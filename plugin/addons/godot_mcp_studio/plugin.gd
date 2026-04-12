@@ -5,6 +5,7 @@ var _connection: Connection
 var _dispatcher: McpDispatcher
 var _log_buffer: McpLogBuffer
 var _server_pid := -1
+var _handlers: Array = []  # prevent GC of RefCounted handlers
 
 
 func _enter_tree() -> void:
@@ -13,11 +14,11 @@ func _enter_tree() -> void:
 	_log_buffer = McpLogBuffer.new()
 	_dispatcher = McpDispatcher.new(_log_buffer)
 
-	# Register handlers
 	var editor_handler := EditorHandler.new(_log_buffer)
 	var scene_handler := SceneHandler.new()
 	var node_handler := NodeHandler.new()
 	var client_handler := ClientHandler.new()
+	_handlers = [editor_handler, scene_handler, node_handler, client_handler]
 
 	_dispatcher.register("get_editor_state", editor_handler.get_editor_state)
 	_dispatcher.register("get_scene_tree", scene_handler.get_scene_tree)
