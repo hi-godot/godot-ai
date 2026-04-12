@@ -95,6 +95,18 @@ claude mcp add --scope user --transport http godot-ai http://127.0.0.1:8000/mcp
 | `client_configure` | Configure an MCP client (Claude Code / Antigravity) |
 | `client_status` | Check which clients are configured |
 
+## Resources
+
+| Resource URI | Description |
+|-------------|-------------|
+| `godot://sessions` | All connected editor sessions with metadata |
+| `godot://scene/current` | Current scene path, project name, play state |
+| `godot://scene/hierarchy` | Full scene tree (nodes, types, paths) |
+| `godot://selection/current` | Currently selected nodes |
+| `godot://project/info` | Project name, Godot version, paths |
+| `godot://project/settings` | Common settings (display, physics, rendering) |
+| `godot://logs/recent` | Last 100 log lines from the editor console |
+
 ## Ports
 
 | Port | Purpose |
@@ -113,7 +125,7 @@ claude mcp add --scope user --transport http godot-ai http://127.0.0.1:8000/mcp
 # Setup (handles macOS Python 3.13 .pth fix automatically)
 script/setup-dev
 
-# Run Python tests (38 unit + integration)
+# Run Python tests (89 unit + integration)
 pytest -v
 
 # Run Godot-side tests (44 handler tests, requires editor running)
@@ -125,6 +137,22 @@ ruff check src/ tests/
 # Start server with auto-reload (dev)
 python -m godot_ai --transport streamable-http --port 8000 --reload
 ```
+
+### Contributing
+
+Work on feature branches and open PRs against `main`:
+
+```bash
+git checkout -b feature/my-feature
+# ... make changes ...
+pytest -v                    # Python tests must pass
+ruff check src/ tests/       # Lint must pass
+# Also run Godot-side tests via the run_tests MCP tool
+git push -u origin feature/my-feature
+gh pr create
+```
+
+PRs should include tests for new functionality (both Python and Godot-side where applicable).
 
 ## License
 

@@ -1,0 +1,365 @@
+"""Integration tests: MCP tools through the full FastMCP stack with mock Godot plugin."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+
+import pytest
+import websockets
+from fastmcp import Client
+
+from godot_ai.server import create_server
+
+from ..conftest import MockGodotPlugin
+
+MCP_PORT = 19502
+
+
+@pytest.fixture
+async def mcp_stack():
+    """Full MCP server + mock Godot plugin connected via WebSocket."""
+    mcp = create_server(ws_port=MCP_PORT)
+    async with Client(mcp) as client:
+        ws = await websockets.connect(f"ws://127.0.0.1:{MCP_PORT}")
+        handshake = {
+            "type": "handshake",
+            "session_id": "mcp-test",
+            "godot_version": "4.4.1",
+            "project_path": "/tmp/test_project",
+            "plugin_version": "0.0.1",
+            "protocol_version": 1,
+        }
+        await ws.send(json.dumps(handshake))
+        await asyncio.sleep(0.05)
+        plugin = MockGodotPlugin(ws=ws, session_id="mcp-test")
+        yield client, plugin
+        await plugin.close()
+
+
+# ---------------------------------------------------------------------------
+# scene_get_hierarchy
+# ---------------------------------------------------------------------------
+
+
+class TestSceneGetHierarchyTool:
+    async def test_returns_paginated_nodes(self, mcp_stack):
+        client, plugin = mcp_stack
+        nodes = [
+            {"name": f"Node{i}", "type": "Node3D", "path": f"/Root/Node{i}"}
+            for i in range(5)
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_scene_tree"
+            await plugin.send_response(cmd["request_id"], {"root": "Root", "nodes": nodes})
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "scene_get_hierarchy", {"depth": 10, "offset": 1, "limit": 2}
+        )
+        await task
+
+        data = result.data
+        assert len(data["nodes"]) == 2
+        assert data["nodes"][0]["name"] == "Node1"
+        assert data["total_count"] == 5
+        assert data["has_more"] is True
+        assert data["offset"] == 1
+        assert data["limit"] == 2
+
+    async def test_last_page_has_more_false(self, mcp_stack):
+        client, plugin = mcp_stack
+        nodes = [{"name": "Only", "type": "Node3D", "path": "/Only"}]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            await plugin.send_response(cmd["request_id"], {"root": "Root", "nodes": nodes})
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "scene_get_hierarchy", {"depth": 10, "offset": 0, "limit": 100}
+        )
+        await task
+
+        assert result.data["has_more"] is False
+        assert result.data["total_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# scene_get_roots
+# ---------------------------------------------------------------------------
+
+
+class TestSceneGetRootsTool:
+    async def test_returns_open_scenes(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_open_scenes"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"scenes": ["res://main.tscn"], "current": "res://main.tscn"},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("scene_get_roots", {})
+        await task
+
+        assert result.data["current"] == "res://main.tscn"
+
+
+# ---------------------------------------------------------------------------
+# editor_state
+# ---------------------------------------------------------------------------
+
+
+class TestEditorStateTool:
+    async def test_returns_editor_state(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_editor_state"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "godot_version": "4.4.1",
+                    "project_name": "TestGame",
+                    "current_scene": "res://main.tscn",
+                    "is_playing": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("editor_state", {})
+        await task
+
+        assert result.data["project_name"] == "TestGame"
+        assert result.data["is_playing"] is False
+
+
+# ---------------------------------------------------------------------------
+# editor_selection_get
+# ---------------------------------------------------------------------------
+
+
+class TestEditorSelectionGetTool:
+    async def test_returns_selection(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_selection"
+            await plugin.send_response(
+                cmd["request_id"], {"selected": ["/Main/Camera3D"]}
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("editor_selection_get", {})
+        await task
+
+        assert result.data["selected"] == ["/Main/Camera3D"]
+
+
+# ---------------------------------------------------------------------------
+# logs_read
+# ---------------------------------------------------------------------------
+
+
+class TestLogsReadTool:
+    async def test_returns_paginated_logs(self, mcp_stack):
+        client, plugin = mcp_stack
+        lines = [f"line {i}" for i in range(10)]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_logs"
+            await plugin.send_response(cmd["request_id"], {"lines": lines})
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("logs_read", {"count": 3, "offset": 2})
+        await task
+
+        data = result.data
+        assert data["lines"] == ["line 2", "line 3", "line 4"]
+        assert data["total_count"] == 10
+        assert data["offset"] == 2
+        assert data["limit"] == 3
+        assert data["has_more"] is True
+
+
+# ---------------------------------------------------------------------------
+# node_find
+# ---------------------------------------------------------------------------
+
+
+class TestNodeFindTool:
+    async def test_returns_paginated_results(self, mcp_stack):
+        client, plugin = mcp_stack
+        nodes = [
+            {"name": f"Mesh{i}", "type": "MeshInstance3D", "path": f"/Root/Mesh{i}"}
+            for i in range(6)
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "find_nodes"
+            await plugin.send_response(cmd["request_id"], {"nodes": nodes})
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "node_find", {"type": "MeshInstance3D", "offset": 2, "limit": 3}
+        )
+        await task
+
+        data = result.data
+        assert len(data["nodes"]) == 3
+        assert data["nodes"][0]["name"] == "Mesh2"
+        assert data["total_count"] == 6
+        assert data["has_more"] is True
+
+
+# ---------------------------------------------------------------------------
+# node_get_properties / node_get_children / node_get_groups
+# ---------------------------------------------------------------------------
+
+
+class TestNodeReadTools:
+    async def test_get_properties(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_node_properties"
+            assert cmd["params"]["path"] == "/Main/Camera3D"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"properties": [{"name": "fov", "value": 75, "type": "float"}]},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("node_get_properties", {"path": "/Main/Camera3D"})
+        await task
+
+        assert result.data["properties"][0]["name"] == "fov"
+
+    async def test_get_children(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_children"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"children": [{"name": "Ground", "type": "MeshInstance3D"}]},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("node_get_children", {"path": "/Main/World"})
+        await task
+
+        assert result.data["children"][0]["name"] == "Ground"
+
+    async def test_get_groups(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_groups"
+            await plugin.send_response(
+                cmd["request_id"], {"groups": ["enemies", "damageable"]}
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("node_get_groups", {"path": "/Main/Enemy"})
+        await task
+
+        assert "enemies" in result.data["groups"]
+
+
+# ---------------------------------------------------------------------------
+# node_create
+# ---------------------------------------------------------------------------
+
+
+class TestNodeCreateTool:
+    async def test_create_node(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "create_node"
+            assert cmd["params"]["type"] == "MeshInstance3D"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"path": "/Main/NewMesh", "type": "MeshInstance3D", "undoable": True},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "node_create", {"type": "MeshInstance3D", "name": "NewMesh", "parent_path": "/Main"}
+        )
+        await task
+
+        assert result.data["path"] == "/Main/NewMesh"
+        assert result.data["undoable"] is True
+
+
+# ---------------------------------------------------------------------------
+# project_settings_get
+# ---------------------------------------------------------------------------
+
+
+class TestProjectSettingsGetTool:
+    async def test_returns_setting(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_project_setting"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"key": "application/config/name", "value": "MyGame", "type": "String"},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "project_settings_get", {"key": "application/config/name"}
+        )
+        await task
+
+        assert result.data["value"] == "MyGame"
+
+
+# ---------------------------------------------------------------------------
+# filesystem_search
+# ---------------------------------------------------------------------------
+
+
+class TestFilesystemSearchTool:
+    async def test_returns_paginated_files(self, mcp_stack):
+        client, plugin = mcp_stack
+        files = [
+            {"path": f"res://scripts/script_{i}.gd", "type": "GDScript"}
+            for i in range(8)
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "search_filesystem"
+            await plugin.send_response(cmd["request_id"], {"files": files, "count": 8})
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "filesystem_search", {"type": "GDScript", "offset": 5, "limit": 10}
+        )
+        await task
+
+        data = result.data
+        assert len(data["files"]) == 3
+        assert data["total_count"] == 8
+        assert data["offset"] == 5
+        assert data["has_more"] is False

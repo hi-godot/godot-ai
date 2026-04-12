@@ -11,6 +11,9 @@ from dataclasses import dataclass
 from fastmcp import FastMCP
 
 from godot_ai.godot_client.client import GodotClient
+from godot_ai.resources.editor import register_editor_resources
+from godot_ai.resources.project import register_project_resources
+from godot_ai.resources.scenes import register_scene_resources
 from godot_ai.resources.sessions import register_session_resources
 from godot_ai.sessions.registry import SessionRegistry
 from godot_ai.tools.client import register_client_tools
@@ -69,5 +72,8 @@ def create_server(ws_port: int = 9500) -> FastMCP:
     register_client_tools(mcp)
     register_testing_tools(mcp)
     register_session_resources(mcp)
+    register_scene_resources(mcp)
+    register_editor_resources(mcp)
+    register_project_resources(mcp)
 
     return mcp

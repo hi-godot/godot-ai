@@ -26,14 +26,31 @@ def register_editor_tools(mcp: FastMCP) -> None:
         return await app.client.send("get_selection")
 
     @mcp.tool()
-    async def logs_read(ctx: Context, count: int = 50) -> dict:
+    async def logs_read(
+        ctx: Context,
+        count: int = 50,
+        offset: int = 0,
+    ) -> dict:
         """Read recent log lines from the Godot editor console.
 
-        Returns the most recent log lines captured by the MCP plugin,
+        Returns paginated log lines captured by the MCP plugin,
         including MCP command traffic when logging is enabled.
 
         Args:
-            count: Number of recent lines to return. Default 50.
+            count: Maximum number of lines to return. Default 50.
+            offset: Number of lines to skip from the start. Default 0.
         """
         app = ctx.lifespan_context
-        return await app.client.send("get_logs", {"count": count})
+        # Request more lines than needed to support offset
+        total_request = offset + count
+        result = await app.client.send("get_logs", {"count": total_request})
+        lines = result.get("lines", [])
+        total_count = len(lines)
+        page = lines[offset : offset + count]
+        return {
+            "lines": page,
+            "total_count": total_count,
+            "offset": offset,
+            "limit": count,
+            "has_more": offset + count < total_count,
+        }

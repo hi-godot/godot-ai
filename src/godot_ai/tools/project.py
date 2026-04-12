@@ -25,16 +25,20 @@ def register_project_tools(mcp: FastMCP) -> None:
         name: str = "",
         type: str = "",
         path: str = "",
+        offset: int = 0,
+        limit: int = 100,
     ) -> dict:
         """Search the Godot project filesystem via EditorFileSystem.
 
         Finds files by name, resource type, or path pattern. At least one
-        filter must be provided.
+        filter must be provided. Results are paginated.
 
         Args:
             name: Filter by filename (case-insensitive substring match).
             type: Filter by resource type (e.g. "PackedScene", "GDScript", "Texture2D").
             path: Filter by path (case-insensitive substring match).
+            offset: Number of results to skip. Default 0.
+            limit: Maximum number of results to return. Default 100.
         """
         app = ctx.lifespan_context
         params: dict = {}
@@ -44,4 +48,14 @@ def register_project_tools(mcp: FastMCP) -> None:
             params["type"] = type
         if path:
             params["path"] = path
-        return await app.client.send("search_filesystem", params)
+        result = await app.client.send("search_filesystem", params)
+        files = result.get("files", [])
+        total_count = len(files)
+        page = files[offset : offset + limit]
+        return {
+            "files": page,
+            "total_count": total_count,
+            "offset": offset,
+            "limit": limit,
+            "has_more": offset + limit < total_count,
+        }
