@@ -4,6 +4,7 @@ extends EditorPlugin
 var _connection: Connection
 var _dispatcher: McpDispatcher
 var _log_buffer: McpLogBuffer
+var _dock: McpDock
 var _server_pid := -1
 var _handlers: Array = []  # prevent GC of RefCounted handlers
 
@@ -33,10 +34,20 @@ func _enter_tree() -> void:
 	_connection.dispatcher = _dispatcher
 	add_child(_connection)
 
+	# Dock panel
+	_dock = McpDock.new()
+	_dock.name = "Godot AI"
+	_dock.setup(_connection, _log_buffer)
+	add_control_to_dock(DOCK_SLOT_RIGHT_BL, _dock)
+
 	_log_buffer.log("plugin loaded")
 
 
 func _exit_tree() -> void:
+	if _dock:
+		remove_control_from_docks(_dock)
+		_dock.queue_free()
+		_dock = null
 	if _connection:
 		_connection.disconnect_from_server()
 		_connection.queue_free()

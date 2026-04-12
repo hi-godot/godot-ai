@@ -1,0 +1,213 @@
+@tool
+class_name McpDock
+extends VBoxContainer
+
+## Editor dock panel showing MCP connection status, client config, and command log.
+
+var _connection: Connection
+var _log_buffer: McpLogBuffer
+
+var _status_icon: ColorRect
+var _status_label: Label
+var _session_label: Label
+var _server_label: Label
+var _log_display: RichTextLabel
+var _log_toggle: CheckButton
+var _reconnect_btn: Button
+var _last_log_count := 0
+var _last_connected := false
+
+# Client config UI
+var _client_rows: Dictionary = {}  # client_name -> {status_label, button}
+
+
+func setup(connection: Connection, log_buffer: McpLogBuffer) -> void:
+	_connection = connection
+	_log_buffer = log_buffer
+
+
+func _ready() -> void:
+	_build_ui()
+
+
+func _process(_delta: float) -> void:
+	if _connection == null:
+		return
+	_update_status()
+	_update_log()
+
+
+func _build_ui() -> void:
+	# --- Status section ---
+	var status_header := _make_header("Connection")
+	add_child(status_header)
+
+	var status_row := HBoxContainer.new()
+	status_row.add_theme_constant_override("separation", 8)
+
+	_status_icon = ColorRect.new()
+	_status_icon.custom_minimum_size = Vector2(12, 12)
+	_status_icon.color = Color.RED
+	var icon_center := CenterContainer.new()
+	icon_center.add_child(_status_icon)
+	status_row.add_child(icon_center)
+
+	_status_label = Label.new()
+	_status_label.text = "Disconnected"
+	status_row.add_child(_status_label)
+
+	add_child(status_row)
+
+	_session_label = Label.new()
+	_session_label.text = ""
+	_session_label.add_theme_font_size_override("font_size", 11)
+	_session_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	add_child(_session_label)
+
+	_server_label = Label.new()
+	_server_label.text = "WS: %d  HTTP: %d" % [McpClientConfigurator.SERVER_WS_PORT, McpClientConfigurator.SERVER_HTTP_PORT]
+	_server_label.add_theme_font_size_override("font_size", 11)
+	_server_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	add_child(_server_label)
+
+	_reconnect_btn = Button.new()
+	_reconnect_btn.text = "Reconnect"
+	_reconnect_btn.pressed.connect(_on_reconnect)
+	add_child(_reconnect_btn)
+
+	add_child(HSeparator.new())
+
+	# --- Client config section ---
+	var client_header := _make_header("Clients")
+	add_child(client_header)
+
+	for client_name in McpClientConfigurator.CLIENT_TYPE_MAP:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 6)
+
+		var name_label := Label.new()
+		name_label.text = client_name.replace("_", " ").capitalize()
+		name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(name_label)
+
+		var status_lbl := Label.new()
+		status_lbl.text = "..."
+		status_lbl.add_theme_font_size_override("font_size", 11)
+		row.add_child(status_lbl)
+
+		var btn := Button.new()
+		btn.text = "Configure"
+		btn.pressed.connect(_on_configure_client.bind(client_name))
+		row.add_child(btn)
+
+		_client_rows[client_name] = {"status_label": status_lbl, "button": btn}
+		add_child(row)
+
+	_refresh_client_status.call_deferred()
+
+	add_child(HSeparator.new())
+
+	# --- Log section ---
+	var log_header_row := HBoxContainer.new()
+	var log_header := _make_header("MCP Log")
+	log_header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	log_header_row.add_child(log_header)
+
+	_log_toggle = CheckButton.new()
+	_log_toggle.text = "Log"
+	_log_toggle.button_pressed = true
+	_log_toggle.toggled.connect(_on_log_toggled)
+	log_header_row.add_child(_log_toggle)
+
+	add_child(log_header_row)
+
+	_log_display = RichTextLabel.new()
+	_log_display.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_log_display.custom_minimum_size = Vector2(0, 120)
+	_log_display.scroll_following = true
+	_log_display.bbcode_enabled = false
+	_log_display.selection_enabled = true
+	add_child(_log_display)
+
+
+func _make_header(text: String) -> Label:
+	var label := Label.new()
+	label.text = text
+	label.add_theme_font_size_override("font_size", 13)
+	label.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
+	return label
+
+
+func _update_status() -> void:
+	var connected := _connection.is_connected
+	if connected == _last_connected:
+		return
+	_last_connected = connected
+
+	if connected:
+		_status_icon.color = Color.GREEN
+		_status_label.text = "Connected"
+		_session_label.text = ""
+	else:
+		_status_icon.color = Color.RED
+		_status_label.text = "Disconnected"
+		_session_label.text = ""
+
+
+func _update_log() -> void:
+	if _log_buffer == null:
+		return
+	var count := _log_buffer.total_count()
+	if count == _last_log_count:
+		return
+
+	# Append only new lines
+	var new_lines := _log_buffer.get_recent(count - _last_log_count)
+	for line in new_lines:
+		_log_display.add_text(line + "\n")
+	_last_log_count = count
+
+
+func _on_reconnect() -> void:
+	if _connection:
+		_connection.disconnect_from_server()
+		_connection._attempt_reconnect()
+
+
+func _on_log_toggled(enabled: bool) -> void:
+	if _connection and _connection.dispatcher:
+		_connection.dispatcher.mcp_logging = enabled
+	_log_display.visible = enabled
+
+
+func _on_configure_client(client_name: String) -> void:
+	var client_type: int = McpClientConfigurator.client_type_from_string(client_name)
+	if client_type < 0:
+		return
+	var result := McpClientConfigurator.configure(client_type as McpClientConfigurator.ClientType)
+	var row: Dictionary = _client_rows.get(client_name, {})
+	if row.has("status_label"):
+		if result.get("status") == "ok":
+			row["status_label"].text = "configured"
+			row["status_label"].add_theme_color_override("font_color", Color.GREEN)
+		else:
+			row["status_label"].text = "failed"
+			row["status_label"].add_theme_color_override("font_color", Color.RED)
+
+
+func _refresh_client_status() -> void:
+	for client_name in McpClientConfigurator.CLIENT_TYPE_MAP:
+		var client_type: McpClientConfigurator.ClientType = McpClientConfigurator.CLIENT_TYPE_MAP[client_name]
+		var status := McpClientConfigurator.check_status(client_type)
+		var row: Dictionary = _client_rows.get(client_name, {})
+		if not row.has("status_label"):
+			continue
+		match status:
+			McpClientConfigurator.ConfigStatus.CONFIGURED:
+				row["status_label"].text = "configured"
+				row["status_label"].add_theme_color_override("font_color", Color.GREEN)
+				row["button"].text = "Reconfigure"
+			McpClientConfigurator.ConfigStatus.NOT_CONFIGURED:
+				row["status_label"].text = "not configured"
+				row["status_label"].add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+				row["button"].text = "Configure"

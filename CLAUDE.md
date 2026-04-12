@@ -57,11 +57,24 @@ MCP tools `client_configure` and `client_status` expose this to AI clients.
 
 ## Adding a new tool
 
-1. Add a GDScript handler in `connection.gd`: `_handle_<name>(params) -> Dictionary`
-2. Add the command string to the `match` block in `_dispatch_command`
-3. Add a Python tool in `tools/<domain>.py` that calls `app.client.send("<command>", params)`
-4. Register the tool in `server.py` if it's a new module
-5. Copy updated plugin files to `test_project/addons/godot_ai/`
+1. Add a handler method in the appropriate `handlers/*.gd` file
+2. Register it in `plugin.gd`: `_dispatcher.register("command_name", handler.method)`
+3. Add a Python tool in `tools/<domain>.py` that calls `app.client.send("command_name", params)`
+4. Register the tool module in `server.py` if it's a new file
+
+## Write tools must be undoable
+
+Every tool that mutates the scene (create, delete, reparent, set_property, etc.) must use `EditorUndoRedoManager`. No exceptions. The pattern:
+
+```gdscript
+_undo_redo.create_action("MCP: <description>")
+_undo_redo.add_do_method(...)
+_undo_redo.add_undo_method(...)
+_undo_redo.add_do_reference(node)  # prevent GC of created nodes
+_undo_redo.commit_action()
+```
+
+Response must include `"undoable": true`. If an operation genuinely can't be undone (file writes, scene open/close), include `"undoable": false` with a reason.
 
 ## What NOT to do
 
