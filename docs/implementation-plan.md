@@ -414,22 +414,18 @@ The product should be useful for inspection and navigation before any write tool
 | `godot://project/settings` | Common settings subset |
 | `godot://logs/recent` | Last 100 log lines |
 
-**Batch 5 — Editor dock panel (Week 3-4):**
-
-Build a GUI dock panel for the Godot editor (like unity-mcp's MCP Console), added via `EditorPlugin.add_control_to_dock()`. This gives users visibility into MCP status without checking the Output panel.
+**Batch 5 — Editor dock panel — DONE:**
 
 | Component | Implementation | Notes |
 |-----------|---------------|-------|
-| Connection status | Green/red indicator + session ID | Updates on connect/disconnect |
-| Server info | Godot version, project path, plugin version | From handshake data |
-| MCP command log | Scrolling `RichTextLabel` | Fed from existing `_log_buffer` |
+| Connection status | Green/red indicator | Updates on connect/disconnect |
+| Server ports | WS + HTTP port display | From constants |
+| MCP command log | Scrolling `RichTextLabel` | Fed from `_log_buffer` |
 | Logging toggle | `CheckButton` | Controls `mcp_logging` var |
 | Reconnect button | `Button` | Calls `_attempt_reconnect()` |
-
-Plugin file: `plugin/addons/godot_mcp_studio/mcp_dock.gd` (or `.tscn` + `.gd`)
-- Created in `plugin.gd._enter_tree()`, added to bottom dock
-- Polls `connection.gd` state each frame for status updates
-- Log display auto-scrolls, capped at visible history
+| Reload Plugin button | `Button` | Toggles plugin off/on |
+| Setup status | Dev mode / uv version | Auto-detected |
+| Client config | Configure buttons per client | Claude Code, Antigravity |
 
 ### Pagination design
 
@@ -438,13 +434,25 @@ Large results (scene trees with 1000+ nodes, long log buffers) need pagination:
 - Default limit: 100 nodes / 50 log lines
 - Response includes `total_count` and `has_more`
 
-### Phase 1 exit criteria
-- [ ] All Batch 1-4 tools implemented and tested
-- [ ] Editor dock panel shows connection status and live MCP log
-- [ ] Large scene trees (500+ nodes) paginate correctly
-- [ ] MCP resources return fresh data on each read
-- [ ] Manual test: connect Claude Desktop, ask it to describe the open scene — it can
-- [ ] 30+ passing tests
+**Batch 6 — Test harness — DONE:**
+
+| Component | Implementation | Notes |
+|-----------|---------------|-------|
+| `McpTestRunner` | `testing/test_runner.gd` | Discovers test_* methods, collects results |
+| `McpTestSuite` | `testing/test_suite.gd` | Base class with assertions |
+| Test suites | `test_project/tests/test_*.gd` | 3 suites: scene, node, editor |
+| `run_tests` | MCP tool + handler | Auto-discovers suites, hot-reloads test files |
+| `get_test_results` | MCP tool + handler | Returns last run results |
+
+### Phase 1 progress
+- [x] Batch 1: Session and editor tools
+- [x] Batch 2: Scene read tools (6 tools)
+- [ ] Batch 3: Project reads (project_settings.get, filesystem.search)
+- [ ] Batch 4: MCP Resources
+- [x] Batch 5: Editor dock panel with setup status
+- [x] Batch 6: Test harness (35 Godot-side + 32 Python = 67 total tests)
+- [ ] Pagination for large results
+- [ ] Manual test: Claude describes the open scene
 
 ---
 
