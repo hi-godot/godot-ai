@@ -456,6 +456,29 @@ Large results (scene trees with 1000+ nodes, long log buffers) need pagination:
 
 ---
 
+## 5b. Distribution & User Install Flow
+
+Ship the user install path before adding more features. Everything above is dev-tested; this makes it user-ready.
+
+### PyPI publishing
+- [ ] Choose package name (verify `godot-ai` is available on PyPI)
+- [ ] Add project metadata to `pyproject.toml` (description, URLs, classifiers, license)
+- [ ] Publish to PyPI: `uv build && uv publish`
+- [ ] Verify: `uvx godot-ai --help` works on a clean machine
+
+### End-to-end user flow testing
+- [ ] Test on clean macOS (no `.venv`, just uv + Godot): install plugin, enable, server starts via uvx
+- [ ] Test on Windows: uvx discovery, server start, plugin connection
+- [ ] Test on Linux: same
+- [ ] Test server update: bump version, re-publish, verify uvx picks up new version
+
+### Plugin distribution
+- [ ] Submit to Godot Asset Library (or decide on distribution channel)
+- [ ] First-run UX: dock panel shows "Install uv" if missing, one-click install
+- [ ] Document install flow in README for each platform
+
+---
+
 ## 6. Phase 2: Safe Write Path (Weeks 4-7)
 
 ### Tool implementation order
