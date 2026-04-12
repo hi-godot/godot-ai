@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from fastmcp import Context, FastMCP
 
-from godot_ai.tools._pagination import paginate
+from godot_ai.handlers import project as project_handlers
+from godot_ai.runtime.direct import DirectRuntime
 
 
 def register_project_tools(mcp: FastMCP) -> None:
@@ -18,8 +19,8 @@ def register_project_tools(mcp: FastMCP) -> None:
         Args:
             key: The setting key path (e.g. "application/config/name").
         """
-        app = ctx.lifespan_context
-        return await app.client.send("get_project_setting", {"key": key})
+        runtime = DirectRuntime.from_context(ctx)
+        return await project_handlers.project_settings_get(runtime, key=key)
 
     @mcp.tool()
     async def filesystem_search(
@@ -42,13 +43,12 @@ def register_project_tools(mcp: FastMCP) -> None:
             offset: Number of results to skip. Default 0.
             limit: Maximum number of results to return. Default 100.
         """
-        app = ctx.lifespan_context
-        params: dict = {}
-        if name:
-            params["name"] = name
-        if type:
-            params["type"] = type
-        if path:
-            params["path"] = path
-        result = await app.client.send("search_filesystem", params)
-        return paginate(result.get("files", []), offset, limit, key="files")
+        runtime = DirectRuntime.from_context(ctx)
+        return await project_handlers.filesystem_search(
+            runtime,
+            name=name,
+            type=type,
+            path=path,
+            offset=offset,
+            limit=limit,
+        )

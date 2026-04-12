@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
+
+import websockets
 
 # ---------------------------------------------------------------------------
 # scene_get_hierarchy
@@ -12,10 +15,7 @@ import asyncio
 class TestSceneGetHierarchyTool:
     async def test_returns_paginated_nodes(self, mcp_stack):
         client, plugin = mcp_stack
-        nodes = [
-            {"name": f"Node{i}", "type": "Node3D", "path": f"/Root/Node{i}"}
-            for i in range(5)
-        ]
+        nodes = [{"name": f"Node{i}", "type": "Node3D", "path": f"/Root/Node{i}"} for i in range(5)]
 
         async def respond():
             cmd = await plugin.recv_command()
@@ -120,9 +120,7 @@ class TestEditorSelectionGetTool:
         async def respond():
             cmd = await plugin.recv_command()
             assert cmd["command"] == "get_selection"
-            await plugin.send_response(
-                cmd["request_id"], {"selected": ["/Main/Camera3D"]}
-            )
+            await plugin.send_response(cmd["request_id"], {"selected": ["/Main/Camera3D"]})
 
         task = asyncio.create_task(respond())
         result = await client.call_tool("editor_selection_get", {})
@@ -236,9 +234,7 @@ class TestNodeReadTools:
         async def respond():
             cmd = await plugin.recv_command()
             assert cmd["command"] == "get_groups"
-            await plugin.send_response(
-                cmd["request_id"], {"groups": ["enemies", "damageable"]}
-            )
+            await plugin.send_response(cmd["request_id"], {"groups": ["enemies", "damageable"]})
 
         task = asyncio.create_task(respond())
         result = await client.call_tool("node_get_groups", {"path": "/Main/Enemy"})
@@ -293,9 +289,7 @@ class TestProjectSettingsGetTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "project_settings_get", {"key": "application/config/name"}
-        )
+        result = await client.call_tool("project_settings_get", {"key": "application/config/name"})
         await task
 
         assert result.data["value"] == "MyGame"
@@ -309,10 +303,7 @@ class TestProjectSettingsGetTool:
 class TestFilesystemSearchTool:
     async def test_returns_paginated_files(self, mcp_stack):
         client, plugin = mcp_stack
-        files = [
-            {"path": f"res://scripts/script_{i}.gd", "type": "GDScript"}
-            for i in range(8)
-        ]
+        files = [{"path": f"res://scripts/script_{i}.gd", "type": "GDScript"} for i in range(8)]
 
         async def respond():
             cmd = await plugin.recv_command()
@@ -330,3 +321,51 @@ class TestFilesystemSearchTool:
         assert data["total_count"] == 8
         assert data["offset"] == 5
         assert data["has_more"] is False
+
+
+# ---------------------------------------------------------------------------
+# reload_plugin
+# ---------------------------------------------------------------------------
+# No GDScript test for reload_plugin — calling it triggers a real plugin
+# reload that kills the test runner.
+
+
+class TestReloadPluginTool:
+    async def test_reload_cycle(self, mcp_stack):
+        """Full reload cycle: ack, disconnect, reconnect with new session."""
+        client, plugin = mcp_stack
+        ws_port = 19502  # matches mcp_stack fixture
+
+        async def simulate_reload():
+            # Receive the reload command and ack it
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "reload_plugin"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"status": "reloading", "message": "Plugin reload initiated"},
+            )
+            # Simulate the plugin dying and reconnecting
+            await plugin.close()
+            await asyncio.sleep(0.1)
+            # Reconnect as a new session
+            ws = await websockets.connect(f"ws://127.0.0.1:{ws_port}")
+            handshake = {
+                "type": "handshake",
+                "session_id": "reloaded-session",
+                "godot_version": "4.4.1",
+                "project_path": "/tmp/test_project",
+                "plugin_version": "0.0.1",
+                "protocol_version": 1,
+            }
+            await ws.send(json.dumps(handshake))
+            await asyncio.sleep(0.05)
+            return ws
+
+        task = asyncio.create_task(simulate_reload())
+        result = await client.call_tool("reload_plugin", {})
+        new_ws = await task
+
+        assert result.data["status"] == "reloaded"
+        assert result.data["old_session_id"] == "mcp-test"
+        assert result.data["new_session_id"] == "reloaded-session"
+        await new_ws.close()

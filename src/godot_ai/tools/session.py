@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from fastmcp import Context, FastMCP
 
+from godot_ai.handlers import session as session_handlers
+from godot_ai.runtime.direct import DirectRuntime
+
 
 def register_session_tools(mcp: FastMCP) -> None:
     @mcp.tool()
@@ -13,13 +16,8 @@ def register_session_tools(mcp: FastMCP) -> None:
         Returns session metadata including Godot version, project path,
         and connection state for each connected editor instance.
         """
-        app = ctx.lifespan_context
-        sessions = app.registry.list_all()
-        active_id = app.registry.active_session_id
-        return {
-            "sessions": [{**s.to_dict(), "is_active": s.session_id == active_id} for s in sessions],
-            "count": len(sessions),
-        }
+        runtime = DirectRuntime.from_context(ctx)
+        return session_handlers.session_list(runtime)
 
     @mcp.tool()
     def session_activate(ctx: Context, session_id: str) -> dict:
@@ -31,9 +29,5 @@ def register_session_tools(mcp: FastMCP) -> None:
         Args:
             session_id: The ID of the session to activate.
         """
-        app = ctx.lifespan_context
-        try:
-            app.registry.set_active(session_id)
-            return {"status": "ok", "active_session_id": session_id}
-        except KeyError:
-            return {"status": "error", "message": f"Session {session_id} not found"}
+        runtime = DirectRuntime.from_context(ctx)
+        return session_handlers.session_activate(runtime, session_id)

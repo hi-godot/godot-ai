@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from fastmcp import Context, FastMCP
 
-from godot_ai.tools._pagination import paginate
+from godot_ai.handlers import editor as editor_handlers
+from godot_ai.runtime.direct import DirectRuntime
 
 
 def register_editor_tools(mcp: FastMCP) -> None:
@@ -15,8 +16,8 @@ def register_editor_tools(mcp: FastMCP) -> None:
         Returns Godot version, project name, current scene path,
         and whether the project is currently playing.
         """
-        app = ctx.lifespan_context
-        return await app.client.send("get_editor_state")
+        runtime = DirectRuntime.from_context(ctx)
+        return await editor_handlers.editor_state(runtime)
 
     @mcp.tool()
     async def editor_selection_get(ctx: Context) -> dict:
@@ -24,8 +25,8 @@ def register_editor_tools(mcp: FastMCP) -> None:
 
         Returns a list of selected node paths.
         """
-        app = ctx.lifespan_context
-        return await app.client.send("get_selection")
+        runtime = DirectRuntime.from_context(ctx)
+        return await editor_handlers.editor_selection_get(runtime)
 
     @mcp.tool()
     async def logs_read(
@@ -43,8 +44,20 @@ def register_editor_tools(mcp: FastMCP) -> None:
             count: Maximum number of lines to return. Default 50.
             offset: Number of lines to skip from the start. Default 0.
         """
-        app = ctx.lifespan_context
-        # Fetch the full buffer so offset/limit/total_count are accurate
-        result = await app.client.send("get_logs", {"count": 500})
-        lines = result.get("lines", [])
-        return paginate(lines, offset, count, key="lines")
+        runtime = DirectRuntime.from_context(ctx)
+        return await editor_handlers.logs_read(runtime, count=count, offset=offset)
+
+    @mcp.tool()
+    async def reload_plugin(ctx: Context) -> dict:
+        """Reload the Godot editor plugin and wait for it to reconnect.
+
+        Sends a reload command to the plugin, which disables and re-enables
+        itself on the next frame. The tool then waits for the new session
+        to connect before returning.
+
+        Requires the MCP server to be running externally (not started by
+        the plugin), otherwise the reload will kill the server process.
+        Start with: python -m godot_ai --transport streamable-http --port 8000 --reload
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await editor_handlers.reload_plugin(runtime)

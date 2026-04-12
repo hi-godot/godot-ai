@@ -6,15 +6,13 @@ import json
 
 from fastmcp import Context, FastMCP
 
+from godot_ai.handlers import session as session_handlers
+from godot_ai.runtime.direct import DirectRuntime
+
 
 def register_session_resources(mcp: FastMCP) -> None:
     @mcp.resource("godot://sessions", mime_type="application/json")
     def get_sessions(ctx: Context) -> str:
         """All connected Godot editor sessions and their metadata."""
-        app = ctx.lifespan_context
-        sessions = app.registry.list_all()
-        active_id = app.registry.active_session_id
-        return json.dumps({
-            "sessions": [{**s.to_dict(), "is_active": s.session_id == active_id} for s in sessions],
-            "count": len(sessions),
-        })
+        runtime = DirectRuntime.from_context(ctx)
+        return json.dumps(session_handlers.session_resource_data(runtime))

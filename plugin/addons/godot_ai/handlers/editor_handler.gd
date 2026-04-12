@@ -42,3 +42,12 @@ func get_logs(params: Dictionary) -> Dictionary:
 			"returned_count": lines.size(),
 		}
 	}
+
+
+func reload_plugin(_params: Dictionary) -> Dictionary:
+	_log_buffer.log("reload_plugin requested, reloading next frame")
+	(func():
+		EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", false)
+		EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", true)
+	).call_deferred()
+	return {"data": {"status": "reloading", "message": "Plugin reload initiated"}}

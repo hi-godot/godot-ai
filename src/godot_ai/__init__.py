@@ -1,11 +1,14 @@
 """Godot AI — production-grade Godot MCP server."""
 
+from __future__ import annotations
+
 import argparse
+from collections.abc import Sequence
 
 __version__ = "0.0.1"
 
 
-def main():
+def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Godot AI server")
     parser.add_argument(
         "--transport",
@@ -24,7 +27,13 @@ def main():
         action="store_true",
         help="Auto-restart on source changes (dev mode, HTTP transports only)",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    if args.reload and args.transport in ("sse", "streamable-http"):
+        from godot_ai.asgi import run_with_reload
+
+        run_with_reload(transport=args.transport, port=args.port, ws_port=args.ws_port)
+        return
 
     from godot_ai.server import create_server
 
@@ -33,10 +42,5 @@ def main():
     transport_kwargs = {}
     if args.transport in ("sse", "streamable-http"):
         transport_kwargs["port"] = args.port
-        if args.reload:
-            transport_kwargs["uvicorn_config"] = {
-                "reload": True,
-                "reload_dirs": ["src"],
-            }
 
     server.run(transport=args.transport, **transport_kwargs)

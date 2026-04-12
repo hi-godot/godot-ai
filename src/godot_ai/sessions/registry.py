@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -38,11 +39,22 @@ class SessionRegistry:
     def __init__(self):
         self._sessions: dict[str, Session] = {}
         self._active_session_id: str | None = None
+        self._session_waiters: list[tuple[asyncio.Future, str | None]] = []
 
     def register(self, session: Session) -> None:
         self._sessions[session.session_id] = session
         if self._active_session_id is None:
             self._active_session_id = session.session_id
+        # Notify any waiters blocked on wait_for_session()
+        remaining = []
+        for future, exclude_id in self._session_waiters:
+            if future.done():
+                continue
+            if exclude_id is not None and session.session_id == exclude_id:
+                remaining.append((future, exclude_id))
+                continue
+            future.set_result(session)
+        self._session_waiters = remaining
 
     def unregister(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
@@ -68,6 +80,20 @@ class SessionRegistry:
     @property
     def active_session_id(self) -> str | None:
         return self._active_session_id
+
+    async def wait_for_session(
+        self, exclude_id: str | None = None, timeout: float = 15.0
+    ) -> Session:
+        """Block until a new session registers (optionally excluding one ID).
+
+        Raises TimeoutError if no matching session appears within timeout.
+        """
+        future: asyncio.Future[Session] = asyncio.get_event_loop().create_future()
+        self._session_waiters.append((future, exclude_id))
+        try:
+            return await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError:
+            raise TimeoutError("Timed out waiting for new session") from None
 
     def __len__(self) -> int:
         return len(self._sessions)

@@ -6,6 +6,7 @@ extends VBoxContainer
 
 var _connection: Connection
 var _log_buffer: McpLogBuffer
+var _plugin: EditorPlugin
 
 var _status_icon: ColorRect
 var _status_label: Label
@@ -19,14 +20,16 @@ var _last_connected := false
 
 # Setup UI
 var _setup_container: VBoxContainer
+var _dev_server_btn: Button
 
 # Client config UI
 var _client_rows: Dictionary = {}  # client_name -> {status_label, button}
 
 
-func setup(connection: Connection, log_buffer: McpLogBuffer) -> void:
+func setup(connection: Connection, log_buffer: McpLogBuffer, plugin: EditorPlugin) -> void:
 	_connection = connection
 	_log_buffer = log_buffer
+	_plugin = plugin
 
 
 func _ready() -> void:
@@ -178,6 +181,8 @@ func _update_status() -> void:
 		_status_label.text = "Disconnected"
 		_session_label.text = ""
 
+	_update_dev_server_btn()
+
 
 func _update_log() -> void:
 	if _log_buffer == null:
@@ -215,10 +220,16 @@ func _refresh_setup_status() -> void:
 	# Clear previous indicators
 	for child in _setup_container.get_children():
 		child.queue_free()
+	_dev_server_btn = null
 
 	var is_dev := McpClientConfigurator.is_dev_checkout()
 	if is_dev:
 		_setup_container.add_child(_make_status_row("Mode", "Dev (venv)", Color.CYAN))
+		_dev_server_btn = Button.new()
+		_dev_server_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_dev_server_btn.pressed.connect(_on_dev_server_pressed)
+		_update_dev_server_btn()
+		_setup_container.add_child(_dev_server_btn)
 		return
 
 	# User mode — check for uv
@@ -253,6 +264,26 @@ func _make_status_row(label_text: String, value_text: String, value_color: Color
 	row.add_child(value)
 
 	return row
+
+
+func _update_dev_server_btn() -> void:
+	if _dev_server_btn == null:
+		return
+	if _plugin and _plugin.is_dev_server_running():
+		_dev_server_btn.text = "Stop Dev Server"
+	else:
+		_dev_server_btn.text = "Start Dev Server"
+
+
+func _on_dev_server_pressed() -> void:
+	if _plugin == null:
+		return
+	if _plugin.is_dev_server_running():
+		_plugin.stop_dev_server()
+	else:
+		_plugin.start_dev_server()
+	# Defer UI update to let port state settle
+	_update_dev_server_btn.call_deferred()
 
 
 func _on_install_uv() -> void:

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from fastmcp import Context, FastMCP
 
+from godot_ai.handlers import client as client_handlers
+from godot_ai.runtime.direct import DirectRuntime
+
 
 def register_client_tools(mcp: FastMCP) -> None:
     @mcp.tool()
@@ -14,10 +17,10 @@ def register_client_tools(mcp: FastMCP) -> None:
         how to launch and connect to this server.
 
         Args:
-            client: The client to configure. Options: "claude_code", "antigravity".
+            client: The client to configure. Options: "claude_code", "codex", "antigravity".
         """
-        app = ctx.lifespan_context
-        return await app.client.send("configure_client", {"client": client})
+        runtime = DirectRuntime.from_context(ctx)
+        return await client_handlers.client_configure(runtime, client=client)
 
     @mcp.tool()
     async def client_status(ctx: Context) -> dict:
@@ -26,5 +29,5 @@ def register_client_tools(mcp: FastMCP) -> None:
         Returns the configuration status of each supported client:
         "configured", "not_configured", or "error".
         """
-        app = ctx.lifespan_context
-        return await app.client.send("check_client_status")
+        runtime = DirectRuntime.from_context(ctx)
+        return await client_handlers.client_status(runtime)

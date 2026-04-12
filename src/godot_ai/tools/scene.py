@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from fastmcp import Context, FastMCP
 
-from godot_ai.tools._pagination import paginate
+from godot_ai.handlers import scene as scene_handlers
+from godot_ai.runtime.direct import DirectRuntime
 
 
 def register_scene_tools(mcp: FastMCP) -> None:
@@ -25,10 +26,13 @@ def register_scene_tools(mcp: FastMCP) -> None:
             offset: Number of nodes to skip. Default 0.
             limit: Maximum number of nodes to return. Default 100.
         """
-        app = ctx.lifespan_context
-        result = await app.client.send("get_scene_tree", {"depth": depth})
-        nodes = result.get("nodes", [])
-        return {"root": result.get("root", ""), **paginate(nodes, offset, limit, key="nodes")}
+        runtime = DirectRuntime.from_context(ctx)
+        return await scene_handlers.scene_get_hierarchy(
+            runtime,
+            depth=depth,
+            offset=offset,
+            limit=limit,
+        )
 
     @mcp.tool()
     async def scene_get_roots(ctx: Context) -> dict:
@@ -37,5 +41,5 @@ def register_scene_tools(mcp: FastMCP) -> None:
         Returns a list of open scene file paths and which one is the
         currently edited scene.
         """
-        app = ctx.lifespan_context
-        return await app.client.send("get_open_scenes")
+        runtime = DirectRuntime.from_context(ctx)
+        return await scene_handlers.scene_get_roots(runtime)

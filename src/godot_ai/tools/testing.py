@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from fastmcp import Context, FastMCP
 
+from godot_ai.handlers import testing as testing_handlers
+from godot_ai.runtime.direct import DirectRuntime
+
 
 def register_testing_tools(mcp: FastMCP) -> None:
     @mcp.tool()
@@ -24,13 +27,8 @@ def register_testing_tools(mcp: FastMCP) -> None:
             test_name: Run only tests whose name contains this substring.
                        Empty runs all tests in the selected suite(s).
         """
-        app = ctx.lifespan_context
-        params = {}
-        if suite:
-            params["suite"] = suite
-        if test_name:
-            params["test_name"] = test_name
-        return await app.client.send("run_tests", params)
+        runtime = DirectRuntime.from_context(ctx)
+        return await testing_handlers.run_tests(runtime, suite=suite, test_name=test_name)
 
     @mcp.tool()
     async def get_test_results(ctx: Context) -> dict:
@@ -39,5 +37,5 @@ def register_testing_tools(mcp: FastMCP) -> None:
         Returns the same structured results as run_tests, without
         re-executing. Useful for reviewing results after a run.
         """
-        app = ctx.lifespan_context
-        return await app.client.send("get_test_results")
+        runtime = DirectRuntime.from_context(ctx)
+        return await testing_handlers.get_test_results(runtime)

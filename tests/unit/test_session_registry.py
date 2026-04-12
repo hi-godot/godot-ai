@@ -1,5 +1,7 @@
 """Tests for SessionRegistry."""
 
+import asyncio
+
 import pytest
 
 from godot_ai.sessions.registry import Session, SessionRegistry
@@ -85,3 +87,47 @@ class TestSessionRegistry:
         assert d["godot_version"] == "4.4.1"
         assert d["project_path"] == "/tmp/test_project"
         assert "connected_at" in d
+
+
+class TestWaitForSession:
+    async def test_resolves_immediately_if_session_already_registered(self):
+        """If a session registers before wait starts, it resolves on the next one."""
+        reg = SessionRegistry()
+        s = _make_session("new-1")
+
+        async def register_soon():
+            await asyncio.sleep(0.05)
+            reg.register(s)
+
+        asyncio.create_task(register_soon())
+        result = await reg.wait_for_session(timeout=2.0)
+        assert result.session_id == "new-1"
+
+    async def test_blocks_then_resolves(self):
+        reg = SessionRegistry()
+
+        async def register_later():
+            await asyncio.sleep(0.1)
+            reg.register(_make_session("delayed"))
+
+        asyncio.create_task(register_later())
+        result = await reg.wait_for_session(timeout=2.0)
+        assert result.session_id == "delayed"
+
+    async def test_timeout_raises(self):
+        reg = SessionRegistry()
+        with pytest.raises(TimeoutError, match="Timed out"):
+            await reg.wait_for_session(timeout=0.1)
+
+    async def test_ignores_excluded_id(self):
+        reg = SessionRegistry()
+
+        async def register_both():
+            await asyncio.sleep(0.05)
+            reg.register(_make_session("old-1"))  # excluded
+            await asyncio.sleep(0.05)
+            reg.register(_make_session("new-1"))  # should match
+
+        asyncio.create_task(register_both())
+        result = await reg.wait_for_session(exclude_id="old-1", timeout=2.0)
+        assert result.session_id == "new-1"

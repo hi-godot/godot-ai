@@ -2,10 +2,10 @@
 class_name McpClientConfigurator
 extends RefCounted
 
-## Configures MCP clients (Claude Code, Antigravity, etc.) to connect to
+## Configures MCP clients (Claude Code, Codex, Antigravity, etc.) to connect to
 ## the Godot MCP Studio server.
 
-enum ClientType { CLAUDE_CODE, ANTIGRAVITY }
+enum ClientType { CLAUDE_CODE, CODEX, ANTIGRAVITY }
 enum ConfigStatus { NOT_CONFIGURED, CONFIGURED, ERROR }
 
 const SERVER_NAME := "godot-ai"
@@ -16,6 +16,7 @@ const SERVER_HTTP_URL := "http://127.0.0.1:%d/mcp" % SERVER_HTTP_PORT
 ## Map client name strings to enum values.
 const CLIENT_TYPE_MAP := {
 	"claude_code": ClientType.CLAUDE_CODE,
+	"codex": ClientType.CODEX,
 	"antigravity": ClientType.ANTIGRAVITY,
 }
 
@@ -24,6 +25,8 @@ static func configure(client: ClientType) -> Dictionary:
 	match client:
 		ClientType.CLAUDE_CODE:
 			return _configure_claude_code()
+		ClientType.CODEX:
+			return _configure_codex()
 		ClientType.ANTIGRAVITY:
 			return _configure_antigravity()
 	return {"status": "error", "message": "Unknown client type"}
@@ -33,6 +36,8 @@ static func check_status(client: ClientType) -> ConfigStatus:
 	match client:
 		ClientType.CLAUDE_CODE:
 			return _check_claude_code()
+		ClientType.CODEX:
+			return _check_codex()
 		ClientType.ANTIGRAVITY:
 			return _check_antigravity()
 	return ConfigStatus.NOT_CONFIGURED
@@ -42,6 +47,8 @@ static func remove(client: ClientType) -> Dictionary:
 	match client:
 		ClientType.CLAUDE_CODE:
 			return _remove_claude_code()
+		ClientType.CODEX:
+			return _remove_codex()
 		ClientType.ANTIGRAVITY:
 			return _remove_antigravity()
 	return {"status": "error", "message": "Unknown client type"}
@@ -237,6 +244,178 @@ static func _remove_claude_code() -> Dictionary:
 		return {"status": "ok", "message": "Claude Code configuration removed"}
 	var err_msg: String = output[0].strip_edges() if output.size() > 0 else "Unknown error"
 	return {"status": "error", "message": "Failed to remove: %s" % err_msg}
+
+
+# --- Codex ---
+
+static func _get_codex_config_path() -> String:
+	return OS.get_environment("HOME").path_join(".codex/config.toml")
+
+
+static func _codex_server_header() -> String:
+	return "[mcp_servers.\"%s\"]" % SERVER_NAME
+
+
+static func _codex_legacy_server_header() -> String:
+	return "[mcp_servers.%s]" % SERVER_NAME.replace("-", "_")
+
+
+static func _codex_server_prefixes() -> Array[String]:
+	return [
+		"[mcp_servers.\"%s\"" % SERVER_NAME,
+		"[mcp_servers.%s" % SERVER_NAME.replace("-", "_"),
+	]
+
+
+static func _read_codex_config() -> String:
+	var config_path := _get_codex_config_path()
+	var file := FileAccess.open(config_path, FileAccess.READ)
+	if file == null:
+		return ""
+	var content := file.get_as_text()
+	file.close()
+	return content
+
+
+static func _write_codex_config(content: String) -> bool:
+	var config_path := _get_codex_config_path()
+	var dir_path := config_path.get_base_dir()
+	if not DirAccess.dir_exists_absolute(dir_path):
+		DirAccess.make_dir_recursive_absolute(dir_path)
+	var file := FileAccess.open(config_path, FileAccess.WRITE)
+	if file == null:
+		return false
+	file.store_string(content)
+	file.close()
+	return true
+
+
+static func _split_lines(content: String) -> Array[String]:
+	var lines: Array[String] = []
+	for line in content.split("\n"):
+		lines.append(line)
+	return lines
+
+
+static func _find_codex_server_section(lines: Array[String]) -> Dictionary:
+	var headers := [_codex_server_header(), _codex_legacy_server_header()]
+	for i in range(lines.size()):
+		var trimmed := lines[i].strip_edges()
+		if headers.has(trimmed):
+			var end := lines.size()
+			for j in range(i + 1, lines.size()):
+				var next_trimmed := lines[j].strip_edges()
+				if next_trimmed.begins_with("[") and next_trimmed.ends_with("]"):
+					end = j
+					break
+			return {"start": i, "end": end}
+	return {}
+
+
+static func _is_codex_server_section_header(trimmed: String) -> bool:
+	for prefix in _codex_server_prefixes():
+		if trimmed.begins_with(prefix):
+			return true
+	return false
+
+
+static func _join_lines(lines: Array[String]) -> String:
+	return "\n".join(lines)
+
+
+static func _configure_codex() -> Dictionary:
+	var content := _read_codex_config()
+	var lines := _split_lines(content)
+	var section := _find_codex_server_section(lines)
+	var server_lines: Array[String] = [
+		_codex_server_header(),
+		"url = \"%s\"" % SERVER_HTTP_URL,
+		"enabled = true",
+	]
+
+	if section.is_empty():
+		if not lines.is_empty() and not lines[-1].strip_edges().is_empty():
+			lines.append("")
+		lines.append_array(server_lines)
+	else:
+		var start: int = section["start"]
+		var end: int = section["end"]
+		var filtered_body: Array[String] = []
+		for i in range(start + 1, end):
+			var trimmed := lines[i].strip_edges()
+			if trimmed.begins_with("url ="):
+				continue
+			if trimmed.begins_with("enabled ="):
+				continue
+			filtered_body.append(lines[i])
+
+		var updated: Array[String] = []
+		updated.append_array(lines.slice(0, start))
+		updated.append_array(server_lines)
+		updated.append_array(filtered_body)
+		updated.append_array(lines.slice(end))
+		lines = updated
+
+	if not _write_codex_config(_join_lines(lines)):
+		return {"status": "error", "message": "Cannot write to %s" % _get_codex_config_path()}
+	return {"status": "ok", "message": "Codex configured (HTTP: %s)" % SERVER_HTTP_URL}
+
+
+static func _check_codex() -> ConfigStatus:
+	var content := _read_codex_config()
+	if content.is_empty():
+		return ConfigStatus.NOT_CONFIGURED
+
+	var lines := _split_lines(content)
+	var section := _find_codex_server_section(lines)
+	if section.is_empty():
+		return ConfigStatus.NOT_CONFIGURED
+
+	var start: int = section["start"]
+	var end: int = section["end"]
+	var configured_url := ""
+	var enabled := true
+	for i in range(start + 1, end):
+		var trimmed := lines[i].strip_edges()
+		if trimmed.begins_with("url ="):
+			var first_quote := trimmed.find("\"")
+			var last_quote := trimmed.rfind("\"")
+			if first_quote >= 0 and last_quote > first_quote:
+				configured_url = trimmed.substr(first_quote + 1, last_quote - first_quote - 1)
+		elif trimmed.begins_with("enabled ="):
+			enabled = trimmed.to_lower().find("false") < 0
+
+	if configured_url != SERVER_HTTP_URL:
+		return ConfigStatus.NOT_CONFIGURED
+	if not enabled:
+		return ConfigStatus.NOT_CONFIGURED
+	return ConfigStatus.CONFIGURED
+
+
+static func _remove_codex() -> Dictionary:
+	var content := _read_codex_config()
+	if content.is_empty():
+		return {"status": "ok", "message": "Not configured"}
+
+	var lines := _split_lines(content)
+	var updated: Array[String] = []
+	var i := 0
+	while i < lines.size():
+		var trimmed := lines[i].strip_edges()
+		if _is_codex_server_section_header(trimmed):
+			i += 1
+			while i < lines.size():
+				var next_trimmed := lines[i].strip_edges()
+				if next_trimmed.begins_with("[") and next_trimmed.ends_with("]"):
+					break
+				i += 1
+			continue
+		updated.append(lines[i])
+		i += 1
+
+	if not _write_codex_config(_join_lines(updated)):
+		return {"status": "error", "message": "Cannot write to %s" % _get_codex_config_path()}
+	return {"status": "ok", "message": "Codex configuration removed"}
 
 
 # --- Antigravity ---

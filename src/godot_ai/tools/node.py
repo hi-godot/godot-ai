@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from fastmcp import Context, FastMCP
 
-from godot_ai.tools._pagination import paginate
+from godot_ai.handlers import node as node_handlers
+from godot_ai.runtime.direct import DirectRuntime
 
 
 def register_node_tools(mcp: FastMCP) -> None:
@@ -26,11 +27,8 @@ def register_node_tools(mcp: FastMCP) -> None:
             name: Optional name for the node.
             parent_path: Node path of the parent (e.g. "/Main"). Empty = scene root.
         """
-        app = ctx.lifespan_context
-        return await app.client.send(
-            "create_node",
-            {"type": type, "name": name, "parent_path": parent_path},
-        )
+        runtime = DirectRuntime.from_context(ctx)
+        return await node_handlers.node_create(runtime, type=type, name=name, parent_path=parent_path)
 
     @mcp.tool()
     async def node_find(
@@ -53,12 +51,15 @@ def register_node_tools(mcp: FastMCP) -> None:
             offset: Number of results to skip. Default 0.
             limit: Maximum number of results to return. Default 100.
         """
-        app = ctx.lifespan_context
-        result = await app.client.send(
-            "find_nodes",
-            {"name": name, "type": type, "group": group},
+        runtime = DirectRuntime.from_context(ctx)
+        return await node_handlers.node_find(
+            runtime,
+            name=name,
+            type=type,
+            group=group,
+            offset=offset,
+            limit=limit,
         )
-        return paginate(result.get("nodes", []), offset, limit, key="nodes")
 
     @mcp.tool()
     async def node_get_properties(ctx: Context, path: str) -> dict:
@@ -70,8 +71,8 @@ def register_node_tools(mcp: FastMCP) -> None:
         Args:
             path: Scene path of the node (e.g. "/Main/Camera3D").
         """
-        app = ctx.lifespan_context
-        return await app.client.send("get_node_properties", {"path": path})
+        runtime = DirectRuntime.from_context(ctx)
+        return await node_handlers.node_get_properties(runtime, path=path)
 
     @mcp.tool()
     async def node_get_children(ctx: Context, path: str) -> dict:
@@ -83,8 +84,8 @@ def register_node_tools(mcp: FastMCP) -> None:
         Args:
             path: Scene path of the parent node (e.g. "/Main").
         """
-        app = ctx.lifespan_context
-        return await app.client.send("get_children", {"path": path})
+        runtime = DirectRuntime.from_context(ctx)
+        return await node_handlers.node_get_children(runtime, path=path)
 
     @mcp.tool()
     async def node_get_groups(ctx: Context, path: str) -> dict:
@@ -95,5 +96,5 @@ def register_node_tools(mcp: FastMCP) -> None:
         Args:
             path: Scene path of the node (e.g. "/Main/Player").
         """
-        app = ctx.lifespan_context
-        return await app.client.send("get_groups", {"path": path})
+        runtime = DirectRuntime.from_context(ctx)
+        return await node_handlers.node_get_groups(runtime, path=path)

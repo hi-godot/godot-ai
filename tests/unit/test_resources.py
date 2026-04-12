@@ -17,8 +17,8 @@ class TestResourceRegistration:
     """Verify all expected resources are registered on the server."""
 
     async def _resource_uris(self, mcp) -> set[str]:
-        resources = await mcp.list_resources()
-        return {str(r.uri) for r in resources}
+        resources = await mcp.get_resources()
+        return {str(uri) for uri in resources}
 
     async def test_sessions_resource_registered(self, mcp):
         assert "godot://sessions" in await self._resource_uris(mcp)
