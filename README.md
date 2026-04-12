@@ -125,7 +125,7 @@ claude mcp add --scope user --transport http godot-ai http://127.0.0.1:8000/mcp
 # Setup (handles macOS Python 3.13 .pth fix automatically)
 script/setup-dev
 
-# Run Python tests (89 unit + integration)
+# Run Python tests (81 unit + integration)
 pytest -v
 
 # Run Godot-side tests (44 handler tests, requires editor running)

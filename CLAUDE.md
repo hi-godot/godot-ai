@@ -54,7 +54,7 @@ python -m godot_ai --transport streamable-http --port 8000 --reload
 
 ### Python tests
 ```bash
-pytest -v                    # 89 unit + integration tests
+pytest -v                    # 81 unit + integration tests
 ```
 
 ### Godot-side tests

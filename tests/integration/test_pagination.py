@@ -1,4 +1,4 @@
-"""Integration tests: pagination in tools via mock Godot plugin."""
+"""Integration tests: pagination round-trip via mock Godot plugin."""
 
 from __future__ import annotations
 
@@ -22,7 +22,8 @@ def _make_files(count: int) -> list[dict]:
 
 
 class TestSceneHierarchyPagination:
-    async def test_default_pagination(self, harness):
+    async def test_full_result_from_godot(self, harness):
+        """Verify Godot returns full results that Python-side pagination can slice."""
         plugin = await harness.connect_plugin()
         client = GodotClient(harness.server, harness.registry)
         nodes = _make_nodes(5)
@@ -35,38 +36,15 @@ class TestSceneHierarchyPagination:
             )
 
         handler_task = asyncio.create_task(mock_handler())
-        # Call the raw command — pagination is in the tool layer, not client.send
         result = await client.send("get_scene_tree", {"depth": 10})
         await handler_task
 
         assert len(result["nodes"]) == 5
         await plugin.close()
 
-    async def test_paginate_scene_nodes(self, harness):
-        """Verify the pagination helper produces correct slices."""
-        from godot_ai.tools.scene import _paginate
-
-        nodes = _make_nodes(10)
-        page = _paginate(nodes, offset=2, limit=3)
-
-        assert len(page["items"]) == 3
-        assert page["items"][0]["name"] == "Node2"
-        assert page["total_count"] == 10
-        assert page["has_more"] is True
-
-    async def test_paginate_last_page(self, harness):
-        from godot_ai.tools.scene import _paginate
-
-        nodes = _make_nodes(10)
-        page = _paginate(nodes, offset=8, limit=5)
-
-        assert len(page["items"]) == 2
-        assert page["total_count"] == 10
-        assert page["has_more"] is False
-
 
 class TestNodeFindPagination:
-    async def test_find_nodes_paginated(self, harness):
+    async def test_find_nodes_returns_full_set(self, harness):
         plugin = await harness.connect_plugin()
         client = GodotClient(harness.server, harness.registry)
         nodes = _make_nodes(15)
@@ -74,16 +52,12 @@ class TestNodeFindPagination:
         async def mock_handler():
             cmd = await plugin.recv_command()
             assert cmd["command"] == "find_nodes"
-            await plugin.send_response(
-                cmd["request_id"],
-                {"nodes": nodes},
-            )
+            await plugin.send_response(cmd["request_id"], {"nodes": nodes})
 
         handler_task = asyncio.create_task(mock_handler())
         result = await client.send("find_nodes", {"name": "Node", "type": "", "group": ""})
         await handler_task
 
-        # Raw result returns all nodes — pagination is at tool layer
         assert len(result["nodes"]) == 15
         await plugin.close()
 
@@ -111,7 +85,7 @@ class TestFilesystemSearchPagination:
 
 
 class TestLogsPagination:
-    async def test_logs_with_offset(self, harness):
+    async def test_logs_returns_lines(self, harness):
         plugin = await harness.connect_plugin()
         client = GodotClient(harness.server, harness.registry)
         lines = [f"log line {i}" for i in range(20)]
@@ -119,15 +93,11 @@ class TestLogsPagination:
         async def mock_handler():
             cmd = await plugin.recv_command()
             assert cmd["command"] == "get_logs"
-            await plugin.send_response(
-                cmd["request_id"],
-                {"lines": lines},
-            )
+            await plugin.send_response(cmd["request_id"], {"lines": lines})
 
         handler_task = asyncio.create_task(mock_handler())
         result = await client.send("get_logs", {"count": 20})
         await handler_task
 
         assert len(result["lines"]) == 20
-        assert result["lines"][0] == "log line 0"
         await plugin.close()

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastmcp import Context, FastMCP
 
+from godot_ai.tools._pagination import paginate
+
 
 def register_node_tools(mcp: FastMCP) -> None:
     @mcp.tool()
@@ -56,16 +58,7 @@ def register_node_tools(mcp: FastMCP) -> None:
             "find_nodes",
             {"name": name, "type": type, "group": group},
         )
-        nodes = result.get("nodes", [])
-        total_count = len(nodes)
-        page = nodes[offset : offset + limit]
-        return {
-            "nodes": page,
-            "total_count": total_count,
-            "offset": offset,
-            "limit": limit,
-            "has_more": offset + limit < total_count,
-        }
+        return paginate(result.get("nodes", []), offset, limit, key="nodes")
 
     @mcp.tool()
     async def node_get_properties(ctx: Context, path: str) -> dict:

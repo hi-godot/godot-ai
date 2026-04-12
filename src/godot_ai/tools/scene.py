@@ -4,18 +4,7 @@ from __future__ import annotations
 
 from fastmcp import Context, FastMCP
 
-
-def _paginate(items: list, offset: int, limit: int) -> dict:
-    """Apply offset/limit pagination to a list, returning pagination metadata."""
-    total_count = len(items)
-    page = items[offset : offset + limit]
-    return {
-        "items": page,
-        "total_count": total_count,
-        "offset": offset,
-        "limit": limit,
-        "has_more": offset + limit < total_count,
-    }
+from godot_ai.tools._pagination import paginate
 
 
 def register_scene_tools(mcp: FastMCP) -> None:
@@ -39,15 +28,7 @@ def register_scene_tools(mcp: FastMCP) -> None:
         app = ctx.lifespan_context
         result = await app.client.send("get_scene_tree", {"depth": depth})
         nodes = result.get("nodes", [])
-        page = _paginate(nodes, offset, limit)
-        return {
-            "nodes": page["items"],
-            "root": result.get("root", ""),
-            "total_count": page["total_count"],
-            "offset": page["offset"],
-            "limit": page["limit"],
-            "has_more": page["has_more"],
-        }
+        return {"root": result.get("root", ""), **paginate(nodes, offset, limit, key="nodes")}
 
     @mcp.tool()
     async def scene_get_roots(ctx: Context) -> dict:

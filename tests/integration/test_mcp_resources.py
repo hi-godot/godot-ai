@@ -5,42 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 
-import pytest
-import websockets
-from fastmcp import Client
-
-from godot_ai.server import create_server
-
-from ..conftest import MockGodotPlugin
-
-MCP_PORT = 19503
-
-
-@pytest.fixture
-async def mcp_stack():
-    """Full MCP server + mock Godot plugin connected via WebSocket."""
-    mcp = create_server(ws_port=MCP_PORT)
-    async with Client(mcp) as client:
-        ws = await websockets.connect(f"ws://127.0.0.1:{MCP_PORT}")
-        handshake = {
-            "type": "handshake",
-            "session_id": "res-test",
-            "godot_version": "4.4.1",
-            "project_path": "/tmp/test_project",
-            "plugin_version": "0.0.1",
-            "protocol_version": 1,
-        }
-        await ws.send(json.dumps(handshake))
-        await asyncio.sleep(0.05)
-        plugin = MockGodotPlugin(ws=ws, session_id="res-test")
-        yield client, plugin
-        await plugin.close()
-
 
 def _parse_resource(result) -> dict:
     """Extract JSON dict from a ReadResourceResult."""
-    text = result[0].text
-    return json.loads(text)
+    return json.loads(result[0].text)
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +23,7 @@ class TestSessionsResource:
         data = _parse_resource(result)
 
         assert data["count"] == 1
-        assert data["sessions"][0]["session_id"] == "res-test"
+        assert data["sessions"][0]["session_id"] == "mcp-test"
         assert data["sessions"][0]["godot_version"] == "4.4.1"
         assert data["sessions"][0]["is_active"] is True
 
@@ -158,7 +126,7 @@ class TestProjectInfoResource:
         result = await client.read_resource("godot://project/info")
         data = _parse_resource(result)
 
-        assert data["session_id"] == "res-test"
+        assert data["session_id"] == "mcp-test"
         assert data["godot_version"] == "4.4.1"
         assert data["project_path"] == "/tmp/test_project"
         assert "connected_at" not in data

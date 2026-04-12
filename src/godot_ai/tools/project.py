@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastmcp import Context, FastMCP
 
+from godot_ai.tools._pagination import paginate
+
 
 def register_project_tools(mcp: FastMCP) -> None:
     @mcp.tool()
@@ -49,13 +51,4 @@ def register_project_tools(mcp: FastMCP) -> None:
         if path:
             params["path"] = path
         result = await app.client.send("search_filesystem", params)
-        files = result.get("files", [])
-        total_count = len(files)
-        page = files[offset : offset + limit]
-        return {
-            "files": page,
-            "total_count": total_count,
-            "offset": offset,
-            "limit": limit,
-            "has_more": offset + limit < total_count,
-        }
+        return paginate(result.get("files", []), offset, limit, key="files")

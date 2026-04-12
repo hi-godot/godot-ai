@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from fastmcp import Context, FastMCP
@@ -35,13 +36,21 @@ def register_project_resources(mcp: FastMCP) -> None:
     async def get_project_settings(ctx: Context) -> str:
         """Common project settings subset (display, physics, rendering)."""
         app = ctx.lifespan_context
-        settings = {}
-        errors = []
-        for key in COMMON_SETTINGS:
+
+        async def _fetch(key: str) -> tuple[str, object | None, str | None]:
             try:
                 result = await app.client.send("get_project_setting", {"key": key})
-                settings[key] = result.get("value")
+                return key, result.get("value"), None
             except Exception as e:
-                errors.append({"key": key, "error": str(e)})
+                return key, None, str(e)
+
+        results = await asyncio.gather(*[_fetch(key) for key in COMMON_SETTINGS])
+        settings = {}
+        errors = []
+        for key, value, error in results:
+            if error:
+                errors.append({"key": key, "error": error})
+            else:
+                settings[key] = value
 
         return json.dumps({"settings": settings, "errors": errors if errors else None})

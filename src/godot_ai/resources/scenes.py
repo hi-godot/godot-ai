@@ -19,7 +19,7 @@ def register_scene_resources(mcp: FastMCP) -> None:
                 "project_name": state.get("project_name", ""),
                 "is_playing": state.get("is_playing", False),
             })
-        except (ConnectionError, Exception) as e:
+        except Exception as e:
             return json.dumps({"error": str(e), "connected": False})
 
     @mcp.resource("godot://scene/hierarchy", mime_type="application/json")
@@ -28,5 +28,5 @@ def register_scene_resources(mcp: FastMCP) -> None:
         app = ctx.lifespan_context
         try:
             return json.dumps(await app.client.send("get_scene_tree", {"depth": 10}))
-        except (ConnectionError, Exception) as e:
+        except Exception as e:
             return json.dumps({"error": str(e), "connected": False})

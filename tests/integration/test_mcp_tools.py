@@ -3,39 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
-
-import pytest
-import websockets
-from fastmcp import Client
-
-from godot_ai.server import create_server
-
-from ..conftest import MockGodotPlugin
-
-MCP_PORT = 19502
-
-
-@pytest.fixture
-async def mcp_stack():
-    """Full MCP server + mock Godot plugin connected via WebSocket."""
-    mcp = create_server(ws_port=MCP_PORT)
-    async with Client(mcp) as client:
-        ws = await websockets.connect(f"ws://127.0.0.1:{MCP_PORT}")
-        handshake = {
-            "type": "handshake",
-            "session_id": "mcp-test",
-            "godot_version": "4.4.1",
-            "project_path": "/tmp/test_project",
-            "plugin_version": "0.0.1",
-            "protocol_version": 1,
-        }
-        await ws.send(json.dumps(handshake))
-        await asyncio.sleep(0.05)
-        plugin = MockGodotPlugin(ws=ws, session_id="mcp-test")
-        yield client, plugin
-        await plugin.close()
-
 
 # ---------------------------------------------------------------------------
 # scene_get_hierarchy

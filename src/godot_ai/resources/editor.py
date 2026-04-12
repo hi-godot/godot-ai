@@ -14,7 +14,7 @@ def register_editor_resources(mcp: FastMCP) -> None:
         app = ctx.lifespan_context
         try:
             return json.dumps(await app.client.send("get_selection"))
-        except (ConnectionError, Exception) as e:
+        except Exception as e:
             return json.dumps({"error": str(e), "connected": False})
 
     @mcp.resource("godot://logs/recent", mime_type="application/json")
@@ -23,5 +23,5 @@ def register_editor_resources(mcp: FastMCP) -> None:
         app = ctx.lifespan_context
         try:
             return json.dumps(await app.client.send("get_logs", {"count": 100}))
-        except (ConnectionError, Exception) as e:
+        except Exception as e:
             return json.dumps({"error": str(e), "connected": False})

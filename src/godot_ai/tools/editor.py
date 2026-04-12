@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastmcp import Context, FastMCP
 
+from godot_ai.tools._pagination import paginate
+
 
 def register_editor_tools(mcp: FastMCP) -> None:
     @mcp.tool()
@@ -41,16 +43,6 @@ def register_editor_tools(mcp: FastMCP) -> None:
             offset: Number of lines to skip from the start. Default 0.
         """
         app = ctx.lifespan_context
-        # Request more lines than needed to support offset
-        total_request = offset + count
-        result = await app.client.send("get_logs", {"count": total_request})
+        result = await app.client.send("get_logs", {"count": offset + count})
         lines = result.get("lines", [])
-        total_count = len(lines)
-        page = lines[offset : offset + count]
-        return {
-            "lines": page,
-            "total_count": total_count,
-            "offset": offset,
-            "limit": count,
-            "has_more": offset + count < total_count,
-        }
+        return paginate(lines, offset, count, key="lines")
