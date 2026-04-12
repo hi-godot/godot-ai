@@ -36,11 +36,9 @@ class GodotWebSocketServer:
             if e.errno == 48:  # Address already in use
                 logger.warning(
                     "WebSocket port %d already in use — another server instance may be running. "
-                    "MCP tools will work via stdio but the Godot plugin won't connect to this instance.",
+                    "MCP tools will work but the Godot plugin won't connect to this instance.",
                     self.port,
                 )
-                # Keep running without WebSocket — stdio transport still works
-                await asyncio.Future()
             else:
                 raise
 

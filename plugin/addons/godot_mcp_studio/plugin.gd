@@ -26,14 +26,13 @@ func _exit_tree() -> void:
 
 
 func _start_server() -> void:
-	# Check if server is already running on port 9500
 	var output: Array = []
-	var exit_code := OS.execute("lsof", ["-ti:9500"], output, true)
+	var exit_code := OS.execute("lsof", ["-ti:%d" % McpClientConfigurator.SERVER_WS_PORT], output, true)
 	if exit_code == 0 and output.size() > 0 and not output[0].strip_edges().is_empty():
-		print("MCP | server already running on port 9500")
+		print("MCP | server already running on port %d" % McpClientConfigurator.SERVER_WS_PORT)
 		return
 
-	var server_cmd := McpClientConfigurator._get_server_command()
+	var server_cmd := McpClientConfigurator.get_server_command()
 	if server_cmd.is_empty():
 		push_warning("MCP | could not find server command")
 		return
@@ -41,7 +40,7 @@ func _start_server() -> void:
 	var cmd: String = server_cmd[0]
 	var args: Array[String] = []
 	args.assign(server_cmd.slice(1))
-	args.append_array(["--transport", "streamable-http", "--port", "8000"])
+	args.append_array(["--transport", "streamable-http", "--port", str(McpClientConfigurator.SERVER_HTTP_PORT)])
 
 	_server_pid = OS.create_process(cmd, args)
 	if _server_pid > 0:
@@ -58,12 +57,11 @@ func _stop_server() -> void:
 
 
 func _auto_configure_clients() -> void:
-	for client_info in [
-		["claude_code", McpClientConfigurator.ClientType.CLAUDE_CODE, "Claude Code"],
-		["antigravity", McpClientConfigurator.ClientType.ANTIGRAVITY, "Antigravity"],
+	for client_type in [
+		McpClientConfigurator.ClientType.CLAUDE_CODE,
+		McpClientConfigurator.ClientType.ANTIGRAVITY,
 	]:
-		var client_type: McpClientConfigurator.ClientType = client_info[1]
-		var display_name: String = client_info[2]
+		var display_name: String = McpClientConfigurator.ClientType.keys()[client_type]
 
 		var status := McpClientConfigurator.check_status(client_type)
 		if status == McpClientConfigurator.ConfigStatus.CONFIGURED:
