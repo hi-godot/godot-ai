@@ -256,14 +256,11 @@ func _make_status_row(label_text: String, value_text: String, value_color: Color
 
 
 func _on_install_uv() -> void:
-	var install_cmd: String
 	match OS.get_name():
 		"Windows":
-			install_cmd = "powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\""
+			OS.execute("powershell", ["-ExecutionPolicy", "ByPass", "-c", "irm https://astral.sh/uv/install.ps1 | iex"], [], false)
 		_:
-			install_cmd = "curl -LsSf https://astral.sh/uv/install.sh | sh"
-	OS.execute("bash", ["-c", install_cmd], [], false)
-	# Re-check after a moment
+			OS.execute("bash", ["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"], [], false)
 	_refresh_setup_status.call_deferred()
 
 

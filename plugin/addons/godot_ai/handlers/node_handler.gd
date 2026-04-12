@@ -70,10 +70,13 @@ func get_node_properties(params: Dictionary) -> Dictionary:
 	var properties: Array[Dictionary] = []
 	for prop in node.get_property_list():
 		var usage: int = prop.get("usage", 0)
-		# Only include properties visible in the inspector (PROPERTY_USAGE_EDITOR)
 		if not (usage & PROPERTY_USAGE_EDITOR):
 			continue
+		# Safe read: custom script getters can error; skip bad properties
+		# rather than letting one bad read timeout the entire request.
 		var value = node.get(prop.name)
+		if value == null and prop.type != TYPE_NIL:
+			continue
 		properties.append({
 			"name": prop.name,
 			"type": type_string(prop.type),

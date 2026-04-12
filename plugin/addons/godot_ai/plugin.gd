@@ -67,6 +67,9 @@ func _exit_tree() -> void:
 func _start_server() -> void:
 	## If a server is already listening on our HTTP port, use it.
 	## This covers: CI (external server), another Godot instance, or manual start.
+	## NOTE: We only check port 8000 (HTTP), not 9500 (WebSocket). If a foreign
+	## process holds 8000, we'll assume it's a valid server. The WebSocket
+	## connection will fail and retry if the server isn't actually ours.
 	if _is_port_in_use(McpClientConfigurator.SERVER_HTTP_PORT):
 		print("MCP | server already running on port %d, using existing" % McpClientConfigurator.SERVER_HTTP_PORT)
 		return

@@ -39,7 +39,7 @@ func find_nodes(params: Dictionary) -> Dictionary:
 
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
-		return {"data": {"nodes": [], "message": "No scene open"}}
+		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 
 	var results: Array[Dictionary] = []
 	_find_recursive(scene_root, scene_root, name_filter, type_filter, group_filter, results)

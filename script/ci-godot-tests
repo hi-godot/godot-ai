@@ -56,6 +56,29 @@ if [ -z "${SESSION_ID:-}" ]; then
   exit 1
 fi
 
+# Verify a Godot session is actually connected before running tests
+FINAL_COUNT=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"session_list","arguments":{}}}' \
+  | python3 -c "
+import json, sys
+raw = sys.stdin.read()
+for line in raw.split('\n'):
+    if line.startswith('data: '):
+        data = json.loads(line[6:])
+        sc = data.get('result',{}).get('structuredContent',{})
+        if not sc:
+            text = data.get('result',{}).get('content',[{}])[0].get('text','{}')
+            sc = json.loads(text)
+        print(sc.get('count', 0))
+        break
+" 2>/dev/null || echo "0")
+
+if [ "$FINAL_COUNT" -eq 0 ] 2>/dev/null; then
+  echo "ERROR: No Godot session connected after 60 attempts. Plugin may not have loaded."
+  exit 1
+fi
+
 # Call run_tests
 echo "Running handler tests..."
 RESULT=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \

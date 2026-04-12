@@ -98,29 +98,27 @@ static func get_server_command() -> Array[String]:
 
 
 ## Find the uvx executable, checking platform-specific locations.
+## On GUI-launched Godot, PATH is minimal, so we check well-known
+## install locations explicitly before falling back to which/where.
 static func find_uvx() -> String:
 	var extra_paths := _get_platform_path_prepend()
-	var search_names := ["uvx"]
+	var is_windows := OS.get_name() == "Windows"
+	var exe_name := "uvx.exe" if is_windows else "uvx"
 
-	for name in search_names:
-		# Check extra platform paths first
-		for dir in extra_paths:
-			var full := dir.path_join(name)
-			if FileAccess.file_exists(full):
-				return full
+	# Check well-known platform paths first (works even with minimal PATH)
+	for dir in extra_paths:
+		var full := dir.path_join(exe_name)
+		if FileAccess.file_exists(full):
+			return full
 
-		# Check via which/where
-		var cmd := "which" if OS.get_name() != "Windows" else "where"
-		var output: Array = []
-		var env_path := OS.get_environment("PATH")
-		if not extra_paths.is_empty():
-			var prepend := ":".join(extra_paths) if OS.get_name() != "Windows" else ";".join(extra_paths)
-			env_path = prepend + (":" if OS.get_name() != "Windows" else ";") + env_path
-		var exit_code := OS.execute(cmd, [name], output, true)
-		if exit_code == 0 and output.size() > 0:
-			var found: String = output[0].strip_edges()
-			if not found.is_empty():
-				return found
+	# Fallback: which/where using inherited PATH
+	var cmd := "where" if is_windows else "which"
+	var output: Array = []
+	var exit_code := OS.execute(cmd, [exe_name], output, true)
+	if exit_code == 0 and output.size() > 0:
+		var found: String = output[0].strip_edges()
+		if not found.is_empty():
+			return found
 
 	return ""
 
