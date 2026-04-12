@@ -86,7 +86,7 @@ class GodotWebSocketServer:
             raise ConnectionError(f"No connection for session {session_id}")
 
         request = CommandRequest(command=command, params=params or {})
-        future: asyncio.Future[CommandResponse] = asyncio.get_event_loop().create_future()
+        future: asyncio.Future[CommandResponse] = asyncio.get_running_loop().create_future()
         self._pending[request.request_id] = future
 
         await ws.send(request.model_dump_json())

@@ -121,6 +121,10 @@ func _dispatch_command(cmd: Dictionary) -> void:
 			result = _handle_get_editor_state(params)
 		"get_scene_tree":
 			result = _handle_get_scene_tree(params)
+		"get_selection":
+			result = _handle_get_selection(params)
+		"create_node":
+			result = _handle_create_node(params)
 		_:
 			result = {
 				"request_id": request_id,
@@ -174,6 +178,82 @@ func _walk_tree(node: Node, out: Array[Dictionary], depth: int, max_depth: int) 
 
 	for child in node.get_children():
 		_walk_tree(child, out, depth + 1, max_depth)
+
+
+func _handle_get_selection(_params: Dictionary) -> Dictionary:
+	var selected := EditorInterface.get_selection().get_selected_nodes()
+	var paths: Array[String] = []
+	for node in selected:
+		paths.append(str(node.get_path()))
+	return {"data": {"selected_paths": paths, "count": paths.size()}}
+
+
+func _handle_create_node(params: Dictionary) -> Dictionary:
+	var node_type: String = params.get("type", "")
+	var node_name: String = params.get("name", "")
+	var parent_path: String = params.get("parent_path", "")
+
+	if node_type.is_empty():
+		return {
+			"status": "error",
+			"error": {"code": "INVALID_PARAMS", "message": "Missing required param: type"}
+		}
+
+	# Verify the type exists
+	if not ClassDB.class_exists(node_type):
+		return {
+			"status": "error",
+			"error": {"code": "INVALID_PARAMS", "message": "Unknown node type: %s" % node_type}
+		}
+	if not ClassDB.is_parent_class(node_type, "Node"):
+		return {
+			"status": "error",
+			"error": {"code": "INVALID_PARAMS", "message": "%s is not a Node type" % node_type}
+		}
+
+	# Find the parent
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return {
+			"status": "error",
+			"error": {"code": "EDITOR_NOT_READY", "message": "No scene open"}
+		}
+
+	var parent: Node = scene_root
+	if not parent_path.is_empty():
+		parent = scene_root.get_node_or_null(parent_path)
+		if parent == null:
+			# Try absolute path
+			parent = scene_root.get_tree().root.get_node_or_null(parent_path)
+		if parent == null:
+			return {
+				"status": "error",
+				"error": {"code": "INVALID_PARAMS", "message": "Parent not found: %s" % parent_path}
+			}
+
+	# Create the node
+	var new_node: Node = ClassDB.instantiate(node_type)
+	if new_node == null:
+		return {
+			"status": "error",
+			"error": {"code": "INTERNAL_ERROR", "message": "Failed to instantiate %s" % node_type}
+		}
+
+	if not node_name.is_empty():
+		new_node.name = node_name
+
+	# Add to parent and set owner so it saves with the scene
+	parent.add_child(new_node, true)
+	new_node.owner = scene_root
+
+	return {
+		"data": {
+			"name": new_node.name,
+			"type": new_node.get_class(),
+			"path": str(new_node.get_path()),
+			"parent_path": str(parent.get_path()),
+		}
+	}
 
 
 func _send_json(data: Dictionary) -> void:

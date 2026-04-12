@@ -1,16 +1,17 @@
 """MCP resources for session state."""
 
-from fastmcp import FastMCP
+from __future__ import annotations
 
-from godot_mcp_studio.sessions.registry import SessionRegistry
+from fastmcp import Context, FastMCP
 
 
-def register_session_resources(mcp: FastMCP, registry: SessionRegistry) -> None:
+def register_session_resources(mcp: FastMCP) -> None:
     @mcp.resource("godot://sessions")
-    def get_sessions() -> dict:
+    def get_sessions(ctx: Context) -> dict:
         """All connected Godot editor sessions and their metadata."""
-        sessions = registry.list_all()
-        active_id = registry.active_session_id
+        app = ctx.lifespan_context
+        sessions = app.registry.list_all()
+        active_id = app.registry.active_session_id
         return {
             "sessions": [{**s.to_dict(), "is_active": s.session_id == active_id} for s in sessions],
             "count": len(sessions),
