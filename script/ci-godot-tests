@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Run Godot handler tests via MCP in CI.
+# Expects: Python server already running on port 8000, Godot editor running with plugin connected.
+set -euo pipefail
+
+SERVER_URL="http://127.0.0.1:8000/mcp"
+HEADERS=(-H "Content-Type: application/json" -H "Accept: application/json, text/event-stream")
+
+# Initialize MCP session
+SESSION_ID=$(curl -si "$SERVER_URL" -X POST "${HEADERS[@]}" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"1.0"}}}' \
+  2>&1 | grep -i 'mcp-session-id' | tr -d '\r' | awk '{print $2}')
+
+if [ -z "$SESSION_ID" ]; then
+  echo "ERROR: Failed to get MCP session ID"
+  exit 1
+fi
+
+curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' > /dev/null
+
+# Call run_tests
+RESULT=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_tests","arguments":{}}}')
+
+# Parse and report results
+echo "$RESULT" | python3 -c "
+import json, sys
+raw = sys.stdin.read()
+for line in raw.split('\n'):
+    if line.startswith('data: '):
+        data = json.loads(line[6:])
+        content = data.get('result', {}).get('structuredContent', {})
+        if not content:
+            text = data.get('result', {}).get('content', [{}])[0].get('text', '{}')
+            content = json.loads(text)
+        passed = content.get('passed', 0)
+        failed = content.get('failed', 0)
+        total = content.get('total', 0)
+        print(f'Godot tests: {passed}/{total} passed, {failed} failed')
+        if content.get('failures'):
+            for f in content['failures']:
+                print(f'  FAIL: {f[\"suite\"]}.{f[\"test\"]}: {f[\"message\"]}')
+        if failed > 0:
+            sys.exit(1)
+        if total == 0:
+            print('ERROR: No tests ran')
+            sys.exit(1)
+        break
+"
