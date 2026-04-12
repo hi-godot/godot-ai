@@ -67,9 +67,16 @@ class GodotWebSocketServer:
                 handshake.project_path,
             )
 
-            # Listen for responses
+            # Listen for responses and events
             async for raw_msg in ws:
                 data = json.loads(raw_msg)
+
+                # Handle state events from the plugin
+                if data.get("type") == "event":
+                    self._handle_event(session_id, data)
+                    continue
+
+                # Handle command responses
                 response = CommandResponse.model_validate(data)
                 future = self._pending.pop(response.request_id, None)
                 if future and not future.done():
@@ -83,6 +90,20 @@ class GodotWebSocketServer:
             if session_id:
                 self.registry.unregister(session_id)
                 self._connections.pop(session_id, None)
+
+    def _handle_event(self, session_id: str, data: dict) -> None:
+        event = data.get("event", "")
+        event_data = data.get("data", {})
+        session = self.registry.get(session_id)
+        if session is None:
+            return
+
+        if event == "scene_changed":
+            session.current_scene = event_data.get("current_scene", "")
+            logger.info("Session %s: scene changed to %s", session_id[:8], session.current_scene)
+        elif event == "play_state_changed":
+            session.play_state = event_data.get("play_state", "stopped")
+            logger.info("Session %s: play state -> %s", session_id[:8], session.play_state)
 
     async def send_command(
         self,

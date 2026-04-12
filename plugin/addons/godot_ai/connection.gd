@@ -23,6 +23,7 @@ var log_buffer: McpLogBuffer
 func _ready() -> void:
 	_session_id = _generate_session_id()
 	_connect_to_server()
+	_hook_editor_signals()
 
 
 func _process(delta: float) -> void:
@@ -40,7 +41,8 @@ func _process(delta: float) -> void:
 				var raw := _peer.get_packet().get_string_from_utf8()
 				_handle_message(raw)
 
-			# Let dispatcher process queued commands, send responses
+			_check_state_changes()
+
 			if dispatcher:
 				for response in dispatcher.tick():
 					_send_json(response)
@@ -105,6 +107,46 @@ func _handle_message(raw: String) -> void:
 	if parsed is Dictionary and parsed.has("request_id") and parsed.has("command"):
 		if dispatcher:
 			dispatcher.enqueue(parsed)
+
+
+## Send a state event to the server (not a command response).
+func send_event(event_name: String, data: Dictionary = {}) -> void:
+	_send_json({"type": "event", "event": event_name, "data": data})
+
+
+func _hook_editor_signals() -> void:
+	# Scene change: poll in _process since there's no direct signal for scene switch
+	# Play state: EditorInterface signals
+	EditorInterface.get_editor_settings()  # ensure interface is ready
+	_last_scene_path = _get_current_scene_path()
+	_last_play_state = EditorInterface.is_playing_scene()
+
+
+var _last_scene_path := ""
+var _last_play_state := false
+
+
+## Check for scene/play state changes each frame (lightweight polling).
+func _check_state_changes() -> void:
+	var scene_path := _get_current_scene_path()
+	if scene_path != _last_scene_path:
+		_last_scene_path = scene_path
+		send_event("scene_changed", {"current_scene": scene_path})
+		if log_buffer:
+			log_buffer.log("[event] scene_changed -> %s" % scene_path)
+
+	var playing := EditorInterface.is_playing_scene()
+	if playing != _last_play_state:
+		_last_play_state = playing
+		var state := "playing" if playing else "stopped"
+		send_event("play_state_changed", {"play_state": state})
+		if log_buffer:
+			log_buffer.log("[event] play_state_changed -> %s" % state)
+
+
+func _get_current_scene_path() -> String:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	return scene_root.scene_file_path if scene_root else ""
 
 
 func _send_json(data: Dictionary) -> void:
