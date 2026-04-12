@@ -18,9 +18,10 @@ func _enter_tree() -> void:
 	var editor_handler := EditorHandler.new(_log_buffer)
 	var scene_handler := SceneHandler.new()
 	var node_handler := NodeHandler.new(get_undo_redo())
+	var project_handler := ProjectHandler.new()
 	var client_handler := ClientHandler.new()
 	var test_handler := TestHandler.new(get_undo_redo(), _log_buffer)
-	_handlers = [editor_handler, scene_handler, node_handler, client_handler, test_handler]
+	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, test_handler]
 
 	_dispatcher.register("get_editor_state", editor_handler.get_editor_state)
 	_dispatcher.register("get_scene_tree", scene_handler.get_scene_tree)
@@ -32,6 +33,8 @@ func _enter_tree() -> void:
 	_dispatcher.register("get_children", node_handler.get_children)
 	_dispatcher.register("get_groups", node_handler.get_groups)
 	_dispatcher.register("get_logs", editor_handler.get_logs)
+	_dispatcher.register("get_project_setting", project_handler.get_project_setting)
+	_dispatcher.register("search_filesystem", project_handler.search_filesystem)
 	_dispatcher.register("configure_client", client_handler.configure_client)
 	_dispatcher.register("check_client_status", client_handler.check_client_status)
 	_dispatcher.register("run_tests", test_handler.run_tests)

@@ -16,6 +16,7 @@ from godot_ai.sessions.registry import SessionRegistry
 from godot_ai.tools.client import register_client_tools
 from godot_ai.tools.editor import register_editor_tools
 from godot_ai.tools.node import register_node_tools
+from godot_ai.tools.project import register_project_tools
 from godot_ai.tools.scene import register_scene_tools
 from godot_ai.tools.session import register_session_tools
 from godot_ai.tools.testing import register_testing_tools
@@ -64,6 +65,7 @@ def create_server(ws_port: int = 9500) -> FastMCP:
     register_editor_tools(mcp)
     register_scene_tools(mcp)
     register_node_tools(mcp)
+    register_project_tools(mcp)
     register_client_tools(mcp)
     register_testing_tools(mcp)
     register_session_resources(mcp)

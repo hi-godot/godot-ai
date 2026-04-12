@@ -447,7 +447,7 @@ Large results (scene trees with 1000+ nodes, long log buffers) need pagination:
 ### Phase 1 progress
 - [x] Batch 1: Session and editor tools
 - [x] Batch 2: Scene read tools (6 tools)
-- [ ] Batch 3: Project reads (project_settings.get, filesystem.search)
+- [x] Batch 3: Project reads (project_settings.get, filesystem.search)
 - [ ] Batch 4: MCP Resources
 - [x] Batch 5: Editor dock panel with setup status
 - [x] Batch 6: Test harness (35 Godot-side + 32 Python = 67 total tests)

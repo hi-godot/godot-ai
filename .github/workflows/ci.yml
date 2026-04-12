@@ -30,6 +30,16 @@ jobs:
       - name: Run tests
         run: pytest -v
 
+      - name: Run tests with coverage
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
+        run: pytest --cov=godot_ai --cov-report=xml -v
+
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.xml
+
       - name: Lint
         run: ruff check src/ tests/
 

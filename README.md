@@ -1,5 +1,8 @@
 # Godot AI
 
+[![CI](https://github.com/hi-godot/godot-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/hi-godot/godot-ai/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/hi-godot/godot-ai/graph/badge.svg)](https://codecov.io/gh/hi-godot/godot-ai)
+
 Production-grade MCP server and AI tools for the Godot engine.
 
 > **Status: Early development.** Core read tools working, write tools coming.
@@ -84,6 +87,8 @@ claude mcp add --scope user --transport http godot-ai http://127.0.0.1:8000/mcp
 | `node_get_properties` | Get all properties of a node |
 | `node_get_children` | Get direct children of a node |
 | `node_get_groups` | Get groups a node belongs to |
+| `project_settings_get` | Get a Godot project setting by key |
+| `filesystem_search` | Search project files by name, type, or path |
 | `logs_read` | Read recent MCP command log from the Godot console |
 | `run_tests` | Run GDScript test suites inside the editor |
 | `get_test_results` | Get results from the last test run |
@@ -108,10 +113,10 @@ claude mcp add --scope user --transport http godot-ai http://127.0.0.1:8000/mcp
 # Setup (handles macOS Python 3.13 .pth fix automatically)
 script/setup-dev
 
-# Run Python tests (32 unit + integration)
+# Run Python tests (38 unit + integration)
 pytest -v
 
-# Run Godot-side tests (35 handler tests, requires editor running)
+# Run Godot-side tests (44 handler tests, requires editor running)
 # Use the run_tests MCP tool
 
 # Lint
