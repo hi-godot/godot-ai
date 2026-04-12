@@ -5,7 +5,7 @@ description = "Production-grade MCP server and AI tools for the Godot engine"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "fastmcp>=2.0.0",
+    "fastmcp>=3.0.0",
     "websockets>=13.0",
     "pydantic>=2.0",
 ]

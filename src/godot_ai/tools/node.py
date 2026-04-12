@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastmcp import Context, FastMCP
 
+from godot_ai.tools._pagination import paginate
+
 
 def register_node_tools(mcp: FastMCP) -> None:
     @mcp.tool()
@@ -36,22 +38,27 @@ def register_node_tools(mcp: FastMCP) -> None:
         name: str = "",
         type: str = "",
         group: str = "",
+        offset: int = 0,
+        limit: int = 100,
     ) -> dict:
         """Find nodes in the scene tree by name, type, or group.
 
         At least one filter must be provided. Filters are combined with AND
-        logic — a node must match all specified filters.
+        logic — a node must match all specified filters. Results are paginated.
 
         Args:
             name: Substring match on node name (case-insensitive).
             type: Exact Godot class name (e.g. "MeshInstance3D").
             group: Group name the node must belong to.
+            offset: Number of results to skip. Default 0.
+            limit: Maximum number of results to return. Default 100.
         """
         app = ctx.lifespan_context
-        return await app.client.send(
+        result = await app.client.send(
             "find_nodes",
             {"name": name, "type": type, "group": group},
         )
+        return paginate(result.get("nodes", []), offset, limit, key="nodes")
 
     @mcp.tool()
     async def node_get_properties(ctx: Context, path: str) -> dict:

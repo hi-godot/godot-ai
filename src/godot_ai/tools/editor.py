@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastmcp import Context, FastMCP
 
+from godot_ai.tools._pagination import paginate
+
 
 def register_editor_tools(mcp: FastMCP) -> None:
     @mcp.tool()
@@ -26,14 +28,23 @@ def register_editor_tools(mcp: FastMCP) -> None:
         return await app.client.send("get_selection")
 
     @mcp.tool()
-    async def logs_read(ctx: Context, count: int = 50) -> dict:
+    async def logs_read(
+        ctx: Context,
+        count: int = 50,
+        offset: int = 0,
+    ) -> dict:
         """Read recent log lines from the Godot editor console.
 
-        Returns the most recent log lines captured by the MCP plugin,
+        Returns paginated log lines captured by the MCP plugin,
         including MCP command traffic when logging is enabled.
+        The buffer holds up to 500 lines; pagination windows into that.
 
         Args:
-            count: Number of recent lines to return. Default 50.
+            count: Maximum number of lines to return. Default 50.
+            offset: Number of lines to skip from the start. Default 0.
         """
         app = ctx.lifespan_context
-        return await app.client.send("get_logs", {"count": count})
+        # Fetch the full buffer so offset/limit/total_count are accurate
+        result = await app.client.send("get_logs", {"count": 500})
+        lines = result.get("lines", [])
+        return paginate(lines, offset, count, key="lines")
