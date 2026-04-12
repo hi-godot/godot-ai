@@ -60,17 +60,12 @@ func create_node(params: Dictionary) -> Dictionary:
 
 
 func get_node_properties(params: Dictionary) -> Dictionary:
-	var node_path: String = params.get("path", "")
-	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
-
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-
-	var node := ScenePath.resolve(node_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+	var resolved := _resolve_node(params)
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	var node_path: String = resolved.path
+	var scene_root: Node = resolved.scene_root
 
 	var properties: Array[Dictionary] = []
 	for prop in node.get_property_list():
@@ -95,17 +90,12 @@ func get_node_properties(params: Dictionary) -> Dictionary:
 
 
 func get_children(params: Dictionary) -> Dictionary:
-	var node_path: String = params.get("path", "")
-	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
-
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-
-	var node := ScenePath.resolve(node_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+	var resolved := _resolve_node(params)
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	var node_path: String = resolved.path
+	var scene_root: Node = resolved.scene_root
 
 	var children: Array[Dictionary] = []
 	for child in node.get_children():
@@ -125,17 +115,11 @@ func get_children(params: Dictionary) -> Dictionary:
 
 
 func get_groups(params: Dictionary) -> Dictionary:
-	var node_path: String = params.get("path", "")
-	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
-
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-
-	var node := ScenePath.resolve(node_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+	var resolved := _resolve_node(params)
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	var node_path: String = resolved.path
 
 	var groups: Array[String] = []
 	for group in node.get_groups():
@@ -149,6 +133,21 @@ func get_groups(params: Dictionary) -> Dictionary:
 			"count": groups.size(),
 		}
 	}
+
+
+## Validate path param, resolve to node. Returns dict with node/path/scene_root
+## on success, or an error dict (has "error" key) on failure.
+func _resolve_node(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("path", "")
+	if node_path.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var node := ScenePath.resolve(node_path, scene_root)
+	if node == null:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+	return {"node": node, "path": node_path, "scene_root": scene_root}
 
 
 ## Convert a Godot Variant to a JSON-safe value.

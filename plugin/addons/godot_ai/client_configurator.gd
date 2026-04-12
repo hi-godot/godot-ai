@@ -75,7 +75,7 @@ static func is_dev_checkout() -> bool:
 ## Get the server launch command. Returns empty array if nothing found.
 static func get_server_command() -> Array[String]:
 	# Tier 1: dev checkout — use venv python + source
-	var venv_python := _find_venv_python()
+	var venv_python := _cached_venv_python()
 	if not venv_python.is_empty():
 		print("MCP | using dev venv: %s" % venv_python)
 		return [venv_python, "-m", "godot_ai"]
@@ -135,6 +135,17 @@ static func check_uv_version() -> String:
 	if exit_code == 0 and output.size() > 0:
 		return output[0].strip_edges()
 	return ""
+
+
+static var _venv_python_cache: String = ""
+static var _venv_python_searched: bool = false
+
+
+static func _cached_venv_python() -> String:
+	if not _venv_python_searched:
+		_venv_python_cache = _find_venv_python()
+		_venv_python_searched = true
+	return _venv_python_cache
 
 
 static func _find_venv_python() -> String:

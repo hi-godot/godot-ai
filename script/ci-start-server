@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Start the MCP server and wait for it to be ready.
+# Usage: ci-start-server [python-command]
+# Default python command: python
+set -euo pipefail
+
+PYTHON_CMD="${1:-python}"
+PORT=8000
+SERVER_URL="http://127.0.0.1:$PORT/mcp"
+
+$PYTHON_CMD -m godot_ai --transport streamable-http --port $PORT &
+
+for i in $(seq 1 30); do
+  if curl -s -o /dev/null "$SERVER_URL" -X POST \
+    -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"1.0"}}}'; then
+    echo "Server ready on port $PORT"
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "ERROR: Server failed to start on port $PORT"
+exit 1

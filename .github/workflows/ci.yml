@@ -49,14 +49,7 @@ jobs:
           /tmp/venv/bin/pip install -e ".[dev]" > /dev/null
 
       - name: Start MCP server
-        run: |
-          /tmp/venv/bin/python -m godot_ai --transport streamable-http --port 8000 &
-          for i in $(seq 1 30); do
-            curl -s -o /dev/null http://127.0.0.1:8000/mcp -X POST \
-              -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
-              -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"1.0"}}}' && echo "Server ready" && break
-            sleep 1
-          done
+        run: bash script/ci-start-server /tmp/venv/bin/python
 
       - name: Start Godot editor (headless)
         run: |
@@ -87,14 +80,7 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Start MCP server
-        run: |
-          python -m godot_ai --transport streamable-http --port 8000 &
-          for i in $(seq 1 30); do
-            curl -s -o /dev/null http://127.0.0.1:8000/mcp -X POST \
-              -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
-              -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"1.0"}}}' && echo "Server ready" && break
-            sleep 1
-          done
+        run: bash script/ci-start-server
 
       - name: Start Godot editor (headless)
         run: |
@@ -126,14 +112,7 @@ jobs:
 
       - name: Start MCP server
         shell: bash
-        run: |
-          python -m godot_ai --transport streamable-http --port 8000 &
-          for i in $(seq 1 30); do
-            curl -s -o /dev/null http://127.0.0.1:8000/mcp -X POST \
-              -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
-              -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"1.0"}}}' && echo "Server ready" && break
-            sleep 1
-          done
+        run: bash script/ci-start-server
 
       - name: Start Godot editor (headless)
         shell: bash
