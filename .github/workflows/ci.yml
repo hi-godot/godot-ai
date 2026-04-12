@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  python-tests:
     name: Python ${{ matrix.python-version }} / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -32,3 +32,100 @@ jobs:
 
       - name: Lint
         run: ruff check src/ tests/
+
+  godot-tests:
+    name: Godot handler tests
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.6.2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        run: |
+          apt-get update -qq && apt-get install -y -qq python3 python3-pip python3-venv > /dev/null
+          python3 -m venv /tmp/venv
+          /tmp/venv/bin/pip install -e ".[dev]" > /dev/null
+
+      - name: Start MCP server
+        run: |
+          /tmp/venv/bin/python -m godot_ai --transport streamable-http --port 8000 &
+          # Wait for server to be ready
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/mcp -X POST \
+              -H "Content-Type: application/json" \
+              -H "Accept: application/json, text/event-stream" \
+              -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"1.0"}}}' | grep -q 200; then
+              echo "Server ready"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Run Godot with plugin (headless)
+        run: |
+          # Import the project first (generates .godot/ cache)
+          timeout 30 godot --headless --path test_project --import || true
+          # Start Godot editor headless — plugin will connect to server
+          timeout 60 godot --headless --path test_project --editor &
+          GODOT_PID=$!
+          # Wait for plugin to connect (watch server logs for session)
+          for i in $(seq 1 30); do
+            if curl -s http://127.0.0.1:8000/mcp -X POST \
+              -H "Content-Type: application/json" \
+              -H "Accept: application/json, text/event-stream" \
+              -d '{"jsonrpc":"2.0","id":99,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"1.0"}}}' 2>/dev/null | grep -q "Godot AI"; then
+              break
+            fi
+            sleep 2
+          done
+          # Give plugin a moment to fully initialize
+          sleep 3
+
+      - name: Run handler tests via MCP
+        run: |
+          # Initialize a session
+          SESSION_ID=$(curl -si http://127.0.0.1:8000/mcp -X POST \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/event-stream" \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"1.0"}}}' 2>&1 | grep -i 'mcp-session-id' | tr -d '\r' | awk '{print $2}')
+
+          curl -s http://127.0.0.1:8000/mcp -X POST \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/event-stream" \
+            -H "Mcp-Session-Id: $SESSION_ID" \
+            -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' > /dev/null
+
+          # Call run_tests
+          RESULT=$(curl -s http://127.0.0.1:8000/mcp -X POST \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/event-stream" \
+            -H "Mcp-Session-Id: $SESSION_ID" \
+            -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_tests","arguments":{}}}')
+
+          echo "$RESULT" | python3 -c "
+          import json, sys
+          raw = sys.stdin.read()
+          # Parse SSE format
+          for line in raw.split('\n'):
+              if line.startswith('data: '):
+                  data = json.loads(line[6:])
+                  content = data.get('result', {}).get('structuredContent', {})
+                  if not content:
+                      text = data.get('result', {}).get('content', [{}])[0].get('text', '{}')
+                      content = json.loads(text)
+                  passed = content.get('passed', 0)
+                  failed = content.get('failed', 0)
+                  total = content.get('total', 0)
+                  print(f'Godot tests: {passed}/{total} passed, {failed} failed')
+                  if content.get('failures'):
+                      for f in content['failures']:
+                          print(f'  FAIL: {f[\"suite\"]}.{f[\"test\"]}: {f[\"message\"]}')
+                  if failed > 0:
+                      sys.exit(1)
+                  if total == 0:
+                      print('ERROR: No tests ran')
+                      sys.exit(1)
+                  break
+          "
