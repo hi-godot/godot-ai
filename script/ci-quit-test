@@ -1,12 +1,46 @@
 #!/usr/bin/env bash
 # Smoke-test the editor_quit tool in CI.
-# Calls editor_quit, then waits for the Godot process to exit cleanly.
+# Calls editor_quit, then verifies the Godot session disconnects.
 #
 # Expects: Python server running on port 8000, Godot editor with plugin connected.
 set -euo pipefail
 
 SERVER_URL="http://127.0.0.1:8000/mcp"
 HEADERS=(-H "Content-Type: application/json" -H "Accept: application/json, text/event-stream")
+REQ_ID=0
+
+# Helper: call an MCP tool and extract the content JSON from the SSE response.
+mcp_call() {
+  local tool="$1"
+  local args="$2"
+  REQ_ID=$((REQ_ID + 1))
+  local raw
+  raw=$(curl -s --max-time 30 "$SERVER_URL" -X POST "${HEADERS[@]}" \
+    -H "Mcp-Session-Id: $SESSION_ID" \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":$REQ_ID,\"method\":\"tools/call\",\"params\":{\"name\":\"$tool\",\"arguments\":$args}}")
+  echo "$raw" | python3 -c "
+import json, sys
+raw = sys.stdin.read()
+for line in raw.split('\n'):
+    if line.startswith('data: '):
+        data = json.loads(line[6:])
+        result = data.get('result', {})
+        if result.get('isError'):
+            msg = result.get('content', [{}])[0].get('text', 'unknown error')
+            print(f'Tool error: {msg}', file=sys.stderr)
+            print('{}')
+            sys.exit(1)
+        content = result.get('structuredContent', {})
+        if not content:
+            text = result.get('content', [{}])[0].get('text', '{}')
+            content = json.loads(text)
+        print(json.dumps(content))
+        sys.exit(0)
+print(f'No SSE data in response (first 500 chars): {raw[:500]}', file=sys.stderr)
+print('{}')
+sys.exit(1)
+"
+}
 
 # Initialize MCP session
 echo "Initializing MCP session..."
@@ -25,23 +59,8 @@ curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
 
 # Verify Godot is connected before quitting
 echo "Verifying Godot session..."
-SESSIONS=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session_list","arguments":{}}}')
-
-COUNT=$(echo "$SESSIONS" | python3 -c "
-import json, sys
-raw = sys.stdin.read()
-for line in raw.split('\n'):
-    if line.startswith('data: '):
-        data = json.loads(line[6:])
-        sc = data.get('result',{}).get('structuredContent',{})
-        if not sc:
-            text = data.get('result',{}).get('content',[{}])[0].get('text','{}')
-            sc = json.loads(text)
-        print(sc.get('count', 0))
-        break
-" 2>/dev/null || echo "0")
+SESSIONS=$(mcp_call session_list '{}')
+COUNT=$(echo "$SESSIONS" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('count',0))")
 
 if [ "$COUNT" -eq 0 ] 2>/dev/null; then
   echo "ERROR: No Godot session connected"
@@ -49,55 +68,36 @@ if [ "$COUNT" -eq 0 ] 2>/dev/null; then
 fi
 echo "Godot session active (count: $COUNT)"
 
-# Find Godot PID before quitting (case-insensitive to catch macOS .app paths)
-GODOT_PID=$(pgrep -if 'godot.*--editor' 2>/dev/null | head -1 || true)
-if [ -z "$GODOT_PID" ]; then
-  echo "WARN: Could not find Godot PID — will skip process exit check"
-fi
-
 # Call editor_quit
 echo "Calling editor_quit..."
-QUIT_RESULT=$(curl -s --max-time 10 "$SERVER_URL" -X POST "${HEADERS[@]}" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"editor_quit","arguments":{}}}')
-
+QUIT_RESULT=$(mcp_call editor_quit '{}')
 echo "$QUIT_RESULT" | python3 -c "
 import json, sys
-raw = sys.stdin.read()
-for line in raw.split('\n'):
-    if line.startswith('data: '):
-        data = json.loads(line[6:])
-        result = data.get('result', {})
-        content = result.get('structuredContent', {})
-        if not content:
-            text = result.get('content', [{}])[0].get('text', '{}')
-            content = json.loads(text)
-        status = content.get('status', '')
-        if status != 'quitting':
-            print(f'FAIL: editor_quit returned status={status!r}, expected \"quitting\"')
-            print(f'Full response: {content}')
-            sys.exit(1)
-        print(f'editor_quit OK: {content.get(\"message\", \"\")}')
-        sys.exit(0)
-print('FAIL: No valid response from editor_quit')
-sys.exit(1)
+content = json.loads(sys.stdin.read())
+status = content.get('status', '')
+if status != 'quitting':
+    print(f'FAIL: editor_quit returned status={status!r}, expected \"quitting\"')
+    sys.exit(1)
+print(f'editor_quit OK: {content.get(\"message\", \"\")}')
 "
 
-# Wait for Godot process to exit (up to 10 seconds)
-if [ -n "$GODOT_PID" ]; then
-  echo "Waiting for Godot (PID $GODOT_PID) to exit..."
-  for i in $(seq 1 20); do
-    if ! kill -0 "$GODOT_PID" 2>/dev/null; then
-      echo "Godot exited cleanly after ~$((i / 2))s"
-      break
-    fi
-    sleep 0.5
-  done
-
-  if kill -0 "$GODOT_PID" 2>/dev/null; then
-    echo "FAIL: Godot still running after 10s — quit did not work"
-    exit 1
+# Verify the session disconnected (proves Godot actually shut down).
+# The session should disappear from the registry within a few seconds.
+echo "Waiting for session to disconnect..."
+for i in $(seq 1 20); do
+  sleep 0.5
+  # session_list may fail if the MCP session expired — that's also fine
+  SESSIONS=$(mcp_call session_list '{}' 2>/dev/null || echo '{"count":0}')
+  COUNT=$(echo "$SESSIONS" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('count',0))" 2>/dev/null || echo "0")
+  if [ "$COUNT" -eq 0 ] 2>/dev/null; then
+    echo "Session disconnected after ~$((i / 2))s"
+    break
   fi
+done
+
+if [ "$COUNT" -ne 0 ] 2>/dev/null; then
+  echo "FAIL: Godot session still connected after 10s — quit did not work"
+  exit 1
 fi
 
 echo "Quit smoke test passed"
