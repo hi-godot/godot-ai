@@ -28,7 +28,12 @@ def register_node_tools(mcp: FastMCP) -> None:
             parent_path: Node path of the parent (e.g. "/Main"). Empty = scene root.
         """
         runtime = DirectRuntime.from_context(ctx)
-        return await node_handlers.node_create(runtime, type=type, name=name, parent_path=parent_path)
+        return await node_handlers.node_create(
+            runtime,
+            type=type,
+            name=name,
+            parent_path=parent_path,
+        )
 
     @mcp.tool()
     async def node_find(

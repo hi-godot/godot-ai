@@ -79,7 +79,9 @@ def test_main_uses_reloadable_runner_for_http_reload(monkeypatch):
         lambda **kwargs: calls.setdefault("kwargs", kwargs),
     )
 
-    godot_ai.main(["--transport", "streamable-http", "--port", "8123", "--ws-port", "9555", "--reload"])
+    godot_ai.main(
+        ["--transport", "streamable-http", "--port", "8123", "--ws-port", "9555", "--reload"]
+    )
 
     assert calls["kwargs"] == {
         "transport": "streamable-http",

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-
 from godot_ai.handlers import editor as editor_handlers
 from godot_ai.handlers import project as project_handlers
 from godot_ai.handlers import session as session_handlers
