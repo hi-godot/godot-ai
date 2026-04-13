@@ -12,12 +12,11 @@ SERVER_URL="http://127.0.0.1:8000/mcp"
 HEADERS=(-H "Content-Type: application/json" -H "Accept: application/json, text/event-stream")
 REQ_ID=0
 
-# Helper: call an MCP tool and return the parsed content JSON.
-# Usage: mcp_call <tool_name> '<json_arguments>'
-# Prints the parsed content to stdout. Exits 1 on failure.
+# Helper: call an MCP tool and extract the content JSON from the SSE response.
+# Prints parsed content to stdout; diagnostics to stderr. Returns 1 on failure.
 mcp_call() {
   local tool="$1"
-  local args="${2:-\{\}}"
+  local args="$2"
   REQ_ID=$((REQ_ID + 1))
   local raw
   raw=$(curl -s --max-time 30 "$SERVER_URL" -X POST "${HEADERS[@]}" \
@@ -29,15 +28,35 @@ raw = sys.stdin.read()
 for line in raw.split('\n'):
     if line.startswith('data: '):
         data = json.loads(line[6:])
-        content = data.get('result', {}).get('structuredContent', {})
+        result = data.get('result', {})
+        if result.get('isError'):
+            msg = result.get('content', [{}])[0].get('text', 'unknown error')
+            print(f'Tool error: {msg}', file=sys.stderr)
+            print('{}')
+            sys.exit(1)
+        content = result.get('structuredContent', {})
         if not content:
-            text = data.get('result', {}).get('content', [{}])[0].get('text', '{}')
+            text = result.get('content', [{}])[0].get('text', '{}')
             content = json.loads(text)
         print(json.dumps(content))
         sys.exit(0)
+print(f'No SSE data in response (first 500 chars): {raw[:500]}', file=sys.stderr)
 print('{}')
 sys.exit(1)
 "
+}
+
+# Helper: call mcp_call and capture output. On failure, print the captured output and exit.
+mcp_call_or_die() {
+  local label="$1"
+  shift
+  local result
+  if ! result=$(mcp_call "$@"); then
+    echo "FAIL at $label (tool: $1)"
+    echo "Captured output: $result"
+    exit 1
+  fi
+  echo "$result"
 }
 
 # Initialize MCP session
@@ -57,7 +76,7 @@ curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
 
 # --- Step 1: Create a cube with the OLD plugin ---
 echo "Creating test node with old plugin..."
-CREATE_RESULT=$(mcp_call node_create '{"type":"MeshInstance3D","name":"ReloadTestCube","parent_path":""}')
+CREATE_RESULT=$(mcp_call_or_die "node_create" node_create '{"type":"MeshInstance3D","name":"ReloadTestCube","parent_path":""}')
 echo "$CREATE_RESULT" | python3 -c "
 import json, sys
 content = json.loads(sys.stdin.read())
@@ -70,7 +89,7 @@ print(f'Created node: {path}')
 
 # --- Step 2: Reload the plugin ---
 echo "Calling reload_plugin..."
-RELOAD_RESULT=$(mcp_call reload_plugin)
+RELOAD_RESULT=$(mcp_call_or_die "reload_plugin" reload_plugin '{}')
 echo "$RELOAD_RESULT" | python3 -c "
 import json, sys
 content = json.loads(sys.stdin.read())
@@ -89,7 +108,7 @@ print(f'reload_plugin OK: {old_id[:12]}... -> {new_id[:12]}...')
 
 # --- Step 3: Verify log buffer is fresh (proves plugin fully rebuilt) ---
 echo "Checking log buffer..."
-LOGS_RESULT=$(mcp_call logs_read '{"count":20}')
+LOGS_RESULT=$(mcp_call_or_die "logs_read" logs_read '{"count":20}')
 echo "$LOGS_RESULT" | python3 -c "
 import json, sys
 content = json.loads(sys.stdin.read())
@@ -108,7 +127,7 @@ print(f'Log buffer OK: {total} lines, starts with \"{lines[0]}\"')
 
 # --- Step 4: Find the cube with the NEW plugin (scene tree survived) ---
 echo "Finding test node with new plugin..."
-FIND_RESULT=$(mcp_call node_find '{"name":"ReloadTestCube"}')
+FIND_RESULT=$(mcp_call_or_die "node_find" node_find '{"name":"ReloadTestCube"}')
 echo "$FIND_RESULT" | python3 -c "
 import json, sys
 content = json.loads(sys.stdin.read())
@@ -122,7 +141,7 @@ print(f'Found node: {node.get(\"name\", \"?\")} ({node.get(\"type\", \"?\")})')
 
 # --- Step 5: Verify editor_state works ---
 echo "Verifying editor_state..."
-HEALTH_RESULT=$(mcp_call editor_state)
+HEALTH_RESULT=$(mcp_call_or_die "editor_state" editor_state '{}')
 echo "$HEALTH_RESULT" | python3 -c "
 import json, sys
 content = json.loads(sys.stdin.read())
