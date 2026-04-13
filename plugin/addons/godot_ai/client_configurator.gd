@@ -249,7 +249,10 @@ static func _remove_claude_code() -> Dictionary:
 # --- Codex ---
 
 static func _get_codex_config_path() -> String:
-	return OS.get_environment("HOME").path_join(".codex/config.toml")
+	var home := OS.get_environment("HOME")
+	if home.is_empty():
+		home = OS.get_environment("USERPROFILE")
+	return home.path_join(".codex/config.toml")
 
 
 static func _codex_server_header() -> String:

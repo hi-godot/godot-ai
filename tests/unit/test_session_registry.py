@@ -91,7 +91,7 @@ class TestSessionRegistry:
 
 class TestWaitForSession:
     async def test_resolves_immediately_if_session_already_registered(self):
-        """If a session registers before wait starts, it resolves on the next one."""
+        """Waiter installed before registration resolves as soon as session registers."""
         reg = SessionRegistry()
         s = _make_session("new-1")
 

@@ -114,34 +114,31 @@ func _stop_server() -> void:
 		_server_pid = -1
 
 
-func start_dev_server() -> bool:
+func start_dev_server() -> void:
 	## Start a dev server with --reload that survives plugin reloads.
-	## Kills any managed server first.
+	## Kills any managed server first, waits for the port to free, then spawns.
 	_stop_server()
-	# Small delay to let the port free up
-	await get_tree().create_timer(0.5).timeout
+	get_tree().create_timer(0.5).timeout.connect(func():
+		var server_cmd := McpClientConfigurator.get_server_command()
+		if server_cmd.is_empty():
+			push_warning("MCP | could not find server command for dev server")
+			return
 
-	var server_cmd := McpClientConfigurator.get_server_command()
-	if server_cmd.is_empty():
-		push_warning("MCP | could not find server command for dev server")
-		return false
+		var cmd: String = server_cmd[0]
+		var inner_args: Array[String] = []
+		inner_args.assign(server_cmd.slice(1))
+		inner_args.append_array([
+			"--transport", "streamable-http",
+			"--port", str(McpClientConfigurator.SERVER_HTTP_PORT),
+			"--reload",
+		])
 
-	var cmd: String = server_cmd[0]
-	var args: Array[String] = []
-	args.assign(server_cmd.slice(1))
-	args.append_array([
-		"--transport", "streamable-http",
-		"--port", str(McpClientConfigurator.SERVER_HTTP_PORT),
-		"--reload",
-	])
-
-	var pid := OS.create_process(cmd, args)
-	if pid > 0:
-		print("MCP | started dev server with --reload (PID %d): %s %s" % [pid, cmd, " ".join(args)])
-		return true
-	else:
-		push_warning("MCP | failed to start dev server")
-		return false
+		var pid := OS.create_process(cmd, inner_args)
+		if pid > 0:
+			print("MCP | started dev server with --reload (PID %d): %s %s" % [pid, cmd, " ".join(inner_args)])
+		else:
+			push_warning("MCP | failed to start dev server")
+	)
 
 
 func stop_dev_server() -> void:
@@ -155,7 +152,7 @@ func stop_dev_server() -> void:
 	var port := McpClientConfigurator.SERVER_HTTP_PORT
 	if OS.get_name() == "Windows":
 		# Find PID listening on port, then kill
-		var exit_code := OS.execute("cmd", ["/c", "for /f \"tokens=5\" %a in ('netstat -ano ^| findstr :%d ^| findstr LISTENING') do taskkill /PID %a /F" % port], output, true)
+		var exit_code := OS.execute("cmd", ["/c", "for /f \"tokens=5\" %%a in ('netstat -ano ^| findstr :%d ^| findstr LISTENING') do taskkill /PID %%a /F" % port], output, true)
 		if exit_code == 0:
 			print("MCP | stopped dev server on port %d" % port)
 	else:
