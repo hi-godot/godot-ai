@@ -39,3 +39,53 @@ async def node_get_children(runtime: Runtime, path: str) -> dict:
 async def node_get_groups(runtime: Runtime, path: str) -> dict:
     return await runtime.send_command("get_groups", {"path": path})
 
+
+async def node_delete(runtime: Runtime, path: str) -> dict:
+    return await runtime.send_command("delete_node", {"path": path})
+
+
+async def node_reparent(runtime: Runtime, path: str, new_parent: str) -> dict:
+    return await runtime.send_command(
+        "reparent_node",
+        {"path": path, "new_parent": new_parent},
+    )
+
+
+async def node_set_property(runtime: Runtime, path: str, property: str, value) -> dict:
+    return await runtime.send_command(
+        "set_property",
+        {"path": path, "property": property, "value": value},
+    )
+
+
+async def node_duplicate(runtime: Runtime, path: str, name: str = "") -> dict:
+    return await runtime.send_command(
+        "duplicate_node",
+        {"path": path, "name": name},
+    )
+
+
+async def node_move(runtime: Runtime, path: str, index: int) -> dict:
+    return await runtime.send_command(
+        "move_node",
+        {"path": path, "index": index},
+    )
+
+
+async def node_add_to_group(runtime: Runtime, path: str, group: str) -> dict:
+    return await runtime.send_command(
+        "add_to_group",
+        {"path": path, "group": group},
+    )
+
+
+async def node_remove_from_group(runtime: Runtime, path: str, group: str) -> dict:
+    return await runtime.send_command(
+        "remove_from_group",
+        {"path": path, "group": group},
+    )
+
+
+async def editor_selection_set(runtime: Runtime, paths: list[str]) -> dict:
+    return await runtime.send_command("set_selection", {"paths": paths})
+

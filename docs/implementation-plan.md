@@ -581,12 +581,19 @@ All write tools check readiness before executing:
 - If `playing`: allow only safe reads and `project.stop`
 - If `scene_switching`: queue and retry after scene load
 
+### Phase 2 progress
+- [x] Batch 5: Scene writes — scene_create, scene_open, scene_save, scene_save_as (scene_close deferred: no public Godot API)
+- [x] Batch 6: Node writes — node_delete, node_reparent, node_set_property, node_duplicate, node_move, node_add_to_group, node_remove_from_group, editor_selection_set
+- [ ] Batch 7: Script and resource writes
+- [x] 167 Python tests passing (27 new for Batches 5-6)
+- [x] GDScript tests for all scene + node write operations
+
 ### Phase 2 exit criteria
 - [ ] All Batch 5-7 tools implemented and tested
-- [ ] Undo works for node operations (create, delete, reparent, set_property)
+- [x] Undo works for node operations (create, delete, reparent, set_property, duplicate, move, group ops)
 - [ ] Write operations are gated on readiness
 - [ ] Manual test: ask Claude to create a scene with 5 nodes and a script — it can
-- [ ] 60+ passing tests
+- [x] 60+ passing tests (167 Python + GDScript tests)
 
 ---
 

@@ -72,6 +72,132 @@ func _find_recursive(node: Node, scene_root: Node, name_filter: String, type_fil
 		_find_recursive(child, scene_root, name_filter, type_filter, group_filter, out)
 
 
+## Create a new scene with the given root node type, save to disk, and open it.
+func create_scene(params: Dictionary) -> Dictionary:
+	var root_type: String = params.get("root_type", "Node3D")
+	var path: String = params.get("path", "")
+
+	if path.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+
+	if not path.begins_with("res://"):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res://")
+
+	if not path.ends_with(".tscn") and not path.ends_with(".scn"):
+		path += ".tscn"
+
+	if not ClassDB.class_exists(root_type):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown node type: %s" % root_type)
+	if not ClassDB.is_parent_class(root_type, "Node"):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "%s is not a Node type" % root_type)
+
+	# Ensure parent directory exists
+	var dir_path := path.get_base_dir()
+	if not DirAccess.dir_exists_absolute(dir_path):
+		var err := DirAccess.make_dir_recursive_absolute(dir_path)
+		if err != OK:
+			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
+
+	var root: Node = ClassDB.instantiate(root_type)
+	if root == null:
+		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s" % root_type)
+
+	root.name = path.get_file().get_basename()
+
+	var packed := PackedScene.new()
+	packed.pack(root)
+	root.free()
+
+	var err := ResourceSaver.save(packed, path)
+	if err != OK:
+		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to save scene: %s" % error_string(err))
+
+	EditorInterface.open_scene_from_path(path)
+
+	return {
+		"data": {
+			"path": path,
+			"root_type": root_type,
+			"root_name": path.get_file().get_basename(),
+			"undoable": false,
+			"reason": "Scene creation involves file system operations",
+		}
+	}
+
+
+## Open an existing scene by file path.
+func open_scene(params: Dictionary) -> Dictionary:
+	var path: String = params.get("path", "")
+	if path.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+
+	if not ResourceLoader.exists(path):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Scene not found: %s" % path)
+
+	EditorInterface.open_scene_from_path(path)
+
+	return {
+		"data": {
+			"path": path,
+			"undoable": false,
+			"reason": "Scene navigation cannot be undone via editor undo",
+		}
+	}
+
+
+## Save the currently edited scene.
+func save_scene(_params: Dictionary) -> Dictionary:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+
+	var err := EditorInterface.save_scene()
+	if err != OK:
+		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to save scene: %s" % error_string(err))
+
+	return {
+		"data": {
+			"path": scene_root.scene_file_path,
+			"undoable": false,
+			"reason": "File save cannot be undone via editor undo",
+		}
+	}
+
+
+## Save the currently edited scene to a new file path.
+func save_scene_as(params: Dictionary) -> Dictionary:
+	var path: String = params.get("path", "")
+	if path.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+
+	if not path.begins_with("res://"):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res://")
+
+	if not path.ends_with(".tscn") and not path.ends_with(".scn"):
+		path += ".tscn"
+
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+
+	# Ensure parent directory exists
+	var dir_path := path.get_base_dir()
+	if not DirAccess.dir_exists_absolute(dir_path):
+		var err := DirAccess.make_dir_recursive_absolute(dir_path)
+		if err != OK:
+			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
+
+	EditorInterface.save_scene_as(path)
+
+	return {
+		"data": {
+			"path": path,
+			"undoable": false,
+			"reason": "File save cannot be undone via editor undo",
+		}
+	}
+
+
 func _walk_tree(node: Node, out: Array[Dictionary], depth: int, max_depth: int, scene_root: Node) -> void:
 	if depth > max_depth:
 		return

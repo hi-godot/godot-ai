@@ -65,6 +65,66 @@ class StubClient:
             return {"children": [{"name": "Child1", "type": "Node3D"}]}
         if command == "get_groups":
             return {"groups": ["enemies"]}
+        if command == "delete_node":
+            return {"path": params.get("path", ""), "undoable": True}
+        if command == "reparent_node":
+            return {
+                "path": "/Main/World/" + params.get("path", "").split("/")[-1],
+                "old_parent": "/Main",
+                "new_parent": params.get("new_parent", ""),
+                "undoable": True,
+            }
+        if command == "set_property":
+            return {
+                "path": params.get("path", ""),
+                "property": params.get("property", ""),
+                "value": params.get("value"),
+                "old_value": "old",
+                "undoable": True,
+            }
+        if command == "duplicate_node":
+            return {
+                "path": params.get("path", "") + "2",
+                "original_path": params.get("path", ""),
+                "name": params.get("name", "Dup"),
+                "type": "Node3D",
+                "undoable": True,
+            }
+        if command == "move_node":
+            return {
+                "path": params.get("path", ""),
+                "old_index": 0,
+                "new_index": params.get("index", 0),
+                "undoable": True,
+            }
+        if command == "add_to_group":
+            return {
+                "path": params.get("path", ""),
+                "group": params.get("group", ""),
+                "undoable": True,
+            }
+        if command == "remove_from_group":
+            return {
+                "path": params.get("path", ""),
+                "group": params.get("group", ""),
+                "undoable": True,
+            }
+        if command == "set_selection":
+            paths = params.get("paths", [])
+            return {"selected": paths, "not_found": [], "count": len(paths)}
+        if command == "create_scene":
+            return {
+                "path": params.get("path", ""),
+                "root_type": params.get("root_type", "Node3D"),
+                "root_name": "new_scene",
+                "undoable": False,
+            }
+        if command == "open_scene":
+            return {"path": params.get("path", ""), "undoable": False}
+        if command == "save_scene":
+            return {"path": "res://main.tscn", "undoable": False}
+        if command == "save_scene_as":
+            return {"path": params.get("path", ""), "undoable": False}
         if command == "search_filesystem":
             return {"files": [{"path": f"res://file_{i}.gd"} for i in range(3)]}
         if command == "run_tests":
@@ -287,6 +347,49 @@ async def test_scene_hierarchy_resource_data_handler():
     assert "nodes" in result
 
 
+async def test_scene_create_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await scene_handlers.scene_create(
+        runtime, path="res://scenes/level.tscn", root_type="Node2D",
+    )
+    assert result["path"] == "res://scenes/level.tscn"
+    assert result["root_type"] == "Node2D"
+    assert client.calls[-1]["params"] == {"path": "res://scenes/level.tscn", "root_type": "Node2D"}
+
+
+async def test_scene_create_handler_default_root_type():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await scene_handlers.scene_create(runtime, path="res://new.tscn")
+    assert result["root_type"] == "Node3D"
+    assert client.calls[-1]["params"] == {"path": "res://new.tscn", "root_type": "Node3D"}
+
+
+async def test_scene_open_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await scene_handlers.scene_open(runtime, path="res://main.tscn")
+    assert result["path"] == "res://main.tscn"
+    assert client.calls[-1]["params"] == {"path": "res://main.tscn"}
+
+
+async def test_scene_save_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await scene_handlers.scene_save(runtime)
+    assert result["path"] == "res://main.tscn"
+    assert client.calls[-1]["command"] == "save_scene"
+
+
+async def test_scene_save_as_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await scene_handlers.scene_save_as(runtime, path="res://copy.tscn")
+    assert result["path"] == "res://copy.tscn"
+    assert client.calls[-1]["params"] == {"path": "res://copy.tscn"}
+
+
 # ---------------------------------------------------------------------------
 # Node handler tests
 # ---------------------------------------------------------------------------
@@ -330,6 +433,91 @@ async def test_node_get_groups_handler():
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     result = await node_handlers.node_get_groups(runtime, path="/Main/Enemy")
     assert result["groups"] == ["enemies"]
+
+
+async def test_node_delete_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await node_handlers.node_delete(runtime, path="/Main/Enemy")
+    assert result["path"] == "/Main/Enemy"
+    assert result["undoable"] is True
+    assert client.calls[-1]["params"] == {"path": "/Main/Enemy"}
+
+
+async def test_node_reparent_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await node_handlers.node_reparent(
+        runtime, path="/Main/Player", new_parent="/Main/World",
+    )
+    assert result["new_parent"] == "/Main/World"
+    assert result["undoable"] is True
+    assert client.calls[-1]["params"] == {"path": "/Main/Player", "new_parent": "/Main/World"}
+
+
+async def test_node_set_property_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await node_handlers.node_set_property(
+        runtime, path="/Main/Camera3D", property="fov", value=90,
+    )
+    assert result["property"] == "fov"
+    assert result["value"] == 90
+    assert result["undoable"] is True
+
+
+async def test_node_duplicate_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await node_handlers.node_duplicate(
+        runtime, path="/Main/Enemy", name="Enemy2",
+    )
+    assert result["original_path"] == "/Main/Enemy"
+    assert result["name"] == "Enemy2"
+    assert result["undoable"] is True
+    assert client.calls[-1]["params"] == {"path": "/Main/Enemy", "name": "Enemy2"}
+
+
+async def test_node_move_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await node_handlers.node_move(runtime, path="/Main/Camera3D", index=2)
+    assert result["new_index"] == 2
+    assert result["undoable"] is True
+    assert client.calls[-1]["params"] == {"path": "/Main/Camera3D", "index": 2}
+
+
+async def test_node_add_to_group_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await node_handlers.node_add_to_group(
+        runtime, path="/Main/Enemy", group="damageable",
+    )
+    assert result["group"] == "damageable"
+    assert result["undoable"] is True
+    assert client.calls[-1]["params"] == {"path": "/Main/Enemy", "group": "damageable"}
+
+
+async def test_node_remove_from_group_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await node_handlers.node_remove_from_group(
+        runtime, path="/Main/Enemy", group="enemies",
+    )
+    assert result["group"] == "enemies"
+    assert result["undoable"] is True
+    assert client.calls[-1]["params"] == {"path": "/Main/Enemy", "group": "enemies"}
+
+
+async def test_editor_selection_set_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await node_handlers.editor_selection_set(
+        runtime, paths=["/Main/Camera3D", "/Main/World"],
+    )
+    assert result["selected"] == ["/Main/Camera3D", "/Main/World"]
+    assert result["count"] == 2
+    assert client.calls[-1]["params"] == {"paths": ["/Main/Camera3D", "/Main/World"]}
 
 
 # ---------------------------------------------------------------------------

@@ -59,6 +59,330 @@ func create_node(params: Dictionary) -> Dictionary:
 	}
 
 
+func delete_node(params: Dictionary) -> Dictionary:
+	var resolved := _resolve_node(params)
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	var node_path: String = resolved.path
+	var scene_root: Node = resolved.scene_root
+
+	if node == scene_root:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Cannot delete the scene root")
+
+	var parent := node.get_parent()
+	var idx := node.get_index()
+
+	_undo_redo.create_action("MCP: Delete %s" % node.name)
+	_undo_redo.add_do_method(parent, "remove_child", node)
+	_undo_redo.add_undo_method(parent, "add_child", node, true)
+	_undo_redo.add_undo_method(parent, "move_child", node, idx)
+	_undo_redo.add_undo_method(node, "set_owner", scene_root)
+	_undo_redo.add_undo_reference(node)
+	_undo_redo.commit_action()
+
+	return {
+		"data": {
+			"path": node_path,
+			"undoable": true,
+		}
+	}
+
+
+func reparent_node(params: Dictionary) -> Dictionary:
+	var resolved := _resolve_node(params)
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	var node_path: String = resolved.path
+	var scene_root: Node = resolved.scene_root
+
+	var new_parent_path: String = params.get("new_parent", "")
+	if new_parent_path.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: new_parent")
+
+	var new_parent := ScenePath.resolve(new_parent_path, scene_root)
+	if new_parent == null:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Parent not found: %s" % new_parent_path)
+
+	if node == scene_root:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Cannot reparent the scene root")
+
+	# Prevent reparenting a node to one of its own descendants
+	if new_parent.is_ancestor_of(node) or new_parent == node:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Cannot reparent a node to itself or its descendant")
+
+	var old_parent := node.get_parent()
+	var old_idx := node.get_index()
+
+	_undo_redo.create_action("MCP: Reparent %s" % node.name)
+	_undo_redo.add_do_method(old_parent, "remove_child", node)
+	_undo_redo.add_do_method(new_parent, "add_child", node, true)
+	_undo_redo.add_do_method(node, "set_owner", scene_root)
+	_undo_redo.add_do_reference(node)
+	_undo_redo.add_undo_method(new_parent, "remove_child", node)
+	_undo_redo.add_undo_method(old_parent, "add_child", node, true)
+	_undo_redo.add_undo_method(old_parent, "move_child", node, old_idx)
+	_undo_redo.add_undo_method(node, "set_owner", scene_root)
+	_undo_redo.add_undo_reference(node)
+	_undo_redo.commit_action()
+
+	# Re-set owner for all descendants (reparent can break ownership chain)
+	_set_owner_recursive(node, scene_root)
+
+	return {
+		"data": {
+			"path": ScenePath.from_node(node, scene_root),
+			"old_parent": ScenePath.from_node(old_parent, scene_root),
+			"new_parent": ScenePath.from_node(new_parent, scene_root),
+			"undoable": true,
+		}
+	}
+
+
+func set_property(params: Dictionary) -> Dictionary:
+	var resolved := _resolve_node(params)
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	var node_path: String = resolved.path
+	var scene_root: Node = resolved.scene_root
+
+	var property: String = params.get("property", "")
+	if property.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: property")
+
+	if not "value" in params:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: value")
+
+	var value = params.get("value")
+
+	# Verify property exists on the node
+	var found := false
+	for prop in node.get_property_list():
+		if prop.name == property:
+			found = true
+			break
+	if not found:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Property '%s' not found on %s" % [property, node.get_class()])
+
+	var old_value = node.get(property)
+	value = _coerce_value(value, typeof(old_value))
+
+	_undo_redo.create_action("MCP: Set %s.%s" % [node.name, property])
+	_undo_redo.add_do_property(node, property, value)
+	_undo_redo.add_undo_property(node, property, old_value)
+	_undo_redo.commit_action()
+
+	return {
+		"data": {
+			"path": node_path,
+			"property": property,
+			"value": _serialize_value(node.get(property)),
+			"old_value": _serialize_value(old_value),
+			"undoable": true,
+		}
+	}
+
+
+func duplicate_node(params: Dictionary) -> Dictionary:
+	var resolved := _resolve_node(params)
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	var node_path: String = resolved.path
+	var scene_root: Node = resolved.scene_root
+
+	if node == scene_root:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Cannot duplicate the scene root")
+
+	var parent := node.get_parent()
+	var dup: Node = node.duplicate()
+	if dup == null:
+		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to duplicate node")
+
+	# Apply optional name
+	var new_name: String = params.get("name", "")
+	if not new_name.is_empty():
+		dup.name = new_name
+
+	_undo_redo.create_action("MCP: Duplicate %s" % node.name)
+	_undo_redo.add_do_method(parent, "add_child", dup, true)
+	_undo_redo.add_do_method(dup, "set_owner", scene_root)
+	_undo_redo.add_do_reference(dup)
+	_undo_redo.add_undo_method(parent, "remove_child", dup)
+	_undo_redo.commit_action()
+
+	# Set owner for all descendants of the duplicate
+	_set_owner_recursive(dup, scene_root)
+
+	return {
+		"data": {
+			"path": ScenePath.from_node(dup, scene_root),
+			"original_path": node_path,
+			"name": dup.name,
+			"type": dup.get_class(),
+			"undoable": true,
+		}
+	}
+
+
+func move_node(params: Dictionary) -> Dictionary:
+	var resolved := _resolve_node(params)
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	var node_path: String = resolved.path
+	var scene_root: Node = resolved.scene_root
+
+	if node == scene_root:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Cannot reorder the scene root")
+
+	if not "index" in params:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: index")
+
+	var new_index: int = params.get("index", 0)
+	var parent := node.get_parent()
+	var old_index := node.get_index()
+	var sibling_count := parent.get_child_count()
+
+	if new_index < 0 or new_index >= sibling_count:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Index %d out of range (0..%d)" % [new_index, sibling_count - 1])
+
+	_undo_redo.create_action("MCP: Move %s to index %d" % [node.name, new_index])
+	_undo_redo.add_do_method(parent, "move_child", node, new_index)
+	_undo_redo.add_undo_method(parent, "move_child", node, old_index)
+	_undo_redo.commit_action()
+
+	return {
+		"data": {
+			"path": node_path,
+			"old_index": old_index,
+			"new_index": new_index,
+			"undoable": true,
+		}
+	}
+
+
+func add_to_group(params: Dictionary) -> Dictionary:
+	var resolved := _resolve_node(params)
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	var node_path: String = resolved.path
+
+	var group: String = params.get("group", "")
+	if group.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: group")
+
+	if node.is_in_group(group):
+		return {"data": {"path": node_path, "group": group, "already_member": true, "undoable": false, "reason": "No change made"}}
+
+	_undo_redo.create_action("MCP: Add %s to group %s" % [node.name, group])
+	_undo_redo.add_do_method(node, "add_to_group", group, true)
+	_undo_redo.add_undo_method(node, "remove_from_group", group)
+	_undo_redo.commit_action()
+
+	return {
+		"data": {
+			"path": node_path,
+			"group": group,
+			"undoable": true,
+		}
+	}
+
+
+func remove_from_group(params: Dictionary) -> Dictionary:
+	var resolved := _resolve_node(params)
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	var node_path: String = resolved.path
+
+	var group: String = params.get("group", "")
+	if group.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: group")
+
+	if not node.is_in_group(group):
+		return {"data": {"path": node_path, "group": group, "not_member": true, "undoable": false, "reason": "Node not in group"}}
+
+	_undo_redo.create_action("MCP: Remove %s from group %s" % [node.name, group])
+	_undo_redo.add_do_method(node, "remove_from_group", group)
+	_undo_redo.add_undo_method(node, "add_to_group", group, true)
+	_undo_redo.commit_action()
+
+	return {
+		"data": {
+			"path": node_path,
+			"group": group,
+			"undoable": true,
+		}
+	}
+
+
+func set_selection(params: Dictionary) -> Dictionary:
+	var paths: Array = params.get("paths", [])
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+
+	var selection := EditorInterface.get_selection()
+	selection.clear()
+
+	var selected: Array[String] = []
+	var not_found: Array[String] = []
+	for path_variant in paths:
+		var path: String = str(path_variant)
+		var node := ScenePath.resolve(path, scene_root)
+		if node:
+			selection.add_node(node)
+			selected.append(path)
+		else:
+			not_found.append(path)
+
+	return {
+		"data": {
+			"selected": selected,
+			"not_found": not_found,
+			"count": selected.size(),
+			"undoable": false,
+			"reason": "Selection changes are not tracked in undo history",
+		}
+	}
+
+
+func _set_owner_recursive(node: Node, owner: Node) -> void:
+	for child in node.get_children():
+		child.set_owner(owner)
+		_set_owner_recursive(child, owner)
+
+
+## Coerce a JSON value to match the expected Godot type.
+static func _coerce_value(value: Variant, target_type: int) -> Variant:
+	match target_type:
+		TYPE_VECTOR2:
+			if value is Dictionary:
+				return Vector2(value.get("x", 0), value.get("y", 0))
+		TYPE_VECTOR3:
+			if value is Dictionary:
+				return Vector3(value.get("x", 0), value.get("y", 0), value.get("z", 0))
+		TYPE_COLOR:
+			if value is Dictionary:
+				return Color(value.get("r", 0), value.get("g", 0), value.get("b", 0), value.get("a", 1))
+			if value is String:
+				return Color(value)
+		TYPE_BOOL:
+			if value is float or value is int:
+				return bool(value)
+		TYPE_INT:
+			if value is float:
+				return int(value)
+		TYPE_FLOAT:
+			if value is int:
+				return float(value)
+	return value
+
+
 func get_node_properties(params: Dictionary) -> Dictionary:
 	var resolved := _resolve_node(params)
 	if resolved.has("error"):

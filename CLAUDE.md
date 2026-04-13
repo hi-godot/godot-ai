@@ -120,6 +120,11 @@ Response must include `"undoable": true`. If an operation genuinely can't be und
 
 New features don't ship without tests. Regressions are caught before they merge.
 
+## Known issues
+
+- **SIGABRT on save after bulk undo/redo**: Godot can crash in `EditorNode::_save_scene_with_preview` after many undo/redo operations (create + duplicate + reparent + delete) followed by `EditorInterface.save_scene()`. Only reproduces with the MCP plugin active (WebSocket polling in `_process()`); standalone repro plugin does not crash. Likely a Godot engine bug triggered by specific timing. Workaround: avoid saving immediately after large batches of write operations, or save from the Godot UI instead of programmatically.
+- **GDScript tests must not call `EditorInterface.save_scene()` or `scene_create`/`scene_open`**: These trigger modal dialogs or scene switches that freeze or crash the test runner. Test only validation/error paths for these operations in GDScript; full behavior is covered by Python integration tests.
+
 ## What NOT to do
 
 - Don't call `EditorInterface` methods from WebSocket callbacks — always queue

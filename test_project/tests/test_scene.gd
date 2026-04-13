@@ -125,3 +125,49 @@ func test_find_nonexistent_type_returns_empty() -> void:
 	var result := _handler.find_nodes({"type": "AudioStreamPlayer3D"})
 	assert_has_key(result, "data")
 	assert_eq(result.data.count, 0)
+
+
+# ----- create_scene (validation only — full create switches scenes, not safe in test runner) -----
+
+func test_create_scene_missing_path() -> void:
+	var result := _handler.create_scene({})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_create_scene_invalid_root_type() -> void:
+	var result := _handler.create_scene({"path": "res://test.tscn", "root_type": "NotAType"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_create_scene_non_node_root_type() -> void:
+	var result := _handler.create_scene({"path": "res://test.tscn", "root_type": "Resource"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_create_scene_invalid_path_prefix() -> void:
+	var result := _handler.create_scene({"path": "/tmp/scene.tscn"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+# ----- open_scene (validation only — opening scenes triggers UI that blocks test runner) -----
+
+func test_open_scene_missing_path() -> void:
+	var result := _handler.open_scene({})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_open_scene_nonexistent() -> void:
+	var result := _handler.open_scene({"path": "res://does_not_exist.tscn"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+# ----- save_scene / save_scene_as (validation only — save triggers modal dialog) -----
+
+func test_save_scene_as_missing_path() -> void:
+	var result := _handler.save_scene_as({})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_save_scene_as_invalid_path_prefix() -> void:
+	var result := _handler.save_scene_as({"path": "/tmp/bad.tscn"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
