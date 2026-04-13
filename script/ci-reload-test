@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Smoke-test the reload_plugin tool in CI.
+# Calls reload_plugin via MCP, waits for the new session, then verifies
+# the plugin is alive by calling editor_state.
+# Expects: Python server running on port 8000, Godot editor with plugin connected.
+set -euo pipefail
+
+SERVER_URL="http://127.0.0.1:8000/mcp"
+HEADERS=(-H "Content-Type: application/json" -H "Accept: application/json, text/event-stream")
+
+# Initialize MCP session
+echo "Initializing MCP session..."
+SESSION_ID=$(curl -si "$SERVER_URL" -X POST "${HEADERS[@]}" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci-reload","version":"1.0"}}}' \
+  2>&1 | grep -i 'mcp-session-id' | tr -d '\r' | awk '{print $2}')
+
+if [ -z "$SESSION_ID" ]; then
+  echo "ERROR: Could not initialize MCP session"
+  exit 1
+fi
+
+curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' > /dev/null
+
+# Call reload_plugin (may take several seconds while plugin restarts)
+echo "Calling reload_plugin..."
+RELOAD_RESULT=$(curl -s --max-time 30 "$SERVER_URL" -X POST "${HEADERS[@]}" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"reload_plugin","arguments":{}}}')
+
+# Parse reload result
+echo "$RELOAD_RESULT" | python3 -c "
+import json, sys
+raw = sys.stdin.read()
+for line in raw.split('\n'):
+    if line.startswith('data: '):
+        data = json.loads(line[6:])
+        content = data.get('result', {}).get('structuredContent', {})
+        if not content:
+            text = data.get('result', {}).get('content', [{}])[0].get('text', '{}')
+            content = json.loads(text)
+        status = content.get('status', '')
+        old_id = content.get('old_session_id', '')
+        new_id = content.get('new_session_id', '')
+        if status != 'reloaded':
+            print(f'FAIL: reload_plugin returned status={status!r}, expected \"reloaded\"')
+            print(f'Full response: {content}')
+            sys.exit(1)
+        if old_id == new_id:
+            print(f'FAIL: old and new session IDs are the same: {old_id}')
+            sys.exit(1)
+        print(f'reload_plugin OK: {old_id[:12]}... -> {new_id[:12]}...')
+        break
+else:
+    print('FAIL: No valid response from reload_plugin')
+    print(f'Raw: {raw[:500]}')
+    sys.exit(1)
+"
+
+# Verify the plugin is alive after reload
+echo "Verifying plugin health..."
+HEALTH_RESULT=$(curl -s --max-time 10 "$SERVER_URL" -X POST "${HEADERS[@]}" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"editor_state","arguments":{}}}')
+
+echo "$HEALTH_RESULT" | python3 -c "
+import json, sys
+raw = sys.stdin.read()
+for line in raw.split('\n'):
+    if line.startswith('data: '):
+        data = json.loads(line[6:])
+        content = data.get('result', {}).get('structuredContent', {})
+        if not content:
+            text = data.get('result', {}).get('content', [{}])[0].get('text', '{}')
+            content = json.loads(text)
+        version = content.get('godot_version', '')
+        project = content.get('project_name', '')
+        if not version:
+            print(f'FAIL: editor_state missing godot_version after reload')
+            print(f'Full response: {content}')
+            sys.exit(1)
+        print(f'Post-reload health OK: {project} on Godot {version}')
+        break
+else:
+    print('FAIL: No valid response from editor_state after reload')
+    print(f'Raw: {raw[:500]}')
+    sys.exit(1)
+"
+
+echo "Reload smoke test passed"

@@ -70,6 +70,9 @@ jobs:
       - name: Run handler tests
         run: bash script/ci-godot-tests
 
+      - name: Reload smoke test
+        run: bash script/ci-reload-test
+
   godot-tests-macos:
     name: Godot tests / macOS
     runs-on: macos-latest
@@ -100,6 +103,9 @@ jobs:
 
       - name: Run handler tests
         run: bash script/ci-godot-tests
+
+      - name: Reload smoke test
+        run: bash script/ci-reload-test
 
   godot-tests-windows:
     name: Godot tests / Windows
@@ -134,3 +140,7 @@ jobs:
       - name: Run handler tests
         shell: bash
         run: bash script/ci-godot-tests
+
+      - name: Reload smoke test
+        shell: bash
+        run: bash script/ci-reload-test
