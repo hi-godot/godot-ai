@@ -7,19 +7,20 @@ A production-grade MCP server for Godot. Python server (FastMCP v3) communicates
 ## Architecture
 
 ```
-AI Client → MCP (stdio/sse) → Python FastMCP server → WebSocket (port 9500) → Godot EditorPlugin
+AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebSocket (port 9500) → Godot EditorPlugin
 ```
 
 - **Python server**: `src/godot_ai/` — FastMCP v3, async, lifespan manages WebSocket server
-- **GDScript plugin**: `plugin/addons/godot_ai/` — canonical source; copied into `test_project/addons/` for testing
+- **GDScript plugin**: `plugin/addons/godot_ai/` — canonical source; symlinked into `test_project/addons/` for testing
 - **Protocol**: JSON over WebSocket. Request/response with `request_id` correlation. Handshake on connect.
 - **Session model**: Multiple Godot editors can connect. Tools route through active session.
+- **Handler/Runtime layer**: Shared handlers in `src/godot_ai/handlers/` contain tool logic. They depend on a `Runtime` protocol (`runtime/interface.py`), implemented by `DirectRuntime` for the in-process server. Tools and resources are thin wrappers that create a runtime and delegate.
 
 ## Key conventions
 
 - **GDScript plugin is the canonical copy** in `plugin/`. `test_project/addons/godot_ai` is a symlink — no copy needed.
 - **Error codes**: Defined in `protocol/errors.py` (Python) and `utils/error_codes.gd` (GDScript). Keep in sync.
-- **Tools return `dict`**: `GodotClient.send()` returns `response.data` (a dict) or raises `GodotCommandError`. Tools just `return await app.client.send(...)`.
+- **Tools return `dict`**: Handlers call `runtime.send_command(command, params)` which returns a dict or raises. Tools create a `DirectRuntime` and delegate to handlers.
 - **Plugin runs on main thread**: All GDScript executes in `_process()` with a 4ms frame budget. Never block. Use `call_deferred` for scene tree mutations.
 - **Scene paths are clean**: `/Main/Camera3D` format, not raw Godot internal paths. Use `ScenePath.from_node(node, scene_root)` in GDScript.
 - **MCP logging**: Plugin prints `MCP | [recv] command(params)` / `MCP | [send] command -> ok` to Godot console. Controlled by `mcp_logging` var.
@@ -40,21 +41,26 @@ ruff format src/ tests/      # format
 ### Server lifecycle in dev
 
 The plugin manages the server process:
-- **Reload Plugin** in the Godot dock kills the old server, starts a new one from `.venv/bin/python -m godot_ai`
-- After Reload Plugin, do `/mcp` in Claude Code to reconnect
-
-The plugin prefers the local `.venv` over system-installed `godot-ai` so dev checkouts always use source code.
+- On startup, plugin checks if port 8000 is already in use. If yes, uses existing server. If no, spawns `.venv/bin/python -m godot_ai --transport streamable-http --port 8000`.
+- The plugin prefers the local `.venv` over system-installed `godot-ai` so dev checkouts always use source code.
 
 For Python auto-reload during dev (no need to touch Godot):
 ```bash
 python -m godot_ai --transport streamable-http --port 8000 --reload
 ```
+This uses `src/godot_ai/asgi.py` to run uvicorn with its factory reload path. Uvicorn watches `src/` for changes and restarts the server process automatically. The plugin auto-reconnects.
+
+### Plugin reload
+
+The `reload_plugin` MCP tool triggers a live plugin reload inside Godot (`EditorInterface.set_plugin_enabled` off/on). Requires the server to be running externally (not managed by the plugin). The Python handler waits for the new session via `SessionRegistry.wait_for_session()`.
+
+The Godot dock also has a **Start/Stop Dev Server** button for convenience.
 
 ## Testing
 
 ### Python tests
 ```bash
-pytest -v                    # 81 unit + integration tests
+pytest -v                    # 140 unit + integration tests
 ```
 
 ### Godot-side tests
@@ -78,17 +84,19 @@ Test suites extend `McpTestSuite` (assertion methods: `assert_true`, `assert_eq`
 
 The plugin can configure MCP clients via `client_configurator.gd`:
 - **Claude Code**: uses `claude mcp add` CLI to register the server
+- **Codex**: writes TOML config to `~/.codex/config.toml`
 - **Antigravity**: writes directly to `~/.gemini/antigravity/mcp_config.json`
 
 MCP tools `client_configure` and `client_status` expose this to AI clients.
 
 ## Adding a new tool
 
-1. Add a handler method in the appropriate `handlers/*.gd` file
+1. Add a handler method in the appropriate GDScript `handlers/*.gd` file
 2. Register it in `plugin.gd`: `_dispatcher.register("command_name", handler.method)`
-3. Add a Python tool in `tools/<domain>.py` that calls `app.client.send("command_name", params)`
-4. Register the tool module in `server.py` if it's a new file
-5. Add tests: Python integration test in `tests/` AND GDScript test in `test_project/tests/`
+3. Add a shared Python handler in `handlers/<domain>.py` that calls `runtime.send_command("command_name", params)`
+4. Add a Python tool in `tools/<domain>.py` that creates `DirectRuntime` and delegates to the handler
+5. Register the tool module in `server.py` if it's a new file
+6. Add tests: handler unit test, Python integration test, AND GDScript test in `test_project/tests/`
 
 ## Write tools must be undoable
 

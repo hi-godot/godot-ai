@@ -207,9 +207,10 @@ addons/godot_ai/
 ├── dispatcher.gd          # Command queue, frame-budget dispatch, handler routing
 ├── mcp_dock.gd            # Editor dock panel
 ├── handlers/
-│   ├── editor_handler.gd  # editor_state, selection, logs
+│   ├── editor_handler.gd  # editor_state, selection, logs, reload_plugin
 │   ├── scene_handler.gd   # scene tree reading
 │   ├── node_handler.gd    # node create (with undo)
+│   ├── project_handler.gd # project settings, filesystem search
 │   └── client_handler.gd  # client configure/status
 └── utils/
     ├── scene_path.gd       # from_node(), resolve()
@@ -425,7 +426,7 @@ The product should be useful for inspection and navigation before any write tool
 | Reconnect button | `Button` | Calls `_attempt_reconnect()` |
 | Reload Plugin button | `Button` | Toggles plugin off/on |
 | Setup status | Dev mode / uv version | Auto-detected |
-| Client config | Configure buttons per client | Claude Code, Antigravity |
+| Client config | Configure buttons per client | Claude Code, Codex, Antigravity |
 
 ### Pagination design
 
@@ -450,8 +451,14 @@ Large results (scene trees with 1000+ nodes, long log buffers) need pagination:
 - [x] Batch 3: Project reads (project_settings.get, filesystem.search)
 - [x] Batch 4: MCP Resources (7 resources: sessions, scene/current, scene/hierarchy, selection/current, project/info, project/settings, logs/recent)
 - [x] Batch 5: Editor dock panel with setup status
-- [x] Batch 6: Test harness (44 Godot-side + 81 Python = 125 total tests)
+- [x] Batch 6: Test harness (44 Godot-side + 140 Python = 184 total tests)
 - [x] Pagination for large results (offset/limit on scene_get_hierarchy, logs_read, node_find, filesystem_search)
+- [x] Handler/runtime abstraction layer (shared handlers depend on Runtime protocol, not FastMCP context)
+- [x] Codex client configurator (TOML config at `~/.codex/config.toml`)
+- [x] `reload_plugin` tool — triggers live plugin reload, waits for new session via Future-based waiter
+- [x] ASGI reloadable entrypoint (`--reload` uses uvicorn factory path for Python auto-reload)
+- [x] Dev server start/stop controls in Godot dock panel
+- [x] Reload smoke test in CI (creates node, reloads plugin, verifies log buffer fresh + scene tree survived)
 - [ ] Manual test: Claude describes the open scene
 
 ---
@@ -500,10 +507,12 @@ Run on every push and PR. Three-tier matrix:
 - Runs on release tags only (not every push)
 
 **Setup tasks:**
-- [ ] Create `.github/workflows/ci.yml` with Tier 1 (Python tests)
-- [ ] Add Tier 2 with Godot headless (investigate `chickensoft-games/setup-godot` action)
-- [ ] Add Tier 3 for release smoke tests
-- [ ] Add status badges to README
+- [x] Create `.github/workflows/ci.yml` with Tier 1 (Python tests) — 6 jobs: 3 OS x 2 Python versions
+- [x] Add Tier 2 with Godot headless — 3 jobs: Linux (Docker), macOS, Windows using `chickensoft-games/setup-godot`
+- [x] Add reload smoke test to Tier 2 (reload_plugin e2e on all 3 OSes)
+- [x] Add Codecov integration with patch coverage check
+- [x] Add status badges to README
+- [ ] Add Tier 3 for release smoke tests (uvx install path)
 
 ---
 
