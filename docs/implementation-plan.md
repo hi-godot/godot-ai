@@ -585,8 +585,8 @@ All write tools check readiness before executing:
 - [x] Batch 5: Scene writes — scene_create, scene_open, scene_save, scene_save_as (scene_close deferred: no public Godot API)
 - [x] Batch 6: Node writes — node_delete, node_reparent, node_set_property, node_duplicate, node_move, node_add_to_group, node_remove_from_group, editor_selection_set
 - [ ] Batch 7: Script and resource writes
-- [x] 167 Python tests passing (27 new for Batches 5-6)
-- [x] GDScript tests for all scene + node write operations
+- [x] 167 Python tests + 76 Godot-side tests = 243 total
+- [x] Fixed SIGABRT crash: re-entrant `_process()` during `_save_scene_with_preview` (Connection.pause_processing guard)
 
 ### Phase 2 exit criteria
 - [ ] All Batch 5-7 tools implemented and tested

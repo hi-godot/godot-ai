@@ -60,7 +60,7 @@ The Godot dock also has a **Start/Stop Dev Server** button for convenience.
 
 ### Python tests
 ```bash
-pytest -v                    # 140 unit + integration tests
+pytest -v                    # 167 unit + integration tests
 ```
 
 ### Godot-side tests
