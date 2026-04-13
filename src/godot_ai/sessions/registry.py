@@ -89,10 +89,12 @@ class SessionRegistry:
         Raises TimeoutError if no matching session appears within timeout.
         """
         future: asyncio.Future[Session] = asyncio.get_event_loop().create_future()
-        self._session_waiters.append((future, exclude_id))
+        entry = (future, exclude_id)
+        self._session_waiters.append(entry)
         try:
             return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
+            self._session_waiters = [w for w in self._session_waiters if w is not entry]
             raise TimeoutError("Timed out waiting for new session") from None
 
     def __len__(self) -> int:

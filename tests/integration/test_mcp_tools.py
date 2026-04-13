@@ -369,3 +369,199 @@ class TestReloadPluginTool:
         assert result.data["old_session_id"] == "mcp-test"
         assert result.data["new_session_id"] == "reloaded-session"
         await new_ws.close()
+
+
+# ---------------------------------------------------------------------------
+# session_list / session_activate
+# ---------------------------------------------------------------------------
+
+
+class TestSessionTools:
+    async def test_session_list_returns_connected_session(self, mcp_stack):
+        client, plugin = mcp_stack
+        result = await client.call_tool("session_list", {})
+        assert result.data["count"] == 1
+        assert result.data["sessions"][0]["session_id"] == "mcp-test"
+        assert result.data["sessions"][0]["is_active"] is True
+
+    async def test_session_activate_existing(self, mcp_stack):
+        client, plugin = mcp_stack
+        result = await client.call_tool("session_activate", {"session_id": "mcp-test"})
+        assert result.data["status"] == "ok"
+
+    async def test_session_activate_nonexistent(self, mcp_stack):
+        client, plugin = mcp_stack
+        result = await client.call_tool("session_activate", {"session_id": "no-such-session"})
+        assert result.data["status"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# client_configure / client_status
+# ---------------------------------------------------------------------------
+
+
+class TestClientTools:
+    async def test_client_status(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "check_client_status"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"claude_code": "configured", "codex": "not_configured"},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("client_status", {})
+        await task
+        assert result.data["claude_code"] == "configured"
+
+    async def test_client_configure(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "configure_client"
+            assert cmd["params"]["client"] == "codex"
+            await plugin.send_response(cmd["request_id"], {"status": "ok"})
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("client_configure", {"client": "codex"})
+        await task
+        assert result.data["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# run_tests / get_test_results
+# ---------------------------------------------------------------------------
+
+
+class TestTestingTools:
+    async def test_run_tests(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "run_tests"
+            await plugin.send_response(
+                cmd["request_id"], {"passed": 3, "failed": 0, "results": []}
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("run_tests", {})
+        await task
+        assert result.data["passed"] == 3
+
+    async def test_run_tests_with_suite(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "run_tests"
+            assert cmd["params"]["suite"] == "scene"
+            await plugin.send_response(
+                cmd["request_id"], {"passed": 2, "failed": 0, "results": []}
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("run_tests", {"suite": "scene"})
+        await task
+        assert result.data["passed"] == 2
+
+    async def test_get_test_results(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_test_results"
+            await plugin.send_response(
+                cmd["request_id"], {"passed": 5, "failed": 1, "results": []}
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("get_test_results", {})
+        await task
+        assert result.data["failed"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Resource reads (through MCP client)
+# ---------------------------------------------------------------------------
+
+
+class TestResourceReads:
+    async def test_read_sessions_resource(self, mcp_stack):
+        client, plugin = mcp_stack
+        result = await client.read_resource("godot://sessions")
+        data = json.loads(result[0].text)
+        assert data["count"] == 1
+        assert data["sessions"][0]["session_id"] == "mcp-test"
+
+    async def test_read_project_info_resource(self, mcp_stack):
+        client, plugin = mcp_stack
+        result = await client.read_resource("godot://project/info")
+        data = json.loads(result[0].text)
+        assert data["session_id"] == "mcp-test"
+
+    async def test_read_selection_resource(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_selection"
+            await plugin.send_response(cmd["request_id"], {"selected": ["/Main/Cam"]})
+
+        task = asyncio.create_task(respond())
+        result = await client.read_resource("godot://selection/current")
+        await task
+        data = json.loads(result[0].text)
+        assert data["selected"] == ["/Main/Cam"]
+
+    async def test_read_logs_resource(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_logs"
+            await plugin.send_response(cmd["request_id"], {"lines": ["log line 1"]})
+
+        task = asyncio.create_task(respond())
+        result = await client.read_resource("godot://logs/recent")
+        await task
+        data = json.loads(result[0].text)
+        assert "lines" in data
+
+    async def test_read_scene_current_resource(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_editor_state"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"current_scene": "res://main.tscn", "project_name": "Test", "is_playing": False},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.read_resource("godot://scene/current")
+        await task
+        data = json.loads(result[0].text)
+        assert data["current_scene"] == "res://main.tscn"
+
+    async def test_read_scene_hierarchy_resource(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_scene_tree"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"root": "Main", "nodes": [{"name": "Camera3D"}]},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.read_resource("godot://scene/hierarchy")
+        await task
+        data = json.loads(result[0].text)
+        assert data["root"] == "Main"

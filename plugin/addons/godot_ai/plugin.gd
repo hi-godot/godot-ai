@@ -52,7 +52,7 @@ func _enter_tree() -> void:
 	_dock.setup(_connection, _log_buffer, self)
 	add_control_to_dock(DOCK_SLOT_RIGHT_BL, _dock)
 
-	_log_buffer.log("plugin loaded [reload-smoke]")
+	_log_buffer.log("plugin loaded")
 
 
 func _exit_tree() -> void:

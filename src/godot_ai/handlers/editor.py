@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from godot_ai.runtime.interface import Runtime
@@ -46,33 +45,28 @@ async def reload_plugin(runtime: Runtime) -> dict:
         raise ConnectionError("No active Godot session")
     old_id = active.session_id
     known_ids = {session.session_id for session in runtime.list_sessions()}
-    deadline = asyncio.get_running_loop().time() + 15.0
 
     try:
         await runtime.send_command("reload_plugin", timeout=2.0)
     except (ConnectionError, TimeoutError) as exc:
         logger.debug("Expected disconnect during reload: %s", exc)
 
-    while True:
-        new_session = _find_replacement_session(
-            list(runtime.list_sessions()),
-            known_ids=known_ids,
-            project_path=active.project_path,
-        )
-        if new_session is not None:
-            runtime.set_active_session(new_session.session_id)
-            return {
-                "status": "reloaded",
-                "old_session_id": old_id,
-                "new_session_id": new_session.session_id,
-            }
+    # Check if a replacement session already appeared during the reload command
+    # (handles the race where the new session registers before we start waiting)
+    new_session = _find_replacement_session(
+        list(runtime.list_sessions()),
+        known_ids=known_ids,
+        project_path=active.project_path,
+    )
+    if new_session is None:
+        new_session = await runtime.wait_for_session(exclude_id=old_id, timeout=15.0)
 
-        if asyncio.get_running_loop().time() >= deadline:
-            raise TimeoutError(
-                f"Timed out waiting for reloaded session for project {active.project_path}"
-            )
-
-        await asyncio.sleep(0.05)
+    runtime.set_active_session(new_session.session_id)
+    return {
+        "status": "reloaded",
+        "old_session_id": old_id,
+        "new_session_id": new_session.session_id,
+    }
 
 
 async def selection_resource_data(runtime: Runtime) -> dict:

@@ -279,9 +279,7 @@ static func _read_codex_config() -> String:
 
 static func _write_codex_config(content: String) -> bool:
 	var config_path := _get_codex_config_path()
-	var dir_path := config_path.get_base_dir()
-	if not DirAccess.dir_exists_absolute(dir_path):
-		DirAccess.make_dir_recursive_absolute(dir_path)
+	DirAccess.make_dir_recursive_absolute(config_path.get_base_dir())
 	var file := FileAccess.open(config_path, FileAccess.WRITE)
 	if file == null:
 		return false

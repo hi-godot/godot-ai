@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import fastmcp
+import pytest
 
 import godot_ai
 from godot_ai import asgi
@@ -104,3 +105,20 @@ def test_main_runs_server_directly_without_reload(monkeypatch):
 
     assert calls["ws_port"] == 9555
     assert server.run_calls == [{"transport": "streamable-http", "port": 8123}]
+
+
+def test_get_dev_transport_rejects_unsupported(monkeypatch):
+    monkeypatch.setenv(asgi.DEV_TRANSPORT_ENV, "stdio")
+    with pytest.raises(ValueError, match="Unsupported dev transport"):
+        asgi._get_dev_transport()
+
+
+def test_get_dev_ws_port_rejects_non_integer(monkeypatch):
+    monkeypatch.setenv(asgi.DEV_WS_PORT_ENV, "abc")
+    with pytest.raises(ValueError, match="Invalid"):
+        asgi._get_dev_ws_port()
+
+
+def test_run_with_reload_rejects_non_http_transport():
+    with pytest.raises(ValueError, match="Reload is only supported for HTTP"):
+        asgi.run_with_reload(transport="stdio", port=8000, ws_port=9500)
