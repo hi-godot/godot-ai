@@ -122,7 +122,7 @@ New features don't ship without tests. Regressions are caught before they merge.
 
 ## Known issues
 
-- **SIGABRT on save after bulk undo/redo**: Godot can crash in `EditorNode::_save_scene_with_preview` after many undo/redo operations (create + duplicate + reparent + delete) followed by `EditorInterface.save_scene()`. Only reproduces with the MCP plugin active (WebSocket polling in `_process()`); standalone repro plugin does not crash. Likely a Godot engine bug triggered by specific timing. Workaround: avoid saving immediately after large batches of write operations, or save from the Godot UI instead of programmatically.
+- **Re-entrant `_process()` during save**: `EditorInterface.save_scene()` internally renders a preview thumbnail, which triggers frame processing. If `Connection._process()` runs during this, WebSocket polling and command dispatch re-enter, crashing Godot (`SIGABRT` in `_save_scene_with_preview`). Fixed by setting `Connection.pause_processing = true` around save calls in `SceneHandler`. Any new handler that calls `save_scene()`, `save_scene_as()`, or `save_all_scenes()` must do the same.
 - **GDScript tests must not call `EditorInterface.save_scene()` or `scene_create`/`scene_open`**: These trigger modal dialogs or scene switches that freeze or crash the test runner. Test only validation/error paths for these operations in GDScript; full behavior is covered by Python integration tests.
 
 ## What NOT to do

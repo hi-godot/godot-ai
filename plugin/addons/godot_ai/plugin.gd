@@ -15,8 +15,11 @@ func _enter_tree() -> void:
 	_log_buffer = McpLogBuffer.new()
 	_dispatcher = McpDispatcher.new(_log_buffer)
 
+	_connection = Connection.new()
+	_connection.log_buffer = _log_buffer
+
 	var editor_handler := EditorHandler.new(_log_buffer)
-	var scene_handler := SceneHandler.new()
+	var scene_handler := SceneHandler.new(_connection)
 	var node_handler := NodeHandler.new(get_undo_redo())
 	var project_handler := ProjectHandler.new()
 	var client_handler := ClientHandler.new()
@@ -53,8 +56,6 @@ func _enter_tree() -> void:
 	_dispatcher.register("run_tests", test_handler.run_tests)
 	_dispatcher.register("get_test_results", test_handler.get_test_results)
 
-	_connection = Connection.new()
-	_connection.log_buffer = _log_buffer
 	_connection.dispatcher = _dispatcher
 	add_child(_connection)
 

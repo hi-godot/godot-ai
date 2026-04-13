@@ -4,6 +4,12 @@ extends RefCounted
 
 ## Handles scene tree reading and node search.
 
+var _connection: Connection
+
+
+func _init(connection: Connection = null) -> void:
+	_connection = connection
+
 
 func get_scene_tree(params: Dictionary) -> Dictionary:
 	var max_depth: int = params.get("depth", 10)
@@ -108,11 +114,15 @@ func create_scene(params: Dictionary) -> Dictionary:
 	packed.pack(root)
 	root.free()
 
+	if _connection:
+		_connection.pause_processing = true
 	var err := ResourceSaver.save(packed, path)
+	EditorInterface.open_scene_from_path(path)
+	if _connection:
+		_connection.pause_processing = false
+
 	if err != OK:
 		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to save scene: %s" % error_string(err))
-
-	EditorInterface.open_scene_from_path(path)
 
 	return {
 		"data": {
@@ -146,12 +156,19 @@ func open_scene(params: Dictionary) -> Dictionary:
 
 
 ## Save the currently edited scene.
+## Pauses WebSocket processing during save to prevent re-entrant _process()
+## calls during EditorNode::_save_scene_with_preview's thumbnail render.
 func save_scene(_params: Dictionary) -> Dictionary:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 
+	if _connection:
+		_connection.pause_processing = true
 	var err := EditorInterface.save_scene()
+	if _connection:
+		_connection.pause_processing = false
+
 	if err != OK:
 		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to save scene: %s" % error_string(err))
 
@@ -187,7 +204,11 @@ func save_scene_as(params: Dictionary) -> Dictionary:
 		if err != OK:
 			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
 
+	if _connection:
+		_connection.pause_processing = true
 	EditorInterface.save_scene_as(path)
+	if _connection:
+		_connection.pause_processing = false
 
 	return {
 		"data": {
