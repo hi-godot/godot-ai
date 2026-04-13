@@ -60,7 +60,7 @@ The Godot dock also has a **Start/Stop Dev Server** button for convenience.
 
 ### Python tests
 ```bash
-pytest -v                    # 140 unit + integration tests
+pytest -v                    # 167 unit + integration tests
 ```
 
 ### Godot-side tests
@@ -119,6 +119,11 @@ Response must include `"undoable": true`. If an operation genuinely can't be und
 - **Godot-side tests** (`test_project/tests/`): handlers exercised against the live editor
 
 New features don't ship without tests. Regressions are caught before they merge.
+
+## Known issues
+
+- **Re-entrant `_process()` during save**: `EditorInterface.save_scene()` internally renders a preview thumbnail, which triggers frame processing. If `Connection._process()` runs during this, WebSocket polling and command dispatch re-enter, crashing Godot (`SIGABRT` in `_save_scene_with_preview`). Fixed by setting `Connection.pause_processing = true` around save calls in `SceneHandler`. Any new handler that calls `save_scene()`, `save_scene_as()`, or `save_all_scenes()` must do the same.
+- **GDScript tests must not call `EditorInterface.save_scene()` or `scene_create`/`scene_open`**: These trigger modal dialogs or scene switches that freeze or crash the test runner. Test only validation/error paths for these operations in GDScript; full behavior is covered by Python integration tests.
 
 ## What NOT to do
 

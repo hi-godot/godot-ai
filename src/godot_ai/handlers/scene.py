@@ -21,6 +21,25 @@ async def scene_get_roots(runtime: Runtime) -> dict:
     return await runtime.send_command("get_open_scenes")
 
 
+async def scene_create(runtime: Runtime, path: str, root_type: str = "Node3D") -> dict:
+    return await runtime.send_command(
+        "create_scene",
+        {"path": path, "root_type": root_type},
+    )
+
+
+async def scene_open(runtime: Runtime, path: str) -> dict:
+    return await runtime.send_command("open_scene", {"path": path})
+
+
+async def scene_save(runtime: Runtime) -> dict:
+    return await runtime.send_command("save_scene")
+
+
+async def scene_save_as(runtime: Runtime, path: str) -> dict:
+    return await runtime.send_command("save_scene_as", {"path": path})
+
+
 async def current_scene_resource_data(runtime: Runtime) -> dict:
     state = await runtime.send_command("get_editor_state")
     return {

@@ -43,3 +43,47 @@ def register_scene_tools(mcp: FastMCP) -> None:
         """
         runtime = DirectRuntime.from_context(ctx)
         return await scene_handlers.scene_get_roots(runtime)
+
+    @mcp.tool()
+    async def scene_create(
+        ctx: Context,
+        path: str,
+        root_type: str = "Node3D",
+    ) -> dict:
+        """Create a new scene file and open it in the editor.
+
+        Creates a scene with the specified root node type, saves it to
+        disk, and opens it for editing.
+
+        Args:
+            path: File path for the new scene (e.g. "res://scenes/level.tscn").
+            root_type: Godot node class for the root node. Default "Node3D".
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await scene_handlers.scene_create(runtime, path=path, root_type=root_type)
+
+    @mcp.tool()
+    async def scene_open(ctx: Context, path: str) -> dict:
+        """Open an existing scene file in the editor.
+
+        Args:
+            path: File path of the scene to open (e.g. "res://main.tscn").
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await scene_handlers.scene_open(runtime, path=path)
+
+    @mcp.tool()
+    async def scene_save(ctx: Context) -> dict:
+        """Save the currently edited scene to disk."""
+        runtime = DirectRuntime.from_context(ctx)
+        return await scene_handlers.scene_save(runtime)
+
+    @mcp.tool()
+    async def scene_save_as(ctx: Context, path: str) -> dict:
+        """Save the currently edited scene to a new file path.
+
+        Args:
+            path: New file path for the scene (e.g. "res://scenes/level_copy.tscn").
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await scene_handlers.scene_save_as(runtime, path=path)

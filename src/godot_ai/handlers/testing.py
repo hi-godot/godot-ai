@@ -11,7 +11,7 @@ async def run_tests(runtime: Runtime, suite: str = "", test_name: str = "") -> d
         params["suite"] = suite
     if test_name:
         params["test_name"] = test_name
-    return await runtime.send_command("run_tests", params)
+    return await runtime.send_command("run_tests", params, timeout=30.0)
 
 
 async def get_test_results(runtime: Runtime) -> dict:

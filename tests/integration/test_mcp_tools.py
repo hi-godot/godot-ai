@@ -79,6 +79,140 @@ class TestSceneGetRootsTool:
 
 
 # ---------------------------------------------------------------------------
+# scene_create
+# ---------------------------------------------------------------------------
+
+
+class TestSceneCreateTool:
+    async def test_create_scene(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "create_scene"
+            assert cmd["params"]["path"] == "res://scenes/level.tscn"
+            assert cmd["params"]["root_type"] == "Node2D"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://scenes/level.tscn",
+                    "root_type": "Node2D",
+                    "root_name": "level",
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "scene_create", {"path": "res://scenes/level.tscn", "root_type": "Node2D"}
+        )
+        await task
+
+        assert result.data["path"] == "res://scenes/level.tscn"
+        assert result.data["root_type"] == "Node2D"
+        assert result.data["undoable"] is False
+
+    async def test_create_scene_default_root(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["root_type"] == "Node3D"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://new.tscn",
+                    "root_type": "Node3D",
+                    "root_name": "new",
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("scene_create", {"path": "res://new.tscn"})
+        await task
+        assert result.data["root_type"] == "Node3D"
+
+
+# ---------------------------------------------------------------------------
+# scene_open
+# ---------------------------------------------------------------------------
+
+
+class TestSceneOpenTool:
+    async def test_open_scene(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "open_scene"
+            assert cmd["params"]["path"] == "res://levels/world.tscn"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"path": "res://levels/world.tscn", "undoable": False},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("scene_open", {"path": "res://levels/world.tscn"})
+        await task
+
+        assert result.data["path"] == "res://levels/world.tscn"
+        assert result.data["undoable"] is False
+
+
+# ---------------------------------------------------------------------------
+# scene_save
+# ---------------------------------------------------------------------------
+
+
+class TestSceneSaveTool:
+    async def test_save_scene(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "save_scene"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"path": "res://main.tscn", "undoable": False},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("scene_save", {})
+        await task
+
+        assert result.data["path"] == "res://main.tscn"
+
+
+# ---------------------------------------------------------------------------
+# scene_save_as
+# ---------------------------------------------------------------------------
+
+
+class TestSceneSaveAsTool:
+    async def test_save_scene_as(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "save_scene_as"
+            assert cmd["params"]["path"] == "res://backup/main_copy.tscn"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"path": "res://backup/main_copy.tscn", "undoable": False},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "scene_save_as", {"path": "res://backup/main_copy.tscn"}
+        )
+        await task
+
+        assert result.data["path"] == "res://backup/main_copy.tscn"
+        assert result.data["undoable"] is False
+
+
+# ---------------------------------------------------------------------------
 # editor_state
 # ---------------------------------------------------------------------------
 
@@ -269,6 +403,280 @@ class TestNodeCreateTool:
 
         assert result.data["path"] == "/Main/NewMesh"
         assert result.data["undoable"] is True
+
+
+# ---------------------------------------------------------------------------
+# node_delete
+# ---------------------------------------------------------------------------
+
+
+class TestNodeDeleteTool:
+    async def test_delete_node(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "delete_node"
+            assert cmd["params"]["path"] == "/Main/Enemy"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"path": "/Main/Enemy", "undoable": True},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("node_delete", {"path": "/Main/Enemy"})
+        await task
+
+        assert result.data["path"] == "/Main/Enemy"
+        assert result.data["undoable"] is True
+
+
+# ---------------------------------------------------------------------------
+# node_reparent
+# ---------------------------------------------------------------------------
+
+
+class TestNodeReparentTool:
+    async def test_reparent_node(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "reparent_node"
+            assert cmd["params"]["path"] == "/Main/Player"
+            assert cmd["params"]["new_parent"] == "/Main/World"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/World/Player",
+                    "old_parent": "/Main",
+                    "new_parent": "/Main/World",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "node_reparent", {"path": "/Main/Player", "new_parent": "/Main/World"}
+        )
+        await task
+
+        assert result.data["new_parent"] == "/Main/World"
+        assert result.data["undoable"] is True
+
+
+# ---------------------------------------------------------------------------
+# node_set_property
+# ---------------------------------------------------------------------------
+
+
+class TestNodeSetPropertyTool:
+    async def test_set_property(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "set_property"
+            assert cmd["params"]["path"] == "/Main/Camera3D"
+            assert cmd["params"]["property"] == "fov"
+            assert cmd["params"]["value"] == 90
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Camera3D",
+                    "property": "fov",
+                    "value": 90,
+                    "old_value": 75,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "node_set_property",
+            {"path": "/Main/Camera3D", "property": "fov", "value": 90},
+        )
+        await task
+
+        assert result.data["value"] == 90
+        assert result.data["old_value"] == 75
+        assert result.data["undoable"] is True
+
+
+# ---------------------------------------------------------------------------
+# node_duplicate
+# ---------------------------------------------------------------------------
+
+
+class TestNodeDuplicateTool:
+    async def test_duplicate_node(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "duplicate_node"
+            assert cmd["params"]["path"] == "/Main/Enemy"
+            assert cmd["params"]["name"] == "Enemy2"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Enemy2",
+                    "original_path": "/Main/Enemy",
+                    "name": "Enemy2",
+                    "type": "CharacterBody3D",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "node_duplicate", {"path": "/Main/Enemy", "name": "Enemy2"}
+        )
+        await task
+
+        assert result.data["name"] == "Enemy2"
+        assert result.data["undoable"] is True
+
+
+# ---------------------------------------------------------------------------
+# node_move
+# ---------------------------------------------------------------------------
+
+
+class TestNodeMoveTool:
+    async def test_move_node(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "move_node"
+            assert cmd["params"]["path"] == "/Main/Camera3D"
+            assert cmd["params"]["index"] == 2
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Camera3D",
+                    "old_index": 0,
+                    "new_index": 2,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "node_move", {"path": "/Main/Camera3D", "index": 2}
+        )
+        await task
+
+        assert result.data["new_index"] == 2
+        assert result.data["undoable"] is True
+
+
+# ---------------------------------------------------------------------------
+# node_add_to_group / node_remove_from_group
+# ---------------------------------------------------------------------------
+
+
+class TestNodeGroupTools:
+    async def test_add_to_group(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "add_to_group"
+            assert cmd["params"]["group"] == "enemies"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"path": "/Main/Enemy", "group": "enemies", "undoable": True},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "node_add_to_group", {"path": "/Main/Enemy", "group": "enemies"}
+        )
+        await task
+
+        assert result.data["group"] == "enemies"
+        assert result.data["undoable"] is True
+
+    async def test_remove_from_group(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "remove_from_group"
+            assert cmd["params"]["group"] == "enemies"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"path": "/Main/Enemy", "group": "enemies", "undoable": True},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "node_remove_from_group", {"path": "/Main/Enemy", "group": "enemies"}
+        )
+        await task
+
+        assert result.data["group"] == "enemies"
+
+
+# ---------------------------------------------------------------------------
+# editor_selection_set
+# ---------------------------------------------------------------------------
+
+
+class TestEditorSelectionSetTool:
+    async def test_set_selection(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "set_selection"
+            assert cmd["params"]["paths"] == ["/Main/Camera3D", "/Main/World"]
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "selected": ["/Main/Camera3D", "/Main/World"],
+                    "not_found": [],
+                    "count": 2,
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "editor_selection_set",
+            {"paths": ["/Main/Camera3D", "/Main/World"]},
+        )
+        await task
+
+        assert result.data["count"] == 2
+        assert result.data["selected"] == ["/Main/Camera3D", "/Main/World"]
+
+    async def test_set_selection_with_missing_nodes(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "selected": ["/Main/Camera3D"],
+                    "not_found": ["/Main/Ghost"],
+                    "count": 1,
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "editor_selection_set",
+            {"paths": ["/Main/Camera3D", "/Main/Ghost"]},
+        )
+        await task
+
+        assert result.data["count"] == 1
+        assert result.data["not_found"] == ["/Main/Ghost"]
 
 
 # ---------------------------------------------------------------------------

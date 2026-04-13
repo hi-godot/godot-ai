@@ -103,3 +103,143 @@ def register_node_tools(mcp: FastMCP) -> None:
         """
         runtime = DirectRuntime.from_context(ctx)
         return await node_handlers.node_get_groups(runtime, path=path)
+
+    @mcp.tool()
+    async def node_delete(ctx: Context, path: str) -> dict:
+        """Delete a node from the scene tree.
+
+        Removes the node at the given path. This operation is undoable
+        via Ctrl+Z in the Godot editor. Cannot delete the scene root.
+
+        Args:
+            path: Scene path of the node to delete (e.g. "/Main/Enemy").
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await node_handlers.node_delete(runtime, path=path)
+
+    @mcp.tool()
+    async def node_reparent(
+        ctx: Context,
+        path: str,
+        new_parent: str,
+    ) -> dict:
+        """Move a node to a new parent in the scene tree.
+
+        Reparents the node, preserving its children. Cannot reparent the
+        scene root or move a node to one of its own descendants.
+
+        Args:
+            path: Scene path of the node to move (e.g. "/Main/Player").
+            new_parent: Scene path of the new parent (e.g. "/Main/World").
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await node_handlers.node_reparent(runtime, path=path, new_parent=new_parent)
+
+    @mcp.tool()
+    async def node_set_property(
+        ctx: Context,
+        path: str,
+        property: str,
+        value: str | int | float | bool | dict | list,
+    ) -> dict:
+        """Set a property on a node.
+
+        Sets a simple property value. For Vector2/Vector3, pass a dict
+        with x/y/z keys. For Color, pass a dict with r/g/b/a keys or
+        a hex string like "#ff0000".
+
+        Args:
+            path: Scene path of the node (e.g. "/Main/Camera3D").
+            property: Property name (e.g. "fov", "position", "visible").
+            value: New value for the property.
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await node_handlers.node_set_property(
+            runtime, path=path, property=property, value=value,
+        )
+
+    @mcp.tool()
+    async def node_duplicate(
+        ctx: Context,
+        path: str,
+        name: str = "",
+    ) -> dict:
+        """Duplicate a node and all its children.
+
+        Creates a deep copy of the node and adds it as a sibling.
+        Cannot duplicate the scene root.
+
+        Args:
+            path: Scene path of the node to duplicate (e.g. "/Main/Enemy").
+            name: Optional name for the duplicate. Godot auto-names if empty.
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await node_handlers.node_duplicate(runtime, path=path, name=name)
+
+    @mcp.tool()
+    async def node_move(
+        ctx: Context,
+        path: str,
+        index: int,
+    ) -> dict:
+        """Reorder a node among its siblings.
+
+        Changes the node's position in its parent's child list.
+        Index 0 = first child.
+
+        Args:
+            path: Scene path of the node to move (e.g. "/Main/Player").
+            index: New sibling index (0-based).
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await node_handlers.node_move(runtime, path=path, index=index)
+
+    @mcp.tool()
+    async def node_add_to_group(
+        ctx: Context,
+        path: str,
+        group: str,
+    ) -> dict:
+        """Add a node to a group.
+
+        Groups are Godot's lightweight tagging system. Nodes can belong
+        to multiple groups.
+
+        Args:
+            path: Scene path of the node (e.g. "/Main/Enemy").
+            group: Group name to add the node to (e.g. "enemies").
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await node_handlers.node_add_to_group(runtime, path=path, group=group)
+
+    @mcp.tool()
+    async def node_remove_from_group(
+        ctx: Context,
+        path: str,
+        group: str,
+    ) -> dict:
+        """Remove a node from a group.
+
+        Args:
+            path: Scene path of the node (e.g. "/Main/Enemy").
+            group: Group name to remove the node from (e.g. "enemies").
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await node_handlers.node_remove_from_group(runtime, path=path, group=group)
+
+    @mcp.tool()
+    async def editor_selection_set(
+        ctx: Context,
+        paths: list[str],
+    ) -> dict:
+        """Select nodes in the Godot editor by their scene paths.
+
+        Replaces the current selection with the specified nodes. Any
+        paths that don't resolve to existing nodes are reported in
+        the not_found list.
+
+        Args:
+            paths: List of scene paths to select (e.g. ["/Main/Camera3D", "/Main/Player"]).
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await node_handlers.editor_selection_set(runtime, paths=paths)

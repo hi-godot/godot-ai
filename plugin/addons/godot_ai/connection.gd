@@ -18,6 +18,9 @@ var _session_id := ""
 
 var dispatcher: McpDispatcher
 var log_buffer: McpLogBuffer
+## Set to true to skip _process() during operations like save_scene
+## that may trigger re-entrant frame processing.
+var pause_processing := false
 
 
 func _ready() -> void:
@@ -27,6 +30,8 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	if pause_processing:
+		return
 	_peer.poll()
 
 	match _peer.get_ready_state():
