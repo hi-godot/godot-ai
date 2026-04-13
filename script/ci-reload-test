@@ -1,12 +1,44 @@
 #!/usr/bin/env bash
 # Smoke-test the reload_plugin tool in CI.
-# Calls reload_plugin via MCP, waits for the new session, then verifies
-# the plugin is alive by calling editor_state.
+# 1. Creates a node (cube) via the OLD plugin
+# 2. Reloads the plugin, verifies new session ID
+# 3. Checks the log buffer is fresh (proves handlers were rebuilt)
+# 4. Finds the cube via the NEW plugin (proves scene tree continuity)
+#
 # Expects: Python server running on port 8000, Godot editor with plugin connected.
 set -euo pipefail
 
 SERVER_URL="http://127.0.0.1:8000/mcp"
 HEADERS=(-H "Content-Type: application/json" -H "Accept: application/json, text/event-stream")
+REQ_ID=0
+
+# Helper: call an MCP tool and return the parsed content JSON.
+# Usage: mcp_call <tool_name> '<json_arguments>'
+# Prints the parsed content to stdout. Exits 1 on failure.
+mcp_call() {
+  local tool="$1"
+  local args="${2:-\{\}}"
+  REQ_ID=$((REQ_ID + 1))
+  local raw
+  raw=$(curl -s --max-time 30 "$SERVER_URL" -X POST "${HEADERS[@]}" \
+    -H "Mcp-Session-Id: $SESSION_ID" \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":$REQ_ID,\"method\":\"tools/call\",\"params\":{\"name\":\"$tool\",\"arguments\":$args}}")
+  echo "$raw" | python3 -c "
+import json, sys
+raw = sys.stdin.read()
+for line in raw.split('\n'):
+    if line.startswith('data: '):
+        data = json.loads(line[6:])
+        content = data.get('result', {}).get('structuredContent', {})
+        if not content:
+            text = data.get('result', {}).get('content', [{}])[0].get('text', '{}')
+            content = json.loads(text)
+        print(json.dumps(content))
+        sys.exit(0)
+print('{}')
+sys.exit(1)
+"
+}
 
 # Initialize MCP session
 echo "Initializing MCP session..."
@@ -23,69 +55,84 @@ curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
   -H "Mcp-Session-Id: $SESSION_ID" \
   -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' > /dev/null
 
-# Call reload_plugin (may take several seconds while plugin restarts)
-echo "Calling reload_plugin..."
-RELOAD_RESULT=$(curl -s --max-time 30 "$SERVER_URL" -X POST "${HEADERS[@]}" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"reload_plugin","arguments":{}}}')
-
-# Parse reload result
-echo "$RELOAD_RESULT" | python3 -c "
+# --- Step 1: Create a cube with the OLD plugin ---
+echo "Creating test node with old plugin..."
+CREATE_RESULT=$(mcp_call node_create '{"type":"MeshInstance3D","name":"ReloadTestCube","parent_path":""}')
+echo "$CREATE_RESULT" | python3 -c "
 import json, sys
-raw = sys.stdin.read()
-for line in raw.split('\n'):
-    if line.startswith('data: '):
-        data = json.loads(line[6:])
-        content = data.get('result', {}).get('structuredContent', {})
-        if not content:
-            text = data.get('result', {}).get('content', [{}])[0].get('text', '{}')
-            content = json.loads(text)
-        status = content.get('status', '')
-        old_id = content.get('old_session_id', '')
-        new_id = content.get('new_session_id', '')
-        if status != 'reloaded':
-            print(f'FAIL: reload_plugin returned status={status!r}, expected \"reloaded\"')
-            print(f'Full response: {content}')
-            sys.exit(1)
-        if old_id == new_id:
-            print(f'FAIL: old and new session IDs are the same: {old_id}')
-            sys.exit(1)
-        print(f'reload_plugin OK: {old_id[:12]}... -> {new_id[:12]}...')
-        break
-else:
-    print('FAIL: No valid response from reload_plugin')
-    print(f'Raw: {raw[:500]}')
+content = json.loads(sys.stdin.read())
+path = content.get('path', '')
+if not path:
+    print(f'FAIL: node_create did not return a path: {content}')
     sys.exit(1)
+print(f'Created node: {path}')
 "
 
-# Verify the plugin is alive after reload
-echo "Verifying plugin health..."
-HEALTH_RESULT=$(curl -s --max-time 10 "$SERVER_URL" -X POST "${HEADERS[@]}" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"editor_state","arguments":{}}}')
+# --- Step 2: Reload the plugin ---
+echo "Calling reload_plugin..."
+RELOAD_RESULT=$(mcp_call reload_plugin)
+echo "$RELOAD_RESULT" | python3 -c "
+import json, sys
+content = json.loads(sys.stdin.read())
+status = content.get('status', '')
+old_id = content.get('old_session_id', '')
+new_id = content.get('new_session_id', '')
+if status != 'reloaded':
+    print(f'FAIL: reload_plugin returned status={status!r}, expected \"reloaded\"')
+    print(f'Full response: {content}')
+    sys.exit(1)
+if old_id == new_id:
+    print(f'FAIL: old and new session IDs are the same: {old_id}')
+    sys.exit(1)
+print(f'reload_plugin OK: {old_id[:12]}... -> {new_id[:12]}...')
+"
 
+# --- Step 3: Verify log buffer is fresh (proves plugin fully rebuilt) ---
+echo "Checking log buffer..."
+LOGS_RESULT=$(mcp_call logs_read '{"count":20}')
+echo "$LOGS_RESULT" | python3 -c "
+import json, sys
+content = json.loads(sys.stdin.read())
+lines = content.get('lines', [])
+total = content.get('total_count', -1)
+if not lines:
+    print('FAIL: logs_read returned no lines after reload')
+    sys.exit(1)
+if 'plugin loaded' not in lines[0]:
+    print(f'FAIL: first log line should be \"plugin loaded\", got: {lines[0]!r}')
+    sys.exit(1)
+if total > 20:
+    print(f'WARN: log buffer has {total} lines — expected a small fresh buffer')
+print(f'Log buffer OK: {total} lines, starts with \"{lines[0]}\"')
+"
+
+# --- Step 4: Find the cube with the NEW plugin (scene tree survived) ---
+echo "Finding test node with new plugin..."
+FIND_RESULT=$(mcp_call node_find '{"name":"ReloadTestCube"}')
+echo "$FIND_RESULT" | python3 -c "
+import json, sys
+content = json.loads(sys.stdin.read())
+nodes = content.get('nodes', [])
+if not nodes:
+    print('FAIL: ReloadTestCube not found after reload — scene tree did not survive')
+    sys.exit(1)
+node = nodes[0]
+print(f'Found node: {node.get(\"name\", \"?\")} ({node.get(\"type\", \"?\")})')
+"
+
+# --- Step 5: Verify editor_state works ---
+echo "Verifying editor_state..."
+HEALTH_RESULT=$(mcp_call editor_state)
 echo "$HEALTH_RESULT" | python3 -c "
 import json, sys
-raw = sys.stdin.read()
-for line in raw.split('\n'):
-    if line.startswith('data: '):
-        data = json.loads(line[6:])
-        content = data.get('result', {}).get('structuredContent', {})
-        if not content:
-            text = data.get('result', {}).get('content', [{}])[0].get('text', '{}')
-            content = json.loads(text)
-        version = content.get('godot_version', '')
-        project = content.get('project_name', '')
-        if not version:
-            print(f'FAIL: editor_state missing godot_version after reload')
-            print(f'Full response: {content}')
-            sys.exit(1)
-        print(f'Post-reload health OK: {project} on Godot {version}')
-        break
-else:
-    print('FAIL: No valid response from editor_state after reload')
-    print(f'Raw: {raw[:500]}')
+content = json.loads(sys.stdin.read())
+version = content.get('godot_version', '')
+project = content.get('project_name', '')
+if not version:
+    print(f'FAIL: editor_state missing godot_version after reload')
+    print(f'Full response: {content}')
     sys.exit(1)
+print(f'Post-reload health OK: {project} on Godot {version}')
 "
 
 echo "Reload smoke test passed"
