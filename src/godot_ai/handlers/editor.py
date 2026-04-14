@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
+
+from fastmcp.tools.base import Image as McpImage
+from mcp.types import TextContent
 
 from godot_ai.runtime.interface import Runtime
 from godot_ai.sessions.registry import Session
@@ -17,6 +22,118 @@ async def editor_state(runtime: Runtime) -> dict:
 
 async def editor_selection_get(runtime: Runtime) -> dict:
     return await runtime.send_command("get_selection")
+
+
+async def editor_screenshot(
+    runtime: Runtime,
+    source: str = "viewport",
+    max_resolution: int = 640,
+    include_image: bool = True,
+    view_target: str = "",
+    coverage: bool = False,
+    elevation: float | None = None,
+    azimuth: float | None = None,
+    fov: float | None = None,
+) -> dict | list:
+    params: dict = {"source": source}
+    if max_resolution > 0:
+        params["max_resolution"] = max_resolution
+    if view_target:
+        params["view_target"] = view_target
+    if coverage:
+        params["coverage"] = True
+    if elevation is not None:
+        params["elevation"] = elevation
+    if azimuth is not None:
+        params["azimuth"] = azimuth
+    if fov is not None:
+        params["fov"] = fov
+
+    result = await runtime.send_command("take_screenshot", params, timeout=15.0)
+
+    # --- Coverage response: multiple images ---
+    if result.get("coverage") and "images" in result:
+        images_meta = []
+        for img in result["images"]:
+            meta_entry = {
+                "label": img["label"],
+                "elevation": img["elevation"],
+                "azimuth": img["azimuth"],
+                "fov": img["fov"],
+                "width": img["width"],
+                "height": img["height"],
+            }
+            if img.get("ortho"):
+                meta_entry["ortho"] = True
+            images_meta.append(meta_entry)
+        metadata = {
+            "source": result["source"],
+            "view_target": view_target,
+            "coverage": True,
+            "image_count": len(result["images"]),
+            "images": images_meta,
+        }
+        if "view_target_count" in result:
+            metadata["view_target_count"] = result["view_target_count"]
+        if "view_target_not_found" in result:
+            metadata["view_target_not_found"] = result["view_target_not_found"]
+        for aabb_key in ("aabb_center", "aabb_size", "aabb_longest_ground_axis"):
+            if aabb_key in result:
+                metadata[aabb_key] = result[aabb_key]
+
+        if not include_image:
+            return metadata
+
+        blocks: list = [TextContent(type="text", text=json.dumps(metadata))]
+        for img in result["images"]:
+            image_bytes = base64.b64decode(img.get("image_base64", ""))
+            blocks.append(McpImage(data=image_bytes, format=img.get("format", "png")))
+        return blocks
+
+    # --- Single-image response ---
+    metadata = {
+        "source": result["source"],
+        "width": result["width"],
+        "height": result["height"],
+        "original_width": result["original_width"],
+        "original_height": result["original_height"],
+        "format": result["format"],
+    }
+    if view_target:
+        metadata["view_target"] = view_target
+        if "view_target_count" in result:
+            metadata["view_target_count"] = result["view_target_count"]
+        if "view_target_not_found" in result:
+            metadata["view_target_not_found"] = result["view_target_not_found"]
+    for key in ("elevation", "azimuth", "fov",
+                "aabb_center", "aabb_size", "aabb_longest_ground_axis"):
+        if key in result:
+            metadata[key] = result[key]
+
+    if not include_image:
+        return metadata
+
+    image_b64 = result.get("image_base64", "")
+    image_bytes = base64.b64decode(image_b64)
+    fmt = result.get("format", "png")
+
+    return [
+        TextContent(type="text", text=json.dumps(metadata)),
+        McpImage(data=image_bytes, format=fmt),
+    ]
+
+
+async def performance_get_monitors(
+    runtime: Runtime, monitors: list[str] | None = None
+) -> dict:
+    params: dict = {}
+    if monitors:
+        params["monitors"] = monitors
+    return await runtime.send_command("get_performance_monitors", params)
+
+
+async def logs_clear(runtime: Runtime) -> dict:
+    return await runtime.send_command("clear_logs")
 
 
 async def logs_read(runtime: Runtime, count: int = 50, offset: int = 0) -> dict:

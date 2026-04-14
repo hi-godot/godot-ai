@@ -1871,3 +1871,418 @@ class TestReadinessGating:
 
         assert not result.is_error
         assert result.data["path"] == "/Main/Unblocked"
+
+
+# ---------------------------------------------------------------------------
+# logs_clear
+# ---------------------------------------------------------------------------
+
+
+class TestLogsClearTool:
+    async def test_clears_log_buffer(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "clear_logs"
+            await plugin.send_response(cmd["request_id"], {"cleared_count": 12})
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("logs_clear", {})
+        await task
+
+        assert not result.is_error
+        assert result.data["cleared_count"] == 12
+
+
+# ---------------------------------------------------------------------------
+# project_run / project_stop
+# ---------------------------------------------------------------------------
+
+
+class TestProjectRunTool:
+    async def test_run_main_scene(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "run_project"
+            assert cmd["params"]["mode"] == "main"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"mode": "main", "scene": "", "undoable": False},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("project_run", {})
+        await task
+
+        assert not result.is_error
+        assert result.data["mode"] == "main"
+
+    async def test_run_current_scene(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["mode"] == "current"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"mode": "current", "scene": "", "undoable": False},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("project_run", {"mode": "current"})
+        await task
+
+        assert not result.is_error
+        assert result.data["mode"] == "current"
+
+    async def test_run_custom_scene(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["mode"] == "custom"
+            assert cmd["params"]["scene"] == "res://levels/level1.tscn"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "mode": "custom",
+                    "scene": "res://levels/level1.tscn",
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "project_run",
+            {"mode": "custom", "scene": "res://levels/level1.tscn"},
+        )
+        await task
+
+        assert not result.is_error
+        assert result.data["scene"] == "res://levels/level1.tscn"
+
+
+class TestProjectStopTool:
+    async def test_stop_running_project(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "stop_project"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"stopped": True, "undoable": False},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("project_stop", {})
+        await task
+
+        assert not result.is_error
+        assert result.data["stopped"] is True
+
+
+# ---------------------------------------------------------------------------
+# performance_get_monitors
+# ---------------------------------------------------------------------------
+
+
+class TestEditorScreenshotTool:
+    _ONE_PX_PNG_B64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4DwABAQEBYY2JxQAAAABJRU5ErkJggg=="
+    )
+
+    async def test_screenshot_with_image(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "take_screenshot"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "source": "viewport",
+                    "width": 640,
+                    "height": 480,
+                    "original_width": 1920,
+                    "original_height": 1080,
+                    "format": "png",
+                    "image_base64": self._ONE_PX_PNG_B64,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("editor_screenshot", {})
+        await task
+
+        assert not result.is_error
+        # When include_image=True, result contains both text and image content blocks
+        assert len(result.content) >= 2
+
+    async def test_screenshot_metadata_only(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "source": "viewport",
+                    "width": 640,
+                    "height": 480,
+                    "original_width": 1920,
+                    "original_height": 1080,
+                    "format": "png",
+                    "image_base64": self._ONE_PX_PNG_B64,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "editor_screenshot", {"include_image": False}
+        )
+        await task
+
+        assert not result.is_error
+        assert result.data["source"] == "viewport"
+        assert result.data["width"] == 640
+
+    async def test_screenshot_custom_source(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["source"] == "game"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "source": "game",
+                    "width": 640,
+                    "height": 480,
+                    "original_width": 1920,
+                    "original_height": 1080,
+                    "format": "png",
+                    "image_base64": self._ONE_PX_PNG_B64,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "editor_screenshot",
+            {"source": "game", "include_image": False},
+        )
+        await task
+
+        assert result.data["source"] == "game"
+
+    async def test_screenshot_with_view_target(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["view_target"] == "/Main/MyCube"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "source": "viewport",
+                    "width": 640,
+                    "height": 480,
+                    "original_width": 1920,
+                    "original_height": 1080,
+                    "format": "png",
+                    "image_base64": self._ONE_PX_PNG_B64,
+                    "view_target": "/Main/MyCube",
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "editor_screenshot",
+            {"view_target": "/Main/MyCube", "include_image": False},
+        )
+        await task
+
+        assert not result.is_error
+        assert result.data["view_target"] == "/Main/MyCube"
+
+    async def test_screenshot_with_multi_view_target(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["view_target"] == "/Main/A,/Main/B"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "source": "viewport",
+                    "width": 640,
+                    "height": 480,
+                    "original_width": 1920,
+                    "original_height": 1080,
+                    "format": "png",
+                    "image_base64": self._ONE_PX_PNG_B64,
+                    "view_target": "/Main/A,/Main/B",
+                    "view_target_count": 2,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "editor_screenshot",
+            {"view_target": "/Main/A,/Main/B", "include_image": False},
+        )
+        await task
+
+        assert not result.is_error
+        assert result.data["view_target"] == "/Main/A,/Main/B"
+        assert result.data["view_target_count"] == 2
+
+    async def test_screenshot_coverage_round_trip(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"].get("coverage") is True
+            assert cmd["params"]["view_target"] == "/Main/X"
+            images = []
+            for preset in [
+                {"label": "establishing", "elevation": 25.0,
+                 "azimuth": 20.0, "fov": 50.0, "ortho": False},
+                {"label": "top", "elevation": 90.0, "azimuth": 0.0,
+                 "fov": 0.0, "ortho": True},
+            ]:
+                images.append(
+                    {
+                        "source": "viewport",
+                        "width": 1,
+                        "height": 1,
+                        "original_width": 100,
+                        "original_height": 100,
+                        "format": "png",
+                        "image_base64": self._ONE_PX_PNG_B64,
+                        **preset,
+                    }
+                )
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "source": "viewport",
+                    "view_target": "/Main/X",
+                    "view_target_count": 1,
+                    "coverage": True,
+                    "images": images,
+                    "aabb_center": [1.0, 0.5, 0.0],
+                    "aabb_size": [3.0, 2.0, 2.0],
+                    "aabb_longest_ground_axis": "x",
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "editor_screenshot",
+            {"view_target": "/Main/X", "coverage": True},
+        )
+        await task
+
+        assert not result.is_error
+        # 1 text metadata + 2 images = 3 content blocks
+        assert len(result.content) == 3
+
+    async def test_screenshot_custom_angles_round_trip(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["elevation"] == 45.0
+            assert cmd["params"]["azimuth"] == 90.0
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "source": "viewport",
+                    "width": 1,
+                    "height": 1,
+                    "original_width": 100,
+                    "original_height": 100,
+                    "format": "png",
+                    "image_base64": self._ONE_PX_PNG_B64,
+                    "view_target": "/Main/X",
+                    "view_target_count": 1,
+                    "elevation": 45.0,
+                    "azimuth": 90.0,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "editor_screenshot",
+            {
+                "view_target": "/Main/X",
+                "elevation": 45.0,
+                "azimuth": 90.0,
+                "include_image": False,
+            },
+        )
+        await task
+
+        assert not result.is_error
+        assert result.data["elevation"] == 45.0
+        assert result.data["azimuth"] == 90.0
+
+
+# ---------------------------------------------------------------------------
+# performance_get_monitors
+# ---------------------------------------------------------------------------
+
+
+class TestPerformanceGetMonitorsTool:
+    async def test_get_all_monitors(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_performance_monitors"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "monitors": {
+                        "time/fps": 60.0,
+                        "memory/static": 1048576,
+                    },
+                    "monitor_count": 2,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("performance_get_monitors", {})
+        await task
+
+        assert not result.is_error
+        assert result.data["monitors"]["time/fps"] == 60.0
+        assert result.data["monitor_count"] == 2
+
+    async def test_get_filtered_monitors(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["monitors"] == ["time/fps"]
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "monitors": {"time/fps": 60.0},
+                    "monitor_count": 1,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "performance_get_monitors",
+            {"monitors": ["time/fps"]},
+        )
+        await task
+
+        assert not result.is_error
+        assert result.data["monitor_count"] == 1

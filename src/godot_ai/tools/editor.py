@@ -47,6 +47,116 @@ def register_editor_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await editor_handlers.logs_read(runtime, count=count, offset=offset)
 
+    @mcp.tool(output_schema=None)
+    async def editor_screenshot(
+        ctx: Context,
+        source: str = "viewport",
+        max_resolution: int = 640,
+        include_image: bool = True,
+        view_target: str = "",
+        coverage: bool = False,
+        elevation: float | None = None,
+        azimuth: float | None = None,
+        fov: float | None = None,
+    ):
+        """Capture a screenshot from the Godot editor.
+
+        Takes a screenshot and optionally returns it as an inline image.
+
+        Sources:
+        - "viewport": Captures the 3D editor viewport (default).
+        - "game": Captures the game viewport (only available when the project is running).
+
+        When include_image is True (default), returns the image as an MCP
+        ImageContent block that vision-capable AI models can analyze directly.
+        When False, returns only metadata (dimensions, format).
+
+        When view_target is provided, a temporary camera is positioned to
+        frame the specified Node3D. The editor's own camera is not affected.
+        Response always includes AABB geometry metadata (center, size,
+        longest ground axis) for planning follow-up shots.
+
+        Recommended workflow for 3D subjects:
+        1. Call with coverage=True to get reference shots + AABB metadata.
+        2. Evaluate the images — what's visible, what's hidden, what needs
+           a closer look?
+        3. Call again with specific elevation/azimuth/fov for closeups and
+           detail shots YOU choose. Use tight fov (20-30) to zoom in.
+        4. Repeat until you have the coverage you need (up to ~15 shots).
+
+        Args:
+            source: Capture source — "viewport" or "game". Default "viewport".
+            max_resolution: Maximum resolution (longest edge) for the returned image.
+                Images larger than this are downscaled. Default 640. Set to 0 for full resolution.
+            include_image: Whether to include the image data in the response. Default True.
+            view_target: Comma-separated scene paths of Node3D nodes to frame
+                (e.g. "/Main/Player" or "/Main/Snowman,/Main/Snowman2").
+                A temporary camera renders the scene from an angle that frames all targets.
+            coverage: When True and view_target is set, capture two reference shots
+                (establishing perspective + orthographic top-down) plus AABB geometry
+                metadata (center, size, longest ground axis). Use these to orient yourself,
+                then iterate with elevation/azimuth/fov for the closeups and detail shots
+                YOU choose — the tool won't guess what's interesting to look at closely.
+                Ignored without view_target.
+            elevation: Camera elevation angle in degrees (0=level, 90=directly above).
+                Use for targeted follow-up shots after reviewing coverage images.
+                Only applies when view_target is set. Default 25.
+            azimuth: Camera azimuth angle in degrees (0=front, 90=right side, 180=behind).
+                Use for targeted follow-up shots after reviewing coverage images.
+                Only applies when view_target is set. Default 30.
+            fov: Camera field of view in degrees. Lower values (25-35) zoom in like a telephoto
+                for detail shots. Higher values (60-75) zoom out for context/establishing shots.
+                Only applies when view_target is set. Default uses editor's current FOV.
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await editor_handlers.editor_screenshot(
+            runtime,
+            source=source,
+            max_resolution=max_resolution,
+            include_image=include_image,
+            view_target=view_target,
+            coverage=coverage,
+            elevation=elevation,
+            azimuth=azimuth,
+            fov=fov,
+        )
+
+    @mcp.tool()
+    async def performance_get_monitors(
+        ctx: Context,
+        monitors: list[str] | None = None,
+    ) -> dict:
+        """Get Godot performance monitor values.
+
+        Returns values from Godot's Performance singleton: FPS, memory usage,
+        object counts, render stats, physics stats, and navigation stats.
+
+        Without filters, returns all monitors. Pass a list of monitor names
+        to get specific ones.
+
+        Available monitors include:
+        - time/fps, time/process, time/physics_process
+        - memory/static, memory/static_max
+        - object/count, object/resource_count, object/node_count, object/orphan_node_count
+        - render/total_objects_in_frame, render/total_draw_calls_in_frame, render/video_mem_used
+        - physics_2d/active_objects, physics_3d/active_objects
+        - navigation/active_maps, navigation/region_count, navigation/agent_count
+
+        Args:
+            monitors: Optional list of monitor names to return. If omitted, returns all.
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await editor_handlers.performance_get_monitors(runtime, monitors=monitors)
+
+    @mcp.tool()
+    async def logs_clear(ctx: Context) -> dict:
+        """Clear the MCP log buffer in the Godot editor.
+
+        Removes all captured log lines. Returns the number of lines cleared.
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await editor_handlers.logs_clear(runtime)
+
     @mcp.tool()
     async def editor_quit(ctx: Context) -> dict:
         """Gracefully quit the Godot editor.

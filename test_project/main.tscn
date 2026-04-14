@@ -1,9 +1,40 @@
 [gd_scene format=3 uid="uid://bdvihvqroq12a"]
 
+[ext_resource type="PackedScene" uid="uid://1w7dp2aeqcpq" path="res://snowman.tscn" id="1_ig7tw"]
+
+[sub_resource type="SphereMesh" id="SphereMesh_7dm0k"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_0xm2m"]
+albedo_color = Color(0.27098876, 5.3172447e-05, 0.2738291, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_h2yge"]
+albedo_color = Color(0.32156864, 0.4745098, 0.63529414, 1)
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_h2yge"]
+
+[sub_resource type="ImageTexture" id="ImageTexture_x4rgl"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ig7tw"]
+albedo_color = Color(0.65968806, 0.63971, 1.347661e-06, 1)
+metallic = 1.0
+metallic_specular = 0.66
+metallic_texture = SubResource("ImageTexture_x4rgl")
+
+[sub_resource type="SphereMesh" id="SphereMesh_h2yge"]
+
+[sub_resource type="ImageTexture" id="ImageTexture_1bvp3"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_1bvp3"]
+albedo_color = Color(0.75792, 0.8095759, 1, 1)
+metallic = 1.0
+metallic_specular = 0.66
+metallic_texture = SubResource("ImageTexture_1bvp3")
+
 [node name="Main" type="Node3D" unique_id=40482226]
 
-[node name="Camera3D" type="Camera3D" parent="." unique_id=974172401]
+[node name="Camera3D" type="Camera3D" parent="." unique_id=974172401 groups=["_mcp_test_group"]]
 transform = Transform3D(1, 0, 0, 0, 0.939693, 0.34202, 0, -0.34202, 0.939693, 0, 2, 5)
+fov = 90.0
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=459000357]
 transform = Transform3D(1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025, 0, 3, 0)
@@ -13,3 +44,149 @@ transform = Transform3D(1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025, 0, 3, 0)
 [node name="Ground" type="MeshInstance3D" parent="World" unique_id=251714484]
 
 [node name="TriggerZone" type="Area3D" parent="." unique_id=1139383780]
+
+[node name="_McpTest" type="Node3D" parent="." unique_id=1405221981]
+
+[node name="_McpTestDuplicate" type="Camera3D" parent="." unique_id=724564954 groups=["_mcp_test_group"]]
+transform = Transform3D(1, 0, 0, 0, 0.939693, 0.34202, 0, -0.34202, 0.939693, 0, 2, 5)
+
+[node name="_McpTestDetach" type="Node3D" parent="." unique_id=1693218495]
+
+[node name="_McpTest2" type="Node3D" parent="." unique_id=362454313]
+
+[node name="_McpTestDuplicate2" type="Camera3D" parent="." unique_id=927836840 groups=["_mcp_test_group"]]
+transform = Transform3D(1, 0, 0, 0, 0.939693, 0.34202, 0, -0.34202, 0.939693, 0, 2, 5)
+fov = 90.0
+
+[node name="_McpTestAttach" type="Node3D" parent="." unique_id=749862862]
+
+[node name="_McpTestDetach2" type="Node3D" parent="." unique_id=2073947647]
+
+[node name="SnowGroup" type="Node3D" parent="." unique_id=647443631]
+
+[node name="Snowman" parent="SnowGroup" unique_id=2093439503 instance=ExtResource("1_ig7tw")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, 0, 2)
+
+[node name="Head" type="MeshInstance3D" parent="SnowGroup/Snowman" unique_id=807890638]
+mesh = SubResource("SphereMesh_7dm0k")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_0xm2m")
+
+[node name="Snowman2" type="MeshInstance3D" parent="SnowGroup/Snowman" unique_id=866245037]
+transform = Transform3D(1, 0, 0, 0, 0.8565442, 0, 0, 0, 0.6106186, 0, -0.8465315, 0)
+mesh = SubResource("SphereMesh_7dm0k")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_h2yge")
+
+[node name="Snowman4" type="MeshInstance3D" parent="SnowGroup/Snowman" unique_id=880843464]
+transform = Transform3D(0.2082468, -0.39861068, 0, 0.27113765, 0.30615222, 0, 0, 0, 0.6106186, 0.5068054, -0.8465315, 0)
+mesh = SubResource("CapsuleMesh_h2yge")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_h2yge")
+
+[node name="Snowman5" type="MeshInstance3D" parent="SnowGroup/Snowman" unique_id=977171446]
+transform = Transform3D(-0.20794833, 0.3980393, 0.03268106, 0.27113765, 0.30615222, 0, -0.011145625, 0.021334136, -0.60974336, -0.49566555, -0.85210073, 0)
+mesh = SubResource("CapsuleMesh_h2yge")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_h2yge")
+
+[node name="Snowman3" type="MeshInstance3D" parent="SnowGroup/Snowman" unique_id=1823618730]
+transform = Transform3D(1, 0, 0, 0, 0.8565442, 0, 0, 0, 0.6106186, 0, -1.5761077, 0)
+mesh = SubResource("SphereMesh_7dm0k")
+skeleton = NodePath("../..")
+
+[node name="Snowman2" parent="SnowGroup" unique_id=287794226 instance=ExtResource("1_ig7tw")]
+transform = Transform3D(0.5102964, 0, 0, 0, 0.5502422, 0, 0, 0, 0.8300923, 1.0719159, -0.6380353, 2)
+
+[node name="Head" type="MeshInstance3D" parent="SnowGroup/Snowman2" unique_id=249090875]
+mesh = SubResource("SphereMesh_7dm0k")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_ig7tw")
+
+[node name="Snowman2" type="MeshInstance3D" parent="SnowGroup/Snowman2" unique_id=1229683206]
+transform = Transform3D(1, 0, 0, 0, 0.8565442, 0, 0, 0, 0.6106186, 0, -0.8465315, 0)
+mesh = SubResource("SphereMesh_7dm0k")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_h2yge")
+
+[node name="Snowman4" type="MeshInstance3D" parent="SnowGroup/Snowman2" unique_id=832225477]
+transform = Transform3D(0.2082468, -0.39861068, 0, 0.27113765, 0.30615222, 0, 0, 0, 0.6106186, 0.5068054, -0.8465315, 0)
+mesh = SubResource("CapsuleMesh_h2yge")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_h2yge")
+
+[node name="Snowman5" type="MeshInstance3D" parent="SnowGroup/Snowman2" unique_id=727309767]
+transform = Transform3D(-0.20794833, 0.3980393, 0.03268106, 0.27113765, 0.30615222, 0, -0.011145625, 0.021334136, -0.60974336, -0.49566555, -0.85210073, 0)
+mesh = SubResource("CapsuleMesh_h2yge")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_h2yge")
+
+[node name="Snowman3" type="MeshInstance3D" parent="SnowGroup/Snowman2" unique_id=1197174408]
+transform = Transform3D(1, 0, 0, 0, 0.8565442, 0, 0, 0, 0.6106186, 0, -1.5761077, 0)
+mesh = SubResource("SphereMesh_7dm0k")
+skeleton = NodePath("../..")
+
+[node name="Snowman3" parent="SnowGroup" unique_id=1518228256 instance=ExtResource("1_ig7tw")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3.054018, 0.18358827, 2.0152388)
+
+[node name="Head" type="MeshInstance3D" parent="SnowGroup/Snowman3" unique_id=1726442106]
+mesh = SubResource("SphereMesh_h2yge")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_1bvp3")
+
+[node name="Snowman2" type="MeshInstance3D" parent="SnowGroup/Snowman3" unique_id=1670954592]
+transform = Transform3D(1, 0, 0, 0, 0.8565442, 0, 0, 0, 0.6106186, 0, -0.8465315, 0)
+mesh = SubResource("SphereMesh_7dm0k")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_h2yge")
+
+[node name="Snowman4" type="MeshInstance3D" parent="SnowGroup/Snowman3" unique_id=1680500486]
+transform = Transform3D(0.2082468, -0.39861068, 0, 0.27113765, 0.30615222, 0, 0, 0, 0.6106186, 0.5068054, -0.8465315, 0)
+mesh = SubResource("CapsuleMesh_h2yge")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_h2yge")
+
+[node name="Snowman5" type="MeshInstance3D" parent="SnowGroup/Snowman3" unique_id=1011812498]
+transform = Transform3D(-0.20794833, 0.3980393, 0.03268106, 0.27113765, 0.30615222, 0, -0.011145625, 0.021334136, -0.60974336, -0.49566555, -0.85210073, 0)
+mesh = SubResource("CapsuleMesh_h2yge")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_h2yge")
+
+[node name="Snowman3" type="MeshInstance3D" parent="SnowGroup/Snowman3" unique_id=466964867]
+transform = Transform3D(1, 0, 0, 0, 0.8565442, 0, 0, 0, 0.6106186, 0, -1.5761077, 0)
+mesh = SubResource("SphereMesh_7dm0k")
+skeleton = NodePath("../..")
+
+[node name="Snowman4" parent="SnowGroup" unique_id=920498664 instance=ExtResource("1_ig7tw")]
+transform = Transform3D(0.5102964, 0, 0, 0, 0.5502422, 0, 0, 0, 0.8300923, 1.0719159, -0.6380353, 0.63244724)
+
+[node name="Head" type="MeshInstance3D" parent="SnowGroup/Snowman4" unique_id=1852946310]
+mesh = SubResource("SphereMesh_7dm0k")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_ig7tw")
+
+[node name="Snowman2" type="MeshInstance3D" parent="SnowGroup/Snowman4" unique_id=346466680]
+transform = Transform3D(1, 0, 0, 0, 0.8565442, 0, 0, 0, 0.6106186, 0, -0.8465315, 0)
+mesh = SubResource("SphereMesh_7dm0k")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_h2yge")
+
+[node name="Snowman4" type="MeshInstance3D" parent="SnowGroup/Snowman4" unique_id=2100831858]
+transform = Transform3D(0.2082468, -0.39861068, 0, 0.27113765, 0.30615222, 0, 0, 0, 0.6106186, 0.5068054, -0.8465315, 0)
+mesh = SubResource("CapsuleMesh_h2yge")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_h2yge")
+
+[node name="Snowman5" type="MeshInstance3D" parent="SnowGroup/Snowman4" unique_id=1620571885]
+transform = Transform3D(-0.20794833, 0.3980393, 0.03268106, 0.27113765, 0.30615222, 0, -0.011145625, 0.021334136, -0.60974336, -0.49566555, -0.85210073, 0)
+mesh = SubResource("CapsuleMesh_h2yge")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_h2yge")
+
+[node name="Snowman3" type="MeshInstance3D" parent="SnowGroup/Snowman4" unique_id=630666020]
+transform = Transform3D(1, 0, 0, 0, 0.8565442, 0, 0, 0, 0.6106186, 0, -1.5761077, 0)
+mesh = SubResource("SphereMesh_7dm0k")
+skeleton = NodePath("../..")
+
+[editable path="SnowGroup/Snowman"]
+[editable path="SnowGroup/Snowman3"]
