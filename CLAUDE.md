@@ -15,6 +15,7 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
 - **Protocol**: JSON over WebSocket. Request/response with `request_id` correlation. Handshake on connect.
 - **Session model**: Multiple Godot editors can connect. Tools route through active session.
 - **Handler/Runtime layer**: Shared handlers in `src/godot_ai/handlers/` contain tool logic. They depend on a `Runtime` protocol (`runtime/interface.py`), implemented by `DirectRuntime` for the in-process server. Tools and resources are thin wrappers that create a runtime and delegate.
+- **Readiness gating**: Write operations check session readiness (`ready`/`importing`/`playing`/`no_scene`) before executing. Plugin sends readiness in handshake and via `readiness_changed` events. Python `require_writable()` in `handlers/_readiness.py` gates all write handlers.
 
 ## Key conventions
 
@@ -60,7 +61,7 @@ The Godot dock also has a **Start/Stop Dev Server** button for convenience.
 
 ### Python tests
 ```bash
-pytest -v                    # 227 unit + integration tests
+pytest -v                    # 234 unit + integration tests
 ```
 
 ### Godot-side tests
@@ -113,7 +114,8 @@ MCP tools `client_configure` and `client_status` expose this to AI clients.
 3. Add a shared Python handler in `handlers/<domain>.py` that calls `runtime.send_command("command_name", params)`
 4. Add a Python tool in `tools/<domain>.py` that creates `DirectRuntime` and delegates to the handler
 5. Register the tool module in `server.py` if it's a new file
-6. Add tests: handler unit test, Python integration test, AND GDScript test in `test_project/tests/`
+6. For write tools: add `require_writable(runtime)` call at the top of the Python handler
+7. Add tests: handler unit test, Python integration test, AND GDScript test in `test_project/tests/`
 
 ## Write tools must be undoable
 

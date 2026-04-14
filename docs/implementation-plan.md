@@ -637,7 +637,9 @@ All write tools check readiness before executing:
 ### Phase 3 progress
 - [x] Batch 1: Signal, autoload, input_map, project_settings_set — 11 new tools, 14 new GDScript handlers
 - [x] Readiness gating — GDScript computes readiness (ready/importing/playing/no_scene), sends events, Python gates all write operations
-- [x] 227 Python tests + 152 Godot-side tests = 379 total
+- [x] Autoload path validation — `res://` prefix + file existence check (security hardening)
+- [x] Compact test output — summary + failures only by default, verbose opt-in
+- [x] 234 Python tests + 156 Godot-side tests = 390 total
 
 ### Phase 3 exit criteria
 - [x] Signal, autoload, input_map tools work (signal_list/connect/disconnect, autoload_list/add/remove, input_map_list/add_action/remove_action/bind_event, project_settings_set)
