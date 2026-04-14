@@ -88,10 +88,14 @@ func patch_script(params: Dictionary) -> Dictionary:
 
 	if path.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
-	if not path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res://")
+	if not "old_text" in params:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: old_text")
 	if not "new_text" in params:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: new_text")
+	if not path.begins_with("res://"):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res://")
+	if not path.ends_with(".gd"):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must end with .gd (use filesystem_write_text for other text files)")
 	if old_text.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "old_text must not be empty")
 

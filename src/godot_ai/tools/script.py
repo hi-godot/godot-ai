@@ -52,7 +52,7 @@ def register_script_tools(mcp: FastMCP) -> None:
         undoable via Ctrl+Z (filesystem edits bypass editor undo).
 
         Args:
-            path: File path starting with res:// (e.g. "res://scripts/player.gd").
+            path: File path starting with res:// and ending with .gd (e.g. "res://scripts/player.gd").
             old_text: Exact substring to find. Must be unique unless replace_all=true.
             new_text: Replacement text. Can be empty to delete.
             replace_all: If true, replace every occurrence. Default false.

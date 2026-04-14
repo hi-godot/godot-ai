@@ -161,6 +161,15 @@ func test_patch_script_missing_old_text() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
+func test_patch_script_non_gd_extension_rejected() -> void:
+	var result := _handler.patch_script({
+		"path": "res://main.tscn",
+		"old_text": "x",
+		"new_text": "y",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
 func test_patch_script_missing_new_text() -> void:
 	var result := _handler.patch_script({
 		"path": TEST_SCRIPT_PATH,

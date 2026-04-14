@@ -150,7 +150,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         - Vector2/Vector3: dict with x/y/z keys
         - Color: dict with r/g/b/a keys, or hex string ("#ff0000")
         - NodePath: string ("../Other/Node")
-        - Resource: res:// path string (loads and assigns), or null to clear
+        - Resource: res:// path string (loads and assigns); pass null or "" to clear
         - StringName: plain string
         - Array/Dictionary: pass a JSON list/object
         - bool/int/float: JSON primitives
@@ -158,7 +158,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         Args:
             path: Scene path of the node (e.g. "/Main/Camera3D").
             property: Property name (e.g. "fov", "position", "visible", "mesh", "remote_path").
-            value: New value for the property. Pass null to clear a Resource/NodePath.
+            value: New value for the property. Pass null (or "" for Resource properties) to clear.
         """
         runtime = DirectRuntime.from_context(ctx)
         return await node_handlers.node_set_property(
