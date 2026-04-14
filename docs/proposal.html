@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Godot MCP Studio: Architecture Proposal</title>
+  <title>Godot AI — Product Proposal</title>
   <style>
     :root {
       --bg: #f4efe6;
@@ -11,7 +11,9 @@
       --ink: #1d1a16;
       --rule: #d8cdbc;
       --accent: #8a3b12;
+      --accent-soft: #efe4d4;
       --code-bg: #efe4d4;
+      --muted: #6e6256;
     }
     * { box-sizing: border-box; }
     body {
@@ -29,8 +31,47 @@
       background: var(--paper);
       border: 1px solid var(--rule);
       border-radius: 18px;
-      padding: 40px 44px;
+      padding: 32px 44px 40px;
       box-shadow: 0 20px 50px rgba(34, 24, 12, 0.08);
+    }
+    .doc-nav {
+      margin: 0 0 28px;
+      padding: 14px 16px 10px;
+      border: 1px solid var(--rule);
+      border-radius: 14px;
+      background: linear-gradient(180deg, #fff7ec 0%, #f7eee2 100%);
+    }
+    .doc-nav-title {
+      margin: 0 0 10px;
+      font-size: 0.88rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .doc-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 10px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .doc-links a {
+      display: inline-block;
+      padding: 6px 10px;
+      border: 1px solid var(--rule);
+      border-radius: 999px;
+      background: #fffaf2;
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.95rem;
+    }
+    .doc-links a.current {
+      background: var(--accent-soft);
+      border-color: #d7b390;
+      color: #5d2a10;
+      font-weight: 700;
     }
     h1, h2, h3, h4 {
       line-height: 1.2;
@@ -59,7 +100,7 @@
       color: #5d2a10;
     }
     p { margin: 0 0 16px; }
-    ul {
+    ul, ol {
       margin: 0 0 18px 1.2rem;
       padding: 0;
     }
@@ -84,9 +125,16 @@
       color: inherit;
     }
     a { color: var(--accent); }
+    .check {
+      display: inline-block;
+      width: 1.35em;
+      margin-left: -0.1em;
+      color: var(--accent);
+      font-weight: 700;
+    }
     @media (max-width: 720px) {
       body { padding: 16px 12px 40px; }
-      main { padding: 26px 20px; }
+      main { padding: 22px 20px 28px; }
       h1 { font-size: 1.7rem; }
       h2 { font-size: 1.3rem; }
     }
@@ -94,62 +142,72 @@
 </head>
 <body>
   <main>
-<h1>Godot MCP Studio: Architecture Proposal</h1>
-<p><em>Generated 2026-04-11</em></p>
-<h2>1. Thesis</h2>
-<p>Build a <strong>production-grade, fully open-source Godot MCP server</strong> that feels native to Godot and mature enough for real daily use.</p>
-<p>The quality bar should be much higher than a thin editor bridge. This project should feel like a serious developer tool:</p>
+    <nav class="doc-nav"><div class="doc-nav-title">Docs</div><ul class="doc-links"><li><a href="implementation-plan.html">Godot AI — Working Plan</a></li><li><a href="proposal.html" class="current">Godot AI — Product Proposal</a></li><li><a href="tool-taxonomy.html">Godot AI — Tool Taxonomy</a></li><li><a href="plugin-architecture.html">Godot AI — Plugin Architecture</a></li><li><a href="testing-strategy.html">Godot AI — Testing Strategy</a></li><li><a href="packaging-distribution.html">Godot AI — Packaging & Distribution</a></li><li><a href="product-positioning.html">Godot AI — Product Positioning</a></li><li><a href="go-no-go-gates.html">Godot AI — Go/No-Go Gates</a></li><li><a href="risk-register.html">Godot AI — Risk Register</a></li><li><a href="history-foundation-phases.html">Godot AI — Foundation History</a></li><li><a href="CONTRIBUTING.html">Contributing to Godot AI</a></li><li><a href="design-stable-host-worker.html">Design: Dev-Mode Stable Host + Restartable Worker</a></li><li><a href="investigation-dev-reload.html">Investigation: Automated Dev Reload</a></li><li><a href="readme-visual-punchlist.html">README Visual Punch List</a></li></ul></nav>
+    <h1>Godot AI — Product Proposal</h1>
+<p><em>Updated 2026-04-14</em></p>
+<p>This document defines what <strong>Godot AI</strong> should be and why it should exist.</p>
+<p>Use the supporting docs for the other concerns:</p>
+<ul>
+<li><a href="implementation-plan.html">Working Plan</a> for active and upcoming work</li>
+<li><a href="tool-taxonomy.html">Tool Taxonomy</a> for the detailed tool surface</li>
+<li><a href="plugin-architecture.html">Plugin Architecture</a> for plugin/server design</li>
+<li><a href="testing-strategy.html">Testing Strategy</a> for verification and CI</li>
+<li><a href="packaging-distribution.html">Packaging &amp; Distribution</a> for install and release paths</li>
+<li><a href="product-positioning.html">Product Positioning</a> for naming, differentiation, and community strategy</li>
+</ul>
+<hr />
+<h2>Thesis</h2>
+<p>Build a production-grade, fully open-source Godot MCP server that feels native to Godot and mature enough for real daily use.</p>
+<p>The project should clear a much higher bar than a thin editor bridge:</p>
 <ul>
 <li>persistent editor integration</li>
 <li>reliable session routing</li>
 <li>strong read resources and safe write workflows</li>
-<li>thoughtful tool design shaped by real usability feedback</li>
+<li>runtime feedback loops that let an AI inspect what it just changed</li>
 <li>tests, CI, documentation, diagnostics, and operational discipline</li>
 </ul>
-<p>The maintainers are unusually well positioned to do this. You and Scriptwonder have already spent a large amount of time shipping, refining, and hardening a production editor MCP through community feedback and usability-driven iteration. The value here is not copying that product. The value is bringing the same maturity, product judgment, and responsiveness to the Godot community in a project that is openly built for Godot from day one.</p>
-<hr>
-<h2>2. Why This Project Exists</h2>
-<p>Godot is a strong fit for a serious MCP server.</p>
+<p>The opportunity is not to clone another engine MCP. The opportunity is to bring a mature product and maintenance standard to the Godot community in a tool that is openly built for Godot from day one.</p>
+<hr />
+<h2>Why This Project Exists</h2>
+<p>Godot is a strong fit for a serious MCP server:</p>
 <ul>
-<li>The Godot ecosystem is open, scriptable, and community-oriented.</li>
-<li>The engine exposes the right core APIs for scenes, nodes, resources, project settings, editor plugins, cameras, materials, shaders, particles, and viewport capture.</li>
-<li>The current Godot MCP landscape still leaves plenty of room for a more mature, better-tested, more usability-focused product.</li>
+<li>the ecosystem is open, scriptable, and community-oriented</li>
+<li>the engine exposes the right core APIs for scenes, nodes, resources, project settings, editor plugins, viewport capture, and project automation</li>
+<li>the current Godot MCP landscape still leaves room for a better-tested, more usability-focused product</li>
 </ul>
-<p>This project should be built around a simple idea:</p>
+<p>The project should be built around a simple idea:</p>
 <ul>
-<li><strong>make an excellent Godot MCP for the Godot community</strong></li>
+<li>make an excellent Godot MCP for the Godot community</li>
 </ul>
 <p>That means:</p>
 <ul>
 <li>deep support for common Godot workflows</li>
-<li>practical tooling that improves real day-to-day editor use</li>
+<li>practical tooling that improves day-to-day editor use</li>
 <li>open-source development with clear contributor paths</li>
-<li>product decisions informed by community feedback, not just technical novelty</li>
+<li>product decisions shaped by real user feedback instead of novelty chasing</li>
 </ul>
-<p>The reference point for quality should be what a mature editor MCP feels like in practice: stable sessions, useful read surfaces, safe mutation paths, good errors, strong docs, and fast iteration on usability problems reported by real users.</p>
-<hr>
-<h2>3. Product Principles</h2>
-<h3>3.1 Godot-native naming</h3>
+<hr />
+<h2>Product Principles</h2>
+<h3>Godot-native naming</h3>
 <p>Use Godot concepts directly:</p>
 <ul>
 <li><code>scene.*</code>, not generic level abstractions</li>
 <li><code>node.*</code>, not <code>entity.*</code></li>
-<li><code>resource.*</code>, not generic asset fiction</li>
+<li><code>resource.*</code>, not fake cross-engine asset terms</li>
 <li><code>signal.*</code>, <code>autoload.*</code>, <code>input_map.*</code>, <code>project_settings.*</code></li>
 </ul>
-<p>If a concept is Godot-specific, expose it directly. Do not hide it behind fake portability.</p>
-<h3>3.2 Persistent editor plugin first, headless path second</h3>
-<p>Interactive editor automation should use a <strong>persistent Godot editor plugin</strong> with a long-lived connection to the MCP server.</p>
-<p>Headless execution should still exist, but as a separate mode for:</p>
+<p>If a concept is Godot-specific, expose it directly.</p>
+<h3>Persistent editor plugin first, headless path second</h3>
+<p>Interactive editor automation should run through a persistent Godot editor plugin with a long-lived connection to the MCP server.</p>
+<p>Headless execution still matters, but as a separate path for:</p>
 <ul>
 <li>CI</li>
-<li>project export</li>
+<li>exports</li>
 <li>scripted imports</li>
 <li>recovery when the editor plugin is unavailable</li>
 </ul>
-<p>This should be a hybrid model, not dogma.</p>
-<h3>3.3 Resources before aggressive mutation</h3>
-<p>The product should win first on reliable read access:</p>
+<h3>Read surfaces before aggressive mutation</h3>
+<p>The product should first become excellent at reliable inspection:</p>
 <ul>
 <li>scene tree</li>
 <li>selection</li>
@@ -158,724 +216,112 @@
 <li>logs</li>
 <li>project settings</li>
 </ul>
-<p>Then add write tools with proper undo integration and failure handling.</p>
-<h3>3.4 Explicit session targeting</h3>
+<p>Then it should add write tools with proper undo integration, readiness gating, and error reporting.</p>
+<h3>Explicit session targeting</h3>
 <p>Every tool call must target a specific Godot editor session. Never rely on &quot;last connected editor.&quot;</p>
-<h3>3.5 <code>code.execute</code> is privileged</h3>
-<p>Editor-side GDScript execution is useful, but it should be treated as an escape hatch and security boundary, not the main API.</p>
-<hr>
-<h2>4. Product Scope</h2>
-<h3>4.1 V1 scope</h3>
-<p><strong>Godot 4.3+ required. Godot 4.4+ recommended</strong> for UID support and recent EditorInterface improvements.</p>
-<p>Build a Godot MCP server that is strong in these areas:</p>
+<h3><code>code.execute</code> stays privileged</h3>
+<p>Editor-side GDScript execution is useful, but it should stay an escape hatch and security boundary, not the main API.</p>
+<hr />
+<h2>Product Scope</h2>
+<h3>V1 product standard</h3>
+<p><strong>Godot 4.3+ is required. Godot 4.4+ is preferred</strong> for UID support and newer editor APIs.</p>
+<p>The first serious release should be strong in these areas:</p>
 <ul>
 <li>scene creation and lifecycle</li>
 <li>node hierarchy inspection and mutation</li>
-<li>resource and filesystem operations</li>
-<li>script creation, reading, patching, and attachment</li>
-<li>signals and project configuration</li>
-<li>play/stop and log inspection</li>
-<li>multi-instance support</li>
-<li>real tests and CI</li>
+<li>resource and filesystem workflows that stay in sync with Godot import state</li>
+<li>script creation, reading, and attachment</li>
+<li>signals, autoloads, input, and project configuration</li>
+<li>run/stop, screenshots, logs, and basic runtime diagnostics</li>
+<li>multi-instance awareness</li>
+<li>tests, CI, and a real install story</li>
 </ul>
-<h3>4.2 Explicit non-goals for V1</h3>
+<h3>Explicit non-goals for V1</h3>
 <ul>
-<li>exhaustive coverage of every Godot editor subsystem in v1</li>
-<li>full parity with every specialized Unity package or editor integration</li>
-<li>premature marketplace or extension-platform ambitions</li>
-<li>giant action-blob tools with dozens of loosely related parameters</li>
-<li>package-management or profiler parity before core workflows are solid</li>
-<li>broad arbitrary code execution as the primary interface</li>
+<li>exhaustive coverage of every Godot editor subsystem</li>
+<li>full parity with every mature Unity MCP or editor package</li>
+<li>giant action-blob tools with huge optional parameter surfaces</li>
+<li>profiler, package-manager, or marketplace ambition before core workflows are solid</li>
+<li>broad arbitrary code execution as the default interface</li>
 </ul>
-<hr>
-<h2>5. Godot-Native Tool Taxonomy</h2>
-<p>The tool surface should look like a Godot product, not a generalized game-engine layer.</p>
-<h3>5.1 Session and editor tools</h3>
+<hr />
+<h2>Capability Direction</h2>
+<p>The product should feel like a Godot tool, not a generic game-engine bridge.</p>
+<h3>Core tool families</h3>
+<p>The core surface should center on:</p>
 <ul>
-<li><code>session.list</code></li>
-<li><code>session.activate</code></li>
-<li><code>editor.state</code></li>
-<li><code>editor.selection.get</code></li>
-<li><code>editor.selection.set</code></li>
-<li><code>editor.screenshot</code></li>
-<li><code>editor.command.execute</code></li>
+<li><code>session.*</code> and <code>editor.*</code></li>
+<li><code>scene.*</code> and <code>node.*</code></li>
+<li><code>resource.*</code> and <code>filesystem.*</code></li>
+<li><code>script.*</code></li>
+<li><code>signal.*</code>, <code>autoload.*</code>, <code>input_map.*</code>, <code>project_settings.*</code></li>
+<li><code>project.run</code>, <code>project.stop</code>, <code>logs.*</code>, <code>performance.*</code></li>
+<li>read-heavy MCP resources for sessions, scene state, selection, project settings, and recent logs</li>
 </ul>
-<h3>5.2 Scene tools</h3>
+<p>Detailed tool-family guidance lives in <a href="tool-taxonomy.html">tool-taxonomy.md</a>.</p>
+<h3>Runtime feedback is the real threshold</h3>
+<p>A tool surface that can only author files and scene structure is not enough. The product becomes materially more useful when it can:</p>
 <ul>
-<li><code>scene.create</code></li>
-<li><code>scene.open</code></li>
-<li><code>scene.save</code></li>
-<li><code>scene.save_as</code></li>
-<li><code>scene.close</code></li>
-<li><code>scene.instantiate</code></li>
-<li><code>scene.inherit</code></li>
-<li><code>scene.get_hierarchy</code></li>
-<li><code>scene.get_roots</code></li>
+<li>launch the project</li>
+<li>inspect logs and runtime state</li>
+<li>capture screenshots</li>
+<li>measure basic performance signals</li>
+<li>iterate without losing session safety</li>
 </ul>
-<h3>5.3 Node tools</h3>
+<p>That is the difference between &quot;can scaffold a project&quot; and &quot;can improve a game.&quot;</p>
+<h3>Prototype-driven extensions</h3>
+<p>After the runtime loop is solid, the next major surface should support higher-quality game production:</p>
 <ul>
-<li><code>node.create</code></li>
-<li><code>node.delete</code></li>
-<li><code>node.duplicate</code></li>
-<li><code>node.reparent</code></li>
-<li><code>node.rename</code></li>
-<li><code>node.move</code></li>
-<li><code>node.find</code></li>
-<li><code>node.get_properties</code></li>
-<li><code>node.set_property</code></li>
-<li><code>node.get_children</code></li>
-<li><code>node.get_groups</code></li>
-<li><code>node.add_to_group</code></li>
-<li><code>node.remove_from_group</code></li>
-<li><code>node.attach_script</code></li>
+<li><code>ui.*</code></li>
+<li><code>camera.*</code></li>
+<li><code>animation_player.*</code> / <code>animation_tree.*</code></li>
+<li><code>audio.*</code></li>
+<li><code>material.*</code>, <code>shader.*</code>, <code>particles.*</code></li>
+<li>light <code>physics.*</code>, <code>tilemap.*</code>, and <code>navigation.*</code> where the benchmark justifies them</li>
 </ul>
-<h3>5.4 Resource and filesystem tools</h3>
-<blockquote><p><strong>Why filesystem tools when AI clients have native file access?</strong> Godot&#x27;s import system doesn&#x27;t see raw filesystem writes. Writing a <code>.png</code> to <code>res://</code> via the OS won&#x27;t register it as a texture until the editor reimports. These tools exist to trigger <code>EditorFileSystem.scan()</code> / <code>EditorFileSystem.reimport_files()</code> after writes, ensuring Godot&#x27;s resource pipeline stays in sync. Without this, AI-written assets are invisible to the editor.</p></blockquote>
+<p>The first serious benchmark for that stage should be the small top-down roguelite slice in <a href="implementation-plan.html">implementation-plan.md</a>.</p>
+<h3>Borrow mature patterns, not engine-specific assumptions</h3>
+<p>What should carry over from mature editor MCP work:</p>
 <ul>
-<li><code>resource.search</code></li>
-<li><code>resource.load</code></li>
-<li><code>resource.save</code></li>
-<li><code>resource.create</code></li>
-<li><code>resource.assign</code></li>
-<li><code>resource.inspect</code></li>
-<li><code>filesystem.search</code></li>
-<li><code>filesystem.read_text</code></li>
-<li><code>filesystem.write_text</code></li>
-<li><code>filesystem.move</code></li>
-<li><code>filesystem.rename</code></li>
-<li><code>filesystem.delete</code></li>
-<li><code>import.reimport</code></li>
-</ul>
-<h3>5.5 Script tools</h3>
-<ul>
-<li><code>script.create</code></li>
-<li><code>script.read</code></li>
-<li><code>script.patch</code> — <strong>Deferred to Phase 3+.</strong> Reliable GDScript patching (indent-sensitive, signal-aware, annotation-safe) is a research item, not a V1 tool. V1 should use full-file <code>script.create</code> / <code>script.read</code> writes instead.</li>
-<li><code>script.attach</code></li>
-<li><code>script.detach</code></li>
-<li><code>script.find_symbols</code></li>
-<li><code>script.get_class_info</code></li>
-</ul>
-<h3>5.6 Godot-specific project tools</h3>
-<ul>
-<li><code>signal.list</code></li>
-<li><code>signal.connect</code></li>
-<li><code>signal.disconnect</code></li>
-<li><code>autoload.list</code></li>
-<li><code>autoload.add</code></li>
-<li><code>autoload.remove</code></li>
-<li><code>input_map.list</code></li>
-<li><code>input_map.add_action</code></li>
-<li><code>input_map.remove_action</code></li>
-<li><code>input_map.bind_event</code></li>
-<li><code>project_settings.get</code></li>
-<li><code>project_settings.set</code></li>
-<li><code>uid.get</code></li>
-<li><code>uid.update</code></li>
-</ul>
-<h3>5.7 Visual, material, and camera tools</h3>
-<ul>
-<li><code>material.create_standard</code></li>
-<li><code>material.assign</code></li>
-<li><code>material.inspect</code></li>
-<li><code>material.set_property</code></li>
-<li><code>shader.create</code></li>
-<li><code>shader.read</code></li>
-<li><code>shader.update</code></li>
-<li><code>shader.set_uniform</code></li>
-<li><code>shader.attach</code></li>
-<li><code>particles.create</code></li>
-<li><code>particles.inspect</code></li>
-<li><code>particles.set_process_material</code></li>
-<li><code>particles.play</code></li>
-<li><code>particles.stop</code></li>
-<li><code>camera.create_2d</code></li>
-<li><code>camera.create_3d</code></li>
-<li><code>camera.set_current</code></li>
-<li><code>camera.capture</code></li>
-<li><code>camera.create_follow_rig</code></li>
-</ul>
-<h3>5.8 Runtime and diagnostics tools</h3>
-<ul>
-<li><code>project.run</code></li>
-<li><code>project.stop</code></li>
-<li><code>logs.read</code></li>
-<li><code>logs.clear</code></li>
-<li><code>build.export</code></li>
-<li><code>build.list_presets</code></li>
-<li><code>performance.get_monitors</code></li>
-<li><code>batch.execute</code></li>
-</ul>
-<p>Post-launch scope includes <code>animation_player.*</code> tools (play, stop, queue, get/set properties on <code>AnimationPlayer</code> and <code>AnimationTree</code> nodes) — deferred until the core runtime surface is stable.</p>
-<h3>5.9 MCP resources</h3>
-<p>Expose read-heavy state as resources, not tools:</p>
-<ul>
-<li><code>godot://sessions</code></li>
-<li><code>godot://scene/current</code></li>
-<li><code>godot://scene/hierarchy</code></li>
-<li><code>godot://selection/current</code></li>
-<li><code>godot://project/info</code></li>
-<li><code>godot://project/settings</code></li>
-<li><code>godot://autoloads</code></li>
-<li><code>godot://input-map</code></li>
-<li><code>godot://filesystem/index</code></li>
-<li><code>godot://logs/recent</code></li>
-</ul>
-<hr>
-<h2>6. Architecture</h2>
-<h3>6.1 High-level design</h3>
-<pre><code>
-AI Client
-   |
-   | MCP
-   v
-Godot MCP Server (Python / FastMCP)
-   |
-   | session router + job manager + tool/resource registry
-   v
-Persistent Godot Editor Plugin (GDScript)
-   |
-   | EditorInterface + SceneTree + ResourceLoader + ProjectSettings + FileAccess
-   v
-Godot Editor
-
-Optional side path:
-
-Godot MCP Server
-   |
-   | one-shot headless command runner
-   v
-godot --headless --script ...
-</code></pre>
-<h3>6.2 Server-side components</h3>
-<p>The Python server should contain:</p>
-<ul>
-<li><code>transport/</code>: WebSocket or TCP session transport</li>
-<li><code>sessions/</code>: session registry, active-session resolution, reconnect handling</li>
-<li><code>jobs/</code>: long-running task tracking for exports, reimports, screenshots, and scans</li>
-<li><code>tools/</code>: FastMCP tool implementations</li>
-<li><code>resources/</code>: MCP resources</li>
-<li><code>protocol/</code>: request envelopes, version negotiation, error schema</li>
-<li><code>godot_client/</code>: typed client for editor-plugin commands</li>
-<li><code>cli/</code>: local commands for diagnostics and headless workflows</li>
-</ul>
-<h3>6.3 Godot plugin responsibilities</h3>
-<p>The editor plugin should own:</p>
-<ul>
-<li>connection lifecycle</li>
-<li>editor event hooks</li>
-<li>scene/node/resource operations</li>
-<li>selection tracking</li>
-<li>undo/redo integration where possible</li>
-<li>readiness reporting</li>
-<li>log forwarding</li>
-<li>screenshot capture</li>
-</ul>
-<p>The plugin should stay thin. Complex orchestration belongs in Python; direct editor mutations belong in GDScript.</p>
-<h3>6.4 Session model</h3>
-<p>Every connected editor session should report:</p>
-<ul>
-<li><code>session_id</code></li>
-<li>Godot version</li>
-<li>project path</li>
-<li>plugin version</li>
-<li>protocol version</li>
-<li>current scene</li>
-<li>play state</li>
-<li>capability flags</li>
-</ul>
-<p>Every tool call must include or resolve against a session ID.</p>
-<h3>6.5 Readiness and lifecycle</h3>
-<p>The proposal needs explicit lifecycle handling from day one:</p>
-<ul>
-<li>editor startup</li>
-<li>plugin reload</li>
-<li>scene switch</li>
-<li>project reload</li>
-<li>import in progress</li>
-<li>script parse error state</li>
-<li>play mode start/stop</li>
-<li>dropped socket and reconnect</li>
-</ul>
-<p>The server should not fire write operations blindly. It should gate them behind readiness checks and return actionable errors.</p>
-<h3>6.6 Jobs and progress</h3>
-<p>Long-running tasks should use a job model:</p>
-<ul>
-<li><code>build.export</code></li>
-<li><code>import.reimport</code></li>
-<li>large filesystem scans</li>
-<li>screenshot batches</li>
-<li>headless project runs</li>
-</ul>
-<p>Each job should have:</p>
-<ul>
-<li><code>job_id</code></li>
-<li>state</li>
-<li>progress</li>
-<li>result payload</li>
-<li>cancellation support where possible</li>
-</ul>
-<h3>6.7 Undo semantics</h3>
-<p>Write tools must integrate with undo/redo where Godot allows it. If an operation cannot be undone cleanly, say so in the tool contract.</p>
-<p>Do not claim atomicity for <code>batch.execute</code>. The correct contract is:</p>
-<ul>
-<li>ordered execution</li>
-<li>optional undo grouping</li>
-<li>per-step result reporting</li>
-<li>partial failure handling</li>
-</ul>
-<h3>6.9 GDScript plugin concurrency model</h3>
-<p>The Godot editor runs on a single main thread. The plugin cannot block that thread or the editor freezes. The concurrency model must be:</p>
-<ol>
-<li><strong>Command queue.</strong> The WebSocket listener receives commands and pushes them onto an internal queue (<code>Array</code> or <code>PackedArray</code>). It never executes editor operations directly from the socket callback.</li>
-<li><strong>Frame-budget dispatch.</strong> A <code>_process()</code> tick drains the queue, executing one or more commands per frame. Each command should have a time budget (e.g., 4ms per frame) to avoid stalling the editor. Large operations (hierarchy walks, filesystem scans) must yield across frames.</li>
-<li><strong><code>call_deferred</code> pattern.</strong> Any operation that touches the scene tree, selection, or undo system must go through <code>call_deferred()</code> to ensure it runs at a safe point in the frame lifecycle. Direct calls risk crashes or undefined behavior during scene tree notification propagation.</li>
-<li><strong>Response correlation.</strong> Each inbound command carries a <code>request_id</code>. The dispatcher stores pending requests and matches responses (or errors) back to them. This enables the Python server to use async/await patterns cleanly.</li>
-</ol>
-<p>If GDScript&#x27;s performance becomes a bottleneck (e.g., serializing large scene trees or processing heavy filesystem scans), GDExtension (C++) is the contingency path. The plugin architecture should keep the command-dispatch interface stable so the GDScript implementation can be swapped for a GDExtension without changing the Python server or protocol.</p>
-<h3>6.8 Security model</h3>
-<p>This needs to be part of the proposal, not an afterthought:</p>
-<ul>
-<li>localhost-only by default</li>
-<li>explicit project trust</li>
-<li>optional auth token for external clients</li>
-<li>dangerous-operation annotations</li>
-<li>audit log of mutations and code execution</li>
-<li>separate capability flag for <code>code.execute</code></li>
-</ul>
-<hr>
-<h2>7. Architectural Quality Bar</h2>
-<p>The maintainers already know what a mature editor MCP has to get right. That experience should inform this project heavily.</p>
-<p>The point is not to duplicate another product&#x27;s API. The point is to bring over the operational quality bar and the architectural best practices that actually made a large editor MCP usable in the real world.</p>
-<h3>7.1 Operational practices to carry forward</h3>
-<ul>
-<li>persistent server-to-editor connection</li>
-<li>multi-instance routing</li>
-<li>readiness checks before mutations</li>
-<li>pagination for large hierarchies and logs</li>
-<li>resources for read-only state</li>
-<li>batch execution with structured results</li>
-<li>CLI diagnostics</li>
-<li>telemetry and structured logging</li>
-<li>layered testing: unit, integration, e2e</li>
-</ul>
-<h3>7.2 Product and architecture habits to adapt for Godot</h3>
-<ul>
-<li>tool grouping can work, but the groups should be Godot-oriented</li>
-<li>script patching workflows are valuable, but need GDScript-specific parsing and anchoring behavior</li>
-<li>scene and object management patterns are useful, but must be re-modeled around nodes and scenes rather than copied conceptually from GameObjects and Components</li>
-</ul>
-<h3>7.3 Patterns to avoid copying literally</h3>
-<ul>
-<li>generic <code>manage_*</code> blob tools with huge optional parameter surfaces</li>
-<li>Unity-specific group structure</li>
-<li>Unity object identity assumptions</li>
-<li>anything that exposes Unity package concepts as if they were portable</li>
-</ul>
-<hr>
-<h2>8. Capability Direction Informed by Mature MCP Work</h2>
-<p>This section uses the feature coverage of a mature editor MCP as a reference point for the kinds of workflows that a high-quality Godot MCP should cover.</p>
-<p>The goal is not feature cloning. The goal is to decide what the <strong>Godot-native version</strong> of those capabilities should look like.</p>
-<p>The short version:</p>
-<ul>
-<li>Some Unity MCP capabilities map cleanly to Godot.</li>
-<li>Some map only partially.</li>
-<li>Some do <strong>not</strong> fail because Godot is &quot;less developed&quot;; they fail because they are built around Unity-specific packages and concepts.</li>
-<li>The real maturity gaps for Godot are mostly in advanced editor subsystems, profiling tooling, and specialized ecosystem integrations.</li>
-</ul>
-<h3>8.1 Capabilities that should translate well</h3>
-<ul>
-<li><code>manage_scene</code> -&gt; Godot scene lifecycle tools</li>
-<li><code>manage_gameobject</code> -&gt; <code>node.*</code> tools</li>
-<li><code>find_gameobjects</code> -&gt; <code>node.find</code></li>
-<li><code>manage_components</code> -&gt; mostly <code>node.set_property</code>, <code>node.create</code>, and node-type-specific helpers</li>
-<li><code>manage_asset</code> -&gt; <code>resource.*</code> and <code>filesystem.*</code></li>
-<li><code>manage_script</code> -&gt; <code>script.*</code></li>
-<li><code>find_in_file</code> -&gt; text search tools</li>
-<li><code>manage_editor</code> play/stop -&gt; <code>project.run</code> and <code>project.stop</code></li>
-<li><code>read_console</code> -&gt; <code>logs.read</code></li>
-<li><code>batch_execute</code> -&gt; <code>batch.execute</code></li>
-</ul>
-<p>These are the high-value core. They should anchor the first release.</p>
-<h3>8.2 Capabilities that should be adapted for Godot</h3>
-<ul>
-<li><code>manage_build</code> should become a Godot export workflow, not a Unity-style build pipeline clone. Model it around export presets, preset inspection, headless export commands, and export logs. The right tools are things like <code>build.list_presets</code>, <code>build.export</code>, and <code>build.get_last_result</code>.</li>
-<li><code>manage_material</code>, <code>manage_shader</code>, and <code>manage_texture</code> should absolutely exist, but as Godot-native tools. Godot has the APIs here: <code>StandardMaterial3D</code>, <code>BaseMaterial3D</code>, <code>Shader</code>, <code>ShaderMaterial</code>, and <code>VisualShader</code> are real first-class resources. The adaptation should focus on <code>material.create_standard</code>, <code>material.assign</code>, <code>shader.create</code>, <code>shader.read</code>, <code>shader.update</code>, and <code>shader.set_uniform</code> rather than mirroring Unity&#x27;s schema one property at a time.</li>
-<li><code>manage_ui</code> should become <code>ui.*</code> tools built around <code>Control</code> nodes, containers, anchors, offsets, size flags, and themes. The adaptation is viable, but the layout and theming model is different enough that Unity UI assumptions should be thrown away.</li>
-<li><code>manage_physics</code> should be split into a few smaller Godot families: project-wide layer and mask settings, body and shape inspection, collision toggles, and physics-related node property helpers. That will cover most useful workflows without pretending Godot exposes the same editor-time physics stack as Unity.</li>
-<li><code>manage_camera</code> should be ported, but as a Godot camera toolkit rather than a Cinemachine wrapper. Godot has <code>Camera2D</code>, <code>Camera3D</code>, and viewport APIs, so <code>camera.create_2d</code>, <code>camera.create_3d</code>, <code>camera.set_current</code>, <code>camera.capture</code>, and a few rig helpers are realistic. The screenshot and capture path is credible via viewport image capture. The Cinemachine-specific parts are not.</li>
-<li><code>run_tests</code> is possible, but should be designed as a pluggable provider model. The core server can expose <code>tests.discover</code> and <code>tests.run</code>, while the actual backend can target a custom harness or community framework. Do not hardwire the proposal to one Godot test tool too early.</li>
-<li><code>manage_profiler</code> should become lightweight performance and rendering diagnostics. Godot exposes engine and rendering metrics, so tools like <code>performance.get_monitors</code>, <code>performance.capture_window</code>, and <code>rendering.get_info</code> make sense. What does not make sense is promising direct parity with Unity Profiler, Memory Profiler, and Frame Debugger.</li>
-</ul>
-<h3>8.3 Capabilities that need Godot-native reinterpretation</h3>
-<ul>
-<li><code>manage_probuilder</code> should become a lighter Godot geometry toolkit, not a ProBuilder clone. Godot has usable APIs here, but not the same product surface: CSG nodes, <code>SurfaceTool</code>, <code>ArrayMesh</code>, and <code>MeshDataTool</code> are enough for primitive generation, boolean-style blocking, procedural mesh generation, face-level inspection, and simple mesh repair. The right adaptation is <code>mesh.create_primitive</code>, <code>mesh.generate_array_mesh</code>, <code>mesh.inspect_surface</code>, <code>mesh.apply_surface_tool</code>, and <code>csg.create_blockout</code>, not full editor modeling parity.</li>
-<li><code>manage_vfx</code> should be split into <code>particles.*</code>, <code>material.*</code>, <code>shader.*</code>, and maybe <code>line.*</code> tools. Godot has real APIs for VFX-adjacent work: <code>GPUParticles2D</code>, <code>GPUParticles3D</code>, <code>CPUParticles2D</code>, <code>CPUParticles3D</code>, <code>ParticleProcessMaterial</code>, and <code>ShaderMaterial</code>. That is enough for emitter creation, burst setup, curves and gradients, mesh assignment, start and stop control, and shader-driven effects. What it does not give you is Unity VFX Graph parity, so the design should be parameter- and resource-driven rather than graph-driven.</li>
-<li><code>manage_camera</code> features tied to Cinemachine should be adapted into rig recipes. Godot does not have Cinemachine, but it does have enough primitives to build useful abstractions with <code>Camera2D</code>, <code>Camera3D</code>, <code>SpringArm3D</code>, <code>Path3D</code>, and <code>PathFollow3D</code>. That suggests tools like <code>camera.create_follow_rig</code>, <code>camera.create_orbit_rig</code>, and <code>camera.create_rail_rig</code> instead of trying to emulate Brain, blend, and extension APIs literally.</li>
-<li><code>manage_scriptable_object</code> should become <code>resource.*</code>, because Godot <code>Resource</code> is the real analog. This is a good fit if you lean into <code>.tres</code> and <code>.res</code> workflows: <code>resource.create</code>, <code>resource.instantiate</code>, <code>resource.set_property</code>, <code>resource.save</code>, and <code>resource.assign</code>. That is actually a strong Godot story once it is named correctly.</li>
-<li><code>manage_packages</code> should become add-on and plugin management. Godot does not have a first-party package ecosystem equivalent to Unity Package Manager, but it does have <code>addons/</code>, <code>plugin.cfg</code>, editor plugins, and Asset Library workflows. So the adaptation is <code>addon.list</code>, <code>addon.enable</code>, <code>addon.disable</code>, <code>addon.install_local</code>, and maybe <code>assetlib.search</code>, not <code>package.add</code>.</li>
-<li><code>unity_docs</code> and <code>unity_reflect</code> should be replaced with Godot-specific documentation and reflection helpers. Reflection should focus on node classes, properties, signals, methods, and resource types. Documentation tools should target Godot docs or a local indexed knowledge base.</li>
-<li>Memory snapshot and Frame Debugger workflows from <code>manage_profiler</code> should not be promised in v1. The right adaptation is a narrower diagnostics surface: runtime monitors, rendering counters, frame timings where available, scene statistics, and structured project-health checks.</li>
-</ul>
-<h3>8.4 Does Godot actually have the APIs for this?</h3>
-<p>Mostly yes.</p>
-<ul>
-<li>Editor integration: yes. <code>EditorPlugin</code> and <code>EditorInterface</code> are exactly the right foundation for a persistent editor plugin.</li>
-<li>Filesystem and resources: yes. <code>EditorFileSystem</code>, <code>ResourceLoader</code>, <code>ResourceSaver</code>, and normal file APIs are enough for project indexing, resource inspection, and reimport-aware workflows.</li>
-<li>Shaders and materials: yes. <code>Shader</code>, <code>ShaderMaterial</code>, <code>VisualShader</code>, <code>StandardMaterial3D</code>, and <code>BaseMaterial3D</code> give you a strong material and shader tool surface.</li>
-<li>Particles and VFX: yes, for a practical MCP product. <code>GPUParticles2D/3D</code>, <code>CPUParticles2D/3D</code>, and <code>ParticleProcessMaterial</code> are enough for structured particle tooling. The gap is not &quot;no APIs&quot;; the gap is &quot;no VFX Graph-style package to mirror.&quot;</li>
-<li>Camera and capture: yes. <code>Camera2D</code>, <code>Camera3D</code>, and viewport capture APIs are enough for camera creation, switching, and screenshot workflows.</li>
-<li>Mesh and procedural geometry: yes, partially. <code>SurfaceTool</code>, <code>ArrayMesh</code>, <code>MeshDataTool</code>, and CSG are enough for useful geometry helpers, but not enough to market full ProBuilder-equivalent editor modeling.</li>
-<li>Performance and profiling: partial yes. Godot has performance monitors and debugger hooks, but not the same breadth of built-in profiler product surface that Unity exposes.</li>
-<li>Package and ecosystem tooling: partial yes. Add-ons and Asset Library workflows exist, but there is no direct Unity Package Manager equivalent.</li>
-</ul>
-<p>The right conclusion is:</p>
-<ul>
-<li>Godot is mature enough for shader, VFX, camera, resource, and project-automation tools.</li>
-<li>The things that do not map cleanly usually fail because they depend on specialized Unity packages or editor subsystems, not because Godot lacks core engine APIs.</li>
-</ul>
-<h3>8.5 The strategic takeaway</h3>
-<p>The right target is:</p>
-<ul>
-<li>the maturity, usefulness, and reliability of a production editor MCP</li>
-<li>expressed through Godot-native concepts, APIs, and workflows</li>
-</ul>
-<hr>
-<h2>9. Proposed Repo Structure</h2>
-<pre><code>
-godot-mcp-studio/
-├── pyproject.toml
-├── src/
-│   ├── core/
-│   ├── protocol/
-│   ├── transport/
-│   ├── sessions/
-│   ├── jobs/
-│   ├── tools/
-│   │   ├── session.py
-│   │   ├── editor.py
-│   │   ├── scene.py
-│   │   ├── node.py
-│   │   ├── resource.py
-│   │   ├── script.py
-│   │   ├── signal.py
-│   │   ├── project.py
-│   │   ├── build.py
-│   │   └── batch.py
-│   ├── resources/
-│   ├── godot_client/
-│   └── cli/
-├── plugin/
-│   └── addons/godot_mcp_studio/
-│       ├── plugin.cfg
-│       ├── plugin.gd
-│       ├── connection.gd
-│       ├── handlers/
-│       ├── state/
-│       └── utils/
-├── tests/
-│   ├── unit/
-│   ├── integration/
-│   ├── contract/
-│   └── e2e/
-└── docs/
-    ├── protocol.md
-    ├── install.md
-    ├── tool-reference.md
-    ├── compatibility.md
-    └── contributor-guide.md
-</code></pre>
-<hr>
-<h2>10. Testing Strategy</h2>
-<h3>10.1 Unit tests</h3>
-<p>Cover:</p>
-<ul>
-<li>request validation</li>
-<li>protocol serialization</li>
-<li>pagination</li>
+<li>persistent connections</li>
 <li>session routing</li>
-<li>error mapping</li>
-<li>job state transitions</li>
-</ul>
-<h3>10.2 Integration tests</h3>
-<p>Use a mocked Godot client to test:</p>
-<ul>
-<li>tool orchestration</li>
-<li>failure handling</li>
-<li>reconnect behavior</li>
-<li>stale reference detection</li>
-<li>partial batch failures</li>
-</ul>
-<h3>10.3 Contract tests</h3>
-<p>Define a contract suite for the plugin/server boundary:</p>
-<ul>
-<li>handshake</li>
-<li>version mismatch behavior</li>
 <li>readiness checks</li>
-<li>event payloads</li>
-<li>log streaming</li>
-<li>job updates</li>
+<li>resources for read-heavy state</li>
+<li>structured errors</li>
+<li>batch execution with clear contracts</li>
+<li>layered testing and CI</li>
 </ul>
-<h3>10.4 End-to-end tests</h3>
-<p>Run against a real Godot project in CI:</p>
+<p>What should not be copied literally:</p>
 <ul>
-<li>open project</li>
-<li>connect plugin</li>
-<li>create scene</li>
-<li>add and mutate nodes</li>
-<li>create and attach script</li>
-<li>run project</li>
-<li>read logs</li>
-<li>export using a sample preset</li>
+<li><code>manage_*</code> blob tools</li>
+<li>Unity-specific object or package assumptions</li>
+<li>fake portability that hides Godot concepts behind generic names</li>
 </ul>
-<p>Godot is relatively CI-friendly compared with Unity and Unreal. That is a real strategic advantage and should be exploited.</p>
-<hr>
-<h2>11. Roadmap</h2>
-<h3>Phase 0: Prove the foundation (Weeks 1-2)</h3>
+<hr />
+<h2>Product Quality Bar</h2>
+<p>The project should be judged as a serious developer tool, not just as an experiment.</p>
+<p>That means:</p>
 <ul>
-<li>Build the minimal Godot editor plugin that connects persistently to the Python server.</li>
-<li>Define protocol envelope, version handshake, session ID, and error schema.</li>
-<li>Prove selection read, scene hierarchy read, and play/stop against a real Godot project.</li>
-<li>Add a basic headless execution path for CI and exports.</li>
+<li>installable without repo archaeology</li>
+<li>trustworthy under normal editor use</li>
+<li>explicit about undoability and safety boundaries</li>
+<li>documented well enough for contributors to extend it</li>
+<li>tested across Python, plugin, and real-project workflows</li>
 </ul>
-<p>Exit criteria:</p>
+<p>The intent is not breadth for its own sake. The intent is a smaller surface that is coherent, dependable, and obviously shaped by real use.</p>
+<hr />
+<h2>Why Godot AI Can Win</h2>
+<p>The differentiation is straightforward:</p>
 <ul>
-<li>one editor session can connect reliably</li>
-<li>the server can route commands to that session</li>
-<li>the plugin survives reconnects and scene switches</li>
+<li>Godot-native tool families instead of a thin generic bridge</li>
+<li>persistent plugin architecture instead of one-shot command relay</li>
+<li>runtime feedback loops instead of file-authoring only</li>
+<li>real tests, CI, docs, and release discipline</li>
+<li>open development shaped by community feedback</li>
 </ul>
-<h3>Phase 0.5: Distribution design (Week 2)</h3>
-<ul>
-<li>Spike PyInstaller packaging: single binary that bundles the Python server, all dependencies, and a launcher script.</li>
-<li>Test on macOS, Windows, and Linux.</li>
-<li>Define the end-user install flow: download binary → run → configure Claude Desktop / Cursor / etc.</li>
-<li>Validate that the binary can auto-discover or be pointed at the Godot editor plugin.</li>
-<li>Document the build pipeline so any contributor can produce a release binary.</li>
-</ul>
-<p>Exit criteria:</p>
-<ul>
-<li>a single command produces a working binary on at least one platform</li>
-<li>the binary starts the MCP server without requiring a Python installation</li>
-</ul>
-<h3>Phase 1: Read-first product slice (Weeks 2-4)</h3>
-<ul>
-<li><code>session.*</code></li>
-<li><code>editor.state</code></li>
-<li><code>editor.selection.*</code></li>
-<li><code>scene.get_hierarchy</code></li>
-<li><code>node.find</code></li>
-<li><code>project.info</code></li>
-<li><code>project_settings.get</code></li>
-<li><code>logs.read</code></li>
-<li>MCP resources for current scene, hierarchy, selection, project info, recent logs</li>
-</ul>
-<p>Exit criteria:</p>
-<ul>
-<li>the server is already useful as an inspection and navigation tool</li>
-<li>large hierarchies and logs are paged and stable</li>
-</ul>
-<h3>Phase 2: Safe write path (Weeks 4-7)</h3>
-<ul>
-<li><code>scene.create</code>, <code>scene.open</code>, <code>scene.save</code></li>
-<li><code>node.create</code>, <code>node.delete</code>, <code>node.reparent</code></li>
-<li><code>node.set_property</code> (simple types only: <code>bool</code>, <code>int</code>, <code>float</code>, <code>String</code>, <code>Vector2/3</code>, <code>Color</code>)</li>
-<li><code>resource.search</code>, <code>resource.load</code>, <code>resource.assign</code></li>
-<li><code>script.create</code>, <code>script.read</code>, <code>script.attach</code></li>
-<li>undo grouping where supported</li>
-<li>readiness checks and better mutation errors</li>
-</ul>
-<p><strong>Deferred to Phase 3:</strong></p>
-<ul>
-<li><code>node.rename</code> (requires UID and reference fixup considerations)</li>
-<li><code>node.set_property</code> for complex types (<code>Resource</code> refs, <code>NodePath</code>, <code>Array</code>, <code>Dictionary</code>)</li>
-<li><code>script.patch</code> (GDScript-aware patching — research item)</li>
-</ul>
-<p>Exit criteria:</p>
-<ul>
-<li>the server can create and modify small Godot projects safely</li>
-<li>write operations are not flaky under normal editor use</li>
-</ul>
-<h3>Phase 3: Godot-native depth (Weeks 7-10)</h3>
-<ul>
-<li><code>signal.*</code></li>
-<li><code>autoload.*</code></li>
-<li><code>input_map.*</code></li>
-<li><code>uid.*</code></li>
-<li><code>build.list_presets</code></li>
-<li><code>build.export</code></li>
-<li><code>editor.screenshot</code></li>
-<li><code>batch.execute</code></li>
-<li>multi-instance support</li>
-</ul>
-<p>Exit criteria:</p>
-<ul>
-<li>the server feels like a mature Godot tool</li>
-</ul>
-<h3>Phase 4: Hardening and launch (Weeks 10-12)</h3>
-<ul>
-<li>polished install flow</li>
-<li>full docs</li>
-<li>compatibility matrix</li>
-<li>telemetry and diagnostics</li>
-<li>CI coverage</li>
-<li>release packaging and launch materials</li>
-</ul>
-<p>Exit criteria:</p>
-<ul>
-<li>a new user can install it, connect it, and complete common workflows without repo archaeology</li>
-</ul>
-<h3>Phase 5: Advanced tooling (Post-launch)</h3>
-<ul>
-<li>richer shader and material workflows</li>
-<li>particle and VFX tooling</li>
-<li>camera rig helpers and capture workflows</li>
-<li>lightweight procedural mesh and CSG helpers</li>
-<li>richer performance inspection</li>
-<li>community-requested extensions</li>
-<li>possible test-framework integrations</li>
-</ul>
-<p>After the core product is stable, growth should be driven by real Godot community demand rather than breadth for its own sake.</p>
-<hr>
-<h2>12. Positioning and Differentiation</h2>
-<p>This should be positioned as:</p>
-<ul>
-<li><strong>a cutting-edge, mature, fully open-source MCP server for Godot</strong></li>
-</ul>
-<p>The most credible differentiators are:</p>
-<ul>
-<li>persistent editor integration</li>
-<li>multi-instance routing</li>
-<li>rich read resources</li>
-<li>real write workflows</li>
-<li>tests</li>
-<li>CI</li>
-<li>docs</li>
-<li>operational discipline shaped by years of real MCP maintenance</li>
-<li>usability work driven by community feedback</li>
-<li>a Godot-native tool surface instead of a thin command bridge</li>
-</ul>
-<p>That is already enough to win.</p>
-<h3>12.1 Competitive positioning vs existing godot-mcp</h3>
-<p>The existing <code>godot-mcp</code> project is a thin bridge: it exposes a handful of editor commands over MCP but lacks persistent connections, session management, structured error handling, undo integration, resource-based reads, or a test suite. It is closer to a proof-of-concept than a production tool.</p>
-<p><strong>Godot MCP Studio</strong> occupies a different tier:</p>
-<ul>
-<li><strong>Architecture:</strong> persistent editor plugin with WebSocket connection, session routing, job management, and lifecycle handling — not one-shot command relay.</li>
-<li><strong>Tool surface:</strong> ~80+ Godot-native tools organized by domain vs a flat list of generic commands.</li>
-<li><strong>Reliability:</strong> readiness gating, reconnect handling, undo integration, and structured error responses vs fire-and-hope.</li>
-<li><strong>Distribution:</strong> standalone binary (PyInstaller) — no Python environment required for end users.</li>
-<li><strong>Quality bar:</strong> unit, integration, contract, and e2e tests; CI; docs; compatibility matrix.</li>
-</ul>
-<p>The positioning is not &quot;better godot-mcp.&quot; It is &quot;what a production-grade Godot MCP should look like.&quot; The existing project validates demand; this project delivers on it.</p>
-<hr>
-<h2>13. Community and Long-Term Growth</h2>
-<p>The long-term strategy should stay rooted in the Godot community.</p>
-<ul>
-<li>prioritize the workflows users actually ask for</li>
-<li>harden core editing workflows before chasing novelty</li>
-<li>document contributor paths clearly</li>
-<li>maintain a visible compatibility matrix across Godot versions</li>
-<li>design extension points only after the core tool surface is stable</li>
-<li>use community feedback to drive usability work, naming, defaults, and docs</li>
-</ul>
-<p>This project should grow the same way good developer tools grow:</p>
-<ul>
-<li>by becoming more useful, more reliable, and easier to contribute to over time</li>
-</ul>
-<hr>
-<h2>14. Naming Strategy</h2>
-<p>The name should optimize for three things at once:</p>
-<ul>
-<li>search relevance for &quot;Godot MCP&quot;</li>
-<li>distinct identity from the existing <code>godot-mcp</code> project</li>
-<li>room to grow into a serious long-term tool, not a throwaway repo name</li>
-</ul>
-<h3>14.1 Recommendation</h3>
-<p>Do <strong>not</strong> use the bare canonical project name <code>godot-mcp</code> if another active project is already identified by that name.</p>
-<p>You can still rank for the same searches by making the exact phrase &quot;Godot MCP&quot; part of:</p>
-<ul>
-<li>the repo name</li>
-<li>the package name</li>
-<li>the README title</li>
-<li>the GitHub description</li>
-<li>the website title and H1</li>
-</ul>
-<p>The cleanest strategy is:</p>
-<ul>
-<li>pick a distinct brand</li>
-<li>attach a highly searchable descriptive suffix</li>
-</ul>
-<p>Example:</p>
-<ul>
-<li>Product name: <strong>Forge</strong></li>
-<li>Repo/package/display name: <strong>Forge Godot MCP</strong></li>
-<li>GitHub description: <strong>Production-grade Godot MCP server with persistent editor integration</strong></li>
-</ul>
-<p>That gives you search relevance without looking like a clone or causing name confusion.</p>
-<h3>14.2 Best name patterns</h3>
-<p>These are the strongest options in descending order of practicality.</p>
-<h4>Option A: Brand + exact keyword</h4>
-<p>This is the best balance.</p>
-<ul>
-<li><code>forge-godot-mcp</code></li>
-<li><code>anvil-godot-mcp</code></li>
-<li><code>ember-godot-mcp</code></li>
-<li><code>arc-godot-mcp</code></li>
-</ul>
-<p>Why this works:</p>
-<ul>
-<li>strong SEO because <code>godot-mcp</code> is in the repo/package name</li>
-<li>avoids direct naming collision</li>
-<li>gives the project a real brand</li>
-</ul>
-<h4>Option B: Exact keyword + clarifier</h4>
-<p>This is more utilitarian and very SEO-friendly.</p>
-<ul>
-<li><code>godot-mcp-server</code></li>
-<li><code>godot-editor-mcp</code></li>
-<li><code>godot-mcp-toolkit</code></li>
-<li><code>godot-mcp-studio</code></li>
-</ul>
-<p>Why this works:</p>
-<ul>
-<li>very obvious in search</li>
-<li>easy to understand immediately</li>
-<li>less brandable than Option A</li>
-</ul>
-<h4>Option C: Brand-first public name, keyword in subtitle</h4>
-<p>This is the cleanest branding but the weakest SEO unless the metadata is disciplined.</p>
-<ul>
-<li><code>Forge</code></li>
-<li>subtitle: <code>A production-grade Godot MCP server</code></li>
-</ul>
-<p>Why this works:</p>
-<ul>
-<li>best long-term brand</li>
-<li>worse discoverability unless every page and package includes &quot;Godot MCP&quot;</li>
-</ul>
-<h3>14.3 My recommendation</h3>
-<p>If you want the most straightforward descriptive option, I think your instinct is good:</p>
-<ul>
-<li><strong>Repo:</strong> <code>godot-mcp-studio</code></li>
-<li><strong>Display name:</strong> <code>Godot MCP Studio</code></li>
-</ul>
-<p>Why this is strong:</p>
-<ul>
-<li>it is extremely clear in search results</li>
-<li>it keeps the exact <code>godot-mcp</code> keyword string</li>
-<li>it feels more like a product than <code>godot-mcp-server</code></li>
-<li>it avoids stepping directly on the existing bare <code>godot-mcp</code> identity</li>
-</ul>
-<p>If you want a stronger brand later, you can still brand the site and docs while keeping the repo name descriptive.</p>
-<h3>14.4 Should you call it <code>godot-mcp</code> anyway?</h3>
-<p>Technically, you can use the phrase in many places. Strategically, I would not make the bare exact string your main identity.</p>
-<p>Reasons:</p>
-<ul>
-<li>it creates immediate confusion with the existing project</li>
-<li>it weakens your distinct project identity</li>
-<li>it makes the project easy to misread as a continuation or replacement fight even if the implementation is fully new</li>
-<li>package and marketplace naming collisions become annoying fast</li>
-</ul>
-<p>Use <code>Godot MCP</code> as a keyword, not as your only identity.</p>
+<p>That is enough to make the project meaningful if it is executed well.</p>
+<p>For the detailed positioning, naming, and community strategy, use <a href="product-positioning.html">product-positioning.md</a>.</p>
+
   </main>
 </body>
 </html>

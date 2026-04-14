@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Godot MCP Studio: Implementation Plan</title>
+  <title>Godot AI — Working Plan</title>
   <style>
     :root {
       --bg: #f4efe6;
@@ -11,7 +11,9 @@
       --ink: #1d1a16;
       --rule: #d8cdbc;
       --accent: #8a3b12;
+      --accent-soft: #efe4d4;
       --code-bg: #efe4d4;
+      --muted: #6e6256;
     }
     * { box-sizing: border-box; }
     body {
@@ -29,8 +31,47 @@
       background: var(--paper);
       border: 1px solid var(--rule);
       border-radius: 18px;
-      padding: 40px 44px;
+      padding: 32px 44px 40px;
       box-shadow: 0 20px 50px rgba(34, 24, 12, 0.08);
+    }
+    .doc-nav {
+      margin: 0 0 28px;
+      padding: 14px 16px 10px;
+      border: 1px solid var(--rule);
+      border-radius: 14px;
+      background: linear-gradient(180deg, #fff7ec 0%, #f7eee2 100%);
+    }
+    .doc-nav-title {
+      margin: 0 0 10px;
+      font-size: 0.88rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .doc-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 10px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .doc-links a {
+      display: inline-block;
+      padding: 6px 10px;
+      border: 1px solid var(--rule);
+      border-radius: 999px;
+      background: #fffaf2;
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.95rem;
+    }
+    .doc-links a.current {
+      background: var(--accent-soft);
+      border-color: #d7b390;
+      color: #5d2a10;
+      font-weight: 700;
     }
     h1, h2, h3, h4 {
       line-height: 1.2;
@@ -84,1142 +125,180 @@
       color: inherit;
     }
     a { color: var(--accent); }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin: 0 0 18px;
-      font-size: 0.92em;
-    }
-    th {
-      text-align: left;
-      padding: 10px 12px;
-      background: var(--accent);
-      color: var(--paper);
-      font-weight: 700;
-    }
-    th:first-child { border-radius: 8px 0 0 0; }
-    th:last-child { border-radius: 0 8px 0 0; }
-    td {
-      padding: 9px 12px;
-      border-bottom: 1px solid var(--rule);
-      vertical-align: top;
-    }
-    tr:nth-child(even) td { background: rgba(216, 205, 188, 0.18); }
-    tr:last-child td:first-child { border-radius: 0 0 0 8px; }
-    tr:last-child td:last-child { border-radius: 0 0 8px 0; }
-    blockquote {
-      margin: 0 0 18px;
-      padding: 14px 18px;
-      border-left: 4px solid var(--accent);
-      background: rgba(138, 59, 18, 0.06);
-      border-radius: 0 10px 10px 0;
-    }
-    blockquote p { margin: 0; }
-    .checklist {
-      list-style: none;
-      margin-left: 0.2rem;
-    }
-    .checklist li::before {
-      content: "\2610";
-      margin-right: 0.5em;
-      font-size: 1.1em;
-      color: var(--accent);
-    }
-    .gate {
-      background: rgba(138, 59, 18, 0.05);
-      border: 1px solid var(--rule);
-      border-radius: 12px;
-      padding: 18px 22px;
-      margin: 0 0 18px;
-    }
-    .gate h4 { margin-top: 0; }
-    .gate-label {
+    .check {
       display: inline-block;
-      background: var(--accent);
-      color: var(--paper);
-      font-size: 0.75em;
+      width: 1.35em;
+      margin-left: -0.1em;
+      color: var(--accent);
       font-weight: 700;
-      padding: 2px 10px;
-      border-radius: 6px;
-      margin-right: 6px;
-      vertical-align: middle;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-    }
-    .risk {
-      background: rgba(138, 59, 18, 0.04);
-      border-left: 4px solid var(--accent);
-      border-radius: 0 10px 10px 0;
-      padding: 14px 18px;
-      margin: 0 0 18px;
-    }
-    .risk h4 { margin-top: 0; color: var(--accent); }
-    .risk-meta {
-      font-size: 0.88em;
-      color: #6b5843;
-      margin-bottom: 6px;
-    }
-    hr {
-      border: none;
-      border-top: 1px solid var(--rule);
-      margin: 32px 0;
     }
     @media (max-width: 720px) {
       body { padding: 16px 12px 40px; }
-      main { padding: 26px 20px; }
+      main { padding: 22px 20px 28px; }
       h1 { font-size: 1.7rem; }
       h2 { font-size: 1.3rem; }
-      table { font-size: 0.84em; }
-      th, td { padding: 7px 8px; }
     }
   </style>
 </head>
 <body>
   <main>
-
-<h1>Godot MCP Studio &mdash; Implementation Plan</h1>
-<p><em>Generated 2026-04-11</em></p>
-<p>This is the actionable implementation plan for building Godot MCP Studio. It assumes a solo developer + Claude Code as AI pair, new to Godot (strong Unity background), targeting Godot 4.4+, with distribution via PyInstaller binary.</p>
-
-<hr>
-
-<h2>1. Project Setup</h2>
-
-<h3>1.1 GitHub org and repo</h3>
-<ol>
-<li>Create a new GitHub org (or use an existing one).</li>
-<li>Create repo: <code>godot-mcp-studio</code> (public, no template).</li>
-<li>Add <code>.gitignore</code> combining Python and Godot ignores.</li>
-<li>Add a placeholder <code>LICENSE</code> (decide later &mdash; MIT or Apache-2.0 are the safe defaults for open-source dev tools).</li>
-<li>Add a minimal <code>README.md</code> with project name, one-liner, and &ldquo;under construction&rdquo; notice.</li>
-</ol>
-
-<h3>1.2 Python project scaffolding</h3>
-<pre><code>godot-mcp-studio/
-&#x251C;&#x2500;&#x2500; pyproject.toml          # uv/pip, Python 3.11+, fastmcp dependency
-&#x251C;&#x2500;&#x2500; src/
-&#x2502;   &#x2514;&#x2500;&#x2500; godot_mcp_studio/
-&#x2502;       &#x251C;&#x2500;&#x2500; __init__.py
-&#x2502;       &#x251C;&#x2500;&#x2500; server.py        # FastMCP server entrypoint
-&#x2502;       &#x251C;&#x2500;&#x2500; protocol/
-&#x2502;       &#x2502;   &#x251C;&#x2500;&#x2500; __init__.py
-&#x2502;       &#x2502;   &#x251C;&#x2500;&#x2500; envelope.py  # request/response envelope types
-&#x2502;       &#x2502;   &#x2514;&#x2500;&#x2500; errors.py    # structured error codes
-&#x2502;       &#x251C;&#x2500;&#x2500; transport/
-&#x2502;       &#x2502;   &#x251C;&#x2500;&#x2500; __init__.py
-&#x2502;       &#x2502;   &#x2514;&#x2500;&#x2500; websocket.py # WebSocket server for Godot plugin
-&#x2502;       &#x251C;&#x2500;&#x2500; sessions/
-&#x2502;       &#x2502;   &#x251C;&#x2500;&#x2500; __init__.py
-&#x2502;       &#x2502;   &#x2514;&#x2500;&#x2500; registry.py  # session tracking + routing
-&#x2502;       &#x251C;&#x2500;&#x2500; godot_client/
-&#x2502;       &#x2502;   &#x251C;&#x2500;&#x2500; __init__.py
-&#x2502;       &#x2502;   &#x2514;&#x2500;&#x2500; client.py    # typed async client for plugin commands
-&#x2502;       &#x251C;&#x2500;&#x2500; tools/
-&#x2502;       &#x2502;   &#x251C;&#x2500;&#x2500; __init__.py
-&#x2502;       &#x2502;   &#x2514;&#x2500;&#x2500; session.py   # first tool module
-&#x2502;       &#x2514;&#x2500;&#x2500; resources/
-&#x2502;           &#x251C;&#x2500;&#x2500; __init__.py
-&#x2502;           &#x2514;&#x2500;&#x2500; sessions.py  # first resource module
-&#x251C;&#x2500;&#x2500; tests/
-&#x2502;   &#x251C;&#x2500;&#x2500; __init__.py
-&#x2502;   &#x251C;&#x2500;&#x2500; unit/
-&#x2502;   &#x2514;&#x2500;&#x2500; integration/
-&#x251C;&#x2500;&#x2500; plugin/                  # Godot editor plugin (separate from Python)
-&#x2502;   &#x2514;&#x2500;&#x2500; addons/godot_mcp_studio/
-&#x2502;       &#x251C;&#x2500;&#x2500; plugin.cfg
-&#x2502;       &#x251C;&#x2500;&#x2500; plugin.gd
-&#x2502;       &#x251C;&#x2500;&#x2500; connection.gd
-&#x2502;       &#x2514;&#x2500;&#x2500; handlers/
-&#x2514;&#x2500;&#x2500; docs/</code></pre>
-
-<h3>1.3 Godot test project</h3>
-<p>Create a minimal Godot 4.4 project at <code>test_project/</code> in the repo root:</p>
+    <nav class="doc-nav"><div class="doc-nav-title">Docs</div><ul class="doc-links"><li><a href="implementation-plan.html" class="current">Godot AI — Working Plan</a></li><li><a href="proposal.html">Godot AI — Product Proposal</a></li><li><a href="tool-taxonomy.html">Godot AI — Tool Taxonomy</a></li><li><a href="plugin-architecture.html">Godot AI — Plugin Architecture</a></li><li><a href="testing-strategy.html">Godot AI — Testing Strategy</a></li><li><a href="packaging-distribution.html">Godot AI — Packaging & Distribution</a></li><li><a href="product-positioning.html">Godot AI — Product Positioning</a></li><li><a href="go-no-go-gates.html">Godot AI — Go/No-Go Gates</a></li><li><a href="risk-register.html">Godot AI — Risk Register</a></li><li><a href="history-foundation-phases.html">Godot AI — Foundation History</a></li><li><a href="CONTRIBUTING.html">Contributing to Godot AI</a></li><li><a href="design-stable-host-worker.html">Design: Dev-Mode Stable Host + Restartable Worker</a></li><li><a href="investigation-dev-reload.html">Investigation: Automated Dev Reload</a></li><li><a href="readme-visual-punchlist.html">README Visual Punch List</a></li></ul></nav>
+    <h1>Godot AI — Working Plan</h1>
+<p><em>Updated 2026-04-14</em></p>
+<p>This is the current working plan for Godot AI. It focuses on active and upcoming work only.</p>
+<p>Historical bootstrap material, architecture detail, packaging mechanics, go/no-go gates, and the risk register now live in separate docs:</p>
 <ul>
-<li>One scene with a few nodes (Node3D, MeshInstance3D, Camera3D, DirectionalLight3D).</li>
-<li>The plugin symlinked or copied into <code>test_project/addons/</code>.</li>
-<li>This project is used for manual testing and later for e2e CI.</li>
+<li><a href="proposal.html">Architecture Proposal</a></li>
+<li><a href="tool-taxonomy.html">Tool Taxonomy</a></li>
+<li><a href="history-foundation-phases.html">Foundation History</a></li>
+<li><a href="plugin-architecture.html">Plugin Architecture</a></li>
+<li><a href="testing-strategy.html">Testing Strategy</a></li>
+<li><a href="packaging-distribution.html">Packaging &amp; Distribution</a></li>
+<li><a href="product-positioning.html">Product Positioning</a></li>
+<li><a href="go-no-go-gates.html">Go/No-Go Gates</a></li>
+<li><a href="risk-register.html">Risk Register</a></li>
 </ul>
-
-<h3>1.4 Dev environment</h3>
+<hr />
+<h2>Status Snapshot</h2>
 <ul>
-<li>Python 3.11+ with <code>uv</code> for dependency management</li>
-<li><code>pytest</code> + <code>pytest-asyncio</code> for tests</li>
-<li><code>ruff</code> for linting/formatting</li>
-<li>Godot 4.4 stable installed</li>
-<li>Claude Code as AI pair for implementation</li>
+<li><span class="check done">&#x2611;</span> Phase 1 read surface shipped</li>
+<li><span class="check done">&#x2611;</span> Phase 2 safe write surface shipped</li>
+<li><span class="check done">&#x2611;</span> Core Godot-native config tools shipped: <code>signal.*</code>, <code>autoload.*</code>, <code>input_map.*</code>, <code>project_settings.set</code></li>
+<li><span class="check done">&#x2611;</span> Godot-side test harness and <code>run_tests</code> / <code>get_test_results</code> shipped</li>
+<li><span class="check done">&#x2611;</span> Readiness gating and undo integration are in place for the current write surface</li>
+<li><span class="check done">&#x2611;</span> Runtime feedback loop: <code>project.run</code>/<code>project.stop</code>, <code>editor.screenshot</code>, <code>performance.get_monitors</code>, <code>logs.clear</code></li>
+<li><span class="check todo">&#x2610;</span> Runtime iteration loop is complete enough for AI-driven feel tuning</li>
+<li><span class="check todo">&#x2610;</span> Release/install path is complete enough for new users</li>
+<li><span class="check todo">&#x2610;</span> Polished game-production extensions have started</li>
 </ul>
-
-<hr>
-
-<h2>2. This Weekend: Phase 0 Sprint Plan</h2>
-<p>The goal is to prove the full vertical: AI client &rarr; MCP server &rarr; WebSocket &rarr; Godot plugin &rarr; editor API &rarr; response back. Two parallel tracks that meet in the middle.</p>
-
-<h3>Track A: Python server skeleton (Saturday morning, ~3&ndash;4 hours)</h3>
-
-<h4>Hour 1: Project bootstrap</h4>
+<h2>What This Plan Optimizes For</h2>
 <ul>
-<li><code>uv init</code> the Python project with <code>pyproject.toml</code></li>
-<li>Add dependencies: <code>fastmcp</code>, <code>websockets</code>, <code>pydantic</code></li>
-<li>Create the package structure under <code>src/godot_mcp_studio/</code></li>
-<li>Write <code>server.py</code> &mdash; bare FastMCP server that starts and accepts MCP connections</li>
-<li>Verify: <code>python -m godot_mcp_studio</code> starts and responds to MCP inspector</li>
+<li>useful day-to-day Godot editing before breadth</li>
+<li>AI-visible feedback loops before more authoring surface</li>
+<li>Godot-native tool families over generic abstraction</li>
+<li>tight test coverage and live smoke checks for every new surface</li>
+<li>small, composable tools instead of giant action blobs</li>
 </ul>
-
-<h4>Hour 2: Protocol envelope + WebSocket transport</h4>
+<hr />
+<h2>Current Priority: Finish Phase 3</h2>
+<h3>Runtime Feedback Loop</h3>
 <ul>
-<li>Define <code>protocol/envelope.py</code>: <code>CommandRequest</code> and <code>CommandResponse</code> Pydantic models
-  <ul>
-    <li><code>request_id: str</code> (UUID)</li>
-    <li><code>command: str</code> (e.g., <code>"get_scene_tree"</code>)</li>
-    <li><code>params: dict</code></li>
-    <li>Response: <code>request_id</code>, <code>status</code>, <code>data</code>, <code>error</code></li>
-  </ul>
-</li>
-<li>Write <code>transport/websocket.py</code>: async WebSocket server (default port 9500)
-  <ul>
-    <li>Accept connections from Godot plugin</li>
-    <li>Parse incoming messages as <code>CommandResponse</code></li>
-    <li>Send outgoing <code>CommandRequest</code> messages</li>
-  </ul>
-</li>
-<li>Verify: WebSocket server starts, accepts a test connection from <code>websocat</code> or a Python test client</li>
+<li><span class="check done">&#x2611;</span> <code>project.run</code> with <code>main</code>, <code>current</code>, and <code>custom</code> modes</li>
+<li><span class="check done">&#x2611;</span> <code>project.stop</code> with validation (rejects if not playing)</li>
+<li><span class="check done">&#x2611;</span> <code>editor.screenshot</code> returning inline MCP ImageContent (viewport/game sources, configurable resolution)</li>
+<li><span class="check done">&#x2611;</span> <code>performance.get_monitors</code> with optional filter (30 Godot Performance monitors)</li>
+<li><span class="check done">&#x2611;</span> <code>logs.clear</code></li>
+<li><span class="check done">&#x2611;</span> WebSocket buffer increase (4 MB) for large payloads like screenshot base64</li>
 </ul>
-
-<h4>Hour 3: Session registry + mock tool</h4>
+<p><strong>Why this matters:</strong> Without a reliable launch-observe-inspect loop, the AI can build project structure but cannot tighten feel, readability, or performance.</p>
+<h3>High-Leverage Authoring</h3>
 <ul>
-<li>Write <code>sessions/registry.py</code>:
-  <ul>
-    <li><code>register_session(session_id, ws_connection, metadata)</code></li>
-    <li><code>get_session(session_id) &rarr; Session</code></li>
-    <li><code>list_sessions() &rarr; list[Session]</code></li>
-    <li>Session metadata: <code>session_id</code>, <code>godot_version</code>, <code>project_path</code>, <code>plugin_version</code></li>
-  </ul>
-</li>
-<li>Write <code>godot_client/client.py</code>:
-  <ul>
-    <li><code>send_command(session_id, command, params) &rarr; response</code></li>
-    <li>Correlates <code>request_id</code> to pending futures</li>
-    <li>Timeout handling (5s default)</li>
-  </ul>
-</li>
-<li>Write first tool: <code>tools/session.py</code> &mdash; <code>session.list</code> that returns registered sessions</li>
-<li>Write first resource: <code>resources/sessions.py</code> &mdash; <code>godot://sessions</code></li>
-<li>Verify: <code>session.list</code> returns empty list; registering a mock session makes it appear</li>
+<li><span class="check todo">&#x2610;</span> <code>batch.execute</code> with stop-on-first-error semantics and optional grouped undo</li>
+<li><span class="check todo">&#x2610;</span> <code>node.rename</code> with UID/reference awareness where feasible</li>
+<li><span class="check todo">&#x2610;</span> complex <code>node.set_property</code> (<code>Resource</code>, <code>NodePath</code>, <code>Array</code>, <code>Dictionary</code>)</li>
+<li><span class="check todo">&#x2610;</span> <code>script.patch</code> shipped or explicitly ruled out after a focused spike</li>
 </ul>
-
-<h4>Hour 4: Integration test with mock</h4>
+<p><strong>Why this matters:</strong> These are workflow multipliers. They matter more for real project iteration than adding another narrow read tool.</p>
+<h3>Multi-Session Reliability</h3>
 <ul>
-<li>Write <code>tests/unit/test_session_registry.py</code></li>
-<li>Write <code>tests/unit/test_protocol.py</code> (envelope serialization roundtrip)</li>
-<li>Write <code>tests/integration/test_mock_session.py</code> &mdash; mock WebSocket client that pretends to be a Godot plugin, registers, receives a command, sends a response</li>
-<li>All tests green</li>
+<li><span class="check todo">&#x2610;</span> reliable multi-instance routing</li>
+<li><span class="check todo">&#x2610;</span> clear session selection semantics in tools and UI</li>
+<li><span class="check todo">&#x2610;</span> enough session metadata to distinguish multiple editors safely</li>
 </ul>
-
-<h3>Track B: Godot plugin spike (Saturday afternoon, ~3&ndash;4 hours)</h3>
-
-<h4>Hour 5: Plugin bootstrap</h4>
+<p><strong>Why this matters:</strong> Real use will quickly involve multiple projects, multiple editor windows, or multiple test sessions. The session model needs to stop being “good enough for one editor.”</p>
+<h3>Phase 3 Exit Criteria</h3>
 <ul>
-<li>Create <code>plugin/addons/godot_mcp_studio/plugin.cfg</code>:
-<pre><code>[plugin]
-name="Godot MCP Studio"
-description="MCP server bridge for AI-assisted Godot development"
-author="Godot MCP Studio"
-version="0.0.1"
-script="plugin.gd"</code></pre>
-</li>
-<li>Create <code>plugin.gd</code> extending <code>EditorPlugin</code>:
-  <ul>
-    <li><code>_enter_tree()</code>: print &ldquo;Godot MCP Studio loaded&rdquo;, start connection</li>
-    <li><code>_exit_tree()</code>: disconnect, cleanup</li>
-  </ul>
-</li>
-<li>Copy plugin into <code>test_project/addons/</code>, enable it in Project Settings</li>
-<li>Verify: plugin loads, prints message in Godot output</li>
+<li><span class="check done">&#x2611;</span> <code>signal.*</code>, <code>autoload.*</code>, <code>input_map.*</code>, <code>project_settings.set</code></li>
+<li><span class="check done">&#x2611;</span> run/stop cycle is reliable</li>
+<li><span class="check todo">&#x2610;</span> batch execution is shipped with a clear contract</li>
+<li><span class="check todo">&#x2610;</span> multi-instance routing works in practice</li>
+<li><span class="check todo">&#x2610;</span> <code>script.patch</code> decision is made</li>
+<li><span class="check done">&#x2611;</span> test coverage and smoke coverage increase where the new runtime loop needs it (255 Python + 170 GDScript = 425 total)</li>
 </ul>
-
-<h4>Hour 6: WebSocket connection</h4>
+<hr />
+<h2>Next Priority: Phase 4 Release Path</h2>
+<p>See <a href="packaging-distribution.html">Packaging &amp; Distribution</a> for full detail. The short version:</p>
 <ul>
-<li>Create <code>connection.gd</code>:
-  <ul>
-    <li>Uses <code>WebSocketPeer</code> (Godot 4.x API)</li>
-    <li>Connects to <code>ws://127.0.0.1:9500</code></li>
-    <li>Handles <code>STATE_OPEN</code>, <code>STATE_CLOSING</code>, <code>STATE_CLOSED</code></li>
-    <li>Auto-reconnect with backoff (1s, 2s, 4s, max 10s)</li>
-    <li>Sends handshake on connect: <code>{"type": "handshake", "session_id": "&lt;generated&gt;", ...}</code></li>
-  </ul>
-</li>
-<li>Wire <code>connection.gd</code> into <code>plugin.gd</code> &mdash; create on <code>_enter_tree</code>, poll in <code>_process</code></li>
-<li>Verify: start Python server, open Godot project, see handshake arrive in Python logs</li>
+<li><span class="check todo">&#x2610;</span> clean install docs for Claude Code, Codex, and other MCP clients</li>
+<li><span class="check todo">&#x2610;</span> PyPI / <code>uvx</code> path works reliably</li>
+<li><span class="check todo">&#x2610;</span> desktop binary path is real, not aspirational</li>
+<li><span class="check todo">&#x2610;</span> CI covers Python tests, Godot-side tests, and release-smoke install paths</li>
+<li><span class="check todo">&#x2610;</span> compatibility guidance is published and maintained</li>
+<li><span class="check todo">&#x2610;</span> a new user can get from zero to working in under 10 minutes</li>
 </ul>
-
-<h4>Hour 7: Command dispatch skeleton</h4>
+<p>Release is not just packaging. It is install flow, docs, smoke coverage, and support burden reduction.</p>
+<hr />
+<h2>Prototype-Driven Extensions</h2>
+<p>These are not the next things to do blindly. They are the extensions that matter once the runtime loop is solid and the project is ready to prove itself against a more polished game benchmark.</p>
+<h3>Tier 1: Needed for Better 2D Game Production</h3>
 <ul>
-<li>Add command receive loop to <code>connection.gd</code>:
-  <ul>
-    <li>Parse incoming JSON as <code>{request_id, command, params}</code></li>
-    <li>Match <code>command</code> string to a handler function</li>
-    <li>Send response JSON: <code>{request_id, status, data, error}</code></li>
-  </ul>
-</li>
-<li>Implement first handler: <code>get_editor_state</code>
-  <ul>
-    <li>Returns: <code>{godot_version, project_name, current_scene, is_playing}</code></li>
-    <li>Uses <code>EditorInterface.get_edited_scene_root()</code>, <code>Engine.get_version_info()</code></li>
-  </ul>
-</li>
-<li>Verify: Python server sends <code>get_editor_state</code> command, Godot plugin responds with real data</li>
+<li><code>ui.*</code> for HUDs, pause menus, upgrade draft screens, game-over flows, and theme/layout work</li>
+<li><code>camera.*</code> for follow, bounds, zoom, and screen shake</li>
+<li><code>resource.create</code> / <code>resource.save</code> / <code>resource.instantiate</code></li>
+<li><code>scene.instantiate</code> and <code>scene.inherit</code></li>
+<li><code>animation_player.*</code> / <code>animation_tree.*</code></li>
+<li><code>audio.*</code></li>
 </ul>
-
-<h4>Hour 8: First real scene tree read</h4>
+<h3>Tier 2: Strong Polish Multipliers</h3>
 <ul>
-<li>Implement handler: <code>get_scene_tree</code>
-  <ul>
-    <li>Walks <code>EditorInterface.get_edited_scene_root()</code> recursively</li>
-    <li>Returns array of <code>{name, type, path, children_count}</code> per node</li>
-    <li>Depth limit parameter (default 10)</li>
-  </ul>
-</li>
-<li>Verify: scene tree data arrives in Python server from a real Godot scene</li>
+<li><code>material.*</code>, <code>shader.*</code>, <code>particles.*</code></li>
+<li><code>physics.*</code> helpers for layers, masks, bodies, and common 2D setup</li>
+<li>light <code>tilemap.*</code> and/or <code>navigation.*</code> if the benchmark moves from a single arena to authored rooms</li>
 </ul>
-
-<h3>Meet in the middle (Saturday evening or Sunday morning, ~2 hours)</h3>
-
-<h4>Hour 9: Wire the first MCP tool to real Godot data</h4>
+<h3>Tier 3: Verification and Shipping Support</h3>
 <ul>
-<li>In Python: implement <code>editor.state</code> tool that calls <code>get_editor_state</code> on the active session</li>
-<li>In Python: implement <code>scene.get_hierarchy</code> tool that calls <code>get_scene_tree</code></li>
-<li>Test manually with MCP inspector or Claude Desktop:
-  <ul>
-    <li><code>editor.state</code> &rarr; returns Godot version, project name, current scene</li>
-    <li><code>scene.get_hierarchy</code> &rarr; returns real node tree from the open scene</li>
-  </ul>
-</li>
+<li><code>build.*</code></li>
+<li>richer performance diagnostics</li>
+<li>more capture and regression-verification helpers where they materially help iteration</li>
 </ul>
-
-<h4>Hour 10: Polish and commit</h4>
+<p><strong>The rule here is simple:</strong> Do not add broad polish tooling before the AI can already launch the game, inspect results, and make safe iterative edits.</p>
+<hr />
+<h2>First Prototype Benchmark: Top-Down Roguelite</h2>
+<p>Use a small 2D top-down roguelite as the first benchmark, but keep it room-based or arena-based rather than jumping straight to full procedural dungeons.</p>
+<h3>Benchmark Scope</h3>
 <ul>
-<li>Add proper error handling for disconnected sessions</li>
-<li>Add <code>--port</code> CLI flag for the WebSocket server</li>
-<li>Write a <code>CONTRIBUTING.md</code> stub with dev setup instructions</li>
-<li>Commit everything, push to GitHub</li>
-<li>Celebrate: you have a working MCP-to-Godot bridge</li>
+<li>one player character with move, shoot, and dash</li>
+<li>three enemy archetypes</li>
+<li>one boss or final survival spike</li>
+<li>XP or currency pickups</li>
+<li>10-15 upgrades presented through a draft or choice screen</li>
+<li>one arena with escalating waves or 3-5 short rooms</li>
+<li>HUD, pause, death, restart, and upgrade UI</li>
+<li>placeholder art is acceptable</li>
+<li>unreadable combat feedback is not acceptable</li>
 </ul>
-
-<h3>Weekend exit criteria</h3>
-<ul class="checklist">
-<li>Python MCP server starts and accepts MCP client connections</li>
-<li>Godot plugin connects to Python server over WebSocket</li>
-<li><code>session.list</code> returns the connected Godot session with metadata</li>
-<li><code>editor.state</code> returns real Godot editor state</li>
-<li><code>scene.get_hierarchy</code> returns real scene tree data</li>
-<li>At least 5 passing tests</li>
-<li>Code pushed to GitHub</li>
-</ul>
-
-<hr>
-
-<h2>3. Post-Sprint Hardening (before adding more tools)</h2>
-<p>The weekend sprint proved the vertical slice works. Before adding tools, fix the structural issues identified in review.</p>
-
-<h3>3.1 Refactor plugin to planned architecture</h3>
-<p><code>connection.gd</code> is a god-object (transport, dispatch, logging, path helpers, all handlers). Split into the architecture the plan already describes:</p>
-<pre><code>addons/godot_mcp_studio/
-&#x251C;&#x2500;&#x2500; plugin.gd              # EditorPlugin lifecycle, owns everything
-&#x251C;&#x2500;&#x2500; connection.gd          # WebSocket only: connect, reconnect, send, receive
-&#x251C;&#x2500;&#x2500; dispatcher.gd          # Command queue, frame-budget dispatch, handler routing
-&#x251C;&#x2500;&#x2500; handlers/
-&#x2502;   &#x251C;&#x2500;&#x2500; editor_handler.gd  # editor_state, selection, logs
-&#x2502;   &#x251C;&#x2500;&#x2500; scene_handler.gd   # scene tree, node find/get
-&#x2502;   &#x251C;&#x2500;&#x2500; node_handler.gd    # node create/delete/modify
-&#x2502;   &#x2514;&#x2500;&#x2500; client_handler.gd  # client configure/status
-&#x251C;&#x2500;&#x2500; state/
-&#x2502;   &#x2514;&#x2500;&#x2500; log_buffer.gd      # Ring buffer for log capture
-&#x2514;&#x2500;&#x2500; utils/
-    &#x251C;&#x2500;&#x2500; scene_path.gd       # _scene_path(), _resolve_scene_node()
-    &#x2514;&#x2500;&#x2500; client_configurator.gd  # Client config (Claude Code, Antigravity)</code></pre>
-<p><strong>Why now:</strong> Every new handler added to connection.gd makes this refactor harder. Do it with 7 tools, not 30.</p>
-
-<h3>3.2 Make client configuration opt-in</h3>
-<p>The current plugin silently rewrites user-scope Claude Code config and Antigravity config on enable. This is a trust problem.</p>
+<h3>What The Current Stack Can Already Do</h3>
 <ul>
-<li>Remove <code>_auto_configure_clients()</code> from <code>_enter_tree()</code></li>
-<li>Move client config to the dock panel: show detected status per client + explicit &ldquo;Configure&rdquo; button</li>
-<li>MCP tools <code>client_configure</code> / <code>client_status</code> stay (useful for AI clients), but don&rsquo;t auto-fire</li>
-<li>Show the exact command/config change before applying (preview, not surprise)</li>
+<li><span class="check done">&#x2611;</span> build an ugly but functional arena prototype with nodes, scripts, resources, input, autoloads, signals, and tests</li>
+<li><span class="check done">&#x2611;</span> create and mutate small Godot projects safely in the editor</li>
+<li><span class="check todo">&#x2610;</span> support the kind of runtime iteration needed to make the benchmark feel good</li>
 </ul>
-
-<h3>3.3 Add undo integration for write tools</h3>
-<p><code>node_create</code> currently calls <code>add_child</code> directly. All write tools must use <code>EditorUndoRedoManager</code>. Undo support is a prerequisite for adding more write tools.</p>
-
-<h3>3.4 Fix session state freshness</h3>
-<p><code>current_scene</code> and <code>play_state</code> in the session registry are stale handshake-only data. Add event push from plugin:</p>
+<h3>What Must Exist Before This Is A Fair Benchmark</h3>
 <ul>
-<li>Plugin hooks editor signals: scene change, play/stop</li>
-<li>Sends update events over WebSocket</li>
-<li>Server updates session registry on event receipt</li>
-<li><code>session_list</code> and <code>editor_state</code> then return live data</li>
+<li><span class="check done">&#x2611;</span> run/stop plus screenshot capture and basic performance sampling</li>
+<li><span class="check todo">&#x2610;</span> <code>batch.execute</code> and a safe partial-edit story</li>
+<li><span class="check todo">&#x2610;</span> data-authoring surface for upgrades, enemies, room data, and reusable scenes</li>
+<li><span class="check todo">&#x2610;</span> <code>ui.*</code> for HUD and upgrade selection</li>
+<li><span class="check todo">&#x2610;</span> <code>camera.*</code> for follow, bounds, zoom, and shake</li>
+<li><span class="check todo">&#x2610;</span> <code>animation_player.*</code> and <code>audio.*</code> for combat readability and feel</li>
+<li><span class="check todo">&#x2610;</span> <code>particles.*</code> / <code>shader.*</code> / <code>material.*</code> for hit juice and feedback clarity</li>
+<li><span class="check todo">&#x2610;</span> light <code>physics.*</code> and optionally <code>tilemap.*</code> / <code>navigation.*</code> if rooms become more authored</li>
 </ul>
-
-<h3>3.5 Build the dock panel (minimal)</h3>
-<p>Minimum viable dock panel (<code>mcp_dock.gd</code>):</p>
+<h3>Benchmark Exit Criteria</h3>
 <ul>
-<li>Connection status: green/red + session ID</li>
-<li>Server info: resolved command, WS/HTTP ports</li>
-<li>Client config: detected status per client + &ldquo;Configure&rdquo; button (opt-in)</li>
-<li>MCP log: scrolling <code>RichTextLabel</code> fed from log buffer</li>
-<li>Controls: reconnect button, <code>mcp_logging</code> toggle</li>
+<li><span class="check todo">&#x2610;</span> Godot AI can author the project structure, gameplay scenes, and data assets with limited manual cleanup</li>
+<li><span class="check todo">&#x2610;</span> the AI can launch the game, inspect results, and tighten feel over repeated iterations</li>
+<li><span class="check todo">&#x2610;</span> a human reviewer would call the slice readable and juicy, not just functional</li>
+<li><span class="check todo">&#x2610;</span> the prototype can be exported to a desktop build without bespoke handholding</li>
 </ul>
-
-<h3>3.6 Symlink test_project plugin</h3>
-<p>Stop copying files. Symlink <code>test_project/addons/godot_mcp_studio</code> &rarr; <code>plugin/addons/godot_mcp_studio</code>.</p>
-
-<h3>3.7 Add integration tests</h3>
-<p>Mock WebSocket client, contract tests, 25+ passing tests before Phase 1.</p>
-
-<h3>Hardening exit criteria</h3>
-<ul class="checklist">
-<li>connection.gd split into connection, dispatcher, handlers</li>
-<li>Client config is opt-in (dock button, not auto-fire)</li>
-<li>node_create uses EditorUndoRedoManager</li>
-<li>Session state updates on scene switch and play/stop</li>
-<li>Dock panel shows connection status and MCP log</li>
-<li>test_project uses symlink to plugin/</li>
-<li>25+ passing tests including integration</li>
-</ul>
-
-<hr>
-
-<h2>4. Phase 0 Full (Weeks 1&ndash;2)</h2>
-<p>Build on the hardened foundation.</p>
-
-<h3>Week 1 (post-weekend)</h3>
-
-<h4>Protocol hardening</h4>
+<hr />
+<h2>What We Are Not Doing Yet</h2>
 <ul>
-<li>Version negotiation in handshake (protocol version field)</li>
-<li>Structured error codes (enum: <code>SESSION_NOT_FOUND</code>, <code>COMMAND_TIMEOUT</code>, <code>EDITOR_NOT_READY</code>, <code>INVALID_PARAMS</code>, etc.)</li>
-<li>Request timeout with configurable default (5s)</li>
-<li>Message size limits</li>
+<li>using the implementation plan as a historical changelog</li>
+<li>promising exhaustive tool coverage before the core loop is strong</li>
+<li>benchmarking with a full procedural dungeon crawler before the arena/room loop works</li>
+<li>building genre-specific high-level DSLs before the general authoring surface is good enough</li>
 </ul>
-
-<h4>Connection reliability</h4>
-<ul>
-<li>Plugin auto-reconnect with exponential backoff</li>
-<li>Server-side heartbeat ping/pong (every 5s)</li>
-<li>Stale session cleanup (no heartbeat for 30s &rarr; mark disconnected)</li>
-<li>Graceful disconnect on plugin unload</li>
-<li>Scene switch notification (plugin sends event when scene changes)</li>
-</ul>
-
-<h4>Session model</h4>
-<ul>
-<li>Full session metadata: <code>session_id</code>, <code>godot_version</code>, <code>project_path</code>, <code>plugin_version</code>, <code>protocol_version</code>, <code>current_scene</code>, <code>play_state</code>, <code>capability_flags</code></li>
-<li>Session event stream: <code>connected</code>, <code>disconnected</code>, <code>scene_changed</code>, <code>play_state_changed</code></li>
-<li>Multi-session support in registry (list, route by ID)</li>
-</ul>
-
-<h3>Week 2</h3>
-
-<h4>Plugin command queue architecture</h4>
-<ul>
-<li>Implement the concurrency model from proposal Section 6.9:
-  <ul>
-    <li>Inbound command queue (Array-based)</li>
-    <li><code>_process()</code> dispatcher with frame budget (4ms default)</li>
-    <li><code>call_deferred()</code> for scene tree mutations</li>
-    <li>Response correlation via <code>request_id</code></li>
-  </ul>
-</li>
-<li>Test with rapid-fire commands to verify no editor stalls</li>
-</ul>
-
-<h4>Readiness system</h4>
-<ul>
-<li>Plugin reports readiness state: <code>ready</code>, <code>scene_switching</code>, <code>importing</code>, <code>playing</code>, <code>error</code></li>
-<li>Server gates write operations on readiness</li>
-<li><code>editor.state</code> includes readiness in response</li>
-</ul>
-
-<h4>Basic headless path</h4>
-<ul>
-<li><code>godot --headless --script</code> runner for CI scenarios</li>
-<li>One headless command: <code>get_project_info</code> (project name, Godot version, scene list)</li>
-</ul>
-
-<h4>Testing</h4>
-<ul>
-<li>Unit tests for protocol serialization, session registry, error handling</li>
-<li>Integration tests with mock WebSocket client</li>
-<li>Contract test: handshake sequence, version mismatch rejection, heartbeat</li>
-</ul>
-
-<h3>Phase 0 exit criteria</h3>
-<ul class="checklist">
-<li>Plugin survives reconnects and scene switches without data loss</li>
-<li>Server handles multiple sessions concurrently</li>
-<li>Protocol has version negotiation and structured errors</li>
-<li>Command queue doesn&#x27;t stall the Godot editor</li>
-<li>Readiness gating prevents writes during unsafe states</li>
-<li>Headless path can extract project info</li>
-<li>15+ passing tests</li>
-</ul>
-
-<hr>
-
-<h2>4. Phase 0.5: Distribution (Week 2, parallel track)</h2>
-
-<h3>PyInstaller spike</h3>
-<p><strong>Goal:</strong> A user downloads one file, runs it, and the MCP server starts. No Python required.</p>
-
-<h4>Steps</h4>
-<ol>
-<li>Create <code>build/pyinstaller.spec</code> or use <code>pyinstaller</code> CLI:
-<pre><code>pyinstaller --onefile --name godot-mcp-studio src/godot_mcp_studio/__main__.py</code></pre>
-</li>
-<li>Test on macOS first (your platform), then cross-compile or test in CI for Windows/Linux.</li>
-<li>Verify the binary:
-  <ul>
-    <li>Starts the MCP server</li>
-    <li>Opens WebSocket listener</li>
-    <li>Accepts Godot plugin connections</li>
-    <li>Responds to MCP tool calls</li>
-  </ul>
-</li>
-<li>Measure binary size (target: &lt; 30MB).</li>
-<li>Test startup time (target: &lt; 3s).</li>
-</ol>
-
-<h4>Install flow design</h4>
-<ol>
-<li>User downloads binary from GitHub Releases.</li>
-<li>User runs binary (or adds it to their MCP client config).</li>
-<li>User copies <code>plugin/addons/godot_mcp_studio/</code> into their Godot project&#x27;s <code>addons/</code> folder.</li>
-<li>User enables the plugin in Godot Project Settings.</li>
-<li>Plugin connects to the running server automatically.</li>
-</ol>
-
-<h4>Claude Desktop / Cursor config</h4>
-<pre><code>{
-  "mcpServers": {
-    "godot-mcp-studio": {
-      "command": "/path/to/godot-mcp-studio",
-      "args": []
-    }
-  }
-}</code></pre>
-
-<h3>Phase 0.5 exit criteria</h3>
-<ul class="checklist">
-<li>Single binary builds on macOS</li>
-<li>Binary starts MCP server without Python installed</li>
-<li>End-to-end test: binary &rarr; Godot plugin &rarr; MCP tool call &rarr; response</li>
-<li>Install instructions documented</li>
-</ul>
-
-<hr>
-
-<h2>5. Phase 1: Read-First Tools (Weeks 2&ndash;4)</h2>
-<p>The product should be useful for inspection and navigation before any write tools ship.</p>
-
-<h3>Tool implementation order</h3>
-
-<h4>Batch 1 &mdash; Session and editor (Week 2)</h4>
-<table>
-<tr><th>Tool</th><th>Plugin handler</th><th>Notes</th></tr>
-<tr><td><code>session.list</code></td><td>&mdash;</td><td>Server-side only, reads registry</td></tr>
-<tr><td><code>session.activate</code></td><td>&mdash;</td><td>Sets default session for subsequent calls</td></tr>
-<tr><td><code>editor.state</code></td><td><code>get_editor_state</code></td><td>Already done in Phase 0</td></tr>
-<tr><td><code>editor.selection.get</code></td><td><code>get_selection</code></td><td><code>EditorInterface.get_selection().get_selected_nodes()</code></td></tr>
-</table>
-
-<h4>Batch 2 &mdash; Scene reads (Week 3)</h4>
-<table>
-<tr><th>Tool</th><th>Plugin handler</th><th>Notes</th></tr>
-<tr><td><code>scene.get_hierarchy</code></td><td><code>get_scene_tree</code></td><td>Already done in Phase 0; add pagination</td></tr>
-<tr><td><code>scene.get_roots</code></td><td><code>get_open_scenes</code></td><td><code>EditorInterface.get_open_scenes()</code></td></tr>
-<tr><td><code>node.find</code></td><td><code>find_nodes</code></td><td>By name, type, group, or property</td></tr>
-<tr><td><code>node.get_properties</code></td><td><code>get_node_properties</code></td><td><code>Object.get_property_list()</code> + values</td></tr>
-<tr><td><code>node.get_children</code></td><td><code>get_children</code></td><td>Direct children of a node path</td></tr>
-<tr><td><code>node.get_groups</code></td><td><code>get_groups</code></td><td><code>Node.get_groups()</code></td></tr>
-</table>
-
-<h4>Batch 3 &mdash; Project reads (Week 3&ndash;4)</h4>
-<table>
-<tr><th>Tool</th><th>Plugin handler</th><th>Notes</th></tr>
-<tr><td><code>project_settings.get</code></td><td><code>get_project_setting</code></td><td><code>ProjectSettings.get_setting()</code></td></tr>
-<tr><td><code>logs.read</code></td><td><code>get_logs</code></td><td>Ring buffer in plugin, last N lines</td></tr>
-<tr><td><code>filesystem.search</code></td><td><code>search_filesystem</code></td><td><code>EditorFileSystem</code> scan</td></tr>
-</table>
-
-<h4>Batch 4 &mdash; MCP Resources (Week 4)</h4>
-<table>
-<tr><th>Resource URI</th><th>Data source</th></tr>
-<tr><td><code>godot://sessions</code></td><td>Session registry</td></tr>
-<tr><td><code>godot://scene/current</code></td><td>Current scene path + root node</td></tr>
-<tr><td><code>godot://scene/hierarchy</code></td><td>Full tree (paginated)</td></tr>
-<tr><td><code>godot://selection/current</code></td><td>Selected nodes</td></tr>
-<tr><td><code>godot://project/info</code></td><td>Project name, Godot version, paths</td></tr>
-<tr><td><code>godot://project/settings</code></td><td>Common settings subset</td></tr>
-<tr><td><code>godot://logs/recent</code></td><td>Last 100 log lines</td></tr>
-</table>
-
-<h4>Batch 5 &mdash; Editor dock panel (Week 3&ndash;4)</h4>
-<p>Build a GUI dock panel for the Godot editor (like unity-mcp&rsquo;s MCP Console), added via <code>EditorPlugin.add_control_to_dock()</code>. This gives users visibility into MCP status without checking the Output panel.</p>
-<table>
-<tr><th>Component</th><th>Implementation</th><th>Notes</th></tr>
-<tr><td>Connection status</td><td>Green/red indicator + session ID</td><td>Updates on connect/disconnect</td></tr>
-<tr><td>Server info</td><td>Godot version, project path, plugin version</td><td>From handshake data</td></tr>
-<tr><td>MCP command log</td><td>Scrolling <code>RichTextLabel</code></td><td>Fed from existing <code>_log_buffer</code></td></tr>
-<tr><td>Logging toggle</td><td><code>CheckButton</code></td><td>Controls <code>mcp_logging</code> var</td></tr>
-<tr><td>Reconnect button</td><td><code>Button</code></td><td>Calls <code>_attempt_reconnect()</code></td></tr>
-</table>
-<p>Plugin file: <code>plugin/addons/godot_mcp_studio/mcp_dock.gd</code> (or <code>.tscn</code> + <code>.gd</code>)</p>
-<ul>
-<li>Created in <code>plugin.gd._enter_tree()</code>, added to bottom dock</li>
-<li>Polls <code>connection.gd</code> state each frame for status updates</li>
-<li>Log display auto-scrolls, capped at visible history</li>
-</ul>
-
-<h3>Pagination design</h3>
-<p>Large results (scene trees with 1000+ nodes, long log buffers) need pagination:</p>
-<ul>
-<li><code>offset</code> + <code>limit</code> parameters on relevant tools</li>
-<li>Default limit: 100 nodes / 50 log lines</li>
-<li>Response includes <code>total_count</code> and <code>has_more</code></li>
-</ul>
-
-<h3>Phase 1 exit criteria</h3>
-<ul class="checklist">
-<li>All Batch 1&ndash;4 tools implemented and tested</li>
-<li>Editor dock panel shows connection status and live MCP log</li>
-<li>Large scene trees (500+ nodes) paginate correctly</li>
-<li>MCP resources return fresh data on each read</li>
-<li>Manual test: connect Claude Desktop, ask it to describe the open scene &mdash; it can</li>
-<li>30+ passing tests</li>
-</ul>
-
-<hr>
-
-<h2>6. Phase 2: Safe Write Path (Weeks 4&ndash;7)</h2>
-
-<h3>Tool implementation order</h3>
-
-<h4>Batch 5 &mdash; Scene writes (Week 4&ndash;5)</h4>
-<table>
-<tr><th>Tool</th><th>Plugin handler</th><th>Undo?</th><th>Notes</th></tr>
-<tr><td><code>scene.create</code></td><td><code>create_scene</code></td><td>N/A</td><td>Creates + opens new scene</td></tr>
-<tr><td><code>scene.open</code></td><td><code>open_scene</code></td><td>N/A</td><td><code>EditorInterface.open_scene_from_path()</code></td></tr>
-<tr><td><code>scene.save</code></td><td><code>save_scene</code></td><td>N/A</td><td><code>EditorInterface.save_scene()</code></td></tr>
-<tr><td><code>scene.save_as</code></td><td><code>save_scene_as</code></td><td>N/A</td><td>Save to new path</td></tr>
-<tr><td><code>scene.close</code></td><td><code>close_scene</code></td><td>N/A</td><td>Close tab</td></tr>
-</table>
-
-<h4>Batch 6 &mdash; Node writes (Week 5&ndash;6)</h4>
-<table>
-<tr><th>Tool</th><th>Plugin handler</th><th>Undo?</th><th>Notes</th></tr>
-<tr><td><code>node.create</code></td><td><code>create_node</code></td><td>Yes</td><td>Type + parent path + name</td></tr>
-<tr><td><code>node.delete</code></td><td><code>delete_node</code></td><td>Yes</td><td>By node path</td></tr>
-<tr><td><code>node.reparent</code></td><td><code>reparent_node</code></td><td>Yes</td><td>Move node to new parent</td></tr>
-<tr><td><code>node.set_property</code></td><td><code>set_property</code></td><td>Yes</td><td>Simple types only in Phase 2</td></tr>
-<tr><td><code>node.duplicate</code></td><td><code>duplicate_node</code></td><td>Yes</td><td>Deep copy</td></tr>
-<tr><td><code>node.move</code></td><td><code>move_node</code></td><td>Yes</td><td>Reorder among siblings</td></tr>
-<tr><td><code>node.add_to_group</code></td><td><code>add_to_group</code></td><td>Yes</td><td><code>Node.add_to_group()</code></td></tr>
-<tr><td><code>node.remove_from_group</code></td><td><code>remove_from_group</code></td><td>Yes</td><td><code>Node.remove_from_group()</code></td></tr>
-<tr><td><code>editor.selection.set</code></td><td><code>set_selection</code></td><td>No</td><td>Select nodes by path</td></tr>
-</table>
-
-<h4>Batch 7 &mdash; Script and resource writes (Week 6&ndash;7)</h4>
-<table>
-<tr><th>Tool</th><th>Plugin handler</th><th>Undo?</th><th>Notes</th></tr>
-<tr><td><code>script.create</code></td><td><code>create_script</code></td><td>N/A</td><td>Write GDScript file to disk</td></tr>
-<tr><td><code>script.read</code></td><td><code>read_script</code></td><td>N/A</td><td>Read script contents</td></tr>
-<tr><td><code>script.attach</code></td><td><code>attach_script</code></td><td>Yes</td><td>Assign script to node</td></tr>
-<tr><td><code>script.detach</code></td><td><code>detach_script</code></td><td>Yes</td><td>Remove script from node</td></tr>
-<tr><td><code>script.find_symbols</code></td><td><code>find_symbols</code></td><td>N/A</td><td>Functions, signals, exports in a script</td></tr>
-<tr><td><code>resource.search</code></td><td><code>search_resources</code></td><td>N/A</td><td>By type, path pattern</td></tr>
-<tr><td><code>resource.load</code></td><td><code>load_resource</code></td><td>N/A</td><td>Inspect resource properties</td></tr>
-<tr><td><code>resource.assign</code></td><td><code>assign_resource</code></td><td>Yes</td><td>Set resource on a node property</td></tr>
-<tr><td><code>filesystem.read_text</code></td><td><code>read_file</code></td><td>N/A</td><td>Read any text file in project</td></tr>
-<tr><td><code>filesystem.write_text</code></td><td><code>write_file</code></td><td>N/A</td><td>Write + trigger reimport</td></tr>
-<tr><td><code>import.reimport</code></td><td><code>reimport</code></td><td>N/A</td><td>Force reimport of specific files</td></tr>
-</table>
-
-<h3>Undo integration pattern</h3>
-<p>Every undoable operation follows this GDScript pattern:</p>
-<pre><code>var undo_redo = get_undo_redo()  # EditorPlugin method
-undo_redo.create_action("MCP: Create Node")
-undo_redo.add_do_method(self, "_do_create_node", parent_path, node_type, node_name)
-undo_redo.add_undo_method(self, "_undo_create_node", parent_path, node_name)
-undo_redo.commit_action()</code></pre>
-
-<p>Non-undoable operations (file writes, scene open/close) document this in their tool response:</p>
-<pre><code>{"undoable": false, "reason": "File system operations cannot be undone via editor undo"}</code></pre>
-
-<h3>Readiness gating</h3>
-<p>All write tools check readiness before executing:</p>
-<ul>
-<li>If <code>importing</code>: reject with <code>EDITOR_NOT_READY</code> error</li>
-<li>If <code>playing</code>: allow only safe reads and <code>project.stop</code></li>
-<li>If <code>scene_switching</code>: queue and retry after scene load</li>
-</ul>
-
-<h3>Phase 2 exit criteria</h3>
-<ul class="checklist">
-<li>All Batch 5&ndash;7 tools implemented and tested</li>
-<li>Undo works for node operations (create, delete, reparent, set_property)</li>
-<li>Write operations are gated on readiness</li>
-<li>Manual test: ask Claude to create a scene with 5 nodes and a script &mdash; it can</li>
-<li>60+ passing tests</li>
-</ul>
-
-<hr>
-
-<h2>7. Phase 3: Godot-Native Depth (Weeks 7&ndash;10)</h2>
-
-<h3>Tools to implement</h3>
-
-<h4>Signals and project config</h4>
-<ul>
-<li><code>signal.list</code> &mdash; list signals on a node (including custom)</li>
-<li><code>signal.connect</code> &mdash; connect signal to method</li>
-<li><code>signal.disconnect</code> &mdash; disconnect signal</li>
-<li><code>autoload.list</code>, <code>autoload.add</code>, <code>autoload.remove</code></li>
-<li><code>input_map.list</code>, <code>input_map.add_action</code>, <code>input_map.remove_action</code>, <code>input_map.bind_event</code></li>
-<li><code>project_settings.set</code></li>
-<li><code>uid.get</code>, <code>uid.update</code></li>
-</ul>
-
-<h4>Runtime and diagnostics</h4>
-<ul>
-<li><code>project.run</code> &mdash; start the game (<code>EditorInterface.play_main_scene()</code> or <code>play_current_scene()</code>)</li>
-<li><code>project.stop</code> &mdash; stop the game (<code>EditorInterface.stop_playing_scene()</code>)</li>
-<li><code>logs.clear</code> &mdash; clear log buffer</li>
-<li><code>editor.screenshot</code> &mdash; viewport capture via <code>get_viewport().get_texture().get_image()</code></li>
-<li><code>editor.command.execute</code> &mdash; run editor commands by name</li>
-<li><code>performance.get_monitors</code> &mdash; <code>Performance.get_monitor()</code> values</li>
-</ul>
-
-<h4>Batch execution</h4>
-<ul>
-<li><code>batch.execute</code> &mdash; ordered execution of multiple commands with per-step results</li>
-<li>Optional undo grouping (all steps in one undo action)</li>
-<li>Partial failure: execute until first error, return results so far</li>
-</ul>
-
-<h4>Deferred from Phase 2</h4>
-<ul>
-<li><code>node.rename</code> &mdash; with UID/reference awareness</li>
-<li><code>node.set_property</code> &mdash; complex types (<code>Resource</code>, <code>NodePath</code>, <code>Array</code>, <code>Dictionary</code>)</li>
-<li><code>script.patch</code> &mdash; research spike: can we reliably patch GDScript? If not, document why and keep full-file writes.</li>
-</ul>
-
-<h4>Multi-instance support</h4>
-<ul>
-<li>Multiple Godot editors connected simultaneously</li>
-<li>Session selection UI or tool parameter</li>
-<li>Session metadata includes enough info to distinguish (project path, window title)</li>
-</ul>
-
-<h3>Phase 3 exit criteria</h3>
-<ul class="checklist">
-<li>Signal, autoload, input_map tools work</li>
-<li>Project run/stop cycle works reliably</li>
-<li>Batch execution handles partial failures</li>
-<li>Multi-instance: two Godot editors connected, commands route correctly</li>
-<li><code>script.patch</code> spike completed (shipped or documented as not viable)</li>
-<li>90+ passing tests</li>
-</ul>
-
-<hr>
-
-<h2>8. Phase 4: Hardening and Launch (Weeks 10&ndash;13)</h2>
-<p>Extended to 3 weeks (was 2) to account for solo developer + Godot learning curve.</p>
-
-<h3>Install flow polish</h3>
-<ul>
-<li>PyInstaller binaries for macOS (arm64 + x86_64), Windows, Linux</li>
-<li>GitHub Releases with checksums</li>
-<li>One-command plugin install: download + copy to addons</li>
-<li>Clear README with screenshots and quickstart video (or GIF)</li>
-</ul>
-
-<h3>Documentation</h3>
-<ul>
-<li><code>docs/install.md</code> &mdash; step-by-step install for each MCP client (Claude Desktop, Cursor, Windsurf, etc.)</li>
-<li><code>docs/tool-reference.md</code> &mdash; auto-generated from tool docstrings</li>
-<li><code>docs/protocol.md</code> &mdash; WebSocket protocol spec for plugin developers</li>
-<li><code>docs/compatibility.md</code> &mdash; Godot version matrix (4.3, 4.4, 4.5-dev)</li>
-<li><code>docs/contributor-guide.md</code> &mdash; how to add a new tool, test it, build the binary</li>
-</ul>
-
-<h3>CI pipeline</h3>
-<ul>
-<li>GitHub Actions:
-  <ul>
-    <li><code>test.yml</code>: run pytest on every push/PR</li>
-    <li><code>lint.yml</code>: ruff check + format</li>
-    <li><code>build.yml</code>: PyInstaller builds on tag (3 platforms)</li>
-    <li><code>e2e.yml</code>: headless Godot e2e tests (stretch goal)</li>
-  </ul>
-</li>
-</ul>
-
-<h3>Telemetry and diagnostics</h3>
-<ul>
-<li>Structured logging (JSON) with configurable verbosity</li>
-<li><code>cli/status</code> command: show connected sessions, server uptime, recent errors</li>
-<li><code>cli/test-connection</code> command: verify plugin can connect</li>
-<li>Optional anonymous usage telemetry (off by default, opt-in)</li>
-</ul>
-
-<h3>Compatibility testing</h3>
-<ul>
-<li>Test against Godot 4.3 stable, 4.4 stable</li>
-<li>Document any 4.3 limitations (no UID tools, etc.)</li>
-<li>Test with Claude Desktop, Cursor, and at least one other MCP client</li>
-</ul>
-
-<h3>Phase 4 exit criteria</h3>
-<ul class="checklist">
-<li>A new user can go from zero to working MCP in under 10 minutes</li>
-<li>Binaries available for macOS, Windows, Linux</li>
-<li>All docs written and accurate</li>
-<li>CI green on all platforms</li>
-<li>Compatibility matrix published</li>
-<li>GitHub repo has proper description, topics, and social preview image</li>
-</ul>
-
-<hr>
-
-<h2>9. GDScript Plugin Architecture</h2>
-
-<h3>File structure</h3>
-<pre><code>addons/godot_mcp_studio/
-&#x251C;&#x2500;&#x2500; plugin.cfg
-&#x251C;&#x2500;&#x2500; plugin.gd                 # EditorPlugin &#x2014; lifecycle, owns Connection + Dispatcher + Dock
-&#x251C;&#x2500;&#x2500; connection.gd             # WebSocketPeer wrapper &#x2014; connect, reconnect, send, receive
-&#x251C;&#x2500;&#x2500; mcp_dock.gd               # Editor dock panel &#x2014; status, log viewer, controls
-&#x251C;&#x2500;&#x2500; dispatcher.gd             # Command queue + frame-budget dispatch
-&#x251C;&#x2500;&#x2500; state/
-&#x2502;   &#x251C;&#x2500;&#x2500; session_state.gd      # Tracks session metadata, readiness
-&#x2502;   &#x2514;&#x2500;&#x2500; log_buffer.gd         # Ring buffer for output log capture
-&#x251C;&#x2500;&#x2500; handlers/
-&#x2502;   &#x251C;&#x2500;&#x2500; editor_handler.gd     # editor.state, selection, screenshot
-&#x2502;   &#x251C;&#x2500;&#x2500; scene_handler.gd      # scene.*, node.*
-&#x2502;   &#x251C;&#x2500;&#x2500; script_handler.gd     # script.*
-&#x2502;   &#x251C;&#x2500;&#x2500; resource_handler.gd   # resource.*, filesystem.*
-&#x2502;   &#x251C;&#x2500;&#x2500; project_handler.gd    # project.run/stop, project_settings.*, signals, autoloads
-&#x2502;   &#x2514;&#x2500;&#x2500; batch_handler.gd      # batch.execute
-&#x2514;&#x2500;&#x2500; utils/
-    &#x251C;&#x2500;&#x2500; serializer.gd         # Node/Resource &#x2192; Dictionary conversion
-    &#x2514;&#x2500;&#x2500; node_finder.gd        # find by name, type, group, path pattern</code></pre>
-
-<h3>Concurrency model (detail)</h3>
-<pre><code>WebSocket receive
-       &#x2502;
-       &#x25BC;
-   command_queue: Array[Dictionary]      &#x2190; append on receive, never block
-       &#x2502;
-       &#x25BC;
-   _process(delta)
-       &#x2502;
-       &#x251C;&#x2500; budget_ms = 4.0
-       &#x251C;&#x2500; start = Time.get_ticks_msec()
-       &#x2502;
-       &#x251C;&#x2500; while queue not empty AND elapsed &lt; budget_ms:
-       &#x2502;      command = queue.pop_front()
-       &#x2502;      result = dispatch(command)    &#x2190; call_deferred for tree mutations
-       &#x2502;      send_response(result)
-       &#x2502;
-       &#x2514;&#x2500; remaining commands wait for next frame</code></pre>
-
-<h4>Key rules</h4>
-<ol>
-<li>Never call <code>EditorInterface</code> methods directly from WebSocket callbacks &mdash; always queue.</li>
-<li>Scene tree mutations (<code>add_child</code>, <code>remove_child</code>, <code>reparent</code>) must use <code>call_deferred</code>.</li>
-<li>Long operations (filesystem scan, deep tree walk) must yield across frames using <code>await get_tree().process_frame</code>.</li>
-<li>Undo operations go through <code>EditorUndoRedoManager</code> (Godot 4.x), obtained via <code>get_undo_redo()</code>.</li>
-</ol>
-
-<h3>Plugin lifecycle</h3>
-<pre><code>_enter_tree():
-    1. Create Connection (WebSocket)
-    2. Create Dispatcher
-    3. Register handlers
-    4. Start connection attempt
-    5. Hook into editor signals:
-       - EditorInterface.get_edited_scene_root() change
-       - EditorPlugin.main_screen_changed
-       - EditorInterface play/stop signals
-
-_process(delta):
-    1. Connection.poll()           &#x2190; WebSocket needs manual polling in Godot
-    2. Dispatcher.tick(delta)      &#x2190; Drain command queue
-    3. LogBuffer.flush()           &#x2190; Forward captured output
-
-_exit_tree():
-    1. Disconnect WebSocket cleanly
-    2. Free resources</code></pre>
-
-<hr>
-
-<h2>10. PyInstaller Packaging Pipeline</h2>
-
-<h3>Build command</h3>
-<pre><code># From repo root
-pip install pyinstaller
-pyinstaller --onefile \
-    --name godot-mcp-studio \
-    --add-data "src/godot_mcp_studio:godot_mcp_studio" \
-    src/godot_mcp_studio/__main__.py</code></pre>
-
-<h3><code>__main__.py</code> entrypoint</h3>
-<pre><code>"""Godot MCP Studio - entry point for both development and packaged binary."""
-import sys
-from godot_mcp_studio.server import create_server
-
-def main():
-    server = create_server()
-    server.run()
-
-if __name__ == "__main__":
-    main()</code></pre>
-
-<h3>Platform matrix</h3>
-<table>
-<tr><th>Platform</th><th>Build env</th><th>Output</th><th>Notes</th></tr>
-<tr><td>macOS arm64</td><td>macOS runner</td><td><code>godot-mcp-studio</code></td><td>Primary dev platform</td></tr>
-<tr><td>macOS x86_64</td><td>macOS runner</td><td><code>godot-mcp-studio</code></td><td>For Intel Macs</td></tr>
-<tr><td>Windows</td><td>Windows runner</td><td><code>godot-mcp-studio.exe</code></td><td></td></tr>
-<tr><td>Linux x86_64</td><td>Ubuntu runner</td><td><code>godot-mcp-studio</code></td><td></td></tr>
-</table>
-
-<h3>GitHub Actions build workflow (sketch)</h3>
-<pre><code>name: Build Release
-on:
-  push:
-    tags: ['v*']
-
-jobs:
-  build:
-    strategy:
-      matrix:
-        os: [macos-latest, macos-13, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: pip install -e ".[build]"
-      - run: pyinstaller --onefile --name godot-mcp-studio src/godot_mcp_studio/__main__.py
-      - uses: actions/upload-artifact@v4
-        with:
-          name: godot-mcp-studio-${{ matrix.os }}
-          path: dist/godot-mcp-studio*</code></pre>
-
-<h3>Testing the binary</h3>
-<p>After build, verify:</p>
-<ol>
-<li>Binary starts without Python installed (test in clean Docker container or fresh VM)</li>
-<li><code>./godot-mcp-studio --version</code> prints version</li>
-<li><code>./godot-mcp-studio</code> starts MCP server and WebSocket listener</li>
-<li>Godot plugin can connect to the binary-launched server</li>
-<li>At least one MCP tool call roundtrips successfully</li>
-</ol>
-
-<hr>
-
-<h2>11. Must-Prove Milestones (Go/No-Go Gates)</h2>
-<p>These are points where you should honestly evaluate whether to continue, pivot, or adjust scope.</p>
-
-<div class="gate">
-<h4><span class="gate-label">Gate 1</span> Weekend spike (end of Day 2)</h4>
-<p><strong>Must prove:</strong> A real MCP tool call can travel from an AI client through the Python server, over WebSocket, to the Godot plugin, execute against the Godot editor API, and return a real response.</p>
-<p><strong>Go if:</strong> The full vertical works, even if janky.</p>
-<p><strong>No-go if:</strong> WebSocket communication with Godot&#x27;s <code>WebSocketPeer</code> is fundamentally broken or the editor plugin can&#x27;t access the APIs you need. Pivot: evaluate TCP socket or HTTP polling instead of WebSocket.</p>
-</div>
-
-<div class="gate">
-<h4><span class="gate-label">Gate 2</span> End of Phase 0 (Week 2)</h4>
-<p><strong>Must prove:</strong> The connection is reliable enough that you&#x27;re not fighting reconnects and protocol bugs every time you want to test a new tool.</p>
-<p><strong>Go if:</strong> You can open Godot, start the server, and interact via MCP inspector without things falling apart within 5 minutes.</p>
-<p><strong>No-go if:</strong> Connection reliability is consuming all your time. Pivot: simplify to HTTP request/response before investing in more tools.</p>
-</div>
-
-<div class="gate">
-<h4><span class="gate-label">Gate 3</span> End of Phase 1 (Week 4)</h4>
-<p><strong>Must prove:</strong> The read tools are actually useful. Claude can inspect a Godot project, understand its structure, and provide meaningful assistance.</p>
-<p><strong>Go if:</strong> You personally find it useful for your own Godot work. The &ldquo;describe this scene&rdquo; workflow feels magical.</p>
-<p><strong>No-go if:</strong> The tool responses are too noisy, too slow, or don&#x27;t give Claude enough context. Pivot: focus on response quality and tool design before adding write tools.</p>
-</div>
-
-<div class="gate">
-<h4><span class="gate-label">Gate 4</span> End of Phase 2 (Week 7)</h4>
-<p><strong>Must prove:</strong> Write operations are safe and reliable. Claude can create scenes, add nodes, and write scripts without corrupting the project.</p>
-<p><strong>Go if:</strong> You&#x27;d trust it to make changes in a project you care about (with undo available).</p>
-<p><strong>No-go if:</strong> Write operations are flaky, undo doesn&#x27;t work, or the readiness gating isn&#x27;t catching unsafe states. Pivot: reduce write scope further, invest in safety.</p>
-</div>
-
-<div class="gate">
-<h4><span class="gate-label">Gate 5</span> Pre-launch (Week 12)</h4>
-<p><strong>Must prove:</strong> A person who isn&#x27;t you can install it and use it successfully.</p>
-<p><strong>Go if:</strong> You hand the install instructions to someone and they get it working without your help.</p>
-<p><strong>No-go if:</strong> The install flow requires too much manual configuration or platform-specific debugging. Pivot: simplify distribution, add troubleshooting docs.</p>
-</div>
-
-<hr>
-
-<h2>12. Risk Register</h2>
-
-<div class="risk">
-<h4>R1: Godot learning curve</h4>
-<p class="risk-meta"><strong>Likelihood:</strong> Certain &nbsp;&middot;&nbsp; <strong>Impact:</strong> Medium &mdash; slows development, may lead to non-idiomatic plugin code</p>
-<p><strong>Mitigation:</strong></p>
-<ul>
-<li>Budget extra time in each phase (already reflected in timeline).</li>
-<li>Use Claude Code to accelerate Godot learning &mdash; ask it to explain APIs, review GDScript.</li>
-<li>Keep <code>test_project/</code> in repo &mdash; iterate quickly against a real project.</li>
-<li>Read the Godot <code>EditorPlugin</code> and <code>EditorInterface</code> docs before starting Track B.</li>
-</ul>
-</div>
-
-<div class="risk">
-<h4>R2: WebSocketPeer limitations in Godot</h4>
-<p class="risk-meta"><strong>Likelihood:</strong> Medium &nbsp;&middot;&nbsp; <strong>Impact:</strong> High if it blocks the core communication path</p>
-<p><strong>Mitigation:</strong></p>
-<ul>
-<li>The weekend spike specifically targets this risk.</li>
-<li>Fallback: TCP socket with JSON-line protocol (simpler, less feature-rich).</li>
-<li>Fallback: HTTP polling (worst performance, but guaranteed to work).</li>
-</ul>
-</div>
-
-<div class="risk">
-<h4>R3: Editor API gaps</h4>
-<p class="risk-meta"><strong>Likelihood:</strong> Medium &mdash; likely for some advanced operations &nbsp;&middot;&nbsp; <strong>Impact:</strong> Medium &mdash; limits specific tool capabilities</p>
-<p><strong>Mitigation:</strong></p>
-<ul>
-<li>Phase 1 read tools will quickly reveal API coverage gaps.</li>
-<li><code>code.execute</code> escape hatch for operations not covered by typed tools.</li>
-<li>Document gaps honestly in compatibility docs.</li>
-</ul>
-</div>
-
-<div class="risk">
-<h4>R4: GDScript performance for large scenes</h4>
-<p class="risk-meta"><strong>Likelihood:</strong> Low&ndash;Medium &nbsp;&middot;&nbsp; <strong>Impact:</strong> Medium &mdash; slow responses for large projects</p>
-<p><strong>Mitigation:</strong></p>
-<ul>
-<li>Pagination (already in design).</li>
-<li>Yielding across frames for large operations.</li>
-<li>GDExtension (C++) contingency for hot paths.</li>
-<li>Cache scene tree data, invalidate on change.</li>
-</ul>
-</div>
-
-<div class="risk">
-<h4>R5: PyInstaller packaging issues</h4>
-<p class="risk-meta"><strong>Likelihood:</strong> Medium &nbsp;&middot;&nbsp; <strong>Impact:</strong> Medium &mdash; doesn&#x27;t block development, but blocks easy distribution</p>
-<p><strong>Mitigation:</strong></p>
-<ul>
-<li>Phase 0.5 specifically spikes this early.</li>
-<li>Fallback: <code>pipx install</code> for users who have Python.</li>
-<li>Fallback: Docker image.</li>
-<li>Fallback: Nuitka or cx_Freeze as alternative packagers.</li>
-</ul>
-</div>
-
-<div class="risk">
-<h4>R6: Solo developer burnout</h4>
-<p class="risk-meta"><strong>Likelihood:</strong> Medium &nbsp;&middot;&nbsp; <strong>Impact:</strong> High &mdash; project stalls</p>
-<p><strong>Mitigation:</strong></p>
-<ul>
-<li>Go/no-go gates allow honest scope adjustment.</li>
-<li>Phase 1 alone (read tools) is a useful product &mdash; ship it if momentum stalls.</li>
-<li>Claude Code as AI pair significantly accelerates implementation.</li>
-<li>The weekend sprint creates early momentum and a working demo.</li>
-</ul>
-</div>
-
-<div class="risk">
-<h4>R7: Scope creep from the proposal</h4>
-<p class="risk-meta"><strong>Likelihood:</strong> Medium &nbsp;&middot;&nbsp; <strong>Impact:</strong> High &mdash; nothing ships</p>
-<p><strong>Mitigation:</strong></p>
-<ul>
-<li>This plan explicitly phases and defers tools.</li>
-<li>Phase 1 ships a useful read-only product.</li>
-<li>Phase 2 ships core writes.</li>
-<li>Everything else can wait for real user demand.</li>
-<li>Resist adding tools not in the current phase.</li>
-</ul>
-</div>
-
-<hr>
-
-<h2>Appendix: Quick Reference</h2>
-
-<h3>Key files to know</h3>
-<table>
-<tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>src/godot_mcp_studio/server.py</code></td><td>MCP server entrypoint</td></tr>
-<tr><td><code>src/godot_mcp_studio/transport/websocket.py</code></td><td>WebSocket server for Godot</td></tr>
-<tr><td><code>src/godot_mcp_studio/sessions/registry.py</code></td><td>Session tracking</td></tr>
-<tr><td><code>src/godot_mcp_studio/godot_client/client.py</code></td><td>Typed client for plugin commands</td></tr>
-<tr><td><code>plugin/addons/godot_mcp_studio/plugin.gd</code></td><td>Editor plugin main script</td></tr>
-<tr><td><code>plugin/addons/godot_mcp_studio/connection.gd</code></td><td>WebSocket client in GDScript</td></tr>
-<tr><td><code>plugin/addons/godot_mcp_studio/dispatcher.gd</code></td><td>Command queue + dispatch</td></tr>
-</table>
-
-<h3>Key commands</h3>
-<pre><code># Start dev server
-python -m godot_mcp_studio
-
-# Run tests
-pytest tests/
-
-# Build binary
-pyinstaller --onefile --name godot-mcp-studio src/godot_mcp_studio/__main__.py
-
-# Lint
-ruff check src/ tests/
-ruff format src/ tests/</code></pre>
-
-<h3>WebSocket protocol (summary)</h3>
-
-<h4>Handshake (plugin &rarr; server)</h4>
-<pre><code>{
-  "type": "handshake",
-  "session_id": "uuid",
-  "godot_version": "4.4.1",
-  "project_path": "/path/to/project",
-  "plugin_version": "0.0.1",
-  "protocol_version": 1
-}</code></pre>
-
-<h4>Command (server &rarr; plugin)</h4>
-<pre><code>{
-  "request_id": "uuid",
-  "command": "get_scene_tree",
-  "params": {"depth": 10}
-}</code></pre>
-
-<h4>Response (plugin &rarr; server)</h4>
-<pre><code>{
-  "request_id": "uuid",
-  "status": "ok",
-  "data": { ... }
-}</code></pre>
-
-<h4>Error response (plugin &rarr; server)</h4>
-<pre><code>{
-  "request_id": "uuid",
-  "status": "error",
-  "error": {
-    "code": "NODE_NOT_FOUND",
-    "message": "Node at path '/root/Main/Player' not found"
-  }
-}</code></pre>
 
   </main>
 </body>
