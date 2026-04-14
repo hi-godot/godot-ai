@@ -17,7 +17,7 @@ Prioritized ideas for assets that would make the landing page feel more polished
 ## Priority 3
 
 - Multi-session GIF: two Godot editors connected, then active-session switching.
-- Test runner GIF: `run_tests` from an MCP client, followed by structured results.
+- Test runner GIF: `test_run` from an MCP client, followed by structured results.
 - Filesystem search screenshot: example query and paginated results for `filesystem_search`.
 
 ## Notes

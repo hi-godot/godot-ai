@@ -67,7 +67,7 @@ http://127.0.0.1:8000/mcp
 | `editor_state` | Read Godot version, project name, current scene, and play state |
 | `editor_selection_get` | Read the current editor selection |
 | `logs_read` | Read recent MCP log lines from the editor |
-| `reload_plugin` | Reload the Godot editor plugin and wait for reconnect |
+| `editor_reload_plugin` | Reload the Godot editor plugin and wait for reconnect |
 
 ### Scene and Nodes
 
@@ -87,8 +87,8 @@ http://127.0.0.1:8000/mcp
 |------|-------------|
 | `project_settings_get` | Read a Godot project setting by key |
 | `filesystem_search` | Search project files by name, type, or path |
-| `run_tests` | Run GDScript test suites inside the editor |
-| `get_test_results` | Read the most recent test results without rerunning |
+| `test_run` | Run GDScript test suites inside the editor |
+| `test_results_get` | Read the most recent test results without rerunning |
 
 ### Client Setup
 

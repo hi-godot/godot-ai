@@ -23,7 +23,7 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 - [x] Phase 1 read surface shipped
 - [x] Phase 2 safe write surface shipped
 - [x] Core Godot-native config tools shipped: `signal.*`, `autoload.*`, `input_map.*`, `project_settings.set`
-- [x] Godot-side test harness and `run_tests` / `get_test_results` shipped
+- [x] Godot-side test harness and `test_run` / `test_results_get` shipped
 - [x] Readiness gating and undo integration are in place for the current write surface
 - [x] Runtime feedback loop: `project.run`/`project.stop`, `editor.screenshot`, `performance.get_monitors`, `logs.clear`
 - [ ] Runtime iteration loop is complete enough for AI-driven feel tuning
