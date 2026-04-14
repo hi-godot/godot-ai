@@ -6,10 +6,11 @@ from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import filesystem as filesystem_handlers
 from godot_ai.runtime.direct import DirectRuntime
+from godot_ai.tools import DEFER_META
 
 
 def register_filesystem_tools(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def filesystem_read_text(ctx: Context, path: str) -> dict:
         """Read a text file from the Godot project.
 
@@ -22,7 +23,7 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await filesystem_handlers.filesystem_read_text(runtime, path=path)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def filesystem_write_text(
         ctx: Context,
         path: str,
@@ -45,9 +46,9 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
             content=content,
         )
 
-    @mcp.tool()
-    async def import_reimport(ctx: Context, paths: list[str]) -> dict:
-        """Force reimport of specific files in the Godot project.
+    @mcp.tool(meta=DEFER_META)
+    async def filesystem_reimport(ctx: Context, paths: list[str]) -> dict:
+        """Force reimport of specific files / assets in the Godot project.
 
         Triggers EditorFileSystem.update_file() for each path, which
         forces the editor to re-scan and reimport the files. Useful
@@ -57,4 +58,35 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
             paths: List of file paths to reimport (e.g. ["res://textures/icon.png"]).
         """
         runtime = DirectRuntime.from_context(ctx)
-        return await filesystem_handlers.import_reimport(runtime, paths=paths)
+        return await filesystem_handlers.filesystem_reimport(runtime, paths=paths)
+
+    @mcp.tool(meta=DEFER_META)
+    async def filesystem_search(
+        ctx: Context,
+        name: str = "",
+        type: str = "",
+        path: str = "",
+        offset: int = 0,
+        limit: int = 100,
+    ) -> dict:
+        """Search the Godot project filesystem via EditorFileSystem.
+
+        Finds files by name, resource type, or path pattern. At least one
+        filter must be provided. Results are paginated.
+
+        Args:
+            name: Filter by filename (case-insensitive substring match).
+            type: Filter by resource type (e.g. "PackedScene", "GDScript", "Texture2D").
+            path: Filter by path (case-insensitive substring match).
+            offset: Number of results to skip. Default 0.
+            limit: Maximum number of results to return. Default 100.
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await filesystem_handlers.filesystem_search(
+            runtime,
+            name=name,
+            type=type,
+            path=path,
+            offset=offset,
+            limit=limit,
+        )

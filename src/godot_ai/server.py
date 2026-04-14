@@ -66,8 +66,29 @@ def create_server(ws_port: int = 9500) -> FastMCP:
 
     mcp = FastMCP(
         "Godot AI",
-        instructions="Production-grade Godot MCP server with persistent editor integration. "
-        "Use session tools to manage connections to Godot editor instances.",
+        instructions=(
+            "Production-grade Godot MCP server with persistent editor integration.\n\n"
+            "Tool categories (namespace prefixes — useful for tool-search queries):\n"
+            "  session_*        — list and activate connected editor sessions\n"
+            "  editor_*         — editor state, selection, screenshot, logs, quit, reload plugin\n"
+            "  scene_*          — open/save scenes (levels/maps), inspect the scene tree\n"
+            "  node_*           — create, inspect, modify, duplicate, group, reparent nodes\n"
+            "  script_*         — create, read, attach, detach, outline GDScript files\n"
+            "  resource_*       — search, load, assign resources (assets: meshes, textures, etc.)\n"
+            "  signal_*         — list, connect, disconnect node signals (events / callbacks)\n"
+            "  input_map_*      — manage input actions (keybindings, keyboard/mouse/gamepad)\n"
+            "  autoload_*       — manage autoload singletons (global scripts)\n"
+            "  project_*        — run/stop the game, read/write project settings\n"
+            "  filesystem_*     — read/write text files, search assets, reimport\n"
+            "  performance_*    — FPS, memory, draw calls, and other runtime metrics\n"
+            "  logs_*           — read or clear the editor log buffer\n"
+            "  test_*           — run GDScript test suites and fetch results\n"
+            "  batch_execute    — compose multi-step scene edits atomically\n"
+            "  client_*         — configure AI clients (Claude Code, Codex, Antigravity)\n\n"
+            "Always connect to an editor session first (session_list / session_activate). "
+            "Write operations require session readiness; check editor_state if a call is "
+            "rejected as 'not writable'."
+        ),
         lifespan=_lifespan,
     )
 

@@ -6,10 +6,11 @@ from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import client as client_handlers
 from godot_ai.runtime.direct import DirectRuntime
+from godot_ai.tools import DEFER_META
 
 
 def register_client_tools(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def client_configure(ctx: Context, client: str) -> dict:
         """Configure an AI client to connect to the Godot AI server.
 
@@ -22,7 +23,7 @@ def register_client_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await client_handlers.client_configure(runtime, client=client)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def client_status(ctx: Context) -> dict:
         """Check which AI clients are configured to use Godot AI.
 

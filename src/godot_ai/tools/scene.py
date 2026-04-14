@@ -6,6 +6,7 @@ from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import scene as scene_handlers
 from godot_ai.runtime.direct import DirectRuntime
+from godot_ai.tools import DEFER_META
 
 
 def register_scene_tools(mcp: FastMCP) -> None:
@@ -16,7 +17,7 @@ def register_scene_tools(mcp: FastMCP) -> None:
         offset: int = 0,
         limit: int = 100,
     ) -> dict:
-        """Get the scene tree hierarchy from the currently open scene.
+        """Get the scene tree hierarchy (nodes / game objects) from the open scene (level / map).
 
         Returns a paginated flat list of nodes with name, type, path,
         and child count. Walks the tree up to the specified depth.
@@ -34,7 +35,7 @@ def register_scene_tools(mcp: FastMCP) -> None:
             limit=limit,
         )
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def scene_get_roots(ctx: Context) -> dict:
         """Get all scenes currently open in the Godot editor.
 
@@ -44,13 +45,13 @@ def register_scene_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await scene_handlers.scene_get_roots(runtime)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def scene_create(
         ctx: Context,
         path: str,
         root_type: str = "Node3D",
     ) -> dict:
-        """Create a new scene file and open it in the editor.
+        """Create a new scene file (level / map / prefab .tscn) and open it in the editor.
 
         Creates a scene with the specified root node type, saves it to
         disk, and opens it for editing.
@@ -62,9 +63,9 @@ def register_scene_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await scene_handlers.scene_create(runtime, path=path, root_type=root_type)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def scene_open(ctx: Context, path: str) -> dict:
-        """Open an existing scene file in the editor.
+        """Open (load) an existing scene file (level / .tscn) in the editor.
 
         Args:
             path: File path of the scene to open (e.g. "res://main.tscn").
@@ -72,13 +73,13 @@ def register_scene_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await scene_handlers.scene_open(runtime, path=path)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def scene_save(ctx: Context) -> dict:
         """Save the currently edited scene to disk."""
         runtime = DirectRuntime.from_context(ctx)
         return await scene_handlers.scene_save(runtime)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def scene_save_as(ctx: Context, path: str) -> dict:
         """Save the currently edited scene to a new file path.
 

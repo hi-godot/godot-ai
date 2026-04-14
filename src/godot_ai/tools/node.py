@@ -6,17 +6,18 @@ from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import node as node_handlers
 from godot_ai.runtime.direct import DirectRuntime
+from godot_ai.tools import DEFER_META
 
 
 def register_node_tools(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def node_create(
         ctx: Context,
         type: str,
         name: str = "",
         parent_path: str = "",
     ) -> dict:
-        """Create a new node in the scene tree.
+        """Create (spawn / add) a new node (game object / entity) in the scene tree.
 
         Creates a node of the given type and adds it as a child of the
         specified parent. If no parent is given, adds to the scene root.
@@ -35,7 +36,7 @@ def register_node_tools(mcp: FastMCP) -> None:
             parent_path=parent_path,
         )
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def node_find(
         ctx: Context,
         name: str = "",
@@ -79,7 +80,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await node_handlers.node_get_properties(runtime, path=path)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def node_get_children(ctx: Context, path: str) -> dict:
         """Get the direct children of a node.
 
@@ -92,7 +93,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await node_handlers.node_get_children(runtime, path=path)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def node_get_groups(ctx: Context, path: str) -> dict:
         """Get the groups a node belongs to.
 
@@ -104,7 +105,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await node_handlers.node_get_groups(runtime, path=path)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def node_delete(ctx: Context, path: str) -> dict:
         """Delete a node from the scene tree.
 
@@ -117,7 +118,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await node_handlers.node_delete(runtime, path=path)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def node_reparent(
         ctx: Context,
         path: str,
@@ -135,7 +136,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await node_handlers.node_reparent(runtime, path=path, new_parent=new_parent)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def node_set_property(
         ctx: Context,
         path: str,
@@ -158,13 +159,13 @@ def register_node_tools(mcp: FastMCP) -> None:
             runtime, path=path, property=property, value=value,
         )
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def node_duplicate(
         ctx: Context,
         path: str,
         name: str = "",
     ) -> dict:
-        """Duplicate a node and all its children.
+        """Duplicate (clone / copy) a node and all its children.
 
         Creates a deep copy of the node and adds it as a sibling.
         Cannot duplicate the scene root.
@@ -176,7 +177,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await node_handlers.node_duplicate(runtime, path=path, name=name)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def node_move(
         ctx: Context,
         path: str,
@@ -194,7 +195,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await node_handlers.node_move(runtime, path=path, index=index)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def node_add_to_group(
         ctx: Context,
         path: str,
@@ -212,7 +213,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await node_handlers.node_add_to_group(runtime, path=path, group=group)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def node_remove_from_group(
         ctx: Context,
         path: str,
@@ -227,19 +228,3 @@ def register_node_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await node_handlers.node_remove_from_group(runtime, path=path, group=group)
 
-    @mcp.tool()
-    async def editor_selection_set(
-        ctx: Context,
-        paths: list[str],
-    ) -> dict:
-        """Select nodes in the Godot editor by their scene paths.
-
-        Replaces the current selection with the specified nodes. Any
-        paths that don't resolve to existing nodes are reported in
-        the not_found list.
-
-        Args:
-            paths: List of scene paths to select (e.g. ["/Main/Camera3D", "/Main/Player"]).
-        """
-        runtime = DirectRuntime.from_context(ctx)
-        return await node_handlers.editor_selection_set(runtime, paths=paths)

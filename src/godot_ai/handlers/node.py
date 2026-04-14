@@ -94,8 +94,3 @@ async def node_remove_from_group(runtime: Runtime, path: str, group: str) -> dic
         {"path": path, "group": group},
     )
 
-
-async def editor_selection_set(runtime: Runtime, paths: list[str]) -> dict:
-    require_writable(runtime)
-    return await runtime.send_command("set_selection", {"paths": paths})
-

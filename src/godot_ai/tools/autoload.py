@@ -6,12 +6,13 @@ from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import autoload as autoload_handlers
 from godot_ai.runtime.direct import DirectRuntime
+from godot_ai.tools import DEFER_META
 
 
 def register_autoload_tools(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def autoload_list(ctx: Context) -> dict:
-        """List all registered autoload singletons.
+        """List all registered autoload singletons (global scripts / scenes accessible by name).
 
         Returns each autoload's name, script/scene path, and whether
         it's a singleton (accessible via name globally).
@@ -19,7 +20,7 @@ def register_autoload_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await autoload_handlers.autoload_list(runtime)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def autoload_add(
         ctx: Context,
         name: str,
@@ -41,7 +42,7 @@ def register_autoload_tools(mcp: FastMCP) -> None:
             runtime, name=name, path=path, singleton=singleton
         )
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def autoload_remove(ctx: Context, name: str) -> dict:
         """Remove an autoload singleton from the project.
 

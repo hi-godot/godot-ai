@@ -6,12 +6,13 @@ from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import input_map as input_map_handlers
 from godot_ai.runtime.direct import DirectRuntime
+from godot_ai.tools import DEFER_META
 
 
 def register_input_map_tools(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def input_map_list(ctx: Context, include_builtin: bool = False) -> dict:
-        """List all input actions and their bound events.
+        """List all input actions (keybindings / control mappings) and their bound events.
 
         By default returns only project-defined actions. Set
         include_builtin=true to also include Godot's built-in ui_*
@@ -23,13 +24,13 @@ def register_input_map_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await input_map_handlers.input_map_list(runtime, include_builtin=include_builtin)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def input_map_add_action(
         ctx: Context,
         action: str,
         deadzone: float = 0.5,
     ) -> dict:
-        """Create a new input action.
+        """Create a new input action (named keybinding / control slot like "jump" or "move_left").
 
         Adds an empty input action that can have events bound to it.
         Saved to project.godot.
@@ -43,7 +44,7 @@ def register_input_map_tools(mcp: FastMCP) -> None:
             runtime, action=action, deadzone=deadzone
         )
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def input_map_remove_action(ctx: Context, action: str) -> dict:
         """Remove an input action and all its bindings.
 
@@ -55,7 +56,7 @@ def register_input_map_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await input_map_handlers.input_map_remove_action(runtime, action=action)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def input_map_bind_event(
         ctx: Context,
         action: str,
@@ -67,10 +68,9 @@ def register_input_map_tools(mcp: FastMCP) -> None:
         meta: bool = False,
         button: int | None = None,
     ) -> dict:
-        """Bind an input event to an action.
+        """Bind keyboard / mouse / gamepad input to an action (configure controls / keybindings).
 
-        Adds a key press, mouse button, or gamepad button to an existing
-        action. Saved to project.godot.
+        Adds the event to an existing action. Saved to project.godot.
 
         Args:
             action: Name of the action to bind to.

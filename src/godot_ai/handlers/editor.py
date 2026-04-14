@@ -9,6 +9,7 @@ import logging
 from fastmcp.tools.base import Image as McpImage
 from mcp.types import TextContent
 
+from godot_ai.handlers._readiness import require_writable
 from godot_ai.runtime.interface import Runtime
 from godot_ai.sessions.registry import Session
 from godot_ai.tools._pagination import paginate
@@ -123,7 +124,7 @@ async def editor_screenshot(
     ]
 
 
-async def performance_get_monitors(
+async def performance_monitors_get(
     runtime: Runtime, monitors: list[str] | None = None
 ) -> dict:
     params: dict = {}
@@ -156,7 +157,7 @@ def _find_replacement_session(
     return None
 
 
-async def reload_plugin(runtime: Runtime) -> dict:
+async def editor_reload_plugin(runtime: Runtime) -> dict:
     active = runtime.get_active_session()
     if active is None:
         raise ConnectionError("No active Godot session")
@@ -188,6 +189,11 @@ async def reload_plugin(runtime: Runtime) -> dict:
 
 async def editor_quit(runtime: Runtime) -> dict:
     return await runtime.send_command("quit_editor")
+
+
+async def editor_selection_set(runtime: Runtime, paths: list[str]) -> dict:
+    require_writable(runtime)
+    return await runtime.send_command("set_selection", {"paths": paths})
 
 
 async def selection_resource_data(runtime: Runtime) -> dict:

@@ -1,4 +1,4 @@
-"""MCP tools for project settings and filesystem search."""
+"""MCP tools for project settings and run/stop."""
 
 from __future__ import annotations
 
@@ -8,16 +8,17 @@ from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import project as project_handlers
 from godot_ai.runtime.direct import DirectRuntime
+from godot_ai.tools import DEFER_META
 
 
 def register_project_tools(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def project_run(
         ctx: Context,
         mode: str = "main",
         scene: str = "",
     ) -> dict:
-        """Run the Godot project from the editor.
+        """Run (play / start) the Godot project (game) from the editor.
 
         Starts the game in one of three modes:
         - "main": Run the project's main scene (default).
@@ -31,9 +32,9 @@ def register_project_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await project_handlers.project_run(runtime, mode=mode, scene=scene)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def project_stop(ctx: Context) -> dict:
-        """Stop the running Godot project.
+        """Stop (halt / exit) the running Godot project (game).
 
         Stops the currently playing scene. Returns an error if the project
         is not running.
@@ -41,7 +42,7 @@ def register_project_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await project_handlers.project_stop(runtime)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def project_settings_get(ctx: Context, key: str) -> dict:
         """Get a Godot project setting by key.
 
@@ -54,7 +55,7 @@ def register_project_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await project_handlers.project_settings_get(runtime, key=key)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def project_settings_set(
         ctx: Context,
         key: str,
@@ -73,33 +74,3 @@ def register_project_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await project_handlers.project_settings_set(runtime, key=key, value=value)
 
-    @mcp.tool()
-    async def filesystem_search(
-        ctx: Context,
-        name: str = "",
-        type: str = "",
-        path: str = "",
-        offset: int = 0,
-        limit: int = 100,
-    ) -> dict:
-        """Search the Godot project filesystem via EditorFileSystem.
-
-        Finds files by name, resource type, or path pattern. At least one
-        filter must be provided. Results are paginated.
-
-        Args:
-            name: Filter by filename (case-insensitive substring match).
-            type: Filter by resource type (e.g. "PackedScene", "GDScript", "Texture2D").
-            path: Filter by path (case-insensitive substring match).
-            offset: Number of results to skip. Default 0.
-            limit: Maximum number of results to return. Default 100.
-        """
-        runtime = DirectRuntime.from_context(ctx)
-        return await project_handlers.filesystem_search(
-            runtime,
-            name=name,
-            type=type,
-            path=path,
-            offset=offset,
-            limit=limit,
-        )
