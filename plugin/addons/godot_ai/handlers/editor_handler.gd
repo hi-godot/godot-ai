@@ -214,6 +214,11 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 			RenderingServer.camera_set_perspective(cam_rid, saved_fov, saved_near, saved_far)
 			RenderingServer.camera_set_transform(cam_rid, saved_xform)
 
+			## Consistent with single-shot path: error if no frames rendered
+			## (e.g. headless mode where force_draw produces no output).
+			if images.is_empty():
+				return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Coverage sweep rendered no images")
+
 			var aabb_center := combined_aabb.get_center()
 			var aabb_size := combined_aabb.size
 			var result_data := {
