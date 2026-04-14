@@ -65,7 +65,7 @@ def register_input_map_tools(mcp: FastMCP) -> None:
         alt: bool = False,
         shift: bool = False,
         meta: bool = False,
-        button: int = 0,
+        button: int | None = None,
     ) -> dict:
         """Bind an input event to an action.
 
@@ -80,7 +80,8 @@ def register_input_map_tools(mcp: FastMCP) -> None:
             alt: Require Alt modifier (key events only).
             shift: Require Shift modifier (key events only).
             meta: Require Meta/Cmd modifier (key events only).
-            button: Button index for mouse_button (1=left, 2=right) or joy_button events.
+            button: Button index for mouse_button (1=left, 2=right) or
+                joy_button (0=A/Cross) events. Required for non-key events.
         """
         runtime = DirectRuntime.from_context(ctx)
         kwargs = {}
@@ -94,7 +95,7 @@ def register_input_map_tools(mcp: FastMCP) -> None:
             kwargs["shift"] = shift
         if meta:
             kwargs["meta"] = meta
-        if event_type in ("mouse_button", "joy_button"):
+        if button is not None:
             kwargs["button"] = button
         return await input_map_handlers.input_map_bind_event(
             runtime, action=action, event_type=event_type, **kwargs

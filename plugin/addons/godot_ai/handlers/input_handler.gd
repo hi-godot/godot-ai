@@ -75,7 +75,12 @@ func remove_action(params: Dictionary) -> Dictionary:
 		ProjectSettings.clear(key)
 		var err := ProjectSettings.save()
 		if err != OK:
-			InputMap.add_action(action)
+			var dz: float = old_setting.get("deadzone", 0.5) if old_setting is Dictionary else 0.5
+			InputMap.add_action(action, dz)
+			if old_setting is Dictionary:
+				for ev in old_setting.get("events", []):
+					if ev is InputEvent:
+						InputMap.action_add_event(action, ev)
 			ProjectSettings.set_setting(key, old_setting)
 			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to save project settings (error %d)" % err)
 
@@ -188,13 +193,19 @@ func _save_action_events(action: String) -> int:
 	for event in InputMap.action_get_events(action):
 		events.append(event)
 	var key := "input/%s" % action
+	var had_setting := ProjectSettings.has_setting(key)
+	var old_setting = ProjectSettings.get_setting(key) if had_setting else null
 	var deadzone: float = 0.5
-	if ProjectSettings.has_setting(key):
-		var existing = ProjectSettings.get_setting(key)
-		if existing is Dictionary:
-			deadzone = existing.get("deadzone", 0.5)
+	if old_setting is Dictionary:
+		deadzone = old_setting.get("deadzone", 0.5)
 	ProjectSettings.set_setting(key, {
 		"deadzone": deadzone,
 		"events": events,
 	})
-	return ProjectSettings.save()
+	var err := ProjectSettings.save()
+	if err != OK:
+		if had_setting:
+			ProjectSettings.set_setting(key, old_setting)
+		else:
+			ProjectSettings.clear(key)
+	return err
