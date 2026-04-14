@@ -83,8 +83,9 @@ const MONITORS := {
 
 
 ## Compute coverage angles from the target's AABB geometry.
-## Establishing shot faces the longest ground axis; complementary rotates ~100°.
-## Orthographic top-down is always included for spatial layout.
+## Returns an establishing perspective shot (faces the longest ground axis)
+## and an orthographic top-down for spatial layout. The AI iterates from
+## there with explicit elevation/azimuth/fov for closeups and detail shots.
 func _compute_coverage_angles(aabb: AABB) -> Array[Dictionary]:
 	var size := aabb.size
 	var ground_x := maxf(size.x, 0.01)
@@ -290,8 +291,10 @@ func _finalize_image(image: Image, source: String, max_resolution: int) -> Dicti
 		var longest := maxi(original_width, original_height)
 		if longest > max_resolution:
 			var scale := float(max_resolution) / float(longest)
-			var new_w := int(original_width * scale)
-			var new_h := int(original_height * scale)
+			## Clamp to 1px min: extreme aspect ratios at very small max_resolution
+			## could otherwise compute a zero dimension and crash image.resize().
+			var new_w := maxi(1, int(original_width * scale))
+			var new_h := maxi(1, int(original_height * scale))
 			image.resize(new_w, new_h, Image.INTERPOLATE_LANCZOS)
 
 	var img_bytes := image.save_png_to_buffer()

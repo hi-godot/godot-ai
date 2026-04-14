@@ -71,10 +71,11 @@ def register_editor_tools(mcp: FastMCP) -> None:
         ImageContent block that vision-capable AI models can analyze directly.
         When False, returns only metadata (dimensions, format).
 
-        When view_target is provided, a temporary camera is positioned to
-        frame the specified Node3D. The editor's own camera is not affected.
-        Response always includes AABB geometry metadata (center, size,
-        longest ground axis) for planning follow-up shots.
+        When view_target is provided, the editor's 3D viewport camera is
+        temporarily repositioned to frame the specified Node3D, then restored
+        after capture. This may cause a brief visible camera change in the
+        viewport. Response always includes AABB geometry metadata (center,
+        size, longest ground axis) for planning follow-up shots.
 
         Recommended workflow for 3D subjects:
         1. Call with coverage=True to get reference shots + AABB metadata.

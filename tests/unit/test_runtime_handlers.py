@@ -346,7 +346,7 @@ class StubClient:
             )
             img_b64 = base64.b64encode(one_px_png).decode()
 
-            # Coverage response: return 3 images
+            # Coverage response: return 2 reference shots (establishing + top)
             if params.get("coverage") and params.get("view_target"):
                 presets = [
                     {"label": "establishing", "elevation": 25.0,
