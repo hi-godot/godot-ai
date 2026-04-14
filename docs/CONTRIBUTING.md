@@ -24,9 +24,9 @@ ruff format src/ tests/      # format
 GDScript test suites run inside the connected editor via MCP:
 
 ```
-run_tests                    # run all suites
-run_tests suite=scene        # run one suite
-get_test_results             # review last results
+test_run                     # run all suites
+test_run suite=scene         # run one suite
+test_results_get             # review last results
 ```
 
 ## Dev Server with Auto-Reload
