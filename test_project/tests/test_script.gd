@@ -80,6 +80,113 @@ func test_create_script_wrong_extension() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
+# ----- patch_script -----
+
+func test_patch_script_basic() -> void:
+	var path := "res://tests/_mcp_test_patch.gd"
+	var original := "extends Node\n\nvar speed = 5\n"
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(original)
+	file.close()
+
+	var result := _handler.patch_script({
+		"path": path,
+		"old_text": "speed = 5",
+		"new_text": "speed = 10",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.replacements, 1)
+	assert_false(result.data.undoable)
+
+	var read := FileAccess.open(path, FileAccess.READ)
+	var new_content := read.get_as_text()
+	read.close()
+	assert_contains(new_content, "speed = 10")
+	DirAccess.remove_absolute(path)
+
+
+func test_patch_script_no_match() -> void:
+	var result := _handler.patch_script({
+		"path": TEST_SCRIPT_PATH,
+		"old_text": "this_does_not_exist_anywhere",
+		"new_text": "whatever",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_patch_script_ambiguous_match_without_replace_all() -> void:
+	var path := "res://tests/_mcp_test_patch_ambig.gd"
+	var original := "var x = 1\nvar y = 1\n"
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(original)
+	file.close()
+
+	var result := _handler.patch_script({
+		"path": path,
+		"old_text": "= 1",
+		"new_text": "= 2",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	DirAccess.remove_absolute(path)
+
+
+func test_patch_script_replace_all() -> void:
+	var path := "res://tests/_mcp_test_patch_all.gd"
+	var original := "foo()\nfoo()\nfoo()\n"
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(original)
+	file.close()
+
+	var result := _handler.patch_script({
+		"path": path,
+		"old_text": "foo",
+		"new_text": "bar",
+		"replace_all": true,
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.replacements, 3)
+
+	var read := FileAccess.open(path, FileAccess.READ)
+	var new_content := read.get_as_text()
+	read.close()
+	assert_eq(new_content, "bar()\nbar()\nbar()\n")
+	DirAccess.remove_absolute(path)
+
+
+func test_patch_script_missing_old_text() -> void:
+	var result := _handler.patch_script({
+		"path": TEST_SCRIPT_PATH,
+		"new_text": "x",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_patch_script_missing_new_text() -> void:
+	var result := _handler.patch_script({
+		"path": TEST_SCRIPT_PATH,
+		"old_text": "speed",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_patch_script_file_not_found() -> void:
+	var result := _handler.patch_script({
+		"path": "res://does/not/exist.gd",
+		"old_text": "x",
+		"new_text": "y",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_patch_script_invalid_prefix() -> void:
+	var result := _handler.patch_script({
+		"path": "/tmp/bad.gd",
+		"old_text": "x",
+		"new_text": "y",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
 # ----- read_script -----
 
 func test_read_script_basic() -> void:

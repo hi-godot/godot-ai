@@ -502,6 +502,42 @@ class TestNodeSetPropertyTool:
 
 
 # ---------------------------------------------------------------------------
+# node_rename
+# ---------------------------------------------------------------------------
+
+
+class TestNodeRenameTool:
+    async def test_rename_node(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "rename_node"
+            assert cmd["params"] == {"path": "/Main/Player", "new_name": "Hero"}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Hero",
+                    "old_path": "/Main/Player",
+                    "name": "Hero",
+                    "old_name": "Player",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "node_rename", {"path": "/Main/Player", "new_name": "Hero"}
+        )
+        await task
+
+        assert result.data["name"] == "Hero"
+        assert result.data["old_name"] == "Player"
+        assert result.data["path"] == "/Main/Hero"
+        assert result.data["undoable"] is True
+
+
+# ---------------------------------------------------------------------------
 # node_duplicate
 # ---------------------------------------------------------------------------
 
@@ -1050,6 +1086,50 @@ class TestScriptCreateTool:
         await task
 
         assert result.data["path"] == "res://scripts/player.gd"
+        assert result.data["undoable"] is False
+
+
+# ---------------------------------------------------------------------------
+# script_patch
+# ---------------------------------------------------------------------------
+
+
+class TestScriptPatchTool:
+    async def test_patch_script(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "patch_script"
+            assert cmd["params"] == {
+                "path": "res://scripts/player.gd",
+                "old_text": "speed = 5",
+                "new_text": "speed = 10",
+                "replace_all": False,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://scripts/player.gd",
+                    "replacements": 1,
+                    "size": 120,
+                    "old_size": 119,
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "script_patch",
+            {
+                "path": "res://scripts/player.gd",
+                "old_text": "speed = 5",
+                "new_text": "speed = 10",
+            },
+        )
+        await task
+
+        assert result.data["replacements"] == 1
         assert result.data["undoable"] is False
 
 

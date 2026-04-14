@@ -30,6 +30,43 @@ def register_script_tools(mcp: FastMCP) -> None:
         return await script_handlers.script_create(runtime, path=path, content=content)
 
     @mcp.tool(meta=DEFER_META)
+    async def script_patch(
+        ctx: Context,
+        path: str,
+        old_text: str,
+        new_text: str,
+        replace_all: bool = False,
+    ) -> dict:
+        """Patch (partial edit / string-replace) a GDScript file in place.
+
+        Anchor-based edit: finds an exact occurrence of `old_text` in the file
+        and replaces it with `new_text`. Use this instead of `script_create`
+        when you only need to change a function, add a signal, or fix a line —
+        it avoids rewriting (and possibly losing) the rest of the file.
+
+        If `old_text` matches multiple places, the call fails unless
+        `replace_all=true` is passed. If it matches zero places, the call
+        fails. Exact byte match — whitespace is significant.
+
+        Triggers a filesystem scan so the editor picks up the edit. Not
+        undoable via Ctrl+Z (filesystem edits bypass editor undo).
+
+        Args:
+            path: File path starting with res:// (e.g. "res://scripts/player.gd").
+            old_text: Exact substring to find. Must be unique unless replace_all=true.
+            new_text: Replacement text. Can be empty to delete.
+            replace_all: If true, replace every occurrence. Default false.
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await script_handlers.script_patch(
+            runtime,
+            path=path,
+            old_text=old_text,
+            new_text=new_text,
+            replace_all=replace_all,
+        )
+
+    @mcp.tool(meta=DEFER_META)
     async def script_read(ctx: Context, path: str) -> dict:
         """Read the contents of a GDScript file.
 

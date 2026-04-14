@@ -14,6 +14,25 @@ async def script_create(runtime: Runtime, path: str, content: str = "") -> dict:
     )
 
 
+async def script_patch(
+    runtime: Runtime,
+    path: str,
+    old_text: str,
+    new_text: str,
+    replace_all: bool = False,
+) -> dict:
+    require_writable(runtime)
+    return await runtime.send_command(
+        "patch_script",
+        {
+            "path": path,
+            "old_text": old_text,
+            "new_text": new_text,
+            "replace_all": replace_all,
+        },
+    )
+
+
 async def script_read(runtime: Runtime, path: str) -> dict:
     return await runtime.send_command("read_script", {"path": path})
 

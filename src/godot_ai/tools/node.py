@@ -141,23 +141,53 @@ def register_node_tools(mcp: FastMCP) -> None:
         ctx: Context,
         path: str,
         property: str,
-        value: str | int | float | bool | dict | list,
+        value: str | int | float | bool | dict | list | None,
     ) -> dict:
         """Set a property on a node.
 
-        Sets a simple property value. For Vector2/Vector3, pass a dict
-        with x/y/z keys. For Color, pass a dict with r/g/b/a keys or
-        a hex string like "#ff0000".
+        Coerces `value` to match the property's declared type:
+
+        - Vector2/Vector3: dict with x/y/z keys
+        - Color: dict with r/g/b/a keys, or hex string ("#ff0000")
+        - NodePath: string ("../Other/Node")
+        - Resource: res:// path string (loads and assigns), or null to clear
+        - StringName: plain string
+        - Array/Dictionary: pass a JSON list/object
+        - bool/int/float: JSON primitives
 
         Args:
             path: Scene path of the node (e.g. "/Main/Camera3D").
-            property: Property name (e.g. "fov", "position", "visible").
-            value: New value for the property.
+            property: Property name (e.g. "fov", "position", "visible", "mesh", "remote_path").
+            value: New value for the property. Pass null to clear a Resource/NodePath.
         """
         runtime = DirectRuntime.from_context(ctx)
         return await node_handlers.node_set_property(
             runtime, path=path, property=property, value=value,
         )
+
+    @mcp.tool(meta=DEFER_META)
+    async def node_rename(
+        ctx: Context,
+        path: str,
+        new_name: str,
+    ) -> dict:
+        """Rename a node in the scene tree.
+
+        Changes the node's `name`. Fails if a sibling already has that name,
+        or if the name contains `/`, `:`, or `@`. Cannot rename the scene root.
+
+        Note: `NodePath` properties on OTHER nodes that pointed at this node
+        (e.g. a camera's `remote_path`) will not be auto-updated. Scripts that
+        reference this node by name (`$OldName`, `get_node("OldName")`) also
+        need manual fixes. Children of the renamed node keep working because
+        their paths are relative.
+
+        Args:
+            path: Scene path of the node to rename (e.g. "/Main/Player").
+            new_name: New name for the node (e.g. "Hero").
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await node_handlers.node_rename(runtime, path=path, new_name=new_name)
 
     @mcp.tool(meta=DEFER_META)
     async def node_duplicate(

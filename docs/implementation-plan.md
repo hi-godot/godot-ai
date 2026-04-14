@@ -57,9 +57,9 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 ### High-Leverage Authoring
 
 - [x] `batch.execute` with stop-on-first-error semantics and optional grouped undo
-- [ ] `node.rename` with UID/reference awareness where feasible
-- [ ] complex `node.set_property` (`Resource`, `NodePath`, `Array`, `Dictionary`)
-- [ ] `script.patch` shipped or explicitly ruled out after a focused spike
+- [x] `node.rename` with sibling-collision validation and char-safety checks (NodePath/script references in OTHER nodes are not auto-updated — documented in the tool)
+- [x] complex `node.set_property` (`Resource` via res:// path, `NodePath`, `Array`, `Dictionary`, `StringName`)
+- [x] `script.patch` shipped — anchor-based `old_text` → `new_text` replace with ambiguity detection and optional `replace_all`
 
 **Why this matters:** These are workflow multipliers. They matter more for real project iteration than adding another narrow read tool.
 
@@ -77,8 +77,8 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 - [x] run/stop cycle is reliable
 - [x] batch execution is shipped with a clear contract
 - [ ] multi-instance routing works in practice
-- [ ] `script.patch` decision is made
-- [x] test coverage and smoke coverage increase where the new runtime loop needs it (277 Python + 191 GDScript = 468 total)
+- [x] `script.patch` decision is made (shipped: anchor-based replace)
+- [x] test coverage and smoke coverage increase where the new runtime loop needs it (282 Python + 216 GDScript = 498 total)
 
 ---
 

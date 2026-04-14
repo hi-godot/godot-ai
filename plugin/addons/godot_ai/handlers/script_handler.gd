@@ -80,6 +80,66 @@ func read_script(params: Dictionary) -> Dictionary:
 	}
 
 
+func patch_script(params: Dictionary) -> Dictionary:
+	var path: String = params.get("path", "")
+	var old_text: String = params.get("old_text", "")
+	var new_text: String = params.get("new_text", "")
+	var replace_all: bool = params.get("replace_all", false)
+
+	if path.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+	if not path.begins_with("res://"):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res://")
+	if not "new_text" in params:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: new_text")
+	if old_text.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "old_text must not be empty")
+
+	var read := FileAccess.open(path, FileAccess.READ)
+	if read == null:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "File not found or unreadable: %s" % path)
+	var content := read.get_as_text()
+	read.close()
+
+	var match_count := content.count(old_text)
+	if match_count == 0:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "old_text not found in %s" % path)
+	if match_count > 1 and not replace_all:
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"old_text matches %d times; pass replace_all=true or provide a more specific snippet" % match_count,
+		)
+
+	var new_content: String
+	var replacements: int
+	if replace_all:
+		new_content = content.replace(old_text, new_text)
+		replacements = match_count
+	else:
+		var idx := content.find(old_text)
+		new_content = content.substr(0, idx) + new_text + content.substr(idx + old_text.length())
+		replacements = 1
+
+	var write := FileAccess.open(path, FileAccess.WRITE)
+	if write == null:
+		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to open file for writing: %s" % path)
+	write.store_string(new_content)
+	write.close()
+
+	EditorInterface.get_resource_filesystem().scan()
+
+	return {
+		"data": {
+			"path": path,
+			"replacements": replacements,
+			"size": new_content.length(),
+			"old_size": content.length(),
+			"undoable": false,
+			"reason": "File system operations cannot be undone via editor undo",
+		}
+	}
+
+
 func attach_script(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("path", "")
 	var script_path: String = params.get("script_path", "")

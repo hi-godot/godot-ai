@@ -109,6 +109,17 @@ class StubClient:
                 "type": "Node3D",
                 "undoable": True,
             }
+        if command == "rename_node":
+            path = params.get("path", "")
+            new_name = params.get("new_name", "")
+            parent = "/".join(path.split("/")[:-1]) if "/" in path else ""
+            return {
+                "path": f"{parent}/{new_name}" if parent else f"/{new_name}",
+                "old_path": path,
+                "name": new_name,
+                "old_name": path.split("/")[-1],
+                "undoable": True,
+            }
         if command == "move_node":
             return {
                 "path": params.get("path", ""),
@@ -168,6 +179,14 @@ class StubClient:
             return {"status": "ok", "client": params.get("client", "")}
         if command == "check_client_status":
             return {"claude_code": "configured", "codex": "not_configured"}
+        if command == "patch_script":
+            return {
+                "path": params.get("path", ""),
+                "replacements": 1,
+                "size": 100,
+                "old_size": 90,
+                "undoable": False,
+            }
         if command == "create_script":
             return {
                 "path": params.get("path", ""),
@@ -799,6 +818,22 @@ async def test_node_set_property_handler():
     assert result["undoable"] is True
 
 
+async def test_node_rename_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await node_handlers.node_rename(
+        runtime,
+        path="/Main/Player",
+        new_name="Hero",
+    )
+    assert result["name"] == "Hero"
+    assert result["old_name"] == "Player"
+    assert result["old_path"] == "/Main/Player"
+    assert result["path"] == "/Main/Hero"
+    assert result["undoable"] is True
+    assert client.calls[-1]["params"] == {"path": "/Main/Player", "new_name": "Hero"}
+
+
 async def test_node_duplicate_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
@@ -1030,6 +1065,38 @@ async def test_script_create_handler():
         "path": "res://scripts/player.gd",
         "content": "extends Node3D\n",
     }
+
+
+async def test_script_patch_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await script_handlers.script_patch(
+        runtime,
+        path="res://scripts/player.gd",
+        old_text="var speed = 5",
+        new_text="var speed = 10",
+    )
+    assert result["replacements"] == 1
+    assert result["undoable"] is False
+    assert client.calls[-1]["params"] == {
+        "path": "res://scripts/player.gd",
+        "old_text": "var speed = 5",
+        "new_text": "var speed = 10",
+        "replace_all": False,
+    }
+
+
+async def test_script_patch_handler_replace_all():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await script_handlers.script_patch(
+        runtime,
+        path="res://scripts/player.gd",
+        old_text="foo",
+        new_text="bar",
+        replace_all=True,
+    )
+    assert client.calls[-1]["params"]["replace_all"] is True
 
 
 async def test_script_read_handler():

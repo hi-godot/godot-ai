@@ -157,17 +157,31 @@ func set_property(params: Dictionary) -> Dictionary:
 
 	var value = params.get("value")
 
-	# Verify property exists on the node
 	var found := false
+	var prop_type: int = TYPE_NIL
 	for prop in node.get_property_list():
 		if prop.name == property:
 			found = true
+			prop_type = prop.get("type", TYPE_NIL)
 			break
 	if not found:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Property '%s' not found on %s" % [property, node.get_class()])
 
 	var old_value = node.get(property)
-	value = _coerce_value(value, typeof(old_value))
+	# Prefer declared property type; fall back to runtime type for dynamic props
+	# (scripted @export vars can report TYPE_NIL in the property list).
+	var target_type: int = prop_type if prop_type != TYPE_NIL else typeof(old_value)
+
+	if target_type == TYPE_OBJECT and value is String:
+		if value == "":
+			value = null
+		else:
+			var loaded := ResourceLoader.load(value)
+			if loaded == null:
+				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource not found: %s" % value)
+			value = loaded
+	else:
+		value = _coerce_value(value, target_type)
 
 	_undo_redo.create_action("MCP: Set %s.%s" % [node.name, property])
 	_undo_redo.add_do_property(node, property, value)
@@ -180,6 +194,58 @@ func set_property(params: Dictionary) -> Dictionary:
 			"property": property,
 			"value": _serialize_value(node.get(property)),
 			"old_value": _serialize_value(old_value),
+			"undoable": true,
+		}
+	}
+
+
+func rename_node(params: Dictionary) -> Dictionary:
+	var resolved := _resolve_node(params)
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	var node_path: String = resolved.path
+	var scene_root: Node = resolved.scene_root
+
+	var new_name: String = params.get("new_name", "")
+	if new_name.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: new_name")
+
+	if new_name.validate_node_name() != new_name:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid characters in name: %s" % new_name)
+
+	if node == scene_root:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Cannot rename the scene root")
+
+	var old_name := String(node.name)
+	if old_name == new_name:
+		return {
+			"data": {
+				"path": node_path,
+				"name": new_name,
+				"old_name": old_name,
+				"unchanged": true,
+				"undoable": false,
+				"reason": "Name unchanged",
+			}
+		}
+
+	var parent := node.get_parent()
+	for sibling in parent.get_children():
+		if sibling != node and String(sibling.name) == new_name:
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "A sibling already has the name '%s'" % new_name)
+
+	_undo_redo.create_action("MCP: Rename %s to %s" % [old_name, new_name])
+	_undo_redo.add_do_property(node, "name", new_name)
+	_undo_redo.add_undo_property(node, "name", old_name)
+	_undo_redo.commit_action()
+
+	return {
+		"data": {
+			"path": ScenePath.from_node(node, scene_root),
+			"old_path": node_path,
+			"name": String(node.name),
+			"old_name": old_name,
 			"undoable": true,
 		}
 	}
@@ -380,6 +446,25 @@ static func _coerce_value(value: Variant, target_type: int) -> Variant:
 		TYPE_FLOAT:
 			if value is int:
 				return float(value)
+		TYPE_STRING_NAME:
+			if value is String:
+				return StringName(value)
+		TYPE_NODE_PATH:
+			if value is String:
+				return NodePath(value)
+			if value == null:
+				return NodePath()
+		TYPE_OBJECT:
+			# Resource loading is handled in set_property so we can return a
+			# typed error; here we only pass through cleared values.
+			if value == null:
+				return null
+		TYPE_ARRAY:
+			if value is Array:
+				return value
+		TYPE_DICTIONARY:
+			if value is Dictionary:
+				return value
 	return value
 
 
@@ -484,6 +569,8 @@ static func _serialize_value(value: Variant) -> Variant:
 	match typeof(value):
 		TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING:
 			return value
+		TYPE_STRING_NAME:
+			return str(value)
 		TYPE_VECTOR2:
 			return {"x": value.x, "y": value.y}
 		TYPE_VECTOR3:
@@ -496,6 +583,16 @@ static func _serialize_value(value: Variant) -> Variant:
 			return str(value)
 		TYPE_NODE_PATH:
 			return str(value)
+		TYPE_ARRAY:
+			var arr: Array = []
+			for item in value:
+				arr.append(_serialize_value(item))
+			return arr
+		TYPE_DICTIONARY:
+			var out := {}
+			for k in value:
+				out[str(k)] = _serialize_value(value[k])
+			return out
 		TYPE_OBJECT:
 			if value is Resource and value.resource_path:
 				return value.resource_path

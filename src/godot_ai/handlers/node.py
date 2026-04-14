@@ -63,6 +63,14 @@ async def node_set_property(runtime: Runtime, path: str, property: str, value) -
     )
 
 
+async def node_rename(runtime: Runtime, path: str, new_name: str) -> dict:
+    require_writable(runtime)
+    return await runtime.send_command(
+        "rename_node",
+        {"path": path, "new_name": new_name},
+    )
+
+
 async def node_duplicate(runtime: Runtime, path: str, name: str = "") -> dict:
     require_writable(runtime)
     return await runtime.send_command(
