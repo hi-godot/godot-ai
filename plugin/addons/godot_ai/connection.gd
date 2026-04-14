@@ -2,7 +2,7 @@
 class_name Connection
 extends Node
 
-## WebSocket transport to the Godot MCP Studio Python server.
+## WebSocket transport to the Godot AI Python server.
 ## Only handles connect, reconnect, send, and receive.
 ## Command dispatch is owned by McpDispatcher.
 
@@ -25,6 +25,9 @@ var pause_processing := false
 
 func _ready() -> void:
 	_session_id = _generate_session_id()
+	## Increase outbound buffer for large messages (e.g. screenshot base64).
+	## Default is 64 KB; screenshots can be several MB.
+	_peer.outbound_buffer_size = 4 * 1024 * 1024  # 4 MB
 	_connect_to_server()
 	_hook_editor_signals()
 
@@ -90,6 +93,7 @@ func _attempt_reconnect() -> void:
 	_reconnect_timer = delay
 	log_buffer.log("reconnecting in %.0fs (attempt %d)" % [delay, _reconnect_attempt])
 	_peer = WebSocketPeer.new()
+	_peer.outbound_buffer_size = 4 * 1024 * 1024  # 4 MB
 	_connect_to_server()
 
 

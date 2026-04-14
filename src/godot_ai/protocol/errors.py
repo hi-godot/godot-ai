@@ -1,4 +1,4 @@
-"""Structured error codes for the Godot MCP Studio protocol."""
+"""Structured error codes for the Godot AI protocol."""
 
 from enum import StrEnum
 

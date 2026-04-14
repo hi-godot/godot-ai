@@ -25,5 +25,9 @@ func get_recent(count: int = 50) -> Array[String]:
 	return result
 
 
+func clear() -> void:
+	_lines.clear()
+
+
 func total_count() -> int:
 	return _lines.size()
