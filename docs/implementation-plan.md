@@ -56,7 +56,7 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 
 ### High-Leverage Authoring
 
-- [ ] `batch.execute` with stop-on-first-error semantics and optional grouped undo
+- [x] `batch.execute` with stop-on-first-error semantics and optional grouped undo
 - [ ] `node.rename` with UID/reference awareness where feasible
 - [ ] complex `node.set_property` (`Resource`, `NodePath`, `Array`, `Dictionary`)
 - [ ] `script.patch` shipped or explicitly ruled out after a focused spike
@@ -75,10 +75,10 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 
 - [x] `signal.*`, `autoload.*`, `input_map.*`, `project_settings.set`
 - [x] run/stop cycle is reliable
-- [ ] batch execution is shipped with a clear contract
+- [x] batch execution is shipped with a clear contract
 - [ ] multi-instance routing works in practice
 - [ ] `script.patch` decision is made
-- [x] test coverage and smoke coverage increase where the new runtime loop needs it (267 Python + 179 GDScript = 446 total)
+- [x] test coverage and smoke coverage increase where the new runtime loop needs it (277 Python + 191 GDScript = 468 total)
 
 ---
 

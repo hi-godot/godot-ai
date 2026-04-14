@@ -20,6 +20,20 @@ func register(command_name: String, handler: Callable) -> void:
 	_handlers[command_name] = handler
 
 
+## Invoke a registered handler directly by name. Returns the handler's raw
+## response dict (no request_id or status wrapping). Returns an UNKNOWN_COMMAND
+## error dict if the command is not registered. Used by batch_execute.
+func dispatch_direct(command: String, params: Dictionary) -> Dictionary:
+	if not _handlers.has(command):
+		return McpErrorCodes.make(McpErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
+	return _handlers[command].call(params)
+
+
+## Whether a command is registered.
+func has_command(command: String) -> bool:
+	return _handlers.has(command)
+
+
 ## Enqueue a raw command dict received from the WebSocket.
 func enqueue(cmd: Dictionary) -> void:
 	_command_queue.append(cmd)

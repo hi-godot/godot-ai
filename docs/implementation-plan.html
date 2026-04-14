@@ -186,6 +186,7 @@
 <li><span class="check done">&#x2611;</span> <code>project.run</code> with <code>main</code>, <code>current</code>, and <code>custom</code> modes</li>
 <li><span class="check done">&#x2611;</span> <code>project.stop</code> with validation (rejects if not playing)</li>
 <li><span class="check done">&#x2611;</span> <code>editor.screenshot</code> returning inline MCP ImageContent (viewport/game sources, configurable resolution)</li>
+<li><span class="check done">&#x2611;</span> <code>editor.screenshot</code> multi-angle coverage + temporary camera control (<code>view_target</code>, <code>coverage</code>, <code>elevation</code>, <code>azimuth</code>, <code>fov</code>) with AABB geometry metadata</li>
 <li><span class="check done">&#x2611;</span> <code>performance.get_monitors</code> with optional filter (30 Godot Performance monitors)</li>
 <li><span class="check done">&#x2611;</span> <code>logs.clear</code></li>
 <li><span class="check done">&#x2611;</span> WebSocket buffer increase (4 MB) for large payloads like screenshot base64</li>
@@ -193,7 +194,7 @@
 <p><strong>Why this matters:</strong> Without a reliable launch-observe-inspect loop, the AI can build project structure but cannot tighten feel, readability, or performance.</p>
 <h3>High-Leverage Authoring</h3>
 <ul>
-<li><span class="check todo">&#x2610;</span> <code>batch.execute</code> with stop-on-first-error semantics and optional grouped undo</li>
+<li><span class="check done">&#x2611;</span> <code>batch.execute</code> with stop-on-first-error semantics and optional grouped undo</li>
 <li><span class="check todo">&#x2610;</span> <code>node.rename</code> with UID/reference awareness where feasible</li>
 <li><span class="check todo">&#x2610;</span> complex <code>node.set_property</code> (<code>Resource</code>, <code>NodePath</code>, <code>Array</code>, <code>Dictionary</code>)</li>
 <li><span class="check todo">&#x2610;</span> <code>script.patch</code> shipped or explicitly ruled out after a focused spike</li>
@@ -210,10 +211,10 @@
 <ul>
 <li><span class="check done">&#x2611;</span> <code>signal.*</code>, <code>autoload.*</code>, <code>input_map.*</code>, <code>project_settings.set</code></li>
 <li><span class="check done">&#x2611;</span> run/stop cycle is reliable</li>
-<li><span class="check todo">&#x2610;</span> batch execution is shipped with a clear contract</li>
+<li><span class="check done">&#x2611;</span> batch execution is shipped with a clear contract</li>
 <li><span class="check todo">&#x2610;</span> multi-instance routing works in practice</li>
 <li><span class="check todo">&#x2610;</span> <code>script.patch</code> decision is made</li>
-<li><span class="check done">&#x2611;</span> test coverage and smoke coverage increase where the new runtime loop needs it (255 Python + 170 GDScript = 425 total)</li>
+<li><span class="check done">&#x2611;</span> test coverage and smoke coverage increase where the new runtime loop needs it (277 Python + 191 GDScript = 468 total)</li>
 </ul>
 <hr />
 <h2>Next Priority: Phase 4 Release Path</h2>
@@ -222,11 +223,24 @@
 <li><span class="check todo">&#x2610;</span> clean install docs for Claude Code, Codex, and other MCP clients</li>
 <li><span class="check todo">&#x2610;</span> PyPI / <code>uvx</code> path works reliably</li>
 <li><span class="check todo">&#x2610;</span> desktop binary path is real, not aspirational</li>
+<li><span class="check todo">&#x2610;</span> plugin is downloadable from the Godot AssetLib</li>
 <li><span class="check todo">&#x2610;</span> CI covers Python tests, Godot-side tests, and release-smoke install paths</li>
 <li><span class="check todo">&#x2610;</span> compatibility guidance is published and maintained</li>
 <li><span class="check todo">&#x2610;</span> a new user can get from zero to working in under 10 minutes</li>
 </ul>
 <p>Release is not just packaging. It is install flow, docs, smoke coverage, and support burden reduction.</p>
+<hr />
+<h2>Tool Search Friendliness</h2>
+<p>Anthropic's tool search (<code>tool_search_tool_regex_20251119</code> / <code>tool_search_tool_bm25_20251119</code>) lets clients defer loading tool definitions until the model searches for them. Our surface will grow past the 30-50 tool threshold where selection accuracy starts to degrade, so the MCP server needs to be a good citizen in that system.</p>
+<ul>
+<li><span class="check todo">&#x2610;</span> audit every tool name for consistent, searchable namespacing (<code>scene_*</code>, <code>node_*</code>, <code>script_*</code>, <code>signal_*</code>, <code>input_map_*</code>, <code>editor_*</code>, <code>project_*</code>, <code>resource_*</code>, <code>filesystem_*</code>, etc.) — no ambiguous or one-off prefixes</li>
+<li><span class="check todo">&#x2610;</span> audit every tool description so it contains the keywords a user would naturally use to describe the task (e.g. <code>screenshot</code>, <code>viewport</code>, <code>game view</code>, <code>input action</code>, <code>autoload singleton</code>) in addition to the Godot term</li>
+<li><span class="check todo">&#x2610;</span> audit argument names and argument descriptions — tool search indexes these too</li>
+<li><span class="check todo">&#x2610;</span> document which tools should stay non-deferred (the 3-5 most common: likely <code>editor_state</code>, <code>scene_get_hierarchy</code>, <code>node_get_properties</code>, plus session tools) and mark the rest <code>defer_loading: true</code> in the server's MCP advertisement where the protocol permits</li>
+<li><span class="check todo">&#x2610;</span> add a short &quot;available tool categories&quot; blurb to the server's MCP server instructions so clients using tool search have a map of what to search for</li>
+<li><span class="check todo">&#x2610;</span> verify the published surface still works for clients that do not use tool search (no tool should require a specific discovery path)</li>
+</ul>
+<p><strong>Why this matters:</strong> Once the tool count crosses ~50, clients that load every definition upfront start paying a real context-window tax and the model starts picking wrong tools. Writing names and descriptions with search in mind is cheap now and costly to retrofit later.</p>
 <hr />
 <h2>Prototype-Driven Extensions</h2>
 <p>These are not the next things to do blindly. They are the extensions that matter once the runtime loop is solid and the project is ready to prove itself against a more polished game benchmark.</p>

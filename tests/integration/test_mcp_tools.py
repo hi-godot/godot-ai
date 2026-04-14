@@ -1632,9 +1632,7 @@ class TestInputMapAddActionTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "input_map_add_action", {"action": "attack"}
-        )
+        result = await client.call_tool("input_map_add_action", {"action": "attack"})
         await task
 
         assert result.data["action"] == "attack"
@@ -1654,9 +1652,7 @@ class TestInputMapRemoveActionTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "input_map_remove_action", {"action": "attack"}
-        )
+        result = await client.call_tool("input_map_remove_action", {"action": "attack"})
         await task
 
         assert result.data["removed"] is True
@@ -1777,9 +1773,7 @@ class TestInputMapListBuiltinFilter:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "input_map_list", {"include_builtin": True}
-        )
+        result = await client.call_tool("input_map_list", {"include_builtin": True})
         await task
 
         assert result.data["count"] == 1
@@ -1802,7 +1796,8 @@ class TestReadinessGating:
         await self._set_readiness(plugin, "importing")
 
         result = await client.call_tool(
-            "node_create", {"type": "Node3D", "name": "Blocked"},
+            "node_create",
+            {"type": "Node3D", "name": "Blocked"},
             raise_on_error=False,
         )
 
@@ -1847,7 +1842,8 @@ class TestReadinessGating:
         # First set importing to block writes
         await self._set_readiness(plugin, "importing")
         result = await client.call_tool(
-            "node_create", {"type": "Node3D", "name": "Blocked"},
+            "node_create",
+            {"type": "Node3D", "name": "Blocked"},
             raise_on_error=False,
         )
         assert result.is_error
@@ -1864,9 +1860,7 @@ class TestReadinessGating:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "node_create", {"type": "Node3D", "name": "Unblocked"}
-        )
+        result = await client.call_tool("node_create", {"type": "Node3D", "name": "Unblocked"})
         await task
 
         assert not result.is_error
@@ -1992,7 +1986,8 @@ class TestProjectStopTool:
 
 class TestEditorScreenshotTool:
     _ONE_PX_PNG_B64 = (
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4DwABAQEBYY2JxQAAAABJRU5ErkJggg=="
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4"
+        "nGP4DwABAQEBYY2JxQAAAABJRU5ErkJggg=="
     )
 
     async def test_screenshot_with_image(self, mcp_stack):
@@ -2041,9 +2036,7 @@ class TestEditorScreenshotTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "editor_screenshot", {"include_image": False}
-        )
+        result = await client.call_tool("editor_screenshot", {"include_image": False})
         await task
 
         assert not result.is_error
@@ -2149,10 +2142,14 @@ class TestEditorScreenshotTool:
             assert cmd["params"]["view_target"] == "/Main/X"
             images = []
             for preset in [
-                {"label": "establishing", "elevation": 25.0,
-                 "azimuth": 20.0, "fov": 50.0, "ortho": False},
-                {"label": "top", "elevation": 90.0, "azimuth": 0.0,
-                 "fov": 0.0, "ortho": True},
+                {
+                    "label": "establishing",
+                    "elevation": 25.0,
+                    "azimuth": 20.0,
+                    "fov": 50.0,
+                    "ortho": False,
+                },
+                {"label": "top", "elevation": 90.0, "azimuth": 0.0, "fov": 0.0, "ortho": True},
             ]:
                 images.append(
                     {
@@ -2286,3 +2283,121 @@ class TestPerformanceGetMonitorsTool:
 
         assert not result.is_error
         assert result.data["monitor_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# batch_execute
+# ---------------------------------------------------------------------------
+
+
+class TestBatchExecuteTool:
+    async def test_forwards_commands_and_returns_results(self, mcp_stack):
+        client, plugin = mcp_stack
+        cmds = [
+            {"command": "create_node", "params": {"type": "Node3D"}},
+            {"command": "set_property", "params": {"path": "/A", "property": "x"}},
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "batch_execute"
+            assert cmd["params"]["commands"] == cmds
+            assert cmd["params"]["undo"] is True
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "succeeded": 2,
+                    "stopped_at": None,
+                    "results": [
+                        {"command": "create_node", "status": "ok", "data": {"undoable": True}},
+                        {"command": "set_property", "status": "ok", "data": {"undoable": True}},
+                    ],
+                    "undo": True,
+                    "rolled_back": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("batch_execute", {"commands": cmds})
+        await task
+
+        assert not result.is_error
+        assert result.data["succeeded"] == 2
+        assert result.data["stopped_at"] is None
+        assert result.data["undoable"] is True
+
+    async def test_reports_sub_command_failure(self, mcp_stack):
+        client, plugin = mcp_stack
+        cmds = [
+            {"command": "create_node", "params": {"type": "Node3D"}},
+            {"command": "set_property", "params": {"path": "/Missing", "property": "x"}},
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "succeeded": 1,
+                    "stopped_at": 1,
+                    "results": [
+                        {"command": "create_node", "status": "ok", "data": {"undoable": True}},
+                        {
+                            "command": "set_property",
+                            "status": "error",
+                            "error": {"code": "INVALID_PARAMS", "message": "Not found"},
+                        },
+                    ],
+                    "undo": True,
+                    "rolled_back": True,
+                    "undoable": False,
+                    "error": {"code": "INVALID_PARAMS", "message": "Not found"},
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("batch_execute", {"commands": cmds})
+        await task
+
+        assert not result.is_error
+        assert result.data["succeeded"] == 1
+        assert result.data["stopped_at"] == 1
+        assert result.data["rolled_back"] is True
+        assert result.data["error"]["code"] == "INVALID_PARAMS"
+
+    async def test_undo_false_is_forwarded(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["undo"] is False
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "succeeded": 1,
+                    "stopped_at": None,
+                    "results": [
+                        {"command": "create_node", "status": "ok", "data": {"undoable": True}}
+                    ],
+                    "undo": False,
+                    "rolled_back": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "batch_execute",
+            {"commands": [{"command": "create_node", "params": {"type": "Node"}}], "undo": False},
+        )
+        await task
+
+        assert not result.is_error
+
+    async def test_empty_list_returns_invalid_params_without_plugin_call(self, mcp_stack):
+        client, _plugin = mcp_stack
+        result = await client.call_tool("batch_execute", {"commands": []})
+        assert not result.is_error
+        assert result.data["error"]["code"] == "INVALID_PARAMS"
+        assert result.data["succeeded"] == 0

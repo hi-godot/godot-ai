@@ -30,7 +30,8 @@ func _enter_tree() -> void:
 	var autoload_handler := AutoloadHandler.new()
 	var input_handler := InputHandler.new()
 	var test_handler := TestHandler.new(get_undo_redo(), _log_buffer)
-	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler]
+	var batch_handler := BatchHandler.new(_dispatcher, get_undo_redo())
+	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler]
 
 	_dispatcher.register("get_editor_state", editor_handler.get_editor_state)
 	_dispatcher.register("get_scene_tree", scene_handler.get_scene_tree)
@@ -89,6 +90,7 @@ func _enter_tree() -> void:
 	_dispatcher.register("bind_event", input_handler.bind_event)
 	_dispatcher.register("run_tests", test_handler.run_tests)
 	_dispatcher.register("get_test_results", test_handler.get_test_results)
+	_dispatcher.register("batch_execute", batch_handler.batch_execute)
 
 	_connection.dispatcher = _dispatcher
 	add_child(_connection)

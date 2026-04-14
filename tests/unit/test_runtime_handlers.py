@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from godot_ai.handlers import autoload as autoload_handlers
+from godot_ai.handlers import batch as batch_handlers
 from godot_ai.handlers import client as client_handlers
 from godot_ai.handlers import editor as editor_handlers
 from godot_ai.handlers import filesystem as filesystem_handlers
@@ -349,32 +350,34 @@ class StubClient:
             # Coverage response: return 2 reference shots (establishing + top)
             if params.get("coverage") and params.get("view_target"):
                 presets = [
-                    {"label": "establishing", "elevation": 25.0,
-                     "azimuth": 20.0, "fov": 50.0, "ortho": False},
-                    {"label": "top", "elevation": 90.0, "azimuth": 0.0,
-                     "fov": 0.0, "ortho": True},
+                    {
+                        "label": "establishing",
+                        "elevation": 25.0,
+                        "azimuth": 20.0,
+                        "fov": 50.0,
+                        "ortho": False,
+                    },
+                    {"label": "top", "elevation": 90.0, "azimuth": 0.0, "fov": 0.0, "ortho": True},
                 ]
                 images = []
                 for p in presets:
-                    images.append({
-                        "source": "viewport",
-                        "width": 1,
-                        "height": 1,
-                        "original_width": 100,
-                        "original_height": 100,
-                        "format": "png",
-                        "image_base64": img_b64,
-                        **p,
-                    })
+                    images.append(
+                        {
+                            "source": "viewport",
+                            "width": 1,
+                            "height": 1,
+                            "original_width": 100,
+                            "original_height": 100,
+                            "format": "png",
+                            "image_base64": img_b64,
+                            **p,
+                        }
+                    )
                 result = {
                     "source": "viewport",
                     "view_target": params["view_target"],
                     "view_target_count": len(
-                        {
-                            pt.strip()
-                            for pt in params["view_target"].split(",")
-                            if pt.strip()
-                        }
+                        {pt.strip() for pt in params["view_target"].split(",") if pt.strip()}
                     ),
                     "coverage": True,
                     "images": images,
@@ -396,11 +399,7 @@ class StubClient:
             if params.get("view_target"):
                 result["view_target"] = params["view_target"]
                 result["view_target_count"] = len(
-                    {
-                        p.strip()
-                        for p in params["view_target"].split(",")
-                        if p.strip()
-                    }
+                    {p.strip() for p in params["view_target"].split(",") if p.strip()}
                 )
                 result["aabb_center"] = [1.0, 0.5, 0.0]
                 result["aabb_size"] = [3.0, 2.0, 2.0]
@@ -415,6 +414,25 @@ class StubClient:
             return result
         if command == "clear_logs":
             return {"cleared_count": 5}
+        if command == "batch_execute":
+            sub_commands = params.get("commands", [])
+            undo = params.get("undo", True)
+            results = [
+                {
+                    "command": item["command"],
+                    "status": "ok",
+                    "data": {"undoable": True},
+                }
+                for item in sub_commands
+            ]
+            return {
+                "succeeded": len(sub_commands),
+                "stopped_at": None,
+                "results": results,
+                "undo": undo,
+                "rolled_back": False,
+                "undoable": True,
+            }
         if command == "run_project":
             return {
                 "mode": params.get("mode", "main"),
@@ -1275,9 +1293,7 @@ async def test_input_map_list_handler():
 async def test_input_map_add_action_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    result = await input_map_handlers.input_map_add_action(
-        runtime, action="jump", deadzone=0.3
-    )
+    result = await input_map_handlers.input_map_add_action(runtime, action="jump", deadzone=0.3)
     assert result["action"] == "jump"
     assert result["deadzone"] == 0.3
     assert client.calls[-1]["command"] == "add_action"
@@ -1396,18 +1412,14 @@ async def test_editor_screenshot_handler_without_image():
 async def test_editor_screenshot_handler_passes_source():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    await editor_handlers.editor_screenshot(
-        runtime, source="game", include_image=False
-    )
+    await editor_handlers.editor_screenshot(runtime, source="game", include_image=False)
     assert client.calls[-1]["params"]["source"] == "game"
 
 
 async def test_editor_screenshot_handler_passes_max_resolution():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    await editor_handlers.editor_screenshot(
-        runtime, max_resolution=1024, include_image=False
-    )
+    await editor_handlers.editor_screenshot(runtime, max_resolution=1024, include_image=False)
     assert client.calls[-1]["params"]["max_resolution"] == 1024
 
 
@@ -1558,9 +1570,7 @@ async def test_editor_screenshot_handler_view_target_not_found_coverage():
                 ],
             }
 
-    runtime = DirectRuntime(
-        registry=SessionRegistry(), client=NotFoundCoverageClient()
-    )
+    runtime = DirectRuntime(registry=SessionRegistry(), client=NotFoundCoverageClient())
     result = await editor_handlers.editor_screenshot(
         runtime,
         view_target="/Main/X,/Main/Missing",
@@ -1605,3 +1615,52 @@ async def test_performance_get_monitors_handler_filtered():
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     await editor_handlers.performance_get_monitors(runtime, monitors=["time/fps"])
     assert client.calls[-1]["params"] == {"monitors": ["time/fps"]}
+
+
+# ---------------------------------------------------------------------------
+# Batch execute handler tests
+# ---------------------------------------------------------------------------
+
+
+async def test_batch_execute_forwards_commands_and_undo_true():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    cmds = [
+        {"command": "create_node", "params": {"type": "Node3D"}},
+        {"command": "set_property", "params": {"path": "/Main/A", "property": "x"}},
+    ]
+    result = await batch_handlers.batch_execute(runtime, commands=cmds)
+    assert client.calls[-1]["command"] == "batch_execute"
+    assert client.calls[-1]["params"]["commands"] == cmds
+    assert client.calls[-1]["params"]["undo"] is True
+    assert result["succeeded"] == 2
+    assert result["stopped_at"] is None
+
+
+async def test_batch_execute_passes_undo_false():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await batch_handlers.batch_execute(
+        runtime,
+        commands=[{"command": "create_node", "params": {"type": "Node"}}],
+        undo=False,
+    )
+    assert client.calls[-1]["params"]["undo"] is False
+
+
+async def test_batch_execute_rejects_non_list():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await batch_handlers.batch_execute(runtime, commands="nope")  # type: ignore[arg-type]
+    assert result["error"]["code"] == "INVALID_PARAMS"
+    assert result["succeeded"] == 0
+    # No command should have been sent to the plugin
+    assert not client.calls
+
+
+async def test_batch_execute_rejects_empty_list():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await batch_handlers.batch_execute(runtime, commands=[])
+    assert result["error"]["code"] == "INVALID_PARAMS"
+    assert not client.calls

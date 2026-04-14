@@ -149,11 +149,12 @@
 <p>For the current roadmap, use <a href="implementation-plan.html">implementation-plan.md</a>.</p>
 <hr />
 <h2>Distribution Goals</h2>
-<p>The project should support three practical usage modes:</p>
+<p>The project should support these practical usage modes:</p>
 <ul>
 <li>dev checkout with local <code>.venv</code></li>
 <li>published Python package via PyPI and <code>uvx</code></li>
 <li>standalone binary path for users who do not want a Python install</li>
+<li>plugin discoverable and installable from the Godot AssetLib</li>
 </ul>
 <p>The goal is not “many install methods” for its own sake. The goal is:</p>
 <ul>
@@ -199,6 +200,25 @@
 <li>stricter support boundaries</li>
 </ul>
 <p>This path is worth building, but only if it stays reliable.</p>
+<h3>Path D: Godot AssetLib</h3>
+<p>Godot's built-in AssetLib is the most natural discovery surface for the plugin. A user who already has Godot open should be able to find Godot AI there without ever visiting GitHub.</p>
+<p>Target experience:</p>
+<ol>
+<li>open Godot, go to the AssetLib tab</li>
+<li>search for &quot;Godot AI&quot; or &quot;MCP&quot;</li>
+<li>download and install into the current project</li>
+<li>enable the plugin; it handles server startup (via <code>uvx</code> or a local <code>.venv</code>) from there</li>
+</ol>
+<p>Publishing checklist:</p>
+<ul>
+<li><span class="check todo">&#x2610;</span> claim the AssetLib entry under a stable author account</li>
+<li><span class="check todo">&#x2610;</span> decide what the AssetLib package actually ships: plugin folder only, or plugin folder + bundled server resources</li>
+<li><span class="check todo">&#x2610;</span> confirm the plugin keeps working when installed from AssetLib rather than a symlinked dev checkout (paths, UID files, autoload registrations)</li>
+<li><span class="check todo">&#x2610;</span> tag versions so AssetLib submissions point at immutable commits</li>
+<li><span class="check todo">&#x2610;</span> figure out the update story — AssetLib does not push updates, so the dock should surface &quot;a newer version is available&quot; when appropriate</li>
+<li><span class="check todo">&#x2610;</span> include AssetLib install in the release-smoke tier of CI once it is live</li>
+</ul>
+<p>The AssetLib path does not replace PyPI/<code>uvx</code> — the Python server still has to come from somewhere — but it dramatically lowers the &quot;how do I even find this&quot; friction for Godot users who are not already Python-fluent.</p>
 <hr />
 <h2>User Install Flow</h2>
 <p>The install flow should be understandable without repo archaeology.</p>
@@ -277,6 +297,7 @@
 <li>verify <code>uvx godot-ai</code> path</li>
 <li>verify package install path</li>
 <li>verify binary startup path</li>
+<li>verify AssetLib-installed plugin loads and connects to the server</li>
 </ul>
 <p>This tier is about install confidence, not deep correctness.</p>
 <hr />
