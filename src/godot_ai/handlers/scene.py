@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from godot_ai.handlers._readiness import require_writable
 from godot_ai.runtime.interface import Runtime
 from godot_ai.tools._pagination import paginate
 
@@ -22,6 +23,7 @@ async def scene_get_roots(runtime: Runtime) -> dict:
 
 
 async def scene_create(runtime: Runtime, path: str, root_type: str = "Node3D") -> dict:
+    require_writable(runtime)
     return await runtime.send_command(
         "create_scene",
         {"path": path, "root_type": root_type},
@@ -29,14 +31,17 @@ async def scene_create(runtime: Runtime, path: str, root_type: str = "Node3D") -
 
 
 async def scene_open(runtime: Runtime, path: str) -> dict:
+    require_writable(runtime)
     return await runtime.send_command("open_scene", {"path": path})
 
 
 async def scene_save(runtime: Runtime) -> dict:
+    require_writable(runtime)
     return await runtime.send_command("save_scene")
 
 
 async def scene_save_as(runtime: Runtime, path: str) -> dict:
+    require_writable(runtime)
     return await runtime.send_command("save_scene_as", {"path": path})
 
 

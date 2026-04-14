@@ -51,6 +51,42 @@ class TestProjectSettingsGet:
         await plugin.close()
 
 
+class TestProjectSettingsSet:
+    async def test_set_project_setting_roundtrip(self, harness):
+        plugin = await harness.connect_plugin()
+        client = GodotClient(harness.server, harness.registry)
+
+        async def mock_handler():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "set_project_setting"
+            assert cmd["params"] == {
+                "key": "display/window/size/viewport_width",
+                "value": 1920,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "key": "display/window/size/viewport_width",
+                    "value": 1920,
+                    "old_value": 1152,
+                    "type": "int",
+                    "undoable": False,
+                },
+            )
+
+        handler_task = asyncio.create_task(mock_handler())
+        result = await client.send(
+            "set_project_setting",
+            {"key": "display/window/size/viewport_width", "value": 1920},
+        )
+        await handler_task
+
+        assert result["key"] == "display/window/size/viewport_width"
+        assert result["value"] == 1920
+        assert result["old_value"] == 1152
+        await plugin.close()
+
+
 class TestFilesystemSearch:
     async def test_search_by_name(self, harness):
         plugin = await harness.connect_plugin()

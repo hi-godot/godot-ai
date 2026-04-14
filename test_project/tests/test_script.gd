@@ -109,6 +109,13 @@ func test_read_script_not_found() -> void:
 # ----- attach_script -----
 
 func test_attach_script_basic() -> void:
+	# Clean up any leftover node from a prior run
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var stale := ScenePath.resolve("/Main/_McpTestAttach", scene_root)
+	if stale:
+		stale.get_parent().remove_child(stale)
+		stale.queue_free()
+
 	# Create a temporary node to attach to
 	var node_handler := NodeHandler.new(_undo_redo)
 	node_handler.create_node({"type": "Node3D", "name": "_McpTestAttach", "parent_path": "/Main"})

@@ -41,6 +41,36 @@ func test_get_project_setting_viewport_width() -> void:
 	assert_eq(result.data.type, "int")
 
 
+# ----- set_project_setting -----
+
+func test_set_project_setting_roundtrip() -> void:
+	## Read the current name, set a new one, then restore
+	var original := _handler.get_project_setting({"key": "application/config/name"})
+	var old_name = original.data.value
+
+	var result := _handler.set_project_setting({
+		"key": "application/config/name",
+		"value": "_McpTestName",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.key, "application/config/name")
+	assert_eq(result.data.value, "_McpTestName")
+	assert_has_key(result.data, "old_value")
+
+	## Restore
+	_handler.set_project_setting({"key": "application/config/name", "value": old_name})
+
+
+func test_set_project_setting_missing_key() -> void:
+	var result := _handler.set_project_setting({})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_set_project_setting_missing_value() -> void:
+	var result := _handler.set_project_setting({"key": "application/config/name"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
 # ----- search_filesystem -----
 
 func test_search_filesystem_by_name() -> void:

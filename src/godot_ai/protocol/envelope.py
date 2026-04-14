@@ -41,3 +41,4 @@ class HandshakeMessage(BaseModel):
     project_path: str
     plugin_version: str
     protocol_version: int = 1
+    readiness: str = "ready"

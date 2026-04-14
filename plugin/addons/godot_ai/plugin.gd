@@ -26,8 +26,11 @@ func _enter_tree() -> void:
 	var script_handler := ScriptHandler.new(get_undo_redo())
 	var resource_handler := ResourceHandler.new(get_undo_redo())
 	var filesystem_handler := FilesystemHandler.new()
+	var signal_handler := SignalHandler.new(get_undo_redo())
+	var autoload_handler := AutoloadHandler.new()
+	var input_handler := InputHandler.new()
 	var test_handler := TestHandler.new(get_undo_redo(), _log_buffer)
-	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, test_handler]
+	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler]
 
 	_dispatcher.register("get_editor_state", editor_handler.get_editor_state)
 	_dispatcher.register("get_scene_tree", scene_handler.get_scene_tree)
@@ -54,6 +57,7 @@ func _enter_tree() -> void:
 	_dispatcher.register("reload_plugin", editor_handler.reload_plugin)
 	_dispatcher.register("quit_editor", editor_handler.quit_editor)
 	_dispatcher.register("get_project_setting", project_handler.get_project_setting)
+	_dispatcher.register("set_project_setting", project_handler.set_project_setting)
 	_dispatcher.register("search_filesystem", project_handler.search_filesystem)
 	_dispatcher.register("configure_client", client_handler.configure_client)
 	_dispatcher.register("check_client_status", client_handler.check_client_status)
@@ -68,6 +72,16 @@ func _enter_tree() -> void:
 	_dispatcher.register("read_file", filesystem_handler.read_file)
 	_dispatcher.register("write_file", filesystem_handler.write_file)
 	_dispatcher.register("reimport", filesystem_handler.reimport)
+	_dispatcher.register("list_signals", signal_handler.list_signals)
+	_dispatcher.register("connect_signal", signal_handler.connect_signal)
+	_dispatcher.register("disconnect_signal", signal_handler.disconnect_signal)
+	_dispatcher.register("list_autoloads", autoload_handler.list_autoloads)
+	_dispatcher.register("add_autoload", autoload_handler.add_autoload)
+	_dispatcher.register("remove_autoload", autoload_handler.remove_autoload)
+	_dispatcher.register("list_actions", input_handler.list_actions)
+	_dispatcher.register("add_action", input_handler.add_action)
+	_dispatcher.register("remove_action", input_handler.remove_action)
+	_dispatcher.register("bind_event", input_handler.bind_event)
 	_dispatcher.register("run_tests", test_handler.run_tests)
 	_dispatcher.register("get_test_results", test_handler.get_test_results)
 

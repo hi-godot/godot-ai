@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
+from godot_ai.handlers._readiness import require_writable
 from godot_ai.runtime.interface import Runtime
 from godot_ai.tools._pagination import paginate
 
@@ -21,6 +23,11 @@ COMMON_SETTINGS = [
 
 async def project_settings_get(runtime: Runtime, key: str) -> dict:
     return await runtime.send_command("get_project_setting", {"key": key})
+
+
+async def project_settings_set(runtime: Runtime, key: str, value: Any) -> dict:
+    require_writable(runtime)
+    return await runtime.send_command("set_project_setting", {"key": key, "value": value})
 
 
 async def filesystem_search(

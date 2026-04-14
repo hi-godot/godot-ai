@@ -592,7 +592,7 @@ All write tools check readiness before executing:
 ### Phase 2 exit criteria
 - [x] All Batch 5-7 tools implemented and tested
 - [x] Undo works for node operations (create, delete, reparent, set_property, duplicate, move, group ops)
-- [ ] Write operations are gated on readiness
+- [x] Write operations are gated on readiness (session tracks readiness state via events, Python handlers call require_writable() before writes)
 - [x] Manual test: ask Claude to create a scene with 5 nodes and a script — it can (smoke tested: 7 nodes, player script with 3 signals/4 exports/3 functions, attached, properties set)
 - [x] 60+ passing tests (192 Python + 124 GDScript = 316 total)
 
@@ -634,8 +634,15 @@ All write tools check readiness before executing:
 - Session selection UI or tool parameter
 - Session metadata includes enough info to distinguish (project path, window title)
 
+### Phase 3 progress
+- [x] Batch 1: Signal, autoload, input_map, project_settings_set — 11 new tools, 14 new GDScript handlers
+- [x] Readiness gating — GDScript computes readiness (ready/importing/playing/no_scene), sends events, Python gates all write operations
+- [x] Autoload path validation — `res://` prefix + file existence check (security hardening)
+- [x] Compact test output — summary + failures only by default, verbose opt-in
+- [x] 234 Python tests + 156 Godot-side tests = 390 total
+
 ### Phase 3 exit criteria
-- [ ] Signal, autoload, input_map tools work
+- [x] Signal, autoload, input_map tools work (signal_list/connect/disconnect, autoload_list/add/remove, input_map_list/add_action/remove_action/bind_event, project_settings_set)
 - [ ] Project run/stop cycle works reliably
 - [ ] Batch execution handles partial failures
 - [ ] Multi-instance: two Godot editors connected, commands route correctly

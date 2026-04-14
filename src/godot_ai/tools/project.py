@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import project as project_handlers
@@ -21,6 +23,25 @@ def register_project_tools(mcp: FastMCP) -> None:
         """
         runtime = DirectRuntime.from_context(ctx)
         return await project_handlers.project_settings_get(runtime, key=key)
+
+    @mcp.tool()
+    async def project_settings_set(
+        ctx: Context,
+        key: str,
+        value: Any,
+    ) -> dict:
+        """Set a Godot project setting by key.
+
+        Writes to ProjectSettings and saves to project.godot.
+        Common keys: "application/config/name",
+        "display/window/size/viewport_width", "physics/2d/default_gravity".
+
+        Args:
+            key: The setting key path (e.g. "application/config/name").
+            value: The value to set (string, int, float, or bool).
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await project_handlers.project_settings_set(runtime, key=key, value=value)
 
     @mcp.tool()
     async def filesystem_search(

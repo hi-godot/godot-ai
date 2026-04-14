@@ -18,6 +18,7 @@ class Session:
     protocol_version: int = 1
     current_scene: str = ""
     play_state: str = "stopped"
+    readiness: str = "ready"
     connected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> dict:
@@ -29,6 +30,7 @@ class Session:
             "protocol_version": self.protocol_version,
             "current_scene": self.current_scene,
             "play_state": self.play_state,
+            "readiness": self.readiness,
             "connected_at": self.connected_at.isoformat(),
         }
 

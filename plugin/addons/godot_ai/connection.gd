@@ -94,6 +94,7 @@ func _attempt_reconnect() -> void:
 
 
 func _send_handshake() -> void:
+	_last_readiness = get_readiness()
 	_send_json({
 		"type": "handshake",
 		"session_id": _session_id,
@@ -101,6 +102,7 @@ func _send_handshake() -> void:
 		"project_path": ProjectSettings.globalize_path("res://"),
 		"plugin_version": "0.0.1",
 		"protocol_version": 1,
+		"readiness": _last_readiness,
 	})
 
 
@@ -129,6 +131,18 @@ func _hook_editor_signals() -> void:
 
 var _last_scene_path := ""
 var _last_play_state := false
+var _last_readiness := ""
+
+
+## Compute current editor readiness from live Godot state.
+static func get_readiness() -> String:
+	if EditorInterface.get_resource_filesystem().is_scanning():
+		return "importing"
+	if EditorInterface.is_playing_scene():
+		return "playing"
+	if EditorInterface.get_edited_scene_root() == null:
+		return "no_scene"
+	return "ready"
 
 
 ## Check for scene/play state changes each frame (lightweight polling).
@@ -147,6 +161,13 @@ func _check_state_changes() -> void:
 		send_event("play_state_changed", {"play_state": state})
 		if log_buffer:
 			log_buffer.log("[event] play_state_changed -> %s" % state)
+
+	var readiness := get_readiness()
+	if readiness != _last_readiness:
+		_last_readiness = readiness
+		send_event("readiness_changed", {"readiness": readiness})
+		if log_buffer:
+			log_buffer.log("[event] readiness -> %s" % readiness)
 
 
 func _get_current_scene_path() -> String:

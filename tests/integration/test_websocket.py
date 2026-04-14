@@ -31,6 +31,15 @@ class TestHandshake:
         assert session.project_path == "/home/user/my_game"
         await plugin.close()
 
+    async def test_handshake_sets_readiness_from_plugin(self, harness):
+        plugin = await harness.connect_plugin(
+            session_id="sess-importing",
+            readiness="importing",
+        )
+        session = harness.registry.get("sess-importing")
+        assert session.readiness == "importing"
+        await plugin.close()
+
     async def test_disconnect_unregisters_session(self, harness):
         plugin = await harness.connect_plugin(session_id="sess-dc")
         await plugin.close()
@@ -167,6 +176,20 @@ class TestEvents:
 
         session = harness.registry.get("evt-2")
         assert session.play_state == "playing"
+        await plugin.close()
+
+    async def test_readiness_changed_event(self, harness):
+        plugin = await harness.connect_plugin(session_id="evt-3")
+        session = harness.registry.get("evt-3")
+        assert session.readiness == "ready"
+
+        await plugin.send_event("readiness_changed", {"readiness": "importing"})
+        await asyncio.sleep(0.05)
+        assert session.readiness == "importing"
+
+        await plugin.send_event("readiness_changed", {"readiness": "ready"})
+        await asyncio.sleep(0.05)
+        assert session.readiness == "ready"
         await plugin.close()
 
 

@@ -57,6 +57,7 @@ class GodotWebSocketServer:
                 project_path=handshake.project_path,
                 plugin_version=handshake.plugin_version,
                 protocol_version=handshake.protocol_version,
+                readiness=handshake.readiness,
             )
             self.registry.register(session)
             self._connections[session_id] = ws
@@ -104,6 +105,9 @@ class GodotWebSocketServer:
         elif event == "play_state_changed":
             session.play_state = event_data.get("play_state", "stopped")
             logger.info("Session %s: play state -> %s", session_id[:8], session.play_state)
+        elif event == "readiness_changed":
+            session.readiness = event_data.get("readiness", "ready")
+            logger.info("Session %s: readiness -> %s", session_id[:8], session.readiness)
 
     async def send_command(
         self,

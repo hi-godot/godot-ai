@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import pytest
 
+from godot_ai.handlers import autoload as autoload_handlers
 from godot_ai.handlers import client as client_handlers
 from godot_ai.handlers import editor as editor_handlers
 from godot_ai.handlers import filesystem as filesystem_handlers
+from godot_ai.handlers import input_map as input_map_handlers
 from godot_ai.handlers import node as node_handlers
 from godot_ai.handlers import project as project_handlers
 from godot_ai.handlers import resource as resource_handlers
 from godot_ai.handlers import scene as scene_handlers
 from godot_ai.handlers import script as script_handlers
 from godot_ai.handlers import session as session_handlers
+from godot_ai.handlers import signal as signal_handlers
 from godot_ai.handlers import testing as testing_handlers
 from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.sessions.registry import Session, SessionRegistry
@@ -44,6 +47,16 @@ class StubClient:
         if command == "get_project_setting":
             key = params["key"] if params else ""
             return {"key": key, "value": f"value:{key}"}
+        if command == "set_project_setting":
+            key = params.get("key", "")
+            value = params.get("value")
+            return {
+                "key": key,
+                "value": value,
+                "old_value": None,
+                "type": type(value).__name__,
+                "undoable": False,
+            }
         if command == "get_editor_state":
             return {
                 "current_scene": "res://main.tscn",
@@ -133,9 +146,23 @@ class StubClient:
         if command == "search_filesystem":
             return {"files": [{"path": f"res://file_{i}.gd"} for i in range(3)]}
         if command == "run_tests":
-            return {"passed": 5, "failed": 0, "results": []}
+            return {
+                "passed": 5,
+                "failed": 0,
+                "total": 5,
+                "duration_ms": 12,
+                "suites_run": ["scene", "node"],
+                "suite_count": 2,
+            }
         if command == "get_test_results":
-            return {"passed": 5, "failed": 0, "results": []}
+            return {
+                "passed": 5,
+                "failed": 0,
+                "total": 5,
+                "duration_ms": 12,
+                "suites_run": ["scene", "node"],
+                "suite_count": 2,
+            }
         if command == "configure_client":
             return {"status": "ok", "client": params.get("client", "")}
         if command == "check_client_status":
@@ -225,6 +252,86 @@ class StubClient:
                 "not_found": [],
                 "reimported_count": len(paths),
                 "not_found_count": 0,
+                "undoable": False,
+            }
+        if command == "list_signals":
+            return {
+                "path": params.get("path", ""),
+                "signals": [
+                    {"name": "ready", "args": []},
+                    {"name": "tree_entered", "args": []},
+                ],
+                "signal_count": 2,
+                "connections": [],
+                "connection_count": 0,
+            }
+        if command == "connect_signal":
+            return {
+                "source": params.get("path", ""),
+                "signal": params.get("signal", ""),
+                "target": params.get("target", ""),
+                "method": params.get("method", ""),
+                "undoable": True,
+            }
+        if command == "disconnect_signal":
+            return {
+                "source": params.get("path", ""),
+                "signal": params.get("signal", ""),
+                "target": params.get("target", ""),
+                "method": params.get("method", ""),
+                "undoable": True,
+            }
+        if command == "list_autoloads":
+            return {
+                "autoloads": [
+                    {
+                        "name": "GameManager",
+                        "path": "res://autoloads/game_manager.gd",
+                        "singleton": True,
+                    },
+                ],
+                "count": 1,
+            }
+        if command == "add_autoload":
+            return {
+                "name": params.get("name", ""),
+                "path": params.get("path", ""),
+                "singleton": params.get("singleton", True),
+                "undoable": False,
+            }
+        if command == "remove_autoload":
+            return {
+                "name": params.get("name", ""),
+                "removed": True,
+                "undoable": False,
+            }
+        if command == "list_actions":
+            return {
+                "actions": [
+                    {"name": "ui_accept", "events": [], "event_count": 0, "is_builtin": True},
+                    {"name": "jump", "events": [], "event_count": 0, "is_builtin": False},
+                ],
+                "count": 2,
+            }
+        if command == "add_action":
+            return {
+                "action": params.get("action", ""),
+                "deadzone": params.get("deadzone", 0.5),
+                "undoable": False,
+            }
+        if command == "remove_action":
+            return {
+                "action": params.get("action", ""),
+                "removed": True,
+                "undoable": False,
+            }
+        if command == "bind_event":
+            return {
+                "action": params.get("action", ""),
+                "event": {
+                    "type": params.get("event_type", ""),
+                    "keycode": params.get("keycode", ""),
+                },
                 "undoable": False,
             }
         return {"status": "ok"}
@@ -665,6 +772,27 @@ async def test_get_test_results_handler():
     assert client.calls[-1]["command"] == "get_test_results"
 
 
+async def test_run_tests_handler_verbose():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await testing_handlers.run_tests(runtime, verbose=True)
+    assert client.calls[-1]["params"] == {"verbose": True}
+
+
+async def test_get_test_results_handler_verbose():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await testing_handlers.get_test_results(runtime, verbose=True)
+    assert client.calls[-1]["params"] == {"verbose": True}
+
+
+async def test_input_map_list_handler_with_include_builtin():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await input_map_handlers.input_map_list(runtime, include_builtin=True)
+    assert client.calls[-1]["params"] == {"include_builtin": True}
+
+
 # ---------------------------------------------------------------------------
 # Client handler tests
 # ---------------------------------------------------------------------------
@@ -750,6 +878,21 @@ async def test_filesystem_search_handler():
     assert len(result["files"]) == 2
     assert result["total_count"] == 3
     assert client.calls[-1]["params"] == {"name": "file", "type": "GDScript", "path": "res://"}
+
+
+async def test_project_settings_set_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await project_handlers.project_settings_set(
+        runtime, key="display/window/size/viewport_width", value=1920
+    )
+    assert result["key"] == "display/window/size/viewport_width"
+    assert result["value"] == 1920
+    assert client.calls[-1]["command"] == "set_project_setting"
+    assert client.calls[-1]["params"] == {
+        "key": "display/window/size/viewport_width",
+        "value": 1920,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -936,3 +1079,128 @@ async def test_project_settings_resource_data_collects_errors():
     assert "application/config/name" in error_keys
     # Other settings should still succeed
     assert len(result["settings"]) == len(project_handlers.COMMON_SETTINGS) - 1
+
+
+# ---------------------------------------------------------------------------
+# Signal handler tests
+# ---------------------------------------------------------------------------
+
+
+async def test_signal_list_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await signal_handlers.signal_list(runtime, path="/Main/Player")
+    assert result["signal_count"] == 2
+    assert result["signals"][0]["name"] == "ready"
+    assert client.calls[-1]["command"] == "list_signals"
+    assert client.calls[-1]["params"] == {"path": "/Main/Player"}
+
+
+async def test_signal_connect_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await signal_handlers.signal_connect(
+        runtime,
+        path="/Main/Button",
+        signal="pressed",
+        target="/Main/Player",
+        method="_on_button_pressed",
+    )
+    assert result["signal"] == "pressed"
+    assert result["undoable"] is True
+    assert client.calls[-1]["command"] == "connect_signal"
+
+
+async def test_signal_disconnect_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await signal_handlers.signal_disconnect(
+        runtime,
+        path="/Main/Button",
+        signal="pressed",
+        target="/Main/Player",
+        method="_on_button_pressed",
+    )
+    assert result["signal"] == "pressed"
+    assert result["undoable"] is True
+    assert client.calls[-1]["command"] == "disconnect_signal"
+
+
+# ---------------------------------------------------------------------------
+# Autoload handler tests
+# ---------------------------------------------------------------------------
+
+
+async def test_autoload_list_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await autoload_handlers.autoload_list(runtime)
+    assert result["count"] == 1
+    assert result["autoloads"][0]["name"] == "GameManager"
+    assert client.calls[-1]["command"] == "list_autoloads"
+
+
+async def test_autoload_add_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await autoload_handlers.autoload_add(
+        runtime, name="AudioBus", path="res://autoloads/audio_bus.gd"
+    )
+    assert result["name"] == "AudioBus"
+    assert result["path"] == "res://autoloads/audio_bus.gd"
+    assert client.calls[-1]["command"] == "add_autoload"
+
+
+async def test_autoload_remove_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await autoload_handlers.autoload_remove(runtime, name="GameManager")
+    assert result["name"] == "GameManager"
+    assert result["removed"] is True
+    assert client.calls[-1]["command"] == "remove_autoload"
+
+
+# ---------------------------------------------------------------------------
+# Input map handler tests
+# ---------------------------------------------------------------------------
+
+
+async def test_input_map_list_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await input_map_handlers.input_map_list(runtime)
+    assert result["count"] == 2
+    assert result["actions"][0]["name"] == "ui_accept"
+    assert client.calls[-1]["command"] == "list_actions"
+
+
+async def test_input_map_add_action_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await input_map_handlers.input_map_add_action(
+        runtime, action="jump", deadzone=0.3
+    )
+    assert result["action"] == "jump"
+    assert result["deadzone"] == 0.3
+    assert client.calls[-1]["command"] == "add_action"
+
+
+async def test_input_map_remove_action_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await input_map_handlers.input_map_remove_action(runtime, action="jump")
+    assert result["action"] == "jump"
+    assert result["removed"] is True
+    assert client.calls[-1]["command"] == "remove_action"
+
+
+async def test_input_map_bind_event_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await input_map_handlers.input_map_bind_event(
+        runtime, action="jump", event_type="key", keycode="Space"
+    )
+    assert result["action"] == "jump"
+    assert result["event"]["type"] == "key"
+    assert client.calls[-1]["command"] == "bind_event"
+    assert client.calls[-1]["params"]["keycode"] == "Space"

@@ -30,7 +30,7 @@ func run_suite(suite: McpTestSuite, test_filter: String = "") -> void:
 		})
 
 
-func run_suites(suites: Array, suite_filter: String = "", test_filter: String = "", ctx: Dictionary = {}) -> Dictionary:
+func run_suites(suites: Array, suite_filter: String = "", test_filter: String = "", ctx: Dictionary = {}, verbose: bool = false) -> Dictionary:
 	_results.clear()
 	var start := Time.get_ticks_msec()
 
@@ -42,27 +42,38 @@ func run_suites(suites: Array, suite_filter: String = "", test_filter: String = 
 		suite.suite_teardown()
 
 	_last_run_ms = Time.get_ticks_msec() - start
-	return get_results()
+	return get_results(verbose)
 
 
-func get_results() -> Dictionary:
+func get_results(verbose: bool = false) -> Dictionary:
 	var passed := 0
 	var failed := 0
 	var failures: Array[Dictionary] = []
+	var suites_seen := {}
 	for r in _results:
+		suites_seen[r.suite] = true
 		if r.passed:
 			passed += 1
 		else:
 			failed += 1
 			failures.append(r)
-	return {
+
+	var result := {
 		"passed": passed,
 		"failed": failed,
 		"total": _results.size(),
 		"duration_ms": _last_run_ms,
-		"failures": failures,
-		"results": _results,
+		"suites_run": suites_seen.keys(),
+		"suite_count": suites_seen.size(),
 	}
+
+	if not failures.is_empty():
+		result["failures"] = failures
+
+	if verbose:
+		result["results"] = _results
+
+	return result
 
 
 func clear() -> void:

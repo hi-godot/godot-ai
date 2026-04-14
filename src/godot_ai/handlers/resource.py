@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from godot_ai.handlers._readiness import require_writable
 from godot_ai.runtime.interface import Runtime
 from godot_ai.tools._pagination import paginate
 
@@ -30,6 +31,7 @@ async def resource_assign(
     property: str,
     resource_path: str,
 ) -> dict:
+    require_writable(runtime)
     return await runtime.send_command(
         "assign_resource",
         {"path": path, "property": property, "resource_path": resource_path},

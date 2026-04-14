@@ -19,6 +19,7 @@ func get_editor_state(_params: Dictionary) -> Dictionary:
 			"project_name": ProjectSettings.get_setting("application/config/name", ""),
 			"current_scene": scene_root.scene_file_path if scene_root else "",
 			"is_playing": EditorInterface.is_playing_scene(),
+			"readiness": Connection.get_readiness(),
 		}
 	}
 

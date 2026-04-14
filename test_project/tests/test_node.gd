@@ -263,6 +263,12 @@ func test_move_node_out_of_range() -> void:
 # ----- add_to_group / remove_from_group -----
 
 func test_add_to_group() -> void:
+	## Ensure clean state: remove from group if left over from a previous run
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var cam := ScenePath.resolve("/Main/Camera3D", scene_root)
+	if cam and cam.is_in_group("_mcp_test_group"):
+		cam.remove_from_group("_mcp_test_group")
+
 	var result := _handler.add_to_group({
 		"path": "/Main/Camera3D",
 		"group": "_mcp_test_group",

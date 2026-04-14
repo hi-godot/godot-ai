@@ -19,6 +19,7 @@ func _init(undo_redo: EditorUndoRedoManager, log_buffer: McpLogBuffer) -> void:
 func run_tests(params: Dictionary) -> Dictionary:
 	var suite_filter: String = params.get("suite", "")
 	var test_filter: String = params.get("test_name", "")
+	var verbose: bool = params.get("verbose", false)
 
 	var suites := _discover_suites()
 	if suites.is_empty():
@@ -29,12 +30,13 @@ func run_tests(params: Dictionary) -> Dictionary:
 		"log_buffer": _log_buffer,
 	}
 
-	var results := _runner.run_suites(suites, suite_filter, test_filter, ctx)
+	var results := _runner.run_suites(suites, suite_filter, test_filter, ctx, verbose)
 	return {"data": results}
 
 
-func get_test_results(_params: Dictionary) -> Dictionary:
-	return {"data": _runner.get_results()}
+func get_test_results(params: Dictionary) -> Dictionary:
+	var verbose: bool = params.get("verbose", false)
+	return {"data": _runner.get_results(verbose)}
 
 
 func _discover_suites() -> Array[McpTestSuite]:

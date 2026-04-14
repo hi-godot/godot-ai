@@ -698,6 +698,42 @@ class TestProjectSettingsGetTool:
 
 
 # ---------------------------------------------------------------------------
+# project_settings_set
+# ---------------------------------------------------------------------------
+
+
+class TestProjectSettingsSetTool:
+    async def test_set_setting(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "set_project_setting"
+            assert cmd["params"]["key"] == "display/window/size/viewport_width"
+            assert cmd["params"]["value"] == 1920
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "key": "display/window/size/viewport_width",
+                    "value": 1920,
+                    "old_value": 1152,
+                    "type": "int",
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "project_settings_set",
+            {"key": "display/window/size/viewport_width", "value": 1920},
+        )
+        await task
+
+        assert result.data["value"] == 1920
+        assert result.data["old_value"] == 1152
+
+
+# ---------------------------------------------------------------------------
 # filesystem_search
 # ---------------------------------------------------------------------------
 
@@ -1368,3 +1404,470 @@ class TestImportReimportTool:
 
         assert result.data["reimported_count"] == 2
         assert result.data["not_found_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# signal_list / signal_connect / signal_disconnect
+# ---------------------------------------------------------------------------
+
+
+class TestSignalListTool:
+    async def test_list_signals(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "list_signals"
+            assert cmd["params"]["path"] == "/Main/Button"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Button",
+                    "signals": [{"name": "pressed", "args": []}],
+                    "signal_count": 1,
+                    "connections": [],
+                    "connection_count": 0,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("signal_list", {"path": "/Main/Button"})
+        await task
+
+        assert result.data["signal_count"] == 1
+        assert result.data["signals"][0]["name"] == "pressed"
+
+
+class TestSignalConnectTool:
+    async def test_connect_signal(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "connect_signal"
+            assert cmd["params"]["signal"] == "pressed"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "source": "/Main/Button",
+                    "signal": "pressed",
+                    "target": "/Main/Player",
+                    "method": "_on_pressed",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "signal_connect",
+            {
+                "path": "/Main/Button",
+                "signal": "pressed",
+                "target": "/Main/Player",
+                "method": "_on_pressed",
+            },
+        )
+        await task
+
+        assert result.data["undoable"] is True
+
+
+class TestSignalDisconnectTool:
+    async def test_disconnect_signal(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "disconnect_signal"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "source": "/Main/Button",
+                    "signal": "pressed",
+                    "target": "/Main/Player",
+                    "method": "_on_pressed",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "signal_disconnect",
+            {
+                "path": "/Main/Button",
+                "signal": "pressed",
+                "target": "/Main/Player",
+                "method": "_on_pressed",
+            },
+        )
+        await task
+
+        assert result.data["undoable"] is True
+
+
+# ---------------------------------------------------------------------------
+# autoload_list / autoload_add / autoload_remove
+# ---------------------------------------------------------------------------
+
+
+class TestAutoloadListTool:
+    async def test_list_autoloads(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "list_autoloads"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "autoloads": [
+                        {
+                            "name": "GameManager",
+                            "path": "res://autoloads/game_manager.gd",
+                            "singleton": True,
+                        },
+                    ],
+                    "count": 1,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("autoload_list", {})
+        await task
+
+        assert result.data["count"] == 1
+        assert result.data["autoloads"][0]["name"] == "GameManager"
+
+
+class TestAutoloadAddTool:
+    async def test_add_autoload(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "add_autoload"
+            assert cmd["params"]["name"] == "AudioBus"
+            assert cmd["params"]["path"] == "res://audio_bus.gd"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "name": "AudioBus",
+                    "path": "res://audio_bus.gd",
+                    "singleton": True,
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "autoload_add",
+            {"name": "AudioBus", "path": "res://audio_bus.gd"},
+        )
+        await task
+
+        assert result.data["name"] == "AudioBus"
+
+
+class TestAutoloadRemoveTool:
+    async def test_remove_autoload(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "remove_autoload"
+            assert cmd["params"]["name"] == "AudioBus"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"name": "AudioBus", "removed": True, "undoable": False},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("autoload_remove", {"name": "AudioBus"})
+        await task
+
+        assert result.data["removed"] is True
+
+
+# ---------------------------------------------------------------------------
+# input_map_list / input_map_add_action / input_map_remove_action / input_map_bind_event
+# ---------------------------------------------------------------------------
+
+
+class TestInputMapListTool:
+    async def test_list_actions(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "list_actions"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "actions": [
+                        {"name": "jump", "events": [], "event_count": 0, "is_builtin": False},
+                    ],
+                    "count": 1,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("input_map_list", {})
+        await task
+
+        assert result.data["count"] == 1
+        assert result.data["actions"][0]["name"] == "jump"
+
+
+class TestInputMapAddActionTool:
+    async def test_add_action(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "add_action"
+            assert cmd["params"]["action"] == "attack"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"action": "attack", "deadzone": 0.5, "undoable": False},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "input_map_add_action", {"action": "attack"}
+        )
+        await task
+
+        assert result.data["action"] == "attack"
+
+
+class TestInputMapRemoveActionTool:
+    async def test_remove_action(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "remove_action"
+            assert cmd["params"]["action"] == "attack"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"action": "attack", "removed": True, "undoable": False},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "input_map_remove_action", {"action": "attack"}
+        )
+        await task
+
+        assert result.data["removed"] is True
+
+
+class TestInputMapBindEventTool:
+    async def test_bind_key_event(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "bind_event"
+            assert cmd["params"]["action"] == "jump"
+            assert cmd["params"]["event_type"] == "key"
+            assert cmd["params"]["keycode"] == "Space"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "action": "jump",
+                    "event": {"type": "key", "keycode": "Space"},
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "input_map_bind_event",
+            {"action": "jump", "event_type": "key", "keycode": "Space"},
+        )
+        await task
+
+        assert result.data["event"]["type"] == "key"
+        assert result.data["event"]["keycode"] == "Space"
+
+    async def test_bind_key_event_with_modifiers(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["ctrl"] is True
+            assert cmd["params"]["alt"] is True
+            assert cmd["params"]["shift"] is True
+            assert cmd["params"]["meta"] is True
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "action": "save",
+                    "event": {"type": "key", "keycode": "S", "ctrl": True},
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "input_map_bind_event",
+            {
+                "action": "save",
+                "event_type": "key",
+                "keycode": "S",
+                "ctrl": True,
+                "alt": True,
+                "shift": True,
+                "meta": True,
+            },
+        )
+        await task
+
+        assert result.data["event"]["type"] == "key"
+
+    async def test_bind_mouse_button_event(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["event_type"] == "mouse_button"
+            assert cmd["params"]["button"] == 1
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "action": "shoot",
+                    "event": {"type": "mouse_button", "button": 1},
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "input_map_bind_event",
+            {"action": "shoot", "event_type": "mouse_button", "button": 1},
+        )
+        await task
+
+        assert result.data["event"]["type"] == "mouse_button"
+        assert result.data["event"]["button"] == 1
+
+
+# ---------------------------------------------------------------------------
+# input_map_list (include_builtin)
+# ---------------------------------------------------------------------------
+
+
+class TestInputMapListBuiltinFilter:
+    async def test_list_with_include_builtin(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "list_actions"
+            assert cmd["params"]["include_builtin"] is True
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "actions": [
+                        {"name": "ui_accept", "events": [], "event_count": 0, "is_builtin": True},
+                    ],
+                    "count": 1,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "input_map_list", {"include_builtin": True}
+        )
+        await task
+
+        assert result.data["count"] == 1
+        assert result.data["actions"][0]["is_builtin"] is True
+
+
+# ---------------------------------------------------------------------------
+# Readiness gating
+# ---------------------------------------------------------------------------
+
+
+class TestReadinessGating:
+    async def _set_readiness(self, plugin, readiness: str) -> None:
+        """Send a readiness_changed event and wait for it to be processed."""
+        await plugin.send_event("readiness_changed", {"readiness": readiness})
+        await asyncio.sleep(0.05)
+
+    async def test_write_tool_rejected_when_importing(self, mcp_stack):
+        client, plugin = mcp_stack
+        await self._set_readiness(plugin, "importing")
+
+        result = await client.call_tool(
+            "node_create", {"type": "Node3D", "name": "Blocked"},
+            raise_on_error=False,
+        )
+
+        assert result.is_error
+        assert "EDITOR_NOT_READY" in str(result.content)
+
+    async def test_write_tool_rejected_when_playing(self, mcp_stack):
+        client, plugin = mcp_stack
+        await self._set_readiness(plugin, "playing")
+
+        result = await client.call_tool("scene_save", {}, raise_on_error=False)
+
+        assert result.is_error
+        assert "EDITOR_NOT_READY" in str(result.content)
+
+    async def test_read_tool_allowed_when_importing(self, mcp_stack):
+        client, plugin = mcp_stack
+        await self._set_readiness(plugin, "importing")
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_editor_state"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "godot_version": "4.4.1",
+                    "project_name": "Test",
+                    "current_scene": "",
+                    "is_playing": False,
+                    "readiness": "importing",
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("editor_state", {})
+        await task
+
+        assert not result.is_error
+
+    async def test_write_tool_works_after_readiness_restored(self, mcp_stack):
+        client, plugin = mcp_stack
+        # First set importing to block writes
+        await self._set_readiness(plugin, "importing")
+        result = await client.call_tool(
+            "node_create", {"type": "Node3D", "name": "Blocked"},
+            raise_on_error=False,
+        )
+        assert result.is_error
+
+        # Restore readiness
+        await self._set_readiness(plugin, "ready")
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "create_node"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"path": "/Main/Unblocked", "type": "Node3D"},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "node_create", {"type": "Node3D", "name": "Unblocked"}
+        )
+        await task
+
+        assert not result.is_error
+        assert result.data["path"] == "/Main/Unblocked"

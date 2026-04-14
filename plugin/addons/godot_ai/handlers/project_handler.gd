@@ -23,6 +23,38 @@ func get_project_setting(params: Dictionary) -> Dictionary:
 	}
 
 
+func set_project_setting(params: Dictionary) -> Dictionary:
+	var key: String = params.get("key", "")
+	if key.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: key")
+
+	if not params.has("value"):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: value")
+
+	var value = params.get("value")
+	var had_setting := ProjectSettings.has_setting(key)
+	var old_value = ProjectSettings.get_setting(key) if had_setting else null
+	ProjectSettings.set_setting(key, value)
+	var err := ProjectSettings.save()
+	if err != OK:
+		if had_setting:
+			ProjectSettings.set_setting(key, old_value)
+		else:
+			ProjectSettings.clear(key)
+		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to save project settings (error %d)" % err)
+
+	return {
+		"data": {
+			"key": key,
+			"value": NodeHandler._serialize_value(value),
+			"old_value": NodeHandler._serialize_value(old_value),
+			"type": type_string(typeof(value)),
+			"undoable": false,
+			"reason": "ProjectSettings changes are saved to disk",
+		}
+	}
+
+
 func search_filesystem(params: Dictionary) -> Dictionary:
 	var name_filter: String = params.get("name", "")
 	var type_filter: String = params.get("type", "")
