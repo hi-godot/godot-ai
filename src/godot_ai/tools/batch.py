@@ -6,10 +6,11 @@ from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import batch as batch_handlers
 from godot_ai.runtime.direct import DirectRuntime
+from godot_ai.tools import DEFER_META
 
 
 def register_batch_tools(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def batch_execute(
         ctx: Context,
         commands: list[dict],

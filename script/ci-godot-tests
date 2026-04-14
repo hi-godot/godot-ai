@@ -79,11 +79,11 @@ if [ "$FINAL_COUNT" -eq 0 ] 2>/dev/null; then
   exit 1
 fi
 
-# Call run_tests
+# Call test_run
 echo "Running handler tests..."
 RESULT=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
   -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run_tests","arguments":{}}}')
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"test_run","arguments":{}}}')
 
 # Parse and report results
 echo "$RESULT" | python3 -c "
@@ -110,7 +110,7 @@ for line in raw.split('\n'):
             sys.exit(1)
         break
 else:
-    print('ERROR: No valid response from run_tests')
+    print('ERROR: No valid response from test_run')
     print(f'Raw response: {raw[:500]}')
     sys.exit(1)
 "

@@ -25,6 +25,7 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
 - **Plugin runs on main thread**: All GDScript executes in `_process()` with a 4ms frame budget. Never block. Use `call_deferred` for scene tree mutations.
 - **Scene paths are clean**: `/Main/Camera3D` format, not raw Godot internal paths. Use `ScenePath.from_node(node, scene_root)` in GDScript.
 - **MCP logging**: Plugin prints `MCP | [recv] command(params)` / `MCP | [send] command -> ok` to Godot console. Controlled by `mcp_logging` var.
+- **Tool-search-friendly naming**: All MCP tools use `domain_action` namespacing (`scene_*`, `node_*`, `script_*`, etc.). Non-core tools are tagged `meta={"defer_loading": True}` for Anthropic tool-search compatibility; core tools (`editor_state`, `scene_get_hierarchy`, `node_get_properties`, `session_list`, `session_activate`) stay non-deferred. Plugin command names (sent over WebSocket) are independent — the MCP tool `editor_reload_plugin` dispatches the plugin command `reload_plugin`.
 
 ## Dev workflow
 
@@ -53,7 +54,7 @@ This uses `src/godot_ai/asgi.py` to run uvicorn with its factory reload path. Uv
 
 ### Plugin reload
 
-The `reload_plugin` MCP tool triggers a live plugin reload inside Godot (`EditorInterface.set_plugin_enabled` off/on). Requires the server to be running externally (not managed by the plugin). The Python handler waits for the new session via `SessionRegistry.wait_for_session()`.
+The `editor_reload_plugin` MCP tool triggers a live plugin reload inside Godot (`EditorInterface.set_plugin_enabled` off/on). Requires the server to be running externally (not managed by the plugin). The Python handler waits for the new session via `SessionRegistry.wait_for_session()`.
 
 The Godot dock also has a **Start/Stop Dev Server** button for convenience.
 
@@ -67,10 +68,10 @@ pytest -v                    # 277 unit + integration tests
 ### Godot-side tests
 GDScript test suites in `test_project/tests/` exercise handlers inside the running editor. Run via MCP:
 ```
-run_tests                    # compact: summary + failures only
-run_tests suite=scene        # run one suite
-run_tests verbose=true       # include every individual test result
-get_test_results             # review last results
+test_run                     # compact: summary + failures only
+test_run suite=scene         # run one suite
+test_run verbose=true        # include every individual test result
+test_results_get             # review last results
 ```
 
 Test suites extend `McpTestSuite` (assertion methods: `assert_true`, `assert_eq`, `assert_has_key`, `assert_contains`, `assert_is_error`, etc.). Drop `test_*.gd` files in `res://tests/` and they're auto-discovered.
@@ -90,7 +91,7 @@ Test suites extend `McpTestSuite` (assertion methods: `assert_true`, `assert_eq`
 2. `pytest -v` — all Python tests pass
 3. Open `test_project/` in Godot (or launch: `/Applications/Godot_mono.app/Contents/MacOS/Godot --editor --path test_project/`)
 4. `session_activate` the test_project session if multiple editors are connected
-5. `run_tests` via MCP — all GDScript tests pass (0 failures)
+5. `test_run` via MCP — all GDScript tests pass (0 failures)
 6. **Live smoke test** new/changed features against the real editor:
    - Call each new tool and verify the response makes sense
    - For write tools: verify the change is visible in the editor, and verify undo works (Ctrl+Z in Godot)
@@ -112,10 +113,11 @@ MCP tools `client_configure` and `client_status` expose this to AI clients.
 1. Add a handler method in the appropriate GDScript `handlers/*.gd` file
 2. Register it in `plugin.gd`: `_dispatcher.register("command_name", handler.method)`
 3. Add a shared Python handler in `handlers/<domain>.py` that calls `runtime.send_command("command_name", params)`
-4. Add a Python tool in `tools/<domain>.py` that creates `DirectRuntime` and delegates to the handler
-5. Register the tool module in `server.py` if it's a new file
+4. Add a Python tool in `tools/<domain>.py` — name it `domain_action` (e.g. `scene_open`, `node_create`), decorate with `@mcp.tool(meta=DEFER_META)` from `godot_ai.tools`. Only omit `meta` for the ~5 always-loaded core tools (`editor_state`, `scene_get_hierarchy`, `node_get_properties`, `session_list`, `session_activate`)
+5. Register the tool module in `server.py` if it's a new file. If it introduces a new namespace, add it to the tool-categories blurb in `server.py` `instructions=`
 6. For write tools: add `require_writable(runtime)` call at the top of the Python handler
-7. Add tests: handler unit test, Python integration test, AND GDScript test in `test_project/tests/`
+7. Write a description with natural-language keywords a user would search for (e.g. `screenshot`, `keybinding`, `asset`) alongside the Godot term
+8. Add tests: handler unit test, Python integration test, AND GDScript test in `test_project/tests/`
 
 ## Write tools must be undoable
 
@@ -143,7 +145,7 @@ New features don't ship without tests. Regressions are caught before they merge.
 
 - **Re-entrant `_process()` during save**: `EditorInterface.save_scene()` internally renders a preview thumbnail, which triggers frame processing. If `Connection._process()` runs during this, WebSocket polling and command dispatch re-enter, crashing Godot (`SIGABRT` in `_save_scene_with_preview`). Fixed by setting `Connection.pause_processing = true` around save calls in `SceneHandler`. Any new handler that calls `save_scene()`, `save_scene_as()`, or `save_all_scenes()` must do the same.
 - **GDScript tests must not call `EditorInterface.save_scene()` or `scene_create`/`scene_open`**: These trigger modal dialogs or scene switches that freeze or crash the test runner. Test only validation/error paths for these operations in GDScript; full behavior is covered by Python integration tests.
-- **GDScript tests must not call `quit_editor` or `reload_plugin`**: These terminate or restart the plugin, killing the test runner. Tested via Python integration tests and CI smoke scripts (`script/ci-quit-test`, `script/ci-reload-test`).
+- **GDScript tests must not call `quit_editor` or `reload_plugin`**: These terminate or restart the plugin, killing the test runner. Tested via Python integration tests and CI smoke scripts (`script/ci-quit-test`, `script/ci-reload-test`). (Note: plugin command names stay `quit_editor` / `reload_plugin`; the MCP tool names are `editor_quit` / `editor_reload_plugin`.)
 
 ## What NOT to do
 

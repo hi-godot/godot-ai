@@ -7,7 +7,7 @@ from typing import Any
 from godot_ai.runtime.interface import Runtime
 
 
-async def run_tests(
+async def test_run(
     runtime: Runtime,
     suite: str = "",
     test_name: str = "",
@@ -23,7 +23,7 @@ async def run_tests(
     return await runtime.send_command("run_tests", params, timeout=30.0)
 
 
-async def get_test_results(runtime: Runtime, verbose: bool = False) -> dict:
+async def test_results_get(runtime: Runtime, verbose: bool = False) -> dict:
     params: dict[str, Any] = {}
     if verbose:
         params["verbose"] = True

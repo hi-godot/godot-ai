@@ -824,7 +824,7 @@ class TestReloadPluginTool:
             return ws
 
         task = asyncio.create_task(simulate_reload())
-        result = await client.call_tool("reload_plugin", {})
+        result = await client.call_tool("editor_reload_plugin", {})
         new_ws = await task
 
         assert result.data["status"] == "reloaded"
@@ -909,7 +909,7 @@ class TestTestingTools:
             await plugin.send_response(cmd["request_id"], {"passed": 3, "failed": 0, "results": []})
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("run_tests", {})
+        result = await client.call_tool("test_run", {})
         await task
         assert result.data["passed"] == 3
 
@@ -923,7 +923,7 @@ class TestTestingTools:
             await plugin.send_response(cmd["request_id"], {"passed": 2, "failed": 0, "results": []})
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("run_tests", {"suite": "scene"})
+        result = await client.call_tool("test_run", {"suite": "scene"})
         await task
         assert result.data["passed"] == 2
 
@@ -936,7 +936,7 @@ class TestTestingTools:
             await plugin.send_response(cmd["request_id"], {"passed": 5, "failed": 1, "results": []})
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("get_test_results", {})
+        result = await client.call_tool("test_results_get", {})
         await task
         assert result.data["failed"] == 1
 
@@ -1398,7 +1398,7 @@ class TestImportReimportTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "import_reimport", {"paths": ["res://icon.png", "res://logo.png"]}
+            "filesystem_reimport", {"paths": ["res://icon.png", "res://logo.png"]}
         )
         await task
 
@@ -1980,7 +1980,7 @@ class TestProjectStopTool:
 
 
 # ---------------------------------------------------------------------------
-# performance_get_monitors
+# editor_screenshot
 # ---------------------------------------------------------------------------
 
 
@@ -2230,11 +2230,11 @@ class TestEditorScreenshotTool:
 
 
 # ---------------------------------------------------------------------------
-# performance_get_monitors
+# performance_monitors_get
 # ---------------------------------------------------------------------------
 
 
-class TestPerformanceGetMonitorsTool:
+class TestPerformanceMonitorsGetTool:
     async def test_get_all_monitors(self, mcp_stack):
         client, plugin = mcp_stack
 
@@ -2253,7 +2253,7 @@ class TestPerformanceGetMonitorsTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("performance_get_monitors", {})
+        result = await client.call_tool("performance_monitors_get", {})
         await task
 
         assert not result.is_error
@@ -2276,7 +2276,7 @@ class TestPerformanceGetMonitorsTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "performance_get_monitors",
+            "performance_monitors_get",
             {"monitors": ["time/fps"]},
         )
         await task

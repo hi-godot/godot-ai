@@ -6,12 +6,13 @@ from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import editor as editor_handlers
 from godot_ai.runtime.direct import DirectRuntime
+from godot_ai.tools import DEFER_META
 
 
 def register_editor_tools(mcp: FastMCP) -> None:
     @mcp.tool()
     async def editor_state(ctx: Context) -> dict:
-        """Get the current Godot editor state.
+        """Get current Godot editor (IDE) state: version, readiness, open scene.
 
         Returns Godot version, project name, current scene path,
         and whether the project is currently playing.
@@ -19,7 +20,7 @@ def register_editor_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await editor_handlers.editor_state(runtime)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def editor_selection_get(ctx: Context) -> dict:
         """Get the currently selected nodes in the Godot editor.
 
@@ -28,7 +29,7 @@ def register_editor_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await editor_handlers.editor_selection_get(runtime)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def logs_read(
         ctx: Context,
         count: int = 50,
@@ -47,7 +48,7 @@ def register_editor_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await editor_handlers.logs_read(runtime, count=count, offset=offset)
 
-    @mcp.tool(output_schema=None)
+    @mcp.tool(output_schema=None, meta=DEFER_META)
     async def editor_screenshot(
         ctx: Context,
         source: str = "viewport",
@@ -59,7 +60,7 @@ def register_editor_tools(mcp: FastMCP) -> None:
         azimuth: float | None = None,
         fov: float | None = None,
     ):
-        """Capture a screenshot from the Godot editor.
+        """Capture a screenshot / image / picture of the Godot editor viewport or running game view.
 
         Takes a screenshot and optionally returns it as an inline image.
 
@@ -122,12 +123,12 @@ def register_editor_tools(mcp: FastMCP) -> None:
             fov=fov,
         )
 
-    @mcp.tool()
-    async def performance_get_monitors(
+    @mcp.tool(meta=DEFER_META)
+    async def performance_monitors_get(
         ctx: Context,
         monitors: list[str] | None = None,
     ) -> dict:
-        """Get Godot performance monitor values.
+        """Get Godot performance monitor values (FPS, memory, draw calls, frame time).
 
         Returns values from Godot's Performance singleton: FPS, memory usage,
         object counts, render stats, physics stats, and navigation stats.
@@ -147,9 +148,9 @@ def register_editor_tools(mcp: FastMCP) -> None:
             monitors: Optional list of monitor names to return. If omitted, returns all.
         """
         runtime = DirectRuntime.from_context(ctx)
-        return await editor_handlers.performance_get_monitors(runtime, monitors=monitors)
+        return await editor_handlers.performance_monitors_get(runtime, monitors=monitors)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def logs_clear(ctx: Context) -> dict:
         """Clear the MCP log buffer in the Godot editor.
 
@@ -158,9 +159,9 @@ def register_editor_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await editor_handlers.logs_clear(runtime)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def editor_quit(ctx: Context) -> dict:
-        """Gracefully quit the Godot editor.
+        """Gracefully quit (close / shutdown) the Godot editor (IDE).
 
         Sends a quit signal to the editor on the next frame, allowing
         any pending responses to be sent first. The editor will close
@@ -169,8 +170,8 @@ def register_editor_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await editor_handlers.editor_quit(runtime)
 
-    @mcp.tool()
-    async def reload_plugin(ctx: Context) -> dict:
+    @mcp.tool(meta=DEFER_META)
+    async def editor_reload_plugin(ctx: Context) -> dict:
         """Reload the Godot editor plugin and wait for it to reconnect.
 
         Sends a reload command to the plugin, which disables and re-enables
@@ -182,4 +183,21 @@ def register_editor_tools(mcp: FastMCP) -> None:
         Start with: python -m godot_ai --transport streamable-http --port 8000 --reload
         """
         runtime = DirectRuntime.from_context(ctx)
-        return await editor_handlers.reload_plugin(runtime)
+        return await editor_handlers.editor_reload_plugin(runtime)
+
+    @mcp.tool(meta=DEFER_META)
+    async def editor_selection_set(
+        ctx: Context,
+        paths: list[str],
+    ) -> dict:
+        """Select nodes in the Godot editor by their scene paths.
+
+        Replaces the current selection with the specified nodes. Any
+        paths that don't resolve to existing nodes are reported in
+        the not_found list.
+
+        Args:
+            paths: List of scene paths to select (e.g. ["/Main/Camera3D", "/Main/Player"]).
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await editor_handlers.editor_selection_set(runtime, paths=paths)

@@ -6,10 +6,11 @@ from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import resource as resource_handlers
 from godot_ai.runtime.direct import DirectRuntime
+from godot_ai.tools import DEFER_META
 
 
 def register_resource_tools(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def resource_search(
         ctx: Context,
         type: str = "",
@@ -17,7 +18,7 @@ def register_resource_tools(mcp: FastMCP) -> None:
         offset: int = 0,
         limit: int = 100,
     ) -> dict:
-        """Search for resources in the Godot project by type or path.
+        """Search for resources (assets: meshes, textures, materials, scenes) by type or path.
 
         At least one filter must be provided. Results are paginated.
         Type matching includes subclasses (e.g. type="Texture2D" finds
@@ -38,9 +39,9 @@ def register_resource_tools(mcp: FastMCP) -> None:
             limit=limit,
         )
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def resource_load(ctx: Context, path: str) -> dict:
-        """Inspect a resource's properties.
+        """Inspect a resource's (asset's) properties — materials, meshes, textures, .tres files.
 
         Loads the resource at the given path and returns its type and
         all editor-visible properties with their current values.
@@ -51,14 +52,14 @@ def register_resource_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await resource_handlers.resource_load(runtime, path=path)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def resource_assign(
         ctx: Context,
         path: str,
         property: str,
         resource_path: str,
     ) -> dict:
-        """Assign a resource to a node property.
+        """Assign a resource (asset — mesh, texture, material, etc.) to a node property.
 
         Loads the resource at resource_path and sets it on the specified
         property of the node at path. This operation is undoable via

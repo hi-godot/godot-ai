@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke-test the reload_plugin tool in CI.
+# Smoke-test the editor_reload_plugin tool in CI.
 # 1. Creates a node (cube) via the OLD plugin
 # 2. Reloads the plugin, verifies new session ID
 # 3. Checks the log buffer is fresh (proves handlers were rebuilt)
@@ -88,8 +88,8 @@ print(f'Created node: {path}')
 "
 
 # --- Step 2: Reload the plugin ---
-echo "Calling reload_plugin..."
-RELOAD_RESULT=$(mcp_call_or_die "reload_plugin" reload_plugin '{}')
+echo "Calling editor_reload_plugin..."
+RELOAD_RESULT=$(mcp_call_or_die "editor_reload_plugin" editor_reload_plugin '{}')
 echo "$RELOAD_RESULT" | python3 -c "
 import json, sys
 content = json.loads(sys.stdin.read())
@@ -97,13 +97,13 @@ status = content.get('status', '')
 old_id = content.get('old_session_id', '')
 new_id = content.get('new_session_id', '')
 if status != 'reloaded':
-    print(f'FAIL: reload_plugin returned status={status!r}, expected \"reloaded\"')
+    print(f'FAIL: editor_reload_plugin returned status={status!r}, expected \"reloaded\"')
     print(f'Full response: {content}')
     sys.exit(1)
 if old_id == new_id:
     print(f'FAIL: old and new session IDs are the same: {old_id}')
     sys.exit(1)
-print(f'reload_plugin OK: {old_id[:12]}... -> {new_id[:12]}...')
+print(f'editor_reload_plugin OK: {old_id[:12]}... -> {new_id[:12]}...')
 "
 
 # --- Step 3: Verify log buffer is fresh (proves plugin fully rebuilt) ---

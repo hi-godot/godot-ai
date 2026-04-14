@@ -6,15 +6,17 @@ from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import signal as signal_handlers
 from godot_ai.runtime.direct import DirectRuntime
+from godot_ai.tools import DEFER_META
 
 
 def register_signal_tools(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def signal_list(ctx: Context, path: str) -> dict:
-        """List all signals on a node and their current connections.
+        """List all signals (events) on a node and their current connections.
 
-        Returns both built-in and custom signals, plus any active
-        signal connections.
+        Signals are Godot's event/observer mechanism — nodes emit signals
+        that other nodes subscribe to via `signal_connect`. Returns both
+        built-in and custom signals, plus any active connections.
 
         Args:
             path: Scene path of the node (e.g. "/Player").
@@ -22,7 +24,7 @@ def register_signal_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await signal_handlers.signal_list(runtime, path=path)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def signal_connect(
         ctx: Context,
         path: str,
@@ -30,9 +32,10 @@ def register_signal_tools(mcp: FastMCP) -> None:
         target: str,
         method: str,
     ) -> dict:
-        """Connect a signal from one node to a method on another node.
+        """Connect a signal from one node to a method on another (event subscription / callback).
 
-        Creates an undoable signal connection in the scene.
+        Creates an undoable signal connection in the scene. Equivalent
+        to Godot's `Node.connect()` and the editor's Node > Signals panel.
 
         Args:
             path: Scene path of the source node emitting the signal.
@@ -45,7 +48,7 @@ def register_signal_tools(mcp: FastMCP) -> None:
             runtime, path=path, signal=signal, target=target, method=method
         )
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def signal_disconnect(
         ctx: Context,
         path: str,
@@ -53,7 +56,7 @@ def register_signal_tools(mcp: FastMCP) -> None:
         target: str,
         method: str,
     ) -> dict:
-        """Disconnect a signal connection between two nodes.
+        """Disconnect a signal connection between two nodes (unsubscribe an event listener).
 
         Removes an existing signal connection. Undoable.
 

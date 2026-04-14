@@ -6,11 +6,12 @@ from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import testing as testing_handlers
 from godot_ai.runtime.direct import DirectRuntime
+from godot_ai.tools import DEFER_META
 
 
 def register_testing_tools(mcp: FastMCP) -> None:
-    @mcp.tool()
-    async def run_tests(
+    @mcp.tool(meta=DEFER_META)
+    async def test_run(
         ctx: Context,
         suite: str = "",
         test_name: str = "",
@@ -34,19 +35,19 @@ def register_testing_tools(mcp: FastMCP) -> None:
                      false — only summary and failures are returned.
         """
         runtime = DirectRuntime.from_context(ctx)
-        return await testing_handlers.run_tests(
+        return await testing_handlers.test_run(
             runtime, suite=suite, test_name=test_name, verbose=verbose
         )
 
-    @mcp.tool()
-    async def get_test_results(ctx: Context, verbose: bool = False) -> dict:
+    @mcp.tool(meta=DEFER_META)
+    async def test_results_get(ctx: Context, verbose: bool = False) -> dict:
         """Get results from the most recent test run.
 
-        Returns the same structured results as run_tests, without
+        Returns the same structured results as test_run, without
         re-executing. Useful for reviewing results after a run.
 
         Args:
             verbose: If true, include every individual test result.
         """
         runtime = DirectRuntime.from_context(ctx)
-        return await testing_handlers.get_test_results(runtime, verbose=verbose)
+        return await testing_handlers.test_results_get(runtime, verbose=verbose)

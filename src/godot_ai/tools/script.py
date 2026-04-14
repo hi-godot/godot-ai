@@ -6,16 +6,17 @@ from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import script as script_handlers
 from godot_ai.runtime.direct import DirectRuntime
+from godot_ai.tools import DEFER_META
 
 
 def register_script_tools(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def script_create(
         ctx: Context,
         path: str,
         content: str = "",
     ) -> dict:
-        """Create a new GDScript file on disk.
+        """Create a new GDScript source file (.gd code file) on disk.
 
         Writes the given content to a .gd file in the Godot project.
         If the file already exists it will be overwritten. Triggers a
@@ -28,7 +29,7 @@ def register_script_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await script_handlers.script_create(runtime, path=path, content=content)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def script_read(ctx: Context, path: str) -> dict:
         """Read the contents of a GDScript file.
 
@@ -40,7 +41,7 @@ def register_script_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await script_handlers.script_read(runtime, path=path)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def script_attach(
         ctx: Context,
         path: str,
@@ -63,7 +64,7 @@ def register_script_tools(mcp: FastMCP) -> None:
             script_path=script_path,
         )
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def script_detach(ctx: Context, path: str) -> dict:
         """Remove the script from a node.
 
@@ -76,9 +77,9 @@ def register_script_tools(mcp: FastMCP) -> None:
         runtime = DirectRuntime.from_context(ctx)
         return await script_handlers.script_detach(runtime, path=path)
 
-    @mcp.tool()
+    @mcp.tool(meta=DEFER_META)
     async def script_find_symbols(ctx: Context, path: str) -> dict:
-        """Inspect a GDScript file for functions, signals, and exports.
+        """Inspect (outline) a GDScript file — functions, methods, signals, class_name, exports.
 
         Parses the script and returns its class_name, extends base,
         function definitions, signal declarations, and @export variables.

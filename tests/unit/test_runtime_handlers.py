@@ -559,7 +559,7 @@ async def test_reload_plugin_returns_existing_replacement_session_without_wait_r
         client=ReloadStubClient(registry=registry, new_session_id="new-session"),
     )
 
-    result = await editor_handlers.reload_plugin(runtime)
+    result = await editor_handlers.editor_reload_plugin(runtime)
 
     assert result == {
         "status": "reloaded",
@@ -581,7 +581,7 @@ async def test_reload_plugin_handles_disconnect_before_ack_if_replacement_is_pre
         ),
     )
 
-    result = await editor_handlers.reload_plugin(runtime)
+    result = await editor_handlers.editor_reload_plugin(runtime)
 
     assert result["new_session_id"] == "new-after-timeout"
     assert runtime.active_session_id == "new-after-timeout"
@@ -590,7 +590,7 @@ async def test_reload_plugin_handles_disconnect_before_ack_if_replacement_is_pre
 async def test_reload_plugin_raises_when_no_active_session():
     runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
     with pytest.raises(ConnectionError, match="No active Godot session"):
-        await editor_handlers.reload_plugin(runtime)
+        await editor_handlers.editor_reload_plugin(runtime)
 
 
 # ---------------------------------------------------------------------------
@@ -851,7 +851,7 @@ async def test_node_remove_from_group_handler():
 async def test_editor_selection_set_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    result = await node_handlers.editor_selection_set(
+    result = await editor_handlers.editor_selection_set(
         runtime,
         paths=["/Main/Camera3D", "/Main/World"],
     )
@@ -868,7 +868,7 @@ async def test_editor_selection_set_handler():
 async def test_run_tests_handler_with_no_params():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    result = await testing_handlers.run_tests(runtime)
+    result = await testing_handlers.test_run(runtime)
     assert result["passed"] == 5
     assert client.calls[-1]["params"] == {}
 
@@ -876,14 +876,14 @@ async def test_run_tests_handler_with_no_params():
 async def test_run_tests_handler_with_suite_and_test_name():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    await testing_handlers.run_tests(runtime, suite="scene", test_name="test_tree")
+    await testing_handlers.test_run(runtime, suite="scene", test_name="test_tree")
     assert client.calls[-1]["params"] == {"suite": "scene", "test_name": "test_tree"}
 
 
 async def test_get_test_results_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    result = await testing_handlers.get_test_results(runtime)
+    result = await testing_handlers.test_results_get(runtime)
     assert result["passed"] == 5
     assert client.calls[-1]["command"] == "get_test_results"
 
@@ -891,14 +891,14 @@ async def test_get_test_results_handler():
 async def test_run_tests_handler_verbose():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    await testing_handlers.run_tests(runtime, verbose=True)
+    await testing_handlers.test_run(runtime, verbose=True)
     assert client.calls[-1]["params"] == {"verbose": True}
 
 
 async def test_get_test_results_handler_verbose():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    await testing_handlers.get_test_results(runtime, verbose=True)
+    await testing_handlers.test_results_get(runtime, verbose=True)
     assert client.calls[-1]["params"] == {"verbose": True}
 
 
@@ -983,7 +983,7 @@ def test_project_info_resource_data_no_session():
 async def test_filesystem_search_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    result = await project_handlers.filesystem_search(
+    result = await filesystem_handlers.filesystem_search(
         runtime,
         name="file",
         type="GDScript",
@@ -1161,7 +1161,7 @@ async def test_filesystem_write_text_handler():
 async def test_import_reimport_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    result = await filesystem_handlers.import_reimport(
+    result = await filesystem_handlers.filesystem_reimport(
         runtime,
         paths=["res://icon.png", "res://logo.png"],
     )
@@ -1173,7 +1173,7 @@ async def test_import_reimport_handler():
 async def test_filesystem_search_handler_empty_params():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    await project_handlers.filesystem_search(runtime)
+    await filesystem_handlers.filesystem_search(runtime)
     assert client.calls[-1]["params"] == {}
 
 
@@ -1603,7 +1603,7 @@ async def test_editor_screenshot_handler_fov_passes_param():
 async def test_performance_get_monitors_handler_all():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    result = await editor_handlers.performance_get_monitors(runtime)
+    result = await editor_handlers.performance_monitors_get(runtime)
     assert result["monitor_count"] == 3
     assert result["monitors"]["time/fps"] == 60.0
     assert client.calls[-1]["command"] == "get_performance_monitors"
@@ -1613,7 +1613,7 @@ async def test_performance_get_monitors_handler_all():
 async def test_performance_get_monitors_handler_filtered():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    await editor_handlers.performance_get_monitors(runtime, monitors=["time/fps"])
+    await editor_handlers.performance_monitors_get(runtime, monitors=["time/fps"])
     assert client.calls[-1]["params"] == {"monitors": ["time/fps"]}
 
 

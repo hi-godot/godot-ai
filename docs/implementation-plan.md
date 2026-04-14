@@ -102,12 +102,12 @@ Release is not just packaging. It is install flow, docs, smoke coverage, and sup
 
 Anthropic's tool search (`tool_search_tool_regex_20251119` / `tool_search_tool_bm25_20251119`) lets clients defer loading tool definitions until the model searches for them. Our surface will grow past the 30-50 tool threshold where selection accuracy starts to degrade, so the MCP server needs to be a good citizen in that system.
 
-- [ ] audit every tool name for consistent, searchable namespacing (`scene_*`, `node_*`, `script_*`, `signal_*`, `input_map_*`, `editor_*`, `project_*`, `resource_*`, `filesystem_*`, etc.) — no ambiguous or one-off prefixes
-- [ ] audit every tool description so it contains the keywords a user would naturally use to describe the task (e.g. `screenshot`, `viewport`, `game view`, `input action`, `autoload singleton`) in addition to the Godot term
-- [ ] audit argument names and argument descriptions — tool search indexes these too
-- [ ] document which tools should stay non-deferred (the 3-5 most common: likely `editor_state`, `scene_get_hierarchy`, `node_get_properties`, plus session tools) and mark the rest `defer_loading: true` in the server's MCP advertisement where the protocol permits
-- [ ] add a short "available tool categories" blurb to the server's MCP server instructions so clients using tool search have a map of what to search for
-- [ ] verify the published surface still works for clients that do not use tool search (no tool should require a specific discovery path)
+- [x] audit every tool name for consistent, searchable namespacing (`scene_*`, `node_*`, `script_*`, `signal_*`, `input_map_*`, `editor_*`, `project_*`, `resource_*`, `filesystem_*`, etc.) — no ambiguous or one-off prefixes
+- [x] audit every tool description so it contains the keywords a user would naturally use to describe the task (e.g. `screenshot`, `viewport`, `game view`, `input action`, `autoload singleton`) in addition to the Godot term
+- [x] audit argument names and argument descriptions — tool search indexes these too
+- [x] document which tools should stay non-deferred (the 3-5 most common: likely `editor_state`, `scene_get_hierarchy`, `node_get_properties`, plus session tools) and mark the rest `defer_loading: true` in the server's MCP advertisement where the protocol permits
+- [x] add a short "available tool categories" blurb to the server's MCP server instructions so clients using tool search have a map of what to search for
+- [x] verify the published surface still works for clients that do not use tool search (no tool should require a specific discovery path)
 
 **Why this matters:** Once the tool count crosses ~50, clients that load every definition upfront start paying a real context-window tax and the model starts picking wrong tools. Writing names and descriptions with search in mind is cheap now and costly to retrofit later.
 
