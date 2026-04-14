@@ -6,6 +6,8 @@ extends McpTestSuite
 var _handler: NodeHandler
 var _undo_redo: EditorUndoRedoManager
 
+const TEST_MATERIAL_PATH := "res://tests/_mcp_test_material.tres"
+
 
 func suite_name() -> String:
 	return "node"
@@ -14,6 +16,13 @@ func suite_name() -> String:
 func suite_setup(ctx: Dictionary) -> void:
 	_undo_redo = ctx.get("undo_redo")
 	_handler = NodeHandler.new(_undo_redo)
+	var mat := StandardMaterial3D.new()
+	ResourceSaver.save(mat, TEST_MATERIAL_PATH)
+
+
+func suite_teardown() -> void:
+	if FileAccess.file_exists(TEST_MATERIAL_PATH):
+		DirAccess.remove_absolute(TEST_MATERIAL_PATH)
 
 
 # ----- get_children -----
@@ -219,10 +228,10 @@ func test_set_property_resource_path() -> void:
 	var result := _handler.set_property({
 		"path": "/Main/_McpTestMat",
 		"property": "material_override",
-		"value": "res://materials/floor.tres",
+		"value": TEST_MATERIAL_PATH,
 	})
 	assert_has_key(result, "data")
-	assert_eq(result.data.value, "res://materials/floor.tres")
+	assert_eq(result.data.value, TEST_MATERIAL_PATH)
 	assert_true(result.data.undoable)
 	_undo_redo.undo()  # undo assign
 	_undo_redo.undo()  # undo create
@@ -246,7 +255,7 @@ func test_set_property_resource_null_clears() -> void:
 	_handler.set_property({
 		"path": "/Main/_McpTestClear",
 		"property": "material_override",
-		"value": "res://materials/floor.tres",
+		"value": TEST_MATERIAL_PATH,
 	})
 	var result := _handler.set_property({
 		"path": "/Main/_McpTestClear",
@@ -328,19 +337,22 @@ func test_serialize_dictionary_recursive() -> void:
 # ----- rename_node -----
 
 func test_rename_node_basic() -> void:
+	var suffix := str(Time.get_ticks_usec())
 	var created := _handler.create_node({
 		"type": "Node3D",
-		"name": "_McpTestRename",
+		"name": "_McpRenameSrc%s" % suffix,
 		"parent_path": "/Main",
 	})
+	assert_has_key(created, "data")
 	var created_path: String = created.data.path
 	var created_name: String = created.data.name
+	var target_name := "_McpRenameDst%s" % suffix
 	var result := _handler.rename_node({
 		"path": created_path,
-		"new_name": created_name + "_renamed",
+		"new_name": target_name,
 	})
 	assert_has_key(result, "data")
-	assert_eq(result.data.name, created_name + "_renamed")
+	assert_eq(result.data.name, target_name)
 	assert_eq(result.data.old_name, created_name)
 	assert_true(result.data.undoable)
 	_undo_redo.undo()
