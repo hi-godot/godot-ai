@@ -25,6 +25,17 @@ async def project_settings_get(runtime: Runtime, key: str) -> dict:
     return await runtime.send_command("get_project_setting", {"key": key})
 
 
+async def project_run(runtime: Runtime, mode: str = "main", scene: str = "") -> dict:
+    params: dict[str, str] = {"mode": mode}
+    if scene:
+        params["scene"] = scene
+    return await runtime.send_command("run_project", params)
+
+
+async def project_stop(runtime: Runtime) -> dict:
+    return await runtime.send_command("stop_project")
+
+
 async def project_settings_set(runtime: Runtime, key: str, value: Any) -> dict:
     require_writable(runtime)
     return await runtime.send_command("set_project_setting", {"key": key, "value": value})

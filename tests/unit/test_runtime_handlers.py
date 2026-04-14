@@ -334,6 +334,104 @@ class StubClient:
                 },
                 "undoable": False,
             }
+        if command == "take_screenshot":
+            # 1x1 red PNG as base64
+            import base64
+
+            one_px_png = (
+                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+                b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
+                b"\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00"
+                b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+            )
+            img_b64 = base64.b64encode(one_px_png).decode()
+
+            # Coverage response: return 2 reference shots (establishing + top)
+            if params.get("coverage") and params.get("view_target"):
+                presets = [
+                    {"label": "establishing", "elevation": 25.0,
+                     "azimuth": 20.0, "fov": 50.0, "ortho": False},
+                    {"label": "top", "elevation": 90.0, "azimuth": 0.0,
+                     "fov": 0.0, "ortho": True},
+                ]
+                images = []
+                for p in presets:
+                    images.append({
+                        "source": "viewport",
+                        "width": 1,
+                        "height": 1,
+                        "original_width": 100,
+                        "original_height": 100,
+                        "format": "png",
+                        "image_base64": img_b64,
+                        **p,
+                    })
+                result = {
+                    "source": "viewport",
+                    "view_target": params["view_target"],
+                    "view_target_count": len(
+                        {
+                            pt.strip()
+                            for pt in params["view_target"].split(",")
+                            if pt.strip()
+                        }
+                    ),
+                    "coverage": True,
+                    "images": images,
+                    "aabb_center": [1.0, 0.5, 0.0],
+                    "aabb_size": [3.0, 2.0, 2.0],
+                    "aabb_longest_ground_axis": "x",
+                }
+                return result
+
+            result = {
+                "source": params.get("source", "viewport"),
+                "width": 1,
+                "height": 1,
+                "original_width": 100,
+                "original_height": 100,
+                "format": "png",
+                "image_base64": img_b64,
+            }
+            if params.get("view_target"):
+                result["view_target"] = params["view_target"]
+                result["view_target_count"] = len(
+                    {
+                        p.strip()
+                        for p in params["view_target"].split(",")
+                        if p.strip()
+                    }
+                )
+                result["aabb_center"] = [1.0, 0.5, 0.0]
+                result["aabb_size"] = [3.0, 2.0, 2.0]
+                result["aabb_longest_ground_axis"] = "x"
+            # Pass through angle/fov if provided
+            if "elevation" in params:
+                result["elevation"] = params["elevation"]
+            if "azimuth" in params:
+                result["azimuth"] = params["azimuth"]
+            if "fov" in params:
+                result["fov"] = params["fov"]
+            return result
+        if command == "clear_logs":
+            return {"cleared_count": 5}
+        if command == "run_project":
+            return {
+                "mode": params.get("mode", "main"),
+                "scene": params.get("scene", ""),
+                "undoable": False,
+            }
+        if command == "stop_project":
+            return {"stopped": True, "undoable": False}
+        if command == "get_performance_monitors":
+            return {
+                "monitors": {
+                    "time/fps": 60.0,
+                    "time/process": 0.001,
+                    "memory/static": 1048576,
+                },
+                "monitor_count": 3,
+            }
         return {"status": "ok"}
 
 
@@ -1204,3 +1302,306 @@ async def test_input_map_bind_event_handler():
     assert result["event"]["type"] == "key"
     assert client.calls[-1]["command"] == "bind_event"
     assert client.calls[-1]["params"]["keycode"] == "Space"
+
+
+# ---------------------------------------------------------------------------
+# Logs clear handler tests
+# ---------------------------------------------------------------------------
+
+
+async def test_logs_clear_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await editor_handlers.logs_clear(runtime)
+    assert result["cleared_count"] == 5
+    assert client.calls[-1]["command"] == "clear_logs"
+
+
+# ---------------------------------------------------------------------------
+# Project run/stop handler tests
+# ---------------------------------------------------------------------------
+
+
+async def test_project_run_handler_default_mode():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await project_handlers.project_run(runtime)
+    assert result["mode"] == "main"
+    assert client.calls[-1]["command"] == "run_project"
+    assert client.calls[-1]["params"] == {"mode": "main"}
+
+
+async def test_project_run_handler_current_mode():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await project_handlers.project_run(runtime, mode="current")
+    assert result["mode"] == "current"
+    assert client.calls[-1]["params"] == {"mode": "current"}
+
+
+async def test_project_run_handler_custom_mode():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await project_handlers.project_run(
+        runtime, mode="custom", scene="res://levels/level1.tscn"
+    )
+    assert result["mode"] == "custom"
+    assert client.calls[-1]["params"] == {
+        "mode": "custom",
+        "scene": "res://levels/level1.tscn",
+    }
+
+
+async def test_project_stop_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await project_handlers.project_stop(runtime)
+    assert result["stopped"] is True
+    assert client.calls[-1]["command"] == "stop_project"
+
+
+# ---------------------------------------------------------------------------
+# Performance monitor handler tests
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Screenshot handler tests
+# ---------------------------------------------------------------------------
+
+
+async def test_editor_screenshot_handler_with_image():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await editor_handlers.editor_screenshot(runtime, include_image=True)
+    # Returns a list of [TextContent, McpImage]
+    assert isinstance(result, list)
+    assert len(result) == 2
+    assert result[0].type == "text"
+    assert client.calls[-1]["command"] == "take_screenshot"
+
+
+async def test_editor_screenshot_handler_without_image():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await editor_handlers.editor_screenshot(runtime, include_image=False)
+    # Returns just metadata dict
+    assert isinstance(result, dict)
+    assert result["source"] == "viewport"
+    assert result["width"] == 1
+    assert result["original_width"] == 100
+    assert "image_base64" not in result
+
+
+async def test_editor_screenshot_handler_passes_source():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await editor_handlers.editor_screenshot(
+        runtime, source="game", include_image=False
+    )
+    assert client.calls[-1]["params"]["source"] == "game"
+
+
+async def test_editor_screenshot_handler_passes_max_resolution():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await editor_handlers.editor_screenshot(
+        runtime, max_resolution=1024, include_image=False
+    )
+    assert client.calls[-1]["params"]["max_resolution"] == 1024
+
+
+async def test_editor_screenshot_handler_passes_view_target():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await editor_handlers.editor_screenshot(
+        runtime, view_target="/Main/MyCube", include_image=False
+    )
+    assert client.calls[-1]["params"]["view_target"] == "/Main/MyCube"
+    assert result["view_target"] == "/Main/MyCube"
+    assert result["view_target_count"] == 1
+    # AABB metadata always included for view_target responses
+    assert result["aabb_center"] == [1.0, 0.5, 0.0]
+    assert result["aabb_size"] == [3.0, 2.0, 2.0]
+    assert result["aabb_longest_ground_axis"] == "x"
+
+
+async def test_editor_screenshot_handler_omits_view_target_when_empty():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await editor_handlers.editor_screenshot(runtime, include_image=False)
+    assert "view_target" not in client.calls[-1]["params"]
+    assert "view_target" not in result
+
+
+async def test_editor_screenshot_handler_passes_comma_view_target():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await editor_handlers.editor_screenshot(
+        runtime, view_target="/Main/A,/Main/B", include_image=False
+    )
+    assert client.calls[-1]["params"]["view_target"] == "/Main/A,/Main/B"
+    assert result["view_target"] == "/Main/A,/Main/B"
+    assert result["view_target_count"] == 2
+
+
+async def test_editor_screenshot_handler_coverage_passes_param():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await editor_handlers.editor_screenshot(
+        runtime, view_target="/Main/X", coverage=True, include_image=False
+    )
+    assert client.calls[-1]["params"]["coverage"] is True
+    assert client.calls[-1]["params"]["view_target"] == "/Main/X"
+
+
+async def test_editor_screenshot_handler_coverage_multi_image():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await editor_handlers.editor_screenshot(
+        runtime, view_target="/Main/X", coverage=True, include_image=True
+    )
+    # 1 text metadata + 2 images
+    assert isinstance(result, list)
+    assert len(result) == 3
+    assert result[0].type == "text"
+    import json
+
+    meta = json.loads(result[0].text)
+    assert meta["coverage"] is True
+    assert meta["image_count"] == 2
+    assert len(meta["images"]) == 2
+    assert meta["images"][0]["label"] == "establishing"
+    assert meta["images"][1]["label"] == "top"
+    assert meta["images"][1].get("ortho") is True
+    assert meta["aabb_center"] == [1.0, 0.5, 0.0]
+    assert meta["aabb_size"] == [3.0, 2.0, 2.0]
+    assert meta["aabb_longest_ground_axis"] == "x"
+
+
+async def test_editor_screenshot_handler_coverage_no_image():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await editor_handlers.editor_screenshot(
+        runtime, view_target="/Main/X", coverage=True, include_image=False
+    )
+    assert isinstance(result, dict)
+    assert result["coverage"] is True
+    assert result["image_count"] == 2
+    assert len(result["images"]) == 2
+    assert "image_base64" not in result
+    assert "aabb_center" in result
+    assert "aabb_size" in result
+    assert "aabb_longest_ground_axis" in result
+
+
+async def test_editor_screenshot_handler_custom_angles():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await editor_handlers.editor_screenshot(
+        runtime,
+        view_target="/Main/X",
+        elevation=45.0,
+        azimuth=90.0,
+        include_image=False,
+    )
+    assert client.calls[-1]["params"]["elevation"] == 45.0
+    assert client.calls[-1]["params"]["azimuth"] == 90.0
+    assert result["elevation"] == 45.0
+    assert result["azimuth"] == 90.0
+
+
+async def test_editor_screenshot_handler_view_target_not_found_single():
+    class NotFoundClient:
+        async def send(self, command, params=None, session_id=None, timeout=5.0):
+            return {
+                "source": "viewport",
+                "width": 1,
+                "height": 1,
+                "original_width": 100,
+                "original_height": 100,
+                "format": "png",
+                "image_base64": "",
+                "view_target": params["view_target"],
+                "view_target_count": 2,
+                "view_target_not_found": ["/Main/Missing"],
+            }
+
+    runtime = DirectRuntime(registry=SessionRegistry(), client=NotFoundClient())
+    result = await editor_handlers.editor_screenshot(
+        runtime, view_target="/Main/X,/Main/Missing", include_image=False
+    )
+    assert result["view_target_not_found"] == ["/Main/Missing"]
+    assert result["view_target_count"] == 2
+
+
+async def test_editor_screenshot_handler_view_target_not_found_coverage():
+    class NotFoundCoverageClient:
+        async def send(self, command, params=None, session_id=None, timeout=5.0):
+            return {
+                "source": "viewport",
+                "view_target": params["view_target"],
+                "view_target_count": 2,
+                "view_target_not_found": ["/Main/Missing"],
+                "coverage": True,
+                "images": [
+                    {
+                        "label": "establishing",
+                        "elevation": 25.0,
+                        "azimuth": 20.0,
+                        "fov": 50.0,
+                        "width": 1,
+                        "height": 1,
+                        "image_base64": "",
+                        "format": "png",
+                    }
+                ],
+            }
+
+    runtime = DirectRuntime(
+        registry=SessionRegistry(), client=NotFoundCoverageClient()
+    )
+    result = await editor_handlers.editor_screenshot(
+        runtime,
+        view_target="/Main/X,/Main/Missing",
+        coverage=True,
+        include_image=False,
+    )
+    assert result["view_target_not_found"] == ["/Main/Missing"]
+    assert result["view_target_count"] == 2
+    assert result["coverage"] is True
+
+
+async def test_editor_screenshot_handler_fov_passes_param():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await editor_handlers.editor_screenshot(
+        runtime,
+        view_target="/Main/X",
+        fov=30.0,
+        include_image=False,
+    )
+    assert client.calls[-1]["params"]["fov"] == 30.0
+    assert result["fov"] == 30.0
+
+
+# ---------------------------------------------------------------------------
+# Performance monitor handler tests
+# ---------------------------------------------------------------------------
+
+
+async def test_performance_get_monitors_handler_all():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await editor_handlers.performance_get_monitors(runtime)
+    assert result["monitor_count"] == 3
+    assert result["monitors"]["time/fps"] == 60.0
+    assert client.calls[-1]["command"] == "get_performance_monitors"
+    assert client.calls[-1]["params"] == {}
+
+
+async def test_performance_get_monitors_handler_filtered():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await editor_handlers.performance_get_monitors(runtime, monitors=["time/fps"])
+    assert client.calls[-1]["params"] == {"monitors": ["time/fps"]}

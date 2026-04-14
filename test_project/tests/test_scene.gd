@@ -96,8 +96,11 @@ func test_open_scenes_current_is_main() -> void:
 func test_find_by_type_mesh_instance() -> void:
 	var result := _handler.find_nodes({"type": "MeshInstance3D"})
 	assert_has_key(result, "data")
-	assert_eq(result.data.count, 1, "Should find exactly 1 MeshInstance3D")
-	assert_eq(result.data.nodes[0].name, "Ground")
+	assert_gt(result.data.count, 0, "Should find at least 1 MeshInstance3D")
+	var names: Array = []
+	for node in result.data.nodes:
+		names.append(node.name)
+	assert_true(names.has("Ground"), "Should include Ground MeshInstance3D")
 
 
 func test_find_by_name_substring() -> void:

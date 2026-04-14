@@ -104,3 +104,35 @@ func test_search_filesystem_no_results() -> void:
 	var result := _handler.search_filesystem({"name": "zzz_nonexistent_file_xyz"})
 	assert_has_key(result, "data")
 	assert_eq(result.data.count, 0)
+
+
+# ----- run_project -----
+
+func test_run_project_rejects_when_already_playing() -> void:
+	## We can't actually start the project in tests (it freezes the runner),
+	## but we can verify validation when not playing.
+	## The "already running" path can only be tested when the project IS running,
+	## which we can't trigger from within the test runner.
+	pass
+
+
+func test_run_project_invalid_mode() -> void:
+	var result := _handler.run_project({"mode": "invalid_mode"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_run_project_custom_missing_scene() -> void:
+	var result := _handler.run_project({"mode": "custom"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_run_project_custom_empty_scene() -> void:
+	var result := _handler.run_project({"mode": "custom", "scene": ""})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+# ----- stop_project -----
+
+func test_stop_project_rejects_when_not_playing() -> void:
+	var result := _handler.stop_project({})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)

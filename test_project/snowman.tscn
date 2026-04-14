@@ -1,0 +1,46 @@
+[gd_scene format=3 uid="uid://1w7dp2aeqcpq"]
+
+[sub_resource type="SphereMesh" id="SphereMesh_7dm0k"]
+
+[sub_resource type="ImageTexture" id="ImageTexture_x4rgl"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ig7tw"]
+albedo_color = Color(0.65968806, 0.63971, 1.347661e-06, 1)
+metallic = 1.0
+metallic_specular = 0.66
+metallic_texture = SubResource("ImageTexture_x4rgl")
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_0xm2m"]
+albedo_color = Color(0.32156864, 0.4745098, 0.63529414, 1)
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_h2yge"]
+
+[node name="Snowman" type="Node3D" unique_id=2093439503]
+
+[node name="Head" type="MeshInstance3D" parent="." unique_id=807890638]
+mesh = SubResource("SphereMesh_7dm0k")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_ig7tw")
+
+[node name="Snowman2" type="MeshInstance3D" parent="." unique_id=866245037]
+transform = Transform3D(1, 0, 0, 0, 0.8565442, 0, 0, 0, 0.6106186, 0, -0.8465315, 0)
+mesh = SubResource("SphereMesh_7dm0k")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_0xm2m")
+
+[node name="Snowman4" type="MeshInstance3D" parent="." unique_id=880843464]
+transform = Transform3D(0.2082468, -0.39861068, 0, 0.27113765, 0.30615222, 0, 0, 0, 0.6106186, 0.5068054, -0.8465315, 0)
+mesh = SubResource("CapsuleMesh_h2yge")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_0xm2m")
+
+[node name="Snowman5" type="MeshInstance3D" parent="." unique_id=977171446]
+transform = Transform3D(-0.20794833, 0.3980393, 0.03268106, 0.27113765, 0.30615222, 0, -0.011145625, 0.021334136, -0.60974336, -0.49566555, -0.85210073, 0)
+mesh = SubResource("CapsuleMesh_h2yge")
+skeleton = NodePath("../..")
+surface_material_override/0 = SubResource("StandardMaterial3D_0xm2m")
+
+[node name="Snowman3" type="MeshInstance3D" parent="." unique_id=1823618730]
+transform = Transform3D(1, 0, 0, 0, 0.8565442, 0, 0, 0, 0.6106186, 0, -1.5761077, 0)
+mesh = SubResource("SphereMesh_7dm0k")
+skeleton = NodePath("../..")

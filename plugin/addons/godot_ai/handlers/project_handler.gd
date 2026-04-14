@@ -55,6 +55,48 @@ func set_project_setting(params: Dictionary) -> Dictionary:
 	}
 
 
+func run_project(params: Dictionary) -> Dictionary:
+	var mode: String = params.get("mode", "main")
+	if EditorInterface.is_playing_scene():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Project is already running")
+
+	match mode:
+		"main":
+			EditorInterface.play_main_scene()
+		"current":
+			EditorInterface.play_current_scene()
+		"custom":
+			var scene_path: String = params.get("scene", "")
+			if scene_path.is_empty():
+				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: scene (required when mode='custom')")
+			EditorInterface.play_custom_scene(scene_path)
+		_:
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid mode '%s' — use 'main', 'current', or 'custom'" % mode)
+
+	return {
+		"data": {
+			"mode": mode,
+			"scene": params.get("scene", ""),
+			"undoable": false,
+			"reason": "Play/stop is a runtime action",
+		}
+	}
+
+
+func stop_project(_params: Dictionary) -> Dictionary:
+	if not EditorInterface.is_playing_scene():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Project is not running")
+
+	EditorInterface.stop_playing_scene()
+	return {
+		"data": {
+			"stopped": true,
+			"undoable": false,
+			"reason": "Play/stop is a runtime action",
+		}
+	}
+
+
 func search_filesystem(params: Dictionary) -> Dictionary:
 	var name_filter: String = params.get("name", "")
 	var type_filter: String = params.get("type", "")

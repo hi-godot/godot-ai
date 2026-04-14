@@ -30,7 +30,12 @@ class GodotWebSocketServer:
     async def start(self):
         logger.info("Starting WebSocket server on port %d", self.port)
         try:
-            async with websockets.serve(self._handle_connection, "127.0.0.1", self.port):
+            async with websockets.serve(
+                self._handle_connection,
+                "127.0.0.1",
+                self.port,
+                max_size=4 * 1024 * 1024,  # 4 MB for screenshot base64
+            ):
                 await asyncio.Future()  # run forever
         except OSError as e:
             if e.errno == 48:  # Address already in use

@@ -3,7 +3,7 @@ class_name McpClientConfigurator
 extends RefCounted
 
 ## Configures MCP clients (Claude Code, Codex, Antigravity, etc.) to connect to
-## the Godot MCP Studio server.
+## the Godot AI server.
 
 enum ClientType { CLAUDE_CODE, CODEX, ANTIGRAVITY }
 enum ConfigStatus { NOT_CONFIGURED, CONFIGURED, ERROR }

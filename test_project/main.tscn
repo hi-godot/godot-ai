@@ -1,5 +1,7 @@
 [gd_scene format=3 uid="uid://bdvihvqroq12a"]
 
+[ext_resource type="PackedScene" uid="uid://1w7dp2aeqcpq" path="res://snowman.tscn" id="1_snowman"]
+
 [node name="Main" type="Node3D" unique_id=40482226]
 
 [node name="Camera3D" type="Camera3D" parent="." unique_id=974172401]
@@ -13,3 +15,17 @@ transform = Transform3D(1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025, 0, 3, 0)
 [node name="Ground" type="MeshInstance3D" parent="World" unique_id=251714484]
 
 [node name="TriggerZone" type="Area3D" parent="." unique_id=1139383780]
+
+[node name="SnowGroup" type="Node3D" parent="." unique_id=647443631]
+
+[node name="Snowman" parent="SnowGroup" instance=ExtResource("1_snowman")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, 0, 2)
+
+[node name="Snowman2" parent="SnowGroup" instance=ExtResource("1_snowman")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 2)
+
+[node name="Snowman3" parent="SnowGroup" instance=ExtResource("1_snowman")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 0, 2)
+
+[node name="Snowman4" parent="SnowGroup" instance=ExtResource("1_snowman")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 0, 2)
