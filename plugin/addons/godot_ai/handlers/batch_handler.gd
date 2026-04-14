@@ -42,10 +42,8 @@ func batch_execute(params: Dictionary) -> Dictionary:
 	var succeeded := 0
 	var stopped_at = null
 	var all_undoable := true
-	var failure_error: Dictionary = {}
-	# UndoRedo references captured after the first successful commit to each
-	# history. We can't call get_history_undo_redo() before a commit exists
-	# because Godot errors on an empty history_map.
+	# Captured after the first successful commit — get_history_undo_redo()
+	# errors if called before any action exists in the history_map.
 	var histories: Array = []
 
 	for idx in range(commands.size()):
@@ -61,7 +59,6 @@ func batch_execute(params: Dictionary) -> Dictionary:
 			result_entry["error"] = raw_result.get("error", {})
 			results.append(result_entry)
 			stopped_at = idx
-			failure_error = raw_result.get("error", {})
 			break
 		else:
 			var data: Dictionary = raw_result.get("data", raw_result)
@@ -85,7 +82,7 @@ func batch_execute(params: Dictionary) -> Dictionary:
 		"undoable": stopped_at == null and all_undoable and not rolled_back,
 	}
 	if stopped_at != null:
-		response_data["error"] = failure_error
+		response_data["error"] = results[-1]["error"]
 	return {"data": response_data}
 
 
@@ -94,12 +91,12 @@ func batch_execute(params: Dictionary) -> Dictionary:
 ## least one action has been committed to each history.
 func _capture_histories(histories: Array) -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root != null:
-		var scene_id := _undo_redo.get_object_history_id(scene_root)
-		if scene_id != EditorUndoRedoManager.INVALID_HISTORY:
-			var scene_ur := _undo_redo.get_history_undo_redo(scene_id)
-			if scene_ur != null and not scene_ur in histories:
-				histories.append(scene_ur)
+	if scene_root == null:
+		return
+	var scene_id := _undo_redo.get_object_history_id(scene_root)
+	var scene_ur := _undo_redo.get_history_undo_redo(scene_id)
+	if scene_ur != null and not scene_ur in histories:
+		histories.append(scene_ur)
 
 
 ## Undo `count` actions by calling undo() on captured histories in LIFO order.
