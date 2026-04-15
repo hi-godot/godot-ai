@@ -745,3 +745,110 @@ func test_create_simple_rejects_missing_tween_fields() -> void:
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	_remove_node(player_path)
+
+
+# ─── Explicit invalid length rejected (not silently auto-computed) ────────────
+
+func test_create_simple_rejects_zero_length() -> void:
+	var player_path := _add_player("TestSimpleZeroLen")
+	if player_path.is_empty():
+		return
+	var result := _handler.create_simple({
+		"player_path": player_path,
+		"name": "zerolen",
+		"length": 0.0,
+		"tweens": [
+			{"target": ".", "property": "modulate",
+			 "from": "white", "to": "red", "duration": 0.5},
+		],
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "length")
+	_remove_node(player_path)
+
+
+func test_create_simple_rejects_negative_length() -> void:
+	var player_path := _add_player("TestSimpleNegLen")
+	if player_path.is_empty():
+		return
+	var result := _handler.create_simple({
+		"player_path": player_path,
+		"name": "neglen",
+		"length": -1.0,
+		"tweens": [
+			{"target": ".", "property": "modulate",
+			 "from": "white", "to": "red", "duration": 0.5},
+		],
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	_remove_node(player_path)
+
+
+# ─── Library-qualified names round-trip through animation_get ────────────────
+
+func test_get_accepts_library_qualified_name() -> void:
+	# When a clip lives in a non-default library, list_animations reports it
+	# as "libname/clip". That string should round-trip back into animation_get.
+	var player_path := _add_player("TestLibQualified")
+	if player_path.is_empty():
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+
+	# Add a named library with a clip directly (handler API currently targets
+	# the default library; this exercises read-path robustness).
+	var lib := AnimationLibrary.new()
+	var anim := Animation.new()
+	anim.length = 1.0
+	lib.add_animation("idle", anim)
+	player.add_animation_library("moves", lib)
+
+	# Qualified name as listed by Godot.
+	var qualified := "moves/idle"
+	assert_true(player.has_animation(qualified), "Godot should expose the qualified form")
+
+	var result := _handler.get_animation({
+		"player_path": player_path,
+		"animation_name": qualified,
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.length, 1.0)
+	_remove_node(player_path)
+
+
+# ─── Track type labels — value / method are distinct, unknown reported ───────
+
+func test_get_labels_value_and_method_tracks_distinctly() -> void:
+	var player_path := _add_player("TestTrackLabels")
+	if player_path.is_empty():
+		return
+	_handler.create_animation({"player_path": player_path, "name": "mixed", "length": 1.0})
+	_handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "mixed",
+		"track_path": ".:modulate",
+		"keyframes": [{"time": 0.0, "value": "white"}],
+	})
+	_handler.add_method_track({
+		"player_path": player_path,
+		"animation_name": "mixed",
+		"target_node_path": ".",
+		"keyframes": [{"time": 0.5, "method": "set_process", "args": [true]}],
+	})
+	var result := _handler.get_animation({"player_path": player_path, "animation_name": "mixed"})
+	assert_eq(result.data.track_count, 2)
+	var types: Array = []
+	for t in result.data.tracks:
+		types.append(t.type)
+	assert_contains(types, "value")
+	assert_contains(types, "method")
+	_remove_node(player_path)
+
+
+func test_track_type_to_string_unknown_for_bezier() -> void:
+	# Bezier tracks can land on an animation even though the write API doesn't
+	# produce them yet (imported resources, or future tools). The label should
+	# be honest, not misreport as "method".
+	assert_eq(AnimationHandler._track_type_to_string(Animation.TYPE_BEZIER), "bezier")
+	assert_eq(AnimationHandler._track_type_to_string(Animation.TYPE_AUDIO), "audio")
+	assert_eq(AnimationHandler._track_type_to_string(9999), "unknown")

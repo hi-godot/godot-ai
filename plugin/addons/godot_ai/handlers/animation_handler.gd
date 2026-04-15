@@ -454,7 +454,7 @@ func get_animation(params: Dictionary) -> Dictionary:
 	var tracks: Array[Dictionary] = []
 	for i in anim.get_track_count():
 		var track_type := anim.track_get_type(i)
-		var type_name := "value" if track_type == Animation.TYPE_VALUE else "method"
+		var type_name := _track_type_to_string(track_type)
 		var keys: Array[Dictionary] = []
 		for k in anim.track_get_key_count(i):
 			var key_val = anim.track_get_key_value(i, k)
@@ -537,15 +537,22 @@ func create_simple(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
 			"Animation '%s' already exists. Delete it first or choose a different name." % anim_name)
 
-	# Compute auto length if not provided.
-	var computed_length: float = float(params.get("length", 0.0))
-	if computed_length <= 0.0:
+	# Compute auto length only when length is absent or null; reject explicit
+	# invalid values instead of silently falling through to auto-compute.
+	var has_length: bool = params.has("length") and params.get("length") != null
+	var computed_length: float = 0.0
+	if has_length:
+		computed_length = float(params.get("length"))
+		if computed_length <= 0.0:
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+				"'length' must be > 0 when provided (got %s)" % str(params.get("length")))
+	else:
 		for spec in tweens:
 			var end_time: float = float(spec.get("delay", 0.0)) + float(spec.get("duration", 0.0))
 			if end_time > computed_length:
 				computed_length = end_time
-	if computed_length <= 0.0:
-		computed_length = 1.0
+		if computed_length <= 0.0:
+			computed_length = 1.0
 
 	# Build the animation fully in memory before touching the undo stack.
 	var anim := Animation.new()
@@ -636,6 +643,8 @@ func _resolve_player_read(player_path: String) -> Dictionary:
 
 
 ## Resolve an animation by name, searching all libraries.
+## Accepts bare clip names ("idle") and library-qualified names ("moves/idle")
+## as returned by `list_animations` for non-default libraries.
 func _resolve_animation(player: AnimationPlayer, anim_name: String) -> Dictionary:
 	if not player.has_animation(anim_name):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
@@ -643,11 +652,20 @@ func _resolve_animation(player: AnimationPlayer, anim_name: String) -> Dictionar
 				anim_name,
 				", ".join(Array(player.get_animation_list()))
 			])
-	# Find which library owns it.
+	# If the caller passed "library/clip", look up in that specific library.
+	var slash := anim_name.find("/")
+	if slash >= 0:
+		var lib_key := anim_name.substr(0, slash)
+		var clip_key := anim_name.substr(slash + 1)
+		if player.has_animation_library(lib_key):
+			var lib: AnimationLibrary = player.get_animation_library(lib_key)
+			if lib.has_animation(clip_key):
+				return {"animation": lib.get_animation(clip_key), "library": lib, "library_key": lib_key}
+	# Otherwise scan libraries for a bare clip name.
 	for lib_name in player.get_animation_library_list():
-		var lib: AnimationLibrary = player.get_animation_library(lib_name)
-		if lib.has_animation(anim_name):
-			return {"animation": lib.get_animation(anim_name), "library": lib, "library_key": lib_name}
+		var lib2: AnimationLibrary = player.get_animation_library(lib_name)
+		if lib2.has_animation(anim_name):
+			return {"animation": lib2.get_animation(anim_name), "library": lib2, "library_key": lib_name}
 	# Fallback — shouldn't happen if has_animation returned true.
 	return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Animation found by player but not in any library")
 
@@ -734,17 +752,33 @@ static func _coerce_for_type(value: Variant, prop_type: int) -> Variant:
 # ============================================================================
 
 ## Parse a transition value: named string or raw float.
-## "linear"→1.0, "ease_in"→2.0, "ease_out"→0.5, "ease_in_out"→-2.0.
+## Named values live in `_NAMED_TRANSITIONS` so the mapping has a single source.
 static func _parse_transition(v: Variant) -> float:
 	if v is float or v is int:
 		return float(v)
 	if v is String:
-		match v.to_lower():
-			"linear": return 1.0
-			"ease_in": return 2.0
-			"ease_out": return 0.5
-			"ease_in_out": return -2.0
+		var key := v.to_lower()
+		if _NAMED_TRANSITIONS.has(key):
+			return float(_NAMED_TRANSITIONS[key])
 	return 1.0
+
+
+## Map an Animation.TrackType enum to a stable string. Unknown types report
+## as "unknown" rather than being silently coerced to "method" — callers that
+## only produce value/method tracks can ignore the others; clients that want
+## to round-trip bezier/audio/etc. get an honest label to key off.
+static func _track_type_to_string(track_type: int) -> String:
+	match track_type:
+		Animation.TYPE_VALUE: return "value"
+		Animation.TYPE_METHOD: return "method"
+		Animation.TYPE_POSITION_3D: return "position_3d"
+		Animation.TYPE_ROTATION_3D: return "rotation_3d"
+		Animation.TYPE_SCALE_3D: return "scale_3d"
+		Animation.TYPE_BLEND_SHAPE: return "blend_shape"
+		Animation.TYPE_BEZIER: return "bezier"
+		Animation.TYPE_AUDIO: return "audio"
+		Animation.TYPE_ANIMATION: return "animation"
+		_: return "unknown"
 
 
 static func _loop_mode_to_string(mode: int) -> String:
