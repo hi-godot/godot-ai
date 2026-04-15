@@ -102,14 +102,8 @@ class GodotWebSocketServer:
             logger.exception("Error in WebSocket handler for session %s", session_id)
         finally:
             if session_id:
-                was_active = self.registry.active_session_id == session_id
                 self.registry.unregister(session_id)
                 self._connections.pop(session_id, None)
-                if was_active:
-                    logger.info(
-                        "Active session %s disconnected; waiting for next register/activate",
-                        session_id[:8],
-                    )
 
     def _handle_event(self, session_id: str, data: dict) -> None:
         event = data.get("event", "")
