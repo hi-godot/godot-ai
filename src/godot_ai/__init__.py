@@ -11,6 +11,11 @@ __version__ = "0.0.1"
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Godot AI server")
     parser.add_argument(
+        "--version",
+        action="version",
+        version=f"godot-ai {__version__}",
+    )
+    parser.add_argument(
         "--transport",
         choices=["stdio", "sse", "streamable-http"],
         default="stdio",

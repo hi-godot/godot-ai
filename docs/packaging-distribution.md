@@ -126,10 +126,12 @@ The install docs should explicitly cover:
 ## PyPI / `uvx` Publishing Work
 
 - [ ] verify `godot-ai` package availability and ownership
-- [ ] finalize metadata in `pyproject.toml`
+- [x] finalize metadata in `pyproject.toml` — authors, keywords, classifiers, project URLs, markdown readme content-type
 - [ ] publish to PyPI
 - [ ] verify `uvx godot-ai --help`
 - [ ] verify the plugin can discover and launch the published package cleanly
+
+CI release-smoke builds the wheel and sdist on every push, installs each into a clean venv, and invokes `godot-ai --version` / `--help` to catch entry-point and packaging regressions before publishing.
 
 The published package path should be treated as first-class, not as a fallback for people who “know Python.”
 
@@ -182,10 +184,10 @@ The binary path is only worth keeping if it remains boring and supportable.
 
 ### Tier 3: Release-Surface Smoke
 
-- verify `uvx godot-ai` path
-- verify package install path
-- verify binary startup path
-- verify AssetLib-installed plugin loads and connects to the server
+- [ ] verify `uvx godot-ai` path
+- [x] verify package install path — `release-smoke` job in `.github/workflows/ci.yml` builds wheel + sdist, installs both into a fresh venv on Linux/macOS/Windows, and runs the CLI entry point
+- [ ] verify binary startup path
+- [ ] verify AssetLib-installed plugin loads and connects to the server
 
 This tier is about install confidence, not deep correctness.
 
