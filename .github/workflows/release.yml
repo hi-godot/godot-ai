@@ -1,0 +1,28 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build plugin ZIP
+        run: |
+          mkdir -p staging/addons
+          cp -r plugin/addons/godot_ai staging/addons/
+          cd staging
+          zip -r ../godot-ai-plugin.zip addons/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: godot-ai-plugin.zip
+          generate_release_notes: true
