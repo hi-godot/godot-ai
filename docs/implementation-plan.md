@@ -122,10 +122,18 @@ These are not the next things to do blindly. They are the extensions that matter
 ### Tier 1: Needed for Better 2D Game Production
 
 - `ui.*` for HUDs, pause menus, upgrade draft screens, game-over flows, and theme/layout work
+  - [x] `ui_set_anchor_preset` — wrap `Control.set_anchors_and_offsets_preset`
+  - [x] `ui_build_layout` — declarative nested-dict → atomic Control subtree
+  - [x] `theme_create` / `theme_set_color` / `theme_set_constant` / `theme_set_font_size` / `theme_set_stylebox_flat` / `theme_apply` — Theme authoring (Godot's CSS-analog)
+  - [ ] `theme_set_stylebox_texture` — 9-slice image-backed styleboxes for pixel-art UI (buttons, panels with real artwork)
+  - [ ] `theme_set_font` + `theme_set_icon` — custom typography and icon sets (needs a Font / Texture2D resource handler first)
+  - [ ] `ui_set_text` convenience — one call to set `.text` across Label / Button / LineEdit / RichTextLabel without remembering per-class property quirks
 - `camera.*` for follow, bounds, zoom, and screen shake
 - `resource.create` / `resource.save` / `resource.instantiate`
 - `scene.instantiate` and `scene.inherit`
+  - [ ] critical path for reusable `button.tscn` / `enemy.tscn` instanced into many parent scenes — the piece that turns the UI composer and node_create flows into "real Godot project structure" instead of one-shot scene builds
 - `animation_player.*` / `animation_tree.*`
+  - [ ] needed for UI juice (hover pulse, slide-in menus, fade transitions), combat readability (shake on damage, hit-stop), and general feel — the current stack can build static HUDs but cannot animate them
 - `audio.*`
 
 ### Tier 2: Strong Polish Multipliers
