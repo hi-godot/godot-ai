@@ -502,11 +502,6 @@ dev = [
     { name = "ruff" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "websockets" },
-]
-
 [package.metadata]
 requires-dist = [
     { name = "fastmcp", specifier = ">=3.0.0" },
@@ -519,9 +514,6 @@ requires-dist = [
     { name = "websockets", specifier = ">=13.0" },
 ]
 provides-extras = ["dev", "build"]
-
-[package.metadata.requires-dev]
-dev = [{ name = "websockets", specifier = ">=16.0" }]
 
 [[package]]
 name = "griffelib"
