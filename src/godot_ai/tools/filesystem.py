@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import filesystem as filesystem_handlers
 from godot_ai.runtime.direct import DirectRuntime
-from godot_ai.tools import DEFER_META
+from godot_ai.tools import DEFER_META, JsonCoerced
 
 
 def register_filesystem_tools(mcp: FastMCP) -> None:
@@ -52,7 +54,7 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
     @mcp.tool(meta=DEFER_META)
     async def filesystem_reimport(
         ctx: Context,
-        paths: list[str],
+        paths: Annotated[list[str], JsonCoerced],
         session_id: str = "",
     ) -> dict:
         """Force reimport of specific files / assets in the Godot project.

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import editor as editor_handlers
 from godot_ai.runtime.direct import DirectRuntime
-from godot_ai.tools import DEFER_META
+from godot_ai.tools import DEFER_META, JsonCoerced
 
 
 def register_editor_tools(mcp: FastMCP) -> None:
@@ -136,7 +138,7 @@ def register_editor_tools(mcp: FastMCP) -> None:
     @mcp.tool(meta=DEFER_META)
     async def performance_monitors_get(
         ctx: Context,
-        monitors: list[str] | None = None,
+        monitors: Annotated[list[str] | None, JsonCoerced] = None,
         session_id: str = "",
     ) -> dict:
         """Get Godot performance monitor values (FPS, memory, draw calls, frame time).
@@ -209,7 +211,7 @@ def register_editor_tools(mcp: FastMCP) -> None:
     @mcp.tool(meta=DEFER_META)
     async def editor_selection_set(
         ctx: Context,
-        paths: list[str],
+        paths: Annotated[list[str], JsonCoerced],
         session_id: str = "",
     ) -> dict:
         """Select nodes in the Godot editor by their scene paths.
