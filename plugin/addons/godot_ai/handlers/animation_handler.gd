@@ -177,7 +177,9 @@ func add_property_track(params: Dictionary) -> Dictionary:
 		return anim_resolved
 	var anim: Animation = anim_resolved.animation
 
-	# Validate keyframe structure before mutating.
+	# Validate + pre-coerce keyframes before mutating. Coercion errors
+	# surface as INVALID_PARAMS rather than silently inserting garbage keys.
+	var coerced_keyframes: Array = []
 	for kf in keyframes:
 		if typeof(kf) != TYPE_DICTIONARY:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Each keyframe must be a dictionary")
@@ -185,11 +187,19 @@ func add_property_track(params: Dictionary) -> Dictionary:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Each keyframe must have a 'time' field")
 		if not "value" in kf:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Each keyframe must have a 'value' field")
+		var coerce_result := _coerce_value_for_track(kf.get("value"), track_path, player)
+		if coerce_result.has("error"):
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, coerce_result.error)
+		coerced_keyframes.append({
+			"time": kf.get("time"),
+			"value": coerce_result.ok,
+			"transition": kf.get("transition", "linear"),
+		})
 
 	var baseline := anim.get_track_count()
 
 	_undo_redo.create_action("MCP: Add property track %s to %s" % [track_path, anim_name])
-	_undo_redo.add_do_method(self, "_do_add_property_track", anim, track_path, interp_str, keyframes, player)
+	_undo_redo.add_do_method(self, "_do_add_property_track", anim, track_path, interp_str, coerced_keyframes)
 	_undo_redo.add_undo_method(anim, "remove_track", baseline)
 	_undo_redo.commit_action()
 
@@ -206,22 +216,23 @@ func add_property_track(params: Dictionary) -> Dictionary:
 	}
 
 
+## Insert a pre-coerced track into the animation. Callers must coerce
+## values against the target property before calling this (see
+## _coerce_value_for_track) — this method runs inside the undo do-method
+## path where error propagation isn't possible.
 func _do_add_property_track(
 	anim: Animation,
 	track_path: String,
 	interp_str: String,
 	keyframes: Array,
-	player: AnimationPlayer,
 ) -> void:
 	var idx := anim.add_track(Animation.TYPE_VALUE)
 	anim.track_set_path(idx, NodePath(track_path))
 	anim.track_set_interpolation_type(idx, _INTERP_MODES.get(interp_str, Animation.INTERPOLATION_LINEAR))
 	for kf in keyframes:
 		var t: float = float(kf.get("time", 0.0))
-		var raw_value = kf.get("value")
 		var trans: float = _parse_transition(kf.get("transition", "linear"))
-		var coerced = _coerce_value_for_track(raw_value, track_path, player)
-		anim.track_insert_key(idx, t, coerced, trans)
+		anim.track_insert_key(idx, t, kf.get("value"), trans)
 
 
 # ============================================================================
@@ -554,30 +565,37 @@ func create_simple(params: Dictionary) -> Dictionary:
 		if computed_length <= 0.0:
 			computed_length = 1.0
 
+	# Pre-coerce all tween values before touching the anim — coercion errors
+	# surface as INVALID_PARAMS, not silent garbage keyframes.
+	var per_track_keyframes: Array = []
+	for spec in tweens:
+		var target: String = str(spec.get("target", ""))
+		var property: String = str(spec.get("property", ""))
+		var track_path: String = target + ":" + property
+		var duration: float = float(spec.get("duration", 1.0))
+		var delay: float = float(spec.get("delay", 0.0))
+		var trans_str = spec.get("transition", "linear")
+		var from_result := _coerce_value_for_track(spec.get("from"), track_path, player)
+		if from_result.has("error"):
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "tween '%s': %s" % [track_path, from_result.error])
+		var to_result := _coerce_value_for_track(spec.get("to"), track_path, player)
+		if to_result.has("error"):
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "tween '%s': %s" % [track_path, to_result.error])
+		per_track_keyframes.append({
+			"track_path": track_path,
+			"keyframes": [
+				{"time": delay, "value": from_result.ok, "transition": trans_str},
+				{"time": delay + duration, "value": to_result.ok, "transition": trans_str},
+			],
+		})
+
 	# Build the animation fully in memory before touching the undo stack.
 	var anim := Animation.new()
 	anim.length = computed_length
 	anim.loop_mode = _LOOP_MODES[loop_mode_str]
 
-	for spec in tweens:
-		var target: String = str(spec.get("target", ""))
-		var property: String = str(spec.get("property", ""))
-		var from_val = spec.get("from")
-		var to_val = spec.get("to")
-		var duration: float = float(spec.get("duration", 1.0))
-		var delay: float = float(spec.get("delay", 0.0))
-		var trans_str = spec.get("transition", "linear")
-		var trans: float = _parse_transition(trans_str)
-
-		var track_path: String = target + ":" + property
-		var idx := anim.add_track(Animation.TYPE_VALUE)
-		anim.track_set_path(idx, NodePath(track_path))
-		anim.track_set_interpolation_type(idx, Animation.INTERPOLATION_LINEAR)
-
-		var coerced_from = _coerce_value_for_track(from_val, track_path, player)
-		var coerced_to = _coerce_value_for_track(to_val, track_path, player)
-		anim.track_insert_key(idx, delay, coerced_from, trans)
-		anim.track_insert_key(idx, delay + duration, coerced_to, trans)
+	for entry in per_track_keyframes:
+		_do_add_property_track(anim, entry.track_path, "linear", entry.keyframes)
 
 	# One atomic undo action.
 	_undo_redo.create_action("MCP: Create animation %s (%d tracks)" % [anim_name, anim.get_track_count()])
@@ -675,18 +693,19 @@ func _resolve_animation(player: AnimationPlayer, anim_name: String) -> Dictionar
 # ============================================================================
 
 ## Coerce a JSON value to match the expected Godot type for the given
-## track_path. Resolves the target node and property type via reflection.
-## Falls back to raw value if the target cannot be found at author time.
-static func _coerce_value_for_track(value: Variant, track_path: String, player: AnimationPlayer) -> Variant:
-	# Parse track_path "NodeName:property" or ".:property"
+## track_path. Returns {"ok": value} or {"error": msg}.
+## Passes the raw value through when the target node isn't in the scene
+## yet (authoring-time path). Errors when the target exists but the
+## property doesn't, or when parsing a typed value (Color/Vector2/Vector3)
+## clearly fails — better to reject than silently store garbage.
+static func _coerce_value_for_track(value: Variant, track_path: String, player: AnimationPlayer) -> Dictionary:
 	var colon := track_path.rfind(":")
 	if colon < 0:
-		return value
+		return {"ok": value}
 
 	var node_part := track_path.substr(0, colon)
 	var prop_part := track_path.substr(colon + 1)
 
-	# Resolve node relative to AnimationPlayer's root (defaults to parent).
 	var root_node: Node = null
 	if player.is_inside_tree():
 		var rn := player.root_node
@@ -695,56 +714,62 @@ static func _coerce_value_for_track(value: Variant, track_path: String, player: 
 		if root_node == null:
 			root_node = player.get_parent()
 	if root_node == null:
-		return value
+		return {"ok": value}
 
 	var target: Node = root_node.get_node_or_null(node_part)
 	if target == null:
-		return value  # Target not in scene yet; pass through raw value.
+		return {"ok": value}
 
-	# Inspect target property type.
 	for p in target.get_property_list():
 		if p.name == prop_part:
-			return _coerce_for_type(value, p.get("type", TYPE_NIL))
+			return _coerce_for_type(value, p.get("type", TYPE_NIL), prop_part)
 
-	return value
+	# Property not found on current target — pass through. The caller may
+	# plan to retarget the AnimationPlayer (set root_node) before playback.
+	return {"ok": value}
 
 
-## Coerce a single value to the given Godot variant type.
-static func _coerce_for_type(value: Variant, prop_type: int) -> Variant:
+## Coerce a single value to the given Godot variant type. Returns
+## {"ok": coerced} or {"error": msg}. Unknown types pass through.
+static func _coerce_for_type(value: Variant, prop_type: int, prop_name: String) -> Dictionary:
 	match prop_type:
 		TYPE_COLOR:
 			if value is Color:
-				return value
+				return {"ok": value}
 			if value is String:
-				var a := Color.from_string(value, Color(0, 0, 0, 0))
-				var b := Color.from_string(value, Color(1, 1, 1, 1))
+				var s := value as String
+				var a := Color.from_string(s, Color(0, 0, 0, 0))
+				var b := Color.from_string(s, Color(1, 1, 1, 1))
 				if a == b:
-					return a
-				return value  # Unparseable — pass through, fail at play time.
+					return {"ok": a}
+				return {"error": "Cannot parse '%s' as Color for property '%s'" % [s, prop_name]}
 			if value is Dictionary and value.has("r") and value.has("g") and value.has("b"):
-				return Color(float(value.r), float(value.g), float(value.b), float(value.get("a", 1.0)))
+				return {"ok": Color(float(value.r), float(value.g), float(value.b), float(value.get("a", 1.0)))}
+			return {"error": "Cannot coerce value to Color for property '%s' (expected string, {r,g,b}, or Color)" % prop_name}
 		TYPE_VECTOR2:
 			if value is Vector2:
-				return value
+				return {"ok": value}
 			if value is Dictionary and value.has("x") and value.has("y"):
-				return Vector2(float(value.x), float(value.y))
+				return {"ok": Vector2(float(value.x), float(value.y))}
 			if value is Array and value.size() >= 2:
-				return Vector2(float(value[0]), float(value[1]))
+				return {"ok": Vector2(float(value[0]), float(value[1]))}
+			return {"error": "Cannot coerce value to Vector2 for property '%s' (expected {x,y}, [x,y], or Vector2)" % prop_name}
 		TYPE_VECTOR3:
 			if value is Vector3:
-				return value
+				return {"ok": value}
 			if value is Dictionary and value.has("x") and value.has("y") and value.has("z"):
-				return Vector3(float(value.x), float(value.y), float(value.z))
+				return {"ok": Vector3(float(value.x), float(value.y), float(value.z))}
+			return {"error": "Cannot coerce value to Vector3 for property '%s' (expected {x,y,z} or Vector3)" % prop_name}
 		TYPE_FLOAT:
 			if value is int or value is float:
-				return float(value)
+				return {"ok": float(value)}
 		TYPE_INT:
 			if value is float or value is int:
-				return int(value)
+				return {"ok": int(value)}
 		TYPE_BOOL:
-			if value is int or value is float:
-				return bool(value)
-	return value
+			if value is int or value is float or value is bool:
+				return {"ok": bool(value)}
+	return {"ok": value}
 
 
 # ============================================================================

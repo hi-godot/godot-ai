@@ -96,7 +96,6 @@ async def animation_play(
     player_path: str,
     animation_name: str = "",
 ) -> dict:
-    require_writable(runtime)
     return await runtime.send_command(
         "animation_play",
         {"player_path": player_path, "animation_name": animation_name},
@@ -107,7 +106,6 @@ async def animation_stop(
     runtime: Runtime,
     player_path: str,
 ) -> dict:
-    require_writable(runtime)
     return await runtime.send_command(
         "animation_stop",
         {"player_path": player_path},

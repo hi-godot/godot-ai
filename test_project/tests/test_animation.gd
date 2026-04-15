@@ -255,8 +255,8 @@ func test_add_property_track_transition_named() -> void:
 		"animation_name": "anim",
 		"track_path": ".:position",
 		"keyframes": [
-			{"time": 0.0, "value": {"x": 0.0, "y": 0.0}, "transition": "ease_out"},
-			{"time": 1.0, "value": {"x": 100.0, "y": 0.0}, "transition": "ease_out"},
+			{"time": 0.0, "value": {"x": 0.0, "y": 0.0, "z": 0.0}, "transition": "ease_out"},
+			{"time": 1.0, "value": {"x": 100.0, "y": 0.0, "z": 0.0}, "transition": "ease_out"},
 		],
 	})
 	assert_has_key(result, "data")
@@ -323,6 +323,36 @@ func test_create_simple_coerces_vector3() -> void:
 	_remove_node(player_path)
 
 
+func test_add_property_track_rejects_unparseable_color() -> void:
+	# When the target property exists and has a known type (here, Color on
+	# Sprite2D.modulate), an unparseable string value should fail at author
+	# time rather than silently ending up as raw text in the keyframe.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var sprite := Sprite2D.new()
+	sprite.name = "ColorSprite"
+	scene_root.add_child(sprite)
+	sprite.owner = scene_root
+
+	var player_path := _add_player("TestBadColor")
+	if player_path.is_empty():
+		sprite.get_parent().remove_child(sprite)
+		sprite.queue_free()
+		return
+	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
+	var result := _handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "anim",
+		"track_path": "ColorSprite:modulate",
+		"keyframes": [
+			{"time": 0.0, "value": "not_a_color"},
+		],
+	})
+	assert_is_error(result, "", "expected INVALID_PARAMS for unparseable color string")
+	_remove_node(player_path)
+	sprite.get_parent().remove_child(sprite)
+	sprite.queue_free()
+
+
 func test_add_property_track_transition_raw_float() -> void:
 	var player_path := _add_player("TestTransFloat")
 	if player_path.is_empty():
@@ -333,8 +363,8 @@ func test_add_property_track_transition_raw_float() -> void:
 		"animation_name": "anim",
 		"track_path": ".:position",
 		"keyframes": [
-			{"time": 0.0, "value": {"x": 0.0, "y": 0.0}, "transition": 3.0},
-			{"time": 1.0, "value": {"x": 100.0, "y": 0.0}, "transition": 3.0},
+			{"time": 0.0, "value": {"x": 0.0, "y": 0.0, "z": 0.0}, "transition": 3.0},
+			{"time": 1.0, "value": {"x": 100.0, "y": 0.0, "z": 0.0}, "transition": 3.0},
 		],
 	})
 	assert_has_key(result, "data")
@@ -535,8 +565,8 @@ func test_create_simple_auto_length() -> void:
 			{
 				"target": ".",
 				"property": "position",
-				"from": {"x": -400.0, "y": 0.0},
-				"to": {"x": 0.0, "y": 0.0},
+				"from": {"x": -400.0, "y": 0.0, "z": 0.0},
+				"to": {"x": 0.0, "y": 0.0, "z": 0.0},
 				"duration": 0.4,
 				"delay": 0.1,
 			}
@@ -582,7 +612,7 @@ func test_create_simple_multiple_tweens() -> void:
 		"name": "combo",
 		"tweens": [
 			{"target": ".", "property": "modulate", "from": {"r":1,"g":1,"b":1,"a":0}, "to": {"r":1,"g":1,"b":1,"a":1}, "duration": 0.5},
-			{"target": ".", "property": "position", "from": {"x": -200.0, "y": 0.0}, "to": {"x": 0.0, "y": 0.0}, "duration": 0.3, "delay": 0.1},
+			{"target": ".", "property": "position", "from": {"x": -200.0, "y": 0.0, "z": 0.0}, "to": {"x": 0.0, "y": 0.0, "z": 0.0}, "duration": 0.3, "delay": 0.1},
 		],
 	})
 	assert_has_key(result, "data")

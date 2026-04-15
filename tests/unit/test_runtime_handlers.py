@@ -2604,6 +2604,42 @@ async def test_animation_list_does_not_require_writable():
     assert result["count"] == 2
 
 
+async def test_animation_play_does_not_require_writable():
+    """animation_play is a preview op — it must not call require_writable."""
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    session = Session(
+        session_id="s1",
+        godot_version="4.4",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="playing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    await animation_handlers.animation_play(runtime, player_path="/Main/AP", animation_name="idle")
+
+
+async def test_animation_stop_does_not_require_writable():
+    """animation_stop is a preview op — it must not call require_writable."""
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    session = Session(
+        session_id="s1",
+        godot_version="4.4",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="playing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    await animation_handlers.animation_stop(runtime, player_path="/Main/AP")
+
+
 async def test_animation_player_create_requires_writable():
     """Write tools must raise EDITOR_NOT_READY when editor is importing."""
     from godot_ai.godot_client.client import GodotCommandError
