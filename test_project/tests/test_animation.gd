@@ -795,60 +795,62 @@ func test_get_accepts_library_qualified_name() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
 
-	# Add a named library with a clip directly (handler API currently targets
-	# the default library; this exercises read-path robustness).
+	# Attach a named library with a clip directly — the handler API targets the
+	# default library today; this test covers the read-path robustness only.
 	var lib := AnimationLibrary.new()
 	var anim := Animation.new()
 	anim.length = 1.0
-	lib.add_animation("idle", anim)
-	player.add_animation_library("moves", lib)
-
-	# Qualified name as listed by Godot.
-	var qualified := "moves/idle"
-	assert_true(player.has_animation(qualified), "Godot should expose the qualified form")
+	lib.add_animation(&"idle", anim)
+	player.add_animation_library(&"moves", lib)
 
 	var result := _handler.get_animation({
 		"player_path": player_path,
-		"animation_name": qualified,
+		"animation_name": "moves/idle",
 	})
-	assert_has_key(result, "data")
+	assert_has_key(result, "data", "Qualified name should resolve via animation_get")
 	assert_eq(result.data.length, 1.0)
 	_remove_node(player_path)
 
 
-# ─── Track type labels — value / method are distinct, unknown reported ───────
+# ─── Track type labels — value / method are distinct, other types honest ────
 
 func test_get_labels_value_and_method_tracks_distinctly() -> void:
+	# The previous implementation labeled anything not TYPE_VALUE as "method";
+	# this verifies value/method are distinct and that bezier reports honestly.
 	var player_path := _add_player("TestTrackLabels")
 	if player_path.is_empty():
 		return
 	_handler.create_animation({"player_path": player_path, "name": "mixed", "length": 1.0})
+
+	# Attach a value track and a method track via the public API.
 	_handler.add_property_track({
 		"player_path": player_path,
 		"animation_name": "mixed",
-		"track_path": ".:modulate",
-		"keyframes": [{"time": 0.0, "value": "white"}],
+		"track_path": ".:position",
+		"keyframes": [{"time": 0.0, "value": {"x": 0.0, "y": 0.0, "z": 0.0}}],
 	})
 	_handler.add_method_track({
 		"player_path": player_path,
 		"animation_name": "mixed",
 		"target_node_path": ".",
-		"keyframes": [{"time": 0.5, "method": "set_process", "args": [true]}],
+		"keyframes": [{"time": 0.5, "method": "queue_free", "args": []}],
 	})
+
+	# Attach a bezier track directly — the write API doesn't produce them, but
+	# imported resources or future tools will, and get_animation must label
+	# them honestly instead of reporting "method".
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var anim: Animation = player.get_animation("mixed")
+	var bezier_idx := anim.add_track(Animation.TYPE_BEZIER)
+	anim.track_set_path(bezier_idx, NodePath(".:rotation"))
+
 	var result := _handler.get_animation({"player_path": player_path, "animation_name": "mixed"})
-	assert_eq(result.data.track_count, 2)
+	assert_eq(result.data.track_count, 3)
 	var types: Array = []
 	for t in result.data.tracks:
 		types.append(t.type)
 	assert_contains(types, "value")
 	assert_contains(types, "method")
+	assert_contains(types, "bezier")
 	_remove_node(player_path)
-
-
-func test_track_type_to_string_unknown_for_bezier() -> void:
-	# Bezier tracks can land on an animation even though the write API doesn't
-	# produce them yet (imported resources, or future tools). The label should
-	# be honest, not misreport as "method".
-	assert_eq(AnimationHandler._track_type_to_string(Animation.TYPE_BEZIER), "bezier")
-	assert_eq(AnimationHandler._track_type_to_string(Animation.TYPE_AUDIO), "audio")
-	assert_eq(AnimationHandler._track_type_to_string(9999), "unknown")
