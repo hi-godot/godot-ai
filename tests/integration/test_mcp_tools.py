@@ -2557,3 +2557,140 @@ class TestPerCallSessionRouting:
             assert "EDITOR_NOT_READY" in str(result.content)
         finally:
             await plugin_b.close()
+
+
+# ---------------------------------------------------------------------------
+# JSON-string coercion for list params (issue #11 — Claude Code MCP client
+# stringifies complex-typed args before sending)
+# ---------------------------------------------------------------------------
+
+
+class TestJsonStringParamCoercion:
+    async def test_batch_execute_accepts_stringified_commands(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "batch_execute"
+            assert cmd["params"]["commands"] == [
+                {"command": "create_node", "params": {"type": "Node3D", "name": "X"}}
+            ]
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "succeeded": 1,
+                    "stopped_at": None,
+                    "results": [
+                        {"command": "create_node", "status": "ok", "data": {"undoable": True}}
+                    ],
+                    "undo": True,
+                    "rolled_back": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "batch_execute",
+            {
+                "commands": json.dumps(
+                    [{"command": "create_node", "params": {"type": "Node3D", "name": "X"}}]
+                )
+            },
+        )
+        await task
+        assert not result.is_error
+        assert result.data["succeeded"] == 1
+
+    async def test_editor_selection_set_accepts_stringified_paths(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["paths"] == ["/Main/Camera3D", "/Main/World"]
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "selected": ["/Main/Camera3D", "/Main/World"],
+                    "not_found": [],
+                    "count": 2,
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "editor_selection_set",
+            {"paths": json.dumps(["/Main/Camera3D", "/Main/World"])},
+        )
+        await task
+        assert result.data["count"] == 2
+
+    async def test_filesystem_reimport_accepts_stringified_paths(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["paths"] == ["res://a.png", "res://b.png"]
+            await plugin.send_response(
+                cmd["request_id"],
+                {"reimported": ["res://a.png", "res://b.png"], "count": 2},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "filesystem_reimport",
+            {"paths": json.dumps(["res://a.png", "res://b.png"])},
+        )
+        await task
+        assert result.data["count"] == 2
+
+    async def test_performance_monitors_get_accepts_stringified_monitors(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["monitors"] == ["time/fps"]
+            await plugin.send_response(
+                cmd["request_id"], {"monitors": {"time/fps": 60}, "missing": []}
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "performance_monitors_get",
+            {"monitors": json.dumps(["time/fps"])},
+        )
+        await task
+        assert result.data["monitors"]["time/fps"] == 60
+
+    async def test_real_list_still_works(self, mcp_stack):
+        """Regression check — passing actual lists must continue to work."""
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["paths"] == ["res://x.png"]
+            await plugin.send_response(
+                cmd["request_id"], {"reimported": ["res://x.png"], "count": 1}
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "filesystem_reimport",
+            {"paths": ["res://x.png"]},
+        )
+        await task
+        assert result.data["count"] == 1
+
+    async def test_malformed_json_string_still_raises_validation(self, mcp_stack):
+        """A non-JSON string must fall through and fail pydantic validation."""
+        client, _plugin = mcp_stack
+        result = await client.call_tool(
+            "filesystem_reimport",
+            {"paths": "not-json-at-all"},
+            raise_on_error=False,
+        )
+        assert result.is_error
+        error_text = str(result.content).lower()
+        assert "paths" in error_text
+        assert "input should be a valid list" in error_text or "list_type" in error_text
