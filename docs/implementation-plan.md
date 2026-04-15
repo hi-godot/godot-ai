@@ -175,12 +175,36 @@ Use a small 2D top-down roguelite as the first benchmark, but keep it room-based
 - [x] create and mutate small Godot projects safely in the editor
 - [ ] support the kind of runtime iteration needed to make the benchmark feel good
 
+### UI Scenarios The Current Stack Can Already Scaffold
+
+With `ui_set_anchor_preset`, `ui_build_layout`, and the `theme_*` authoring
+family in place, an agent can one-shot a styled, anchored, undoable Control
+tree for each of these benchmark-relevant UI surfaces — `theme_*` defines the
+look once, `ui_build_layout` places it, `signal_connect` wires behavior:
+
+- **Roguelite HUD** — health bottom-left, ammo bottom-right, score / boss bar top-center, minimap / combo top-right; one theme applied at `/Main/HUD` styles everything inside
+- **Pause menu overlay** — full-rect dim panel, centered `VBoxContainer` with Resume / Settings / Quit buttons, themed hover/pressed states
+- **Upgrade-draft screen** — centered bordered `Panel` with three side-by-side `Button` cards; rounded corners, drop shadow, and border from one `theme_set_stylebox_flat`
+- **Game-over screen** — dim overlay, YOU DIED label, stats `Label` filled by the game script, Retry / MainMenu / Quit button row
+- **Settings menu** — dialog panel with labeled slider rows (`HBoxContainer` of Label + HSlider) for master/music/SFX volume, fullscreen `CheckBox`, uniform spacing via `theme_set_constant`
+- **Dialogue box** — `bottom_wide` panel with portrait `TextureRect`, name + message `RichTextLabel`, continue hint; game code mutates `.text` per line
+- **Main menu** — logo top-center, title centered, vertical stack of nav buttons
+- **Inventory grid** — `GridContainer` of themed `Panel` slots each holding an icon `TextureRect` and quantity `Label`; re-skinnable by swapping the theme
+- **Tutorial prompt** — small themed `Panel` anchored where the tutorial wants it, styled key-cap via stylebox, text mutated as the tutorial progresses
+- **Boss overlay** — `top_wide` panel with name Label, wide `ProgressBar` for health, horizontal row of phase indicators; phase color changes via a single `theme_set_color` update
+
+Each of these is a single-prompt target today. What these scenarios still
+cannot express is juice: hover animations, slide-ins, shake on damage, sound
+feedback, custom fonts, and pixel-art 9-slice buttons. Those are blocked by
+the `animation_player.*` / `audio.*` / `theme_set_font` / `theme_set_stylebox_texture` gaps
+tracked above.
+
 ### What Must Exist Before This Is A Fair Benchmark
 
 - [x] run/stop plus screenshot capture and basic performance sampling
 - [ ] `batch.execute` and a safe partial-edit story
 - [ ] data-authoring surface for upgrades, enemies, room data, and reusable scenes
-- [ ] `ui.*` for HUD and upgrade selection
+- [~] `ui.*` for HUD and upgrade selection — anchor presets, declarative `ui_build_layout` composer, and `theme_*` authoring shipped; still need `ui_set_text`, `theme_set_font`, `theme_set_stylebox_texture` for pixel-art / custom typography
 - [ ] `camera.*` for follow, bounds, zoom, and shake
 - [ ] `animation_player.*` and `audio.*` for combat readability and feel
 - [ ] `particles.*` / `shader.*` / `material.*` for hit juice and feedback clarity
