@@ -6,6 +6,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import cached_property
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ class Session:
     connected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_seen: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
-    @property
+    @cached_property
     def name(self) -> str:
         """Short human-readable name derived from project_path.
 
@@ -36,7 +37,6 @@ class Session:
         path = self.project_path.rstrip("/\\")
         if not path:
             return self.session_id[:8]
-        ## os.path.basename equivalent without importing os just for this
         for sep in ("/", "\\"):
             if sep in path:
                 return path.rsplit(sep, 1)[-1]
