@@ -28,7 +28,7 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 - [x] Runtime feedback loop: `project.run`/`project.stop`, `editor.screenshot`, `performance.get_monitors`, `logs.clear`
 - [ ] Runtime iteration loop is complete enough for AI-driven feel tuning
 - [ ] Release/install path is complete enough for new users
-- [ ] Polished game-production extensions have started
+- [~] Polished game-production extensions have started — `ui_*` (anchor presets, `ui_build_layout` composer), `theme_*` (color/constant/font-size/stylebox_flat/apply), and `animation_*` (AnimationPlayer + `animation_create_simple` composer) shipped; `camera_*`, `audio_*`, and animation preset helpers still pending
 
 ## What This Plan Optimizes For
 
@@ -80,7 +80,7 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 - [x] batch execution is shipped with a clear contract
 - [x] multi-instance routing works in practice
 - [x] `script.patch` decision is made (shipped: anchor-based replace)
-- [x] test coverage and smoke coverage increase where the new runtime loop needs it (310 Python + 227 GDScript = 537 total)
+- [x] test coverage and smoke coverage increase where the new runtime loop needs it (373 Python + 307 GDScript = 680 total)
 
 ---
 
