@@ -64,7 +64,7 @@ The Godot dock also has a **Start/Stop Dev Server** button for convenience.
 
 ### Python tests
 ```bash
-pytest -v                    # 310 unit + integration tests
+pytest -v                    # 373 unit + integration tests
 ```
 
 ### Godot-side tests
@@ -134,6 +134,35 @@ _undo_redo.commit_action()
 ```
 
 Response must include `"undoable": true`. If an operation genuinely can't be undone (file writes, scene open/close), include `"undoable": false` with a reason.
+
+### Auto-create missing dependencies in the same undo action
+
+When a write tool needs a sub-resource that may not exist yet (e.g. `animation_create` needs an `AnimationLibrary` on the AnimationPlayer; a future `material_set_param` would need a `Material` on the mesh), do **not** error or do a separate setup write. Bundle the dependency creation into the same `create_action` so a single Ctrl-Z rolls back both:
+
+```gdscript
+var library = player.get_animation_library("") if player.has_animation_library("") else null
+var created = library == null
+if created:
+    library = AnimationLibrary.new()
+
+_undo_redo.create_action("MCP: Create animation foo")
+if created:
+    _undo_redo.add_do_method(player, "add_animation_library", "", library)
+    _undo_redo.add_undo_method(player, "remove_animation_library", "")
+    _undo_redo.add_do_reference(library)  # keep alive across undo→redo
+_undo_redo.add_do_method(library, "add_animation", "foo", anim)
+_undo_redo.add_undo_method(library, "remove_animation", "foo")
+_undo_redo.add_do_reference(anim)
+_undo_redo.commit_action()
+```
+
+Surface a `<dependency>_created: bool` field in the response so callers (and tests) can confirm the auto-creation actually happened. See `animation_handler.gd:create_animation` for a worked example.
+
+### Value coercion: assert on the stored Variant, not on counts
+
+JSON dicts like `{"r":1,"g":0,"b":0,"a":1}` only become `Color` / `Vector2` / `Vector3` if the coercer finds a matching property on the target node and that property's `TYPE_*` is in the coerce table. If the property is missing (wrong scene root type) or the type isn't handled, the raw dict is silently stored as the keyframe value and Godot plays garbage at runtime.
+
+GDScript tests that just assert `track_count == 1` will pass even when coercion is broken. **Always read back via `track_get_key_value(idx, k)` and assert `value is Color` / `value is Vector3` / etc.** `test_animation.gd` `test_add_property_track_coerces_vector3_dict` is the reference pattern. The same rule applies to any future handler that takes JSON values intended to land as typed Variants in the scene.
 
 ## Test coverage
 

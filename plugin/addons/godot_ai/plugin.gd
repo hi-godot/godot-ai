@@ -33,7 +33,8 @@ func _enter_tree() -> void:
 	var batch_handler := BatchHandler.new(_dispatcher, get_undo_redo())
 	var ui_handler := UiHandler.new(get_undo_redo())
 	var theme_handler := ThemeHandler.new(get_undo_redo())
-	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler, ui_handler, theme_handler]
+	var animation_handler := AnimationHandler.new(get_undo_redo())
+	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler, ui_handler, theme_handler, animation_handler]
 
 	_dispatcher.register("get_editor_state", editor_handler.get_editor_state)
 	_dispatcher.register("get_scene_tree", scene_handler.get_scene_tree)
@@ -103,6 +104,16 @@ func _enter_tree() -> void:
 	_dispatcher.register("theme_set_font_size", theme_handler.set_font_size)
 	_dispatcher.register("theme_set_stylebox_flat", theme_handler.set_stylebox_flat)
 	_dispatcher.register("apply_theme", theme_handler.apply_theme)
+	_dispatcher.register("animation_player_create", animation_handler.create_player)
+	_dispatcher.register("animation_create", animation_handler.create_animation)
+	_dispatcher.register("animation_add_property_track", animation_handler.add_property_track)
+	_dispatcher.register("animation_add_method_track", animation_handler.add_method_track)
+	_dispatcher.register("animation_set_autoplay", animation_handler.set_autoplay)
+	_dispatcher.register("animation_play", animation_handler.play)
+	_dispatcher.register("animation_stop", animation_handler.stop)
+	_dispatcher.register("animation_list", animation_handler.list_animations)
+	_dispatcher.register("animation_get", animation_handler.get_animation)
+	_dispatcher.register("animation_create_simple", animation_handler.create_simple)
 
 	_connection.dispatcher = _dispatcher
 	add_child(_connection)

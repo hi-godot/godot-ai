@@ -28,7 +28,7 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 - [x] Runtime feedback loop: `project.run`/`project.stop`, `editor.screenshot`, `performance.get_monitors`, `logs.clear`
 - [ ] Runtime iteration loop is complete enough for AI-driven feel tuning
 - [ ] Release/install path is complete enough for new users
-- [ ] Polished game-production extensions have started
+- [~] Polished game-production extensions have started — `ui_*` (anchor presets, `ui_build_layout` composer), `theme_*` (color/constant/font-size/stylebox_flat/apply), and `animation_*` (AnimationPlayer + `animation_create_simple` composer) shipped; `camera_*`, `audio_*`, and animation preset helpers still pending
 
 ## What This Plan Optimizes For
 
@@ -80,7 +80,7 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 - [x] batch execution is shipped with a clear contract
 - [x] multi-instance routing works in practice
 - [x] `script.patch` decision is made (shipped: anchor-based replace)
-- [x] test coverage and smoke coverage increase where the new runtime loop needs it (310 Python + 227 GDScript = 537 total)
+- [x] test coverage and smoke coverage increase where the new runtime loop needs it (373 Python + 307 GDScript = 680 total)
 
 ---
 
@@ -133,7 +133,13 @@ These are not the next things to do blindly. They are the extensions that matter
 - `scene.instantiate` and `scene.inherit`
   - [ ] critical path for reusable `button.tscn` / `enemy.tscn` instanced into many parent scenes — the piece that turns the UI composer and node_create flows into "real Godot project structure" instead of one-shot scene builds
 - `animation_player.*` / `animation_tree.*`
-  - [ ] needed for UI juice (hover pulse, slide-in menus, fade transitions), combat readability (shake on damage, hit-stop), and general feel — the current stack can build static HUDs but cannot animate them
+  - [~] AnimationPlayer scaffolding shipped (`animation_player_create`, `animation_create`, `animation_add_property_track`, `animation_add_method_track`, `animation_set_autoplay`, `animation_play`, `animation_stop`, `animation_list`, `animation_get`, `animation_create_simple` composer)
+  - [ ] **Preset helpers** — `animation_preset_fade`, `animation_preset_slide_in`, `animation_preset_shake`, `animation_preset_pulse_loop`. Thin wrappers over `animation_create_simple` that bake in the right transition / loop_mode / two-keyframe shape for each effect. Cuts a "fade in this Panel" from a 6-line tween spec to one call.
+  - [ ] **Bezier and audio tracks** — `animation_add_bezier_track` (for hand-tuned curves where keyframe interpolation isn't enough) and `animation_add_audio_track` (timed AudioStreamPlayer cues; needs the audio resource handler first).
+  - [ ] **`animation_tree.*`** — state-machine and blend-tree authoring for character locomotion (idle ↔ walk ↔ run blends, attack one-shots). Larger surface; depends on the AnimationPlayer being solid first.
+  - [ ] **3D material fades / sub-resource paths** — animating a 3D mesh's transparency means tweening `MeshInstance3D:material_override:albedo_color`, which the value coercer needs to walk into. Today it falls through to raw value for nested resource paths. Requires extending `_coerce_value_for_track` to resolve `node:resource:property` chains, plus a worked example in the docstring.
+  - [ ] **Coercion gaps for non-UI types** — `_coerce_for_type` currently handles Color / Vector2 / Vector3 / int / float / bool. Missing: `Transform3D` / `Quaternion` / `Basis` (3D rigging), `Vector3i` (TileMap), `NodePath` / `StringName` (prop-redirection animations), `Rect2` / `AABB`. Today these silently store the raw JSON value and play garbage. Fix is local to one function; the test plan is the harder bit (need fixture nodes for each property type).
+  - [ ] **Library-keyed access** — current API targets the default library only. Multi-library workflows (e.g. importing a glTF skeleton with named clip libraries) need explicit `library` params on `animation_create` / `animation_add_*_track` / `animation_play`. Low priority — most users won't hit this.
 - `audio.*`
 
 ### Tier 2: Strong Polish Multipliers
@@ -192,11 +198,14 @@ look once, `ui_build_layout` places it, `signal_connect` wires behavior:
 - **Inventory grid** — `GridContainer` of themed `Panel` slots each holding an icon `TextureRect` and quantity `Label`; re-skinnable by swapping the theme
 - **Tutorial prompt** — small themed `Panel` anchored where the tutorial wants it, styled key-cap via stylebox, text mutated as the tutorial progresses
 - **Boss overlay** — `top_wide` panel with name Label, wide `ProgressBar` for health, horizontal row of phase indicators; phase color changes via a single `theme_set_color` update
+- **Sliding pause menu** — `animation_create_simple` tweens `PauseMenu:position` from off-screen left to center with `ease_out`; `loop_mode="none"`; `animation_set_autoplay` omitted so script triggers it on pause input
+- **Hover pulse on buttons** — `animation_create_simple` tweens `Button:scale` from `{x:1,y:1}` to `{x:1.08,y:1.08}` with `loop_mode="pingpong"`; autoplay starts immediately
+- **Damage shake on HUD root** — property track on `HUD:position` with rapid keyframes at ±8px offsets over 0.3s; triggered by script on `player_hit` signal
+- **Fade transition between UI screens** — `animation_create_simple` tweens `TransitionRect:modulate` from `{a:0}` to `{a:1}` (fade to black), then a method track calls `emit_signal("fade_complete")` at the midpoint
 
-Each of these is a single-prompt target today. What these scenarios still
-cannot express is juice: hover animations, slide-ins, shake on damage, sound
-feedback, custom fonts, and pixel-art 9-slice buttons. Those are blocked by
-the `animation_player.*` / `audio.*` / `theme_set_font` / `theme_set_stylebox_texture` gaps
+Each of these is now a single-prompt target. What these scenarios still
+cannot express is: sound feedback, custom fonts, and pixel-art 9-slice buttons. Those are blocked by
+the `audio.*` / `theme_set_font` / `theme_set_stylebox_texture` gaps
 tracked above.
 
 ### What Must Exist Before This Is A Fair Benchmark
@@ -206,7 +215,7 @@ tracked above.
 - [ ] data-authoring surface for upgrades, enemies, room data, and reusable scenes
 - [~] `ui.*` for HUD and upgrade selection — anchor presets, declarative `ui_build_layout` composer, and `theme_*` authoring shipped; still need `ui_set_text`, `theme_set_font`, `theme_set_stylebox_texture` for pixel-art / custom typography
 - [ ] `camera.*` for follow, bounds, zoom, and shake
-- [ ] `animation_player.*` and `audio.*` for combat readability and feel
+- [~] `animation_player.*` shipped; `audio.*` still pending for combat readability and feel
 - [ ] `particles.*` / `shader.*` / `material.*` for hit juice and feedback clarity
 - [ ] light `physics.*` and optionally `tilemap.*` / `navigation.*` if rooms become more authored
 
