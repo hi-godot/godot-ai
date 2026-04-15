@@ -757,7 +757,7 @@ static func _parse_transition(v: Variant) -> float:
 	if v is float or v is int:
 		return float(v)
 	if v is String:
-		var key := v.to_lower()
+		var key: String = (v as String).to_lower()
 		if _NAMED_TRANSITIONS.has(key):
 			return float(_NAMED_TRANSITIONS[key])
 	return 1.0
