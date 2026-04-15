@@ -18,6 +18,7 @@ from godot_ai.handlers import script as script_handlers
 from godot_ai.handlers import session as session_handlers
 from godot_ai.handlers import signal as signal_handlers
 from godot_ai.handlers import testing as testing_handlers
+from godot_ai.handlers import ui as ui_handlers
 from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.sessions.registry import Session, SessionRegistry
 
@@ -324,6 +325,16 @@ class StubClient:
                 "name": params.get("name", ""),
                 "removed": True,
                 "undoable": False,
+            }
+        if command == "set_anchor_preset":
+            return {
+                "path": params.get("path", ""),
+                "preset": params.get("preset", ""),
+                "resize_mode": params.get("resize_mode", "minsize"),
+                "margin": params.get("margin", 0),
+                "anchors": {"left": 0.0, "top": 0.0, "right": 1.0, "bottom": 1.0},
+                "offsets": {"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0},
+                "undoable": True,
             }
         if command == "list_actions":
             return {
@@ -1954,3 +1965,43 @@ async def test_batch_execute_rejects_empty_list():
     result = await batch_handlers.batch_execute(runtime, commands=[])
     assert result["error"]["code"] == "INVALID_PARAMS"
     assert not client.calls
+
+
+# ---------------------------------------------------------------------------
+# UI handler tests
+# ---------------------------------------------------------------------------
+
+
+async def test_ui_set_anchor_preset_handler_defaults():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await ui_handlers.ui_set_anchor_preset(
+        runtime, path="/Main/HUD", preset="full_rect"
+    )
+    assert client.calls[-1]["command"] == "set_anchor_preset"
+    assert client.calls[-1]["params"] == {
+        "path": "/Main/HUD",
+        "preset": "full_rect",
+        "resize_mode": "minsize",
+        "margin": 0,
+    }
+    assert result["preset"] == "full_rect"
+    assert result["undoable"] is True
+
+
+async def test_ui_set_anchor_preset_handler_passes_resize_mode_and_margin():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await ui_handlers.ui_set_anchor_preset(
+        runtime,
+        path="/Main/Hud/Panel",
+        preset="center",
+        resize_mode="keep_size",
+        margin=12,
+    )
+    assert client.calls[-1]["params"] == {
+        "path": "/Main/Hud/Panel",
+        "preset": "center",
+        "resize_mode": "keep_size",
+        "margin": 12,
+    }
