@@ -18,20 +18,28 @@ class SupportsDirectRuntime(Protocol):
 class DirectRuntime:
     """In-process runtime used by the current single-process server."""
 
-    def __init__(self, registry: SessionRegistry, client: GodotClient):
+    def __init__(
+        self,
+        registry: SessionRegistry,
+        client: GodotClient,
+        session_id: str | None = None,
+    ):
         self._registry = registry
         self._client = client
+        self._bound_session_id = session_id
 
     @classmethod
-    def from_context(cls, ctx: Context) -> DirectRuntime:
+    def from_context(cls, ctx: Context, session_id: str | None = None) -> DirectRuntime:
         app = ctx.fastmcp._lifespan_result
         if app is None:
             raise RuntimeError("FastMCP lifespan context is not available")
-        return cls.from_app_context(app)
+        return cls.from_app_context(app, session_id=session_id)
 
     @classmethod
-    def from_app_context(cls, app: SupportsDirectRuntime) -> DirectRuntime:
-        return cls(registry=app.registry, client=app.client)
+    def from_app_context(
+        cls, app: SupportsDirectRuntime, session_id: str | None = None
+    ) -> DirectRuntime:
+        return cls(registry=app.registry, client=app.client, session_id=session_id)
 
     async def send_command(
         self,
@@ -43,7 +51,7 @@ class DirectRuntime:
         return await self._client.send(
             command=command,
             params=params,
-            session_id=session_id,
+            session_id=session_id if session_id is not None else self._bound_session_id,
             timeout=timeout,
         )
 
@@ -51,11 +59,13 @@ class DirectRuntime:
         return self._registry.list_all()
 
     def get_active_session(self) -> Session | None:
+        if self._bound_session_id is not None:
+            return self._registry.get(self._bound_session_id)
         return self._registry.get_active()
 
     @property
     def active_session_id(self) -> str | None:
-        return self._registry.active_session_id
+        return self._bound_session_id or self._registry.active_session_id
 
     def set_active_session(self, session_id: str) -> None:
         self._registry.set_active(session_id)

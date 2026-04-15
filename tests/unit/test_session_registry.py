@@ -41,13 +41,25 @@ class TestSessionRegistry:
 
         assert reg.active_session_id == "a"
 
-    def test_unregister_active_falls_back(self):
+    def test_unregister_active_clears_active(self):
+        ## Disconnect of the active session must NOT silently promote another
+        ## session to active — that would route commands to whichever session
+        ## was registered first, which is the 'multi-instance routing' bug.
         reg = SessionRegistry()
         reg.register(_make_session("a"))
         reg.register(_make_session("b"))
         reg.unregister("a")
 
-        assert reg.active_session_id == "b"
+        assert reg.active_session_id is None
+        assert len(reg) == 1
+
+    def test_unregister_non_active_leaves_active(self):
+        reg = SessionRegistry()
+        reg.register(_make_session("a"))
+        reg.register(_make_session("b"))
+        reg.unregister("b")
+
+        assert reg.active_session_id == "a"
         assert len(reg) == 1
 
     def test_unregister_last_clears_active(self):
@@ -87,6 +99,44 @@ class TestSessionRegistry:
         assert d["godot_version"] == "4.4.1"
         assert d["project_path"] == "/tmp/test_project"
         assert "connected_at" in d
+        assert "last_seen" in d
+        assert d["name"] == "test_project"
+        assert d["editor_pid"] == 0
+
+
+class TestSessionMetadata:
+    def test_name_derived_from_project_path(self):
+        s = _make_session(project_path="/Users/me/projects/my_game/")
+        assert s.name == "my_game"
+
+    def test_name_strips_trailing_slash(self):
+        s = _make_session(project_path="/tmp/test_project")
+        assert s.name == "test_project"
+
+    def test_name_handles_windows_path(self):
+        s = _make_session(project_path="C:\\Users\\me\\my_game\\")
+        assert s.name == "my_game"
+
+    def test_name_falls_back_to_session_id_prefix_when_path_empty(self):
+        s = _make_session("abcdef1234567890", project_path="")
+        assert s.name == "abcdef12"
+
+    def test_editor_pid_defaults_to_zero(self):
+        s = _make_session()
+        assert s.editor_pid == 0
+
+    def test_editor_pid_stored(self):
+        s = _make_session(editor_pid=12345)
+        assert s.editor_pid == 12345
+
+    def test_touch_updates_last_seen(self):
+        s = _make_session()
+        original = s.last_seen
+        ## busy-wait a tiny amount to guarantee timestamp delta
+        import time
+        time.sleep(0.001)
+        s.touch()
+        assert s.last_seen > original
 
 
 class TestWaitForSession:

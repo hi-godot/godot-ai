@@ -63,18 +63,26 @@ class GodotWebSocketServer:
                 plugin_version=handshake.plugin_version,
                 protocol_version=handshake.protocol_version,
                 readiness=handshake.readiness,
+                editor_pid=handshake.editor_pid,
             )
             self.registry.register(session)
             self._connections[session_id] = ws
             logger.info(
-                "Session connected: %s (Godot %s, %s)",
+                "Session connected: %s (pid=%s, Godot %s, %s)",
                 session_id,
+                handshake.editor_pid or "?",
                 handshake.godot_version,
                 handshake.project_path,
             )
 
             # Listen for responses and events
             async for raw_msg in ws:
+                ## Any message counts as a heartbeat — last_seen lets callers
+                ## distinguish live editors from stale registry entries.
+                live = self.registry.get(session_id)
+                if live is not None:
+                    live.touch()
+
                 data = json.loads(raw_msg)
 
                 # Handle state events from the plugin
@@ -94,8 +102,14 @@ class GodotWebSocketServer:
             logger.exception("Error in WebSocket handler for session %s", session_id)
         finally:
             if session_id:
+                was_active = self.registry.active_session_id == session_id
                 self.registry.unregister(session_id)
                 self._connections.pop(session_id, None)
+                if was_active:
+                    logger.info(
+                        "Active session %s disconnected; waiting for next register/activate",
+                        session_id[:8],
+                    )
 
     def _handle_event(self, session_id: str, data: dict) -> None:
         event = data.get("event", "")

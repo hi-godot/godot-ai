@@ -17,6 +17,7 @@ def register_project_tools(mcp: FastMCP) -> None:
         ctx: Context,
         mode: str = "main",
         scene: str = "",
+        session_id: str = "",
     ) -> dict:
         """Run (play / start) the Godot project (game) from the editor.
 
@@ -28,22 +29,26 @@ def register_project_tools(mcp: FastMCP) -> None:
         Args:
             mode: Run mode — "main", "current", or "custom". Default "main".
             scene: Scene path (e.g. "res://levels/level1.tscn"). Required when mode is "custom".
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await project_handlers.project_run(runtime, mode=mode, scene=scene)
 
     @mcp.tool(meta=DEFER_META)
-    async def project_stop(ctx: Context) -> dict:
+    async def project_stop(ctx: Context, session_id: str = "") -> dict:
         """Stop (halt / exit) the running Godot project (game).
 
         Stops the currently playing scene. Returns an error if the project
         is not running.
+
+        Args:
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await project_handlers.project_stop(runtime)
 
     @mcp.tool(meta=DEFER_META)
-    async def project_settings_get(ctx: Context, key: str) -> dict:
+    async def project_settings_get(ctx: Context, key: str, session_id: str = "") -> dict:
         """Get a Godot project setting by key.
 
         Reads from ProjectSettings (e.g. "application/config/name",
@@ -51,8 +56,9 @@ def register_project_tools(mcp: FastMCP) -> None:
 
         Args:
             key: The setting key path (e.g. "application/config/name").
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await project_handlers.project_settings_get(runtime, key=key)
 
     @mcp.tool(meta=DEFER_META)
@@ -60,6 +66,7 @@ def register_project_tools(mcp: FastMCP) -> None:
         ctx: Context,
         key: str,
         value: Any,
+        session_id: str = "",
     ) -> dict:
         """Set a Godot project setting by key.
 
@@ -70,7 +77,7 @@ def register_project_tools(mcp: FastMCP) -> None:
         Args:
             key: The setting key path (e.g. "application/config/name").
             value: The value to set (string, int, float, or bool).
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await project_handlers.project_settings_set(runtime, key=key, value=value)
-

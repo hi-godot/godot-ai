@@ -11,7 +11,7 @@ from godot_ai.tools import DEFER_META
 
 def register_filesystem_tools(mcp: FastMCP) -> None:
     @mcp.tool(meta=DEFER_META)
-    async def filesystem_read_text(ctx: Context, path: str) -> dict:
+    async def filesystem_read_text(ctx: Context, path: str, session_id: str = "") -> dict:
         """Read a text file from the Godot project.
 
         Returns the full file content, size, and line count.
@@ -19,8 +19,9 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
 
         Args:
             path: File path starting with res:// (e.g. "res://project.godot").
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await filesystem_handlers.filesystem_read_text(runtime, path=path)
 
     @mcp.tool(meta=DEFER_META)
@@ -28,6 +29,7 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
         ctx: Context,
         path: str,
         content: str = "",
+        session_id: str = "",
     ) -> dict:
         """Write a text file to the Godot project.
 
@@ -38,8 +40,9 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
         Args:
             path: File path starting with res:// (e.g. "res://data/config.json").
             content: Text content to write. Empty creates a blank file.
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await filesystem_handlers.filesystem_write_text(
             runtime,
             path=path,
@@ -47,7 +50,11 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool(meta=DEFER_META)
-    async def filesystem_reimport(ctx: Context, paths: list[str]) -> dict:
+    async def filesystem_reimport(
+        ctx: Context,
+        paths: list[str],
+        session_id: str = "",
+    ) -> dict:
         """Force reimport of specific files / assets in the Godot project.
 
         Triggers EditorFileSystem.update_file() for each path, which
@@ -56,8 +63,9 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
 
         Args:
             paths: List of file paths to reimport (e.g. ["res://textures/icon.png"]).
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await filesystem_handlers.filesystem_reimport(runtime, paths=paths)
 
     @mcp.tool(meta=DEFER_META)
@@ -68,6 +76,7 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
         path: str = "",
         offset: int = 0,
         limit: int = 100,
+        session_id: str = "",
     ) -> dict:
         """Search the Godot project filesystem via EditorFileSystem.
 
@@ -80,8 +89,9 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
             path: Filter by path (case-insensitive substring match).
             offset: Number of results to skip. Default 0.
             limit: Maximum number of results to return. Default 100.
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await filesystem_handlers.filesystem_search(
             runtime,
             name=name,

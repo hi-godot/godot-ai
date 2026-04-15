@@ -46,6 +46,31 @@ class TestHandshake:
         await asyncio.sleep(0.1)  # let server process disconnect
         assert harness.registry.get("sess-dc") is None
 
+    async def test_handshake_captures_editor_pid(self, harness):
+        plugin = await harness.connect_plugin(session_id="sess-pid", editor_pid=4242)
+        session = harness.registry.get("sess-pid")
+        assert session.editor_pid == 4242
+        await plugin.close()
+
+    async def test_handshake_missing_editor_pid_defaults_to_zero(self, harness):
+        ## Default path — plugin omits the field (older plugin versions).
+        plugin = await harness.connect_plugin(session_id="sess-no-pid")
+        session = harness.registry.get("sess-no-pid")
+        assert session.editor_pid == 0
+        await plugin.close()
+
+    async def test_inbound_message_updates_last_seen(self, harness):
+        plugin = await harness.connect_plugin(session_id="sess-heartbeat")
+        session = harness.registry.get("sess-heartbeat")
+        baseline = session.last_seen
+
+        await asyncio.sleep(0.01)
+        await plugin.send_event("readiness_changed", {"readiness": "ready"})
+        await asyncio.sleep(0.05)
+
+        assert session.last_seen > baseline
+        await plugin.close()
+
 
 # ---------------------------------------------------------------------------
 # Command round-trip

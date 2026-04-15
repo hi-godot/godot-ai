@@ -1,6 +1,6 @@
 # Godot AI — Working Plan
 
-*Updated 2026-04-14*
+*Updated 2026-04-15*
 
 This is the current working plan for Godot AI. It focuses on active and upcoming work only.
 
@@ -65,9 +65,11 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 
 ### Multi-Session Reliability
 
-- [ ] reliable multi-instance routing
-- [ ] clear session selection semantics in tools and UI
-- [ ] enough session metadata to distinguish multiple editors safely
+- [x] reliable multi-instance routing — fixed `SessionRegistry.unregister` silently promoting the first-registered session; reload handler now pins `session_id` explicitly
+- [x] clear session selection semantics in tools and UI — `session_activate` accepts substring hints (project folder name / path / session_id) in addition to exact UUID, with ambiguous-match and no-match paths that list candidates
+- [x] enough session metadata to distinguish multiple editors safely — added `name` (project basename), `editor_pid`, and `last_seen` heartbeat to every session; surfaced in `session_list`
+- [x] per-call session targeting — every Godot-talking tool accepts an optional `session_id`; bound at the `DirectRuntime` layer so `require_writable` and handlers see the pinned session. Lets two AI clients share one server without stomping each other's active.
+- [x] human-readable session IDs — `<project-slug>@<4hex>` (e.g. `godot-ai@a3f2`) instead of 32-char random hex. Agents can recognize/remember the target without calling `session_list` first.
 
 **Why this matters:** Real use will quickly involve multiple projects, multiple editor windows, or multiple test sessions. The session model needs to stop being “good enough for one editor.”
 
@@ -76,9 +78,9 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 - [x] `signal.*`, `autoload.*`, `input_map.*`, `project_settings.set`
 - [x] run/stop cycle is reliable
 - [x] batch execution is shipped with a clear contract
-- [ ] multi-instance routing works in practice
+- [x] multi-instance routing works in practice
 - [x] `script.patch` decision is made (shipped: anchor-based replace)
-- [x] test coverage and smoke coverage increase where the new runtime loop needs it (282 Python + 216 GDScript = 498 total)
+- [x] test coverage and smoke coverage increase where the new runtime loop needs it (310 Python + 227 GDScript = 537 total)
 
 ---
 
@@ -137,6 +139,7 @@ These are not the next things to do blindly. They are the extensions that matter
 - `build.*`
 - richer performance diagnostics
 - more capture and regression-verification helpers where they materially help iteration
+- `editor_viewport_*` — toggle per-viewport display options that live outside the scene (e.g. View Environment / View Gizmos, Preview Sun, Preview Environment, grid visibility, orthogonal vs. perspective). Useful when the AI needs the editor grid visible, or wants to disable the default sky to judge lighting. These are editor-only state, not scene state, so they require a dedicated surface rather than `node_set_property`.
 
 **The rule here is simple:** Do not add broad polish tooling before the AI can already launch the game, inspect results, and make safe iterative edits.
 

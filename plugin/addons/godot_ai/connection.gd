@@ -24,7 +24,7 @@ var pause_processing := false
 
 
 func _ready() -> void:
-	_session_id = _generate_session_id()
+	_session_id = _make_session_id(ProjectSettings.globalize_path("res://"))
 	## Increase outbound buffer for large messages (e.g. screenshot base64).
 	## Default is 64 KB; screenshots can be several MB.
 	_peer.outbound_buffer_size = 4 * 1024 * 1024  # 4 MB
@@ -107,6 +107,7 @@ func _send_handshake() -> void:
 		"plugin_version": "0.0.1",
 		"protocol_version": 1,
 		"readiness": _last_readiness,
+		"editor_pid": OS.get_process_id(),
 	})
 
 
@@ -184,8 +185,35 @@ func _send_json(data: Dictionary) -> void:
 		_peer.send_text(JSON.stringify(data))
 
 
-func _generate_session_id() -> String:
+## Build a human-readable session ID of form "<slug>@<4hex>" from the project path.
+## The slug is derived from the project directory name so agents can recognize
+## which editor they're targeting; the hex suffix disambiguates same-project twins.
+static func _make_session_id(project_path: String) -> String:
+	var base := project_path.rstrip("/\\").get_file()
+	if base == "":
+		base = "project"
+	var slug := _slugify(base)
+	if slug == "":
+		slug = "project"
+	var suffix := _rand_hex(4)
+	return "%s@%s" % [slug, suffix]
+
+
+static func _slugify(s: String) -> String:
+	var out := ""
+	var prev_dash := false
+	for c in s.to_lower():
+		if (c >= "a" and c <= "z") or (c >= "0" and c <= "9"):
+			out += c
+			prev_dash = false
+		elif not prev_dash and out != "":
+			out += "-"
+			prev_dash = true
+	return out.trim_suffix("-")
+
+
+static func _rand_hex(n: int) -> String:
 	var bytes := PackedByteArray()
-	for i in 16:
+	for i in (n + 1) / 2:
 		bytes.append(randi() % 256)
-	return bytes.hex_encode()
+	return bytes.hex_encode().substr(0, n)

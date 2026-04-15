@@ -61,6 +61,7 @@ class ServerHarness:
         project_path: str = "/tmp/test_project",
         plugin_version: str = "0.0.1",
         readiness: str = "ready",
+        editor_pid: int = 0,
     ) -> MockGodotPlugin:
         ws = await websockets.connect(f"ws://127.0.0.1:{self.port}")
         handshake = {
@@ -71,6 +72,7 @@ class ServerHarness:
             "plugin_version": plugin_version,
             "protocol_version": 1,
             "readiness": readiness,
+            "editor_pid": editor_pid,
         }
         await ws.send(json.dumps(handshake))
         # Give the server a moment to process the handshake

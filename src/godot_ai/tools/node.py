@@ -16,6 +16,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         type: str,
         name: str = "",
         parent_path: str = "",
+        session_id: str = "",
     ) -> dict:
         """Create (spawn / add) a new node (game object / entity) in the scene tree.
 
@@ -27,8 +28,9 @@ def register_node_tools(mcp: FastMCP) -> None:
             type: The Godot node class (e.g. "Node3D", "MeshInstance3D", "Camera3D").
             name: Optional name for the node.
             parent_path: Node path of the parent (e.g. "/Main"). Empty = scene root.
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await node_handlers.node_create(
             runtime,
             type=type,
@@ -44,6 +46,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         group: str = "",
         offset: int = 0,
         limit: int = 100,
+        session_id: str = "",
     ) -> dict:
         """Find nodes in the scene tree by name, type, or group.
 
@@ -56,8 +59,9 @@ def register_node_tools(mcp: FastMCP) -> None:
             group: Group name the node must belong to.
             offset: Number of results to skip. Default 0.
             limit: Maximum number of results to return. Default 100.
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await node_handlers.node_find(
             runtime,
             name=name,
@@ -68,7 +72,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def node_get_properties(ctx: Context, path: str) -> dict:
+    async def node_get_properties(ctx: Context, path: str, session_id: str = "") -> dict:
         """Get all properties of a node.
 
         Returns the property list with current values for the node at
@@ -76,12 +80,13 @@ def register_node_tools(mcp: FastMCP) -> None:
 
         Args:
             path: Scene path of the node (e.g. "/Main/Camera3D").
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await node_handlers.node_get_properties(runtime, path=path)
 
     @mcp.tool(meta=DEFER_META)
-    async def node_get_children(ctx: Context, path: str) -> dict:
+    async def node_get_children(ctx: Context, path: str, session_id: str = "") -> dict:
         """Get the direct children of a node.
 
         Returns name, type, and path for each immediate child of the
@@ -89,24 +94,26 @@ def register_node_tools(mcp: FastMCP) -> None:
 
         Args:
             path: Scene path of the parent node (e.g. "/Main").
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await node_handlers.node_get_children(runtime, path=path)
 
     @mcp.tool(meta=DEFER_META)
-    async def node_get_groups(ctx: Context, path: str) -> dict:
+    async def node_get_groups(ctx: Context, path: str, session_id: str = "") -> dict:
         """Get the groups a node belongs to.
 
         Returns the list of group names for the node at the given path.
 
         Args:
             path: Scene path of the node (e.g. "/Main/Player").
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await node_handlers.node_get_groups(runtime, path=path)
 
     @mcp.tool(meta=DEFER_META)
-    async def node_delete(ctx: Context, path: str) -> dict:
+    async def node_delete(ctx: Context, path: str, session_id: str = "") -> dict:
         """Delete a node from the scene tree.
 
         Removes the node at the given path. This operation is undoable
@@ -114,8 +121,9 @@ def register_node_tools(mcp: FastMCP) -> None:
 
         Args:
             path: Scene path of the node to delete (e.g. "/Main/Enemy").
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await node_handlers.node_delete(runtime, path=path)
 
     @mcp.tool(meta=DEFER_META)
@@ -123,6 +131,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         ctx: Context,
         path: str,
         new_parent: str,
+        session_id: str = "",
     ) -> dict:
         """Move a node to a new parent in the scene tree.
 
@@ -132,8 +141,9 @@ def register_node_tools(mcp: FastMCP) -> None:
         Args:
             path: Scene path of the node to move (e.g. "/Main/Player").
             new_parent: Scene path of the new parent (e.g. "/Main/World").
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await node_handlers.node_reparent(runtime, path=path, new_parent=new_parent)
 
     @mcp.tool(meta=DEFER_META)
@@ -142,6 +152,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         path: str,
         property: str,
         value: str | int | float | bool | dict | list | None,
+        session_id: str = "",
     ) -> dict:
         """Set a property on a node.
 
@@ -159,8 +170,9 @@ def register_node_tools(mcp: FastMCP) -> None:
             path: Scene path of the node (e.g. "/Main/Camera3D").
             property: Property name (e.g. "fov", "position", "visible", "mesh", "remote_path").
             value: New value for the property. Pass null (or "" for Resource properties) to clear.
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await node_handlers.node_set_property(
             runtime, path=path, property=property, value=value,
         )
@@ -170,6 +182,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         ctx: Context,
         path: str,
         new_name: str,
+        session_id: str = "",
     ) -> dict:
         """Rename a node in the scene tree.
 
@@ -185,8 +198,9 @@ def register_node_tools(mcp: FastMCP) -> None:
         Args:
             path: Scene path of the node to rename (e.g. "/Main/Player").
             new_name: New name for the node (e.g. "Hero").
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await node_handlers.node_rename(runtime, path=path, new_name=new_name)
 
     @mcp.tool(meta=DEFER_META)
@@ -194,6 +208,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         ctx: Context,
         path: str,
         name: str = "",
+        session_id: str = "",
     ) -> dict:
         """Duplicate (clone / copy) a node and all its children.
 
@@ -203,8 +218,9 @@ def register_node_tools(mcp: FastMCP) -> None:
         Args:
             path: Scene path of the node to duplicate (e.g. "/Main/Enemy").
             name: Optional name for the duplicate. Godot auto-names if empty.
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await node_handlers.node_duplicate(runtime, path=path, name=name)
 
     @mcp.tool(meta=DEFER_META)
@@ -212,6 +228,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         ctx: Context,
         path: str,
         index: int,
+        session_id: str = "",
     ) -> dict:
         """Reorder a node among its siblings.
 
@@ -221,8 +238,9 @@ def register_node_tools(mcp: FastMCP) -> None:
         Args:
             path: Scene path of the node to move (e.g. "/Main/Player").
             index: New sibling index (0-based).
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await node_handlers.node_move(runtime, path=path, index=index)
 
     @mcp.tool(meta=DEFER_META)
@@ -230,6 +248,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         ctx: Context,
         path: str,
         group: str,
+        session_id: str = "",
     ) -> dict:
         """Add a node to a group.
 
@@ -239,8 +258,9 @@ def register_node_tools(mcp: FastMCP) -> None:
         Args:
             path: Scene path of the node (e.g. "/Main/Enemy").
             group: Group name to add the node to (e.g. "enemies").
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await node_handlers.node_add_to_group(runtime, path=path, group=group)
 
     @mcp.tool(meta=DEFER_META)
@@ -248,13 +268,14 @@ def register_node_tools(mcp: FastMCP) -> None:
         ctx: Context,
         path: str,
         group: str,
+        session_id: str = "",
     ) -> dict:
         """Remove a node from a group.
 
         Args:
             path: Scene path of the node (e.g. "/Main/Enemy").
             group: Group name to remove the node from (e.g. "enemies").
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await node_handlers.node_remove_from_group(runtime, path=path, group=group)
-

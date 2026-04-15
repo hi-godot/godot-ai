@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from godot_ai.protocol.errors import ErrorCode
 from godot_ai.sessions.registry import SessionRegistry
 from godot_ai.transport.websocket import GodotWebSocketServer
+
+logger = logging.getLogger(__name__)
 
 
 class GodotCommandError(Exception):
@@ -42,6 +45,13 @@ class GodotClient:
             if session is None:
                 raise ConnectionError("No active Godot session")
             session_id = session.session_id
+            if len(self.registry) > 1:
+                logger.debug(
+                    "Routing %s to active session %s (%d sessions connected)",
+                    command,
+                    session_id[:8],
+                    len(self.registry),
+                )
 
         if self.registry.get(session_id) is None:
             raise ConnectionError(

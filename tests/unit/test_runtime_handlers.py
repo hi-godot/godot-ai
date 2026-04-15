@@ -478,10 +478,14 @@ class ReloadStubClient:
         registry: SessionRegistry,
         new_session_id: str = "reloaded",
         raise_timeout: bool = False,
+        target_id: str = "old-session",
+        target_project_path: str = "/tmp/test_project",
     ):
         self.registry = registry
         self.new_session_id = new_session_id
         self.raise_timeout = raise_timeout
+        self.target_id = target_id
+        self.target_project_path = target_project_path
         self.calls: list[dict] = []
 
     async def send(
@@ -500,11 +504,11 @@ class ReloadStubClient:
             }
         )
         if command == "reload_plugin":
-            self.registry.unregister("old-session")
+            self.registry.unregister(self.target_id)
             self.registry.register(
                 _make_session(
                     self.new_session_id,
-                    project_path="/tmp/test_project",
+                    project_path=self.target_project_path,
                 )
             )
             if self.raise_timeout:
@@ -534,6 +538,58 @@ def test_direct_runtime_exposes_registry_state():
     assert runtime.active_session_id == "b"
     assert runtime.get_active_session().session_id == "b"
     assert [session.session_id for session in runtime.list_sessions()] == ["a", "b"]
+
+
+async def test_direct_runtime_binds_session_for_send_command():
+    registry = SessionRegistry()
+    registry.register(_make_session("a"))
+    registry.register(_make_session("b"))
+    registry.set_active("a")
+    client = StubClient()
+    runtime = DirectRuntime(registry=registry, client=client, session_id="b")
+
+    assert runtime.active_session_id == "b"
+    assert runtime.get_active_session().session_id == "b"
+
+    await runtime.send_command("get_editor_state")
+
+    assert client.calls[-1]["session_id"] == "b"
+    ## Global active is untouched — only this runtime is pinned.
+    assert registry.active_session_id == "a"
+
+
+async def test_direct_runtime_bound_id_defers_to_explicit_send_command_id():
+    registry = SessionRegistry()
+    registry.register(_make_session("a"))
+    registry.register(_make_session("b"))
+    client = StubClient()
+    runtime = DirectRuntime(registry=registry, client=client, session_id="b")
+
+    await runtime.send_command("get_editor_state", session_id="a")
+
+    assert client.calls[-1]["session_id"] == "a"
+
+
+def test_direct_runtime_bound_id_missing_returns_none_session():
+    registry = SessionRegistry()
+    registry.register(_make_session("a"))
+    runtime = DirectRuntime(registry=registry, client=StubClient(), session_id="ghost")
+
+    assert runtime.active_session_id == "ghost"
+    assert runtime.get_active_session() is None
+
+
+async def test_direct_runtime_unbound_preserves_active_routing():
+    registry = SessionRegistry()
+    registry.register(_make_session("a"))
+    registry.set_active("a")
+    client = StubClient()
+    runtime = DirectRuntime(registry=registry, client=client)
+
+    await runtime.send_command("get_editor_state")
+
+    ## Unbound runtime passes None so client falls back to registry active.
+    assert client.calls[-1]["session_id"] is None
 
 
 async def test_logs_read_handler_uses_runtime_and_paginates():
@@ -610,6 +666,81 @@ async def test_reload_plugin_raises_when_no_active_session():
     runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
     with pytest.raises(ConnectionError, match="No active Godot session"):
         await editor_handlers.editor_reload_plugin(runtime)
+
+
+async def test_reload_plugin_pins_target_session_when_multiple_connected():
+    """Reload must target the active session by explicit id, not by falling
+    back to whatever registry.get_active() returns at send time."""
+    registry = SessionRegistry()
+    registry.register(_make_session("session-a", project_path="/projects/a"))
+    registry.register(_make_session("session-b", project_path="/projects/b"))
+    registry.set_active("session-b")
+    stub = ReloadStubClient(
+        registry=registry,
+        new_session_id="session-b-new",
+        target_id="session-b",
+        target_project_path="/projects/b",
+    )
+    runtime = DirectRuntime(registry=registry, client=stub)
+
+    result = await editor_handlers.editor_reload_plugin(runtime)
+
+    reload_calls = [c for c in stub.calls if c["command"] == "reload_plugin"]
+    assert len(reload_calls) == 1
+    assert reload_calls[0]["session_id"] == "session-b", (
+        "Reload must be pinned to the old active id, not resolved implicitly"
+    )
+    assert result["old_session_id"] == "session-b"
+    assert result["new_session_id"] == "session-b-new"
+    assert runtime.active_session_id == "session-b-new"
+
+
+def test_unregister_active_session_clears_active_not_promotes_first():
+    """Disconnect of the active session must not silently promote another
+    session — that's the 'first-registered wins' routing footgun."""
+    registry = SessionRegistry()
+    registry.register(_make_session("session-a"))
+    registry.register(_make_session("session-b"))
+    registry.set_active("session-b")
+
+    registry.unregister("session-b")
+
+    assert registry.active_session_id is None
+    assert registry.get_active() is None
+
+
+def test_unregister_non_active_session_leaves_active_unchanged():
+    registry = SessionRegistry()
+    registry.register(_make_session("session-a"))
+    registry.register(_make_session("session-b"))
+    registry.set_active("session-b")
+
+    registry.unregister("session-a")
+
+    assert registry.active_session_id == "session-b"
+
+
+def test_register_promotes_first_session_when_no_active():
+    """Zero-config single-editor UX: first registration becomes active."""
+    registry = SessionRegistry()
+    registry.register(_make_session("first"))
+    assert registry.active_session_id == "first"
+
+    registry.register(_make_session("second"))
+    assert registry.active_session_id == "first"  # unchanged
+
+
+def test_register_reclaims_active_after_active_disconnected():
+    """After the active session disconnects (active cleared), the next
+    registration should re-promote — covering the single-editor reload case
+    where the same editor disconnects and immediately reconnects."""
+    registry = SessionRegistry()
+    registry.register(_make_session("old"))
+    registry.unregister("old")
+    assert registry.active_session_id is None
+
+    registry.register(_make_session("new"))
+    assert registry.active_session_id == "new"
 
 
 # ---------------------------------------------------------------------------
@@ -975,14 +1106,106 @@ def test_session_activate_handler_success():
     registry.register(_make_session("a"))
     runtime = DirectRuntime(registry=registry, client=StubClient())
     result = session_handlers.session_activate(runtime, "a")
-    assert result == {"status": "ok", "active_session_id": "a"}
+    assert result["status"] == "ok"
+    assert result["active_session_id"] == "a"
+    assert result["matched"] == "exact_id"
 
 
 def test_session_activate_handler_not_found():
     runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
     result = session_handlers.session_activate(runtime, "nonexistent")
     assert result["status"] == "error"
-    assert "not found" in result["message"]
+    assert "No session matches" in result["message"]
+
+
+def test_session_activate_by_project_name_hint():
+    registry = SessionRegistry()
+    registry.register(
+        _make_session("aaaa-uuid-1", project_path="/home/user/projects/my_game/")
+    )
+    registry.register(
+        _make_session("bbbb-uuid-2", project_path="/home/user/projects/other_tool/")
+    )
+    runtime = DirectRuntime(registry=registry, client=StubClient())
+
+    result = session_handlers.session_activate(runtime, "my_game")
+
+    assert result["status"] == "ok"
+    assert result["active_session_id"] == "aaaa-uuid-1"
+    assert result["matched"] == "hint"
+    assert result["matched_name"] == "my_game"
+
+
+def test_session_activate_by_project_path_substring():
+    registry = SessionRegistry()
+    registry.register(
+        _make_session("aaaa-uuid-1", project_path="/home/user/projects/my_game/")
+    )
+    registry.register(
+        _make_session("bbbb-uuid-2", project_path="/tmp/other/")
+    )
+    runtime = DirectRuntime(registry=registry, client=StubClient())
+
+    result = session_handlers.session_activate(runtime, "projects")
+
+    assert result["status"] == "ok"
+    assert result["active_session_id"] == "aaaa-uuid-1"
+
+
+def test_session_activate_ambiguous_hint_errors_with_candidates():
+    registry = SessionRegistry()
+    registry.register(
+        _make_session("aaaa-uuid", project_path="/home/user/game_project_one/")
+    )
+    registry.register(
+        _make_session("bbbb-uuid", project_path="/home/user/game_project_two/")
+    )
+    runtime = DirectRuntime(registry=registry, client=StubClient())
+
+    result = session_handlers.session_activate(runtime, "game_project")
+
+    assert result["status"] == "error"
+    assert "matched 2 sessions" in result["message"]
+    assert len(result["candidates"]) == 2
+    candidate_ids = {candidate["session_id"] for candidate in result["candidates"]}
+    assert candidate_ids == {"aaaa-uuid", "bbbb-uuid"}
+
+
+def test_session_activate_exact_id_wins_over_substring_ambiguity():
+    """If a hint equals one session's id exactly, it wins even if the string
+    would otherwise match other sessions as a substring."""
+    registry = SessionRegistry()
+    registry.register(_make_session("test", project_path="/tmp/test_one/"))
+    registry.register(_make_session("xyz", project_path="/tmp/test_two/"))
+    runtime = DirectRuntime(registry=registry, client=StubClient())
+
+    result = session_handlers.session_activate(runtime, "test")
+
+    assert result["status"] == "ok"
+    assert result["matched"] == "exact_id"
+    assert result["active_session_id"] == "test"
+
+
+def test_session_activate_no_match_lists_available_sessions():
+    registry = SessionRegistry()
+    registry.register(_make_session("aaaa", project_path="/home/user/game/"))
+    runtime = DirectRuntime(registry=registry, client=StubClient())
+
+    result = session_handlers.session_activate(runtime, "nomatch")
+
+    assert result["status"] == "error"
+    assert len(result["available"]) == 1
+    assert result["available"][0]["name"] == "game"
+
+
+def test_session_activate_empty_hint_does_not_match_any():
+    registry = SessionRegistry()
+    registry.register(_make_session("aaaa"))
+    runtime = DirectRuntime(registry=registry, client=StubClient())
+
+    result = session_handlers.session_activate(runtime, "")
+
+    assert result["status"] == "error"
 
 
 def test_session_resource_data_delegates_to_session_list():

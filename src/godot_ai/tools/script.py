@@ -15,6 +15,7 @@ def register_script_tools(mcp: FastMCP) -> None:
         ctx: Context,
         path: str,
         content: str = "",
+        session_id: str = "",
     ) -> dict:
         """Create a new GDScript source file (.gd code file) on disk.
 
@@ -25,8 +26,9 @@ def register_script_tools(mcp: FastMCP) -> None:
         Args:
             path: File path starting with res:// (e.g. "res://scripts/player.gd").
             content: GDScript source code to write. Empty creates a blank file.
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await script_handlers.script_create(runtime, path=path, content=content)
 
     @mcp.tool(meta=DEFER_META)
@@ -36,6 +38,7 @@ def register_script_tools(mcp: FastMCP) -> None:
         old_text: str,
         new_text: str,
         replace_all: bool = False,
+        session_id: str = "",
     ) -> dict:
         """Patch (partial edit / string-replace) a GDScript file in place.
 
@@ -56,8 +59,9 @@ def register_script_tools(mcp: FastMCP) -> None:
             old_text: Exact substring to find. Must be unique unless replace_all=true.
             new_text: Replacement text. Can be empty to delete.
             replace_all: If true, replace every occurrence. Default false.
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await script_handlers.script_patch(
             runtime,
             path=path,
@@ -67,15 +71,16 @@ def register_script_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool(meta=DEFER_META)
-    async def script_read(ctx: Context, path: str) -> dict:
+    async def script_read(ctx: Context, path: str, session_id: str = "") -> dict:
         """Read the contents of a GDScript file.
 
         Returns the full source code, line count, and file size.
 
         Args:
             path: File path starting with res:// (e.g. "res://scripts/player.gd").
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await script_handlers.script_read(runtime, path=path)
 
     @mcp.tool(meta=DEFER_META)
@@ -83,6 +88,7 @@ def register_script_tools(mcp: FastMCP) -> None:
         ctx: Context,
         path: str,
         script_path: str,
+        session_id: str = "",
     ) -> dict:
         """Attach a script to a node in the scene tree.
 
@@ -93,8 +99,9 @@ def register_script_tools(mcp: FastMCP) -> None:
         Args:
             path: Scene path of the node (e.g. "/Main/Player").
             script_path: File path of the script (e.g. "res://scripts/player.gd").
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await script_handlers.script_attach(
             runtime,
             path=path,
@@ -102,7 +109,7 @@ def register_script_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool(meta=DEFER_META)
-    async def script_detach(ctx: Context, path: str) -> dict:
+    async def script_detach(ctx: Context, path: str, session_id: str = "") -> dict:
         """Remove the script from a node.
 
         Detaches whatever script is currently assigned to the node.
@@ -110,12 +117,13 @@ def register_script_tools(mcp: FastMCP) -> None:
 
         Args:
             path: Scene path of the node (e.g. "/Main/Player").
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await script_handlers.script_detach(runtime, path=path)
 
     @mcp.tool(meta=DEFER_META)
-    async def script_find_symbols(ctx: Context, path: str) -> dict:
+    async def script_find_symbols(ctx: Context, path: str, session_id: str = "") -> dict:
         """Inspect (outline) a GDScript file — functions, methods, signals, class_name, exports.
 
         Parses the script and returns its class_name, extends base,
@@ -123,6 +131,7 @@ def register_script_tools(mcp: FastMCP) -> None:
 
         Args:
             path: File path starting with res:// (e.g. "res://scripts/player.gd").
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await script_handlers.script_find_symbols(runtime, path=path)

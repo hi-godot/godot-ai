@@ -17,6 +17,7 @@ def register_resource_tools(mcp: FastMCP) -> None:
         path: str = "",
         offset: int = 0,
         limit: int = 100,
+        session_id: str = "",
     ) -> dict:
         """Search for resources (assets: meshes, textures, materials, scenes) by type or path.
 
@@ -29,8 +30,9 @@ def register_resource_tools(mcp: FastMCP) -> None:
             path: Substring match on the resource file path (case-insensitive).
             offset: Number of results to skip. Default 0.
             limit: Maximum number of results to return. Default 100.
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await resource_handlers.resource_search(
             runtime,
             type=type,
@@ -40,7 +42,7 @@ def register_resource_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool(meta=DEFER_META)
-    async def resource_load(ctx: Context, path: str) -> dict:
+    async def resource_load(ctx: Context, path: str, session_id: str = "") -> dict:
         """Inspect a resource's (asset's) properties — materials, meshes, textures, .tres files.
 
         Loads the resource at the given path and returns its type and
@@ -48,8 +50,9 @@ def register_resource_tools(mcp: FastMCP) -> None:
 
         Args:
             path: File path starting with res:// (e.g. "res://materials/ground.tres").
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await resource_handlers.resource_load(runtime, path=path)
 
     @mcp.tool(meta=DEFER_META)
@@ -58,6 +61,7 @@ def register_resource_tools(mcp: FastMCP) -> None:
         path: str,
         property: str,
         resource_path: str,
+        session_id: str = "",
     ) -> dict:
         """Assign a resource (asset — mesh, texture, material, etc.) to a node property.
 
@@ -69,8 +73,9 @@ def register_resource_tools(mcp: FastMCP) -> None:
             path: Scene path of the node (e.g. "/Main/Ground").
             property: Property name that accepts a resource (e.g. "mesh", "material_override").
             resource_path: File path of the resource (e.g. "res://meshes/cube.tres").
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await resource_handlers.resource_assign(
             runtime,
             path=path,

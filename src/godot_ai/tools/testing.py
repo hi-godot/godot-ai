@@ -16,6 +16,7 @@ def register_testing_tools(mcp: FastMCP) -> None:
         suite: str = "",
         test_name: str = "",
         verbose: bool = False,
+        session_id: str = "",
     ) -> dict:
         """Run GDScript test suites inside the connected Godot editor.
 
@@ -33,14 +34,19 @@ def register_testing_tools(mcp: FastMCP) -> None:
                        Empty runs all tests in the selected suite(s).
             verbose: If true, include every individual test result. Default
                      false — only summary and failures are returned.
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await testing_handlers.test_run(
             runtime, suite=suite, test_name=test_name, verbose=verbose
         )
 
     @mcp.tool(meta=DEFER_META)
-    async def test_results_get(ctx: Context, verbose: bool = False) -> dict:
+    async def test_results_get(
+        ctx: Context,
+        verbose: bool = False,
+        session_id: str = "",
+    ) -> dict:
         """Get results from the most recent test run.
 
         Returns the same structured results as test_run, without
@@ -48,6 +54,7 @@ def register_testing_tools(mcp: FastMCP) -> None:
 
         Args:
             verbose: If true, include every individual test result.
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await testing_handlers.test_results_get(runtime, verbose=verbose)

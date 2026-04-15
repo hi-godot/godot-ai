@@ -42,3 +42,5 @@ class HandshakeMessage(BaseModel):
     plugin_version: str
     protocol_version: int = 1
     readiness: str = "ready"
+    ## Optional because older plugins won't send it; server falls back to 0.
+    editor_pid: int = 0

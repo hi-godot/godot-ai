@@ -26,6 +26,8 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
 - **Scene paths are clean**: `/Main/Camera3D` format, not raw Godot internal paths. Use `ScenePath.from_node(node, scene_root)` in GDScript.
 - **MCP logging**: Plugin prints `MCP | [recv] command(params)` / `MCP | [send] command -> ok` to Godot console. Controlled by `mcp_logging` var.
 - **Tool-search-friendly naming**: All MCP tools use `domain_action` namespacing (`scene_*`, `node_*`, `script_*`, etc.). Non-core tools are tagged `meta={"defer_loading": True}` for Anthropic tool-search compatibility; core tools (`editor_state`, `scene_get_hierarchy`, `node_get_properties`, `session_list`, `session_activate`) stay non-deferred. Plugin command names (sent over WebSocket) are independent — the MCP tool `editor_reload_plugin` dispatches the plugin command `reload_plugin`.
+- **Session IDs**: format is `<project-slug>@<4hex>` (e.g. `godot-ai@a3f2`). The slug is derived from the project directory name so agents can recognize which editor they're targeting; the hex suffix disambiguates same-project twins. Server treats the ID as an opaque key.
+- **Per-call session routing**: every Godot-talking tool accepts an optional `session_id` parameter. Empty (the default) resolves to the global active session. When supplied, that single call targets that session — `require_writable` and every handler inside the call see the pinned session, not the active one. Use this when multiple AI clients share one MCP server. Resources (`godot://...`) still resolve via the active session.
 
 ## Dev workflow
 
@@ -62,7 +64,7 @@ The Godot dock also has a **Start/Stop Dev Server** button for convenience.
 
 ### Python tests
 ```bash
-pytest -v                    # 277 unit + integration tests
+pytest -v                    # 310 unit + integration tests
 ```
 
 ### Godot-side tests
@@ -113,7 +115,7 @@ MCP tools `client_configure` and `client_status` expose this to AI clients.
 1. Add a handler method in the appropriate GDScript `handlers/*.gd` file
 2. Register it in `plugin.gd`: `_dispatcher.register("command_name", handler.method)`
 3. Add a shared Python handler in `handlers/<domain>.py` that calls `runtime.send_command("command_name", params)`
-4. Add a Python tool in `tools/<domain>.py` — name it `domain_action` (e.g. `scene_open`, `node_create`), decorate with `@mcp.tool(meta=DEFER_META)` from `godot_ai.tools`. Only omit `meta` for the ~5 always-loaded core tools (`editor_state`, `scene_get_hierarchy`, `node_get_properties`, `session_list`, `session_activate`)
+4. Add a Python tool in `tools/<domain>.py` — name it `domain_action` (e.g. `scene_open`, `node_create`), decorate with `@mcp.tool(meta=DEFER_META)` from `godot_ai.tools`. Only omit `meta` for the ~5 always-loaded core tools (`editor_state`, `scene_get_hierarchy`, `node_get_properties`, `session_list`, `session_activate`). Add `session_id: str = ""` as the last parameter and pass it in: `DirectRuntime.from_context(ctx, session_id=session_id or None)` — this lets callers pin the tool to a specific editor when multiple are connected.
 5. Register the tool module in `server.py` if it's a new file. If it introduces a new namespace, add it to the tool-categories blurb in `server.py` `instructions=`
 6. For write tools: add `require_writable(runtime)` call at the top of the Python handler
 7. Write a description with natural-language keywords a user would search for (e.g. `screenshot`, `keybinding`, `asset`) alongside the Godot term

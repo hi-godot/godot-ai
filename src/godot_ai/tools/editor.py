@@ -11,22 +11,28 @@ from godot_ai.tools import DEFER_META
 
 def register_editor_tools(mcp: FastMCP) -> None:
     @mcp.tool()
-    async def editor_state(ctx: Context) -> dict:
+    async def editor_state(ctx: Context, session_id: str = "") -> dict:
         """Get current Godot editor (IDE) state: version, readiness, open scene.
 
         Returns Godot version, project name, current scene path,
         and whether the project is currently playing.
+
+        Args:
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await editor_handlers.editor_state(runtime)
 
     @mcp.tool(meta=DEFER_META)
-    async def editor_selection_get(ctx: Context) -> dict:
+    async def editor_selection_get(ctx: Context, session_id: str = "") -> dict:
         """Get the currently selected nodes in the Godot editor.
 
         Returns a list of selected node paths.
+
+        Args:
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await editor_handlers.editor_selection_get(runtime)
 
     @mcp.tool(meta=DEFER_META)
@@ -34,6 +40,7 @@ def register_editor_tools(mcp: FastMCP) -> None:
         ctx: Context,
         count: int = 50,
         offset: int = 0,
+        session_id: str = "",
     ) -> dict:
         """Read recent log lines from the Godot editor console.
 
@@ -44,8 +51,9 @@ def register_editor_tools(mcp: FastMCP) -> None:
         Args:
             count: Maximum number of lines to return. Default 50.
             offset: Number of lines to skip from the start. Default 0.
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await editor_handlers.logs_read(runtime, count=count, offset=offset)
 
     @mcp.tool(output_schema=None, meta=DEFER_META)
@@ -59,6 +67,7 @@ def register_editor_tools(mcp: FastMCP) -> None:
         elevation: float | None = None,
         azimuth: float | None = None,
         fov: float | None = None,
+        session_id: str = "",
     ):
         """Capture a screenshot / image / picture of the Godot editor viewport or running game view.
 
@@ -109,8 +118,9 @@ def register_editor_tools(mcp: FastMCP) -> None:
             fov: Camera field of view in degrees. Lower values (25-35) zoom in like a telephoto
                 for detail shots. Higher values (60-75) zoom out for context/establishing shots.
                 Only applies when view_target is set. Default uses editor's current FOV.
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await editor_handlers.editor_screenshot(
             runtime,
             source=source,
@@ -127,6 +137,7 @@ def register_editor_tools(mcp: FastMCP) -> None:
     async def performance_monitors_get(
         ctx: Context,
         monitors: list[str] | None = None,
+        session_id: str = "",
     ) -> dict:
         """Get Godot performance monitor values (FPS, memory, draw calls, frame time).
 
@@ -146,32 +157,39 @@ def register_editor_tools(mcp: FastMCP) -> None:
 
         Args:
             monitors: Optional list of monitor names to return. If omitted, returns all.
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await editor_handlers.performance_monitors_get(runtime, monitors=monitors)
 
     @mcp.tool(meta=DEFER_META)
-    async def logs_clear(ctx: Context) -> dict:
+    async def logs_clear(ctx: Context, session_id: str = "") -> dict:
         """Clear the MCP log buffer in the Godot editor.
 
         Removes all captured log lines. Returns the number of lines cleared.
+
+        Args:
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await editor_handlers.logs_clear(runtime)
 
     @mcp.tool(meta=DEFER_META)
-    async def editor_quit(ctx: Context) -> dict:
+    async def editor_quit(ctx: Context, session_id: str = "") -> dict:
         """Gracefully quit (close / shutdown) the Godot editor (IDE).
 
         Sends a quit signal to the editor on the next frame, allowing
         any pending responses to be sent first. The editor will close
         cleanly without triggering crash dialogs.
+
+        Args:
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await editor_handlers.editor_quit(runtime)
 
     @mcp.tool(meta=DEFER_META)
-    async def editor_reload_plugin(ctx: Context) -> dict:
+    async def editor_reload_plugin(ctx: Context, session_id: str = "") -> dict:
         """Reload the Godot editor plugin and wait for it to reconnect.
 
         Sends a reload command to the plugin, which disables and re-enables
@@ -181,14 +199,18 @@ def register_editor_tools(mcp: FastMCP) -> None:
         Requires the MCP server to be running externally (not started by
         the plugin), otherwise the reload will kill the server process.
         Start with: python -m godot_ai --transport streamable-http --port 8000 --reload
+
+        Args:
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await editor_handlers.editor_reload_plugin(runtime)
 
     @mcp.tool(meta=DEFER_META)
     async def editor_selection_set(
         ctx: Context,
         paths: list[str],
+        session_id: str = "",
     ) -> dict:
         """Select nodes in the Godot editor by their scene paths.
 
@@ -198,6 +220,7 @@ def register_editor_tools(mcp: FastMCP) -> None:
 
         Args:
             paths: List of scene paths to select (e.g. ["/Main/Camera3D", "/Main/Player"]).
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await editor_handlers.editor_selection_set(runtime, paths=paths)

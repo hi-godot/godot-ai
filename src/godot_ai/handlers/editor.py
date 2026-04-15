@@ -165,7 +165,9 @@ async def editor_reload_plugin(runtime: Runtime) -> dict:
     known_ids = {session.session_id for session in runtime.list_sessions()}
 
     try:
-        await runtime.send_command("reload_plugin", timeout=2.0)
+        ## Pin to old_id explicitly so the reload command can't race
+        ## active-session changes (e.g. another editor disconnecting mid-call).
+        await runtime.send_command("reload_plugin", session_id=old_id, timeout=2.0)
     except (ConnectionError, TimeoutError) as exc:
         logger.debug("Expected disconnect during reload: %s", exc)
 

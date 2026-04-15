@@ -15,6 +15,7 @@ def register_batch_tools(mcp: FastMCP) -> None:
         ctx: Context,
         commands: list[dict],
         undo: bool = True,
+        session_id: str = "",
     ) -> dict:
         """Execute a list of editor sub-commands in order, stopping on first error.
 
@@ -43,13 +44,14 @@ def register_batch_tools(mcp: FastMCP) -> None:
         Args:
             commands: List of `{"command": str, "params": dict}` items.
             undo: Roll back succeeded sub-commands on failure. Default True.
+            session_id: Optional Godot session to target. Empty = active session.
 
         Returns a dict with `succeeded` (count), `stopped_at` (failing index
         or null), `results` (per-sub-command status/data/error), `rolled_back`
         (whether rollback was performed), and `undoable` (whether the batch
         can be undone as a whole).
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await batch_handlers.batch_execute(
             runtime,
             commands=commands,

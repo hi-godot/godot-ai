@@ -11,7 +11,7 @@ from godot_ai.tools import DEFER_META
 
 def register_signal_tools(mcp: FastMCP) -> None:
     @mcp.tool(meta=DEFER_META)
-    async def signal_list(ctx: Context, path: str) -> dict:
+    async def signal_list(ctx: Context, path: str, session_id: str = "") -> dict:
         """List all signals (events) on a node and their current connections.
 
         Signals are Godot's event/observer mechanism — nodes emit signals
@@ -20,8 +20,9 @@ def register_signal_tools(mcp: FastMCP) -> None:
 
         Args:
             path: Scene path of the node (e.g. "/Player").
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await signal_handlers.signal_list(runtime, path=path)
 
     @mcp.tool(meta=DEFER_META)
@@ -31,6 +32,7 @@ def register_signal_tools(mcp: FastMCP) -> None:
         signal: str,
         target: str,
         method: str,
+        session_id: str = "",
     ) -> dict:
         """Connect a signal from one node to a method on another (event subscription / callback).
 
@@ -42,8 +44,9 @@ def register_signal_tools(mcp: FastMCP) -> None:
             signal: Name of the signal to connect (e.g. "pressed", "body_entered").
             target: Scene path of the target node receiving the signal.
             method: Name of the method to call on the target node.
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await signal_handlers.signal_connect(
             runtime, path=path, signal=signal, target=target, method=method
         )
@@ -55,6 +58,7 @@ def register_signal_tools(mcp: FastMCP) -> None:
         signal: str,
         target: str,
         method: str,
+        session_id: str = "",
     ) -> dict:
         """Disconnect a signal connection between two nodes (unsubscribe an event listener).
 
@@ -65,8 +69,9 @@ def register_signal_tools(mcp: FastMCP) -> None:
             signal: Name of the signal to disconnect.
             target: Scene path of the target node.
             method: Name of the method that was connected.
+            session_id: Optional Godot session to target. Empty = active session.
         """
-        runtime = DirectRuntime.from_context(ctx)
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await signal_handlers.signal_disconnect(
             runtime, path=path, signal=signal, target=target, method=method
         )

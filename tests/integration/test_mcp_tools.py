@@ -2481,3 +2481,79 @@ class TestBatchExecuteTool:
         assert not result.is_error
         assert result.data["error"]["code"] == "INVALID_PARAMS"
         assert result.data["succeeded"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Per-call session routing via session_id parameter
+# ---------------------------------------------------------------------------
+
+
+class TestPerCallSessionRouting:
+    async def _connect_second_plugin(self, session_id: str, readiness: str = "ready"):
+        """Connect a second mock plugin to the same MCP stack server."""
+        from tests.conftest import MockGodotPlugin
+
+        ws = await websockets.connect("ws://127.0.0.1:19502")
+        handshake = {
+            "type": "handshake",
+            "session_id": session_id,
+            "godot_version": "4.4.1",
+            "project_path": f"/tmp/{session_id}",
+            "plugin_version": "0.0.1",
+            "protocol_version": 1,
+            "readiness": readiness,
+        }
+        await ws.send(json.dumps(handshake))
+        await asyncio.sleep(0.05)
+        return MockGodotPlugin(ws=ws, session_id=session_id)
+
+    async def test_session_id_routes_to_specific_session(self, mcp_stack):
+        client, plugin_a = mcp_stack
+        ## Rename the implicit session "mcp-test" for clarity: active=proj-a@0001.
+        plugin_b = await self._connect_second_plugin("proj-b@0002")
+        try:
+            ## No session_id -> active (the default mcp-test plugin).
+            async def respond_active():
+                cmd = await plugin_a.recv_command()
+                await plugin_a.send_response(
+                    cmd["request_id"],
+                    {"scenes": ["res://from_a.tscn"], "current": "res://from_a.tscn"},
+                )
+
+            task = asyncio.create_task(respond_active())
+            result = await client.call_tool("scene_get_roots", {})
+            await task
+            assert result.data["current"] == "res://from_a.tscn"
+
+            ## session_id="proj-b@0002" -> routed to plugin_b, not plugin_a.
+            async def respond_b():
+                cmd = await plugin_b.recv_command()
+                await plugin_b.send_response(
+                    cmd["request_id"],
+                    {"scenes": ["res://from_b.tscn"], "current": "res://from_b.tscn"},
+                )
+
+            task = asyncio.create_task(respond_b())
+            result = await client.call_tool(
+                "scene_get_roots", {"session_id": "proj-b@0002"}
+            )
+            await task
+            assert result.data["current"] == "res://from_b.tscn"
+        finally:
+            await plugin_b.close()
+
+    async def test_session_id_respects_target_readiness(self, mcp_stack):
+        client, plugin_a = mcp_stack
+        ## Active session (plugin_a/mcp-test) is ready; plugin_b is playing.
+        plugin_b = await self._connect_second_plugin("proj-b@0002", readiness="playing")
+        try:
+            ## require_writable must see the bound session's readiness, not active.
+            result = await client.call_tool(
+                "node_create",
+                {"type": "Node3D", "name": "Blocked", "session_id": "proj-b@0002"},
+                raise_on_error=False,
+            )
+            assert result.is_error
+            assert "EDITOR_NOT_READY" in str(result.content)
+        finally:
+            await plugin_b.close()
