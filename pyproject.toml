@@ -2,13 +2,44 @@
 name = "godot-ai"
 version = "0.0.1"
 description = "Production-grade MCP server and AI tools for the Godot engine"
-readme = "README.md"
+readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
+authors = [{ name = "Godot AI contributors" }]
+keywords = [
+    "godot",
+    "godot-engine",
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "llm",
+    "gamedev",
+    "editor-plugin",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Games/Entertainment",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Code Generators",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+    "Environment :: Console",
+    "Framework :: AsyncIO",
+]
 dependencies = [
     "fastmcp>=3.0.0",
     "websockets>=13.0",
     "pydantic>=2.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/hi-godot/godot-ai"
+Repository = "https://github.com/hi-godot/godot-ai"
+Issues = "https://github.com/hi-godot/godot-ai/issues"
+Documentation = "https://github.com/hi-godot/godot-ai#readme"
 
 [project.optional-dependencies]
 dev = [

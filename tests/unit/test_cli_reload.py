@@ -107,6 +107,14 @@ def test_main_runs_server_directly_without_reload(monkeypatch):
     assert server.run_calls == [{"transport": "streamable-http", "port": 8123}]
 
 
+def test_main_version_flag(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        godot_ai.main(["--version"])
+    assert excinfo.value.code == 0
+    captured = capsys.readouterr()
+    assert f"godot-ai {godot_ai.__version__}" in captured.out
+
+
 def test_get_dev_transport_rejects_unsupported(monkeypatch):
     monkeypatch.setenv(asgi.DEV_TRANSPORT_ENV, "stdio")
     with pytest.raises(ValueError, match="Unsupported dev transport"):
