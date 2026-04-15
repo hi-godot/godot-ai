@@ -237,10 +237,13 @@ func _build_subtree(spec: Dictionary) -> Dictionary:
 				node.free()
 				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Theme not found: %s" % theme_path)
 			var theme_res: Resource = ResourceLoader.load(theme_path)
+			if theme_res == null or not theme_res is Theme:
+				node.free()
+				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "theme path must point to a Theme resource: %s" % theme_path)
 			if not node is Control and not node is Window:
 				node.free()
 				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "theme can only be set on Control / Window (got %s)" % node_type)
-			node.theme = theme_res
+			node.theme = theme_res as Theme
 
 	# Anchor preset — applied before children so children inherit sensible anchors.
 	if spec.has("anchor_preset"):
@@ -292,40 +295,59 @@ func _apply_property(node: Node, prop: String, value: Variant) -> Variant:
 			"Property '%s' not found on %s" % [prop, node.get_class()]
 		)
 
-	var coerced := _coerce_for_type(value, prop_type)
-	node.set(prop, coerced)
+	var coercion := _coerce_for_type(value, prop_type)
+	if not coercion.ok:
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"Property '%s' on %s expects type %s (cannot coerce %s)" % [
+				prop, node.get_class(), type_string(prop_type), value
+			]
+		)
+	node.set(prop, coercion.value)
 	return null
 
 
-static func _coerce_for_type(value: Variant, prop_type: int) -> Variant:
+## Coerce a JSON-friendly value to the target Godot type. Returns
+## {"ok": true, "value": coerced} on success, {"ok": false} on failure.
+## For types we don't explicitly coerce, the value is returned as-is
+## (Godot will typecheck at set() time and fail loudly if it disagrees).
+static func _coerce_for_type(value: Variant, prop_type: int) -> Dictionary:
 	match prop_type:
 		TYPE_COLOR:
 			if value is Color:
-				return value
+				return {"ok": true, "value": value}
 			if value is String:
 				var a := Color.from_string(value, Color(0, 0, 0, 0))
 				var b := Color.from_string(value, Color(1, 1, 1, 1))
 				if a == b:
-					return a
+					return {"ok": true, "value": a}
+				return {"ok": false}
 			if value is Dictionary and value.has("r") and value.has("g") and value.has("b"):
-				return Color(float(value.r), float(value.g), float(value.b), float(value.get("a", 1.0)))
+				return {
+					"ok": true,
+					"value": Color(float(value.r), float(value.g), float(value.b), float(value.get("a", 1.0))),
+				}
+			return {"ok": false}
 		TYPE_VECTOR2:
 			if value is Vector2:
-				return value
+				return {"ok": true, "value": value}
 			if value is Dictionary and value.has("x") and value.has("y"):
-				return Vector2(float(value.x), float(value.y))
+				return {"ok": true, "value": Vector2(float(value.x), float(value.y))}
 			if value is Array and value.size() == 2:
-				return Vector2(float(value[0]), float(value[1]))
+				return {"ok": true, "value": Vector2(float(value[0]), float(value[1]))}
+			return {"ok": false}
 		TYPE_VECTOR2I:
 			if value is Vector2i:
-				return value
+				return {"ok": true, "value": value}
 			if value is Dictionary and value.has("x") and value.has("y"):
-				return Vector2i(int(value.x), int(value.y))
+				return {"ok": true, "value": Vector2i(int(value.x), int(value.y))}
 			if value is Array and value.size() == 2:
-				return Vector2i(int(value[0]), int(value[1]))
+				return {"ok": true, "value": Vector2i(int(value[0]), int(value[1]))}
+			return {"ok": false}
 		TYPE_NODE_PATH:
 			if value is NodePath:
-				return value
+				return {"ok": true, "value": value}
 			if value is String:
-				return NodePath(value)
-	return value
+				return {"ok": true, "value": NodePath(value)}
+			return {"ok": false}
+	return {"ok": true, "value": value}

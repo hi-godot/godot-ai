@@ -296,3 +296,26 @@ func test_build_layout_is_undoable() -> void:
 	assert_eq(scene_root.get_child_count(), before_count + 1)
 	_undo_redo.undo()
 	assert_eq(scene_root.get_child_count(), before_count, "Undo should remove the whole built tree")
+
+
+func test_build_layout_rejects_non_theme_resource() -> void:
+	# A .tres that is not a Theme — use a StandardMaterial3D saved to disk.
+	var bogus_path := "res://tests/_mcp_test_not_a_theme.tres"
+	var mat := StandardMaterial3D.new()
+	ResourceSaver.save(mat, bogus_path)
+	var result := _handler.build_layout({
+		"tree": {"type": "Panel", "theme": bogus_path}
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "Theme resource")
+	if FileAccess.file_exists(bogus_path):
+		DirAccess.remove_absolute(bogus_path)
+
+
+func test_build_layout_rejects_uncoercible_property() -> void:
+	# Label.modulate is a Color — "not a color" must be rejected (not silently passed).
+	var result := _handler.build_layout({
+		"tree": {"type": "Label", "properties": {"modulate": "not a color!!"}}
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "modulate")

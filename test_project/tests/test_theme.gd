@@ -260,3 +260,40 @@ func test_theme_apply_rejects_non_control() -> void:
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	assert_contains(result.error.message, "not a Control")
+
+
+# ----- Regression: Copilot review fixes -----
+
+func test_theme_set_color_rejects_null_value() -> void:
+	_make_theme()
+	var result := _handler.set_color({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Label",
+		"name": "font_color",
+		"value": null,
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "null")
+
+
+func test_create_theme_overwritten_flag_tracks_pre_save_state() -> void:
+	# Fresh location — overwritten must be false even when overwrite=true.
+	if FileAccess.file_exists(TEST_THEME_PATH):
+		DirAccess.remove_absolute(TEST_THEME_PATH)
+	var result := _handler.create_theme({"path": TEST_THEME_PATH, "overwrite": true})
+	assert_has_key(result, "data")
+	assert_eq(result.data.overwritten, false, "Overwritten should be false on fresh create")
+
+	# Second call: now it should be true.
+	var result2 := _handler.create_theme({"path": TEST_THEME_PATH, "overwrite": true})
+	assert_has_key(result2, "data")
+	assert_eq(result2.data.overwritten, true, "Overwritten should be true on second create")
+
+
+func test_create_theme_missing_path_names_param_correctly() -> void:
+	# Error message should name `path`, not `theme_path`, for theme_create.
+	var result := _handler.create_theme({})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "path")
+	# Make sure it's NOT using the default "theme_path" label.
+	assert_true(result.error.message.find("theme_path") == -1, "Error should say 'path', not 'theme_path'")

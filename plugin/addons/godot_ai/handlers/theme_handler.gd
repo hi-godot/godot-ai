@@ -25,11 +25,14 @@ func create_theme(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 	var overwrite: bool = params.get("overwrite", false)
 
-	var err := _validate_res_path(path, ".tres")
+	var err := _validate_res_path(path, ".tres", "path")
 	if err != null:
 		return err
 
-	if FileAccess.file_exists(path) and not overwrite:
+	# Capture whether the file was already there BEFORE the save so we can
+	# report `overwritten` accurately (after save the file always exists).
+	var existed_before := FileAccess.file_exists(path)
+	if existed_before and not overwrite:
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
 			"Theme already exists at %s (pass overwrite=true to replace)" % path
@@ -51,7 +54,7 @@ func create_theme(params: Dictionary) -> Dictionary:
 	return {
 		"data": {
 			"path": path,
-			"overwritten": overwrite and FileAccess.file_exists(path),
+			"overwritten": existed_before,
 			"undoable": false,
 			"reason": "File creation is persistent; delete the file manually to revert",
 		}
@@ -115,9 +118,15 @@ func _set_scalar(
 	if not "value" in params:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: value")
 
-	var parsed = parser.call(params.get("value"))
-	if parsed == null and params.get("value") != null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid %s value: %s" % [kind, params.get("value")])
+	var raw_value = params.get("value")
+	if raw_value == null:
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"Invalid %s value: null (pass a concrete value; use the appropriate clear command to remove a slot)" % kind
+		)
+	var parsed = parser.call(raw_value)
+	if parsed == null:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid %s value: %s" % [kind, raw_value])
 
 	var had_before: bool = has_fn.call(theme, name, class_name_param)
 	var before_value = getter.call(theme, name, class_name_param) if had_before else null
@@ -331,15 +340,18 @@ func _load_theme_from_params(params: Dictionary) -> Dictionary:
 	return {"theme": theme, "path": theme_path}
 
 
-static func _validate_res_path(path: String, required_suffix: String) -> Variant:
+static func _validate_res_path(path: String, required_suffix: String, param_name: String = "theme_path") -> Variant:
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: theme_path")
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: %s" % param_name)
 	if not path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res:// (got %s)" % path)
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"%s must start with res:// (got %s)" % [param_name, path]
+		)
 	if not path.ends_with(required_suffix):
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
-			"Path must end with %s (got %s)" % [required_suffix, path]
+			"%s must end with %s (got %s)" % [param_name, required_suffix, path]
 		)
 	return null
 
