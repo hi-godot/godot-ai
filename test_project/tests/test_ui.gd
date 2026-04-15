@@ -188,3 +188,111 @@ func test_set_anchor_preset_is_undoable() -> void:
 	assert_eq(ctl.anchor_left, before_left, "Undo should restore anchor_left")
 	assert_eq(ctl.anchor_right, before_right, "Undo should restore anchor_right")
 	_remove_control(path)
+
+
+# ============================================================================
+# build_layout — declarative UI tree composer
+# ============================================================================
+
+
+func test_build_layout_creates_simple_tree() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return
+	var spec := {
+		"type": "Panel",
+		"name": "TestBuildSimple",
+		"children": [
+			{"type": "Label", "name": "Title", "properties": {"text": "Hello"}},
+			{"type": "Button", "name": "Go", "properties": {"text": "Go"}},
+		],
+	}
+	var result := _handler.build_layout({"tree": spec})
+	assert_has_key(result, "data")
+	assert_eq(result.data.node_count, 3)
+	var root := ScenePath.resolve(result.data.root_path, scene_root)
+	assert_true(root != null)
+	assert_true(root is Panel)
+	assert_eq(root.get_child_count(), 2)
+	var label: Label = root.get_node("Title")
+	assert_eq(label.text, "Hello")
+
+	# Clean up.
+	root.get_parent().remove_child(root)
+	root.queue_free()
+
+
+func test_build_layout_rejects_unknown_type() -> void:
+	var result := _handler.build_layout({"tree": {"type": "NotARealClass"}})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_build_layout_rejects_non_node_type() -> void:
+	# Resource is not a Node.
+	var result := _handler.build_layout({"tree": {"type": "Resource"}})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_build_layout_rejects_missing_type() -> void:
+	var result := _handler.build_layout({"tree": {"name": "NoType"}})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_build_layout_rejects_unknown_property() -> void:
+	# Label has no "bogus_prop".
+	var result := _handler.build_layout({
+		"tree": {"type": "Label", "properties": {"bogus_prop": 1}}
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_build_layout_rejects_bad_parent_path() -> void:
+	var result := _handler.build_layout({
+		"tree": {"type": "Panel"}, "parent_path": "/Nowhere/Nope"
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_build_layout_applies_anchor_preset_and_coerces_color() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return
+	var spec := {
+		"type": "ColorRect",
+		"name": "TestBuildColor",
+		"anchor_preset": "full_rect",
+		"properties": {"color": "#112233"},
+	}
+	var result := _handler.build_layout({"tree": spec})
+	assert_has_key(result, "data")
+	var node: ColorRect = ScenePath.resolve(result.data.root_path, scene_root)
+	assert_true(node != null)
+	assert_eq(node.anchor_right, 1.0, "anchor_preset=full_rect should set anchor_right=1")
+	# Color coerced from hex — "#112233" -> r~=0.067, g~=0.133, b~=0.2
+	assert_true(abs(node.color.r - 0.067) < 0.05)
+
+	node.get_parent().remove_child(node)
+	node.queue_free()
+
+
+func test_build_layout_rejects_anchor_preset_on_non_control() -> void:
+	# Node doesn't inherit from Control, so anchor_preset must be rejected.
+	var result := _handler.build_layout({
+		"tree": {"type": "Node", "anchor_preset": "center"}
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_build_layout_is_undoable() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return
+	var before_count := scene_root.get_child_count()
+	var result := _handler.build_layout({
+		"tree": {"type": "Panel", "name": "TestBuildUndo",
+			"children": [{"type": "Label"}, {"type": "Button"}]}
+	})
+	assert_has_key(result, "data")
+	assert_eq(scene_root.get_child_count(), before_count + 1)
+	_undo_redo.undo()
+	assert_eq(scene_root.get_child_count(), before_count, "Undo should remove the whole built tree")

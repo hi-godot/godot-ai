@@ -18,6 +18,7 @@ from godot_ai.handlers import script as script_handlers
 from godot_ai.handlers import session as session_handlers
 from godot_ai.handlers import signal as signal_handlers
 from godot_ai.handlers import testing as testing_handlers
+from godot_ai.handlers import theme as theme_handlers
 from godot_ai.handlers import ui as ui_handlers
 from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.sessions.registry import Session, SessionRegistry
@@ -334,6 +335,66 @@ class StubClient:
                 "margin": params.get("margin", 0),
                 "anchors": {"left": 0.0, "top": 0.0, "right": 1.0, "bottom": 1.0},
                 "offsets": {"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0},
+                "undoable": True,
+            }
+        if command == "build_layout":
+            return {
+                "root_path": "/Main/HUD/PauseMenu",
+                "node_count": 5,
+                "undoable": True,
+            }
+        if command == "create_theme":
+            return {
+                "path": params.get("path", ""),
+                "overwritten": False,
+                "undoable": False,
+            }
+        if command == "theme_set_color":
+            return {
+                "path": params.get("theme_path", ""),
+                "kind": "color",
+                "class_name": params.get("class_name", ""),
+                "name": params.get("name", ""),
+                "value": params.get("value"),
+                "previous_value": None,
+                "undoable": True,
+            }
+        if command == "theme_set_constant":
+            return {
+                "path": params.get("theme_path", ""),
+                "kind": "constant",
+                "class_name": params.get("class_name", ""),
+                "name": params.get("name", ""),
+                "value": params.get("value"),
+                "previous_value": None,
+                "undoable": True,
+            }
+        if command == "theme_set_font_size":
+            return {
+                "path": params.get("theme_path", ""),
+                "kind": "font_size",
+                "class_name": params.get("class_name", ""),
+                "name": params.get("name", ""),
+                "value": params.get("value"),
+                "previous_value": None,
+                "undoable": True,
+            }
+        if command == "theme_set_stylebox_flat":
+            return {
+                "path": params.get("theme_path", ""),
+                "class_name": params.get("class_name", ""),
+                "name": params.get("name", ""),
+                "stylebox_class": "StyleBoxFlat",
+                "bg_color": params.get("bg_color"),
+                "border_width": params.get("border_width", 0),
+                "corner_radius": params.get("corner_radius", 0),
+                "undoable": True,
+            }
+        if command == "apply_theme":
+            return {
+                "node_path": params.get("node_path", ""),
+                "theme_path": params.get("theme_path", ""),
+                "cleared": not params.get("theme_path"),
                 "undoable": True,
             }
         if command == "list_actions":
@@ -2005,3 +2066,178 @@ async def test_ui_set_anchor_preset_handler_passes_resize_mode_and_margin():
         "resize_mode": "keep_size",
         "margin": 12,
     }
+
+
+# ---------------------------------------------------------------------------
+# UI build_layout handler tests
+# ---------------------------------------------------------------------------
+
+
+async def test_ui_build_layout_handler_forwards_tree_and_parent():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    tree = {
+        "type": "VBoxContainer",
+        "name": "PauseMenu",
+        "properties": {"separation": 16},
+        "children": [{"type": "Label", "properties": {"text": "Paused"}}],
+    }
+    result = await ui_handlers.ui_build_layout(
+        runtime, tree=tree, parent_path="/Main/HUD"
+    )
+    assert client.calls[-1]["command"] == "build_layout"
+    assert client.calls[-1]["params"] == {"tree": tree, "parent_path": "/Main/HUD"}
+    assert result["node_count"] == 5
+
+
+async def test_ui_build_layout_handler_defaults_parent_to_empty():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await ui_handlers.ui_build_layout(runtime, tree={"type": "Panel"})
+    assert client.calls[-1]["params"]["parent_path"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Theme handler tests
+# ---------------------------------------------------------------------------
+
+
+async def test_theme_create_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await theme_handlers.theme_create(
+        runtime, path="res://ui/themes/game.tres"
+    )
+    assert client.calls[-1]["command"] == "create_theme"
+    assert client.calls[-1]["params"] == {
+        "path": "res://ui/themes/game.tres",
+        "overwrite": False,
+    }
+    assert result["path"] == "res://ui/themes/game.tres"
+
+
+async def test_theme_create_handler_overwrite_passthrough():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await theme_handlers.theme_create(
+        runtime, path="res://ui/themes/game.tres", overwrite=True
+    )
+    assert client.calls[-1]["params"]["overwrite"] is True
+
+
+async def test_theme_set_color_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await theme_handlers.theme_set_color(
+        runtime,
+        theme_path="res://ui/themes/game.tres",
+        class_name="Label",
+        name="font_color",
+        value="#e0e0ff",
+    )
+    assert client.calls[-1]["command"] == "theme_set_color"
+    assert client.calls[-1]["params"] == {
+        "theme_path": "res://ui/themes/game.tres",
+        "class_name": "Label",
+        "name": "font_color",
+        "value": "#e0e0ff",
+    }
+    assert result["class_name"] == "Label"
+
+
+async def test_theme_set_constant_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await theme_handlers.theme_set_constant(
+        runtime,
+        theme_path="res://ui/themes/game.tres",
+        class_name="VBoxContainer",
+        name="separation",
+        value=12,
+    )
+    assert client.calls[-1]["command"] == "theme_set_constant"
+    assert client.calls[-1]["params"]["value"] == 12
+
+
+async def test_theme_set_font_size_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await theme_handlers.theme_set_font_size(
+        runtime,
+        theme_path="res://ui/themes/game.tres",
+        class_name="Label",
+        name="font_size",
+        value=24,
+    )
+    assert client.calls[-1]["command"] == "theme_set_font_size"
+    assert client.calls[-1]["params"]["value"] == 24
+
+
+async def test_theme_set_stylebox_flat_handler_only_passes_provided_fields():
+    """Unset optional params must not be forwarded — lets the plugin side keep
+    StyleBoxFlat defaults when a caller only wants to set a few fields."""
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await theme_handlers.theme_set_stylebox_flat(
+        runtime,
+        theme_path="res://ui/themes/game.tres",
+        class_name="Button",
+        name="normal",
+        bg_color="#101820",
+        corner_radius=8,
+    )
+    params = client.calls[-1]["params"]
+    assert params["bg_color"] == "#101820"
+    assert params["corner_radius"] == 8
+    # Fields that weren't set should be absent, not None.
+    assert "border_color" not in params
+    assert "shadow_size" not in params
+    assert "anti_aliasing" not in params
+
+
+async def test_theme_set_stylebox_flat_handler_forwards_all_fields():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await theme_handlers.theme_set_stylebox_flat(
+        runtime,
+        theme_path="res://ui/themes/game.tres",
+        class_name="Panel",
+        name="panel",
+        bg_color="#0a0a14",
+        border_color="#00ffff",
+        border_width=2,
+        corner_radius=10,
+        content_margin=12.0,
+        shadow_color="#000000",
+        shadow_size=8,
+        shadow_offset_x=0,
+        shadow_offset_y=4,
+        anti_aliasing=True,
+    )
+    params = client.calls[-1]["params"]
+    assert params["anti_aliasing"] is True
+    assert params["shadow_offset_y"] == 4
+    assert params["content_margin"] == 12.0
+
+
+async def test_theme_apply_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await theme_handlers.theme_apply(
+        runtime,
+        node_path="/Main/HUD",
+        theme_path="res://ui/themes/game.tres",
+    )
+    assert client.calls[-1]["command"] == "apply_theme"
+    assert client.calls[-1]["params"] == {
+        "node_path": "/Main/HUD",
+        "theme_path": "res://ui/themes/game.tres",
+    }
+
+
+async def test_theme_apply_handler_clears_when_empty():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await theme_handlers.theme_apply(runtime, node_path="/Main/HUD")
+    assert client.calls[-1]["params"]["theme_path"] == ""
+    assert result["cleared"] is True

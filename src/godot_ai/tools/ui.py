@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Annotated, Any
+
 from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import ui as ui_handlers
 from godot_ai.runtime.direct import DirectRuntime
-from godot_ai.tools import DEFER_META
+from godot_ai.tools import DEFER_META, JsonCoerced
 
 
 def register_ui_tools(mcp: FastMCP) -> None:
@@ -51,4 +53,67 @@ def register_ui_tools(mcp: FastMCP) -> None:
             preset=preset,
             resize_mode=resize_mode,
             margin=margin,
+        )
+
+    @mcp.tool(meta=DEFER_META)
+    async def ui_build_layout(
+        ctx: Context,
+        tree: Annotated[dict[str, Any], JsonCoerced],
+        parent_path: str = "",
+        session_id: str = "",
+    ) -> dict:
+        """Build a UI subtree atomically from a declarative nested spec.
+
+        One call turns a nested description into a fully-constructed,
+        configured, themed, anchored Control tree under a parent. Faster
+        and more reliable than a sequence of node_create + node_set_property
+        + ui_set_anchor_preset + theme_apply calls; everything commits (or
+        fails and rolls back) as one undo action. This is the closest thing
+        to writing UXML and getting UI back.
+
+        Tree spec (per node):
+            type           - Godot class name (required, e.g. "VBoxContainer",
+                             "Panel", "Label", "Button", "HBoxContainer",
+                             "MarginContainer", "TextureRect").
+            name           - Node name (optional).
+            properties     - Dict of property -> value (optional). Color values
+                             accept hex strings; Vector2 accepts {"x": ,"y": }
+                             or [x, y]; strings go to text/icon paths; ints to
+                             size_flags_*, separation, etc.
+            anchor_preset  - Optional preset name (full_rect, center, top_left,
+                             top_wide, right_wide, ...). Applied after properties.
+            anchor_margin  - Optional margin in pixels for the anchor preset.
+            theme          - Optional res:// path to a Theme; applies to this
+                             subtree. Use theme_create + theme_set_* first.
+            children       - Optional array of nested child specs.
+
+        Example — a pause menu:
+            {
+              "type": "Panel", "name": "PauseMenu", "anchor_preset": "full_rect",
+              "theme": "res://ui/themes/game.tres",
+              "children": [{
+                "type": "VBoxContainer", "anchor_preset": "center",
+                "properties": {"separation": 16},
+                "children": [
+                  {"type": "Label", "properties": {"text": "Paused"}},
+                  {"type": "Button", "name": "Resume",
+                   "properties": {"text": "Resume"}},
+                  {"type": "Button", "name": "Quit",
+                   "properties": {"text": "Quit"}}
+                ]
+              }]
+            }
+
+        All nodes are validated (types exist, properties exist, res:// paths
+        resolve) before any scene mutation. If anything is invalid, no node
+        is created. Ctrl+Z in Godot undoes the entire build in one step.
+
+        Args:
+            tree: Root node spec (see above). Nested structure supported.
+            parent_path: Scene path to attach under. Empty or "/" = scene root.
+            session_id: Optional Godot session to target. Empty = active session.
+        """
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
+        return await ui_handlers.ui_build_layout(
+            runtime, tree=tree, parent_path=parent_path
         )

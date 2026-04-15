@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from godot_ai.handlers._readiness import require_writable
 from godot_ai.runtime.interface import Runtime
 
@@ -22,4 +24,16 @@ async def ui_set_anchor_preset(
             "resize_mode": resize_mode,
             "margin": margin,
         },
+    )
+
+
+async def ui_build_layout(
+    runtime: Runtime,
+    tree: dict[str, Any],
+    parent_path: str = "",
+) -> dict:
+    require_writable(runtime)
+    return await runtime.send_command(
+        "build_layout",
+        {"tree": tree, "parent_path": parent_path},
     )

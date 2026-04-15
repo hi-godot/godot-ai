@@ -30,6 +30,7 @@ from godot_ai.tools.script import register_script_tools
 from godot_ai.tools.session import register_session_tools
 from godot_ai.tools.signal import register_signal_tools
 from godot_ai.tools.testing import register_testing_tools
+from godot_ai.tools.theme import register_theme_tools
 from godot_ai.tools.ui import register_ui_tools
 from godot_ai.transport.websocket import GodotWebSocketServer
 
@@ -85,7 +86,10 @@ def create_server(ws_port: int = 9500) -> FastMCP:
             "  logs_*           — read or clear the editor log buffer\n"
             "  test_*           — run GDScript test suites and fetch results\n"
             "  batch_execute    — compose multi-step scene edits atomically\n"
-            "  ui_*             — Control layout helpers (anchor presets for HUD / menus)\n"
+            "  ui_*             — Control layout helpers "
+            "(anchor presets, declarative layout builder)\n"
+            "  theme_*          — author Theme resources "
+            "(colors, stylebox, font sizes) — Godot's CSS-like styling\n"
             "  client_*         — configure AI clients (Claude Code, Codex, Antigravity)\n\n"
             "Always connect to an editor session first (session_list / session_activate). "
             "Write operations require session readiness; check editor_state if a call is "
@@ -109,6 +113,7 @@ def create_server(ws_port: int = 9500) -> FastMCP:
     register_testing_tools(mcp)
     register_batch_tools(mcp)
     register_ui_tools(mcp)
+    register_theme_tools(mcp)
     register_session_resources(mcp)
     register_scene_resources(mcp)
     register_editor_resources(mcp)

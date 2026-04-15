@@ -2772,3 +2772,308 @@ class TestUiSetAnchorPresetTool:
 
         assert result.data["margin"] == 16
         assert result.data["resize_mode"] == "keep_size"
+
+
+# ---------------------------------------------------------------------------
+# ui_build_layout
+# ---------------------------------------------------------------------------
+
+
+class TestUiBuildLayoutTool:
+    async def test_forwards_tree_and_parent(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "build_layout"
+            assert cmd["params"]["tree"]["type"] == "VBoxContainer"
+            assert cmd["params"]["parent_path"] == "/Main/HUD"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "root_path": "/Main/HUD/PauseMenu",
+                    "node_count": 4,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "ui_build_layout",
+            {
+                "tree": {
+                    "type": "VBoxContainer",
+                    "name": "PauseMenu",
+                    "children": [
+                        {"type": "Label", "properties": {"text": "Paused"}},
+                        {"type": "Button", "properties": {"text": "Resume"}},
+                    ],
+                },
+                "parent_path": "/Main/HUD",
+            },
+        )
+        await task
+
+        assert result.data["node_count"] == 4
+        assert result.data["undoable"] is True
+
+    async def test_accepts_stringified_tree_via_json_coercion(self, mcp_stack):
+        """Some MCP clients stringify complex args — JsonCoerced must decode them."""
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            # After JsonCoerced, the tree is a real dict, not a string.
+            assert cmd["params"]["tree"]["type"] == "Panel"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"root_path": "/Panel", "node_count": 1, "undoable": True},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "ui_build_layout",
+            {"tree": '{"type": "Panel"}'},
+        )
+        await task
+        assert result.data["node_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# theme_create / theme_set_* / theme_apply
+# ---------------------------------------------------------------------------
+
+
+class TestThemeCreateTool:
+    async def test_create_theme(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "create_theme"
+            assert cmd["params"] == {
+                "path": "res://ui/themes/game.tres",
+                "overwrite": False,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://ui/themes/game.tres",
+                    "overwritten": False,
+                    "undoable": False,
+                    "reason": "File creation is persistent",
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "theme_create", {"path": "res://ui/themes/game.tres"}
+        )
+        await task
+        assert result.data["path"] == "res://ui/themes/game.tres"
+
+
+class TestThemeSetColorTool:
+    async def test_set_color_hex(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "theme_set_color"
+            assert cmd["params"]["value"] == "#e0e0ff"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://ui/themes/game.tres",
+                    "kind": "color",
+                    "class_name": "Label",
+                    "name": "font_color",
+                    "value": {"r": 0.88, "g": 0.88, "b": 1.0, "a": 1.0},
+                    "previous_value": None,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "theme_set_color",
+            {
+                "theme_path": "res://ui/themes/game.tres",
+                "class_name": "Label",
+                "name": "font_color",
+                "value": "#e0e0ff",
+            },
+        )
+        await task
+        assert result.data["kind"] == "color"
+        assert result.data["undoable"] is True
+
+
+class TestThemeSetConstantTool:
+    async def test_set_constant(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["value"] == 16
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://ui/themes/game.tres",
+                    "kind": "constant",
+                    "class_name": "VBoxContainer",
+                    "name": "separation",
+                    "value": 16,
+                    "previous_value": None,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "theme_set_constant",
+            {
+                "theme_path": "res://ui/themes/game.tres",
+                "class_name": "VBoxContainer",
+                "name": "separation",
+                "value": 16,
+            },
+        )
+        await task
+        assert result.data["value"] == 16
+
+
+class TestThemeSetFontSizeTool:
+    async def test_set_font_size(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["value"] == 24
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://ui/themes/game.tres",
+                    "kind": "font_size",
+                    "class_name": "Label",
+                    "name": "font_size",
+                    "value": 24,
+                    "previous_value": None,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "theme_set_font_size",
+            {
+                "theme_path": "res://ui/themes/game.tres",
+                "class_name": "Label",
+                "name": "font_size",
+                "value": 24,
+            },
+        )
+        await task
+        assert result.data["value"] == 24
+
+
+class TestThemeSetStyleboxFlatTool:
+    async def test_composes_stylebox_fields(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "theme_set_stylebox_flat"
+            params = cmd["params"]
+            assert params["class_name"] == "Button"
+            assert params["name"] == "normal"
+            assert params["bg_color"] == "#101820"
+            assert params["border_color"] == "#00ffff"
+            assert params["corner_radius"] == 8
+            # Fields not supplied must not be forwarded.
+            assert "shadow_size" not in params
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://ui/themes/game.tres",
+                    "class_name": "Button",
+                    "name": "normal",
+                    "stylebox_class": "StyleBoxFlat",
+                    "bg_color": {"r": 0.06, "g": 0.09, "b": 0.13, "a": 1.0},
+                    "border_width": 2,
+                    "corner_radius": 8,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "theme_set_stylebox_flat",
+            {
+                "theme_path": "res://ui/themes/game.tres",
+                "class_name": "Button",
+                "name": "normal",
+                "bg_color": "#101820",
+                "border_color": "#00ffff",
+                "border_width": 2,
+                "corner_radius": 8,
+            },
+        )
+        await task
+        assert result.data["corner_radius"] == 8
+
+
+class TestThemeApplyTool:
+    async def test_apply(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "apply_theme"
+            assert cmd["params"] == {
+                "node_path": "/Main/HUD",
+                "theme_path": "res://ui/themes/game.tres",
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "node_path": "/Main/HUD",
+                    "theme_path": "res://ui/themes/game.tres",
+                    "cleared": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "theme_apply",
+            {
+                "node_path": "/Main/HUD",
+                "theme_path": "res://ui/themes/game.tres",
+            },
+        )
+        await task
+        assert result.data["cleared"] is False
+
+    async def test_apply_empty_clears(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["theme_path"] == ""
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "node_path": "/Main/HUD",
+                    "theme_path": "",
+                    "cleared": True,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "theme_apply", {"node_path": "/Main/HUD"}
+        )
+        await task
+        assert result.data["cleared"] is True

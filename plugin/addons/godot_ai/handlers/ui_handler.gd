@@ -136,3 +136,196 @@ func set_anchor_preset(params: Dictionary) -> Dictionary:
 			"undoable": true,
 		}
 	}
+
+
+# ============================================================================
+# build_layout — declarative nested-dict → Control tree in one undo action
+# ============================================================================
+
+## Build a tree of Control nodes atomically.
+##
+## Params:
+##   tree         - Dictionary describing the root node. Required fields: "type".
+##                  Optional: "name", "properties" (dict), "anchor_preset",
+##                  "anchor_margin", "theme" (res:// path), "children" (array).
+##   parent_path  - Parent scene path. Empty or "/" = scene root.
+##
+## Validation is done before any scene mutation: class names, property
+## existence, and res:// paths are all checked up-front. If anything is
+## invalid, no node is created.
+func build_layout(params: Dictionary) -> Dictionary:
+	var tree = params.get("tree")
+	if typeof(tree) != TYPE_DICTIONARY:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: tree (must be a dictionary)")
+
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+
+	var parent_path: String = params.get("parent_path", "")
+	var parent: Node = scene_root
+	if not parent_path.is_empty() and parent_path != "/":
+		parent = ScenePath.resolve(parent_path, scene_root)
+		if parent == null:
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Parent not found: %s" % parent_path)
+
+	# Validate + build in memory first; if anything fails, free and bail.
+	var built := _build_subtree(tree)
+	if built.has("error"):
+		return built
+	var root_node: Node = built.node
+	var created: Array[Node] = built.created
+
+	_undo_redo.create_action("MCP: Build UI layout (%d nodes)" % created.size())
+	_undo_redo.add_do_method(parent, "add_child", root_node, true)
+	_undo_redo.add_do_method(root_node, "set_owner", scene_root)
+	for n in created:
+		_undo_redo.add_do_method(n, "set_owner", scene_root)
+		_undo_redo.add_do_reference(n)
+	_undo_redo.add_undo_method(parent, "remove_child", root_node)
+	_undo_redo.commit_action()
+
+	return {
+		"data": {
+			"root_path": ScenePath.from_node(root_node, scene_root),
+			"node_count": created.size(),
+			"undoable": true,
+		}
+	}
+
+
+## Recursively instantiate + configure a node and its children in memory.
+## Returns {"node": root, "created": [all descendants incl. root]} or {"error": ...}.
+func _build_subtree(spec: Dictionary) -> Dictionary:
+	var node_type: String = spec.get("type", "")
+	if node_type.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Every layout node requires a 'type'")
+	if not ClassDB.class_exists(node_type):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown type: %s" % node_type)
+	if not ClassDB.is_parent_class(node_type, "Node"):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "%s is not a Node type" % node_type)
+
+	var node: Node = ClassDB.instantiate(node_type)
+	if node == null:
+		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s" % node_type)
+
+	var node_name: String = spec.get("name", "")
+	if not node_name.is_empty():
+		node.name = node_name
+
+	# Properties.
+	if spec.has("properties"):
+		var props = spec.get("properties")
+		if typeof(props) != TYPE_DICTIONARY:
+			node.free()
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "properties must be a dictionary")
+		for key in props:
+			var value = props[key]
+			var apply_err := _apply_property(node, str(key), value)
+			if apply_err != null:
+				node.free()
+				return apply_err
+
+	# Theme (res:// path -> Resource).
+	if spec.has("theme"):
+		var theme_path: String = str(spec.get("theme", ""))
+		if not theme_path.is_empty():
+			if not theme_path.begins_with("res://"):
+				node.free()
+				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "theme must be a res:// path")
+			if not ResourceLoader.exists(theme_path):
+				node.free()
+				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Theme not found: %s" % theme_path)
+			var theme_res: Resource = ResourceLoader.load(theme_path)
+			if not node is Control and not node is Window:
+				node.free()
+				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "theme can only be set on Control / Window (got %s)" % node_type)
+			node.theme = theme_res
+
+	# Anchor preset — applied before children so children inherit sensible anchors.
+	if spec.has("anchor_preset"):
+		var preset_name: String = str(spec.get("anchor_preset", "")).to_lower()
+		if not _PRESETS.has(preset_name):
+			node.free()
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown anchor_preset: %s" % preset_name)
+		if not node is Control:
+			node.free()
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "anchor_preset requires a Control (got %s)" % node_type)
+		var preset_value: int = _PRESETS[preset_name]
+		var margin: int = int(spec.get("anchor_margin", 0))
+		(node as Control).set_anchors_and_offsets_preset(preset_value, Control.PRESET_MODE_MINSIZE, margin)
+
+	var created: Array[Node] = [node]
+	if spec.has("children"):
+		var children = spec.get("children")
+		if typeof(children) != TYPE_ARRAY:
+			node.free()
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "children must be an array")
+		for child_spec in children:
+			if typeof(child_spec) != TYPE_DICTIONARY:
+				node.free()
+				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "each child must be a dictionary")
+			var child_result := _build_subtree(child_spec)
+			if child_result.has("error"):
+				node.free()
+				return child_result
+			var child_node: Node = child_result.node
+			node.add_child(child_node)
+			for n in child_result.created:
+				created.append(n)
+	return {"node": node, "created": created}
+
+
+## Apply a property to a newly-instantiated node. Handles Color/Vector2/NodePath
+## coercion from JSON-friendly forms. Returns null on success, error dict on failure.
+func _apply_property(node: Node, prop: String, value: Variant) -> Variant:
+	var found := false
+	var prop_type := TYPE_NIL
+	for p in node.get_property_list():
+		if p.name == prop:
+			found = true
+			prop_type = p.get("type", TYPE_NIL)
+			break
+	if not found:
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"Property '%s' not found on %s" % [prop, node.get_class()]
+		)
+
+	var coerced := _coerce_for_type(value, prop_type)
+	node.set(prop, coerced)
+	return null
+
+
+static func _coerce_for_type(value: Variant, prop_type: int) -> Variant:
+	match prop_type:
+		TYPE_COLOR:
+			if value is Color:
+				return value
+			if value is String:
+				var a := Color.from_string(value, Color(0, 0, 0, 0))
+				var b := Color.from_string(value, Color(1, 1, 1, 1))
+				if a == b:
+					return a
+			if value is Dictionary and value.has("r") and value.has("g") and value.has("b"):
+				return Color(float(value.r), float(value.g), float(value.b), float(value.get("a", 1.0)))
+		TYPE_VECTOR2:
+			if value is Vector2:
+				return value
+			if value is Dictionary and value.has("x") and value.has("y"):
+				return Vector2(float(value.x), float(value.y))
+			if value is Array and value.size() == 2:
+				return Vector2(float(value[0]), float(value[1]))
+		TYPE_VECTOR2I:
+			if value is Vector2i:
+				return value
+			if value is Dictionary and value.has("x") and value.has("y"):
+				return Vector2i(int(value.x), int(value.y))
+			if value is Array and value.size() == 2:
+				return Vector2i(int(value[0]), int(value[1]))
+		TYPE_NODE_PATH:
+			if value is NodePath:
+				return value
+			if value is String:
+				return NodePath(value)
+	return value

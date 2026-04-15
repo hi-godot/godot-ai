@@ -32,7 +32,8 @@ func _enter_tree() -> void:
 	var test_handler := TestHandler.new(get_undo_redo(), _log_buffer)
 	var batch_handler := BatchHandler.new(_dispatcher, get_undo_redo())
 	var ui_handler := UiHandler.new(get_undo_redo())
-	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler, ui_handler]
+	var theme_handler := ThemeHandler.new(get_undo_redo())
+	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler, ui_handler, theme_handler]
 
 	_dispatcher.register("get_editor_state", editor_handler.get_editor_state)
 	_dispatcher.register("get_scene_tree", scene_handler.get_scene_tree)
@@ -95,6 +96,13 @@ func _enter_tree() -> void:
 	_dispatcher.register("get_test_results", test_handler.get_test_results)
 	_dispatcher.register("batch_execute", batch_handler.batch_execute)
 	_dispatcher.register("set_anchor_preset", ui_handler.set_anchor_preset)
+	_dispatcher.register("build_layout", ui_handler.build_layout)
+	_dispatcher.register("create_theme", theme_handler.create_theme)
+	_dispatcher.register("theme_set_color", theme_handler.set_color)
+	_dispatcher.register("theme_set_constant", theme_handler.set_constant)
+	_dispatcher.register("theme_set_font_size", theme_handler.set_font_size)
+	_dispatcher.register("theme_set_stylebox_flat", theme_handler.set_stylebox_flat)
+	_dispatcher.register("apply_theme", theme_handler.apply_theme)
 
 	_connection.dispatcher = _dispatcher
 	add_child(_connection)
