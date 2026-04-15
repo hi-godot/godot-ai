@@ -230,6 +230,10 @@ func add_method_track(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: animation_name")
 	if target_path.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: target_node_path")
+	if target_path.contains(":"):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			"target_node_path is a bare NodePath without ':property' (got '%s'). " % target_path +
+			"Method name goes in each keyframe's 'method' field, not the path.")
 	if typeof(keyframes) != TYPE_ARRAY or keyframes.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "keyframes must be a non-empty array")
 
@@ -701,20 +705,6 @@ static func _coerce_for_type(value: Variant, prop_type: int) -> Variant:
 # ============================================================================
 # Helpers — parsing + serializing
 # ============================================================================
-
-static func _parse_loop_mode(s: String) -> int:
-	match s.to_lower():
-		"linear": return Animation.LOOP_LINEAR
-		"pingpong": return Animation.LOOP_PINGPONG
-		_: return Animation.LOOP_NONE
-
-
-static func _parse_interpolation(s: String) -> int:
-	match s.to_lower():
-		"nearest": return Animation.INTERPOLATION_NEAREST
-		"cubic": return Animation.INTERPOLATION_CUBIC
-		_: return Animation.INTERPOLATION_LINEAR
-
 
 ## Parse a transition value: named string or raw float.
 ## "linear"→1.0, "ease_in"→2.0, "ease_out"→0.5, "ease_in_out"→-2.0.

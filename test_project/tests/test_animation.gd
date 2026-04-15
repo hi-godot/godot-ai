@@ -311,6 +311,22 @@ func test_add_method_track_basic() -> void:
 	_remove_node(player_path)
 
 
+func test_add_method_track_rejects_colon_in_target_path() -> void:
+	var player_path := _add_player("TestMethodColonPath")
+	if player_path.is_empty():
+		return
+	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
+	var result := _handler.add_method_track({
+		"player_path": player_path,
+		"animation_name": "anim",
+		"target_node_path": "Panel:queue_free",  # wrong — method goes in keyframe
+		"keyframes": [{"time": 0.0, "method": "queue_free"}],
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "bare NodePath")
+	_remove_node(player_path)
+
+
 func test_add_method_track_requires_method_key() -> void:
 	var player_path := _add_player("TestMethodNoMethod")
 	if player_path.is_empty():
