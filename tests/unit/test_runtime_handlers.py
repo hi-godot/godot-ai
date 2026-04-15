@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from godot_ai.handlers import animation as animation_handlers
 from godot_ai.handlers import autoload as autoload_handlers
 from godot_ai.handlers import batch as batch_handlers
 from godot_ai.handlers import client as client_handlers
@@ -540,6 +541,116 @@ class StubClient:
                     "memory/static": 1048576,
                 },
                 "monitor_count": 3,
+            }
+        if command == "animation_player_create":
+            return {
+                "path": "/Main/" + params.get("name", "AnimationPlayer"),
+                "parent_path": "/Main",
+                "name": params.get("name", "AnimationPlayer"),
+                "undoable": True,
+            }
+        if command == "animation_create":
+            return {
+                "player_path": params.get("player_path", ""),
+                "name": params.get("name", ""),
+                "length": params.get("length", 1.0),
+                "loop_mode": params.get("loop_mode", "none"),
+                "undoable": True,
+            }
+        if command == "animation_add_property_track":
+            return {
+                "player_path": params.get("player_path", ""),
+                "animation_name": params.get("animation_name", ""),
+                "track_path": params.get("track_path", ""),
+                "interpolation": params.get("interpolation", "linear"),
+                "keyframe_count": len(params.get("keyframes", [])),
+                "track_index": 0,
+                "undoable": True,
+            }
+        if command == "animation_add_method_track":
+            return {
+                "player_path": params.get("player_path", ""),
+                "animation_name": params.get("animation_name", ""),
+                "target_node_path": params.get("target_node_path", ""),
+                "keyframe_count": len(params.get("keyframes", [])),
+                "track_index": 0,
+                "undoable": True,
+            }
+        if command == "animation_set_autoplay":
+            name = params.get("animation_name", "")
+            return {
+                "player_path": params.get("player_path", ""),
+                "animation_name": name,
+                "previous_autoplay": "",
+                "cleared": name == "",
+                "undoable": True,
+            }
+        if command == "animation_play":
+            return {
+                "player_path": params.get("player_path", ""),
+                "animation_name": params.get("animation_name", ""),
+                "undoable": False,
+                "reason": "Runtime playback state — not saved with scene",
+            }
+        if command == "animation_stop":
+            return {
+                "player_path": params.get("player_path", ""),
+                "undoable": False,
+                "reason": "Runtime playback state — not saved with scene",
+            }
+        if command == "animation_list":
+            return {
+                "player_path": params.get("player_path", ""),
+                "animations": [
+                    {"name": "idle", "length": 1.0, "loop_mode": "linear", "track_count": 2},
+                    {"name": "run", "length": 0.5, "loop_mode": "none", "track_count": 1},
+                ],
+                "count": 2,
+            }
+        if command == "animation_get":
+            return {
+                "player_path": params.get("player_path", ""),
+                "name": params.get("animation_name", ""),
+                "length": 1.0,
+                "loop_mode": "none",
+                "track_count": 1,
+                "tracks": [
+                    {
+                        "index": 0,
+                        "type": "value",
+                        "path": ".:modulate",
+                        "interpolation": "linear",
+                        "key_count": 2,
+                        "keys": [
+                            {
+                                "time": 0.0,
+                                "value": {"r": 1, "g": 1, "b": 1, "a": 0},
+                                "transition": 1.0,
+                            },
+                            {
+                                "time": 1.0,
+                                "value": {"r": 1, "g": 1, "b": 1, "a": 1},
+                                "transition": 1.0,
+                            },
+                        ],
+                    }
+                ],
+            }
+        if command == "animation_create_simple":
+            tweens = params.get("tweens", [])
+            computed_length = params.get("length")
+            if computed_length is None:
+                computed_length = max(
+                    (t.get("delay", 0) + t.get("duration", 0) for t in tweens),
+                    default=1.0,
+                )
+            return {
+                "player_path": params.get("player_path", ""),
+                "name": params.get("name", ""),
+                "length": computed_length,
+                "loop_mode": params.get("loop_mode", "none"),
+                "track_count": len(tweens),
+                "undoable": True,
             }
         return {"status": "ok"}
 
@@ -2241,3 +2352,276 @@ async def test_theme_apply_handler_clears_when_empty():
     result = await theme_handlers.theme_apply(runtime, node_path="/Main/HUD")
     assert client.calls[-1]["params"]["theme_path"] == ""
     assert result["cleared"] is True
+
+
+# ---------------------------------------------------------------------------
+# Animation handler tests
+# ---------------------------------------------------------------------------
+
+
+async def test_animation_player_create_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await animation_handlers.animation_player_create(
+        runtime, parent_path="/Main", name="AnimationPlayer"
+    )
+    assert client.calls[-1]["command"] == "animation_player_create"
+    assert client.calls[-1]["params"] == {
+        "parent_path": "/Main",
+        "name": "AnimationPlayer",
+    }
+    assert result["path"] == "/Main/AnimationPlayer"
+    assert result["undoable"] is True
+
+
+async def test_animation_player_create_default_name():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await animation_handlers.animation_player_create(runtime, parent_path="/Main")
+    assert client.calls[-1]["params"]["name"] == "AnimationPlayer"
+
+
+async def test_animation_create_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await animation_handlers.animation_create(
+        runtime,
+        player_path="/Main/AnimationPlayer",
+        name="pulse",
+        length=0.5,
+        loop_mode="pingpong",
+    )
+    assert client.calls[-1]["command"] == "animation_create"
+    assert client.calls[-1]["params"] == {
+        "player_path": "/Main/AnimationPlayer",
+        "name": "pulse",
+        "length": 0.5,
+        "loop_mode": "pingpong",
+    }
+    assert result["name"] == "pulse"
+    assert result["loop_mode"] == "pingpong"
+
+
+async def test_animation_create_default_loop_mode():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await animation_handlers.animation_create(
+        runtime, player_path="/Main/AP", name="idle", length=1.0
+    )
+    assert client.calls[-1]["params"]["loop_mode"] == "none"
+
+
+async def test_animation_add_property_track_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    keyframes = [
+        {"time": 0.0, "value": {"r": 1, "g": 1, "b": 1, "a": 0}},
+        {"time": 0.5, "value": {"r": 1, "g": 1, "b": 1, "a": 1}},
+    ]
+    result = await animation_handlers.animation_add_property_track(
+        runtime,
+        player_path="/Main/AP",
+        animation_name="fade",
+        track_path="Panel:modulate",
+        keyframes=keyframes,
+        interpolation="linear",
+    )
+    assert client.calls[-1]["command"] == "animation_add_property_track"
+    params = client.calls[-1]["params"]
+    assert params["track_path"] == "Panel:modulate"
+    assert params["keyframes"] == keyframes
+    assert params["interpolation"] == "linear"
+    assert result["keyframe_count"] == 2
+    assert result["undoable"] is True
+
+
+async def test_animation_add_property_track_default_interpolation():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await animation_handlers.animation_add_property_track(
+        runtime,
+        player_path="/Main/AP",
+        animation_name="anim",
+        track_path=".:position",
+        keyframes=[{"time": 0.0, "value": {"x": 0, "y": 0}}],
+    )
+    assert client.calls[-1]["params"]["interpolation"] == "linear"
+
+
+async def test_animation_add_method_track_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    keyframes = [{"time": 1.0, "method": "queue_free", "args": []}]
+    result = await animation_handlers.animation_add_method_track(
+        runtime,
+        player_path="/Main/AP",
+        animation_name="death",
+        target_node_path=".",
+        keyframes=keyframes,
+    )
+    assert client.calls[-1]["command"] == "animation_add_method_track"
+    params = client.calls[-1]["params"]
+    assert params["target_node_path"] == "."
+    assert params["keyframes"] == keyframes
+    assert result["keyframe_count"] == 1
+
+
+async def test_animation_set_autoplay_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await animation_handlers.animation_set_autoplay(
+        runtime, player_path="/Main/AP", animation_name="idle"
+    )
+    assert client.calls[-1]["command"] == "animation_set_autoplay"
+    assert client.calls[-1]["params"] == {
+        "player_path": "/Main/AP",
+        "animation_name": "idle",
+    }
+    assert result["cleared"] is False
+
+
+async def test_animation_set_autoplay_clears_with_empty():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await animation_handlers.animation_set_autoplay(
+        runtime, player_path="/Main/AP"
+    )
+    assert client.calls[-1]["params"]["animation_name"] == ""
+    assert result["cleared"] is True
+
+
+async def test_animation_play_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await animation_handlers.animation_play(
+        runtime, player_path="/Main/AP", animation_name="idle"
+    )
+    assert client.calls[-1]["command"] == "animation_play"
+    assert result["undoable"] is False
+
+
+async def test_animation_stop_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await animation_handlers.animation_stop(runtime, player_path="/Main/AP")
+    assert client.calls[-1]["command"] == "animation_stop"
+    assert result["undoable"] is False
+
+
+async def test_animation_list_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await animation_handlers.animation_list(
+        runtime, player_path="/Main/AP"
+    )
+    assert client.calls[-1]["command"] == "animation_list"
+    assert result["count"] == 2
+    assert result["animations"][0]["name"] == "idle"
+
+
+async def test_animation_get_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await animation_handlers.animation_get(
+        runtime, player_path="/Main/AP", animation_name="fade"
+    )
+    assert client.calls[-1]["command"] == "animation_get"
+    assert client.calls[-1]["params"] == {
+        "player_path": "/Main/AP",
+        "animation_name": "fade",
+    }
+    assert result["track_count"] == 1
+    assert result["tracks"][0]["type"] == "value"
+
+
+async def test_animation_create_simple_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    tweens = [
+        {
+            "target": "Panel",
+            "property": "modulate",
+            "from": {"r": 1, "g": 1, "b": 1, "a": 0},
+            "to": {"r": 1, "g": 1, "b": 1, "a": 1},
+            "duration": 0.5,
+        }
+    ]
+    result = await animation_handlers.animation_create_simple(
+        runtime,
+        player_path="/Main/AP",
+        name="fade_in",
+        tweens=tweens,
+        loop_mode="none",
+    )
+    assert client.calls[-1]["command"] == "animation_create_simple"
+    params = client.calls[-1]["params"]
+    assert params["name"] == "fade_in"
+    assert params["tweens"] == tweens
+    assert params["loop_mode"] == "none"
+    assert "length" not in params  # omitted when None
+    assert result["track_count"] == 1
+    assert result["undoable"] is True
+
+
+async def test_animation_create_simple_passes_explicit_length():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await animation_handlers.animation_create_simple(
+        runtime,
+        player_path="/Main/AP",
+        name="slide",
+        tweens=[
+            {
+                "target": ".",
+                "property": "position",
+                "from": {"x": -400, "y": 0},
+                "to": {"x": 0, "y": 0},
+                "duration": 0.3,
+            }
+        ],
+        length=2.0,
+    )
+    assert client.calls[-1]["params"]["length"] == 2.0
+
+
+async def test_animation_list_does_not_require_writable():
+    """animation_list is a read tool — it must not call require_writable."""
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    session = Session(
+        session_id="s1",
+        godot_version="4.4",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="playing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    # Should NOT raise even though readiness is "playing"
+    result = await animation_handlers.animation_list(runtime, player_path="/Main/AP")
+    assert result["count"] == 2
+
+
+async def test_animation_player_create_requires_writable():
+    """Write tools must raise EDITOR_NOT_READY when editor is importing."""
+    from godot_ai.godot_client.client import GodotCommandError
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    session = Session(
+        session_id="s1",
+        godot_version="4.4",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="importing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+
+    with pytest.raises(GodotCommandError):
+        await animation_handlers.animation_player_create(
+            runtime, parent_path="/Main"
+        )

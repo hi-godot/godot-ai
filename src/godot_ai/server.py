@@ -16,6 +16,7 @@ from godot_ai.resources.project import register_project_resources
 from godot_ai.resources.scenes import register_scene_resources
 from godot_ai.resources.sessions import register_session_resources
 from godot_ai.sessions.registry import SessionRegistry
+from godot_ai.tools.animation import register_animation_tools
 from godot_ai.tools.autoload import register_autoload_tools
 from godot_ai.tools.batch import register_batch_tools
 from godot_ai.tools.client import register_client_tools
@@ -90,6 +91,8 @@ def create_server(ws_port: int = 9500) -> FastMCP:
             "(anchor presets, declarative layout builder)\n"
             "  theme_*          — author Theme resources "
             "(colors, stylebox, font sizes) — Godot's CSS-like styling\n"
+            "  animation_*      — AnimationPlayer authoring "
+            "(tracks, keyframes, autoplay) — hover pulses, slide-ins, shakes, fades\n"
             "  client_*         — configure AI clients (Claude Code, Codex, Antigravity)\n\n"
             "Always connect to an editor session first (session_list / session_activate). "
             "Write operations require session readiness; check editor_state if a call is "
@@ -114,6 +117,7 @@ def create_server(ws_port: int = 9500) -> FastMCP:
     register_batch_tools(mcp)
     register_ui_tools(mcp)
     register_theme_tools(mcp)
+    register_animation_tools(mcp)
     register_session_resources(mcp)
     register_scene_resources(mcp)
     register_editor_resources(mcp)

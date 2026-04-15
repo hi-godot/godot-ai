@@ -3077,3 +3077,417 @@ class TestThemeApplyTool:
         )
         await task
         assert result.data["cleared"] is True
+
+
+# ---------------------------------------------------------------------------
+# animation_player_create / animation_create / animation_add_*_track / etc.
+# ---------------------------------------------------------------------------
+
+
+class TestAnimationPlayerCreateTool:
+    async def test_create_player(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_player_create"
+            assert cmd["params"] == {"parent_path": "/Main", "name": "AnimationPlayer"}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/AnimationPlayer",
+                    "parent_path": "/Main",
+                    "name": "AnimationPlayer",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_player_create", {"parent_path": "/Main"}
+        )
+        await task
+        assert result.data["path"] == "/Main/AnimationPlayer"
+        assert result.data["undoable"] is True
+
+    async def test_create_player_custom_name(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["name"] == "MyPlayer"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/MyPlayer",
+                    "parent_path": "/Main",
+                    "name": "MyPlayer",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_player_create", {"parent_path": "/Main", "name": "MyPlayer"}
+        )
+        await task
+        assert result.data["name"] == "MyPlayer"
+
+
+class TestAnimationCreateTool:
+    async def test_create_animation(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_create"
+            assert cmd["params"]["name"] == "idle"
+            assert cmd["params"]["length"] == 1.0
+            assert cmd["params"]["loop_mode"] == "linear"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "name": "idle",
+                    "length": 1.0,
+                    "loop_mode": "linear",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_create",
+            {"player_path": "/Main/AP", "name": "idle", "length": 1.0, "loop_mode": "linear"},
+        )
+        await task
+        assert result.data["loop_mode"] == "linear"
+
+    async def test_create_animation_default_loop(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["loop_mode"] == "none"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "name": "run",
+                    "length": 0.5,
+                    "loop_mode": "none",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        await client.call_tool(
+            "animation_create", {"player_path": "/Main/AP", "name": "run", "length": 0.5}
+        )
+        await task
+
+
+class TestAnimationAddPropertyTrackTool:
+    async def test_add_property_track(self, mcp_stack):
+        client, plugin = mcp_stack
+        keyframes = [
+            {"time": 0.0, "value": {"r": 1, "g": 1, "b": 1, "a": 0}},
+            {"time": 0.5, "value": {"r": 1, "g": 1, "b": 1, "a": 1}},
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_add_property_track"
+            assert cmd["params"]["track_path"] == "Panel:modulate"
+            assert cmd["params"]["interpolation"] == "linear"
+            assert len(cmd["params"]["keyframes"]) == 2
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "fade",
+                    "track_path": "Panel:modulate",
+                    "interpolation": "linear",
+                    "keyframe_count": 2,
+                    "track_index": 0,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_add_property_track",
+            {
+                "player_path": "/Main/AP",
+                "animation_name": "fade",
+                "track_path": "Panel:modulate",
+                "keyframes": keyframes,
+            },
+        )
+        await task
+        assert result.data["keyframe_count"] == 2
+        assert result.data["undoable"] is True
+
+    async def test_add_property_track_accepts_stringified_keyframes(self, mcp_stack):
+        """JsonCoerced must decode string-encoded keyframes from MCP clients."""
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            # After JsonCoerced the keyframes list should be decoded.
+            assert isinstance(cmd["params"]["keyframes"], list)
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "anim",
+                    "track_path": ".:modulate",
+                    "interpolation": "linear",
+                    "keyframe_count": 1,
+                    "track_index": 0,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_add_property_track",
+            {
+                "player_path": "/Main/AP",
+                "animation_name": "anim",
+                "track_path": ".:modulate",
+                "keyframes": '[{"time": 0.0, "value": 1.0}]',
+            },
+        )
+        await task
+        assert result.data["keyframe_count"] == 1
+
+
+class TestAnimationAddMethodTrackTool:
+    async def test_add_method_track(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_add_method_track"
+            assert cmd["params"]["target_node_path"] == "."
+            kf = cmd["params"]["keyframes"][0]
+            assert kf["method"] == "queue_free"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"player_path": "/Main/AP", "animation_name": "die",
+                 "target_node_path": ".", "keyframe_count": 1, "track_index": 0, "undoable": True},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_add_method_track",
+            {
+                "player_path": "/Main/AP",
+                "animation_name": "die",
+                "target_node_path": ".",
+                "keyframes": [{"time": 1.0, "method": "queue_free"}],
+            },
+        )
+        await task
+        assert result.data["undoable"] is True
+
+
+class TestAnimationSetAutoplayTool:
+    async def test_set_autoplay(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_set_autoplay"
+            assert cmd["params"]["animation_name"] == "idle"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"player_path": "/Main/AP", "animation_name": "idle",
+                 "previous_autoplay": "", "cleared": False, "undoable": True},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_set_autoplay",
+            {"player_path": "/Main/AP", "animation_name": "idle"},
+        )
+        await task
+        assert result.data["cleared"] is False
+
+    async def test_set_autoplay_clear(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["animation_name"] == ""
+            await plugin.send_response(
+                cmd["request_id"],
+                {"player_path": "/Main/AP", "animation_name": "", "previous_autoplay": "idle",
+                 "cleared": True, "undoable": True},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_set_autoplay", {"player_path": "/Main/AP"}
+        )
+        await task
+        assert result.data["cleared"] is True
+
+
+class TestAnimationPlaybackTool:
+    async def test_play(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_play"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"player_path": "/Main/AP", "animation_name": "idle",
+                 "undoable": False, "reason": "Runtime playback state — not saved with scene"},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_play", {"player_path": "/Main/AP", "animation_name": "idle"}
+        )
+        await task
+        assert result.data["undoable"] is False
+
+    async def test_stop(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_stop"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"player_path": "/Main/AP", "undoable": False,
+                 "reason": "Runtime playback state — not saved with scene"},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("animation_stop", {"player_path": "/Main/AP"})
+        await task
+        assert result.data["undoable"] is False
+
+
+class TestAnimationListTool:
+    async def test_list(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_list"
+            assert cmd["params"]["player_path"] == "/Main/AP"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animations": [
+                        {"name": "idle", "length": 2.0, "loop_mode": "linear", "track_count": 3},
+                    ],
+                    "count": 1,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("animation_list", {"player_path": "/Main/AP"})
+        await task
+        assert result.data["count"] == 1
+        assert result.data["animations"][0]["name"] == "idle"
+
+
+class TestAnimationGetTool:
+    async def test_get(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_get"
+            assert cmd["params"]["animation_name"] == "fade"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "name": "fade",
+                    "length": 0.5,
+                    "loop_mode": "none",
+                    "track_count": 1,
+                    "tracks": [
+                        {"index": 0, "type": "value", "path": "Panel:modulate",
+                         "interpolation": "linear", "key_count": 2, "keys": []}
+                    ],
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_get", {"player_path": "/Main/AP", "animation_name": "fade"}
+        )
+        await task
+        assert result.data["name"] == "fade"
+        assert result.data["tracks"][0]["type"] == "value"
+
+
+class TestAnimationCreateSimpleTool:
+    async def test_create_simple(self, mcp_stack):
+        client, plugin = mcp_stack
+        tweens = [
+            {"target": "Panel", "property": "modulate",
+             "from": {"r": 1, "g": 1, "b": 1, "a": 0},
+             "to": {"r": 1, "g": 1, "b": 1, "a": 1},
+             "duration": 0.5}
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_create_simple"
+            assert cmd["params"]["name"] == "fade_in"
+            assert len(cmd["params"]["tweens"]) == 1
+            assert cmd["params"]["loop_mode"] == "none"
+            assert "length" not in cmd["params"]
+            await plugin.send_response(
+                cmd["request_id"],
+                {"player_path": "/Main/AP", "name": "fade_in", "length": 0.5,
+                 "loop_mode": "none", "track_count": 1, "undoable": True},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_create_simple",
+            {"player_path": "/Main/AP", "name": "fade_in", "tweens": tweens},
+        )
+        await task
+        assert result.data["track_count"] == 1
+        assert result.data["undoable"] is True
+
+    async def test_create_simple_accepts_stringified_tweens(self, mcp_stack):
+        """JsonCoerced must handle string-encoded tweens from MCP clients."""
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert isinstance(cmd["params"]["tweens"], list)
+            await plugin.send_response(
+                cmd["request_id"],
+                {"player_path": "/Main/AP", "name": "pulse", "length": 0.5,
+                 "loop_mode": "pingpong", "track_count": 1, "undoable": True},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_create_simple",
+            {
+                "player_path": "/Main/AP",
+                "name": "pulse",
+                "loop_mode": "pingpong",
+                "tweens": (
+                    '[{"target":"Button","property":"scale",'
+                    '"from":{"x":1,"y":1},"to":{"x":1.1,"y":1.1},"duration":0.4}]'
+                ),
+            },
+        )
+        await task
+        assert result.data["undoable"] is True
