@@ -157,7 +157,7 @@ These are the next layers once the core runtime loop is dependable.
 
 - `ui.*` for HUDs, menus, upgrade screens, theme/layout work
 - `camera.*` for follow, bounds, zoom, shake, and capture helpers
-- `animation_player.*` and `animation_tree.*`
+- `animation_*` — AnimationPlayer authoring shipped (player + animation creation, property/method tracks, autoplay, dev-time play/stop, list/get, `animation_create_simple` composer). Auto-attaches a default `AnimationLibrary` on first write. Works for 2D, 3D, and UI; `animation_tree.*`, bezier/audio tracks, preset helpers, and 3D material-fade coercion are tracked as follow-ups in `implementation-plan.md`.
 - `audio.*`
 
 These are the tools that move the project from "functional prototype" toward "readable and polished prototype."
