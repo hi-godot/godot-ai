@@ -2691,4 +2691,6 @@ class TestJsonStringParamCoercion:
             raise_on_error=False,
         )
         assert result.is_error
-        assert "list" in str(result.content).lower()
+        error_text = str(result.content).lower()
+        assert "paths" in error_text
+        assert "input should be a valid list" in error_text or "list_type" in error_text
