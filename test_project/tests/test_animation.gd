@@ -265,6 +265,64 @@ func test_add_property_track_transition_named() -> void:
 	_remove_node(player_path)
 
 
+func test_add_property_track_coerces_vector3_dict() -> void:
+	# Exercises _coerce_value_for_track against a real Node3D property.
+	# Scene root is Node3D, so `.position` is a Vector3.
+	var player_path := _add_player("TestCoerceVec3")
+	if player_path.is_empty():
+		return
+	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
+	_handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "anim",
+		"track_path": ".:position",
+		"keyframes": [
+			{"time": 0.0, "value": {"x": 0.0, "y": 0.0, "z": 0.0}},
+			{"time": 1.0, "value": {"x": 1.0, "y": 2.0, "z": 3.0}},
+		],
+	})
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var anim: Animation = player.get_animation("anim")
+	var k0 = anim.track_get_key_value(0, 0)
+	var k1 = anim.track_get_key_value(0, 1)
+	assert_true(k0 is Vector3, "keyframe 0 should be coerced to Vector3")
+	assert_true(k1 is Vector3, "keyframe 1 should be coerced to Vector3")
+	assert_eq(k1.x, 1.0)
+	assert_eq(k1.y, 2.0)
+	assert_eq(k1.z, 3.0)
+	_remove_node(player_path)
+
+
+func test_create_simple_coerces_vector3() -> void:
+	# Auto-length + coerce path in one test.
+	var player_path := _add_player("TestCoerceSimple")
+	if player_path.is_empty():
+		return
+	_handler.create_simple({
+		"player_path": player_path,
+		"name": "slide",
+		"tweens": [
+			{
+				"target": ".",
+				"property": "position",
+				"from": {"x": 0.0, "y": 0.0, "z": 0.0},
+				"to": {"x": 5.0, "y": 0.0, "z": 0.0},
+				"duration": 0.5,
+			},
+		],
+	})
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var anim: Animation = player.get_animation("slide")
+	var start = anim.track_get_key_value(0, 0)
+	var end = anim.track_get_key_value(0, 1)
+	assert_true(start is Vector3, "from value should coerce to Vector3")
+	assert_true(end is Vector3, "to value should coerce to Vector3")
+	assert_eq(end.x, 5.0)
+	_remove_node(player_path)
+
+
 func test_add_property_track_transition_raw_float() -> void:
 	var player_path := _add_player("TestTransFloat")
 	if player_path.is_empty():
@@ -552,6 +610,127 @@ func test_create_simple_is_undoable() -> void:
 	assert_true(not player.has_animation("pulse"), "Undo should remove the composed animation")
 	_undo_redo.redo()
 	assert_true(player.has_animation("pulse"), "Redo should restore the composed animation")
+	_remove_node(player_path)
+
+
+func test_create_simple_rejects_duplicate_target_property() -> void:
+	var player_path := _add_player("TestSimpleDup")
+	if player_path.is_empty():
+		return
+	var result := _handler.create_simple({
+		"player_path": player_path,
+		"name": "dup",
+		"tweens": [
+			{"target": ".", "property": "position", "from": {"x": 0.0, "y": 0.0, "z": 0.0},
+			 "to": {"x": 1.0, "y": 0.0, "z": 0.0}, "duration": 0.3},
+			{"target": ".", "property": "position", "from": {"x": 1.0, "y": 0.0, "z": 0.0},
+			 "to": {"x": 2.0, "y": 0.0, "z": 0.0}, "duration": 0.3},
+		],
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "Duplicate")
+	_remove_node(player_path)
+
+
+# ─── Auto-create default library ─────────────────────────────────────────────
+
+## Helper: create an AnimationPlayer WITHOUT a default library (the vanilla
+## state you get from node_create or dragging one in from the inspector).
+func _add_bare_player(player_name: String) -> String:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return ""
+	var player := AnimationPlayer.new()
+	player.name = player_name
+	scene_root.add_child(player, true)
+	player.set_owner(scene_root)
+	return ScenePath.from_node(player, scene_root)
+
+
+func test_create_animation_auto_attaches_default_library() -> void:
+	var path := _add_bare_player("TestBarePlayer1")
+	if path.is_empty():
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var player := ScenePath.resolve(path, scene_root) as AnimationPlayer
+	assert_true(not player.has_animation_library(""), "precondition: no default library")
+
+	var result := _handler.create_animation({
+		"player_path": path,
+		"name": "idle",
+		"length": 1.0,
+	})
+	assert_has_key(result, "data")
+	assert_true(result.data.library_created, "library_created should be true on first write")
+	assert_true(player.has_animation_library(""), "default library should now exist")
+	assert_true(player.has_animation("idle"))
+
+	# Undo should remove both the animation AND the library.
+	_undo_redo.undo()
+	assert_true(not player.has_animation("idle"))
+	assert_true(not player.has_animation_library(""),
+		"undo should also remove the auto-created library")
+
+	# Redo should restore both.
+	_undo_redo.redo()
+	assert_true(player.has_animation_library(""))
+	assert_true(player.has_animation("idle"))
+
+	_remove_node(path)
+
+
+func test_create_simple_auto_attaches_default_library() -> void:
+	var path := _add_bare_player("TestBarePlayer2")
+	if path.is_empty():
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var player := ScenePath.resolve(path, scene_root) as AnimationPlayer
+
+	var result := _handler.create_simple({
+		"player_path": path,
+		"name": "slide",
+		"tweens": [
+			{"target": ".", "property": "position",
+			 "from": {"x": 0.0, "y": 0.0, "z": 0.0},
+			 "to": {"x": 1.0, "y": 0.0, "z": 0.0}, "duration": 0.3},
+		],
+	})
+	assert_has_key(result, "data")
+	assert_true(result.data.library_created)
+	assert_true(player.has_animation("slide"))
+
+	_undo_redo.undo()
+	assert_true(not player.has_animation_library(""))
+	_remove_node(path)
+
+
+func test_create_animation_reports_library_created_false_when_present() -> void:
+	var player_path := _add_player("TestLibExists")
+	if player_path.is_empty():
+		return
+	var result := _handler.create_animation({
+		"player_path": player_path,
+		"name": "idle",
+		"length": 1.0,
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.library_created, false,
+		"library_created should be false when the player already has one")
+	_remove_node(player_path)
+
+
+# ─── animation_play empty name ───────────────────────────────────────────────
+
+func test_play_with_empty_name_delegates_to_godot() -> void:
+	# Empty name is forwarded to AnimationPlayer.play("") which Godot interprets
+	# as "resume current, or default"; must not error if an animation exists.
+	var player_path := _add_player("TestPlayEmpty")
+	if player_path.is_empty():
+		return
+	_handler.create_animation({"player_path": player_path, "name": "idle", "length": 1.0})
+	var result := _handler.play({"player_path": player_path, "animation_name": ""})
+	assert_has_key(result, "data")
+	assert_eq(result.data.undoable, false)
 	_remove_node(player_path)
 
 

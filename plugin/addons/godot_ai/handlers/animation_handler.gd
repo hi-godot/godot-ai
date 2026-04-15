@@ -103,7 +103,12 @@ func create_animation(params: Dictionary) -> Dictionary:
 	var resolved := _resolve_player(player_path)
 	if resolved.has("error"):
 		return resolved
+	var player: AnimationPlayer = resolved.player
 	var library: AnimationLibrary = resolved.library
+	var created_library := false
+	if library == null:
+		library = AnimationLibrary.new()
+		created_library = true
 
 	if library.has_animation(anim_name):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
@@ -114,6 +119,10 @@ func create_animation(params: Dictionary) -> Dictionary:
 	anim.loop_mode = _LOOP_MODES[loop_mode_str]
 
 	_undo_redo.create_action("MCP: Create animation %s" % anim_name)
+	if created_library:
+		_undo_redo.add_do_method(player, "add_animation_library", "", library)
+		_undo_redo.add_undo_method(player, "remove_animation_library", "")
+		_undo_redo.add_do_reference(library)
 	_undo_redo.add_do_method(library, "add_animation", anim_name, anim)
 	_undo_redo.add_undo_method(library, "remove_animation", anim_name)
 	_undo_redo.add_do_reference(anim)
@@ -125,6 +134,7 @@ func create_animation(params: Dictionary) -> Dictionary:
 			"name": anim_name,
 			"length": length,
 			"loop_mode": loop_mode_str,
+			"library_created": created_library,
 			"undoable": true,
 		}
 	}
@@ -495,6 +505,7 @@ func create_simple(params: Dictionary) -> Dictionary:
 			"Invalid loop_mode '%s'. Valid: %s" % [loop_mode_str, ", ".join(_LOOP_MODES.keys())])
 
 	# Validate all tween specs before touching the scene.
+	var seen_paths := {}
 	for spec in tweens:
 		if typeof(spec) != TYPE_DICTIONARY:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Each tween spec must be a dictionary")
@@ -505,12 +516,22 @@ func create_simple(params: Dictionary) -> Dictionary:
 		if float(spec.get("duration", 0.0)) <= 0.0:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
 				"tween 'duration' must be > 0")
+		var dup_key: String = str(spec.target) + ":" + str(spec.property)
+		if seen_paths.has(dup_key):
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+				"Duplicate tween target '%s' — merge keyframes into a single track " % dup_key +
+				"via animation_add_property_track instead of two separate tweens.")
+		seen_paths[dup_key] = true
 
 	var resolved := _resolve_player(player_path)
 	if resolved.has("error"):
 		return resolved
 	var player: AnimationPlayer = resolved.player
 	var library: AnimationLibrary = resolved.library
+	var created_library := false
+	if library == null:
+		library = AnimationLibrary.new()
+		created_library = true
 
 	if library.has_animation(anim_name):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
@@ -553,6 +574,10 @@ func create_simple(params: Dictionary) -> Dictionary:
 
 	# One atomic undo action.
 	_undo_redo.create_action("MCP: Create animation %s (%d tracks)" % [anim_name, anim.get_track_count()])
+	if created_library:
+		_undo_redo.add_do_method(player, "add_animation_library", "", library)
+		_undo_redo.add_undo_method(player, "remove_animation_library", "")
+		_undo_redo.add_do_reference(library)
 	_undo_redo.add_do_method(library, "add_animation", anim_name, anim)
 	_undo_redo.add_undo_method(library, "remove_animation", anim_name)
 	_undo_redo.add_do_reference(anim)
@@ -565,6 +590,7 @@ func create_simple(params: Dictionary) -> Dictionary:
 			"length": computed_length,
 			"loop_mode": loop_mode_str,
 			"track_count": anim.get_track_count(),
+			"library_created": created_library,
 			"undoable": true,
 		}
 	}
@@ -575,8 +601,9 @@ func create_simple(params: Dictionary) -> Dictionary:
 # ============================================================================
 
 ## Resolve an AnimationPlayer and its default library for write operations.
-## Requires a scene to be open and the node to be an AnimationPlayer with a
-## default ("") AnimationLibrary attached.
+## Returns {player, library} on success, or an error dict.
+## library is null if the player exists but has no default library yet —
+## callers bundle an `add_animation_library` step into their undo action.
 func _resolve_player(player_path: String) -> Dictionary:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
@@ -588,10 +615,10 @@ func _resolve_player(player_path: String) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
 			"Node at %s is not an AnimationPlayer (got %s)" % [player_path, node.get_class()])
 	var player := node as AnimationPlayer
-	if not player.has_animation_library(""):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
-			"AnimationPlayer at %s has no default library. Use animation_player_create to add one." % player_path)
-	return {"player": player, "library": player.get_animation_library("")}
+	var lib: AnimationLibrary = null
+	if player.has_animation_library(""):
+		lib = player.get_animation_library("")
+	return {"player": player, "library": lib}
 
 
 ## Resolve for read operations (no library requirement).

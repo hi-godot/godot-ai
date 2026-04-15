@@ -1,15 +1,24 @@
 """MCP tools for AnimationPlayer authoring — keyframes, tracks, autoplay, playback.
 
-Use these tools to animate anything in a Godot scene: fade UI elements in and
-out, pulse buttons on hover, slide panels into view, shake the HUD on damage,
-create hit-stop freeze frames, or wire sound cues to specific animation frames.
+Use these tools to animate anything in a Godot scene — 2D, 3D, or UI:
+
+- 2D (Node2D / Sprite2D / etc.): move sprites along paths, spin a coin, flash
+  a damage frame via modulate, scale an explosion, fade a bullet trail.
+- 3D (Node3D / MeshInstance3D / Camera3D / etc.): swing a door via rotation,
+  dolly or shake a camera, bob a collectible on the Y axis, drive a light's
+  energy for flicker, fade an object (requires a material override since
+  modulate is CanvasItem-only in 3D).
+- UI (Control / Panel / Label / etc.): fade HUD overlays, pulse buttons on
+  hover, slide menus in from offscreen, shake a health bar on damage.
 
 AnimationPlayer + Animation + AnimationLibrary form Godot's built-in animation
 system. An AnimationPlayer node holds one or more AnimationLibraries, each
 containing named Animation clips. Each clip has tracks — property tracks that
-tween node properties (position, modulate, scale, …) and method tracks that
-fire callbacks at specific times. All authoring here targets the default library
-("") which saves automatically with the scene.
+tween node properties (position, modulate, scale, rotation, fov, …) and method
+tracks that fire callbacks at specific times. All authoring here targets the
+default library ("") which saves automatically with the scene; the tools will
+create an empty default library automatically if the AnimationPlayer doesn't
+have one yet.
 """
 
 from __future__ import annotations
@@ -161,6 +170,14 @@ def register_animation_tools(mcp: FastMCP) -> None:
             method  (str, required)   — method name to call on the target node
             args    (list, optional)  — positional arguments to pass (default [])
 
+        Note: method-track keyframes do NOT accept a "transition" field — Godot
+        fires method tracks as discrete events, not interpolated values. If
+        you pass transition it will be silently ignored.
+
+        Note: target_node_path is a bare NodePath ("." / "HUD" / "Enemy/Sprite2D"),
+        NOT a "NodePath:property" composite like property tracks take. The method
+        name goes in each keyframe's "method" field, not in the path.
+
         Example — play a sound at 0.2s then emit "animation_finished" at 1.0s:
             target_node_path: "."
             keyframes: [
@@ -226,8 +243,11 @@ def register_animation_tools(mcp: FastMCP) -> None:
 
         Args:
             player_path: Scene path to the AnimationPlayer.
-            animation_name: Animation to play. Empty string replays the current
-                animation or plays the first available.
+            animation_name: Animation to play. Empty string delegates to
+                AnimationPlayer.play("") — resumes whatever was playing, or
+                falls back to Godot's default selection (typically the first
+                animation if none is current). Prefer passing an explicit
+                name for reproducible behaviour.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
