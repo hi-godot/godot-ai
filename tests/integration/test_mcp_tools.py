@@ -2694,3 +2694,81 @@ class TestJsonStringParamCoercion:
         error_text = str(result.content).lower()
         assert "paths" in error_text
         assert "input should be a valid list" in error_text or "list_type" in error_text
+
+
+# ---------------------------------------------------------------------------
+# ui_set_anchor_preset
+# ---------------------------------------------------------------------------
+
+
+class TestUiSetAnchorPresetTool:
+    async def test_defaults_resize_mode_and_margin(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "set_anchor_preset"
+            assert cmd["params"] == {
+                "path": "/Main/HUD",
+                "preset": "full_rect",
+                "resize_mode": "minsize",
+                "margin": 0,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/HUD",
+                    "preset": "full_rect",
+                    "resize_mode": "minsize",
+                    "margin": 0,
+                    "anchors": {"left": 0.0, "top": 0.0, "right": 1.0, "bottom": 1.0},
+                    "offsets": {"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0},
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "ui_set_anchor_preset",
+            {"path": "/Main/HUD", "preset": "full_rect"},
+        )
+        await task
+
+        assert result.data["preset"] == "full_rect"
+        assert result.data["anchors"]["right"] == 1.0
+        assert result.data["undoable"] is True
+
+    async def test_passes_resize_mode_and_margin(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["resize_mode"] == "keep_size"
+            assert cmd["params"]["margin"] == 16
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/HUD/Panel",
+                    "preset": "center",
+                    "resize_mode": "keep_size",
+                    "margin": 16,
+                    "anchors": {"left": 0.5, "top": 0.5, "right": 0.5, "bottom": 0.5},
+                    "offsets": {"left": -50.0, "top": -25.0, "right": 50.0, "bottom": 25.0},
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "ui_set_anchor_preset",
+            {
+                "path": "/Main/HUD/Panel",
+                "preset": "center",
+                "resize_mode": "keep_size",
+                "margin": 16,
+            },
+        )
+        await task
+
+        assert result.data["margin"] == 16
+        assert result.data["resize_mode"] == "keep_size"
