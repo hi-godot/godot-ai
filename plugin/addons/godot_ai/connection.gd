@@ -214,6 +214,7 @@ static func _slugify(s: String) -> String:
 
 static func _rand_hex(n: int) -> String:
 	var bytes := PackedByteArray()
-	for i in (n + 1) / 2:
+	var byte_count := int(ceil(float(n) / 2.0))
+	for i in byte_count:
 		bytes.append(randi() % 256)
 	return bytes.hex_encode().substr(0, n)
