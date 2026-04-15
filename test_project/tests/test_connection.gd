@@ -43,11 +43,13 @@ func test_make_session_id_only_slashes_falls_back_to_project() -> void:
 
 
 func test_make_session_id_randomizes_suffix() -> void:
-	var s1 := Connection._make_session_id("/Users/x/game/")
-	var s2 := Connection._make_session_id("/Users/x/game/")
-	## Two calls for the same path should (almost always) differ in the suffix.
-	## Collision odds are 1/65536 per pair — treat a match as a flake.
-	assert_ne(s1, s2, "suffix should randomize between calls")
+	var seen := {}
+	for i in range(32):
+		var sid := Connection._make_session_id("/Users/x/game/")
+		seen[sid] = true
+	## Avoid a flaky two-sample comparison: collect many IDs and verify
+	## the suffix is not constant across repeated calls for the same path.
+	assert_true(seen.size() > 1, "suffix should vary across repeated calls")
 
 
 # ----- slugify -----
