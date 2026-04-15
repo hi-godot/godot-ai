@@ -70,15 +70,16 @@ jobs:
         run: |
           venv="${RUNNER_TEMP}/smoke-venv"
           python -m venv "$venv"
-          if [ -f "$venv/bin/pip" ]; then
-            PIP="$venv/bin/pip"
+          if [ -x "$venv/bin/python" ]; then
+            PY="$venv/bin/python"
             GODOT_AI="$venv/bin/godot-ai"
           else
-            PIP="$venv/Scripts/pip.exe"
+            PY="$venv/Scripts/python.exe"
             GODOT_AI="$venv/Scripts/godot-ai.exe"
           fi
-          "$PIP" install --upgrade pip
-          "$PIP" install dist/*.whl
+          # Use `python -m pip` rather than the pip executable — on Windows,
+          # pip.exe can't replace itself mid-upgrade, which breaks smoke tests.
+          "$PY" -m pip install dist/*.whl
           "$GODOT_AI" --version
           "$GODOT_AI" --help
 
@@ -87,15 +88,14 @@ jobs:
         run: |
           venv="${RUNNER_TEMP}/smoke-sdist-venv"
           python -m venv "$venv"
-          if [ -f "$venv/bin/pip" ]; then
-            PIP="$venv/bin/pip"
+          if [ -x "$venv/bin/python" ]; then
+            PY="$venv/bin/python"
             GODOT_AI="$venv/bin/godot-ai"
           else
-            PIP="$venv/Scripts/pip.exe"
+            PY="$venv/Scripts/python.exe"
             GODOT_AI="$venv/Scripts/godot-ai.exe"
           fi
-          "$PIP" install --upgrade pip
-          "$PIP" install dist/*.tar.gz
+          "$PY" -m pip install dist/*.tar.gz
           "$GODOT_AI" --version
 
       - name: Upload build artifacts
