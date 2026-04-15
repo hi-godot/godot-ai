@@ -26,7 +26,7 @@ def _coerce_json(value: Any) -> Any:
     if isinstance(value, str):
         try:
             return json.loads(value)
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError:
             return value
     return value
 
