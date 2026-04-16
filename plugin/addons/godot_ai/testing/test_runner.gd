@@ -18,15 +18,26 @@ func run_suite(suite: McpTestSuite, test_filter: String = "") -> void:
 			continue
 
 		suite._reset()
+		suite._crash_sentinel = true
 		suite.setup()
 		suite.call(method_name)
+		suite._crash_sentinel = false
 		suite.teardown()
+
+		var passed := not suite._failed
+		var msg := suite._message
+
+		## Warn about zero-assertion tests (likely silently skipped logic).
+		if passed and suite._assertion_count == 0:
+			passed = false
+			msg = "Test completed with 0 assertions (likely skipped its logic)"
 
 		_results.append({
 			"suite": name,
 			"test": method_name,
-			"passed": not suite._failed,
-			"message": suite._message,
+			"passed": passed,
+			"message": msg,
+			"assertion_count": suite._assertion_count,
 		})
 
 
@@ -37,7 +48,7 @@ func run_suites(suites: Array, suite_filter: String = "", test_filter: String = 
 	for suite: McpTestSuite in suites:
 		if not suite_filter.is_empty() and suite.suite_name() != suite_filter:
 			continue
-		suite.suite_setup(ctx)
+		suite.suite_setup(ctx.duplicate())
 		run_suite(suite, test_filter)
 		suite.suite_teardown()
 

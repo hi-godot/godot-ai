@@ -26,7 +26,13 @@ func register(command_name: String, handler: Callable) -> void:
 func dispatch_direct(command: String, params: Dictionary) -> Dictionary:
 	if not _handlers.has(command):
 		return McpErrorCodes.make(McpErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
-	return _handlers[command].call(params)
+	var result: Dictionary = _handlers[command].call(params)
+	if result == null or result.is_empty():
+		return McpErrorCodes.make(
+			McpErrorCodes.INTERNAL_ERROR,
+			"Handler '%s' returned empty result (likely crashed — check Godot console)" % command,
+		)
+	return result
 
 
 ## Whether a command is registered.
@@ -70,6 +76,11 @@ func _dispatch(cmd: Dictionary) -> Dictionary:
 
 	if _handlers.has(command):
 		result = _handlers[command].call(params)
+		if result == null or result.is_empty():
+			result = McpErrorCodes.make(
+				McpErrorCodes.INTERNAL_ERROR,
+				"Handler '%s' returned empty result (likely crashed — check Godot console)" % command,
+			)
 	else:
 		result = McpErrorCodes.make(McpErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
 

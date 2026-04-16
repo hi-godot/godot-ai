@@ -47,7 +47,8 @@ func add_action(params: Dictionary) -> Dictionary:
 	if err != OK:
 		InputMap.erase_action(action)
 		ProjectSettings.clear(key)
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to save project settings (error %d)" % err)
+		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR,
+			"Failed to save project settings while adding action '%s': %s (error %d)" % [action, McpErrorCodes.godot_error_string(err), err])
 
 	return {
 		"data": {
@@ -82,7 +83,8 @@ func remove_action(params: Dictionary) -> Dictionary:
 					if ev is InputEvent:
 						InputMap.action_add_event(action, ev)
 			ProjectSettings.set_setting(key, old_setting)
-			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to save project settings (error %d)" % err)
+			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR,
+				"Failed to save project settings while removing action '%s': %s (error %d)" % [action, McpErrorCodes.godot_error_string(err), err])
 
 	return {
 		"data": {
@@ -115,7 +117,8 @@ func bind_event(params: Dictionary) -> Dictionary:
 	var err := _save_action_events(action)
 	if err != OK:
 		InputMap.action_erase_event(action, event)
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to save project settings (error %d)" % err)
+		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR,
+			"Failed to save project settings while binding event to action '%s': %s (error %d)" % [action, McpErrorCodes.godot_error_string(err), err])
 
 	return {
 		"data": {

@@ -43,7 +43,7 @@ func create_theme(params: Dictionary) -> Dictionary:
 	if save_err != OK:
 		return McpErrorCodes.make(
 			McpErrorCodes.INTERNAL_ERROR,
-			"Failed to save theme to %s (error %d)" % [path, save_err]
+			"Failed to save theme to %s: %s (error %d)" % [path, McpErrorCodes.godot_error_string(save_err), save_err]
 		)
 
 	# Make sure the editor's filesystem picks up the new file.
@@ -126,7 +126,8 @@ func _set_scalar(
 		)
 	var parsed = parser.call(raw_value)
 	if parsed == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid %s value: %s" % [kind, raw_value])
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			"Invalid %s value: %s (expected: hex string, named color, number, or {r,g,b,a} dict)" % [kind, raw_value])
 
 	var had_before: bool = has_fn.call(theme, name, class_name_param)
 	var before_value = getter.call(theme, name, class_name_param) if had_before else null
@@ -155,6 +156,7 @@ func _set_scalar(
 func _apply_scalar(theme_path: String, setter: Callable, name: String, class_name_param: String, value: Variant) -> void:
 	var theme: Theme = ResourceLoader.load(theme_path)
 	if theme == null:
+		push_warning("MCP: Failed to load theme for undo/redo: %s" % theme_path)
 		return
 	setter.call(theme, name, class_name_param, value)
 	ResourceSaver.save(theme, theme_path)
@@ -163,6 +165,7 @@ func _apply_scalar(theme_path: String, setter: Callable, name: String, class_nam
 func _clear_scalar(theme_path: String, clearer: Callable, name: String, class_name_param: String) -> void:
 	var theme: Theme = ResourceLoader.load(theme_path)
 	if theme == null:
+		push_warning("MCP: Failed to load theme for undo/redo: %s" % theme_path)
 		return
 	clearer.call(theme, name, class_name_param)
 	ResourceSaver.save(theme, theme_path)
@@ -204,12 +207,12 @@ func set_stylebox_flat(params: Dictionary) -> Dictionary:
 	if params.has("bg_color"):
 		var bg := _parse_color(params.bg_color)
 		if bg == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid bg_color")
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid bg_color: %s (expected hex #rrggbb, named color, or {r,g,b,a} dict)" % str(params.bg_color))
 		sb.bg_color = bg
 	if params.has("border_color"):
 		var bc := _parse_color(params.border_color)
 		if bc == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid border_color")
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid border_color: %s (expected hex #rrggbb, named color, or {r,g,b,a} dict)" % str(params.border_color))
 		sb.border_color = bc
 	if params.has("border_width"):
 		sb.set_border_width_all(int(params.border_width))
@@ -220,7 +223,7 @@ func set_stylebox_flat(params: Dictionary) -> Dictionary:
 	if params.has("shadow_color"):
 		var sc := _parse_color(params.shadow_color)
 		if sc == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid shadow_color")
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid shadow_color: %s (expected hex #rrggbb, named color, or {r,g,b,a} dict)" % str(params.shadow_color))
 		sb.shadow_color = sc
 	if params.has("shadow_size"):
 		sb.shadow_size = int(params.shadow_size)
@@ -260,6 +263,7 @@ func set_stylebox_flat(params: Dictionary) -> Dictionary:
 func _apply_stylebox(theme_path: String, name: String, class_name_param: String, sb: StyleBox) -> void:
 	var theme: Theme = ResourceLoader.load(theme_path)
 	if theme == null:
+		push_warning("MCP: Failed to load theme for undo/redo: %s" % theme_path)
 		return
 	theme.set_stylebox(name, class_name_param, sb)
 	ResourceSaver.save(theme, theme_path)
@@ -268,6 +272,7 @@ func _apply_stylebox(theme_path: String, name: String, class_name_param: String,
 func _clear_stylebox(theme_path: String, name: String, class_name_param: String) -> void:
 	var theme: Theme = ResourceLoader.load(theme_path)
 	if theme == null:
+		push_warning("MCP: Failed to load theme for undo/redo: %s" % theme_path)
 		return
 	theme.clear_stylebox(name, class_name_param)
 	ResourceSaver.save(theme, theme_path)

@@ -48,7 +48,8 @@ func add_autoload(params: Dictionary) -> Dictionary:
 	var err := ProjectSettings.save()
 	if err != OK:
 		ProjectSettings.clear(key)
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to save project settings (error %d)" % err)
+		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR,
+			"Failed to save project settings while adding autoload '%s': %s (error %d)" % [name, McpErrorCodes.godot_error_string(err), err])
 
 	return {
 		"data": {
@@ -75,7 +76,8 @@ func remove_autoload(params: Dictionary) -> Dictionary:
 	var err := ProjectSettings.save()
 	if err != OK:
 		ProjectSettings.set_setting(key, old_value)
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to save project settings (error %d)" % err)
+		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR,
+			"Failed to save project settings while removing autoload '%s': %s (error %d)" % [name, McpErrorCodes.godot_error_string(err), err])
 
 	return {
 		"data": {

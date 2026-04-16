@@ -39,6 +39,8 @@ func list_signals(params: Dictionary) -> Dictionary:
 		for conn in node.get_signal_connection_list(sig.name):
 			var callable: Callable = conn.get("callable", Callable())
 			var target := callable.get_object()
+			if target == null:
+				continue  # skip connections to freed objects
 			connections.append({
 				"signal": sig.name,
 				"target": ScenePath.from_node(target, scene_root) if target is Node else str(target),
