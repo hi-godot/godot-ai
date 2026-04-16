@@ -26,7 +26,7 @@ func register(command_name: String, handler: Callable) -> void:
 func dispatch_direct(command: String, params: Dictionary) -> Dictionary:
 	if not _handlers.has(command):
 		return McpErrorCodes.make(McpErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
-	return _handlers[command].call(params)
+	return _call_handler(command, params)
 
 
 ## Whether a command is registered.
@@ -69,7 +69,7 @@ func _dispatch(cmd: Dictionary) -> Dictionary:
 	var result: Dictionary
 
 	if _handlers.has(command):
-		result = _handlers[command].call(params)
+		result = _call_handler(command, params)
 	else:
 		result = McpErrorCodes.make(McpErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
 
@@ -85,4 +85,17 @@ func _dispatch(cmd: Dictionary) -> Dictionary:
 			var err_msg: String = result.get("error", {}).get("message", "unknown")
 			_log_buffer.log("[send] %s -> error: %s" % [command, err_msg])
 
+	return result
+
+
+func _call_handler(command: String, params: Dictionary) -> Dictionary:
+	var result: Dictionary = _handlers[command].call(params)
+	## Handlers must return {"data": ...} on success or {"error": ...} on failure.
+	## Anything else (null, empty, missing keys) means the handler crashed
+	## mid-call — GDScript swallows the error and returns an empty dict.
+	if result == null or not (result.has("data") or result.has("error")):
+		return McpErrorCodes.make(
+			McpErrorCodes.INTERNAL_ERROR,
+			"Handler '%s' returned malformed result (likely crashed — check Godot console)" % command,
+		)
 	return result

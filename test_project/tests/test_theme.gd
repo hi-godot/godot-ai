@@ -268,6 +268,7 @@ func test_theme_apply_to_control() -> void:
 	_make_theme()
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var panel := Panel.new()
 	panel.name = "TestThemedPanel"
@@ -292,6 +293,7 @@ func test_theme_apply_clear_with_empty_path() -> void:
 	_make_theme()
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var panel := Panel.new()
 	panel.name = "TestClearThemePanel"
@@ -313,6 +315,7 @@ func test_theme_apply_rejects_non_control() -> void:
 	_make_theme()
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	# Scene root is a Node3D — not a Control.
 	var result := _handler.apply_theme({

@@ -22,11 +22,31 @@ func run_suite(suite: McpTestSuite, test_filter: String = "") -> void:
 		suite.call(method_name)
 		suite.teardown()
 
+		if suite._skipped:
+			_results.append({
+				"suite": name,
+				"test": method_name,
+				"passed": true,
+				"skipped": true,
+				"message": suite._skip_reason,
+				"assertion_count": 0,
+			})
+			continue
+
+		var passed := not suite._failed
+		var msg := suite._message
+
+		## Warn about zero-assertion tests (likely silently skipped logic).
+		if passed and suite._assertion_count == 0:
+			passed = false
+			msg = "Test completed with 0 assertions (likely skipped its logic)"
+
 		_results.append({
 			"suite": name,
 			"test": method_name,
-			"passed": not suite._failed,
-			"message": suite._message,
+			"passed": passed,
+			"message": msg,
+			"assertion_count": suite._assertion_count,
 		})
 
 
@@ -37,9 +57,20 @@ func run_suites(suites: Array, suite_filter: String = "", test_filter: String = 
 	for suite: McpTestSuite in suites:
 		if not suite_filter.is_empty() and suite.suite_name() != suite_filter:
 			continue
-		suite.suite_setup(ctx)
+
+		## Snapshot scene children before the suite so we can clean up leaks.
+		var scene_root := EditorInterface.get_edited_scene_root()
+		var before_children: Array[Node] = []
+		if scene_root != null:
+			before_children = _get_children_snapshot(scene_root)
+
+		suite.suite_setup(ctx.duplicate(true))
 		run_suite(suite, test_filter)
 		suite.suite_teardown()
+
+		## Remove any nodes the suite left behind (failed undo, missing cleanup).
+		if scene_root != null and scene_root.is_inside_tree():
+			_cleanup_leaked_nodes(scene_root, before_children)
 
 	_last_run_ms = Time.get_ticks_msec() - start
 	return get_results(verbose)
@@ -48,11 +79,14 @@ func run_suites(suites: Array, suite_filter: String = "", test_filter: String = 
 func get_results(verbose: bool = false) -> Dictionary:
 	var passed := 0
 	var failed := 0
+	var skipped := 0
 	var failures: Array[Dictionary] = []
 	var suites_seen := {}
 	for r in _results:
 		suites_seen[r.suite] = true
-		if r.passed:
+		if r.get("skipped", false):
+			skipped += 1
+		elif r.passed:
 			passed += 1
 		else:
 			failed += 1
@@ -61,6 +95,7 @@ func get_results(verbose: bool = false) -> Dictionary:
 	var result := {
 		"passed": passed,
 		"failed": failed,
+		"skipped": skipped,
 		"total": _results.size(),
 		"duration_ms": _last_run_ms,
 		"suites_run": suites_seen.keys(),
@@ -89,3 +124,25 @@ func _get_test_methods(obj: Object) -> Array[String]:
 			methods.append(name)
 	methods.sort()
 	return methods
+
+
+func _get_children_snapshot(node: Node) -> Array[Node]:
+	var children: Array[Node] = []
+	for child in node.get_children():
+		children.append(child)
+	return children
+
+
+## Remove any nodes in scene_root that weren't present before the suite ran.
+## NOTE: this bypasses EditorUndoRedoManager by design — the test runner
+## owns these leaks and needs to clear them unconditionally. Don't Ctrl-Z in
+## the editor immediately after a test run that triggered cleanup; the undo
+## stack may reference freed nodes.
+func _cleanup_leaked_nodes(scene_root: Node, before: Array[Node]) -> void:
+	var before_set := {}
+	for n in before:
+		before_set[n] = true
+	for child in scene_root.get_children():
+		if not before_set.has(child):
+			scene_root.remove_child(child)
+			child.queue_free()

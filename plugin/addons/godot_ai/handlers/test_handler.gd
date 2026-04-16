@@ -55,7 +55,7 @@ func _discover_suites() -> Dictionary:
 	var errors: Array[String] = []
 	var dir := DirAccess.open("res://tests")
 	if dir == null:
-		return {"suites": suites, "errors": ["DirAccess.open('res://tests') returned null"]}
+		return {"suites": suites, "errors": ["DirAccess.open('res://tests') returned null — directory may not exist"]}
 
 	dir.list_dir_begin()
 	var file_name := dir.get_next()
@@ -64,15 +64,15 @@ func _discover_suites() -> Dictionary:
 			var path := "res://tests/" + file_name
 			var script = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
 			if script == null:
-				errors.append(file_name)
+				errors.append("%s (load failed — check for parse errors or duplicate methods)" % file_name)
 			elif script.can_instantiate():
 				var instance = script.new()
 				if instance is McpTestSuite:
 					suites.append(instance)
 				else:
-					errors.append("%s (not McpTestSuite)" % file_name)
+					errors.append("%s (not a McpTestSuite subclass)" % file_name)
 			else:
-				errors.append("%s (cannot instantiate)" % file_name)
+				errors.append("%s (cannot instantiate — abstract or broken)" % file_name)
 		file_name = dir.get_next()
 
 	## Sort by suite name for deterministic order.
