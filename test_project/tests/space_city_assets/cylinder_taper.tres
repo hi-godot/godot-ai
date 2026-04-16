@@ -1,7 +1,0 @@
-[gd_resource type="CylinderMesh" format=3]
-
-[resource]
-top_radius = 0.3
-bottom_radius = 0.7
-height = 1.0
-radial_segments = 10

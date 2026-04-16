@@ -84,29 +84,11 @@ async def theme_set_stylebox_flat(
     name: str,
     bg_color: Any = None,
     border_color: Any = None,
-    border_width: int | None = None,
-    corner_radius: int | None = None,
-    content_margin: float | None = None,
-    shadow_color: Any = None,
-    shadow_size: int | None = None,
-    shadow_offset_x: float | None = None,
-    shadow_offset_y: float | None = None,
+    border: dict[str, Any] | None = None,
+    corners: dict[str, Any] | None = None,
+    margins: dict[str, Any] | None = None,
+    shadow: dict[str, Any] | None = None,
     anti_aliasing: bool | None = None,
-    # Per-side border width overrides
-    border_width_top: int | None = None,
-    border_width_bottom: int | None = None,
-    border_width_left: int | None = None,
-    border_width_right: int | None = None,
-    # Per-corner radius overrides
-    corner_radius_top_left: int | None = None,
-    corner_radius_top_right: int | None = None,
-    corner_radius_bottom_left: int | None = None,
-    corner_radius_bottom_right: int | None = None,
-    # Per-side content margin overrides
-    content_margin_top: float | None = None,
-    content_margin_bottom: float | None = None,
-    content_margin_left: float | None = None,
-    content_margin_right: float | None = None,
 ) -> dict:
     require_writable(runtime)
     params: dict[str, Any] = {
@@ -118,39 +100,16 @@ async def theme_set_stylebox_flat(
         params["bg_color"] = bg_color
     if border_color is not None:
         params["border_color"] = border_color
-    if border_width is not None:
-        params["border_width"] = border_width
-    if corner_radius is not None:
-        params["corner_radius"] = corner_radius
-    if content_margin is not None:
-        params["content_margin"] = content_margin
-    if shadow_color is not None:
-        params["shadow_color"] = shadow_color
-    if shadow_size is not None:
-        params["shadow_size"] = shadow_size
-    if shadow_offset_x is not None:
-        params["shadow_offset_x"] = shadow_offset_x
-    if shadow_offset_y is not None:
-        params["shadow_offset_y"] = shadow_offset_y
+    if border is not None:
+        params["border"] = border
+    if corners is not None:
+        params["corners"] = corners
+    if margins is not None:
+        params["margins"] = margins
+    if shadow is not None:
+        params["shadow"] = shadow
     if anti_aliasing is not None:
         params["anti_aliasing"] = anti_aliasing
-    # Per-side overrides
-    for key, val in [
-        ("border_width_top", border_width_top),
-        ("border_width_bottom", border_width_bottom),
-        ("border_width_left", border_width_left),
-        ("border_width_right", border_width_right),
-        ("corner_radius_top_left", corner_radius_top_left),
-        ("corner_radius_top_right", corner_radius_top_right),
-        ("corner_radius_bottom_left", corner_radius_bottom_left),
-        ("corner_radius_bottom_right", corner_radius_bottom_right),
-        ("content_margin_top", content_margin_top),
-        ("content_margin_bottom", content_margin_bottom),
-        ("content_margin_left", content_margin_left),
-        ("content_margin_right", content_margin_right),
-    ]:
-        if val is not None:
-            params[key] = val
     return await runtime.send_command("theme_set_stylebox_flat", params)
 
 

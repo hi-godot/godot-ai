@@ -87,10 +87,10 @@ func reimport(params: Dictionary) -> Dictionary:
 	for path_variant in paths:
 		var path: String = str(path_variant)
 		if not path.begins_with("res://"):
-			not_found.append(path)
+			not_found.append("%s (must start with res://)" % path)
 			continue
 		if not FileAccess.file_exists(path):
-			not_found.append(path)
+			not_found.append("%s (file does not exist)" % path)
 			continue
 		efs.update_file(path)
 		reimported.append(path)

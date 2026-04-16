@@ -363,6 +363,7 @@ func test_rename_node_scene_root() -> void:
 	# Renaming the scene root is allowed (not the .tscn file path, just the node name).
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var old_name := String(scene_root.name)
 	var result := _handler.rename_node({"path": "/" + old_name, "new_name": "RenamedTestRoot"})
@@ -530,6 +531,7 @@ func test_create_node_from_scene_path() -> void:
 	# Use the test project's own main.tscn as the scene to instance.
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var before_count := scene_root.get_child_count()
 	var result := _handler.create_node({
@@ -546,6 +548,79 @@ func test_create_node_from_scene_path() -> void:
 		scene_root.remove_child(instanced)
 		instanced.queue_free()
 	assert_eq(scene_root.get_child_count(), before_count, "Cleanup should restore child count")
+
+
+func test_create_node_scene_path_preserves_instance_link() -> void:
+	# A scene instanced via GEN_EDIT_STATE_INSTANCE must carry scene_file_path
+	# so the editor treats it as a real instance (foldout icon, swappable, the
+	# .tscn stores a reference rather than an exploded subtree).
+	#
+	# We use a throwaway PackedScene to avoid self-instancing main.tscn.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return
+	var tmp_root := Node2D.new()
+	tmp_root.name = "TmpInstanceRoot"
+	var tmp_child := Node2D.new()
+	tmp_child.name = "TmpChild"
+	tmp_root.add_child(tmp_child)
+	tmp_child.owner = tmp_root
+	var packed := PackedScene.new()
+	packed.pack(tmp_root)
+	var tmp_path := "res://tests/_mcp_test_instance.tscn"
+	ResourceSaver.save(packed, tmp_path)
+	tmp_root.queue_free()
+
+	var result := _handler.create_node({
+		"scene_path": tmp_path,
+		"name": "InstancedTmp",
+	})
+	assert_has_key(result, "data")
+	var instanced: Node = scene_root.find_child("InstancedTmp", false, false)
+	assert_true(instanced != null, "Instanced node exists")
+	# The root of an instanced scene carries scene_file_path pointing to the .tscn.
+	assert_eq(instanced.scene_file_path, tmp_path, "scene_file_path preserves instance link")
+	# Descendants of an instance are NOT owned by our scene_root — they're owned
+	# by the sub-scene, which is what makes Godot treat it as an instance.
+	var desc: Node = instanced.find_child("TmpChild", false, false)
+	assert_true(desc != null, "Descendant exists")
+	assert_true(desc.owner != scene_root, "Descendant owner stays with sub-scene, not our scene_root")
+	# Cleanup.
+	instanced.get_parent().remove_child(instanced)
+	instanced.queue_free()
+	DirAccess.remove_absolute(tmp_path)
+
+
+func test_create_node_scene_path_undo_redo() -> void:
+	# Undo removes the instance; redo restores it with the same scene link.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return
+	var tmp_root := Node2D.new()
+	tmp_root.name = "UndoInstanceRoot"
+	var packed := PackedScene.new()
+	packed.pack(tmp_root)
+	var tmp_path := "res://tests/_mcp_test_undo_instance.tscn"
+	ResourceSaver.save(packed, tmp_path)
+	tmp_root.queue_free()
+
+	var before := scene_root.get_child_count()
+	_handler.create_node({"scene_path": tmp_path, "name": "UndoInstance"})
+	assert_eq(scene_root.get_child_count(), before + 1, "Instance added")
+
+	_undo_redo.undo()
+	assert_eq(scene_root.get_child_count(), before, "Undo removes the instance")
+	assert_true(scene_root.find_child("UndoInstance", false, false) == null, "No node after undo")
+
+	_undo_redo.redo()
+	assert_eq(scene_root.get_child_count(), before + 1, "Redo restores the instance")
+	var restored: Node = scene_root.find_child("UndoInstance", false, false)
+	assert_true(restored != null, "Instance back after redo")
+	assert_eq(restored.scene_file_path, tmp_path, "scene_file_path preserved through redo")
+	# Cleanup.
+	restored.get_parent().remove_child(restored)
+	restored.queue_free()
+	DirAccess.remove_absolute(tmp_path)
 
 
 func test_create_node_scene_path_not_found() -> void:

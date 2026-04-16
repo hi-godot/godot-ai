@@ -1,6 +1,6 @@
 # Godot AI — Working Plan
 
-*Updated 2026-04-16*
+*Updated 2026-04-16 (PR #28)*
 
 This is the current working plan for Godot AI. It focuses on active and upcoming work only.
 
@@ -28,7 +28,7 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 - [x] Runtime feedback loop: `project.run`/`project.stop`, `editor.screenshot`, `performance.get_monitors`, `logs.clear`
 - [ ] Runtime iteration loop is complete enough for AI-driven feel tuning
 - [ ] Release/install path is complete enough for new users
-- [~] Polished game-production extensions have started — `ui_*` (anchor presets, `ui_build_layout` composer, `theme_override_*` pseudo-properties), `theme_*` (color/constant/font-size/stylebox_flat with per-side overrides/apply), and `animation_*` (AnimationPlayer + `animation_create_simple` composer + delete/validate + overwrite support) shipped; `camera_*`, `audio_*`, and animation preset helpers still pending
+- [~] Polished game-production extensions have started — `ui_*` (anchor presets, `ui_build_layout` composer, `theme_override_*` pseudo-properties), `theme_*` (color/constant/font-size/stylebox_flat with nested `border`/`corners`/`margins`/`shadow` dicts, `apply`), and `animation_*` (AnimationPlayer + `animation_create_simple` composer + delete/validate + overwrite support, undo robust to history interleaving) shipped; `camera_*`, `audio_*`, and animation preset helpers still pending
 
 ## What This Plan Optimizes For
 
@@ -80,7 +80,7 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 - [x] batch execution is shipped with a clear contract
 - [x] multi-instance routing works in practice
 - [x] `script.patch` decision is made (shipped: anchor-based replace)
-- [x] test coverage and smoke coverage increase where the new runtime loop needs it (387 Python + 333 GDScript = 720 total)
+- [x] test coverage and smoke coverage increase where the new runtime loop needs it (388 Python + 345 GDScript = 733 total)
 
 ---
 

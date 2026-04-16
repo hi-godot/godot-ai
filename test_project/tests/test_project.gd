@@ -108,12 +108,9 @@ func test_search_filesystem_no_results() -> void:
 
 # ----- run_project -----
 
-func test_run_project_rejects_when_already_playing() -> void:
-	## We can't actually start the project in tests (it freezes the runner),
-	## but we can verify validation when not playing.
-	## The "already running" path can only be tested when the project IS running,
-	## which we can't trigger from within the test runner.
-	pass
+## NOTE: test_run_project_rejects_when_already_playing removed — it was an
+## empty test (just `pass`) that requires the project to actually be running,
+## which can't happen from within the test runner. Covered by Python tests.
 
 
 func test_run_project_invalid_mode() -> void:

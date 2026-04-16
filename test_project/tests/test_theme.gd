@@ -167,6 +167,7 @@ func test_theme_set_font_size() -> void:
 # ----- theme_set_stylebox_flat -----
 
 func test_theme_set_stylebox_flat_composes_fields() -> void:
+	# The `all` key inside each nested dict applies uniformly to all sides.
 	_make_theme()
 	var result := _handler.set_stylebox_flat({
 		"theme_path": TEST_THEME_PATH,
@@ -174,20 +175,80 @@ func test_theme_set_stylebox_flat_composes_fields() -> void:
 		"name": "normal",
 		"bg_color": "#101820",
 		"border_color": "#00ffff",
-		"border_width": 2,
-		"corner_radius": 8,
-		"content_margin": 12.0,
+		"border": {"all": 2},
+		"corners": {"all": 8},
+		"margins": {"all": 12.0},
 	})
 	assert_has_key(result, "data")
 	assert_eq(result.data.stylebox_class, "StyleBoxFlat")
-	assert_eq(result.data.border_width, 2)
-	assert_eq(result.data.corner_radius, 8)
+	assert_eq(result.data.border.top, 2)
+	assert_eq(result.data.corners.top_left, 8)
+	assert_eq(result.data.margins.top, 12.0)
 	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
 	var sb: StyleBoxFlat = theme.get_stylebox("normal", "Button")
 	assert_true(sb != null, "StyleBox was saved")
 	assert_eq(sb.border_width_left, 2)
 	assert_eq(sb.corner_radius_top_left, 8)
 	assert_eq(sb.content_margin_left, 12.0)
+
+
+func test_theme_set_stylebox_flat_side_specific_overrides_all() -> void:
+	# Side-specific keys must override `all`.
+	_make_theme()
+	var result := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Button",
+		"name": "normal",
+		"border": {"all": 1, "top": 4},
+		"corners": {"all": 0, "top_left": 16},
+		"margins": {"all": 2.0, "bottom": 10.0},
+	})
+	assert_has_key(result, "data")
+	# Response reflects the resolved per-side values.
+	assert_eq(result.data.border.top, 4)
+	assert_eq(result.data.border.bottom, 1)
+	assert_eq(result.data.border.left, 1)
+	assert_eq(result.data.border.right, 1)
+	assert_eq(result.data.corners.top_left, 16)
+	assert_eq(result.data.corners.top_right, 0)
+	assert_eq(result.data.margins.bottom, 10.0)
+	assert_eq(result.data.margins.top, 2.0)
+	# And the saved StyleBox matches.
+	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	var sb: StyleBoxFlat = theme.get_stylebox("normal", "Button")
+	assert_eq(sb.border_width_top, 4)
+	assert_eq(sb.border_width_bottom, 1)
+	assert_eq(sb.corner_radius_top_left, 16)
+	assert_eq(sb.corner_radius_top_right, 0)
+	assert_eq(sb.content_margin_bottom, 10.0)
+
+
+func test_theme_set_stylebox_flat_shadow_nested_dict() -> void:
+	_make_theme()
+	var result := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Button",
+		"name": "normal",
+		"shadow": {"color": "#00000080", "size": 6, "offset_x": 2.0, "offset_y": 3.0},
+	})
+	assert_has_key(result, "data")
+	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	var sb: StyleBoxFlat = theme.get_stylebox("normal", "Button")
+	assert_eq(sb.shadow_size, 6)
+	assert_eq(sb.shadow_offset, Vector2(2.0, 3.0))
+
+
+func test_theme_set_stylebox_flat_rejects_unknown_nested_key() -> void:
+	# Typos in nested dicts must fail loudly, not be silently ignored.
+	_make_theme()
+	var result := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Button",
+		"name": "normal",
+		"border": {"all": 1, "topp": 4},  # 'topp' not a real key
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "topp")
 
 
 func test_theme_set_stylebox_flat_rejects_bad_color() -> void:
@@ -207,6 +268,7 @@ func test_theme_apply_to_control() -> void:
 	_make_theme()
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var panel := Panel.new()
 	panel.name = "TestThemedPanel"
@@ -231,6 +293,7 @@ func test_theme_apply_clear_with_empty_path() -> void:
 	_make_theme()
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var panel := Panel.new()
 	panel.name = "TestClearThemePanel"
@@ -252,6 +315,7 @@ func test_theme_apply_rejects_non_control() -> void:
 	_make_theme()
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	# Scene root is a Node3D — not a Control.
 	var result := _handler.apply_theme({
@@ -321,7 +385,7 @@ func test_create_theme_creates_parent_directories() -> void:
 	DirAccess.remove_absolute("res://tests/_mcp_nested_dir")
 
 
-# ----- Friction fix: per-side stylebox parameters -----
+# ----- Per-side stylebox parameters via nested dicts -----
 
 func test_set_stylebox_flat_per_side_border_width() -> void:
 	_make_theme()
@@ -329,16 +393,14 @@ func test_set_stylebox_flat_per_side_border_width() -> void:
 		"theme_path": TEST_THEME_PATH,
 		"class_name": "Button",
 		"name": "normal",
-		"border_width": 1,
-		"border_width_top": 4,
-		"border_width_bottom": 2,
+		"border": {"all": 1, "top": 4, "bottom": 2},
 	})
 	assert_has_key(result, "data")
 	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
 	var sb: StyleBoxFlat = theme.get_stylebox("normal", "Button")
 	assert_eq(sb.border_width_top, 4)
 	assert_eq(sb.border_width_bottom, 2)
-	assert_eq(sb.border_width_left, 1)  # uniform fallback
+	assert_eq(sb.border_width_left, 1)  # from `all`
 	assert_eq(sb.border_width_right, 1)
 
 
@@ -348,15 +410,13 @@ func test_set_stylebox_flat_per_corner_radius() -> void:
 		"theme_path": TEST_THEME_PATH,
 		"class_name": "Panel",
 		"name": "panel",
-		"corner_radius": 4,
-		"corner_radius_top_left": 12,
-		"corner_radius_bottom_right": 0,
+		"corners": {"all": 4, "top_left": 12, "bottom_right": 0},
 	})
 	assert_has_key(result, "data")
 	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
 	var sb: StyleBoxFlat = theme.get_stylebox("panel", "Panel")
 	assert_eq(sb.corner_radius_top_left, 12)
-	assert_eq(sb.corner_radius_top_right, 4)  # uniform fallback
+	assert_eq(sb.corner_radius_top_right, 4)  # from `all`
 	assert_eq(sb.corner_radius_bottom_left, 4)
 	assert_eq(sb.corner_radius_bottom_right, 0)
 
@@ -367,8 +427,7 @@ func test_set_stylebox_flat_per_side_content_margin() -> void:
 		"theme_path": TEST_THEME_PATH,
 		"class_name": "PanelContainer",
 		"name": "panel",
-		"content_margin": 8.0,
-		"content_margin_top": 16.0,
+		"margins": {"all": 8.0, "top": 16.0},
 	})
 	assert_has_key(result, "data")
 	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)

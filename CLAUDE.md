@@ -20,7 +20,7 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
 ## Key conventions
 
 - **GDScript plugin is the canonical copy** in `plugin/`. `test_project/addons/godot_ai` is a symlink — no copy needed.
-- **Error codes**: Defined in `protocol/errors.py` (Python) and `utils/error_codes.gd` (GDScript). Keep in sync.
+- **Error codes**: Defined in `protocol/errors.py` (Python) and `utils/error_codes.gd` (GDScript). Keep in sync. Use Godot's built-in `error_string(err)` to translate numeric error codes in error messages — do not write a custom lookup table.
 - **Tools return `dict`**: Handlers call `runtime.send_command(command, params)` which returns a dict or raises. Tools create a `DirectRuntime` and delegate to handlers.
 - **Plugin runs on main thread**: All GDScript executes in `_process()` with a 4ms frame budget. Never block. Use `call_deferred` for scene tree mutations.
 - **Scene paths are clean**: `/Main/Camera3D` format, not raw Godot internal paths. Use `ScenePath.from_node(node, scene_root)` in GDScript.
@@ -76,7 +76,7 @@ The dock checks the GitHub releases API on startup. If a newer version exists, a
 
 ### Python tests
 ```bash
-pytest -v                    # 387 unit + integration tests
+pytest -v                    # 388 unit + integration tests
 ```
 
 ### Godot-side tests
@@ -89,6 +89,11 @@ test_results_get             # review last results
 ```
 
 Test suites extend `McpTestSuite` (assertion methods: `assert_true`, `assert_eq`, `assert_has_key`, `assert_contains`, `assert_is_error`, etc.). Drop `test_*.gd` files in `res://tests/` and they're auto-discovered.
+
+**Guardrails built into the test runner:**
+- **Zero-assertion detection**: Tests that complete with 0 assertions are flagged as failures ("Test completed with 0 assertions — likely skipped its logic"). This catches tests that silently `return` before asserting anything.
+- **Resilient discovery**: If a `.gd` file fails to load (parse error, duplicate method, wrong base class), the rest of the suites still run and the failing files are reported in `load_errors`.
+- **Suite isolation**: Each suite gets a fresh `ctx.duplicate()` so `suite_setup()` mutations can't leak to the next suite.
 
 ## Testing against Godot
 
@@ -185,6 +190,35 @@ JSON dicts like `{"r":1,"g":0,"b":0,"a":1}` only become `Color` / `Vector2` / `V
 
 GDScript tests that just assert `track_count == 1` will pass even when coercion is broken. **Always read back via `track_get_key_value(idx, k)` and assert `value is Color` / `value is Vector3` / etc.** `test_animation.gd` `test_add_property_track_coerces_vector3_dict` is the reference pattern. The same rule applies to any future handler that takes JSON values intended to land as typed Variants in the scene.
 
+Same principle for theme override pseudo-properties on Controls: use `get_theme_color_override`, `get_theme_constant_override`, `get_theme_font_size_override`, `get_theme_stylebox_override` in tests — **not** the fallback `get_theme_color` getters — so a broken override silently resolving via the theme fallback can't mask a bug. `test_ui.gd` `test_build_layout_theme_override_*` are the reference pattern.
+
+### Auto-generated indices: look up at undo time, not do time
+
+When a write tool mutates a resource whose index is assigned by Godot (`Animation.add_track` returns an int index, same for track keys, `MultiMesh.instance_count`, etc.), do **not** capture that index at do time and reuse it in the undo callable. Any other mutation landing between the do and the undo makes the index stale — the undo will then remove the wrong element (or error).
+
+Instead, undo via a helper that resolves the index at undo time via a stable lookup:
+
+```gdscript
+_undo_redo.add_undo_method(self, "_undo_remove_track_by_path", anim, track_path, Animation.TYPE_VALUE)
+
+func _undo_remove_track_by_path(anim: Animation, path: String, type: int) -> void:
+    var idx := anim.find_track(NodePath(path), type)
+    if idx >= 0:
+        anim.remove_track(idx)
+```
+
+See `animation_handler.gd::_undo_remove_track_by_path` for the reference pattern. Cover with a test that interleaves a second mutation between the do and undo of the first (`test_animation.gd::test_add_property_track_undo_survives_interleaving`).
+
+### Scene instancing: use GEN_EDIT_STATE_INSTANCE
+
+When a tool instantiates a PackedScene into the edited scene, pass `PackedScene.GEN_EDIT_STATE_INSTANCE` to `instantiate()`:
+
+```gdscript
+new_node = packed_scene.instantiate(PackedScene.GEN_EDIT_STATE_INSTANCE)
+```
+
+This makes Godot treat the result as a real scene instance: the root shows the foldout icon, the `.tscn` stores a reference to the sub-scene rather than an exploded subtree, and the instance can be swapped or toggled editable via the usual editor UI. Don't manually set descendant owners to your scene_root — descendants of a scene instance stay owned by their sub-scene; overriding that breaks the instance link. See `node_handler.gd::create_node`.
+
 ## Test coverage
 
 100% code coverage for core features, always. Every tool, handler, and protocol path must have both:
@@ -210,4 +244,5 @@ New features don't ship without tests. Regressions are caught before they merge.
 - Don't use `pop_front()` on arrays in hot paths — use index + slice
 - Don't add error handling in individual tools — `GodotClient.send()` raises on errors
 - Don't use Python-style `"""docstrings"""` in GDScript — use `##` comments
+- Don't write GDScript tests that `return` without asserting — the runner flags these as failures. Use `assert_true(false, "reason")` before the `return` if a precondition isn't met
 - Don't forget the `overwrite` parameter on `animation_create` / `animation_create_simple` — without it, creating an animation with the same name errors instead of replacing

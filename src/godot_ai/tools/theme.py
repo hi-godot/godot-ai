@@ -8,13 +8,13 @@ property sets with one reusable stylesheet-like document.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import theme as theme_handlers
 from godot_ai.runtime.direct import DirectRuntime
-from godot_ai.tools import DEFER_META
+from godot_ai.tools import DEFER_META, JsonCoerced
 
 
 def register_theme_tools(mcp: FastMCP) -> None:
@@ -128,26 +128,11 @@ def register_theme_tools(mcp: FastMCP) -> None:
         name: str,
         bg_color: Any = None,
         border_color: Any = None,
-        border_width: int | None = None,
-        corner_radius: int | None = None,
-        content_margin: float | None = None,
-        shadow_color: Any = None,
-        shadow_size: int | None = None,
-        shadow_offset_x: float | None = None,
-        shadow_offset_y: float | None = None,
+        border: Annotated[dict[str, Any] | None, JsonCoerced] = None,
+        corners: Annotated[dict[str, Any] | None, JsonCoerced] = None,
+        margins: Annotated[dict[str, Any] | None, JsonCoerced] = None,
+        shadow: Annotated[dict[str, Any] | None, JsonCoerced] = None,
         anti_aliasing: bool | None = None,
-        border_width_top: int | None = None,
-        border_width_bottom: int | None = None,
-        border_width_left: int | None = None,
-        border_width_right: int | None = None,
-        corner_radius_top_left: int | None = None,
-        corner_radius_top_right: int | None = None,
-        corner_radius_bottom_left: int | None = None,
-        corner_radius_bottom_right: int | None = None,
-        content_margin_top: float | None = None,
-        content_margin_bottom: float | None = None,
-        content_margin_left: float | None = None,
-        content_margin_right: float | None = None,
         session_id: str = "",
     ) -> dict:
         """Compose a StyleBoxFlat and assign it to a theme slot.
@@ -161,6 +146,10 @@ def register_theme_tools(mcp: FastMCP) -> None:
         Common slot names: "normal" (base Button/Panel background), "hover",
         "pressed", "focus", "disabled", "panel" (for Panel / PanelContainer).
 
+        The border/corners/margins/shadow dicts each accept an ``all`` key
+        that applies to every side and side-specific keys that override it.
+        Omit a dict entirely to leave those StyleBox defaults untouched.
+
         Args:
             theme_path: res:// path to the Theme .tres file.
             class_name: Theme type (e.g. "Button", "Panel", "PanelContainer",
@@ -169,26 +158,16 @@ def register_theme_tools(mcp: FastMCP) -> None:
                 "focus", "panel").
             bg_color: Background fill color (hex string, named, or r/g/b/a dict).
             border_color: Border color.
-            border_width: Border thickness in pixels — applied to all 4 sides.
-            corner_radius: Rounded-corner radius in pixels — applied to all 4 corners.
-            content_margin: Inner padding in pixels — applied to all 4 sides.
-            shadow_color: Drop shadow color.
-            shadow_size: Drop shadow blur size in pixels.
-            shadow_offset_x: Horizontal shadow offset.
-            shadow_offset_y: Vertical shadow offset.
+            border: Border widths in pixels. Keys: ``all``, ``top``, ``bottom``,
+                ``left``, ``right``. Side-specific keys override ``all``.
+                Example: ``{"all": 1, "top": 2}`` → top=2, others=1.
+            corners: Corner radii in pixels. Keys: ``all``, ``top_left``,
+                ``top_right``, ``bottom_left``, ``bottom_right``.
+            margins: Inner content padding in pixels. Keys: ``all``, ``top``,
+                ``bottom``, ``left``, ``right``.
+            shadow: Drop shadow. Keys: ``color``, ``size`` (blur, px),
+                ``offset_x``, ``offset_y``.
             anti_aliasing: Whether to anti-alias borders and corners.
-            border_width_top: Border thickness for top side only (overrides border_width).
-            border_width_bottom: Border thickness for bottom side only.
-            border_width_left: Border thickness for left side only.
-            border_width_right: Border thickness for right side only.
-            corner_radius_top_left: Corner radius for top-left (overrides corner_radius).
-            corner_radius_top_right: Corner radius for top-right.
-            corner_radius_bottom_left: Corner radius for bottom-left.
-            corner_radius_bottom_right: Corner radius for bottom-right.
-            content_margin_top: Content margin for top side (overrides content_margin).
-            content_margin_bottom: Content margin for bottom side.
-            content_margin_left: Content margin for left side.
-            content_margin_right: Content margin for right side.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -199,26 +178,11 @@ def register_theme_tools(mcp: FastMCP) -> None:
             name=name,
             bg_color=bg_color,
             border_color=border_color,
-            border_width=border_width,
-            corner_radius=corner_radius,
-            content_margin=content_margin,
-            shadow_color=shadow_color,
-            shadow_size=shadow_size,
-            shadow_offset_x=shadow_offset_x,
-            shadow_offset_y=shadow_offset_y,
+            border=border,
+            corners=corners,
+            margins=margins,
+            shadow=shadow,
             anti_aliasing=anti_aliasing,
-            border_width_top=border_width_top,
-            border_width_bottom=border_width_bottom,
-            border_width_left=border_width_left,
-            border_width_right=border_width_right,
-            corner_radius_top_left=corner_radius_top_left,
-            corner_radius_top_right=corner_radius_top_right,
-            corner_radius_bottom_left=corner_radius_bottom_left,
-            corner_radius_bottom_right=corner_radius_bottom_right,
-            content_margin_top=content_margin_top,
-            content_margin_bottom=content_margin_bottom,
-            content_margin_left=content_margin_left,
-            content_margin_right=content_margin_right,
         )
 
     @mcp.tool(meta=DEFER_META)

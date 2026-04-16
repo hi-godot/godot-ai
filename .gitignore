@@ -34,3 +34,7 @@ Thumbs.db
 *.dmg
 *.exe
 *.AppImage
+
+# Local demo scene (not tracked in repo)
+test_project/tests/space_city.tscn
+test_project/tests/space_city_assets/

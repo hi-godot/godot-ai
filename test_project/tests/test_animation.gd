@@ -52,6 +52,7 @@ func _remove_node(path: String) -> void:
 func test_player_create_returns_path() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.create_player({
 		"parent_path": "/" + scene_root.name,
@@ -66,6 +67,7 @@ func test_player_create_returns_path() -> void:
 func test_player_create_attaches_default_library() -> void:
 	var path := _add_player("TestPlayerLib")
 	if path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var player := ScenePath.resolve(path, scene_root) as AnimationPlayer
@@ -83,6 +85,7 @@ func test_player_create_missing_parent() -> void:
 func test_player_create_is_undoable() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var before_count := scene_root.get_child_count()
 	var result := _handler.create_player({
@@ -100,6 +103,7 @@ func test_player_create_is_undoable() -> void:
 func test_animation_create_basic() -> void:
 	var player_path := _add_player("TestAnimCreate")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	var result := _handler.create_animation({
 		"player_path": player_path,
@@ -117,6 +121,7 @@ func test_animation_create_basic() -> void:
 func test_animation_create_with_loop_mode() -> void:
 	var player_path := _add_player("TestAnimLoop")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	var result := _handler.create_animation({
 		"player_path": player_path,
@@ -140,6 +145,7 @@ func test_animation_create_with_loop_mode() -> void:
 func test_animation_create_rejects_duplicate_name() -> void:
 	var player_path := _add_player("TestAnimDup")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "walk", "length": 1.0})
 	var result := _handler.create_animation({"player_path": player_path, "name": "walk", "length": 1.0})
@@ -151,6 +157,7 @@ func test_animation_create_rejects_duplicate_name() -> void:
 func test_animation_create_rejects_invalid_loop_mode() -> void:
 	var player_path := _add_player("TestAnimBadLoop")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	var result := _handler.create_animation({
 		"player_path": player_path,
@@ -166,6 +173,7 @@ func test_animation_create_rejects_invalid_loop_mode() -> void:
 func test_animation_create_is_undoable() -> void:
 	var player_path := _add_player("TestAnimUndoCreate")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
@@ -184,16 +192,19 @@ func test_animation_create_is_undoable() -> void:
 func test_add_property_track_basic() -> void:
 	var player_path := _add_player("TestPropTrack")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
 
+	# Scene root is Node3D — use .:position (a real Vector3 property) rather
+	# than .:modulate which doesn't exist on Node3D.
 	var result := _handler.add_property_track({
 		"player_path": player_path,
 		"animation_name": "anim",
-		"track_path": ".:modulate",
+		"track_path": ".:position",
 		"keyframes": [
-			{"time": 0.0, "value": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 0.0}},
-			{"time": 1.0, "value": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0}},
+			{"time": 0.0, "value": {"x": 0.0, "y": 0.0, "z": 0.0}},
+			{"time": 1.0, "value": {"x": 1.0, "y": 0.0, "z": 0.0}},
 		],
 	})
 	assert_has_key(result, "data")
@@ -211,6 +222,7 @@ func test_add_property_track_basic() -> void:
 func test_add_property_track_requires_colon_in_path() -> void:
 	var player_path := _add_player("TestPropTrackNoColon")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
 	var result := _handler.add_property_track({
@@ -227,17 +239,21 @@ func test_add_property_track_requires_colon_in_path() -> void:
 func test_add_property_track_is_undoable() -> void:
 	var player_path := _add_player("TestPropTrackUndo")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	var anim: Animation = player.get_animation("anim")
 
+	# Scene root is Node3D — use .:visible (a real bool property) rather than
+	# the previous .:modulate which only worked because coercion used to silently
+	# fall through when the property didn't exist.
 	_handler.add_property_track({
 		"player_path": player_path,
 		"animation_name": "anim",
-		"track_path": ".:modulate",
-		"keyframes": [{"time": 0.0, "value": 1.0}, {"time": 1.0, "value": 0.0}],
+		"track_path": ".:visible",
+		"keyframes": [{"time": 0.0, "value": true}, {"time": 1.0, "value": false}],
 	})
 	assert_eq(anim.get_track_count(), 1)
 	_undo_redo.undo()
@@ -245,9 +261,102 @@ func test_add_property_track_is_undoable() -> void:
 	_remove_node(player_path)
 
 
+func test_add_property_track_rejects_missing_property() -> void:
+	# Scene root is Node3D — .modulate doesn't exist. Previously coercion
+	# passed through silently; now it errors.
+	var player_path := _add_player("TestMissingProp")
+	if player_path.is_empty():
+		return
+	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
+	var result := _handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "anim",
+		"track_path": ".:modulate",
+		"keyframes": [{"time": 0.0, "value": {"r": 1.0, "g": 0.0, "b": 0.0}}],
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "not found")
+	_remove_node(player_path)
+
+
+func test_add_property_track_undo_survives_interleaving() -> void:
+	# Stress-tests the find_track-at-undo-time pattern: if another track lands
+	# between do and undo, the undo must still remove the CORRECT track — not
+	# whatever happens to sit at the originally captured index.
+	var player_path := _add_player("TestInterleavedUndo")
+	if player_path.is_empty():
+		return
+	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var anim: Animation = player.get_animation("anim")
+
+	# Add track A on .:position.
+	_handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "anim",
+		"track_path": ".:position",
+		"keyframes": [{"time": 0.0, "value": {"x": 0.0, "y": 0.0, "z": 0.0}}],
+	})
+	assert_eq(anim.get_track_count(), 1, "After track A")
+
+	# Add track B on .:scale (interleaves track A's history).
+	_handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "anim",
+		"track_path": ".:scale",
+		"keyframes": [{"time": 0.0, "value": {"x": 1.0, "y": 1.0, "z": 1.0}}],
+	})
+	assert_eq(anim.get_track_count(), 2, "After track B")
+
+	# Undo B — should remove scale, leaving position.
+	_undo_redo.undo()
+	assert_eq(anim.get_track_count(), 1, "Undo B leaves one track")
+	assert_eq(anim.track_get_path(0), NodePath(".:position"), "Remaining track is position, not scale")
+
+	# Undo A — should remove position.
+	_undo_redo.undo()
+	assert_eq(anim.get_track_count(), 0, "Undo A leaves no tracks")
+
+	_remove_node(player_path)
+
+
+func test_add_method_track_rejects_bad_args() -> void:
+	# args must be an Array if provided — not a string, not a null.
+	var player_path := _add_player("TestBadArgs")
+	if player_path.is_empty():
+		return
+	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
+	var result := _handler.add_method_track({
+		"player_path": player_path,
+		"animation_name": "anim",
+		"target_node_path": ".",
+		"keyframes": [{"time": 0.0, "method": "queue_free", "args": "not an array"}],
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "args")
+	_remove_node(player_path)
+
+
+func test_add_method_track_rejects_empty_method() -> void:
+	var player_path := _add_player("TestEmptyMethod")
+	if player_path.is_empty():
+		return
+	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
+	var result := _handler.add_method_track({
+		"player_path": player_path,
+		"animation_name": "anim",
+		"target_node_path": ".",
+		"keyframes": [{"time": 0.0, "method": ""}],
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	_remove_node(player_path)
+
+
 func test_add_property_track_transition_named() -> void:
 	var player_path := _add_player("TestTransNamed")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
 	var result := _handler.add_property_track({
@@ -270,6 +379,7 @@ func test_add_property_track_coerces_vector3_dict() -> void:
 	# Scene root is Node3D, so `.position` is a Vector3.
 	var player_path := _add_player("TestCoerceVec3")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
 	_handler.add_property_track({
@@ -298,6 +408,7 @@ func test_create_simple_coerces_vector3() -> void:
 	# Auto-length + coerce path in one test.
 	var player_path := _add_player("TestCoerceSimple")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_simple({
 		"player_path": player_path,
@@ -337,6 +448,7 @@ func test_add_property_track_rejects_unparseable_color() -> void:
 	if player_path.is_empty():
 		sprite.get_parent().remove_child(sprite)
 		sprite.queue_free()
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
 	var result := _handler.add_property_track({
@@ -356,6 +468,7 @@ func test_add_property_track_rejects_unparseable_color() -> void:
 func test_add_property_track_transition_raw_float() -> void:
 	var player_path := _add_player("TestTransFloat")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
 	var result := _handler.add_property_track({
@@ -376,6 +489,7 @@ func test_add_property_track_transition_raw_float() -> void:
 func test_add_method_track_basic() -> void:
 	var player_path := _add_player("TestMethodTrack")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 2.0})
 	var result := _handler.add_method_track({
@@ -402,6 +516,7 @@ func test_add_method_track_basic() -> void:
 func test_add_method_track_rejects_colon_in_target_path() -> void:
 	var player_path := _add_player("TestMethodColonPath")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
 	var result := _handler.add_method_track({
@@ -418,6 +533,7 @@ func test_add_method_track_rejects_colon_in_target_path() -> void:
 func test_add_method_track_requires_method_key() -> void:
 	var player_path := _add_player("TestMethodNoMethod")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
 	var result := _handler.add_method_track({
@@ -436,6 +552,7 @@ func test_add_method_track_requires_method_key() -> void:
 func test_set_autoplay_basic() -> void:
 	var player_path := _add_player("TestAutoplay")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "idle", "length": 1.0})
 	var result := _handler.set_autoplay({
@@ -455,6 +572,7 @@ func test_set_autoplay_basic() -> void:
 func test_set_autoplay_validates_unknown_name() -> void:
 	var player_path := _add_player("TestAutoplayBad")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	var result := _handler.set_autoplay({
 		"player_path": player_path,
@@ -468,6 +586,7 @@ func test_set_autoplay_validates_unknown_name() -> void:
 func test_set_autoplay_empty_clears() -> void:
 	var player_path := _add_player("TestAutoplayClear")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "idle", "length": 1.0})
 	_handler.set_autoplay({"player_path": player_path, "animation_name": "idle"})
@@ -486,6 +605,7 @@ func test_set_autoplay_empty_clears() -> void:
 func test_play_stop_are_not_undoable() -> void:
 	var player_path := _add_player("TestPlayStop")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "idle", "length": 1.0})
 
@@ -502,6 +622,7 @@ func test_play_stop_are_not_undoable() -> void:
 func test_play_validates_unknown_animation() -> void:
 	var player_path := _add_player("TestPlayBad")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	var result := _handler.play({"player_path": player_path, "animation_name": "nope"})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
@@ -513,6 +634,7 @@ func test_play_validates_unknown_animation() -> void:
 func test_list_returns_created_animations() -> void:
 	var player_path := _add_player("TestList")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "walk", "length": 1.0})
 	_handler.create_animation({"player_path": player_path, "name": "run", "length": 0.5})
@@ -531,15 +653,16 @@ func test_list_returns_created_animations() -> void:
 func test_get_returns_track_detail() -> void:
 	var player_path := _add_player("TestGet")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "fade", "length": 1.0})
 	_handler.add_property_track({
 		"player_path": player_path,
 		"animation_name": "fade",
-		"track_path": ".:modulate",
+		"track_path": ".:position",
 		"keyframes": [
-			{"time": 0.0, "value": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 0.0}},
-			{"time": 1.0, "value": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0}},
+			{"time": 0.0, "value": {"x": 0.0, "y": 0.0, "z": 0.0}},
+			{"time": 1.0, "value": {"x": 10.0, "y": 0.0, "z": 0.0}},
 		],
 	})
 
@@ -557,6 +680,7 @@ func test_get_returns_track_detail() -> void:
 func test_create_simple_auto_length() -> void:
 	var player_path := _add_player("TestSimple")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	var result := _handler.create_simple({
 		"player_path": player_path,
@@ -583,7 +707,9 @@ func test_create_simple_auto_length() -> void:
 func test_create_simple_explicit_length() -> void:
 	var player_path := _add_player("TestSimpleExplicit")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
+	# Scene root is Node3D — use .position, not .modulate (not present on Node3D).
 	var result := _handler.create_simple({
 		"player_path": player_path,
 		"name": "fade",
@@ -591,9 +717,9 @@ func test_create_simple_explicit_length() -> void:
 		"tweens": [
 			{
 				"target": ".",
-				"property": "modulate",
-				"from": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 0.0},
-				"to": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
+				"property": "position",
+				"from": {"x": 0.0, "y": 0.0, "z": 0.0},
+				"to": {"x": 1.0, "y": 0.0, "z": 0.0},
 				"duration": 0.5,
 			}
 		],
@@ -606,12 +732,13 @@ func test_create_simple_explicit_length() -> void:
 func test_create_simple_multiple_tweens() -> void:
 	var player_path := _add_player("TestSimpleMulti")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	var result := _handler.create_simple({
 		"player_path": player_path,
 		"name": "combo",
 		"tweens": [
-			{"target": ".", "property": "modulate", "from": {"r":1,"g":1,"b":1,"a":0}, "to": {"r":1,"g":1,"b":1,"a":1}, "duration": 0.5},
+			{"target": ".", "property": "scale", "from": {"x":1,"y":1,"z":1}, "to": {"x":2,"y":2,"z":2}, "duration": 0.5},
 			{"target": ".", "property": "position", "from": {"x": -200.0, "y": 0.0, "z": 0.0}, "to": {"x": 0.0, "y": 0.0, "z": 0.0}, "duration": 0.3, "delay": 0.1},
 		],
 	})
@@ -623,6 +750,7 @@ func test_create_simple_multiple_tweens() -> void:
 func test_create_simple_is_undoable() -> void:
 	var player_path := _add_player("TestSimpleUndo")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
@@ -632,7 +760,7 @@ func test_create_simple_is_undoable() -> void:
 		"name": "pulse",
 		"loop_mode": "pingpong",
 		"tweens": [
-			{"target": ".", "property": "modulate", "from": "white", "to": "red", "duration": 0.5},
+			{"target": ".", "property": "scale", "from": {"x":1,"y":1,"z":1}, "to": {"x":2,"y":2,"z":2}, "duration": 0.5},
 		],
 	})
 	assert_true(player.has_animation("pulse"))
@@ -646,6 +774,7 @@ func test_create_simple_is_undoable() -> void:
 func test_create_simple_rejects_duplicate_target_property() -> void:
 	var player_path := _add_player("TestSimpleDup")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	var result := _handler.create_simple({
 		"player_path": player_path,
@@ -680,6 +809,7 @@ func _add_bare_player(player_name: String) -> String:
 func test_create_animation_auto_attaches_default_library() -> void:
 	var path := _add_bare_player("TestBarePlayer1")
 	if path.is_empty():
+		skip("Scene not ready — _add_bare_player returned empty path")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var player := ScenePath.resolve(path, scene_root) as AnimationPlayer
@@ -712,6 +842,7 @@ func test_create_animation_auto_attaches_default_library() -> void:
 func test_create_simple_auto_attaches_default_library() -> void:
 	var path := _add_bare_player("TestBarePlayer2")
 	if path.is_empty():
+		skip("Scene not ready — _add_bare_player returned empty path")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var player := ScenePath.resolve(path, scene_root) as AnimationPlayer
@@ -737,6 +868,7 @@ func test_create_simple_auto_attaches_default_library() -> void:
 func test_create_animation_reports_library_created_false_when_present() -> void:
 	var player_path := _add_player("TestLibExists")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	var result := _handler.create_animation({
 		"player_path": player_path,
@@ -756,6 +888,7 @@ func test_play_with_empty_name_delegates_to_godot() -> void:
 	# as "resume current, or default"; must not error if an animation exists.
 	var player_path := _add_player("TestPlayEmpty")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "idle", "length": 1.0})
 	var result := _handler.play({"player_path": player_path, "animation_name": ""})
@@ -767,11 +900,12 @@ func test_play_with_empty_name_delegates_to_godot() -> void:
 func test_create_simple_rejects_missing_tween_fields() -> void:
 	var player_path := _add_player("TestSimpleMissing")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	var result := _handler.create_simple({
 		"player_path": player_path,
 		"name": "bad",
-		"tweens": [{"target": ".", "property": "modulate"}],  # Missing from/to/duration
+		"tweens": [{"target": ".", "property": "position"}],  # Missing from/to/duration
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	_remove_node(player_path)
@@ -782,14 +916,15 @@ func test_create_simple_rejects_missing_tween_fields() -> void:
 func test_create_simple_rejects_zero_length() -> void:
 	var player_path := _add_player("TestSimpleZeroLen")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	var result := _handler.create_simple({
 		"player_path": player_path,
 		"name": "zerolen",
 		"length": 0.0,
 		"tweens": [
-			{"target": ".", "property": "modulate",
-			 "from": "white", "to": "red", "duration": 0.5},
+			{"target": ".", "property": "scale",
+			 "from": {"x":1,"y":1,"z":1}, "to": {"x":2,"y":2,"z":2}, "duration": 0.5},
 		],
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
@@ -800,14 +935,15 @@ func test_create_simple_rejects_zero_length() -> void:
 func test_create_simple_rejects_negative_length() -> void:
 	var player_path := _add_player("TestSimpleNegLen")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	var result := _handler.create_simple({
 		"player_path": player_path,
 		"name": "neglen",
 		"length": -1.0,
 		"tweens": [
-			{"target": ".", "property": "modulate",
-			 "from": "white", "to": "red", "duration": 0.5},
+			{"target": ".", "property": "scale",
+			 "from": {"x":1,"y":1,"z":1}, "to": {"x":2,"y":2,"z":2}, "duration": 0.5},
 		],
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
@@ -821,6 +957,7 @@ func test_get_accepts_library_qualified_name() -> void:
 	# as "libname/clip". That string should round-trip back into animation_get.
 	var player_path := _add_player("TestLibQualified")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
@@ -849,6 +986,7 @@ func test_get_labels_value_and_method_tracks_distinctly() -> void:
 	# this verifies value/method are distinct and that bezier reports honestly.
 	var player_path := _add_player("TestTrackLabels")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "mixed", "length": 1.0})
 
@@ -893,6 +1031,7 @@ func test_get_labels_value_and_method_tracks_distinctly() -> void:
 func test_delete_animation_basic() -> void:
 	var player_path := _add_player("TestDeleteAnim")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "to_delete", "length": 1.0})
 
@@ -919,9 +1058,41 @@ func test_delete_animation_basic() -> void:
 	_remove_node(player_path)
 
 
+func test_delete_animation_in_non_default_library() -> void:
+	# Previously delete only worked for animations in the default library and
+	# returned INTERNAL_ERROR "No default library found" for anything else.
+	# Now it searches all libraries symmetrically with animation_get / animation_play.
+	var player_path := _add_player("TestDeleteNonDefault")
+	if player_path.is_empty():
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+
+	var lib := AnimationLibrary.new()
+	var anim := Animation.new()
+	anim.length = 0.5
+	lib.add_animation(&"idle", anim)
+	player.add_animation_library(&"moves", lib)
+	assert_true(player.has_animation("moves/idle"), "Setup: library-qualified animation present")
+
+	var result := _handler.delete_animation({
+		"player_path": player_path, "animation_name": "moves/idle",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.library_key, "moves")
+	assert_false(player.has_animation("moves/idle"), "Animation removed from non-default library")
+
+	# Undo restores it.
+	_undo_redo.undo()
+	assert_true(player.has_animation("moves/idle"), "Undo restored library-qualified animation")
+
+	_remove_node(player_path)
+
+
 func test_delete_animation_not_found() -> void:
 	var player_path := _add_player("TestDeleteNotFound")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	var result := _handler.delete_animation({
 		"player_path": player_path, "animation_name": "nope",
@@ -937,6 +1108,7 @@ func test_delete_animation_not_found() -> void:
 func test_create_animation_overwrite() -> void:
 	var player_path := _add_player("TestOverwrite")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "overme", "length": 1.0})
 
@@ -964,6 +1136,7 @@ func test_create_animation_overwrite() -> void:
 func test_validate_animation_all_valid() -> void:
 	var player_path := _add_player("TestValidateOk")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "valid_test", "length": 1.0})
 	_handler.add_property_track({
@@ -985,6 +1158,7 @@ func test_validate_animation_all_valid() -> void:
 func test_validate_animation_broken_track() -> void:
 	var player_path := _add_player("TestValidateBroken")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "broken_test", "length": 1.0})
 	_handler.add_property_track({
@@ -1007,6 +1181,7 @@ func test_validate_animation_broken_track() -> void:
 func test_validate_animation_not_found() -> void:
 	var player_path := _add_player("TestValidateNotFound")
 	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
 		return
 	var result := _handler.validate_animation({
 		"player_path": player_path, "animation_name": "nope",

@@ -101,7 +101,8 @@ func test_reimport_nonexistent_file() -> void:
 	assert_has_key(result, "data")
 	assert_eq(result.data.reimported_count, 0)
 	assert_eq(result.data.not_found_count, 1)
-	assert_contains(result.data.not_found, "res://nonexistent.png")
+	# not_found entries now include reason suffix, so check the first entry contains the path
+	assert_contains(result.data.not_found[0], "res://nonexistent.png")
 
 
 func test_reimport_existing_file() -> void:

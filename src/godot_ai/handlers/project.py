@@ -32,11 +32,23 @@ async def project_run(runtime: Runtime, mode: str = "main", scene: str = "") -> 
 
 
 async def project_stop(runtime: Runtime) -> dict:
+    """Stop the running game and wait for readiness to reflect the stop.
+
+    The plugin's `_process` emits a `readiness_changed` event on the next
+    frame once `EditorInterface.is_playing_scene()` flips to false. A write
+    tool called immediately after this handler returns would otherwise race
+    the event and see stale `readiness="playing"`. We poll `session.readiness`
+    until it leaves "playing", bounded by a 1s timeout so a hung play process
+    doesn't block the handler indefinitely — in that case readiness stays
+    "playing" and the next write tool correctly blocks with EDITOR_NOT_READY.
+    """
     result = await runtime.send_command("stop_project")
-    # Give the editor one frame to settle and emit `readiness_changed`.
-    # Without this, a tool call immediately after stop may see stale
-    # readiness="playing" and reject the command.
-    await asyncio.sleep(0.15)
+    session = runtime.get_active_session()
+    if session is not None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 1.0
+        while session.readiness == "playing" and loop.time() < deadline:
+            await asyncio.sleep(0.02)
     return result
 
 
