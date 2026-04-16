@@ -110,7 +110,39 @@ for line in raw.split('\n'):
 done
 
 if [ "$READINESS" != "ready" ]; then
-  echo "WARNING: Editor not ready after 60s (readiness: $READINESS). Tests may fail."
+  echo "Editor not ready (readiness: $READINESS) — attempting to open main scene..."
+  curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
+    -H "Mcp-Session-Id: $SESSION_ID" \
+    -d '{"jsonrpc":"2.0","id":51,"method":"tools/call","params":{"name":"scene_open","arguments":{"path":"res://main.tscn"}}}' > /dev/null
+  # Wait a bit more for the scene to load
+  for i in $(seq 1 15); do
+    READINESS=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
+      -H "Mcp-Session-Id: $SESSION_ID" \
+      -d '{"jsonrpc":"2.0","id":52,"method":"tools/call","params":{"name":"editor_state","arguments":{}}}' \
+      | python3 -c "
+import json, sys
+raw = sys.stdin.read()
+for line in raw.split('\n'):
+    if line.startswith('data: '):
+        data = json.loads(line[6:])
+        sc = data.get('result',{}).get('structuredContent',{})
+        if not sc:
+            text = data.get('result',{}).get('content',[{}])[0].get('text','{}')
+            sc = json.loads(text)
+        print(sc.get('readiness', 'unknown'))
+        break
+" 2>/dev/null || echo "unknown")
+    if [ "$READINESS" = "ready" ]; then
+      echo "Editor is ready after scene_open"
+      break
+    fi
+    echo "  post-open attempt $i — readiness: $READINESS"
+    sleep 2
+  done
+fi
+
+if [ "$READINESS" != "ready" ]; then
+  echo "WARNING: Editor still not ready (readiness: $READINESS). Tests may fail."
 fi
 
 # Call test_run
