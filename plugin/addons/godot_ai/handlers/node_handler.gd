@@ -15,14 +15,7 @@ func create_node(params: Dictionary) -> Dictionary:
 	var node_type: String = params.get("type", "")
 	var node_name: String = params.get("name", "")
 	var parent_path: String = params.get("parent_path", "")
-
-	if node_type.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: type")
-
-	if not ClassDB.class_exists(node_type):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown node type: %s" % node_type)
-	if not ClassDB.is_parent_class(node_type, "Node"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "%s is not a Node type" % node_type)
+	var scene_path: String = params.get("scene_path", "")
 
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
@@ -34,9 +27,31 @@ func create_node(params: Dictionary) -> Dictionary:
 		if parent == null:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Parent not found: %s" % parent_path)
 
-	var new_node: Node = ClassDB.instantiate(node_type)
-	if new_node == null:
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s" % node_type)
+	var new_node: Node
+
+	if not scene_path.is_empty():
+		# Scene instancing path — load and instantiate a PackedScene.
+		if not scene_path.begins_with("res://"):
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "scene_path must start with res://")
+		if not ResourceLoader.exists(scene_path):
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Scene not found: %s" % scene_path)
+		var packed_scene = ResourceLoader.load(scene_path)
+		if packed_scene == null or not packed_scene is PackedScene:
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource at %s is not a PackedScene" % scene_path)
+		new_node = packed_scene.instantiate()
+		if new_node == null:
+			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to instantiate scene: %s" % scene_path)
+	else:
+		# ClassDB path — create by type.
+		if node_type.is_empty():
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: type (or provide scene_path)")
+		if not ClassDB.class_exists(node_type):
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown node type: %s" % node_type)
+		if not ClassDB.is_parent_class(node_type, "Node"):
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "%s is not a Node type" % node_type)
+		new_node = ClassDB.instantiate(node_type)
+		if new_node == null:
+			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s" % node_type)
 
 	if not node_name.is_empty():
 		new_node.name = node_name
@@ -48,15 +63,20 @@ func create_node(params: Dictionary) -> Dictionary:
 	_undo_redo.add_undo_method(parent, "remove_child", new_node)
 	_undo_redo.commit_action()
 
-	return {
-		"data": {
-			"name": new_node.name,
-			"type": new_node.get_class(),
-			"path": ScenePath.from_node(new_node, scene_root),
-			"parent_path": ScenePath.from_node(parent, scene_root),
-			"undoable": true,
-		}
+	# For instanced scenes, set owner on descendants so they serialize properly.
+	if not scene_path.is_empty():
+		_set_owner_recursive(new_node, scene_root)
+
+	var response := {
+		"name": new_node.name,
+		"type": new_node.get_class(),
+		"path": ScenePath.from_node(new_node, scene_root),
+		"parent_path": ScenePath.from_node(parent, scene_root),
+		"undoable": true,
 	}
+	if not scene_path.is_empty():
+		response["scene_path"] = scene_path
+	return {"data": response}
 
 
 func delete_node(params: Dictionary) -> Dictionary:
@@ -214,9 +234,6 @@ func rename_node(params: Dictionary) -> Dictionary:
 	if new_name.validate_node_name() != new_name:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid characters in name: %s" % new_name)
 
-	if node == scene_root:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Cannot rename the scene root")
-
 	var old_name := String(node.name)
 	if old_name == new_name:
 		return {
@@ -230,10 +247,12 @@ func rename_node(params: Dictionary) -> Dictionary:
 			}
 		}
 
-	var parent := node.get_parent()
-	for sibling in parent.get_children():
-		if sibling != node and String(sibling.name) == new_name:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "A sibling already has the name '%s'" % new_name)
+	# Scene root has no siblings, so skip sibling collision check.
+	if node != scene_root:
+		var parent := node.get_parent()
+		for sibling in parent.get_children():
+			if sibling != node and String(sibling.name) == new_name:
+				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "A sibling already has the name '%s'" % new_name)
 
 	_undo_redo.create_action("MCP: Rename %s to %s" % [old_name, new_name])
 	_undo_redo.add_do_property(node, "name", new_name)

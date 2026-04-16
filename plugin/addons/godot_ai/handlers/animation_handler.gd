@@ -110,9 +110,13 @@ func create_animation(params: Dictionary) -> Dictionary:
 		library = AnimationLibrary.new()
 		created_library = true
 
+	var overwrite: bool = params.get("overwrite", false)
+	var old_anim: Animation = null
 	if library.has_animation(anim_name):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
-			"Animation '%s' already exists. Delete it first or choose a different name." % anim_name)
+		if not overwrite:
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+				"Animation '%s' already exists. Pass overwrite=true or delete it first." % anim_name)
+		old_anim = library.get_animation(anim_name)
 
 	var anim := Animation.new()
 	anim.length = length
@@ -123,8 +127,15 @@ func create_animation(params: Dictionary) -> Dictionary:
 		_undo_redo.add_do_method(player, "add_animation_library", "", library)
 		_undo_redo.add_undo_method(player, "remove_animation_library", "")
 		_undo_redo.add_do_reference(library)
+	if old_anim != null:
+		_undo_redo.add_do_method(library, "remove_animation", anim_name)
 	_undo_redo.add_do_method(library, "add_animation", anim_name, anim)
-	_undo_redo.add_undo_method(library, "remove_animation", anim_name)
+	if old_anim != null:
+		_undo_redo.add_undo_method(library, "remove_animation", anim_name)
+		_undo_redo.add_undo_method(library, "add_animation", anim_name, old_anim)
+		_undo_redo.add_do_reference(old_anim)
+	else:
+		_undo_redo.add_undo_method(library, "remove_animation", anim_name)
 	_undo_redo.add_do_reference(anim)
 	_undo_redo.commit_action()
 
@@ -135,6 +146,50 @@ func create_animation(params: Dictionary) -> Dictionary:
 			"length": length,
 			"loop_mode": loop_mode_str,
 			"library_created": created_library,
+			"overwritten": old_anim != null,
+			"undoable": true,
+		}
+	}
+
+
+# ============================================================================
+# animation_delete
+# ============================================================================
+
+func delete_animation(params: Dictionary) -> Dictionary:
+	var player_path: String = params.get("player_path", "")
+	var anim_name: String = params.get("animation_name", "")
+
+	if player_path.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: player_path")
+	if anim_name.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: animation_name")
+
+	var resolved := _resolve_player(player_path)
+	if resolved.has("error"):
+		return resolved
+	var player: AnimationPlayer = resolved.player
+
+	if not player.has_animation(anim_name):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			"Animation '%s' not found on player at %s" % [anim_name, player_path])
+
+	var library: AnimationLibrary = resolved.library
+	if library == null:
+		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "No default library found")
+
+	var old_anim: Animation = library.get_animation(anim_name)
+
+	_undo_redo.create_action("MCP: Delete animation %s" % anim_name)
+	_undo_redo.add_do_method(library, "remove_animation", anim_name)
+	_undo_redo.add_undo_method(library, "add_animation", anim_name, old_anim)
+	_undo_redo.add_do_reference(old_anim)  # prevent GC so undo→redo works
+	_undo_redo.commit_action()
+
+	return {
+		"data": {
+			"player_path": player_path,
+			"animation_name": anim_name,
 			"undoable": true,
 		}
 	}
@@ -544,9 +599,13 @@ func create_simple(params: Dictionary) -> Dictionary:
 		library = AnimationLibrary.new()
 		created_library = true
 
+	var overwrite: bool = params.get("overwrite", false)
+	var old_anim: Animation = null
 	if library.has_animation(anim_name):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
-			"Animation '%s' already exists. Delete it first or choose a different name." % anim_name)
+		if not overwrite:
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+				"Animation '%s' already exists. Pass overwrite=true or delete it first." % anim_name)
+		old_anim = library.get_animation(anim_name)
 
 	# Compute auto length only when length is absent or null; reject explicit
 	# invalid values instead of silently falling through to auto-compute.
@@ -603,8 +662,15 @@ func create_simple(params: Dictionary) -> Dictionary:
 		_undo_redo.add_do_method(player, "add_animation_library", "", library)
 		_undo_redo.add_undo_method(player, "remove_animation_library", "")
 		_undo_redo.add_do_reference(library)
+	if old_anim != null:
+		_undo_redo.add_do_method(library, "remove_animation", anim_name)
 	_undo_redo.add_do_method(library, "add_animation", anim_name, anim)
-	_undo_redo.add_undo_method(library, "remove_animation", anim_name)
+	if old_anim != null:
+		_undo_redo.add_undo_method(library, "remove_animation", anim_name)
+		_undo_redo.add_undo_method(library, "add_animation", anim_name, old_anim)
+		_undo_redo.add_do_reference(old_anim)
+	else:
+		_undo_redo.add_undo_method(library, "remove_animation", anim_name)
 	_undo_redo.add_do_reference(anim)
 	_undo_redo.commit_action()
 
@@ -616,6 +682,7 @@ func create_simple(params: Dictionary) -> Dictionary:
 			"loop_mode": loop_mode_str,
 			"track_count": anim.get_track_count(),
 			"library_created": created_library,
+			"overwritten": old_anim != null,
 			"undoable": true,
 		}
 	}

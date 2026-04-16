@@ -114,6 +114,7 @@ func _enter_tree() -> void:
 	_dispatcher.register("animation_list", animation_handler.list_animations)
 	_dispatcher.register("animation_get", animation_handler.get_animation)
 	_dispatcher.register("animation_create_simple", animation_handler.create_simple)
+	_dispatcher.register("animation_delete", animation_handler.delete_animation)
 
 	_connection.dispatcher = _dispatcher
 	add_child(_connection)

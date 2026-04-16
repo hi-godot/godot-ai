@@ -2663,3 +2663,59 @@ async def test_animation_player_create_requires_writable():
 
     with pytest.raises(GodotCommandError):
         await animation_handlers.animation_player_create(runtime, parent_path="/Main")
+
+
+async def test_animation_delete_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await animation_handlers.animation_delete(
+        runtime, player_path="/Main/AP", animation_name="idle"
+    )
+    assert client.calls[-1]["command"] == "animation_delete"
+    assert client.calls[-1]["params"] == {
+        "player_path": "/Main/AP",
+        "animation_name": "idle",
+    }
+
+
+async def test_animation_create_overwrite_param():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await animation_handlers.animation_create(
+        runtime,
+        player_path="/Main/AP",
+        name="test",
+        length=1.0,
+        overwrite=True,
+    )
+    assert client.calls[-1]["params"]["overwrite"] is True
+
+
+async def test_animation_create_no_overwrite_by_default():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await animation_handlers.animation_create(
+        runtime, player_path="/Main/AP", name="test", length=1.0
+    )
+    assert "overwrite" not in client.calls[-1]["params"]
+
+
+async def test_animation_create_simple_overwrite_param():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await animation_handlers.animation_create_simple(
+        runtime,
+        player_path="/Main/AP",
+        name="test",
+        tweens=[{"target": ".", "property": "visible", "from": True, "to": False, "duration": 1.0}],
+        overwrite=True,
+    )
+    assert client.calls[-1]["params"]["overwrite"] is True
+
+
+async def test_node_create_scene_path_param():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await node_handlers.node_create(runtime, scene_path="res://main.tscn", name="Instanced")
+    assert client.calls[-1]["params"]["scene_path"] == "res://main.tscn"
+    assert client.calls[-1]["params"]["name"] == "Instanced"
