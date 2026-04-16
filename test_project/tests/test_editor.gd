@@ -132,6 +132,8 @@ func test_screenshot_view_target_duplicates() -> void:
 	var result := _handler.take_screenshot({"source": "viewport", "view_target": dupe_target})
 	if result.has("data"):
 		assert_eq(result.data.view_target_count, 1, "Duplicate paths should resolve to 1 target")
+	else:
+		skip("Viewport not available in headless mode")
 
 
 func test_screenshot_view_target_single_path_unchanged() -> void:
@@ -153,6 +155,8 @@ func test_screenshot_view_target_single_path_unchanged() -> void:
 		assert_has_key(result.data, "view_target")
 		assert_has_key(result.data, "view_target_count")
 		assert_eq(result.data.view_target_count, 1)
+	else:
+		skip("Viewport not available in headless mode")
 
 
 func test_screenshot_viewport_returns_image() -> void:
@@ -167,6 +171,8 @@ func test_screenshot_viewport_returns_image() -> void:
 		assert_eq(result.data.format, "png")
 		assert_gt(result.data.width, 0, "Width should be positive")
 		assert_gt(result.data.height, 0, "Height should be positive")
+	else:
+		skip("Viewport not available in headless mode")
 
 
 func test_screenshot_with_max_resolution() -> void:
@@ -174,6 +180,8 @@ func test_screenshot_with_max_resolution() -> void:
 	if result.has("data"):
 		assert_true(result.data.width <= 64, "Width should be <= max_resolution")
 		assert_true(result.data.height <= 64, "Height should be <= max_resolution")
+	else:
+		skip("Viewport not available in headless mode")
 
 
 func test_screenshot_coverage_without_view_target() -> void:
@@ -182,6 +190,8 @@ func test_screenshot_coverage_without_view_target() -> void:
 	if result.has("data"):
 		assert_true(not result.data.has("images"), "Should not have images array without view_target")
 		assert_has_key(result.data, "image_base64")
+	else:
+		skip("Viewport not available in headless mode")
 
 
 func test_screenshot_coverage_with_view_target() -> void:
@@ -221,6 +231,8 @@ func test_screenshot_coverage_with_view_target() -> void:
 		assert_has_key(result.data, "aabb_center")
 		assert_has_key(result.data, "aabb_size")
 		assert_has_key(result.data, "aabb_longest_ground_axis")
+	else:
+		skip("Viewport not available in headless mode")
 
 
 func test_screenshot_view_target_has_aabb_metadata() -> void:
@@ -242,6 +254,8 @@ func test_screenshot_view_target_has_aabb_metadata() -> void:
 		assert_has_key(result.data, "aabb_center")
 		assert_has_key(result.data, "aabb_size")
 		assert_has_key(result.data, "aabb_longest_ground_axis")
+	else:
+		skip("Viewport not available in headless mode")
 
 
 func test_screenshot_custom_angles() -> void:
@@ -265,6 +279,8 @@ func test_screenshot_custom_angles() -> void:
 		assert_eq(result.data.elevation, 45.0, "Elevation should match requested")
 		assert_eq(result.data.azimuth, 90.0, "Azimuth should match requested")
 		assert_has_key(result.data, "image_base64")
+	else:
+		skip("Viewport not available in headless mode")
 
 
 func test_screenshot_custom_fov() -> void:
@@ -286,6 +302,8 @@ func test_screenshot_custom_fov() -> void:
 		assert_has_key(result.data, "fov")
 		assert_eq(result.data.fov, 30.0, "FOV should match requested")
 		assert_has_key(result.data, "image_base64")
+	else:
+		skip("Viewport not available in headless mode")
 
 
 # ----- get_performance_monitors -----
