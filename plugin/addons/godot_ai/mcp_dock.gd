@@ -43,6 +43,8 @@ var _client_keys: Array[String] = []
 var _update_banner: VBoxContainer
 var _http_request: HTTPRequest
 var _download_request: HTTPRequest
+var _update_label: Label
+var _update_btn: Button
 var _latest_download_url := ""
 const RELEASES_URL := "https://api.github.com/repos/hi-godot/godot-ai/releases/latest"
 const RELEASES_PAGE := "https://github.com/hi-godot/godot-ai/releases/latest"
@@ -132,21 +134,19 @@ func _build_ui() -> void:
 	_update_banner.add_theme_constant_override("separation", 4)
 	_update_banner.visible = false
 
-	var update_label := Label.new()
-	update_label.name = "UpdateLabel"
-	update_label.add_theme_font_size_override("font_size", 15)
-	update_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3))
-	_update_banner.add_child(update_label)
+	_update_label = Label.new()
+	_update_label.add_theme_font_size_override("font_size", 15)
+	_update_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3))
+	_update_banner.add_child(_update_label)
 
 	var update_btn_row := HBoxContainer.new()
 	update_btn_row.add_theme_constant_override("separation", 6)
 
-	var update_btn := Button.new()
-	update_btn.name = "UpdateBtn"
-	update_btn.text = "Update"
-	update_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	update_btn.pressed.connect(_on_update_pressed)
-	update_btn_row.add_child(update_btn)
+	_update_btn = Button.new()
+	_update_btn.text = "Update"
+	_update_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_update_btn.pressed.connect(_on_update_pressed)
+	update_btn_row.add_child(_update_btn)
 
 	var release_link := Button.new()
 	release_link.text = "Release notes"
@@ -573,7 +573,7 @@ func _on_update_check_completed(result: int, response_code: int, _headers: Packe
 			_latest_download_url = asset.get("browser_download_url", "")
 			break
 
-	_update_banner.get_node("UpdateLabel").text = "Update available: v%s" % remote_version
+	_update_label.text = "Update available: v%s" % remote_version
 	_update_banner.visible = true
 
 
@@ -582,7 +582,7 @@ func _on_update_pressed() -> void:
 		OS.shell_open(RELEASES_PAGE)
 		return
 
-	var btn: Button = _update_banner.get_node("UpdateBtn")
+	var btn := _update_btn
 	btn.text = "Downloading..."
 	btn.disabled = true
 
@@ -590,13 +590,17 @@ func _on_update_pressed() -> void:
 	if _download_request != null:
 		_download_request.queue_free()
 	_download_request = HTTPRequest.new()
-	_download_request.download_file = ProjectSettings.globalize_path(UPDATE_TEMP_ZIP)
+	var global_zip := ProjectSettings.globalize_path(UPDATE_TEMP_ZIP)
+	var global_dir := ProjectSettings.globalize_path(UPDATE_TEMP_DIR)
+	DirAccess.make_dir_recursive_absolute(global_dir)
+	_download_request.download_file = global_zip
+	_download_request.max_redirects = 10
 	_download_request.request_completed.connect(_on_download_completed)
 	add_child(_download_request)
-
-	# Ensure temp dir exists
-	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(UPDATE_TEMP_DIR))
-	_download_request.request(_latest_download_url)
+	var err := _download_request.request(_latest_download_url)
+	if err != OK:
+		btn.text = "Request failed"
+		btn.disabled = false
 
 
 func _on_download_completed(result: int, response_code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
@@ -604,9 +608,10 @@ func _on_download_completed(result: int, response_code: int, _headers: PackedStr
 		_download_request.queue_free()
 		_download_request = null
 
-	var btn: Button = _update_banner.get_node("UpdateBtn")
+	var btn := _update_btn
 	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
-		btn.text = "Download failed"
+		print("MCP | update download failed: result=%d code=%d" % [result, response_code])
+		btn.text = "Download failed (%d)" % response_code
 		btn.disabled = false
 		return
 
@@ -621,8 +626,8 @@ func _install_update() -> void:
 
 	var reader := ZIPReader.new()
 	if reader.open(zip_path) != OK:
-		_update_banner.get_node("UpdateBtn").text = "Extract failed"
-		_update_banner.get_node("UpdateBtn").disabled = false
+		_update_btn.text = "Extract failed"
+		_update_btn.disabled = false
 		return
 
 	var files := reader.get_files()
@@ -647,7 +652,7 @@ func _install_update() -> void:
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(UPDATE_TEMP_DIR))
 
 	# Reload the plugin to pick up new code
-	_update_banner.get_node("UpdateBtn").text = "Reloading..."
+	_update_btn.text = "Reloading..."
 	_reload_after_update.call_deferred()
 
 
