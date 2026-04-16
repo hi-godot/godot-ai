@@ -1,6 +1,6 @@
 # Godot AI — Testing Strategy
 
-*Updated 2026-04-14*
+*Updated 2026-04-16*
 
 This document defines how Godot AI should prove that new capability is real, stable, and safe to extend.
 
@@ -99,9 +99,17 @@ If a tool has undo semantics, readiness constraints, or cross-session behavior, 
 
 The CI stack should exercise at least three tiers:
 
-- Python unit and integration tests
-- Godot-side editor test suites
-- release-surface smoke, especially install and packaging paths once distribution work is active
+- Python unit and integration tests (3 OS x 2 Python versions)
+- Godot-side editor test suites (3 OS via `chickensoft-games/setup-godot@v2` on GitHub Actions runners)
+- release-surface smoke, especially install and packaging paths once distribution work is active (3 OS)
+
+### CI hardening measures
+
+- **GDScript validation**: `script/ci-check-gdscript` runs after `--import` and before the editor launches. It scans the import log for `SCRIPT ERROR` / `Parse Error` lines and fails the build immediately if any GDScript file has syntax errors. This catches broken scripts before the test runner starts.
+- **Step timeouts**: test and smoke steps have `timeout-minutes` set to prevent CI hangs from frozen Godot processes.
+- **Filesystem scan settling**: `script/ci-godot-tests` includes a short sleep after editor startup so the filesystem scan completes and test discovery finds all suites.
+- **Resilient test discovery**: `test_handler.gd` catches per-file load errors during `_discover_suites()`. A broken test file does not prevent the rest of the suite from running; errors are reported in the response alongside successful results.
+- **Regression diagnostics**: `script/ci-find-regression-range` helps identify which commits introduced a CI regression by binary-searching recent history.
 
 This should stay aligned with the release work in [packaging-distribution.md](packaging-distribution.md).
 

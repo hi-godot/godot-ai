@@ -76,7 +76,7 @@ The dock checks the GitHub releases API on startup. If a newer version exists, a
 
 ### Python tests
 ```bash
-pytest -v                    # 375 unit + integration tests
+pytest -v                    # 387 unit + integration tests
 ```
 
 ### Godot-side tests
@@ -198,6 +198,10 @@ New features don't ship without tests. Regressions are caught before they merge.
 - **Re-entrant `_process()` during save**: `EditorInterface.save_scene()` internally renders a preview thumbnail, which triggers frame processing. If `Connection._process()` runs during this, WebSocket polling and command dispatch re-enter, crashing Godot (`SIGABRT` in `_save_scene_with_preview`). Fixed by setting `Connection.pause_processing = true` around save calls in `SceneHandler`. Any new handler that calls `save_scene()`, `save_scene_as()`, or `save_all_scenes()` must do the same.
 - **GDScript tests must not call `EditorInterface.save_scene()` or `scene_create`/`scene_open`**: These trigger modal dialogs or scene switches that freeze or crash the test runner. Test only validation/error paths for these operations in GDScript; full behavior is covered by Python integration tests.
 - **GDScript tests must not call `quit_editor` or `reload_plugin`**: These terminate or restart the plugin, killing the test runner. Tested via Python integration tests and CI smoke scripts (`script/ci-quit-test`, `script/ci-reload-test`). (Note: plugin command names stay `quit_editor` / `reload_plugin`; the MCP tool names are `editor_quit` / `editor_reload_plugin`.)
+- **Resilient test discovery**: `_discover_suites()` in `test_handler.gd` catches per-file load errors and returns `{suites, errors}`. Individual broken test scripts do not prevent the rest from running. The `errors` list reports which scripts failed to load.
+- **CI GDScript validation**: `script/ci-check-gdscript` runs before Godot tests in CI. It scans the `--import` log for `SCRIPT ERROR` / `Parse Error` lines and fails the build early if any GDScript has syntax errors, before the test runner even starts.
+- **CI Linux runner**: Linux Godot CI uses `chickensoft-games/setup-godot@v2` on `ubuntu-latest` (not a Docker image). All three OS jobs (Linux, macOS, Windows) use the same chickensoft action for consistent Godot setup. Step timeouts are set on test and smoke steps to prevent CI hangs.
+- **Sleep before test_run in CI**: `script/ci-godot-tests` includes a short sleep (8s) after Godot startup to let the editor filesystem scan settle before running tests. Without this, test discovery can miss files.
 
 ## What NOT to do
 
@@ -206,3 +210,4 @@ New features don't ship without tests. Regressions are caught before they merge.
 - Don't use `pop_front()` on arrays in hot paths — use index + slice
 - Don't add error handling in individual tools — `GodotClient.send()` raises on errors
 - Don't use Python-style `"""docstrings"""` in GDScript — use `##` comments
+- Don't forget the `overwrite` parameter on `animation_create` / `animation_create_simple` — without it, creating an animation with the same name errors instead of replacing

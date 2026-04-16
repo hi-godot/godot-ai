@@ -28,7 +28,7 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 - [x] Runtime feedback loop: `project.run`/`project.stop`, `editor.screenshot`, `performance.get_monitors`, `logs.clear`
 - [ ] Runtime iteration loop is complete enough for AI-driven feel tuning
 - [ ] Release/install path is complete enough for new users
-- [~] Polished game-production extensions have started — `ui_*` (anchor presets, `ui_build_layout` composer), `theme_*` (color/constant/font-size/stylebox_flat/apply), and `animation_*` (AnimationPlayer + `animation_create_simple` composer) shipped; `camera_*`, `audio_*`, and animation preset helpers still pending
+- [~] Polished game-production extensions have started — `ui_*` (anchor presets, `ui_build_layout` composer, `theme_override_*` pseudo-properties), `theme_*` (color/constant/font-size/stylebox_flat with per-side overrides/apply), and `animation_*` (AnimationPlayer + `animation_create_simple` composer + delete/validate + overwrite support) shipped; `camera_*`, `audio_*`, and animation preset helpers still pending
 
 ## What This Plan Optimizes For
 
@@ -57,7 +57,7 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 ### High-Leverage Authoring
 
 - [x] `batch.execute` with stop-on-first-error semantics and optional grouped undo
-- [x] `node.rename` with sibling-collision validation and char-safety checks (NodePath/script references in OTHER nodes are not auto-updated — documented in the tool)
+- [x] `node.rename` with sibling-collision validation and char-safety checks (NodePath/script references in OTHER nodes are not auto-updated — documented in the tool). Now also allows renaming the scene root node.
 - [x] complex `node.set_property` (`Resource` via res:// path, `NodePath`, `Array`, `Dictionary`, `StringName`)
 - [x] `script.patch` shipped — anchor-based `old_text` → `new_text` replace with ambiguity detection and optional `replace_all`
 
@@ -80,7 +80,7 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 - [x] batch execution is shipped with a clear contract
 - [x] multi-instance routing works in practice
 - [x] `script.patch` decision is made (shipped: anchor-based replace)
-- [x] test coverage and smoke coverage increase where the new runtime loop needs it (375 Python + 312 GDScript = 687 total)
+- [x] test coverage and smoke coverage increase where the new runtime loop needs it (387 Python + 333 GDScript = 720 total)
 
 ---
 
@@ -92,7 +92,7 @@ See [Packaging & Distribution](packaging-distribution.md) for full detail. The s
 - [ ] PyPI / `uvx` path works reliably
 - [ ] desktop binary path is real, not aspirational
 - [~] plugin is downloadable from the Godot AssetLib — release ZIP workflow ships `godot-ai-plugin.zip` via GitHub Releases; AssetLib submission in progress; dock has self-update check
-- [x] CI covers Python tests, Godot-side tests, and release-smoke install paths (3 OS × 2 Python + 3 OS Godot + release-smoke)
+- [x] CI covers Python tests, Godot-side tests, and release-smoke install paths (3 OS × 2 Python + 3 OS Godot + release-smoke). Linux CI uses `chickensoft-games/setup-godot` on `ubuntu-latest`. GDScript parse validation (`ci-check-gdscript`) runs before tests. Step timeouts prevent hangs.
 - [x] bump-and-release workflow — `gh workflow run bump-and-release.yml -f bump=patch/minor/major` bumps versions, commits, tags, and triggers release build
 - [ ] compatibility guidance is published and maintained
 - [ ] a new user can get from zero to working in under 10 minutes
@@ -132,9 +132,9 @@ These are not the next things to do blindly. They are the extensions that matter
 - `camera.*` for follow, bounds, zoom, and screen shake
 - `resource.create` / `resource.save` / `resource.instantiate`
 - `scene.instantiate` and `scene.inherit`
-  - [ ] critical path for reusable `button.tscn` / `enemy.tscn` instanced into many parent scenes — the piece that turns the UI composer and node_create flows into "real Godot project structure" instead of one-shot scene builds
+  - [~] `node_create` now supports a `scene_path` parameter for instancing a `.tscn` as a child node. This covers the basic "instance a prefab" use case. Dedicated `scene.instantiate` (with transform overrides) and `scene.inherit` (inherited scenes) are still pending for full reusable-scene workflows.
 - `animation_player.*` / `animation_tree.*`
-  - [~] AnimationPlayer scaffolding shipped (`animation_player_create`, `animation_create`, `animation_add_property_track`, `animation_add_method_track`, `animation_set_autoplay`, `animation_play`, `animation_stop`, `animation_list`, `animation_get`, `animation_create_simple` composer)
+  - [~] AnimationPlayer scaffolding shipped (`animation_player_create`, `animation_create`, `animation_add_property_track`, `animation_add_method_track`, `animation_set_autoplay`, `animation_play`, `animation_stop`, `animation_list`, `animation_get`, `animation_create_simple` composer, `animation_delete`, `animation_validate`). `animation_create` and `animation_create_simple` support `overwrite` parameter for re-creating animations in place.
   - [ ] **Preset helpers** — `animation_preset_fade`, `animation_preset_slide_in`, `animation_preset_shake`, `animation_preset_pulse_loop`. Thin wrappers over `animation_create_simple` that bake in the right transition / loop_mode / two-keyframe shape for each effect. Cuts a "fade in this Panel" from a 6-line tween spec to one call.
   - [ ] **Bezier and audio tracks** — `animation_add_bezier_track` (for hand-tuned curves where keyframe interpolation isn't enough) and `animation_add_audio_track` (timed AudioStreamPlayer cues; needs the audio resource handler first).
   - [ ] **`animation_tree.*`** — state-machine and blend-tree authoring for character locomotion (idle ↔ walk ↔ run blends, attack one-shots). Larger surface; depends on the AnimationPlayer being solid first.

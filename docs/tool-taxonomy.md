@@ -1,6 +1,6 @@
 # Godot AI — Tool Taxonomy
 
-*Updated 2026-04-14*
+*Updated 2026-04-16*
 
 This document describes the intended Godot-native tool surface.
 
@@ -157,7 +157,7 @@ These are the next layers once the core runtime loop is dependable.
 
 - `ui.*` for HUDs, menus, upgrade screens, theme/layout work
 - `camera.*` for follow, bounds, zoom, shake, and capture helpers
-- `animation_*` — AnimationPlayer authoring shipped (player + animation creation, property/method tracks, autoplay, dev-time play/stop, list/get, `animation_create_simple` composer). Auto-attaches a default `AnimationLibrary` on first write. Works for 2D, 3D, and UI; `animation_tree.*`, bezier/audio tracks, preset helpers, and 3D material-fade coercion are tracked as follow-ups in `implementation-plan.md`.
+- `animation_*` — AnimationPlayer authoring shipped (player + animation creation, property/method tracks, autoplay, dev-time play/stop, list/get, `animation_create_simple` composer, `animation_delete`, `animation_validate`). `animation_create` and `animation_create_simple` support an `overwrite` parameter to replace existing animations in place. Auto-attaches a default `AnimationLibrary` on first write. Works for 2D, 3D, and UI; `animation_tree.*`, bezier/audio tracks, preset helpers, and 3D material-fade coercion are tracked as follow-ups in `implementation-plan.md`.
 - `audio.*`
 
 These are the tools that move the project from "functional prototype" toward "readable and polished prototype."
