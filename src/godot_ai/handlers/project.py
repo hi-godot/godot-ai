@@ -45,7 +45,7 @@ async def project_stop(runtime: Runtime) -> dict:
     result = await runtime.send_command("stop_project")
     session = runtime.get_active_session()
     if session is not None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         deadline = loop.time() + 1.0
         while session.readiness == "playing" and loop.time() < deadline:
             await asyncio.sleep(0.02)

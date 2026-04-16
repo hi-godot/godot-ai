@@ -226,6 +226,11 @@ func add_property_track(params: Dictionary) -> Dictionary:
 
 	# Validate + pre-coerce keyframes before mutating. Coercion errors
 	# surface as INVALID_PARAMS rather than silently inserting garbage keys.
+	# Resolve the target property's type ONCE — dense clips used to re-walk
+	# get_property_list() per keyframe.
+	var ctx := _resolve_track_prop_context(track_path, player)
+	if ctx.has("error"):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ctx.error)
 	var coerced_keyframes: Array = []
 	for kf in keyframes:
 		if typeof(kf) != TYPE_DICTIONARY:
@@ -234,7 +239,7 @@ func add_property_track(params: Dictionary) -> Dictionary:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Each keyframe must have a 'time' field")
 		if not "value" in kf:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Each keyframe must have a 'value' field")
-		var coerce_result := _coerce_value_for_track(kf.get("value"), track_path, player)
+		var coerce_result := _coerce_with_context(kf.get("value"), ctx)
 		if coerce_result.has("error"):
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, coerce_result.error)
 		coerced_keyframes.append({
@@ -863,9 +868,21 @@ func _resolve_animation(player: AnimationPlayer, anim_name: String) -> Dictionar
 ## property doesn't, or when parsing a typed value (Color/Vector2/Vector3)
 ## clearly fails — better to reject than silently store garbage.
 static func _coerce_value_for_track(value: Variant, track_path: String, player: AnimationPlayer) -> Dictionary:
+	var ctx := _resolve_track_prop_context(track_path, player)
+	if ctx.has("error"):
+		return {"error": ctx.error}
+	return _coerce_with_context(value, ctx)
+
+
+## Resolve a track_path's target property type once, so callers coercing many
+## keyframes avoid walking `get_property_list()` on every one. Returns:
+##   {pass_through: true}                   — no resolution / authoring-time
+##   {pass_through: false, prop_type, prop_name}  — coerce against this type
+##   {error: msg}                           — property not found on target
+static func _resolve_track_prop_context(track_path: String, player: AnimationPlayer) -> Dictionary:
 	var colon := track_path.rfind(":")
 	if colon < 0:
-		return {"ok": value}
+		return {"pass_through": true}
 
 	var node_part := track_path.substr(0, colon)
 	var prop_part := track_path.substr(colon + 1)
@@ -878,22 +895,32 @@ static func _coerce_value_for_track(value: Variant, track_path: String, player: 
 		if root_node == null:
 			root_node = player.get_parent()
 	if root_node == null:
-		return {"ok": value}
+		return {"pass_through": true}
 
 	var target: Node = root_node.get_node_or_null(node_part)
 	if target == null:
 		# Target node isn't in the scene yet — authoring-time path. Pass through.
-		return {"ok": value}
+		return {"pass_through": true}
 
 	for p in target.get_property_list():
 		if p.name == prop_part:
-			return _coerce_for_type(value, p.get("type", TYPE_NIL), prop_part)
+			return {
+				"pass_through": false,
+				"prop_type": p.get("type", TYPE_NIL),
+				"prop_name": prop_part,
+			}
 
 	# Target exists but the property doesn't. Reject loudly — silently storing
 	# the raw value here produces garbage keyframes at playback time.
 	return {"error":
 		"Property '%s' not found on target '%s' (class %s)" %
 		[prop_part, node_part, target.get_class()]}
+
+
+static func _coerce_with_context(value: Variant, ctx: Dictionary) -> Dictionary:
+	if ctx.get("pass_through", false):
+		return {"ok": value}
+	return _coerce_for_type(value, ctx.prop_type, ctx.prop_name)
 
 
 ## Coerce a single value to the given Godot variant type. Returns
