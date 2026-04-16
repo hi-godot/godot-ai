@@ -274,11 +274,14 @@ static func _find_claude_cli() -> String:
 		if FileAccess.file_exists(p):
 			return p
 
-	# 2. Login shell lookup (Unix only) — catches custom PATH entries in the
-	#    user's shell rc files (nvm, asdf, volta, custom prefix, etc.)
+	# 2. Login shell lookup (Unix only) — use the user's default shell so PATH
+	#    entries in .zshrc / .bashrc / .bash_profile / etc. are picked up.
 	if not is_windows:
+		var shell := OS.get_environment("SHELL")
+		if shell.is_empty():
+			shell = "/bin/bash"
 		var login_output: Array = []
-		var login_exit := OS.execute("/bin/bash", ["-lc", "command -v claude"], login_output, true)
+		var login_exit := OS.execute(shell, ["-lc", "command -v claude"], login_output, true)
 		if login_exit == 0 and login_output.size() > 0:
 			var login_found: String = login_output[0].strip_edges()
 			if not login_found.is_empty() and FileAccess.file_exists(login_found):
