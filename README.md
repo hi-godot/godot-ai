@@ -96,6 +96,12 @@ enabled = true
 - *"Create a Camera3D named MainCamera under /Main."*
 - *"Search the project for PackedScene files in ui/."*
 - *"Run the scene test suite."*
+- *"Build a neon space city with glass towers, glowing planets, and fire / magic / spark particle effects."*
+
+<p align="center">
+  <a href="docs/images/space-city.png"><img src="docs/images/space-city.png" alt="Space city scene — neon towers, glowing planets, Tron streets, and varied particle FX, all built from MCP tool calls" width="640"></a>
+</p>
+<p align="center"><em>An AI-authored scene: 10 emissive buildings, 3 glowing planets, Tron-style floor strips, and 6 varied particle effects — every node, material, and preset placed by MCP tool calls.</em></p>
 
 ---
 
