@@ -1,91 +1,11 @@
 [gd_scene format=3 uid="uid://bdvihvqroq12a"]
 
 [ext_resource type="PackedScene" uid="uid://1w7dp2aeqcpq" path="res://snowman.tscn" id="1_snowman"]
-[ext_resource type="Material" path="res://tests/_mcp_test_material.tres" id="2_1bvp3"]
-[ext_resource type="Script" uid="uid://db82fn8v83fbf" path="res://tests/_mcp_test_script.gd" id="3_lquwl"]
-[ext_resource type="Script" uid="uid://b072den24dlrk" path="res://hud_loader.gd" id="4_7mycd"]
-
-[sub_resource type="Animation" id="Animation_272bh"]
-tracks/0/type = "value"
-tracks/0/imported = false
-tracks/0/enabled = true
-tracks/0/path = NodePath(".:modulate")
-tracks/0/interp = 1
-tracks/0/loop_wrap = true
-tracks/0/keys = {
-"times": PackedFloat32Array(0, 1),
-"transitions": PackedFloat32Array(1, 1),
-"update": 0,
-"values": [1.0, 0.0]
-}
-
-[sub_resource type="AnimationLibrary" id="AnimationLibrary_5vw27"]
-_data = {
-&"anim": SubResource("Animation_272bh")
-}
-
-[sub_resource type="Animation" id="Animation_kek77"]
-length = 0.3
-
-[sub_resource type="AnimationLibrary" id="AnimationLibrary_4c57u"]
-_data = {
-&"fade": SubResource("Animation_kek77")
-}
-
-[sub_resource type="Animation" id="Animation_efxa6"]
-
-[sub_resource type="AnimationLibrary" id="AnimationLibrary_dg77c"]
-_data = {
-&"idle": SubResource("Animation_efxa6")
-}
-
-[sub_resource type="Animation" id="Animation_ycdy4"]
-length = 0.3
-tracks/0/type = "value"
-tracks/0/imported = false
-tracks/0/enabled = true
-tracks/0/path = NodePath(".:position")
-tracks/0/interp = 1
-tracks/0/loop_wrap = true
-tracks/0/keys = {
-"times": PackedFloat32Array(0, 0.3),
-"transitions": PackedFloat32Array(1, 1),
-"update": 0,
-"values": [Vector3(0, 0, 0), Vector3(1, 0, 0)]
-}
-
-[sub_resource type="AnimationLibrary" id="AnimationLibrary_w48qg"]
-_data = {
-&"slide": SubResource("Animation_ycdy4")
-}
-
-[sub_resource type="Animation" id="Animation_vivmo"]
-length = 0.5
-loop_mode = 2
-tracks/0/type = "value"
-tracks/0/imported = false
-tracks/0/enabled = true
-tracks/0/path = NodePath(".:modulate")
-tracks/0/interp = 1
-tracks/0/loop_wrap = true
-tracks/0/keys = {
-"times": PackedFloat32Array(0, 0.5),
-"transitions": PackedFloat32Array(1, 1),
-"update": 0,
-"values": ["white", "red"]
-}
-
-[sub_resource type="AnimationLibrary" id="AnimationLibrary_2cqfq"]
-_data = {
-&"pulse": SubResource("Animation_vivmo")
-}
-
-[sub_resource type="AnimationLibrary" id="AnimationLibrary_yaehf"]
 
 [node name="Main" type="Node3D" unique_id=40482226]
 
-[node name="Camera3D" type="Camera3D" parent="." unique_id=974172401 groups=["_mcp_test_group"]]
-fov = 90.0
+[node name="Camera3D" type="Camera3D" parent="." unique_id=974172401]
+transform = Transform3D(1, 0, 0, 0, 0.939693, 0.34202, 0, -0.34202, 0.939693, 0, 2, 5)
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=459000357]
 transform = Transform3D(1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025, 0, 3, 0)
@@ -98,68 +18,14 @@ transform = Transform3D(1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025, 0, 3, 0)
 
 [node name="SnowGroup" type="Node3D" parent="." unique_id=647443631]
 
-[node name="Snowman" parent="SnowGroup" unique_id=639215127 instance=ExtResource("1_snowman")]
+[node name="Snowman" parent="SnowGroup" instance=ExtResource("1_snowman")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, 0, 2)
 
-[node name="Snowman2" parent="SnowGroup" unique_id=1031980867 instance=ExtResource("1_snowman")]
+[node name="Snowman2" parent="SnowGroup" instance=ExtResource("1_snowman")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 2)
 
-[node name="Snowman3" parent="SnowGroup" unique_id=1069855150 instance=ExtResource("1_snowman")]
+[node name="Snowman3" parent="SnowGroup" instance=ExtResource("1_snowman")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 0, 2)
 
-[node name="Snowman4" parent="SnowGroup" unique_id=611705064 instance=ExtResource("1_snowman")]
+[node name="Snowman4" parent="SnowGroup" instance=ExtResource("1_snowman")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 0, 2)
-
-[node name="TestPropTrackUndo" type="AnimationPlayer" parent="." unique_id=495225911]
-libraries/ = SubResource("AnimationLibrary_5vw27")
-
-[node name="TestAnimUndoCreate" type="AnimationPlayer" parent="." unique_id=223240288]
-libraries/ = SubResource("AnimationLibrary_4c57u")
-
-[node name="TestBarePlayer1" type="AnimationPlayer" parent="." unique_id=2122131180]
-libraries/ = SubResource("AnimationLibrary_dg77c")
-
-[node name="TestBarePlayer2" type="AnimationPlayer" parent="." unique_id=1554174557]
-libraries/ = SubResource("AnimationLibrary_w48qg")
-
-[node name="TestSimpleUndo" type="AnimationPlayer" parent="." unique_id=2144195937]
-libraries/ = SubResource("AnimationLibrary_2cqfq")
-
-[node name="TestPlayerUndo" type="AnimationPlayer" parent="." unique_id=1288558279]
-libraries/ = SubResource("AnimationLibrary_yaehf")
-
-[node name="_McpTest" type="Node3D" parent="." unique_id=2090550167]
-
-[node name="_McpTestDuplicate" type="Camera3D" parent="." unique_id=346119011 groups=["_mcp_test_group"]]
-transform = Transform3D(1, 0, 0, 0, 0.939693, 0.34202, 0, -0.34202, 0.939693, 0, 2, 5)
-
-[node name="_McpRenameDst26419002" type="Node3D" parent="." unique_id=1450845298]
-
-[node name="_McpTestRemote" type="RemoteTransform3D" parent="." unique_id=1205577850]
-remote_path = NodePath("../Camera3D")
-
-[node name="_McpTestClear" type="MeshInstance3D" parent="." unique_id=1706428342]
-
-[node name="_McpTestMat" type="MeshInstance3D" parent="." unique_id=2000331629]
-material_override = ExtResource("2_1bvp3")
-
-[node name="_McpTestAttach" type="Node3D" parent="." unique_id=331360800]
-script = ExtResource("3_lquwl")
-
-[node name="_McpTestDetach" type="Node3D" parent="." unique_id=663434284]
-
-[node name="TestBuildUndo" type="Panel" parent="." unique_id=2025494709]
-
-[node name="@Label@18863" type="Label" parent="TestBuildUndo" unique_id=734850494]
-layout_mode = 0
-
-[node name="@Button@18864" type="Button" parent="TestBuildUndo" unique_id=264562056]
-layout_mode = 0
-
-[node name="TestUiUndo" type="Panel" parent="." unique_id=1772332156]
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-
-[node name="HUDLoader" type="Node" parent="." unique_id=632746340]
-script = ExtResource("4_7mycd")
