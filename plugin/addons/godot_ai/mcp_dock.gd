@@ -37,7 +37,15 @@ var _log_toggle: CheckButton
 
 var _last_log_count := 0
 var _last_connected := false
+var _last_status_text := ""
+var _startup_grace_until_msec: int = 0
 var _client_keys: Array[String] = []
+
+# First-run grace: uvx installs 60+ Python packages on first run (can take
+# 10-30s on a slow connection). Don't scare users with "Disconnected" during
+# that window — show "Starting server…" instead. After this expires, fall
+# back to the normal disconnect UI.
+const STARTUP_GRACE_MSEC := 60 * 1000
 
 # Update check
 var _update_banner: VBoxContainer
@@ -56,6 +64,7 @@ func setup(connection: Connection, log_buffer: McpLogBuffer, plugin: EditorPlugi
 	_connection = connection
 	_log_buffer = log_buffer
 	_plugin = plugin
+	_startup_grace_until_msec = Time.get_ticks_msec() + STARTUP_GRACE_MSEC
 
 
 func _ready() -> void:
@@ -110,13 +119,19 @@ func _build_ui() -> void:
 
 	_status_icon = ColorRect.new()
 	_status_icon.custom_minimum_size = Vector2(14, 14)
-	_status_icon.color = Color.RED
+	# Amber on first paint — matches the "Starting server…" label text and
+	# distinguishes from a real disconnect (red).
+	_status_icon.color = Color(1.0, 0.75, 0.25)
 	var icon_center := CenterContainer.new()
 	icon_center.add_child(_status_icon)
 	status_row.add_child(icon_center)
 
 	_status_label = Label.new()
-	_status_label.text = "Disconnected"
+	# Start in grace state — _update_status will take over on the next frame
+	# once the connection is available. Never show bare "Disconnected" on
+	# first paint because that's misleading while the server is still
+	# spinning up.
+	_status_label.text = "Starting server…"
 	_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_row.add_child(_status_label)
 
@@ -322,16 +337,28 @@ func _selected_client_key() -> String:
 
 func _update_status() -> void:
 	var connected := _connection.is_connected
-	if connected == _last_connected:
-		return
-	_last_connected = connected
+	var status_text: String
+	var status_color: Color
 
 	if connected:
-		_status_icon.color = Color.GREEN
-		_status_label.text = "Connected"
+		status_text = "Connected"
+		status_color = Color.GREEN
+	elif Time.get_ticks_msec() < _startup_grace_until_msec:
+		# Inside startup grace — distinguish from real disconnect so first-run
+		# users don't assume it's broken while uvx is downloading packages.
+		status_text = "Starting server…"
+		status_color = Color(1.0, 0.75, 0.25)  # amber
 	else:
-		_status_icon.color = Color.RED
-		_status_label.text = "Disconnected"
+		status_text = "Disconnected"
+		status_color = Color.RED
+
+	var changed := connected != _last_connected or status_text != _last_status_text
+	if not changed:
+		return
+	_last_connected = connected
+	_last_status_text = status_text
+	_status_icon.color = status_color
+	_status_label.text = status_text
 
 	_update_dev_server_btn()
 

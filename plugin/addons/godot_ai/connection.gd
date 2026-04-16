@@ -104,7 +104,7 @@ func _send_handshake() -> void:
 		"session_id": _session_id,
 		"godot_version": Engine.get_version_info().get("string", "unknown"),
 		"project_path": ProjectSettings.globalize_path("res://"),
-		"plugin_version": "0.0.1",
+		"plugin_version": McpClientConfigurator.get_plugin_version(),
 		"protocol_version": 1,
 		"readiness": _last_readiness,
 		"editor_pid": OS.get_process_id(),
