@@ -3567,3 +3567,64 @@ class TestAnimationCreateSimpleTool:
         )
         await task
         assert result.data["undoable"] is True
+
+
+class TestAnimationDeleteTool:
+    async def test_delete(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_delete"
+            assert cmd["params"]["player_path"] == "/Main/AP"
+            assert cmd["params"]["animation_name"] == "idle"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "idle",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_delete",
+            {"player_path": "/Main/AP", "animation_name": "idle"},
+        )
+        await task
+        assert result.data["undoable"] is True
+
+
+class TestAnimationValidateTool:
+    async def test_validate(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_validate"
+            assert cmd["params"]["player_path"] == "/Main/AP"
+            assert cmd["params"]["animation_name"] == "walk"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "walk",
+                    "track_count": 2,
+                    "valid_count": 1,
+                    "broken_count": 1,
+                    "broken_tracks": [
+                        {"index": 1, "path": "Gone:visible", "issue": "node_not_found"},
+                    ],
+                    "valid": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_validate",
+            {"player_path": "/Main/AP", "animation_name": "walk"},
+        )
+        await task
+        assert result.data["valid"] is False
+        assert result.data["broken_count"] == 1
