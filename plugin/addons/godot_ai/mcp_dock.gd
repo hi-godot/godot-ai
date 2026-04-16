@@ -380,14 +380,16 @@ func _update_log() -> void:
 # --- Dev mode persistence ---
 
 func _load_dev_mode() -> bool:
+	# Default OFF for every install (including dev checkouts). Contributors
+	# who want the extra diagnostic UI (Reload Plugin, Reconnect, MCP log
+	# panel, Start/Stop Dev Server) can flip the toggle once — editor
+	# settings persist across sessions.
 	var es := EditorInterface.get_editor_settings()
 	if es == null:
-		return McpClientConfigurator.is_dev_checkout()
+		return false
 	if not es.has_setting(DEV_MODE_SETTING):
-		# Default: on for dev checkouts, off for end-users
-		var default := McpClientConfigurator.is_dev_checkout()
-		es.set_setting(DEV_MODE_SETTING, default)
-		return default
+		es.set_setting(DEV_MODE_SETTING, false)
+		return false
 	return bool(es.get_setting(DEV_MODE_SETTING))
 
 
