@@ -23,9 +23,28 @@ func run_tests(params: Dictionary) -> Dictionary:
 
 	var suites := _discover_suites()
 	if suites.is_empty():
-		var diag := _diagnose_discovery()
-		diag["error"] = "No test suites found in res://tests/"
-		diag["total"] = 0
+		## Inline diagnostics — separate function was returning {} in CI
+		var diag := {"error": "No test suites found in res://tests/", "total": 0}
+		var ddir := DirAccess.open("res://tests")
+		diag["dir_open"] = ddir != null
+		if ddir != null:
+			var dfiles := []
+			var dloads := {}
+			ddir.list_dir_begin()
+			var df := ddir.get_next()
+			while not df.is_empty():
+				dfiles.append(df)
+				if df.begins_with("test_") and df.ends_with(".gd"):
+					var dscript = ResourceLoader.load("res://tests/" + df, "", ResourceLoader.CACHE_MODE_IGNORE)
+					if dscript == null:
+						dloads[df] = "load_null"
+					elif dscript.new() is McpTestSuite:
+						dloads[df] = "ok"
+					else:
+						dloads[df] = "not_suite"
+				df = ddir.get_next()
+			diag["files"] = dfiles
+			diag["loads"] = dloads
 		return {"data": diag}
 
 	var ctx := {
@@ -71,10 +90,9 @@ func _diagnose_discovery() -> Dictionary:
 	var dir := DirAccess.open("res://tests")
 	result["dir_open"] = dir != null
 	if dir == null:
-		result["dir_error"] = DirAccess.get_open_error()
 		return result
 
-	var files := []
+	var files: Array[String] = []
 	var load_results := {}
 	dir.list_dir_begin()
 	var f := dir.get_next()
@@ -89,7 +107,7 @@ func _diagnose_discovery() -> Dictionary:
 				if instance is McpTestSuite:
 					load_results[f] = "ok"
 				else:
-					load_results[f] = "not_McpTestSuite:%s" % instance.get_class()
+					load_results[f] = "not_McpTestSuite"
 		f = dir.get_next()
 
 	result["files_in_dir"] = files
