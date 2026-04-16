@@ -1,6 +1,6 @@
 # Godot AI — Working Plan
 
-*Updated 2026-04-15*
+*Updated 2026-04-16*
 
 This is the current working plan for Godot AI. It focuses on active and upcoming work only.
 
@@ -80,7 +80,7 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 - [x] batch execution is shipped with a clear contract
 - [x] multi-instance routing works in practice
 - [x] `script.patch` decision is made (shipped: anchor-based replace)
-- [x] test coverage and smoke coverage increase where the new runtime loop needs it (373 Python + 307 GDScript = 680 total)
+- [x] test coverage and smoke coverage increase where the new runtime loop needs it (375 Python + 312 GDScript = 687 total)
 
 ---
 
@@ -88,11 +88,12 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 
 See [Packaging & Distribution](packaging-distribution.md) for full detail. The short version:
 
-- [ ] clean install docs for Claude Code, Codex, and other MCP clients
+- [x] clean install docs for Claude Code, Claude Desktop, Codex, and Antigravity (README + dock auto-configure with manual fallback)
 - [ ] PyPI / `uvx` path works reliably
 - [ ] desktop binary path is real, not aspirational
-- [ ] plugin is downloadable from the Godot AssetLib
-- [ ] CI covers Python tests, Godot-side tests, and release-smoke install paths
+- [~] plugin is downloadable from the Godot AssetLib — release ZIP workflow ships `godot-ai-plugin.zip` via GitHub Releases; AssetLib submission in progress; dock has self-update check
+- [x] CI covers Python tests, Godot-side tests, and release-smoke install paths (3 OS × 2 Python + 3 OS Godot + release-smoke)
+- [x] bump-and-release workflow — `gh workflow run bump-and-release.yml -f bump=patch/minor/major` bumps versions, commits, tags, and triggers release build
 - [ ] compatibility guidance is published and maintained
 - [ ] a new user can get from zero to working in under 10 minutes
 
@@ -211,7 +212,7 @@ tracked above.
 ### What Must Exist Before This Is A Fair Benchmark
 
 - [x] run/stop plus screenshot capture and basic performance sampling
-- [ ] `batch.execute` and a safe partial-edit story
+- [x] `batch.execute` and a safe partial-edit story
 - [ ] data-authoring surface for upgrades, enemies, room data, and reusable scenes
 - [~] `ui.*` for HUD and upgrade selection — anchor presets, declarative `ui_build_layout` composer, and `theme_*` authoring shipped; still need `ui_set_text`, `theme_set_font`, `theme_set_stylebox_texture` for pixel-art / custom typography
 - [ ] `camera.*` for follow, bounds, zoom, and shake
