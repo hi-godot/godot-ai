@@ -5,8 +5,8 @@ extends VBoxContainer
 ## Editor dock panel showing MCP connection status, client config, and command log.
 
 const DEV_MODE_SETTING := "godot_ai/dev_mode"
-const COLOR_MUTED := COLOR_MUTED
-const COLOR_HEADER := COLOR_HEADER
+static var COLOR_MUTED := Color(0.7, 0.7, 0.7)
+static var COLOR_HEADER := Color(0.95, 0.95, 0.95)
 
 var _connection: Connection
 var _log_buffer: McpLogBuffer
