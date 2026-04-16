@@ -57,9 +57,20 @@ func run_suites(suites: Array, suite_filter: String = "", test_filter: String = 
 	for suite: McpTestSuite in suites:
 		if not suite_filter.is_empty() and suite.suite_name() != suite_filter:
 			continue
+
+		## Snapshot scene children before the suite so we can clean up leaks.
+		var scene_root := EditorInterface.get_edited_scene_root()
+		var before_children: Array[Node] = []
+		if scene_root != null:
+			before_children = _get_children_snapshot(scene_root)
+
 		suite.suite_setup(ctx.duplicate())
 		run_suite(suite, test_filter)
 		suite.suite_teardown()
+
+		## Remove any nodes the suite left behind (failed undo, missing cleanup).
+		if scene_root != null and scene_root.is_inside_tree():
+			_cleanup_leaked_nodes(scene_root, before_children)
 
 	_last_run_ms = Time.get_ticks_msec() - start
 	return get_results(verbose)
@@ -113,3 +124,17 @@ func _get_test_methods(obj: Object) -> Array[String]:
 			methods.append(name)
 	methods.sort()
 	return methods
+
+
+func _get_children_snapshot(node: Node) -> Array[Node]:
+	var children: Array[Node] = []
+	for child in node.get_children():
+		children.append(child)
+	return children
+
+
+func _cleanup_leaked_nodes(scene_root: Node, before: Array[Node]) -> void:
+	for child in scene_root.get_children():
+		if not before.has(child):
+			scene_root.remove_child(child)
+			child.queue_free()
