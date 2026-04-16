@@ -39,8 +39,8 @@ func get_test_results(params: Dictionary) -> Dictionary:
 	return {"data": _runner.get_results(verbose)}
 
 
-func _discover_suites() -> Array[McpTestSuite]:
-	var suites: Array[McpTestSuite] = []
+func _discover_suites() -> Array:
+	var suites := []
 	var dir := DirAccess.open("res://tests")
 	if dir == null:
 		return suites
@@ -49,7 +49,7 @@ func _discover_suites() -> Array[McpTestSuite]:
 	var file_name := dir.get_next()
 	while not file_name.is_empty():
 		if file_name.begins_with("test_") and file_name.ends_with(".gd"):
-			var script := ResourceLoader.load("res://tests/" + file_name)
+			var script := ResourceLoader.load("res://tests/" + file_name, "", ResourceLoader.CACHE_MODE_IGNORE)
 			if script:
 				var instance = script.new()
 				if instance is McpTestSuite:
@@ -57,7 +57,7 @@ func _discover_suites() -> Array[McpTestSuite]:
 		file_name = dir.get_next()
 
 	## Sort by suite name for deterministic order
-	suites.sort_custom(func(a: McpTestSuite, b: McpTestSuite) -> bool:
+	suites.sort_custom(func(a, b) -> bool:
 		return a.suite_name() < b.suite_name()
 	)
 	return suites
