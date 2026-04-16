@@ -23,22 +23,23 @@ func run_tests(params: Dictionary) -> Dictionary:
 
 	var suites := _discover_suites()
 	if suites.is_empty():
-		# Inline diagnostic: check what DirAccess sees
-		var dbg := {"step": "start"}
-		var ddir := DirAccess.open("res://tests")
-		if ddir == null:
-			dbg["dir"] = "null"
-			dbg["exists"] = DirAccess.dir_exists_absolute("res://tests")
+		# Inline diagnostic: try loading one script and report what happens
+		var dbg := {}
+		var test_file := "test_connection.gd"
+		var path := "res://tests/" + test_file
+		dbg["load_path"] = path
+		var scr = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
+		if scr == null:
+			dbg["load_result"] = "null"
+			dbg["file_exists"] = FileAccess.file_exists(path)
 		else:
-			dbg["dir"] = "ok"
-			var flist: Array[String] = []
-			ddir.list_dir_begin()
-			var fname := ddir.get_next()
-			while not fname.is_empty():
-				flist.append(fname)
-				fname = ddir.get_next()
-			dbg["files"] = flist
-			dbg["file_count"] = flist.size()
+			dbg["load_result"] = "ok"
+			dbg["script_class"] = scr.get_class()
+			var inst = scr.new()
+			dbg["instance_class"] = inst.get_class() if inst else "null"
+			dbg["is_test_suite"] = inst is McpTestSuite if inst else false
+			if inst and not (inst is McpTestSuite):
+				dbg["base_script"] = inst.get_script().get_base_script().resource_path if inst.get_script() and inst.get_script().get_base_script() else "none"
 		return {"data": {"error": "No test suites found in res://tests/", "total": 0, "debug": dbg}}
 
 	var ctx := {
