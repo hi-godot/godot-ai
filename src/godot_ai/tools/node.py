@@ -13,9 +13,10 @@ def register_node_tools(mcp: FastMCP) -> None:
     @mcp.tool(meta=DEFER_META)
     async def node_create(
         ctx: Context,
-        type: str,
+        type: str = "",
         name: str = "",
         parent_path: str = "",
+        scene_path: str = "",
         session_id: str = "",
     ) -> dict:
         """Create (spawn / add) a new node (game object / entity) in the scene tree.
@@ -28,6 +29,10 @@ def register_node_tools(mcp: FastMCP) -> None:
             type: The Godot node class (e.g. "Node3D", "MeshInstance3D", "Camera3D").
             name: Optional name for the node.
             parent_path: Node path of the parent (e.g. "/Main"). Empty = scene root.
+            scene_path: File path of a PackedScene to instantiate (e.g.
+                "res://prefabs/enemy.tscn"). When provided, the scene is loaded
+                and instantiated instead of creating by type. Mutually exclusive
+                with type — if scene_path is given, type is ignored.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -36,6 +41,7 @@ def register_node_tools(mcp: FastMCP) -> None:
             type=type,
             name=name,
             parent_path=parent_path,
+            scene_path=scene_path,
         )
 
     @mcp.tool(meta=DEFER_META)
@@ -174,7 +180,10 @@ def register_node_tools(mcp: FastMCP) -> None:
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await node_handlers.node_set_property(
-            runtime, path=path, property=property, value=value,
+            runtime,
+            path=path,
+            property=property,
+            value=value,
         )
 
     @mcp.tool(meta=DEFER_META)

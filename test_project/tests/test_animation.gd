@@ -924,3 +924,132 @@ func test_get_labels_value_and_method_tracks_distinctly() -> void:
 	assert_contains(types, "method")
 	assert_contains(types, "bezier")
 	_remove_node(player_path)
+
+
+# ============================================================================
+# Friction fix: animation_delete
+# ============================================================================
+
+func test_delete_animation_basic() -> void:
+	var player_path := _add_player("TestDeleteAnim")
+	if player_path.is_empty():
+		return
+	_handler.create_animation({"player_path": player_path, "name": "to_delete", "length": 1.0})
+
+	var result := _handler.delete_animation({
+		"player_path": player_path, "animation_name": "to_delete",
+	})
+	assert_has_key(result, "data")
+	assert_true(result.data.undoable)
+
+	# Verify it's gone.
+	var list_result := _handler.list_animations({"player_path": player_path})
+	for anim in list_result.data.animations:
+		assert_true(anim.name != "to_delete", "Deleted anim should not appear")
+
+	# Undo should restore it.
+	_undo_redo.undo()
+	var list_after := _handler.list_animations({"player_path": player_path})
+	var found := false
+	for anim in list_after.data.animations:
+		if anim.name == "to_delete":
+			found = true
+	assert_true(found, "Undo should restore deleted animation")
+
+	_remove_node(player_path)
+
+
+func test_delete_animation_not_found() -> void:
+	var player_path := _add_player("TestDeleteNotFound")
+	if player_path.is_empty():
+		return
+	var result := _handler.delete_animation({
+		"player_path": player_path, "animation_name": "nope",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	_remove_node(player_path)
+
+
+# ============================================================================
+# Friction fix: animation overwrite
+# ============================================================================
+
+func test_create_animation_overwrite() -> void:
+	var player_path := _add_player("TestOverwrite")
+	if player_path.is_empty():
+		return
+	_handler.create_animation({"player_path": player_path, "name": "overme", "length": 1.0})
+
+	# Without overwrite, duplicate name should fail.
+	var fail_result := _handler.create_animation({
+		"player_path": player_path, "name": "overme", "length": 2.0,
+	})
+	assert_is_error(fail_result, McpErrorCodes.INVALID_PARAMS)
+
+	# With overwrite, it should succeed.
+	var result := _handler.create_animation({
+		"player_path": player_path, "name": "overme", "length": 2.0, "overwrite": true,
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.overwritten, true)
+	assert_eq(result.data.length, 2.0)
+
+	_remove_node(player_path)
+
+
+# ============================================================================
+# Friction fix: animation_validate
+# ============================================================================
+
+func test_validate_animation_all_valid() -> void:
+	var player_path := _add_player("TestValidateOk")
+	if player_path.is_empty():
+		return
+	_handler.create_animation({"player_path": player_path, "name": "valid_test", "length": 1.0})
+	_handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "valid_test",
+		"track_path": ".:visible",
+		"keyframes": [{"time": 0.0, "value": true}],
+	})
+	var result := _handler.validate_animation({
+		"player_path": player_path, "animation_name": "valid_test",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.valid, true)
+	assert_eq(result.data.broken_count, 0)
+	assert_eq(result.data.valid_count, 1)
+	_remove_node(player_path)
+
+
+func test_validate_animation_broken_track() -> void:
+	var player_path := _add_player("TestValidateBroken")
+	if player_path.is_empty():
+		return
+	_handler.create_animation({"player_path": player_path, "name": "broken_test", "length": 1.0})
+	_handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "broken_test",
+		"track_path": "NonExistentNode:visible",
+		"keyframes": [{"time": 0.0, "value": true}],
+	})
+	var result := _handler.validate_animation({
+		"player_path": player_path, "animation_name": "broken_test",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.valid, false)
+	assert_eq(result.data.broken_count, 1)
+	assert_eq(result.data.broken_tracks[0].issue, "node_not_found")
+	assert_eq(result.data.broken_tracks[0].node_path, "NonExistentNode")
+	_remove_node(player_path)
+
+
+func test_validate_animation_not_found() -> void:
+	var player_path := _add_player("TestValidateNotFound")
+	if player_path.is_empty():
+		return
+	var result := _handler.validate_animation({
+		"player_path": player_path, "animation_name": "nope",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	_remove_node(player_path)

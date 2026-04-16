@@ -1,11 +1,90 @@
 [gd_scene format=3 uid="uid://bdvihvqroq12a"]
 
 [ext_resource type="PackedScene" uid="uid://1w7dp2aeqcpq" path="res://snowman.tscn" id="1_snowman"]
+[ext_resource type="Material" path="res://tests/_mcp_test_material.tres" id="2_h2yge"]
+[ext_resource type="Script" path="res://tests/_mcp_test_script.gd" id="3_1bvp3"]
+
+[sub_resource type="Animation" id="Animation_lquwl"]
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath(".:modulate")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 1),
+"transitions": PackedFloat32Array(1, 1),
+"update": 0,
+"values": [1.0, 0.0]
+}
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_7mycd"]
+_data = {
+&"anim": SubResource("Animation_lquwl")
+}
+
+[sub_resource type="Animation" id="Animation_272bh"]
+length = 0.3
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_5vw27"]
+_data = {
+&"fade": SubResource("Animation_272bh")
+}
+
+[sub_resource type="Animation" id="Animation_kek77"]
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_4c57u"]
+_data = {
+&"idle": SubResource("Animation_kek77")
+}
+
+[sub_resource type="Animation" id="Animation_efxa6"]
+length = 0.3
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath(".:position")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.3),
+"transitions": PackedFloat32Array(1, 1),
+"update": 0,
+"values": [Vector3(0, 0, 0), Vector3(1, 0, 0)]
+}
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_dg77c"]
+_data = {
+&"slide": SubResource("Animation_efxa6")
+}
+
+[sub_resource type="Animation" id="Animation_ycdy4"]
+length = 0.5
+loop_mode = 2
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath(".:modulate")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.5),
+"transitions": PackedFloat32Array(1, 1),
+"update": 0,
+"values": ["white", "red"]
+}
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_w48qg"]
+_data = {
+&"pulse": SubResource("Animation_ycdy4")
+}
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_vivmo"]
 
 [node name="Main" type="Node3D" unique_id=40482226]
 
-[node name="Camera3D" type="Camera3D" parent="." unique_id=974172401]
-transform = Transform3D(1, 0, 0, 0, 0.939693, 0.34202, 0, -0.34202, 0.939693, 0, 2, 5)
+[node name="Camera3D" type="Camera3D" parent="." unique_id=974172401 groups=["_mcp_test_group"]]
+fov = 90.0
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=459000357]
 transform = Transform3D(1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025, 0, 3, 0)
@@ -18,14 +97,65 @@ transform = Transform3D(1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025, 0, 3, 0)
 
 [node name="SnowGroup" type="Node3D" parent="." unique_id=647443631]
 
-[node name="Snowman" parent="SnowGroup" instance=ExtResource("1_snowman")]
+[node name="Snowman" parent="SnowGroup" unique_id=915534216 instance=ExtResource("1_snowman")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, 0, 2)
 
-[node name="Snowman2" parent="SnowGroup" instance=ExtResource("1_snowman")]
+[node name="Snowman2" parent="SnowGroup" unique_id=112146669 instance=ExtResource("1_snowman")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 2)
 
-[node name="Snowman3" parent="SnowGroup" instance=ExtResource("1_snowman")]
+[node name="Snowman3" parent="SnowGroup" unique_id=1614542640 instance=ExtResource("1_snowman")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 0, 2)
 
-[node name="Snowman4" parent="SnowGroup" instance=ExtResource("1_snowman")]
+[node name="Snowman4" parent="SnowGroup" unique_id=360871404 instance=ExtResource("1_snowman")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 0, 2)
+
+[node name="TestPropTrackUndo" type="AnimationPlayer" parent="." unique_id=102301581]
+libraries/ = SubResource("AnimationLibrary_7mycd")
+
+[node name="TestAnimUndoCreate" type="AnimationPlayer" parent="." unique_id=956131291]
+libraries/ = SubResource("AnimationLibrary_5vw27")
+
+[node name="TestBarePlayer1" type="AnimationPlayer" parent="." unique_id=1976815132]
+libraries/ = SubResource("AnimationLibrary_4c57u")
+
+[node name="TestBarePlayer2" type="AnimationPlayer" parent="." unique_id=949701231]
+libraries/ = SubResource("AnimationLibrary_dg77c")
+
+[node name="TestSimpleUndo" type="AnimationPlayer" parent="." unique_id=459666258]
+libraries/ = SubResource("AnimationLibrary_w48qg")
+
+[node name="TestPlayerUndo" type="AnimationPlayer" parent="." unique_id=1647827796]
+libraries/ = SubResource("AnimationLibrary_vivmo")
+
+[node name="_McpTest" type="Node3D" parent="." unique_id=1603395699]
+
+[node name="_McpTestDuplicate" type="Camera3D" parent="." unique_id=1568163391 groups=["_mcp_test_group"]]
+transform = Transform3D(1, 0, 0, 0, 0.939693, 0.34202, 0, -0.34202, 0.939693, 0, 2, 5)
+
+[node name="_McpRenameDst58365114" type="Node3D" parent="." unique_id=1948149834]
+
+[node name="_McpTestRemote" type="RemoteTransform3D" parent="." unique_id=444774314]
+remote_path = NodePath("../Camera3D")
+
+[node name="_McpTestClear" type="MeshInstance3D" parent="." unique_id=1454267247]
+
+[node name="_McpTestMat" type="MeshInstance3D" parent="." unique_id=943006872]
+material_override = ExtResource("2_h2yge")
+
+[node name="_McpTestAttach" type="Node3D" parent="." unique_id=1554348388]
+script = ExtResource("3_1bvp3")
+
+[node name="_McpTestDetach" type="Node3D" parent="." unique_id=1407978375]
+
+[node name="TestBuildUndo" type="Panel" parent="." unique_id=386500178]
+
+[node name="@Label@18685" type="Label" parent="TestBuildUndo" unique_id=1131311740]
+layout_mode = 0
+
+[node name="@Button@18686" type="Button" parent="TestBuildUndo" unique_id=1607281749]
+layout_mode = 0
+
+[node name="TestUiUndo" type="Panel" parent="." unique_id=274306649]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0

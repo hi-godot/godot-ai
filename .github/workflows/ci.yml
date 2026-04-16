@@ -109,34 +109,45 @@ jobs:
   godot-tests-linux:
     name: Godot tests / Linux
     runs-on: ubuntu-latest
-    container:
-      image: barichello/godot-ci:4.6.2
 
     steps:
       - uses: actions/checkout@v4
 
+      - uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 4.6.2
+          use-dotnet: false
+
       - name: Set up Python
-        timeout-minutes: 5
-        run: |
-          apt-get update -qq && apt-get install -y -qq python3 python3-pip python3-venv curl > /dev/null
-          python3 -m venv /tmp/venv
-          /tmp/venv/bin/pip install -e ".[dev]"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
 
       - name: Start MCP server
-        run: bash script/ci-start-server /tmp/venv/bin/python
+        run: bash script/ci-start-server
+
+      - name: Import and validate GDScript
+        timeout-minutes: 3
+        run: |
+          godot --headless --path test_project --import > /tmp/godot-import.log 2>&1 || true
+          bash script/ci-check-gdscript /tmp/godot-import.log
 
       - name: Start Godot editor (headless)
-        run: |
-          timeout 30 godot --headless --path test_project --import || true
-          timeout 120 godot --headless --path test_project --editor &
+        run: godot --headless --path test_project --editor &
 
       - name: Run handler tests
+        timeout-minutes: 3
         run: bash script/ci-godot-tests
 
       - name: Reload smoke test
+        timeout-minutes: 2
         run: bash script/ci-reload-test
 
       - name: Quit smoke test
+        timeout-minutes: 2
         run: bash script/ci-quit-test
 
   godot-tests-macos:

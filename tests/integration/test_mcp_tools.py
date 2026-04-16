@@ -526,9 +526,7 @@ class TestNodeRenameTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "node_rename", {"path": "/Main/Player", "new_name": "Hero"}
-        )
+        result = await client.call_tool("node_rename", {"path": "/Main/Player", "new_name": "Hero"})
         await task
 
         assert result.data["name"] == "Hero"
@@ -2534,9 +2532,7 @@ class TestPerCallSessionRouting:
                 )
 
             task = asyncio.create_task(respond_b())
-            result = await client.call_tool(
-                "scene_get_roots", {"session_id": "proj-b@0002"}
-            )
+            result = await client.call_tool("scene_get_roots", {"session_id": "proj-b@0002"})
             await task
             assert result.data["current"] == "res://from_b.tscn"
         finally:
@@ -2866,9 +2862,7 @@ class TestThemeCreateTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "theme_create", {"path": "res://ui/themes/game.tres"}
-        )
+        result = await client.call_tool("theme_create", {"path": "res://ui/themes/game.tres"})
         await task
         assert result.data["path"] == "res://ui/themes/game.tres"
 
@@ -3022,6 +3016,50 @@ class TestThemeSetStyleboxFlatTool:
         await task
         assert result.data["corner_radius"] == 8
 
+    async def test_per_side_params_forwarded(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "theme_set_stylebox_flat"
+            params = cmd["params"]
+            assert params["border_width"] == 1
+            assert params["border_width_top"] == 4
+            assert params["border_width_bottom"] == 2
+            assert "border_width_left" not in params
+            assert params["corner_radius_top_left"] == 12
+            assert params["content_margin_top"] == 16.0
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://themes/game.tres",
+                    "class_name": "Button",
+                    "name": "normal",
+                    "stylebox_class": "StyleBoxFlat",
+                    "bg_color": {"r": 0, "g": 0, "b": 0, "a": 1},
+                    "border_width": 1,
+                    "corner_radius": 4,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "theme_set_stylebox_flat",
+            {
+                "theme_path": "res://themes/game.tres",
+                "class_name": "Button",
+                "name": "normal",
+                "border_width": 1,
+                "border_width_top": 4,
+                "border_width_bottom": 2,
+                "corner_radius_top_left": 12,
+                "content_margin_top": 16.0,
+            },
+        )
+        await task
+        assert result.data["border_width"] == 1
+
 
 class TestThemeApplyTool:
     async def test_apply(self, mcp_stack):
@@ -3072,9 +3110,7 @@ class TestThemeApplyTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "theme_apply", {"node_path": "/Main/HUD"}
-        )
+        result = await client.call_tool("theme_apply", {"node_path": "/Main/HUD"})
         await task
         assert result.data["cleared"] is True
 
@@ -3103,9 +3139,7 @@ class TestAnimationPlayerCreateTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "animation_player_create", {"parent_path": "/Main"}
-        )
+        result = await client.call_tool("animation_player_create", {"parent_path": "/Main"})
         await task
         assert result.data["path"] == "/Main/AnimationPlayer"
         assert result.data["undoable"] is True
@@ -3275,8 +3309,14 @@ class TestAnimationAddMethodTrackTool:
             assert kf["method"] == "queue_free"
             await plugin.send_response(
                 cmd["request_id"],
-                {"player_path": "/Main/AP", "animation_name": "die",
-                 "target_node_path": ".", "keyframe_count": 1, "track_index": 0, "undoable": True},
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "die",
+                    "target_node_path": ".",
+                    "keyframe_count": 1,
+                    "track_index": 0,
+                    "undoable": True,
+                },
             )
 
         task = asyncio.create_task(respond())
@@ -3303,8 +3343,13 @@ class TestAnimationSetAutoplayTool:
             assert cmd["params"]["animation_name"] == "idle"
             await plugin.send_response(
                 cmd["request_id"],
-                {"player_path": "/Main/AP", "animation_name": "idle",
-                 "previous_autoplay": "", "cleared": False, "undoable": True},
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "idle",
+                    "previous_autoplay": "",
+                    "cleared": False,
+                    "undoable": True,
+                },
             )
 
         task = asyncio.create_task(respond())
@@ -3323,14 +3368,17 @@ class TestAnimationSetAutoplayTool:
             assert cmd["params"]["animation_name"] == ""
             await plugin.send_response(
                 cmd["request_id"],
-                {"player_path": "/Main/AP", "animation_name": "", "previous_autoplay": "idle",
-                 "cleared": True, "undoable": True},
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "",
+                    "previous_autoplay": "idle",
+                    "cleared": True,
+                    "undoable": True,
+                },
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "animation_set_autoplay", {"player_path": "/Main/AP"}
-        )
+        result = await client.call_tool("animation_set_autoplay", {"player_path": "/Main/AP"})
         await task
         assert result.data["cleared"] is True
 
@@ -3344,8 +3392,12 @@ class TestAnimationPlaybackTool:
             assert cmd["command"] == "animation_play"
             await plugin.send_response(
                 cmd["request_id"],
-                {"player_path": "/Main/AP", "animation_name": "idle",
-                 "undoable": False, "reason": "Runtime playback state — not saved with scene"},
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "idle",
+                    "undoable": False,
+                    "reason": "Runtime playback state — not saved with scene",
+                },
             )
 
         task = asyncio.create_task(respond())
@@ -3363,8 +3415,11 @@ class TestAnimationPlaybackTool:
             assert cmd["command"] == "animation_stop"
             await plugin.send_response(
                 cmd["request_id"],
-                {"player_path": "/Main/AP", "undoable": False,
-                 "reason": "Runtime playback state — not saved with scene"},
+                {
+                    "player_path": "/Main/AP",
+                    "undoable": False,
+                    "reason": "Runtime playback state — not saved with scene",
+                },
             )
 
         task = asyncio.create_task(respond())
@@ -3416,8 +3471,14 @@ class TestAnimationGetTool:
                     "loop_mode": "none",
                     "track_count": 1,
                     "tracks": [
-                        {"index": 0, "type": "value", "path": "Panel:modulate",
-                         "interpolation": "linear", "key_count": 2, "keys": []}
+                        {
+                            "index": 0,
+                            "type": "value",
+                            "path": "Panel:modulate",
+                            "interpolation": "linear",
+                            "key_count": 2,
+                            "keys": [],
+                        }
                     ],
                 },
             )
@@ -3435,10 +3496,13 @@ class TestAnimationCreateSimpleTool:
     async def test_create_simple(self, mcp_stack):
         client, plugin = mcp_stack
         tweens = [
-            {"target": "Panel", "property": "modulate",
-             "from": {"r": 1, "g": 1, "b": 1, "a": 0},
-             "to": {"r": 1, "g": 1, "b": 1, "a": 1},
-             "duration": 0.5}
+            {
+                "target": "Panel",
+                "property": "modulate",
+                "from": {"r": 1, "g": 1, "b": 1, "a": 0},
+                "to": {"r": 1, "g": 1, "b": 1, "a": 1},
+                "duration": 0.5,
+            }
         ]
 
         async def respond():
@@ -3450,8 +3514,14 @@ class TestAnimationCreateSimpleTool:
             assert "length" not in cmd["params"]
             await plugin.send_response(
                 cmd["request_id"],
-                {"player_path": "/Main/AP", "name": "fade_in", "length": 0.5,
-                 "loop_mode": "none", "track_count": 1, "undoable": True},
+                {
+                    "player_path": "/Main/AP",
+                    "name": "fade_in",
+                    "length": 0.5,
+                    "loop_mode": "none",
+                    "track_count": 1,
+                    "undoable": True,
+                },
             )
 
         task = asyncio.create_task(respond())
@@ -3472,8 +3542,14 @@ class TestAnimationCreateSimpleTool:
             assert isinstance(cmd["params"]["tweens"], list)
             await plugin.send_response(
                 cmd["request_id"],
-                {"player_path": "/Main/AP", "name": "pulse", "length": 0.5,
-                 "loop_mode": "pingpong", "track_count": 1, "undoable": True},
+                {
+                    "player_path": "/Main/AP",
+                    "name": "pulse",
+                    "length": 0.5,
+                    "loop_mode": "pingpong",
+                    "track_count": 1,
+                    "undoable": True,
+                },
             )
 
         task = asyncio.create_task(respond())
@@ -3491,3 +3567,64 @@ class TestAnimationCreateSimpleTool:
         )
         await task
         assert result.data["undoable"] is True
+
+
+class TestAnimationDeleteTool:
+    async def test_delete(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_delete"
+            assert cmd["params"]["player_path"] == "/Main/AP"
+            assert cmd["params"]["animation_name"] == "idle"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "idle",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_delete",
+            {"player_path": "/Main/AP", "animation_name": "idle"},
+        )
+        await task
+        assert result.data["undoable"] is True
+
+
+class TestAnimationValidateTool:
+    async def test_validate(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_validate"
+            assert cmd["params"]["player_path"] == "/Main/AP"
+            assert cmd["params"]["animation_name"] == "walk"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "walk",
+                    "track_count": 2,
+                    "valid_count": 1,
+                    "broken_count": 1,
+                    "broken_tracks": [
+                        {"index": 1, "path": "Gone:visible", "issue": "node_not_found"},
+                    ],
+                    "valid": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_validate",
+            {"player_path": "/Main/AP", "animation_name": "walk"},
+        )
+        await task
+        assert result.data["valid"] is False
+        assert result.data["broken_count"] == 1

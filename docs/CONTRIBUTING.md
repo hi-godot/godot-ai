@@ -29,6 +29,20 @@ test_run suite=scene         # run one suite
 test_results_get             # review last results
 ```
 
+### CI regression range helper
+
+When CI starts failing, identify the regression window (last green → first red):
+
+```bash
+script/ci-find-regression-range hi-godot/godot-ai ci.yml main
+```
+
+If your local clone has a valid `origin` GitHub remote, you can omit `owner/repo`:
+
+```bash
+script/ci-find-regression-range
+```
+
 ## Dev Server with Auto-Reload
 
 For Python-side changes without restarting Godot:

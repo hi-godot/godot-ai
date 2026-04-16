@@ -7,12 +7,18 @@ from godot_ai.runtime.interface import Runtime
 from godot_ai.tools._pagination import paginate
 
 
-async def node_create(runtime: Runtime, type: str, name: str = "", parent_path: str = "") -> dict:
+async def node_create(
+    runtime: Runtime,
+    type: str = "",
+    name: str = "",
+    parent_path: str = "",
+    scene_path: str = "",
+) -> dict:
     require_writable(runtime)
-    return await runtime.send_command(
-        "create_node",
-        {"type": type, "name": name, "parent_path": parent_path},
-    )
+    params: dict = {"type": type, "name": name, "parent_path": parent_path}
+    if scene_path:
+        params["scene_path"] = scene_path
+    return await runtime.send_command("create_node", params)
 
 
 async def node_find(
@@ -101,4 +107,3 @@ async def node_remove_from_group(runtime: Runtime, path: str, group: str) -> dic
         "remove_from_group",
         {"path": path, "group": group},
     )
-

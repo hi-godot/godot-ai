@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Validate all GDScript files for parse errors.
+# Uses a single Godot --import invocation (already run by CI) rather than
+# spawning one process per file. Falls back to per-file checks if the
+# import log isn't provided.
+#
+# Usage:
+#   bash script/ci-check-gdscript [import_log]
+#
+# If import_log is provided, scans it for SCRIPT ERROR / Parse Error lines.
+# If omitted, runs a single import pass and checks its output.
+set -euo pipefail
+
+PROJECT_DIR="${PROJECT_DIR:-test_project}"
+
+if [ "${1:-}" != "" ] && [ -f "$1" ]; then
+  IMPORT_LOG="$1"
+else
+  echo "Running GDScript validation via --import..."
+  IMPORT_LOG=$(mktemp)
+  godot --headless --path "$PROJECT_DIR" --import > "$IMPORT_LOG" 2>&1 || true
+fi
+
+# Check for parse errors in the import output.
+ERRORS=$(grep -ciE "SCRIPT ERROR|Parse Error|Failed to load script" "$IMPORT_LOG" 2>/dev/null || echo "0")
+
+if [ "$ERRORS" -gt 0 ]; then
+  echo "GDScript parse errors found:"
+  grep -iE "SCRIPT ERROR|Parse Error|Failed to load script" "$IMPORT_LOG" | sed 's/^/  /'
+  exit 1
+fi
+
+echo "All GDScript files OK"

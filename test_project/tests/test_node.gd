@@ -360,8 +360,19 @@ func test_rename_node_basic() -> void:
 
 
 func test_rename_node_scene_root() -> void:
-	var result := _handler.rename_node({"path": "/Main", "new_name": "NewMain"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	# Renaming the scene root is allowed (not the .tscn file path, just the node name).
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return
+	var old_name := String(scene_root.name)
+	var result := _handler.rename_node({"path": "/" + old_name, "new_name": "RenamedTestRoot"})
+	assert_has_key(result, "data")
+	assert_eq(result.data.name, "RenamedTestRoot")
+	assert_true(result.data.undoable)
+	# Restore the original name to avoid polluting other tests.
+	var restore := _handler.rename_node({"path": "/RenamedTestRoot", "new_name": old_name})
+	assert_has_key(restore, "data")
+	assert_eq(String(scene_root.name), old_name)
 
 
 func test_rename_node_missing_name() -> void:
@@ -509,3 +520,53 @@ func test_set_selection_empty_clears() -> void:
 	var result := _handler.set_selection({"paths": []})
 	assert_has_key(result, "data")
 	assert_eq(result.data.count, 0)
+
+
+# ============================================================================
+# Friction fix: scene instancing via node_create
+# ============================================================================
+
+func test_create_node_from_scene_path() -> void:
+	# Use the test project's own main.tscn as the scene to instance.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return
+	var before_count := scene_root.get_child_count()
+	var result := _handler.create_node({
+		"scene_path": "res://main.tscn",
+		"name": "InstancedMain",
+	})
+	assert_has_key(result, "data")
+	assert_has_key(result.data, "scene_path")
+	assert_eq(result.data.scene_path, "res://main.tscn")
+	assert_true(result.data.undoable)
+	# Clean up: remove the instanced node.
+	var instanced := scene_root.find_child("InstancedMain", false, false)
+	if instanced:
+		scene_root.remove_child(instanced)
+		instanced.queue_free()
+	assert_eq(scene_root.get_child_count(), before_count, "Cleanup should restore child count")
+
+
+func test_create_node_scene_path_not_found() -> void:
+	var result := _handler.create_node({
+		"scene_path": "res://nonexistent_scene.tscn",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "not found")
+
+
+func test_create_node_scene_path_not_res() -> void:
+	var result := _handler.create_node({
+		"scene_path": "/tmp/scene.tscn",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "res://")
+
+
+func test_create_node_requires_type_or_scene_path() -> void:
+	var result := _handler.create_node({"parent_path": ""})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "type")
+
+

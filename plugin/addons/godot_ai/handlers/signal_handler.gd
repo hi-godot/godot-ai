@@ -121,11 +121,15 @@ func _resolve_signal_params(params: Dictionary) -> Dictionary:
 
 	var source := ScenePath.resolve(params.path, scene_root)
 	if source == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Source node not found: %s" % params.path)
+		source = _resolve_autoload(params.path)
+	if source == null:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Source node not found: %s (not in scene tree or autoloads)" % params.path)
 
 	var target := ScenePath.resolve(params.target, scene_root)
 	if target == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Target node not found: %s" % params.target)
+		target = _resolve_autoload(params.target)
+	if target == null:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Target node not found: %s (not in scene tree or autoloads)" % params.target)
 
 	return {
 		"source": source,
@@ -134,6 +138,18 @@ func _resolve_signal_params(params: Dictionary) -> Dictionary:
 		"method": params.method,
 		"scene_root": scene_root,
 	}
+
+
+## Attempt to resolve a path as an autoload singleton.
+## Uses direct ProjectSettings lookup (O(1)) instead of scanning all properties.
+func _resolve_autoload(path: String) -> Node:
+	var name := path.trim_prefix("/")
+	if not ProjectSettings.has_setting("autoload/" + name):
+		return null
+	var tree := Engine.get_main_loop()
+	if tree is SceneTree:
+		return (tree as SceneTree).root.get_node_or_null(name)
+	return null
 
 
 func _signal_response(source: Node, signal_name: String, target: Node, method: String, scene_root: Node) -> Dictionary:

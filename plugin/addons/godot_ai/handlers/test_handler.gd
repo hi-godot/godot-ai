@@ -22,7 +22,7 @@ func run_tests(params: Dictionary) -> Dictionary:
 	var verbose: bool = params.get("verbose", false)
 
 	var discovery := _discover_suites()
-	var suites: Array[McpTestSuite] = discovery.suites
+	var suites: Array = discovery.suites
 	if suites.is_empty():
 		var msg := "No test suites found in res://tests/"
 		if not discovery.errors.is_empty():
@@ -49,9 +49,9 @@ func get_test_results(params: Dictionary) -> Dictionary:
 
 
 func _discover_suites() -> Dictionary:
-	## Returns {"suites": Array[McpTestSuite], "errors": Array[String]}.
+	## Returns {"suites": Array, "errors": Array[String]}.
 	## Resilient: a broken script doesn't kill discovery of the rest.
-	var suites: Array[McpTestSuite] = []
+	var suites := []
 	var errors: Array[String] = []
 	var dir := DirAccess.open("res://tests")
 	if dir == null:
@@ -76,7 +76,7 @@ func _discover_suites() -> Dictionary:
 		file_name = dir.get_next()
 
 	## Sort by suite name for deterministic order.
-	suites.sort_custom(func(a: McpTestSuite, b: McpTestSuite) -> bool:
+	suites.sort_custom(func(a, b) -> bool:
 		return a.suite_name() < b.suite_name()
 	)
 	return {"suites": suites, "errors": errors}

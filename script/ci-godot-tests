@@ -79,6 +79,12 @@ if [ "$FINAL_COUNT" -eq 0 ] 2>/dev/null; then
   exit 1
 fi
 
+# Give the editor time to finish its filesystem scan and script class
+# registration. Without this, test_run fires before DirAccess sees the
+# test scripts — the plugin connects before the scan completes.
+echo "Waiting for editor filesystem scan to settle..."
+sleep 8
+
 # Call test_run
 echo "Running handler tests..."
 RESULT=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \

@@ -136,6 +136,18 @@ def register_theme_tools(mcp: FastMCP) -> None:
         shadow_offset_x: float | None = None,
         shadow_offset_y: float | None = None,
         anti_aliasing: bool | None = None,
+        border_width_top: int | None = None,
+        border_width_bottom: int | None = None,
+        border_width_left: int | None = None,
+        border_width_right: int | None = None,
+        corner_radius_top_left: int | None = None,
+        corner_radius_top_right: int | None = None,
+        corner_radius_bottom_left: int | None = None,
+        corner_radius_bottom_right: int | None = None,
+        content_margin_top: float | None = None,
+        content_margin_bottom: float | None = None,
+        content_margin_left: float | None = None,
+        content_margin_right: float | None = None,
         session_id: str = "",
     ) -> dict:
         """Compose a StyleBoxFlat and assign it to a theme slot.
@@ -165,6 +177,18 @@ def register_theme_tools(mcp: FastMCP) -> None:
             shadow_offset_x: Horizontal shadow offset.
             shadow_offset_y: Vertical shadow offset.
             anti_aliasing: Whether to anti-alias borders and corners.
+            border_width_top: Border thickness for top side only (overrides border_width).
+            border_width_bottom: Border thickness for bottom side only.
+            border_width_left: Border thickness for left side only.
+            border_width_right: Border thickness for right side only.
+            corner_radius_top_left: Corner radius for top-left (overrides corner_radius).
+            corner_radius_top_right: Corner radius for top-right.
+            corner_radius_bottom_left: Corner radius for bottom-left.
+            corner_radius_bottom_right: Corner radius for bottom-right.
+            content_margin_top: Content margin for top side (overrides content_margin).
+            content_margin_bottom: Content margin for bottom side.
+            content_margin_left: Content margin for left side.
+            content_margin_right: Content margin for right side.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -183,6 +207,18 @@ def register_theme_tools(mcp: FastMCP) -> None:
             shadow_offset_x=shadow_offset_x,
             shadow_offset_y=shadow_offset_y,
             anti_aliasing=anti_aliasing,
+            border_width_top=border_width_top,
+            border_width_bottom=border_width_bottom,
+            border_width_left=border_width_left,
+            border_width_right=border_width_right,
+            corner_radius_top_left=corner_radius_top_left,
+            corner_radius_top_right=corner_radius_top_right,
+            corner_radius_bottom_left=corner_radius_bottom_left,
+            corner_radius_bottom_right=corner_radius_bottom_right,
+            content_margin_top=content_margin_top,
+            content_margin_bottom=content_margin_bottom,
+            content_margin_left=content_margin_left,
+            content_margin_right=content_margin_right,
         )
 
     @mcp.tool(meta=DEFER_META)
@@ -205,6 +241,4 @@ def register_theme_tools(mcp: FastMCP) -> None:
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await theme_handlers.theme_apply(
-            runtime, node_path=node_path, theme_path=theme_path
-        )
+        return await theme_handlers.theme_apply(runtime, node_path=node_path, theme_path=theme_path)

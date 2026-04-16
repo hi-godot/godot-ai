@@ -68,6 +68,7 @@ def register_animation_tools(mcp: FastMCP) -> None:
         name: str,
         length: float,
         loop_mode: str = "none",
+        overwrite: bool = False,
         session_id: str = "",
     ) -> dict:
         """Create a new Animation clip inside an AnimationPlayer's default library.
@@ -85,6 +86,8 @@ def register_animation_tools(mcp: FastMCP) -> None:
                 "none" — play once and stop (default),
                 "linear" — loop from beginning,
                 "pingpong" — reverse and repeat.
+            overwrite: If true, replace an existing animation with the same name
+                instead of erroring. The old animation is captured for undo.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -94,6 +97,55 @@ def register_animation_tools(mcp: FastMCP) -> None:
             name=name,
             length=length,
             loop_mode=loop_mode,
+            overwrite=overwrite,
+        )
+
+    @mcp.tool(meta=DEFER_META)
+    async def animation_delete(
+        ctx: Context,
+        player_path: str,
+        animation_name: str,
+        session_id: str = "",
+    ) -> dict:
+        """Delete an Animation clip from an AnimationPlayer's library.
+
+        Removes the named animation. Undoable — Ctrl+Z in Godot restores it.
+
+        Args:
+            player_path: Scene path to the AnimationPlayer.
+            animation_name: Name of the animation to delete.
+            session_id: Optional Godot session to target. Empty = active session.
+        """
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
+        return await animation_handlers.animation_delete(
+            runtime,
+            player_path=player_path,
+            animation_name=animation_name,
+        )
+
+    @mcp.tool(meta=DEFER_META)
+    async def animation_validate(
+        ctx: Context,
+        player_path: str,
+        animation_name: str,
+        session_id: str = "",
+    ) -> dict:
+        """Check all track paths in an animation resolve to actual nodes.
+
+        Returns a validation report with valid_count, broken_count, and a list
+        of broken tracks with their index, path, and issue description. Use this
+        after restructuring a node tree to find animations targeting stale paths.
+
+        Args:
+            player_path: Scene path to the AnimationPlayer.
+            animation_name: Name of the animation to validate.
+            session_id: Optional Godot session to target. Empty = active session.
+        """
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
+        return await animation_handlers.animation_validate(
+            runtime,
+            player_path=player_path,
+            animation_name=animation_name,
         )
 
     @mcp.tool(meta=DEFER_META)
@@ -324,6 +376,7 @@ def register_animation_tools(mcp: FastMCP) -> None:
         tweens: Annotated[list[dict[str, Any]], JsonCoerced],
         length: float | None = None,
         loop_mode: str = "none",
+        overwrite: bool = False,
         session_id: str = "",
     ) -> dict:
         """Create a complete animation from a list of tween specs in one call.
@@ -372,6 +425,7 @@ def register_animation_tools(mcp: FastMCP) -> None:
             tweens: List of tween spec dicts (see above).
             length: Total duration in seconds. Auto-computed if omitted.
             loop_mode: "none" (default), "linear", or "pingpong".
+            overwrite: If true, replace an existing animation with the same name.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -382,4 +436,5 @@ def register_animation_tools(mcp: FastMCP) -> None:
             tweens=tweens,
             length=length,
             loop_mode=loop_mode,
+            overwrite=overwrite,
         )

@@ -26,17 +26,18 @@ async def animation_create(
     name: str,
     length: float,
     loop_mode: str = "none",
+    overwrite: bool = False,
 ) -> dict:
     require_writable(runtime)
-    return await runtime.send_command(
-        "animation_create",
-        {
-            "player_path": player_path,
-            "name": name,
-            "length": length,
-            "loop_mode": loop_mode,
-        },
-    )
+    params: dict = {
+        "player_path": player_path,
+        "name": name,
+        "length": length,
+        "loop_mode": loop_mode,
+    }
+    if overwrite:
+        params["overwrite"] = True
+    return await runtime.send_command("animation_create", params)
 
 
 async def animation_add_property_track(
@@ -133,6 +134,30 @@ async def animation_get(
     )
 
 
+async def animation_delete(
+    runtime: Runtime,
+    player_path: str,
+    animation_name: str,
+) -> dict:
+    require_writable(runtime)
+    return await runtime.send_command(
+        "animation_delete",
+        {"player_path": player_path, "animation_name": animation_name},
+    )
+
+
+async def animation_validate(
+    runtime: Runtime,
+    player_path: str,
+    animation_name: str,
+) -> dict:
+    # Read-only — no require_writable.
+    return await runtime.send_command(
+        "animation_validate",
+        {"player_path": player_path, "animation_name": animation_name},
+    )
+
+
 async def animation_create_simple(
     runtime: Runtime,
     player_path: str,
@@ -140,6 +165,7 @@ async def animation_create_simple(
     tweens: list[dict[str, Any]],
     length: float | None = None,
     loop_mode: str = "none",
+    overwrite: bool = False,
 ) -> dict:
     require_writable(runtime)
     params: dict[str, Any] = {
@@ -150,4 +176,6 @@ async def animation_create_simple(
     }
     if length is not None:
         params["length"] = length
+    if overwrite:
+        params["overwrite"] = True
     return await runtime.send_command("animation_create_simple", params)
