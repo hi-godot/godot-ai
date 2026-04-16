@@ -5,6 +5,8 @@ extends VBoxContainer
 ## Editor dock panel showing MCP connection status, client config, and command log.
 
 const DEV_MODE_SETTING := "godot_ai/dev_mode"
+const COLOR_MUTED := COLOR_MUTED
+const COLOR_HEADER := COLOR_HEADER
 
 var _connection: Connection
 var _log_buffer: McpLogBuffer
@@ -52,13 +54,17 @@ func _process(_delta: float) -> void:
 	if _connection == null:
 		return
 	_update_status()
-	_update_log()
-	_update_redock_visibility()
+	if _log_section.visible:
+		_update_log()
+
+
+func _notification(what: int) -> void:
+	# Detect dock/undock by watching for reparenting events.
+	if what == NOTIFICATION_PARENTED or what == NOTIFICATION_UNPARENTED:
+		_update_redock_visibility.call_deferred()
 
 
 func _is_floating() -> bool:
-	# Godot wraps floating docks in a Window that is NOT the editor's root
-	# viewport window. Walk up until we hit a Window, compare to root.
 	var p := get_parent()
 	while p != null:
 		if p is Window:
@@ -68,6 +74,8 @@ func _is_floating() -> bool:
 
 
 func _update_redock_visibility() -> void:
+	if _redock_btn == null:
+		return
 	var floating := _is_floating()
 	if _redock_btn.visible != floating:
 		_redock_btn.visible = floating
@@ -116,7 +124,7 @@ func _build_ui() -> void:
 
 	_server_label = Label.new()
 	_server_label.text = "WS: %d  HTTP: %d" % [McpClientConfigurator.SERVER_WS_PORT, McpClientConfigurator.SERVER_HTTP_PORT]
-	_server_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	_server_label.add_theme_color_override("font_color", COLOR_MUTED)
 	_dev_section.add_child(_server_label)
 
 	var btn_row := HBoxContainer.new()
@@ -170,7 +178,7 @@ func _build_ui() -> void:
 
 	_client_status_label = Label.new()
 	_client_status_label.text = "..."
-	_client_status_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	_client_status_label.add_theme_color_override("font_color", COLOR_MUTED)
 	add_child(_client_status_label)
 
 	# Manual-command fallback panel (hidden until auto-configure fails)
@@ -180,7 +188,7 @@ func _build_ui() -> void:
 
 	var manual_hint := Label.new()
 	manual_hint.text = "Run this manually:"
-	manual_hint.add_theme_color_override("font_color", Color(0.75, 0.75, 0.75))
+	manual_hint.add_theme_color_override("font_color", COLOR_MUTED)
 	_client_manual_panel.add_child(manual_hint)
 
 	_client_manual_text = TextEdit.new()
@@ -249,19 +257,12 @@ func _make_header(text: String) -> Label:
 	var label := Label.new()
 	label.text = text
 	label.add_theme_font_size_override("font_size", 15)
-	label.add_theme_color_override("font_color", Color(0.95, 0.95, 0.95))
+	label.add_theme_color_override("font_color", COLOR_HEADER)
 	return label
 
 
 func _pretty_client_name(client_name: String) -> String:
-	# "claude_code" -> "Claude Code"
-	var parts := client_name.split("_")
-	var capitalized: Array[String] = []
-	for p in parts:
-		if p.is_empty():
-			continue
-		capitalized.append(p.substr(0, 1).to_upper() + p.substr(1))
-	return " ".join(capitalized)
+	return client_name.capitalize()
 
 
 func _selected_client_key() -> String:
@@ -322,6 +323,7 @@ func _on_dev_mode_toggled(enabled: bool) -> void:
 	if es != null:
 		es.set_setting(DEV_MODE_SETTING, enabled)
 	_apply_dev_mode_visibility()
+	_refresh_setup_status()
 
 
 func _apply_dev_mode_visibility() -> void:
@@ -331,9 +333,9 @@ func _apply_dev_mode_visibility() -> void:
 
 	# Setup section: visible in dev mode, OR in user mode when uv is missing
 	# (so users can install uv from the dock).
-	var uv_missing := not McpClientConfigurator.is_dev_checkout() and McpClientConfigurator.check_uv_version().is_empty()
+	var is_dev := McpClientConfigurator.is_dev_checkout()
+	var uv_missing := not is_dev and McpClientConfigurator.check_uv_version().is_empty()
 	_setup_section.visible = dev or uv_missing
-	_refresh_setup_status()
 
 
 # --- Button handlers ---
@@ -395,7 +397,7 @@ func _make_status_row(label_text: String, value_text: String, value_color: Color
 
 	var label := Label.new()
 	label.text = label_text
-	label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	label.add_theme_color_override("font_color", COLOR_MUTED)
 	label.custom_minimum_size.x = 60
 	row.add_child(label)
 
@@ -485,7 +487,7 @@ func _refresh_client_status() -> void:
 			_set_client_status_label("configured", Color.GREEN)
 			_client_configure_btn.text = "Reconfigure"
 		McpClientConfigurator.ConfigStatus.NOT_CONFIGURED:
-			_set_client_status_label("not configured", Color(0.7, 0.7, 0.7))
+			_set_client_status_label("not configured", COLOR_MUTED)
 			_client_configure_btn.text = "Configure"
 		_:
 			_set_client_status_label("error", Color.RED)

@@ -152,6 +152,9 @@ static func check_uv_version() -> String:
 static var _venv_python_cache: String = ""
 static var _venv_python_searched: bool = false
 
+static var _claude_cli_cache: String = ""
+static var _claude_cli_searched: bool = false
+
 
 static func _cached_venv_python() -> String:
 	if not _venv_python_searched:
@@ -212,6 +215,37 @@ static func _get_platform_path_prepend() -> Array[String]:
 				"/usr/local/bin",
 			]
 	return []
+
+
+# --- Generic JSON config helpers (used by Claude Desktop and Antigravity) ---
+
+static func _read_json_config(config_path: String, label: String) -> Variant:
+	var file := FileAccess.open(config_path, FileAccess.READ)
+	if file == null:
+		return null
+	var content := file.get_as_text()
+	file.close()
+	if content.is_empty():
+		return null
+	var json := JSON.new()
+	if json.parse(content) != OK:
+		push_warning("MCP | %s config parse error: %s (at line %d)" % [label, json.get_error_message(), json.get_error_line()])
+		return null
+	if not (json.data is Dictionary):
+		return null
+	return json.data
+
+
+static func _write_json_config(config_path: String, config: Dictionary) -> bool:
+	var dir_path := config_path.get_base_dir()
+	if not DirAccess.dir_exists_absolute(dir_path):
+		DirAccess.make_dir_recursive_absolute(dir_path)
+	var file := FileAccess.open(config_path, FileAccess.WRITE)
+	if file == null:
+		return false
+	file.store_string(JSON.stringify(config, "\t"))
+	file.close()
+	return true
 
 
 # --- Claude Code ---
@@ -284,8 +318,15 @@ static func manual_command(client: ClientType) -> String:
 	return ""
 
 
+static func _cached_claude_cli() -> String:
+	if not _claude_cli_searched:
+		_claude_cli_cache = _find_claude_cli()
+		_claude_cli_searched = true
+	return _claude_cli_cache
+
+
 static func _configure_claude_code() -> Dictionary:
-	var claude_cli := _find_claude_cli()
+	var claude_cli := _cached_claude_cli()
 	if claude_cli.is_empty():
 		return {"status": "error", "message": "Claude CLI not found — install from https://claude.ai/download"}
 
@@ -302,7 +343,7 @@ static func _configure_claude_code() -> Dictionary:
 
 
 static func _check_claude_code() -> ConfigStatus:
-	var claude_cli := _find_claude_cli()
+	var claude_cli := _cached_claude_cli()
 	if claude_cli.is_empty():
 		return ConfigStatus.NOT_CONFIGURED
 	var output: Array = []
@@ -320,7 +361,7 @@ static func _check_claude_code() -> ConfigStatus:
 
 
 static func _remove_claude_code() -> Dictionary:
-	var claude_cli := _find_claude_cli()
+	var claude_cli := _cached_claude_cli()
 	if claude_cli.is_empty():
 		return {"status": "error", "message": "Claude CLI not found"}
 	var output: Array = []
@@ -524,34 +565,11 @@ static func _get_claude_desktop_config_path() -> String:
 
 
 static func _read_claude_desktop_config() -> Variant:
-	var config_path := _get_claude_desktop_config_path()
-	var file := FileAccess.open(config_path, FileAccess.READ)
-	if file == null:
-		return null
-	var content := file.get_as_text()
-	file.close()
-	if content.is_empty():
-		return null
-	var json := JSON.new()
-	if json.parse(content) != OK:
-		push_warning("MCP | Claude Desktop config parse error: %s (at line %d)" % [json.get_error_message(), json.get_error_line()])
-		return null
-	if not (json.data is Dictionary):
-		return null
-	return json.data
+	return _read_json_config(_get_claude_desktop_config_path(), "Claude Desktop")
 
 
 static func _write_claude_desktop_config(config: Dictionary) -> bool:
-	var config_path := _get_claude_desktop_config_path()
-	var dir_path := config_path.get_base_dir()
-	if not DirAccess.dir_exists_absolute(dir_path):
-		DirAccess.make_dir_recursive_absolute(dir_path)
-	var file := FileAccess.open(config_path, FileAccess.WRITE)
-	if file == null:
-		return false
-	file.store_string(JSON.stringify(config, "\t"))
-	file.close()
-	return true
+	return _write_json_config(_get_claude_desktop_config_path(), config)
 
 
 ## Claude Desktop only accepts stdio `command`/`args` entries in `mcpServers`.
@@ -622,37 +640,12 @@ static func _get_antigravity_config_path() -> String:
 	return OS.get_environment("HOME").path_join(".gemini/antigravity/mcp_config.json")
 
 
-## Read and parse the Antigravity config file. Returns null if missing/invalid.
 static func _read_antigravity_config() -> Variant:
-	var config_path := _get_antigravity_config_path()
-	var file := FileAccess.open(config_path, FileAccess.READ)
-	if file == null:
-		return null
-	var content := file.get_as_text()
-	file.close()
-	if content.is_empty():
-		return null
-	var json := JSON.new()
-	if json.parse(content) != OK:
-		push_warning("MCP | Antigravity config parse error: %s (at line %d)" % [json.get_error_message(), json.get_error_line()])
-		return null
-	if not (json.data is Dictionary):
-		return null
-	return json.data
+	return _read_json_config(_get_antigravity_config_path(), "Antigravity")
 
 
-## Write the Antigravity config file, preserving other entries.
 static func _write_antigravity_config(config: Dictionary) -> bool:
-	var config_path := _get_antigravity_config_path()
-	var dir_path := config_path.get_base_dir()
-	if not DirAccess.dir_exists_absolute(dir_path):
-		DirAccess.make_dir_recursive_absolute(dir_path)
-	var file := FileAccess.open(config_path, FileAccess.WRITE)
-	if file == null:
-		return false
-	file.store_string(JSON.stringify(config, "\t"))
-	file.close()
-	return true
+	return _write_json_config(_get_antigravity_config_path(), config)
 
 
 static func _configure_antigravity() -> Dictionary:
