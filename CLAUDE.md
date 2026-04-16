@@ -76,7 +76,7 @@ The dock checks the GitHub releases API on startup. If a newer version exists, a
 
 ### Python tests
 ```bash
-pytest -v                    # 387 unit + integration tests
+pytest -v                    # 388 unit + integration tests
 ```
 
 ### Godot-side tests
