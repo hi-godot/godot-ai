@@ -36,16 +36,12 @@ func suite_teardown() -> void:
 var _failed: bool = false
 var _message: String = ""
 var _assertion_count: int = 0
-## Set true by the runner before calling the test method. If it's still true
-## after the method returns, the test crashed before reaching any assertion.
-var _crash_sentinel: bool = false
 
 
 func _reset() -> void:
 	_failed = false
 	_message = ""
 	_assertion_count = 0
-	_crash_sentinel = false
 
 
 # ----- assertions -----

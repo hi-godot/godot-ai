@@ -18,10 +18,8 @@ func run_suite(suite: McpTestSuite, test_filter: String = "") -> void:
 			continue
 
 		suite._reset()
-		suite._crash_sentinel = true
 		suite.setup()
 		suite.call(method_name)
-		suite._crash_sentinel = false
 		suite.teardown()
 
 		var passed := not suite._failed
