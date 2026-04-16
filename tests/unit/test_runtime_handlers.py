@@ -11,7 +11,9 @@ from godot_ai.handlers import client as client_handlers
 from godot_ai.handlers import editor as editor_handlers
 from godot_ai.handlers import filesystem as filesystem_handlers
 from godot_ai.handlers import input_map as input_map_handlers
+from godot_ai.handlers import material as material_handlers
 from godot_ai.handlers import node as node_handlers
+from godot_ai.handlers import particle as particle_handlers
 from godot_ai.handlers import project as project_handlers
 from godot_ai.handlers import resource as resource_handlers
 from godot_ai.handlers import scene as scene_handlers
@@ -667,6 +669,163 @@ class StubClient:
                 "length": computed_length,
                 "loop_mode": params.get("loop_mode", "none"),
                 "track_count": len(tweens),
+                "undoable": True,
+            }
+        if command == "material_create":
+            return {
+                "path": params.get("path", ""),
+                "type": params.get("type", "standard"),
+                "class": "StandardMaterial3D",
+                "shader_path": params.get("shader_path", ""),
+                "overwritten": False,
+                "undoable": False,
+                "reason": "File creation is persistent",
+            }
+        if command == "material_set_param":
+            return {
+                "path": params.get("path", ""),
+                "property": params.get("property", ""),
+                "value": params.get("value"),
+                "previous_value": None,
+                "undoable": True,
+            }
+        if command == "material_set_shader_param":
+            return {
+                "path": params.get("path", ""),
+                "param": params.get("param", ""),
+                "value": params.get("value"),
+                "previous_value": None,
+                "undoable": True,
+            }
+        if command == "material_get":
+            return {
+                "path": params.get("path", ""),
+                "class": "StandardMaterial3D",
+                "type": "standard",
+                "properties": [
+                    {"name": "albedo_color", "type": "Color",
+                     "value": {"r": 1, "g": 1, "b": 1, "a": 1}},
+                    {"name": "metallic", "type": "float", "value": 0.0},
+                ],
+                "property_count": 2,
+                "shader_parameters": [],
+                "shader_path": "",
+            }
+        if command == "material_list":
+            return {
+                "materials": [
+                    {"path": "res://materials/red.tres", "class": "StandardMaterial3D"},
+                ],
+                "count": 1,
+            }
+        if command == "material_assign":
+            return {
+                "node_path": params.get("node_path", ""),
+                "property": "material_override",
+                "slot": params.get("slot", "override"),
+                "resource_path": params.get("resource_path", ""),
+                "material_class": "StandardMaterial3D",
+                "material_created": params.get("create_if_missing", False)
+                and not params.get("resource_path", ""),
+                "undoable": True,
+            }
+        if command == "material_apply_to_node":
+            applied = list((params.get("params") or {}).keys())
+            return {
+                "node_path": params.get("node_path", ""),
+                "property": "material_override",
+                "slot": params.get("slot", "override"),
+                "type": params.get("type", "standard"),
+                "class": "StandardMaterial3D",
+                "applied_params": applied,
+                "material_created": True,
+                "saved_to": params.get("save_to", ""),
+                "undoable": True,
+            }
+        if command == "material_apply_preset":
+            return {
+                "preset": params.get("preset", ""),
+                "type": "standard",
+                "path": params.get("path", ""),
+                "node_path": params.get("node_path", ""),
+                "material_created": True,
+                "assigned": bool(params.get("node_path")),
+                "saved_to_disk": bool(params.get("path")),
+                "undoable": bool(params.get("node_path")),
+                "reason": "",
+            }
+        if command == "particle_create":
+            return {
+                "path": params.get("parent_path", "") + "/" + params.get("name", "Particles"),
+                "parent_path": params.get("parent_path", ""),
+                "name": params.get("name", "Particles"),
+                "type": params.get("type", "gpu_3d"),
+                "class": "GPUParticles3D",
+                "process_material_created": params.get("type", "gpu_3d").startswith("gpu"),
+                "draw_pass_mesh_created": params.get("type", "gpu_3d") == "gpu_3d",
+                "undoable": True,
+            }
+        if command == "particle_set_main":
+            props = params.get("properties") or {}
+            return {
+                "path": params.get("node_path", ""),
+                "applied": list(props.keys()),
+                "values": {k: props[k] for k in props},
+                "undoable": True,
+            }
+        if command == "particle_set_process":
+            props = params.get("properties") or {}
+            return {
+                "path": params.get("node_path", ""),
+                "applied": list(props.keys()),
+                "values": {k: props[k] for k in props},
+                "process_material_created": False,
+                "undoable": True,
+            }
+        if command == "particle_set_draw_pass":
+            return {
+                "path": params.get("node_path", ""),
+                "pass": params.get("pass", 1),
+                "mesh_path": params.get("mesh", ""),
+                "mesh_class": "QuadMesh" if not params.get("mesh") else "",
+                "material_path": params.get("material", ""),
+                "draw_pass_mesh_created": not params.get("mesh"),
+                "undoable": True,
+            }
+        if command == "particle_restart":
+            return {
+                "path": params.get("node_path", ""),
+                "undoable": False,
+                "reason": "Restart is a runtime operation",
+            }
+        if command == "particle_get":
+            return {
+                "path": params.get("node_path", ""),
+                "type": "gpu_3d",
+                "class": "GPUParticles3D",
+                "main": {"amount": 80, "lifetime": 1.2},
+                "process": {"class": "ParticleProcessMaterial", "properties": {}},
+                "draw_passes": [
+                    {"pass": 1, "mesh_class": "QuadMesh"},
+                    {"pass": 2, "mesh_class": ""},
+                    {"pass": 3, "mesh_class": ""},
+                    {"pass": 4, "mesh_class": ""},
+                ],
+                "texture_path": "",
+            }
+        if command == "particle_apply_preset":
+            return {
+                "path": params.get("parent_path", "") + "/" + params.get("name", ""),
+                "parent_path": params.get("parent_path", ""),
+                "name": params.get("name", ""),
+                "preset": params.get("preset", ""),
+                "type": params.get("type", "gpu_3d"),
+                "class": "GPUParticles3D",
+                "applied_main": ["amount", "lifetime"],
+                "applied_process": ["emission_shape", "color_ramp"],
+                "process_material_created": params.get("type", "gpu_3d").startswith("gpu"),
+                "draw_pass_mesh_created": params.get("type", "gpu_3d") == "gpu_3d",
+                "is_3d": params.get("type", "gpu_3d").endswith("_3d"),
                 "undoable": True,
             }
         return {"status": "ok"}
@@ -2816,3 +2975,304 @@ async def test_project_stop_handler_times_out_if_readiness_stuck():
     elapsed = time.monotonic() - t0
     # Timeout should fire ~1s and let the handler return.
     assert 0.9 <= elapsed < 1.5, f"Expected ~1s timeout, got {elapsed:.3f}s"
+
+
+# ---------------------------------------------------------------------------
+# Material handler tests
+# ---------------------------------------------------------------------------
+
+
+async def test_material_create_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await material_handlers.material_create(
+        runtime, path="res://materials/red.tres", type="standard"
+    )
+    assert client.calls[-1]["command"] == "material_create"
+    assert client.calls[-1]["params"] == {
+        "path": "res://materials/red.tres",
+        "type": "standard",
+        "overwrite": False,
+    }
+    assert result["path"] == "res://materials/red.tres"
+
+
+async def test_material_create_forwards_shader_path():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await material_handlers.material_create(
+        runtime,
+        path="res://mat/shader.tres",
+        type="shader",
+        shader_path="res://shaders/pulse.gdshader",
+        overwrite=True,
+    )
+    assert client.calls[-1]["params"]["shader_path"] == "res://shaders/pulse.gdshader"
+    assert client.calls[-1]["params"]["overwrite"] is True
+
+
+async def test_material_set_param_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await material_handlers.material_set_param(
+        runtime,
+        path="res://materials/red.tres",
+        property="albedo_color",
+        value="#ff0000",
+    )
+    assert client.calls[-1]["command"] == "material_set_param"
+    assert client.calls[-1]["params"]["value"] == "#ff0000"
+    assert result["undoable"] is True
+
+
+async def test_material_set_shader_param_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await material_handlers.material_set_shader_param(
+        runtime, path="res://mat/shader.tres", param="pulse", value=0.7
+    )
+    assert client.calls[-1]["command"] == "material_set_shader_param"
+    assert client.calls[-1]["params"]["param"] == "pulse"
+    assert client.calls[-1]["params"]["value"] == 0.7
+
+
+async def test_material_get_handler_is_readonly():
+    """material_get should not require writable — no require_writable call."""
+    client = StubClient()
+    session = Session(
+        session_id="s1",
+        godot_version="4.4",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="playing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    # Must not raise even in "playing" readiness.
+    await material_handlers.material_get(runtime, path="res://materials/red.tres")
+    assert client.calls[-1]["command"] == "material_get"
+
+
+async def test_material_list_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await material_handlers.material_list(
+        runtime, root="res://materials", type="StandardMaterial3D"
+    )
+    params = client.calls[-1]["params"]
+    assert params["root"] == "res://materials"
+    assert params["type"] == "StandardMaterial3D"
+
+
+async def test_material_list_omits_empty_type():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await material_handlers.material_list(runtime)
+    assert "type" not in client.calls[-1]["params"]
+
+
+async def test_material_assign_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await material_handlers.material_assign(
+        runtime,
+        node_path="/Main/Box",
+        resource_path="res://materials/red.tres",
+        slot="override",
+    )
+    assert client.calls[-1]["command"] == "material_assign"
+    assert client.calls[-1]["params"]["slot"] == "override"
+    assert result["undoable"] is True
+
+
+async def test_material_assign_create_if_missing_flag():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await material_handlers.material_assign(
+        runtime,
+        node_path="/Main/Box",
+        create_if_missing=True,
+        type="orm",
+    )
+    params = client.calls[-1]["params"]
+    assert params["create_if_missing"] is True
+    assert params["type"] == "orm"
+    # resource_path omitted when empty
+    assert "resource_path" not in params
+
+
+async def test_material_apply_to_node_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await material_handlers.material_apply_to_node(
+        runtime,
+        node_path="/Main/Box",
+        type="standard",
+        params={"albedo_color": "#00ff00", "metallic": 0.5},
+    )
+    sent = client.calls[-1]["params"]
+    assert sent["params"] == {"albedo_color": "#00ff00", "metallic": 0.5}
+    assert result["material_created"] is True
+
+
+async def test_material_apply_preset_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await material_handlers.material_apply_preset(
+        runtime, preset="glass", node_path="/Main/Box"
+    )
+    params = client.calls[-1]["params"]
+    assert params["preset"] == "glass"
+    assert params["node_path"] == "/Main/Box"
+    # Omit path/overrides when empty
+    assert "path" not in params
+    assert "overrides" not in params
+
+
+async def test_material_apply_preset_with_overrides():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await material_handlers.material_apply_preset(
+        runtime,
+        preset="emissive",
+        path="res://materials/glow.tres",
+        overrides={"emission_energy_multiplier": 8},
+    )
+    params = client.calls[-1]["params"]
+    assert params["path"] == "res://materials/glow.tres"
+    assert params["overrides"] == {"emission_energy_multiplier": 8}
+
+
+# ---------------------------------------------------------------------------
+# Particle handler tests
+# ---------------------------------------------------------------------------
+
+
+async def test_particle_create_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await particle_handlers.particle_create(
+        runtime, parent_path="/Main", name="Fire", type="gpu_3d"
+    )
+    assert client.calls[-1]["command"] == "particle_create"
+    assert client.calls[-1]["params"] == {
+        "parent_path": "/Main",
+        "name": "Fire",
+        "type": "gpu_3d",
+    }
+    assert result["process_material_created"] is True
+    assert result["draw_pass_mesh_created"] is True
+
+
+async def test_particle_create_cpu_2d():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await particle_handlers.particle_create(
+        runtime, parent_path="/Main", name="Drops", type="cpu_2d"
+    )
+    assert result["process_material_created"] is False
+    assert result["draw_pass_mesh_created"] is False
+
+
+async def test_particle_set_main_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await particle_handlers.particle_set_main(
+        runtime,
+        node_path="/Main/Fire",
+        properties={"amount": 120, "lifetime": 2.5, "one_shot": False},
+    )
+    params = client.calls[-1]["params"]
+    assert params["properties"] == {"amount": 120, "lifetime": 2.5, "one_shot": False}
+
+
+async def test_particle_set_process_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await particle_handlers.particle_set_process(
+        runtime,
+        node_path="/Main/Fire",
+        properties={
+            "emission_shape": "sphere",
+            "emission_sphere_radius": 0.4,
+            "color_ramp": {"stops": [{"time": 0.0, "color": [1, 1, 1, 1]}]},
+        },
+    )
+    params = client.calls[-1]["params"]
+    assert params["properties"]["emission_shape"] == "sphere"
+    assert params["properties"]["color_ramp"]["stops"][0]["time"] == 0.0
+
+
+async def test_particle_set_draw_pass_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await particle_handlers.particle_set_draw_pass(
+        runtime,
+        node_path="/Main/Fire",
+        pass_=2,
+        mesh="res://meshes/spark.mesh",
+    )
+    params = client.calls[-1]["params"]
+    assert params["pass"] == 2
+    assert params["mesh"] == "res://meshes/spark.mesh"
+    assert "texture" not in params
+    assert "material" not in params
+
+
+async def test_particle_restart_handler_is_nonwriting():
+    """particle_restart is runtime-only and must not require writable state."""
+    client = StubClient()
+    session = Session(
+        session_id="s1",
+        godot_version="4.4",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="playing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    result = await particle_handlers.particle_restart(runtime, node_path="/Main/Fire")
+    assert client.calls[-1]["command"] == "particle_restart"
+    assert result["undoable"] is False
+
+
+async def test_particle_get_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await particle_handlers.particle_get(runtime, node_path="/Main/Fire")
+    assert client.calls[-1]["command"] == "particle_get"
+    assert "main" in result
+    assert "process" in result
+
+
+async def test_particle_apply_preset_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await particle_handlers.particle_apply_preset(
+        runtime,
+        parent_path="/Main/Anchor",
+        name="Campfire",
+        preset="fire",
+        type="gpu_3d",
+    )
+    params = client.calls[-1]["params"]
+    assert params["preset"] == "fire"
+    assert params["type"] == "gpu_3d"
+    assert "overrides" not in params
+    assert result["preset"] == "fire"
+
+
+async def test_particle_apply_preset_with_overrides():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await particle_handlers.particle_apply_preset(
+        runtime,
+        parent_path="/Main",
+        name="Spark",
+        preset="spark_burst",
+        overrides={"amount": 200},
+    )
+    params = client.calls[-1]["params"]
+    assert params["overrides"] == {"amount": 200}

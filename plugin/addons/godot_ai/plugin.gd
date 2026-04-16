@@ -22,7 +22,7 @@ func _enter_tree() -> void:
 	var editor_handler := EditorHandler.new(_log_buffer, _connection)
 	var scene_handler := SceneHandler.new(_connection)
 	var node_handler := NodeHandler.new(get_undo_redo())
-	var project_handler := ProjectHandler.new()
+	var project_handler := ProjectHandler.new(_connection)
 	var client_handler := ClientHandler.new()
 	var script_handler := ScriptHandler.new(get_undo_redo())
 	var resource_handler := ResourceHandler.new(get_undo_redo())
@@ -35,7 +35,9 @@ func _enter_tree() -> void:
 	var ui_handler := UiHandler.new(get_undo_redo())
 	var theme_handler := ThemeHandler.new(get_undo_redo())
 	var animation_handler := AnimationHandler.new(get_undo_redo())
-	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler, ui_handler, theme_handler, animation_handler]
+	var material_handler := MaterialHandler.new(get_undo_redo())
+	var particle_handler := ParticleHandler.new(get_undo_redo())
+	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler, ui_handler, theme_handler, animation_handler, material_handler, particle_handler]
 
 	_dispatcher.register("get_editor_state", editor_handler.get_editor_state)
 	_dispatcher.register("get_scene_tree", scene_handler.get_scene_tree)
@@ -117,6 +119,21 @@ func _enter_tree() -> void:
 	_dispatcher.register("animation_create_simple", animation_handler.create_simple)
 	_dispatcher.register("animation_delete", animation_handler.delete_animation)
 	_dispatcher.register("animation_validate", animation_handler.validate_animation)
+	_dispatcher.register("material_create", material_handler.create_material)
+	_dispatcher.register("material_set_param", material_handler.set_param)
+	_dispatcher.register("material_set_shader_param", material_handler.set_shader_param)
+	_dispatcher.register("material_get", material_handler.get_material)
+	_dispatcher.register("material_list", material_handler.list_materials)
+	_dispatcher.register("material_assign", material_handler.assign_material)
+	_dispatcher.register("material_apply_to_node", material_handler.apply_to_node)
+	_dispatcher.register("material_apply_preset", material_handler.apply_preset)
+	_dispatcher.register("particle_create", particle_handler.create_particle)
+	_dispatcher.register("particle_set_main", particle_handler.set_main)
+	_dispatcher.register("particle_set_process", particle_handler.set_process)
+	_dispatcher.register("particle_set_draw_pass", particle_handler.set_draw_pass)
+	_dispatcher.register("particle_restart", particle_handler.restart_particle)
+	_dispatcher.register("particle_get", particle_handler.get_particle)
+	_dispatcher.register("particle_apply_preset", particle_handler.apply_preset)
 
 	_connection.dispatcher = _dispatcher
 	add_child(_connection)

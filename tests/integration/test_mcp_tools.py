@@ -3631,3 +3631,438 @@ class TestAnimationValidateTool:
         await task
         assert result.data["valid"] is False
         assert result.data["broken_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# material_create / material_set_param / material_assign / material_apply_*
+# ---------------------------------------------------------------------------
+
+
+class TestMaterialCreateTool:
+    async def test_create_standard(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "material_create"
+            assert cmd["params"] == {
+                "path": "res://materials/red.tres",
+                "type": "standard",
+                "overwrite": False,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://materials/red.tres",
+                    "type": "standard",
+                    "class": "StandardMaterial3D",
+                    "overwritten": False,
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "material_create", {"path": "res://materials/red.tres"}
+        )
+        await task
+        assert result.data["class"] == "StandardMaterial3D"
+        assert result.data["undoable"] is False
+
+    async def test_create_shader_forwards_shader_path(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["type"] == "shader"
+            assert cmd["params"]["shader_path"] == "res://shaders/pulse.gdshader"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://mat/shader.tres",
+                    "type": "shader",
+                    "class": "ShaderMaterial",
+                    "shader_path": "res://shaders/pulse.gdshader",
+                    "overwritten": False,
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "material_create",
+            {
+                "path": "res://mat/shader.tres",
+                "type": "shader",
+                "shader_path": "res://shaders/pulse.gdshader",
+            },
+        )
+        await task
+        assert result.data["shader_path"] == "res://shaders/pulse.gdshader"
+
+
+class TestMaterialSetParamTool:
+    async def test_set_color(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "material_set_param"
+            assert cmd["params"]["property"] == "albedo_color"
+            assert cmd["params"]["value"] == "#ff0000"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://materials/red.tres",
+                    "property": "albedo_color",
+                    "value": {"r": 1, "g": 0, "b": 0, "a": 1},
+                    "previous_value": {"r": 1, "g": 1, "b": 1, "a": 1},
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "material_set_param",
+            {
+                "path": "res://materials/red.tres",
+                "property": "albedo_color",
+                "value": "#ff0000",
+            },
+        )
+        await task
+        assert result.data["undoable"] is True
+
+
+class TestMaterialSetShaderParamTool:
+    async def test_set_shader_uniform(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "material_set_shader_param"
+            assert cmd["params"]["param"] == "pulse_strength"
+            assert cmd["params"]["value"] == 0.75
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://mat/shader.tres",
+                    "param": "pulse_strength",
+                    "value": 0.75,
+                    "previous_value": 0.0,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "material_set_shader_param",
+            {
+                "path": "res://mat/shader.tres",
+                "param": "pulse_strength",
+                "value": 0.75,
+            },
+        )
+        await task
+        assert result.data["param"] == "pulse_strength"
+
+
+class TestMaterialAssignTool:
+    async def test_assign_resource(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "material_assign"
+            assert cmd["params"]["slot"] == "override"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "node_path": "/Main/Box",
+                    "property": "material_override",
+                    "slot": "override",
+                    "resource_path": "res://materials/red.tres",
+                    "material_class": "StandardMaterial3D",
+                    "material_created": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "material_assign",
+            {
+                "node_path": "/Main/Box",
+                "resource_path": "res://materials/red.tres",
+            },
+        )
+        await task
+        assert result.data["material_created"] is False
+
+
+class TestMaterialApplyToNodeTool:
+    async def test_apply_inline(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "material_apply_to_node"
+            assert cmd["params"]["params"] == {
+                "albedo_color": "#00ff00",
+                "metallic": 0.5,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "node_path": "/Main/Box",
+                    "property": "material_override",
+                    "slot": "override",
+                    "type": "standard",
+                    "class": "StandardMaterial3D",
+                    "applied_params": ["albedo_color", "metallic"],
+                    "material_created": True,
+                    "saved_to": "",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "material_apply_to_node",
+            {
+                "node_path": "/Main/Box",
+                "params": {"albedo_color": "#00ff00", "metallic": 0.5},
+            },
+        )
+        await task
+        assert "albedo_color" in result.data["applied_params"]
+
+
+class TestMaterialApplyPresetTool:
+    async def test_apply_glass_preset(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "material_apply_preset"
+            assert cmd["params"]["preset"] == "glass"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "preset": "glass",
+                    "type": "standard",
+                    "path": "",
+                    "node_path": "/Main/Box",
+                    "material_created": True,
+                    "assigned": True,
+                    "saved_to_disk": False,
+                    "undoable": True,
+                    "reason": "",
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "material_apply_preset",
+            {"preset": "glass", "node_path": "/Main/Box"},
+        )
+        await task
+        assert result.data["assigned"] is True
+
+
+# ---------------------------------------------------------------------------
+# particle_create / particle_set_* / particle_apply_preset
+# ---------------------------------------------------------------------------
+
+
+class TestParticleCreateTool:
+    async def test_create_gpu_3d(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "particle_create"
+            assert cmd["params"] == {
+                "parent_path": "/Main",
+                "name": "Fire",
+                "type": "gpu_3d",
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Fire",
+                    "parent_path": "/Main",
+                    "name": "Fire",
+                    "type": "gpu_3d",
+                    "class": "GPUParticles3D",
+                    "process_material_created": True,
+                    "draw_pass_mesh_created": True,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "particle_create", {"parent_path": "/Main", "name": "Fire"}
+        )
+        await task
+        assert result.data["process_material_created"] is True
+        assert result.data["draw_pass_mesh_created"] is True
+
+
+class TestParticleSetMainTool:
+    async def test_set_main_props(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "particle_set_main"
+            assert cmd["params"]["properties"]["amount"] == 120
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Fire",
+                    "applied": ["amount", "lifetime"],
+                    "values": {"amount": 120, "lifetime": 2.0},
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "particle_set_main",
+            {
+                "node_path": "/Main/Fire",
+                "properties": {"amount": 120, "lifetime": 2.0},
+            },
+        )
+        await task
+        assert result.data["values"]["amount"] == 120
+
+
+class TestParticleSetProcessTool:
+    async def test_color_ramp_forwarded(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "particle_set_process"
+            ramp = cmd["params"]["properties"]["color_ramp"]
+            assert ramp["stops"][0]["color"] == [1, 1, 1, 1]
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Fire",
+                    "applied": ["color_ramp"],
+                    "values": {"color_ramp": {"type": "GradientTexture1D", "stops": []}},
+                    "process_material_created": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "particle_set_process",
+            {
+                "node_path": "/Main/Fire",
+                "properties": {
+                    "color_ramp": {"stops": [{"time": 0, "color": [1, 1, 1, 1]}]},
+                },
+            },
+        )
+        await task
+        assert "color_ramp" in result.data["applied"]
+
+
+class TestParticleApplyPresetTool:
+    async def test_apply_fire(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "particle_apply_preset"
+            assert cmd["params"]["preset"] == "fire"
+            assert cmd["params"]["type"] == "gpu_3d"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Fire",
+                    "parent_path": "/Main",
+                    "name": "Fire",
+                    "preset": "fire",
+                    "type": "gpu_3d",
+                    "class": "GPUParticles3D",
+                    "applied_main": ["amount", "lifetime"],
+                    "applied_process": ["emission_shape", "color_ramp"],
+                    "process_material_created": True,
+                    "draw_pass_mesh_created": True,
+                    "is_3d": True,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "particle_apply_preset",
+            {"parent_path": "/Main", "name": "Fire", "preset": "fire"},
+        )
+        await task
+        assert result.data["process_material_created"] is True
+        assert "color_ramp" in result.data["applied_process"]
+
+
+class TestParticleRestartTool:
+    async def test_restart_is_not_undoable(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "particle_restart"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Fire",
+                    "undoable": False,
+                    "reason": "Restart is a runtime operation",
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("particle_restart", {"node_path": "/Main/Fire"})
+        await task
+        assert result.data["undoable"] is False
+
+
+class TestParticleGetTool:
+    async def test_get_returns_structured_snapshot(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "particle_get"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Fire",
+                    "type": "gpu_3d",
+                    "class": "GPUParticles3D",
+                    "main": {"amount": 80, "lifetime": 1.2},
+                    "process": {
+                        "class": "ParticleProcessMaterial",
+                        "properties": {"emission_shape": 1},
+                    },
+                    "draw_passes": [
+                        {"pass": 1, "mesh_class": "QuadMesh"},
+                        {"pass": 2, "mesh_class": ""},
+                        {"pass": 3, "mesh_class": ""},
+                        {"pass": 4, "mesh_class": ""},
+                    ],
+                    "texture_path": "",
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("particle_get", {"node_path": "/Main/Fire"})
+        await task
+        assert result.data["main"]["amount"] == 80
+        assert result.data["draw_passes"][0]["mesh_class"] == "QuadMesh"
