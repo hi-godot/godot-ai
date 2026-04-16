@@ -126,7 +126,13 @@ jobs:
       - name: Start Godot editor (headless)
         run: |
           timeout 30 godot --headless --path test_project --import || true
-          timeout 120 godot --headless --path test_project --editor res://main.tscn &
+          # Ensure the editor remembers to open main.tscn on launch.
+          # Headless --import creates .godot/ but may not record open scenes,
+          # so the subsequent --editor launch starts with no scene open.
+          mkdir -p test_project/.godot/editor
+          printf '[EditorNode]\nopen_scenes=PackedStringArray("res://main.tscn")\n' \
+            >> test_project/.godot/editor/editor_layout.cfg
+          timeout 120 godot --headless --path test_project --editor &
 
       - name: Run handler tests
         run: bash script/ci-godot-tests
