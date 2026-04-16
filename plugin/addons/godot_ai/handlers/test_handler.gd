@@ -23,7 +23,10 @@ func run_tests(params: Dictionary) -> Dictionary:
 
 	var suites := _discover_suites()
 	if suites.is_empty():
-		return {"data": {"error": "No test suites found in res://tests/", "total": 0}}
+		var diag := _diagnose_discovery()
+		diag["error"] = "No test suites found in res://tests/"
+		diag["total"] = 0
+		return {"data": diag}
 
 	var ctx := {
 		"undo_redo": _undo_redo,
@@ -61,3 +64,35 @@ func _discover_suites() -> Array:
 		return a.suite_name() < b.suite_name()
 	)
 	return suites
+
+
+func _diagnose_discovery() -> Dictionary:
+	var result := {}
+	var dir := DirAccess.open("res://tests")
+	result["dir_open"] = dir != null
+	if dir == null:
+		result["dir_error"] = DirAccess.get_open_error()
+		return result
+
+	var files := []
+	var load_results := {}
+	dir.list_dir_begin()
+	var f := dir.get_next()
+	while not f.is_empty():
+		files.append(f)
+		if f.begins_with("test_") and f.ends_with(".gd"):
+			var script = ResourceLoader.load("res://tests/" + f, "", ResourceLoader.CACHE_MODE_IGNORE)
+			if script == null:
+				load_results[f] = "load_failed"
+			else:
+				var instance = script.new()
+				if instance is McpTestSuite:
+					load_results[f] = "ok"
+				else:
+					load_results[f] = "not_McpTestSuite:%s" % instance.get_class()
+		f = dir.get_next()
+
+	result["files_in_dir"] = files
+	result["file_count"] = files.size()
+	result["load_results"] = load_results
+	return result

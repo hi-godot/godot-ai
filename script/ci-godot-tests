@@ -106,7 +106,9 @@ for line in raw.split('\n'):
         if failed > 0:
             sys.exit(1)
         if total == 0:
-            print('ERROR: No tests ran — Godot plugin may not have connected')
+            print('ERROR: No tests ran. Diagnostic data:')
+            import pprint
+            pprint.pprint(content)
             sys.exit(1)
         break
 else:
