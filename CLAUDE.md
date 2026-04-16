@@ -85,6 +85,12 @@ Test suites extend `McpTestSuite` (assertion methods: `assert_true`, `assert_eq`
 3. Plugin starts the server automatically; logs should show `Session connected`
 4. Use `/mcp` in Claude Code to connect
 
+**Worktree gotcha**: each working tree (main checkout or git worktree) has its own
+`test_project/addons/godot_ai` symlink pointing to *that tree's* `plugin/`. If you
+edit a worktree's plugin but Godot is running on the main repo's `test_project/`,
+your changes won't appear there. Use `script/open-godot-here` to launch Godot on the
+current working tree's `test_project/`.
+
 ## Pre-commit smoke test
 
 **Always do this before every commit.** Python mocks don't catch GDScript bugs, editor API regressions, or undo/redo issues.

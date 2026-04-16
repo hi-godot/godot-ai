@@ -4,26 +4,40 @@ extends VBoxContainer
 
 ## Editor dock panel showing MCP connection status, client config, and command log.
 
+const DEV_MODE_SETTING := "godot_ai/dev_mode"
+static var COLOR_MUTED := Color(0.7, 0.7, 0.7)
+static var COLOR_HEADER := Color(0.95, 0.95, 0.95)
+
 var _connection: Connection
 var _log_buffer: McpLogBuffer
 var _plugin: EditorPlugin
 
+# Always visible
+var _redock_btn: Button
 var _status_icon: ColorRect
 var _status_label: Label
-var _session_label: Label
-var _server_label: Label
-var _log_display: RichTextLabel
-var _log_toggle: CheckButton
-var _reconnect_btn: Button
-var _last_log_count := 0
-var _last_connected := false
+var _client_dropdown: OptionButton
+var _client_status_label: Label
+var _client_configure_btn: Button
+var _client_manual_panel: VBoxContainer
+var _client_manual_text: TextEdit
+var _dev_mode_toggle: CheckButton
 
-# Setup UI
+# Dev-mode only
+var _dev_section: VBoxContainer
+var _server_label: Label
+var _reconnect_btn: Button
+var _reload_btn: Button
+var _setup_section: VBoxContainer
 var _setup_container: VBoxContainer
 var _dev_server_btn: Button
+var _log_section: VBoxContainer
+var _log_display: RichTextLabel
+var _log_toggle: CheckButton
 
-# Client config UI
-var _client_rows: Dictionary = {}  # client_name -> {status_label, button}
+var _last_log_count := 0
+var _last_connected := false
+var _client_keys: Array[String] = []
 
 
 func setup(connection: Connection, log_buffer: McpLogBuffer, plugin: EditorPlugin) -> void:
@@ -40,19 +54,50 @@ func _process(_delta: float) -> void:
 	if _connection == null:
 		return
 	_update_status()
-	_update_log()
+	if _log_section.visible:
+		_update_log()
+
+
+func _notification(what: int) -> void:
+	# Detect dock/undock by watching for reparenting events.
+	if what == NOTIFICATION_PARENTED or what == NOTIFICATION_UNPARENTED:
+		_update_redock_visibility.call_deferred()
+
+
+func _is_floating() -> bool:
+	var p := get_parent()
+	while p != null:
+		if p is Window:
+			return p != get_tree().root
+		p = p.get_parent()
+	return false
+
+
+func _update_redock_visibility() -> void:
+	if _redock_btn == null:
+		return
+	var floating := _is_floating()
+	if _redock_btn.visible != floating:
+		_redock_btn.visible = floating
+
+
+func _on_redock() -> void:
+	# When floating, our Window is NOT the editor root. Closing it triggers
+	# Godot's internal dock-return logic (same as clicking the window's X).
+	var win := get_window()
+	if win != null and win != get_tree().root:
+		win.close_requested.emit()
 
 
 func _build_ui() -> void:
-	# --- Status section ---
-	var status_header := _make_header("Connection")
-	add_child(status_header)
+	add_theme_constant_override("separation", 8)
 
+	# --- Top row: status indicator + redock button (when floating) ---
 	var status_row := HBoxContainer.new()
 	status_row.add_theme_constant_override("separation", 8)
 
 	_status_icon = ColorRect.new()
-	_status_icon.custom_minimum_size = Vector2(12, 12)
+	_status_icon.custom_minimum_size = Vector2(14, 14)
 	_status_icon.color = Color.RED
 	var icon_center := CenterContainer.new()
 	icon_center.add_child(_status_icon)
@@ -60,21 +105,27 @@ func _build_ui() -> void:
 
 	_status_label = Label.new()
 	_status_label.text = "Disconnected"
+	_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_row.add_child(_status_label)
+
+	_redock_btn = Button.new()
+	_redock_btn.text = "Dock"
+	_redock_btn.tooltip_text = "Return this panel to the editor dock"
+	_redock_btn.visible = false
+	_redock_btn.pressed.connect(_on_redock)
+	status_row.add_child(_redock_btn)
 
 	add_child(status_row)
 
-	_session_label = Label.new()
-	_session_label.text = ""
-	_session_label.add_theme_font_size_override("font_size", 11)
-	_session_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
-	add_child(_session_label)
+	# --- Dev-only connection extras (server label + reconnect/reload buttons) ---
+	_dev_section = VBoxContainer.new()
+	_dev_section.add_theme_constant_override("separation", 6)
+	add_child(_dev_section)
 
 	_server_label = Label.new()
 	_server_label.text = "WS: %d  HTTP: %d" % [McpClientConfigurator.SERVER_WS_PORT, McpClientConfigurator.SERVER_HTTP_PORT]
-	_server_label.add_theme_font_size_override("font_size", 11)
-	_server_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
-	add_child(_server_label)
+	_server_label.add_theme_color_override("font_color", COLOR_MUTED)
+	_dev_section.add_child(_server_label)
 
 	var btn_row := HBoxContainer.new()
 	btn_row.add_theme_constant_override("separation", 6)
@@ -85,57 +136,96 @@ func _build_ui() -> void:
 	_reconnect_btn.pressed.connect(_on_reconnect)
 	btn_row.add_child(_reconnect_btn)
 
-	var reload_btn := Button.new()
-	reload_btn.text = "Reload Plugin"
-	reload_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	reload_btn.pressed.connect(_on_reload_plugin)
-	btn_row.add_child(reload_btn)
+	_reload_btn = Button.new()
+	_reload_btn.text = "Reload Plugin"
+	_reload_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_reload_btn.pressed.connect(_on_reload_plugin)
+	btn_row.add_child(_reload_btn)
 
-	add_child(btn_row)
+	_dev_section.add_child(btn_row)
 
-	add_child(HSeparator.new())
+	# --- Setup section (dev-only or when uv missing) ---
+	_setup_section = VBoxContainer.new()
+	_setup_section.add_theme_constant_override("separation", 6)
+	add_child(_setup_section)
 
-	# --- Setup section ---
-	var setup_header := _make_header("Setup")
-	add_child(setup_header)
-
+	_setup_section.add_child(HSeparator.new())
+	_setup_section.add_child(_make_header("Setup"))
 	_setup_container = VBoxContainer.new()
-	add_child(_setup_container)
-	_refresh_setup_status.call_deferred()
+	_setup_container.add_theme_constant_override("separation", 6)
+	_setup_section.add_child(_setup_container)
 
 	add_child(HSeparator.new())
 
-	# --- Client config section ---
-	var client_header := _make_header("Clients")
-	add_child(client_header)
+	# --- Client config (dropdown, no separate header needed) ---
+	var client_row := HBoxContainer.new()
+	client_row.add_theme_constant_override("separation", 6)
 
+	_client_dropdown = OptionButton.new()
+	_client_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	for client_name in McpClientConfigurator.CLIENT_TYPE_MAP:
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 6)
+		_client_dropdown.add_item(_pretty_client_name(client_name))
+		_client_keys.append(client_name)
+	_client_dropdown.item_selected.connect(_on_client_selected)
+	client_row.add_child(_client_dropdown)
 
-		var name_label := Label.new()
-		name_label.text = client_name.replace("_", " ").capitalize()
-		name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		row.add_child(name_label)
+	_client_configure_btn = Button.new()
+	_client_configure_btn.text = "Configure"
+	_client_configure_btn.pressed.connect(_on_configure_selected_client)
+	client_row.add_child(_client_configure_btn)
 
-		var status_lbl := Label.new()
-		status_lbl.text = "..."
-		status_lbl.add_theme_font_size_override("font_size", 11)
-		row.add_child(status_lbl)
+	add_child(client_row)
 
-		var btn := Button.new()
-		btn.text = "Configure"
-		btn.pressed.connect(_on_configure_client.bind(client_name))
-		row.add_child(btn)
+	_client_status_label = Label.new()
+	_client_status_label.text = "..."
+	_client_status_label.add_theme_color_override("font_color", COLOR_MUTED)
+	add_child(_client_status_label)
 
-		_client_rows[client_name] = {"status_label": status_lbl, "button": btn}
-		add_child(row)
+	# Manual-command fallback panel (hidden until auto-configure fails)
+	_client_manual_panel = VBoxContainer.new()
+	_client_manual_panel.add_theme_constant_override("separation", 4)
+	_client_manual_panel.visible = false
 
-	_refresh_client_status.call_deferred()
+	var manual_hint := Label.new()
+	manual_hint.text = "Run this manually:"
+	manual_hint.add_theme_color_override("font_color", COLOR_MUTED)
+	_client_manual_panel.add_child(manual_hint)
+
+	_client_manual_text = TextEdit.new()
+	_client_manual_text.editable = false
+	_client_manual_text.custom_minimum_size = Vector2(0, 60)
+	_client_manual_text.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	_client_manual_panel.add_child(_client_manual_text)
+
+	var copy_btn := Button.new()
+	copy_btn.text = "Copy"
+	copy_btn.pressed.connect(_on_copy_manual_command)
+	_client_manual_panel.add_child(copy_btn)
+
+	add_child(_client_manual_panel)
 
 	add_child(HSeparator.new())
 
-	# --- Log section ---
+	# --- Dev mode toggle (always visible) ---
+	var dev_toggle_row := HBoxContainer.new()
+	var dev_toggle_label := Label.new()
+	dev_toggle_label.text = "Developer mode"
+	dev_toggle_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	dev_toggle_row.add_child(dev_toggle_label)
+
+	_dev_mode_toggle = CheckButton.new()
+	_dev_mode_toggle.button_pressed = _load_dev_mode()
+	_dev_mode_toggle.toggled.connect(_on_dev_mode_toggled)
+	dev_toggle_row.add_child(_dev_mode_toggle)
+	add_child(dev_toggle_row)
+
+	# --- Log section (dev-only) ---
+	_log_section = VBoxContainer.new()
+	_log_section.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	add_child(_log_section)
+
+	_log_section.add_child(HSeparator.new())
+
 	var log_header_row := HBoxContainer.new()
 	var log_header := _make_header("MCP Log")
 	log_header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -147,7 +237,7 @@ func _build_ui() -> void:
 	_log_toggle.toggled.connect(_on_log_toggled)
 	log_header_row.add_child(_log_toggle)
 
-	add_child(log_header_row)
+	_log_section.add_child(log_header_row)
 
 	_log_display = RichTextLabel.new()
 	_log_display.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -155,16 +245,34 @@ func _build_ui() -> void:
 	_log_display.scroll_following = true
 	_log_display.bbcode_enabled = false
 	_log_display.selection_enabled = true
-	add_child(_log_display)
+	_log_section.add_child(_log_display)
+
+	# Apply initial dev-mode visibility
+	_apply_dev_mode_visibility()
+	_refresh_setup_status.call_deferred()
+	_refresh_client_status.call_deferred()
 
 
 func _make_header(text: String) -> Label:
 	var label := Label.new()
 	label.text = text
-	label.add_theme_font_size_override("font_size", 13)
-	label.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
+	label.add_theme_font_size_override("font_size", 15)
+	label.add_theme_color_override("font_color", COLOR_HEADER)
 	return label
 
+
+func _pretty_client_name(client_name: String) -> String:
+	return client_name.capitalize()
+
+
+func _selected_client_key() -> String:
+	var idx := _client_dropdown.selected
+	if idx < 0 or idx >= _client_keys.size():
+		return ""
+	return _client_keys[idx]
+
+
+# --- Status updates ---
 
 func _update_status() -> void:
 	var connected := _connection.is_connected
@@ -175,11 +283,9 @@ func _update_status() -> void:
 	if connected:
 		_status_icon.color = Color.GREEN
 		_status_label.text = "Connected"
-		_session_label.text = ""
 	else:
 		_status_icon.color = Color.RED
 		_status_label.text = "Disconnected"
-		_session_label.text = ""
 
 	_update_dev_server_btn()
 
@@ -197,6 +303,42 @@ func _update_log() -> void:
 		_log_display.add_text(line + "\n")
 	_last_log_count = count
 
+
+# --- Dev mode persistence ---
+
+func _load_dev_mode() -> bool:
+	var es := EditorInterface.get_editor_settings()
+	if es == null:
+		return McpClientConfigurator.is_dev_checkout()
+	if not es.has_setting(DEV_MODE_SETTING):
+		# Default: on for dev checkouts, off for end-users
+		var default := McpClientConfigurator.is_dev_checkout()
+		es.set_setting(DEV_MODE_SETTING, default)
+		return default
+	return bool(es.get_setting(DEV_MODE_SETTING))
+
+
+func _on_dev_mode_toggled(enabled: bool) -> void:
+	var es := EditorInterface.get_editor_settings()
+	if es != null:
+		es.set_setting(DEV_MODE_SETTING, enabled)
+	_apply_dev_mode_visibility()
+	_refresh_setup_status()
+
+
+func _apply_dev_mode_visibility() -> void:
+	var dev := _dev_mode_toggle.button_pressed
+	_dev_section.visible = dev
+	_log_section.visible = dev
+
+	# Setup section: visible in dev mode, OR in user mode when uv is missing
+	# (so users can install uv from the dock).
+	var is_dev := McpClientConfigurator.is_dev_checkout()
+	var uv_missing := not is_dev and McpClientConfigurator.check_uv_version().is_empty()
+	_setup_section.visible = dev or uv_missing
+
+
+# --- Button handlers ---
 
 func _on_reload_plugin() -> void:
 	# Toggle plugin off/on to reload all GDScript
@@ -216,8 +358,11 @@ func _on_log_toggled(enabled: bool) -> void:
 	_log_display.visible = enabled
 
 
+# --- Setup section ---
+
 func _refresh_setup_status() -> void:
-	# Clear previous indicators
+	if _setup_container == null:
+		return
 	for child in _setup_container.get_children():
 		child.queue_free()
 	_dev_server_btn = null
@@ -252,14 +397,12 @@ func _make_status_row(label_text: String, value_text: String, value_color: Color
 
 	var label := Label.new()
 	label.text = label_text
-	label.add_theme_font_size_override("font_size", 11)
-	label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
-	label.custom_minimum_size.x = 50
+	label.add_theme_color_override("font_color", COLOR_MUTED)
+	label.custom_minimum_size.x = 60
 	row.add_child(label)
 
 	var value := Label.new()
 	value.text = value_text
-	value.add_theme_font_size_override("font_size", 11)
 	value.add_theme_color_override("font_color", value_color)
 	row.add_child(value)
 
@@ -282,7 +425,6 @@ func _on_dev_server_pressed() -> void:
 		_plugin.stop_dev_server()
 	else:
 		_plugin.start_dev_server()
-	# Defer UI update to let port state settle
 	_update_dev_server_btn.call_deferred()
 
 
@@ -295,34 +437,63 @@ func _on_install_uv() -> void:
 	_refresh_setup_status.call_deferred()
 
 
-func _on_configure_client(client_name: String) -> void:
-	var client_type: int = McpClientConfigurator.client_type_from_string(client_name)
+# --- Client section ---
+
+func _on_client_selected(_index: int) -> void:
+	_client_manual_panel.visible = false
+	_refresh_client_status()
+
+
+func _on_configure_selected_client() -> void:
+	var key := _selected_client_key()
+	if key.is_empty():
+		return
+	var client_type: int = McpClientConfigurator.client_type_from_string(key)
 	if client_type < 0:
 		return
-	var result := McpClientConfigurator.configure(client_type as McpClientConfigurator.ClientType)
-	var row: Dictionary = _client_rows.get(client_name, {})
-	if row.has("status_label"):
-		if result.get("status") == "ok":
-			row["status_label"].text = "configured"
-			row["status_label"].add_theme_color_override("font_color", Color.GREEN)
-		else:
-			row["status_label"].text = "failed"
-			row["status_label"].add_theme_color_override("font_color", Color.RED)
+	var ct := client_type as McpClientConfigurator.ClientType
+	var result := McpClientConfigurator.configure(ct)
+	if result.get("status") == "ok":
+		_set_client_status_label("configured", Color.GREEN)
+		_client_configure_btn.text = "Reconfigure"
+		_client_manual_panel.visible = false
+	else:
+		var msg := str(result.get("message", "failed"))
+		_set_client_status_label("error: %s" % msg, Color.RED)
+		_show_manual_command(ct)
+
+
+func _show_manual_command(client_type: McpClientConfigurator.ClientType) -> void:
+	var cmd := McpClientConfigurator.manual_command(client_type)
+	if cmd.is_empty():
+		_client_manual_panel.visible = false
+		return
+	_client_manual_text.text = cmd
+	_client_manual_panel.visible = true
+
+
+func _on_copy_manual_command() -> void:
+	DisplayServer.clipboard_set(_client_manual_text.text)
 
 
 func _refresh_client_status() -> void:
-	for client_name in McpClientConfigurator.CLIENT_TYPE_MAP:
-		var client_type: McpClientConfigurator.ClientType = McpClientConfigurator.CLIENT_TYPE_MAP[client_name]
-		var status := McpClientConfigurator.check_status(client_type)
-		var row: Dictionary = _client_rows.get(client_name, {})
-		if not row.has("status_label"):
-			continue
-		match status:
-			McpClientConfigurator.ConfigStatus.CONFIGURED:
-				row["status_label"].text = "configured"
-				row["status_label"].add_theme_color_override("font_color", Color.GREEN)
-				row["button"].text = "Reconfigure"
-			McpClientConfigurator.ConfigStatus.NOT_CONFIGURED:
-				row["status_label"].text = "not configured"
-				row["status_label"].add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
-				row["button"].text = "Configure"
+	var key := _selected_client_key()
+	if key.is_empty():
+		return
+	var client_type: McpClientConfigurator.ClientType = McpClientConfigurator.CLIENT_TYPE_MAP[key]
+	var status := McpClientConfigurator.check_status(client_type)
+	match status:
+		McpClientConfigurator.ConfigStatus.CONFIGURED:
+			_set_client_status_label("configured", Color.GREEN)
+			_client_configure_btn.text = "Reconfigure"
+		McpClientConfigurator.ConfigStatus.NOT_CONFIGURED:
+			_set_client_status_label("not configured", COLOR_MUTED)
+			_client_configure_btn.text = "Configure"
+		_:
+			_set_client_status_label("error", Color.RED)
+			_client_configure_btn.text = "Configure"
+
+
+func _set_client_status_label(text: String, color: Color) -> void:
+	_client_status_label.text = text
+	_client_status_label.add_theme_color_override("font_color", color)
