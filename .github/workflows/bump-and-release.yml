@@ -1,5 +1,10 @@
 name: Bump and Release
 
+# Manually bumps plugin.cfg + pyproject.toml, commits, tags, and pushes.
+# The tag push then fires release.yml, which publishes to PyPI and creates
+# the GitHub release with the plugin ZIP. This workflow's job is purely the
+# version bump + tag.
+
 on:
   workflow_dispatch:
     inputs:
@@ -54,17 +59,5 @@ jobs:
           git commit -m "Bump version to ${NEW}"
           git tag "v${NEW}"
           git push origin main --tags
-
-      - name: Build plugin ZIP
-        run: |
-          mkdir -p staging/addons
-          cp -r plugin/addons/godot_ai staging/addons/
-          cd staging
-          zip -r ../godot-ai-plugin.zip addons/
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.next.outputs.version }}
-          files: godot-ai-plugin.zip
-          generate_release_notes: true
+          # Tag push triggers .github/workflows/release.yml which publishes
+          # to PyPI and creates the GitHub Release with the plugin ZIP.
