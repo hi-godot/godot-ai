@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Open Godot on the test_project belonging to the *current* working tree
+# (main checkout or worktree). Avoids the gotcha where editing a worktree's
+# plugin doesn't show up because Godot is still running on main's test_project.
+#
+# Usage: script/open-godot-here
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TEST_PROJECT="$REPO_ROOT/test_project"
+
+GODOT_BIN="${GODOT_BIN:-/Applications/Godot_mono.app/Contents/MacOS/Godot}"
+
+if [[ ! -d "$TEST_PROJECT" ]]; then
+    echo "error: $TEST_PROJECT not found" >&2
+    exit 1
+fi
+if [[ ! -x "$GODOT_BIN" ]]; then
+    echo "error: Godot not found at $GODOT_BIN (override with GODOT_BIN=...)" >&2
+    exit 1
+fi
+
+echo "Opening Godot on: $TEST_PROJECT"
+exec "$GODOT_BIN" --editor --path "$TEST_PROJECT"

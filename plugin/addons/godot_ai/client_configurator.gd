@@ -5,7 +5,7 @@ extends RefCounted
 ## Configures MCP clients (Claude Code, Codex, Antigravity, etc.) to connect to
 ## the Godot AI server.
 
-enum ClientType { CLAUDE_CODE, CODEX, ANTIGRAVITY }
+enum ClientType { CLAUDE_CODE, CLAUDE_DESKTOP, CODEX, ANTIGRAVITY }
 enum ConfigStatus { NOT_CONFIGURED, CONFIGURED, ERROR }
 
 const SERVER_NAME := "godot-ai"
@@ -16,6 +16,7 @@ const SERVER_HTTP_URL := "http://127.0.0.1:%d/mcp" % SERVER_HTTP_PORT
 ## Map client name strings to enum values.
 const CLIENT_TYPE_MAP := {
 	"claude_code": ClientType.CLAUDE_CODE,
+	"claude_desktop": ClientType.CLAUDE_DESKTOP,
 	"codex": ClientType.CODEX,
 	"antigravity": ClientType.ANTIGRAVITY,
 }
@@ -25,6 +26,8 @@ static func configure(client: ClientType) -> Dictionary:
 	match client:
 		ClientType.CLAUDE_CODE:
 			return _configure_claude_code()
+		ClientType.CLAUDE_DESKTOP:
+			return _configure_claude_desktop()
 		ClientType.CODEX:
 			return _configure_codex()
 		ClientType.ANTIGRAVITY:
@@ -36,6 +39,8 @@ static func check_status(client: ClientType) -> ConfigStatus:
 	match client:
 		ClientType.CLAUDE_CODE:
 			return _check_claude_code()
+		ClientType.CLAUDE_DESKTOP:
+			return _check_claude_desktop()
 		ClientType.CODEX:
 			return _check_codex()
 		ClientType.ANTIGRAVITY:
@@ -47,6 +52,8 @@ static func remove(client: ClientType) -> Dictionary:
 	match client:
 		ClientType.CLAUDE_CODE:
 			return _remove_claude_code()
+		ClientType.CLAUDE_DESKTOP:
+			return _remove_claude_desktop()
 		ClientType.CODEX:
 			return _remove_codex()
 		ClientType.ANTIGRAVITY:
@@ -145,6 +152,9 @@ static func check_uv_version() -> String:
 static var _venv_python_cache: String = ""
 static var _venv_python_searched: bool = false
 
+static var _claude_cli_cache: String = ""
+static var _claude_cli_searched: bool = false
+
 
 static func _cached_venv_python() -> String:
 	if not _venv_python_searched:
@@ -207,14 +217,127 @@ static func _get_platform_path_prepend() -> Array[String]:
 	return []
 
 
+# --- Generic JSON config helpers (used by Claude Desktop and Antigravity) ---
+
+static func _read_json_config(config_path: String, label: String) -> Variant:
+	var file := FileAccess.open(config_path, FileAccess.READ)
+	if file == null:
+		return null
+	var content := file.get_as_text()
+	file.close()
+	if content.is_empty():
+		return null
+	var json := JSON.new()
+	if json.parse(content) != OK:
+		push_warning("MCP | %s config parse error: %s (at line %d)" % [label, json.get_error_message(), json.get_error_line()])
+		return null
+	if not (json.data is Dictionary):
+		return null
+	return json.data
+
+
+static func _write_json_config(config_path: String, config: Dictionary) -> bool:
+	var dir_path := config_path.get_base_dir()
+	if not DirAccess.dir_exists_absolute(dir_path):
+		DirAccess.make_dir_recursive_absolute(dir_path)
+	var file := FileAccess.open(config_path, FileAccess.WRITE)
+	if file == null:
+		return false
+	file.store_string(JSON.stringify(config, "\t"))
+	file.close()
+	return true
+
+
 # --- Claude Code ---
 
+## GUI-launched Godot has a minimal PATH, so resolve `claude` in three steps:
+##   1. Check well-known install locations (covers most users)
+##   2. Run a login shell (`bash -lc 'which claude'`) to pick up the user's
+##      full PATH as configured in .zshrc / .bash_profile / etc.
+##   3. Fall back to which/where with the inherited PATH.
+static func _find_claude_cli() -> String:
+	var is_windows := OS.get_name() == "Windows"
+	var exe_name := "claude.exe" if is_windows else "claude"
+
+	# 1. Well-known locations
+	var candidates: Array[String] = []
+	var home := OS.get_environment("HOME")
+	if home.is_empty():
+		home = OS.get_environment("USERPROFILE")
+	if not home.is_empty():
+		candidates.append(home.path_join(".local/bin").path_join(exe_name))
+		candidates.append(home.path_join(".claude/local").path_join(exe_name))
+	candidates.append("/usr/local/bin/%s" % exe_name)
+	candidates.append("/opt/homebrew/bin/%s" % exe_name)
+
+	for p in candidates:
+		if FileAccess.file_exists(p):
+			return p
+
+	# 2. Login shell lookup (Unix only) — use the user's default shell so PATH
+	#    entries in .zshrc / .bashrc / .bash_profile / etc. are picked up.
+	if not is_windows:
+		var shell := OS.get_environment("SHELL")
+		if shell.is_empty():
+			shell = "/bin/bash"
+		var login_output: Array = []
+		var login_exit := OS.execute(shell, ["-lc", "command -v claude"], login_output, true)
+		if login_exit == 0 and login_output.size() > 0:
+			var login_found: String = login_output[0].strip_edges()
+			if not login_found.is_empty() and FileAccess.file_exists(login_found):
+				return login_found
+
+	# 3. which/where fallback using the inherited PATH
+	var lookup := "where" if is_windows else "which"
+	var output: Array = []
+	var exit_code := OS.execute(lookup, [exe_name], output, true)
+	if exit_code == 0 and output.size() > 0:
+		var found: String = output[0].strip_edges()
+		if not found.is_empty():
+			return found
+
+	return ""
+
+
+## Return a human-runnable manual configuration command / instruction for a client.
+## Used as a fallback when auto-configure can't find a required CLI, and shown
+## in the dock so the user can copy+paste.
+static func manual_command(client: ClientType) -> String:
+	match client:
+		ClientType.CLAUDE_CODE:
+			return "claude mcp add --scope user --transport http %s %s" % [SERVER_NAME, SERVER_HTTP_URL]
+		ClientType.CLAUDE_DESKTOP:
+			return "Edit %s and add under \"mcpServers\":\n  \"%s\": { \"command\": \"npx\", \"args\": [\"-y\", \"mcp-remote\", \"%s\"] }" % [
+				_get_claude_desktop_config_path(), SERVER_NAME, SERVER_HTTP_URL,
+			]
+		ClientType.CODEX:
+			return "Edit %s and add:\n  [mcp_servers.\"%s\"]\n  url = \"%s\"\n  enabled = true" % [
+				_get_codex_config_path(), SERVER_NAME, SERVER_HTTP_URL,
+			]
+		ClientType.ANTIGRAVITY:
+			return "Edit %s and add under \"mcpServers\":\n  \"%s\": { \"serverUrl\": \"%s\", \"disabled\": false }" % [
+				_get_antigravity_config_path(), SERVER_NAME, SERVER_HTTP_URL,
+			]
+	return ""
+
+
+static func _cached_claude_cli() -> String:
+	if not _claude_cli_searched:
+		_claude_cli_cache = _find_claude_cli()
+		_claude_cli_searched = true
+	return _claude_cli_cache
+
+
 static func _configure_claude_code() -> Dictionary:
-	OS.execute("claude", ["mcp", "remove", SERVER_NAME], [], true)
+	var claude_cli := _cached_claude_cli()
+	if claude_cli.is_empty():
+		return {"status": "error", "message": "Claude CLI not found — install from https://claude.ai/download"}
+
+	OS.execute(claude_cli, ["mcp", "remove", SERVER_NAME], [], true)
 
 	var args: Array[String] = ["mcp", "add", "--scope", "user", "--transport", "http", SERVER_NAME, SERVER_HTTP_URL]
 	var output: Array = []
-	var exit_code := OS.execute("claude", args, output, true)
+	var exit_code := OS.execute(claude_cli, args, output, true)
 
 	if exit_code == 0:
 		return {"status": "ok", "message": "Claude Code configured (HTTP: %s)" % SERVER_HTTP_URL}
@@ -223,8 +346,11 @@ static func _configure_claude_code() -> Dictionary:
 
 
 static func _check_claude_code() -> ConfigStatus:
+	var claude_cli := _cached_claude_cli()
+	if claude_cli.is_empty():
+		return ConfigStatus.NOT_CONFIGURED
 	var output: Array = []
-	var exit_code := OS.execute("claude", ["mcp", "list"], output, true)
+	var exit_code := OS.execute(claude_cli, ["mcp", "list"], output, true)
 	if exit_code != 0:
 		return ConfigStatus.NOT_CONFIGURED
 
@@ -238,8 +364,11 @@ static func _check_claude_code() -> ConfigStatus:
 
 
 static func _remove_claude_code() -> Dictionary:
+	var claude_cli := _cached_claude_cli()
+	if claude_cli.is_empty():
+		return {"status": "error", "message": "Claude CLI not found"}
 	var output: Array = []
-	var exit_code := OS.execute("claude", ["mcp", "remove", SERVER_NAME], output, true)
+	var exit_code := OS.execute(claude_cli, ["mcp", "remove", SERVER_NAME], output, true)
 	if exit_code == 0:
 		return {"status": "ok", "message": "Claude Code configuration removed"}
 	var err_msg: String = output[0].strip_edges() if output.size() > 0 else "Unknown error"
@@ -419,43 +548,107 @@ static func _remove_codex() -> Dictionary:
 	return {"status": "ok", "message": "Codex configuration removed"}
 
 
+# --- Claude Desktop ---
+
+static func _get_claude_desktop_config_path() -> String:
+	match OS.get_name():
+		"macOS":
+			return OS.get_environment("HOME").path_join("Library/Application Support/Claude/claude_desktop_config.json")
+		"Windows":
+			var appdata := OS.get_environment("APPDATA")
+			if appdata.is_empty():
+				appdata = OS.get_environment("USERPROFILE").path_join("AppData/Roaming")
+			return appdata.path_join("Claude/claude_desktop_config.json")
+		_:
+			# Linux / unofficial — best-effort
+			var xdg := OS.get_environment("XDG_CONFIG_HOME")
+			if xdg.is_empty():
+				xdg = OS.get_environment("HOME").path_join(".config")
+			return xdg.path_join("Claude/claude_desktop_config.json")
+
+
+static func _read_claude_desktop_config() -> Variant:
+	return _read_json_config(_get_claude_desktop_config_path(), "Claude Desktop")
+
+
+static func _write_claude_desktop_config(config: Dictionary) -> bool:
+	return _write_json_config(_get_claude_desktop_config_path(), config)
+
+
+## Claude Desktop only accepts stdio `command`/`args` entries in `mcpServers`.
+## For our HTTP server, bridge via `npx mcp-remote <url>` which ships the
+## mcp-remote proxy from npm on demand.
+static func _claude_desktop_entry() -> Dictionary:
+	return {
+		"command": "npx",
+		"args": ["-y", "mcp-remote", SERVER_HTTP_URL],
+	}
+
+
+static func _configure_claude_desktop() -> Dictionary:
+	var config = _read_claude_desktop_config()
+	if not (config is Dictionary):
+		config = {"mcpServers": {}}
+	if not config.has("mcpServers") or not (config["mcpServers"] is Dictionary):
+		config["mcpServers"] = {}
+
+	config["mcpServers"][SERVER_NAME] = _claude_desktop_entry()
+
+	if not _write_claude_desktop_config(config):
+		return {"status": "error", "message": "Cannot write to %s" % _get_claude_desktop_config_path()}
+	return {"status": "ok", "message": "Claude Desktop configured (via npx mcp-remote → %s) — restart Claude Desktop to load" % SERVER_HTTP_URL}
+
+
+static func _check_claude_desktop() -> ConfigStatus:
+	var config = _read_claude_desktop_config()
+	if not (config is Dictionary):
+		return ConfigStatus.NOT_CONFIGURED
+
+	var servers = config.get("mcpServers", {})
+	if not (servers is Dictionary):
+		return ConfigStatus.NOT_CONFIGURED
+	if not servers.has(SERVER_NAME):
+		return ConfigStatus.NOT_CONFIGURED
+
+	var entry = servers.get(SERVER_NAME)
+	if not (entry is Dictionary):
+		return ConfigStatus.NOT_CONFIGURED
+
+	# Accept either: (a) the bridge form we write (command=npx, args include mcp-remote + SERVER_HTTP_URL),
+	#                (b) a legacy/newer url-style entry pointing at our server.
+	if entry.get("url", "") == SERVER_HTTP_URL:
+		return ConfigStatus.CONFIGURED
+	var args = entry.get("args", [])
+	if entry.get("command", "") == "npx" and args is Array and args.has(SERVER_HTTP_URL):
+		return ConfigStatus.CONFIGURED
+
+	return ConfigStatus.NOT_CONFIGURED
+
+
+static func _remove_claude_desktop() -> Dictionary:
+	var config = _read_claude_desktop_config()
+	if not (config is Dictionary):
+		return {"status": "ok", "message": "Not configured"}
+
+	var servers = config.get("mcpServers")
+	if servers is Dictionary:
+		servers.erase(SERVER_NAME)
+		_write_claude_desktop_config(config)
+	return {"status": "ok", "message": "Claude Desktop configuration removed"}
+
+
 # --- Antigravity ---
 
 static func _get_antigravity_config_path() -> String:
 	return OS.get_environment("HOME").path_join(".gemini/antigravity/mcp_config.json")
 
 
-## Read and parse the Antigravity config file. Returns null if missing/invalid.
 static func _read_antigravity_config() -> Variant:
-	var config_path := _get_antigravity_config_path()
-	var file := FileAccess.open(config_path, FileAccess.READ)
-	if file == null:
-		return null
-	var content := file.get_as_text()
-	file.close()
-	if content.is_empty():
-		return null
-	var json := JSON.new()
-	if json.parse(content) != OK:
-		push_warning("MCP | Antigravity config parse error: %s (at line %d)" % [json.get_error_message(), json.get_error_line()])
-		return null
-	if not (json.data is Dictionary):
-		return null
-	return json.data
+	return _read_json_config(_get_antigravity_config_path(), "Antigravity")
 
 
-## Write the Antigravity config file, preserving other entries.
 static func _write_antigravity_config(config: Dictionary) -> bool:
-	var config_path := _get_antigravity_config_path()
-	var dir_path := config_path.get_base_dir()
-	if not DirAccess.dir_exists_absolute(dir_path):
-		DirAccess.make_dir_recursive_absolute(dir_path)
-	var file := FileAccess.open(config_path, FileAccess.WRITE)
-	if file == null:
-		return false
-	file.store_string(JSON.stringify(config, "\t"))
-	file.close()
-	return true
+	return _write_json_config(_get_antigravity_config_path(), config)
 
 
 static func _configure_antigravity() -> Dictionary:

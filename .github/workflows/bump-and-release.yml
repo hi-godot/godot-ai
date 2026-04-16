@@ -1,0 +1,70 @@
+name: Bump and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read current version
+        id: current
+        run: |
+          version=$(grep '^version=' plugin/addons/godot_ai/plugin.cfg | sed 's/version="//' | sed 's/"//')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Compute new version
+        id: next
+        run: |
+          IFS='.' read -r major minor patch <<< "${{ steps.current.outputs.version }}"
+          case "${{ inputs.bump }}" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          echo "version=${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
+
+      - name: Update version files
+        run: |
+          NEW="${{ steps.next.outputs.version }}"
+          OLD="${{ steps.current.outputs.version }}"
+          sed -i "s/version=\"${OLD}\"/version=\"${NEW}\"/" plugin/addons/godot_ai/plugin.cfg
+          sed -i "s/^version = \"${OLD}\"/version = \"${NEW}\"/" pyproject.toml
+
+      - name: Commit, tag, and push
+        run: |
+          NEW="${{ steps.next.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add plugin/addons/godot_ai/plugin.cfg pyproject.toml
+          git commit -m "Bump version to ${NEW}"
+          git tag "v${NEW}"
+          git push origin main --tags
+
+      - name: Build plugin ZIP
+        run: |
+          mkdir -p staging/addons
+          cp -r plugin/addons/godot_ai staging/addons/
+          cd staging
+          zip -r ../godot-ai-plugin.zip addons/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.next.outputs.version }}
+          files: godot-ai-plugin.zip
+          generate_release_notes: true

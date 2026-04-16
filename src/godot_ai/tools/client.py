@@ -18,7 +18,8 @@ def register_client_tools(mcp: FastMCP) -> None:
         how to launch and connect to this server.
 
         Args:
-            client: The client to configure. Options: "claude_code", "codex", "antigravity".
+            client: The client to configure.
+                Options: "claude_code", "claude_desktop", "codex", "antigravity".
         """
         runtime = DirectRuntime.from_context(ctx)
         return await client_handlers.client_configure(runtime, client=client)

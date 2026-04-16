@@ -58,13 +58,25 @@ This uses `src/godot_ai/asgi.py` to run uvicorn with its factory reload path. Uv
 
 The `editor_reload_plugin` MCP tool triggers a live plugin reload inside Godot (`EditorInterface.set_plugin_enabled` off/on). Requires the server to be running externally (not managed by the plugin). The Python handler waits for the new session via `SessionRegistry.wait_for_session()`.
 
-The Godot dock also has a **Start/Stop Dev Server** button for convenience.
+The Godot dock also has a **Start/Stop Dev Server** button for convenience (visible in developer mode).
+
+### Releasing
+
+Use the GitHub Actions workflow to cut a release:
+```bash
+gh workflow run bump-and-release.yml -f bump=patch   # or minor / major
+```
+This bumps `plugin.cfg` + `pyproject.toml`, commits, tags, and pushes. The `release.yml` workflow triggers on the tag and builds a `godot-ai-plugin.zip` attached to the GitHub Release.
+
+### Self-update
+
+The dock checks the GitHub releases API on startup. If a newer version exists, a yellow banner appears with an "Update" button that downloads the release ZIP, extracts it over the current `addons/godot_ai/`, and reloads the plugin. The server process is unaffected.
 
 ## Testing
 
 ### Python tests
 ```bash
-pytest -v                    # 373 unit + integration tests
+pytest -v                    # 375 unit + integration tests
 ```
 
 ### Godot-side tests
@@ -84,6 +96,12 @@ Test suites extend `McpTestSuite` (assertion methods: `assert_true`, `assert_eq`
 2. Open a scene (e.g. `main.tscn`)
 3. Plugin starts the server automatically; logs should show `Session connected`
 4. Use `/mcp` in Claude Code to connect
+
+**Worktree gotcha**: each working tree (main checkout or git worktree) has its own
+`test_project/addons/godot_ai` symlink pointing to *that tree's* `plugin/`. If you
+edit a worktree's plugin but Godot is running on the main repo's `test_project/`,
+your changes won't appear there. Use `script/open-godot-here` to launch Godot on the
+current working tree's `test_project/`.
 
 ## Pre-commit smoke test
 
@@ -105,8 +123,11 @@ Test suites extend `McpTestSuite` (assertion methods: `assert_true`, `assert_eq`
 
 The plugin can configure MCP clients via `client_configurator.gd`:
 - **Claude Code**: uses `claude mcp add` CLI to register the server
+- **Claude Desktop**: writes JSON config to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows) with `npx mcp-remote` bridge
 - **Codex**: writes TOML config to `~/.codex/config.toml`
 - **Antigravity**: writes directly to `~/.gemini/antigravity/mcp_config.json`
+
+If auto-configure can't find a client's CLI (common with GUI-launched editors that have limited PATH), the dock shows a "Run this manually" panel with a copyable command.
 
 MCP tools `client_configure` and `client_status` expose this to AI clients.
 

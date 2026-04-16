@@ -38,13 +38,57 @@ In Godot: **Project > Project Settings > Plugins** — enable **Godot AI**.
 
 The plugin will automatically start the MCP server, connect over WebSocket, and show status in the **Godot AI** dock.
 
+<p align="center"><img src="docs/images/dock.png" alt="Godot AI dock" width="320"></p>
+
 ### 3. Connect your MCP client
 
-Click a **Configure** button in the dock, or point any HTTP MCP client at:
+Pick a client in the dock's **Clients** dropdown and press **Configure**. The
+plugin writes the right config for:
 
-```text
-http://127.0.0.1:8000/mcp
+- **Claude Code** (CLI)
+- **Claude Desktop** (via `npx mcp-remote` bridge)
+- **Codex**
+- **Antigravity**
+
+If auto-configure can't find the client's CLI (GUI-launched editors have
+limited PATH), the dock shows a **Run this manually** panel with a copyable
+command — or use the commands below directly.
+
+<details>
+<summary><strong>Manual configuration</strong></summary>
+
+Server URL: `http://127.0.0.1:8000/mcp`
+
+**Claude Code** (CLI):
+```bash
+claude mcp add --scope user --transport http godot-ai http://127.0.0.1:8000/mcp
 ```
+
+**Claude Desktop** — edit `~/Library/Application Support/Claude/claude_desktop_config.json`
+(macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows) and add under
+`mcpServers`:
+```json
+"godot-ai": {
+  "command": "npx",
+  "args": ["-y", "mcp-remote", "http://127.0.0.1:8000/mcp"]
+}
+```
+Requires Node.js (`npx`). Restart Claude Desktop after editing.
+
+**Codex** — edit `~/.codex/config.toml` and add:
+```toml
+[mcp_servers."godot-ai"]
+url = "http://127.0.0.1:8000/mcp"
+enabled = true
+```
+
+**Antigravity** — edit `~/.gemini/antigravity/mcp_config.json` and add under
+`mcpServers`:
+```json
+"godot-ai": { "serverUrl": "http://127.0.0.1:8000/mcp", "disabled": false }
+```
+
+</details>
 
 ### 4. Try it
 

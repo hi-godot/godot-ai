@@ -7,6 +7,7 @@ var _log_buffer: McpLogBuffer
 var _dock: McpDock
 var _server_pid := -1
 var _handlers: Array = []  # prevent GC of RefCounted handlers
+static var _server_started_this_session := false  # guard against re-entrant spawns
 
 
 func _enter_tree() -> void:
@@ -148,8 +149,14 @@ func _start_server() -> void:
 	## NOTE: We only check port 8000 (HTTP), not 9500 (WebSocket). If a foreign
 	## process holds 8000, we'll assume it's a valid server. The WebSocket
 	## connection will fail and retry if the server isn't actually ours.
+	if _server_started_this_session:
+		# Guard against re-entrant spawns (e.g. plugin reload during update).
+		# The static flag persists across disable/enable cycles within the same
+		# editor session, preventing cascading server process creation.
+		return
 	if _is_port_in_use(McpClientConfigurator.SERVER_HTTP_PORT):
 		print("MCP | server already running on port %d, using existing" % McpClientConfigurator.SERVER_HTTP_PORT)
+		_server_started_this_session = true
 		return
 
 	var server_cmd := McpClientConfigurator.get_server_command()
@@ -164,6 +171,7 @@ func _start_server() -> void:
 
 	_server_pid = OS.create_process(cmd, args)
 	if _server_pid > 0:
+		_server_started_this_session = true
 		print("MCP | started server (PID %d): %s %s" % [_server_pid, cmd, " ".join(args)])
 	else:
 		push_warning("MCP | failed to start server")
