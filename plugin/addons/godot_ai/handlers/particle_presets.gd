@@ -8,6 +8,11 @@ extends RefCounted
 ## through the normal write path (one undo action wraps all spawns).
 
 
+## Each preset has {main, process, draw}. `draw` configures the StandardMaterial3D
+## attached to the auto-created QuadMesh in draw_pass_1 (GPU 3D only); if
+## omitted, the handler falls back to a sensible billboard-particles default.
+## `blend_mode: "add"` is what makes fire/magic/explosion glow — without
+## additive blending, additively-layered particles just stack to gray.
 const _PRESETS := {
 	"fire": {
 		"main": {
@@ -37,6 +42,7 @@ const _PRESETS := {
 				]
 			},
 		},
+		"draw": {"blend_mode": "add"},
 	},
 	"smoke": {
 		"main": {
@@ -65,6 +71,8 @@ const _PRESETS := {
 				]
 			},
 		},
+		# Smoke uses regular alpha blending so it darkens the background.
+		"draw": {"blend_mode": "mix"},
 	},
 	"spark_burst": {
 		"main": {
@@ -84,6 +92,12 @@ const _PRESETS := {
 			"scale_min": 0.05,
 			"scale_max": 0.12,
 			"color": {"r": 1.0, "g": 0.9, "b": 0.2, "a": 1.0},
+		},
+		"draw": {
+			"blend_mode": "add",
+			"emission_enabled": true,
+			"emission": {"r": 1.0, "g": 0.8, "b": 0.2, "a": 1.0},
+			"emission_energy_multiplier": 2.0,
 		},
 	},
 	"magic_swirl": {
@@ -117,6 +131,7 @@ const _PRESETS := {
 				]
 			},
 		},
+		"draw": {"blend_mode": "add"},
 	},
 	"rain": {
 		"main": {
@@ -138,6 +153,8 @@ const _PRESETS := {
 			"scale_max": 0.04,
 			"color": {"r": 0.7, "g": 0.85, "b": 1.0, "a": 0.5},
 		},
+		# Rain drops render as streaks; fixed_y aligns them vertically.
+		"draw": {"billboard_mode": "fixed_y", "blend_mode": "mix"},
 	},
 	"explosion": {
 		"main": {
@@ -166,6 +183,48 @@ const _PRESETS := {
 				]
 			},
 		},
+		"draw": {
+			"blend_mode": "add",
+			"emission_enabled": true,
+			"emission": {"r": 1.0, "g": 0.5, "b": 0.1, "a": 1.0},
+			"emission_energy_multiplier": 1.5,
+		},
+	},
+	"lightning": {
+		# Short, bright, electric-blue spark burst. One-shot — call
+		# particle_restart to re-trigger. Pairs well with a scene-wide flash.
+		"main": {
+			"amount": 40,
+			"lifetime": 0.35,
+			"one_shot": true,
+			"explosiveness": 1.0,
+			"local_coords": false,
+		},
+		"process": {
+			"emission_shape": "box",
+			"emission_box_extents": {"x": 0.1, "y": 1.5, "z": 0.1},
+			"direction": {"x": 0.0, "y": -1.0, "z": 0.0},
+			"spread": 8.0,
+			"initial_velocity_min": 18.0,
+			"initial_velocity_max": 28.0,
+			"gravity": {"x": 0.0, "y": 0.0, "z": 0.0},
+			"scale_min": 0.08,
+			"scale_max": 0.18,
+			"color_ramp": {
+				"stops": [
+					{"time": 0.0, "color": [1.0, 1.0, 1.0, 1.0]},
+					{"time": 0.2, "color": [0.6, 0.85, 1.0, 1.0]},
+					{"time": 0.6, "color": [0.3, 0.5, 1.0, 0.9]},
+					{"time": 1.0, "color": [0.1, 0.2, 0.7, 0.0]},
+				]
+			},
+		},
+		"draw": {
+			"blend_mode": "add",
+			"emission_enabled": true,
+			"emission": {"r": 0.5, "g": 0.8, "b": 1.0, "a": 1.0},
+			"emission_energy_multiplier": 4.0,
+		},
 	},
 }
 
@@ -178,15 +237,16 @@ static func has(preset_name: String) -> bool:
 	return _PRESETS.has(preset_name)
 
 
-## Return deep-copied {main, process} blueprint with overrides merged in.
-## Overrides may include top-level "main", "process", or bare keys that
-## are routed to main/process based on which group they belong to.
+## Return deep-copied {main, process, draw} blueprint with overrides merged in.
+## Overrides may include top-level "main" / "process" / "draw" dicts, or bare
+## keys that get routed based on which group they belong to.
 static func build(preset_name: String, overrides: Dictionary) -> Variant:
 	if not _PRESETS.has(preset_name):
 		return null
 	var entry: Dictionary = _PRESETS[preset_name].duplicate(true)
 	var main: Dictionary = entry.get("main", {})
 	var process: Dictionary = entry.get("process", {})
+	var draw: Dictionary = entry.get("draw", {})
 	for key in overrides:
 		var val = overrides[key]
 		if key == "main" and val is Dictionary:
@@ -195,12 +255,16 @@ static func build(preset_name: String, overrides: Dictionary) -> Variant:
 		elif key == "process" and val is Dictionary:
 			for k in val:
 				process[k] = val[k]
+		elif key == "draw" and val is Dictionary:
+			for k in val:
+				draw[k] = val[k]
 		elif _MAIN_KEYS.has(key):
 			main[key] = val
 		else:
 			process[key] = val
 	entry["main"] = main
 	entry["process"] = process
+	entry["draw"] = draw
 	return entry
 
 

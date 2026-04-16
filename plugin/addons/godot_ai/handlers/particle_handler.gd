@@ -72,7 +72,9 @@ func create_particle(params: Dictionary) -> Dictionary:
 	var process_mat: ParticleProcessMaterial = null
 	var process_material_created := false
 	var draw_mesh: Mesh = null
+	var draw_material: StandardMaterial3D = null
 	var draw_pass_mesh_created := false
+	var draw_material_created := false
 
 	if type_str == "gpu_3d" or type_str == "gpu_2d":
 		process_mat = ParticleProcessMaterial.new()
@@ -80,7 +82,13 @@ func create_particle(params: Dictionary) -> Dictionary:
 	if type_str == "gpu_3d":
 		draw_mesh = QuadMesh.new()
 		(draw_mesh as QuadMesh).size = Vector2(0.25, 0.25)
+		# Without a material, the mesh renders flat white — ignoring
+		# ParticleProcessMaterial.color_ramp entirely. Give it the standard
+		# billboard + vertex-color-as-albedo setup so color_ramp works.
+		draw_material = ParticleValues.build_draw_material({})
+		(draw_mesh as QuadMesh).material = draw_material
 		draw_pass_mesh_created = true
+		draw_material_created = true
 
 	_undo_redo.create_action("MCP: Create %s '%s'" % [_VALID_TYPES[type_str], node.name])
 	_undo_redo.add_do_method(parent, "add_child", node, true)
@@ -91,6 +99,8 @@ func create_particle(params: Dictionary) -> Dictionary:
 	if draw_mesh != null:
 		_undo_redo.add_do_property(node, "draw_pass_1", draw_mesh)
 		_undo_redo.add_do_reference(draw_mesh)
+	if draw_material != null:
+		_undo_redo.add_do_reference(draw_material)
 	_undo_redo.add_do_reference(node)
 	_undo_redo.add_undo_method(parent, "remove_child", node)
 	_undo_redo.commit_action()
@@ -104,6 +114,7 @@ func create_particle(params: Dictionary) -> Dictionary:
 			"class": _VALID_TYPES[type_str],
 			"process_material_created": process_material_created,
 			"draw_pass_mesh_created": draw_pass_mesh_created,
+			"draw_material_created": draw_material_created,
 			"undoable": true,
 		}
 	}
@@ -599,11 +610,17 @@ func apply_preset(params: Dictionary) -> Dictionary:
 		process_material_created = true
 
 	var draw_mesh: Mesh = null
+	var draw_material: StandardMaterial3D = null
 	var draw_pass_mesh_created := false
+	var draw_material_created := false
 	if type_str == "gpu_3d":
 		draw_mesh = QuadMesh.new()
 		(draw_mesh as QuadMesh).size = Vector2(0.25, 0.25)
+		var draw_config: Dictionary = blueprint.get("draw", {})
+		draw_material = ParticleValues.build_draw_material(draw_config)
+		(draw_mesh as QuadMesh).material = draw_material
 		draw_pass_mesh_created = true
+		draw_material_created = true
 
 	# Pre-apply preset values to in-memory targets (no undo needed; nodes not in tree yet).
 	var main_values: Dictionary = blueprint.get("main", {})
@@ -645,6 +662,8 @@ func apply_preset(params: Dictionary) -> Dictionary:
 	if draw_mesh != null:
 		_undo_redo.add_do_property(node, "draw_pass_1", draw_mesh)
 		_undo_redo.add_do_reference(draw_mesh)
+	if draw_material != null:
+		_undo_redo.add_do_reference(draw_material)
 	_undo_redo.add_undo_method(parent, "remove_child", node)
 	_undo_redo.commit_action()
 
@@ -660,6 +679,7 @@ func apply_preset(params: Dictionary) -> Dictionary:
 			"applied_process": applied_process,
 			"process_material_created": process_material_created,
 			"draw_pass_mesh_created": draw_pass_mesh_created,
+			"draw_material_created": draw_material_created,
 			"is_3d": is_3d,
 			"undoable": true,
 		}

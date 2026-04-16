@@ -148,6 +148,58 @@ static func coerce(property: String, value: Variant, target_type: int) -> Dictio
 	return MaterialValues.coerce_material_value(property, value, target_type)
 
 
+## Build a StandardMaterial3D suitable for GPUParticles3D draw-pass rendering.
+##
+## Godot's default Mesh has no material, which means ParticleProcessMaterial's
+## color_ramp (which drives the COLOR varying) gets ignored and particles
+## render as flat white squares that don't face the camera. A correct default
+## must have vertex_color_use_as_albedo=true, billboard=particles, unshaded,
+## and alpha transparency so the gradient actually modulates the pixels.
+##
+## Config is an optional dict that overrides individual properties. Supported
+## keys match BaseMaterial3D properties (plus enum-by-name via MaterialValues):
+##   blend_mode: "mix" | "add" | "sub" | "mul"
+##   transparency: "disabled" | "alpha" | "alpha_scissor" | "alpha_hash" | "alpha_depth_pre_pass"
+##   shading_mode: "unshaded" | "per_pixel" | "per_vertex"
+##   billboard_mode: "disabled" | "enabled" | "fixed_y" | "particles"
+##   vertex_color_use_as_albedo: bool
+##   emission_enabled: bool
+##   emission: Color
+##   emission_energy_multiplier: float
+##   albedo_color: Color
+##   albedo_texture: res:// path
+##   (anything else accepted by BaseMaterial3D.set())
+static func build_draw_material(config: Dictionary) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	# Sensible defaults for particle draw-pass rendering.
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.vertex_color_use_as_albedo = true
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	mat.billboard_keep_scale = true
+	# Configure from dict overrides.
+	for key in config:
+		var prop_name := String(key)
+		var prop_type := _object_property_type(mat, prop_name)
+		if prop_type == TYPE_NIL:
+			continue
+		var coerce_result := MaterialValues.coerce_material_value(
+			prop_name, config[prop_name], prop_type
+		)
+		if coerce_result.ok:
+			mat.set(prop_name, coerce_result.value)
+	return mat
+
+
+static func _object_property_type(obj: Object, name: String) -> int:
+	if obj == null:
+		return TYPE_NIL
+	for prop in obj.get_property_list():
+		if prop.name == name:
+			return int(prop.get("type", TYPE_NIL))
+	return TYPE_NIL
+
+
 ## Serialize for response.
 static func serialize(value: Variant) -> Variant:
 	if value == null:

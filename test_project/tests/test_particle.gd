@@ -435,6 +435,66 @@ func test_apply_preset_with_overrides() -> void:
 	_created_paths.append(result.data.path)
 
 
+func test_apply_preset_attaches_draw_material() -> void:
+	# Without a draw material, color_ramp silently gets ignored by the renderer.
+	# The preset must auto-attach a StandardMaterial3D with vertex colour on.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return
+	var result := _handler.apply_preset({
+		"parent_path": "/" + scene_root.name,
+		"name": "TestFireDrawMat",
+		"preset": "fire",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.draw_material_created, true)
+	var node := ScenePath.resolve(result.data.path, scene_root) as GPUParticles3D
+	var quad := node.draw_pass_1 as QuadMesh
+	assert_true(quad != null, "draw_pass_1 should be a QuadMesh")
+	var mat := quad.material as StandardMaterial3D
+	assert_true(mat != null, "QuadMesh should have a StandardMaterial3D attached")
+	assert_true(mat.vertex_color_use_as_albedo, "vertex_color_use_as_albedo must be on for color_ramp to render")
+	assert_eq(int(mat.billboard_mode), BaseMaterial3D.BILLBOARD_PARTICLES)
+	assert_eq(int(mat.transparency), BaseMaterial3D.TRANSPARENCY_ALPHA)
+	# Fire preset requests additive blend for the glow.
+	assert_eq(int(mat.blend_mode), BaseMaterial3D.BLEND_MODE_ADD)
+	_created_paths.append(result.data.path)
+
+
+func test_apply_preset_lightning() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return
+	var result := _handler.apply_preset({
+		"parent_path": "/" + scene_root.name,
+		"name": "TestLightning",
+		"preset": "lightning",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.preset, "lightning")
+	var node := ScenePath.resolve(result.data.path, scene_root) as GPUParticles3D
+	assert_eq(node.one_shot, true)
+	assert_true(abs(node.explosiveness - 1.0) < 0.01)
+	var mat := (node.draw_pass_1 as QuadMesh).material as StandardMaterial3D
+	assert_true(mat.emission_enabled, "Lightning should be emissive")
+	assert_eq(int(mat.blend_mode), BaseMaterial3D.BLEND_MODE_ADD)
+	_created_paths.append(result.data.path)
+
+
+func test_create_attaches_default_draw_material() -> void:
+	# Bare particle_create (no preset) must also get the billboard-particles
+	# default material, otherwise color_ramp won't render.
+	var r := _create("TestDefaultDrawMat", "gpu_3d")
+	if r.is_empty():
+		return
+	assert_eq(r.data.draw_material_created, true)
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var node := ScenePath.resolve(r.data.path, scene_root) as GPUParticles3D
+	var mat := (node.draw_pass_1 as QuadMesh).material as StandardMaterial3D
+	assert_true(mat != null, "Default QuadMesh should have a material")
+	assert_true(mat.vertex_color_use_as_albedo)
+
+
 func test_apply_preset_unknown() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:

@@ -218,22 +218,28 @@ def register_particle_tools(mcp: FastMCP) -> None:
         overrides: Annotated[dict[str, Any], JsonCoerced] | None = None,
         session_id: str = "",
     ) -> dict:
-        """Spawn a curated particle effect — fire, smoke, spark_burst, magic_swirl, rain, explosion.
+        """Spawn a curated particle effect — fire, smoke, sparks, magic, rain, explosion, lightning.
 
-        All presets create the node, configure the process behavior, and set
-        up a draw pass — all in one undo action. Presets can target any
-        supported ``type``; ``fire`` as ``gpu_2d`` works, though the presets
-        are tuned for 3D.
+        All presets create the node, configure the process behavior, set up
+        a draw pass, AND attach a billboard ``StandardMaterial3D`` with
+        ``vertex_color_use_as_albedo=true`` so the ``color_ramp`` actually
+        renders (additive blend for fire/sparks/magic/explosion/lightning,
+        alpha blend for smoke/rain). All in one undo action. Presets can
+        target any supported ``type``; ``fire`` as ``gpu_2d`` works, though
+        presets are tuned for GPU 3D.
 
         Preset details:
 
         - ``fire`` — upward buoyancy, white→orange→red→transparent gradient,
-          sphere emission. Looping.
-        - ``smoke`` — slow rising gray gradient, sphere emission, long lifetime.
-        - ``spark_burst`` — one-shot, high-velocity point emission, gravity-affected.
-        - ``magic_swirl`` — ring emission, tangential velocity, cyan→magenta.
-        - ``rain`` — box emission from above, fast downward velocity.
-        - ``explosion`` — one-shot radial spark + smoke, strong explosiveness.
+          sphere emission, additive blend. Looping.
+        - ``smoke`` — slow rising gray gradient, sphere emission, long lifetime, alpha blend.
+        - ``spark_burst`` — one-shot, high-velocity point emission, gravity-affected,
+          additive + emissive.
+        - ``magic_swirl`` — ring emission, tangential velocity, cyan→magenta, additive.
+        - ``rain`` — box emission from above, fast downward velocity, vertical billboard.
+        - ``explosion`` — one-shot radial spark + smoke, strong explosiveness, additive + emissive.
+        - ``lightning`` — one-shot downward electric-blue strike, short lifetime,
+          additive + strong emission. Use ``particle_restart`` to re-trigger.
 
         Args:
             parent_path: Scene path of the parent node.
