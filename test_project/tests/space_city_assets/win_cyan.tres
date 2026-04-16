@@ -1,0 +1,16 @@
+[gd_resource type="ShaderMaterial" format=3 uid="uid://dvp2jiinuu536"]
+
+[ext_resource type="Shader" uid="uid://d0d1pgveq4wnh" path="res://tests/space_city_assets/windows.gdshader" id="1_cgjhq"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_cgjhq")
+shader_parameter/base_color = Color(0.05, 0.11, 0.14, 1)
+shader_parameter/window_color = Color(0.35, 0.95, 1, 1)
+shader_parameter/emission_energy = 2.0
+shader_parameter/window_density = 0.5
+shader_parameter/cell_width = 0.6
+shader_parameter/cell_height = 1.2
+shader_parameter/window_margin = 0.22
+shader_parameter/seed = 83.0
+shader_parameter/edge_glow = 0.8

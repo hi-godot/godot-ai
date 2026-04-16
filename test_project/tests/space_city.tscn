@@ -1,11 +1,13 @@
 [gd_scene format=3 uid="uid://bva8hpd0l1vs5"]
 
-[ext_resource type="Environment" uid="uid://dlujdd7vtai3l" path="res://tests/space_city_assets/env.tres" id="1_17vyq"]
+[ext_resource type="Environment" path="res://tests/space_city_assets/env.tres" id="1_17vyq"]
 [ext_resource type="BoxMesh" path="res://tests/space_city_assets/box.tres" id="2_5pngn"]
 [ext_resource type="SphereMesh" path="res://tests/space_city_assets/sphere_med.tres" id="3_0cm4n"]
 [ext_resource type="SphereMesh" path="res://tests/space_city_assets/sphere_big.tres" id="4_3wjxf"]
 [ext_resource type="SphereMesh" path="res://tests/space_city_assets/sphere_small.tres" id="5_1bi45"]
 [ext_resource type="PlaneMesh" path="res://tests/space_city_assets/street.tres" id="6_vg24i"]
+[ext_resource type="CylinderMesh" path="res://tests/space_city_assets/cylinder.tres" id="7_0cm4n"]
+[ext_resource type="CylinderMesh" path="res://tests/space_city_assets/cylinder_taper.tres" id="8_3wjxf"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_h5o7s"]
 albedo_color = Color(0.25, 0.04, 0.22, 1)
@@ -91,9 +93,9 @@ emission_energy_multiplier = 0.4
 shading_mode = 0
 albedo_color = Color(1, 0.55, 0.15, 1)
 
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_rb7ni"]
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_17vyq"]
 shading_mode = 0
-albedo_color = Color(0.25, 0.45, 0.9, 1)
+albedo_color = Color(0.35, 0.55, 1, 1)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_i8iue"]
 shading_mode = 0
@@ -353,6 +355,294 @@ albedo_color = Color(1, 0.2, 0.7, 1)
 shading_mode = 0
 albedo_color = Color(0.2, 0.7, 1, 1)
 
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_1bi45"]
+albedo_color = Color(0.06, 0.08, 0.15, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.25, 0.55, 1, 1)
+emission_energy_multiplier = 0.55
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_vg24i"]
+albedo_color = Color(0.13, 0.05, 0.11, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.95, 0.25, 0.7, 1)
+emission_energy_multiplier = 0.5
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_rb7ni"]
+albedo_color = Color(0.08, 0.07, 0.14, 1)
+metallic = 0.2
+roughness = 0.6
+emission_enabled = true
+emission = Color(0.4, 0.3, 0.8, 1)
+emission_energy_multiplier = 0.3
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_j3yge"]
+albedo_color = Color(0.12, 0.09, 0.05, 1)
+metallic = 0.2
+roughness = 0.6
+emission_enabled = true
+emission = Color(0.9, 0.5, 0.15, 1)
+emission_energy_multiplier = 0.4
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_md0m6"]
+albedo_color = Color(0.05, 0.1, 0.14, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.2, 0.85, 0.95, 1)
+emission_energy_multiplier = 0.55
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_uxfcm"]
+albedo_color = Color(0.14, 0.06, 0.14, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.95, 0.25, 0.8, 1)
+emission_energy_multiplier = 0.5
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_6in1r"]
+albedo_color = Color(0.07, 0.05, 0.14, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.55, 0.25, 1, 1)
+emission_energy_multiplier = 0.45
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_5gejt"]
+albedo_color = Color(0.06, 0.11, 0.14, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.2, 0.85, 0.95, 1)
+emission_energy_multiplier = 0.5
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_jr1x5"]
+albedo_color = Color(0.11, 0.05, 0.13, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.85, 0.25, 0.75, 1)
+emission_energy_multiplier = 0.7
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_flmff"]
+albedo_color = Color(0.13, 0.09, 0.04, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(1, 0.55, 0.1, 1)
+emission_energy_multiplier = 0.65
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_c8t8q"]
+albedo_color = Color(0.05, 0.1, 0.14, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.15, 0.9, 1, 1)
+emission_energy_multiplier = 0.6
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_y04wd"]
+albedo_color = Color(0.07, 0.05, 0.14, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.55, 0.25, 1, 1)
+emission_energy_multiplier = 0.55
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_40wvg"]
+albedo_color = Color(0.07, 0.08, 0.15, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.25, 0.5, 1, 1)
+emission_energy_multiplier = 0.6
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_6wxi5"]
+albedo_color = Color(0.08, 0.06, 0.12, 1)
+metallic = 0.15
+roughness = 0.7
+emission_enabled = true
+emission = Color(0.9, 0.45, 0.2, 1)
+emission_energy_multiplier = 0.25
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_6je4n"]
+albedo_color = Color(0.08, 0.08, 0.12, 1)
+metallic = 0.15
+roughness = 0.7
+emission_enabled = true
+emission = Color(0.3, 0.75, 1, 1)
+emission_energy_multiplier = 0.3
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_tk40t"]
+albedo_color = Color(0.09, 0.06, 0.1, 1)
+metallic = 0.15
+roughness = 0.7
+emission_enabled = true
+emission = Color(1, 0.3, 0.5, 1)
+emission_energy_multiplier = 0.22
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_x2co4"]
+albedo_color = Color(0.06, 0.09, 0.12, 1)
+metallic = 0.15
+roughness = 0.7
+emission_enabled = true
+emission = Color(0.4, 0.85, 1, 1)
+emission_energy_multiplier = 0.3
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_73278"]
+albedo_color = Color(0.08, 0.07, 0.14, 1)
+metallic = 0.15
+roughness = 0.7
+emission_enabled = true
+emission = Color(0.6, 0.35, 1, 1)
+emission_energy_multiplier = 0.25
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_b7hpf"]
+albedo_color = Color(0.12, 0.09, 0.05, 1)
+metallic = 0.15
+roughness = 0.7
+emission_enabled = true
+emission = Color(1, 0.5, 0.15, 1)
+emission_energy_multiplier = 0.28
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_p0s7s"]
+albedo_color = Color(0.1, 0.06, 0.12, 1)
+metallic = 0.15
+roughness = 0.7
+emission_enabled = true
+emission = Color(0.95, 0.3, 0.7, 1)
+emission_energy_multiplier = 0.25
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_0cm4n"]
+albedo_color = Color(0.14, 0.06, 0.14, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.95, 0.25, 0.8, 1)
+emission_energy_multiplier = 0.28
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_3wjxf"]
+albedo_color = Color(0.06, 0.1, 0.14, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.2, 0.85, 0.95, 1)
+emission_energy_multiplier = 0.25
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_3j76b"]
+albedo_color = Color(0.07, 0.05, 0.14, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.55, 0.25, 1, 1)
+emission_energy_multiplier = 0.22
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_fxajh"]
+albedo_color = Color(0.17, 0.04, 0.16, 1)
+metallic = 0.3
+roughness = 0.4
+emission_enabled = true
+emission = Color(1, 0.2, 0.85, 1)
+emission_energy_multiplier = 0.85
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_6js3m"]
+albedo_color = Color(0.06, 0.09, 0.17, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.25, 0.5, 1, 1)
+emission_energy_multiplier = 0.25
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_t1iv8"]
+albedo_color = Color(0.07, 0.08, 0.15, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.3, 0.55, 1, 1)
+emission_energy_multiplier = 0.22
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_xs7kk"]
+albedo_color = Color(0.06, 0.1, 0.12, 1)
+metallic = 0.15
+roughness = 0.7
+emission_enabled = true
+emission = Color(0.3, 0.85, 1, 1)
+emission_energy_multiplier = 0.2
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_1gl38"]
+albedo_color = Color(0.11, 0.06, 0.12, 1)
+metallic = 0.15
+roughness = 0.7
+emission_enabled = true
+emission = Color(0.9, 0.3, 0.6, 1)
+emission_energy_multiplier = 0.18
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_r4lty"]
+albedo_color = Color(0.05, 0.08, 0.17, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.25, 0.45, 1, 1)
+emission_energy_multiplier = 0.3
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_0dlc7"]
+albedo_color = Color(0.2, 0.12, 0.03, 1)
+metallic = 0.3
+roughness = 0.4
+emission_enabled = true
+emission = Color(1, 0.55, 0.1, 1)
+emission_energy_multiplier = 0.8
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_8n0g5"]
+albedo_color = Color(0.14, 0.06, 0.14, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.95, 0.25, 0.8, 1)
+emission_energy_multiplier = 0.25
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_jfpls"]
+albedo_color = Color(0.07, 0.05, 0.14, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.55, 0.25, 1, 1)
+emission_energy_multiplier = 0.25
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_l4s8e"]
+albedo_color = Color(0.06, 0.11, 0.14, 1)
+metallic = 0.3
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.2, 0.85, 0.95, 1)
+emission_energy_multiplier = 0.22
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_j2alg"]
+albedo_color = Color(0.08, 0.07, 0.12, 1)
+metallic = 0.15
+roughness = 0.7
+emission_enabled = true
+emission = Color(0.6, 0.4, 1, 1)
+emission_energy_multiplier = 0.15
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_hgxif"]
+albedo_color = Color(0.12, 0.09, 0.05, 1)
+metallic = 0.15
+roughness = 0.7
+emission_enabled = true
+emission = Color(0.95, 0.5, 0.15, 1)
+emission_energy_multiplier = 0.18
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_4w872"]
+albedo_color = Color(0.05, 0.1, 0.14, 1)
+metallic = 0.15
+roughness = 0.7
+emission_enabled = true
+emission = Color(0.3, 0.85, 1, 1)
+emission_energy_multiplier = 0.2
+
 [node name="SpaceCity" type="Node3D" unique_id=1569212195]
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1268980709]
@@ -365,13 +655,13 @@ light_energy = 0.35
 shadow_enabled = true
 
 [node name="Camera3D" type="Camera3D" parent="." unique_id=1946777046]
-transform = Transform3D(1, 0, 0, 0, 0.9848078, -0.1736482, 0, 0.1736482, 0.9848078, 0, 12.596695, 12)
-fov = 62.0
+transform = Transform3D(0.96827865, -0.0442487, 0.24592395, -5.7202293e-10, 0.9841956, 0.17708474, -0.24987304, -0.17146736, 0.9529756, 7.34009, 20.401, 16.364319)
+fov = 52.8
 
 [node name="Towers" type="Node3D" parent="." unique_id=1891743041]
 
 [node name="T_L1" type="MeshInstance3D" parent="Towers" unique_id=967875564]
-transform = Transform3D(3.5, 0, 0, 0, 20, 0, 0, 0, 3.5, -7, 10, -4)
+transform = Transform3D(3.5, 0, 0, 0, 20, 0, 0, 0, 3.5, -6.622717, 10, -4.4125843)
 material_override = SubResource("StandardMaterial3D_h5o7s")
 mesh = ExtResource("2_5pngn")
 
@@ -396,12 +686,12 @@ material_override = SubResource("StandardMaterial3D_svb6q")
 mesh = ExtResource("2_5pngn")
 
 [node name="T_R1" type="MeshInstance3D" parent="Towers" unique_id=1215318001]
-transform = Transform3D(3.5, 0, 0, 0, 17, 0, 0, 0, 3.5, 7, 8.5, -7)
+transform = Transform3D(3.5, 0, 0, 0, 17, 0, 0, 0, 3.5, 8.468931, 8.5, -8.0636215)
 material_override = SubResource("StandardMaterial3D_5pjn4")
 mesh = ExtResource("2_5pngn")
 
 [node name="T_R2" type="MeshInstance3D" parent="Towers" unique_id=122632917]
-transform = Transform3D(3, 0, 0, 0, 26, 0, 0, 0, 3, 7.5, 13, -20)
+transform = Transform3D(3, 0, 0, 0, 26, 0, 0, 0, 3, 6.6465864, 13, -20)
 material_override = SubResource("StandardMaterial3D_y2qiu")
 mesh = ExtResource("2_5pngn")
 
@@ -428,8 +718,8 @@ material_override = SubResource("StandardMaterial3D_5meh5")
 mesh = ExtResource("3_0cm4n")
 
 [node name="Planet_Blue" type="MeshInstance3D" parent="Planets" unique_id=1667509468]
-transform = Transform3D(1.4, 0, 0, 0, 1.4, 0, 0, 0, 1.4, 10, 38, -70)
-material_override = SubResource("StandardMaterial3D_rb7ni")
+transform = Transform3D(1.4, 0, 0, 0, 1.4, 0, 0, 0, 1.4, -41.376392, 38, -70)
+material_override = SubResource("StandardMaterial3D_17vyq")
 mesh = ExtResource("4_3wjxf")
 
 [node name="Planet_Pink" type="MeshInstance3D" parent="Planets" unique_id=1387589401]
@@ -522,3 +812,189 @@ mesh = ExtResource("2_5pngn")
 transform = Transform3D(0.12, 0, 0, 0, 0.05, 0, 0, 0, 60, 4.5, 0.03, -30)
 material_override = SubResource("StandardMaterial3D_v5mp7")
 mesh = ExtResource("2_5pngn")
+
+[node name="SideCity" type="Node3D" parent="." unique_id=620492359]
+
+[node name="Cyl_FL" type="MeshInstance3D" parent="SideCity" unique_id=951282822]
+transform = Transform3D(2.2, 0, 0, 0, 6, 0, 0, 0, 2.2, -36, 3, -54)
+material_override = SubResource("StandardMaterial3D_1bi45")
+mesh = ExtResource("7_0cm4n")
+
+[node name="Cyl_FR" type="MeshInstance3D" parent="SideCity" unique_id=85359463]
+transform = Transform3D(2, 0, 0, 0, 6, 0, 0, 0, 2, 12, 3, -5)
+material_override = SubResource("StandardMaterial3D_vg24i")
+mesh = ExtResource("7_0cm4n")
+
+[node name="H_FL" type="MeshInstance3D" parent="SideCity" unique_id=1930777475]
+transform = Transform3D(3, 0, 0, 0, 4, 0, 0, 0, 2.5, -14.5, 2, -12)
+material_override = SubResource("StandardMaterial3D_rb7ni")
+mesh = ExtResource("2_5pngn")
+
+[node name="H_FR" type="MeshInstance3D" parent="SideCity" unique_id=146372378]
+transform = Transform3D(1.5591422, 0, 0.46064064, 0, 5.954575, 0, -0.3686518, 0, 1.9481914, 14.158766, 1.5, -18.7482)
+material_override = SubResource("StandardMaterial3D_j3yge")
+mesh = ExtResource("2_5pngn")
+
+[node name="Cyl_ML" type="MeshInstance3D" parent="SideCity" unique_id=1240724361]
+transform = Transform3D(2, 0, 0, 0, 10, 0, 0, 0, 2, -11.5, 5, -24)
+material_override = SubResource("StandardMaterial3D_md0m6")
+mesh = ExtResource("7_0cm4n")
+
+[node name="Cyl_MR" type="MeshInstance3D" parent="SideCity" unique_id=1466807170]
+transform = Transform3D(2, 0, 0, 0, 11, 0, 0, 0, 2, 11.5, 5.5, -26)
+material_override = SubResource("StandardMaterial3D_uxfcm")
+mesh = ExtResource("7_0cm4n")
+
+[node name="Cyl_MLT" type="MeshInstance3D" parent="SideCity" unique_id=184258828]
+transform = Transform3D(2.5, 0, 0, 0, 9, 0, 0, 0, 2.5, -12.5, 4.5, -38)
+material_override = SubResource("StandardMaterial3D_6in1r")
+mesh = ExtResource("8_3wjxf")
+
+[node name="Cyl_MRT" type="MeshInstance3D" parent="SideCity" unique_id=2001282893]
+transform = Transform3D(2.5, 0, 0, 0, 8, 0, 0, 0, 2.5, 13, 4, -36)
+material_override = SubResource("StandardMaterial3D_5gejt")
+mesh = ExtResource("8_3wjxf")
+
+[node name="Distant" type="Node3D" parent="." unique_id=545667691]
+
+[node name="Tower_FB1" type="MeshInstance3D" parent="Distant" unique_id=255343805]
+transform = Transform3D(3, 0, 0, 0, 12, 0, 0, 0, 3, 138.57654, -257, -616.1896)
+material_override = SubResource("StandardMaterial3D_jr1x5")
+mesh = ExtResource("2_5pngn")
+
+[node name="Tower_FB2" type="MeshInstance3D" parent="Distant" unique_id=1740772347]
+transform = Transform3D(2.5, 0, 0, 0, 10, 0, 0, 0, 2.5, 4, 5, -68)
+material_override = SubResource("StandardMaterial3D_flmff")
+mesh = ExtResource("2_5pngn")
+
+[node name="Tower_FB3" type="MeshInstance3D" parent="Distant" unique_id=1484165976]
+transform = Transform3D(2, 0, 0, 0, 8, 0, 0, 0, 2, -40.295067, 4, -70)
+material_override = SubResource("StandardMaterial3D_c8t8q")
+mesh = ExtResource("7_0cm4n")
+
+[node name="Tower_FB4" type="MeshInstance3D" parent="Distant" unique_id=1888910905]
+transform = Transform3D(2.2, 0, 0, 0, 9, 0, 0, 0, 2.2, 9, 4.5, -72)
+material_override = SubResource("StandardMaterial3D_y04wd")
+mesh = ExtResource("8_3wjxf")
+
+[node name="Tower_FB5" type="MeshInstance3D" parent="Distant" unique_id=430326296]
+transform = Transform3D(2.5, 0, 0, 0, 10, 0, 0, 0, 2.5, 0.5, 5, -80)
+material_override = SubResource("StandardMaterial3D_40wvg")
+mesh = ExtResource("2_5pngn")
+
+[node name="HS1" type="MeshInstance3D" parent="Distant" unique_id=248416691]
+transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, -15, 1, -68)
+material_override = SubResource("StandardMaterial3D_6wxi5")
+mesh = ExtResource("2_5pngn")
+
+[node name="HS2" type="MeshInstance3D" parent="Distant" unique_id=226508043]
+transform = Transform3D(1.8, 0, 0, 0, 3, 0, 0, 0, 1.8, 15, 1.5, -72)
+material_override = SubResource("StandardMaterial3D_6je4n")
+mesh = ExtResource("2_5pngn")
+
+[node name="HS3" type="MeshInstance3D" parent="Distant" unique_id=2120365991]
+transform = Transform3D(1.5, 0, 0, 0, 1.6, 0, 0, 0, 1.5, -20, 0.8, -85)
+material_override = SubResource("StandardMaterial3D_tk40t")
+mesh = ExtResource("2_5pngn")
+
+[node name="HS4" type="MeshInstance3D" parent="Distant" unique_id=206840520]
+transform = Transform3D(1.7, 0, 0, 0, 1.8, 0, 0, 0, 1.7, 18, 0.9, -80)
+material_override = SubResource("StandardMaterial3D_x2co4")
+mesh = ExtResource("7_0cm4n")
+
+[node name="HS5" type="MeshInstance3D" parent="Distant" unique_id=2097824253]
+transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, -5, 1, -92)
+material_override = SubResource("StandardMaterial3D_73278")
+mesh = ExtResource("2_5pngn")
+
+[node name="HS6" type="MeshInstance3D" parent="Distant" unique_id=495105560]
+transform = Transform3D(1.8, 0, 0, 0, 1.6, 0, 0, 0, 1.8, 7, 0.8, -90)
+material_override = SubResource("StandardMaterial3D_b7hpf")
+mesh = ExtResource("2_5pngn")
+
+[node name="HS7" type="MeshInstance3D" parent="Distant" unique_id=202504198]
+transform = Transform3D(1.7, 0, 0, 0, 2.4, 0, 0, 0, 1.7, -11, 1.2, -95)
+material_override = SubResource("StandardMaterial3D_p0s7s")
+mesh = ExtResource("2_5pngn")
+
+[node name="Wings" type="Node3D" parent="." unique_id=690421753]
+
+[node name="WL1" type="MeshInstance3D" parent="Wings" unique_id=1225994607]
+transform = Transform3D(3.2, 0, 0, 0, 16, 0, 0, 0, 3.2, -28, 8, -17)
+material_override = SubResource("StandardMaterial3D_0cm4n")
+mesh = ExtResource("2_5pngn")
+
+[node name="WL2" type="MeshInstance3D" parent="Wings" unique_id=1250846577]
+transform = Transform3D(3, 0, 0, 0, 8, 0, 0, 0, 3, -18, 4, -18)
+material_override = SubResource("StandardMaterial3D_3wjxf")
+mesh = ExtResource("7_0cm4n")
+
+[node name="WL3" type="MeshInstance3D" parent="Wings" unique_id=1972716259]
+transform = Transform3D(3.5, 0, 0, 0, 12, 0, 0, 0, 3.5, -26, 6, -25)
+material_override = SubResource("StandardMaterial3D_3j76b")
+mesh = ExtResource("2_5pngn")
+
+[node name="WL4" type="MeshInstance3D" parent="Wings" unique_id=224033934]
+transform = Transform3D(3.2, 0, 0, 0, 14, 0, 0, 0, 3.2, -32, 7, -36)
+material_override = SubResource("StandardMaterial3D_fxajh")
+mesh = ExtResource("8_3wjxf")
+
+[node name="WL5" type="MeshInstance3D" parent="Wings" unique_id=771508350]
+transform = Transform3D(2.2, 0, 0, 0, 6, 0, 0, 0, 2.2, -22, 3, -44)
+material_override = SubResource("StandardMaterial3D_6js3m")
+mesh = ExtResource("7_0cm4n")
+
+[node name="WL6" type="MeshInstance3D" parent="Wings" unique_id=167809580]
+transform = Transform3D(2.8, 0, 0, 0, 10, 0, 0, 0, 2.8, -29, 5, -52)
+material_override = SubResource("StandardMaterial3D_t1iv8")
+mesh = ExtResource("2_5pngn")
+
+[node name="WL8" type="MeshInstance3D" parent="Wings" unique_id=2059241959]
+transform = Transform3D(3, 0, 0, 0, 5, 0, 0, 0, 3, -17, 2.5, -6)
+material_override = SubResource("StandardMaterial3D_xs7kk")
+mesh = ExtResource("8_3wjxf")
+
+[node name="WL9" type="MeshInstance3D" parent="Wings" unique_id=395661204]
+transform = Transform3D(3, 0, 0, 0, 5, 0, 0, 0, 3, 19.832886, 2.5, -20.151293)
+material_override = SubResource("StandardMaterial3D_1gl38")
+mesh = ExtResource("8_3wjxf")
+
+[node name="WR1" type="MeshInstance3D" parent="Wings" unique_id=1406895384]
+transform = Transform3D(3.2, 0, 0, 0, 18, 0, 0, 0, 3.2, 20, 9, -10)
+material_override = SubResource("StandardMaterial3D_r4lty")
+mesh = ExtResource("2_5pngn")
+
+[node name="WR2" type="MeshInstance3D" parent="Wings" unique_id=30594663]
+transform = Transform3D(3, 0, 0, 0, 10, 0, 0, 0, 3, 25, 5, -20)
+material_override = SubResource("StandardMaterial3D_0dlc7")
+mesh = ExtResource("7_0cm4n")
+
+[node name="WR3" type="MeshInstance3D" parent="Wings" unique_id=446775617]
+transform = Transform3D(2.8, 0, 0, 0, 8, 0, 0, 0, 2.8, 15.63896, 4, -31.817753)
+material_override = SubResource("StandardMaterial3D_8n0g5")
+mesh = ExtResource("2_5pngn")
+
+[node name="WR4" type="MeshInstance3D" parent="Wings" unique_id=824568126]
+transform = Transform3D(3.5, 0, 0, 0, 14, 0, 0, 0, 3.5, 30, 7, -42)
+material_override = SubResource("StandardMaterial3D_jfpls")
+mesh = ExtResource("8_3wjxf")
+
+[node name="WR5" type="MeshInstance3D" parent="Wings" unique_id=2066800567]
+transform = Transform3D(2.2, 0, 0, 0, 6, 0, 0, 0, 2.2, 21, 3, -50)
+material_override = SubResource("StandardMaterial3D_l4s8e")
+mesh = ExtResource("7_0cm4n")
+
+[node name="WR6" type="MeshInstance3D" parent="Wings" unique_id=1462480604]
+transform = Transform3D(2.5, 0, 0, 0, 5, 0, 0, 0, 2.5, 28, 2.5, -14)
+material_override = SubResource("StandardMaterial3D_j2alg")
+mesh = ExtResource("2_5pngn")
+
+[node name="WR7" type="MeshInstance3D" parent="Wings" unique_id=456540047]
+transform = Transform3D(2.4, 0, 0, 0, 3, 0, 0, 0, 2.4, 18, 1.5, -4)
+material_override = SubResource("StandardMaterial3D_hgxif")
+mesh = ExtResource("2_5pngn")
+
+[node name="WR8" type="MeshInstance3D" parent="Wings" unique_id=716874544]
+transform = Transform3D(2.8, 0, 0, 0, 6, 0, 0, 0, 2.8, 34, 3, -25)
+material_override = SubResource("StandardMaterial3D_4w872")
+mesh = ExtResource("7_0cm4n")
