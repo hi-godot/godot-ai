@@ -111,9 +111,10 @@ done
 
 if [ "$READINESS" != "ready" ]; then
   echo "Editor not ready (readiness: $READINESS) — attempting to open main scene..."
-  curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
+  OPEN_RESULT=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
     -H "Mcp-Session-Id: $SESSION_ID" \
-    -d '{"jsonrpc":"2.0","id":51,"method":"tools/call","params":{"name":"scene_open","arguments":{"path":"res://main.tscn"}}}' > /dev/null
+    -d '{"jsonrpc":"2.0","id":51,"method":"tools/call","params":{"name":"scene_open","arguments":{"path":"res://main.tscn"}}}')
+  echo "scene_open response: $OPEN_RESULT" | head -c 500
   # Wait a bit more for the scene to load
   for i in $(seq 1 15); do
     READINESS=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \

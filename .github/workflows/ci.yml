@@ -126,7 +126,7 @@ jobs:
       - name: Start Godot editor (headless)
         run: |
           timeout 30 godot --headless --path test_project --import || true
-          timeout 120 godot --headless --path test_project --editor &
+          timeout 120 godot --headless --path test_project --editor res://main.tscn &
 
       - name: Run handler tests
         run: bash script/ci-godot-tests
