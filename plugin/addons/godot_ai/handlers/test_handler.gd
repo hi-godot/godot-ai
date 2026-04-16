@@ -8,6 +8,7 @@ extends RefCounted
 var _runner: McpTestRunner
 var _undo_redo: EditorUndoRedoManager
 var _log_buffer: McpLogBuffer
+var _discovery_log: Array[String] = []
 
 
 func _init(undo_redo: EditorUndoRedoManager, log_buffer: McpLogBuffer) -> void:
@@ -23,24 +24,7 @@ func run_tests(params: Dictionary) -> Dictionary:
 
 	var suites := _discover_suites()
 	if suites.is_empty():
-		# Inline diagnostic: try loading one script and report what happens
-		var dbg := {}
-		var test_file := "test_connection.gd"
-		var path := "res://tests/" + test_file
-		dbg["load_path"] = path
-		var scr = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
-		if scr == null:
-			dbg["load_result"] = "null"
-			dbg["file_exists"] = FileAccess.file_exists(path)
-		else:
-			dbg["load_result"] = "ok"
-			dbg["script_class"] = scr.get_class()
-			var inst = scr.new()
-			dbg["instance_class"] = inst.get_class() if inst else "null"
-			dbg["is_test_suite"] = inst is McpTestSuite if inst else false
-			if inst and not (inst is McpTestSuite):
-				dbg["base_script"] = inst.get_script().get_base_script().resource_path if inst.get_script() and inst.get_script().get_base_script() else "none"
-		return {"data": {"error": "No test suites found in res://tests/", "total": 0, "debug": dbg}}
+		return {"data": {"error": "No test suites found in res://tests/", "total": 0, "discovery_log": _discovery_log}}
 
 	var ctx := {
 		"undo_redo": _undo_redo,
@@ -57,28 +41,33 @@ func get_test_results(params: Dictionary) -> Dictionary:
 
 
 func _discover_suites() -> Array[McpTestSuite]:
+	_discovery_log = []
 	var suites: Array[McpTestSuite] = []
 	var dir := DirAccess.open("res://tests")
 	if dir == null:
-		print("MCP | test discovery: DirAccess.open('res://tests') returned null, error: ", DirAccess.get_open_error())
+		_discovery_log.append("dir=null")
 		return suites
 
-	print("MCP | test discovery: scanning res://tests/")
+	_discovery_log.append("dir=ok")
 	dir.list_dir_begin()
 	var file_name := dir.get_next()
 	while not file_name.is_empty():
 		if file_name.begins_with("test_") and file_name.ends_with(".gd"):
+			_discovery_log.append("try:" + file_name)
 			var script := ResourceLoader.load("res://tests/" + file_name, "", ResourceLoader.CACHE_MODE_IGNORE)
 			if script:
+				_discovery_log.append("loaded:" + file_name)
 				var instance = script.new()
 				if instance is McpTestSuite:
 					suites.append(instance)
+					_discovery_log.append("suite:" + file_name)
 				else:
-					print("MCP | test discovery: ", file_name, " instance is NOT McpTestSuite (type: ", typeof(instance), ")")
+					_discovery_log.append("not_suite:" + file_name)
 			else:
-				print("MCP | test discovery: failed to load ", file_name)
+				_discovery_log.append("load_fail:" + file_name)
 		file_name = dir.get_next()
 
+	_discovery_log.append("total:%d" % suites.size())
 	## Sort by suite name for deterministic order
 	suites.sort_custom(func(a: McpTestSuite, b: McpTestSuite) -> bool:
 		return a.suite_name() < b.suite_name()
