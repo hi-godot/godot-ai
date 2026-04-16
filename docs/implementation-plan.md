@@ -1,6 +1,6 @@
 # Godot AI — Working Plan
 
-*Updated 2026-04-16 (PR #28)*
+*Updated 2026-04-16 (PR #30 — materials + particles)*
 
 This is the current working plan for Godot AI. It focuses on active and upcoming work only.
 
@@ -28,7 +28,7 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 - [x] Runtime feedback loop: `project.run`/`project.stop`, `editor.screenshot`, `performance.get_monitors`, `logs.clear`
 - [ ] Runtime iteration loop is complete enough for AI-driven feel tuning
 - [ ] Release/install path is complete enough for new users
-- [~] Polished game-production extensions have started — `ui_*` (anchor presets, `ui_build_layout` composer, `theme_override_*` pseudo-properties), `theme_*` (color/constant/font-size/stylebox_flat with nested `border`/`corners`/`margins`/`shadow` dicts, `apply`), and `animation_*` (AnimationPlayer + `animation_create_simple` composer + delete/validate + overwrite support, undo robust to history interleaving) shipped; `camera_*`, `audio_*`, and animation preset helpers still pending
+- [~] Polished game-production extensions have started — `ui_*` (anchor presets, `ui_build_layout` composer, `theme_override_*` pseudo-properties), `theme_*` (color/constant/font-size/stylebox_flat with nested `border`/`corners`/`margins`/`shadow` dicts, `apply`), `animation_*` (AnimationPlayer + `animation_create_simple` composer + delete/validate + overwrite support, undo robust to history interleaving), `material_*` (Standard / ORM / CanvasItem / Shader with enum-by-name + 6 presets), and `particle_*` (GPU+CPU 2D+3D with 7 presets, auto-attached billboard draw material so color_ramp renders out of the box) shipped; `camera_*`, `audio_*`, dedicated `shader_*` CRUD, and animation preset helpers still pending
 
 ## What This Plan Optimizes For
 
@@ -145,7 +145,9 @@ These are not the next things to do blindly. They are the extensions that matter
 
 ### Tier 2: Strong Polish Multipliers
 
-- `material.*`, `shader.*`, `particles.*`
+- [x] `material_*` — StandardMaterial3D / ORMMaterial3D / CanvasItemMaterial / ShaderMaterial authoring shipped. Tools: `material_create`, `material_set_param`, `material_set_shader_param`, `material_get`, `material_list`, `material_assign` (with `create_if_missing`), `material_apply_to_node` (inline material builder, one-undo), `material_apply_preset` (metal, glass, emissive, unlit, matte, ceramic). Enum-by-name coercion for transparency / shading_mode / blend_mode / cull_mode / etc. Shader uniform setting via `material_set_shader_param` drives arbitrary `.gdshader` parameters.
+- [x] `particle_*` — GPUParticles2D/3D + CPUParticles2D/3D shipped with 7 presets (`fire`, `smoke`, `spark_burst`, `magic_swirl`, `rain`, `explosion`, `lightning`). Tools: `particle_create`, `particle_set_main`, `particle_set_process` (auto-creates `ParticleProcessMaterial` in-one-undo if missing), `particle_set_draw_pass` (grows `draw_passes` count + auto-default QuadMesh if slot empty), `particle_restart`, `particle_get`, `particle_apply_preset`. Every auto-create draw pass gets a billboard `StandardMaterial3D` with `vertex_color_use_as_albedo=true` so `color_ramp` actually renders — the default Godot draw pass has no material and silently ignores the gradient.
+- [ ] `shader.*` for CRUD on `.gdshader` files (currently shaders can only be created by writing them via `filesystem_write_text` and loading with `material_set_shader_param`)
 - `physics.*` helpers for layers, masks, bodies, and common 2D setup
 - light `tilemap.*` and/or `navigation.*` if the benchmark moves from a single arena to authored rooms
 
@@ -217,7 +219,7 @@ tracked above.
 - [~] `ui.*` for HUD and upgrade selection — anchor presets, declarative `ui_build_layout` composer, and `theme_*` authoring shipped; still need `ui_set_text`, `theme_set_font`, `theme_set_stylebox_texture` for pixel-art / custom typography
 - [ ] `camera.*` for follow, bounds, zoom, and shake
 - [~] `animation_player.*` shipped; `audio.*` still pending for combat readability and feel
-- [ ] `particles.*` / `shader.*` / `material.*` for hit juice and feedback clarity
+- [~] `material_*` and `particle_*` shipped (see Tier 2 above); still need a dedicated `shader_*` CRUD surface for `.gdshader` editing outside of `filesystem_write_text`
 - [ ] light `physics.*` and optionally `tilemap.*` / `navigation.*` if rooms become more authored
 
 ### Benchmark Exit Criteria

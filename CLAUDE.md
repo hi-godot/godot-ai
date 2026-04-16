@@ -163,7 +163,7 @@ Response must include `"undoable": true`. If an operation genuinely can't be und
 
 ### Auto-create missing dependencies in the same undo action
 
-When a write tool needs a sub-resource that may not exist yet (e.g. `animation_create` needs an `AnimationLibrary` on the AnimationPlayer; a future `material_set_param` would need a `Material` on the mesh), do **not** error or do a separate setup write. Bundle the dependency creation into the same `create_action` so a single Ctrl-Z rolls back both:
+When a write tool needs a sub-resource that may not exist yet (e.g. `animation_create` needs an `AnimationLibrary` on the AnimationPlayer; `particle_set_process` needs a `ParticleProcessMaterial` on the GPU emitter; `material_assign` with `create_if_missing=true` needs a `Material` on the mesh), do **not** error or do a separate setup write. Bundle the dependency creation into the same `create_action` so a single Ctrl-Z rolls back both:
 
 ```gdscript
 var library = player.get_animation_library("") if player.has_animation_library("") else null
