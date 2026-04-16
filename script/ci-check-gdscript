@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Validate all GDScript files for parse errors.
+# Runs before Godot editor tests — catches syntax issues immediately.
+set -euo pipefail
+
+PROJECT_DIR="${1:-test_project}"
+ERRORS=0
+
+echo "Checking GDScript files for parse errors..."
+
+# Find all .gd files in the project and plugin
+for gd_file in $(find "$PROJECT_DIR" plugin -name "*.gd" -not -path "*/.godot/*" 2>/dev/null | sort); do
+  # Convert filesystem path to res:// path for Godot
+  if [[ "$gd_file" == plugin/* ]]; then
+    # Plugin files are symlinked into test_project/addons/godot_ai/
+    res_path="res://addons/godot_ai/${gd_file#plugin/addons/godot_ai/}"
+  elif [[ "$gd_file" == "$PROJECT_DIR"/* ]]; then
+    res_path="res://${gd_file#$PROJECT_DIR/}"
+  else
+    continue
+  fi
+
+  output=$(godot --headless --path "$PROJECT_DIR" --check-only --script "$res_path" 2>&1 || true)
+  if echo "$output" | grep -qi "error"; then
+    echo "  FAIL: $gd_file"
+    echo "$output" | grep -i "error" | head -3 | sed 's/^/    /'
+    ERRORS=$((ERRORS + 1))
+  fi
+done
+
+if [ "$ERRORS" -gt 0 ]; then
+  echo "ERROR: $ERRORS GDScript file(s) have parse errors"
+  exit 1
+fi
+
+echo "All GDScript files OK"

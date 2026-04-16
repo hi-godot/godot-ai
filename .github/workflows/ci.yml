@@ -125,10 +125,14 @@ jobs:
       - name: Start MCP server
         run: bash script/ci-start-server /tmp/venv/bin/python
 
-      - name: Start Godot editor (headless)
+      - name: Import and validate GDScript
+        timeout-minutes: 3
         run: |
           timeout 30 godot --headless --path test_project --import || true
-          timeout 120 godot --headless --path test_project --editor &
+          bash script/ci-check-gdscript
+
+      - name: Start Godot editor (headless)
+        run: timeout 120 godot --headless --path test_project --editor &
 
       - name: Run handler tests
         run: bash script/ci-godot-tests

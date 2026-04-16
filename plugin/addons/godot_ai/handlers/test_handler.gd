@@ -21,9 +21,16 @@ func run_tests(params: Dictionary) -> Dictionary:
 	var test_filter: String = params.get("test_name", "")
 	var verbose: bool = params.get("verbose", false)
 
-	var suites := _discover_suites()
+	var discovery := _discover_suites()
+	var suites: Array = discovery.suites
 	if suites.is_empty():
-		return {"data": {"error": "No test suites found in res://tests/", "total": 0}}
+		var msg := "No test suites found in res://tests/"
+		if not discovery.errors.is_empty():
+			msg += " (%d script(s) failed to load: %s)" % [
+				discovery.errors.size(),
+				", ".join(discovery.errors),
+			]
+		return {"data": {"error": msg, "total": 0, "load_errors": discovery.errors}}
 
 	var ctx := {
 		"undo_redo": _undo_redo,
@@ -31,6 +38,8 @@ func run_tests(params: Dictionary) -> Dictionary:
 	}
 
 	var results := _runner.run_suites(suites, suite_filter, test_filter, ctx, verbose)
+	if not discovery.errors.is_empty():
+		results["load_errors"] = discovery.errors
 	return {"data": results}
 
 
@@ -39,25 +48,35 @@ func get_test_results(params: Dictionary) -> Dictionary:
 	return {"data": _runner.get_results(verbose)}
 
 
-func _discover_suites() -> Array[McpTestSuite]:
-	var suites: Array[McpTestSuite] = []
+func _discover_suites() -> Dictionary:
+	## Returns {"suites": Array, "errors": Array[String]}.
+	## Resilient: a broken script doesn't kill discovery of the rest.
+	var suites := []
+	var errors: Array[String] = []
 	var dir := DirAccess.open("res://tests")
 	if dir == null:
-		return suites
+		return {"suites": suites, "errors": ["DirAccess.open('res://tests') returned null"]}
 
 	dir.list_dir_begin()
 	var file_name := dir.get_next()
 	while not file_name.is_empty():
 		if file_name.begins_with("test_") and file_name.ends_with(".gd"):
-			var script := ResourceLoader.load("res://tests/" + file_name, "", ResourceLoader.CACHE_MODE_IGNORE)
-			if script:
+			var path := "res://tests/" + file_name
+			var script = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
+			if script == null:
+				errors.append(file_name)
+			elif script.can_instantiate():
 				var instance = script.new()
 				if instance is McpTestSuite:
 					suites.append(instance)
+				else:
+					errors.append("%s (not McpTestSuite)" % file_name)
+			else:
+				errors.append("%s (cannot instantiate)" % file_name)
 		file_name = dir.get_next()
 
-	## Sort by suite name for deterministic order
-	suites.sort_custom(func(a: McpTestSuite, b: McpTestSuite) -> bool:
+	## Sort by suite name for deterministic order.
+	suites.sort_custom(func(a, b) -> bool:
 		return a.suite_name() < b.suite_name()
 	)
-	return suites
+	return {"suites": suites, "errors": errors}
