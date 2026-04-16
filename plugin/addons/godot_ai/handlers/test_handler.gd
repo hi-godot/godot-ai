@@ -23,7 +23,8 @@ func run_tests(params: Dictionary) -> Dictionary:
 
 	var suites := _discover_suites()
 	if suites.is_empty():
-		return {"data": {"error": "No test suites found in res://tests/", "total": 0}}
+		var debug_info := _debug_discovery()
+		return {"data": {"error": "No test suites found in res://tests/", "total": 0, "debug": debug_info}}
 
 	var ctx := {
 		"undo_redo": _undo_redo,
@@ -67,3 +68,36 @@ func _discover_suites() -> Array[McpTestSuite]:
 		return a.suite_name() < b.suite_name()
 	)
 	return suites
+
+
+## Diagnostic info when test discovery fails — returned in the error response.
+func _debug_discovery() -> Dictionary:
+	var info := {}
+	var dir := DirAccess.open("res://tests")
+	if dir == null:
+		info["dir_open_error"] = DirAccess.get_open_error()
+		info["dir_exists"] = DirAccess.dir_exists_absolute("res://tests")
+		return info
+
+	info["dir_opened"] = true
+	var files: Array[String] = []
+	var gd_files: Array[String] = []
+	var load_errors: Dictionary = {}
+	dir.list_dir_begin()
+	var f := dir.get_next()
+	while not f.is_empty():
+		files.append(f)
+		if f.begins_with("test_") and f.ends_with(".gd"):
+			gd_files.append(f)
+			var script := ResourceLoader.load("res://tests/" + f, "", ResourceLoader.CACHE_MODE_IGNORE)
+			if script == null:
+				load_errors[f] = "load returned null"
+			else:
+				var instance = script.new()
+				if not (instance is McpTestSuite):
+					load_errors[f] = "not McpTestSuite, type=%s" % str(typeof(instance))
+		f = dir.get_next()
+	info["all_files"] = files
+	info["gd_files"] = gd_files
+	info["load_errors"] = load_errors
+	return info
