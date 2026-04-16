@@ -23,29 +23,7 @@ func run_tests(params: Dictionary) -> Dictionary:
 
 	var suites := _discover_suites()
 	if suites.is_empty():
-		## Inline diagnostics — separate function was returning {} in CI
-		var diag := {"error": "No test suites found in res://tests/", "total": 0}
-		var ddir := DirAccess.open("res://tests")
-		diag["dir_open"] = ddir != null
-		if ddir != null:
-			var dfiles := []
-			var dloads := {}
-			ddir.list_dir_begin()
-			var df := ddir.get_next()
-			while not df.is_empty():
-				dfiles.append(df)
-				if df.begins_with("test_") and df.ends_with(".gd"):
-					var dscript = ResourceLoader.load("res://tests/" + df, "", ResourceLoader.CACHE_MODE_IGNORE)
-					if dscript == null:
-						dloads[df] = "load_null"
-					elif dscript.new() is McpTestSuite:
-						dloads[df] = "ok"
-					else:
-						dloads[df] = "not_suite"
-				df = ddir.get_next()
-			diag["files"] = dfiles
-			diag["loads"] = dloads
-		return {"data": diag}
+		return {"data": {"error": "No test suites found in res://tests/", "total": 0}}
 
 	var ctx := {
 		"undo_redo": _undo_redo,
@@ -62,6 +40,10 @@ func get_test_results(params: Dictionary) -> Dictionary:
 
 
 func _discover_suites() -> Array:
+	## Uses untyped Array to avoid silent rejection when scripts are loaded
+	## with different cache modes. Uses default cache (not CACHE_MODE_IGNORE)
+	## so that class_name type references (e.g. var _handler: ThemeHandler)
+	## resolve correctly against the global class registry.
 	var suites := []
 	var dir := DirAccess.open("res://tests")
 	if dir == null:
@@ -71,7 +53,7 @@ func _discover_suites() -> Array:
 	var file_name := dir.get_next()
 	while not file_name.is_empty():
 		if file_name.begins_with("test_") and file_name.ends_with(".gd"):
-			var script := ResourceLoader.load("res://tests/" + file_name, "", ResourceLoader.CACHE_MODE_IGNORE)
+			var script := ResourceLoader.load("res://tests/" + file_name)
 			if script:
 				var instance = script.new()
 				if instance is McpTestSuite:
@@ -83,34 +65,3 @@ func _discover_suites() -> Array:
 		return a.suite_name() < b.suite_name()
 	)
 	return suites
-
-
-func _diagnose_discovery() -> Dictionary:
-	var result := {}
-	var dir := DirAccess.open("res://tests")
-	result["dir_open"] = dir != null
-	if dir == null:
-		return result
-
-	var files: Array[String] = []
-	var load_results := {}
-	dir.list_dir_begin()
-	var f := dir.get_next()
-	while not f.is_empty():
-		files.append(f)
-		if f.begins_with("test_") and f.ends_with(".gd"):
-			var script = ResourceLoader.load("res://tests/" + f, "", ResourceLoader.CACHE_MODE_IGNORE)
-			if script == null:
-				load_results[f] = "load_failed"
-			else:
-				var instance = script.new()
-				if instance is McpTestSuite:
-					load_results[f] = "ok"
-				else:
-					load_results[f] = "not_McpTestSuite"
-		f = dir.get_next()
-
-	result["files_in_dir"] = files
-	result["file_count"] = files.size()
-	result["load_results"] = load_results
-	return result

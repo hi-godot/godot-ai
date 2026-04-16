@@ -106,12 +106,11 @@ for line in raw.split('\n'):
         if failed > 0:
             sys.exit(1)
         if total == 0:
-            print(f'ERROR: No tests ran. Content keys: {list(content.keys())}')
-            print(f'Content: {content}')
+            print('ERROR: No tests ran — Godot plugin may not have connected')
             sys.exit(1)
         break
 else:
     print('ERROR: No valid response from test_run')
-    print(f'Raw response: {raw[:1000]}')
+    print(f'Raw response: {raw[:500]}')
     sys.exit(1)
 "
