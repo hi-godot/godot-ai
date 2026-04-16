@@ -1,6 +1,6 @@
 # Godot AI — Testing Strategy
 
-*Updated 2026-04-14*
+*Updated 2026-04-16*
 
 This document defines how Godot AI should prove that new capability is real, stable, and safe to extend.
 
@@ -67,6 +67,13 @@ Use in-editor GDScript suites for:
 - signal, autoload, input, and filesystem handlers
 - runtime tools like run/stop and screenshots
 - any behavior that depends on actual Godot editor APIs or undo semantics
+
+Built-in guardrails:
+
+- **Zero-assertion detection**: the runner flags any test that completes with 0 assertions as a failure. This catches tests that silently `return` early (e.g. when `scene_root == null`) without exercising any logic.
+- **Resilient discovery**: if a `.gd` file fails to parse (duplicate methods, syntax errors, wrong base class), the remaining suites still load and run. Failing files are reported in `load_errors` with a reason string.
+- **Suite isolation**: each suite receives a fresh `ctx.duplicate()` so `suite_setup()` mutations cannot leak between suites.
+- **CI static check**: `script/ci-check-gdscript` runs `godot --check-only` against every `.gd` file before the editor test run, catching parse errors at the gate.
 
 ### End-to-end and release-smoke tests
 

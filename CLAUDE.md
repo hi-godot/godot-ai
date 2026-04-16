@@ -20,7 +20,7 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
 ## Key conventions
 
 - **GDScript plugin is the canonical copy** in `plugin/`. `test_project/addons/godot_ai` is a symlink — no copy needed.
-- **Error codes**: Defined in `protocol/errors.py` (Python) and `utils/error_codes.gd` (GDScript). Keep in sync.
+- **Error codes**: Defined in `protocol/errors.py` (Python) and `utils/error_codes.gd` (GDScript). Keep in sync. Use Godot's built-in `error_string(err)` to translate numeric error codes in error messages — do not write a custom lookup table.
 - **Tools return `dict`**: Handlers call `runtime.send_command(command, params)` which returns a dict or raises. Tools create a `DirectRuntime` and delegate to handlers.
 - **Plugin runs on main thread**: All GDScript executes in `_process()` with a 4ms frame budget. Never block. Use `call_deferred` for scene tree mutations.
 - **Scene paths are clean**: `/Main/Camera3D` format, not raw Godot internal paths. Use `ScenePath.from_node(node, scene_root)` in GDScript.
@@ -89,6 +89,11 @@ test_results_get             # review last results
 ```
 
 Test suites extend `McpTestSuite` (assertion methods: `assert_true`, `assert_eq`, `assert_has_key`, `assert_contains`, `assert_is_error`, etc.). Drop `test_*.gd` files in `res://tests/` and they're auto-discovered.
+
+**Guardrails built into the test runner:**
+- **Zero-assertion detection**: Tests that complete with 0 assertions are flagged as failures ("Test completed with 0 assertions — likely skipped its logic"). This catches tests that silently `return` before asserting anything.
+- **Resilient discovery**: If a `.gd` file fails to load (parse error, duplicate method, wrong base class), the rest of the suites still run and the failing files are reported in `load_errors`.
+- **Suite isolation**: Each suite gets a fresh `ctx.duplicate()` so `suite_setup()` mutations can't leak to the next suite.
 
 ## Testing against Godot
 
@@ -206,3 +211,4 @@ New features don't ship without tests. Regressions are caught before they merge.
 - Don't use `pop_front()` on arrays in hot paths — use index + slice
 - Don't add error handling in individual tools — `GodotClient.send()` raises on errors
 - Don't use Python-style `"""docstrings"""` in GDScript — use `##` comments
+- Don't write GDScript tests that `return` without asserting — the runner flags these as failures. Use `assert_true(false, "reason")` before the `return` if a precondition isn't met

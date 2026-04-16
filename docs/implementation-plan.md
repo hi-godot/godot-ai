@@ -80,7 +80,7 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 - [x] batch execution is shipped with a clear contract
 - [x] multi-instance routing works in practice
 - [x] `script.patch` decision is made (shipped: anchor-based replace)
-- [x] test coverage and smoke coverage increase where the new runtime loop needs it (375 Python + 312 GDScript = 687 total)
+- [x] test coverage and smoke coverage increase where the new runtime loop needs it (375 Python + 311 GDScript = 686 total)
 
 ---
 
