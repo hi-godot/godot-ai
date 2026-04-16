@@ -90,9 +90,12 @@ func _dispatch(cmd: Dictionary) -> Dictionary:
 
 func _call_handler(command: String, params: Dictionary) -> Dictionary:
 	var result: Dictionary = _handlers[command].call(params)
-	if result == null or result.is_empty():
+	## Handlers must return {"data": ...} on success or {"error": ...} on failure.
+	## Anything else (null, empty, missing keys) means the handler crashed
+	## mid-call — GDScript swallows the error and returns an empty dict.
+	if result == null or not (result.has("data") or result.has("error")):
 		return McpErrorCodes.make(
 			McpErrorCodes.INTERNAL_ERROR,
-			"Handler '%s' returned empty result (likely crashed — check Godot console)" % command,
+			"Handler '%s' returned malformed result (likely crashed — check Godot console)" % command,
 		)
 	return result
