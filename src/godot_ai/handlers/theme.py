@@ -92,6 +92,21 @@ async def theme_set_stylebox_flat(
     shadow_offset_x: float | None = None,
     shadow_offset_y: float | None = None,
     anti_aliasing: bool | None = None,
+    # Per-side border width overrides
+    border_width_top: int | None = None,
+    border_width_bottom: int | None = None,
+    border_width_left: int | None = None,
+    border_width_right: int | None = None,
+    # Per-corner radius overrides
+    corner_radius_top_left: int | None = None,
+    corner_radius_top_right: int | None = None,
+    corner_radius_bottom_left: int | None = None,
+    corner_radius_bottom_right: int | None = None,
+    # Per-side content margin overrides
+    content_margin_top: float | None = None,
+    content_margin_bottom: float | None = None,
+    content_margin_left: float | None = None,
+    content_margin_right: float | None = None,
 ) -> dict:
     require_writable(runtime)
     params: dict[str, Any] = {
@@ -119,6 +134,23 @@ async def theme_set_stylebox_flat(
         params["shadow_offset_y"] = shadow_offset_y
     if anti_aliasing is not None:
         params["anti_aliasing"] = anti_aliasing
+    # Per-side overrides
+    for key, val in [
+        ("border_width_top", border_width_top),
+        ("border_width_bottom", border_width_bottom),
+        ("border_width_left", border_width_left),
+        ("border_width_right", border_width_right),
+        ("corner_radius_top_left", corner_radius_top_left),
+        ("corner_radius_top_right", corner_radius_top_right),
+        ("corner_radius_bottom_left", corner_radius_bottom_left),
+        ("corner_radius_bottom_right", corner_radius_bottom_right),
+        ("content_margin_top", content_margin_top),
+        ("content_margin_bottom", content_margin_bottom),
+        ("content_margin_left", content_margin_left),
+        ("content_margin_right", content_margin_right),
+    ]:
+        if val is not None:
+            params[key] = val
     return await runtime.send_command("theme_set_stylebox_flat", params)
 
 

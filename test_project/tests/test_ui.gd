@@ -319,3 +319,88 @@ func test_build_layout_rejects_uncoercible_property() -> void:
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	assert_contains(result.error.message, "modulate")
+
+
+# ============================================================================
+# Friction fix: theme_override_* properties in build_layout
+# ============================================================================
+
+func test_build_layout_theme_override_color() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return
+	var result := _handler.build_layout({
+		"tree": {
+			"type": "Label",
+			"name": "TestOverrideColor",
+			"properties": {
+				"text": "Red text",
+				"theme_override_colors/font_color": "#ff0000",
+			},
+		},
+	})
+	assert_has_key(result, "data")
+	var label: Label = scene_root.find_child("TestOverrideColor", true, false)
+	assert_true(label != null, "Label should exist")
+	assert_true(label.has_theme_color_override("font_color"), "Color override should be set")
+	var c := label.get_theme_color("font_color")
+	assert_true(c.r > 0.9, "Red channel should be ~1.0")
+	# Cleanup.
+	label.get_parent().remove_child(label)
+	label.queue_free()
+
+
+func test_build_layout_theme_override_constant() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return
+	var result := _handler.build_layout({
+		"tree": {
+			"type": "VBoxContainer",
+			"name": "TestOverrideConst",
+			"properties": {
+				"theme_override_constants/separation": 20,
+			},
+		},
+	})
+	assert_has_key(result, "data")
+	var vbox := scene_root.find_child("TestOverrideConst", true, false) as VBoxContainer
+	assert_true(vbox != null, "VBoxContainer should exist")
+	assert_true(vbox.has_theme_constant_override("separation"), "Constant override should be set")
+	assert_eq(vbox.get_theme_constant("separation"), 20)
+	vbox.get_parent().remove_child(vbox)
+	vbox.queue_free()
+
+
+func test_build_layout_theme_override_font_size() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return
+	var result := _handler.build_layout({
+		"tree": {
+			"type": "Label",
+			"name": "TestOverrideFontSize",
+			"properties": {
+				"text": "Big",
+				"theme_override_font_sizes/font_size": 32,
+			},
+		},
+	})
+	assert_has_key(result, "data")
+	var label := scene_root.find_child("TestOverrideFontSize", true, false) as Label
+	assert_true(label != null, "Label should exist")
+	assert_true(label.has_theme_font_size_override("font_size"), "Font size override should be set")
+	assert_eq(label.get_theme_font_size("font_size"), 32)
+	label.get_parent().remove_child(label)
+	label.queue_free()
+
+
+func test_build_layout_theme_override_rejects_non_control() -> void:
+	var result := _handler.build_layout({
+		"tree": {
+			"type": "Node3D",
+			"properties": {"theme_override_colors/font_color": "#ff0000"},
+		},
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "theme_override_")

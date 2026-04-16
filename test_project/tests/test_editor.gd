@@ -299,3 +299,20 @@ func test_performance_monitors_unknown_filtered_out() -> void:
 	var result := _handler.get_performance_monitors({"monitors": ["time/fps", "fake/monitor"]})
 	assert_eq(result.data.monitor_count, 1)
 	assert_has_key(result.data.monitors, "time/fps")
+
+
+# ----- Friction fix: screenshot source="game" -----
+
+func test_screenshot_game_not_running_returns_error() -> void:
+	# When the game is not running, source="game" should return an error.
+	if EditorInterface.is_playing_scene():
+		return  # Can't test this path while game is running.
+	var result := _handler.take_screenshot({"source": "game"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "not running")
+
+
+func test_screenshot_invalid_source() -> void:
+	var result := _handler.take_screenshot({"source": "bogus"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "Invalid source")

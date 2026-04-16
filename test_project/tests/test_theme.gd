@@ -297,3 +297,83 @@ func test_create_theme_missing_path_names_param_correctly() -> void:
 	assert_contains(result.error.message, "path")
 	# Make sure it's NOT using the default "theme_path" label.
 	assert_true(result.error.message.find("theme_path") == -1, "Error should say 'path', not 'theme_path'")
+
+
+# ----- Friction fix: auto-create parent directories -----
+
+func test_create_theme_creates_parent_directories() -> void:
+	var nested_path := "res://tests/_mcp_nested_dir/subdir/test_theme.tres"
+	# Ensure clean state.
+	if FileAccess.file_exists(nested_path):
+		DirAccess.remove_absolute(nested_path)
+	if DirAccess.dir_exists_absolute("res://tests/_mcp_nested_dir/subdir"):
+		DirAccess.remove_absolute("res://tests/_mcp_nested_dir/subdir")
+	if DirAccess.dir_exists_absolute("res://tests/_mcp_nested_dir"):
+		DirAccess.remove_absolute("res://tests/_mcp_nested_dir")
+
+	var result := _handler.create_theme({"path": nested_path})
+	assert_has_key(result, "data")
+	assert_true(FileAccess.file_exists(nested_path), "Theme file should exist in nested dir")
+
+	# Cleanup.
+	DirAccess.remove_absolute(nested_path)
+	DirAccess.remove_absolute("res://tests/_mcp_nested_dir/subdir")
+	DirAccess.remove_absolute("res://tests/_mcp_nested_dir")
+
+
+# ----- Friction fix: per-side stylebox parameters -----
+
+func test_set_stylebox_flat_per_side_border_width() -> void:
+	_make_theme()
+	var result := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Button",
+		"name": "normal",
+		"border_width": 1,
+		"border_width_top": 4,
+		"border_width_bottom": 2,
+	})
+	assert_has_key(result, "data")
+	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	var sb: StyleBoxFlat = theme.get_stylebox("normal", "Button")
+	assert_eq(sb.border_width_top, 4)
+	assert_eq(sb.border_width_bottom, 2)
+	assert_eq(sb.border_width_left, 1)  # uniform fallback
+	assert_eq(sb.border_width_right, 1)
+
+
+func test_set_stylebox_flat_per_corner_radius() -> void:
+	_make_theme()
+	var result := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Panel",
+		"name": "panel",
+		"corner_radius": 4,
+		"corner_radius_top_left": 12,
+		"corner_radius_bottom_right": 0,
+	})
+	assert_has_key(result, "data")
+	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	var sb: StyleBoxFlat = theme.get_stylebox("panel", "Panel")
+	assert_eq(sb.corner_radius_top_left, 12)
+	assert_eq(sb.corner_radius_top_right, 4)  # uniform fallback
+	assert_eq(sb.corner_radius_bottom_left, 4)
+	assert_eq(sb.corner_radius_bottom_right, 0)
+
+
+func test_set_stylebox_flat_per_side_content_margin() -> void:
+	_make_theme()
+	var result := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "PanelContainer",
+		"name": "panel",
+		"content_margin": 8.0,
+		"content_margin_top": 16.0,
+	})
+	assert_has_key(result, "data")
+	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	var sb: StyleBoxFlat = theme.get_stylebox("panel", "PanelContainer")
+	assert_eq(sb.content_margin_top, 16.0)
+	assert_eq(sb.content_margin_bottom, 8.0)
+	assert_eq(sb.content_margin_left, 8.0)
+	assert_eq(sb.content_margin_right, 8.0)

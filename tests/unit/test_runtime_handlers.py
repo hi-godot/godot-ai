@@ -1303,12 +1303,8 @@ def test_session_activate_handler_not_found():
 
 def test_session_activate_by_project_name_hint():
     registry = SessionRegistry()
-    registry.register(
-        _make_session("aaaa-uuid-1", project_path="/home/user/projects/my_game/")
-    )
-    registry.register(
-        _make_session("bbbb-uuid-2", project_path="/home/user/projects/other_tool/")
-    )
+    registry.register(_make_session("aaaa-uuid-1", project_path="/home/user/projects/my_game/"))
+    registry.register(_make_session("bbbb-uuid-2", project_path="/home/user/projects/other_tool/"))
     runtime = DirectRuntime(registry=registry, client=StubClient())
 
     result = session_handlers.session_activate(runtime, "my_game")
@@ -1321,12 +1317,8 @@ def test_session_activate_by_project_name_hint():
 
 def test_session_activate_by_project_path_substring():
     registry = SessionRegistry()
-    registry.register(
-        _make_session("aaaa-uuid-1", project_path="/home/user/projects/my_game/")
-    )
-    registry.register(
-        _make_session("bbbb-uuid-2", project_path="/tmp/other/")
-    )
+    registry.register(_make_session("aaaa-uuid-1", project_path="/home/user/projects/my_game/"))
+    registry.register(_make_session("bbbb-uuid-2", project_path="/tmp/other/"))
     runtime = DirectRuntime(registry=registry, client=StubClient())
 
     result = session_handlers.session_activate(runtime, "projects")
@@ -1337,12 +1329,8 @@ def test_session_activate_by_project_path_substring():
 
 def test_session_activate_ambiguous_hint_errors_with_candidates():
     registry = SessionRegistry()
-    registry.register(
-        _make_session("aaaa-uuid", project_path="/home/user/game_project_one/")
-    )
-    registry.register(
-        _make_session("bbbb-uuid", project_path="/home/user/game_project_two/")
-    )
+    registry.register(_make_session("aaaa-uuid", project_path="/home/user/game_project_one/"))
+    registry.register(_make_session("bbbb-uuid", project_path="/home/user/game_project_two/"))
     runtime = DirectRuntime(registry=registry, client=StubClient())
 
     result = session_handlers.session_activate(runtime, "game_project")
@@ -2147,9 +2135,7 @@ async def test_batch_execute_rejects_empty_list():
 async def test_ui_set_anchor_preset_handler_defaults():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    result = await ui_handlers.ui_set_anchor_preset(
-        runtime, path="/Main/HUD", preset="full_rect"
-    )
+    result = await ui_handlers.ui_set_anchor_preset(runtime, path="/Main/HUD", preset="full_rect")
     assert client.calls[-1]["command"] == "set_anchor_preset"
     assert client.calls[-1]["params"] == {
         "path": "/Main/HUD",
@@ -2193,9 +2179,7 @@ async def test_ui_build_layout_handler_forwards_tree_and_parent():
         "properties": {"separation": 16},
         "children": [{"type": "Label", "properties": {"text": "Paused"}}],
     }
-    result = await ui_handlers.ui_build_layout(
-        runtime, tree=tree, parent_path="/Main/HUD"
-    )
+    result = await ui_handlers.ui_build_layout(runtime, tree=tree, parent_path="/Main/HUD")
     assert client.calls[-1]["command"] == "build_layout"
     assert client.calls[-1]["params"] == {"tree": tree, "parent_path": "/Main/HUD"}
     assert result["node_count"] == 5
@@ -2216,9 +2200,7 @@ async def test_ui_build_layout_handler_defaults_parent_to_empty():
 async def test_theme_create_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    result = await theme_handlers.theme_create(
-        runtime, path="res://ui/themes/game.tres"
-    )
+    result = await theme_handlers.theme_create(runtime, path="res://ui/themes/game.tres")
     assert client.calls[-1]["command"] == "create_theme"
     assert client.calls[-1]["params"] == {
         "path": "res://ui/themes/game.tres",
@@ -2230,9 +2212,7 @@ async def test_theme_create_handler():
 async def test_theme_create_handler_overwrite_passthrough():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    await theme_handlers.theme_create(
-        runtime, path="res://ui/themes/game.tres", overwrite=True
-    )
+    await theme_handlers.theme_create(runtime, path="res://ui/themes/game.tres", overwrite=True)
     assert client.calls[-1]["params"]["overwrite"] is True
 
 
@@ -2329,6 +2309,34 @@ async def test_theme_set_stylebox_flat_handler_forwards_all_fields():
     assert params["anti_aliasing"] is True
     assert params["shadow_offset_y"] == 4
     assert params["content_margin"] == 12.0
+
+
+async def test_theme_set_stylebox_flat_handler_per_side_params():
+    """Per-side border/corner/margin params should be forwarded when provided."""
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await theme_handlers.theme_set_stylebox_flat(
+        runtime,
+        theme_path="res://themes/game.tres",
+        class_name="Button",
+        name="normal",
+        border_width=1,
+        border_width_top=4,
+        border_width_bottom=2,
+        corner_radius_top_left=12,
+        content_margin_top=16.0,
+    )
+    params = client.calls[-1]["params"]
+    assert params["border_width"] == 1
+    assert params["border_width_top"] == 4
+    assert params["border_width_bottom"] == 2
+    assert params["corner_radius_top_left"] == 12
+    assert params["content_margin_top"] == 16.0
+    # Unset per-side params should be absent.
+    assert "border_width_left" not in params
+    assert "border_width_right" not in params
+    assert "corner_radius_top_right" not in params
+    assert "content_margin_bottom" not in params
 
 
 async def test_theme_apply_handler():
@@ -2483,9 +2491,7 @@ async def test_animation_set_autoplay_handler():
 async def test_animation_set_autoplay_clears_with_empty():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    result = await animation_handlers.animation_set_autoplay(
-        runtime, player_path="/Main/AP"
-    )
+    result = await animation_handlers.animation_set_autoplay(runtime, player_path="/Main/AP")
     assert client.calls[-1]["params"]["animation_name"] == ""
     assert result["cleared"] is True
 
@@ -2511,9 +2517,7 @@ async def test_animation_stop_handler():
 async def test_animation_list_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    result = await animation_handlers.animation_list(
-        runtime, player_path="/Main/AP"
-    )
+    result = await animation_handlers.animation_list(runtime, player_path="/Main/AP")
     assert client.calls[-1]["command"] == "animation_list"
     assert result["count"] == 2
     assert result["animations"][0]["name"] == "idle"
@@ -2658,6 +2662,4 @@ async def test_animation_player_create_requires_writable():
     runtime = DirectRuntime(registry=registry, client=client)
 
     with pytest.raises(GodotCommandError):
-        await animation_handlers.animation_player_create(
-            runtime, parent_path="/Main"
-        )
+        await animation_handlers.animation_player_create(runtime, parent_path="/Main")

@@ -38,6 +38,16 @@ func create_theme(params: Dictionary) -> Dictionary:
 			"Theme already exists at %s (pass overwrite=true to replace)" % path
 		)
 
+	# Ensure parent directory exists (same pattern as script_create).
+	var dir_path := path.get_base_dir()
+	if not DirAccess.dir_exists_absolute(dir_path):
+		var mkdir_err := DirAccess.make_dir_recursive_absolute(dir_path)
+		if mkdir_err != OK:
+			return McpErrorCodes.make(
+				McpErrorCodes.INTERNAL_ERROR,
+				"Failed to create directory: %s (error %d)" % [dir_path, mkdir_err]
+			)
+
 	var theme := Theme.new()
 	var save_err := ResourceSaver.save(theme, path)
 	if save_err != OK:
@@ -213,10 +223,19 @@ func set_stylebox_flat(params: Dictionary) -> Dictionary:
 		sb.border_color = bc
 	if params.has("border_width"):
 		sb.set_border_width_all(int(params.border_width))
+	for side_key in ["border_width_top", "border_width_bottom", "border_width_left", "border_width_right"]:
+		if params.has(side_key):
+			sb.set(side_key, int(params[side_key]))
 	if params.has("corner_radius"):
 		sb.set_corner_radius_all(int(params.corner_radius))
+	for corner_key in ["corner_radius_top_left", "corner_radius_top_right", "corner_radius_bottom_left", "corner_radius_bottom_right"]:
+		if params.has(corner_key):
+			sb.set(corner_key, int(params[corner_key]))
 	if params.has("content_margin"):
 		sb.set_content_margin_all(float(params.content_margin))
+	for margin_key in ["content_margin_top", "content_margin_bottom", "content_margin_left", "content_margin_right"]:
+		if params.has(margin_key):
+			sb.set(margin_key, float(params[margin_key]))
 	if params.has("shadow_color"):
 		var sc := _parse_color(params.shadow_color)
 		if sc == null:

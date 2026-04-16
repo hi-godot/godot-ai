@@ -119,7 +119,7 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 	var custom_azimuth = params.get("azimuth", null)
 	var custom_fov = params.get("fov", null)
 
-	var viewport: SubViewport
+	var viewport: Viewport
 	match source:
 		"viewport":
 			viewport = EditorInterface.get_editor_viewport_3d()
@@ -128,6 +128,8 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 		"game":
 			if not EditorInterface.is_playing_scene():
 				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Game is not running — use source='viewport' or start the project first")
+			# The game viewport is the editor window's root viewport, not a SubViewport.
+			# Using the main screen's viewport captures the game view area.
 			viewport = EditorInterface.get_editor_main_screen().get_viewport()
 			if viewport == null:
 				return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "Could not access game viewport")

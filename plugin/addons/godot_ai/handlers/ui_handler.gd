@@ -279,9 +279,71 @@ func _build_subtree(spec: Dictionary) -> Dictionary:
 	return {"node": node, "created": created}
 
 
+## Mapping from theme_override_* property prefixes to their add/remove methods.
+const _THEME_OVERRIDE_MAP := {
+	"theme_override_colors/": {
+		"add": "add_theme_color_override",
+		"remove": "remove_theme_color_override",
+		"coerce_type": TYPE_COLOR,
+	},
+	"theme_override_constants/": {
+		"add": "add_theme_constant_override",
+		"remove": "remove_theme_constant_override",
+		"coerce_type": TYPE_INT,
+	},
+	"theme_override_font_sizes/": {
+		"add": "add_theme_font_size_override",
+		"remove": "remove_theme_font_size_override",
+		"coerce_type": TYPE_INT,
+	},
+	"theme_override_styles/": {
+		"add": "add_theme_stylebox_override",
+		"remove": "remove_theme_stylebox_override",
+		"coerce_type": TYPE_OBJECT,
+	},
+}
+
+
 ## Apply a property to a newly-instantiated node. Handles Color/Vector2/NodePath
 ## coercion from JSON-friendly forms. Returns null on success, error dict on failure.
 func _apply_property(node: Node, prop: String, value: Variant) -> Variant:
+	# Handle theme_override_* pseudo-properties before the regular property scan.
+	for prefix in _THEME_OVERRIDE_MAP:
+		if prop.begins_with(prefix):
+			if not node is Control:
+				return McpErrorCodes.make(
+					McpErrorCodes.INVALID_PARAMS,
+					"theme_override_* requires a Control node (got %s)" % node.get_class()
+				)
+			var override_name := prop.substr(prefix.length())
+			var info: Dictionary = _THEME_OVERRIDE_MAP[prefix]
+			var coerce_type: int = info.coerce_type
+
+			# For stylebox overrides, load from a res:// path.
+			if coerce_type == TYPE_OBJECT:
+				if value is String and value.begins_with("res://"):
+					var res := ResourceLoader.load(value)
+					if res == null or not res is StyleBox:
+						return McpErrorCodes.make(
+							McpErrorCodes.INVALID_PARAMS,
+							"Style resource not found or not a StyleBox: %s" % value
+						)
+					node.call(info.add, override_name, res)
+				else:
+					return McpErrorCodes.make(
+						McpErrorCodes.INVALID_PARAMS,
+						"theme_override_styles/ expects a res:// path to a StyleBox"
+					)
+			else:
+				var coercion := _coerce_for_type(value, coerce_type)
+				if not coercion.ok:
+					return McpErrorCodes.make(
+						McpErrorCodes.INVALID_PARAMS,
+						"Cannot coerce '%s' for %s" % [value, prop]
+					)
+				node.call(info.add, override_name, coercion.value)
+			return null
+
 	var found := false
 	var prop_type := TYPE_NIL
 	for p in node.get_property_list():
