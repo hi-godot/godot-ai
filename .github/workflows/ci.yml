@@ -116,10 +116,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python
+        timeout-minutes: 5
         run: |
           apt-get update -qq && apt-get install -y -qq python3 python3-pip python3-venv curl > /dev/null
           python3 -m venv /tmp/venv
-          /tmp/venv/bin/pip install -e ".[dev]" > /dev/null
+          /tmp/venv/bin/pip install -e ".[dev]"
 
       - name: Start MCP server
         run: bash script/ci-start-server /tmp/venv/bin/python
@@ -130,15 +131,12 @@ jobs:
           timeout 120 godot --headless --path test_project --editor &
 
       - name: Run handler tests
-        timeout-minutes: 3
         run: bash script/ci-godot-tests
 
       - name: Reload smoke test
-        timeout-minutes: 2
         run: bash script/ci-reload-test
 
       - name: Quit smoke test
-        timeout-minutes: 2
         run: bash script/ci-quit-test
 
   godot-tests-macos:
@@ -170,15 +168,12 @@ jobs:
           godot --headless --path test_project --editor &
 
       - name: Run handler tests
-        timeout-minutes: 3
         run: bash script/ci-godot-tests
 
       - name: Reload smoke test
-        timeout-minutes: 2
         run: bash script/ci-reload-test
 
       - name: Quit smoke test
-        timeout-minutes: 2
         run: bash script/ci-quit-test
 
   godot-tests-windows:

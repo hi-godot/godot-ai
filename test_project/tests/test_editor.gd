@@ -312,7 +312,7 @@ func test_screenshot_game_not_running_returns_error() -> void:
 	assert_contains(result.error.message, "not running")
 
 
-func test_screenshot_invalid_source() -> void:
+func test_screenshot_bogus_source() -> void:
 	var result := _handler.take_screenshot({"source": "bogus"})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	assert_contains(result.error.message, "Invalid source")
