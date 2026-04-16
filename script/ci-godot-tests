@@ -109,13 +109,9 @@ for line in raw.split('\n'):
             print(f'ERROR: No tests ran. Content keys: {list(content.keys())}')
             print(f'Content: {content}')
             sys.exit(1)
-else:
-    print(f'ERROR: No data: line found in response')
-    print(f'Raw (first 1000 chars): {raw[:1000]}')
-    sys.exit(1)
         break
 else:
     print('ERROR: No valid response from test_run')
-    print(f'Raw response: {raw[:500]}')
+    print(f'Raw response: {raw[:1000]}')
     sys.exit(1)
 "
