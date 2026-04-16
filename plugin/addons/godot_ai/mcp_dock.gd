@@ -651,9 +651,18 @@ func _install_update() -> void:
 	DirAccess.remove_absolute(zip_path)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(UPDATE_TEMP_DIR))
 
-	# Reload the plugin to pick up new code
-	_update_btn.text = "Reloading..."
-	_reload_after_update.call_deferred()
+	# Godot 4.4+ handles plugin reload safely. On 4.3 and older, toggling
+	# the plugin off/on can cause re-entrant server spawns, so we ask the
+	# user to restart the editor instead.
+	var version := Engine.get_version_info()
+	if version.get("minor", 0) >= 4:
+		_update_btn.text = "Reloading..."
+		_reload_after_update.call_deferred()
+	else:
+		_update_btn.text = "Restart editor to apply"
+		_update_btn.disabled = true
+		_update_label.text = "Updated! Restart the editor."
+		_update_label.add_theme_color_override("font_color", Color.GREEN)
 
 
 func _reload_after_update() -> void:
