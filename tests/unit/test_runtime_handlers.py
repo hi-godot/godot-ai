@@ -3113,7 +3113,22 @@ async def test_material_apply_to_node_handler():
     )
     sent = client.calls[-1]["params"]
     assert sent["params"] == {"albedo_color": "#00ff00", "metallic": 0.5}
+    assert "save_to" not in sent
     assert result["material_created"] is True
+
+
+async def test_material_apply_to_node_forwards_save_to():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await material_handlers.material_apply_to_node(
+        runtime,
+        node_path="/Main/Box",
+        type="standard",
+        params={"albedo_color": "#ff00ff"},
+        save_to="res://materials/my_mat.tres",
+    )
+    sent = client.calls[-1]["params"]
+    assert sent["save_to"] == "res://materials/my_mat.tres"
 
 
 async def test_material_apply_preset_handler():
@@ -3218,6 +3233,22 @@ async def test_particle_set_draw_pass_handler():
     assert params["mesh"] == "res://meshes/spark.mesh"
     assert "texture" not in params
     assert "material" not in params
+
+
+async def test_particle_set_draw_pass_forwards_texture_and_material():
+    """2D particles use `texture`; 3D particles optionally overlay a `material`."""
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await particle_handlers.particle_set_draw_pass(
+        runtime,
+        node_path="/Main/Rain2D",
+        texture="res://fx/raindrop.png",
+        material="res://materials/splash.tres",
+    )
+    params = client.calls[-1]["params"]
+    assert params["texture"] == "res://fx/raindrop.png"
+    assert params["material"] == "res://materials/splash.tres"
+    assert "mesh" not in params
 
 
 async def test_particle_restart_handler_is_nonwriting():

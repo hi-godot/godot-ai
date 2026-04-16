@@ -3800,6 +3800,69 @@ class TestMaterialAssignTool:
         assert result.data["material_created"] is False
 
 
+class TestMaterialGetTool:
+    async def test_get_material(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "material_get"
+            assert cmd["params"] == {"path": "res://materials/red.tres"}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://materials/red.tres",
+                    "class": "StandardMaterial3D",
+                    "type": "standard",
+                    "properties": [
+                        {
+                            "name": "albedo_color",
+                            "type": "Color",
+                            "value": {"r": 1, "g": 0, "b": 0, "a": 1},
+                        }
+                    ],
+                    "property_count": 1,
+                    "shader_parameters": [],
+                    "shader_path": "",
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "material_get", {"path": "res://materials/red.tres"}
+        )
+        await task
+        assert result.data["class"] == "StandardMaterial3D"
+
+
+class TestMaterialListTool:
+    async def test_list_materials(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "material_list"
+            assert cmd["params"]["root"] == "res://materials"
+            assert cmd["params"]["type"] == "StandardMaterial3D"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "materials": [
+                        {"path": "res://materials/red.tres", "class": "StandardMaterial3D"},
+                    ],
+                    "count": 1,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "material_list",
+            {"root": "res://materials", "type": "StandardMaterial3D"},
+        )
+        await task
+        assert result.data["count"] == 1
+
+
 class TestMaterialApplyToNodeTool:
     async def test_apply_inline(self, mcp_stack):
         client, plugin = mcp_stack
@@ -3972,6 +4035,43 @@ class TestParticleSetProcessTool:
         )
         await task
         assert "color_ramp" in result.data["applied"]
+
+
+class TestParticleSetDrawPassTool:
+    async def test_set_draw_pass_forwards_pass_and_mesh(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "particle_set_draw_pass"
+            assert cmd["params"]["pass"] == 2
+            assert cmd["params"]["mesh"] == "res://meshes/spark.mesh"
+            assert "texture" not in cmd["params"]
+            assert "material" not in cmd["params"]
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Fire",
+                    "pass": 2,
+                    "mesh_path": "res://meshes/spark.mesh",
+                    "mesh_class": "Mesh",
+                    "material_path": "",
+                    "draw_pass_mesh_created": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "particle_set_draw_pass",
+            {
+                "node_path": "/Main/Fire",
+                "pass_": 2,
+                "mesh": "res://meshes/spark.mesh",
+            },
+        )
+        await task
+        assert result.data["pass"] == 2
 
 
 class TestParticleApplyPresetTool:
