@@ -122,22 +122,8 @@ func create_animation(params: Dictionary) -> Dictionary:
 	anim.length = length
 	anim.loop_mode = _LOOP_MODES[loop_mode_str]
 
-	_undo_redo.create_action("MCP: Create animation %s" % anim_name)
-	if created_library:
-		_undo_redo.add_do_method(player, "add_animation_library", "", library)
-		_undo_redo.add_undo_method(player, "remove_animation_library", "")
-		_undo_redo.add_do_reference(library)
-	if old_anim != null:
-		_undo_redo.add_do_method(library, "remove_animation", anim_name)
-	_undo_redo.add_do_method(library, "add_animation", anim_name, anim)
-	if old_anim != null:
-		_undo_redo.add_undo_method(library, "remove_animation", anim_name)
-		_undo_redo.add_undo_method(library, "add_animation", anim_name, old_anim)
-		_undo_redo.add_do_reference(old_anim)
-	else:
-		_undo_redo.add_undo_method(library, "remove_animation", anim_name)
-	_undo_redo.add_do_reference(anim)
-	_undo_redo.commit_action()
+	_commit_animation_add("MCP: Create animation %s" % anim_name,
+		player, library, created_library, anim_name, anim, old_anim)
 
 	return {
 		"data": {
@@ -729,7 +715,39 @@ func create_simple(params: Dictionary) -> Dictionary:
 		_do_add_property_track(anim, entry.track_path, "linear", entry.keyframes)
 
 	# One atomic undo action.
-	_undo_redo.create_action("MCP: Create animation %s (%d tracks)" % [anim_name, anim.get_track_count()])
+	_commit_animation_add("MCP: Create animation %s (%d tracks)" % [anim_name, anim.get_track_count()],
+		player, library, created_library, anim_name, anim, old_anim)
+
+	return {
+		"data": {
+			"player_path": player_path,
+			"name": anim_name,
+			"length": computed_length,
+			"loop_mode": loop_mode_str,
+			"track_count": anim.get_track_count(),
+			"library_created": created_library,
+			"overwritten": old_anim != null,
+			"undoable": true,
+		}
+	}
+
+
+# ============================================================================
+# Helpers — undo
+# ============================================================================
+
+## Shared undo setup for create_animation and create_simple. Handles both
+## fresh-create and overwrite cases in a single atomic action.
+func _commit_animation_add(
+	action_label: String,
+	player: AnimationPlayer,
+	library: AnimationLibrary,
+	created_library: bool,
+	anim_name: String,
+	anim: Animation,
+	old_anim: Animation,  ## null when not overwriting
+) -> void:
+	_undo_redo.create_action(action_label)
 	if created_library:
 		_undo_redo.add_do_method(player, "add_animation_library", "", library)
 		_undo_redo.add_undo_method(player, "remove_animation_library", "")
@@ -745,19 +763,6 @@ func create_simple(params: Dictionary) -> Dictionary:
 		_undo_redo.add_undo_method(library, "remove_animation", anim_name)
 	_undo_redo.add_do_reference(anim)
 	_undo_redo.commit_action()
-
-	return {
-		"data": {
-			"player_path": player_path,
-			"name": anim_name,
-			"length": computed_length,
-			"loop_mode": loop_mode_str,
-			"track_count": anim.get_track_count(),
-			"library_created": created_library,
-			"overwritten": old_anim != null,
-			"undoable": true,
-		}
-	}
 
 
 # ============================================================================

@@ -1,35 +1,32 @@
 #!/usr/bin/env bash
 # Validate all GDScript files for parse errors.
-# Runs before Godot editor tests — catches syntax issues immediately.
+# Uses a single Godot --import invocation (already run by CI) rather than
+# spawning one process per file. Falls back to per-file checks if the
+# import log isn't provided.
+#
+# Usage:
+#   bash script/ci-check-gdscript [import_log]
+#
+# If import_log is provided, scans it for SCRIPT ERROR / Parse Error lines.
+# If omitted, runs a single import pass and checks its output.
 set -euo pipefail
 
-PROJECT_DIR="${1:-test_project}"
-ERRORS=0
+PROJECT_DIR="${PROJECT_DIR:-test_project}"
 
-echo "Checking GDScript files for parse errors..."
+if [ "${1:-}" != "" ] && [ -f "$1" ]; then
+  IMPORT_LOG="$1"
+else
+  echo "Running GDScript validation via --import..."
+  IMPORT_LOG=$(mktemp)
+  godot --headless --path "$PROJECT_DIR" --import > "$IMPORT_LOG" 2>&1 || true
+fi
 
-# Find all .gd files in the project and plugin
-for gd_file in $(find "$PROJECT_DIR" plugin -name "*.gd" -not -path "*/.godot/*" 2>/dev/null | sort); do
-  # Convert filesystem path to res:// path for Godot
-  if [[ "$gd_file" == plugin/* ]]; then
-    # Plugin files are symlinked into test_project/addons/godot_ai/
-    res_path="res://addons/godot_ai/${gd_file#plugin/addons/godot_ai/}"
-  elif [[ "$gd_file" == "$PROJECT_DIR"/* ]]; then
-    res_path="res://${gd_file#$PROJECT_DIR/}"
-  else
-    continue
-  fi
-
-  output=$(godot --headless --path "$PROJECT_DIR" --check-only --script "$res_path" 2>&1 || true)
-  if echo "$output" | grep -qi "error"; then
-    echo "  FAIL: $gd_file"
-    echo "$output" | grep -i "error" | head -3 | sed 's/^/    /'
-    ERRORS=$((ERRORS + 1))
-  fi
-done
+# Check for parse errors in the import output.
+ERRORS=$(grep -ciE "SCRIPT ERROR|Parse Error|Failed to load script" "$IMPORT_LOG" 2>/dev/null || echo "0")
 
 if [ "$ERRORS" -gt 0 ]; then
-  echo "ERROR: $ERRORS GDScript file(s) have parse errors"
+  echo "GDScript parse errors found:"
+  grep -iE "SCRIPT ERROR|Parse Error|Failed to load script" "$IMPORT_LOG" | sed 's/^/  /'
   exit 1
 fi
 

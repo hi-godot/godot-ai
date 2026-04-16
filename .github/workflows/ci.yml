@@ -132,8 +132,8 @@ jobs:
       - name: Import and validate GDScript
         timeout-minutes: 3
         run: |
-          godot --headless --path test_project --import || true
-          bash script/ci-check-gdscript
+          godot --headless --path test_project --import > /tmp/godot-import.log 2>&1 || true
+          bash script/ci-check-gdscript /tmp/godot-import.log
 
       - name: Start Godot editor (headless)
         run: godot --headless --path test_project --editor &

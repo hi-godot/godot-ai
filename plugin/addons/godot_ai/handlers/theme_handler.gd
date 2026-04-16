@@ -38,15 +38,15 @@ func create_theme(params: Dictionary) -> Dictionary:
 			"Theme already exists at %s (pass overwrite=true to replace)" % path
 		)
 
-	# Ensure parent directory exists (same pattern as script_create).
+	# Ensure parent directory exists. make_dir_recursive is idempotent —
+	# no need to check dir_exists first (avoids TOCTOU race).
 	var dir_path := path.get_base_dir()
-	if not DirAccess.dir_exists_absolute(dir_path):
-		var mkdir_err := DirAccess.make_dir_recursive_absolute(dir_path)
-		if mkdir_err != OK:
-			return McpErrorCodes.make(
-				McpErrorCodes.INTERNAL_ERROR,
-				"Failed to create directory: %s (error %d)" % [dir_path, mkdir_err]
-			)
+	var mkdir_err := DirAccess.make_dir_recursive_absolute(dir_path)
+	if mkdir_err != OK and mkdir_err != ERR_ALREADY_EXISTS:
+		return McpErrorCodes.make(
+			McpErrorCodes.INTERNAL_ERROR,
+			"Failed to create directory: %s (error %d)" % [dir_path, mkdir_err]
+		)
 
 	var theme := Theme.new()
 	var save_err := ResourceSaver.save(theme, path)
