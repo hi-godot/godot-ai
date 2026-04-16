@@ -38,6 +38,8 @@ In Godot: **Project > Project Settings > Plugins** — enable **Godot AI**.
 
 The plugin will automatically start the MCP server, connect over WebSocket, and show status in the **Godot AI** dock.
 
+<p align="center"><img src="docs/images/dock.png" alt="Godot AI dock" width="320"></p>
+
 ### 3. Connect your MCP client
 
 Pick a client in the dock's **Clients** dropdown and press **Configure**. The
