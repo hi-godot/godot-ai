@@ -4,8 +4,16 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 
-__version__ = "0.0.1"
+try:
+    __version__ = _pkg_version("godot-ai")
+except PackageNotFoundError:
+    # In-tree / unbuilt source tree (e.g. running pytest from a checkout
+    # without an editable install). Package metadata is only available after
+    # install, so fall back to a placeholder rather than crashing.
+    __version__ = "0+unknown"
 
 
 def main(argv: Sequence[str] | None = None) -> None:
