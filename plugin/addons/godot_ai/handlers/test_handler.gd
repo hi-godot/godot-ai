@@ -8,7 +8,6 @@ extends RefCounted
 var _runner: McpTestRunner
 var _undo_redo: EditorUndoRedoManager
 var _log_buffer: McpLogBuffer
-var _discovery_log: Array[String] = []
 
 
 func _init(undo_redo: EditorUndoRedoManager, log_buffer: McpLogBuffer) -> void:
@@ -24,7 +23,7 @@ func run_tests(params: Dictionary) -> Dictionary:
 
 	var suites := _discover_suites()
 	if suites.is_empty():
-		return {"data": {"error": "No test suites found in res://tests/", "total": 0, "discovery_log": _discovery_log}}
+		return {"data": {"error": "No test suites found in res://tests/", "total": 0}}
 
 	var ctx := {
 		"undo_redo": _undo_redo,
@@ -41,33 +40,22 @@ func get_test_results(params: Dictionary) -> Dictionary:
 
 
 func _discover_suites() -> Array[McpTestSuite]:
-	_discovery_log = []
 	var suites: Array[McpTestSuite] = []
 	var dir := DirAccess.open("res://tests")
 	if dir == null:
-		_discovery_log.append("dir=null")
 		return suites
 
-	_discovery_log.append("dir=ok")
 	dir.list_dir_begin()
 	var file_name := dir.get_next()
 	while not file_name.is_empty():
 		if file_name.begins_with("test_") and file_name.ends_with(".gd"):
-			_discovery_log.append("try:" + file_name)
-			var script := ResourceLoader.load("res://tests/" + file_name, "", ResourceLoader.CACHE_MODE_IGNORE)
+			var script := ResourceLoader.load("res://tests/" + file_name)
 			if script:
-				_discovery_log.append("loaded:" + file_name)
 				var instance = script.new()
 				if instance is McpTestSuite:
 					suites.append(instance)
-					_discovery_log.append("suite:" + file_name)
-				else:
-					_discovery_log.append("not_suite:" + file_name)
-			else:
-				_discovery_log.append("load_fail:" + file_name)
 		file_name = dir.get_next()
 
-	_discovery_log.append("total:%d" % suites.size())
 	## Sort by suite name for deterministic order
 	suites.sort_custom(func(a: McpTestSuite, b: McpTestSuite) -> bool:
 		return a.suite_name() < b.suite_name()

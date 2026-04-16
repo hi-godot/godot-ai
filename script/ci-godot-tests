@@ -123,11 +123,6 @@ RESULT=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
   -H "Mcp-Session-Id: $SESSION_ID" \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"test_run","arguments":{}}}')
 
-# Debug: dump raw response
-echo "DEBUG: raw test_run response (first 1000 chars):"
-echo "$RESULT" | head -c 1000
-echo ""
-
 # Parse and report results
 echo "$RESULT" | python3 -c "
 import json, sys
