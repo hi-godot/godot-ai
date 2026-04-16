@@ -343,8 +343,12 @@ func test_build_layout_theme_override_color() -> void:
 	var label: Label = scene_root.find_child("TestOverrideColor", true, false)
 	assert_true(label != null, "Label should exist")
 	assert_true(label.has_theme_color_override("font_color"), "Color override should be set")
-	var c := label.get_theme_color("font_color")
-	assert_true(c.r > 0.9, "Red channel should be ~1.0")
+	# Read back via the *_override getter (not the fallback get_theme_color)
+	# so we're asserting on the stored Variant, not on any theme fallback path.
+	var stored: Color = label.get_theme_color_override("font_color")
+	assert_eq(stored.r, 1.0)
+	assert_eq(stored.g, 0.0)
+	assert_eq(stored.b, 0.0)
 	# Cleanup.
 	label.get_parent().remove_child(label)
 	label.queue_free()
@@ -367,7 +371,8 @@ func test_build_layout_theme_override_constant() -> void:
 	var vbox := scene_root.find_child("TestOverrideConst", true, false) as VBoxContainer
 	assert_true(vbox != null, "VBoxContainer should exist")
 	assert_true(vbox.has_theme_constant_override("separation"), "Constant override should be set")
-	assert_eq(vbox.get_theme_constant("separation"), 20)
+	# Read back via *_override getter — asserts the stored int, not a fallback.
+	assert_eq(vbox.get_theme_constant_override("separation"), 20)
 	vbox.get_parent().remove_child(vbox)
 	vbox.queue_free()
 
@@ -390,9 +395,45 @@ func test_build_layout_theme_override_font_size() -> void:
 	var label := scene_root.find_child("TestOverrideFontSize", true, false) as Label
 	assert_true(label != null, "Label should exist")
 	assert_true(label.has_theme_font_size_override("font_size"), "Font size override should be set")
-	assert_eq(label.get_theme_font_size("font_size"), 32)
+	# Read back via *_override getter.
+	assert_eq(label.get_theme_font_size_override("font_size"), 32)
 	label.get_parent().remove_child(label)
 	label.queue_free()
+
+
+func test_build_layout_theme_override_stylebox() -> void:
+	# theme_override_styles/ accepts a res:// path to a StyleBox resource.
+	# Previously untested — verifies that load + add_theme_stylebox_override
+	# actually install the resource.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return
+	# Create a throwaway StyleBoxFlat on disk.
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.1, 0.2, 0.3, 1.0)
+	var sb_path := "res://tests/_mcp_test_override_stylebox.tres"
+	ResourceSaver.save(sb, sb_path)
+
+	var result := _handler.build_layout({
+		"tree": {
+			"type": "Panel",
+			"name": "TestOverrideStyle",
+			"properties": {
+				"theme_override_styles/panel": sb_path,
+			},
+		},
+	})
+	assert_has_key(result, "data")
+	var panel := scene_root.find_child("TestOverrideStyle", true, false) as Panel
+	assert_true(panel != null, "Panel should exist")
+	assert_true(panel.has_theme_stylebox_override("panel"), "Stylebox override should be set")
+	var stored: StyleBox = panel.get_theme_stylebox_override("panel")
+	assert_true(stored is StyleBoxFlat, "Stored override is a StyleBoxFlat")
+	assert_eq((stored as StyleBoxFlat).bg_color, Color(0.1, 0.2, 0.3, 1.0))
+	# Cleanup.
+	panel.get_parent().remove_child(panel)
+	panel.queue_free()
+	DirAccess.remove_absolute(sb_path)
 
 
 func test_build_layout_theme_override_rejects_non_control() -> void:

@@ -117,17 +117,15 @@ func _resolve_signal_params(params: Dictionary) -> Dictionary:
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 
-	var source := ScenePath.resolve(params.path, scene_root)
-	if source == null:
-		source = _resolve_autoload(params.path)
-	if source == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Source node not found: %s (not in scene tree or autoloads)" % params.path)
+	var source_result := _resolve_node_or_autoload(params.path, scene_root, "Source")
+	if source_result.has("error"):
+		return source_result
+	var source: Node = source_result.node
 
-	var target := ScenePath.resolve(params.target, scene_root)
-	if target == null:
-		target = _resolve_autoload(params.target)
-	if target == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Target node not found: %s (not in scene tree or autoloads)" % params.target)
+	var target_result := _resolve_node_or_autoload(params.target, scene_root, "Target")
+	if target_result.has("error"):
+		return target_result
+	var target: Node = target_result.node
 
 	return {
 		"source": source,
@@ -138,16 +136,34 @@ func _resolve_signal_params(params: Dictionary) -> Dictionary:
 	}
 
 
-## Attempt to resolve a path as an autoload singleton.
-## Uses direct ProjectSettings lookup (O(1)) instead of scanning all properties.
-func _resolve_autoload(path: String) -> Node:
+## Resolve a path to a Node, with three distinct outcomes:
+##   1. Found in the edited scene tree → returns {node}
+##   2. Declared as an autoload AND instantiated at edit time → returns {node}
+##   3. Declared as an autoload but NOT instantiated at edit time → returns
+##      INVALID_PARAMS with guidance. Most autoloads are runtime-only, so a
+##      silent "not found" hides the real reason the connection can't be made.
+##   4. Not in scene and not a declared autoload → returns INVALID_PARAMS.
+func _resolve_node_or_autoload(path: String, scene_root: Node, role: String) -> Dictionary:
+	var node := ScenePath.resolve(path, scene_root)
+	if node != null:
+		return {"node": node}
+
 	var name := path.trim_prefix("/")
-	if not ProjectSettings.has_setting("autoload/" + name):
-		return null
-	var tree := Engine.get_main_loop()
-	if tree is SceneTree:
-		return (tree as SceneTree).root.get_node_or_null(name)
-	return null
+	if ProjectSettings.has_setting("autoload/" + name):
+		# Autoload is declared — see if the editor has it instanced.
+		var tree := Engine.get_main_loop()
+		if tree is SceneTree:
+			var live := (tree as SceneTree).root.get_node_or_null(name)
+			if live != null:
+				return {"node": live}
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			"%s '%s' is a declared autoload but isn't instantiated in the editor. " % [role, name] +
+			"Most autoloads are runtime-only; edit-time signal connection isn't supported for them. " +
+			"Connect it from a script attached to the scene using @onready + connect(), " +
+			"or enable editor-instancing for this autoload in Project Settings > Autoload.")
+
+	return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+		"%s node not found: %s (not in scene tree or autoloads)" % [role, path])
 
 
 func _signal_response(source: Node, signal_name: String, target: Node, method: String, scene_root: Node) -> Dictionary:

@@ -156,19 +156,24 @@ func delete_animation(params: Dictionary) -> Dictionary:
 		return resolved
 	var player: AnimationPlayer = resolved.player
 
-	if not player.has_animation(anim_name):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
-			"Animation '%s' not found on player at %s" % [anim_name, player_path])
-
-	var library: AnimationLibrary = resolved.library
-	if library == null:
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "No default library found")
-
-	var old_anim: Animation = library.get_animation(anim_name)
+	# Use _resolve_animation so we can delete from ANY library, not just the
+	# default. Mirrors the read-side symmetry with animation_get / animation_play
+	# which already search all libraries via _resolve_animation.
+	var anim_resolved := _resolve_animation(player, anim_name)
+	if anim_resolved.has("error"):
+		return anim_resolved
+	var old_anim: Animation = anim_resolved.animation
+	var library: AnimationLibrary = anim_resolved.library
+	# Clip key within the owning library — strips the "libname/" prefix if the
+	# caller passed a qualified name.
+	var clip_key: String = anim_name
+	var slash := anim_name.find("/")
+	if slash >= 0:
+		clip_key = anim_name.substr(slash + 1)
 
 	_undo_redo.create_action("MCP: Delete animation %s" % anim_name)
-	_undo_redo.add_do_method(library, "remove_animation", anim_name)
-	_undo_redo.add_undo_method(library, "add_animation", anim_name, old_anim)
+	_undo_redo.add_do_method(library, "remove_animation", clip_key)
+	_undo_redo.add_undo_method(library, "add_animation", clip_key, old_anim)
 	_undo_redo.add_do_reference(old_anim)  # prevent GC so undo→redo works
 	_undo_redo.commit_action()
 
@@ -176,6 +181,7 @@ func delete_animation(params: Dictionary) -> Dictionary:
 		"data": {
 			"player_path": player_path,
 			"animation_name": anim_name,
+			"library_key": anim_resolved.get("library_key", ""),
 			"undoable": true,
 		}
 	}
@@ -237,11 +243,12 @@ func add_property_track(params: Dictionary) -> Dictionary:
 			"transition": kf.get("transition", "linear"),
 		})
 
-	var baseline := anim.get_track_count()
-
 	_undo_redo.create_action("MCP: Add property track %s to %s" % [track_path, anim_name])
 	_undo_redo.add_do_method(self, "_do_add_property_track", anim, track_path, interp_str, coerced_keyframes)
-	_undo_redo.add_undo_method(anim, "remove_track", baseline)
+	# Undo locates the track by (path, type) at undo time rather than caching
+	# an index captured at do time. Cached indices go stale if any other track
+	# mutation lands between do and undo (Godot editor, another MCP call, etc.)
+	_undo_redo.add_undo_method(self, "_undo_remove_track_by_path", anim, track_path, Animation.TYPE_VALUE)
 	_undo_redo.commit_action()
 
 	return {
@@ -251,7 +258,6 @@ func add_property_track(params: Dictionary) -> Dictionary:
 			"track_path": track_path,
 			"interpolation": interp_str,
 			"keyframe_count": keyframes.size(),
-			"track_index": baseline,
 			"undoable": true,
 		}
 	}
@@ -306,6 +312,12 @@ func add_method_track(params: Dictionary) -> Dictionary:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Each keyframe must have a 'time' field")
 		if not "method" in kf:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Each keyframe must have a 'method' field")
+		var method_field = kf.get("method")
+		if typeof(method_field) != TYPE_STRING or (method_field as String).is_empty():
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "'method' must be a non-empty string")
+		if kf.has("args") and typeof(kf.get("args")) != TYPE_ARRAY:
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+				"'args' must be an array if provided (got %s)" % type_string(typeof(kf.get("args"))))
 
 	var resolved := _resolve_player(player_path)
 	if resolved.has("error"):
@@ -317,11 +329,10 @@ func add_method_track(params: Dictionary) -> Dictionary:
 		return anim_resolved
 	var anim: Animation = anim_resolved.animation
 
-	var baseline := anim.get_track_count()
-
 	_undo_redo.create_action("MCP: Add method track %s to %s" % [target_path, anim_name])
 	_undo_redo.add_do_method(self, "_do_add_method_track", anim, target_path, keyframes)
-	_undo_redo.add_undo_method(anim, "remove_track", baseline)
+	# Undo locates the track by (path, type) at undo time — see add_property_track.
+	_undo_redo.add_undo_method(self, "_undo_remove_track_by_path", anim, target_path, Animation.TYPE_METHOD)
 	_undo_redo.commit_action()
 
 	return {
@@ -330,10 +341,19 @@ func add_method_track(params: Dictionary) -> Dictionary:
 			"animation_name": anim_name,
 			"target_node_path": target_path,
 			"keyframe_count": keyframes.size(),
-			"track_index": baseline,
 			"undoable": true,
 		}
 	}
+
+
+## Remove a track identified by (path, type) at undo time. Robust to
+## history interleaving: if another track was added since the do, the
+## find_track call still resolves to the correct index. Returns silently
+## if the track is no longer present (e.g. a prior undo already removed it).
+func _undo_remove_track_by_path(anim: Animation, track_path: String, track_type: int) -> void:
+	var idx := anim.find_track(NodePath(track_path), track_type)
+	if idx >= 0:
+		anim.remove_track(idx)
 
 
 func _do_add_method_track(anim: Animation, target_path: String, keyframes: Array) -> void:
@@ -862,15 +882,18 @@ static func _coerce_value_for_track(value: Variant, track_path: String, player: 
 
 	var target: Node = root_node.get_node_or_null(node_part)
 	if target == null:
+		# Target node isn't in the scene yet — authoring-time path. Pass through.
 		return {"ok": value}
 
 	for p in target.get_property_list():
 		if p.name == prop_part:
 			return _coerce_for_type(value, p.get("type", TYPE_NIL), prop_part)
 
-	# Property not found on current target — pass through. The caller may
-	# plan to retarget the AnimationPlayer (set root_node) before playback.
-	return {"ok": value}
+	# Target exists but the property doesn't. Reject loudly — silently storing
+	# the raw value here produces garbage keyframes at playback time.
+	return {"error":
+		"Property '%s' not found on target '%s' (class %s)" %
+		[prop_part, node_part, target.get_class()]}
 
 
 ## Coerce a single value to the given Godot variant type. Returns

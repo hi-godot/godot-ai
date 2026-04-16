@@ -381,14 +381,33 @@ class StubClient:
                 "undoable": True,
             }
         if command == "theme_set_stylebox_flat":
+            border = params.get("border") or {}
+            corners = params.get("corners") or {}
+            margins = params.get("margins") or {}
             return {
                 "path": params.get("theme_path", ""),
                 "class_name": params.get("class_name", ""),
                 "name": params.get("name", ""),
                 "stylebox_class": "StyleBoxFlat",
                 "bg_color": params.get("bg_color"),
-                "border_width": params.get("border_width", 0),
-                "corner_radius": params.get("corner_radius", 0),
+                "border": {
+                    "top": border.get("top", border.get("all", 0)),
+                    "bottom": border.get("bottom", border.get("all", 0)),
+                    "left": border.get("left", border.get("all", 0)),
+                    "right": border.get("right", border.get("all", 0)),
+                },
+                "corners": {
+                    "top_left": corners.get("top_left", corners.get("all", 0)),
+                    "top_right": corners.get("top_right", corners.get("all", 0)),
+                    "bottom_left": corners.get("bottom_left", corners.get("all", 0)),
+                    "bottom_right": corners.get("bottom_right", corners.get("all", 0)),
+                },
+                "margins": {
+                    "top": margins.get("top", margins.get("all", 0)),
+                    "bottom": margins.get("bottom", margins.get("all", 0)),
+                    "left": margins.get("left", margins.get("all", 0)),
+                    "right": margins.get("right", margins.get("all", 0)),
+                },
                 "undoable": True,
             }
         if command == "apply_theme":
@@ -564,7 +583,6 @@ class StubClient:
                 "track_path": params.get("track_path", ""),
                 "interpolation": params.get("interpolation", "linear"),
                 "keyframe_count": len(params.get("keyframes", [])),
-                "track_index": 0,
                 "undoable": True,
             }
         if command == "animation_add_method_track":
@@ -573,7 +591,6 @@ class StubClient:
                 "animation_name": params.get("animation_name", ""),
                 "target_node_path": params.get("target_node_path", ""),
                 "keyframe_count": len(params.get("keyframes", [])),
-                "track_index": 0,
                 "undoable": True,
             }
         if command == "animation_set_autoplay":
@@ -2275,18 +2292,19 @@ async def test_theme_set_stylebox_flat_handler_only_passes_provided_fields():
         class_name="Button",
         name="normal",
         bg_color="#101820",
-        corner_radius=8,
+        corners={"all": 8},
     )
     params = client.calls[-1]["params"]
     assert params["bg_color"] == "#101820"
-    assert params["corner_radius"] == 8
+    assert params["corners"] == {"all": 8}
     # Fields that weren't set should be absent, not None.
     assert "border_color" not in params
-    assert "shadow_size" not in params
+    assert "border" not in params
+    assert "shadow" not in params
     assert "anti_aliasing" not in params
 
 
-async def test_theme_set_stylebox_flat_handler_forwards_all_fields():
+async def test_theme_set_stylebox_flat_handler_forwards_nested_dicts():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     await theme_handlers.theme_set_stylebox_flat(
@@ -2296,47 +2314,18 @@ async def test_theme_set_stylebox_flat_handler_forwards_all_fields():
         name="panel",
         bg_color="#0a0a14",
         border_color="#00ffff",
-        border_width=2,
-        corner_radius=10,
-        content_margin=12.0,
-        shadow_color="#000000",
-        shadow_size=8,
-        shadow_offset_x=0,
-        shadow_offset_y=4,
+        border={"all": 2, "top": 4},
+        corners={"all": 10},
+        margins={"all": 12.0, "bottom": 20.0},
+        shadow={"color": "#000000", "size": 8, "offset_x": 0, "offset_y": 4},
         anti_aliasing=True,
     )
     params = client.calls[-1]["params"]
     assert params["anti_aliasing"] is True
-    assert params["shadow_offset_y"] == 4
-    assert params["content_margin"] == 12.0
-
-
-async def test_theme_set_stylebox_flat_handler_per_side_params():
-    """Per-side border/corner/margin params should be forwarded when provided."""
-    client = StubClient()
-    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    await theme_handlers.theme_set_stylebox_flat(
-        runtime,
-        theme_path="res://themes/game.tres",
-        class_name="Button",
-        name="normal",
-        border_width=1,
-        border_width_top=4,
-        border_width_bottom=2,
-        corner_radius_top_left=12,
-        content_margin_top=16.0,
-    )
-    params = client.calls[-1]["params"]
-    assert params["border_width"] == 1
-    assert params["border_width_top"] == 4
-    assert params["border_width_bottom"] == 2
-    assert params["corner_radius_top_left"] == 12
-    assert params["content_margin_top"] == 16.0
-    # Unset per-side params should be absent.
-    assert "border_width_left" not in params
-    assert "border_width_right" not in params
-    assert "corner_radius_top_right" not in params
-    assert "content_margin_bottom" not in params
+    assert params["border"] == {"all": 2, "top": 4}
+    assert params["corners"] == {"all": 10}
+    assert params["margins"] == {"all": 12.0, "bottom": 20.0}
+    assert params["shadow"]["offset_y"] == 4
 
 
 async def test_theme_apply_handler():
@@ -2755,8 +2744,8 @@ async def test_animation_validate_does_not_require_writable():
     )
 
 
-async def test_project_stop_handler_has_settle_delay():
-    """project_stop should include a brief settle delay."""
+async def test_project_stop_handler_returns_fast_when_no_session():
+    """Without an active session there's nothing to poll on — return immediately."""
     import time
 
     client = StubClient()
@@ -2764,5 +2753,66 @@ async def test_project_stop_handler_has_settle_delay():
     t0 = time.monotonic()
     await project_handlers.project_stop(runtime)
     elapsed = time.monotonic() - t0
-    assert elapsed >= 0.1, f"Expected >= 0.1s settle delay, got {elapsed:.3f}s"
+    assert elapsed < 0.1, f"Expected near-zero elapsed, got {elapsed:.3f}s"
     assert client.calls[-1]["command"] == "stop_project"
+
+
+async def test_project_stop_handler_waits_for_readiness_change():
+    """When session.readiness is 'playing', handler polls until it changes or timeout."""
+    import asyncio
+    import time
+
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    registry = SessionRegistry()
+    session = Session(
+        session_id="t@0001",
+        godot_version="4.6",
+        project_path="/tmp/test",
+        plugin_version="0.1.0",
+    )
+    session.readiness = "playing"
+    registry.register(session)
+    registry.set_active(session.session_id)
+    runtime = DirectRuntime(registry=registry, client=client)
+
+    # Simulate the plugin's `readiness_changed` event arriving after ~50ms.
+    async def flip_readiness():
+        await asyncio.sleep(0.05)
+        session.readiness = "ready"
+
+    asyncio.create_task(flip_readiness())
+
+    t0 = time.monotonic()
+    await project_handlers.project_stop(runtime)
+    elapsed = time.monotonic() - t0
+    # Should complete when readiness flips, not wait the full 1s timeout.
+    assert elapsed < 0.5, f"Expected fast completion on readiness change, got {elapsed:.3f}s"
+    assert session.readiness == "ready"
+
+
+async def test_project_stop_handler_times_out_if_readiness_stuck():
+    """If readiness stays 'playing' (e.g. hung play process), handler returns after ~1s."""
+    import time
+
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    registry = SessionRegistry()
+    session = Session(
+        session_id="t@0002",
+        godot_version="4.6",
+        project_path="/tmp/test",
+        plugin_version="0.1.0",
+    )
+    session.readiness = "playing"
+    registry.register(session)
+    registry.set_active(session.session_id)
+    runtime = DirectRuntime(registry=registry, client=client)
+
+    t0 = time.monotonic()
+    await project_handlers.project_stop(runtime)
+    elapsed = time.monotonic() - t0
+    # Timeout should fire ~1s and let the handler return.
+    assert 0.9 <= elapsed < 1.5, f"Expected ~1s timeout, got {elapsed:.3f}s"

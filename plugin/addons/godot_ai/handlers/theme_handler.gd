@@ -182,19 +182,19 @@ func _clear_scalar(theme_path: String, clearer: Callable, name: String, class_na
 # theme_set_stylebox_flat
 # ============================================================================
 
-## Compose a StyleBoxFlat from a flat param dict and assign it to a theme slot.
+## Compose a StyleBoxFlat and assign it to a theme slot.
 ##
-## Params beyond theme/class_name/name:
-##   bg_color            (Color, "#rrggbb", or "#rrggbbaa")
-##   border_color        (Color)
-##   border_width        (int) — applied to all sides
-##   corner_radius       (int) — applied to all corners
-##   content_margin      (float) — applied to all sides
-##   shadow_color        (Color)
-##   shadow_size         (int)
-##   shadow_offset_x     (float)
-##   shadow_offset_y     (float)
-##   anti_aliasing       (bool)
+## Parameters (beyond theme_path / class_name / name):
+##   bg_color       (Color, "#rrggbb", "#rrggbbaa", or {r,g,b,a})
+##   border_color   (Color)
+##   border         {all|top|bottom|left|right: int}  — side keys override `all`
+##   corners        {all|top_left|top_right|bottom_left|bottom_right: int}
+##   margins        {all|top|bottom|left|right: float}
+##   shadow         {color, size: int, offset_x: float, offset_y: float}
+##   anti_aliasing  (bool)
+##
+## Unknown keys inside any nested dict are rejected with INVALID_PARAMS so
+## typos fail loudly instead of silently being ignored.
 func set_stylebox_flat(params: Dictionary) -> Dictionary:
 	var load_result := _load_theme_from_params(params)
 	if load_result.has("error"):
@@ -221,33 +221,57 @@ func set_stylebox_flat(params: Dictionary) -> Dictionary:
 		if bc == null:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid border_color")
 		sb.border_color = bc
-	if params.has("border_width"):
-		sb.set_border_width_all(int(params.border_width))
-	for side_key in ["border_width_top", "border_width_bottom", "border_width_left", "border_width_right"]:
-		if params.has(side_key):
-			sb.set(side_key, int(params[side_key]))
-	if params.has("corner_radius"):
-		sb.set_corner_radius_all(int(params.corner_radius))
-	for corner_key in ["corner_radius_top_left", "corner_radius_top_right", "corner_radius_bottom_left", "corner_radius_bottom_right"]:
-		if params.has(corner_key):
-			sb.set(corner_key, int(params[corner_key]))
-	if params.has("content_margin"):
-		sb.set_content_margin_all(float(params.content_margin))
-	for margin_key in ["content_margin_top", "content_margin_bottom", "content_margin_left", "content_margin_right"]:
-		if params.has(margin_key):
-			sb.set(margin_key, float(params[margin_key]))
-	if params.has("shadow_color"):
-		var sc := _parse_color(params.shadow_color)
-		if sc == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid shadow_color")
-		sb.shadow_color = sc
-	if params.has("shadow_size"):
-		sb.shadow_size = int(params.shadow_size)
-	if params.has("shadow_offset_x") or params.has("shadow_offset_y"):
-		sb.shadow_offset = Vector2(
-			float(params.get("shadow_offset_x", 0)),
-			float(params.get("shadow_offset_y", 0)),
-		)
+
+	# border: {all, top, bottom, left, right} — int widths
+	if params.has("border"):
+		var err := _apply_sides(sb, params.border, "border",
+			["top", "bottom", "left", "right"],
+			"border_width_",
+			TYPE_INT)
+		if err != "":
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, err)
+
+	# corners: {all, top_left, top_right, bottom_left, bottom_right} — int radii
+	if params.has("corners"):
+		var err2 := _apply_sides(sb, params.corners, "corners",
+			["top_left", "top_right", "bottom_left", "bottom_right"],
+			"corner_radius_",
+			TYPE_INT)
+		if err2 != "":
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, err2)
+
+	# margins: {all, top, bottom, left, right} — float padding
+	if params.has("margins"):
+		var err3 := _apply_sides(sb, params.margins, "margins",
+			["top", "bottom", "left", "right"],
+			"content_margin_",
+			TYPE_FLOAT)
+		if err3 != "":
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, err3)
+
+	# shadow: {color, size, offset_x, offset_y}
+	if params.has("shadow"):
+		if typeof(params.shadow) != TYPE_DICTIONARY:
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "'shadow' must be a dict with color/size/offset_x/offset_y")
+		var shadow: Dictionary = params.shadow
+		var allowed_shadow_keys := {"color": true, "size": true, "offset_x": true, "offset_y": true}
+		for k in shadow.keys():
+			if not allowed_shadow_keys.has(k):
+				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+					"Unknown key in 'shadow': %s (valid: color, size, offset_x, offset_y)" % k)
+		if shadow.has("color"):
+			var sc := _parse_color(shadow.color)
+			if sc == null:
+				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid shadow.color")
+			sb.shadow_color = sc
+		if shadow.has("size"):
+			sb.shadow_size = int(shadow.size)
+		if shadow.has("offset_x") or shadow.has("offset_y"):
+			sb.shadow_offset = Vector2(
+				float(shadow.get("offset_x", 0)),
+				float(shadow.get("offset_y", 0)),
+			)
+
 	if params.has("anti_aliasing"):
 		sb.anti_aliasing = bool(params.anti_aliasing)
 
@@ -269,11 +293,55 @@ func set_stylebox_flat(params: Dictionary) -> Dictionary:
 			"name": name,
 			"stylebox_class": "StyleBoxFlat",
 			"bg_color": _serialize_value(sb.bg_color),
-			"border_width": sb.border_width_left,
-			"corner_radius": sb.corner_radius_top_left,
+			"border": {
+				"top": sb.border_width_top,
+				"bottom": sb.border_width_bottom,
+				"left": sb.border_width_left,
+				"right": sb.border_width_right,
+			},
+			"corners": {
+				"top_left": sb.corner_radius_top_left,
+				"top_right": sb.corner_radius_top_right,
+				"bottom_left": sb.corner_radius_bottom_left,
+				"bottom_right": sb.corner_radius_bottom_right,
+			},
+			"margins": {
+				"top": sb.content_margin_top,
+				"bottom": sb.content_margin_bottom,
+				"left": sb.content_margin_left,
+				"right": sb.content_margin_right,
+			},
 			"undoable": true,
 		}
 	}
+
+
+## Parse a {all, <side1>, <side2>, ...} dict and apply it to StyleBoxFlat via
+## its set_<prop_prefix><side> properties. Returns "" on success, an error
+## message on failure. Validates that only known keys are present.
+func _apply_sides(sb: StyleBoxFlat, sides_dict: Variant, dict_name: String,
+		side_names: Array, prop_prefix: String, value_type: int) -> String:
+	if typeof(sides_dict) != TYPE_DICTIONARY:
+		return "'%s' must be a dict with 'all' and/or side-specific keys" % dict_name
+	var valid_keys := {"all": true}
+	for s in side_names:
+		valid_keys[s] = true
+	for k in sides_dict.keys():
+		if not valid_keys.has(k):
+			return "Unknown key in '%s': %s (valid: all, %s)" % [
+				dict_name, k, ", ".join(side_names)
+			]
+	# Apply `all` first, then override with side-specific keys.
+	if sides_dict.has("all"):
+		var all_val: Variant = sides_dict.all
+		for s in side_names:
+			var v: Variant = int(all_val) if value_type == TYPE_INT else float(all_val)
+			sb.set(prop_prefix + s, v)
+	for s in side_names:
+		if sides_dict.has(s):
+			var v2: Variant = int(sides_dict[s]) if value_type == TYPE_INT else float(sides_dict[s])
+			sb.set(prop_prefix + s, v2)
+	return ""
 
 
 func _apply_stylebox(theme_path: String, name: String, class_name_param: String, sb: StyleBox) -> void:

@@ -2983,9 +2983,10 @@ class TestThemeSetStyleboxFlatTool:
             assert params["name"] == "normal"
             assert params["bg_color"] == "#101820"
             assert params["border_color"] == "#00ffff"
-            assert params["corner_radius"] == 8
+            assert params["corners"] == {"all": 8}
             # Fields not supplied must not be forwarded.
-            assert "shadow_size" not in params
+            assert "shadow" not in params
+            assert "margins" not in params
             await plugin.send_response(
                 cmd["request_id"],
                 {
@@ -2994,8 +2995,9 @@ class TestThemeSetStyleboxFlatTool:
                     "name": "normal",
                     "stylebox_class": "StyleBoxFlat",
                     "bg_color": {"r": 0.06, "g": 0.09, "b": 0.13, "a": 1.0},
-                    "border_width": 2,
-                    "corner_radius": 8,
+                    "border": {"top": 2, "bottom": 2, "left": 2, "right": 2},
+                    "corners": {"top_left": 8, "top_right": 8, "bottom_left": 8, "bottom_right": 8},
+                    "margins": {"top": 0, "bottom": 0, "left": 0, "right": 0},
                     "undoable": True,
                 },
             )
@@ -3009,26 +3011,24 @@ class TestThemeSetStyleboxFlatTool:
                 "name": "normal",
                 "bg_color": "#101820",
                 "border_color": "#00ffff",
-                "border_width": 2,
-                "corner_radius": 8,
+                "border": {"all": 2},
+                "corners": {"all": 8},
             },
         )
         await task
-        assert result.data["corner_radius"] == 8
+        assert result.data["corners"]["top_left"] == 8
 
-    async def test_per_side_params_forwarded(self, mcp_stack):
+    async def test_nested_dicts_with_overrides_forwarded(self, mcp_stack):
         client, plugin = mcp_stack
 
         async def respond():
             cmd = await plugin.recv_command()
             assert cmd["command"] == "theme_set_stylebox_flat"
             params = cmd["params"]
-            assert params["border_width"] == 1
-            assert params["border_width_top"] == 4
-            assert params["border_width_bottom"] == 2
-            assert "border_width_left" not in params
-            assert params["corner_radius_top_left"] == 12
-            assert params["content_margin_top"] == 16.0
+            assert params["border"] == {"all": 1, "top": 4, "bottom": 2}
+            assert params["corners"] == {"top_left": 12}
+            assert params["margins"] == {"top": 16.0}
+            assert params["shadow"] == {"color": "#000000", "size": 6}
             await plugin.send_response(
                 cmd["request_id"],
                 {
@@ -3037,8 +3037,14 @@ class TestThemeSetStyleboxFlatTool:
                     "name": "normal",
                     "stylebox_class": "StyleBoxFlat",
                     "bg_color": {"r": 0, "g": 0, "b": 0, "a": 1},
-                    "border_width": 1,
-                    "corner_radius": 4,
+                    "border": {"top": 4, "bottom": 2, "left": 1, "right": 1},
+                    "corners": {
+                        "top_left": 12,
+                        "top_right": 0,
+                        "bottom_left": 0,
+                        "bottom_right": 0,
+                    },
+                    "margins": {"top": 16.0, "bottom": 0, "left": 0, "right": 0},
                     "undoable": True,
                 },
             )
@@ -3050,15 +3056,15 @@ class TestThemeSetStyleboxFlatTool:
                 "theme_path": "res://themes/game.tres",
                 "class_name": "Button",
                 "name": "normal",
-                "border_width": 1,
-                "border_width_top": 4,
-                "border_width_bottom": 2,
-                "corner_radius_top_left": 12,
-                "content_margin_top": 16.0,
+                "border": {"all": 1, "top": 4, "bottom": 2},
+                "corners": {"top_left": 12},
+                "margins": {"top": 16.0},
+                "shadow": {"color": "#000000", "size": 6},
             },
         )
         await task
-        assert result.data["border_width"] == 1
+        assert result.data["border"]["top"] == 4
+        assert result.data["margins"]["top"] == 16.0
 
 
 class TestThemeApplyTool:
@@ -3243,7 +3249,6 @@ class TestAnimationAddPropertyTrackTool:
                     "track_path": "Panel:modulate",
                     "interpolation": "linear",
                     "keyframe_count": 2,
-                    "track_index": 0,
                     "undoable": True,
                 },
             )
@@ -3278,7 +3283,6 @@ class TestAnimationAddPropertyTrackTool:
                     "track_path": ".:modulate",
                     "interpolation": "linear",
                     "keyframe_count": 1,
-                    "track_index": 0,
                     "undoable": True,
                 },
             )
@@ -3314,7 +3318,6 @@ class TestAnimationAddMethodTrackTool:
                     "animation_name": "die",
                     "target_node_path": ".",
                     "keyframe_count": 1,
-                    "track_index": 0,
                     "undoable": True,
                 },
             )

@@ -187,13 +187,15 @@ func test_add_property_track_basic() -> void:
 		return
 	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
 
+	# Scene root is Node3D — use .:position (a real Vector3 property) rather
+	# than .:modulate which doesn't exist on Node3D.
 	var result := _handler.add_property_track({
 		"player_path": player_path,
 		"animation_name": "anim",
-		"track_path": ".:modulate",
+		"track_path": ".:position",
 		"keyframes": [
-			{"time": 0.0, "value": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 0.0}},
-			{"time": 1.0, "value": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0}},
+			{"time": 0.0, "value": {"x": 0.0, "y": 0.0, "z": 0.0}},
+			{"time": 1.0, "value": {"x": 1.0, "y": 0.0, "z": 0.0}},
 		],
 	})
 	assert_has_key(result, "data")
@@ -233,15 +235,110 @@ func test_add_property_track_is_undoable() -> void:
 	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	var anim: Animation = player.get_animation("anim")
 
+	# Scene root is Node3D — use .:visible (a real bool property) rather than
+	# the previous .:modulate which only worked because coercion used to silently
+	# fall through when the property didn't exist.
 	_handler.add_property_track({
 		"player_path": player_path,
 		"animation_name": "anim",
-		"track_path": ".:modulate",
-		"keyframes": [{"time": 0.0, "value": 1.0}, {"time": 1.0, "value": 0.0}],
+		"track_path": ".:visible",
+		"keyframes": [{"time": 0.0, "value": true}, {"time": 1.0, "value": false}],
 	})
 	assert_eq(anim.get_track_count(), 1)
 	_undo_redo.undo()
 	assert_eq(anim.get_track_count(), 0, "Undo should remove the track")
+	_remove_node(player_path)
+
+
+func test_add_property_track_rejects_missing_property() -> void:
+	# Scene root is Node3D — .modulate doesn't exist. Previously coercion
+	# passed through silently; now it errors.
+	var player_path := _add_player("TestMissingProp")
+	if player_path.is_empty():
+		return
+	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
+	var result := _handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "anim",
+		"track_path": ".:modulate",
+		"keyframes": [{"time": 0.0, "value": {"r": 1.0, "g": 0.0, "b": 0.0}}],
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "not found")
+	_remove_node(player_path)
+
+
+func test_add_property_track_undo_survives_interleaving() -> void:
+	# Stress-tests the find_track-at-undo-time pattern: if another track lands
+	# between do and undo, the undo must still remove the CORRECT track — not
+	# whatever happens to sit at the originally captured index.
+	var player_path := _add_player("TestInterleavedUndo")
+	if player_path.is_empty():
+		return
+	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var anim: Animation = player.get_animation("anim")
+
+	# Add track A on .:position.
+	_handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "anim",
+		"track_path": ".:position",
+		"keyframes": [{"time": 0.0, "value": {"x": 0.0, "y": 0.0, "z": 0.0}}],
+	})
+	assert_eq(anim.get_track_count(), 1, "After track A")
+
+	# Add track B on .:scale (interleaves track A's history).
+	_handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "anim",
+		"track_path": ".:scale",
+		"keyframes": [{"time": 0.0, "value": {"x": 1.0, "y": 1.0, "z": 1.0}}],
+	})
+	assert_eq(anim.get_track_count(), 2, "After track B")
+
+	# Undo B — should remove scale, leaving position.
+	_undo_redo.undo()
+	assert_eq(anim.get_track_count(), 1, "Undo B leaves one track")
+	assert_eq(anim.track_get_path(0), NodePath(".:position"), "Remaining track is position, not scale")
+
+	# Undo A — should remove position.
+	_undo_redo.undo()
+	assert_eq(anim.get_track_count(), 0, "Undo A leaves no tracks")
+
+	_remove_node(player_path)
+
+
+func test_add_method_track_rejects_bad_args() -> void:
+	# args must be an Array if provided — not a string, not a null.
+	var player_path := _add_player("TestBadArgs")
+	if player_path.is_empty():
+		return
+	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
+	var result := _handler.add_method_track({
+		"player_path": player_path,
+		"animation_name": "anim",
+		"target_node_path": ".",
+		"keyframes": [{"time": 0.0, "method": "queue_free", "args": "not an array"}],
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "args")
+	_remove_node(player_path)
+
+
+func test_add_method_track_rejects_empty_method() -> void:
+	var player_path := _add_player("TestEmptyMethod")
+	if player_path.is_empty():
+		return
+	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
+	var result := _handler.add_method_track({
+		"player_path": player_path,
+		"animation_name": "anim",
+		"target_node_path": ".",
+		"keyframes": [{"time": 0.0, "method": ""}],
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	_remove_node(player_path)
 
 
@@ -536,10 +633,10 @@ func test_get_returns_track_detail() -> void:
 	_handler.add_property_track({
 		"player_path": player_path,
 		"animation_name": "fade",
-		"track_path": ".:modulate",
+		"track_path": ".:position",
 		"keyframes": [
-			{"time": 0.0, "value": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 0.0}},
-			{"time": 1.0, "value": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0}},
+			{"time": 0.0, "value": {"x": 0.0, "y": 0.0, "z": 0.0}},
+			{"time": 1.0, "value": {"x": 10.0, "y": 0.0, "z": 0.0}},
 		],
 	})
 
@@ -584,6 +681,7 @@ func test_create_simple_explicit_length() -> void:
 	var player_path := _add_player("TestSimpleExplicit")
 	if player_path.is_empty():
 		return
+	# Scene root is Node3D — use .position, not .modulate (not present on Node3D).
 	var result := _handler.create_simple({
 		"player_path": player_path,
 		"name": "fade",
@@ -591,9 +689,9 @@ func test_create_simple_explicit_length() -> void:
 		"tweens": [
 			{
 				"target": ".",
-				"property": "modulate",
-				"from": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 0.0},
-				"to": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
+				"property": "position",
+				"from": {"x": 0.0, "y": 0.0, "z": 0.0},
+				"to": {"x": 1.0, "y": 0.0, "z": 0.0},
 				"duration": 0.5,
 			}
 		],
@@ -611,7 +709,7 @@ func test_create_simple_multiple_tweens() -> void:
 		"player_path": player_path,
 		"name": "combo",
 		"tweens": [
-			{"target": ".", "property": "modulate", "from": {"r":1,"g":1,"b":1,"a":0}, "to": {"r":1,"g":1,"b":1,"a":1}, "duration": 0.5},
+			{"target": ".", "property": "scale", "from": {"x":1,"y":1,"z":1}, "to": {"x":2,"y":2,"z":2}, "duration": 0.5},
 			{"target": ".", "property": "position", "from": {"x": -200.0, "y": 0.0, "z": 0.0}, "to": {"x": 0.0, "y": 0.0, "z": 0.0}, "duration": 0.3, "delay": 0.1},
 		],
 	})
@@ -632,7 +730,7 @@ func test_create_simple_is_undoable() -> void:
 		"name": "pulse",
 		"loop_mode": "pingpong",
 		"tweens": [
-			{"target": ".", "property": "modulate", "from": "white", "to": "red", "duration": 0.5},
+			{"target": ".", "property": "scale", "from": {"x":1,"y":1,"z":1}, "to": {"x":2,"y":2,"z":2}, "duration": 0.5},
 		],
 	})
 	assert_true(player.has_animation("pulse"))
@@ -771,7 +869,7 @@ func test_create_simple_rejects_missing_tween_fields() -> void:
 	var result := _handler.create_simple({
 		"player_path": player_path,
 		"name": "bad",
-		"tweens": [{"target": ".", "property": "modulate"}],  # Missing from/to/duration
+		"tweens": [{"target": ".", "property": "position"}],  # Missing from/to/duration
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	_remove_node(player_path)
@@ -788,8 +886,8 @@ func test_create_simple_rejects_zero_length() -> void:
 		"name": "zerolen",
 		"length": 0.0,
 		"tweens": [
-			{"target": ".", "property": "modulate",
-			 "from": "white", "to": "red", "duration": 0.5},
+			{"target": ".", "property": "scale",
+			 "from": {"x":1,"y":1,"z":1}, "to": {"x":2,"y":2,"z":2}, "duration": 0.5},
 		],
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
@@ -806,8 +904,8 @@ func test_create_simple_rejects_negative_length() -> void:
 		"name": "neglen",
 		"length": -1.0,
 		"tweens": [
-			{"target": ".", "property": "modulate",
-			 "from": "white", "to": "red", "duration": 0.5},
+			{"target": ".", "property": "scale",
+			 "from": {"x":1,"y":1,"z":1}, "to": {"x":2,"y":2,"z":2}, "duration": 0.5},
 		],
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
@@ -915,6 +1013,37 @@ func test_delete_animation_basic() -> void:
 		if anim.name == "to_delete":
 			found = true
 	assert_true(found, "Undo should restore deleted animation")
+
+	_remove_node(player_path)
+
+
+func test_delete_animation_in_non_default_library() -> void:
+	# Previously delete only worked for animations in the default library and
+	# returned INTERNAL_ERROR "No default library found" for anything else.
+	# Now it searches all libraries symmetrically with animation_get / animation_play.
+	var player_path := _add_player("TestDeleteNonDefault")
+	if player_path.is_empty():
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+
+	var lib := AnimationLibrary.new()
+	var anim := Animation.new()
+	anim.length = 0.5
+	lib.add_animation(&"idle", anim)
+	player.add_animation_library(&"moves", lib)
+	assert_true(player.has_animation("moves/idle"), "Setup: library-qualified animation present")
+
+	var result := _handler.delete_animation({
+		"player_path": player_path, "animation_name": "moves/idle",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.library_key, "moves")
+	assert_false(player.has_animation("moves/idle"), "Animation removed from non-default library")
+
+	# Undo restores it.
+	_undo_redo.undo()
+	assert_true(player.has_animation("moves/idle"), "Undo restored library-qualified animation")
 
 	_remove_node(player_path)
 

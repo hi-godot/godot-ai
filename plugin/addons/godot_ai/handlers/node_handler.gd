@@ -31,6 +31,10 @@ func create_node(params: Dictionary) -> Dictionary:
 
 	if not scene_path.is_empty():
 		# Scene instancing path — load and instantiate a PackedScene.
+		# GEN_EDIT_STATE_INSTANCE makes the editor treat the result as a real
+		# scene instance (foldout icon, the .tscn stores a reference instead of
+		# an exploded subtree). Descendants remain owned by their sub-scene;
+		# setting their owner to our scene_root would break the instance link.
 		if not scene_path.begins_with("res://"):
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "scene_path must start with res://")
 		if not ResourceLoader.exists(scene_path):
@@ -38,7 +42,7 @@ func create_node(params: Dictionary) -> Dictionary:
 		var packed_scene = ResourceLoader.load(scene_path)
 		if packed_scene == null or not packed_scene is PackedScene:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource at %s is not a PackedScene" % scene_path)
-		new_node = packed_scene.instantiate()
+		new_node = packed_scene.instantiate(PackedScene.GEN_EDIT_STATE_INSTANCE)
 		if new_node == null:
 			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to instantiate scene: %s" % scene_path)
 	else:
@@ -62,10 +66,6 @@ func create_node(params: Dictionary) -> Dictionary:
 	_undo_redo.add_do_reference(new_node)
 	_undo_redo.add_undo_method(parent, "remove_child", new_node)
 	_undo_redo.commit_action()
-
-	# For instanced scenes, set owner on descendants so they serialize properly.
-	if not scene_path.is_empty():
-		_set_owner_recursive(new_node, scene_root)
 
 	var response := {
 		"name": new_node.name,
