@@ -36,12 +36,24 @@ func suite_teardown() -> void:
 var _failed: bool = false
 var _message: String = ""
 var _assertion_count: int = 0
+var _skipped: bool = false
+var _skip_reason: String = ""
 
 
 func _reset() -> void:
 	_failed = false
 	_message = ""
 	_assertion_count = 0
+	_skipped = false
+	_skip_reason = ""
+
+
+## Mark the current test as skipped. Use when a precondition isn't met
+## (e.g. no scene open, no Node3D in scene) and the test can't run.
+## Skipped tests count separately from passed/failed.
+func skip(reason: String = "") -> void:
+	_skipped = true
+	_skip_reason = reason
 
 
 # ----- assertions -----

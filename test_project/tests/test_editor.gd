@@ -117,7 +117,7 @@ func test_screenshot_view_target_duplicates() -> void:
 	## Use a known node from main.tscn.
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
-		assert_true(false, "No scene root — is a scene open?")
+		skip("No scene root — is a scene open?")
 		return
 	## Find the first Node3D child to use as a test target
 	var target_path := ""
@@ -126,7 +126,7 @@ func test_screenshot_view_target_duplicates() -> void:
 			target_path = ScenePath.from_node(child, scene_root)
 			break
 	if target_path.is_empty():
-		assert_true(false, "No Node3D target found in scene")
+		skip("No Node3D target found in scene")
 		return
 	var dupe_target := target_path + "," + target_path
 	var result := _handler.take_screenshot({"source": "viewport", "view_target": dupe_target})
@@ -138,7 +138,7 @@ func test_screenshot_view_target_single_path_unchanged() -> void:
 	## Single-path input should still work as before.
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
-		assert_true(false, "No scene root — is a scene open?")
+		skip("No scene root — is a scene open?")
 		return
 	var target_path := ""
 	for child in scene_root.get_children():
@@ -146,7 +146,7 @@ func test_screenshot_view_target_single_path_unchanged() -> void:
 			target_path = ScenePath.from_node(child, scene_root)
 			break
 	if target_path.is_empty():
-		assert_true(false, "No Node3D target found in scene")
+		skip("No Node3D target found in scene")
 		return
 	var result := _handler.take_screenshot({"source": "viewport", "view_target": target_path})
 	if result.has("data"):
@@ -190,7 +190,7 @@ func test_screenshot_coverage_with_view_target() -> void:
 	## fall back to any Node3D if no preferred target is present.
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
-		assert_true(false, "No scene root — is a scene open?")
+		skip("No scene root — is a scene open?")
 		return
 	var target_path := ""
 	var preferred := scene_root.get_node_or_null("SnowGroup")
@@ -202,7 +202,7 @@ func test_screenshot_coverage_with_view_target() -> void:
 				target_path = ScenePath.from_node(child, scene_root)
 				break
 	if target_path.is_empty():
-		assert_true(false, "No Node3D target found in scene")
+		skip("No Node3D target found in scene")
 		return
 	var result := _handler.take_screenshot({"source": "viewport", "view_target": target_path, "coverage": true})
 	if result.has("data"):
@@ -227,7 +227,7 @@ func test_screenshot_view_target_has_aabb_metadata() -> void:
 	## Any view_target screenshot should include AABB geometry metadata
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
-		assert_true(false, "No scene root — is a scene open?")
+		skip("No scene root — is a scene open?")
 		return
 	var target_path := ""
 	for child in scene_root.get_children():
@@ -235,7 +235,7 @@ func test_screenshot_view_target_has_aabb_metadata() -> void:
 			target_path = ScenePath.from_node(child, scene_root)
 			break
 	if target_path.is_empty():
-		assert_true(false, "No Node3D target found in scene")
+		skip("No Node3D target found in scene")
 		return
 	var result := _handler.take_screenshot({"source": "viewport", "view_target": target_path})
 	if result.has("data"):
@@ -248,7 +248,7 @@ func test_screenshot_custom_angles() -> void:
 	## Explicit elevation/azimuth with valid target → single image with those angles
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
-		assert_true(false, "No scene root — is a scene open?")
+		skip("No scene root — is a scene open?")
 		return
 	var target_path := ""
 	for child in scene_root.get_children():
@@ -256,7 +256,7 @@ func test_screenshot_custom_angles() -> void:
 			target_path = ScenePath.from_node(child, scene_root)
 			break
 	if target_path.is_empty():
-		assert_true(false, "No Node3D target found in scene")
+		skip("No Node3D target found in scene")
 		return
 	var result := _handler.take_screenshot({"source": "viewport", "view_target": target_path, "elevation": 45.0, "azimuth": 90.0})
 	if result.has("data"):
@@ -271,7 +271,7 @@ func test_screenshot_custom_fov() -> void:
 	## Explicit fov with valid target → single image with fov in response
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
-		assert_true(false, "No scene root — is a scene open?")
+		skip("No scene root — is a scene open?")
 		return
 	var target_path := ""
 	for child in scene_root.get_children():
@@ -279,7 +279,7 @@ func test_screenshot_custom_fov() -> void:
 			target_path = ScenePath.from_node(child, scene_root)
 			break
 	if target_path.is_empty():
-		assert_true(false, "No Node3D target found in scene")
+		skip("No Node3D target found in scene")
 		return
 	var result := _handler.take_screenshot({"source": "viewport", "view_target": target_path, "fov": 30.0})
 	if result.has("data"):

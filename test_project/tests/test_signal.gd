@@ -21,7 +21,7 @@ func suite_setup(ctx: Dictionary) -> void:
 func test_list_signals_returns_signals() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
-		assert_true(false, "No scene root — is a scene open?")
+		skip("No scene root — is a scene open?")
 		return
 	var path := "/" + scene_root.name
 	var result := _handler.list_signals({"path": path})
@@ -85,7 +85,7 @@ func test_disconnect_signal_missing_params() -> void:
 func test_disconnect_signal_not_connected() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
-		assert_true(false, "No scene root — is a scene open?")
+		skip("No scene root — is a scene open?")
 		return
 	var path := "/" + scene_root.name
 	var result := _handler.disconnect_signal({
@@ -103,6 +103,7 @@ func test_connect_signal_autoload_not_found() -> void:
 	# An autoload name that doesn't exist should produce a clear error.
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.connect_signal({
 		"path": "NonExistentAutoload",

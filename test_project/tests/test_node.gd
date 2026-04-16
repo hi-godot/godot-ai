@@ -363,6 +363,7 @@ func test_rename_node_scene_root() -> void:
 	# Renaming the scene root is allowed (not the .tscn file path, just the node name).
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var old_name := String(scene_root.name)
 	var result := _handler.rename_node({"path": "/" + old_name, "new_name": "RenamedTestRoot"})
@@ -530,6 +531,7 @@ func test_create_node_from_scene_path() -> void:
 	# Use the test project's own main.tscn as the scene to instance.
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var before_count := scene_root.get_child_count()
 	var result := _handler.create_node({

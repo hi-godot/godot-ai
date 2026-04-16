@@ -44,7 +44,7 @@ func _remove_control(path: String) -> void:
 func test_set_anchor_preset_full_rect() -> void:
 	var path := _add_control("TestUiFullRect")
 	if path.is_empty():
-		assert_true(false, "Scene not ready — _add_control returned empty path")
+		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_anchor_preset({"path": path, "preset": "full_rect"})
 	assert_has_key(result, "data")
@@ -60,7 +60,7 @@ func test_set_anchor_preset_full_rect() -> void:
 func test_set_anchor_preset_center() -> void:
 	var path := _add_control("TestUiCenter")
 	if path.is_empty():
-		assert_true(false, "Scene not ready — _add_control returned empty path")
+		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_anchor_preset({"path": path, "preset": "center"})
 	assert_has_key(result, "data")
@@ -74,7 +74,7 @@ func test_set_anchor_preset_center() -> void:
 func test_set_anchor_preset_top_left_with_margin() -> void:
 	var path := _add_control("TestUiTopLeftMargin")
 	if path.is_empty():
-		assert_true(false, "Scene not ready — _add_control returned empty path")
+		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_anchor_preset({
 		"path": path, "preset": "top_left", "margin": 8
@@ -92,7 +92,7 @@ func test_set_anchor_preset_top_left_with_margin() -> void:
 func test_set_anchor_preset_accepts_mixed_case() -> void:
 	var path := _add_control("TestUiMixedCase")
 	if path.is_empty():
-		assert_true(false, "Scene not ready — _add_control returned empty path")
+		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_anchor_preset({"path": path, "preset": "Full_Rect"})
 	assert_has_key(result, "data")
@@ -103,7 +103,7 @@ func test_set_anchor_preset_accepts_mixed_case() -> void:
 func test_set_anchor_preset_keep_size_mode() -> void:
 	var path := _add_control("TestUiKeepSize")
 	if path.is_empty():
-		assert_true(false, "Scene not ready — _add_control returned empty path")
+		skip("Scene not ready — _add_control returned empty path")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var node := ScenePath.resolve(path, scene_root)
@@ -130,7 +130,7 @@ func test_set_anchor_preset_missing_path() -> void:
 func test_set_anchor_preset_missing_preset() -> void:
 	var path := _add_control("TestUiMissingPreset")
 	if path.is_empty():
-		assert_true(false, "Scene not ready — _add_control returned empty path")
+		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_anchor_preset({"path": path})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
@@ -140,7 +140,7 @@ func test_set_anchor_preset_missing_preset() -> void:
 func test_set_anchor_preset_unknown_preset() -> void:
 	var path := _add_control("TestUiUnknownPreset")
 	if path.is_empty():
-		assert_true(false, "Scene not ready — _add_control returned empty path")
+		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_anchor_preset({"path": path, "preset": "not_a_preset"})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
@@ -152,7 +152,7 @@ func test_set_anchor_preset_unknown_preset() -> void:
 func test_set_anchor_preset_unknown_resize_mode() -> void:
 	var path := _add_control("TestUiUnknownResize")
 	if path.is_empty():
-		assert_true(false, "Scene not ready — _add_control returned empty path")
+		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_anchor_preset({
 		"path": path, "preset": "center", "resize_mode": "stretch"
@@ -172,7 +172,7 @@ func test_set_anchor_preset_non_control_node() -> void:
 	# Scene root in the test project is a Node3D, not a Control.
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
-		assert_true(false, "No scene root — is a scene open?")
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.set_anchor_preset({
 		"path": "/" + scene_root.name, "preset": "full_rect"
@@ -186,7 +186,7 @@ func test_set_anchor_preset_non_control_node() -> void:
 func test_set_anchor_preset_is_undoable() -> void:
 	var path := _add_control("TestUiUndo")
 	if path.is_empty():
-		assert_true(false, "Scene not ready — _add_control returned empty path")
+		skip("Scene not ready — _add_control returned empty path")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var ctl := ScenePath.resolve(path, scene_root) as Control
@@ -208,7 +208,7 @@ func test_set_anchor_preset_is_undoable() -> void:
 func test_build_layout_creates_simple_tree() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
-		assert_true(false, "No scene root — is a scene open?")
+		skip("No scene root — is a scene open?")
 		return
 	var spec := {
 		"type": "Panel",
@@ -267,7 +267,7 @@ func test_build_layout_rejects_bad_parent_path() -> void:
 func test_build_layout_applies_anchor_preset_and_coerces_color() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
-		assert_true(false, "No scene root — is a scene open?")
+		skip("No scene root — is a scene open?")
 		return
 	var spec := {
 		"type": "ColorRect",
@@ -298,7 +298,7 @@ func test_build_layout_rejects_anchor_preset_on_non_control() -> void:
 func test_build_layout_is_undoable() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
-		assert_true(false, "No scene root — is a scene open?")
+		skip("No scene root — is a scene open?")
 		return
 	var before_count := scene_root.get_child_count()
 	var result := _handler.build_layout({
@@ -341,6 +341,7 @@ func test_build_layout_rejects_uncoercible_property() -> void:
 func test_build_layout_theme_override_color() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.build_layout({
 		"tree": {
@@ -366,6 +367,7 @@ func test_build_layout_theme_override_color() -> void:
 func test_build_layout_theme_override_constant() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.build_layout({
 		"tree": {
@@ -388,6 +390,7 @@ func test_build_layout_theme_override_constant() -> void:
 func test_build_layout_theme_override_font_size() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.build_layout({
 		"tree": {

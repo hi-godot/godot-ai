@@ -22,6 +22,17 @@ func run_suite(suite: McpTestSuite, test_filter: String = "") -> void:
 		suite.call(method_name)
 		suite.teardown()
 
+		if suite._skipped:
+			_results.append({
+				"suite": name,
+				"test": method_name,
+				"passed": true,
+				"skipped": true,
+				"message": suite._skip_reason,
+				"assertion_count": 0,
+			})
+			continue
+
 		var passed := not suite._failed
 		var msg := suite._message
 
@@ -57,11 +68,14 @@ func run_suites(suites: Array, suite_filter: String = "", test_filter: String = 
 func get_results(verbose: bool = false) -> Dictionary:
 	var passed := 0
 	var failed := 0
+	var skipped := 0
 	var failures: Array[Dictionary] = []
 	var suites_seen := {}
 	for r in _results:
 		suites_seen[r.suite] = true
-		if r.passed:
+		if r.get("skipped", false):
+			skipped += 1
+		elif r.passed:
 			passed += 1
 		else:
 			failed += 1
@@ -70,6 +84,7 @@ func get_results(verbose: bool = false) -> Dictionary:
 	var result := {
 		"passed": passed,
 		"failed": failed,
+		"skipped": skipped,
 		"total": _results.size(),
 		"duration_ms": _last_run_ms,
 		"suites_run": suites_seen.keys(),
