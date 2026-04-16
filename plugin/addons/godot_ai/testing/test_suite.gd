@@ -35,16 +35,31 @@ func suite_teardown() -> void:
 
 var _failed: bool = false
 var _message: String = ""
+var _assertion_count: int = 0
+var _skipped: bool = false
+var _skip_reason: String = ""
 
 
 func _reset() -> void:
 	_failed = false
 	_message = ""
+	_assertion_count = 0
+	_skipped = false
+	_skip_reason = ""
+
+
+## Mark the current test as skipped. Use when a precondition isn't met
+## (e.g. no scene open, no Node3D in scene) and the test can't run.
+## Skipped tests count separately from passed/failed.
+func skip(reason: String = "") -> void:
+	_skipped = true
+	_skip_reason = reason
 
 
 # ----- assertions -----
 
 func assert_true(condition: bool, msg: String = "") -> void:
+	_assertion_count += 1
 	if _failed:
 		return
 	if not condition:
@@ -53,6 +68,7 @@ func assert_true(condition: bool, msg: String = "") -> void:
 
 
 func assert_false(condition: bool, msg: String = "") -> void:
+	_assertion_count += 1
 	if _failed:
 		return
 	if condition:
@@ -61,6 +77,7 @@ func assert_false(condition: bool, msg: String = "") -> void:
 
 
 func assert_eq(actual: Variant, expected: Variant, msg: String = "") -> void:
+	_assertion_count += 1
 	if _failed:
 		return
 	if actual != expected:
@@ -69,6 +86,7 @@ func assert_eq(actual: Variant, expected: Variant, msg: String = "") -> void:
 
 
 func assert_ne(actual: Variant, not_expected: Variant, msg: String = "") -> void:
+	_assertion_count += 1
 	if _failed:
 		return
 	if actual == not_expected:
@@ -77,6 +95,7 @@ func assert_ne(actual: Variant, not_expected: Variant, msg: String = "") -> void
 
 
 func assert_gt(actual: Variant, threshold: Variant, msg: String = "") -> void:
+	_assertion_count += 1
 	if _failed:
 		return
 	if not (actual > threshold):
@@ -85,6 +104,7 @@ func assert_gt(actual: Variant, threshold: Variant, msg: String = "") -> void:
 
 
 func assert_has_key(dict: Variant, key: String, msg: String = "") -> void:
+	_assertion_count += 1
 	if _failed:
 		return
 	if not dict is Dictionary:
@@ -97,6 +117,7 @@ func assert_has_key(dict: Variant, key: String, msg: String = "") -> void:
 
 
 func assert_contains(haystack: Variant, needle: Variant, msg: String = "") -> void:
+	_assertion_count += 1
 	if _failed:
 		return
 	if haystack is String:
@@ -113,6 +134,7 @@ func assert_contains(haystack: Variant, needle: Variant, msg: String = "") -> vo
 
 
 func assert_is_error(result: Dictionary, expected_code: String = "", msg: String = "") -> void:
+	_assertion_count += 1
 	if _failed:
 		return
 	if not result.has("error"):

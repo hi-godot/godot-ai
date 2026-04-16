@@ -85,6 +85,14 @@ fi
 echo "Waiting for editor filesystem scan to settle..."
 sleep 8
 
+# Open main.tscn so tests that need a scene root can actually run.
+# In a fresh CI checkout there's no editor state, so no scene is open by default.
+echo "Opening main.tscn..."
+curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"scene_open","arguments":{"path":"res://main.tscn"}}}' > /dev/null
+sleep 2
+
 # Call test_run
 echo "Running handler tests..."
 RESULT=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \

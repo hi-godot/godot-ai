@@ -13,7 +13,8 @@ func configure_client(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown client: %s. Use: %s" % [client_name, valid_names])
 	var result := McpClientConfigurator.configure(client_type as McpClientConfigurator.ClientType)
 	if result.get("status") == "error":
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, result.get("message", "Configuration failed"))
+		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR,
+			result.get("message", "Configuration failed for '%s' (check logs for details)" % client_name))
 	return {"data": result}
 
 
