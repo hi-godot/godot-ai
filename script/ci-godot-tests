@@ -79,11 +79,11 @@ if [ "$FINAL_COUNT" -eq 0 ] 2>/dev/null; then
   exit 1
 fi
 
-# Verify test files are visible
-echo "Checking test_project layout..."
-ls -la test_project/addons/godot_ai 2>&1 | head -3
-ls test_project/tests/test_*.gd 2>&1 | wc -l | xargs -I{} echo "Test .gd files found: {}"
-ls test_project/addons/godot_ai/handlers/test_handler.gd 2>&1
+# Give the editor time to finish its filesystem scan and script class
+# registration. Without this, test_run fires before DirAccess sees the
+# test scripts — the plugin connects before the scan completes.
+echo "Waiting for editor filesystem scan to settle..."
+sleep 8
 
 # Call test_run
 echo "Running handler tests..."

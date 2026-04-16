@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -129,12 +130,15 @@ jobs:
           timeout 120 godot --headless --path test_project --editor &
 
       - name: Run handler tests
+        timeout-minutes: 3
         run: bash script/ci-godot-tests
 
       - name: Reload smoke test
+        timeout-minutes: 2
         run: bash script/ci-reload-test
 
       - name: Quit smoke test
+        timeout-minutes: 2
         run: bash script/ci-quit-test
 
   godot-tests-macos:
@@ -166,12 +170,15 @@ jobs:
           godot --headless --path test_project --editor &
 
       - name: Run handler tests
+        timeout-minutes: 3
         run: bash script/ci-godot-tests
 
       - name: Reload smoke test
+        timeout-minutes: 2
         run: bash script/ci-reload-test
 
       - name: Quit smoke test
+        timeout-minutes: 2
         run: bash script/ci-quit-test
 
   godot-tests-windows:
