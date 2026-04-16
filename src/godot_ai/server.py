@@ -23,7 +23,9 @@ from godot_ai.tools.client import register_client_tools
 from godot_ai.tools.editor import register_editor_tools
 from godot_ai.tools.filesystem import register_filesystem_tools
 from godot_ai.tools.input_map import register_input_map_tools
+from godot_ai.tools.material import register_material_tools
 from godot_ai.tools.node import register_node_tools
+from godot_ai.tools.particle import register_particle_tools
 from godot_ai.tools.project import register_project_tools
 from godot_ai.tools.resource import register_resource_tools
 from godot_ai.tools.scene import register_scene_tools
@@ -93,6 +95,12 @@ def create_server(ws_port: int = 9500) -> FastMCP:
             "(colors, stylebox, font sizes) — Godot's CSS-like styling\n"
             "  animation_*      — AnimationPlayer authoring "
             "(tracks, keyframes, autoplay) — hover pulses, slide-ins, shakes, fades\n"
+            "  material_*       — author Materials "
+            "(StandardMaterial3D, ORM, ShaderMaterial) — "
+            "paint, albedo, metal, glass, emission, shader uniforms\n"
+            "  particle_*       — author particle emitters "
+            "(GPUParticles2D/3D, CPUParticles2D/3D) — "
+            "fire, smoke, sparks, magic, rain, explosion\n"
             "  client_*         — configure AI clients (Claude Code, Codex, Antigravity)\n\n"
             "Always connect to an editor session first (session_list / session_activate). "
             "Write operations require session readiness; check editor_state if a call is "
@@ -118,6 +126,8 @@ def create_server(ws_port: int = 9500) -> FastMCP:
     register_ui_tools(mcp)
     register_theme_tools(mcp)
     register_animation_tools(mcp)
+    register_material_tools(mcp)
+    register_particle_tools(mcp)
     register_session_resources(mcp)
     register_scene_resources(mcp)
     register_editor_resources(mcp)
