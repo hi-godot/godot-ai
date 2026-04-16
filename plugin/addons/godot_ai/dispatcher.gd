@@ -70,12 +70,6 @@ func _dispatch(cmd: Dictionary) -> Dictionary:
 
 	if _handlers.has(command):
 		result = _handlers[command].call(params)
-		## Detect handler crash: if .call() returned empty dict (GDScript default
-		## on unhandled error), report it so the caller sees a real error instead
-		## of silent empty data.
-		if result.is_empty():
-			result = McpErrorCodes.make("HANDLER_CRASH",
-				"Handler for '%s' returned empty dict (likely crashed)" % command)
 	else:
 		result = McpErrorCodes.make(McpErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
 
