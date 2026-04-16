@@ -2719,3 +2719,50 @@ async def test_node_create_scene_path_param():
     await node_handlers.node_create(runtime, scene_path="res://main.tscn", name="Instanced")
     assert client.calls[-1]["params"]["scene_path"] == "res://main.tscn"
     assert client.calls[-1]["params"]["name"] == "Instanced"
+
+
+async def test_animation_validate_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await animation_handlers.animation_validate(
+        runtime, player_path="/Main/AP", animation_name="idle"
+    )
+    assert client.calls[-1]["command"] == "animation_validate"
+    assert client.calls[-1]["params"] == {
+        "player_path": "/Main/AP",
+        "animation_name": "idle",
+    }
+
+
+async def test_animation_validate_does_not_require_writable():
+    """animation_validate is read-only — must not call require_writable."""
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    session = Session(
+        session_id="s1",
+        godot_version="4.4",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="playing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    # Should NOT raise even when readiness is "playing".
+    await animation_handlers.animation_validate(
+        runtime, player_path="/Main/AP", animation_name="idle"
+    )
+
+
+async def test_project_stop_handler_has_settle_delay():
+    """project_stop should include a brief settle delay."""
+    import time
+
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    t0 = time.monotonic()
+    await project_handlers.project_stop(runtime)
+    elapsed = time.monotonic() - t0
+    assert elapsed >= 0.1, f"Expected >= 0.1s settle delay, got {elapsed:.3f}s"
+    assert client.calls[-1]["command"] == "stop_project"

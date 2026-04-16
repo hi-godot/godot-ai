@@ -551,6 +551,78 @@ func get_animation(params: Dictionary) -> Dictionary:
 
 
 # ============================================================================
+# animation_validate  (read-only)
+# ============================================================================
+
+func validate_animation(params: Dictionary) -> Dictionary:
+	var player_path: String = params.get("player_path", "")
+	var anim_name: String = params.get("animation_name", "")
+
+	if player_path.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: player_path")
+	if anim_name.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: animation_name")
+
+	var resolved := _resolve_player_read(player_path)
+	if resolved.has("error"):
+		return resolved
+	var player: AnimationPlayer = resolved.player
+
+	if not player.has_animation(anim_name):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			"Animation '%s' not found on player at %s" % [anim_name, player_path])
+
+	var anim: Animation = player.get_animation(anim_name)
+
+	var root_node: Node = null
+	if player.is_inside_tree():
+		var rn := player.root_node
+		if rn != NodePath():
+			root_node = player.get_node_or_null(rn)
+		if root_node == null:
+			root_node = player.get_parent()
+
+	var broken_tracks: Array[Dictionary] = []
+	var valid_count := 0
+
+	for i in anim.get_track_count():
+		var track_path_str := str(anim.track_get_path(i))
+		var colon := track_path_str.rfind(":")
+		var node_part: String
+		if colon >= 0:
+			node_part = track_path_str.substr(0, colon)
+		else:
+			node_part = track_path_str
+
+		var target_node: Node = null
+		if root_node != null:
+			target_node = root_node.get_node_or_null(node_part)
+
+		if target_node == null:
+			broken_tracks.append({
+				"index": i,
+				"path": track_path_str,
+				"type": _track_type_to_string(anim.track_get_type(i)),
+				"issue": "node_not_found",
+				"node_path": node_part,
+			})
+		else:
+			valid_count += 1
+
+	return {
+		"data": {
+			"player_path": player_path,
+			"animation_name": anim_name,
+			"track_count": anim.get_track_count(),
+			"valid_count": valid_count,
+			"broken_count": broken_tracks.size(),
+			"broken_tracks": broken_tracks,
+			"valid": broken_tracks.is_empty(),
+		}
+	}
+
+
+# ============================================================================
 # animation_create_simple  (composer)
 # ============================================================================
 

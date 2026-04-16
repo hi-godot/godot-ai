@@ -32,7 +32,12 @@ async def project_run(runtime: Runtime, mode: str = "main", scene: str = "") -> 
 
 
 async def project_stop(runtime: Runtime) -> dict:
-    return await runtime.send_command("stop_project")
+    result = await runtime.send_command("stop_project")
+    # Give the editor one frame to settle and emit `readiness_changed`.
+    # Without this, a tool call immediately after stop may see stale
+    # readiness="playing" and reject the command.
+    await asyncio.sleep(0.15)
+    return result
 
 
 async def project_settings_set(runtime: Runtime, key: str, value: Any) -> dict:
@@ -67,4 +72,3 @@ async def project_settings_resource_data(runtime: Runtime) -> dict:
         else:
             settings[key] = value
     return {"settings": settings, "errors": errors if errors else None}
-

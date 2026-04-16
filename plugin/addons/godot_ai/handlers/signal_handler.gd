@@ -119,11 +119,15 @@ func _resolve_signal_params(params: Dictionary) -> Dictionary:
 
 	var source := ScenePath.resolve(params.path, scene_root)
 	if source == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Source node not found: %s" % params.path)
+		source = _resolve_autoload(params.path)
+	if source == null:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Source node not found: %s (not in scene tree or autoloads)" % params.path)
 
 	var target := ScenePath.resolve(params.target, scene_root)
 	if target == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Target node not found: %s" % params.target)
+		target = _resolve_autoload(params.target)
+	if target == null:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Target node not found: %s (not in scene tree or autoloads)" % params.target)
 
 	return {
 		"source": source,
@@ -132,6 +136,26 @@ func _resolve_signal_params(params: Dictionary) -> Dictionary:
 		"method": params.method,
 		"scene_root": scene_root,
 	}
+
+
+## Attempt to resolve a path as an autoload singleton.
+## Checks ProjectSettings for autoload entries and looks up the runtime
+## singleton by name under the scene tree root. Returns null if not found.
+func _resolve_autoload(path: String) -> Node:
+	# Strip leading "/" if present (e.g. "/GameState" -> "GameState").
+	var name := path.trim_prefix("/")
+	# Check all autoload entries in ProjectSettings.
+	for prop in ProjectSettings.get_property_list():
+		var key: String = prop.get("name", "")
+		if not key.begins_with("autoload/"):
+			continue
+		var autoload_name := key.substr("autoload/".length())
+		if autoload_name == name:
+			# Autoload singletons are children of the SceneTree root at runtime.
+			var tree := Engine.get_main_loop()
+			if tree and tree is SceneTree:
+				return (tree as SceneTree).root.get_node_or_null(autoload_name)
+	return null
 
 
 func _signal_response(source: Node, signal_name: String, target: Node, method: String, scene_root: Node) -> Dictionary:

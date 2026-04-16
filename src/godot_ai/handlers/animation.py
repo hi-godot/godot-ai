@@ -146,6 +146,18 @@ async def animation_delete(
     )
 
 
+async def animation_validate(
+    runtime: Runtime,
+    player_path: str,
+    animation_name: str,
+) -> dict:
+    # Read-only — no require_writable.
+    return await runtime.send_command(
+        "animation_validate",
+        {"player_path": player_path, "animation_name": animation_name},
+    )
+
+
 async def animation_create_simple(
     runtime: Runtime,
     player_path: str,

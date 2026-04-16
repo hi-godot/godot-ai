@@ -124,6 +124,31 @@ def register_animation_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool(meta=DEFER_META)
+    async def animation_validate(
+        ctx: Context,
+        player_path: str,
+        animation_name: str,
+        session_id: str = "",
+    ) -> dict:
+        """Check all track paths in an animation resolve to actual nodes.
+
+        Returns a validation report with valid_count, broken_count, and a list
+        of broken tracks with their index, path, and issue description. Use this
+        after restructuring a node tree to find animations targeting stale paths.
+
+        Args:
+            player_path: Scene path to the AnimationPlayer.
+            animation_name: Name of the animation to validate.
+            session_id: Optional Godot session to target. Empty = active session.
+        """
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
+        return await animation_handlers.animation_validate(
+            runtime,
+            player_path=player_path,
+            animation_name=animation_name,
+        )
+
+    @mcp.tool(meta=DEFER_META)
     async def animation_add_property_track(
         ctx: Context,
         player_path: str,

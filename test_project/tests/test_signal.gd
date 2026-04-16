@@ -93,3 +93,20 @@ func test_disconnect_signal_not_connected() -> void:
 		"method": "_nonexistent_method",
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+# ----- Friction fix: autoload resolution -----
+
+func test_connect_signal_autoload_not_found() -> void:
+	# An autoload name that doesn't exist should produce a clear error.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return
+	var result := _handler.connect_signal({
+		"path": "NonExistentAutoload",
+		"signal": "ready",
+		"target": "/" + scene_root.name,
+		"method": "queue_free",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "not found")
