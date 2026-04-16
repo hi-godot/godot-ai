@@ -22,7 +22,7 @@ func _enter_tree() -> void:
 	var editor_handler := EditorHandler.new(_log_buffer, _connection)
 	var scene_handler := SceneHandler.new(_connection)
 	var node_handler := NodeHandler.new(get_undo_redo())
-	var project_handler := ProjectHandler.new()
+	var project_handler := ProjectHandler.new(_connection)
 	var client_handler := ClientHandler.new()
 	var script_handler := ScriptHandler.new(get_undo_redo())
 	var resource_handler := ResourceHandler.new(get_undo_redo())

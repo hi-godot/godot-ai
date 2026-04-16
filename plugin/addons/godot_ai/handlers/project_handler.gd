@@ -4,6 +4,12 @@ extends RefCounted
 
 ## Handles project settings and filesystem search commands.
 
+var _connection: Connection
+
+
+func _init(connection: Connection = null) -> void:
+	_connection = connection
+
 
 func get_project_setting(params: Dictionary) -> Dictionary:
 	var key: String = params.get("key", "")
@@ -60,6 +66,14 @@ func run_project(params: Dictionary) -> Dictionary:
 	if EditorInterface.is_playing_scene():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Project is already running")
 
+	# play_*_scene internally triggers try_autosave() → _save_scene_with_preview()
+	# which renders a preview thumbnail and calls frame processing. If our
+	# WebSocket connection's _process() re-enters during that render, the
+	# engine crashes (SIGABRT in _save_scene_with_preview). Pause processing
+	# around the play call — same pattern as SceneHandler.save_scene.
+	if _connection:
+		_connection.pause_processing = true
+	var validation_error: Variant = null
 	match mode:
 		"main":
 			EditorInterface.play_main_scene()
@@ -68,10 +82,16 @@ func run_project(params: Dictionary) -> Dictionary:
 		"custom":
 			var scene_path: String = params.get("scene", "")
 			if scene_path.is_empty():
-				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: scene (required when mode='custom')")
-			EditorInterface.play_custom_scene(scene_path)
+				validation_error = McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: scene (required when mode='custom')")
+			else:
+				EditorInterface.play_custom_scene(scene_path)
 		_:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid mode '%s' — use 'main', 'current', or 'custom'" % mode)
+			validation_error = McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid mode '%s' — use 'main', 'current', or 'custom'" % mode)
+	if _connection:
+		_connection.pause_processing = false
+
+	if validation_error != null:
+		return validation_error
 
 	return {
 		"data": {
