@@ -39,6 +39,16 @@ var _last_log_count := 0
 var _last_connected := false
 var _client_keys: Array[String] = []
 
+# Update check
+var _update_banner: VBoxContainer
+var _http_request: HTTPRequest
+var _download_request: HTTPRequest
+var _latest_download_url := ""
+const RELEASES_URL := "https://api.github.com/repos/hi-godot/godot-ai/releases/latest"
+const RELEASES_PAGE := "https://github.com/hi-godot/godot-ai/releases/latest"
+const UPDATE_TEMP_DIR := "user://godot_ai_update/"
+const UPDATE_TEMP_ZIP := "user://godot_ai_update/update.zip"
+
 
 func setup(connection: Connection, log_buffer: McpLogBuffer, plugin: EditorPlugin) -> void:
 	_connection = connection
@@ -116,6 +126,42 @@ func _build_ui() -> void:
 	status_row.add_child(_redock_btn)
 
 	add_child(status_row)
+
+	# --- Update banner (top of dock, hidden until check finds a newer version) ---
+	_update_banner = VBoxContainer.new()
+	_update_banner.add_theme_constant_override("separation", 4)
+	_update_banner.visible = false
+
+	var update_label := Label.new()
+	update_label.name = "UpdateLabel"
+	update_label.add_theme_font_size_override("font_size", 15)
+	update_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3))
+	_update_banner.add_child(update_label)
+
+	var update_btn_row := HBoxContainer.new()
+	update_btn_row.add_theme_constant_override("separation", 6)
+
+	var update_btn := Button.new()
+	update_btn.name = "UpdateBtn"
+	update_btn.text = "Update"
+	update_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	update_btn.pressed.connect(_on_update_pressed)
+	update_btn_row.add_child(update_btn)
+
+	var release_link := Button.new()
+	release_link.text = "Release notes"
+	release_link.pressed.connect(func(): OS.shell_open(RELEASES_PAGE))
+	update_btn_row.add_child(release_link)
+
+	_update_banner.add_child(update_btn_row)
+	_update_banner.add_child(HSeparator.new())
+
+	add_child(_update_banner)
+
+	_http_request = HTTPRequest.new()
+	_http_request.request_completed.connect(_on_update_check_completed)
+	add_child(_http_request)
+	_check_for_updates.call_deferred()
 
 	# --- Dev-only connection extras (server label + reconnect/reload buttons) ---
 	_dev_section = VBoxContainer.new()
@@ -497,3 +543,127 @@ func _refresh_client_status() -> void:
 func _set_client_status_label(text: String, color: Color) -> void:
 	_client_status_label.text = text
 	_client_status_label.add_theme_color_override("font_color", color)
+
+
+# --- Update check & self-update ---
+
+func _check_for_updates() -> void:
+	_http_request.request(RELEASES_URL, ["Accept: application/vnd.github+json"])
+
+
+func _on_update_check_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
+		return
+	var json := JSON.parse_string(body.get_string_from_utf8())
+	if json == null or not json is Dictionary:
+		return
+	var tag: String = json.get("tag_name", "")
+	if tag.is_empty():
+		return
+	var remote_version := tag.trim_prefix("v")
+	var local_version := McpClientConfigurator.get_plugin_version()
+	if not _is_newer(remote_version, local_version):
+		return
+
+	# Find the plugin ZIP asset URL
+	var assets: Array = json.get("assets", [])
+	for asset in assets:
+		var name: String = asset.get("name", "")
+		if name == "godot-ai-plugin.zip":
+			_latest_download_url = asset.get("browser_download_url", "")
+			break
+
+	_update_banner.get_node("UpdateLabel").text = "Update available: v%s" % remote_version
+	_update_banner.visible = true
+
+
+func _on_update_pressed() -> void:
+	if _latest_download_url.is_empty():
+		OS.shell_open(RELEASES_PAGE)
+		return
+
+	var btn: Button = _update_banner.get_node("UpdateBtn")
+	btn.text = "Downloading..."
+	btn.disabled = true
+
+	# Create a separate HTTPRequest for the ZIP download
+	if _download_request != null:
+		_download_request.queue_free()
+	_download_request = HTTPRequest.new()
+	_download_request.download_file = ProjectSettings.globalize_path(UPDATE_TEMP_ZIP)
+	_download_request.request_completed.connect(_on_download_completed)
+	add_child(_download_request)
+
+	# Ensure temp dir exists
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(UPDATE_TEMP_DIR))
+	_download_request.request(_latest_download_url)
+
+
+func _on_download_completed(result: int, response_code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
+	if _download_request != null:
+		_download_request.queue_free()
+		_download_request = null
+
+	var btn: Button = _update_banner.get_node("UpdateBtn")
+	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
+		btn.text = "Download failed"
+		btn.disabled = false
+		return
+
+	btn.text = "Installing..."
+	# Extract and install on next frame to avoid mid-callback issues
+	_install_update.call_deferred()
+
+
+func _install_update() -> void:
+	var zip_path := ProjectSettings.globalize_path(UPDATE_TEMP_ZIP)
+	var install_base := ProjectSettings.globalize_path("res://")
+
+	var reader := ZIPReader.new()
+	if reader.open(zip_path) != OK:
+		_update_banner.get_node("UpdateBtn").text = "Extract failed"
+		_update_banner.get_node("UpdateBtn").disabled = false
+		return
+
+	var files := reader.get_files()
+	for file_path in files:
+		if not file_path.begins_with("addons/godot_ai/"):
+			continue
+		if file_path.ends_with("/"):
+			DirAccess.make_dir_recursive_absolute(install_base.path_join(file_path))
+		else:
+			var dir := file_path.get_base_dir()
+			DirAccess.make_dir_recursive_absolute(install_base.path_join(dir))
+			var content := reader.read_file(file_path)
+			var f := FileAccess.open(install_base.path_join(file_path), FileAccess.WRITE)
+			if f != null:
+				f.store_buffer(content)
+				f.close()
+
+	reader.close()
+
+	# Clean up temp files
+	DirAccess.remove_absolute(zip_path)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(UPDATE_TEMP_DIR))
+
+	# Reload the plugin to pick up new code
+	_update_banner.get_node("UpdateBtn").text = "Reloading..."
+	_reload_after_update.call_deferred()
+
+
+func _reload_after_update() -> void:
+	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", false)
+	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", true)
+
+
+static func _is_newer(remote: String, local: String) -> bool:
+	var r := remote.split(".")
+	var l := local.split(".")
+	for i in range(max(r.size(), l.size())):
+		var rv := int(r[i]) if i < r.size() else 0
+		var lv := int(l[i]) if i < l.size() else 0
+		if rv > lv:
+			return true
+		if rv < lv:
+			return false
+	return false
