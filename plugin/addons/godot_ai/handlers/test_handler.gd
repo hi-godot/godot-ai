@@ -43,8 +43,10 @@ func _discover_suites() -> Array[McpTestSuite]:
 	var suites: Array[McpTestSuite] = []
 	var dir := DirAccess.open("res://tests")
 	if dir == null:
+		print("MCP | test discovery: DirAccess.open('res://tests') returned null, error: ", DirAccess.get_open_error())
 		return suites
 
+	print("MCP | test discovery: scanning res://tests/")
 	dir.list_dir_begin()
 	var file_name := dir.get_next()
 	while not file_name.is_empty():
@@ -54,6 +56,10 @@ func _discover_suites() -> Array[McpTestSuite]:
 				var instance = script.new()
 				if instance is McpTestSuite:
 					suites.append(instance)
+				else:
+					print("MCP | test discovery: ", file_name, " instance is NOT McpTestSuite (type: ", typeof(instance), ")")
+			else:
+				print("MCP | test discovery: failed to load ", file_name)
 		file_name = dir.get_next()
 
 	## Sort by suite name for deterministic order
