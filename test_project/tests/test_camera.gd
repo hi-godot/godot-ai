@@ -111,8 +111,8 @@ func test_create_with_make_current_unmarks_sibling() -> void:
 	var second_node := ScenePath.resolve(second.data.path, scene_root) as Camera2D
 	assert_true(first_node != null)
 	assert_true(second_node != null)
-	assert_eq(second_node.current, true)
-	assert_eq(first_node.current, false, "Previously-current camera should have been unmarked")
+	assert_eq(second_node.is_current(), true)
+	assert_eq(first_node.is_current(), false, "Previously-current camera should have been unmarked")
 
 
 func test_make_current_does_not_cross_classes() -> void:
@@ -124,8 +124,8 @@ func test_make_current_does_not_cross_classes() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var n2 := ScenePath.resolve(cam2d.data.path, scene_root) as Camera2D
 	var n3 := ScenePath.resolve(cam3d.data.path, scene_root) as Camera3D
-	assert_eq(n2.current, true, "Camera2D current should not be touched when Camera3D becomes current")
-	assert_eq(n3.current, true)
+	assert_eq(n2.is_current(), true, "Camera2D current should not be touched when Camera3D becomes current")
+	assert_eq(n3.is_current(), true)
 
 
 # ============================================================================
@@ -204,13 +204,13 @@ func test_configure_current_sibling_unmark_single_undo() -> void:
 		"properties": {"current": true},
 	})
 	assert_has_key(result, "data")
-	assert_eq(second_node.current, true)
-	assert_eq(first_node.current, false)
+	assert_eq(second_node.is_current(), true)
+	assert_eq(first_node.is_current(), false)
 
 	# One undo reverts both.
 	_undo_redo.undo()
-	assert_eq(second_node.current, false)
-	assert_eq(first_node.current, true, "Single undo should restore original current camera")
+	assert_eq(second_node.is_current(), false)
+	assert_eq(first_node.is_current(), true, "Single undo should restore original current camera")
 
 
 # ============================================================================
@@ -485,7 +485,8 @@ func test_get_fallback_to_first_when_none_current() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	# Ensure none in scene are current.
 	for cam in _all_cameras_in_scene(scene_root):
-		cam.current = false
+		if cam.has_method("clear_current"):
+			cam.clear_current()
 	var result := _handler.get_camera({"camera_path": ""})
 	assert_has_key(result, "data")
 	assert_contains(["first", "current"], result.data.resolved_via)

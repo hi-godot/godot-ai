@@ -7,6 +7,7 @@ import pytest
 from godot_ai.handlers import animation as animation_handlers
 from godot_ai.handlers import autoload as autoload_handlers
 from godot_ai.handlers import batch as batch_handlers
+from godot_ai.handlers import camera as camera_handlers
 from godot_ai.handlers import client as client_handlers
 from godot_ai.handlers import editor as editor_handlers
 from godot_ai.handlers import filesystem as filesystem_handlers
@@ -3307,3 +3308,110 @@ async def test_particle_apply_preset_with_overrides():
     )
     params = client.calls[-1]["params"]
     assert params["overrides"] == {"amount": 200}
+
+
+# ----- camera handlers -----
+
+
+async def test_camera_set_limits_2d_forwards_all_edges():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await camera_handlers.camera_set_limits_2d(
+        runtime,
+        camera_path="/Main/Cam",
+        left=-500,
+        right=500,
+        top=-300,
+        bottom=300,
+        smoothed=True,
+    )
+    params = client.calls[-1]["params"]
+    assert params == {
+        "camera_path": "/Main/Cam",
+        "left": -500,
+        "right": 500,
+        "top": -300,
+        "bottom": 300,
+        "smoothed": True,
+    }
+
+
+async def test_camera_set_limits_2d_omits_unset_edges():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await camera_handlers.camera_set_limits_2d(runtime, camera_path="/Main/Cam", left=-100)
+    params = client.calls[-1]["params"]
+    assert params == {"camera_path": "/Main/Cam", "left": -100}
+
+
+async def test_camera_set_damping_2d_forwards_all_options():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await camera_handlers.camera_set_damping_2d(
+        runtime,
+        camera_path="/Main/Cam",
+        position_speed=4.0,
+        rotation_speed=3.0,
+        drag_margins={"left": 0.2, "right": 0.2},
+        drag_horizontal_enabled=True,
+        drag_vertical_enabled=False,
+    )
+    params = client.calls[-1]["params"]
+    assert params["position_speed"] == 4.0
+    assert params["rotation_speed"] == 3.0
+    assert params["drag_margins"] == {"left": 0.2, "right": 0.2}
+    assert params["drag_horizontal_enabled"] is True
+    assert params["drag_vertical_enabled"] is False
+
+
+async def test_camera_set_damping_2d_omits_unset():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await camera_handlers.camera_set_damping_2d(runtime, camera_path="/Main/Cam")
+    params = client.calls[-1]["params"]
+    assert params == {"camera_path": "/Main/Cam"}
+
+
+async def test_camera_apply_preset_forwards_type():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await camera_handlers.camera_apply_preset(
+        runtime,
+        parent_path="/Main",
+        name="Cam",
+        preset="topdown_2d",
+        type="2d",
+    )
+    params = client.calls[-1]["params"]
+    assert params["type"] == "2d"
+    assert params["preset"] == "topdown_2d"
+    assert "overrides" not in params
+
+
+async def test_camera_apply_preset_omits_type_when_none():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await camera_handlers.camera_apply_preset(
+        runtime,
+        parent_path="/Main",
+        name="Cam",
+        preset="topdown_2d",
+    )
+    params = client.calls[-1]["params"]
+    assert "type" not in params
+    assert params["make_current"] is True
+
+
+async def test_camera_get_empty_path():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await camera_handlers.camera_get(runtime)
+    params = client.calls[-1]["params"]
+    assert params == {"camera_path": ""}
+
+
+async def test_camera_list_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await camera_handlers.camera_list(runtime)
+    assert client.calls[-1]["command"] == "camera_list"

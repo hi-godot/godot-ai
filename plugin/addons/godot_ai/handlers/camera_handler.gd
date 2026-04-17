@@ -66,6 +66,29 @@ func _init(undo_redo: EditorUndoRedoManager) -> void:
 	_undo_redo = undo_redo
 
 
+# Camera2D doesn't expose `current` as a settable property in Godot 4 —
+# only is_current() / make_current() / clear_current(). Camera3D exposes
+# both, but using methods uniformly avoids per-class branching.
+static func _is_current(cam: Node) -> bool:
+	if cam == null:
+		return false
+	return bool(cam.is_current())
+
+
+# Register a current=true switch on `node` in the open undo action,
+# unmarking previously-current siblings of the same class so a single
+# Ctrl-Z reverts the whole switch.
+func _add_make_current_to_action(node: Node, type_str: String, scene_root: Node) -> void:
+	for cam in _list_cameras_in_scene(scene_root, type_str):
+		if cam == node:
+			continue
+		if _is_current(cam):
+			_undo_redo.add_do_method(cam, "clear_current")
+			_undo_redo.add_undo_method(cam, "make_current")
+	_undo_redo.add_do_method(node, "make_current")
+	_undo_redo.add_undo_method(node, "clear_current")
+
+
 # ============================================================================
 # camera_create
 # ============================================================================
@@ -106,15 +129,9 @@ func create_camera(params: Dictionary) -> Dictionary:
 	_undo_redo.add_do_method(node, "set_owner", scene_root)
 	_undo_redo.add_do_reference(node)
 	if make_current:
-		# Unmark any previously-current siblings of the same class.
-		for cam in pre_existing:
-			if cam.current:
-				_undo_redo.add_do_property(cam, "current", false)
-				_undo_redo.add_undo_property(cam, "current", true)
-		# Must land AFTER add_child: setting current=true before the node is
-		# in the tree is a silent no-op on the viewport.
-		_undo_redo.add_do_property(node, "current", true)
-		_undo_redo.add_undo_property(node, "current", false)
+		# Must land AFTER add_child: making current before the node is in the
+		# tree is a silent no-op on the viewport.
+		_add_make_current_to_action(node, type_str, scene_root)
 	_undo_redo.add_undo_method(parent, "remove_child", node)
 	_undo_redo.commit_action()
 
@@ -152,6 +169,9 @@ func configure(params: Dictionary) -> Dictionary:
 	var valid_keys: Array = _KEYS_2D if type_str == "2d" else _KEYS_3D
 	var coerced: Dictionary = {}
 	var old_values: Dictionary = {}
+	# `current` is special-cased via methods (Camera2D doesn't expose it as a property).
+	var current_request: Variant = null
+	var current_was_on: bool = _is_current(node)
 
 	for property in properties:
 		var prop_name: String = String(property)
@@ -162,6 +182,9 @@ func configure(params: Dictionary) -> Dictionary:
 					prop_name, _VALID_TYPES[type_str], ", ".join(valid_keys)
 				]
 			)
+		if prop_name == "current":
+			current_request = bool(properties[prop_name])
+			continue
 		var prop_type := _object_property_type(node, prop_name)
 		if prop_type == TYPE_NIL:
 			return McpErrorCodes.make(
@@ -178,14 +201,13 @@ func configure(params: Dictionary) -> Dictionary:
 	for prop_name in coerced:
 		_undo_redo.add_do_property(node, prop_name, coerced[prop_name])
 		_undo_redo.add_undo_property(node, prop_name, old_values[prop_name])
-	# If current is being turned on, unmark previously-current siblings in the same action.
-	if coerced.has("current") and bool(coerced["current"]) and not bool(old_values.get("current", false)):
-		for cam in _list_cameras_in_scene(scene_root, type_str):
-			if cam == node:
-				continue
-			if cam.current:
-				_undo_redo.add_do_property(cam, "current", false)
-				_undo_redo.add_undo_property(cam, "current", true)
+	if current_request != null:
+		var want_on: bool = bool(current_request)
+		if want_on and not current_was_on:
+			_add_make_current_to_action(node, type_str, scene_root)
+		elif not want_on and current_was_on:
+			_undo_redo.add_do_method(node, "clear_current")
+			_undo_redo.add_undo_method(node, "make_current")
 	_undo_redo.commit_action()
 
 	var applied: Array[String] = []
@@ -193,6 +215,9 @@ func configure(params: Dictionary) -> Dictionary:
 	for prop_name in coerced:
 		applied.append(prop_name)
 		serialized[prop_name] = CameraValues.serialize(coerced[prop_name])
+	if current_request != null:
+		applied.append("current")
+		serialized["current"] = bool(current_request)
 
 	return {
 		"data": {
@@ -466,7 +491,7 @@ func get_camera(params: Dictionary) -> Dictionary:
 		# Empty: prefer current camera (2D or 3D, either is fine), else first found.
 		var all_cams := _list_cameras_in_scene(scene_root, "")
 		for cam in all_cams:
-			if cam.current:
+			if _is_current(cam):
 				node = cam
 				resolved_via = "current"
 				break
@@ -500,6 +525,9 @@ func get_camera(params: Dictionary) -> Dictionary:
 	var keys: Array = _KEYS_2D if type_str == "2d" else _KEYS_3D
 	var props: Dictionary = {}
 	for key in keys:
+		if key == "current":
+			props[key] = _is_current(node)
+			continue
 		if _object_property_type(node, key) != TYPE_NIL:
 			props[key] = CameraValues.serialize(node.get(key))
 
@@ -508,7 +536,7 @@ func get_camera(params: Dictionary) -> Dictionary:
 			"path": ScenePath.from_node(node, scene_root),
 			"type": type_str,
 			"class": node.get_class(),
-			"current": bool(node.get("current")),
+			"current": _is_current(node),
 			"properties": props,
 			"resolved_via": resolved_via,
 		}
@@ -531,7 +559,7 @@ func list_cameras(_params: Dictionary) -> Dictionary:
 			"path": ScenePath.from_node(cam, scene_root),
 			"class": cam.get_class(),
 			"type": _camera_type_str(cam),
-			"current": bool(cam.get("current")),
+			"current": _is_current(cam),
 		})
 	return {"data": {"cameras": out}}
 
@@ -575,7 +603,6 @@ func apply_preset(params: Dictionary) -> Dictionary:
 		if parent == null:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Parent not found: %s" % parent_path)
 
-	var pre_existing := _list_cameras_in_scene(scene_root, type_str)
 	var node := _instantiate_camera(type_str)
 	node.name = node_name
 
@@ -586,6 +613,10 @@ func apply_preset(params: Dictionary) -> Dictionary:
 		var prop_name := String(prop)
 		if not (prop_name in valid_keys):
 			continue  # Silently skip preset keys that don't apply to this camera class.
+		# `current` lives on methods, not as a writable property on Camera2D —
+		# always handled via the make_current path below.
+		if prop_name == "current":
+			continue
 		var prop_type := _object_property_type(node, prop_name)
 		if prop_type == TYPE_NIL:
 			continue
@@ -600,12 +631,7 @@ func apply_preset(params: Dictionary) -> Dictionary:
 	_undo_redo.add_do_method(node, "set_owner", scene_root)
 	_undo_redo.add_do_reference(node)
 	if make_current:
-		for cam in pre_existing:
-			if cam.current:
-				_undo_redo.add_do_property(cam, "current", false)
-				_undo_redo.add_undo_property(cam, "current", true)
-		_undo_redo.add_do_property(node, "current", true)
-		_undo_redo.add_undo_property(node, "current", false)
+		_add_make_current_to_action(node, type_str, scene_root)
 	_undo_redo.add_undo_method(parent, "remove_child", node)
 	_undo_redo.commit_action()
 
