@@ -107,6 +107,8 @@ func set_stream(params: Dictionary) -> Dictionary:
 	if not ResourceLoader.exists(stream_path):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "AudioStream not found: %s" % stream_path)
 	var loaded := ResourceLoader.load(stream_path)
+	if loaded == null:
+		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to load AudioStream: %s" % stream_path)
 	if not (loaded is AudioStream):
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
@@ -255,12 +257,18 @@ func list_streams(params: Dictionary) -> Dictionary:
 	var root: String = params.get("root", "res://")
 	var include_duration: bool = bool(params.get("include_duration", true))
 
+	if not root.begins_with("res://"):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "root must start with res://")
+
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "EditorFileSystem not available")
 
 	var results: Array[Dictionary] = []
-	_scan_audio(efs.get_filesystem(), root, include_duration, results)
+	var start_dir := efs.get_filesystem_path(root)
+	if start_dir == null:
+		start_dir = efs.get_filesystem()
+	_scan_audio(start_dir, root, include_duration, results)
 	return {
 		"data": {
 			"root": root,

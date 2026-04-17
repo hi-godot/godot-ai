@@ -372,3 +372,8 @@ func test_list_filters_by_root() -> void:
 	var result := _handler.list_streams({"root": "res://definitely_does_not_exist_xyz/"})
 	assert_has_key(result, "data")
 	assert_eq(int(result.data.count), 0)
+
+
+func test_list_rejects_non_res_root() -> void:
+	var result := _handler.list_streams({"root": "user://"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)

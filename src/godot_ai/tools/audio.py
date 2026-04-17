@@ -94,10 +94,13 @@ def register_audio_tools(mcp: FastMCP) -> None:
 
         Args:
             player_path: Scene path to the AudioStreamPlayer / 2D / 3D node.
-            volume_db: Volume in decibels. 0 = unchanged, negative = quieter.
+            volume_db: Volume in decibels. Omit (``None``) to leave unchanged;
+                0 = full volume, negative = quieter, positive = louder.
             pitch_scale: Playback-rate multiplier (1.0 = normal, 2.0 = octave up).
-            autoplay: Start on scene load.
-            bus: Audio bus name (default "Master"). Must match a bus in the project.
+                Omit to leave unchanged.
+            autoplay: Start on scene load. Omit to leave unchanged.
+            bus: Audio bus name (e.g. "Master"). Must match a bus in the project.
+                Omit to leave unchanged.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
