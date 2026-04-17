@@ -5261,6 +5261,8 @@ class TestCameraApplyPresetTool:
             },
         )
         await task
+
+
 # audio_player_create / audio_player_set_stream / audio_play / audio_stop / audio_list
 # ---------------------------------------------------------------------------
 
@@ -5439,3 +5441,99 @@ class TestAudioListTool:
         await task
         assert result.data["count"] == 1
         assert result.data["streams"][0]["class"] == "AudioStreamOggVorbis"
+
+
+# ---------------------------------------------------------------------------
+# control_draw_recipe
+# ---------------------------------------------------------------------------
+
+
+class TestControlDrawRecipeTool:
+    async def test_forwards_ops_and_clear_existing(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        ops = [
+            {"draw": "line", "from": [0, 0], "to": [18, 0], "color": "#00eaff", "width": 2},
+            {"draw": "line", "from": [0, 0], "to": [0, 18], "color": "#00eaff", "width": 2},
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "control_draw_recipe"
+            assert cmd["params"]["path"] == "/Main/HUD/Panel"
+            assert cmd["params"]["ops"] == ops
+            assert cmd["params"]["clear_existing"] is True
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/HUD/Panel",
+                    "ops_count": 2,
+                    "script_attached": True,
+                    "script_replaced": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "control_draw_recipe",
+            {"path": "/Main/HUD/Panel", "ops": ops},
+        )
+        await task
+        assert result.data["ops_count"] == 2
+        assert result.data["undoable"] is True
+        assert result.data["script_attached"] is True
+
+    async def test_clear_existing_false_forwarded(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["clear_existing"] is False
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Foo",
+                    "ops_count": 0,
+                    "script_attached": False,
+                    "script_replaced": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        await client.call_tool(
+            "control_draw_recipe",
+            {"path": "/Foo", "ops": [], "clear_existing": False},
+        )
+        await task
+
+    async def test_json_coerced_ops_accepted_as_string(self, mcp_stack):
+        """Some MCP clients stringify list[dict] args; JsonCoerced handles it."""
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["ops"] == [
+                {"draw": "circle", "center": [5, 5], "radius": 3, "color": "red"}
+            ]
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Foo",
+                    "ops_count": 1,
+                    "script_attached": True,
+                    "script_replaced": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        await client.call_tool(
+            "control_draw_recipe",
+            {
+                "path": "/Foo",
+                "ops": '[{"draw":"circle","center":[5,5],"radius":3,"color":"red"}]',
+            },
+        )
+        await task

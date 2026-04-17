@@ -10,6 +10,7 @@ from godot_ai.handlers import autoload as autoload_handlers
 from godot_ai.handlers import batch as batch_handlers
 from godot_ai.handlers import camera as camera_handlers
 from godot_ai.handlers import client as client_handlers
+from godot_ai.handlers import control as control_handlers
 from godot_ai.handlers import curve as curve_handlers
 from godot_ai.handlers import editor as editor_handlers
 from godot_ai.handlers import environment as environment_handlers
@@ -477,6 +478,15 @@ class StubClient:
             return {
                 "root_path": "/Main/HUD/PauseMenu",
                 "node_count": 5,
+                "undoable": True,
+            }
+        if command == "control_draw_recipe":
+            ops_list = params.get("ops", []) if params else []
+            return {
+                "path": params.get("path", "") if params else "",
+                "ops_count": len(ops_list),
+                "script_attached": True,
+                "script_replaced": False,
                 "undoable": True,
             }
         if command == "create_theme":
@@ -2942,6 +2952,44 @@ async def test_ui_build_layout_handler_defaults_parent_to_empty():
 
 
 # ---------------------------------------------------------------------------
+# control_draw_recipe handler tests
+# ---------------------------------------------------------------------------
+
+
+async def test_control_draw_recipe_handler_forwards_ops_list():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    ops = [
+        {"draw": "line", "from": [0, 0], "to": [18, 0], "color": "#00eaff", "width": 2},
+        {"draw": "circle", "center": [10, 10], "radius": 3, "color": "red"},
+    ]
+    result = await control_handlers.control_draw_recipe(runtime, path="/Main/HUD/Panel", ops=ops)
+    assert client.calls[-1]["command"] == "control_draw_recipe"
+    assert client.calls[-1]["params"] == {
+        "path": "/Main/HUD/Panel",
+        "ops": ops,
+        "clear_existing": True,
+    }
+    assert result["ops_count"] == 2
+    assert result["undoable"] is True
+
+
+async def test_control_draw_recipe_handler_clear_existing_false():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await control_handlers.control_draw_recipe(runtime, path="/Foo", ops=[], clear_existing=False)
+    assert client.calls[-1]["params"]["clear_existing"] is False
+
+
+async def test_control_draw_recipe_handler_empty_ops():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await control_handlers.control_draw_recipe(runtime, path="/Foo", ops=[])
+    assert client.calls[-1]["params"]["ops"] == []
+    assert result["ops_count"] == 0
+
+
+# ---------------------------------------------------------------------------
 # Theme handler tests
 # ---------------------------------------------------------------------------
 
@@ -3985,6 +4033,8 @@ async def test_camera_list_handler():
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     await camera_handlers.camera_list(runtime)
     assert client.calls[-1]["command"] == "camera_list"
+
+
 # ---------------------------------------------------------------------------
 # Audio handler tests
 # ---------------------------------------------------------------------------
