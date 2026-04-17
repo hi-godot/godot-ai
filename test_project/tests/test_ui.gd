@@ -16,16 +16,21 @@ func suite_setup(ctx: Dictionary) -> void:
 	_handler = UiHandler.new(_undo_redo)
 
 
-# Create a Control named `TestHudPanel` under the scene root for a single test.
-# Returns the path, or empty string if the scene isn't ready.
-func _add_control(ctl_name: String = "TestHudPanel") -> String:
+# Add a Control under the scene root for a single test. If `ctl` is null,
+# creates a Panel; otherwise uses the provided (caller-allocated) instance.
+# Returns the scene path, or "" if the scene isn't ready — in which case an
+# already-allocated `ctl` is freed so the caller doesn't leak it.
+func _add_control(ctl_name: String = "TestHudPanel", ctl: Control = null) -> String:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		if ctl != null:
+			ctl.queue_free()
 		return ""
-	var panel := Panel.new()
-	panel.name = ctl_name
-	scene_root.add_child(panel)
-	panel.owner = scene_root
+	if ctl == null:
+		ctl = Panel.new()
+	ctl.name = ctl_name
+	scene_root.add_child(ctl)
+	ctl.owner = scene_root
 	return "/" + scene_root.name + "/" + ctl_name
 
 
@@ -37,19 +42,6 @@ func _remove_control(path: String) -> void:
 	if node != null:
 		node.get_parent().remove_child(node)
 		node.queue_free()
-
-
-# Add an already-constructed Control subclass (Label, Button, LineEdit, ...) to
-# the scene root under the given name. Returns path, or "" if scene not ready.
-func _add_typed_control(ctl: Control, ctl_name: String) -> String:
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		ctl.queue_free()
-		return ""
-	ctl.name = ctl_name
-	scene_root.add_child(ctl)
-	ctl.owner = scene_root
-	return "/" + scene_root.name + "/" + ctl_name
 
 
 # ----- set_anchor_preset: happy path -----
@@ -219,9 +211,9 @@ func test_set_anchor_preset_is_undoable() -> void:
 
 
 func test_set_text_on_label() -> void:
-	var path := _add_typed_control(Label.new(), "TestSetTextLabel")
+	var path := _add_control("TestSetTextLabel", Label.new())
 	if path.is_empty():
-		skip("Scene not ready — _add_typed_control returned empty path")
+		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_text({"path": path, "text": "Hello"})
 	assert_has_key(result, "data")
@@ -237,9 +229,9 @@ func test_set_text_on_label() -> void:
 
 
 func test_set_text_on_button() -> void:
-	var path := _add_typed_control(Button.new(), "TestSetTextButton")
+	var path := _add_control("TestSetTextButton", Button.new())
 	if path.is_empty():
-		skip("Scene not ready — _add_typed_control returned empty path")
+		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_text({"path": path, "text": "Go"})
 	assert_has_key(result, "data")
@@ -250,9 +242,9 @@ func test_set_text_on_button() -> void:
 
 func test_set_text_on_line_edit() -> void:
 	# LineEdit covers the interactive-input side of the duck-type path.
-	var path := _add_typed_control(LineEdit.new(), "TestSetTextLineEdit")
+	var path := _add_control("TestSetTextLineEdit", LineEdit.new())
 	if path.is_empty():
-		skip("Scene not ready — _add_typed_control returned empty path")
+		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_text({"path": path, "text": "input"})
 	assert_has_key(result, "data")
@@ -264,9 +256,9 @@ func test_set_text_on_line_edit() -> void:
 func test_set_text_replaces_existing_text() -> void:
 	var label := Label.new()
 	label.text = "old"
-	var path := _add_typed_control(label, "TestSetTextReplace")
+	var path := _add_control("TestSetTextReplace", label)
 	if path.is_empty():
-		skip("Scene not ready — _add_typed_control returned empty path")
+		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_text({"path": path, "text": "new"})
 	assert_has_key(result, "data")
@@ -281,9 +273,9 @@ func test_set_text_missing_path() -> void:
 
 
 func test_set_text_missing_text() -> void:
-	var path := _add_typed_control(Label.new(), "TestSetTextMissingText")
+	var path := _add_control("TestSetTextMissingText", Label.new())
 	if path.is_empty():
-		skip("Scene not ready — _add_typed_control returned empty path")
+		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_text({"path": path})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
@@ -292,9 +284,9 @@ func test_set_text_missing_text() -> void:
 
 
 func test_set_text_rejects_non_string_value() -> void:
-	var path := _add_typed_control(Label.new(), "TestSetTextBadType")
+	var path := _add_control("TestSetTextBadType", Label.new())
 	if path.is_empty():
-		skip("Scene not ready — _add_typed_control returned empty path")
+		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_text({"path": path, "text": 42})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
@@ -322,9 +314,9 @@ func test_set_text_non_control_node() -> void:
 func test_set_text_control_without_text_property() -> void:
 	# Panel is a Control but has no `text` property — should give a clear error,
 	# not silently no-op or crash.
-	var path := _add_typed_control(Panel.new(), "TestSetTextNoTextProp")
+	var path := _add_control("TestSetTextNoTextProp", Panel.new())
 	if path.is_empty():
-		skip("Scene not ready — _add_typed_control returned empty path")
+		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_text({"path": path, "text": "x"})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
@@ -335,9 +327,9 @@ func test_set_text_control_without_text_property() -> void:
 func test_set_text_is_undoable() -> void:
 	var label := Label.new()
 	label.text = "before"
-	var path := _add_typed_control(label, "TestSetTextUndo")
+	var path := _add_control("TestSetTextUndo", label)
 	if path.is_empty():
-		skip("Scene not ready — _add_typed_control returned empty path")
+		skip("Scene not ready — _add_control returned empty path")
 		return
 	_handler.set_text({"path": path, "text": "after"})
 	assert_eq(label.text, "after", "Apply should change text")

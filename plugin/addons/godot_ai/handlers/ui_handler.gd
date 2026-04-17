@@ -140,9 +140,6 @@ func set_anchor_preset(params: Dictionary) -> Dictionary:
 
 ## Set the visible `text` property on a UI Control (Label, Button + subclasses,
 ## LineEdit, TextEdit, RichTextLabel, LinkButton). Undoable.
-##
-## For RichTextLabel, the value is interpreted as BBCode iff the node's
-## existing `bbcode_enabled` is true — this tool does not toggle that flag.
 func set_text(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("path", "")
 	if node_path.is_empty():
@@ -161,18 +158,32 @@ func set_text(params: Dictionary) -> Dictionary:
 	var node := ScenePath.resolve(node_path, scene_root)
 	if node == null:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+	var node_type := node.get_class()
 	if not node is Control:
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
-			"Node %s is not a Control (got %s)" % [node_path, node.get_class()]
+			"Node %s is not a Control (got %s)" % [node_path, node_type]
 		)
-	# Duck-type rather than allowlist: covers Label, Button and all of its
-	# subclasses (CheckBox, CheckButton, OptionButton, MenuButton, LinkButton),
-	# LineEdit, TextEdit, RichTextLabel — plus any future text-bearing Control.
-	if not ("text" in node):
+	# Scan get_property_list() (matches set_property / _apply_property in this
+	# repo) so we can both confirm `text` exists and that it's actually a String
+	# — guards against a custom Control whose `text` happens to be some other
+	# type, where set()-ing a String would silently mis-coerce.
+	var text_prop_type := TYPE_NIL
+	var has_text := false
+	for prop in node.get_property_list():
+		if prop.get("name", "") == "text":
+			has_text = true
+			text_prop_type = prop.get("type", TYPE_NIL)
+			break
+	if not has_text:
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
-			"Control %s has no 'text' property (got %s)" % [node_path, node.get_class()]
+			"Control %s has no 'text' property (got %s)" % [node_path, node_type]
+		)
+	if text_prop_type != TYPE_STRING:
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"Control %s has a non-string 'text' property (got %s)" % [node_path, node_type]
 		)
 
 	var old_value: String = node.get("text")
@@ -187,7 +198,7 @@ func set_text(params: Dictionary) -> Dictionary:
 			"path": node_path,
 			"text": text_value,
 			"old_text": old_value,
-			"node_type": node.get_class(),
+			"node_type": node_type,
 			"undoable": true,
 		}
 	}
