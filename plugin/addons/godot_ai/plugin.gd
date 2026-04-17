@@ -91,6 +91,7 @@ func _enter_tree() -> void:
 	_dispatcher.register("load_resource", resource_handler.load_resource)
 	_dispatcher.register("assign_resource", resource_handler.assign_resource)
 	_dispatcher.register("create_resource", resource_handler.create_resource)
+	_dispatcher.register("get_resource_info", resource_handler.get_resource_info)
 	_dispatcher.register("read_file", filesystem_handler.read_file)
 	_dispatcher.register("write_file", filesystem_handler.write_file)
 	_dispatcher.register("reimport", filesystem_handler.reimport)

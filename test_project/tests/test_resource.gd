@@ -266,7 +266,88 @@ func test_create_resource_unknown_property_in_properties_dict() -> void:
 		"properties": {"not_a_real_field": 42},
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	# Error should enrich with valid_properties so the caller can recover without a round-trip.
+	assert_has_key(result.error, "data")
+	assert_has_key(result.error.data, "valid_properties")
+	var valid: Array = result.error.data.valid_properties
+	assert_contains(valid, "size", "BoxMesh's real 'size' property should appear in valid_properties")
+	# The error message should also point at resource_get_info for full discovery.
+	assert_contains(result.error.message, "resource_get_info")
 	_remove_node(mi)
+
+
+# ----- get_resource_info -----
+
+func test_get_resource_info_missing_type() -> void:
+	var result := _handler.get_resource_info({})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_get_resource_info_unknown_type() -> void:
+	var result := _handler.get_resource_info({"type": "DefinitelyNotAClass_xyz"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "Unknown resource type")
+
+
+func test_get_resource_info_non_resource_type() -> void:
+	# RefCounted is not a Resource — the error should redirect cleanly.
+	var result := _handler.get_resource_info({"type": "RefCounted"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "not a Resource")
+
+
+func test_get_resource_info_node_type_redirects() -> void:
+	var result := _handler.get_resource_info({"type": "Node3D"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "node_")
+
+
+func test_get_resource_info_concrete_type_box_mesh() -> void:
+	var result := _handler.get_resource_info({"type": "BoxMesh"})
+	assert_has_key(result, "data")
+	assert_eq(result.data.type, "BoxMesh")
+	assert_true(result.data.can_instantiate, "BoxMesh should be instantiable")
+	assert_false(result.data.is_abstract)
+	assert_gt(result.data.property_count, 0)
+	var prop_names: Array = []
+	for p in result.data.properties:
+		prop_names.append(p.name)
+	assert_contains(prop_names, "size", "BoxMesh.size must appear in properties")
+
+
+func test_get_resource_info_concrete_type_cylinder_mesh() -> void:
+	# The exact friction from the Night Market log: CylinderMesh uses
+	# top_radius/bottom_radius, not `radius`. Tool must surface these.
+	var result := _handler.get_resource_info({"type": "CylinderMesh"})
+	assert_has_key(result, "data")
+	var prop_names: Array = []
+	for p in result.data.properties:
+		prop_names.append(p.name)
+	assert_contains(prop_names, "top_radius")
+	assert_contains(prop_names, "bottom_radius")
+	assert_contains(prop_names, "height")
+
+
+func test_get_resource_info_abstract_type_shape3d() -> void:
+	var result := _handler.get_resource_info({"type": "Shape3D"})
+	assert_has_key(result, "data")
+	assert_true(result.data.is_abstract, "Shape3D is abstract")
+	assert_false(result.data.can_instantiate)
+	assert_has_key(result.data, "concrete_subclasses")
+	var subs: Array = result.data.concrete_subclasses
+	assert_contains(subs, "BoxShape3D")
+	assert_contains(subs, "SphereShape3D")
+
+
+func test_get_resource_info_properties_sorted() -> void:
+	var result := _handler.get_resource_info({"type": "BoxMesh"})
+	assert_has_key(result, "data")
+	var names: Array = []
+	for p in result.data.properties:
+		names.append(p.name)
+	var sorted_names := names.duplicate()
+	sorted_names.sort()
+	assert_eq(names, sorted_names, "properties should be sorted alphabetically by name")
 
 
 func test_create_resource_saves_to_disk() -> void:

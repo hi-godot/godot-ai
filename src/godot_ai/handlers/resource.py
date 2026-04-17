@@ -38,6 +38,10 @@ async def resource_assign(
     )
 
 
+async def resource_get_info(runtime: Runtime, type: str) -> dict:
+    return await runtime.send_command("get_resource_info", {"type": type})
+
+
 async def resource_create(
     runtime: Runtime,
     type: str,

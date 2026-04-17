@@ -240,10 +240,14 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary) ->
 		prop_types[prop.name] = prop.get("type", TYPE_NIL)
 	for key in properties.keys():
 		if not prop_types.has(key):
-			return McpErrorCodes.make(
+			var valid: Array = prop_types.keys()
+			valid.sort()
+			var err := McpErrorCodes.make(
 				McpErrorCodes.INVALID_PARAMS,
-				"Property '%s' not found on %s" % [key, res.get_class()]
+				"Property '%s' not found on %s. Call resource_get_info('%s') to list available properties." % [key, res.get_class(), res.get_class()]
 			)
+			err["error"]["data"] = {"valid_properties": valid}
+			return err
 		var target_type: int = prop_types[key]
 		if target_type == TYPE_NIL:
 			target_type = typeof(res.get(key))
@@ -376,3 +380,61 @@ func _save_created_resource(res: Resource, type_str: String, resource_path: Stri
 			"reason": "File creation is persistent; delete the file manually to revert",
 		}
 	}
+
+
+## Introspect a Resource class — return its editor-visible properties, parent,
+## whether it's abstract, and (for abstract bases) the list of concrete
+## subclasses that resource_create can instantiate. Read-only.
+func get_resource_info(params: Dictionary) -> Dictionary:
+	var type_str: String = params.get("type", "")
+	if type_str.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: type")
+
+	if not ClassDB.class_exists(type_str):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown resource type: %s" % type_str)
+	if ClassDB.is_parent_class(type_str, "Node"):
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"%s is a Node type, not a Resource — use node_* tools for node introspection" % type_str
+		)
+	if not ClassDB.is_parent_class(type_str, "Resource") and type_str != "Resource":
+		var parent := ClassDB.get_parent_class(type_str)
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"%s is not a Resource type (extends %s)" % [type_str, parent]
+		)
+
+	var properties: Array[Dictionary] = []
+	for prop in ClassDB.class_get_property_list(type_str):
+		var usage: int = prop.get("usage", 0)
+		if not (usage & PROPERTY_USAGE_EDITOR):
+			continue
+		properties.append({
+			"name": prop.name,
+			"type": type_string(prop.type),
+			"hint": prop.get("hint", 0),
+			"usage": usage,
+		})
+	properties.sort_custom(func(a, b): return a.name < b.name)
+
+	var can_instantiate: bool = ClassDB.can_instantiate(type_str)
+	var data: Dictionary = {
+		"type": type_str,
+		"parent_class": ClassDB.get_parent_class(type_str),
+		"can_instantiate": can_instantiate,
+		"is_abstract": not can_instantiate,
+		"properties": properties,
+		"property_count": properties.size(),
+	}
+
+	# For abstract bases (Shape3D, Material, Texture, StyleBox, ...) surface
+	# the concrete Resource subclasses an agent could try next.
+	if not can_instantiate:
+		var subclasses: Array[String] = []
+		for cls in ClassDB.get_inheriters_from_class(type_str):
+			if ClassDB.can_instantiate(cls) and ClassDB.is_parent_class(cls, "Resource"):
+				subclasses.append(cls)
+		subclasses.sort()
+		data["concrete_subclasses"] = subclasses
+
+	return {"data": data}

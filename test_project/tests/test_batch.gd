@@ -69,6 +69,36 @@ func test_rejects_unknown_subcommand() -> void:
 	assert_is_error(result, McpErrorCodes.UNKNOWN_COMMAND)
 
 
+func test_unknown_command_error_mentions_plugin_names() -> void:
+	# Simulates the common mistake: passing MCP tool name "node_create"
+	# instead of the plugin command "create_node".
+	var result := _handler.batch_execute({"commands": [{"command": "node_create"}]})
+	assert_is_error(result, McpErrorCodes.UNKNOWN_COMMAND)
+	var msg: String = result.error.message
+	assert_contains(msg, "plugin command names", "error should explain naming convention")
+	assert_contains(msg, "create_node", "error should suggest the correct plugin name")
+
+
+func test_unknown_command_populates_suggestions_field() -> void:
+	var result := _handler.batch_execute({"commands": [{"command": "node_create"}]})
+	assert_is_error(result, McpErrorCodes.UNKNOWN_COMMAND)
+	assert_has_key(result.error, "data")
+	assert_has_key(result.error.data, "suggestions")
+	var suggestions: Array = result.error.data.suggestions
+	assert_gt(suggestions.size(), 0, "suggestions should be non-empty for near-match name")
+	assert_contains(suggestions, "create_node", "suggestions should include 'create_node'")
+
+
+func test_unknown_command_empty_suggestions_when_no_match() -> void:
+	# Pure gibberish should still error cleanly, with suggestions empty or low-similarity.
+	var result := _handler.batch_execute({"commands": [{"command": "zzzqqqxxx_totally_bogus"}]})
+	assert_is_error(result, McpErrorCodes.UNKNOWN_COMMAND)
+	assert_has_key(result.error, "data")
+	assert_has_key(result.error.data, "suggestions")
+	# Array may be empty — the contract is just that the key exists and is an Array.
+	assert_true(result.error.data.suggestions is Array, "suggestions must be an Array")
+
+
 func test_rejects_batch_execute_as_subcommand() -> void:
 	var result := _handler.batch_execute({
 		"commands": [{"command": "batch_execute", "params": {}}],

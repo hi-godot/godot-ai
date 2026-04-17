@@ -36,7 +36,7 @@ func batch_execute(params: Dictionary) -> Dictionary:
 		if cmd_name in FORBIDDEN_SUBCOMMANDS:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "commands[%d]: '%s' is not allowed as a sub-command" % [idx, cmd_name])
 		if not _dispatcher.has_command(cmd_name):
-			return McpErrorCodes.make(McpErrorCodes.UNKNOWN_COMMAND, "commands[%d]: unknown command '%s'" % [idx, cmd_name])
+			return _unknown_command_error(idx, cmd_name)
 
 	var results: Array = []
 	var succeeded := 0
@@ -97,6 +97,19 @@ func _capture_histories(histories: Array) -> void:
 	var scene_ur := _undo_redo.get_history_undo_redo(scene_id)
 	if scene_ur != null and not scene_ur in histories:
 		histories.append(scene_ur)
+
+
+## Build the unknown-command error for a sub-command. Clarifies that
+## batch_execute expects plugin command names (not MCP tool names) and
+## surfaces fuzzy suggestions in both the message and structured data.
+func _unknown_command_error(idx: int, cmd_name: String) -> Dictionary:
+	var suggestions := _dispatcher.suggest_similar(cmd_name)
+	var msg := "commands[%d]: unknown plugin command '%s'. batch_execute expects plugin command names (e.g. 'create_node'), not MCP tool names (e.g. 'node_create')." % [idx, cmd_name]
+	if not suggestions.is_empty():
+		msg += " Did you mean: %s?" % ", ".join(suggestions)
+	var err := McpErrorCodes.make(McpErrorCodes.UNKNOWN_COMMAND, msg)
+	err["error"]["data"] = {"suggestions": suggestions}
+	return err
 
 
 ## Undo `count` actions by calling undo() on captured histories in LIFO order.

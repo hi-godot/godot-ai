@@ -22,12 +22,17 @@ async def scene_get_roots(runtime: Runtime) -> dict:
     return await runtime.send_command("get_open_scenes")
 
 
-async def scene_create(runtime: Runtime, path: str, root_type: str = "Node3D") -> dict:
+async def scene_create(
+    runtime: Runtime,
+    path: str,
+    root_type: str = "Node3D",
+    root_name: str = "",
+) -> dict:
     require_writable(runtime)
-    return await runtime.send_command(
-        "create_scene",
-        {"path": path, "root_type": root_type},
-    )
+    params: dict = {"path": path, "root_type": root_type}
+    if root_name:
+        params["root_name"] = root_name
+    return await runtime.send_command("create_scene", params)
 
 
 async def scene_open(runtime: Runtime, path: str) -> dict:

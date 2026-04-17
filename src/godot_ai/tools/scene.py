@@ -55,6 +55,7 @@ def register_scene_tools(mcp: FastMCP) -> None:
         ctx: Context,
         path: str,
         root_type: str = "Node3D",
+        root_name: str = "",
         session_id: str = "",
     ) -> dict:
         """Create a new scene file (level / map / prefab .tscn) and open it in the editor.
@@ -65,10 +66,17 @@ def register_scene_tools(mcp: FastMCP) -> None:
         Args:
             path: File path for the new scene (e.g. "res://scenes/level.tscn").
             root_type: Godot node class for the root node. Default "Node3D".
+            root_name: Custom name for the root node. Defaults to the filename
+                basename when empty (e.g. "level" for level.tscn).
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await scene_handlers.scene_create(runtime, path=path, root_type=root_type)
+        return await scene_handlers.scene_create(
+            runtime,
+            path=path,
+            root_type=root_type,
+            root_name=root_name,
+        )
 
     @mcp.tool(meta=DEFER_META)
     async def scene_open(ctx: Context, path: str, session_id: str = "") -> dict:

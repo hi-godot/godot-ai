@@ -34,6 +34,25 @@ func has_command(command: String) -> bool:
 	return _handlers.has(command)
 
 
+## Rank registered commands by similarity to `cmd_name` and return the top `limit`
+## matches. Uses Godot's built-in String.similarity() (0.0–1.0). Returns an empty
+## array if no candidates clear the threshold. Used by batch_execute to surface
+## "did you mean" suggestions when an unknown command is passed.
+func suggest_similar(cmd_name: String, limit: int = 3, threshold: float = 0.5) -> Array[String]:
+	if cmd_name.is_empty() or _handlers.is_empty():
+		return []
+	var scored: Array = []
+	for name in _handlers.keys():
+		var score: float = cmd_name.similarity(name)
+		if score >= threshold:
+			scored.append([score, name])
+	scored.sort_custom(func(a, b): return a[0] > b[0])
+	var result: Array[String] = []
+	for i in range(min(limit, scored.size())):
+		result.append(scored[i][1])
+	return result
+
+
 ## Enqueue a raw command dict received from the WebSocket.
 func enqueue(cmd: Dictionary) -> void:
 	_command_queue.append(cmd)

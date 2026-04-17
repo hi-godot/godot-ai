@@ -133,7 +133,8 @@ func _get_children_snapshot(node: Node) -> Array[Node]:
 	return children
 
 
-## Remove any nodes in scene_root that weren't present before the suite ran.
+## Remove any nodes in scene_root that weren't present before the suite ran,
+## plus any _McpTest* named nodes anywhere in the tree (catches nested leaks).
 ## NOTE: this bypasses EditorUndoRedoManager by design — the test runner
 ## owns these leaks and needs to clear them unconditionally. Don't Ctrl-Z in
 ## the editor immediately after a test run that triggered cleanup; the undo
@@ -146,3 +147,14 @@ func _cleanup_leaked_nodes(scene_root: Node, before: Array[Node]) -> void:
 		if not before_set.has(child):
 			scene_root.remove_child(child)
 			child.queue_free()
+	# Also sweep the whole tree for _McpTest* nodes added under non-root parents.
+	_sweep_mcp_test_nodes(scene_root)
+
+
+func _sweep_mcp_test_nodes(node: Node) -> void:
+	for child in node.get_children():
+		if child.name.begins_with("_McpTest"):
+			node.remove_child(child)
+			child.queue_free()
+		else:
+			_sweep_mcp_test_nodes(child)

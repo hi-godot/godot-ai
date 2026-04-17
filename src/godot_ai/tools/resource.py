@@ -84,6 +84,39 @@ def register_resource_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool(meta=DEFER_META)
+    async def resource_get_info(
+        ctx: Context,
+        type: str,
+        session_id: str = "",
+    ) -> dict:
+        """Introspect a Godot Resource class — list properties, parent, subclasses.
+
+        Read-only. Call this before resource_create to discover which properties
+        a type accepts (e.g. CylinderMesh uses `top_radius` / `bottom_radius`,
+        not `radius`). Works on abstract base classes too — passing "Shape3D"
+        or "Material" returns `concrete_subclasses` so you know what to
+        instantiate.
+
+        Returns:
+            - `type`: the class name (echoed)
+            - `parent_class`: immediate parent class
+            - `can_instantiate` / `is_abstract`: whether resource_create can
+              use this type directly
+            - `properties`: list of editor-visible properties, each with
+              `name`, `type` (Godot type string), `hint`, `usage`
+            - `property_count`: convenience count
+            - `concrete_subclasses` (abstract types only): sorted list of
+              instantiable Resource subclasses
+
+        Args:
+            type: Godot class name (e.g. "CylinderMesh", "Shape3D", "StyleBox").
+                Must be a Resource subclass.
+            session_id: Optional Godot session to target. Empty = active.
+        """
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
+        return await resource_handlers.resource_get_info(runtime, type=type)
+
+    @mcp.tool(meta=DEFER_META)
     async def resource_create(
         ctx: Context,
         type: str,

@@ -157,8 +157,17 @@ class StubClient:
             return {
                 "path": params.get("path", ""),
                 "root_type": params.get("root_type", "Node3D"),
-                "root_name": "new_scene",
+                "root_name": params.get("root_name") or "new_scene",
                 "undoable": False,
+            }
+        if command == "get_resource_info":
+            return {
+                "type": params.get("type", ""),
+                "parent_class": "Resource",
+                "can_instantiate": True,
+                "is_abstract": False,
+                "properties": [{"name": "size", "type": "Vector3", "hint": 0, "usage": 4}],
+                "property_count": 1,
             }
         if command == "open_scene":
             return {"path": params.get("path", ""), "undoable": False}
@@ -1383,6 +1392,32 @@ async def test_scene_create_handler_default_root_type():
     assert client.calls[-1]["params"] == {"path": "res://new.tscn", "root_type": "Node3D"}
 
 
+async def test_scene_create_handler_explicit_root_name_forwarded():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await scene_handlers.scene_create(
+        runtime,
+        path="res://scenes/market.tscn",
+        root_type="Node3D",
+        root_name="Market",
+    )
+    # Param must be forwarded to the plugin and echoed in the response.
+    assert client.calls[-1]["params"] == {
+        "path": "res://scenes/market.tscn",
+        "root_type": "Node3D",
+        "root_name": "Market",
+    }
+    assert result["root_name"] == "Market"
+
+
+async def test_scene_create_handler_omits_empty_root_name():
+    # Empty root_name must NOT be sent — plugin should fall back to the filename basename.
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await scene_handlers.scene_create(runtime, path="res://new.tscn", root_name="")
+    assert "root_name" not in client.calls[-1]["params"]
+
+
 async def test_scene_open_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
@@ -2009,6 +2044,17 @@ async def test_resource_create_minimal_omits_empty_params():
     assert "resource_path" not in params
     assert "overwrite" not in params
     assert "properties" not in params
+
+
+async def test_resource_get_info_handler_forwards_type():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await resource_handlers.resource_get_info(runtime, type="BoxMesh")
+    assert client.calls[-1]["command"] == "get_resource_info"
+    assert client.calls[-1]["params"] == {"type": "BoxMesh"}
+    assert result["type"] == "BoxMesh"
+    assert result["can_instantiate"] is True
+    assert any(p["name"] == "size" for p in result["properties"])
 
 
 async def test_curve_set_points_inline_handler():

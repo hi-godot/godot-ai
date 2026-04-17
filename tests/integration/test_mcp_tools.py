@@ -118,6 +118,9 @@ class TestSceneCreateTool:
         async def respond():
             cmd = await plugin.recv_command()
             assert cmd["params"]["root_type"] == "Node3D"
+            # When root_name is omitted, the handler must NOT forward the key —
+            # the plugin falls back to the filename basename.
+            assert "root_name" not in cmd["params"]
             await plugin.send_response(
                 cmd["request_id"],
                 {
@@ -132,6 +135,30 @@ class TestSceneCreateTool:
         result = await client.call_tool("scene_create", {"path": "res://new.tscn"})
         await task
         assert result.data["root_type"] == "Node3D"
+
+    async def test_create_scene_explicit_root_name(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["root_name"] == "Market"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://scenes/market.tscn",
+                    "root_type": "Node3D",
+                    "root_name": "Market",
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "scene_create",
+            {"path": "res://scenes/market.tscn", "root_name": "Market"},
+        )
+        await task
+        assert result.data["root_name"] == "Market"
 
 
 # ---------------------------------------------------------------------------
@@ -1500,6 +1527,74 @@ class TestResourceCreateTool:
 
 
 # ---------------------------------------------------------------------------
+# resource_get_info
+# ---------------------------------------------------------------------------
+
+
+class TestResourceGetInfoTool:
+    async def test_concrete_type_returns_properties(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_resource_info"
+            assert cmd["params"] == {"type": "BoxMesh"}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "type": "BoxMesh",
+                    "parent_class": "PrimitiveMesh",
+                    "can_instantiate": True,
+                    "is_abstract": False,
+                    "properties": [
+                        {"name": "size", "type": "Vector3", "hint": 0, "usage": 4},
+                    ],
+                    "property_count": 1,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("resource_get_info", {"type": "BoxMesh"})
+        await task
+
+        assert result.data["type"] == "BoxMesh"
+        assert result.data["can_instantiate"] is True
+        assert result.data["is_abstract"] is False
+        assert any(p["name"] == "size" for p in result.data["properties"])
+
+    async def test_abstract_type_returns_concrete_subclasses(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"] == {"type": "Shape3D"}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "type": "Shape3D",
+                    "parent_class": "Resource",
+                    "can_instantiate": False,
+                    "is_abstract": True,
+                    "properties": [],
+                    "property_count": 0,
+                    "concrete_subclasses": [
+                        "BoxShape3D",
+                        "CapsuleShape3D",
+                        "CylinderShape3D",
+                        "SphereShape3D",
+                    ],
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("resource_get_info", {"type": "Shape3D"})
+        await task
+
+        assert result.data["is_abstract"] is True
+        assert "BoxShape3D" in result.data["concrete_subclasses"]
+
+
+# ---------------------------------------------------------------------------
 # curve_set_points
 # ---------------------------------------------------------------------------
 
@@ -2793,6 +2888,13 @@ class TestBatchExecuteTool:
         assert not result.is_error
         assert result.data["error"]["code"] == "INVALID_PARAMS"
         assert result.data["succeeded"] == 0
+
+    # Note: the shape of the new enriched UNKNOWN_COMMAND error — naming-convention
+    # hint in the message + `error.data.suggestions` — is covered by the
+    # GDScript suite (`test_batch.gd::test_unknown_command_*`). The Python
+    # integration harness only verifies the transport; adding a mock that
+    # returns this error would duplicate the GDScript contract without
+    # exercising any additional Python code path.
 
 
 # ---------------------------------------------------------------------------
