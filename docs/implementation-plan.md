@@ -222,6 +222,80 @@ tracked above.
 - [~] `material_*` and `particle_*` shipped (see Tier 2 above); still need a dedicated `shader_*` CRUD surface for `.gdshader` editing outside of `filesystem_write_text`
 - [ ] light `physics.*` and optionally `tilemap.*` / `navigation.*` if rooms become more authored
 
+### Versioned Milestones (v1 / v2 / v3)
+
+The benchmark isn't a single "done" switch. It's three readable gates, each composed from capabilities already tracked in this file. Climbing the ladder is the same as landing Tier 1 → 2 → 3 tools above.
+
+#### v1 — "Ugly but playable"
+
+Matches what the current stack can already produce (see "What The Current Stack Can Already Do" above).
+
+- one arena, move + shoot (dash deferred to v2)
+- one enemy archetype, no boss
+- flat-color HUD (health + score) via `ui_build_layout` + `theme_set_stylebox_flat`
+- pause overlay, death → restart loop
+- no particles, no audio, no screen shake
+- AI authors the whole loop end-to-end and launches it via `project_run`
+- **Goal:** prove end-to-end AI authoring of a complete gameplay loop on today's tool surface.
+
+#### v2 — "Readable and juicy"
+
+Unlocks once Tier 2 tools land (most already shipped — `particle_*`, `material_*`, `animation_player.*`).
+
+- dash ability with trail particle + brief `modulate` fade on the player
+- three enemy archetypes, XP / currency pickups
+- 10–15 upgrades presented via a draft screen (see UI pattern for "Upgrade-draft screen" above)
+- hit-flash via `animation_create_simple` modulate tween; muzzle flash via `particle_apply_preset "spark_burst"`; death via `"explosion"`
+- screen shake via the damage-shake animation pattern on HUD root
+- sliding pause menu + hover pulse animations on buttons
+- **Goal:** combat feel + meta progression loop readable enough to iterate on.
+
+#### v3 — "Shippable slice"
+
+Requires the remaining Tier 1 gaps (`camera.*`, `audio.*`) plus Tier 3 shipping support (`build.*`).
+
+- `camera.*` follow + bounds + shake, replacing the v2 HUD-shake stand-in
+- `audio.*` SFX for shoot / hit / dash / pickup, plus a music bed
+- boss encounter OR escalating-wave survival spike
+- 3–5 authored rooms (if `tilemap.*` / `navigation.*` lands) or a single polished arena with a wave system
+- main menu and settings menu with volume sliders
+- desktop export via `build.*` without bespoke handholding
+- **Goal:** meets all four Benchmark Exit Criteria below.
+
+**How this ladder composes with the tier list:** a Tier 1/2/3 checkbox landing is not progress on its own — v1/v2/v3 are the gates where we stop and verify the capability actually produces a shippable feel. Tools enable versions; versions validate tools.
+
+### Asset Sourcing Strategy
+
+"Placeholder art is acceptable" above is easy to misread as "we have an asset pipeline gap." We don't — for v1 and v2. This subsection states what the AI actually uses per version, and answers the recurring question of whether we need a dedicated texture-generation tool in this repo.
+
+#### Per-version asset sources
+
+- **v1 — Primitives only, no image files.**
+  - UI is `ColorRect`, `Panel`, and `theme_set_stylebox_flat` — solid colors, rounded corners, no textures.
+  - Gameplay uses `Sprite2D` with `PlaceholderTexture2D`, or `Polygon2D` / shape-based visuals. Colored flat-shade `StandardMaterial3D` if anything 3D sneaks in.
+  - Particle colors come from the gradient presets already baked into `particle_apply_preset` — the `GradientTexture1D` is generated inside the handler, no asset file needed.
+  - **The AI ships v1 without reading or writing a single `.png`.** Contributors should stop worrying about an art pipeline at this stage.
+
+- **v2 — Procedural + built-in textures.**
+  - Godot-native procedural texture resources via `resource_create`: `NoiseTexture2D` (noise backgrounds, particle sprites), `GradientTexture2D` (radial glows, health-bar fills), `PlaceholderTexture2D` (anything with a size hint).
+  - Shader-based visuals for hit-flash, dash trail, and damage vignette via `material_set_shader_param` plus a `.gdshader` written through `filesystem_write_text`.
+  - **Still no binary image files.** This is a recipes-only stage — the tools already exist.
+
+- **v3 — Real art drops in.**
+  - Pixel-art sprites, 9-slice UI buttons, custom fonts, SFX / music are binary files the AI cannot author directly. Three sourcing paths, priority order:
+    1. **CC0 asset packs** (Kenney, itch.io). AI suggests a pack, user drops the folder into `res://assets/`, AI calls `filesystem_reimport` and wires references. No new tooling in this repo.
+    2. **External image-gen MCP server** composed alongside `godot-ai`. Any image-gen MCP with a file-write tool can produce a PNG on disk inside the project, then `filesystem_reimport` picks it up. No new tooling in this repo.
+    3. **SVG icon set** via `theme_set_icon` (tracked above, pending). SVG is text, so `filesystem_write_text` can author simple geometric icons directly.
+
+#### Do we need a separate `texture_*` / image-gen tool here?
+
+**Default answer: no.** The reasoning:
+
+- **Image generation is out of scope for an editor-integration server.** Bundling model-calling logic into `godot-ai` drags in API keys, credit accounting, and model-vendor choice. The `filesystem_reimport` tool already exists so an external image-gen MCP can drop a PNG on disk and have Godot pick it up.
+- **"Texture adjust" is a shader concern, not an asset concern.** `CanvasItemMaterial` / `ShaderMaterial` / `modulate` / `self_modulate` are all reachable today.
+- **Weak case for one helper — `resource_create_procedural_texture`:** a thin wrapper that creates `NoiseTexture2D` / `GradientTexture2D` / `PlaceholderTexture2D` with sensible defaults and saves to a `res://` path. These are the three most common v2 needs and today require multi-step `resource_create` + property-set sequences. Deferred — build it only if a real v2 attempt shows the multi-step version is painful.
+- **Revisit trigger:** if v3 sourcing via external image-gen MCP proves unreliable in practice (latency, quality, auth friction), revisit whether a bundled `texture_gen` tool belongs here. Don't speculatively build it.
+
 ### Benchmark Exit Criteria
 
 - [ ] Godot AI can author the project structure, gameplay scenes, and data assets with limited manual cleanup
