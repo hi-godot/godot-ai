@@ -56,6 +56,37 @@ def register_ui_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool(meta=DEFER_META)
+    async def ui_set_text(
+        ctx: Context,
+        path: str,
+        text: str,
+        session_id: str = "",
+    ) -> dict:
+        """Set the visible text on a UI Control.
+
+        Convenience wrapper for the most common UI write: updating the caption /
+        label / content / placeholder-substitute text on a Control. Works for
+        Label, Button (and its subclasses: CheckBox, CheckButton, OptionButton,
+        MenuButton, LinkButton), LineEdit, TextEdit, and RichTextLabel —
+        anything exposing a `text` property. Equivalent to
+        node_set_property(path, "text", ...) but discoverable under UI keywords.
+
+        For RichTextLabel, the stored value is interpreted as BBCode iff the
+        node's `bbcode_enabled` is already true; this tool does not toggle that
+        flag. Toggle it via node_set_property if needed.
+
+        Keywords: label, button, caption, textbox, line edit, text edit, string,
+        content, rich text, bbcode, hud, dialog.
+
+        Args:
+            path: Scene path to a text-bearing Control (e.g. "/Main/HUD/Score").
+            text: New text value.
+            session_id: Optional Godot session to target. Empty = active session.
+        """
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
+        return await ui_handlers.ui_set_text(runtime, path=path, text=text)
+
+    @mcp.tool(meta=DEFER_META)
     async def ui_build_layout(
         ctx: Context,
         tree: Annotated[dict[str, Any], JsonCoerced],

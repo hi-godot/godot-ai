@@ -27,6 +27,18 @@ async def ui_set_anchor_preset(
     )
 
 
+async def ui_set_text(
+    runtime: Runtime,
+    path: str,
+    text: str,
+) -> dict:
+    require_writable(runtime)
+    return await runtime.send_command(
+        "set_text",
+        {"path": path, "text": text},
+    )
+
+
 async def ui_build_layout(
     runtime: Runtime,
     tree: dict[str, Any],

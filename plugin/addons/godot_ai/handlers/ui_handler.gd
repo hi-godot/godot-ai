@@ -138,6 +138,61 @@ func set_anchor_preset(params: Dictionary) -> Dictionary:
 	}
 
 
+## Set the visible `text` property on a UI Control (Label, Button + subclasses,
+## LineEdit, TextEdit, RichTextLabel, LinkButton). Undoable.
+##
+## For RichTextLabel, the value is interpreted as BBCode iff the node's
+## existing `bbcode_enabled` is true — this tool does not toggle that flag.
+func set_text(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("path", "")
+	if node_path.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+
+	if not params.has("text"):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: text")
+	var text_value: Variant = params["text"]
+	if typeof(text_value) != TYPE_STRING:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "text must be a string")
+
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+
+	var node := ScenePath.resolve(node_path, scene_root)
+	if node == null:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+	if not node is Control:
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"Node %s is not a Control (got %s)" % [node_path, node.get_class()]
+		)
+	# Duck-type rather than allowlist: covers Label, Button and all of its
+	# subclasses (CheckBox, CheckButton, OptionButton, MenuButton, LinkButton),
+	# LineEdit, TextEdit, RichTextLabel — plus any future text-bearing Control.
+	if not ("text" in node):
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"Control %s has no 'text' property (got %s)" % [node_path, node.get_class()]
+		)
+
+	var old_value: String = node.get("text")
+
+	_undo_redo.create_action("MCP: Set %s text" % node.name)
+	_undo_redo.add_do_property(node, "text", text_value)
+	_undo_redo.add_undo_property(node, "text", old_value)
+	_undo_redo.commit_action()
+
+	return {
+		"data": {
+			"path": node_path,
+			"text": text_value,
+			"old_text": old_value,
+			"node_type": node.get_class(),
+			"undoable": true,
+		}
+	}
+
+
 # ============================================================================
 # build_layout — declarative nested-dict → Control tree in one undo action
 # ============================================================================

@@ -2771,6 +2771,65 @@ class TestUiSetAnchorPresetTool:
 
 
 # ---------------------------------------------------------------------------
+# ui_set_text
+# ---------------------------------------------------------------------------
+
+
+class TestUiSetTextTool:
+    async def test_forwards_path_and_text(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "set_text"
+            assert cmd["params"] == {"path": "/Main/HUD/Score", "text": "100"}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/HUD/Score",
+                    "text": "100",
+                    "old_text": "0",
+                    "node_type": "Label",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "ui_set_text",
+            {"path": "/Main/HUD/Score", "text": "100"},
+        )
+        await task
+
+        assert result.data["text"] == "100"
+        assert result.data["old_text"] == "0"
+        assert result.data["node_type"] == "Label"
+        assert result.data["undoable"] is True
+
+    async def test_surfaces_plugin_error(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            await plugin.send_error(
+                cmd["request_id"],
+                "INVALID_PARAMS",
+                "Node /Main/Camera3D is not a Control (got Camera3D)",
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "ui_set_text",
+            {"path": "/Main/Camera3D", "text": "x"},
+            raise_on_error=False,
+        )
+        await task
+
+        assert result.is_error
+        assert "not a Control" in str(result.content)
+
+
+# ---------------------------------------------------------------------------
 # ui_build_layout
 # ---------------------------------------------------------------------------
 

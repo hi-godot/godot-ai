@@ -100,6 +100,7 @@ func _enter_tree() -> void:
 	_dispatcher.register("get_test_results", test_handler.get_test_results)
 	_dispatcher.register("batch_execute", batch_handler.batch_execute)
 	_dispatcher.register("set_anchor_preset", ui_handler.set_anchor_preset)
+	_dispatcher.register("set_text", ui_handler.set_text)
 	_dispatcher.register("build_layout", ui_handler.build_layout)
 	_dispatcher.register("create_theme", theme_handler.create_theme)
 	_dispatcher.register("theme_set_color", theme_handler.set_color)

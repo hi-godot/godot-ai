@@ -39,6 +39,19 @@ func _remove_control(path: String) -> void:
 		node.queue_free()
 
 
+# Add an already-constructed Control subclass (Label, Button, LineEdit, ...) to
+# the scene root under the given name. Returns path, or "" if scene not ready.
+func _add_typed_control(ctl: Control, ctl_name: String) -> String:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		ctl.queue_free()
+		return ""
+	ctl.name = ctl_name
+	scene_root.add_child(ctl)
+	ctl.owner = scene_root
+	return "/" + scene_root.name + "/" + ctl_name
+
+
 # ----- set_anchor_preset: happy path -----
 
 func test_set_anchor_preset_full_rect() -> void:
@@ -197,6 +210,139 @@ func test_set_anchor_preset_is_undoable() -> void:
 	_undo_redo.undo()
 	assert_eq(ctl.anchor_left, before_left, "Undo should restore anchor_left")
 	assert_eq(ctl.anchor_right, before_right, "Undo should restore anchor_right")
+	_remove_control(path)
+
+
+# ============================================================================
+# set_text — set `text` on any text-bearing Control
+# ============================================================================
+
+
+func test_set_text_on_label() -> void:
+	var path := _add_typed_control(Label.new(), "TestSetTextLabel")
+	if path.is_empty():
+		skip("Scene not ready — _add_typed_control returned empty path")
+		return
+	var result := _handler.set_text({"path": path, "text": "Hello"})
+	assert_has_key(result, "data")
+	assert_eq(result.data.text, "Hello")
+	assert_eq(result.data.old_text, "")
+	assert_eq(result.data.node_type, "Label")
+	assert_true(result.data.undoable)
+	# Verify the live node was actually updated.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var label := ScenePath.resolve(path, scene_root) as Label
+	assert_eq(label.text, "Hello")
+	_remove_control(path)
+
+
+func test_set_text_on_button() -> void:
+	var path := _add_typed_control(Button.new(), "TestSetTextButton")
+	if path.is_empty():
+		skip("Scene not ready — _add_typed_control returned empty path")
+		return
+	var result := _handler.set_text({"path": path, "text": "Go"})
+	assert_has_key(result, "data")
+	assert_eq(result.data.text, "Go")
+	assert_eq(result.data.node_type, "Button")
+	_remove_control(path)
+
+
+func test_set_text_on_line_edit() -> void:
+	# LineEdit covers the interactive-input side of the duck-type path.
+	var path := _add_typed_control(LineEdit.new(), "TestSetTextLineEdit")
+	if path.is_empty():
+		skip("Scene not ready — _add_typed_control returned empty path")
+		return
+	var result := _handler.set_text({"path": path, "text": "input"})
+	assert_has_key(result, "data")
+	assert_eq(result.data.text, "input")
+	assert_eq(result.data.node_type, "LineEdit")
+	_remove_control(path)
+
+
+func test_set_text_replaces_existing_text() -> void:
+	var label := Label.new()
+	label.text = "old"
+	var path := _add_typed_control(label, "TestSetTextReplace")
+	if path.is_empty():
+		skip("Scene not ready — _add_typed_control returned empty path")
+		return
+	var result := _handler.set_text({"path": path, "text": "new"})
+	assert_has_key(result, "data")
+	assert_eq(result.data.text, "new")
+	assert_eq(result.data.old_text, "old")
+	_remove_control(path)
+
+
+func test_set_text_missing_path() -> void:
+	var result := _handler.set_text({"text": "hi"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_set_text_missing_text() -> void:
+	var path := _add_typed_control(Label.new(), "TestSetTextMissingText")
+	if path.is_empty():
+		skip("Scene not ready — _add_typed_control returned empty path")
+		return
+	var result := _handler.set_text({"path": path})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "text")
+	_remove_control(path)
+
+
+func test_set_text_rejects_non_string_value() -> void:
+	var path := _add_typed_control(Label.new(), "TestSetTextBadType")
+	if path.is_empty():
+		skip("Scene not ready — _add_typed_control returned empty path")
+		return
+	var result := _handler.set_text({"path": path, "text": 42})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	_remove_control(path)
+
+
+func test_set_text_unknown_node() -> void:
+	var result := _handler.set_text({"path": "/DoesNotExist", "text": "x"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_set_text_non_control_node() -> void:
+	# Scene root in the test project is a Node3D, not a Control.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.set_text({
+		"path": "/" + scene_root.name, "text": "x"
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "not a Control")
+
+
+func test_set_text_control_without_text_property() -> void:
+	# Panel is a Control but has no `text` property — should give a clear error,
+	# not silently no-op or crash.
+	var path := _add_typed_control(Panel.new(), "TestSetTextNoTextProp")
+	if path.is_empty():
+		skip("Scene not ready — _add_typed_control returned empty path")
+		return
+	var result := _handler.set_text({"path": path, "text": "x"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "text")
+	_remove_control(path)
+
+
+func test_set_text_is_undoable() -> void:
+	var label := Label.new()
+	label.text = "before"
+	var path := _add_typed_control(label, "TestSetTextUndo")
+	if path.is_empty():
+		skip("Scene not ready — _add_typed_control returned empty path")
+		return
+	_handler.set_text({"path": path, "text": "after"})
+	assert_eq(label.text, "after", "Apply should change text")
+	_undo_redo.undo()
+	assert_eq(label.text, "before", "Undo should restore prior text")
 	_remove_control(path)
 
 
