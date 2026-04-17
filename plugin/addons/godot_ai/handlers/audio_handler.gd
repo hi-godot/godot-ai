@@ -145,14 +145,12 @@ func set_playback(params: Dictionary) -> Dictionary:
 		return resolved
 	var player: Node = resolved.player
 
-	# Collect and validate only the keys the caller actually provided. An
-	# empty update is rejected — matches the pattern elsewhere (set_main).
 	var updates: Dictionary = {}
 	for key in _PLAYBACK_KEYS:
 		if params.has(key):
 			var expected_type: int = _PLAYBACK_KEYS[key]
 			var value = params.get(key)
-			var coerced = _coerce_playback_value(key, value, expected_type)
+			var coerced = _coerce_playback_value(value, expected_type)
 			if coerced == null:
 				return McpErrorCodes.make(
 					McpErrorCodes.INVALID_PARAMS,
@@ -178,17 +176,11 @@ func set_playback(params: Dictionary) -> Dictionary:
 		_undo_redo.add_undo_property(player, key, old_values[key])
 	_undo_redo.commit_action()
 
-	var applied: Array[String] = []
-	var applied_values: Dictionary = {}
-	for key in updates:
-		applied.append(key)
-		applied_values[key] = updates[key]
-
 	return {
 		"data": {
 			"player_path": player_path,
-			"applied": applied,
-			"values": applied_values,
+			"applied": updates.keys(),
+			"values": updates,
 			"undoable": true,
 		}
 	}
@@ -340,7 +332,7 @@ func _resolve_player(player_path: String) -> Dictionary:
 ## Coerce a playback param value to the expected type. int→float is allowed
 ## so JSON integers pass through; everything else requires the exact type.
 ## Returns the coerced value, or null on type mismatch.
-static func _coerce_playback_value(key: String, value: Variant, expected_type: int) -> Variant:
+static func _coerce_playback_value(value: Variant, expected_type: int) -> Variant:
 	match expected_type:
 		TYPE_FLOAT:
 			if value is float or value is int:

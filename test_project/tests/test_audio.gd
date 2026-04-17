@@ -327,8 +327,6 @@ func test_play_and_stop_roundtrip() -> void:
 	assert_has_key(play_result, "data")
 	assert_eq(play_result.data.undoable, false)
 	assert_eq(play_result.data.reason, "Runtime playback state — not saved with scene")
-	# The fixture is ~0.1s of silence, but play() schedules playback; the
-	# node reports `playing=true` immediately after the call.
 	var stop_result := _handler.stop({"player_path": r.data.path})
 	assert_has_key(stop_result, "data")
 	assert_eq(stop_result.data.undoable, false)
