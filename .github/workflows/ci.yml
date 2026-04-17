@@ -14,7 +14,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Deliberately Linux-only: the Python server is pure-async with no
+        # platform-specific code. Real OS regressions are caught by the
+        # release-smoke and godot-tests jobs, which still run on all 3 OSes.
+        # See issue #35 before restoring the full matrix.
+        os: [ubuntu-latest]
         python-version: ["3.11", "3.13"]
 
     steps:
