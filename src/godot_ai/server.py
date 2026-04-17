@@ -17,6 +17,7 @@ from godot_ai.resources.scenes import register_scene_resources
 from godot_ai.resources.sessions import register_session_resources
 from godot_ai.sessions.registry import SessionRegistry
 from godot_ai.tools.animation import register_animation_tools
+from godot_ai.tools.audio import register_audio_tools
 from godot_ai.tools.autoload import register_autoload_tools
 from godot_ai.tools.batch import register_batch_tools
 from godot_ai.tools.camera import register_camera_tools
@@ -96,6 +97,8 @@ def create_server(ws_port: int = 9500) -> FastMCP:
             "(colors, stylebox, font sizes) — Godot's CSS-like styling\n"
             "  animation_*      — AnimationPlayer authoring "
             "(tracks, keyframes, autoplay) — hover pulses, slide-ins, shakes, fades\n"
+            "  animation_preset_* — one-call canned animations "
+            "(fade, slide, shake, pulse) — no tween specs needed\n"
             "  material_*       — author Materials "
             "(StandardMaterial3D, ORM, ShaderMaterial) — "
             "paint, albedo, metal, glass, emission, shader uniforms\n"
@@ -104,6 +107,8 @@ def create_server(ws_port: int = 9500) -> FastMCP:
             "fire, smoke, sparks, magic, rain, explosion\n"
             "  camera_*         — Camera2D/Camera3D authoring "
             "(follow, bounds, zoom, damping, smoothing, drag margins, deadzone)\n"
+            "  audio_*          — author sound effects and music "
+            "(AudioStreamPlayer/2D/3D) — load streams, play, stop, list audio assets\n"
             "  client_*         — configure AI clients (Claude Code, Codex, Antigravity)\n\n"
             "Always connect to an editor session first (session_list / session_activate). "
             "Write operations require session readiness; check editor_state if a call is "
@@ -132,6 +137,7 @@ def create_server(ws_port: int = 9500) -> FastMCP:
     register_material_tools(mcp)
     register_particle_tools(mcp)
     register_camera_tools(mcp)
+    register_audio_tools(mcp)
     register_session_resources(mcp)
     register_scene_resources(mcp)
     register_editor_resources(mcp)

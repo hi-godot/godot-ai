@@ -18,18 +18,35 @@ def register_client_tools(mcp: FastMCP) -> None:
         how to launch and connect to this server.
 
         Args:
-            client: The client to configure.
-                Options: "claude_code", "claude_desktop", "codex", "antigravity".
+            client: The client id to configure. Currently supported:
+                claude_code, claude_desktop, codex, antigravity,
+                cursor, windsurf, vscode, vscode_insiders, zed,
+                gemini_cli, cline, kilo_code, roo_code, kiro, trae,
+                cherry_studio, opencode, qwen_code.
+                Call client_status to discover the live list.
         """
         runtime = DirectRuntime.from_context(ctx)
         return await client_handlers.client_configure(runtime, client=client)
 
     @mcp.tool(meta=DEFER_META)
-    async def client_status(ctx: Context) -> dict:
-        """Check which AI clients are configured to use Godot AI.
+    async def client_remove(ctx: Context, client: str) -> dict:
+        """Remove the Godot AI MCP server entry from a client's config.
 
-        Returns the configuration status of each supported client:
-        "configured", "not_configured", or "error".
+        Args:
+            client: The client id to remove (same set as client_configure).
+        """
+        runtime = DirectRuntime.from_context(ctx)
+        return await client_handlers.client_remove(runtime, client=client)
+
+    @mcp.tool(meta=DEFER_META)
+    async def client_status(ctx: Context) -> dict:
+        """List every supported client and whether it's configured / installed.
+
+        Returns a dict with a "clients" array. Each entry has:
+            id            stable identifier (use with client_configure)
+            display_name  human-readable name
+            status        "configured" | "not_configured" | "error"
+            installed     bool — true if the client appears to be present locally
         """
         runtime = DirectRuntime.from_context(ctx)
         return await client_handlers.client_status(runtime)

@@ -16,12 +16,13 @@ var _plugin: EditorPlugin
 var _redock_btn: Button
 var _status_icon: ColorRect
 var _status_label: Label
-var _client_dropdown: OptionButton
-var _client_status_label: Label
-var _client_configure_btn: Button
-var _client_manual_panel: VBoxContainer
-var _client_manual_text: TextEdit
+var _client_grid: VBoxContainer
+var _client_configure_all_btn: Button
 var _dev_mode_toggle: CheckButton
+
+## Per-client UI handles, keyed by client id. Each entry holds the row's
+## status dot, configure button, remove button, manual-command panel + text.
+var _client_rows: Dictionary = {}
 
 # Dev-mode only
 var _dev_section: VBoxContainer
@@ -39,7 +40,6 @@ var _last_log_count := 0
 var _last_connected := false
 var _last_status_text := ""
 var _startup_grace_until_msec: int = 0
-var _client_keys: Array[String] = []
 
 # First-run grace: uvx installs 60+ Python packages on first run (can take
 # 10-30s on a slow connection). Don't scare users with "Disconnected" during
@@ -218,52 +218,32 @@ func _build_ui() -> void:
 
 	add_child(HSeparator.new())
 
-	# --- Client config (dropdown, no separate header needed) ---
-	var client_row := HBoxContainer.new()
-	client_row.add_theme_constant_override("separation", 6)
+	# --- Client config (scrollable grid: one row per registered client) ---
+	var clients_header_row := HBoxContainer.new()
+	var clients_header := _make_header("Clients")
+	clients_header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	clients_header_row.add_child(clients_header)
 
-	_client_dropdown = OptionButton.new()
-	_client_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for client_name in McpClientConfigurator.CLIENT_TYPE_MAP:
-		_client_dropdown.add_item(_pretty_client_name(client_name))
-		_client_keys.append(client_name)
-	_client_dropdown.item_selected.connect(_on_client_selected)
-	client_row.add_child(_client_dropdown)
+	_client_configure_all_btn = Button.new()
+	_client_configure_all_btn.text = "Configure all"
+	_client_configure_all_btn.tooltip_text = "Configure every client that isn't already pointing at this server"
+	_client_configure_all_btn.pressed.connect(_on_configure_all_clients)
+	clients_header_row.add_child(_client_configure_all_btn)
+	add_child(clients_header_row)
 
-	_client_configure_btn = Button.new()
-	_client_configure_btn.text = "Configure"
-	_client_configure_btn.pressed.connect(_on_configure_selected_client)
-	client_row.add_child(_client_configure_btn)
+	var clients_scroll := ScrollContainer.new()
+	clients_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	clients_scroll.custom_minimum_size = Vector2(0, 220)
+	clients_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	add_child(clients_scroll)
 
-	add_child(client_row)
+	_client_grid = VBoxContainer.new()
+	_client_grid.add_theme_constant_override("separation", 4)
+	_client_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	clients_scroll.add_child(_client_grid)
 
-	_client_status_label = Label.new()
-	_client_status_label.text = "..."
-	_client_status_label.add_theme_color_override("font_color", COLOR_MUTED)
-	add_child(_client_status_label)
-
-	# Manual-command fallback panel (hidden until auto-configure fails)
-	_client_manual_panel = VBoxContainer.new()
-	_client_manual_panel.add_theme_constant_override("separation", 4)
-	_client_manual_panel.visible = false
-
-	var manual_hint := Label.new()
-	manual_hint.text = "Run this manually:"
-	manual_hint.add_theme_color_override("font_color", COLOR_MUTED)
-	_client_manual_panel.add_child(manual_hint)
-
-	_client_manual_text = TextEdit.new()
-	_client_manual_text.editable = false
-	_client_manual_text.custom_minimum_size = Vector2(0, 60)
-	_client_manual_text.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
-	_client_manual_panel.add_child(_client_manual_text)
-
-	var copy_btn := Button.new()
-	copy_btn.text = "Copy"
-	copy_btn.pressed.connect(_on_copy_manual_command)
-	_client_manual_panel.add_child(copy_btn)
-
-	add_child(_client_manual_panel)
+	for client_id in McpClientConfigurator.client_ids():
+		_build_client_row(client_id)
 
 	add_child(HSeparator.new())
 
@@ -311,7 +291,7 @@ func _build_ui() -> void:
 	# Apply initial dev-mode visibility
 	_apply_dev_mode_visibility()
 	_refresh_setup_status.call_deferred()
-	_refresh_client_status.call_deferred()
+	_refresh_all_client_statuses.call_deferred()
 
 
 func _make_header(text: String) -> Label:
@@ -322,15 +302,66 @@ func _make_header(text: String) -> Label:
 	return label
 
 
-func _pretty_client_name(client_name: String) -> String:
-	return client_name.capitalize()
+func _build_client_row(client_id: String) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
+	var dot := ColorRect.new()
+	dot.custom_minimum_size = Vector2(10, 10)
+	dot.color = COLOR_MUTED
+	var dot_center := CenterContainer.new()
+	dot_center.add_child(dot)
+	row.add_child(dot_center)
 
-func _selected_client_key() -> String:
-	var idx := _client_dropdown.selected
-	if idx < 0 or idx >= _client_keys.size():
-		return ""
-	return _client_keys[idx]
+	var name_label := Label.new()
+	name_label.text = McpClientConfigurator.client_display_name(client_id)
+	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(name_label)
+
+	var configure_btn := Button.new()
+	configure_btn.text = "Configure"
+	configure_btn.pressed.connect(_on_configure_client.bind(client_id))
+	row.add_child(configure_btn)
+
+	var remove_btn := Button.new()
+	remove_btn.text = "Remove"
+	remove_btn.visible = false
+	remove_btn.pressed.connect(_on_remove_client.bind(client_id))
+	row.add_child(remove_btn)
+
+	_client_grid.add_child(row)
+
+	var manual_panel := VBoxContainer.new()
+	manual_panel.add_theme_constant_override("separation", 4)
+	manual_panel.visible = false
+
+	var manual_hint := Label.new()
+	manual_hint.text = "Run this manually:"
+	manual_hint.add_theme_color_override("font_color", COLOR_MUTED)
+	manual_panel.add_child(manual_hint)
+
+	var manual_text := TextEdit.new()
+	manual_text.editable = false
+	manual_text.custom_minimum_size = Vector2(0, 60)
+	manual_text.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	manual_panel.add_child(manual_text)
+
+	var copy_btn := Button.new()
+	copy_btn.text = "Copy"
+	copy_btn.pressed.connect(_on_copy_manual_command.bind(client_id))
+	manual_panel.add_child(copy_btn)
+
+	_client_grid.add_child(manual_panel)
+
+	_client_rows[client_id] = {
+		"dot": dot,
+		"name_label": name_label,
+		"configure_btn": configure_btn,
+		"remove_btn": remove_btn,
+		"manual_panel": manual_panel,
+		"manual_text": manual_text,
+	}
 
 
 # --- Status updates ---
@@ -514,64 +545,83 @@ func _on_install_uv() -> void:
 
 # --- Client section ---
 
-func _on_client_selected(_index: int) -> void:
-	_client_manual_panel.visible = false
-	_refresh_client_status()
-
-
-func _on_configure_selected_client() -> void:
-	var key := _selected_client_key()
-	if key.is_empty():
-		return
-	var client_type: int = McpClientConfigurator.client_type_from_string(key)
-	if client_type < 0:
-		return
-	var ct := client_type as McpClientConfigurator.ClientType
-	var result := McpClientConfigurator.configure(ct)
+func _on_configure_client(client_id: String) -> void:
+	var result := McpClientConfigurator.configure(client_id)
 	if result.get("status") == "ok":
-		_set_client_status_label("configured", Color.GREEN)
-		_client_configure_btn.text = "Reconfigure"
-		_client_manual_panel.visible = false
+		_apply_row_status(client_id, McpClient.Status.CONFIGURED)
+		_client_rows[client_id]["manual_panel"].visible = false
 	else:
-		var msg := str(result.get("message", "failed"))
-		_set_client_status_label("error: %s" % msg, Color.RED)
-		_show_manual_command(ct)
+		_apply_row_status(client_id, McpClient.Status.ERROR, str(result.get("message", "failed")))
+		_show_manual_command_for(client_id)
 
 
-func _show_manual_command(client_type: McpClientConfigurator.ClientType) -> void:
-	var cmd := McpClientConfigurator.manual_command(client_type)
+func _on_remove_client(client_id: String) -> void:
+	var result := McpClientConfigurator.remove(client_id)
+	if result.get("status") == "ok":
+		_apply_row_status(client_id, McpClient.Status.NOT_CONFIGURED)
+		_client_rows[client_id]["manual_panel"].visible = false
+	else:
+		_apply_row_status(client_id, McpClient.Status.ERROR, str(result.get("message", "failed")))
+
+
+func _on_configure_all_clients() -> void:
+	for client_id in McpClientConfigurator.client_ids():
+		if McpClientConfigurator.check_status(client_id) == McpClient.Status.CONFIGURED:
+			continue
+		_on_configure_client(client_id)
+
+
+func _show_manual_command_for(client_id: String) -> void:
+	var row: Dictionary = _client_rows.get(client_id, {})
+	if row.is_empty():
+		return
+	var cmd := McpClientConfigurator.manual_command(client_id)
 	if cmd.is_empty():
-		_client_manual_panel.visible = false
+		row["manual_panel"].visible = false
 		return
-	_client_manual_text.text = cmd
-	_client_manual_panel.visible = true
+	row["manual_text"].text = cmd
+	row["manual_panel"].visible = true
 
 
-func _on_copy_manual_command() -> void:
-	DisplayServer.clipboard_set(_client_manual_text.text)
-
-
-func _refresh_client_status() -> void:
-	var key := _selected_client_key()
-	if key.is_empty():
+func _on_copy_manual_command(client_id: String) -> void:
+	var row: Dictionary = _client_rows.get(client_id, {})
+	if row.is_empty():
 		return
-	var client_type: McpClientConfigurator.ClientType = McpClientConfigurator.CLIENT_TYPE_MAP[key]
-	var status := McpClientConfigurator.check_status(client_type)
+	DisplayServer.clipboard_set(row["manual_text"].text)
+
+
+func _refresh_all_client_statuses() -> void:
+	for client_id in _client_rows:
+		var status := McpClientConfigurator.check_status(client_id)
+		_apply_row_status(client_id, status)
+
+
+func _apply_row_status(client_id: String, status: McpClient.Status, error_msg: String = "") -> void:
+	var row: Dictionary = _client_rows.get(client_id, {})
+	if row.is_empty():
+		return
+	var dot: ColorRect = row["dot"]
+	var configure_btn: Button = row["configure_btn"]
+	var remove_btn: Button = row["remove_btn"]
+	var name_label: Label = row["name_label"]
+	var base_name := McpClientConfigurator.client_display_name(client_id)
 	match status:
-		McpClientConfigurator.ConfigStatus.CONFIGURED:
-			_set_client_status_label("configured", Color.GREEN)
-			_client_configure_btn.text = "Reconfigure"
-		McpClientConfigurator.ConfigStatus.NOT_CONFIGURED:
-			_set_client_status_label("not configured", COLOR_MUTED)
-			_client_configure_btn.text = "Configure"
+		McpClient.Status.CONFIGURED:
+			dot.color = Color.GREEN
+			configure_btn.text = "Reconfigure"
+			remove_btn.visible = true
+			name_label.text = base_name
+		McpClient.Status.NOT_CONFIGURED:
+			dot.color = COLOR_MUTED
+			configure_btn.text = "Configure"
+			remove_btn.visible = false
+			var installed := McpClientConfigurator.is_installed(client_id)
+			name_label.text = base_name if installed else "%s  (not detected)" % base_name
 		_:
-			_set_client_status_label("error", Color.RED)
-			_client_configure_btn.text = "Configure"
-
-
-func _set_client_status_label(text: String, color: Color) -> void:
-	_client_status_label.text = text
-	_client_status_label.add_theme_color_override("font_color", color)
+			dot.color = Color.RED
+			configure_btn.text = "Retry"
+			remove_btn.visible = false
+			name_label.text = "%s — %s" % [base_name, error_msg] if not error_msg.is_empty() else base_name
 
 
 # --- Update check & self-update ---

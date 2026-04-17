@@ -138,6 +138,72 @@ func set_anchor_preset(params: Dictionary) -> Dictionary:
 	}
 
 
+## Set the visible `text` property on a UI Control (Label, Button + subclasses,
+## LineEdit, TextEdit, RichTextLabel, LinkButton). Undoable.
+func set_text(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("path", "")
+	if node_path.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+
+	if not params.has("text"):
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: text")
+	var text_value: Variant = params["text"]
+	if typeof(text_value) != TYPE_STRING:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "text must be a string")
+
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+
+	var node := ScenePath.resolve(node_path, scene_root)
+	if node == null:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+	var node_type := node.get_class()
+	if not node is Control:
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"Node %s is not a Control (got %s)" % [node_path, node_type]
+		)
+	# Scan get_property_list() (matches set_property / _apply_property in this
+	# repo) so we can both confirm `text` exists and that it's actually a String
+	# — guards against a custom Control whose `text` happens to be some other
+	# type, where set()-ing a String would silently mis-coerce.
+	var text_prop_type := TYPE_NIL
+	var has_text := false
+	for prop in node.get_property_list():
+		if prop.get("name", "") == "text":
+			has_text = true
+			text_prop_type = prop.get("type", TYPE_NIL)
+			break
+	if not has_text:
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"Control %s has no 'text' property (got %s)" % [node_path, node_type]
+		)
+	if text_prop_type != TYPE_STRING:
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"Control %s has a non-string 'text' property (got %s)" % [node_path, node_type]
+		)
+
+	var old_value: String = node.get("text")
+
+	_undo_redo.create_action("MCP: Set %s text" % node.name)
+	_undo_redo.add_do_property(node, "text", text_value)
+	_undo_redo.add_undo_property(node, "text", old_value)
+	_undo_redo.commit_action()
+
+	return {
+		"data": {
+			"path": node_path,
+			"text": text_value,
+			"old_text": old_value,
+			"node_type": node_type,
+			"undoable": true,
+		}
+	}
+
+
 # ============================================================================
 # build_layout — declarative nested-dict → Control tree in one undo action
 # ============================================================================

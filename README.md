@@ -42,53 +42,33 @@ The plugin will automatically start the MCP server, connect over WebSocket, and 
 
 ### 3. Connect your MCP client
 
-Pick a client in the dock's **Clients** dropdown and press **Configure**. The
-plugin writes the right config for:
+The dock lists every supported client in a scrollable grid with a status dot
+and per-row **Configure** / **Remove** buttons. Press **Configure all** to set
+up every client at once. Auto-configure handles:
 
-- **Claude Code** (CLI)
-- **Claude Desktop** (via `npx mcp-remote` bridge)
-- **Codex**
-- **Antigravity**
+- **Claude Code** — CLI (`claude mcp add`)
+- **Claude Desktop** — JSON config + `npx mcp-remote` stdio bridge
+- **Codex** — TOML (`~/.codex/config.toml`)
+- **Antigravity** — JSON config
+- **Cursor** — `~/.cursor/mcp.json`
+- **Windsurf** — `~/.codeium/windsurf/mcp_config.json`
+- **VS Code** & **VS Code Insiders** — `<user>/Code/User/mcp.json`
+- **Zed** — `~/.config/zed/settings.json` (via `npx mcp-remote`)
+- **Gemini CLI** — `~/.gemini/settings.json`
+- **Cline**, **Kilo Code**, **Roo Code** — VS Code extension globalStorage
+- **Kiro** — `~/.kiro/settings/mcp.json`
+- **Trae** — `<user>/Trae/User/mcp.json`
+- **Cherry Studio** — `<user>/CherryStudio/mcp_servers.json`
+- **OpenCode** — `~/.config/opencode/opencode.json`
+- **Qwen Code** — `~/.qwen/settings.json`
 
-If auto-configure can't find the client's CLI (GUI-launched editors have
-limited PATH), the dock shows a **Run this manually** panel with a copyable
-command — or use the commands below directly.
+If auto-configure can't find a CLI (GUI-launched editors have a limited PATH),
+each row exposes a **Run this manually** panel with a copyable snippet. Server
+URL is always `http://127.0.0.1:8000/mcp`.
 
-<details>
-<summary><strong>Manual configuration</strong></summary>
-
-Server URL: `http://127.0.0.1:8000/mcp`
-
-**Claude Code** (CLI):
-```bash
-claude mcp add --scope user --transport http godot-ai http://127.0.0.1:8000/mcp
-```
-
-**Claude Desktop** — edit `~/Library/Application Support/Claude/claude_desktop_config.json`
-(macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows) and add under
-`mcpServers`:
-```json
-"godot-ai": {
-  "command": "npx",
-  "args": ["-y", "mcp-remote", "http://127.0.0.1:8000/mcp"]
-}
-```
-Requires Node.js (`npx`). Restart Claude Desktop after editing.
-
-**Codex** — edit `~/.codex/config.toml` and add:
-```toml
-[mcp_servers."godot-ai"]
-url = "http://127.0.0.1:8000/mcp"
-enabled = true
-```
-
-**Antigravity** — edit `~/.gemini/antigravity/mcp_config.json` and add under
-`mcpServers`:
-```json
-"godot-ai": { "serverUrl": "http://127.0.0.1:8000/mcp", "disabled": false }
-```
-
-</details>
+> Adding a new client: drop a `clients/<name>.gd` descriptor under
+> `plugin/addons/godot_ai/clients/` and add one `preload(...)` line to
+> `clients/_registry.gd`. No edits to dock or facade required.
 
 ### 4. Try it
 

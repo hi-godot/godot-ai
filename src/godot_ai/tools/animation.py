@@ -438,3 +438,200 @@ def register_animation_tools(mcp: FastMCP) -> None:
             loop_mode=loop_mode,
             overwrite=overwrite,
         )
+
+    @mcp.tool(meta=DEFER_META)
+    async def animation_preset_fade(
+        ctx: Context,
+        player_path: str,
+        target_path: str,
+        mode: str = "in",
+        duration: float = 0.5,
+        animation_name: str = "",
+        overwrite: bool = False,
+        session_id: str = "",
+    ) -> dict:
+        """One-call fade-in / fade-out animation on a target node (alpha tween).
+
+        Builds an Animation clip with a single property track on
+        `<target_path>:modulate:a` — tweens only the alpha channel so the
+        target's RGB color stays intact. The clip is added to the player's
+        default library in one undoable action.
+
+        Useful for: HUD panels, popups, damage flashes, dialog overlays,
+        pickup sparkles, screen wipes. Any node with a `modulate` property
+        (CanvasItem, Control, Node2D, Sprite3D) works — plain Node3Ds do not
+        and the tool will reject them with INVALID_PARAMS.
+
+        Args:
+            player_path: Scene path to the AnimationPlayer (e.g. "/Main/AnimationPlayer").
+            target_path: Target node path relative to the player's root_node
+                (e.g. "Panel", "../Enemy", "HUD/HealthBar"). Same format as
+                `animation_add_property_track`'s track_path before the colon.
+            mode: "in" (alpha 0 → 1) or "out" (alpha 1 → 0). Default "in".
+            duration: Fade length in seconds. Default 0.5.
+            animation_name: Clip name. Default "fade_in" or "fade_out" per mode.
+            overwrite: If true, replace an existing animation with the same name.
+            session_id: Optional Godot session to target. Empty = active session.
+        """
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
+        return await animation_handlers.animation_preset_fade(
+            runtime,
+            player_path=player_path,
+            target_path=target_path,
+            mode=mode,
+            duration=duration,
+            animation_name=animation_name,
+            overwrite=overwrite,
+        )
+
+    @mcp.tool(meta=DEFER_META)
+    async def animation_preset_slide(
+        ctx: Context,
+        player_path: str,
+        target_path: str,
+        direction: str = "left",
+        mode: str = "in",
+        distance: float | None = None,
+        duration: float = 0.4,
+        animation_name: str = "",
+        overwrite: bool = False,
+        session_id: str = "",
+    ) -> dict:
+        """One-call slide-in / slide-out animation on a target node (position tween).
+
+        Builds an Animation clip with a single property track on
+        `<target_path>:position` that moves the target between its current
+        position and an offset derived from `direction` × `distance`.
+
+        Automatically picks the right Vector type: Vector2 for Control and
+        Node2D targets (screen pixels, y-down convention — "up" = -y), Vector3
+        for Node3D targets (world-up, "up" = +y). Other node types are rejected.
+
+        Useful for: menus sliding in from offscreen, banners entering the HUD,
+        tooltips springing up, enemies dashing in, chips flying off a stack.
+
+        Args:
+            player_path: Scene path to the AnimationPlayer.
+            target_path: Target node path relative to the player's root_node.
+            direction: "left", "right", "up", or "down".
+            mode: "in" (start offset, end at rest) or "out" (start at rest, end offset).
+            distance: Offset magnitude. Default 100 for 2D/UI (pixels), 1.0 for 3D.
+            duration: Slide length in seconds. Default 0.4.
+            animation_name: Clip name. Default "slide_{mode}_{direction}".
+            overwrite: If true, replace an existing animation with the same name.
+            session_id: Optional Godot session to target. Empty = active session.
+        """
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
+        return await animation_handlers.animation_preset_slide(
+            runtime,
+            player_path=player_path,
+            target_path=target_path,
+            direction=direction,
+            mode=mode,
+            distance=distance,
+            duration=duration,
+            animation_name=animation_name,
+            overwrite=overwrite,
+        )
+
+    @mcp.tool(meta=DEFER_META)
+    async def animation_preset_shake(
+        ctx: Context,
+        player_path: str,
+        target_path: str,
+        intensity: float | None = None,
+        duration: float = 0.3,
+        frequency: float = 30.0,
+        seed: int = 0,
+        animation_name: str = "",
+        overwrite: bool = False,
+        session_id: str = "",
+    ) -> dict:
+        """One-call screen / node shake animation (jittered position keyframes).
+
+        Builds an Animation clip with a single property track on
+        `<target_path>:position`. The first and last keyframes are the node's
+        current position so the shake starts and ends on-rest (no drift); only
+        the `ceil(frequency * duration) - 1` interior keyframes are jittered —
+        each axis offset uniformly in `[-intensity, +intensity]`. The returned
+        `keyframe_count` includes both at-rest bookends.
+
+        Deterministic when `seed` is non-zero: same seed → same keyframe values,
+        so undo/redo and repeated calls are stable. Pass seed=0 (default) to use
+        fresh randomness per call.
+
+        Auto-picks Vector2 for Control / Node2D targets and Vector3 for Node3D.
+        Useful for: camera shake on damage, UI panel trauma, explosion feedback.
+
+        Args:
+            player_path: Scene path to the AnimationPlayer.
+            target_path: Target node path relative to the player's root_node.
+            intensity: Shake magnitude per axis. Default 10.0 (2D/UI pixels), 0.1 (3D units).
+            duration: Total shake length in seconds. Default 0.3.
+            frequency: Shake samples per second. Default 30.0.
+            seed: RNG seed for reproducibility. 0 (default) = fresh randomness.
+            animation_name: Clip name. Default "shake".
+            overwrite: If true, replace an existing animation with the same name.
+            session_id: Optional Godot session to target. Empty = active session.
+        """
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
+        return await animation_handlers.animation_preset_shake(
+            runtime,
+            player_path=player_path,
+            target_path=target_path,
+            intensity=intensity,
+            duration=duration,
+            frequency=frequency,
+            seed=seed,
+            animation_name=animation_name,
+            overwrite=overwrite,
+        )
+
+    @mcp.tool(meta=DEFER_META)
+    async def animation_preset_pulse(
+        ctx: Context,
+        player_path: str,
+        target_path: str,
+        from_scale: float = 1.0,
+        to_scale: float = 1.1,
+        duration: float = 0.4,
+        animation_name: str = "",
+        overwrite: bool = False,
+        session_id: str = "",
+    ) -> dict:
+        """One-call pulse / hover-bounce animation (three-keyframe scale ping-pong).
+
+        Builds an Animation clip with a single property track on
+        `<target_path>:scale` containing three keyframes:
+        (0, from_scale), (duration/2, to_scale), (duration, from_scale).
+
+        The ping-pong lives inside the clip itself, so a one-shot playback
+        already scales up-and-back. For continuous pulsing, toggle the clip's
+        loop mode to "linear" in the Godot Animation dock, or embed this clip
+        as one tween inside a longer `animation_create_simple` sequence.
+
+        Auto-picks Vector2 for Control / Node2D targets and Vector3 for Node3D.
+        Useful for: button hover feedback, hint pulses on interactable objects,
+        breathe effects on idle UI, damage number pops.
+
+        Args:
+            player_path: Scene path to the AnimationPlayer.
+            target_path: Target node path relative to the player's root_node.
+            from_scale: Start/end uniform scale. Default 1.0.
+            to_scale: Peak uniform scale at mid-clip. Default 1.1.
+            duration: Total pulse length in seconds. Default 0.4.
+            animation_name: Clip name. Default "pulse".
+            overwrite: If true, replace an existing animation with the same name.
+            session_id: Optional Godot session to target. Empty = active session.
+        """
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
+        return await animation_handlers.animation_preset_pulse(
+            runtime,
+            player_path=player_path,
+            target_path=target_path,
+            from_scale=from_scale,
+            to_scale=to_scale,
+            duration=duration,
+            animation_name=animation_name,
+            overwrite=overwrite,
+        )

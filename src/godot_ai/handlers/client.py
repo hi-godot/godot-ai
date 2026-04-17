@@ -9,6 +9,9 @@ async def client_configure(runtime: Runtime, client: str) -> dict:
     return await runtime.send_command("configure_client", {"client": client})
 
 
+async def client_remove(runtime: Runtime, client: str) -> dict:
+    return await runtime.send_command("remove_client", {"client": client})
+
+
 async def client_status(runtime: Runtime) -> dict:
     return await runtime.send_command("check_client_status")
-

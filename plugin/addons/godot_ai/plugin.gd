@@ -38,7 +38,8 @@ func _enter_tree() -> void:
 	var material_handler := MaterialHandler.new(get_undo_redo())
 	var particle_handler := ParticleHandler.new(get_undo_redo())
 	var camera_handler := CameraHandler.new(get_undo_redo())
-	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler, ui_handler, theme_handler, animation_handler, material_handler, particle_handler, camera_handler]
+	var audio_handler := AudioHandler.new(get_undo_redo())
+	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler, ui_handler, theme_handler, animation_handler, material_handler, particle_handler, camera_handler, audio_handler]
 
 	_dispatcher.register("get_editor_state", editor_handler.get_editor_state)
 	_dispatcher.register("get_scene_tree", scene_handler.get_scene_tree)
@@ -74,6 +75,7 @@ func _enter_tree() -> void:
 	_dispatcher.register("stop_project", project_handler.stop_project)
 	_dispatcher.register("search_filesystem", project_handler.search_filesystem)
 	_dispatcher.register("configure_client", client_handler.configure_client)
+	_dispatcher.register("remove_client", client_handler.remove_client)
 	_dispatcher.register("check_client_status", client_handler.check_client_status)
 	_dispatcher.register("create_script", script_handler.create_script)
 	_dispatcher.register("patch_script", script_handler.patch_script)
@@ -101,6 +103,7 @@ func _enter_tree() -> void:
 	_dispatcher.register("get_test_results", test_handler.get_test_results)
 	_dispatcher.register("batch_execute", batch_handler.batch_execute)
 	_dispatcher.register("set_anchor_preset", ui_handler.set_anchor_preset)
+	_dispatcher.register("set_text", ui_handler.set_text)
 	_dispatcher.register("build_layout", ui_handler.build_layout)
 	_dispatcher.register("create_theme", theme_handler.create_theme)
 	_dispatcher.register("theme_set_color", theme_handler.set_color)
@@ -120,6 +123,10 @@ func _enter_tree() -> void:
 	_dispatcher.register("animation_create_simple", animation_handler.create_simple)
 	_dispatcher.register("animation_delete", animation_handler.delete_animation)
 	_dispatcher.register("animation_validate", animation_handler.validate_animation)
+	_dispatcher.register("animation_preset_fade", animation_handler.preset_fade)
+	_dispatcher.register("animation_preset_slide", animation_handler.preset_slide)
+	_dispatcher.register("animation_preset_shake", animation_handler.preset_shake)
+	_dispatcher.register("animation_preset_pulse", animation_handler.preset_pulse)
 	_dispatcher.register("material_create", material_handler.create_material)
 	_dispatcher.register("material_set_param", material_handler.set_param)
 	_dispatcher.register("material_set_shader_param", material_handler.set_shader_param)
@@ -143,6 +150,12 @@ func _enter_tree() -> void:
 	_dispatcher.register("camera_get", camera_handler.get_camera)
 	_dispatcher.register("camera_list", camera_handler.list_cameras)
 	_dispatcher.register("camera_apply_preset", camera_handler.apply_preset)
+	_dispatcher.register("audio_player_create", audio_handler.create_player)
+	_dispatcher.register("audio_player_set_stream", audio_handler.set_stream)
+	_dispatcher.register("audio_player_set_playback", audio_handler.set_playback)
+	_dispatcher.register("audio_play", audio_handler.play)
+	_dispatcher.register("audio_stop", audio_handler.stop)
+	_dispatcher.register("audio_list", audio_handler.list_streams)
 
 	_connection.dispatcher = _dispatcher
 	add_child(_connection)

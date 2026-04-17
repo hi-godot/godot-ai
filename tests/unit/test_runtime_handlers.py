@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from godot_ai.handlers import animation as animation_handlers
+from godot_ai.handlers import audio as audio_handlers
 from godot_ai.handlers import autoload as autoload_handlers
 from godot_ai.handlers import batch as batch_handlers
 from godot_ai.handlers import camera as camera_handlers
@@ -183,8 +184,25 @@ class StubClient:
             }
         if command == "configure_client":
             return {"status": "ok", "client": params.get("client", "")}
+        if command == "remove_client":
+            return {"status": "ok", "client": params.get("client", "")}
         if command == "check_client_status":
-            return {"claude_code": "configured", "codex": "not_configured"}
+            return {
+                "clients": [
+                    {
+                        "id": "claude_code",
+                        "display_name": "Claude Code",
+                        "status": "configured",
+                        "installed": True,
+                    },
+                    {
+                        "id": "codex",
+                        "display_name": "Codex",
+                        "status": "not_configured",
+                        "installed": False,
+                    },
+                ]
+            }
         if command == "patch_script":
             return {
                 "path": params.get("path", ""),
@@ -704,8 +722,11 @@ class StubClient:
                 "class": "StandardMaterial3D",
                 "type": "standard",
                 "properties": [
-                    {"name": "albedo_color", "type": "Color",
-                     "value": {"r": 1, "g": 1, "b": 1, "a": 1}},
+                    {
+                        "name": "albedo_color",
+                        "type": "Color",
+                        "value": {"r": 1, "g": 1, "b": 1, "a": 1},
+                    },
                     {"name": "metallic", "type": "float", "value": 0.0},
                 ],
                 "property_count": 2,
@@ -828,6 +849,62 @@ class StubClient:
                 "draw_pass_mesh_created": params.get("type", "gpu_3d") == "gpu_3d",
                 "is_3d": params.get("type", "gpu_3d").endswith("_3d"),
                 "undoable": True,
+            }
+        if command == "audio_player_create":
+            type_str = params.get("type", "1d")
+            class_name = {
+                "1d": "AudioStreamPlayer",
+                "2d": "AudioStreamPlayer2D",
+                "3d": "AudioStreamPlayer3D",
+            }.get(type_str, "AudioStreamPlayer")
+            return {
+                "path": params.get("parent_path", "") + "/" + params.get("name", ""),
+                "parent_path": params.get("parent_path", ""),
+                "name": params.get("name", ""),
+                "type": type_str,
+                "class": class_name,
+                "undoable": True,
+            }
+        if command == "audio_player_set_stream":
+            return {
+                "player_path": params.get("player_path", ""),
+                "stream_path": params.get("stream_path", ""),
+                "stream_class": "AudioStreamOggVorbis",
+                "duration_seconds": 1.23,
+                "undoable": True,
+            }
+        if command == "audio_player_set_playback":
+            applied = [k for k in ("volume_db", "pitch_scale", "autoplay", "bus") if k in params]
+            return {
+                "player_path": params.get("player_path", ""),
+                "applied": applied,
+                "values": {k: params[k] for k in applied},
+                "undoable": True,
+            }
+        if command == "audio_play":
+            return {
+                "player_path": params.get("player_path", ""),
+                "from_position": params.get("from_position", 0.0),
+                "playing": True,
+                "undoable": False,
+                "reason": "Runtime playback state — not saved with scene",
+            }
+        if command == "audio_stop":
+            return {
+                "player_path": params.get("player_path", ""),
+                "playing": False,
+                "undoable": False,
+                "reason": "Runtime playback state — not saved with scene",
+            }
+        if command == "audio_list":
+            include_duration = params.get("include_duration", True)
+            entry = {"path": "res://sfx/click.ogg", "class": "AudioStreamOggVorbis"}
+            if include_duration:
+                entry["duration_seconds"] = 0.42
+            return {
+                "root": params.get("root", "res://"),
+                "streams": [entry],
+                "count": 1,
             }
         return {"status": "ok"}
 
@@ -1448,11 +1525,22 @@ async def test_client_configure_handler():
     assert client.calls[-1]["params"] == {"client": "codex"}
 
 
+async def test_client_remove_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await client_handlers.client_remove(runtime, client="cursor")
+    assert result["client"] == "cursor"
+    assert client.calls[-1]["command"] == "remove_client"
+    assert client.calls[-1]["params"] == {"client": "cursor"}
+
+
 async def test_client_status_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     result = await client_handlers.client_status(runtime)
-    assert result["claude_code"] == "configured"
+    clients = {entry["id"]: entry for entry in result["clients"]}
+    assert clients["claude_code"]["status"] == "configured"
+    assert clients["codex"]["installed"] is False
     assert client.calls[-1]["command"] == "check_client_status"
 
 
@@ -3135,9 +3223,7 @@ async def test_material_apply_to_node_forwards_save_to():
 async def test_material_apply_preset_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    await material_handlers.material_apply_preset(
-        runtime, preset="glass", node_path="/Main/Box"
-    )
+    await material_handlers.material_apply_preset(runtime, preset="glass", node_path="/Main/Box")
     params = client.calls[-1]["params"]
     assert params["preset"] == "glass"
     assert params["node_path"] == "/Main/Box"
@@ -3415,3 +3501,177 @@ async def test_camera_list_handler():
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     await camera_handlers.camera_list(runtime)
     assert client.calls[-1]["command"] == "camera_list"
+# ---------------------------------------------------------------------------
+# Audio handler tests
+# ---------------------------------------------------------------------------
+
+
+async def test_audio_player_create_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await audio_handlers.audio_player_create(
+        runtime, parent_path="/Main", name="Footsteps", type="3d"
+    )
+    assert client.calls[-1]["command"] == "audio_player_create"
+    assert client.calls[-1]["params"] == {
+        "parent_path": "/Main",
+        "name": "Footsteps",
+        "type": "3d",
+    }
+    assert result["class"] == "AudioStreamPlayer3D"
+    assert result["undoable"] is True
+
+
+async def test_audio_player_create_defaults_to_1d():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await audio_handlers.audio_player_create(runtime, parent_path="/Main")
+    assert client.calls[-1]["params"]["type"] == "1d"
+    assert client.calls[-1]["params"]["name"] == "AudioStreamPlayer"
+    assert result["class"] == "AudioStreamPlayer"
+
+
+async def test_audio_player_set_stream_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await audio_handlers.audio_player_set_stream(
+        runtime,
+        player_path="/Main/Footsteps",
+        stream_path="res://sfx/step.ogg",
+    )
+    assert client.calls[-1]["command"] == "audio_player_set_stream"
+    assert client.calls[-1]["params"] == {
+        "player_path": "/Main/Footsteps",
+        "stream_path": "res://sfx/step.ogg",
+    }
+    assert result["duration_seconds"] == 1.23
+    assert result["undoable"] is True
+
+
+async def test_audio_player_set_playback_partial_update():
+    """Only provided fields should go into params — None values stay out."""
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await audio_handlers.audio_player_set_playback(
+        runtime,
+        player_path="/Main/Footsteps",
+        volume_db=-6.0,
+    )
+    params = client.calls[-1]["params"]
+    assert params == {"player_path": "/Main/Footsteps", "volume_db": -6.0}
+    assert "pitch_scale" not in params
+    assert "autoplay" not in params
+    assert "bus" not in params
+
+
+async def test_audio_player_set_playback_all_fields():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await audio_handlers.audio_player_set_playback(
+        runtime,
+        player_path="/Main/Music",
+        volume_db=-3.0,
+        pitch_scale=1.1,
+        autoplay=True,
+        bus="Music",
+    )
+    params = client.calls[-1]["params"]
+    assert params == {
+        "player_path": "/Main/Music",
+        "volume_db": -3.0,
+        "pitch_scale": 1.1,
+        "autoplay": True,
+        "bus": "Music",
+    }
+    assert set(result["applied"]) == {"volume_db", "pitch_scale", "autoplay", "bus"}
+
+
+async def test_audio_play_handler_does_not_require_writable():
+    """audio_play is runtime-only — should succeed even when the editor is 'playing'."""
+    client = StubClient()
+    session = Session(
+        session_id="s1",
+        godot_version="4.4",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="playing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    result = await audio_handlers.audio_play(
+        runtime, player_path="/Main/Footsteps", from_position=0.5
+    )
+    assert client.calls[-1]["command"] == "audio_play"
+    assert client.calls[-1]["params"] == {
+        "player_path": "/Main/Footsteps",
+        "from_position": 0.5,
+    }
+    assert result["undoable"] is False
+    assert result["playing"] is True
+
+
+async def test_audio_stop_handler_does_not_require_writable():
+    client = StubClient()
+    session = Session(
+        session_id="s1",
+        godot_version="4.4",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="playing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    result = await audio_handlers.audio_stop(runtime, player_path="/Main/Footsteps")
+    assert client.calls[-1]["command"] == "audio_stop"
+    assert result["undoable"] is False
+    assert result["playing"] is False
+
+
+async def test_audio_list_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await audio_handlers.audio_list(runtime)
+    assert client.calls[-1]["command"] == "audio_list"
+    assert client.calls[-1]["params"] == {"root": "res://", "include_duration": True}
+    assert result["count"] == 1
+    assert result["streams"][0]["duration_seconds"] == 0.42
+
+
+async def test_audio_list_handler_is_read_only():
+    """audio_list is read-only — should succeed even when the editor is 'importing'."""
+    client = StubClient()
+    session = Session(
+        session_id="s1",
+        godot_version="4.4",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="importing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    result = await audio_handlers.audio_list(runtime, include_duration=False)
+    params = client.calls[-1]["params"]
+    assert params["include_duration"] is False
+    assert "duration_seconds" not in result["streams"][0]
+
+
+async def test_audio_player_create_blocks_when_not_writable():
+    """audio_player_create requires a writable session (uses require_writable)."""
+    client = StubClient()
+    session = Session(
+        session_id="s1",
+        godot_version="4.4",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="playing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(Exception) as exc_info:
+        await audio_handlers.audio_player_create(runtime, parent_path="/Main")
+    assert "play mode" in str(exc_info.value).lower()
+    assert client.calls == []

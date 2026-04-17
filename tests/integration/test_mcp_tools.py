@@ -905,13 +905,30 @@ class TestClientTools:
             assert cmd["command"] == "check_client_status"
             await plugin.send_response(
                 cmd["request_id"],
-                {"claude_code": "configured", "codex": "not_configured"},
+                {
+                    "clients": [
+                        {
+                            "id": "claude_code",
+                            "display_name": "Claude Code",
+                            "status": "configured",
+                            "installed": True,
+                        },
+                        {
+                            "id": "codex",
+                            "display_name": "Codex",
+                            "status": "not_configured",
+                            "installed": False,
+                        },
+                    ]
+                },
             )
 
         task = asyncio.create_task(respond())
         result = await client.call_tool("client_status", {})
         await task
-        assert result.data["claude_code"] == "configured"
+        clients = {entry["id"]: entry for entry in result.data["clients"]}
+        assert clients["claude_code"]["status"] == "configured"
+        assert clients["codex"]["installed"] is False
 
     async def test_client_configure(self, mcp_stack):
         client, plugin = mcp_stack
@@ -924,6 +941,20 @@ class TestClientTools:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool("client_configure", {"client": "codex"})
+        await task
+        assert result.data["status"] == "ok"
+
+    async def test_client_remove(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "remove_client"
+            assert cmd["params"]["client"] == "cursor"
+            await plugin.send_response(cmd["request_id"], {"status": "ok"})
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("client_remove", {"client": "cursor"})
         await task
         assert result.data["status"] == "ok"
 
@@ -2771,6 +2802,65 @@ class TestUiSetAnchorPresetTool:
 
 
 # ---------------------------------------------------------------------------
+# ui_set_text
+# ---------------------------------------------------------------------------
+
+
+class TestUiSetTextTool:
+    async def test_forwards_path_and_text(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "set_text"
+            assert cmd["params"] == {"path": "/Main/HUD/Score", "text": "100"}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/HUD/Score",
+                    "text": "100",
+                    "old_text": "0",
+                    "node_type": "Label",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "ui_set_text",
+            {"path": "/Main/HUD/Score", "text": "100"},
+        )
+        await task
+
+        assert result.data["text"] == "100"
+        assert result.data["old_text"] == "0"
+        assert result.data["node_type"] == "Label"
+        assert result.data["undoable"] is True
+
+    async def test_surfaces_plugin_error(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            await plugin.send_error(
+                cmd["request_id"],
+                "INVALID_PARAMS",
+                "Node /Main/Camera3D is not a Control (got Camera3D)",
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "ui_set_text",
+            {"path": "/Main/Camera3D", "text": "x"},
+            raise_on_error=False,
+        )
+        await task
+
+        assert result.is_error
+        assert "not a Control" in str(result.content)
+
+
+# ---------------------------------------------------------------------------
 # ui_build_layout
 # ---------------------------------------------------------------------------
 
@@ -3633,6 +3723,234 @@ class TestAnimationValidateTool:
         assert result.data["broken_count"] == 1
 
 
+class TestAnimationPresetTools:
+    async def test_preset_fade(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_preset_fade"
+            assert cmd["params"]["player_path"] == "/Main/AP"
+            assert cmd["params"]["target_path"] == "Panel"
+            assert cmd["params"]["mode"] == "in"
+            assert cmd["params"]["duration"] == 0.5
+            # Optional params omitted when not set.
+            assert "animation_name" not in cmd["params"]
+            assert "overwrite" not in cmd["params"]
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "fade_in",
+                    "mode": "in",
+                    "length": 0.5,
+                    "track_count": 1,
+                    "library_created": False,
+                    "overwritten": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_preset_fade",
+            {
+                "player_path": "/Main/AP",
+                "target_path": "Panel",
+                "mode": "in",
+                "duration": 0.5,
+            },
+        )
+        await task
+        assert result.data["animation_name"] == "fade_in"
+        assert result.data["undoable"] is True
+
+    async def test_preset_fade_overwrite_forwards(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["overwrite"] is True
+            assert cmd["params"]["animation_name"] == "hud_flash"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "hud_flash",
+                    "mode": "out",
+                    "length": 0.25,
+                    "track_count": 1,
+                    "library_created": False,
+                    "overwritten": True,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_preset_fade",
+            {
+                "player_path": "/Main/AP",
+                "target_path": "HUD",
+                "mode": "out",
+                "duration": 0.25,
+                "animation_name": "hud_flash",
+                "overwrite": True,
+            },
+        )
+        await task
+        assert result.data["overwritten"] is True
+
+    async def test_preset_slide_forwards_direction_and_distance(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_preset_slide"
+            assert cmd["params"]["direction"] == "left"
+            assert cmd["params"]["mode"] == "in"
+            assert cmd["params"]["distance"] == 250.0
+            assert cmd["params"]["duration"] == 0.4
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "slide_in_left",
+                    "direction": "left",
+                    "mode": "in",
+                    "distance": 250.0,
+                    "length": 0.4,
+                    "track_count": 1,
+                    "library_created": False,
+                    "overwritten": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_preset_slide",
+            {
+                "player_path": "/Main/AP",
+                "target_path": "Menu",
+                "direction": "left",
+                "mode": "in",
+                "distance": 250.0,
+            },
+        )
+        await task
+        assert result.data["direction"] == "left"
+
+    async def test_preset_slide_distance_omitted_when_default(self, mcp_stack):
+        """`distance=None` means the plugin picks the 2D/3D default — don't leak it."""
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert "distance" not in cmd["params"]
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "slide_in_left",
+                    "direction": "left",
+                    "mode": "in",
+                    "distance": 100.0,
+                    "length": 0.4,
+                    "track_count": 1,
+                    "library_created": False,
+                    "overwritten": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        await client.call_tool(
+            "animation_preset_slide",
+            {"player_path": "/Main/AP", "target_path": "Menu"},
+        )
+        await task
+
+    async def test_preset_shake_forwards_seed_and_frequency(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_preset_shake"
+            assert cmd["params"]["seed"] == 42
+            assert cmd["params"]["frequency"] == 60.0
+            assert cmd["params"]["intensity"] == 8.0
+            assert cmd["params"]["duration"] == 0.2
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "shake",
+                    "length": 0.2,
+                    "frequency": 60.0,
+                    "intensity": 8.0,
+                    "keyframe_count": 13,
+                    "track_count": 1,
+                    "library_created": False,
+                    "overwritten": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_preset_shake",
+            {
+                "player_path": "/Main/AP",
+                "target_path": "Camera",
+                "intensity": 8.0,
+                "duration": 0.2,
+                "frequency": 60.0,
+                "seed": 42,
+            },
+        )
+        await task
+        assert result.data["keyframe_count"] == 13
+
+    async def test_preset_pulse_forwards_scale_bounds(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_preset_pulse"
+            assert cmd["params"]["from_scale"] == 1.0
+            assert cmd["params"]["to_scale"] == 1.25
+            assert cmd["params"]["duration"] == 0.3
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "pulse",
+                    "from_scale": 1.0,
+                    "to_scale": 1.25,
+                    "length": 0.3,
+                    "track_count": 1,
+                    "library_created": False,
+                    "overwritten": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_preset_pulse",
+            {
+                "player_path": "/Main/AP",
+                "target_path": "Button",
+                "from_scale": 1.0,
+                "to_scale": 1.25,
+                "duration": 0.3,
+            },
+        )
+        await task
+        assert result.data["animation_name"] == "pulse"
+
+
 # ---------------------------------------------------------------------------
 # material_create / material_set_param / material_assign / material_apply_*
 # ---------------------------------------------------------------------------
@@ -3662,9 +3980,7 @@ class TestMaterialCreateTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "material_create", {"path": "res://materials/red.tres"}
-        )
+        result = await client.call_tool("material_create", {"path": "res://materials/red.tres"})
         await task
         assert result.data["class"] == "StandardMaterial3D"
         assert result.data["undoable"] is False
@@ -3828,9 +4144,7 @@ class TestMaterialGetTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "material_get", {"path": "res://materials/red.tres"}
-        )
+        result = await client.call_tool("material_get", {"path": "res://materials/red.tres"})
         await task
         assert result.data["class"] == "StandardMaterial3D"
 
@@ -3965,9 +4279,7 @@ class TestParticleCreateTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "particle_create", {"parent_path": "/Main", "name": "Fire"}
-        )
+        result = await client.call_tool("particle_create", {"parent_path": "/Main", "name": "Fire"})
         await task
         assert result.data["process_material_created"] is True
         assert result.data["draw_pass_mesh_created"] is True
@@ -4567,3 +4879,181 @@ class TestCameraApplyPresetTool:
             },
         )
         await task
+# audio_player_create / audio_player_set_stream / audio_play / audio_stop / audio_list
+# ---------------------------------------------------------------------------
+
+
+class TestAudioPlayerCreateTool:
+    async def test_create_3d(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "audio_player_create"
+            assert cmd["params"] == {
+                "parent_path": "/Main",
+                "name": "Footsteps",
+                "type": "3d",
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Footsteps",
+                    "parent_path": "/Main",
+                    "name": "Footsteps",
+                    "type": "3d",
+                    "class": "AudioStreamPlayer3D",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "audio_player_create",
+            {"parent_path": "/Main", "name": "Footsteps", "type": "3d"},
+        )
+        await task
+        assert result.data["class"] == "AudioStreamPlayer3D"
+        assert result.data["undoable"] is True
+
+
+class TestAudioPlayerSetStreamTool:
+    async def test_set_stream_forwards_path(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "audio_player_set_stream"
+            assert cmd["params"] == {
+                "player_path": "/Main/Footsteps",
+                "stream_path": "res://sfx/step.ogg",
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/Footsteps",
+                    "stream_path": "res://sfx/step.ogg",
+                    "stream_class": "AudioStreamOggVorbis",
+                    "duration_seconds": 0.42,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "audio_player_set_stream",
+            {"player_path": "/Main/Footsteps", "stream_path": "res://sfx/step.ogg"},
+        )
+        await task
+        assert result.data["stream_class"] == "AudioStreamOggVorbis"
+        assert result.data["duration_seconds"] == 0.42
+
+
+class TestAudioPlayerSetPlaybackTool:
+    async def test_partial_update_omits_none_fields(self, mcp_stack):
+        """Only fields the caller passes should end up on the wire."""
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "audio_player_set_playback"
+            assert cmd["params"] == {"player_path": "/Main/Music", "volume_db": -3.0}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/Music",
+                    "applied": ["volume_db"],
+                    "values": {"volume_db": -3.0},
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "audio_player_set_playback",
+            {"player_path": "/Main/Music", "volume_db": -3.0},
+        )
+        await task
+        assert result.data["applied"] == ["volume_db"]
+
+
+class TestAudioPlayTool:
+    async def test_play_is_runtime_only(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "audio_play"
+            assert cmd["params"] == {
+                "player_path": "/Main/Footsteps",
+                "from_position": 0.0,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/Footsteps",
+                    "from_position": 0.0,
+                    "playing": True,
+                    "undoable": False,
+                    "reason": "Runtime playback state — not saved with scene",
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("audio_play", {"player_path": "/Main/Footsteps"})
+        await task
+        assert result.data["undoable"] is False
+        assert result.data["playing"] is True
+
+
+class TestAudioStopTool:
+    async def test_stop(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "audio_stop"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/Footsteps",
+                    "playing": False,
+                    "undoable": False,
+                    "reason": "Runtime playback state — not saved with scene",
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("audio_stop", {"player_path": "/Main/Footsteps"})
+        await task
+        assert result.data["playing"] is False
+
+
+class TestAudioListTool:
+    async def test_list_returns_streams(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "audio_list"
+            assert cmd["params"] == {"root": "res://", "include_duration": True}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "root": "res://",
+                    "streams": [
+                        {
+                            "path": "res://sfx/click.ogg",
+                            "class": "AudioStreamOggVorbis",
+                            "duration_seconds": 0.1,
+                        }
+                    ],
+                    "count": 1,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("audio_list", {})
+        await task
+        assert result.data["count"] == 1
+        assert result.data["streams"][0]["class"] == "AudioStreamOggVorbis"
