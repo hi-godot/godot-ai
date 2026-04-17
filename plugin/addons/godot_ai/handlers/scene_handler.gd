@@ -108,9 +108,10 @@ func create_scene(params: Dictionary) -> Dictionary:
 	if root == null:
 		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s" % root_type)
 
-	var requested_root_name: String = params.get("root_name", "")
-	var resolved_root_name := requested_root_name if not requested_root_name.is_empty() else path.get_file().get_basename()
-	root.name = resolved_root_name
+	var root_name: String = params.get("root_name", "")
+	if root_name.is_empty():
+		root_name = path.get_file().get_basename()
+	root.name = root_name
 
 	var packed := PackedScene.new()
 	packed.pack(root)
@@ -130,7 +131,7 @@ func create_scene(params: Dictionary) -> Dictionary:
 		"data": {
 			"path": path,
 			"root_type": root_type,
-			"root_name": resolved_root_name,
+			"root_name": root_name,
 			"undoable": false,
 			"reason": "Scene creation involves file system operations",
 		}

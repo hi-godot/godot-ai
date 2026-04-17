@@ -240,7 +240,10 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary) ->
 		prop_types[prop.name] = prop.get("type", TYPE_NIL)
 	for key in properties.keys():
 		if not prop_types.has(key):
-			var valid: Array = prop_types.keys()
+			var valid: Array[String] = []
+			for prop in res.get_property_list():
+				if prop.get("usage", 0) & PROPERTY_USAGE_EDITOR:
+					valid.append(prop.name)
 			valid.sort()
 			var err := McpErrorCodes.make(
 				McpErrorCodes.INVALID_PARAMS,

@@ -147,8 +147,9 @@ func _cleanup_leaked_nodes(scene_root: Node, before: Array[Node]) -> void:
 		if not before_set.has(child):
 			scene_root.remove_child(child)
 			child.queue_free()
-	# Also sweep the whole tree for _McpTest* nodes added under non-root parents.
-	_sweep_mcp_test_nodes(scene_root)
+	# Also sweep descendants for _McpTest* nodes added under non-root parents.
+	for child in scene_root.get_children():
+		_sweep_mcp_test_nodes(child)
 
 
 func _sweep_mcp_test_nodes(node: Node) -> void:
