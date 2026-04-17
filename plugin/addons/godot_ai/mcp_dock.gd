@@ -18,6 +18,8 @@ var _status_icon: ColorRect
 var _status_label: Label
 var _client_grid: VBoxContainer
 var _client_configure_all_btn: Button
+var _clients_summary_label: Label
+var _clients_window: Window
 var _dev_mode_toggle: CheckButton
 
 ## Per-client UI handles, keyed by client id. Each entry holds the row's
@@ -218,24 +220,56 @@ func _build_ui() -> void:
 
 	add_child(HSeparator.new())
 
-	# --- Client config (scrollable grid: one row per registered client) ---
-	var clients_header_row := HBoxContainer.new()
+	# --- Clients ---
+	var clients_row := HBoxContainer.new()
+	clients_row.add_theme_constant_override("separation", 8)
+
 	var clients_header := _make_header("Clients")
-	clients_header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	clients_header_row.add_child(clients_header)
+	clients_row.add_child(clients_header)
+
+	_clients_summary_label = Label.new()
+	_clients_summary_label.add_theme_color_override("font_color", COLOR_MUTED)
+	_clients_summary_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	clients_row.add_child(_clients_summary_label)
+
+	var clients_open_btn := Button.new()
+	clients_open_btn.text = "Configure Clients"
+	clients_open_btn.pressed.connect(_on_open_clients_window)
+	clients_row.add_child(clients_open_btn)
+
+	add_child(clients_row)
+
+	_clients_window = Window.new()
+	_clients_window.title = "Configure MCP Clients"
+	_clients_window.min_size = Vector2i(560, 400)
+	_clients_window.close_requested.connect(_on_clients_window_close_requested)
+	add_child(_clients_window)
+
+	var window_margin := MarginContainer.new()
+	window_margin.anchor_right = 1.0
+	window_margin.anchor_bottom = 1.0
+	window_margin.add_theme_constant_override("margin_left", 12)
+	window_margin.add_theme_constant_override("margin_right", 12)
+	window_margin.add_theme_constant_override("margin_top", 12)
+	window_margin.add_theme_constant_override("margin_bottom", 12)
+	_clients_window.add_child(window_margin)
+
+	var window_body := VBoxContainer.new()
+	window_body.add_theme_constant_override("separation", 8)
+	window_margin.add_child(window_body)
 
 	_client_configure_all_btn = Button.new()
 	_client_configure_all_btn.text = "Configure all"
 	_client_configure_all_btn.tooltip_text = "Configure every client that isn't already pointing at this server"
+	_client_configure_all_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
 	_client_configure_all_btn.pressed.connect(_on_configure_all_clients)
-	clients_header_row.add_child(_client_configure_all_btn)
-	add_child(clients_header_row)
+	window_body.add_child(_client_configure_all_btn)
 
 	var clients_scroll := ScrollContainer.new()
 	clients_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	clients_scroll.custom_minimum_size = Vector2(0, 220)
+	clients_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	clients_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	add_child(clients_scroll)
+	window_body.add_child(clients_scroll)
 
 	_client_grid = VBoxContainer.new()
 	_client_grid.add_theme_constant_override("separation", 4)
@@ -297,7 +331,7 @@ func _build_ui() -> void:
 func _make_header(text: String) -> Label:
 	var label := Label.new()
 	label.text = text
-	label.add_theme_font_size_override("font_size", 15)
+	label.add_theme_font_size_override("font_size", 18)
 	label.add_theme_color_override("font_color", COLOR_HEADER)
 	return label
 
@@ -553,6 +587,7 @@ func _on_configure_client(client_id: String) -> void:
 	else:
 		_apply_row_status(client_id, McpClient.Status.ERROR, str(result.get("message", "failed")))
 		_show_manual_command_for(client_id)
+	_refresh_clients_summary()
 
 
 func _on_remove_client(client_id: String) -> void:
@@ -562,6 +597,7 @@ func _on_remove_client(client_id: String) -> void:
 		_client_rows[client_id]["manual_panel"].visible = false
 	else:
 		_apply_row_status(client_id, McpClient.Status.ERROR, str(result.get("message", "failed")))
+	_refresh_clients_summary()
 
 
 func _on_configure_all_clients() -> void:
@@ -569,6 +605,34 @@ func _on_configure_all_clients() -> void:
 		if McpClientConfigurator.check_status(client_id) == McpClient.Status.CONFIGURED:
 			continue
 		_on_configure_client(client_id)
+	_refresh_clients_summary()
+
+
+func _on_open_clients_window() -> void:
+	if _clients_window == null:
+		return
+	# popup_centered() with a minsize forces the window to that size and
+	# centers on the parent viewport. Setting .size on a hidden Window
+	# doesn't always take effect, so we force it at popup time here.
+	_clients_window.popup_centered(Vector2i(640, 600))
+
+
+func _on_clients_window_close_requested() -> void:
+	if _clients_window != null:
+		_clients_window.hide()
+
+
+func _refresh_clients_summary() -> void:
+	# Count from row dot colors — `_apply_row_status` is the single source of
+	# truth, and reading colors avoids re-running filesystem-hitting status
+	# checks on every refresh.
+	if _clients_summary_label == null:
+		return
+	var configured := 0
+	for row in _client_rows.values():
+		if (row["dot"] as ColorRect).color == Color.GREEN:
+			configured += 1
+	_clients_summary_label.text = "%d / %d configured" % [configured, _client_rows.size()]
 
 
 func _show_manual_command_for(client_id: String) -> void:
@@ -594,6 +658,7 @@ func _refresh_all_client_statuses() -> void:
 	for client_id in _client_rows:
 		var status := McpClientConfigurator.check_status(client_id)
 		_apply_row_status(client_id, status)
+	_refresh_clients_summary()
 
 
 func _apply_row_status(client_id: String, status: McpClient.Status, error_msg: String = "") -> void:
