@@ -82,3 +82,63 @@ def register_resource_tools(mcp: FastMCP) -> None:
             property=property,
             resource_path=resource_path,
         )
+
+    @mcp.tool(meta=DEFER_META)
+    async def resource_create(
+        ctx: Context,
+        type: str,
+        properties: dict | None = None,
+        path: str = "",
+        property: str = "",
+        resource_path: str = "",
+        overwrite: bool = False,
+        session_id: str = "",
+    ) -> dict:
+        """Instantiate a built-in Godot Resource subclass in-memory or as a .tres file.
+
+        Covers primitive meshes (BoxMesh, SphereMesh, CylinderMesh, CapsuleMesh,
+        PlaneMesh, TorusMesh, PrismMesh, QuadMesh), physics shapes (BoxShape3D,
+        SphereShape3D, CapsuleShape3D, CylinderShape3D, RectangleShape2D,
+        CircleShape2D, CapsuleShape2D, ...), curves (Curve, Curve2D, Curve3D),
+        gradients (Gradient), StyleBox variants, PhysicsMaterial, Environment,
+        Sky, SkyMaterial, ProceduralSkyMaterial, and any other concrete Resource
+        subclass — i.e. everything ClassDB.can_instantiate() allows.
+
+        Exactly one of {path+property, resource_path} must be given:
+        - path+property: instantiate and assign to the node slot in one
+          undoable action (undo restores the previous value).
+        - resource_path: instantiate and save as a .tres/.res file on disk
+          (not undoable — file creation is persistent).
+
+        For compound resources with their own authoring tools, prefer those:
+        material_create (Materials), animation_create (Animations),
+        theme_create (Themes). Use environment_create, gradient_texture_create,
+        noise_texture_create, physics_shape_autofit, or curve_set_points for
+        those specific families where composing sub-resources matters.
+
+        Args:
+            type: Godot class name to instantiate (e.g. "BoxMesh", "BoxShape3D",
+                "Curve", "StyleBoxFlat"). Must be a concrete Resource subclass.
+            properties: Optional dict of initial property values. Values are
+                coerced the same way set_property does — e.g. {"size": {"x": 2,
+                "y": 2, "z": 2}} lands as a Vector3, colors as Color, etc.
+            path: Scene path of a node to receive the resource (e.g.
+                "/Main/Mesh"). Mutually exclusive with resource_path.
+            property: Property name on that node (e.g. "mesh", "shape",
+                "texture"). Required when path is given.
+            resource_path: res:// destination to save as a .tres/.res file.
+                Mutually exclusive with path+property.
+            overwrite: Allow replacing an existing file at resource_path.
+                Default false.
+            session_id: Optional Godot session to target. Empty = active.
+        """
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
+        return await resource_handlers.resource_create(
+            runtime,
+            type=type,
+            properties=properties,
+            path=path,
+            property=property,
+            resource_path=resource_path,
+            overwrite=overwrite,
+        )

@@ -36,3 +36,27 @@ async def resource_assign(
         "assign_resource",
         {"path": path, "property": property, "resource_path": resource_path},
     )
+
+
+async def resource_create(
+    runtime: Runtime,
+    type: str,
+    properties: dict | None = None,
+    path: str = "",
+    property: str = "",
+    resource_path: str = "",
+    overwrite: bool = False,
+) -> dict:
+    require_writable(runtime)
+    params: dict = {"type": type}
+    if properties:
+        params["properties"] = properties
+    if path:
+        params["path"] = path
+    if property:
+        params["property"] = property
+    if resource_path:
+        params["resource_path"] = resource_path
+    if overwrite:
+        params["overwrite"] = overwrite
+    return await runtime.send_command("create_resource", params)

@@ -10,12 +10,15 @@ from godot_ai.handlers import autoload as autoload_handlers
 from godot_ai.handlers import batch as batch_handlers
 from godot_ai.handlers import camera as camera_handlers
 from godot_ai.handlers import client as client_handlers
+from godot_ai.handlers import curve as curve_handlers
 from godot_ai.handlers import editor as editor_handlers
+from godot_ai.handlers import environment as environment_handlers
 from godot_ai.handlers import filesystem as filesystem_handlers
 from godot_ai.handlers import input_map as input_map_handlers
 from godot_ai.handlers import material as material_handlers
 from godot_ai.handlers import node as node_handlers
 from godot_ai.handlers import particle as particle_handlers
+from godot_ai.handlers import physics_shape as physics_shape_handlers
 from godot_ai.handlers import project as project_handlers
 from godot_ai.handlers import resource as resource_handlers
 from godot_ai.handlers import scene as scene_handlers
@@ -23,6 +26,7 @@ from godot_ai.handlers import script as script_handlers
 from godot_ai.handlers import session as session_handlers
 from godot_ai.handlers import signal as signal_handlers
 from godot_ai.handlers import testing as testing_handlers
+from godot_ai.handlers import texture as texture_handlers
 from godot_ai.handlers import theme as theme_handlers
 from godot_ai.handlers import ui as ui_handlers
 from godot_ai.runtime.direct import DirectRuntime
@@ -274,6 +278,107 @@ class StubClient:
                 "property": params.get("property", ""),
                 "resource_path": params.get("resource_path", ""),
                 "resource_type": "StandardMaterial3D",
+                "undoable": True,
+            }
+        if command == "curve_set_points":
+            if params.get("resource_path"):
+                return {
+                    "resource_path": params["resource_path"],
+                    "curve_class": "Curve3D",
+                    "point_count": len(params.get("points", [])),
+                    "undoable": False,
+                    "reason": "File save is persistent; edit the .tres file manually to revert",
+                }
+            return {
+                "path": params.get("path", ""),
+                "property": params.get("property", ""),
+                "curve_class": "Curve3D",
+                "point_count": len(params.get("points", [])),
+                "undoable": True,
+            }
+        if command == "gradient_texture_create":
+            if params.get("resource_path"):
+                return {
+                    "resource_path": params["resource_path"],
+                    "texture_class": "GradientTexture2D",
+                    "gradient_class": "Gradient",
+                    "stop_count": len(params.get("stops", [])),
+                    "fill": params.get("fill", "linear"),
+                    "overwritten": False,
+                    "undoable": False,
+                    "reason": "File creation is persistent; delete the file manually to revert",
+                }
+            return {
+                "path": params.get("path", ""),
+                "property": params.get("property", ""),
+                "texture_class": "GradientTexture2D",
+                "gradient_class": "Gradient",
+                "stop_count": len(params.get("stops", [])),
+                "fill": params.get("fill", "linear"),
+                "undoable": True,
+            }
+        if command == "noise_texture_create":
+            if params.get("resource_path"):
+                return {
+                    "resource_path": params["resource_path"],
+                    "texture_class": "NoiseTexture2D",
+                    "noise_class": "FastNoiseLite",
+                    "noise_type": params.get("noise_type", "simplex_smooth"),
+                    "overwritten": False,
+                    "undoable": False,
+                    "reason": "File creation is persistent; delete the file manually to revert",
+                }
+            return {
+                "path": params.get("path", ""),
+                "property": params.get("property", ""),
+                "texture_class": "NoiseTexture2D",
+                "noise_class": "FastNoiseLite",
+                "noise_type": params.get("noise_type", "simplex_smooth"),
+                "undoable": True,
+            }
+        if command == "environment_create":
+            if params.get("resource_path"):
+                return {
+                    "resource_path": params["resource_path"],
+                    "preset": params.get("preset", "default"),
+                    "overwritten": False,
+                    "undoable": False,
+                    "reason": "File creation is persistent; delete the file manually to revert",
+                }
+            return {
+                "path": params.get("path", ""),
+                "preset": params.get("preset", "default"),
+                "sky_created": params.get("sky", True) is not False,
+                "sky_material_class": "ProceduralSkyMaterial",
+                "undoable": True,
+            }
+        if command == "physics_shape_autofit":
+            return {
+                "path": params.get("path", ""),
+                "source_path": params.get("source_path", "/auto"),
+                "shape_type": params.get("shape_type", "box"),
+                "shape_class": "BoxShape3D",
+                "shape_created": True,
+                "size": {"x": 2.0, "y": 1.0, "z": 1.0},
+                "undoable": True,
+            }
+        if command == "create_resource":
+            if params.get("resource_path"):
+                return {
+                    "resource_path": params["resource_path"],
+                    "type": params.get("type", ""),
+                    "resource_class": params.get("type", ""),
+                    "properties_applied": len(params.get("properties", {}) or {}),
+                    "overwritten": False,
+                    "undoable": False,
+                    "reason": "File creation is persistent; delete the file manually to revert",
+                }
+            return {
+                "path": params.get("path", ""),
+                "property": params.get("property", ""),
+                "type": params.get("type", ""),
+                "resource_class": params.get("type", ""),
+                "properties_applied": len(params.get("properties", {}) or {}),
                 "undoable": True,
             }
         if command == "read_file":
@@ -1849,6 +1954,339 @@ async def test_resource_assign_handler():
         "property": "mesh",
         "resource_path": "res://cube.tres",
     }
+
+
+async def test_resource_create_assign_inline_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await resource_handlers.resource_create(
+        runtime,
+        type="BoxMesh",
+        path="/Main/Mesh",
+        property="mesh",
+        properties={"size": {"x": 2, "y": 2, "z": 2}},
+    )
+    assert result["resource_class"] == "BoxMesh"
+    assert result["undoable"] is True
+    assert client.calls[-1]["params"] == {
+        "type": "BoxMesh",
+        "properties": {"size": {"x": 2, "y": 2, "z": 2}},
+        "path": "/Main/Mesh",
+        "property": "mesh",
+    }
+
+
+async def test_resource_create_save_to_disk_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await resource_handlers.resource_create(
+        runtime,
+        type="BoxShape3D",
+        resource_path="res://shapes/box.tres",
+        overwrite=True,
+    )
+    assert result["resource_class"] == "BoxShape3D"
+    assert result["undoable"] is False
+    assert client.calls[-1]["params"] == {
+        "type": "BoxShape3D",
+        "resource_path": "res://shapes/box.tres",
+        "overwrite": True,
+    }
+
+
+async def test_resource_create_minimal_omits_empty_params():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await resource_handlers.resource_create(
+        runtime,
+        type="BoxMesh",
+        path="/Main/Mesh",
+        property="mesh",
+    )
+    # Omitted optional params should NOT appear in the outgoing params dict
+    # so the plugin sees a clean "either/or" shape.
+    params = client.calls[-1]["params"]
+    assert "resource_path" not in params
+    assert "overwrite" not in params
+    assert "properties" not in params
+
+
+async def test_curve_set_points_inline_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    points = [
+        {"position": {"x": 0, "y": 0, "z": 0}},
+        {"position": {"x": 5, "y": 0, "z": 0}},
+    ]
+    result = await curve_handlers.curve_set_points(
+        runtime,
+        points=points,
+        path="/Main/Path3D",
+        property="curve",
+    )
+    assert result["point_count"] == 2
+    assert result["undoable"] is True
+    assert client.calls[-1]["params"] == {
+        "points": points,
+        "path": "/Main/Path3D",
+        "property": "curve",
+    }
+
+
+async def test_curve_set_points_disk_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await curve_handlers.curve_set_points(
+        runtime,
+        points=[{"position": {"x": 0, "y": 0, "z": 0}}],
+        resource_path="res://paths/main.tres",
+    )
+    assert result["undoable"] is False
+    assert client.calls[-1]["params"]["resource_path"] == "res://paths/main.tres"
+
+
+async def test_curve_set_points_requires_writable():
+    from godot_ai.godot_client.client import GodotCommandError
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    session = Session(
+        session_id="s1",
+        godot_version="4.4",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="importing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError):
+        await curve_handlers.curve_set_points(
+            runtime,
+            points=[],
+            path="/Main/Path3D",
+            property="curve",
+        )
+
+
+async def test_gradient_texture_create_inline_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    stops = [
+        {"offset": 0.0, "color": {"r": 1, "g": 0, "b": 0, "a": 1}},
+        {"offset": 1.0, "color": {"r": 0, "g": 0, "b": 1, "a": 1}},
+    ]
+    result = await texture_handlers.gradient_texture_create(
+        runtime,
+        stops=stops,
+        path="/Main/Line",
+        property="texture",
+        fill="radial",
+    )
+    assert result["texture_class"] == "GradientTexture2D"
+    assert result["stop_count"] == 2
+    assert result["fill"] == "radial"
+    params = client.calls[-1]["params"]
+    assert params["stops"] == stops
+    assert params["fill"] == "radial"
+    assert params["path"] == "/Main/Line"
+    assert params["property"] == "texture"
+
+
+async def test_gradient_texture_create_requires_writable():
+    from godot_ai.godot_client.client import GodotCommandError
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    session = Session(
+        session_id="s1",
+        godot_version="4.4",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="importing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError):
+        await texture_handlers.gradient_texture_create(
+            runtime,
+            stops=[{"offset": 0, "color": "#f00"}, {"offset": 1, "color": "#00f"}],
+            path="/Main/Line",
+            property="texture",
+        )
+
+
+async def test_noise_texture_create_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await texture_handlers.noise_texture_create(
+        runtime,
+        noise_type="perlin",
+        resource_path="res://textures/noise.tres",
+        frequency=0.05,
+        seed=42,
+        fractal_octaves=4,
+    )
+    assert result["texture_class"] == "NoiseTexture2D"
+    assert result["noise_type"] == "perlin"
+    params = client.calls[-1]["params"]
+    assert params["noise_type"] == "perlin"
+    assert params["frequency"] == 0.05
+    assert params["seed"] == 42
+    assert params["fractal_octaves"] == 4
+    assert params["resource_path"] == "res://textures/noise.tres"
+
+
+async def test_noise_texture_create_requires_writable():
+    from godot_ai.godot_client.client import GodotCommandError
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    session = Session(
+        session_id="s1",
+        godot_version="4.4",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="importing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError):
+        await texture_handlers.noise_texture_create(
+            runtime, path="/Main/Sprite", property="texture"
+        )
+
+
+async def test_environment_create_inline_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await environment_handlers.environment_create(
+        runtime,
+        path="/Main/World",
+        preset="sunset",
+    )
+    assert result["preset"] == "sunset"
+    assert result["undoable"] is True
+    assert client.calls[-1]["params"] == {
+        "preset": "sunset",
+        "path": "/Main/World",
+    }
+
+
+async def test_environment_create_save_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await environment_handlers.environment_create(
+        runtime,
+        resource_path="res://environments/night.tres",
+        preset="night",
+        sky=False,
+        overwrite=True,
+    )
+    assert result["undoable"] is False
+    assert client.calls[-1]["params"] == {
+        "preset": "night",
+        "resource_path": "res://environments/night.tres",
+        "sky": False,
+        "overwrite": True,
+    }
+
+
+async def test_environment_create_requires_writable():
+    from godot_ai.godot_client.client import GodotCommandError
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    session = Session(
+        session_id="s1",
+        godot_version="4.4",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="importing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError):
+        await environment_handlers.environment_create(runtime, path="/Main/World")
+
+
+async def test_physics_shape_autofit_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await physics_shape_handlers.physics_shape_autofit(
+        runtime,
+        path="/Main/Body/Collision",
+        source_path="/Main/Body/Mesh",
+        shape_type="box",
+    )
+    assert result["shape_class"] == "BoxShape3D"
+    assert result["shape_created"] is True
+    assert client.calls[-1]["params"] == {
+        "path": "/Main/Body/Collision",
+        "source_path": "/Main/Body/Mesh",
+        "shape_type": "box",
+    }
+
+
+async def test_physics_shape_autofit_minimal_omits_empty():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await physics_shape_handlers.physics_shape_autofit(
+        runtime, path="/Main/Body/Collision"
+    )
+    params = client.calls[-1]["params"]
+    assert "source_path" not in params
+    assert "shape_type" not in params
+
+
+async def test_physics_shape_autofit_requires_writable():
+    from godot_ai.godot_client.client import GodotCommandError
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    session = Session(
+        session_id="s1",
+        godot_version="4.4",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="importing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError):
+        await physics_shape_handlers.physics_shape_autofit(
+            runtime, path="/Main/Body/Collision"
+        )
+
+
+async def test_resource_create_requires_writable():
+    """Write tools must raise EDITOR_NOT_READY when editor is importing."""
+    from godot_ai.godot_client.client import GodotCommandError
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    session = Session(
+        session_id="s1",
+        godot_version="4.4",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="importing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+
+    with pytest.raises(GodotCommandError):
+        await resource_handlers.resource_create(
+            runtime,
+            type="BoxMesh",
+            path="/Main/Mesh",
+            property="mesh",
+        )
 
 
 # ---------------------------------------------------------------------------

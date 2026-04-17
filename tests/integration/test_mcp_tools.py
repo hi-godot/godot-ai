@@ -1417,6 +1417,289 @@ class TestResourceAssignTool:
 
 
 # ---------------------------------------------------------------------------
+# resource_create
+# ---------------------------------------------------------------------------
+
+
+class TestResourceCreateTool:
+    async def test_create_and_assign_inline(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "create_resource"
+            assert cmd["params"]["type"] == "BoxMesh"
+            assert cmd["params"]["path"] == "/Main/Mesh"
+            assert cmd["params"]["property"] == "mesh"
+            assert cmd["params"]["properties"] == {"size": {"x": 2, "y": 2, "z": 2}}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Mesh",
+                    "property": "mesh",
+                    "type": "BoxMesh",
+                    "resource_class": "BoxMesh",
+                    "properties_applied": 1,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "resource_create",
+            {
+                "type": "BoxMesh",
+                "path": "/Main/Mesh",
+                "property": "mesh",
+                "properties": {"size": {"x": 2, "y": 2, "z": 2}},
+            },
+        )
+        await task
+
+        assert result.data["resource_class"] == "BoxMesh"
+        assert result.data["undoable"] is True
+
+    async def test_create_and_save_to_disk(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "create_resource"
+            assert cmd["params"]["type"] == "BoxShape3D"
+            assert cmd["params"]["resource_path"] == "res://shapes/box.tres"
+            assert cmd["params"]["overwrite"] is True
+            assert "path" not in cmd["params"]
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "resource_path": "res://shapes/box.tres",
+                    "type": "BoxShape3D",
+                    "resource_class": "BoxShape3D",
+                    "properties_applied": 1,
+                    "overwritten": True,
+                    "undoable": False,
+                    "reason": "File creation is persistent; delete the file manually to revert",
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "resource_create",
+            {
+                "type": "BoxShape3D",
+                "resource_path": "res://shapes/box.tres",
+                "properties": {"size": {"x": 1, "y": 2, "z": 1}},
+                "overwrite": True,
+            },
+        )
+        await task
+
+        assert result.data["resource_class"] == "BoxShape3D"
+        assert result.data["overwritten"] is True
+        assert result.data["undoable"] is False
+
+
+# ---------------------------------------------------------------------------
+# curve_set_points
+# ---------------------------------------------------------------------------
+
+
+class TestCurveSetPointsTool:
+    async def test_set_points_on_node_curve(self, mcp_stack):
+        client, plugin = mcp_stack
+        points = [
+            {"position": {"x": 0, "y": 0, "z": 0}},
+            {"position": {"x": 5, "y": 0, "z": 0}},
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "curve_set_points"
+            assert cmd["params"]["path"] == "/Main/Path3D"
+            assert cmd["params"]["property"] == "curve"
+            assert len(cmd["params"]["points"]) == 2
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Path3D",
+                    "property": "curve",
+                    "curve_class": "Curve3D",
+                    "point_count": 2,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "curve_set_points",
+            {"points": points, "path": "/Main/Path3D", "property": "curve"},
+        )
+        await task
+
+        assert result.data["curve_class"] == "Curve3D"
+        assert result.data["point_count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# gradient_texture_create / noise_texture_create
+# ---------------------------------------------------------------------------
+
+
+class TestTextureTools:
+    async def test_gradient_texture_inline(self, mcp_stack):
+        client, plugin = mcp_stack
+        stops = [
+            {"offset": 0.0, "color": {"r": 1, "g": 0, "b": 0, "a": 1}},
+            {"offset": 1.0, "color": {"r": 0, "g": 0, "b": 1, "a": 1}},
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "gradient_texture_create"
+            assert cmd["params"]["fill"] == "linear"
+            assert len(cmd["params"]["stops"]) == 2
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Line",
+                    "property": "texture",
+                    "texture_class": "GradientTexture2D",
+                    "gradient_class": "Gradient",
+                    "stop_count": 2,
+                    "fill": "linear",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "gradient_texture_create",
+            {
+                "stops": stops,
+                "path": "/Main/Line",
+                "property": "texture",
+            },
+        )
+        await task
+
+        assert result.data["texture_class"] == "GradientTexture2D"
+        assert result.data["stop_count"] == 2
+
+    async def test_noise_texture_save(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "noise_texture_create"
+            assert cmd["params"]["noise_type"] == "simplex"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "resource_path": "res://noise.tres",
+                    "texture_class": "NoiseTexture2D",
+                    "noise_class": "FastNoiseLite",
+                    "noise_type": "simplex",
+                    "overwritten": False,
+                    "undoable": False,
+                    "reason": "File creation is persistent; delete the file manually to revert",
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "noise_texture_create",
+            {
+                "noise_type": "simplex",
+                "resource_path": "res://noise.tres",
+            },
+        )
+        await task
+
+        assert result.data["texture_class"] == "NoiseTexture2D"
+        assert result.data["undoable"] is False
+
+
+# ---------------------------------------------------------------------------
+# environment_create
+# ---------------------------------------------------------------------------
+
+
+class TestEnvironmentCreateTool:
+    async def test_create_inline_with_preset(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "environment_create"
+            assert cmd["params"]["path"] == "/Main/World"
+            assert cmd["params"]["preset"] == "sunset"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/World",
+                    "preset": "sunset",
+                    "sky_created": True,
+                    "sky_material_class": "ProceduralSkyMaterial",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "environment_create",
+            {"path": "/Main/World", "preset": "sunset"},
+        )
+        await task
+
+        assert result.data["preset"] == "sunset"
+        assert result.data["sky_created"] is True
+
+
+# ---------------------------------------------------------------------------
+# physics_shape_autofit
+# ---------------------------------------------------------------------------
+
+
+class TestPhysicsShapeAutofitTool:
+    async def test_autofit_3d_box(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "physics_shape_autofit"
+            assert cmd["params"]["path"] == "/Main/Body/Collision"
+            assert cmd["params"]["source_path"] == "/Main/Body/Mesh"
+            assert cmd["params"]["shape_type"] == "box"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Body/Collision",
+                    "source_path": "/Main/Body/Mesh",
+                    "shape_type": "box",
+                    "shape_class": "BoxShape3D",
+                    "shape_created": True,
+                    "size": {"x": 2.0, "y": 1.0, "z": 1.0},
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "physics_shape_autofit",
+            {
+                "path": "/Main/Body/Collision",
+                "source_path": "/Main/Body/Mesh",
+                "shape_type": "box",
+            },
+        )
+        await task
+
+        assert result.data["shape_class"] == "BoxShape3D"
+        assert result.data["shape_created"] is True
+        assert result.data["size"]["x"] == 2.0
+
+
+# ---------------------------------------------------------------------------
 # filesystem_read_text
 # ---------------------------------------------------------------------------
 

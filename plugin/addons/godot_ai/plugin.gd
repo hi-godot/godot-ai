@@ -39,7 +39,11 @@ func _enter_tree() -> void:
 	var particle_handler := ParticleHandler.new(get_undo_redo())
 	var camera_handler := CameraHandler.new(get_undo_redo())
 	var audio_handler := AudioHandler.new(get_undo_redo())
-	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler, ui_handler, theme_handler, animation_handler, material_handler, particle_handler, camera_handler, audio_handler]
+	var physics_shape_handler := PhysicsShapeHandler.new(get_undo_redo())
+	var environment_handler := EnvironmentHandler.new(get_undo_redo())
+	var texture_handler := TextureHandler.new(get_undo_redo())
+	var curve_handler := CurveHandler.new(get_undo_redo())
+	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler, ui_handler, theme_handler, animation_handler, material_handler, particle_handler, camera_handler, audio_handler, physics_shape_handler, environment_handler, texture_handler, curve_handler]
 
 	_dispatcher.register("get_editor_state", editor_handler.get_editor_state)
 	_dispatcher.register("get_scene_tree", scene_handler.get_scene_tree)
@@ -86,6 +90,7 @@ func _enter_tree() -> void:
 	_dispatcher.register("search_resources", resource_handler.search_resources)
 	_dispatcher.register("load_resource", resource_handler.load_resource)
 	_dispatcher.register("assign_resource", resource_handler.assign_resource)
+	_dispatcher.register("create_resource", resource_handler.create_resource)
 	_dispatcher.register("read_file", filesystem_handler.read_file)
 	_dispatcher.register("write_file", filesystem_handler.write_file)
 	_dispatcher.register("reimport", filesystem_handler.reimport)
@@ -156,6 +161,11 @@ func _enter_tree() -> void:
 	_dispatcher.register("audio_play", audio_handler.play)
 	_dispatcher.register("audio_stop", audio_handler.stop)
 	_dispatcher.register("audio_list", audio_handler.list_streams)
+	_dispatcher.register("physics_shape_autofit", physics_shape_handler.autofit)
+	_dispatcher.register("environment_create", environment_handler.create_environment)
+	_dispatcher.register("gradient_texture_create", texture_handler.create_gradient_texture)
+	_dispatcher.register("noise_texture_create", texture_handler.create_noise_texture)
+	_dispatcher.register("curve_set_points", curve_handler.set_points)
 
 	_connection.dispatcher = _dispatcher
 	add_child(_connection)

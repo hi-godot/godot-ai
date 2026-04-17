@@ -192,6 +192,8 @@ func set_property(params: Dictionary) -> Dictionary:
 	# (scripted @export vars can report TYPE_NIL in the property list).
 	var target_type: int = prop_type if prop_type != TYPE_NIL else typeof(old_value)
 
+	var instantiated_resource := false
+
 	if target_type == TYPE_OBJECT and value is String:
 		if value == "":
 			value = null
@@ -200,12 +202,38 @@ func set_property(params: Dictionary) -> Dictionary:
 			if loaded == null:
 				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource not found: %s" % value)
 			value = loaded
+	elif target_type == TYPE_OBJECT and value is Dictionary and value.has("__class__"):
+		# Shortcut: {"__class__": "BoxMesh", "size": {...}} instantiates a
+		# fresh Resource subclass and applies the remaining keys as
+		# properties. Mirrors resource_create's inline-assign path but
+		# avoids a separate tool call for the common case.
+		var type_str: String = value.get("__class__", "")
+		var class_err := ResourceHandler._validate_resource_class(type_str)
+		if class_err != null:
+			return class_err
+		var instance := ClassDB.instantiate(type_str)
+		if instance == null or not (instance is Resource):
+			return McpErrorCodes.make(
+				McpErrorCodes.INTERNAL_ERROR,
+				"Failed to instantiate %s as a Resource" % type_str
+			)
+		var res: Resource = instance
+		var remaining: Dictionary = (value as Dictionary).duplicate()
+		remaining.erase("__class__")
+		if not remaining.is_empty():
+			var apply_err := ResourceHandler._apply_resource_properties(res, remaining)
+			if apply_err != null:
+				return apply_err
+		value = res
+		instantiated_resource = true
 	else:
 		value = _coerce_value(value, target_type)
 
 	_undo_redo.create_action("MCP: Set %s.%s" % [node.name, property])
 	_undo_redo.add_do_property(node, property, value)
 	_undo_redo.add_undo_property(node, property, old_value)
+	if instantiated_resource:
+		_undo_redo.add_do_reference(value)
 	_undo_redo.commit_action()
 
 	return {

@@ -107,3 +107,239 @@ func test_assign_resource_resource_not_found() -> void:
 		"resource_path": "res://nonexistent.tres",
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+# ----- create_resource -----
+
+func _add_mesh_instance(node_name: String = "TestMesh") -> Node:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return null
+	var mi := MeshInstance3D.new()
+	mi.name = node_name
+	scene_root.add_child(mi)
+	mi.set_owner(scene_root)
+	return mi
+
+
+func _remove_node(node: Node) -> void:
+	if node == null:
+		return
+	if node.get_parent() != null:
+		node.get_parent().remove_child(node)
+	node.queue_free()
+
+
+func test_create_resource_missing_type() -> void:
+	var result := _handler.create_resource({"path": "/Main/Foo", "property": "mesh"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "type")
+
+
+func test_create_resource_no_home_errors() -> void:
+	var result := _handler.create_resource({"type": "BoxMesh"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "path")
+
+
+func test_create_resource_both_homes_errors() -> void:
+	var result := _handler.create_resource({
+		"type": "BoxMesh",
+		"path": "/Main/Foo",
+		"property": "mesh",
+		"resource_path": "res://foo.tres",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "not both")
+
+
+func test_create_resource_unknown_class() -> void:
+	var result := _handler.create_resource({
+		"type": "NotARealClass",
+		"path": "/Main/Foo",
+		"property": "mesh",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "Unknown")
+
+
+func test_create_resource_node_class_redirects_to_create_node() -> void:
+	var result := _handler.create_resource({
+		"type": "Node3D",
+		"path": "/Main/Foo",
+		"property": "mesh",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "node_create")
+
+
+func test_create_resource_non_resource_class() -> void:
+	# RefCounted is neither Node nor Resource — should error.
+	var result := _handler.create_resource({
+		"type": "RefCounted",
+		"path": "/Main/Foo",
+		"property": "mesh",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "not a Resource")
+
+
+func test_create_resource_abstract_class() -> void:
+	# Shape3D is the abstract base of BoxShape3D/SphereShape3D/etc., and
+	# ClassDB.can_instantiate("Shape3D") returns false.
+	var result := _handler.create_resource({
+		"type": "Shape3D",
+		"path": "/Main/Foo",
+		"property": "mesh",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "abstract")
+
+
+func test_create_resource_assigns_box_mesh_typed() -> void:
+	var mi := _add_mesh_instance("TestBoxMesh")
+	if mi == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.create_resource({
+		"type": "BoxMesh",
+		"path": "/%s/TestBoxMesh" % mi.get_parent().name,
+		"property": "mesh",
+		"properties": {"size": {"x": 2, "y": 3, "z": 4}},
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.resource_class, "BoxMesh")
+	assert_true(result.data.undoable)
+	# Assert on the stored Variant, not just the response — per CLAUDE.md
+	# "assert on stored Variant, not counts".
+	assert_true(mi.mesh is BoxMesh, "mesh should be a BoxMesh instance")
+	assert_true(mi.mesh.size is Vector3, "size should be coerced to Vector3")
+	assert_eq(mi.mesh.size.x, 2.0)
+	assert_eq(mi.mesh.size.y, 3.0)
+	assert_eq(mi.mesh.size.z, 4.0)
+	_remove_node(mi)
+
+
+func test_create_resource_undo_restores_previous_value() -> void:
+	var mi := _add_mesh_instance("TestUndo")
+	if mi == null:
+		skip("No scene root — is a scene open?")
+		return
+	var old_mesh: Mesh = mi.mesh  # likely null
+	var result := _handler.create_resource({
+		"type": "SphereMesh",
+		"path": "/%s/TestUndo" % mi.get_parent().name,
+		"property": "mesh",
+	})
+	assert_has_key(result, "data")
+	assert_true(mi.mesh is SphereMesh)
+	editor_undo(_undo_redo)
+	assert_eq(mi.mesh, old_mesh, "Undo should restore the previous mesh value")
+	editor_redo(_undo_redo)
+	assert_true(mi.mesh is SphereMesh, "Redo should re-apply the SphereMesh")
+	_remove_node(mi)
+
+
+func test_create_resource_property_not_on_node() -> void:
+	var mi := _add_mesh_instance("TestBadProp")
+	if mi == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.create_resource({
+		"type": "BoxMesh",
+		"path": "/%s/TestBadProp" % mi.get_parent().name,
+		"property": "not_a_real_property",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	_remove_node(mi)
+
+
+func test_create_resource_unknown_property_in_properties_dict() -> void:
+	var mi := _add_mesh_instance("TestBadPropKey")
+	if mi == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.create_resource({
+		"type": "BoxMesh",
+		"path": "/%s/TestBadPropKey" % mi.get_parent().name,
+		"property": "mesh",
+		"properties": {"not_a_real_field": 42},
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	_remove_node(mi)
+
+
+func test_create_resource_saves_to_disk() -> void:
+	var out_path := "res://test_tmp_box.tres"
+	# Clean up any prior test artifact.
+	if FileAccess.file_exists(out_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(out_path))
+	var result := _handler.create_resource({
+		"type": "BoxShape3D",
+		"resource_path": out_path,
+		"properties": {"size": {"x": 1, "y": 2, "z": 3}},
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.resource_class, "BoxShape3D")
+	assert_false(result.data.undoable)
+	assert_true(FileAccess.file_exists(out_path), "File should exist at %s" % out_path)
+	# Round-trip through ResourceLoader to verify the saved .tres is valid.
+	var loaded := ResourceLoader.load(out_path)
+	assert_true(loaded is BoxShape3D)
+	assert_true(loaded.size is Vector3)
+	assert_eq(loaded.size.x, 1.0)
+	# Clean up.
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(out_path))
+
+
+func test_create_resource_save_refuses_overwrite_without_flag() -> void:
+	var out_path := "res://test_tmp_overwrite.tres"
+	if FileAccess.file_exists(out_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(out_path))
+	var first := _handler.create_resource({
+		"type": "BoxShape3D",
+		"resource_path": out_path,
+	})
+	assert_has_key(first, "data")
+	var second := _handler.create_resource({
+		"type": "BoxShape3D",
+		"resource_path": out_path,
+	})
+	assert_is_error(second, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(second.error.message, "overwrite")
+	var third := _handler.create_resource({
+		"type": "BoxShape3D",
+		"resource_path": out_path,
+		"overwrite": true,
+	})
+	assert_has_key(third, "data")
+	assert_true(third.data.overwritten)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(out_path))
+
+
+func test_create_resource_undo_survives_interleaving() -> void:
+	# Per CLAUDE.md "Auto-generated indices: look up at undo time" — ensure
+	# undo of a resource_create survives an unrelated mutation in between.
+	var mi := _add_mesh_instance("TestInterleave")
+	if mi == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.create_resource({
+		"type": "BoxMesh",
+		"path": "/%s/TestInterleave" % mi.get_parent().name,
+		"property": "mesh",
+	})
+	assert_has_key(result, "data")
+	var assigned_mesh = mi.mesh
+	assert_true(assigned_mesh is BoxMesh)
+	# Interleave: rename the node through a separate undo action.
+	_undo_redo.create_action("MCP: interleaved rename")
+	_undo_redo.add_do_property(mi, "name", "Renamed")
+	_undo_redo.add_undo_property(mi, "name", "TestInterleave")
+	_undo_redo.commit_action()
+	# Undo the interleaved action first, then the original — mesh should
+	# still revert cleanly.
+	editor_undo(_undo_redo)  # undo rename
+	editor_undo(_undo_redo)  # undo mesh assign
+	assert_true(mi.mesh == null or not (mi.mesh is BoxMesh), "Undo should have removed the BoxMesh")
+	_remove_node(mi)

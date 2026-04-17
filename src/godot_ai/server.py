@@ -22,12 +22,15 @@ from godot_ai.tools.autoload import register_autoload_tools
 from godot_ai.tools.batch import register_batch_tools
 from godot_ai.tools.camera import register_camera_tools
 from godot_ai.tools.client import register_client_tools
+from godot_ai.tools.curve import register_curve_tools
 from godot_ai.tools.editor import register_editor_tools
+from godot_ai.tools.environment import register_environment_tools
 from godot_ai.tools.filesystem import register_filesystem_tools
 from godot_ai.tools.input_map import register_input_map_tools
 from godot_ai.tools.material import register_material_tools
 from godot_ai.tools.node import register_node_tools
 from godot_ai.tools.particle import register_particle_tools
+from godot_ai.tools.physics_shape import register_physics_shape_tools
 from godot_ai.tools.project import register_project_tools
 from godot_ai.tools.resource import register_resource_tools
 from godot_ai.tools.scene import register_scene_tools
@@ -35,6 +38,7 @@ from godot_ai.tools.script import register_script_tools
 from godot_ai.tools.session import register_session_tools
 from godot_ai.tools.signal import register_signal_tools
 from godot_ai.tools.testing import register_testing_tools
+from godot_ai.tools.texture import register_texture_tools
 from godot_ai.tools.theme import register_theme_tools
 from godot_ai.tools.ui import register_ui_tools
 from godot_ai.transport.websocket import GodotWebSocketServer
@@ -81,7 +85,9 @@ def create_server(ws_port: int = 9500) -> FastMCP:
             "  scene_*          — open/save scenes (levels/maps), inspect the scene tree\n"
             "  node_*           — create, inspect, modify, duplicate, group, reparent nodes\n"
             "  script_*         — create, read, attach, detach, outline GDScript files\n"
-            "  resource_*       — search, load, assign resources (assets: meshes, textures, etc.)\n"
+            "  resource_*       — search, load, assign, and CREATE built-in Resources "
+            "(BoxMesh, BoxShape3D, Curve, Gradient, StyleBox*, PhysicsMaterial, etc.) "
+            "inline or as .tres files — see resource_create\n"
             "  signal_*         — list, connect, disconnect node signals (events / callbacks)\n"
             "  input_map_*      — manage input actions (keybindings, keyboard/mouse/gamepad)\n"
             "  autoload_*       — manage autoload singletons (global scripts)\n"
@@ -109,6 +115,15 @@ def create_server(ws_port: int = 9500) -> FastMCP:
             "(follow, bounds, zoom, damping, smoothing, drag margins, deadzone)\n"
             "  audio_*          — author sound effects and music "
             "(AudioStreamPlayer/2D/3D) — load streams, play, stop, list audio assets\n"
+            "  physics_shape_*  — size CollisionShape2D/3D to match sibling visuals "
+            "(box, sphere, capsule, cylinder / rectangle, circle, capsule)\n"
+            "  environment_*    — author WorldEnvironment chain "
+            "(Environment + Sky + SkyMaterial) with presets: "
+            "default, sunset, night, fog\n"
+            "  gradient_texture_*, noise_texture_* — procedural 2D textures "
+            "(gradients for Line2D/Sprite2D, FastNoiseLite + NoiseTexture2D for heightmaps)\n"
+            "  curve_*          — author Curve/Curve2D/Curve3D point lists "
+            "for Path3D routes, particle ramps, and easing curves\n"
             "  client_*         — configure AI clients (Claude Code, Codex, Antigravity)\n\n"
             "Always connect to an editor session first (session_list / session_activate). "
             "Write operations require session readiness; check editor_state if a call is "
@@ -138,6 +153,10 @@ def create_server(ws_port: int = 9500) -> FastMCP:
     register_particle_tools(mcp)
     register_camera_tools(mcp)
     register_audio_tools(mcp)
+    register_physics_shape_tools(mcp)
+    register_environment_tools(mcp)
+    register_texture_tools(mcp)
+    register_curve_tools(mcp)
     register_session_resources(mcp)
     register_scene_resources(mcp)
     register_editor_resources(mcp)

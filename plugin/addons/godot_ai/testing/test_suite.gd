@@ -56,6 +56,43 @@ func skip(reason: String = "") -> void:
 	_skip_reason = reason
 
 
+## Trigger an undo against whichever history (scene or global) holds the most
+## recent action. `EditorUndoRedoManager` in Godot 4.x doesn't expose `.undo()`
+## directly — you resolve the history's underlying UndoRedo and call it there.
+## Actions registered via `add_do_method(self, …)` with a non-scene target land
+## in GLOBAL_HISTORY, while actions on scene nodes land in the scene's history,
+## so we try both (matches the pattern in batch_handler.gd).
+func editor_undo(undo_redo: EditorUndoRedoManager) -> bool:
+	for ur in _collect_histories(undo_redo):
+		if ur.undo():
+			return true
+	return false
+
+
+## Mirror of `editor_undo` for redo.
+func editor_redo(undo_redo: EditorUndoRedoManager) -> bool:
+	for ur in _collect_histories(undo_redo):
+		if ur.redo():
+			return true
+	return false
+
+
+func _collect_histories(undo_redo: EditorUndoRedoManager) -> Array:
+	var out: Array = []
+	if undo_redo == null:
+		return out
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root != null:
+		var scene_id := undo_redo.get_object_history_id(scene_root)
+		var scene_ur := undo_redo.get_history_undo_redo(scene_id)
+		if scene_ur != null:
+			out.append(scene_ur)
+	var global_ur := undo_redo.get_history_undo_redo(EditorUndoRedoManager.GLOBAL_HISTORY)
+	if global_ur != null and not global_ur in out:
+		out.append(global_ur)
+	return out
+
+
 # ----- assertions -----
 
 func assert_true(condition: bool, msg: String = "") -> void:

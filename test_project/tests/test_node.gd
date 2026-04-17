@@ -295,6 +295,98 @@ func test_set_property_nonexistent_property() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
+# ----- set_property __class__ shortcut (fresh built-in Resource) -----
+
+func _add_mesh_instance_for_shortcut(node_name: String) -> Node:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return null
+	var mi := MeshInstance3D.new()
+	mi.name = node_name
+	scene_root.add_child(mi)
+	mi.set_owner(scene_root)
+	return mi
+
+
+func test_set_property_class_dict_instantiates_fresh_resource() -> void:
+	var mi := _add_mesh_instance_for_shortcut("TestClassDictBox")
+	if mi == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.set_property({
+		"path": "/%s/TestClassDictBox" % mi.get_parent().name,
+		"property": "mesh",
+		"value": {"__class__": "BoxMesh", "size": {"x": 2, "y": 3, "z": 4}},
+	})
+	assert_has_key(result, "data")
+	# Assert on stored Variant — not just the response — per CLAUDE.md.
+	assert_true(mi.mesh is BoxMesh, "mesh should be a BoxMesh instance")
+	assert_true(mi.mesh.size is Vector3)
+	assert_eq(mi.mesh.size.x, 2.0)
+	assert_eq(mi.mesh.size.z, 4.0)
+	# Undo should restore null.
+	editor_undo(_undo_redo)
+	assert_true(mi.mesh == null)
+	if mi.get_parent():
+		mi.get_parent().remove_child(mi)
+	mi.queue_free()
+
+
+func test_set_property_class_dict_invalid_class() -> void:
+	var mi := _add_mesh_instance_for_shortcut("TestClassDictBad")
+	if mi == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.set_property({
+		"path": "/%s/TestClassDictBad" % mi.get_parent().name,
+		"property": "mesh",
+		"value": {"__class__": "NotARealClass"},
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	if mi.get_parent():
+		mi.get_parent().remove_child(mi)
+	mi.queue_free()
+
+
+func test_set_property_class_dict_abstract_class() -> void:
+	var mi := _add_mesh_instance_for_shortcut("TestClassDictAbstract")
+	if mi == null:
+		skip("No scene root — is a scene open?")
+		return
+	# Shape3D is truly abstract per ClassDB.can_instantiate().
+	# PrimitiveMesh is technically instantiable, so it's not a good test target.
+	var result := _handler.set_property({
+		"path": "/%s/TestClassDictAbstract" % mi.get_parent().name,
+		"property": "mesh",
+		"value": {"__class__": "Shape3D"},
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "abstract")
+	if mi.get_parent():
+		mi.get_parent().remove_child(mi)
+	mi.queue_free()
+
+
+func test_set_property_resource_path_still_works() -> void:
+	# Regression: __class__ shortcut must not break the existing
+	# "string value = res:// path" behavior.
+	var mi := _add_mesh_instance_for_shortcut("TestResPathRegression")
+	if mi == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.set_property({
+		"path": "/%s/TestResPathRegression" % mi.get_parent().name,
+		"property": "material_override",
+		"value": TEST_MATERIAL_PATH,
+	})
+	assert_has_key(result, "data")
+	assert_true(mi.material_override is StandardMaterial3D)
+	editor_undo(_undo_redo)
+	if mi.get_parent():
+		mi.get_parent().remove_child(mi)
+	mi.queue_free()
+
+
 # ----- _coerce_value / _serialize_value unit coverage -----
 
 func test_coerce_array_passthrough() -> void:
