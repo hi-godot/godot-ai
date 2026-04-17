@@ -10,6 +10,10 @@ build/
 venv/
 .pytest_cache/
 .ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
 
 # PyInstaller
 *.spec
@@ -38,3 +42,6 @@ Thumbs.db
 # Local demo scene (not tracked in repo)
 test_project/tests/space_city.tscn
 test_project/tests/space_city_assets/
+
+# Test runtime artifacts (created by GDScript tests; ephemeral)
+test_project/tests/_mcp_test_*
