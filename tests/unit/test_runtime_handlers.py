@@ -182,8 +182,25 @@ class StubClient:
             }
         if command == "configure_client":
             return {"status": "ok", "client": params.get("client", "")}
+        if command == "remove_client":
+            return {"status": "ok", "client": params.get("client", "")}
         if command == "check_client_status":
-            return {"claude_code": "configured", "codex": "not_configured"}
+            return {
+                "clients": [
+                    {
+                        "id": "claude_code",
+                        "display_name": "Claude Code",
+                        "status": "configured",
+                        "installed": True,
+                    },
+                    {
+                        "id": "codex",
+                        "display_name": "Codex",
+                        "status": "not_configured",
+                        "installed": False,
+                    },
+                ]
+            }
         if command == "patch_script":
             return {
                 "path": params.get("path", ""),
@@ -1447,11 +1464,23 @@ async def test_client_configure_handler():
     assert client.calls[-1]["params"] == {"client": "codex"}
 
 
+async def test_client_remove_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await client_handlers.client_remove(runtime, client="cursor")
+    assert result["client"] == "cursor"
+    assert client.calls[-1]["command"] == "remove_client"
+    assert client.calls[-1]["params"] == {"client": "cursor"}
+
+
 async def test_client_status_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     result = await client_handlers.client_status(runtime)
-    assert result["claude_code"] == "configured"
+    clients = result["clients"]
+    assert clients[0]["id"] == "claude_code"
+    assert clients[0]["status"] == "configured"
+    assert clients[1]["installed"] is False
     assert client.calls[-1]["command"] == "check_client_status"
 
 

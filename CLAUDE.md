@@ -126,15 +126,40 @@ current working tree's `test_project/`.
 
 ## Client configuration
 
-The plugin can configure MCP clients via `client_configurator.gd`:
-- **Claude Code**: uses `claude mcp add` CLI to register the server
-- **Claude Desktop**: writes JSON config to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows) with `npx mcp-remote` bridge
-- **Codex**: writes TOML config to `~/.codex/config.toml`
-- **Antigravity**: writes directly to `~/.gemini/antigravity/mcp_config.json`
+The plugin auto-configures 18+ MCP clients via a registry + strategy system in
+`plugin/addons/godot_ai/clients/`:
 
-If auto-configure can't find a client's CLI (common with GUI-launched editors that have limited PATH), the dock shows a "Run this manually" panel with a copyable command.
+- `_base.gd` — `McpClient` descriptor (data only: id, display_name, config_type,
+  path_template, server_key_path, entry_builder, …)
+- `_registry.gd` — explicit `preload(...)` list of every client. Adding a client
+  means: write `clients/<name>.gd` extending `McpClient`, then append one
+  preload here. No edits to dock or facade required.
+- `_json_strategy.gd` / `_toml_strategy.gd` / `_cli_strategy.gd` — three
+  reusable writers, selected by descriptor `config_type`. **No per-client
+  branching** inside strategies — non-standard entry shapes (Claude Desktop's
+  `npx mcp-remote` bridge, Antigravity's `serverUrl`, Zed's `command`/`settings`
+  shape) supply their own `entry_builder` (and optionally a `verify_entry`
+  callable for status checks).
+- `_path_template.gd` — expands `~`, `$HOME`, `$APPDATA`, `$XDG_CONFIG_HOME`,
+  `$LOCALAPPDATA`, `$USERPROFILE`; picks the right per-OS entry from a
+  `{"darwin": ..., "windows": ..., "linux": ...}` (or `"unix"` shorthand) map.
+- `_atomic_write.gd` — `.tmp` + rename + `.backup` so a crash mid-write never
+  truncates the user's MCP config.
+- `_cli_finder.gd` — three-tier lookup (well-known dirs → login shell →
+  `which`/`where`) with per-exe caching. Critical for GUI-launched editors
+  whose PATH doesn't include `~/.local/bin`, `/opt/homebrew/bin`, etc.
 
-MCP tools `client_configure` and `client_status` expose this to AI clients.
+`client_configurator.gd` is a thin facade exposing string-id wrappers
+(`configure`, `check_status`, `remove`, `manual_command`, `is_installed`,
+`client_ids`, `client_display_name`). It also keeps the server-launch
+discovery (`get_server_command`, `find_uvx`, `is_dev_checkout`) since those
+are unrelated to client configuration.
+
+MCP tools `client_configure`, `client_remove`, and `client_status` expose this
+to AI clients. `client_status` returns `{"clients": [{id, display_name, status,
+installed}, …]}`. The dock renders one row per client with a status dot,
+Configure/Remove buttons, and a per-row "Run this manually" fallback for cases
+when auto-configure can't find a CLI.
 
 ## Adding a new tool
 

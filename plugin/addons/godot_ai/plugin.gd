@@ -73,6 +73,7 @@ func _enter_tree() -> void:
 	_dispatcher.register("stop_project", project_handler.stop_project)
 	_dispatcher.register("search_filesystem", project_handler.search_filesystem)
 	_dispatcher.register("configure_client", client_handler.configure_client)
+	_dispatcher.register("remove_client", client_handler.remove_client)
 	_dispatcher.register("check_client_status", client_handler.check_client_status)
 	_dispatcher.register("create_script", script_handler.create_script)
 	_dispatcher.register("patch_script", script_handler.patch_script)
