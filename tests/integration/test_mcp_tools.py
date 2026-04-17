@@ -4166,3 +4166,404 @@ class TestParticleGetTool:
         await task
         assert result.data["main"]["amount"] == 80
         assert result.data["draw_passes"][0]["mesh_class"] == "QuadMesh"
+
+
+# ---------------------------------------------------------------------------
+# camera_*
+# ---------------------------------------------------------------------------
+
+
+class TestCameraCreateTool:
+    async def test_create_2d_forwards_params(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "camera_create"
+            assert cmd["params"] == {
+                "parent_path": "/Main",
+                "name": "Cam",
+                "type": "2d",
+                "make_current": False,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Cam",
+                    "parent_path": "/Main",
+                    "name": "Cam",
+                    "type": "2d",
+                    "class": "Camera2D",
+                    "current": False,
+                    "is_first_camera": True,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("camera_create", {"parent_path": "/Main", "name": "Cam"})
+        await task
+        assert result.data["class"] == "Camera2D"
+        assert result.data["is_first_camera"] is True
+
+    async def test_create_3d_with_make_current(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "camera_create"
+            assert cmd["params"]["type"] == "3d"
+            assert cmd["params"]["make_current"] is True
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Cam3D",
+                    "parent_path": "/Main",
+                    "name": "Cam3D",
+                    "type": "3d",
+                    "class": "Camera3D",
+                    "current": True,
+                    "is_first_camera": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "camera_create",
+            {
+                "parent_path": "/Main",
+                "name": "Cam3D",
+                "type": "3d",
+                "make_current": True,
+            },
+        )
+        await task
+        assert result.data["current"] is True
+
+
+class TestCameraConfigureTool:
+    async def test_zoom_vector_forwarded(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "camera_configure"
+            assert cmd["params"]["properties"]["zoom"] == {"x": 2.0, "y": 2.0}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Cam",
+                    "type": "2d",
+                    "class": "Camera2D",
+                    "applied": ["zoom"],
+                    "values": {"zoom": {"x": 2.0, "y": 2.0}},
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "camera_configure",
+            {
+                "camera_path": "/Main/Cam",
+                "properties": {"zoom": {"x": 2.0, "y": 2.0}},
+            },
+        )
+        await task
+        assert "zoom" in result.data["applied"]
+
+    async def test_enum_by_name_forwarded(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["properties"]["keep_aspect"] == "keep_height"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Cam3D",
+                    "type": "3d",
+                    "class": "Camera3D",
+                    "applied": ["keep_aspect"],
+                    "values": {"keep_aspect": 1},
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "camera_configure",
+            {
+                "camera_path": "/Main/Cam3D",
+                "properties": {"keep_aspect": "keep_height"},
+            },
+        )
+        await task
+        assert result.data["applied"] == ["keep_aspect"]
+
+
+class TestCameraSetLimits2DTool:
+    async def test_partial_limits(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "camera_set_limits_2d"
+            assert cmd["params"] == {
+                "camera_path": "/Main/Cam",
+                "left": -500,
+                "right": 500,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Cam",
+                    "applied": ["limit_left", "limit_right"],
+                    "values": {"limit_left": -500, "limit_right": 500},
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "camera_set_limits_2d",
+            {"camera_path": "/Main/Cam", "left": -500, "right": 500},
+        )
+        await task
+        assert "limit_left" in result.data["applied"]
+
+
+class TestCameraSetDamping2DTool:
+    async def test_forwards_all_params(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "camera_set_damping_2d"
+            params = cmd["params"]
+            assert params["position_speed"] == 4.0
+            assert params["rotation_speed"] == 3.0
+            assert params["drag_margins"] == {"left": 0.2, "right": 0.2}
+            assert params["drag_horizontal_enabled"] is True
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Cam",
+                    "applied": [
+                        "position_smoothing_enabled",
+                        "position_smoothing_speed",
+                        "rotation_smoothing_enabled",
+                        "rotation_smoothing_speed",
+                        "drag_horizontal_enabled",
+                        "drag_left_margin",
+                        "drag_right_margin",
+                    ],
+                    "values": {},
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "camera_set_damping_2d",
+            {
+                "camera_path": "/Main/Cam",
+                "position_speed": 4.0,
+                "rotation_speed": 3.0,
+                "drag_margins": {"left": 0.2, "right": 0.2},
+                "drag_horizontal_enabled": True,
+            },
+        )
+        await task
+        assert "position_smoothing_speed" in result.data["applied"]
+
+    async def test_only_position_speed(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            # Only camera_path + position_speed should be forwarded.
+            assert cmd["params"] == {
+                "camera_path": "/Main/Cam",
+                "position_speed": 5.0,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {"path": "/Main/Cam", "applied": [], "values": {}, "undoable": True},
+            )
+
+        task = asyncio.create_task(respond())
+        await client.call_tool(
+            "camera_set_damping_2d",
+            {"camera_path": "/Main/Cam", "position_speed": 5.0},
+        )
+        await task
+
+
+class TestCameraFollow2DTool:
+    async def test_forwards_target(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "camera_follow_2d"
+            assert cmd["params"] == {
+                "camera_path": "/Main/Cam",
+                "target_path": "/Main/Player",
+                "smoothing_speed": 6.0,
+                "zero_transform": True,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Player/Cam",
+                    "target_path": "/Main/Player",
+                    "reparented": True,
+                    "smoothing_speed": 6.0,
+                    "zero_transform": True,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "camera_follow_2d",
+            {
+                "camera_path": "/Main/Cam",
+                "target_path": "/Main/Player",
+                "smoothing_speed": 6.0,
+            },
+        )
+        await task
+        assert result.data["reparented"] is True
+
+
+class TestCameraGetTool:
+    async def test_get_current_via_empty_path(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "camera_get"
+            assert cmd["params"] == {"camera_path": ""}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Cam",
+                    "type": "2d",
+                    "class": "Camera2D",
+                    "current": True,
+                    "properties": {"zoom": {"x": 2.0, "y": 2.0}},
+                    "resolved_via": "current",
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("camera_get", {})
+        await task
+        assert result.data["resolved_via"] == "current"
+
+
+class TestCameraListTool:
+    async def test_list_enumerates(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "camera_list"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "cameras": [
+                        {
+                            "path": "/Main/Cam2D",
+                            "class": "Camera2D",
+                            "type": "2d",
+                            "current": True,
+                        },
+                        {
+                            "path": "/Main/Cam3D",
+                            "class": "Camera3D",
+                            "type": "3d",
+                            "current": False,
+                        },
+                    ],
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("camera_list", {})
+        await task
+        assert len(result.data["cameras"]) == 2
+
+
+class TestCameraApplyPresetTool:
+    async def test_topdown_2d(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "camera_apply_preset"
+            assert cmd["params"]["preset"] == "topdown_2d"
+            assert cmd["params"]["make_current"] is True
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Cam",
+                    "parent_path": "/Main",
+                    "name": "Cam",
+                    "preset": "topdown_2d",
+                    "type": "2d",
+                    "class": "Camera2D",
+                    "applied": ["zoom", "anchor_mode", "position_smoothing_enabled"],
+                    "current": True,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "camera_apply_preset",
+            {
+                "parent_path": "/Main",
+                "name": "Cam",
+                "preset": "topdown_2d",
+            },
+        )
+        await task
+        assert result.data["preset"] == "topdown_2d"
+        assert result.data["current"] is True
+
+    async def test_overrides_forwarded(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["overrides"] == {"zoom": {"x": 3.0, "y": 3.0}}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Cam",
+                    "parent_path": "/Main",
+                    "name": "Cam",
+                    "preset": "topdown_2d",
+                    "type": "2d",
+                    "class": "Camera2D",
+                    "applied": ["zoom"],
+                    "current": True,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        await client.call_tool(
+            "camera_apply_preset",
+            {
+                "parent_path": "/Main",
+                "name": "Cam",
+                "preset": "topdown_2d",
+                "overrides": {"zoom": {"x": 3.0, "y": 3.0}},
+            },
+        )
+        await task

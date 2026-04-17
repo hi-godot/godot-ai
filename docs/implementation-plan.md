@@ -28,7 +28,7 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 - [x] Runtime feedback loop: `project.run`/`project.stop`, `editor.screenshot`, `performance.get_monitors`, `logs.clear`
 - [ ] Runtime iteration loop is complete enough for AI-driven feel tuning
 - [ ] Release/install path is complete enough for new users
-- [~] Polished game-production extensions have started — `ui_*` (anchor presets, `ui_build_layout` composer, `theme_override_*` pseudo-properties), `theme_*` (color/constant/font-size/stylebox_flat with nested `border`/`corners`/`margins`/`shadow` dicts, `apply`), `animation_*` (AnimationPlayer + `animation_create_simple` composer + delete/validate + overwrite support, undo robust to history interleaving), `material_*` (Standard / ORM / CanvasItem / Shader with enum-by-name + 6 presets), and `particle_*` (GPU+CPU 2D+3D with 7 presets, auto-attached billboard draw material so color_ramp renders out of the box) shipped; `camera_*`, `audio_*`, dedicated `shader_*` CRUD, and animation preset helpers still pending
+- [~] Polished game-production extensions have started — `ui_*` (anchor presets, `ui_build_layout` composer, `theme_override_*` pseudo-properties), `theme_*` (color/constant/font-size/stylebox_flat with nested `border`/`corners`/`margins`/`shadow` dicts, `apply`), `animation_*` (AnimationPlayer + `animation_create_simple` composer + delete/validate + overwrite support, undo robust to history interleaving), `material_*` (Standard / ORM / CanvasItem / Shader with enum-by-name + 6 presets), `particle_*` (GPU+CPU 2D+3D with 7 presets, auto-attached billboard draw material so color_ramp renders out of the box), and `camera_*` (Camera2D/Camera3D create/configure/limits/damping/follow/get/list + 4 presets, sibling-unmark on `current=true`, one-undo reparent-based follow) shipped; `audio_*`, dedicated `shader_*` CRUD, animation preset helpers, and 3D follow (SpringArm3D rig) still pending
 
 ## What This Plan Optimizes For
 
@@ -129,7 +129,7 @@ These are not the next things to do blindly. They are the extensions that matter
   - [ ] `theme_set_stylebox_texture` — 9-slice image-backed styleboxes for pixel-art UI (buttons, panels with real artwork)
   - [ ] `theme_set_font` + `theme_set_icon` — custom typography and icon sets (needs a Font / Texture2D resource handler first)
   - [ ] `ui_set_text` convenience — one call to set `.text` across Label / Button / LineEdit / RichTextLabel without remembering per-class property quirks
-- `camera.*` for follow, bounds, zoom, and screen shake
+- [~] `camera_*` for follow, bounds, zoom, damping — shipped: `camera_create`, `camera_configure` (class-aware batch), `camera_set_limits_2d` (room bounds), `camera_set_damping_2d` (position/rotation smoothing + drag-margin deadzone), `camera_follow_2d` (reparent-based, one-undo), `camera_get`, `camera_list`, `camera_apply_preset` (topdown_2d, platformer_2d, cinematic_3d, action_3d). `current=true` auto-unmarks siblings of the same class in the same undo action. Pending: `camera_*` 3D follow via `SpringArm3D` rig (3D damping lives there too — Camera3D has no native smoothing) and screen shake (tracked as `animation_preset_shake`)
 - `resource.create` / `resource.save` / `resource.instantiate`
 - `scene.instantiate` and `scene.inherit`
   - [~] `node_create` now supports a `scene_path` parameter for instancing a `.tscn` as a child node. This covers the basic "instance a prefab" use case. Dedicated `scene.instantiate` (with transform overrides) and `scene.inherit` (inherited scenes) are still pending for full reusable-scene workflows.
@@ -217,7 +217,7 @@ tracked above.
 - [x] `batch.execute` and a safe partial-edit story
 - [ ] data-authoring surface for upgrades, enemies, room data, and reusable scenes
 - [~] `ui.*` for HUD and upgrade selection — anchor presets, declarative `ui_build_layout` composer, and `theme_*` authoring shipped; still need `ui_set_text`, `theme_set_font`, `theme_set_stylebox_texture` for pixel-art / custom typography
-- [ ] `camera.*` for follow, bounds, zoom, and shake
+- [~] `camera_*` for follow, bounds, zoom, damping — 2D surface shipped (see Tier 1 above); 3D follow / SpringArm3D rig and screen shake (`animation_preset_shake`) still pending
 - [~] `animation_player.*` shipped; `audio.*` still pending for combat readability and feel
 - [~] `material_*` and `particle_*` shipped (see Tier 2 above); still need a dedicated `shader_*` CRUD surface for `.gdshader` editing outside of `filesystem_write_text`
 - [ ] light `physics.*` and optionally `tilemap.*` / `navigation.*` if rooms become more authored
