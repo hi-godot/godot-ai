@@ -179,3 +179,107 @@ async def animation_create_simple(
     if overwrite:
         params["overwrite"] = True
     return await runtime.send_command("animation_create_simple", params)
+
+
+async def animation_preset_fade(
+    runtime: Runtime,
+    player_path: str,
+    target_path: str,
+    mode: str = "in",
+    duration: float = 0.5,
+    animation_name: str = "",
+    overwrite: bool = False,
+) -> dict:
+    require_writable(runtime)
+    params: dict[str, Any] = {
+        "player_path": player_path,
+        "target_path": target_path,
+        "mode": mode,
+        "duration": duration,
+    }
+    if animation_name:
+        params["animation_name"] = animation_name
+    if overwrite:
+        params["overwrite"] = True
+    return await runtime.send_command("animation_preset_fade", params)
+
+
+async def animation_preset_slide(
+    runtime: Runtime,
+    player_path: str,
+    target_path: str,
+    direction: str = "left",
+    mode: str = "in",
+    distance: float | None = None,
+    duration: float = 0.4,
+    animation_name: str = "",
+    overwrite: bool = False,
+) -> dict:
+    require_writable(runtime)
+    params: dict[str, Any] = {
+        "player_path": player_path,
+        "target_path": target_path,
+        "direction": direction,
+        "mode": mode,
+        "duration": duration,
+    }
+    if distance is not None:
+        params["distance"] = distance
+    if animation_name:
+        params["animation_name"] = animation_name
+    if overwrite:
+        params["overwrite"] = True
+    return await runtime.send_command("animation_preset_slide", params)
+
+
+async def animation_preset_shake(
+    runtime: Runtime,
+    player_path: str,
+    target_path: str,
+    intensity: float | None = None,
+    duration: float = 0.3,
+    frequency: float = 30.0,
+    seed: int = 0,
+    animation_name: str = "",
+    overwrite: bool = False,
+) -> dict:
+    require_writable(runtime)
+    params: dict[str, Any] = {
+        "player_path": player_path,
+        "target_path": target_path,
+        "duration": duration,
+        "frequency": frequency,
+        "seed": seed,
+    }
+    if intensity is not None:
+        params["intensity"] = intensity
+    if animation_name:
+        params["animation_name"] = animation_name
+    if overwrite:
+        params["overwrite"] = True
+    return await runtime.send_command("animation_preset_shake", params)
+
+
+async def animation_preset_pulse(
+    runtime: Runtime,
+    player_path: str,
+    target_path: str,
+    from_scale: float = 1.0,
+    to_scale: float = 1.1,
+    duration: float = 0.4,
+    animation_name: str = "",
+    overwrite: bool = False,
+) -> dict:
+    require_writable(runtime)
+    params: dict[str, Any] = {
+        "player_path": player_path,
+        "target_path": target_path,
+        "from_scale": from_scale,
+        "to_scale": to_scale,
+        "duration": duration,
+    }
+    if animation_name:
+        params["animation_name"] = animation_name
+    if overwrite:
+        params["overwrite"] = True
+    return await runtime.send_command("animation_preset_pulse", params)

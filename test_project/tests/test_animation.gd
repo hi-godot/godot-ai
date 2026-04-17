@@ -1188,3 +1188,436 @@ func test_validate_animation_not_found() -> void:
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	_remove_node(player_path)
+
+
+# ─── animation_preset_* — shared helpers ─────────────────────────────────────
+
+## Add a sibling node to the scene_root. The preset tools resolve target_path
+## against the player's root_node (default "..") which is the scene_root when
+## the player lives directly under it — so target_path is just the sibling's name.
+func _add_sibling(node: Node, sibling_name: String) -> Node:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return null
+	node.name = sibling_name
+	scene_root.add_child(node)
+	node.owner = scene_root
+	return node
+
+
+func _fetch_anim(player_path: String, anim_name: String) -> Animation:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	if player == null or not player.has_animation(anim_name):
+		return null
+	return player.get_animation(anim_name)
+
+
+# ─── animation_preset_fade ────────────────────────────────────────────────────
+
+func test_preset_fade_basic_in() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var sprite: Sprite2D = _add_sibling(Sprite2D.new(), "FadeTarget") as Sprite2D
+	var player_path := _add_player("TestPresetFadeIn")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/FadeTarget")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_fade({
+		"player_path": player_path,
+		"target_path": "FadeTarget",
+		"mode": "in",
+		"duration": 0.5,
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.animation_name, "fade_in")
+	assert_eq(result.data.track_count, 1)
+	assert_eq(result.data.length, 0.5)
+	assert_true(result.data.undoable)
+
+	# Verify the stored keyframes are floats (alpha sub-property),
+	# not raw dicts — guarded against coercion regressions.
+	var anim := _fetch_anim(player_path, "fade_in")
+	assert_true(anim != null, "animation should exist")
+	var start_v = anim.track_get_key_value(0, 0)
+	var end_v = anim.track_get_key_value(0, 1)
+	assert_true(start_v is float, "start alpha should be float, got %s" % typeof(start_v))
+	assert_true(end_v is float, "end alpha should be float, got %s" % typeof(end_v))
+	assert_eq(float(start_v), 0.0)
+	assert_eq(float(end_v), 1.0)
+	# Track path should include the :a sub-property so only alpha changes.
+	var track_path := String(anim.track_get_path(0))
+	assert_true(track_path.ends_with(":modulate:a"),
+		"expected fade track to target modulate:a, got '%s'" % track_path)
+
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/FadeTarget")
+
+
+func test_preset_fade_out_reverses_alpha() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var sprite: Sprite2D = _add_sibling(Sprite2D.new(), "FadeOutTarget") as Sprite2D
+	var player_path := _add_player("TestPresetFadeOut")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/FadeOutTarget")
+		skip("Scene not ready")
+		return
+	_handler.preset_fade({
+		"player_path": player_path,
+		"target_path": "FadeOutTarget",
+		"mode": "out",
+	})
+	var anim := _fetch_anim(player_path, "fade_out")
+	assert_eq(float(anim.track_get_key_value(0, 0)), 1.0)
+	assert_eq(float(anim.track_get_key_value(0, 1)), 0.0)
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/FadeOutTarget")
+
+
+func test_preset_fade_rejects_target_without_modulate() -> void:
+	# A plain Node3D has no modulate property — the handler must reject it
+	# rather than silently building a broken track.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var n3d: Node3D = _add_sibling(Node3D.new(), "NoModulateTarget") as Node3D
+	var player_path := _add_player("TestPresetFadeReject")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/NoModulateTarget")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_fade({
+		"player_path": player_path,
+		"target_path": "NoModulateTarget",
+		"mode": "in",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/NoModulateTarget")
+
+
+func test_preset_fade_invalid_mode() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var sprite: Sprite2D = _add_sibling(Sprite2D.new(), "FadeBadMode") as Sprite2D
+	var player_path := _add_player("TestPresetFadeBadMode")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/FadeBadMode")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_fade({
+		"player_path": player_path,
+		"target_path": "FadeBadMode",
+		"mode": "wobble",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/FadeBadMode")
+
+
+# ─── animation_preset_slide ───────────────────────────────────────────────────
+
+func test_preset_slide_2d_stores_vector2() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var target: Node2D = _add_sibling(Node2D.new(), "Slide2D") as Node2D
+	target.position = Vector2(100, 50)
+	var player_path := _add_player("TestPresetSlide2D")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/Slide2D")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_slide({
+		"player_path": player_path,
+		"target_path": "Slide2D",
+		"direction": "left",
+		"mode": "in",
+		"distance": 200.0,
+		"duration": 0.4,
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.animation_name, "slide_in_left")
+	var anim := _fetch_anim(player_path, "slide_in_left")
+	var start_v = anim.track_get_key_value(0, 0)
+	var end_v = anim.track_get_key_value(0, 1)
+	assert_true(start_v is Vector2, "2D slide start should be Vector2, got %s" % typeof(start_v))
+	assert_true(end_v is Vector2, "2D slide end should be Vector2")
+	# mode=in, direction=left: starts at current - (200, 0), ends at current.
+	assert_eq((start_v as Vector2).x, -100.0)  # 100 + (-200)
+	assert_eq((end_v as Vector2).x, 100.0)
+	assert_eq((end_v as Vector2).y, 50.0)
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/Slide2D")
+
+
+func test_preset_slide_3d_stores_vector3() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var target: Node3D = _add_sibling(Node3D.new(), "Slide3D") as Node3D
+	target.position = Vector3.ZERO
+	var player_path := _add_player("TestPresetSlide3D")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/Slide3D")
+		skip("Scene not ready")
+		return
+	# direction=up, mode=out: Node3D up = +y, so end = (0, 1, 0)
+	var result := _handler.preset_slide({
+		"player_path": player_path,
+		"target_path": "Slide3D",
+		"direction": "up",
+		"mode": "out",
+		"distance": 1.0,
+	})
+	assert_has_key(result, "data")
+	var anim := _fetch_anim(player_path, "slide_out_up")
+	var end_v = anim.track_get_key_value(0, 1)
+	assert_true(end_v is Vector3, "3D slide end should be Vector3, got %s" % typeof(end_v))
+	assert_eq((end_v as Vector3).y, 1.0)
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/Slide3D")
+
+
+func test_preset_slide_rejects_non_transform_node() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var target: Node = _add_sibling(Node.new(), "SlideBadTarget")
+	var player_path := _add_player("TestPresetSlideBad")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/SlideBadTarget")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_slide({
+		"player_path": player_path,
+		"target_path": "SlideBadTarget",
+		"direction": "left",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/SlideBadTarget")
+
+
+func test_preset_slide_invalid_direction() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var target: Node2D = _add_sibling(Node2D.new(), "SlideDir") as Node2D
+	var player_path := _add_player("TestPresetSlideDir")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/SlideDir")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_slide({
+		"player_path": player_path,
+		"target_path": "SlideDir",
+		"direction": "sideways",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/SlideDir")
+
+
+# ─── animation_preset_shake ───────────────────────────────────────────────────
+
+func test_preset_shake_seed_is_deterministic() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var target: Node2D = _add_sibling(Node2D.new(), "Shaker") as Node2D
+	target.position = Vector2(10, 20)
+	var player_path := _add_player("TestPresetShake")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/Shaker")
+		skip("Scene not ready")
+		return
+
+	# First run.
+	var r1 := _handler.preset_shake({
+		"player_path": player_path,
+		"target_path": "Shaker",
+		"intensity": 5.0,
+		"duration": 0.2,
+		"frequency": 20.0,
+		"seed": 42,
+		"animation_name": "shake_a",
+	})
+	assert_has_key(r1, "data")
+	var anim_a := _fetch_anim(player_path, "shake_a")
+	var vals_a: Array = []
+	for i in range(anim_a.track_get_key_count(0)):
+		vals_a.append(anim_a.track_get_key_value(0, i))
+
+	# Second run, same seed, different name.
+	_handler.preset_shake({
+		"player_path": player_path,
+		"target_path": "Shaker",
+		"intensity": 5.0,
+		"duration": 0.2,
+		"frequency": 20.0,
+		"seed": 42,
+		"animation_name": "shake_b",
+	})
+	var anim_b := _fetch_anim(player_path, "shake_b")
+	var vals_b: Array = []
+	for i in range(anim_b.track_get_key_count(0)):
+		vals_b.append(anim_b.track_get_key_value(0, i))
+
+	assert_eq(vals_a.size(), vals_b.size())
+	for i in range(vals_a.size()):
+		assert_true(vals_a[i] is Vector2, "shake 2D keyframe should be Vector2")
+		assert_eq(vals_a[i], vals_b[i],
+			"same-seed shakes should produce identical keyframe %d" % i)
+
+	# First and last keyframe are at-rest (node's current position).
+	assert_eq(vals_a[0], target.position)
+	assert_eq(vals_a[vals_a.size() - 1], target.position)
+
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/Shaker")
+
+
+func test_preset_shake_3d_stores_vector3() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var target: Node3D = _add_sibling(Node3D.new(), "Shake3D") as Node3D
+	var player_path := _add_player("TestPresetShake3D")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/Shake3D")
+		skip("Scene not ready")
+		return
+	_handler.preset_shake({
+		"player_path": player_path,
+		"target_path": "Shake3D",
+		"seed": 7,
+	})
+	var anim := _fetch_anim(player_path, "shake")
+	# Sample a middle keyframe (0 and last are at-rest).
+	var mid = anim.track_get_key_value(0, 1)
+	assert_true(mid is Vector3, "3D shake keyframe should be Vector3, got %s" % typeof(mid))
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/Shake3D")
+
+
+# ─── animation_preset_pulse ───────────────────────────────────────────────────
+
+func test_preset_pulse_2d_three_keyframes() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var target: Node2D = _add_sibling(Node2D.new(), "Pulser") as Node2D
+	var player_path := _add_player("TestPresetPulse")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/Pulser")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_pulse({
+		"player_path": player_path,
+		"target_path": "Pulser",
+		"from_scale": 1.0,
+		"to_scale": 1.2,
+		"duration": 0.4,
+	})
+	assert_has_key(result, "data")
+	var anim := _fetch_anim(player_path, "pulse")
+	assert_eq(anim.track_get_key_count(0), 3)
+	var k0 = anim.track_get_key_value(0, 0)
+	var k1 = anim.track_get_key_value(0, 1)
+	var k2 = anim.track_get_key_value(0, 2)
+	assert_true(k0 is Vector2 and k1 is Vector2 and k2 is Vector2,
+		"2D pulse keyframes should be Vector2")
+	assert_eq((k0 as Vector2).x, 1.0)
+	assert_eq((k1 as Vector2).x, 1.2)
+	assert_eq((k2 as Vector2).x, 1.0)
+	# Peak sits at the midpoint.
+	assert_eq(anim.track_get_key_time(0, 1), 0.2)
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/Pulser")
+
+
+func test_preset_pulse_3d_stores_vector3() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var target: Node3D = _add_sibling(Node3D.new(), "Pulse3D") as Node3D
+	var player_path := _add_player("TestPresetPulse3D")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/Pulse3D")
+		skip("Scene not ready")
+		return
+	_handler.preset_pulse({
+		"player_path": player_path,
+		"target_path": "Pulse3D",
+	})
+	var anim := _fetch_anim(player_path, "pulse")
+	var peak = anim.track_get_key_value(0, 1)
+	assert_true(peak is Vector3, "3D pulse peak should be Vector3, got %s" % typeof(peak))
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/Pulse3D")
+
+
+# ─── animation_preset_* — shared behaviors ───────────────────────────────────
+
+func test_preset_overwrite_required_for_second_call() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var sprite: Sprite2D = _add_sibling(Sprite2D.new(), "OverwriteTarget") as Sprite2D
+	var player_path := _add_player("TestPresetOverwrite")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/OverwriteTarget")
+		skip("Scene not ready")
+		return
+	var r1 := _handler.preset_fade({
+		"player_path": player_path, "target_path": "OverwriteTarget", "mode": "in",
+	})
+	assert_has_key(r1, "data")
+	# Second call with same (auto-derived) name errors without overwrite.
+	var r2 := _handler.preset_fade({
+		"player_path": player_path, "target_path": "OverwriteTarget", "mode": "in",
+	})
+	assert_is_error(r2, McpErrorCodes.INVALID_PARAMS)
+	# With overwrite=true, it succeeds.
+	var r3 := _handler.preset_fade({
+		"player_path": player_path, "target_path": "OverwriteTarget", "mode": "in",
+		"overwrite": true, "duration": 0.25,
+	})
+	assert_has_key(r3, "data")
+	assert_eq(r3.data.overwritten, true)
+	assert_eq(r3.data.length, 0.25)
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/OverwriteTarget")
+
+
+func test_preset_fade_missing_target() -> void:
+	var player_path := _add_player("TestPresetMissingTarget")
+	if player_path.is_empty():
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_fade({
+		"player_path": player_path,
+		"target_path": "NoSuchNode",
+		"mode": "in",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	_remove_node(player_path)
