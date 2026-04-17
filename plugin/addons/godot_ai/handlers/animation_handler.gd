@@ -886,7 +886,7 @@ func preset_slide(params: Dictionary) -> Dictionary:
 	var target_resolved := _resolve_preset_target(player, target_path)
 	if target_resolved.has("error"):
 		return target_resolved
-	var target: Node = target_resolved.node
+	var target = target_resolved.node
 	var kind: String = target_resolved.kind
 
 	# Default distance picks 3D units vs screen pixels based on target kind.
@@ -982,7 +982,7 @@ func preset_shake(params: Dictionary) -> Dictionary:
 	var target_resolved := _resolve_preset_target(player, target_path)
 	if target_resolved.has("error"):
 		return target_resolved
-	var target: Node = target_resolved.node
+	var target = target_resolved.node
 	var kind: String = target_resolved.kind
 
 	var default_intensity: float = 0.1 if kind == "3d" else 10.0
