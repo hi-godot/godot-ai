@@ -1544,11 +1544,12 @@ func test_preset_pulse_2d_three_keyframes() -> void:
 	var k2 = anim.track_get_key_value(0, 2)
 	assert_true(k0 is Vector2 and k1 is Vector2 and k2 is Vector2,
 		"2D pulse keyframes should be Vector2")
-	assert_eq((k0 as Vector2).x, 1.0)
-	assert_eq((k1 as Vector2).x, 1.2)
-	assert_eq((k2 as Vector2).x, 1.0)
+	# Vector2 components are float32 — compare approximately.
+	assert_true(is_equal_approx((k0 as Vector2).x, 1.0))
+	assert_true(is_equal_approx((k1 as Vector2).x, 1.2))
+	assert_true(is_equal_approx((k2 as Vector2).x, 1.0))
 	# Peak sits at the midpoint.
-	assert_eq(anim.track_get_key_time(0, 1), 0.2)
+	assert_true(is_equal_approx(anim.track_get_key_time(0, 1), 0.2))
 	_remove_node(player_path)
 	_remove_node("/" + scene_root.name + "/Pulser")
 
