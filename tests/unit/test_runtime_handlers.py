@@ -1477,10 +1477,9 @@ async def test_client_status_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     result = await client_handlers.client_status(runtime)
-    clients = result["clients"]
-    assert clients[0]["id"] == "claude_code"
-    assert clients[0]["status"] == "configured"
-    assert clients[1]["installed"] is False
+    clients = {entry["id"]: entry for entry in result["clients"]}
+    assert clients["claude_code"]["status"] == "configured"
+    assert clients["codex"]["installed"] is False
     assert client.calls[-1]["command"] == "check_client_status"
 
 

@@ -67,13 +67,12 @@ static func remove(client: McpClient, _server_name: String) -> Dictionary:
 	if path.is_empty() or not FileAccess.file_exists(path):
 		return {"status": "ok", "message": "Not configured"}
 	var lines := _split_lines(_read_text(path))
-	var headers_prefix := _all_header_prefixes(client)
+	var headers := _all_headers(client)
 
 	var output: Array[String] = []
 	var i := 0
 	while i < lines.size():
-		var trimmed := lines[i].strip_edges()
-		if _matches_any_prefix(trimmed, headers_prefix):
+		if _matches_any_header(lines[i], headers):
 			i += 1
 			while i < lines.size():
 				var nt := lines[i].strip_edges()
@@ -121,7 +120,7 @@ static func _primary_header(client: McpClient) -> String:
 	var parts := client.toml_section_path
 	if parts.size() < 2:
 		return "[%s]" % ".".join(parts)
-	var section := ".".join(_packed_to_array(_packed_slice(parts, 0, parts.size() - 1)))
+	var section := ".".join(_packed_slice(parts, 0, parts.size() - 1))
 	var name := parts[parts.size() - 1]
 	return "[%s.\"%s\"]" % [section, name]
 
@@ -133,26 +132,23 @@ static func _all_headers(client: McpClient) -> Array[String]:
 	return out
 
 
-static func _all_header_prefixes(client: McpClient) -> Array[String]:
-	var out: Array[String] = []
-	for h in _all_headers(client):
-		# Strip trailing ] so we match e.g. `[mcp_servers."godot-ai"` even when
-		# the user has appended fields on the header line (rare but possible).
-		out.append(h.trim_suffix("]"))
-	return out
-
-
-static func _matches_any_prefix(line: String, prefixes: Array[String]) -> bool:
-	for p in prefixes:
-		if line.begins_with(p):
+## Exact-header match. We cannot use a simple prefix check because
+## `[mcp_servers."godot-ai"` is a prefix of `[mcp_servers."godot-ai-dev"]`,
+## which would silently delete unrelated sections during remove().
+static func _matches_any_header(line: String, headers: Array[String]) -> bool:
+	var trimmed := line.strip_edges()
+	for h in headers:
+		if not trimmed.begins_with(h):
+			continue
+		var remainder := trimmed.substr(h.length()).strip_edges()
+		if remainder.is_empty() or remainder.begins_with("#"):
 			return true
 	return false
 
 
 static func _find_section(lines: Array[String], headers: Array[String]) -> Dictionary:
 	for i in range(lines.size()):
-		var trimmed := lines[i].strip_edges()
-		if headers.has(trimmed):
+		if _matches_any_header(lines[i], headers):
 			var end := lines.size()
 			for j in range(i + 1, lines.size()):
 				var nt := lines[j].strip_edges()
@@ -161,13 +157,6 @@ static func _find_section(lines: Array[String], headers: Array[String]) -> Dicti
 					break
 			return {"start": i, "end": end}
 	return {}
-
-
-static func _packed_to_array(packed: PackedStringArray) -> Array:
-	var out: Array = []
-	for s in packed:
-		out.append(s)
-	return out
 
 
 static func _packed_slice(packed: PackedStringArray, from: int, to: int) -> PackedStringArray:

@@ -926,10 +926,9 @@ class TestClientTools:
         task = asyncio.create_task(respond())
         result = await client.call_tool("client_status", {})
         await task
-        clients = result.data["clients"]
-        assert clients[0]["id"] == "claude_code"
-        assert clients[0]["status"] == "configured"
-        assert clients[1]["installed"] is False
+        clients = {entry["id"]: entry for entry in result.data["clients"]}
+        assert clients["claude_code"]["status"] == "configured"
+        assert clients["codex"]["installed"] is False
 
     async def test_client_configure(self, mcp_stack):
         client, plugin = mcp_stack

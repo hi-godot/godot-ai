@@ -3,8 +3,8 @@ class_name McpAtomicWrite
 extends RefCounted
 
 ## Write text to a file via temp + rename so a crash mid-write never leaves
-## the user's MCP config truncated. Caller is responsible for ensuring the
-## parent dir exists.
+## the user's MCP config truncated. Creates the parent dir if needed and
+## keeps a one-shot `.backup` of the prior file.
 
 
 static func write(path: String, content: String) -> bool:

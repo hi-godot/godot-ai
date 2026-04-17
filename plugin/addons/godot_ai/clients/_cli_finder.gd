@@ -93,6 +93,11 @@ static func _well_known_dirs() -> Array[String]:
 			var local := OS.get_environment("LOCALAPPDATA")
 			var prog := OS.get_environment("ProgramFiles")
 			var paths: Array[String] = []
+			if not home.is_empty():
+				paths.append(home.path_join(".claude/local"))
+				paths.append(home.path_join(".local/bin"))
+				paths.append(home.path_join(".cargo/bin"))
+				paths.append(home.path_join("AppData/Local/Programs/uv"))
 			if not local.is_empty():
 				paths.append(local.path_join("Programs/uv"))
 			if not prog.is_empty():

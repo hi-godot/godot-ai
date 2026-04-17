@@ -13,10 +13,10 @@ static func configure(client: McpClient, server_name: String, server_url: String
 
 	# Best-effort prior cleanup so re-configure is idempotent.
 	if client.cli_unregister_args.is_valid():
-		var pre_args: Array[String] = client.cli_unregister_args.call(server_name)
+		var pre_args = client.cli_unregister_args.call(server_name)
 		OS.execute(cli, pre_args, [], true)
 
-	var args: Array[String] = client.cli_register_args.call(server_name, server_url)
+	var args = client.cli_register_args.call(server_name, server_url)
 	var output: Array = []
 	var exit_code := OS.execute(cli, args, output, true)
 	if exit_code == 0:
@@ -40,7 +40,7 @@ static func remove(client: McpClient, server_name: String) -> Dictionary:
 		return {"status": "error", "message": "%s CLI not found" % client.display_name}
 	if not client.cli_unregister_args.is_valid():
 		return {"status": "error", "message": "%s descriptor missing cli_unregister_args" % client.display_name}
-	var args: Array[String] = client.cli_unregister_args.call(server_name)
+	var args = client.cli_unregister_args.call(server_name)
 	var output: Array = []
 	var exit_code := OS.execute(cli, args, output, true)
 	if exit_code == 0:
@@ -50,7 +50,4 @@ static func remove(client: McpClient, server_name: String) -> Dictionary:
 
 
 static func _resolve_cli(client: McpClient) -> String:
-	var names: Array[String] = []
-	for n in client.cli_names:
-		names.append(n)
-	return McpCliFinder.find(names)
+	return McpCliFinder.find(McpClient._array_from_packed(client.cli_names))

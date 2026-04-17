@@ -15,6 +15,6 @@ func _init() -> void:
 	entry_url_field = "httpUrl"
 	entry_builder = func(_name: String, url: String) -> Dictionary:
 		return {"httpUrl": url}
-	detect_paths = path_template.values()
+	detect_paths = PackedStringArray(path_template.values())
 	manual_command_builder = func(name: String, url: String, path: String) -> String:
 		return "Edit %s and add under \"mcpServers\":\n  \"%s\": { \"httpUrl\": \"%s\" }" % [path, name, url]

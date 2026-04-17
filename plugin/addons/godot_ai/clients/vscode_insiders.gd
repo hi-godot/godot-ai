@@ -15,6 +15,6 @@ func _init() -> void:
 	server_key_path = PackedStringArray(["servers"])
 	entry_builder = func(_name: String, url: String) -> Dictionary:
 		return {"type": "http", "url": url}
-	detect_paths = path_template.values()
+	detect_paths = PackedStringArray(path_template.values())
 	manual_command_builder = func(name: String, url: String, path: String) -> String:
 		return "Edit %s and add under \"servers\":\n  \"%s\": { \"type\": \"http\", \"url\": \"%s\" }" % [path, name, url]

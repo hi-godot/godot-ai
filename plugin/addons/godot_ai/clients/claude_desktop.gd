@@ -24,6 +24,6 @@ func _init() -> void:
 			return true
 		var args = entry.get("args", [])
 		return entry.get("command", "") == "npx" and args is Array and args.has(url)
-	detect_paths = path_template.values()
+	detect_paths = PackedStringArray(path_template.values())
 	manual_command_builder = func(name: String, url: String, path: String) -> String:
 		return "Edit %s and add under \"mcpServers\":\n  \"%s\": { \"command\": \"npx\", \"args\": [\"-y\", \"mcp-remote\", \"%s\"] }" % [path, name, url]

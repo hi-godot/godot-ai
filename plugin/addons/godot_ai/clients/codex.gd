@@ -16,6 +16,6 @@ func _init() -> void:
 			"url = \"%s\"" % url,
 			"enabled = true",
 		])
-	detect_paths = path_template.values()
+	detect_paths = PackedStringArray(path_template.values())
 	manual_command_builder = func(name: String, url: String, path: String) -> String:
 		return "Edit %s and add:\n  [mcp_servers.\"%s\"]\n  url = \"%s\"\n  enabled = true" % [path, name, url]
