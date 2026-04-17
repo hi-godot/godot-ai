@@ -3633,6 +3633,234 @@ class TestAnimationValidateTool:
         assert result.data["broken_count"] == 1
 
 
+class TestAnimationPresetTools:
+    async def test_preset_fade(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_preset_fade"
+            assert cmd["params"]["player_path"] == "/Main/AP"
+            assert cmd["params"]["target_path"] == "Panel"
+            assert cmd["params"]["mode"] == "in"
+            assert cmd["params"]["duration"] == 0.5
+            # Optional params omitted when not set.
+            assert "animation_name" not in cmd["params"]
+            assert "overwrite" not in cmd["params"]
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "fade_in",
+                    "mode": "in",
+                    "length": 0.5,
+                    "track_count": 1,
+                    "library_created": False,
+                    "overwritten": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_preset_fade",
+            {
+                "player_path": "/Main/AP",
+                "target_path": "Panel",
+                "mode": "in",
+                "duration": 0.5,
+            },
+        )
+        await task
+        assert result.data["animation_name"] == "fade_in"
+        assert result.data["undoable"] is True
+
+    async def test_preset_fade_overwrite_forwards(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["overwrite"] is True
+            assert cmd["params"]["animation_name"] == "hud_flash"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "hud_flash",
+                    "mode": "out",
+                    "length": 0.25,
+                    "track_count": 1,
+                    "library_created": False,
+                    "overwritten": True,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_preset_fade",
+            {
+                "player_path": "/Main/AP",
+                "target_path": "HUD",
+                "mode": "out",
+                "duration": 0.25,
+                "animation_name": "hud_flash",
+                "overwrite": True,
+            },
+        )
+        await task
+        assert result.data["overwritten"] is True
+
+    async def test_preset_slide_forwards_direction_and_distance(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_preset_slide"
+            assert cmd["params"]["direction"] == "left"
+            assert cmd["params"]["mode"] == "in"
+            assert cmd["params"]["distance"] == 250.0
+            assert cmd["params"]["duration"] == 0.4
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "slide_in_left",
+                    "direction": "left",
+                    "mode": "in",
+                    "distance": 250.0,
+                    "length": 0.4,
+                    "track_count": 1,
+                    "library_created": False,
+                    "overwritten": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_preset_slide",
+            {
+                "player_path": "/Main/AP",
+                "target_path": "Menu",
+                "direction": "left",
+                "mode": "in",
+                "distance": 250.0,
+            },
+        )
+        await task
+        assert result.data["direction"] == "left"
+
+    async def test_preset_slide_distance_omitted_when_default(self, mcp_stack):
+        """`distance=None` means the plugin picks the 2D/3D default — don't leak it."""
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert "distance" not in cmd["params"]
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "slide_in_left",
+                    "direction": "left",
+                    "mode": "in",
+                    "distance": 100.0,
+                    "length": 0.4,
+                    "track_count": 1,
+                    "library_created": False,
+                    "overwritten": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        await client.call_tool(
+            "animation_preset_slide",
+            {"player_path": "/Main/AP", "target_path": "Menu"},
+        )
+        await task
+
+    async def test_preset_shake_forwards_seed_and_frequency(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_preset_shake"
+            assert cmd["params"]["seed"] == 42
+            assert cmd["params"]["frequency"] == 60.0
+            assert cmd["params"]["intensity"] == 8.0
+            assert cmd["params"]["duration"] == 0.2
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "shake",
+                    "length": 0.2,
+                    "frequency": 60.0,
+                    "intensity": 8.0,
+                    "keyframe_count": 13,
+                    "track_count": 1,
+                    "library_created": False,
+                    "overwritten": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_preset_shake",
+            {
+                "player_path": "/Main/AP",
+                "target_path": "Camera",
+                "intensity": 8.0,
+                "duration": 0.2,
+                "frequency": 60.0,
+                "seed": 42,
+            },
+        )
+        await task
+        assert result.data["keyframe_count"] == 13
+
+    async def test_preset_pulse_forwards_scale_bounds(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_preset_pulse"
+            assert cmd["params"]["from_scale"] == 1.0
+            assert cmd["params"]["to_scale"] == 1.25
+            assert cmd["params"]["duration"] == 0.3
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/AP",
+                    "animation_name": "pulse",
+                    "from_scale": 1.0,
+                    "to_scale": 1.25,
+                    "length": 0.3,
+                    "track_count": 1,
+                    "library_created": False,
+                    "overwritten": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_preset_pulse",
+            {
+                "player_path": "/Main/AP",
+                "target_path": "Button",
+                "from_scale": 1.0,
+                "to_scale": 1.25,
+                "duration": 0.3,
+            },
+        )
+        await task
+        assert result.data["animation_name"] == "pulse"
+
+
 # ---------------------------------------------------------------------------
 # material_create / material_set_param / material_assign / material_apply_*
 # ---------------------------------------------------------------------------

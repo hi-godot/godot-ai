@@ -95,6 +95,8 @@ def create_server(ws_port: int = 9500) -> FastMCP:
             "(colors, stylebox, font sizes) — Godot's CSS-like styling\n"
             "  animation_*      — AnimationPlayer authoring "
             "(tracks, keyframes, autoplay) — hover pulses, slide-ins, shakes, fades\n"
+            "  animation_preset_* — one-call canned animations "
+            "(fade, slide, shake, pulse) — no tween specs needed\n"
             "  material_*       — author Materials "
             "(StandardMaterial3D, ORM, ShaderMaterial) — "
             "paint, albedo, metal, glass, emission, shader uniforms\n"
