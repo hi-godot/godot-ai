@@ -129,7 +129,9 @@ static func get_server_command() -> Array[String]:
 
 
 static func find_uvx() -> String:
-	return McpCliFinder.find(["uvx.exe"] if OS.get_name() == "Windows" else ["uvx"])
+	var names: Array[String] = []
+	names.append("uvx.exe" if OS.get_name() == "Windows" else "uvx")
+	return McpCliFinder.find(names)
 
 
 static func check_uv_version() -> String:
