@@ -40,6 +40,12 @@ func set_project_setting(params: Dictionary) -> Dictionary:
 	var value = params.get("value")
 	var had_setting := ProjectSettings.has_setting(key)
 	var old_value = ProjectSettings.get_setting(key) if had_setting else null
+	# JSON has no distinct int type: Godot parses `1920` as float. If the
+	# existing setting is TYPE_INT, coerce whole-number floats back to int so
+	# we don't silently flip typed-int settings (viewport_width, etc.) to
+	# floats on disk. See issue #31.
+	if had_setting and typeof(old_value) == TYPE_INT and typeof(value) == TYPE_FLOAT and float(int(value)) == value:
+		value = int(value)
 	ProjectSettings.set_setting(key, value)
 	var err := ProjectSettings.save()
 	if err != OK:

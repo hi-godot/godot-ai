@@ -61,6 +61,26 @@ func test_set_project_setting_roundtrip() -> void:
 	_handler.set_project_setting({"key": "application/config/name", "value": old_name})
 
 
+func test_set_project_setting_preserves_int_type() -> void:
+	## Issue #31: JSON has no int type, so whole-number values arrive as floats.
+	## When the existing setting is TYPE_INT, the handler must coerce back to int
+	## so we don't silently flip typed-int settings to floats on disk.
+	var original := _handler.get_project_setting({"key": "display/window/size/viewport_width"})
+	var old_width = original.data.value
+
+	# Send a float value that would naturally come from JSON-encoded `1920`.
+	var result := _handler.set_project_setting({
+		"key": "display/window/size/viewport_width",
+		"value": 1920.0,
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.type, "int", "Whole-number float on an int setting must be stored as int")
+	assert_eq(result.data.value, 1920)
+
+	## Restore
+	_handler.set_project_setting({"key": "display/window/size/viewport_width", "value": old_width})
+
+
 func test_set_project_setting_missing_key() -> void:
 	var result := _handler.set_project_setting({})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
