@@ -37,7 +37,8 @@ func _enter_tree() -> void:
 	var animation_handler := AnimationHandler.new(get_undo_redo())
 	var material_handler := MaterialHandler.new(get_undo_redo())
 	var particle_handler := ParticleHandler.new(get_undo_redo())
-	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler, ui_handler, theme_handler, animation_handler, material_handler, particle_handler]
+	var audio_handler := AudioHandler.new(get_undo_redo())
+	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler, ui_handler, theme_handler, animation_handler, material_handler, particle_handler, audio_handler]
 
 	_dispatcher.register("get_editor_state", editor_handler.get_editor_state)
 	_dispatcher.register("get_scene_tree", scene_handler.get_scene_tree)
@@ -134,6 +135,12 @@ func _enter_tree() -> void:
 	_dispatcher.register("particle_restart", particle_handler.restart_particle)
 	_dispatcher.register("particle_get", particle_handler.get_particle)
 	_dispatcher.register("particle_apply_preset", particle_handler.apply_preset)
+	_dispatcher.register("audio_player_create", audio_handler.create_player)
+	_dispatcher.register("audio_player_set_stream", audio_handler.set_stream)
+	_dispatcher.register("audio_player_set_playback", audio_handler.set_playback)
+	_dispatcher.register("audio_play", audio_handler.play)
+	_dispatcher.register("audio_stop", audio_handler.stop)
+	_dispatcher.register("audio_list", audio_handler.list_streams)
 
 	_connection.dispatcher = _dispatcher
 	add_child(_connection)

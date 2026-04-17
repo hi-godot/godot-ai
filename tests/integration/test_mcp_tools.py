@@ -3662,9 +3662,7 @@ class TestMaterialCreateTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "material_create", {"path": "res://materials/red.tres"}
-        )
+        result = await client.call_tool("material_create", {"path": "res://materials/red.tres"})
         await task
         assert result.data["class"] == "StandardMaterial3D"
         assert result.data["undoable"] is False
@@ -3828,9 +3826,7 @@ class TestMaterialGetTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "material_get", {"path": "res://materials/red.tres"}
-        )
+        result = await client.call_tool("material_get", {"path": "res://materials/red.tres"})
         await task
         assert result.data["class"] == "StandardMaterial3D"
 
@@ -3965,9 +3961,7 @@ class TestParticleCreateTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "particle_create", {"parent_path": "/Main", "name": "Fire"}
-        )
+        result = await client.call_tool("particle_create", {"parent_path": "/Main", "name": "Fire"})
         await task
         assert result.data["process_material_created"] is True
         assert result.data["draw_pass_mesh_created"] is True
@@ -4166,3 +4160,184 @@ class TestParticleGetTool:
         await task
         assert result.data["main"]["amount"] == 80
         assert result.data["draw_passes"][0]["mesh_class"] == "QuadMesh"
+
+
+# ---------------------------------------------------------------------------
+# audio_player_create / audio_player_set_stream / audio_play / audio_stop / audio_list
+# ---------------------------------------------------------------------------
+
+
+class TestAudioPlayerCreateTool:
+    async def test_create_3d(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "audio_player_create"
+            assert cmd["params"] == {
+                "parent_path": "/Main",
+                "name": "Footsteps",
+                "type": "3d",
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Footsteps",
+                    "parent_path": "/Main",
+                    "name": "Footsteps",
+                    "type": "3d",
+                    "class": "AudioStreamPlayer3D",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "audio_player_create",
+            {"parent_path": "/Main", "name": "Footsteps", "type": "3d"},
+        )
+        await task
+        assert result.data["class"] == "AudioStreamPlayer3D"
+        assert result.data["undoable"] is True
+
+
+class TestAudioPlayerSetStreamTool:
+    async def test_set_stream_forwards_path(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "audio_player_set_stream"
+            assert cmd["params"] == {
+                "player_path": "/Main/Footsteps",
+                "stream_path": "res://sfx/step.ogg",
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/Footsteps",
+                    "stream_path": "res://sfx/step.ogg",
+                    "stream_class": "AudioStreamOggVorbis",
+                    "duration_seconds": 0.42,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "audio_player_set_stream",
+            {"player_path": "/Main/Footsteps", "stream_path": "res://sfx/step.ogg"},
+        )
+        await task
+        assert result.data["stream_class"] == "AudioStreamOggVorbis"
+        assert result.data["duration_seconds"] == 0.42
+
+
+class TestAudioPlayerSetPlaybackTool:
+    async def test_partial_update_omits_none_fields(self, mcp_stack):
+        """Only fields the caller passes should end up on the wire."""
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "audio_player_set_playback"
+            assert cmd["params"] == {"player_path": "/Main/Music", "volume_db": -3.0}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/Music",
+                    "applied": ["volume_db"],
+                    "values": {"volume_db": -3.0},
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "audio_player_set_playback",
+            {"player_path": "/Main/Music", "volume_db": -3.0},
+        )
+        await task
+        assert result.data["applied"] == ["volume_db"]
+
+
+class TestAudioPlayTool:
+    async def test_play_is_runtime_only(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "audio_play"
+            assert cmd["params"] == {
+                "player_path": "/Main/Footsteps",
+                "from_position": 0.0,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/Footsteps",
+                    "from_position": 0.0,
+                    "playing": True,
+                    "undoable": False,
+                    "reason": "Runtime playback state — not saved with scene",
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("audio_play", {"player_path": "/Main/Footsteps"})
+        await task
+        assert result.data["undoable"] is False
+        assert result.data["playing"] is True
+
+
+class TestAudioStopTool:
+    async def test_stop(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "audio_stop"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/Footsteps",
+                    "playing": False,
+                    "undoable": False,
+                    "reason": "Runtime playback state — not saved with scene",
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("audio_stop", {"player_path": "/Main/Footsteps"})
+        await task
+        assert result.data["playing"] is False
+
+
+class TestAudioListTool:
+    async def test_list_returns_streams(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "audio_list"
+            assert cmd["params"] == {"root": "res://", "include_duration": True}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "root": "res://",
+                    "streams": [
+                        {
+                            "path": "res://sfx/click.ogg",
+                            "class": "AudioStreamOggVorbis",
+                            "duration_seconds": 0.1,
+                        }
+                    ],
+                    "count": 1,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("audio_list", {})
+        await task
+        assert result.data["count"] == 1
+        assert result.data["streams"][0]["class"] == "AudioStreamOggVorbis"
