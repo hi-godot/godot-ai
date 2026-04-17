@@ -135,7 +135,7 @@ func set_param(params: Dictionary) -> Dictionary:
 	if not property_exists:
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
-			"Property '%s' not found on %s" % [property, mat.get_class()]
+			McpPropertyErrors.build_message(mat, property)
 		)
 
 	var coerced := MaterialValues.coerce_material_value(property, raw_value, prop_type)
@@ -750,7 +750,7 @@ func _apply_one_param_on_instance(mat: Material, property: String, raw_value: Va
 	if not property_exists:
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
-			"Property '%s' not found on %s" % [property, mat.get_class()]
+			McpPropertyErrors.build_message(mat, property)
 		)
 	var coerced := MaterialValues.coerce_material_value(property, raw_value, prop_type)
 	if not coerced.ok:

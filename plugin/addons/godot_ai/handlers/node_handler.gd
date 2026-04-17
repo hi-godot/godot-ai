@@ -185,7 +185,7 @@ func set_property(params: Dictionary) -> Dictionary:
 			prop_type = prop.get("type", TYPE_NIL)
 			break
 	if not found:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Property '%s' not found on %s" % [property, node.get_class()])
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpPropertyErrors.build_message(node, property))
 
 	var old_value = node.get(property)
 	# Prefer declared property type; fall back to runtime type for dynamic props

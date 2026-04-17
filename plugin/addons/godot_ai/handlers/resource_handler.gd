@@ -122,7 +122,7 @@ func assign_resource(params: Dictionary) -> Dictionary:
 			found = true
 			break
 	if not found:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Property '%s' not found on %s" % [property, node.get_class()])
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpPropertyErrors.build_message(node, property))
 
 	if not ResourceLoader.exists(resource_path):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource not found: %s" % resource_path)

@@ -98,6 +98,39 @@ func test_assign_resource_property_not_found() -> void:
 		"resource_path": "res://main.tscn",
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	# Issue #47: surface available property names + suggestions so the agent
+	# doesn't need a round-trip to discover valid names.
+	var msg: String = result.error.get("message", "")
+	assert_contains(msg, "available:", "Error must list available property names")
+
+
+# ----- _property_errors helper (issue #47) -----
+
+func test_property_errors_suggests_top_radius_for_radius_on_cylinder_mesh() -> void:
+	## Repro from issue #47: agent sends {"radius": 0.5} on a CylinderMesh.
+	## Godot's property is split into `top_radius` and `bottom_radius`; the
+	## error must surface both as suggestions.
+	var mesh := CylinderMesh.new()
+	var msg := McpPropertyErrors.build_message(mesh, "radius")
+	assert_contains(msg, "top_radius", "Did-you-mean should surface top_radius")
+	assert_contains(msg, "bottom_radius", "Did-you-mean should surface bottom_radius")
+	assert_contains(msg, "Did you mean", "Message must mark suggestions explicitly")
+	assert_contains(msg, "available:", "Message must list available properties")
+
+
+func test_property_errors_no_suggestions_for_totally_unknown_name() -> void:
+	## No close match means no "did you mean" segment — but the available-list
+	## tail still gives the agent enough to pick the right property.
+	var mesh := CylinderMesh.new()
+	var msg := McpPropertyErrors.build_message(mesh, "asdfqwerty")
+	assert_contains(msg, "asdfqwerty", "Bad name must appear verbatim")
+	assert_contains(msg, "available:", "Available-list tail must appear")
+
+
+func test_property_errors_includes_engine_class_label() -> void:
+	var mesh := CylinderMesh.new()
+	var msg := McpPropertyErrors.build_message(mesh, "radius")
+	assert_contains(msg, "CylinderMesh", "Error must identify the target class")
 
 
 func test_assign_resource_resource_not_found() -> void:

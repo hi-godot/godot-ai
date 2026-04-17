@@ -420,7 +420,7 @@ func _apply_property(node: Node, prop: String, value: Variant) -> Variant:
 	if not found:
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
-			"Property '%s' not found on %s" % [prop, node.get_class()]
+			McpPropertyErrors.build_message(node, prop)
 		)
 
 	var coercion := _coerce_for_type(value, prop_type)

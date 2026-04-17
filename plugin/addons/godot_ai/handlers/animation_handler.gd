@@ -1357,8 +1357,8 @@ static func _resolve_track_prop_context(track_path: String, player: AnimationPla
 	# Target exists but the property doesn't. Reject loudly — silently storing
 	# the raw value here produces garbage keyframes at playback time.
 	return {"error":
-		"Property '%s' not found on target '%s' (class %s)" %
-		[prop_part, node_part, target.get_class()]}
+		"%s (target path: '%s')" %
+		[McpPropertyErrors.build_message(target, prop_part), node_part]}
 
 
 static func _coerce_with_context(value: Variant, ctx: Dictionary) -> Dictionary:
