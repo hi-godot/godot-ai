@@ -46,7 +46,6 @@ func control_draw_recipe(params: Dictionary) -> Dictionary:
 	var coerced_ops: Array = coerced.ops
 
 	var old_script: Variant = node.get_script()
-	var script_replaced := false
 	if old_script != null and old_script != DRAW_RECIPE_SCRIPT:
 		if not clear_existing:
 			return McpErrorCodes.make(
@@ -56,7 +55,6 @@ func control_draw_recipe(params: Dictionary) -> Dictionary:
 					% path
 				)
 			)
-		script_replaced = true
 
 	var had_meta := node.has_meta("_ops")
 	var old_ops: Variant = node.get_meta("_ops") if had_meta else null
@@ -79,7 +77,7 @@ func control_draw_recipe(params: Dictionary) -> Dictionary:
 			"path": ScenePath.from_node(node, scene_root),
 			"ops_count": coerced_ops.size(),
 			"script_attached": old_script == null,
-			"script_replaced": script_replaced,
+			"script_replaced": old_script != null and old_script != DRAW_RECIPE_SCRIPT,
 			"undoable": true,
 		}
 	}
@@ -146,25 +144,28 @@ func _require_fields(op: Dictionary, idx: int, kind: String, fields: Array) -> D
 	return {}
 
 
+func _coerce_typed(value: Variant, prop_type: int, idx: int, kind: String, field: String) -> Dictionary:
+	var r := UiHandler._coerce_for_type(value, prop_type)
+	if r.ok:
+		return {"ok": true, "value": r.value}
+	return McpErrorCodes.make(
+		McpErrorCodes.INVALID_PARAMS, "ops[%d] (%s): invalid '%s'" % [idx, kind, field]
+	)
+
+
 func _coerce_line(op: Dictionary, idx: int) -> Dictionary:
 	var missing := _require_fields(op, idx, "line", ["from", "to", "color"])
 	if missing.has("error"):
 		return missing
-	var frm := UiHandler._coerce_for_type(op.from, TYPE_VECTOR2)
-	if not frm.ok:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS, "ops[%d] (line): invalid 'from'" % idx
-		)
-	var to_ := UiHandler._coerce_for_type(op.to, TYPE_VECTOR2)
-	if not to_.ok:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS, "ops[%d] (line): invalid 'to'" % idx
-		)
-	var c := UiHandler._coerce_for_type(op.color, TYPE_COLOR)
-	if not c.ok:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS, "ops[%d] (line): invalid 'color'" % idx
-		)
+	var frm := _coerce_typed(op.from, TYPE_VECTOR2, idx, "line", "from")
+	if frm.has("error"):
+		return frm
+	var to_ := _coerce_typed(op.to, TYPE_VECTOR2, idx, "line", "to")
+	if to_.has("error"):
+		return to_
+	var c := _coerce_typed(op.color, TYPE_COLOR, idx, "line", "color")
+	if c.has("error"):
+		return c
 	var out := {"draw": "line", "from": frm.value, "to": to_.value, "color": c.value}
 	if op.has("width"):
 		out["width"] = float(op.width)
@@ -177,16 +178,12 @@ func _coerce_rect(op: Dictionary, idx: int) -> Dictionary:
 	var missing := _require_fields(op, idx, "rect", ["rect", "color"])
 	if missing.has("error"):
 		return missing
-	var r := UiHandler._coerce_for_type(op.rect, TYPE_RECT2)
-	if not r.ok:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS, "ops[%d] (rect): invalid 'rect'" % idx
-		)
-	var c := UiHandler._coerce_for_type(op.color, TYPE_COLOR)
-	if not c.ok:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS, "ops[%d] (rect): invalid 'color'" % idx
-		)
+	var r := _coerce_typed(op.rect, TYPE_RECT2, idx, "rect", "rect")
+	if r.has("error"):
+		return r
+	var c := _coerce_typed(op.color, TYPE_COLOR, idx, "rect", "color")
+	if c.has("error"):
+		return c
 	var out := {"draw": "rect", "rect": r.value, "color": c.value}
 	if op.has("filled"):
 		out["filled"] = bool(op.filled)
@@ -201,16 +198,12 @@ func _coerce_arc(op: Dictionary, idx: int) -> Dictionary:
 	)
 	if missing.has("error"):
 		return missing
-	var center := UiHandler._coerce_for_type(op.center, TYPE_VECTOR2)
-	if not center.ok:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS, "ops[%d] (arc): invalid 'center'" % idx
-		)
-	var c := UiHandler._coerce_for_type(op.color, TYPE_COLOR)
-	if not c.ok:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS, "ops[%d] (arc): invalid 'color'" % idx
-		)
+	var center := _coerce_typed(op.center, TYPE_VECTOR2, idx, "arc", "center")
+	if center.has("error"):
+		return center
+	var c := _coerce_typed(op.color, TYPE_COLOR, idx, "arc", "color")
+	if c.has("error"):
+		return c
 	var out := {
 		"draw": "arc",
 		"center": center.value,
@@ -232,16 +225,12 @@ func _coerce_circle(op: Dictionary, idx: int) -> Dictionary:
 	var missing := _require_fields(op, idx, "circle", ["center", "radius", "color"])
 	if missing.has("error"):
 		return missing
-	var center := UiHandler._coerce_for_type(op.center, TYPE_VECTOR2)
-	if not center.ok:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS, "ops[%d] (circle): invalid 'center'" % idx
-		)
-	var c := UiHandler._coerce_for_type(op.color, TYPE_COLOR)
-	if not c.ok:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS, "ops[%d] (circle): invalid 'color'" % idx
-		)
+	var center := _coerce_typed(op.center, TYPE_VECTOR2, idx, "circle", "center")
+	if center.has("error"):
+		return center
+	var c := _coerce_typed(op.color, TYPE_COLOR, idx, "circle", "color")
+	if c.has("error"):
+		return c
 	return {
 		"op":
 		{
@@ -315,16 +304,12 @@ func _coerce_string(op: Dictionary, idx: int) -> Dictionary:
 	var missing := _require_fields(op, idx, "string", ["position", "text", "color"])
 	if missing.has("error"):
 		return missing
-	var pos := UiHandler._coerce_for_type(op.position, TYPE_VECTOR2)
-	if not pos.ok:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS, "ops[%d] (string): invalid 'position'" % idx
-		)
-	var c := UiHandler._coerce_for_type(op.color, TYPE_COLOR)
-	if not c.ok:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS, "ops[%d] (string): invalid 'color'" % idx
-		)
+	var pos := _coerce_typed(op.position, TYPE_VECTOR2, idx, "string", "position")
+	if pos.has("error"):
+		return pos
+	var c := _coerce_typed(op.color, TYPE_COLOR, idx, "string", "color")
+	if c.has("error"):
+		return c
 	var out := {
 		"draw": "string",
 		"position": pos.value,

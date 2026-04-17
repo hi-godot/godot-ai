@@ -181,3 +181,32 @@ func assert_is_error(result: Dictionary, expected_code: String = "", msg: String
 	if expected_code and result.error.get("code", "") != expected_code:
 		_failed = true
 		_message = msg if msg else "Expected error code %s, got %s" % [expected_code, result.error.get("code", "")]
+
+
+# ----- scene helpers (shared across suites that create/remove Controls) -----
+
+## Add a Control under the scene root. Creates a Panel if ctl is null.
+## Returns the scene path, or "" when no scene is open — in which case a
+## caller-supplied ctl is freed to prevent leaks.
+func _add_control(ctl_name: String, ctl: Control = null) -> String:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		if ctl != null:
+			ctl.queue_free()
+		return ""
+	if ctl == null:
+		ctl = Panel.new()
+	ctl.name = ctl_name
+	scene_root.add_child(ctl)
+	ctl.owner = scene_root
+	return "/" + scene_root.name + "/" + ctl_name
+
+
+func _remove_control(path: String) -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return
+	var node := ScenePath.resolve(path, scene_root)
+	if node != null:
+		node.get_parent().remove_child(node)
+		node.queue_free()
