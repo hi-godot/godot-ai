@@ -45,7 +45,21 @@ func set_points(params: Dictionary) -> Dictionary:
 	if has_file_target:
 		if not ResourceLoader.exists(resource_path):
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource not found: %s" % resource_path)
-		curve = ResourceLoader.load(resource_path)
+		# ResourceLoader.load() returns Godot's cached Resource. Duplicate
+		# before mutating so: (a) open scenes holding a reference to this
+		# .tres don't silently see the new points outside any undo action,
+		# and (b) if ResourceSaver.save() fails we haven't corrupted the
+		# in-memory cache (cache/disk divergence). Also guard against
+		# ResourceLoader.exists() succeeding but load() returning null
+		# (corrupt .tres, unregistered class) — otherwise curve.get_class()
+		# on the response line below would crash the plugin.
+		var loaded_curve: Resource = ResourceLoader.load(resource_path)
+		if loaded_curve == null:
+			return McpErrorCodes.make(
+				McpErrorCodes.INTERNAL_ERROR,
+				"Failed to load curve from %s (file exists but load returned null — may be corrupt)" % resource_path
+			)
+		curve = loaded_curve.duplicate()
 	else:
 		var scene_root := EditorInterface.get_edited_scene_root()
 		if scene_root == null:
@@ -95,6 +109,12 @@ func set_points(params: Dictionary) -> Dictionary:
 				McpErrorCodes.INTERNAL_ERROR,
 				"Failed to save curve to %s: %s" % [resource_path, error_string(save_err)]
 			)
+		# Refresh the FileSystem dock so it picks up the edit without manual
+		# reimport. Sibling save-paths in this PR (_save_created_resource,
+		# _save_environment, _save_texture) all do this — keep consistent.
+		var efs := EditorInterface.get_resource_filesystem()
+		if efs != null:
+			efs.update_file(resource_path)
 		return {
 			"data": {
 				"resource_path": resource_path,

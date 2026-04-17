@@ -343,3 +343,70 @@ func test_create_resource_undo_survives_interleaving() -> void:
 	editor_undo(_undo_redo)  # undo mesh assign
 	assert_true(mi.mesh == null or not (mi.mesh is BoxMesh), "Undo should have removed the BoxMesh")
 	_remove_node(mi)
+
+
+# ----- regression: properties dict __class__ shortcut for nested Resource slots -----
+
+func test_create_resource_nested_class_dict_instantiates_sub_resource() -> void:
+	# resource_create type=GradientTexture2D properties={gradient: {__class__: Gradient}}
+	# should land a real Gradient in .gradient, not leave the slot empty while
+	# reporting properties_applied: 1.
+	var s := _add_mesh_instance("TestNestedClass")
+	if s == null:
+		skip("No scene root — is a scene open?")
+		return
+	# Use GradientTexture2D → Gradient sub-resource as the test case (flat,
+	# no shader dependencies required).
+	s.mesh = PlaneMesh.new()
+	s.material_override = StandardMaterial3D.new()
+	# Assign a GradientTexture2D via resource_create with a nested Gradient.
+	var result := _handler.create_resource({
+		"type": "GradientTexture2D",
+		"path": "/%s/TestNestedClass" % s.get_parent().name,
+		"property": "material_override",  # material_override accepts any Material, so this will fail
+	})
+	# Actually reposition this test: use a 2D host so we can target a
+	# texture property on a TextureRect, which accepts Texture2D (GradientTexture2D).
+	_remove_node(s)
+
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var tr := TextureRect.new()
+	tr.name = "TestNestedClassTR"
+	scene_root.add_child(tr)
+	tr.set_owner(scene_root)
+	var r2 := _handler.create_resource({
+		"type": "GradientTexture2D",
+		"path": tr.get_path(),
+		"property": "texture",
+		"properties": {
+			"gradient": {
+				"__class__": "Gradient",
+			},
+		},
+	})
+	assert_has_key(r2, "data", "Expected data response; got: %s" % str(r2))
+	assert_true(tr.texture is GradientTexture2D)
+	# Regression: .gradient must be a real Gradient, not null and not a Dictionary.
+	assert_true(tr.texture.gradient is Gradient, "Nested __class__ must instantiate sub-resource")
+	_remove_node(tr)
+
+
+func test_create_resource_nested_class_dict_invalid_class() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var tr := TextureRect.new()
+	tr.name = "TestNestedBadClass"
+	scene_root.add_child(tr)
+	tr.set_owner(scene_root)
+	var result := _handler.create_resource({
+		"type": "GradientTexture2D",
+		"path": tr.get_path(),
+		"property": "texture",
+		"properties": {
+			"gradient": {"__class__": "NotARealClass"},
+		},
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	_remove_node(tr)

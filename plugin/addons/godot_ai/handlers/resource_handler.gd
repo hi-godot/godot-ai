@@ -259,6 +259,29 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary) ->
 						"Resource not found at path '%s' for property '%s'" % [v, key]
 					)
 				v = loaded
+		elif target_type == TYPE_OBJECT and v is Dictionary and v.has("__class__"):
+			# Nested shortcut: the same {"__class__": "X", ...} form that
+			# node_handler.set_property accepts, now also supported here so
+			# resource_create/environment_create callers can populate
+			# sub-resource slots (ShaderMaterial.shader, etc.) in one shot.
+			var sub_type: String = v.get("__class__", "")
+			var class_err := _validate_resource_class(sub_type)
+			if class_err != null:
+				return class_err
+			var sub_instance := ClassDB.instantiate(sub_type)
+			if sub_instance == null or not (sub_instance is Resource):
+				return McpErrorCodes.make(
+					McpErrorCodes.INTERNAL_ERROR,
+					"Failed to instantiate %s as a Resource for property '%s'" % [sub_type, key]
+				)
+			var sub_res: Resource = sub_instance
+			var remaining: Dictionary = (v as Dictionary).duplicate()
+			remaining.erase("__class__")
+			if not remaining.is_empty():
+				var nested_err := _apply_resource_properties(sub_res, remaining)
+				if nested_err != null:
+					return nested_err
+			v = sub_res
 		else:
 			v = NodeHandler._coerce_value(v, target_type)
 		res.set(key, v)

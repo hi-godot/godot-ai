@@ -153,10 +153,19 @@ static func _find_bounds_sibling(collision_node: Node, is_3d: bool) -> Node:
 
 ## Measure the visual bounds of `source`. Returns {aabb: AABB} for 3D or
 ## {rect: Rect2} for 2D on success, or {error: ...} on failure.
+## Bounds are returned in world-ish size (local extents scaled by the source
+## node's own transform scale) so a MeshInstance3D at scale=(2,2,2) gives an
+## 8× volume collider, not a unit collider.
 static func _measure_bounds(source: Node, is_3d: bool) -> Dictionary:
 	if is_3d:
 		if source is VisualInstance3D:
-			return {"aabb": (source as VisualInstance3D).get_aabb()}
+			var aabb: AABB = (source as VisualInstance3D).get_aabb()
+			# get_aabb() is local-space; pre-multiply by the source's scale
+			# so the collider tracks what you actually see in the viewport.
+			var scale_3d: Vector3 = (source as Node3D).transform.basis.get_scale()
+			aabb.position = aabb.position * scale_3d
+			aabb.size = aabb.size * scale_3d
+			return {"aabb": aabb}
 		return {"error": McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
 			"Source %s has no measurable 3D bounds (must be VisualInstance3D subclass)" % source.get_class()
@@ -164,10 +173,27 @@ static func _measure_bounds(source: Node, is_3d: bool) -> Dictionary:
 	# 2D
 	if source is Sprite2D:
 		var s: Sprite2D = source
-		return {"rect": s.get_rect()}
+		var srect: Rect2 = s.get_rect()
+		# get_rect() reports the local texture rect and ignores scale.
+		srect.position = srect.position * s.scale
+		srect.size = srect.size * s.scale
+		return {"rect": srect}
 	if source is TextureRect:
 		var tr: TextureRect = source
-		return {"rect": Rect2(Vector2.ZERO, tr.size)}
+		# tr.size is the Control's laid-out size, which is Vector2.ZERO
+		# before the first layout pass (e.g. just after the node was created
+		# via MCP). Fall back to the texture's own size when that happens,
+		# so autofit doesn't silently produce a zero-sized shape.
+		var tr_size: Vector2 = tr.size
+		if tr_size.is_zero_approx():
+			if tr.texture != null:
+				tr_size = tr.texture.get_size() * tr.scale
+			else:
+				return {"error": McpErrorCodes.make(
+					McpErrorCodes.INVALID_PARAMS,
+					"TextureRect at %s has zero layout size and no texture to fall back to — autofit would produce a zero-sized shape" % source.name
+				)}
+		return {"rect": Rect2(Vector2.ZERO, tr_size)}
 	return {"error": McpErrorCodes.make(
 		McpErrorCodes.INVALID_PARAMS,
 		"Source %s has no measurable 2D bounds (must be Sprite2D or TextureRect)" % source.get_class()
@@ -202,11 +228,14 @@ static func _apply_shape_size(shape: Resource, shape_type: String, bounds: Dicti
 				var h := size_v.y
 				previous["radius"] = cap.radius
 				previous["height"] = cap.height
+				# CapsuleShape3D enforces height >= 2*radius and silently
+				# clamps setters that would violate it. Read back the
+				# stored values so the response reflects reality.
 				cap.radius = r2
 				cap.height = h
 				applied.append("radius")
 				applied.append("height")
-				size_response = {"radius": r2, "height": h}
+				size_response = {"radius": cap.radius, "height": cap.height}
 			"cylinder":
 				var cyl := shape as CylinderShape3D
 				var r3 := maxf(size_v.x, size_v.z) * 0.5
@@ -217,7 +246,7 @@ static func _apply_shape_size(shape: Resource, shape_type: String, bounds: Dicti
 				cyl.height = ch
 				applied.append("radius")
 				applied.append("height")
-				size_response = {"radius": r3, "height": ch}
+				size_response = {"radius": cyl.radius, "height": cyl.height}
 	else:
 		var rect: Rect2 = bounds.rect
 		var sz: Vector2 = rect.size
@@ -239,10 +268,12 @@ static func _apply_shape_size(shape: Resource, shape_type: String, bounds: Dicti
 				var ch2 := sz.y
 				previous["radius"] = cap2.radius
 				previous["height"] = cap2.height
+				# CapsuleShape2D has the same height >= 2*radius invariant
+				# as its 3D counterpart; read back what Godot actually kept.
 				cap2.radius = cr2
 				cap2.height = ch2
 				applied.append("radius")
 				applied.append("height")
-				size_response = {"radius": cr2, "height": ch2}
+				size_response = {"radius": cap2.radius, "height": cap2.height}
 
 	return {"applied": applied, "previous": previous, "size_response": size_response}

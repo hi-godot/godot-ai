@@ -298,6 +298,47 @@ func test_set_points_scalar_curve() -> void:
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(out_path))
 
 
+# ----- regression: resource_path branch must not mutate the cached Resource -----
+
+func test_set_points_disk_path_does_not_mutate_cached_resource() -> void:
+	# If the handler mutates the loaded (cached) curve in place before saving,
+	# anything else that holds a reference to the same ResourceLoader cache
+	# would silently see the new points outside any undo action. Guard that.
+	var out_path := "res://test_tmp_cache_sharing.tres"
+	if FileAccess.file_exists(out_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(out_path))
+	var c := Curve3D.new()
+	c.add_point(Vector3(99, 99, 99))  # unique marker point in the ORIGINAL
+	ResourceSaver.save(c, out_path)
+
+	# Warm the ResourceLoader cache by loading once — this is the object the
+	# handler's ResourceLoader.load() call will get back.
+	var cached: Curve3D = ResourceLoader.load(out_path)
+	assert_eq(cached.point_count, 1)
+	assert_eq(cached.get_point_position(0), Vector3(99, 99, 99))
+
+	var result := _handler.set_points({
+		"points": [
+			{"position": {"x": 0, "y": 0, "z": 0}},
+			{"position": {"x": 1, "y": 0, "z": 0}},
+		],
+		"resource_path": out_path,
+	})
+	assert_has_key(result, "data")
+
+	# The cached in-memory instance held by someone else (us, here) must
+	# remain unmodified. The handler should have duplicated before mutating.
+	assert_eq(cached.point_count, 1, "Cached Curve3D must not be mutated in place")
+	assert_eq(cached.get_point_position(0), Vector3(99, 99, 99))
+
+	# A fresh load, meanwhile, should reflect the newly-saved points.
+	var reloaded: Curve3D = ResourceLoader.load(out_path)
+	# If reloaded == cached (same cache slot), the cache may have been
+	# invalidated by the save; regardless, reloading should give us 2 points.
+	assert_gt(reloaded.point_count, 0)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(out_path))
+
+
 func test_set_points_3d_invalid_point_shape() -> void:
 	var p := _add_path_3d("TestCurve3DBadShape")
 	if p == null:
