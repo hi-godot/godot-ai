@@ -550,10 +550,11 @@ def register_animation_tools(mcp: FastMCP) -> None:
         """One-call screen / node shake animation (jittered position keyframes).
 
         Builds an Animation clip with a single property track on
-        `<target_path>:position` containing `ceil(frequency * duration)`
-        jittered keyframes — each axis offset uniformly in `[-intensity, +intensity]`.
-        First and last keyframes are the node's current position so the shake
-        starts and ends on-rest (no drift).
+        `<target_path>:position`. The first and last keyframes are the node's
+        current position so the shake starts and ends on-rest (no drift); only
+        the `ceil(frequency * duration) - 1` interior keyframes are jittered —
+        each axis offset uniformly in `[-intensity, +intensity]`. The returned
+        `keyframe_count` includes both at-rest bookends.
 
         Deterministic when `seed` is non-zero: same seed → same keyframe values,
         so undo/redo and repeated calls are stable. Pass seed=0 (default) to use
@@ -604,9 +605,10 @@ def register_animation_tools(mcp: FastMCP) -> None:
         `<target_path>:scale` containing three keyframes:
         (0, from_scale), (duration/2, to_scale), (duration, from_scale).
 
-        The ping-pong lives inside the clip itself — callers that want
-        continuous pulsing can set `loop_mode="linear"` via a follow-up
-        tool or embed the result in a longer sequence.
+        The ping-pong lives inside the clip itself, so a one-shot playback
+        already scales up-and-back. For continuous pulsing, toggle the clip's
+        loop mode to "linear" in the Godot Animation dock, or embed this clip
+        as one tween inside a longer `animation_create_simple` sequence.
 
         Auto-picks Vector2 for Control / Node2D targets and Vector3 for Node3D.
         Useful for: button hover feedback, hint pulses on interactable objects,
