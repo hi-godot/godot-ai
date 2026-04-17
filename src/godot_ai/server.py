@@ -22,6 +22,7 @@ from godot_ai.tools.autoload import register_autoload_tools
 from godot_ai.tools.batch import register_batch_tools
 from godot_ai.tools.camera import register_camera_tools
 from godot_ai.tools.client import register_client_tools
+from godot_ai.tools.control import register_control_tools
 from godot_ai.tools.curve import register_curve_tools
 from godot_ai.tools.editor import register_editor_tools
 from godot_ai.tools.environment import register_environment_tools
@@ -99,6 +100,8 @@ def create_server(ws_port: int = 9500) -> FastMCP:
             "  batch_execute    — compose multi-step scene edits atomically\n"
             "  ui_*             — Control layout helpers "
             "(anchor presets, declarative layout builder)\n"
+            "  control_*        — attach vector _draw() ops to Controls "
+            "(gauges, radar, corner brackets, scanlines, crosshairs, waveforms)\n"
             "  theme_*          — author Theme resources "
             "(colors, stylebox, font sizes) — Godot's CSS-like styling\n"
             "  animation_*      — AnimationPlayer authoring "
@@ -147,6 +150,7 @@ def create_server(ws_port: int = 9500) -> FastMCP:
     register_testing_tools(mcp)
     register_batch_tools(mcp)
     register_ui_tools(mcp)
+    register_control_tools(mcp)
     register_theme_tools(mcp)
     register_animation_tools(mcp)
     register_material_tools(mcp)

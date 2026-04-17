@@ -472,6 +472,28 @@ static func _coerce_for_type(value: Variant, prop_type: int) -> Dictionary:
 			if value is Array and value.size() == 2:
 				return {"ok": true, "value": Vector2i(int(value[0]), int(value[1]))}
 			return {"ok": false}
+		TYPE_RECT2:
+			if value is Rect2:
+				return {"ok": true, "value": value}
+			if value is Array and value.size() == 4:
+				return {
+					"ok": true,
+					"value":
+					Rect2(float(value[0]), float(value[1]), float(value[2]), float(value[3])),
+				}
+			if value is Dictionary:
+				if value.has("x") and value.has("y") and value.has("w") and value.has("h"):
+					return {
+						"ok": true,
+						"value":
+						Rect2(float(value.x), float(value.y), float(value.w), float(value.h)),
+					}
+				if value.has("position") and value.has("size"):
+					var pos := _coerce_for_type(value.position, TYPE_VECTOR2)
+					var sz := _coerce_for_type(value.size, TYPE_VECTOR2)
+					if pos.ok and sz.ok:
+						return {"ok": true, "value": Rect2(pos.value, sz.value)}
+			return {"ok": false}
 		TYPE_NODE_PATH:
 			if value is NodePath:
 				return {"ok": true, "value": value}

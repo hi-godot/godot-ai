@@ -43,7 +43,8 @@ func _enter_tree() -> void:
 	var environment_handler := EnvironmentHandler.new(get_undo_redo())
 	var texture_handler := TextureHandler.new(get_undo_redo())
 	var curve_handler := CurveHandler.new(get_undo_redo())
-	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler, ui_handler, theme_handler, animation_handler, material_handler, particle_handler, camera_handler, audio_handler, physics_shape_handler, environment_handler, texture_handler, curve_handler]
+	var control_draw_recipe_handler := ControlDrawRecipeHandler.new(get_undo_redo())
+	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler, ui_handler, theme_handler, animation_handler, material_handler, particle_handler, camera_handler, audio_handler, physics_shape_handler, environment_handler, texture_handler, curve_handler, control_draw_recipe_handler]
 
 	_dispatcher.register("get_editor_state", editor_handler.get_editor_state)
 	_dispatcher.register("get_scene_tree", scene_handler.get_scene_tree)
@@ -167,6 +168,9 @@ func _enter_tree() -> void:
 	_dispatcher.register("gradient_texture_create", texture_handler.create_gradient_texture)
 	_dispatcher.register("noise_texture_create", texture_handler.create_noise_texture)
 	_dispatcher.register("curve_set_points", curve_handler.set_points)
+	_dispatcher.register(
+		"control_draw_recipe", control_draw_recipe_handler.control_draw_recipe
+	)
 
 	_connection.dispatcher = _dispatcher
 	add_child(_connection)

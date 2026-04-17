@@ -16,33 +16,6 @@ func suite_setup(ctx: Dictionary) -> void:
 	_handler = UiHandler.new(_undo_redo)
 
 
-# Add a Control under the scene root for a single test. If `ctl` is null,
-# creates a Panel; otherwise uses the provided (caller-allocated) instance.
-# Returns the scene path, or "" if the scene isn't ready — in which case an
-# already-allocated `ctl` is freed so the caller doesn't leak it.
-func _add_control(ctl_name: String = "TestHudPanel", ctl: Control = null) -> String:
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		if ctl != null:
-			ctl.queue_free()
-		return ""
-	if ctl == null:
-		ctl = Panel.new()
-	ctl.name = ctl_name
-	scene_root.add_child(ctl)
-	ctl.owner = scene_root
-	return "/" + scene_root.name + "/" + ctl_name
-
-
-func _remove_control(path: String) -> void:
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return
-	var node := ScenePath.resolve(path, scene_root)
-	if node != null:
-		node.get_parent().remove_child(node)
-		node.queue_free()
-
 
 # ----- set_anchor_preset: happy path -----
 
