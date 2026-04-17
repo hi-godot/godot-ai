@@ -22,6 +22,16 @@ func run_suite(suite: McpTestSuite, test_filter: String = "") -> void:
 		suite.call(method_name)
 		suite.teardown()
 
+		## Issue #19 defence: free any `_McpTest*` nodes the test created, even
+		## nested ones. If the scene gets auto-saved mid-test while one of these
+		## exists, the reference bakes into main.tscn and breaks the next open
+		## with a "missing dependency" error. Runs after every test, not just at
+		## suite boundaries, so a test that fails mid-flow can't leave a trap
+		## for the next test or for scene autosave.
+		var scene_root_for_cleanup := EditorInterface.get_edited_scene_root()
+		if scene_root_for_cleanup != null and scene_root_for_cleanup.is_inside_tree():
+			_free_mcp_test_nodes_recursive(scene_root_for_cleanup)
+
 		if suite._skipped:
 			_results.append({
 				"suite": name,
@@ -147,15 +157,22 @@ func _cleanup_leaked_nodes(scene_root: Node, before: Array[Node]) -> void:
 		if not before_set.has(child):
 			scene_root.remove_child(child)
 			child.queue_free()
-	# Also sweep descendants for _McpTest* nodes added under non-root parents.
-	for child in scene_root.get_children():
-		_sweep_mcp_test_nodes(child)
 
 
-func _sweep_mcp_test_nodes(node: Node) -> void:
-	for child in node.get_children():
-		if child.name.begins_with("_McpTest"):
-			node.remove_child(child)
-			child.queue_free()
-		else:
-			_sweep_mcp_test_nodes(child)
+## Recursively free every node whose name starts with `_McpTest`, anywhere in
+## the scene. Intentionally bypasses undo — these are test leaks, not user
+## work. Walk breadth-first so we can collect victims before mutating the tree.
+func _free_mcp_test_nodes_recursive(root: Node) -> void:
+	var victims: Array[Node] = []
+	var queue: Array[Node] = [root]
+	while not queue.is_empty():
+		var node: Node = queue.pop_back()
+		for child in node.get_children():
+			if str(child.name).begins_with("_McpTest"):
+				victims.append(child)
+			else:
+				queue.append(child)
+	for v in victims:
+		if v.get_parent() != null:
+			v.get_parent().remove_child(v)
+		v.queue_free()
