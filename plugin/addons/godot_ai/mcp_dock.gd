@@ -242,6 +242,7 @@ func _build_ui() -> void:
 	_clients_window = Window.new()
 	_clients_window.title = "Configure MCP Clients"
 	_clients_window.min_size = Vector2i(560, 400)
+	_clients_window.visible = false
 	_clients_window.close_requested.connect(_on_clients_window_close_requested)
 	add_child(_clients_window)
 
