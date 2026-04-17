@@ -4507,7 +4507,6 @@ class TestCameraCreateTool:
                     "type": "2d",
                     "class": "Camera2D",
                     "current": False,
-                    "is_first_camera": True,
                     "undoable": True,
                 },
             )
@@ -4516,7 +4515,6 @@ class TestCameraCreateTool:
         result = await client.call_tool("camera_create", {"parent_path": "/Main", "name": "Cam"})
         await task
         assert result.data["class"] == "Camera2D"
-        assert result.data["is_first_camera"] is True
 
     async def test_create_3d_with_make_current(self, mcp_stack):
         client, plugin = mcp_stack
@@ -4535,7 +4533,6 @@ class TestCameraCreateTool:
                     "type": "3d",
                     "class": "Camera3D",
                     "current": True,
-                    "is_first_camera": False,
                     "undoable": True,
                 },
             )

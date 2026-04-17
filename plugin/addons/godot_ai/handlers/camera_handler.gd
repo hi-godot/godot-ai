@@ -115,9 +115,6 @@ func create_camera(params: Dictionary) -> Dictionary:
 		if parent == null:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Parent not found: %s" % parent_path)
 
-	var pre_existing := _list_cameras_in_scene(scene_root, type_str)
-	var is_first_camera := pre_existing.is_empty()
-
 	var node := _instantiate_camera(type_str)
 	if node == null:
 		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to instantiate camera")
@@ -143,7 +140,6 @@ func create_camera(params: Dictionary) -> Dictionary:
 			"type": type_str,
 			"class": _VALID_TYPES[type_str],
 			"current": bool(make_current),
-			"is_first_camera": is_first_camera,
 			"undoable": true,
 		}
 	}
@@ -167,11 +163,11 @@ func configure(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "properties dict is empty")
 
 	var valid_keys: Array = _KEYS_2D if type_str == "2d" else _KEYS_3D
+	var prop_types := _property_type_map(node)
 	var coerced: Dictionary = {}
 	var old_values: Dictionary = {}
 	# `current` is special-cased via methods (Camera2D doesn't expose it as a property).
 	var current_request: Variant = null
-	var current_was_on: bool = _is_current(node)
 
 	for property in properties:
 		var prop_name: String = String(property)
@@ -185,7 +181,7 @@ func configure(params: Dictionary) -> Dictionary:
 		if prop_name == "current":
 			current_request = bool(properties[prop_name])
 			continue
-		var prop_type := _object_property_type(node, prop_name)
+		var prop_type: int = prop_types.get(prop_name, TYPE_NIL)
 		if prop_type == TYPE_NIL:
 			return McpErrorCodes.make(
 				McpErrorCodes.INVALID_PARAMS,
@@ -203,9 +199,10 @@ func configure(params: Dictionary) -> Dictionary:
 		_undo_redo.add_undo_property(node, prop_name, old_values[prop_name])
 	if current_request != null:
 		var want_on: bool = bool(current_request)
-		if want_on and not current_was_on:
+		var was_on: bool = _is_current(node)
+		if want_on and not was_on:
 			_add_make_current_to_action(node, type_str, scene_root)
-		elif not want_on and current_was_on:
+		elif not want_on and was_on:
 			_undo_redo.add_do_method(node, "clear_current")
 			_undo_redo.add_undo_method(node, "make_current")
 	_undo_redo.commit_action()
@@ -258,13 +255,15 @@ func set_limits_2d(params: Dictionary) -> Dictionary:
 		"bottom": "limit_bottom",
 	}
 	for edge in edges:
-		if params.has(edge) and params[edge] != null:
+		var v = params.get(edge)
+		if v != null:
 			var prop_name: String = edges[edge]
-			applied[prop_name] = int(params[edge])
+			applied[prop_name] = int(v)
 			old_values[prop_name] = node.get(prop_name)
 
-	if params.has("smoothed") and params["smoothed"] != null:
-		applied["limit_smoothed"] = bool(params["smoothed"])
+	var smoothed = params.get("smoothed")
+	if smoothed != null:
+		applied["limit_smoothed"] = bool(smoothed)
 		old_values["limit_smoothed"] = node.get("limit_smoothed")
 
 	if applied.is_empty():
@@ -315,8 +314,9 @@ func set_damping_2d(params: Dictionary) -> Dictionary:
 	var old_values: Dictionary = {}
 
 	# position_speed: set position_smoothing_speed AND toggle position_smoothing_enabled.
-	if params.has("position_speed") and params["position_speed"] != null:
-		var pos_speed := float(params["position_speed"])
+	var pos_v = params.get("position_speed")
+	if pos_v != null:
+		var pos_speed := float(pos_v)
 		var pos_enable := pos_speed > 0.0
 		applied["position_smoothing_enabled"] = pos_enable
 		old_values["position_smoothing_enabled"] = node.get("position_smoothing_enabled")
@@ -325,8 +325,9 @@ func set_damping_2d(params: Dictionary) -> Dictionary:
 			old_values["position_smoothing_speed"] = node.get("position_smoothing_speed")
 
 	# rotation_speed: same pattern for rotation_smoothing_*.
-	if params.has("rotation_speed") and params["rotation_speed"] != null:
-		var rot_speed := float(params["rotation_speed"])
+	var rot_v = params.get("rotation_speed")
+	if rot_v != null:
+		var rot_speed := float(rot_v)
 		var rot_enable := rot_speed > 0.0
 		applied["rotation_smoothing_enabled"] = rot_enable
 		old_values["rotation_smoothing_enabled"] = node.get("rotation_smoothing_enabled")
@@ -334,15 +335,15 @@ func set_damping_2d(params: Dictionary) -> Dictionary:
 			applied["rotation_smoothing_speed"] = rot_speed
 			old_values["rotation_smoothing_speed"] = node.get("rotation_smoothing_speed")
 
-	# drag_horizontal_enabled / drag_vertical_enabled.
 	for flag in ["drag_horizontal_enabled", "drag_vertical_enabled"]:
-		if params.has(flag) and params[flag] != null:
-			applied[flag] = bool(params[flag])
+		var flag_v = params.get(flag)
+		if flag_v != null:
+			applied[flag] = bool(flag_v)
 			old_values[flag] = node.get(flag)
 
 	# drag_margins: dict {left, top, right, bottom} floats in [0,1]; null/missing keys untouched.
-	if params.has("drag_margins") and params["drag_margins"] != null:
-		var margins_v = params["drag_margins"]
+	var margins_v = params.get("drag_margins")
+	if margins_v != null:
 		if not (margins_v is Dictionary):
 			return McpErrorCodes.make(
 				McpErrorCodes.INVALID_PARAMS,
@@ -350,9 +351,10 @@ func set_damping_2d(params: Dictionary) -> Dictionary:
 			)
 		var margins: Dictionary = margins_v
 		for edge in _DAMPING_MARGIN_KEYS:
-			if not margins.has(edge) or margins[edge] == null:
+			var margin_v = margins.get(edge)
+			if margin_v == null:
 				continue
-			var v := float(margins[edge])
+			var v := float(margin_v)
 			if v < 0.0 or v > 1.0:
 				return McpErrorCodes.make(
 					McpErrorCodes.INVALID_PARAMS,
@@ -523,12 +525,13 @@ func get_camera(params: Dictionary) -> Dictionary:
 
 	var type_str := _camera_type_str(node)
 	var keys: Array = _KEYS_2D if type_str == "2d" else _KEYS_3D
+	var prop_types := _property_type_map(node)
 	var props: Dictionary = {}
 	for key in keys:
 		if key == "current":
 			props[key] = _is_current(node)
 			continue
-		if _object_property_type(node, key) != TYPE_NIL:
+		if prop_types.has(key):
 			props[key] = CameraValues.serialize(node.get(key))
 
 	return {
@@ -608,6 +611,7 @@ func apply_preset(params: Dictionary) -> Dictionary:
 
 	var preset_props: Dictionary = blueprint.get("properties", {})
 	var valid_keys: Array = _KEYS_2D if type_str == "2d" else _KEYS_3D
+	var prop_types := _property_type_map(node)
 	var applied: Array[String] = []
 	for prop in preset_props:
 		var prop_name := String(prop)
@@ -617,7 +621,7 @@ func apply_preset(params: Dictionary) -> Dictionary:
 		# always handled via the make_current path below.
 		if prop_name == "current":
 			continue
-		var prop_type := _object_property_type(node, prop_name)
+		var prop_type: int = prop_types.get(prop_name, TYPE_NIL)
 		if prop_type == TYPE_NIL:
 			continue
 		var coerce_result := CameraValues.coerce(prop_name, preset_props[prop_name], prop_type)
@@ -722,10 +726,13 @@ static func _collect_cameras(node: Node, class_filter: String, out: Array) -> vo
 		_collect_cameras(child, class_filter, out)
 
 
-static func _object_property_type(obj: Object, name: String) -> int:
+## Build a name -> property-type dict from the object's property list.
+## Single walk of get_property_list() amortizes lookups across a batch of
+## properties in configure / apply_preset.
+static func _property_type_map(obj: Object) -> Dictionary:
+	var out: Dictionary = {}
 	if obj == null:
-		return TYPE_NIL
+		return out
 	for prop in obj.get_property_list():
-		if prop.name == name:
-			return int(prop.get("type", TYPE_NIL))
-	return TYPE_NIL
+		out[prop.name] = int(prop.get("type", TYPE_NIL))
+	return out
