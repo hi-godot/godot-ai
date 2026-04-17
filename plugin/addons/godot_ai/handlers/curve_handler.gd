@@ -41,6 +41,7 @@ func set_points(params: Dictionary) -> Dictionary:
 
 	var curve: Resource
 	var node: Node = null
+	var curve_created := false
 	if has_file_target:
 		if not ResourceLoader.exists(resource_path):
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource not found: %s" % resource_path)
@@ -58,12 +59,22 @@ func set_points(params: Dictionary) -> Dictionary:
 				"Property '%s' not found on %s" % [property, node.get_class()]
 			)
 		curve = node.get(property)
+		# Auto-create a fresh Curve subclass if the slot is empty. Infer the
+		# concrete class from the property's hint_string (e.g. Path3D.curve's
+		# hint is "Curve3D"). Creation is bundled into the same undo action
+		# as the point-set below, so Ctrl-Z rolls back both.
+		if curve == null:
+			var inferred := _infer_curve_class(node, property)
+			if inferred.is_empty():
+				return McpErrorCodes.make(
+					McpErrorCodes.INVALID_PARAMS,
+					"Curve slot on %s.%s is null and the Curve class can't be inferred from the property hint — create one first with resource_create (type=Curve3D/Curve2D/Curve)" % [node.get_class(), property]
+				)
+			curve = ClassDB.instantiate(inferred)
+			if curve == null:
+				return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s" % inferred)
+			curve_created = true
 
-	if curve == null:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
-			"Curve resource at the given location is null — create one first with resource_create (type=Curve3D/Curve2D/Curve)"
-		)
 	if not (curve is Curve or curve is Curve2D or curve is Curve3D):
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
@@ -96,10 +107,11 @@ func set_points(params: Dictionary) -> Dictionary:
 
 	# Inline (node-attached) path: swap the curve property so the action lands
 	# cleanly in scene history, mirroring the resource-swap pattern used by
-	# material_handler::assign_material.
-	var new_curve: Resource = curve.duplicate()
+	# material_handler::assign_material. When curve_created is true the
+	# "old" value is null — undo clears the slot back to empty.
+	var new_curve: Resource = curve if curve_created else curve.duplicate()
 	_apply_snapshot_to_curve(new_curve, new_snapshot)
-	var old_curve: Resource = curve
+	var old_curve: Resource = null if curve_created else curve
 
 	_undo_redo.create_action("MCP: Set %d points on %s.%s" % [new_snapshot.size(), node.name, property])
 	_undo_redo.add_do_property(node, property, new_curve)
@@ -113,9 +125,31 @@ func set_points(params: Dictionary) -> Dictionary:
 			"property": property,
 			"curve_class": new_curve.get_class(),
 			"point_count": new_snapshot.size(),
+			"curve_created": curve_created,
 			"undoable": true,
 		}
 	}
+
+
+## Infer the concrete Curve class to instantiate for a null property slot.
+## Reads the property's hint_string (set by Godot on resource-typed exports)
+## to get the exact accepted class name (e.g. "Curve3D" for Path3D.curve).
+## Returns empty string if no viable curve class can be determined.
+static func _infer_curve_class(node: Node, property: String) -> String:
+	for prop in node.get_property_list():
+		if prop.name != property:
+			continue
+		var hint_string: String = prop.get("hint_string", "")
+		if hint_string.is_empty():
+			return ""
+		if not ClassDB.class_exists(hint_string):
+			return ""
+		if hint_string == "Curve" or hint_string == "Curve2D" or hint_string == "Curve3D":
+			return hint_string
+		# Some custom properties may list a parent class; require an exact
+		# match against our three supported types to avoid surprises.
+		return ""
+	return ""
 
 
 ## Convert input `points` into a normalized snapshot of typed values for

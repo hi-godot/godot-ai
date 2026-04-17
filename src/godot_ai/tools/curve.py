@@ -34,6 +34,12 @@ def register_curve_tools(mcp: FastMCP) -> None:
         Line2D-like curves) or resource_path (a .tres file). Inline edits are
         undoable as a single action; .tres edits are persistent.
 
+        If the node's curve slot is empty, a fresh Curve/Curve2D/Curve3D is
+        auto-created (inferred from the property's class hint — Path3D.curve
+        → Curve3D, Path2D.curve → Curve2D, etc.) and bundled into the same
+        undo action. The response sets `curve_created: true` when this
+        happens.
+
         Dedicated tool rather than set_property because Curve2D/Curve3D.add_point
         is a method call, not a property — resource_create's properties dict
         can't reach it.

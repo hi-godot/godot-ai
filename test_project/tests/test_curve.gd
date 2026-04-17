@@ -73,26 +73,6 @@ func test_set_points_missing_property() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
-func test_set_points_null_curve_errors() -> void:
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		skip("No scene root")
-		return
-	var p := Path3D.new()
-	p.name = "NullCurvePath"
-	# Intentionally leave p.curve = null
-	scene_root.add_child(p)
-	p.set_owner(scene_root)
-	var result := _handler.set_points({
-		"points": [],
-		"path": p.get_path(),
-		"property": "curve",
-	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
-	assert_contains(result.error.message, "null")
-	_remove_node(p)
-
-
 func test_set_points_wrong_resource_type() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
@@ -114,6 +94,83 @@ func test_set_points_wrong_resource_type() -> void:
 
 
 # ----- Curve3D happy paths -----
+
+func test_set_points_auto_creates_curve3d_when_null() -> void:
+	# Regression: Path3D with curve=null should auto-create a fresh Curve3D
+	# in the same undo action, rather than requiring a separate resource_create.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var p := Path3D.new()
+	p.name = "TestAutoCreate3D"
+	# Intentionally leave p.curve = null
+	scene_root.add_child(p)
+	p.set_owner(scene_root)
+	assert_true(p.curve == null, "Precondition: curve slot should be empty")
+
+	var result := _handler.set_points({
+		"points": [
+			{"position": {"x": 0, "y": 0, "z": 0}},
+			{"position": {"x": 1, "y": 0, "z": 0}},
+		],
+		"path": p.get_path(),
+		"property": "curve",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.curve_class, "Curve3D")
+	assert_eq(result.data.point_count, 2)
+	assert_true(result.data.curve_created, "curve_created should be true when slot was null")
+	assert_true(p.curve is Curve3D)
+	assert_eq(p.curve.point_count, 2)
+
+	# Undo should clear the slot back to null, not leave the auto-created curve.
+	editor_undo(_undo_redo)
+	assert_true(p.curve == null, "Undo should clear the auto-created curve")
+	_remove_node(p)
+
+
+func test_set_points_auto_creates_curve2d_on_path2d() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var p := Path2D.new()
+	p.name = "TestAutoCreate2D"
+	scene_root.add_child(p)
+	p.set_owner(scene_root)
+	assert_true(p.curve == null)
+
+	var result := _handler.set_points({
+		"points": [
+			{"position": {"x": 0, "y": 0}},
+			{"position": {"x": 100, "y": 0}},
+		],
+		"path": p.get_path(),
+		"property": "curve",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.curve_class, "Curve2D")
+	assert_true(result.data.curve_created)
+	assert_true(p.curve is Curve2D)
+	_remove_node(p)
+
+
+func test_set_points_existing_curve_does_not_flag_created() -> void:
+	var p := _add_path_3d("TestExistingCurve")
+	if p == null:
+		skip("No scene root")
+		return
+	# Curve already exists from _add_path_3d
+	var result := _handler.set_points({
+		"points": [{"position": {"x": 0, "y": 0, "z": 0}}],
+		"path": p.get_path(),
+		"property": "curve",
+	})
+	assert_has_key(result, "data")
+	assert_false(result.data.curve_created, "curve_created should be false when slot already had a curve")
+	_remove_node(p)
+
 
 func test_set_points_3d_position_only_coerces_vector3() -> void:
 	var p := _add_path_3d("TestCurve3DPos")
