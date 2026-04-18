@@ -11,6 +11,10 @@
 
 Over **120 MCP tools** expose the editor's real authoring surface: build and edit scenes, create and reparent nodes, set properties, attach and patch GDScript, wire signals, create resources and materials, author animations on an `AnimationPlayer`, configure particles, cameras, and environments, build Control / theme layouts, manage project settings, autoloads, and the input map, search and read project files, capture screenshots, and run GDScript test suites — all from a prompt, every write undoable in the editor.
 
+> 🎉 **Now on the [Godot Asset Library](https://godotengine.org/asset-library/asset/5050)** — one-click install from Godot's **AssetLib** tab. You'll still need [uv](https://docs.astral.sh/uv/) on your system for the Python server (see [Quick Start](#quick-start)).
+
+<p align="center"><img src="docs/images/assetlib.png" alt="Godot AI on the Godot Asset Library" width="520"></p>
+
 *Independent community project, not affiliated with the [Godot Foundation](https://godot.foundation). Godot Engine is [MIT-licensed](https://godotengine.org/license).*
 
 ---
@@ -25,12 +29,19 @@ Over **120 MCP tools** expose the editor's real authoring surface: build and edi
 
 ### 1. Install the plugin
 
-Clone the repo (or [download the zip](https://github.com/hi-godot/godot-ai/archive/refs/heads/main.zip)) and copy the plugin into your Godot project:
+**Recommended — via the [Godot Asset Library](https://godotengine.org/asset-library/asset/5050):** in Godot, open the **AssetLib** tab, search for **Godot AI**, click **Download**, then **Install**.
+
+<details>
+<summary>Or install from source</summary>
 
 ```bash
 git clone https://github.com/hi-godot/godot-ai.git
 cp -r godot-ai/plugin/addons/godot_ai your-project/addons/
 ```
+
+Alternatively, [download the latest release ZIP](https://github.com/hi-godot/godot-ai/releases/latest) and extract `addons/godot_ai` into your project's `addons/` folder.
+
+</details>
 
 ### 2. Enable the plugin
 
@@ -66,12 +77,12 @@ snippet.
 - *"Create a Camera3D named MainCamera under /Main."*
 - *"Search the project for PackedScene files in ui/."*
 - *"Run the scene test suite."*
-- *"Build a neon space city with glass towers, glowing planets, and fire / magic / spark particle effects."*
+- *"Build a voxel block-world game with a player, blocks to place and destroy, and save slots."*
 
 <p align="center">
-  <a href="docs/images/space-city.png"><img src="docs/images/space-city.png" alt="Space city scene — neon towers, glowing planets, Tron streets, and varied particle FX, all built from MCP tool calls" width="640"></a>
+  <a href="docs/images/blockgame.png"><img src="docs/images/blockgame.png" alt="Block-world game scene built from MCP tool calls — voxel terrain, player, and UI" width="640"></a>
 </p>
-<p align="center"><em>An AI-authored scene: 10 emissive buildings, 3 glowing planets, Tron-style floor strips, and 6 varied particle effects — every node, material, and preset placed by MCP tool calls.</em></p>
+<p align="center"><em>An AI-authored scene built from a handful of prompts — terrain, player, blocks, and UI, all placed by MCP tool calls. The full game and modular save system built by Godot AI are <a href="https://github.com/dsarno/save-system-godot-claude">available free here</a>.</em></p>
 
 ---
 
