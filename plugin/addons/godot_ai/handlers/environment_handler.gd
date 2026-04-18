@@ -30,16 +30,11 @@ func create_environment(params: Dictionary) -> Dictionary:
 	var properties: Dictionary = params.get("properties", {})
 	var sky_param = params.get("sky", null)  # nullable — falls back to preset default
 
-	if node_path.is_empty() and resource_path.is_empty():
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
-			"Must provide either path (WorldEnvironment node) or resource_path (.tres file)"
-		)
-	if not node_path.is_empty() and not resource_path.is_empty():
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
-			"Provide either path or resource_path, not both"
-		)
+	# environment_create targets the whole WorldEnvironment node (no separate
+	# `property` param) — pass require_property=false.
+	var home_err := ResourceIO.validate_home(params, false)
+	if home_err != null:
+		return home_err
 
 	if not _PRESETS.has(preset):
 		return McpErrorCodes.make(
@@ -154,41 +149,6 @@ func _assign_environment(env: Environment, sky: Sky, sky_material: ProceduralSky
 
 
 func _save_environment(env: Environment, _sky: Sky, _sky_material: ProceduralSkyMaterial, resource_path: String, overwrite: bool, preset: String) -> Dictionary:
-	if not resource_path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "resource_path must start with res://")
-
-	var existed_before := FileAccess.file_exists(resource_path)
-	if existed_before and not overwrite:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
-			"Environment already exists at %s (pass overwrite=true to replace)" % resource_path
-		)
-
-	var dir_path := resource_path.get_base_dir()
-	var mkdir_err := DirAccess.make_dir_recursive_absolute(dir_path)
-	if mkdir_err != OK and mkdir_err != ERR_ALREADY_EXISTS:
-		return McpErrorCodes.make(
-			McpErrorCodes.INTERNAL_ERROR,
-			"Failed to create directory %s: %s" % [dir_path, error_string(mkdir_err)]
-		)
-
-	var save_err := ResourceSaver.save(env, resource_path)
-	if save_err != OK:
-		return McpErrorCodes.make(
-			McpErrorCodes.INTERNAL_ERROR,
-			"Failed to save Environment to %s: %s" % [resource_path, error_string(save_err)]
-		)
-
-	var efs := EditorInterface.get_resource_filesystem()
-	if efs != null:
-		efs.update_file(resource_path)
-
-	return {
-		"data": {
-			"resource_path": resource_path,
-			"preset": preset,
-			"overwritten": existed_before,
-			"undoable": false,
-			"reason": "File creation is persistent; delete the file manually to revert",
-		}
-	}
+	return ResourceIO.save_to_disk(env, resource_path, overwrite, "Environment", {
+		"preset": preset,
+	})

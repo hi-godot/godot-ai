@@ -164,24 +164,10 @@ func create_resource(params: Dictionary) -> Dictionary:
 	var resource_path: String = params.get("resource_path", "")
 	var overwrite: bool = params.get("overwrite", false)
 
-	var has_node_target := not node_path.is_empty()
+	var home_err := ResourceIO.validate_home(params)
+	if home_err != null:
+		return home_err
 	var has_file_target := not resource_path.is_empty()
-
-	if has_node_target and has_file_target:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
-			"Provide either path+property (assign inline) or resource_path (save .tres), not both"
-		)
-	if not has_node_target and not has_file_target:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
-			"Must provide either path+property (assign inline) or resource_path (save .tres) — a dangling resource would be GC'd"
-		)
-	if has_node_target and property.is_empty():
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
-			"Missing required param: property (required when path is given)"
-		)
 
 	var class_err := _validate_resource_class(type_str)
 	if class_err != null:
@@ -343,46 +329,11 @@ func _assign_created_resource(res: Resource, type_str: String, node_path: String
 
 
 func _save_created_resource(res: Resource, type_str: String, resource_path: String, overwrite: bool, applied_count: int) -> Dictionary:
-	if not resource_path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "resource_path must start with res://")
-
-	var existed_before := FileAccess.file_exists(resource_path)
-	if existed_before and not overwrite:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
-			"Resource already exists at %s (pass overwrite=true to replace)" % resource_path
-		)
-
-	var dir_path := resource_path.get_base_dir()
-	var mkdir_err := DirAccess.make_dir_recursive_absolute(dir_path)
-	if mkdir_err != OK and mkdir_err != ERR_ALREADY_EXISTS:
-		return McpErrorCodes.make(
-			McpErrorCodes.INTERNAL_ERROR,
-			"Failed to create directory %s: %s" % [dir_path, error_string(mkdir_err)]
-		)
-
-	var save_err := ResourceSaver.save(res, resource_path)
-	if save_err != OK:
-		return McpErrorCodes.make(
-			McpErrorCodes.INTERNAL_ERROR,
-			"Failed to save resource to %s: %s" % [resource_path, error_string(save_err)]
-		)
-
-	var efs := EditorInterface.get_resource_filesystem()
-	if efs != null:
-		efs.update_file(resource_path)
-
-	return {
-		"data": {
-			"resource_path": resource_path,
-			"type": type_str,
-			"resource_class": res.get_class(),
-			"properties_applied": applied_count,
-			"overwritten": existed_before,
-			"undoable": false,
-			"reason": "File creation is persistent; delete the file manually to revert",
-		}
-	}
+	return ResourceIO.save_to_disk(res, resource_path, overwrite, "Resource", {
+		"type": type_str,
+		"resource_class": res.get_class(),
+		"properties_applied": applied_count,
+	})
 
 
 ## Introspect a Resource class — return its editor-visible properties, parent,

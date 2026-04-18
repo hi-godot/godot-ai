@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._target import target_params
 from godot_ai.runtime.interface import Runtime
 
 
@@ -17,14 +18,11 @@ async def environment_create(
 ) -> dict:
     require_writable(runtime)
     params: dict = {"preset": preset}
-    if path:
-        params["path"] = path
-    if resource_path:
-        params["resource_path"] = resource_path
+    # environment_create has no `property` param (path targets the whole
+    # WorldEnvironment node) — pass "" to the shared helper.
+    params.update(target_params(path, "", resource_path, overwrite))
     if properties:
         params["properties"] = properties
     if sky is not None:
         params["sky"] = sky
-    if overwrite:
-        params["overwrite"] = overwrite
     return await runtime.send_command("environment_create", params)

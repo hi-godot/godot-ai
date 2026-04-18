@@ -22,20 +22,10 @@ func set_points(params: Dictionary) -> Dictionary:
 	var resource_path: String = params.get("resource_path", "")
 	var new_points: Array = params.get("points", [])
 
-	var has_node_target := not node_path.is_empty()
+	var home_err := ResourceIO.validate_home(params)
+	if home_err != null:
+		return home_err
 	var has_file_target := not resource_path.is_empty()
-	if has_node_target and has_file_target:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
-			"Provide either path+property or resource_path, not both"
-		)
-	if not has_node_target and not has_file_target:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
-			"Must provide either path+property (node-attached curve) or resource_path (standalone .tres)"
-		)
-	if has_node_target and property.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: property")
 	if not (new_points is Array):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "points must be an array")
 
@@ -103,27 +93,13 @@ func set_points(params: Dictionary) -> Dictionary:
 
 	if has_file_target:
 		_apply_snapshot_to_curve(curve, new_snapshot)
-		var save_err := ResourceSaver.save(curve, resource_path)
-		if save_err != OK:
-			return McpErrorCodes.make(
-				McpErrorCodes.INTERNAL_ERROR,
-				"Failed to save curve to %s: %s" % [resource_path, error_string(save_err)]
-			)
-		# Refresh the FileSystem dock so it picks up the edit without manual
-		# reimport. Sibling save-paths in this PR (_save_created_resource,
-		# _save_environment, _save_texture) all do this — keep consistent.
-		var efs := EditorInterface.get_resource_filesystem()
-		if efs != null:
-			efs.update_file(resource_path)
-		return {
-			"data": {
-				"resource_path": resource_path,
-				"curve_class": curve.get_class(),
-				"point_count": new_snapshot.size(),
-				"undoable": false,
-				"reason": "File save is persistent; edit the .tres file manually to revert",
-			}
-		}
+		# curve_set_points EDITS an existing .tres, so override the default
+		# "delete to revert" message via extra_fields.
+		return ResourceIO.save_to_disk(curve, resource_path, true, "Curve", {
+			"curve_class": curve.get_class(),
+			"point_count": new_snapshot.size(),
+			"reason": "File save is persistent; edit the .tres file manually to revert",
+		})
 
 	# Inline (node-attached) path: swap the curve property so the action lands
 	# cleanly in scene history, mirroring the resource-swap pattern used by

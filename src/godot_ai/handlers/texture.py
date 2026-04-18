@@ -3,25 +3,8 @@
 from __future__ import annotations
 
 from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._target import target_params
 from godot_ai.runtime.interface import Runtime
-
-
-def _target_params(
-    path: str,
-    property: str,
-    resource_path: str,
-    overwrite: bool,
-) -> dict:
-    params: dict = {}
-    if path:
-        params["path"] = path
-    if property:
-        params["property"] = property
-    if resource_path:
-        params["resource_path"] = resource_path
-    if overwrite:
-        params["overwrite"] = overwrite
-    return params
 
 
 async def gradient_texture_create(
@@ -37,7 +20,7 @@ async def gradient_texture_create(
 ) -> dict:
     require_writable(runtime)
     params = {"stops": stops, "width": width, "height": height, "fill": fill}
-    params.update(_target_params(path, property, resource_path, overwrite))
+    params.update(target_params(path, property, resource_path, overwrite))
     return await runtime.send_command("gradient_texture_create", params)
 
 
@@ -64,5 +47,5 @@ async def noise_texture_create(
     }
     if fractal_octaves > 0:
         params["fractal_octaves"] = fractal_octaves
-    params.update(_target_params(path, property, resource_path, overwrite))
+    params.update(target_params(path, property, resource_path, overwrite))
     return await runtime.send_command("noise_texture_create", params)
