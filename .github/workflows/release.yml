@@ -61,11 +61,31 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build plugin ZIP
+        # Wrap in an outer "godot-ai-plugin/" folder so Godot's AssetLib
+        # "Ignore asset root" default (which strips the zip's single top-level
+        # folder) removes the wrapper instead of addons/. A zip whose top
+        # entry is addons/ itself gets addons/ stripped on install, landing
+        # godot_ai/ at res:// outside the plugin path — the plugin never
+        # registers and scripts fail strict-warning parsing outside addons/.
         run: |
-          mkdir -p staging/addons
-          cp -r plugin/addons/godot_ai staging/addons/
+          mkdir -p staging/godot-ai-plugin/addons
+          cp -r plugin/addons/godot_ai staging/godot-ai-plugin/addons/
           cd staging
-          zip -r ../godot-ai-plugin.zip addons/
+          zip -r ../godot-ai-plugin.zip godot-ai-plugin/
+
+      - name: Verify zip structure
+        run: |
+          top=$(unzip -l godot-ai-plugin.zip | awk 'NR>3 && $NF!="" {print $NF}' | awk -F/ '{print $1}' | sort -u)
+          if [ "$top" != "godot-ai-plugin" ]; then
+            echo "ERROR: expected single top-level folder 'godot-ai-plugin/' in zip, got:" >&2
+            echo "$top" >&2
+            exit 1
+          fi
+          if ! unzip -l godot-ai-plugin.zip | grep -q 'godot-ai-plugin/addons/godot_ai/plugin.cfg'; then
+            echo "ERROR: plugin.cfg not at expected path godot-ai-plugin/addons/godot_ai/plugin.cfg" >&2
+            exit 1
+          fi
+          echo "Zip structure verified: godot-ai-plugin/addons/godot_ai/..."
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
