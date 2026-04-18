@@ -30,6 +30,30 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
 - **Session IDs**: format is `<project-slug>@<4hex>` (e.g. `godot-ai@a3f2`). The slug is derived from the project directory name so agents can recognize which editor they're targeting; the hex suffix disambiguates same-project twins. Server treats the ID as an opaque key.
 - **Per-call session routing**: every Godot-talking tool accepts an optional `session_id` parameter. Empty (the default) resolves to the global active session. When supplied, that single call targets that session — `require_writable` and every handler inside the call see the pinned session, not the active one. Use this when multiple AI clients share one MCP server. Resources (`godot://...`) still resolve via the active session.
 
+## Worktrees
+
+Claude Code sessions often run in git worktrees (`.claude/worktrees/<name>/`). Be aware of which worktree you're in — it affects everything:
+
+- **File paths**: Your working directory is the worktree, not the repo root. Files you create live in that worktree.
+- **Godot editor**: The editor runs against a specific worktree's `test_project/`. The plugin is symlinked from that worktree's `plugin/` directory. Check `session_list` — the `project_path` field tells you which worktree the editor is using.
+- **Dev server**: The `--reload` dev server uses the root repo's `.venv` and `src/`, not the worktree's. Python code changes in any worktree won't take effect unless the root repo also has them (e.g. via `git pull`).
+- **Passing info between sessions**: When writing prompts, handoff notes, or file references intended for another session, **always include the full worktree path** or specify the worktree name. Relative paths like `docs/friction-log.md` are ambiguous — a different session may be in a different worktree or on `main`. Use the absolute path.
+- **Merging**: Worktree branches must be merged to `main` and pulled into other worktrees for changes to propagate. The plugin symlink means GDScript changes propagate within the same worktree immediately, but not across worktrees.
+
+### Godot editor + worktree safety
+
+**Always launch Godot from the root repo's `test_project/`, not from a worktree.** Worktrees can be auto-removed when their owning Claude Code session exits. MCP tools write files to whatever `test_project/` the editor is running — if that's a worktree that gets deleted, all uncommitted scene files, scripts, and themes are permanently lost.
+
+```bash
+# SAFE — root repo, never auto-cleaned:
+/Applications/Godot_mono.app/Contents/MacOS/Godot --editor --path /Users/davidsarno/Documents/godot-ai/test_project/
+
+# DANGEROUS — worktree, can vanish:
+/Applications/Godot_mono.app/Contents/MacOS/Godot --editor --path .claude/worktrees/some-name/test_project/
+```
+
+If you need worktree-specific test_project changes, use your own worktree (the one your session created), commit frequently, and never point Godot at a worktree owned by another session.
+
 ## Dev workflow
 
 ```bash
