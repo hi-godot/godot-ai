@@ -7,7 +7,9 @@
 [![CI](https://github.com/hi-godot/godot-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/hi-godot/godot-ai/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/hi-godot/godot-ai/graph/badge.svg)](https://codecov.io/gh/hi-godot/godot-ai)
 
-**Connect MCP clients directly to a live Godot editor.** Godot AI bridges AI assistants (Claude Code, Codex, Antigravity, etc.) with your Godot Editor via the [Model Context Protocol](https://modelcontextprotocol.io/introduction). Inspect scenes, create nodes, search project data, run tests, and read structured editor resources — all from a prompt.
+**Connect MCP clients directly to a live Godot editor.** Godot AI bridges AI assistants (Claude Code, Codex, Antigravity, etc.) with your Godot Editor via the [Model Context Protocol](https://modelcontextprotocol.io/introduction).
+
+Over **120 MCP tools** expose the editor's real authoring surface: build and edit scenes, create and reparent nodes, set properties, attach and patch GDScript, wire signals, create resources and materials, author animations on an `AnimationPlayer`, configure particles, cameras, and environments, build Control / theme layouts, manage project settings, autoloads, and the input map, search and read project files, capture screenshots, and run GDScript test suites — all from a prompt, every write undoable in the editor.
 
 *Independent community project, not affiliated with the [Godot Foundation](https://godot.foundation). Godot Engine is [MIT-licensed](https://godotengine.org/license).*
 
@@ -40,39 +42,23 @@ The plugin will automatically start the MCP server, connect over WebSocket, and 
 
 ### 3. Connect your MCP client
 
-The dock lists every supported client in a scrollable grid with a status dot
-and per-row **Configure** / **Remove** buttons. Press **Configure all** to set
-up every client at once. Auto-configure handles:
+The dock lists every supported client with a status dot and per-row
+**Configure** / **Remove** buttons, or press **Configure all**. Auto-configure
+covers:
 
-- **Claude Code** — CLI (`claude mcp add`)
-- **Claude Desktop** — JSON config + `npx mcp-remote` stdio bridge
-- **Antigravity** — JSON config
+- **Claude Code**, **Claude Desktop**, **Antigravity**
 
 <details>
 <summary><strong>…and 15+ more clients</strong></summary>
 
-- **Codex** — TOML (`~/.codex/config.toml`)
-- **Cursor** — `~/.cursor/mcp.json`
-- **Windsurf** — `~/.codeium/windsurf/mcp_config.json`
-- **VS Code** & **VS Code Insiders** — `<user>/Code/User/mcp.json`
-- **Zed** — `~/.config/zed/settings.json` (via `npx mcp-remote`)
-- **Gemini CLI** — `~/.gemini/settings.json`
-- **Cline**, **Kilo Code**, **Roo Code** — VS Code extension globalStorage
-- **Kiro** — `~/.kiro/settings/mcp.json`
-- **Trae** — `<user>/Trae/User/mcp.json`
-- **Cherry Studio** — `<user>/CherryStudio/mcp_servers.json`
-- **OpenCode** — `~/.config/opencode/opencode.json`
-- **Qwen Code** — `~/.qwen/settings.json`
+Codex, Cursor, Windsurf, VS Code, VS Code Insiders, Zed, Gemini CLI, Cline,
+Kilo Code, Roo Code, Kiro, Trae, Cherry Studio, OpenCode, Qwen Code.
 
 </details>
 
-If auto-configure can't find a CLI (GUI-launched editors have a limited PATH),
-each row exposes a **Run this manually** panel with a copyable snippet. Server
-URL is always `http://127.0.0.1:8000/mcp`.
-
-> Adding a new client: drop a `clients/<name>.gd` descriptor under
-> `plugin/addons/godot_ai/clients/` and add one `preload(...)` line to
-> `clients/_registry.gd`. No edits to dock or facade required.
+Server URL is always `http://127.0.0.1:8000/mcp`. If auto-configure can't find
+a CLI, each dock row exposes a **Run this manually** panel with a copyable
+snippet.
 
 ### 4. Try it
 
