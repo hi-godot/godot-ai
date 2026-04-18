@@ -16,6 +16,32 @@ The plugin auto-starts the MCP server and connects over WebSocket. No manual con
 
 - Godot 4.3+ (4.4+ recommended)
 - [uv](https://docs.astral.sh/uv/) (used to install the Python server)
+  <details>
+  <summary>Install uv</summary>
+
+  **macOS / Linux:**
+  ```bash
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  ```
+
+  **Windows (PowerShell):**
+  ```powershell
+  powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+  ```
+
+  **Homebrew (macOS / Linux):**
+  ```bash
+  brew install uv
+  ```
+
+  **pipx:**
+  ```bash
+  pipx install uv
+  ```
+
+  See the [uv install docs](https://docs.astral.sh/uv/getting-started/installation/) for more options.
+
+  </details>
 - An MCP client ([Claude Code](https://docs.anthropic.com/en/docs/claude-code) | [Codex](https://openai.com/index/codex/) | [Antigravity](https://www.antigravity.dev/))
 
 ## Documentation
