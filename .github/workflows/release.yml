@@ -75,13 +75,14 @@ jobs:
 
       - name: Verify zip structure
         run: |
-          top=$(unzip -l godot-ai-plugin.zip | awk 'NR>3 && $NF!="" {print $NF}' | awk -F/ '{print $1}' | sort -u)
+          # unzip -Z1 lists only entry names, one per line, no header/footer
+          top=$(unzip -Z1 godot-ai-plugin.zip | awk -F/ '{print $1}' | sort -u)
           if [ "$top" != "godot-ai-plugin" ]; then
             echo "ERROR: expected single top-level folder 'godot-ai-plugin/' in zip, got:" >&2
             echo "$top" >&2
             exit 1
           fi
-          if ! unzip -l godot-ai-plugin.zip | grep -q 'godot-ai-plugin/addons/godot_ai/plugin.cfg'; then
+          if ! unzip -Z1 godot-ai-plugin.zip | grep -qx 'godot-ai-plugin/addons/godot_ai/plugin.cfg'; then
             echo "ERROR: plugin.cfg not at expected path godot-ai-plugin/addons/godot_ai/plugin.cfg" >&2
             exit 1
           fi
