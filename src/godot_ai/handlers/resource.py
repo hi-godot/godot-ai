@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._target import target_params
 from godot_ai.runtime.interface import Runtime
 from godot_ai.tools._pagination import paginate
 
@@ -55,12 +56,5 @@ async def resource_create(
     params: dict = {"type": type}
     if properties:
         params["properties"] = properties
-    if path:
-        params["path"] = path
-    if property:
-        params["property"] = property
-    if resource_path:
-        params["resource_path"] = resource_path
-    if overwrite:
-        params["overwrite"] = overwrite
+    params.update(target_params(path, property, resource_path, overwrite))
     return await runtime.send_command("create_resource", params)

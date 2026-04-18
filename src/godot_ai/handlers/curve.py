@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._target import target_params
 from godot_ai.runtime.interface import Runtime
 
 
@@ -14,11 +15,8 @@ async def curve_set_points(
     resource_path: str = "",
 ) -> dict:
     require_writable(runtime)
+    # curve_set_points writes to an existing .tres (not a new create), so it
+    # has no overwrite param — pass False to the shared helper.
     params: dict = {"points": points}
-    if path:
-        params["path"] = path
-    if property:
-        params["property"] = property
-    if resource_path:
-        params["resource_path"] = resource_path
+    params.update(target_params(path, property, resource_path, False))
     return await runtime.send_command("curve_set_points", params)

@@ -50,7 +50,7 @@ func create_gradient_texture(params: Dictionary) -> Dictionary:
 			"Invalid fill '%s'. Valid: %s" % [fill, ", ".join(_FILL_MODES.keys())]
 		)
 
-	var home_err := _validate_home(params)
+	var home_err := ResourceIO.validate_home(params)
 	if home_err != null:
 		return home_err
 
@@ -112,7 +112,7 @@ func create_noise_texture(params: Dictionary) -> Dictionary:
 			"Invalid noise_type '%s'. Valid: %s" % [noise_type, ", ".join(_NOISE_TYPES.keys())]
 		)
 
-	var home_err := _validate_home(params)
+	var home_err := ResourceIO.validate_home(params)
 	if home_err != null:
 		return home_err
 
@@ -139,27 +139,6 @@ func create_noise_texture(params: Dictionary) -> Dictionary:
 # shared helpers
 # ============================================================================
 
-static func _validate_home(params: Dictionary) -> Variant:
-	var node_path: String = params.get("path", "")
-	var property: String = params.get("property", "")
-	var resource_path: String = params.get("resource_path", "")
-	var has_node_target := not node_path.is_empty()
-	var has_file_target := not resource_path.is_empty()
-	if has_node_target and has_file_target:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
-			"Provide either path+property or resource_path, not both"
-		)
-	if not has_node_target and not has_file_target:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
-			"Must provide either path+property (assign inline) or resource_path (save .tres)"
-		)
-	if has_node_target and property.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: property")
-	return null
-
-
 func _finalize(tex: Resource, sub_resources: Array, params: Dictionary, label: String, extra: Dictionary) -> Dictionary:
 	var node_path: String = params.get("path", "")
 	var property: String = params.get("property", "")
@@ -167,7 +146,7 @@ func _finalize(tex: Resource, sub_resources: Array, params: Dictionary, label: S
 	var overwrite: bool = params.get("overwrite", false)
 
 	if not resource_path.is_empty():
-		return _save_texture(tex, resource_path, overwrite, label, extra)
+		return ResourceIO.save_to_disk(tex, resource_path, overwrite, label, extra)
 	return _assign_texture(tex, sub_resources, node_path, property, label, extra)
 
 
@@ -216,37 +195,3 @@ func _assign_texture(tex: Resource, sub_resources: Array, node_path: String, pro
 	return {"data": data}
 
 
-func _save_texture(tex: Resource, resource_path: String, overwrite: bool, label: String, extra: Dictionary) -> Dictionary:
-	if not resource_path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "resource_path must start with res://")
-	var existed_before := FileAccess.file_exists(resource_path)
-	if existed_before and not overwrite:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
-			"%s already exists at %s (pass overwrite=true to replace)" % [label, resource_path]
-		)
-	var dir_path := resource_path.get_base_dir()
-	var mkdir_err := DirAccess.make_dir_recursive_absolute(dir_path)
-	if mkdir_err != OK and mkdir_err != ERR_ALREADY_EXISTS:
-		return McpErrorCodes.make(
-			McpErrorCodes.INTERNAL_ERROR,
-			"Failed to create directory %s: %s" % [dir_path, error_string(mkdir_err)]
-		)
-	var save_err := ResourceSaver.save(tex, resource_path)
-	if save_err != OK:
-		return McpErrorCodes.make(
-			McpErrorCodes.INTERNAL_ERROR,
-			"Failed to save %s to %s: %s" % [label, resource_path, error_string(save_err)]
-		)
-	var efs := EditorInterface.get_resource_filesystem()
-	if efs != null:
-		efs.update_file(resource_path)
-
-	var data := {
-		"resource_path": resource_path,
-		"overwritten": existed_before,
-		"undoable": false,
-		"reason": "File creation is persistent; delete the file manually to revert",
-	}
-	data.merge(extra)
-	return {"data": data}
