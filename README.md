@@ -9,8 +9,6 @@
 
 **Connect MCP clients directly to a live Godot editor.** Godot AI bridges AI assistants (Claude Code, Codex, Antigravity, etc.) with your Godot Editor via the [Model Context Protocol](https://modelcontextprotocol.io/introduction). Inspect scenes, create nodes, search project data, run tests, and read structured editor resources — all from a prompt.
 
-> **Status:** early, usable, and still expanding.
-
 *Independent community project, not affiliated with the [Godot Foundation](https://godot.foundation). Godot Engine is [MIT-licensed](https://godotengine.org/license).*
 
 ---
