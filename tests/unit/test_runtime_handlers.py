@@ -2700,6 +2700,22 @@ async def test_project_run_handler_custom_mode():
     }
 
 
+async def test_project_run_handler_autosave_default_omits_param():
+    # Issue #81: default autosave=True keeps the wire format minimal — older
+    # plugins never see the new key and behavior stays identical.
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await project_handlers.project_run(runtime)
+    assert "autosave" not in client.calls[-1]["params"]
+
+
+async def test_project_run_handler_autosave_false_forwarded():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await project_handlers.project_run(runtime, mode="current", autosave=False)
+    assert client.calls[-1]["params"] == {"mode": "current", "autosave": False}
+
+
 async def test_project_stop_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)

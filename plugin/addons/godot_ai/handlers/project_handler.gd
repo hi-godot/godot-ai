@@ -69,6 +69,7 @@ func set_project_setting(params: Dictionary) -> Dictionary:
 
 func run_project(params: Dictionary) -> Dictionary:
 	var mode: String = params.get("mode", "main")
+	var autosave: bool = params.get("autosave", true)
 	if EditorInterface.is_playing_scene():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Project is already running")
 
@@ -79,6 +80,21 @@ func run_project(params: Dictionary) -> Dictionary:
 	# around the play call — same pattern as SceneHandler.save_scene.
 	if _connection:
 		_connection.pause_processing = true
+
+	# try_autosave() reads run/auto_save/save_before_running every call, so
+	# toggling it off around the play call suppresses the save without
+	# touching the user's persisted preference. Issue #81.
+	var autosave_key := "run/auto_save/save_before_running"
+	var editor_settings: EditorSettings = null
+	if not autosave:
+		editor_settings = EditorInterface.get_editor_settings()
+	var prior_autosave: bool = true
+	var restore_setting := false
+	if editor_settings != null and editor_settings.has_setting(autosave_key):
+		prior_autosave = bool(editor_settings.get_setting(autosave_key))
+		editor_settings.set_setting(autosave_key, false)
+		restore_setting = true
+
 	var validation_error: Variant = null
 	match mode:
 		"main":
@@ -93,6 +109,10 @@ func run_project(params: Dictionary) -> Dictionary:
 				EditorInterface.play_custom_scene(scene_path)
 		_:
 			validation_error = McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid mode '%s' — use 'main', 'current', or 'custom'" % mode)
+
+	if restore_setting:
+		editor_settings.set_setting(autosave_key, prior_autosave)
+
 	if _connection:
 		_connection.pause_processing = false
 
@@ -103,6 +123,7 @@ func run_project(params: Dictionary) -> Dictionary:
 		"data": {
 			"mode": mode,
 			"scene": params.get("scene", ""),
+			"autosave": autosave,
 			"undoable": false,
 			"reason": "Play/stop is a runtime action",
 		}

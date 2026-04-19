@@ -2515,6 +2515,33 @@ class TestProjectRunTool:
         assert not result.is_error
         assert result.data["scene"] == "res://levels/level1.tscn"
 
+    async def test_run_autosave_false_forwarded_to_plugin(self, mcp_stack):
+        # Issue #81: autosave=False must reach the plugin so it can suppress
+        # Godot's save-before-running and leave the .tscn on disk untouched.
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["autosave"] is False
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "mode": "current",
+                    "scene": "",
+                    "autosave": False,
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "project_run", {"mode": "current", "autosave": False}
+        )
+        await task
+
+        assert not result.is_error
+        assert result.data["autosave"] is False
+
 
 class TestProjectStopTool:
     async def test_stop_running_project(self, mcp_stack):
