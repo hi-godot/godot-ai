@@ -4479,13 +4479,13 @@ class TestMaterialSetParamTool:
         async def respond():
             cmd = await plugin.recv_command()
             assert cmd["command"] == "material_set_param"
-            assert cmd["params"]["property"] == "albedo_color"
+            assert cmd["params"]["param"] == "albedo_color"
             assert cmd["params"]["value"] == "#ff0000"
             await plugin.send_response(
                 cmd["request_id"],
                 {
                     "path": "res://materials/red.tres",
-                    "property": "albedo_color",
+                    "param": "albedo_color",
                     "value": {"r": 1, "g": 0, "b": 0, "a": 1},
                     "previous_value": {"r": 1, "g": 1, "b": 1, "a": 1},
                     "undoable": True,
@@ -4497,7 +4497,7 @@ class TestMaterialSetParamTool:
             "material_set_param",
             {
                 "path": "res://materials/red.tres",
-                "property": "albedo_color",
+                "param": "albedo_color",
                 "value": "#ff0000",
             },
         )

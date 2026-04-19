@@ -131,7 +131,7 @@ func test_set_param_color_hex() -> void:
 	_make_material()
 	var result := _handler.set_param({
 		"path": TEST_MATERIAL_PATH,
-		"property": "albedo_color",
+		"param": "albedo_color",
 		"value": "#ff0000",
 	})
 	assert_has_key(result, "data")
@@ -146,7 +146,7 @@ func test_set_param_color_dict() -> void:
 	_make_material()
 	var result := _handler.set_param({
 		"path": TEST_MATERIAL_PATH,
-		"property": "albedo_color",
+		"param": "albedo_color",
 		"value": {"r": 0.5, "g": 0.25, "b": 0.75, "a": 1.0},
 	})
 	assert_has_key(result, "data")
@@ -159,7 +159,7 @@ func test_set_param_metallic_float() -> void:
 	_make_material()
 	var result := _handler.set_param({
 		"path": TEST_MATERIAL_PATH,
-		"property": "metallic",
+		"param": "metallic",
 		"value": 0.9,
 	})
 	assert_has_key(result, "data")
@@ -171,7 +171,7 @@ func test_set_param_bool() -> void:
 	_make_material()
 	var result := _handler.set_param({
 		"path": TEST_MATERIAL_PATH,
-		"property": "emission_enabled",
+		"param": "emission_enabled",
 		"value": true,
 	})
 	assert_has_key(result, "data")
@@ -181,7 +181,7 @@ func test_set_param_transparency_enum_by_name() -> void:
 	_make_material()
 	var result := _handler.set_param({
 		"path": TEST_MATERIAL_PATH,
-		"property": "transparency",
+		"param": "transparency",
 		"value": "alpha",
 	})
 	assert_has_key(result, "data")
@@ -193,7 +193,7 @@ func test_set_param_shading_mode_enum() -> void:
 	_make_material()
 	var result := _handler.set_param({
 		"path": TEST_MATERIAL_PATH,
-		"property": "shading_mode",
+		"param": "shading_mode",
 		"value": "unshaded",
 	})
 	assert_has_key(result, "data")
@@ -205,7 +205,7 @@ func test_set_param_invalid_enum_by_name() -> void:
 	_make_material()
 	var result := _handler.set_param({
 		"path": TEST_MATERIAL_PATH,
-		"property": "transparency",
+		"param": "transparency",
 		"value": "not_a_mode",
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
@@ -215,7 +215,7 @@ func test_set_param_unknown_property() -> void:
 	_make_material()
 	var result := _handler.set_param({
 		"path": TEST_MATERIAL_PATH,
-		"property": "does_not_exist",
+		"param": "does_not_exist",
 		"value": 1.0,
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
@@ -224,7 +224,7 @@ func test_set_param_unknown_property() -> void:
 func test_set_param_material_not_found() -> void:
 	var result := _handler.set_param({
 		"path": "res://nope_material.tres",
-		"property": "metallic",
+		"param": "metallic",
 		"value": 0.5,
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
@@ -234,7 +234,7 @@ func test_set_param_missing_value() -> void:
 	_make_material()
 	var result := _handler.set_param({
 		"path": TEST_MATERIAL_PATH,
-		"property": "metallic",
+		"param": "metallic",
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 

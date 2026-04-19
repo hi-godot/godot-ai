@@ -445,13 +445,16 @@ func _get_visual_aabb(node: Node3D) -> AABB:
 ## Calculate a camera Transform3D that frames the given AABB nicely.
 ## elevation_deg: camera elevation (0 = level, 90 = directly above). Default 25.
 ## azimuth_deg: camera azimuth (0 = front, 90 = right side). Default 30.
-## padding: distance multiplier for breathing room (1.2 = tight, 2.5 = context). Default 1.2.
-func _frame_transform_for_aabb(aabb: AABB, fov_degrees: float = 75.0, elevation_deg: float = 25.0, azimuth_deg: float = 30.0, padding: float = 1.2) -> Transform3D:
+## padding: distance multiplier for breathing room (1.2 = tight, 2.5 = context). Default 1.8.
+func _frame_transform_for_aabb(aabb: AABB, fov_degrees: float = 75.0, elevation_deg: float = 25.0, azimuth_deg: float = 30.0, padding: float = 1.8) -> Transform3D:
 	var center := aabb.get_center()
 	var radius := aabb.size.length() * 0.5
 	var fov_rad := deg_to_rad(fov_degrees)
 	var distance := radius / tan(fov_rad * 0.5) * padding
-	distance = maxf(distance, radius * 2.0)
+	## Floor with an absolute offset so unit-scale AABBs don't place the camera
+	## inside or against the target. `radius * 2.0` alone scales to zero as the
+	## AABB shrinks; the +1.0 guarantees a minimum of ~1 world-unit of standoff.
+	distance = maxf(distance, radius * 2.0 + 1.0)
 	var elev := deg_to_rad(elevation_deg)
 	var azim := deg_to_rad(azimuth_deg)
 	var cam_pos := center + Vector3(

@@ -1323,13 +1323,24 @@ static func _coerce_value_for_track(value: Variant, track_path: String, player: 
 ##   {pass_through: true}                   — no resolution / authoring-time
 ##   {pass_through: false, prop_type, prop_name}  — coerce against this type
 ##   {error: msg}                           — property not found on target
+##
+## Supports Godot's native NodePath subpath form `property:sub` (e.g.
+## `position:y`, `modulate:a`) — splits on the FIRST colon (node↔property
+## boundary), resolves the base property on the target, and for known
+## scalar subpaths (x/y/z/w on vectors, r/g/b/a on Color) narrows the
+## coerce target to TYPE_FLOAT so JSON numbers land as floats, not dicts.
 static func _resolve_track_prop_context(track_path: String, player: AnimationPlayer) -> Dictionary:
-	var colon := track_path.rfind(":")
+	var colon := track_path.find(":")
 	if colon < 0:
 		return {"pass_through": true}
 
 	var node_part := track_path.substr(0, colon)
-	var prop_part := track_path.substr(colon + 1)
+	var prop_full := track_path.substr(colon + 1)
+
+	# Property may include a subpath: "position:y", "modulate:a", etc.
+	var sub_colon := prop_full.find(":")
+	var prop_base := prop_full if sub_colon < 0 else prop_full.substr(0, sub_colon)
+	var prop_sub := "" if sub_colon < 0 else prop_full.substr(sub_colon + 1)
 
 	var root_node: Node = null
 	if player.is_inside_tree():
@@ -1347,18 +1358,54 @@ static func _resolve_track_prop_context(track_path: String, player: AnimationPla
 		return {"pass_through": true}
 
 	for p in target.get_property_list():
-		if p.name == prop_part:
+		if p.name == prop_base:
+			var base_type: int = p.get("type", TYPE_NIL)
+			var coerce_type := base_type
+			if not prop_sub.is_empty():
+				var sub_type := _subpath_component_type(base_type, prop_sub)
+				if sub_type == TYPE_NIL:
+					# Unknown subpath component — pass through so Godot's own
+					# NodePath resolution raises at playback if it's truly bogus,
+					# rather than fabricating a coerce error for a valid-but-
+					# uncommon form (e.g. Transform3D subpaths).
+					return {"pass_through": true}
+				coerce_type = sub_type
 			return {
 				"pass_through": false,
-				"prop_type": p.get("type", TYPE_NIL),
-				"prop_name": prop_part,
+				"prop_type": coerce_type,
+				"prop_name": prop_full,
 			}
 
 	# Target exists but the property doesn't. Reject loudly — silently storing
 	# the raw value here produces garbage keyframes at playback time.
 	return {"error":
 		"%s (target path: '%s')" %
-		[McpPropertyErrors.build_message(target, prop_part), node_part]}
+		[McpPropertyErrors.build_message(target, prop_base), node_part]}
+
+
+## Component letters accepted on each aggregate base type, paired with the
+## scalar Variant type the component resolves to. A subpath like `position:y`
+## on a Vector3 maps to TYPE_FLOAT; on a Vector3i it maps to TYPE_INT.
+const _SUBPATH_COMPONENTS := {
+	TYPE_VECTOR2: ["xy", TYPE_FLOAT],
+	TYPE_VECTOR3: ["xyz", TYPE_FLOAT],
+	TYPE_VECTOR4: ["xyzw", TYPE_FLOAT],
+	TYPE_QUATERNION: ["xyzw", TYPE_FLOAT],
+	TYPE_COLOR: ["rgba", TYPE_FLOAT],
+	TYPE_VECTOR2I: ["xy", TYPE_INT],
+	TYPE_VECTOR3I: ["xyz", TYPE_INT],
+	TYPE_VECTOR4I: ["xyzw", TYPE_INT],
+}
+
+
+## Map a `property:sub` subpath to its scalar component type. Returns
+## TYPE_NIL when the base type / subkey pair isn't one we recognise —
+## callers pass-through in that case rather than mis-coerce.
+static func _subpath_component_type(base_type: int, sub: String) -> int:
+	var entry = _SUBPATH_COMPONENTS.get(base_type)
+	if entry == null or sub.length() != 1:
+		return TYPE_NIL
+	return entry[1] if (entry[0] as String).contains(sub) else TYPE_NIL
 
 
 static func _coerce_with_context(value: Variant, ctx: Dictionary) -> Dictionary:

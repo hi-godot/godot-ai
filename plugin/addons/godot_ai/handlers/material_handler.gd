@@ -114,9 +114,9 @@ func set_param(params: Dictionary) -> Dictionary:
 	var mat: Material = load_result.material
 	var mat_path: String = load_result.path
 
-	var property: String = params.get("property", "")
+	var property: String = params.get("param", "")
 	if property.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: property")
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: param")
 
 	if not ("value" in params):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: value")
