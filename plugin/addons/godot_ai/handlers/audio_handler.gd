@@ -59,7 +59,7 @@ func create_player(params: Dictionary) -> Dictionary:
 	if not parent_path.is_empty():
 		parent = ScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Parent not found: %s" % parent_path)
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_parent_error(parent_path, scene_root))
 
 	var node := _instantiate_player(type_str)
 	if node == null:

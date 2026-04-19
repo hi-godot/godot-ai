@@ -25,7 +25,7 @@ func create_node(params: Dictionary) -> Dictionary:
 	if not parent_path.is_empty():
 		parent = ScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Parent not found: %s" % parent_path)
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_parent_error(parent_path, scene_root))
 
 	var new_node: Node
 
@@ -123,7 +123,7 @@ func reparent_node(params: Dictionary) -> Dictionary:
 
 	var new_parent := ScenePath.resolve(new_parent_path, scene_root)
 	if new_parent == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Parent not found: %s" % new_parent_path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_parent_error(new_parent_path, scene_root))
 
 	if node == scene_root:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Cannot reparent the scene root")
