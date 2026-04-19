@@ -23,7 +23,7 @@
 
 <p align="center">
   <img src="docs/images/huddemo.gif" alt="Cyberpunk HUD demo" width="800"><br>
-  <em>UI demo built in ~2 hours with zero coding, zero image gen, all programmatically drawn by Godot AI</em>
+  <em>UI demo built in ~2 hours with zero coding, zero image gen, all programmatically drawn by Godot AI — <a href="https://github.com/hi-godot/cyberpunk-hud-demo">source</a></em>
 </p>
 
 ---
