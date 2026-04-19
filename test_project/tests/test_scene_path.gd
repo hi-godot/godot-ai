@@ -52,14 +52,7 @@ func test_resolve_nested_descendant() -> void:
 	root.queue_free()
 
 
-# ----- resolve: /root/ alias (issue #71) -----
-
-func test_resolve_root_alias_returns_scene_root() -> void:
-	## /root is a SceneTree-style alias for the edited scene root.
-	var root := _make_tree()
-	assert_eq(ScenePath.resolve("/root", root), root)
-	root.queue_free()
-
+# ----- resolve: /root/<scene_root_name> alias (issue #71) -----
 
 func test_resolve_root_alias_with_scene_name_returns_scene_root() -> void:
 	## /root/Main → scene root. This is the agent's most common mistake;
@@ -85,6 +78,20 @@ func test_resolve_root_alias_nested_descendant() -> void:
 	root.queue_free()
 
 
+func test_resolve_does_not_hijack_editor_internal_root_paths() -> void:
+	## Node.get_path() inside the editor returns paths like
+	## /root/@EditorNode@.../Main/X. Those legitimately live under /root but
+	## the segment after /root is NOT the scene_root's name — the alias must
+	## not swallow them, or absolute-path lookups break for every handler
+	## that resolves a node by its real SceneTree path.
+	var root := _make_tree()
+	## Path doesn't match alias prefix "/root/Main" → falls through to the
+	## absolute-path fallback (which returns null here because root isn't
+	## actually in any SceneTree, but the key behavior is "don't strip /root").
+	assert_eq(ScenePath.resolve("/root/@EditorNode@1/Main/Camera3D", root), null)
+	root.queue_free()
+
+
 # ----- resolve: failure cases -----
 
 func test_resolve_unknown_path_returns_null() -> void:
@@ -101,16 +108,28 @@ func test_resolve_null_scene_root_returns_null() -> void:
 
 func test_format_parent_error_names_scene_root() -> void:
 	var root := _make_tree()
-	var msg := ScenePath.format_parent_error("/root/Main", root)
-	assert_contains(msg, "/root/Main")
+	var msg := ScenePath.format_parent_error("/SomeBogusPath", root)
+	assert_contains(msg, "/SomeBogusPath")
 	assert_contains(msg, "/Main")
 	assert_contains(msg, "relative to the edited scene root")
 	assert_contains(msg, "not the SceneTree")
 	root.queue_free()
 
 
-func test_format_parent_error_handles_null_root() -> void:
-	## Defensive: format_parent_error shouldn't crash if scene_root is null
-	## (which can happen if a check is misordered in a handler).
+func test_format_parent_error_uses_generic_paths_wording() -> void:
+	## Helper is shared across param names (parent_path, new_parent, …); the
+	## message must not hardcode any specific param name.
+	var root := _make_tree()
+	var msg := ScenePath.format_parent_error("/X", root)
+	assert_false(msg.contains("parent_path"), "should not name a specific param")
+	assert_contains(msg, "Paths are relative")
+	root.queue_free()
+
+
+func test_format_parent_error_null_root_returns_actionable_message() -> void:
+	## When no scene is open there's no scene_root to suggest. Return a
+	## message that points at the real problem instead of "/<no scene>".
 	var msg := ScenePath.format_parent_error("/Foo", null)
 	assert_contains(msg, "/Foo")
+	assert_contains(msg, "No edited scene is open")
+	assert_false(msg.contains("<no scene>"), "should not leak placeholder")
