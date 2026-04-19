@@ -154,6 +154,118 @@ jobs:
         timeout-minutes: 2
         run: bash script/ci-quit-test
 
+  # Separate job from godot-tests-*: the capture smoke test needs a real
+  # rendering driver (null RenderingDevice in --headless produces empty
+  # framebuffers) and a display server. Linux uses xvfb-run; macOS and
+  # Windows CI runners have a real graphics stack and run the editor
+  # windowed. This job verifies editor_screenshot(source="game") round-
+  # trips real game pixels — see closes #72.
+  game-capture-smoke-linux:
+    name: Game capture smoke / Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 4.6.2
+          use-dotnet: false
+
+      - name: Install xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Start MCP server
+        run: bash script/ci-start-server
+
+      - name: Import project
+        timeout-minutes: 3
+        run: godot --headless --path test_project --import || true
+
+      - name: Start Godot editor with rendering driver
+        run: |
+          xvfb-run -a --server-args="-screen 0 1280x720x24" \
+            godot --rendering-driver opengl3 --path test_project --editor &
+
+      - name: Run capture smoke test
+        timeout-minutes: 5
+        run: python script/ci-game-capture-smoke
+
+  game-capture-smoke-macos:
+    name: Game capture smoke / macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 4.6.2
+          use-dotnet: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Start MCP server
+        run: bash script/ci-start-server
+
+      - name: Import project
+        run: godot --headless --path test_project --import || true
+
+      - name: Start Godot editor
+        run: godot --path test_project --editor &
+
+      - name: Run capture smoke test
+        timeout-minutes: 5
+        run: python script/ci-game-capture-smoke
+
+  game-capture-smoke-windows:
+    name: Game capture smoke / Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 4.6.2
+          use-dotnet: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Start MCP server
+        shell: bash
+        run: bash script/ci-start-server
+
+      - name: Import project
+        shell: bash
+        run: godot --headless --path test_project --import || true
+
+      - name: Start Godot editor
+        shell: bash
+        run: godot --path test_project --editor &
+
+      - name: Run capture smoke test
+        timeout-minutes: 5
+        shell: bash
+        run: python script/ci-game-capture-smoke
+
   godot-tests-macos:
     name: Godot tests / macOS
     runs-on: macos-latest

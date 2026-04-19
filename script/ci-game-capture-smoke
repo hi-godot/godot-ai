@@ -1,0 +1,313 @@
+#!/usr/bin/env python3
+"""
+End-to-end smoke test for editor_screenshot(source="game").
+
+Drives a running Godot editor (launched separately by CI with a real
+rendering driver, typically under xvfb-run on Linux) through the MCP
+streamable-HTTP transport:
+
+  1. wait for the plugin's WebSocket session to register
+  2. open res://capture_smoke.tscn (four colored quadrants)
+  3. run the project in that scene
+  4. poll editor_state until is_playing=true, then settle for a beat
+  5. call editor_screenshot(source="game")
+  6. decode the returned PNG, sample the centre of each quadrant
+  7. assert each sample matches red / green / blue / white within tolerance
+  8. stop the project
+
+Exits non-zero on any failure — each assertion prints a diagnostic line so
+CI logs show exactly which quadrant drifted.
+
+The core capture path is independent of Godot's render backend, but only
+returns game pixels when Godot can actually rasterise — on a headless
+runner the RenderingDevice is null and get_texture().get_image() is empty.
+CI must launch Godot with a rendering driver (opengl3 is the most
+forgiving on xvfb).
+"""
+
+from __future__ import annotations
+
+import base64
+import io
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+
+from PIL import Image
+
+SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://127.0.0.1:8000/mcp")
+HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream",
+}
+
+SCENE_PATH = "res://capture_smoke.tscn"
+## (label, sample fraction x, sample fraction y, expected RGB)
+QUADRANTS = [
+    ("red", 0.25, 0.25, (255, 0, 0)),
+    ("green", 0.75, 0.25, (0, 255, 0)),
+    ("blue", 0.25, 0.75, (0, 0, 255)),
+    ("white", 0.75, 0.75, (255, 255, 255)),
+]
+## Generous tolerance: default Godot 2D rendering is gamma-correct and the
+## "pure red/green/blue" ColorRects come back as slightly darkened sRGB after
+## the framebuffer's linear → sRGB conversion. 40/255 easily covers that
+## while still catching "returned editor UI instead of game pixels".
+COLOR_TOLERANCE = 40
+
+
+def _post(session_id: str | None, body: dict, timeout: float = 10.0) -> dict:
+    headers = dict(HEADERS)
+    if session_id:
+        headers["Mcp-Session-Id"] = session_id
+    req = urllib.request.Request(
+        SERVER_URL,
+        data=json.dumps(body).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read().decode("utf-8")
+        new_session = resp.headers.get("mcp-session-id")
+    result = {"_session_id": new_session, "_raw": raw}
+    for line in raw.splitlines():
+        if line.startswith("data: "):
+            result.update(json.loads(line[6:]))
+            break
+    else:
+        try:
+            result.update(json.loads(raw))
+        except json.JSONDecodeError:
+            pass
+    return result
+
+
+def _tool_call(
+    session_id: str,
+    name: str,
+    args: dict,
+    request_id: int,
+    timeout: float = 30.0,
+) -> dict:
+    body = {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "tools/call",
+        "params": {"name": name, "arguments": args},
+    }
+    resp = _post(session_id, body, timeout=timeout)
+    ## Prefer structuredContent; fall back to the text block the transport
+    ## wraps around dict/list results.
+    result = resp.get("result", {})
+    sc = result.get("structuredContent")
+    if sc:
+        return sc
+    content = result.get("content") or []
+    for block in content:
+        if block.get("type") == "text":
+            try:
+                return json.loads(block["text"])
+            except json.JSONDecodeError:
+                return {"_text": block["text"]}
+    return {"_raw": resp.get("_raw", "")}
+
+
+def _initialize_session() -> str:
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "ci-game-capture-smoke", "version": "1.0"},
+        },
+    }
+    resp = _post(None, body)
+    session_id = resp.get("_session_id")
+    if not session_id:
+        raw = resp.get("_raw", "")[:300]
+        raise RuntimeError(f"No Mcp-Session-Id in initialize response: {raw}")
+    _post(session_id, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+    return session_id
+
+
+def _wait_for_godot_session(session_id: str, timeout: float = 120.0) -> None:
+    deadline = time.monotonic() + timeout
+    last_err: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            result = _tool_call(session_id, "session_list", {}, 2)
+            if result.get("count", 0) > 0:
+                print(f"Godot session connected: {result.get('active_session_id') or result}")
+                return
+        except (urllib.error.URLError, RuntimeError) as exc:
+            last_err = exc
+        time.sleep(2)
+    raise RuntimeError(f"Godot session never registered; last err: {last_err}")
+
+
+def _wait_for_is_playing(session_id: str, timeout: float = 30.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = _tool_call(session_id, "editor_state", {}, 100)
+        if state.get("is_playing"):
+            print(f"Project is playing (readiness={state.get('readiness')})")
+            return
+        time.sleep(0.5)
+    raise RuntimeError("Project never reached is_playing=true")
+
+
+def _within_tolerance(a: tuple[int, int, int], b: tuple[int, int, int]) -> bool:
+    return all(abs(x - y) <= COLOR_TOLERANCE for x, y in zip(a, b))
+
+
+def _dump_diagnostics(session_id: str) -> None:
+    """On failure, print everything that could explain what happened."""
+    try:
+        autoloads = _tool_call(session_id, "autoload_list", {}, 900)
+        print("\n[diag] autoloads:", json.dumps(autoloads, indent=2))
+    except Exception as exc:
+        print(f"[diag] autoload_list failed: {exc}")
+    try:
+        ## project.godot on disk — did ProjectSettings.save() actually persist
+        ## the autoload entry before the subprocess spawned?
+        proj = _tool_call(
+            session_id,
+            "filesystem_read_text",
+            {"path": "res://project.godot"},
+            901,
+        )
+        text = proj.get("content", "")
+        in_autoload = False
+        lines_out: list[str] = []
+        for line in text.splitlines():
+            if line.startswith("[autoload]"):
+                in_autoload = True
+            elif line.startswith("[") and in_autoload:
+                in_autoload = False
+            if in_autoload:
+                lines_out.append(line)
+        print("[diag] project.godot [autoload] section:")
+        for line in lines_out or ["  (section missing)"]:
+            print(f"    {line}")
+    except Exception as exc:
+        print(f"[diag] filesystem_read_file failed: {exc}")
+    try:
+        logs = _tool_call(session_id, "logs_read", {"count": 50}, 902)
+        print("[diag] recent plugin logs:")
+        for line in logs.get("lines", []):
+            print(f"    {line}")
+    except Exception as exc:
+        print(f"[diag] logs_read failed: {exc}")
+
+
+def main() -> int:
+    print(f"Connecting to MCP server at {SERVER_URL}")
+    session_id = _initialize_session()
+    _wait_for_godot_session(session_id)
+
+    ## Dump autoload state BEFORE we touch the game — tells us whether the
+    ## plugin's _enter_tree actually persisted _mcp_game_helper, which is the
+    ## hinge for the whole capture path.
+    _dump_diagnostics(session_id)
+
+    print(f"Opening {SCENE_PATH}")
+    _tool_call(session_id, "scene_open", {"path": SCENE_PATH}, 10)
+    time.sleep(1)
+
+    print("Running project (current scene)")
+    _tool_call(session_id, "project_run", {"mode": "current"}, 11, timeout=20)
+
+    try:
+        _wait_for_is_playing(session_id)
+        ## Give the game subprocess time to register its EngineDebugger
+        ## capture after main-loop startup. On CI this can take noticeably
+        ## longer than interactive use, so be generous here.
+        time.sleep(4.0)
+
+        print("Capturing source='game'")
+        ## Fetch metadata (include_image=False) first: this is the easiest
+        ## way to assert the capture actually succeeded on the plugin side.
+        meta = _tool_call(
+            session_id,
+            "editor_screenshot",
+            {"source": "game", "include_image": False, "max_resolution": 0},
+            13,
+            timeout=20,
+        )
+        if "source" in meta and meta["source"] != "game":
+            raise RuntimeError(f"Metadata source mismatch: {meta}")
+        if meta.get("error"):
+            raise RuntimeError(f"editor_screenshot returned error: {meta}")
+
+        ## For the image bytes, go back to the raw server response for the
+        ## include_image=True call: the transport puts an image content
+        ## block alongside the text block, base64-encoded.
+        body = {
+            "jsonrpc": "2.0",
+            "id": 14,
+            "method": "tools/call",
+            "params": {
+                "name": "editor_screenshot",
+                "arguments": {"source": "game", "include_image": True, "max_resolution": 0},
+            },
+        }
+        resp = _post(session_id, body, timeout=20)
+        raw = resp.get("_raw", "")
+        image_b64: str | None = None
+        for line in raw.splitlines():
+            if not line.startswith("data: "):
+                continue
+            data = json.loads(line[6:])
+            for block in data.get("result", {}).get("content", []):
+                if block.get("type") == "image" and block.get("mimeType", "").startswith("image/"):
+                    image_b64 = block.get("data")
+                    break
+            if image_b64:
+                break
+        if not image_b64:
+            raise RuntimeError(f"No image block in response. Raw: {raw[:500]}")
+
+        png = base64.b64decode(image_b64)
+        img = Image.open(io.BytesIO(png)).convert("RGB")
+        print(f"Got PNG {img.width}x{img.height} ({len(png)} bytes)")
+
+        if img.width < 64 or img.height < 64:
+            raise RuntimeError(f"Image too small to sample: {img.width}x{img.height}")
+
+        failures: list[str] = []
+        for label, fx, fy, expected in QUADRANTS:
+            x = int(img.width * fx)
+            y = int(img.height * fy)
+            actual = img.getpixel((x, y))
+            match = _within_tolerance(actual, expected)
+            symbol = "OK" if match else "FAIL"
+            print(f"  [{symbol}] {label:>6} @ ({x}, {y}): got {actual}, expected ~{expected}")
+            if not match:
+                failures.append(f"{label} at ({x}, {y}): got {actual}, expected {expected}")
+
+        if failures:
+            print("\nCapture smoke test FAILED:")
+            for f in failures:
+                print(f"  - {f}")
+            return 1
+
+        print("\nCapture smoke test PASSED")
+        return 0
+    except Exception:
+        print("\nCapture smoke test raised — dumping diagnostics:", file=sys.stderr)
+        _dump_diagnostics(session_id)
+        raise
+    finally:
+        try:
+            _tool_call(session_id, "project_stop", {}, 999, timeout=10)
+        except Exception as exc:
+            print(f"(cleanup) project_stop failed: {exc}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

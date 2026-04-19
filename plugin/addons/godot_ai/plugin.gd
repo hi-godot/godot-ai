@@ -1,12 +1,16 @@
 @tool
 extends EditorPlugin
 
+const GAME_HELPER_AUTOLOAD_NAME := "_mcp_game_helper"
+const GAME_HELPER_AUTOLOAD_PATH := "res://addons/godot_ai/runtime/game_helper.gd"
+
 var _connection: Connection
 var _dispatcher: McpDispatcher
 var _log_buffer: McpLogBuffer
 var _dock: McpDock
 var _server_pid := -1
 var _handlers: Array = []  # prevent GC of RefCounted handlers
+var _debugger_plugin: McpDebuggerPlugin
 static var _server_started_this_session := false  # guard against re-entrant spawns
 
 
@@ -19,7 +23,11 @@ func _enter_tree() -> void:
 	_connection = Connection.new()
 	_connection.log_buffer = _log_buffer
 
-	var editor_handler := EditorHandler.new(_log_buffer, _connection)
+	_debugger_plugin = McpDebuggerPlugin.new(_log_buffer)
+	add_debugger_plugin(_debugger_plugin)
+	_ensure_game_helper_autoload()
+
+	var editor_handler := EditorHandler.new(_log_buffer, _connection, _debugger_plugin)
 	var scene_handler := SceneHandler.new(_connection)
 	var node_handler := NodeHandler.new(get_undo_redo())
 	var project_handler := ProjectHandler.new(_connection)
@@ -193,8 +201,47 @@ func _exit_tree() -> void:
 		_connection.disconnect_from_server()
 		_connection.queue_free()
 		_connection = null
+	if _debugger_plugin:
+		remove_debugger_plugin(_debugger_plugin)
+		_debugger_plugin = null
 	_stop_server()
 	print("MCP | plugin unloaded")
+
+
+## Register the game-side autoload on plugin enable. Runs the helper inside
+## the game process so the editor-side debugger plugin can request
+## framebuffer captures over EngineDebugger messages. Removed on
+## _disable_plugin so disabling the plugin leaves project.godot clean.
+func _enable_plugin() -> void:
+	_ensure_game_helper_autoload()
+
+
+func _disable_plugin() -> void:
+	var key := "autoload/" + GAME_HELPER_AUTOLOAD_NAME
+	if not ProjectSettings.has_setting(key):
+		return
+	ProjectSettings.clear(key)
+	ProjectSettings.save()
+
+
+func _ensure_game_helper_autoload() -> void:
+	## Write the autoload directly to ProjectSettings and save immediately.
+	## EditorPlugin.add_autoload_singleton only mutates in-memory settings —
+	## the on-disk project.godot is only persisted when the editor saves
+	## (e.g. on quit). CI spawns the game subprocess before any save fires,
+	## so the child process never sees the autoload and the capture times
+	## out. Mirror AutoloadHandler's pattern: set_setting + save().
+	var key := "autoload/" + GAME_HELPER_AUTOLOAD_NAME
+	var value := "*" + GAME_HELPER_AUTOLOAD_PATH  # "*" prefix = singleton
+	if ProjectSettings.get_setting(key, "") == value:
+		return  ## already registered with the right target
+	ProjectSettings.set_setting(key, value)
+	ProjectSettings.set_initial_value(key, "")
+	ProjectSettings.set_as_basic(key, true)
+	var err := ProjectSettings.save()
+	if err != OK:
+		push_warning("MCP: failed to save project.godot after registering %s autoload (error %d)"
+			% [GAME_HELPER_AUTOLOAD_NAME, err])
 
 
 func _start_server() -> void:

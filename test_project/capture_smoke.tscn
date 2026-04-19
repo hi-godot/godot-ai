@@ -1,0 +1,36 @@
+[gd_scene format=3 uid="uid://c4pturem0k3"]
+
+; CI game-capture smoke-test scene.
+;
+; Four solid-color quadrants fill the game window so script/ci-game-capture-smoke
+; can sample the centre of each quadrant and assert that editor_screenshot
+; (source="game") actually returned the game's framebuffer and not the editor
+; UI. Do not edit the colors or layout without updating that script.
+
+[node name="Root" type="Control"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Red" type="ColorRect" parent="."]
+anchor_right = 0.5
+anchor_bottom = 0.5
+color = Color(1, 0, 0, 1)
+
+[node name="Green" type="ColorRect" parent="."]
+anchor_left = 0.5
+anchor_right = 1.0
+anchor_bottom = 0.5
+color = Color(0, 1, 0, 1)
+
+[node name="Blue" type="ColorRect" parent="."]
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 1.0
+color = Color(0, 0, 1, 1)
+
+[node name="White" type="ColorRect" parent="."]
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(1, 1, 1, 1)

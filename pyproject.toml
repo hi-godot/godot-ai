@@ -47,6 +47,9 @@ dev = [
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
     "ruff>=0.8",
+    # Used by script/ci-game-capture-smoke to decode PNG frames from the
+    # running game and assert the expected colored quadrants are present.
+    "pillow>=10.0",
 ]
 build = [
     "pyinstaller>=6.0",

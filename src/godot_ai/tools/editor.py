@@ -77,7 +77,14 @@ def register_editor_tools(mcp: FastMCP) -> None:
 
         Sources:
         - "viewport": Captures the 3D editor viewport (default).
-        - "game": Captures the game viewport (only available when the project is running).
+        - "game": Captures the running game's own framebuffer (only available
+          when the project is running). Works regardless of whether Game
+          Embed Mode is on or off, and regardless of whether the game
+          workspace is docked or floating — the game is always a separate
+          OS process, and the plugin reaches it via Godot's debugger
+          channel (the same channel the profiler and remote scene tree
+          use). Requires the `_mcp_game_helper` autoload, which the plugin
+          registers automatically when it's enabled.
 
         When include_image is True (default), returns the image as an MCP
         ImageContent block that vision-capable AI models can analyze directly.

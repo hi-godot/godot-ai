@@ -69,6 +69,10 @@ plugin/addons/godot_ai/
 │   ├── resource_handler.gd
 │   ├── project_handler.gd
 │   └── batch_handler.gd
+├── debugger/
+│   └── mcp_debugger_plugin.gd   ## editor-side debugger-channel bridge
+├── runtime/
+│   └── game_helper.gd           ## autoload that runs inside the game
 ├── state/
 │   ├── session_state.gd
 │   └── log_buffer.gd
@@ -192,6 +196,67 @@ The architecture should treat these as tracked jobs with:
 - explicit partial-failure reporting when the work is composite
 
 `batch.execute` in particular should promise ordered execution and clear per-step results, not fake atomicity.
+
+---
+
+## Game-Process Capture Bridge
+
+The running game is always a separate OS child process — "Embed Game Mode"
+on Windows and Linux (and macOS 4.5+) just reparents the game's window into
+the editor via `SetParent` / `XReparentWindow` / remote-layer. The editor
+never has direct access to the game's framebuffer through its own
+`Viewport`, so anything that needs pixels from the running game has to ask
+the game for them.
+
+The plugin does this over Godot's editor-debugger channel — the same
+channel Godot itself uses for the Remote scene tree, profiler, and
+live-edit — via three cooperating pieces:
+
+- `plugin/addons/godot_ai/debugger/mcp_debugger_plugin.gd` — an
+  `EditorDebuggerPlugin` that registers on `_enter_tree`. `_has_capture`
+  claims the `"mcp"` prefix. `_capture` routes the replies that come back
+  from the game: `mcp:hello` (boot beacon), `mcp:screenshot_response`,
+  `mcp:screenshot_error`.
+- `plugin/addons/godot_ai/runtime/game_helper.gd` — an autoload the plugin
+  registers as `_mcp_game_helper` via direct `ProjectSettings.set_setting`
+  + `save()` on `_enter_tree` (the `EditorPlugin.add_autoload_singleton`
+  convenience method only mutates in-memory settings and doesn't persist
+  before Godot spawns the subprocess). The autoload guards on
+  `Engine.is_editor_hint()` so it no-ops inside the editor itself — not
+  `OS.has_feature("editor")`, which is a compile-time `TOOLS_ENABLED`
+  check that returns true in the game subprocess too because it runs the
+  same editor binary.
+- Capture flow: the editor-side plugin waits for the game to beacon
+  `mcp:hello` (proving its `EngineDebugger.register_message_capture("mcp",
+  ...)` has run — Godot silently drops messages to unregistered prefixes),
+  then sends `mcp:take_screenshot`. The game's capture replies with a PNG
+  of `get_tree().root.get_texture().get_image()` as base64. The
+  editor-side plugin pushes the reply back over the MCP WebSocket via
+  `Connection.send_deferred_response` with the original `request_id`.
+
+### Deferred-Response Pattern
+
+The MCP dispatcher runs handlers synchronously and sends one response per
+command. Game capture can't fit that shape: the reply arrives arbitrarily
+later over a different channel. The dispatcher supports this via a
+sentinel:
+
+- Handlers that produce their reply out-of-band return
+  `McpDispatcher.DEFERRED_RESPONSE` (a dict containing `{"_deferred":
+  true}`). `tick()` skips auto-sending for these.
+- The dispatcher threads the incoming `request_id` through `params` under
+  the `"_request_id"` key (on a duplicated params dict — the original
+  queued command is not mutated). Deferred handlers read it and hand it
+  off to whatever async source ultimately produces the reply.
+- When the reply arrives (debugger capture, timeout, etc.), the async
+  source calls `Connection.send_deferred_response(request_id, payload)`,
+  which JSON-serialises with `request_id` attached and ships it over the
+  WebSocket just like a normal response.
+
+This is the only pattern in the plugin today that decouples response from
+handler-return. New tools should only reach for it when the work can't
+fit in a frame and the reply genuinely has to flow back later — think
+IPC, remote-debugger queries, multi-frame renders.
 
 ---
 
