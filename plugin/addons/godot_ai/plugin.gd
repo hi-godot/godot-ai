@@ -217,17 +217,31 @@ func _enable_plugin() -> void:
 
 
 func _disable_plugin() -> void:
-	if ProjectSettings.has_setting("autoload/" + GAME_HELPER_AUTOLOAD_NAME):
-		remove_autoload_singleton(GAME_HELPER_AUTOLOAD_NAME)
+	var key := "autoload/" + GAME_HELPER_AUTOLOAD_NAME
+	if not ProjectSettings.has_setting(key):
+		return
+	ProjectSettings.clear(key)
+	ProjectSettings.save()
 
 
 func _ensure_game_helper_autoload() -> void:
-	## Idempotent: only add if absent. Godot errors if you add an existing
-	## autoload name, and we call this from both _enter_tree (for already-
-	## enabled plugins) and _enable_plugin (for first-time enable).
-	if ProjectSettings.has_setting("autoload/" + GAME_HELPER_AUTOLOAD_NAME):
-		return
-	add_autoload_singleton(GAME_HELPER_AUTOLOAD_NAME, GAME_HELPER_AUTOLOAD_PATH)
+	## Write the autoload directly to ProjectSettings and save immediately.
+	## EditorPlugin.add_autoload_singleton only mutates in-memory settings —
+	## the on-disk project.godot is only persisted when the editor saves
+	## (e.g. on quit). CI spawns the game subprocess before any save fires,
+	## so the child process never sees the autoload and the capture times
+	## out. Mirror AutoloadHandler's pattern: set_setting + save().
+	var key := "autoload/" + GAME_HELPER_AUTOLOAD_NAME
+	var value := "*" + GAME_HELPER_AUTOLOAD_PATH  # "*" prefix = singleton
+	if ProjectSettings.get_setting(key, "") == value:
+		return  ## already registered with the right target
+	ProjectSettings.set_setting(key, value)
+	ProjectSettings.set_initial_value(key, "")
+	ProjectSettings.set_as_basic(key, true)
+	var err := ProjectSettings.save()
+	if err != OK:
+		push_warning("MCP: failed to save project.godot after registering %s autoload (error %d)"
+			% [GAME_HELPER_AUTOLOAD_NAME, err])
 
 
 func _start_server() -> void:
