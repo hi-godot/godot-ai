@@ -154,4 +154,12 @@ See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for development setup, testing, and 
 
 ---
 
+## Star History
+
+<a href="https://star-history.com/#hi-godot/godot-ai&Date">
+  <img src="https://api.star-history.com/svg?repos=hi-godot/godot-ai&type=Date" alt="Star History Chart" width="700">
+</a>
+
+---
+
 **License:** [MIT](LICENSE) | **Issues:** [GitHub](https://github.com/hi-godot/godot-ai/issues)
