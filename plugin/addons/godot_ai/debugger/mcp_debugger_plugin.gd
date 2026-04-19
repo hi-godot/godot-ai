@@ -17,7 +17,10 @@ extends EditorDebuggerPlugin
 ## supported IPC and works identically regardless of embed mode.
 
 const CAPTURE_PREFIX := "mcp"
-const DEFAULT_TIMEOUT_SEC := 3.0
+## CI runners under xvfb can be slow to spin up the game subprocess and
+## register the autoload's capture. 8s keeps the message responsive for
+## interactive users while still covering slow-CI startup.
+const DEFAULT_TIMEOUT_SEC := 8.0
 
 var _log_buffer: McpLogBuffer
 
