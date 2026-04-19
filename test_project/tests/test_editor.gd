@@ -100,6 +100,25 @@ func test_screenshot_game_not_playing() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
+func test_debugger_plugin_capture_prefix() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	assert_true(plugin._has_capture("mcp"), "Should accept 'mcp' prefix")
+	assert_true(not plugin._has_capture("foo"), "Should reject other prefixes")
+
+
+func test_debugger_plugin_ignores_unknown_messages() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	assert_true(not plugin._capture("mcp:not_a_real_message", [], 0), "Unknown mcp message returns false")
+
+
+func test_debugger_plugin_screenshot_error_unknown_request() -> void:
+	## _on_screenshot_error for an unknown request_id must silently drop
+	## (the request already timed out or was reaped) without crashing.
+	var plugin := McpDebuggerPlugin.new()
+	plugin._on_screenshot_error(["unknown-id", "whatever"])
+	assert_true(true, "No crash when replying to unknown request_id")
+
+
 func test_screenshot_view_target_not_found() -> void:
 	var result := _handler.take_screenshot({"source": "viewport", "view_target": "/Main/NonExistent"})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)

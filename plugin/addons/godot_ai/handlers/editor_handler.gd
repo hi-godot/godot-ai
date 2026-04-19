@@ -6,11 +6,13 @@ extends RefCounted
 
 var _log_buffer: McpLogBuffer
 var _connection: Connection
+var _debugger_plugin: McpDebuggerPlugin
 
 
-func _init(log_buffer: McpLogBuffer, connection: Connection = null) -> void:
+func _init(log_buffer: McpLogBuffer, connection: Connection = null, debugger_plugin: McpDebuggerPlugin = null) -> void:
 	_log_buffer = log_buffer
 	_connection = connection
+	_debugger_plugin = debugger_plugin
 
 
 func get_editor_state(_params: Dictionary) -> Dictionary:
@@ -128,11 +130,19 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 		"game":
 			if not EditorInterface.is_playing_scene():
 				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Game is not running — use source='viewport' or start the project first")
-			# The game viewport is the editor window's root viewport, not a SubViewport.
-			# Using the main screen's viewport captures the game view area.
-			viewport = EditorInterface.get_editor_main_screen().get_viewport()
-			if viewport == null:
-				return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "Could not access game viewport")
+			## The game is always a separate OS process (embedded mode just
+			## reparents its window into the editor). Reach the framebuffer
+			## via the debugger channel: the `_mcp_game_helper` autoload
+			## inside the game process replies with a PNG, and
+			## McpDebuggerPlugin pushes the response back through our
+			## WebSocket with the same request_id via Connection.send_deferred_response.
+			if _debugger_plugin == null or _connection == null:
+				return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable — plugin may not be fully initialised")
+			var request_id: String = params.get("_request_id", "")
+			if request_id.is_empty():
+				return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Missing request_id — cannot correlate deferred response")
+			_debugger_plugin.request_game_screenshot(request_id, max_resolution, _connection)
+			return McpDispatcher.DEFERRED_RESPONSE
 		_:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid source '%s' — use 'viewport' or 'game'" % source)
 

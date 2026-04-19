@@ -58,6 +58,14 @@ func enqueue(cmd: Dictionary) -> void:
 	_command_queue.append(cmd)
 
 
+## Handlers whose response flows out-of-band (e.g. debugger-channel capture)
+## return this marker so tick() skips auto-sending a response. The handler is
+## responsible for pushing the final response via Connection._send_json when
+## the async operation completes. The request_id is threaded through params
+## under the "_request_id" key so the handler can correlate the response.
+const DEFERRED_RESPONSE := {"_deferred": true}
+
+
 ## Process queued commands within a frame budget (milliseconds).
 ## Returns an array of response dictionaries to send back.
 func tick(budget_ms: float = 4.0) -> Array[Dictionary]:
@@ -68,7 +76,8 @@ func tick(budget_ms: float = 4.0) -> Array[Dictionary]:
 	while idx < _command_queue.size() and (Time.get_ticks_msec() - start) < budget_ms:
 		var cmd: Dictionary = _command_queue[idx]
 		var response := _dispatch(cmd)
-		responses.append(response)
+		if not response.get("_deferred", false):
+			responses.append(response)
 		idx += 1
 
 	if idx > 0:
@@ -81,9 +90,12 @@ func _dispatch(cmd: Dictionary) -> Dictionary:
 	var request_id: String = cmd.get("request_id", "")
 	var command: String = cmd.get("command", "")
 	var params: Dictionary = cmd.get("params", {})
+	## Thread the request_id through for handlers that produce deferred
+	## responses. Handlers not using this field simply ignore it.
+	params["_request_id"] = request_id
 
 	if mcp_logging:
-		_log_buffer.log("[recv] %s(%s)" % [command, JSON.stringify(params)])
+		_log_buffer.log("[recv] %s(%s)" % [command, JSON.stringify(cmd.get("params", {}))])
 
 	var result: Dictionary
 
@@ -91,6 +103,11 @@ func _dispatch(cmd: Dictionary) -> Dictionary:
 		result = _call_handler(command, params)
 	else:
 		result = McpErrorCodes.make(McpErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
+
+	if result.get("_deferred", false):
+		if mcp_logging:
+			_log_buffer.log("[defer] %s (request %s)" % [command, request_id])
+		return result
 
 	result["request_id"] = request_id
 	if not result.has("status"):
@@ -112,7 +129,7 @@ func _call_handler(command: String, params: Dictionary) -> Dictionary:
 	## Handlers must return {"data": ...} on success or {"error": ...} on failure.
 	## Anything else (null, empty, missing keys) means the handler crashed
 	## mid-call — GDScript swallows the error and returns an empty dict.
-	if result == null or not (result.has("data") or result.has("error")):
+	if result == null or not (result.has("data") or result.has("error") or result.has("_deferred")):
 		return McpErrorCodes.make(
 			McpErrorCodes.INTERNAL_ERROR,
 			"Handler '%s' returned malformed result (likely crashed — check Godot console)" % command,

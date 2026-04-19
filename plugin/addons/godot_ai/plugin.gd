@@ -1,12 +1,16 @@
 @tool
 extends EditorPlugin
 
+const GAME_HELPER_AUTOLOAD_NAME := "_mcp_game_helper"
+const GAME_HELPER_AUTOLOAD_PATH := "res://addons/godot_ai/runtime/game_helper.gd"
+
 var _connection: Connection
 var _dispatcher: McpDispatcher
 var _log_buffer: McpLogBuffer
 var _dock: McpDock
 var _server_pid := -1
 var _handlers: Array = []  # prevent GC of RefCounted handlers
+var _debugger_plugin: McpDebuggerPlugin
 static var _server_started_this_session := false  # guard against re-entrant spawns
 
 
@@ -19,7 +23,11 @@ func _enter_tree() -> void:
 	_connection = Connection.new()
 	_connection.log_buffer = _log_buffer
 
-	var editor_handler := EditorHandler.new(_log_buffer, _connection)
+	_debugger_plugin = McpDebuggerPlugin.new(_log_buffer)
+	add_debugger_plugin(_debugger_plugin)
+	_ensure_game_helper_autoload()
+
+	var editor_handler := EditorHandler.new(_log_buffer, _connection, _debugger_plugin)
 	var scene_handler := SceneHandler.new(_connection)
 	var node_handler := NodeHandler.new(get_undo_redo())
 	var project_handler := ProjectHandler.new(_connection)
@@ -193,8 +201,33 @@ func _exit_tree() -> void:
 		_connection.disconnect_from_server()
 		_connection.queue_free()
 		_connection = null
+	if _debugger_plugin:
+		remove_debugger_plugin(_debugger_plugin)
+		_debugger_plugin = null
 	_stop_server()
 	print("MCP | plugin unloaded")
+
+
+## Register the game-side autoload on plugin enable. Runs the helper inside
+## the game process so the editor-side debugger plugin can request
+## framebuffer captures over EngineDebugger messages. Removed on
+## _disable_plugin so disabling the plugin leaves project.godot clean.
+func _enable_plugin() -> void:
+	_ensure_game_helper_autoload()
+
+
+func _disable_plugin() -> void:
+	if ProjectSettings.has_setting("autoload/" + GAME_HELPER_AUTOLOAD_NAME):
+		remove_autoload_singleton(GAME_HELPER_AUTOLOAD_NAME)
+
+
+func _ensure_game_helper_autoload() -> void:
+	## Idempotent: only add if absent. Godot errors if you add an existing
+	## autoload name, and we call this from both _enter_tree (for already-
+	## enabled plugins) and _enable_plugin (for first-time enable).
+	if ProjectSettings.has_setting("autoload/" + GAME_HELPER_AUTOLOAD_NAME):
+		return
+	add_autoload_singleton(GAME_HELPER_AUTOLOAD_NAME, GAME_HELPER_AUTOLOAD_PATH)
 
 
 func _start_server() -> void:

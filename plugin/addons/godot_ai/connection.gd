@@ -126,6 +126,17 @@ func send_event(event_name: String, data: Dictionary = {}) -> void:
 	_send_json({"type": "event", "event": event_name, "data": data})
 
 
+## Push a command response for a request_id whose handler deferred its reply
+## (see McpDispatcher.DEFERRED_RESPONSE). `payload` must carry either a `data`
+## or `error` field in the same shape handlers normally return.
+func send_deferred_response(request_id: String, payload: Dictionary) -> void:
+	var response := payload.duplicate()
+	response["request_id"] = request_id
+	if not response.has("status"):
+		response["status"] = "ok" if payload.has("data") else "error"
+	_send_json(response)
+
+
 func _hook_editor_signals() -> void:
 	# Scene change: poll in _process since there's no direct signal for scene switch
 	# Play state: EditorInterface signals
