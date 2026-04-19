@@ -147,6 +147,31 @@ func test_create_node_non_node_type() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
+func test_create_node_accepts_root_alias_for_parent_path() -> void:
+	## Agents reach for /root/Main right after scene creation. Resolve it as
+	## an alias for the edited scene root rather than failing.
+	var result := _handler.create_node({
+		"type": "Node3D",
+		"name": "_McpTestRootAlias",
+		"parent_path": "/root/Main",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.parent_path, "/Main", "should resolve to scene root")
+	_undo_redo.undo()
+
+
+func test_create_node_parent_not_found_error_names_convention() -> void:
+	## The plain "Parent not found: X" error doesn't tell the agent that
+	## paths are scene-relative. The upgraded message must spell that out.
+	var result := _handler.create_node({
+		"type": "Node3D",
+		"parent_path": "/SomeBogusPath",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "relative to the edited scene root")
+	assert_contains(result.error.message, "Scene root is")
+
+
 # ----- delete_node -----
 
 func test_delete_node_basic() -> void:

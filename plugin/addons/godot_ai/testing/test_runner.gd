@@ -74,8 +74,31 @@ func run_suites(suites: Array, suite_filter: String = "", test_filter: String = 
 		if scene_root != null:
 			before_children = _get_children_snapshot(scene_root)
 
+		suite._reset_suite_state()
 		suite.suite_setup(ctx.duplicate(true))
-		run_suite(suite, test_filter)
+
+		## fail_setup() / skip_suite() gives suites a clean way to bail out of
+		## suite_setup without leaving N tests to fail with "0 assertions". We
+		## emit ONE suite-level result and skip individual tests entirely.
+		if suite._suite_failed:
+			_results.append({
+				"suite": suite.suite_name(),
+				"test": "<suite_setup>",
+				"passed": false,
+				"message": "suite_setup() failed: %s (subsequent tests not run)" % suite._suite_failed_message,
+				"assertion_count": 0,
+			})
+		elif suite._suite_skipped:
+			_results.append({
+				"suite": suite.suite_name(),
+				"test": "<suite_setup>",
+				"passed": true,
+				"skipped": true,
+				"message": "suite_setup() skipped: %s" % suite._suite_skipped_reason,
+				"assertion_count": 0,
+			})
+		else:
+			run_suite(suite, test_filter)
 		suite.suite_teardown()
 
 		## Remove any nodes the suite left behind (failed undo, missing cleanup).

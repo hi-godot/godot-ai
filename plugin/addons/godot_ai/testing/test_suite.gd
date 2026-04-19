@@ -39,6 +39,13 @@ var _assertion_count: int = 0
 var _skipped: bool = false
 var _skip_reason: String = ""
 
+# ----- suite-level state (managed by McpTestRunner) -----
+
+var _suite_failed: bool = false
+var _suite_failed_message: String = ""
+var _suite_skipped: bool = false
+var _suite_skipped_reason: String = ""
+
 
 func _reset() -> void:
 	_failed = false
@@ -48,12 +55,42 @@ func _reset() -> void:
 	_skip_reason = ""
 
 
+func _reset_suite_state() -> void:
+	_suite_failed = false
+	_suite_failed_message = ""
+	_suite_skipped = false
+	_suite_skipped_reason = ""
+
+
 ## Mark the current test as skipped. Use when a precondition isn't met
 ## (e.g. no scene open, no Node3D in scene) and the test can't run.
 ## Skipped tests count separately from passed/failed.
 func skip(reason: String = "") -> void:
 	_skipped = true
 	_skip_reason = reason
+
+
+## Bail out of suite_setup() with a failure. Subsequent tests in this suite
+## are not run; the runner reports a single suite-level failure with the
+## given reason instead of N zero-assertion noise lines per test.
+##
+## Example:
+##     func suite_setup(ctx):
+##         var arena = preload("res://game/arena.gd").new()
+##         if arena == null:
+##             fail_setup("arena.gd failed to instantiate in @tool scope")
+##             return
+func fail_setup(reason: String) -> void:
+	_suite_failed = true
+	_suite_failed_message = reason
+
+
+## Bail out of suite_setup() because a precondition isn't met (no scene open,
+## no game running, etc.). Subsequent tests are not run and the runner emits
+## a single suite-level skip rather than per-test skip noise.
+func skip_suite(reason: String) -> void:
+	_suite_skipped = true
+	_suite_skipped_reason = reason
 
 
 ## Trigger an undo against whichever history (scene or global) holds the most

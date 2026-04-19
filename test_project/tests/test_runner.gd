@@ -56,6 +56,26 @@ class _LeakingSuite extends McpTestSuite:
 		assert_true(true)
 
 
+class _FailedSetupSuite extends McpTestSuite:
+	func suite_name() -> String: return "inner_failed_setup"
+	func suite_setup(_ctx: Dictionary) -> void:
+		fail_setup("arena.gd cannot instantiate in @tool scope")
+	func test_a() -> void:
+		assert_true(true)  # never runs
+	func test_b() -> void:
+		assert_true(true)  # never runs
+
+
+class _SkippedSetupSuite extends McpTestSuite:
+	func suite_name() -> String: return "inner_skipped_setup"
+	func suite_setup(_ctx: Dictionary) -> void:
+		skip_suite("no scene open")
+	func test_a() -> void:
+		assert_true(true)  # never runs
+	func test_b() -> void:
+		assert_true(true)  # never runs
+
+
 # ----- skip() semantics -----
 
 func test_skip_records_separately_from_pass_fail() -> void:
@@ -100,6 +120,43 @@ func test_suite_setup_receives_deep_copy_of_ctx() -> void:
 	assert_false(ctx.has("new_top"), "new top-level key should not leak back")
 	assert_false(nested.has("injected"), "nested dict should be deep-copied")
 	assert_eq(nested.value, 1, "nested value should be unchanged")
+
+
+# ----- suite-level failure (issue #75) -----
+
+func test_fail_setup_emits_one_suite_level_failure() -> void:
+	## A suite that calls fail_setup() in suite_setup should emit ONE result
+	## (not N per-test "0 assertions" results) and skip individual tests.
+	var runner := McpTestRunner.new()
+	var result := runner.run_suites([_FailedSetupSuite.new()])
+	assert_eq(result.failed, 1, "exactly one suite-level failure")
+	assert_eq(result.passed, 0, "individual tests must not run")
+	assert_eq(result.total, 1, "one result, not per-test results")
+	assert_has_key(result, "failures")
+	var failure: Dictionary = result.failures[0]
+	assert_eq(failure.test, "<suite_setup>")
+	assert_contains(failure.message, "arena.gd cannot instantiate")
+	assert_contains(failure.message, "subsequent tests not run")
+
+
+func test_skip_suite_emits_one_suite_level_skip() -> void:
+	## skip_suite() is the no-precondition counterpart to fail_setup().
+	var runner := McpTestRunner.new()
+	var result := runner.run_suites([_SkippedSetupSuite.new()])
+	assert_eq(result.skipped, 1, "exactly one suite-level skip")
+	assert_eq(result.failed, 0)
+	assert_eq(result.passed, 0)
+	assert_eq(result.total, 1)
+
+
+func test_failed_setup_does_not_run_other_suites_tests() -> void:
+	## Mixed: a failing suite should not poison the runner — subsequent
+	## suites must still execute normally.
+	var runner := McpTestRunner.new()
+	var result := runner.run_suites([_FailedSetupSuite.new(), _PassingSuite.new()])
+	assert_eq(result.failed, 1, "failing suite's suite-level failure")
+	assert_eq(result.passed, 1, "passing suite still ran")
+	assert_eq(result.total, 2)
 
 
 # ----- leaked-node cleanup -----

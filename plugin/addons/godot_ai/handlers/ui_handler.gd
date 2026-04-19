@@ -233,7 +233,7 @@ func build_layout(params: Dictionary) -> Dictionary:
 	if not parent_path.is_empty() and parent_path != "/":
 		parent = ScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Parent not found: %s" % parent_path)
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_parent_error(parent_path, scene_root))
 
 	# Validate + build in memory first; if anything fails, free and bail.
 	var built := _build_subtree(tree)
