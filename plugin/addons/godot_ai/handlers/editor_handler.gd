@@ -43,9 +43,12 @@ const VALID_LOG_SOURCES := ["plugin", "game", "all"]
 
 
 func get_logs(params: Dictionary) -> Dictionary:
-	var count: int = params.get("count", 50)
+	## Coerce defensively — MCP clients can send JSON numbers as floats or
+	## stray `null` values that would otherwise fail the typed locals
+	## before we ever reach the INVALID_PARAMS return below.
+	var count: int = maxi(0, int(params.get("count", 50)))
 	var offset: int = maxi(0, int(params.get("offset", 0)))
-	var source: String = params.get("source", "plugin")
+	var source: String = str(params.get("source", "plugin"))
 	if not source in VALID_LOG_SOURCES:
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,

@@ -18,6 +18,10 @@ config/name="MCP Test Project"
 run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.6")
 
+[autoload]
+
+_mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
+
 [display]
 
 window/size/viewport_width=1920

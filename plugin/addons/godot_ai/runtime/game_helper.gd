@@ -31,6 +31,11 @@ var _registered := false
 ## extends Logger, which only exists in Godot 4.5+).
 var _logger
 var _logger_attached := false
+## Entries drained from the logger but not yet sent over the debugger
+## channel. Holds the tail of one drain() so we can bleed it out across
+## frames at FLUSH_BATCH_LIMIT per frame rather than blasting the whole
+## queue in a single _process tick.
+var _pending_outbound: Array = []
 
 
 func _ready() -> void:
@@ -72,17 +77,21 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	## Drain the logger queue on the main thread (Logger virtuals can fire
 	## from any thread; EngineDebugger.send_message is only safe from main).
+	## Send at most one FLUSH_BATCH_LIMIT-sized batch per frame so a runaway
+	## print loop can't stall the game by shoving thousands of entries
+	## through the debugger packet path in a single tick. Surplus stays in
+	## `_pending_outbound` and bleeds out across subsequent frames.
 	if not _logger_attached or _logger == null:
 		return
 	if not EngineDebugger.is_active():
 		return
-	if not _logger.has_pending():
-		return
-	var pending: Array = _logger.drain()
-	while not pending.is_empty():
-		var batch := pending.slice(0, FLUSH_BATCH_LIMIT)
-		pending = pending.slice(FLUSH_BATCH_LIMIT)
-		EngineDebugger.send_message("mcp:log_batch", [batch])
+	if _pending_outbound.is_empty():
+		if not _logger.has_pending():
+			return
+		_pending_outbound = _logger.drain()
+	var batch := _pending_outbound.slice(0, FLUSH_BATCH_LIMIT)
+	_pending_outbound = _pending_outbound.slice(FLUSH_BATCH_LIMIT)
+	EngineDebugger.send_message("mcp:log_batch", [batch])
 
 
 func _exit_tree() -> void:
