@@ -78,15 +78,28 @@ static func _is_current(cam: Node) -> bool:
 # Register a current=true switch on `node` in the open undo action,
 # unmarking previously-current siblings of the same class so a single
 # Ctrl-Z reverts the whole switch.
+#
+# Undo uses a single make_current() on the previously-current camera rather
+# than a separate clear_current() + make_current() pair. make_current() takes
+# over the viewport slot atomically, so the old camera naturally returns
+# is_current() == false without needing an explicit clear. The two-step
+# approach leaves the viewport temporarily with no current camera between
+# the clear and the make, which can cause unexpected state changes in the
+# editor before the second undo method fires.
 func _add_make_current_to_action(node: Node, type_str: String, scene_root: Node) -> void:
+	var prev_current: Node = null
 	for cam in _list_cameras_in_scene(scene_root, type_str):
 		if cam == node:
 			continue
 		if _is_current(cam):
+			prev_current = cam
 			_undo_redo.add_do_method(cam, "clear_current")
-			_undo_redo.add_undo_method(cam, "make_current")
+			break
 	_undo_redo.add_do_method(node, "make_current")
-	_undo_redo.add_undo_method(node, "clear_current")
+	if prev_current != null:
+		_undo_redo.add_undo_method(prev_current, "make_current")
+	else:
+		_undo_redo.add_undo_method(node, "clear_current")
 
 
 # ============================================================================
