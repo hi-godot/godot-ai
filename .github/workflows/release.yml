@@ -4,10 +4,8 @@ on:
   push:
     tags:
       - "v*"
-  # Also dispatchable so bump-and-release.yml can invoke this workflow after
-  # tagging. A tag push authenticated by GITHUB_TOKEN does NOT trigger other
-  # workflows (GitHub anti-loop safeguard), but workflow_dispatch is the
-  # documented exception — it fires regardless of the source token.
+  # Dispatched explicitly by bump-and-release.yml — see that workflow's
+  # "Trigger release workflow" step for why the tag push alone isn't enough.
   workflow_dispatch:
 
 permissions:
