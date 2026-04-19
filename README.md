@@ -21,6 +21,13 @@
 
 ---
 
+<p align="center">
+  <img src="docs/images/huddemo.gif" alt="Cyberpunk HUD demo" width="800"><br>
+  <em>This UI was created with Claude + Godot AI in 2 hours, zero coding, zero art generation, all programmatically drawn by Godot AI</em>
+</p>
+
+---
+
 ## Quick Start
 
 ### Prerequisites
