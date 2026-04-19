@@ -420,7 +420,13 @@ def register_animation_tools(mcp: FastMCP) -> None:
                      "duration": 0.4, "transition": "ease_in_out"}]
 
         Args:
-            player_path: Scene path to the AnimationPlayer.
+            player_path: Scene path to the AnimationPlayer. If no node exists
+                at that path, an AnimationPlayer is auto-created there (the
+                parent must exist, same rule as node_create). The creation is
+                bundled into the same undo action as the animation, so a
+                single Ctrl-Z rolls back player + library + animation.
+                The response includes ``animation_player_created: true`` when
+                this happens.
             name: Name for the new animation clip.
             tweens: List of tween spec dicts (see above).
             length: Total duration in seconds. Auto-computed if omitted.

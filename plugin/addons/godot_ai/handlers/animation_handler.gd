@@ -672,7 +672,7 @@ func create_simple(params: Dictionary) -> Dictionary:
 				"via animation_add_property_track instead of two separate tweens.")
 		seen_paths[dup_key] = true
 
-	var resolved := _resolve_player(player_path)
+	var resolved := _resolve_or_create_player(player_path)
 	if resolved.has("error"):
 		return resolved
 	var player: AnimationPlayer = resolved.player
@@ -681,6 +681,8 @@ func create_simple(params: Dictionary) -> Dictionary:
 	if library == null:
 		library = AnimationLibrary.new()
 		created_library = true
+	var created_player: bool = resolved.get("player_created", false)
+	var player_parent: Node = resolved.get("player_parent", null)
 
 	var overwrite: bool = params.get("overwrite", false)
 	var old_anim: Animation = null
@@ -739,9 +741,11 @@ func create_simple(params: Dictionary) -> Dictionary:
 	for entry in per_track_keyframes:
 		_do_add_property_track(anim, entry.track_path, "linear", entry.keyframes)
 
-	# One atomic undo action.
+	# One atomic undo action — bundles player creation (if any), library
+	# creation (if any), and the animation add. A single Ctrl-Z rolls back all.
 	_commit_animation_add("MCP: Create animation %s (%d tracks)" % [anim_name, anim.get_track_count()],
-		player, library, created_library, anim_name, anim, old_anim)
+		player, library, created_library, anim_name, anim, old_anim,
+		player_parent, created_player)
 
 	return {
 		"data": {
@@ -751,6 +755,7 @@ func create_simple(params: Dictionary) -> Dictionary:
 			"loop_mode": loop_mode_str,
 			"track_count": anim.get_track_count(),
 			"library_created": created_library,
+			"animation_player_created": created_player,
 			"overwritten": old_anim != null,
 			"undoable": true,
 		}
@@ -1206,7 +1211,9 @@ static func _direction_offset(kind: String, direction: String, distance: float) 
 # ============================================================================
 
 ## Shared undo setup for create_animation and create_simple. Handles both
-## fresh-create and overwrite cases in a single atomic action.
+## fresh-create and overwrite cases in a single atomic action. When
+## `created_player` is true, also bundles the AnimationPlayer add_child into
+## the same action so a single Ctrl-Z rolls back player + library + anim.
 func _commit_animation_add(
 	action_label: String,
 	player: AnimationPlayer,
@@ -1215,8 +1222,16 @@ func _commit_animation_add(
 	anim_name: String,
 	anim: Animation,
 	old_anim: Animation,  ## null when not overwriting
+	player_parent: Node = null,  ## non-null only when created_player is true
+	created_player: bool = false,
 ) -> void:
 	_undo_redo.create_action(action_label)
+	if created_player and player_parent != null:
+		var scene_root := EditorInterface.get_edited_scene_root()
+		_undo_redo.add_do_method(player_parent, "add_child", player, true)
+		_undo_redo.add_do_method(player, "set_owner", scene_root)
+		_undo_redo.add_undo_method(player_parent, "remove_child", player)
+		_undo_redo.add_do_reference(player)
 	if created_library:
 		_undo_redo.add_do_method(player, "add_animation_library", "", library)
 		_undo_redo.add_undo_method(player, "remove_animation_library", "")
@@ -1257,6 +1272,52 @@ func _resolve_player(player_path: String) -> Dictionary:
 	if player.has_animation_library(""):
 		lib = player.get_animation_library("")
 	return {"player": player, "library": lib}
+
+
+## Like `_resolve_player`, but when the node at `player_path` doesn't exist,
+## prepare a fresh AnimationPlayer to be added at that path instead of
+## erroring. Parallels the existing library auto-create affordance — callers
+## bundle the `add_child` step into the same undo action so player + library
+## + animation roll back together. Returns the same shape as `_resolve_player`
+## plus `{player_created: bool, player_parent: Node}` when a new player is
+## staged. If the node exists but isn't an AnimationPlayer, errors exactly
+## like `_resolve_player` — that's a genuine type mismatch, not a missing node.
+func _resolve_or_create_player(player_path: String) -> Dictionary:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	if ScenePath.resolve(player_path, scene_root) != null:
+		# Node exists — delegate so the type-mismatch error stays identical
+		# to _resolve_player's.
+		var existing := _resolve_player(player_path)
+		if not existing.has("error"):
+			existing["player_created"] = false
+		return existing
+
+	# Stage a fresh AnimationPlayer at player_path. Parent must exist (same
+	# rule as node_create) — otherwise the caller's path is ambiguous.
+	var parent_path := player_path.get_base_dir()
+	var new_name := player_path.get_file()
+	if new_name.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			"Invalid player_path (no node name): %s" % player_path)
+	var parent: Node
+	if parent_path.is_empty() or parent_path == "/":
+		parent = scene_root
+	else:
+		parent = ScenePath.resolve(parent_path, scene_root)
+		if parent == null:
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+				"Node not found: %s (and its parent %s also does not exist — create the parent first)" %
+				[player_path, parent_path])
+	var new_player := AnimationPlayer.new()
+	new_player.name = new_name
+	return {
+		"player": new_player,
+		"library": null,
+		"player_created": true,
+		"player_parent": parent,
+	}
 
 
 ## Resolve for read operations (no library requirement).

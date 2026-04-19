@@ -501,11 +501,26 @@ func clear_logs(_params: Dictionary) -> Dictionary:
 
 func reload_plugin(_params: Dictionary) -> Dictionary:
 	_log_buffer.log("reload_plugin requested, reloading next frame")
-	(func():
-		EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", false)
-		EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", true)
-	).call_deferred()
+	_do_reload_plugin.call_deferred()
 	return {"data": {"status": "reloading", "message": "Plugin reload initiated"}}
+
+
+## Force a filesystem rescan before toggling the plugin, so Godot's
+## class-name registry picks up any .gd files added since the last scan
+## (e.g. via git pull or an agent-driven sync). Without this, re-enable can
+## fail with "Could not find type X" when new class_name scripts are on disk
+## but not yet registered, leaving the plugin disabled with no recovery path
+## short of killing the editor. See issue #83.
+func _do_reload_plugin() -> void:
+	var fs := EditorInterface.get_resource_filesystem()
+	fs.scan()
+	var tree := Engine.get_main_loop() as SceneTree
+	# Cap the wait so a long scan (huge project) doesn't hang reload.
+	var deadline_ms := Time.get_ticks_msec() + 5000
+	while fs.is_scanning() and Time.get_ticks_msec() < deadline_ms:
+		await tree.process_frame
+	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", false)
+	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", true)
 
 
 func quit_editor(_params: Dictionary) -> Dictionary:
