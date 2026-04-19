@@ -78,8 +78,14 @@ def register_animation_tools(mcp: FastMCP) -> None:
         animation_add_method_track (for calling methods / emitting signals at
         specific times). Or use animation_create_simple for a one-call approach.
 
+        If `player_path` doesn't resolve to a node, an AnimationPlayer is
+        auto-created at that path (its parent must exist) and
+        `animation_player_created: true` is returned. Resolving to a node of a
+        different type still errors.
+
         Args:
-            player_path: Scene path to the AnimationPlayer node.
+            player_path: Scene path to the AnimationPlayer node. Auto-created
+                if the path doesn't resolve (parent must exist).
             name: Name for the new animation clip (e.g. "idle", "pulse", "fade_in").
             length: Duration in seconds.
             loop_mode: Playback loop behaviour:
@@ -419,8 +425,15 @@ def register_animation_tools(mcp: FastMCP) -> None:
                      "from": {"x": 1, "y": 1}, "to": {"x": 1.1, "y": 1.1},
                      "duration": 0.4, "transition": "ease_in_out"}]
 
+        If `player_path` doesn't resolve to a node, an AnimationPlayer is
+        auto-created at that path (its parent must exist) and
+        `animation_player_created: true` is returned — skipping the separate
+        animation_player_create step. Resolving to a node of a different type
+        still errors.
+
         Args:
-            player_path: Scene path to the AnimationPlayer.
+            player_path: Scene path to the AnimationPlayer. Auto-created if the
+                path doesn't resolve (parent must exist).
             name: Name for the new animation clip.
             tweens: List of tween spec dicts (see above).
             length: Total duration in seconds. Auto-computed if omitted.

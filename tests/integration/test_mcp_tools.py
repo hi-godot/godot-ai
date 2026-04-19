@@ -3771,6 +3771,36 @@ class TestAnimationCreateTool:
         )
         await task
 
+    async def test_create_animation_player_created_flag_passes_through(self, mcp_stack):
+        # The plugin signals auto-creation via animation_player_created=true;
+        # the tool layer should pass that straight through so callers see it.
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "player_path": "/Main/NewAP",
+                    "name": "idle",
+                    "length": 1.0,
+                    "loop_mode": "none",
+                    "library_created": True,
+                    "animation_player_created": True,
+                    "overwritten": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_create",
+            {"player_path": "/Main/NewAP", "name": "idle", "length": 1.0},
+        )
+        await task
+        assert result.data["animation_player_created"] is True
+        assert result.data["library_created"] is True
+
 
 class TestAnimationAddPropertyTrackTool:
     async def test_add_property_track(self, mcp_stack):
