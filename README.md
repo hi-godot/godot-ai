@@ -92,7 +92,7 @@ snippet.
 - *"Build a voxel block-world game with a player, blocks to place and destroy, and save slots."*
 
 <p align="center">
-  <a href="docs/images/blockgame.png"><img src="docs/images/blockgame.png" alt="Block-world game scene built from MCP tool calls — voxel terrain, player, and UI" width="640"></a>
+  <img src="docs/images/blockarena.gif" alt="Block-world game scene built from MCP tool calls — voxel terrain, player, and UI" width="640">
 </p>
 <p align="center"><em>An AI-authored scene built from a handful of prompts — terrain, player, blocks, and UI, all placed by MCP tool calls. The full game and modular save system built by Godot AI are <a href="https://github.com/dsarno/save-system-godot-claude">available free here</a>.</em></p>
 
