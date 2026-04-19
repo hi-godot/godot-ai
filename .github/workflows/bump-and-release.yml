@@ -1,9 +1,8 @@
 name: Bump and Release
 
-# Manually bumps plugin.cfg + pyproject.toml, commits, tags, and pushes.
-# The tag push then fires release.yml, which publishes to PyPI and creates
-# the GitHub release with the plugin ZIP. This workflow's job is purely the
-# version bump + tag.
+# Manually bumps plugin.cfg + pyproject.toml, commits, tags, pushes, and
+# then dispatches release.yml against the new tag — release.yml publishes
+# to PyPI and creates the GitHub Release with the plugin ZIP.
 
 on:
   workflow_dispatch:
@@ -59,5 +58,15 @@ jobs:
           git commit -m "Bump version to ${NEW}"
           git tag "v${NEW}"
           git push origin main --tags
-          # Tag push triggers .github/workflows/release.yml which publishes
-          # to PyPI and creates the GitHub Release with the plugin ZIP.
+
+      - name: Trigger release workflow
+        # The tag push above does NOT fire release.yml on its own — pushes
+        # authenticated by GITHUB_TOKEN are blocked from triggering other
+        # workflows (GitHub anti-loop safeguard). workflow_dispatch is the
+        # documented exception, so dispatch release.yml explicitly against
+        # the new tag ref.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NEW="${{ steps.next.outputs.version }}"
+          gh workflow run release.yml --ref "v${NEW}"

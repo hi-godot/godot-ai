@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "v*"
+  # Also dispatchable so bump-and-release.yml can invoke this workflow after
+  # tagging. A tag push authenticated by GITHUB_TOKEN does NOT trigger other
+  # workflows (GitHub anti-loop safeguard), but workflow_dispatch is the
+  # documented exception — it fires regardless of the source token.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -48,6 +53,12 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Idempotent re-runs: if this version is already on PyPI (e.g. a
+          # previous run published but a downstream job failed), skip the
+          # upload instead of erroring with "File already exists" — which
+          # would block the build-plugin-zip job that depends on this one.
+          skip-existing: true
 
   # Build the Godot plugin ZIP and attach it to the GitHub Release.
   # Runs after publish-pypi so the Python package is live on PyPI before the
