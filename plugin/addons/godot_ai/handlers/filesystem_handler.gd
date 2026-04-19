@@ -51,6 +51,8 @@ func write_file(params: Dictionary) -> Dictionary:
 		if err != OK:
 			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
 
+	var existed_before := FileAccess.file_exists(path)
+
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	if file == null:
 		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to open file for writing: %s" % path)
@@ -61,14 +63,14 @@ func write_file(params: Dictionary) -> Dictionary:
 	# Trigger reimport so the editor recognises the new/changed file
 	EditorInterface.get_resource_filesystem().scan()
 
-	return {
-		"data": {
-			"path": path,
-			"size": content.length(),
-			"undoable": false,
-			"reason": "File system operations cannot be undone via editor undo",
-		}
+	var data := {
+		"path": path,
+		"size": content.length(),
+		"undoable": false,
+		"reason": "File system operations cannot be undone via editor undo",
 	}
+	ResourceIO.attach_cleanup_hint(data, existed_before, [path])
+	return {"data": data}
 
 
 func reimport(params: Dictionary) -> Dictionary:

@@ -23,6 +23,12 @@ def register_script_tools(mcp: FastMCP) -> None:
         If the file already exists it will be overwritten. Triggers a
         filesystem scan so the editor picks up the new file.
 
+        When this call creates a new file (the path did not exist before),
+        the response includes `data.cleanup.rm` listing the `.gd` plus the
+        `.gd.uid` sidecar Godot generates — callers running transient smoke
+        tests can feed that list into a final cleanup step. On overwrite the
+        field is omitted so the caller doesn't rm files they already had.
+
         Args:
             path: File path starting with res:// (e.g. "res://scripts/player.gd").
             content: GDScript source code to write. Empty creates a blank file.

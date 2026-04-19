@@ -397,6 +397,9 @@ func test_create_resource_saves_to_disk() -> void:
 	assert_eq(result.data.resource_class, "BoxShape3D")
 	assert_false(result.data.undoable)
 	assert_true(FileAccess.file_exists(out_path), "File should exist at %s" % out_path)
+	# Cleanup hint lists the freshly-written .tres (issue #82).
+	assert_has_key(result.data, "cleanup")
+	assert_eq(result.data.cleanup.rm, [out_path])
 	# Round-trip through ResourceLoader to verify the saved .tres is valid.
 	var loaded := ResourceLoader.load(out_path)
 	assert_true(loaded is BoxShape3D)
@@ -428,6 +431,8 @@ func test_create_resource_save_refuses_overwrite_without_flag() -> void:
 	})
 	assert_has_key(third, "data")
 	assert_true(third.data.overwritten)
+	# Overwrite must not emit a cleanup hint — the caller already had the file.
+	assert_false(third.data.has("cleanup"), "Overwrite must not emit a cleanup hint")
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(out_path))
 
 

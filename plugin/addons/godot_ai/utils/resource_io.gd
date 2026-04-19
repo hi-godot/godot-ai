@@ -86,7 +86,21 @@ static func save_to_disk(res: Resource, resource_path: String, overwrite: bool, 
 		"undoable": false,
 		"reason": "File creation is persistent; delete the file manually to revert",
 	}
+	attach_cleanup_hint(data, existed_before, [resource_path])
 	# merge with overwrite=true so callers (e.g. curve_set_points editing an
 	# existing .tres) can supply a domain-specific `reason`.
 	data.merge(extra_fields, true)
 	return {"data": data}
+
+
+## Attach a `cleanup.rm` hint listing `paths` to `data` — only when the call
+## just created a new file (`existed_before == false`). On overwrite the field
+## is omitted because the caller already had the file on disk, and handing
+## them a cleanup list would invite dropping user content instead of just
+## scratch artifacts. Used by write-and-return handlers (create_script,
+## filesystem_write_text, resource_create/save_to_disk) so callers running
+## transient smoke tests can rm artifacts without tracking paths. See #82.
+static func attach_cleanup_hint(data: Dictionary, existed_before: bool, paths: Array) -> void:
+	if existed_before:
+		return
+	data["cleanup"] = {"rm": paths}

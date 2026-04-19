@@ -141,7 +141,10 @@ def register_resource_tools(mcp: FastMCP) -> None:
         - path+property: instantiate and assign to the node slot in one
           undoable action (undo restores the previous value).
         - resource_path: instantiate and save as a .tres/.res file on disk
-          (not undoable — file creation is persistent).
+          (not undoable — file creation is persistent). When the file did
+          not exist before, the response includes `data.cleanup.rm` listing
+          it so callers running transient smoke tests can feed the list into
+          a final cleanup step; omitted on overwrite.
 
         For compound resources with their own authoring tools, prefer those:
         material_create (Materials), animation_create (Animations),

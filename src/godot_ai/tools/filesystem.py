@@ -39,6 +39,12 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
         a filesystem scan so the editor picks up changes. Parent
         directories are created automatically if needed.
 
+        When this call creates a new file (the path did not exist before),
+        the response includes `data.cleanup.rm` listing the path — callers
+        running transient smoke tests can feed that list into a final cleanup
+        step. On overwrite the field is omitted so the caller doesn't rm a
+        file they already had on disk.
+
         Args:
             path: File path starting with res:// (e.g. "res://data/config.json").
             content: Text content to write. Empty creates a blank file.

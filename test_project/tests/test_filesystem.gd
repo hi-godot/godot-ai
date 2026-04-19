@@ -61,6 +61,9 @@ func test_read_file_not_found() -> void:
 
 func test_write_file_basic() -> void:
 	var path := "res://tests/_mcp_test_written.txt"
+	# Make sure no stale copy is on disk so this call is a fresh create.
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
 	var content := "Written by MCP\nSecond line\n"
 	var result := _handler.write_file({"path": path, "content": content})
 	assert_has_key(result, "data")
@@ -72,6 +75,22 @@ func test_write_file_basic() -> void:
 	var file := FileAccess.open(path, FileAccess.READ)
 	assert_eq(file.get_as_text(), content)
 	file.close()
+	# Cleanup hint lists the freshly-written path (issue #82).
+	assert_has_key(result.data, "cleanup")
+	assert_eq(result.data.cleanup.rm, [path])
+
+
+func test_write_file_overwrite_omits_cleanup_hint() -> void:
+	## Second write to the same path is an overwrite; dropping a cleanup hint
+	## on overwrite would invite callers to rm files they already had.
+	var path := "res://tests/_mcp_test_overwrite.txt"
+	var first := _handler.write_file({"path": path, "content": "v1\n"})
+	assert_has_key(first, "data")
+	assert_has_key(first.data, "cleanup")
+	var second := _handler.write_file({"path": path, "content": "v2\n"})
+	assert_has_key(second, "data")
+	assert_false(second.data.has("cleanup"), "Overwrite must not emit a cleanup hint")
+	DirAccess.remove_absolute(path)
 
 
 func test_write_file_missing_path() -> void:

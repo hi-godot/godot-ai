@@ -61,7 +61,24 @@ func test_create_script_basic() -> void:
 	var file := FileAccess.open(path, FileAccess.READ)
 	assert_eq(file.get_as_text(), content)
 	file.close()
+	# Cleanup hint lists .gd and .gd.uid for freshly-created scripts (issue #82).
+	assert_has_key(result.data, "cleanup")
+	assert_eq(result.data.cleanup.rm, [path, path + ".uid"])
 	# Clean up
+	DirAccess.remove_absolute(path)
+
+
+func test_create_script_overwrite_omits_cleanup_hint() -> void:
+	## On overwrite the caller already had the file on disk; cleanup.rm would
+	## point them at user content, not just scratch — so the field is omitted.
+	var path := "res://tests/_mcp_test_overwrite.gd"
+	var first := FileAccess.open(path, FileAccess.WRITE)
+	assert_true(first != null)
+	first.store_string("extends Node\n")
+	first.close()
+	var result := _handler.create_script({"path": path, "content": "extends Node\n# v2\n"})
+	assert_has_key(result, "data")
+	assert_false(result.data.has("cleanup"), "Overwrite must not emit a cleanup hint")
 	DirAccess.remove_absolute(path)
 
 

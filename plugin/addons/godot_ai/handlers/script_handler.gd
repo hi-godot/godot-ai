@@ -31,6 +31,8 @@ func create_script(params: Dictionary) -> Dictionary:
 		if err != OK:
 			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
 
+	var existed_before := FileAccess.file_exists(path)
+
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	if file == null:
 		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to open file for writing: %s" % path)
@@ -41,14 +43,16 @@ func create_script(params: Dictionary) -> Dictionary:
 	# Trigger reimport so the editor recognises the new file
 	EditorInterface.get_resource_filesystem().scan()
 
-	return {
-		"data": {
-			"path": path,
-			"size": content.length(),
-			"undoable": false,
-			"reason": "File system operations cannot be undone via editor undo",
-		}
+	var data := {
+		"path": path,
+		"size": content.length(),
+		"undoable": false,
+		"reason": "File system operations cannot be undone via editor undo",
 	}
+	# `.gd.uid` is the sidecar Godot generates on scan; list both so the caller
+	# can rm the full set in one go.
+	ResourceIO.attach_cleanup_hint(data, existed_before, [path, path + ".uid"])
+	return {"data": data}
 
 
 func read_script(params: Dictionary) -> Dictionary:
