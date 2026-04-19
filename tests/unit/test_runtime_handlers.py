@@ -860,7 +860,7 @@ class StubClient:
         if command == "material_set_param":
             return {
                 "path": params.get("path", ""),
-                "property": params.get("property", ""),
+                "param": params.get("param", ""),
                 "value": params.get("value"),
                 "previous_value": None,
                 "undoable": True,
@@ -3750,10 +3750,11 @@ async def test_material_set_param_handler():
     result = await material_handlers.material_set_param(
         runtime,
         path="res://materials/red.tres",
-        property="albedo_color",
+        param="albedo_color",
         value="#ff0000",
     )
     assert client.calls[-1]["command"] == "material_set_param"
+    assert client.calls[-1]["params"]["param"] == "albedo_color"
     assert client.calls[-1]["params"]["value"] == "#ff0000"
     assert result["undoable"] is True
 

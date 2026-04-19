@@ -25,13 +25,13 @@ async def material_create(
 async def material_set_param(
     runtime: Runtime,
     path: str,
-    property: str,
+    param: str,
     value: Any,
 ) -> dict:
     require_writable(runtime)
     return await runtime.send_command(
         "material_set_param",
-        {"path": path, "property": property, "value": value},
+        {"path": path, "param": param, "value": value},
     )
 
 

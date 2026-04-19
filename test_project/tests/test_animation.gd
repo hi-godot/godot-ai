@@ -404,6 +404,79 @@ func test_add_property_track_coerces_vector3_dict() -> void:
 	_remove_node(player_path)
 
 
+func test_add_property_track_accepts_vector_subpath() -> void:
+	# Godot-native NodePath subpath form (`position:y`) must resolve to the
+	# `y` float component, not error as "Property 'y' not found".
+	var player_path := _add_player("TestSubpathVec")
+	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
+		return
+	_handler.create_animation({"player_path": player_path, "name": "bob", "length": 1.0})
+	var result := _handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "bob",
+		"track_path": ".:position:y",
+		"keyframes": [
+			{"time": 0.0, "value": 0.0},
+			{"time": 1.0, "value": 2.0},
+		],
+	})
+	assert_has_key(result, "data")
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var anim: Animation = player.get_animation("bob")
+	var k0 = anim.track_get_key_value(0, 0)
+	var k1 = anim.track_get_key_value(0, 1)
+	# Subpath coercion must land scalar floats in the keyframes — never a
+	# Vector3 dict masquerading as a keyframe value.
+	assert_true(k0 is float, "keyframe 0 should be float for position:y subpath")
+	assert_true(k1 is float, "keyframe 1 should be float for position:y subpath")
+	assert_eq(k1, 2.0)
+	_remove_node(player_path)
+
+
+func test_create_simple_accepts_color_subpath() -> void:
+	# Fade-just-the-alpha flow: `modulate:a` subpath targets a Color component,
+	# which must coerce to float so the animation plays an alpha ramp, not a
+	# broken dict-valued track.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var sprite := Sprite2D.new()
+	sprite.name = "SubpathAlphaSprite"
+	scene_root.add_child(sprite)
+	sprite.owner = scene_root
+
+	var player_path := _add_player("TestSubpathAlpha")
+	if player_path.is_empty():
+		sprite.get_parent().remove_child(sprite)
+		sprite.queue_free()
+		skip("Scene not ready — _add_player returned empty path")
+		return
+	var result := _handler.create_simple({
+		"player_path": player_path,
+		"name": "fade",
+		"tweens": [
+			{
+				"target": "SubpathAlphaSprite",
+				"property": "modulate:a",
+				"from": 1.0,
+				"to": 0.0,
+				"duration": 0.5,
+			},
+		],
+	})
+	assert_has_key(result, "data")
+	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var anim: Animation = player.get_animation("fade")
+	var k0 = anim.track_get_key_value(0, 0)
+	var k1 = anim.track_get_key_value(0, 1)
+	assert_true(k0 is float, "from value should coerce to float for modulate:a")
+	assert_true(k1 is float, "to value should coerce to float for modulate:a")
+	assert_eq(k1, 0.0)
+	_remove_node(player_path)
+	sprite.get_parent().remove_child(sprite)
+	sprite.queue_free()
+
+
 func test_create_simple_coerces_vector3() -> void:
 	# Auto-length + coerce path in one test.
 	var player_path := _add_player("TestCoerceSimple")

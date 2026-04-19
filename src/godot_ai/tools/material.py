@@ -83,19 +83,19 @@ def register_material_tools(mcp: FastMCP) -> None:
     async def material_set_param(
         ctx: Context,
         path: str,
-        property: str,
+        param: str,
         value: Any,
         session_id: str = "",
     ) -> dict:
         """Set a built-in property on a material .tres file.
 
         Works for StandardMaterial3D / ORMMaterial3D / CanvasItemMaterial.
-        Property names match the Godot class reference (e.g. "albedo_color",
+        Param names match the Godot class reference (e.g. "albedo_color",
         "metallic", "roughness", "emission_enabled", "emission",
         "emission_energy_multiplier", "normal_enabled", "normal_texture",
         "albedo_texture", "transparency").
 
-        Enum-valued properties accept either an int or a string name:
+        Enum-valued params accept either an int or a string name:
         ``transparency="alpha"`` → ``TRANSPARENCY_ALPHA``;
         ``shading_mode="unshaded"`` → ``SHADING_MODE_UNSHADED``.
 
@@ -103,7 +103,7 @@ def register_material_tools(mcp: FastMCP) -> None:
 
         Args:
             path: res:// path to the material .tres file.
-            property: Property name (e.g. "albedo_color", "metallic",
+            param: Property name (e.g. "albedo_color", "metallic",
                 "emission_enabled", "transparency").
             value: Value to set. Colors accept hex strings, named colors,
                 or {r, g, b, a} dicts. Vectors accept {x, y, z} dicts.
@@ -112,7 +112,7 @@ def register_material_tools(mcp: FastMCP) -> None:
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await material_handlers.material_set_param(
-            runtime, path=path, property=property, value=value
+            runtime, path=path, param=param, value=value
         )
 
     @mcp.tool(meta=DEFER_META)
