@@ -938,6 +938,87 @@ func test_create_simple_auto_attaches_default_library() -> void:
 	_remove_node(path)
 
 
+func test_create_simple_auto_creates_animation_player() -> void:
+	## Issue #86: agents hit "Node at /Root/Pivot is not an AnimationPlayer" or
+	## "Node not found" when the player doesn't exist yet. The tool now creates
+	## one at the given path (parent must exist), bundled into the same undo
+	## action so Ctrl-Z rolls back player + library + animation together.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var player_path := "/" + scene_root.name + "/AutoPlayer86"
+	if ScenePath.resolve(player_path, scene_root) != null:
+		skip("AutoPlayer86 already exists in scene — rerun after cleanup")
+		return
+
+	var result := _handler.create_simple({
+		"player_path": player_path,
+		"name": "bob",
+		"tweens": [
+			{"target": ".", "property": "position",
+			 "from": {"x": 0.0, "y": 0.0, "z": 0.0},
+			 "to": {"x": 0.0, "y": 2.0, "z": 0.0}, "duration": 1.0},
+		],
+	})
+	assert_has_key(result, "data")
+	assert_true(result.data.animation_player_created,
+		"animation_player_created should be true when the player didn't exist")
+	assert_true(result.data.library_created,
+		"library_created should be true — fresh player has no library")
+	var created := ScenePath.resolve(player_path, scene_root)
+	assert_true(created is AnimationPlayer,
+		"AnimationPlayer should exist at %s after create_simple" % player_path)
+	assert_true((created as AnimationPlayer).has_animation("bob"))
+
+	# Single Ctrl-Z rolls back everything.
+	_undo_redo.undo()
+	assert_true(ScenePath.resolve(player_path, scene_root) == null,
+		"undo should remove the auto-created AnimationPlayer from the scene")
+
+
+func test_create_simple_rejects_wrong_type_even_when_auto_create_enabled() -> void:
+	## Existing error when the path points at a non-AnimationPlayer stays —
+	## the caller picked a live node that happens to be a different class.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var decoy := Node.new()
+	decoy.name = "Decoy86"
+	scene_root.add_child(decoy)
+	decoy.owner = scene_root
+
+	var result := _handler.create_simple({
+		"player_path": "/" + scene_root.name + "/Decoy86",
+		"name": "x",
+		"tweens": [
+			{"target": ".", "property": "position",
+			 "from": {"x": 0}, "to": {"x": 1}, "duration": 1.0},
+		],
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "not an AnimationPlayer")
+	_remove_node("/" + scene_root.name + "/Decoy86")
+
+
+func test_create_simple_errors_when_parent_missing() -> void:
+	## Parent path must exist, matching node_create semantics.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.create_simple({
+		"player_path": "/" + scene_root.name + "/NoSuchParent/AutoPlayer",
+		"name": "x",
+		"tweens": [
+			{"target": ".", "property": "position",
+			 "from": {"x": 0}, "to": {"x": 1}, "duration": 1.0},
+		],
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
 func test_create_animation_reports_library_created_false_when_present() -> void:
 	var player_path := _add_player("TestLibExists")
 	if player_path.is_empty():

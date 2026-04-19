@@ -21,6 +21,13 @@
 
 ---
 
+<p align="center">
+  <img src="docs/images/huddemo.gif" alt="Cyberpunk HUD demo" width="800"><br>
+  <em>UI demo built in ~2 hours with zero coding, zero image gen, all programmatically drawn by Godot AI</em>
+</p>
+
+---
+
 ## Quick Start
 
 ### Prerequisites
@@ -85,9 +92,9 @@ snippet.
 - *"Build a voxel block-world game with a player, blocks to place and destroy, and save slots."*
 
 <p align="center">
-  <a href="docs/images/blockgame.png"><img src="docs/images/blockgame.png" alt="Block-world game scene built from MCP tool calls — voxel terrain, player, and UI" width="640"></a>
+  <img src="docs/images/blockarena.gif" alt="Block-world game scene built from MCP tool calls — voxel terrain, player, and UI" width="640">
 </p>
-<p align="center"><em>An AI-authored scene built from a handful of prompts — terrain, player, blocks, and UI, all placed by MCP tool calls. The full game and modular save system built by Godot AI are <a href="https://github.com/dsarno/save-system-godot-claude">available free here</a>.</em></p>
+<p align="center"><em>Demo gamelet with sophisticated save system built from a handful of Godot AI MCP prompts. Code and Godot project  <a href="https://github.com/dsarno/save-system-godot-claude">available free here</a>.</em></p>
 
 ---
 

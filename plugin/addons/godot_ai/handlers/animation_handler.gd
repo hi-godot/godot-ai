@@ -754,7 +754,8 @@ func create_simple(params: Dictionary) -> Dictionary:
 	for entry in per_track_keyframes:
 		_do_add_property_track(anim, entry.track_path, "linear", entry.keyframes)
 
-	# One atomic undo action.
+	# One atomic undo action — bundles player creation (if any), library
+	# creation (if any), and the animation add. A single Ctrl-Z rolls back all.
 	_commit_animation_add("MCP: Create animation %s (%d tracks)" % [anim_name, anim.get_track_count()],
 		player, library, created_library, anim_name, anim, old_anim,
 		created_player, player_parent)
@@ -1329,6 +1330,52 @@ func _instantiate_player(player_path: String, scene_root: Node) -> Dictionary:
 	return {
 		"player": new_player,
 		"library": lib,
+		"player_created": true,
+		"player_parent": parent,
+	}
+
+
+## Like `_resolve_player`, but when the node at `player_path` doesn't exist,
+## prepare a fresh AnimationPlayer to be added at that path instead of
+## erroring. Parallels the existing library auto-create affordance — callers
+## bundle the `add_child` step into the same undo action so player + library
+## + animation roll back together. Returns the same shape as `_resolve_player`
+## plus `{player_created: bool, player_parent: Node}` when a new player is
+## staged. If the node exists but isn't an AnimationPlayer, errors exactly
+## like `_resolve_player` — that's a genuine type mismatch, not a missing node.
+func _resolve_or_create_player(player_path: String) -> Dictionary:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	if ScenePath.resolve(player_path, scene_root) != null:
+		# Node exists — delegate so the type-mismatch error stays identical
+		# to _resolve_player's.
+		var existing := _resolve_player(player_path)
+		if not existing.has("error"):
+			existing["player_created"] = false
+		return existing
+
+	# Stage a fresh AnimationPlayer at player_path. Parent must exist (same
+	# rule as node_create) — otherwise the caller's path is ambiguous.
+	var parent_path := player_path.get_base_dir()
+	var new_name := player_path.get_file()
+	if new_name.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			"Invalid player_path (no node name): %s" % player_path)
+	var parent: Node
+	if parent_path.is_empty() or parent_path == "/":
+		parent = scene_root
+	else:
+		parent = ScenePath.resolve(parent_path, scene_root)
+		if parent == null:
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+				"Node not found: %s (and its parent %s also does not exist — create the parent first)" %
+				[player_path, parent_path])
+	var new_player := AnimationPlayer.new()
+	new_player.name = new_name
+	return {
+		"player": new_player,
+		"library": null,
 		"player_created": true,
 		"player_parent": parent,
 	}

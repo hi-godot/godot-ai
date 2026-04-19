@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Serve the MCP dev server using *this worktree's* src/godot_ai, not the root
+# repo's editable-installed copy.
+#
+# Why: the shared .venv lives in the root repo and pip-installs the root's
+# src/godot_ai editable. When you launch Godot from a worktree, the plugin
+# spawns the root's python -m godot_ai, so Python-side changes in the worktree
+# are invisible. Prepending the worktree's src/ to PYTHONPATH makes
+# `import godot_ai` resolve to the worktree's source instead.
+#
+# Usage: script/serve-this-worktree [extra uvicorn/module args]
+#   e.g. script/serve-this-worktree --port 8001
+#
+# Kills any existing listener on the chosen port first so you don't stack
+# servers on top of the plugin-spawned one.
+
+set -euo pipefail
+
+PORT=8000
+# Pull --port out of args if present so we can free it before starting.
+ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --port)
+            PORT="$2"
+            ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        --port=*)
+            PORT="${1#*=}"
+            ARGS+=("$1")
+            shift
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+WORKTREE_ROOT="$(git rev-parse --show-toplevel)"
+# .venv and the editable install live in the main repo's common dir, not the
+# worktree. `git rev-parse --git-common-dir` returns that path (or the regular
+# .git if we're already on main), so .venv resolves correctly either way.
+COMMON_DIR="$(cd "$WORKTREE_ROOT" && git rev-parse --git-common-dir)"
+# --git-common-dir may return a relative path; absolutize via its parent.
+if [[ "$COMMON_DIR" != /* ]]; then
+    COMMON_DIR="$(cd "$WORKTREE_ROOT/$COMMON_DIR" && pwd)"
+fi
+ROOT_REPO="$(dirname "$COMMON_DIR")"
+
+VENV_PY="$ROOT_REPO/.venv/bin/python"
+if [[ ! -x "$VENV_PY" ]]; then
+    echo "error: $VENV_PY not found — run script/setup-dev in the root repo first" >&2
+    exit 1
+fi
+
+SRC="$WORKTREE_ROOT/src"
+if [[ ! -d "$SRC" ]]; then
+    echo "error: $SRC not found" >&2
+    exit 1
+fi
+
+# Free the port so we replace the plugin-spawned server rather than stack on it.
+if lsof -i ":$PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+    echo "Stopping existing listener on port $PORT"
+    lsof -i ":$PORT" -sTCP:LISTEN -t | xargs kill 2>/dev/null || true
+    sleep 1
+fi
+
+echo "Serving worktree: $WORKTREE_ROOT"
+echo "Using venv:       $ROOT_REPO/.venv"
+echo "PYTHONPATH:       $SRC"
+
+export PYTHONPATH="$SRC${PYTHONPATH:+:$PYTHONPATH}"
+exec "$VENV_PY" -m godot_ai --transport streamable-http --port "$PORT" --reload "${ARGS[@]}"
