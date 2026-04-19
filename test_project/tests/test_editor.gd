@@ -365,3 +365,173 @@ func test_screenshot_bogus_source() -> void:
 	var result := _handler.take_screenshot({"source": "bogus"})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	assert_contains(result.error.message, "Invalid source")
+
+
+# ----- GameLogBuffer (issue #73) -----
+
+func test_game_log_buffer_append_and_get_range() -> void:
+	var buf := GameLogBuffer.new()
+	buf.append("info", "hello")
+	buf.append("warn", "almost out of fuel")
+	buf.append("error", "boom")
+	var entries := buf.get_range(0, 10)
+	assert_eq(entries.size(), 3)
+	assert_eq(entries[0].source, "game")
+	assert_eq(entries[0].level, "info")
+	assert_eq(entries[0].text, "hello")
+	assert_eq(entries[1].level, "warn")
+	assert_eq(entries[2].level, "error")
+	assert_eq(buf.total_count(), 3)
+
+
+func test_game_log_buffer_get_range_offset_and_count() -> void:
+	var buf := GameLogBuffer.new()
+	for i in range(5):
+		buf.append("info", "line %d" % i)
+	var page := buf.get_range(2, 2)
+	assert_eq(page.size(), 2)
+	assert_eq(page[0].text, "line 2")
+	assert_eq(page[1].text, "line 3")
+
+
+func test_game_log_buffer_unknown_level_coerces_to_info() -> void:
+	var buf := GameLogBuffer.new()
+	buf.append("not-a-level", "weird")
+	var entries := buf.get_range(0, 10)
+	assert_eq(entries[0].level, "info", "Unknown level should coerce to info")
+
+
+func test_game_log_buffer_ring_evicts_and_tracks_dropped() -> void:
+	var buf := GameLogBuffer.new()
+	var cap := GameLogBuffer.MAX_LINES
+	for i in range(cap + 5):
+		buf.append("info", "n %d" % i)
+	assert_eq(buf.total_count(), cap, "Buffer should cap at MAX_LINES")
+	assert_eq(buf.dropped_count(), 5, "Should record 5 evictions")
+	## Oldest 5 dropped: first remaining entry should be index 5.
+	var first := buf.get_range(0, 1)
+	assert_eq(first[0].text, "n 5")
+
+
+func test_game_log_buffer_clear_for_new_run_rotates_run_id() -> void:
+	var buf := GameLogBuffer.new()
+	buf.append("info", "before")
+	## Time.get_ticks_msec changes between calls — guarantees distinct ids.
+	var first_id := buf.clear_for_new_run()
+	assert_ne(first_id, "", "Initial clear should return a non-empty run id")
+	assert_eq(buf.total_count(), 0, "Buffer should be empty after clear")
+	OS.delay_msec(2)
+	buf.append("info", "after")
+	var second_id := buf.clear_for_new_run()
+	assert_ne(first_id, second_id, "Each clear should rotate the run id")
+	assert_eq(buf.dropped_count(), 0, "dropped_count resets on new run")
+
+
+# ----- get_logs source routing -----
+
+func test_get_logs_source_invalid_returns_error() -> void:
+	var result := _handler.get_logs({"source": "bogus"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "Invalid source")
+
+
+func test_get_logs_source_plugin_returns_structured_lines() -> void:
+	var plugin_buf := McpLogBuffer.new()
+	plugin_buf.log("first")
+	plugin_buf.log("second")
+	var handler := EditorHandler.new(plugin_buf)
+	var result := handler.get_logs({"source": "plugin", "count": 10})
+	assert_has_key(result, "data")
+	assert_eq(result.data.source, "plugin")
+	assert_eq(result.data.lines.size(), 2)
+	assert_eq(result.data.lines[0].source, "plugin")
+	assert_eq(result.data.lines[0].level, "info")
+	assert_contains(result.data.lines[0].text, "first")
+
+
+func test_get_logs_source_game_empty_when_no_buffer() -> void:
+	var handler := EditorHandler.new(McpLogBuffer.new())
+	var result := handler.get_logs({"source": "game", "count": 10})
+	assert_has_key(result, "data")
+	assert_eq(result.data.source, "game")
+	assert_eq(result.data.lines.size(), 0)
+	assert_eq(result.data.run_id, "")
+	assert_has_key(result.data, "is_running")
+	assert_has_key(result.data, "dropped_count")
+
+
+func test_get_logs_source_game_returns_buffered_entries() -> void:
+	var game_buf := GameLogBuffer.new()
+	game_buf.clear_for_new_run()
+	game_buf.append("info", "spawned 12 blocks")
+	game_buf.append("error", "null deref")
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, null, game_buf)
+	var result := handler.get_logs({"source": "game", "count": 10})
+	assert_eq(result.data.source, "game")
+	assert_eq(result.data.lines.size(), 2)
+	assert_eq(result.data.lines[0].text, "spawned 12 blocks")
+	assert_eq(result.data.lines[1].level, "error")
+	assert_ne(result.data.run_id, "", "run_id should be set after clear_for_new_run")
+
+
+func test_get_logs_source_game_offset_applies() -> void:
+	var game_buf := GameLogBuffer.new()
+	for i in range(5):
+		game_buf.append("info", "g %d" % i)
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, null, game_buf)
+	var result := handler.get_logs({"source": "game", "count": 2, "offset": 2})
+	assert_eq(result.data.returned_count, 2)
+	assert_eq(result.data.lines[0].text, "g 2")
+	assert_eq(result.data.lines[1].text, "g 3")
+	assert_eq(result.data.offset, 2)
+	assert_eq(result.data.total_count, 5)
+
+
+func test_get_logs_source_all_includes_both_streams() -> void:
+	var plugin_buf := McpLogBuffer.new()
+	plugin_buf.log("plugin-a")
+	plugin_buf.log("plugin-b")
+	var game_buf := GameLogBuffer.new()
+	game_buf.append("warn", "game-c")
+	var handler := EditorHandler.new(plugin_buf, null, null, game_buf)
+	var result := handler.get_logs({"source": "all", "count": 10})
+	assert_eq(result.data.source, "all")
+	assert_eq(result.data.lines.size(), 3)
+	## Plugin lines come first, then game.
+	assert_eq(result.data.lines[0].source, "plugin")
+	assert_eq(result.data.lines[1].source, "plugin")
+	assert_eq(result.data.lines[2].source, "game")
+	assert_eq(result.data.lines[2].level, "warn")
+	assert_eq(result.data.lines[2].text, "game-c")
+
+
+# ----- McpDebuggerPlugin: log batch capture (issue #73) -----
+
+func test_debugger_plugin_log_batch_appends_to_buffer() -> void:
+	var game_buf := GameLogBuffer.new()
+	var plugin := McpDebuggerPlugin.new(null, game_buf)
+	plugin._capture("mcp:log_batch", [[
+		["info", "alpha"],
+		["error", "beta"],
+	]], 0)
+	assert_eq(game_buf.total_count(), 2)
+	var entries := game_buf.get_range(0, 10)
+	assert_eq(entries[0].text, "alpha")
+	assert_eq(entries[1].level, "error")
+
+
+func test_debugger_plugin_hello_rotates_run_id() -> void:
+	var game_buf := GameLogBuffer.new()
+	game_buf.append("info", "stale from previous run")
+	var plugin := McpDebuggerPlugin.new(null, game_buf)
+	plugin._capture("mcp:hello", [], 0)
+	assert_eq(game_buf.total_count(), 0, "hello should clear the game buffer")
+	assert_ne(game_buf.run_id(), "", "hello should set a run_id")
+
+
+func test_debugger_plugin_log_batch_no_buffer_is_safe() -> void:
+	## Plugin started without a game buffer should silently no-op on
+	## log batches rather than crash — defensive for partial init.
+	var plugin := McpDebuggerPlugin.new(null, null)
+	plugin._capture("mcp:log_batch", [[["info", "x"]]], 0)
+	assert_true(true, "No crash when no game buffer is wired")

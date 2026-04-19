@@ -20,8 +20,17 @@ extends Node
 ## send_message that requires an active channel.
 
 const CAPTURE_PREFIX := "mcp"
+## Cap per-frame flush so a runaway print loop can't blow the debugger's
+## packet budget in a single send. Surplus stays queued for the next frame.
+const FLUSH_BATCH_LIMIT := 200
+
+const GAME_LOGGER_PATH := "res://addons/godot_ai/runtime/game_logger.gd"
 
 var _registered := false
+## Untyped because the McpGameLogger script is loaded dynamically (it
+## extends Logger, which only exists in Godot 4.5+).
+var _logger
+var _logger_attached := false
 
 
 func _ready() -> void:
@@ -38,20 +47,52 @@ func _ready() -> void:
 	## handshake completes; the capture sits until a message arrives.
 	EngineDebugger.register_message_capture(CAPTURE_PREFIX, _on_debug_message)
 	_registered = true
+	## Capture print() / printerr() / push_error() / push_warning() and
+	## ferry them to the editor in mcp:log_batch messages flushed from
+	## _process. Logger subclassing was added in Godot 4.5 — gate on
+	## ClassDB so the rest of the helper still loads on 4.4 (the logger
+	## script never gets parsed because we only load() it inside this
+	## branch).
+	if ClassDB.class_exists("Logger") and OS.has_method("add_logger"):
+		var logger_script := load(GAME_LOGGER_PATH)
+		if logger_script != null:
+			_logger = logger_script.new()
+			OS.call("add_logger", _logger)
+			_logger_attached = true
 	## Routed to the editor's Output panel via Godot's remote-stdout
 	## forwarder — handy when diagnosing why capture timed out.
-	print("[godot_ai game_helper] registered mcp capture (debugger active=%s)"
-		% EngineDebugger.is_active())
+	print("[godot_ai game_helper] registered mcp capture (debugger active=%s, logger=%s)"
+		% [EngineDebugger.is_active(), _logger_attached])
 	## Boot beacon so the editor side can confirm the autoload ran even
 	## if no screenshot was ever requested.
 	if EngineDebugger.is_active():
 		EngineDebugger.send_message("mcp:hello", [])
 
 
+func _process(_delta: float) -> void:
+	## Drain the logger queue on the main thread (Logger virtuals can fire
+	## from any thread; EngineDebugger.send_message is only safe from main).
+	if not _logger_attached or _logger == null:
+		return
+	if not EngineDebugger.is_active():
+		return
+	if not _logger.has_pending():
+		return
+	var pending: Array = _logger.drain()
+	while not pending.is_empty():
+		var batch := pending.slice(0, FLUSH_BATCH_LIMIT)
+		pending = pending.slice(FLUSH_BATCH_LIMIT)
+		EngineDebugger.send_message("mcp:log_batch", [batch])
+
+
 func _exit_tree() -> void:
 	if _registered:
 		EngineDebugger.unregister_message_capture(CAPTURE_PREFIX)
 		_registered = false
+	if _logger_attached and _logger != null and OS.has_method("remove_logger"):
+		OS.call("remove_logger", _logger)
+		_logger_attached = false
+		_logger = null
 
 
 ## Dispatched for messages prefixed "mcp:" on the debugger channel.

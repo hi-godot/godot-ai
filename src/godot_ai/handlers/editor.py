@@ -106,8 +106,14 @@ async def editor_screenshot(
             metadata["view_target_count"] = result["view_target_count"]
         if "view_target_not_found" in result:
             metadata["view_target_not_found"] = result["view_target_not_found"]
-    for key in ("elevation", "azimuth", "fov",
-                "aabb_center", "aabb_size", "aabb_longest_ground_axis"):
+    for key in (
+        "elevation",
+        "azimuth",
+        "fov",
+        "aabb_center",
+        "aabb_size",
+        "aabb_longest_ground_axis",
+    ):
         if key in result:
             metadata[key] = result[key]
 
@@ -124,9 +130,7 @@ async def editor_screenshot(
     ]
 
 
-async def performance_monitors_get(
-    runtime: Runtime, monitors: list[str] | None = None
-) -> dict:
+async def performance_monitors_get(runtime: Runtime, monitors: list[str] | None = None) -> dict:
     params: dict = {}
     if monitors:
         params["monitors"] = monitors
@@ -137,10 +141,77 @@ async def logs_clear(runtime: Runtime) -> dict:
     return await runtime.send_command("clear_logs")
 
 
-async def logs_read(runtime: Runtime, count: int = 50, offset: int = 0) -> dict:
-    result = await runtime.send_command("get_logs", {"count": 500})
+_VALID_LOG_SOURCES = ("plugin", "game", "all")
+
+
+async def logs_read(
+    runtime: Runtime,
+    count: int = 50,
+    offset: int = 0,
+    source: str = "plugin",
+    since_run_id: str = "",
+) -> dict:
+    if source not in _VALID_LOG_SOURCES:
+        raise ValueError(f"Invalid source '{source}' — use 'plugin', 'game', or 'all'")
+
+    if source == "plugin":
+        ## Backward-compatible shape: callers asking for the default
+        ## source still receive the historical {lines: [str], ...}
+        ## payload, so existing dashboards and tests don't break.
+        result = await runtime.send_command("get_logs", {"count": 500, "source": "plugin"})
+        ## The plugin response can be either the legacy `{lines: [str]}`
+        ## (older plugin versions) or the new structured shape
+        ## `{lines: [{source, level, text}], ...}`. Normalize to legacy
+        ## strings here so the public Python API doesn't shift under
+        ## existing callers.
+        raw_lines = result.get("lines", [])
+        flat: list[str] = []
+        for entry in raw_lines:
+            if isinstance(entry, dict):
+                flat.append(str(entry.get("text", "")))
+            else:
+                flat.append(str(entry))
+        return paginate(flat, offset, count, key="lines")
+
+    ## game / all: ask the plugin to apply offset+count itself so the
+    ## ring buffer's run_id, dropped_count, and is_running stay
+    ## authoritative on the editor side.
+    result = await runtime.send_command(
+        "get_logs", {"count": count, "offset": offset, "source": source}
+    )
+    run_id = result.get("run_id", "")
+    if since_run_id and run_id and run_id != since_run_id:
+        ## A new game run has started since the caller's last poll —
+        ## tell them to reset their cursor instead of returning stale
+        ## lines from the previous play session.
+        return {
+            "source": source,
+            "lines": [],
+            "total_count": 0,
+            "returned_count": 0,
+            "offset": 0,
+            "limit": count,
+            "has_more": False,
+            "run_id": run_id,
+            "is_running": result.get("is_running", False),
+            "dropped_count": result.get("dropped_count", 0),
+            "stale_run_id": True,
+        }
     lines = result.get("lines", [])
-    return paginate(lines, offset, count, key="lines")
+    total = int(result.get("total_count", len(lines)))
+    return {
+        "source": source,
+        "lines": lines,
+        "total_count": total,
+        "returned_count": len(lines),
+        "offset": offset,
+        "limit": count,
+        "has_more": offset + count < total,
+        "run_id": run_id,
+        "is_running": result.get("is_running", False),
+        "dropped_count": result.get("dropped_count", 0),
+        "stale_run_id": False,
+    }
 
 
 def _find_replacement_session(

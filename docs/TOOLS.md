@@ -12,7 +12,7 @@ Godot AI exposes 120+ MCP tools. They're grouped below by domain.
 | `editor_selection_get` / `editor_selection_set` | Read or set the editor selection |
 | `editor_screenshot` | Capture the 3D editor viewport or the running game's framebuffer. `source="game"` works in every embed / floating / separate-window mode via the debugger-channel bridge (requires the `_mcp_game_helper` autoload, registered automatically when the plugin is enabled) |
 | `editor_reload_plugin` / `editor_quit` | Reload the plugin or quit the editor |
-| `logs_read` / `logs_clear` | Read or clear recent MCP log lines |
+| `logs_read` / `logs_clear` | Read or clear recent log lines. `source="plugin"` (default) returns MCP traffic; `source="game"` returns `print` / `push_error` / `push_warning` from the running game with per-run `run_id`, `is_running`, and `dropped_count`; `source="all"` returns both streams. Game capture requires Godot 4.5+ (Logger API) and the `_mcp_game_helper` autoload registered automatically by the plugin |
 | `performance_monitors_get` | Read Godot performance monitors (FPS, memory, draw calls, etc.) |
 | `batch_execute` | Run multiple plugin commands in one round trip |
 

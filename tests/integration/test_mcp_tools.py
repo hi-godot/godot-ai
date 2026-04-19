@@ -314,6 +314,76 @@ class TestLogsReadTool:
         assert data["limit"] == 3
         assert data["has_more"] is True
 
+    async def test_source_game_passes_through_and_returns_structured(self, mcp_stack):
+        client, plugin = mcp_stack
+        entries = [
+            {"source": "game", "level": "info", "text": "spawned 12 blocks"},
+            {"source": "game", "level": "warn", "text": "low fps"},
+            {"source": "game", "level": "error", "text": "null deref"},
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_logs"
+            assert cmd["params"]["source"] == "game"
+            assert cmd["params"]["count"] == 50
+            assert cmd["params"]["offset"] == 0
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "source": "game",
+                    "lines": entries,
+                    "total_count": 3,
+                    "returned_count": 3,
+                    "offset": 0,
+                    "run_id": "rABC",
+                    "is_running": True,
+                    "dropped_count": 4,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("logs_read", {"source": "game"})
+        await task
+
+        data = result.data
+        assert data["source"] == "game"
+        assert data["lines"] == entries
+        assert data["run_id"] == "rABC"
+        assert data["is_running"] is True
+        assert data["dropped_count"] == 4
+        assert data["stale_run_id"] is False
+
+    async def test_since_run_id_stale_returns_empty(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "source": "game",
+                    "lines": [
+                        {"source": "game", "level": "info", "text": "x"},
+                    ],
+                    "total_count": 1,
+                    "returned_count": 1,
+                    "offset": 0,
+                    "run_id": "rNEW",
+                    "is_running": True,
+                    "dropped_count": 0,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("logs_read", {"source": "game", "since_run_id": "rOLD"})
+        await task
+
+        data = result.data
+        assert data["stale_run_id"] is True
+        assert data["lines"] == []
+        assert data["run_id"] == "rNEW"
+
 
 # ---------------------------------------------------------------------------
 # node_find

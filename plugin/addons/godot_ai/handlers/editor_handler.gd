@@ -7,12 +7,14 @@ extends RefCounted
 var _log_buffer: McpLogBuffer
 var _connection: Connection
 var _debugger_plugin: McpDebuggerPlugin
+var _game_log_buffer: GameLogBuffer
 
 
-func _init(log_buffer: McpLogBuffer, connection: Connection = null, debugger_plugin: McpDebuggerPlugin = null) -> void:
+func _init(log_buffer: McpLogBuffer, connection: Connection = null, debugger_plugin: McpDebuggerPlugin = null, game_log_buffer: GameLogBuffer = null) -> void:
 	_log_buffer = log_buffer
 	_connection = connection
 	_debugger_plugin = debugger_plugin
+	_game_log_buffer = game_log_buffer
 
 
 func get_editor_state(_params: Dictionary) -> Dictionary:
@@ -37,14 +39,105 @@ func get_selection(_params: Dictionary) -> Dictionary:
 	return {"data": {"selected_paths": paths, "count": paths.size()}}
 
 
+const VALID_LOG_SOURCES := ["plugin", "game", "all"]
+
+
 func get_logs(params: Dictionary) -> Dictionary:
 	var count: int = params.get("count", 50)
-	var lines := _log_buffer.get_recent(count)
+	var offset: int = maxi(0, int(params.get("offset", 0)))
+	var source: String = params.get("source", "plugin")
+	if not source in VALID_LOG_SOURCES:
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"Invalid source '%s' — use 'plugin', 'game', or 'all'" % source,
+		)
+
+	match source:
+		"plugin":
+			return _get_plugin_logs(count, offset)
+		"game":
+			return _get_game_logs(count, offset)
+		"all":
+			return _get_all_logs(count, offset)
+	return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Unreachable")
+
+
+func _get_plugin_logs(count: int, offset: int) -> Dictionary:
+	var all_lines := _log_buffer.get_recent(_log_buffer.total_count())
+	var page: Array[Dictionary] = []
+	var stop := mini(all_lines.size(), offset + count)
+	for i in range(mini(offset, all_lines.size()), stop):
+		page.append({"source": "plugin", "level": "info", "text": all_lines[i]})
 	return {
 		"data": {
-			"lines": lines,
-			"total_count": _log_buffer.total_count(),
-			"returned_count": lines.size(),
+			"source": "plugin",
+			"lines": page,
+			"total_count": all_lines.size(),
+			"returned_count": page.size(),
+			"offset": offset,
+		}
+	}
+
+
+func _get_game_logs(count: int, offset: int) -> Dictionary:
+	if _game_log_buffer == null:
+		return {
+			"data": {
+				"source": "game",
+				"lines": [],
+				"total_count": 0,
+				"returned_count": 0,
+				"offset": offset,
+				"run_id": "",
+				"is_running": false,
+				"dropped_count": 0,
+			}
+		}
+	var page := _game_log_buffer.get_range(offset, count)
+	return {
+		"data": {
+			"source": "game",
+			"lines": page,
+			"total_count": _game_log_buffer.total_count(),
+			"returned_count": page.size(),
+			"offset": offset,
+			"run_id": _game_log_buffer.run_id(),
+			"is_running": EditorInterface.is_playing_scene(),
+			"dropped_count": _game_log_buffer.dropped_count(),
+		}
+	}
+
+
+func _get_all_logs(count: int, offset: int) -> Dictionary:
+	## Plugin lines have no timestamp, so we can't merge chronologically.
+	## Concatenate plugin then game and apply the offset/count window over
+	## the combined list. The per-line `source` field tells callers where
+	## each entry came from.
+	var combined: Array[Dictionary] = []
+	for line in _log_buffer.get_recent(_log_buffer.total_count()):
+		combined.append({"source": "plugin", "level": "info", "text": line})
+	if _game_log_buffer != null:
+		for entry in _game_log_buffer.get_range(0, _game_log_buffer.total_count()):
+			combined.append(entry)
+	var stop := mini(combined.size(), offset + count)
+	var page: Array[Dictionary] = []
+	for i in range(mini(offset, combined.size()), stop):
+		page.append(combined[i])
+	var run_id := ""
+	var dropped := 0
+	if _game_log_buffer != null:
+		run_id = _game_log_buffer.run_id()
+		dropped = _game_log_buffer.dropped_count()
+	return {
+		"data": {
+			"source": "all",
+			"lines": page,
+			"total_count": combined.size(),
+			"returned_count": page.size(),
+			"offset": offset,
+			"run_id": run_id,
+			"is_running": EditorInterface.is_playing_scene(),
+			"dropped_count": dropped,
 		}
 	}
 

@@ -42,21 +42,51 @@ def register_editor_tools(mcp: FastMCP) -> None:
         ctx: Context,
         count: int = 50,
         offset: int = 0,
+        source: str = "plugin",
+        since_run_id: str = "",
         session_id: str = "",
     ) -> dict:
-        """Read recent log lines from the Godot editor console.
+        """Read recent log lines from the Godot editor or running game.
 
-        Returns paginated log lines captured by the MCP plugin,
-        including MCP command traffic when logging is enabled.
-        The buffer holds up to 500 lines; pagination windows into that.
+        Three sources are supported:
+
+        - "plugin" (default): MCP plugin's own recv/send/event traffic.
+          Buffer caps at 500 lines. Returns the historical
+          `{lines: [str], total_count, offset, limit, has_more}` shape.
+        - "game": stdout/stderr/push_error/push_warning from the playing
+          game. Captured via a Logger subclass inside the
+          `_mcp_game_helper` autoload (Godot 4.5+) and ferried over the
+          editor-debugger channel. Buffer caps at 2000 lines, clears on
+          each project_run, and survives play-stop. Each entry is a
+          `{source: "game", level: "info"|"warn"|"error", text}` dict.
+          The response also carries `run_id` (rotates per play),
+          `is_running`, and `dropped_count` (ring evictions since the
+          run started).
+        - "all": plugin lines first, then game lines, with `source` on
+          each entry so callers can split. No timestamp merge — pull
+          per-source if you need chronology.
+
+        Tail pattern: poll `logs_read(source="game", offset=N,
+        since_run_id=R)`. When `stale_run_id: true` comes back, reset
+        your offset to 0 and capture the new `run_id`.
 
         Args:
             count: Maximum number of lines to return. Default 50.
             offset: Number of lines to skip from the start. Default 0.
+            source: "plugin", "game", or "all". Default "plugin".
+            since_run_id: When set on a "game"/"all" call, the response
+                carries `stale_run_id: true` if the buffer has rotated to a
+                new run since this id was captured. Reset your offset on stale.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await editor_handlers.logs_read(runtime, count=count, offset=offset)
+        return await editor_handlers.logs_read(
+            runtime,
+            count=count,
+            offset=offset,
+            source=source,
+            since_run_id=since_run_id,
+        )
 
     @mcp.tool(output_schema=None, meta=DEFER_META)
     async def editor_screenshot(

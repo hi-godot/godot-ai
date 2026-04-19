@@ -30,6 +30,7 @@ const DEFAULT_TIMEOUT_SEC := 8.0
 const GAME_READY_WAIT_SEC := 20.0
 
 var _log_buffer: McpLogBuffer
+var _game_log_buffer: GameLogBuffer
 
 ## Pending request_id -> {connection, deadline_ts, timer}
 var _pending: Dictionary = {}
@@ -42,8 +43,9 @@ var _game_ready := false
 signal game_ready
 
 
-func _init(log_buffer: McpLogBuffer = null) -> void:
+func _init(log_buffer: McpLogBuffer = null, game_log_buffer: GameLogBuffer = null) -> void:
 	_log_buffer = log_buffer
+	_game_log_buffer = game_log_buffer
 
 
 func _has_capture(prefix: String) -> bool:
@@ -72,17 +74,39 @@ func _capture(message: String, data: Array, _session_id: int) -> bool:
 		"mcp:screenshot_error":
 			_on_screenshot_error(data)
 			return true
+		"mcp:log_batch":
+			_on_log_batch(data)
+			return true
 		"mcp:hello":
 			## Boot beacon from the game-side autoload. Tells us the
 			## game has registered its "mcp" capture and is safe to send
 			## take_screenshot to — before this, Godot's debugger would
-			## drop our message silently.
+			## drop our message silently. Also marks a fresh play
+			## cycle: rotate the game-log buffer so each run starts
+			## clean and gets a new run_id.
 			_game_ready = true
 			game_ready.emit()
-			if _log_buffer:
+			if _game_log_buffer:
+				var run_id := _game_log_buffer.clear_for_new_run()
+				if _log_buffer:
+					_log_buffer.log("[debug] <- mcp:hello from game_helper (run %s)" % run_id)
+			elif _log_buffer:
 				_log_buffer.log("[debug] <- mcp:hello from game_helper")
 			return true
 	return false
+
+
+func _on_log_batch(data: Array) -> void:
+	if _game_log_buffer == null:
+		return
+	## data layout: [[[level, text], [level, text], ...]]
+	if data.is_empty() or not (data[0] is Array):
+		return
+	var entries: Array = data[0]
+	for entry in entries:
+		if not (entry is Array) or entry.size() < 2:
+			continue
+		_game_log_buffer.append(str(entry[0]), str(entry[1]))
 
 
 ## Request a game-process framebuffer capture over the debugger channel.

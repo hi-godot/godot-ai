@@ -56,6 +56,39 @@ class StubClient:
         if command == "quit_editor":
             return {"status": "quitting", "message": "Editor quit initiated"}
         if command == "get_logs":
+            params_dict = params or {}
+            source = params_dict.get("source", "plugin")
+            if source == "game":
+                req_offset = int(params_dict.get("offset", 0))
+                req_count = int(params_dict.get("count", 50))
+                all_entries = [
+                    {"source": "game", "level": "info", "text": f"game {i}"} for i in range(5)
+                ]
+                page = all_entries[req_offset : req_offset + req_count]
+                return {
+                    "source": "game",
+                    "lines": page,
+                    "total_count": len(all_entries),
+                    "returned_count": len(page),
+                    "offset": req_offset,
+                    "run_id": "rstub",
+                    "is_running": True,
+                    "dropped_count": 0,
+                }
+            if source == "all":
+                return {
+                    "source": "all",
+                    "lines": [
+                        {"source": "plugin", "level": "info", "text": "p0"},
+                        {"source": "game", "level": "warn", "text": "g0"},
+                    ],
+                    "total_count": 2,
+                    "returned_count": 2,
+                    "offset": 0,
+                    "run_id": "rstub",
+                    "is_running": True,
+                    "dropped_count": 0,
+                }
             return {"lines": [f"line {i}" for i in range(6)]}
         if command == "get_project_setting":
             key = params["key"] if params else ""
@@ -1163,6 +1196,89 @@ async def test_logs_read_handler_uses_runtime_and_paginates():
     assert result["limit"] == 2
     assert result["total_count"] == 6
     assert result["has_more"] is True
+
+
+async def test_logs_read_handler_invalid_source_raises():
+    runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
+
+    with pytest.raises(ValueError, match="Invalid source"):
+        await editor_handlers.logs_read(runtime, source="bogus")
+
+
+async def test_logs_read_handler_source_game_passes_through():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+
+    result = await editor_handlers.logs_read(runtime, count=2, offset=1, source="game")
+
+    ## Plugin params should carry source + offset/count so the buffer can
+    ## window itself authoritatively (preserving run_id semantics).
+    last_call = client.calls[-1]
+    assert last_call["command"] == "get_logs"
+    assert last_call["params"] == {"count": 2, "offset": 1, "source": "game"}
+
+    assert result["source"] == "game"
+    assert result["lines"] == [
+        {"source": "game", "level": "info", "text": "game 1"},
+        {"source": "game", "level": "info", "text": "game 2"},
+    ]
+    assert result["total_count"] == 5
+    assert result["returned_count"] == 2
+    assert result["run_id"] == "rstub"
+    assert result["is_running"] is True
+    assert result["dropped_count"] == 0
+    assert result["has_more"] is True
+    assert result["stale_run_id"] is False
+
+
+async def test_logs_read_handler_since_run_id_stale_returns_empty():
+    runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
+
+    result = await editor_handlers.logs_read(runtime, source="game", since_run_id="r-old")
+
+    assert result["stale_run_id"] is True
+    assert result["lines"] == []
+    assert result["run_id"] == "rstub"
+
+
+async def test_logs_read_handler_source_all_returns_structured():
+    runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
+
+    result = await editor_handlers.logs_read(runtime, source="all")
+
+    assert result["source"] == "all"
+    assert result["lines"][0]["source"] == "plugin"
+    assert result["lines"][1]["source"] == "game"
+    assert result["lines"][1]["level"] == "warn"
+    assert result["run_id"] == "rstub"
+
+
+async def test_logs_read_handler_plugin_normalizes_structured_payload():
+    ## A plugin upgrade ships structured entries even for source=plugin;
+    ## the public Python API still returns the legacy [str] shape for that
+    ## source so existing callers don't shift.
+    class StructuredPluginClient(StubClient):
+        async def send(self, command, params=None, session_id=None, timeout=5.0):
+            self.calls.append(
+                {
+                    "command": command,
+                    "params": params,
+                    "session_id": session_id,
+                    "timeout": timeout,
+                }
+            )
+            return {
+                "lines": [
+                    {"source": "plugin", "level": "info", "text": "structured 0"},
+                    {"source": "plugin", "level": "info", "text": "structured 1"},
+                ]
+            }
+
+    runtime = DirectRuntime(registry=SessionRegistry(), client=StructuredPluginClient())
+
+    result = await editor_handlers.logs_read(runtime, count=10)
+
+    assert result["lines"] == ["structured 0", "structured 1"]
 
 
 async def test_project_settings_resource_collects_results():
@@ -2290,9 +2406,7 @@ async def test_physics_shape_autofit_handler():
 async def test_physics_shape_autofit_minimal_omits_empty():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    await physics_shape_handlers.physics_shape_autofit(
-        runtime, path="/Main/Body/Collision"
-    )
+    await physics_shape_handlers.physics_shape_autofit(runtime, path="/Main/Body/Collision")
     params = client.calls[-1]["params"]
     assert "source_path" not in params
     assert "shape_type" not in params
@@ -2314,9 +2428,7 @@ async def test_physics_shape_autofit_requires_writable():
     registry.register(session)
     runtime = DirectRuntime(registry=registry, client=client)
     with pytest.raises(GodotCommandError):
-        await physics_shape_handlers.physics_shape_autofit(
-            runtime, path="/Main/Body/Collision"
-        )
+        await physics_shape_handlers.physics_shape_autofit(runtime, path="/Main/Body/Collision")
 
 
 async def test_resource_create_requires_writable():

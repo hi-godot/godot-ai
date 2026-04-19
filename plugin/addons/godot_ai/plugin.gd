@@ -7,6 +7,7 @@ const GAME_HELPER_AUTOLOAD_PATH := "res://addons/godot_ai/runtime/game_helper.gd
 var _connection: Connection
 var _dispatcher: McpDispatcher
 var _log_buffer: McpLogBuffer
+var _game_log_buffer: GameLogBuffer
 var _dock: McpDock
 var _server_pid := -1
 var _handlers: Array = []  # prevent GC of RefCounted handlers
@@ -18,16 +19,17 @@ func _enter_tree() -> void:
 	_start_server()
 
 	_log_buffer = McpLogBuffer.new()
+	_game_log_buffer = GameLogBuffer.new()
 	_dispatcher = McpDispatcher.new(_log_buffer)
 
 	_connection = Connection.new()
 	_connection.log_buffer = _log_buffer
 
-	_debugger_plugin = McpDebuggerPlugin.new(_log_buffer)
+	_debugger_plugin = McpDebuggerPlugin.new(_log_buffer, _game_log_buffer)
 	add_debugger_plugin(_debugger_plugin)
 	_ensure_game_helper_autoload()
 
-	var editor_handler := EditorHandler.new(_log_buffer, _connection, _debugger_plugin)
+	var editor_handler := EditorHandler.new(_log_buffer, _connection, _debugger_plugin, _game_log_buffer)
 	var scene_handler := SceneHandler.new(_connection)
 	var node_handler := NodeHandler.new(get_undo_redo())
 	var project_handler := ProjectHandler.new(_connection)
