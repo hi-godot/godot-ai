@@ -52,9 +52,5 @@ static func resolve(scene_path: String, scene_root: Node) -> Node:
 ## Agents routinely try /root/Foo or absolute SceneTree paths; the bare
 ## "Parent not found: X" gave them no hint that paths are scene-relative.
 static func format_parent_error(path: String, scene_root: Node) -> String:
-	var root_name := scene_root.name if scene_root != null else "<no scene>"
-	return (
-		"Parent not found: %s. parent_path is relative to the edited scene root "
-		"(e.g. \"/%s\" or \"\"), not the SceneTree. Scene root is \"/%s\"."
-		% [path, root_name, root_name]
-	)
+	var root_name := str(scene_root.name) if scene_root != null else "<no scene>"
+	return "Parent not found: %s. parent_path is relative to the edited scene root (e.g. \"/%s\" or \"\"), not the SceneTree. Scene root is \"/%s\"." % [path, root_name, root_name]
