@@ -12,6 +12,77 @@ edges that aren't necessarily code bugs.
 
 ---
 
+## 2026-04-19 — `control_draw_recipe` rect-op warnings spam the console
+
+Source: cyberpunk-hud-demo v3 polish exercise. Scene uses
+`control_draw_recipe` with filled rects (barcode strip: 18 rects, QR
+block: 25 rects) and the console fills with:
+
+```
+WARNING: scene/main/canvas_item.cpp:823 - The draw_rect() "width"
+argument has no effect when "filled" is "true".
+```
+
+One warning per rect per redraw, hundreds per frame when the control
+is visible.
+
+### bug — `draw_recipe.gd` always passes `width` into `draw_rect`
+
+[`plugin/addons/godot_ai/runtime/draw_recipe.gd`](plugin/addons/godot_ai/runtime/draw_recipe.gd)
+at lines 36–41:
+
+```gdscript
+"rect":
+    draw_rect(
+        op.rect,
+        op.color,
+        bool(op.get("filled", true)),
+        float(op.get("width", 1.0))
+    )
+```
+
+Godot's `draw_rect` signature is
+`draw_rect(rect, color, filled=true, width=-1.0, antialiased=false)`,
+and Godot warns whenever `width > 0` is passed with `filled=true`. Our
+replayer always reads `op.get("width", 1.0)` and forwards it, so every
+filled rect triggers the warning even when the caller didn't set a
+width.
+
+### suggested fix
+
+Branch on filled, or pass `width=-1` when filled so Godot skips the
+stroke step cleanly:
+
+```gdscript
+"rect":
+    var filled := bool(op.get("filled", true))
+    if filled:
+        draw_rect(op.rect, op.color, true)
+    else:
+        draw_rect(op.rect, op.color, false, float(op.get("width", 1.0)))
+```
+
+Same pattern should be double-checked on the other "always-passes-width"
+calls (`line`, `polyline`, `arc` — those look fine since those primitives
+genuinely use width).
+
+### repro
+
+Call `control_draw_recipe` with a filled rect op (the common barcode /
+QR / flat-fill case):
+
+```python
+control_draw_recipe(
+    path="/Main/Panel",
+    ops=[{"draw": "rect", "rect": [0, 0, 10, 10], "color": "#ffffff"}],
+)
+```
+
+Save, reopen scene, watch the editor log. Each save/reopen/redraw =
+one warning per rect. On a 25-op grid it adds up fast.
+
+---
+
 ## 2026-04-19 — Smoking PR #78 (`logs_read source=game`)
 
 Smoking PR #78 (`claude/add-game-logs-capture-gtE27`) against a live editor
