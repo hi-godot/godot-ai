@@ -10,7 +10,7 @@ Godot AI exposes 120+ MCP tools. They're grouped below by domain.
 | `session_activate` | Set the active session for multi-editor routing |
 | `editor_state` | Read Godot version, project name, current scene, and play state |
 | `editor_selection_get` / `editor_selection_set` | Read or set the editor selection |
-| `editor_screenshot` | Capture the editor viewport or a sub-viewport |
+| `editor_screenshot` | Capture the 3D editor viewport or the running game's framebuffer. `source="game"` works in every embed / floating / separate-window mode via the debugger-channel bridge (requires the `_mcp_game_helper` autoload, registered automatically when the plugin is enabled) |
 | `editor_reload_plugin` / `editor_quit` | Reload the plugin or quit the editor |
 | `logs_read` / `logs_clear` | Read or clear recent MCP log lines |
 | `performance_monitors_get` | Read Godot performance monitors (FPS, memory, draw calls, etc.) |
