@@ -427,10 +427,82 @@ func test_game_log_buffer_clear_for_new_run_rotates_run_id() -> void:
 	assert_eq(buf.dropped_count(), 0, "dropped_count resets on new run")
 
 
+func test_game_log_buffer_preserves_order_after_multiple_wraps() -> void:
+	## Post O(1)-circular-buffer rewrite: verify that two full wraps still
+	## leave entries in correct logical order, and that get_range across the
+	## wrap boundary doesn't return the physical-slot order by mistake.
+	var buf := GameLogBuffer.new()
+	var cap := GameLogBuffer.MAX_LINES
+	## Fill cap, then wrap 1.5 times: total 2.5 * cap writes.
+	var total := cap * 5 / 2
+	for i in range(total):
+		buf.append("info", "n %d" % i)
+	assert_eq(buf.total_count(), cap, "Buffer caps at MAX_LINES after many wraps")
+	assert_eq(buf.dropped_count(), total - cap, "dropped_count tracks every eviction")
+	## Oldest retained entry should be the first one that survived the drop.
+	var oldest := buf.get_range(0, 1)
+	assert_eq(oldest[0].text, "n %d" % (total - cap), "Oldest is first post-drop entry")
+	## Newest retained entry should be the last append.
+	var newest := buf.get_range(cap - 1, 1)
+	assert_eq(newest[0].text, "n %d" % (total - 1), "Newest is last append")
+	## Sanity — logical ordering is contiguous across the physical wrap.
+	var page := buf.get_range(0, cap)
+	for i in range(cap):
+		var expected := total - cap + i
+		assert_eq(page[i].text, "n %d" % expected, "Entry %d should be 'n %d'" % [i, expected])
+
+
+func test_game_log_buffer_get_recent_works_after_wrap() -> void:
+	var buf := GameLogBuffer.new()
+	var cap := GameLogBuffer.MAX_LINES
+	for i in range(cap + 10):
+		buf.append("info", "w %d" % i)
+	var tail := buf.get_recent(3)
+	assert_eq(tail.size(), 3)
+	assert_eq(tail[0].text, "w %d" % (cap + 10 - 3))
+	assert_eq(tail[1].text, "w %d" % (cap + 10 - 2))
+	assert_eq(tail[2].text, "w %d" % (cap + 10 - 1))
+
+
 # ----- get_logs source routing -----
 
 func test_get_logs_source_invalid_returns_error() -> void:
 	var result := _handler.get_logs({"source": "bogus"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "Invalid source")
+
+
+func test_get_logs_coerces_float_count_and_offset() -> void:
+	## JSON numbers decode to float in Godot — make sure typed locals
+	## don't blow up before the validator can report INVALID_PARAMS.
+	var plugin_buf := McpLogBuffer.new()
+	plugin_buf.log("a")
+	plugin_buf.log("b")
+	plugin_buf.log("c")
+	var handler := EditorHandler.new(plugin_buf)
+	var result := handler.get_logs({"count": 2.0, "offset": 1.0, "source": "plugin"})
+	assert_has_key(result, "data")
+	assert_eq(result.data.lines.size(), 2)
+	assert_contains(result.data.lines[0].text, "b")
+
+
+func test_get_logs_negative_count_floored_to_zero() -> void:
+	## maxi(0, ...) on count means a negative/garbage count returns an
+	## empty page instead of crashing or returning negative-index junk.
+	var plugin_buf := McpLogBuffer.new()
+	plugin_buf.log("only line")
+	var handler := EditorHandler.new(plugin_buf)
+	var result := handler.get_logs({"count": -5, "source": "plugin"})
+	assert_has_key(result, "data")
+	assert_eq(result.data.lines.size(), 0, "Negative count yields empty page")
+
+
+func test_get_logs_null_source_falls_through_to_invalid() -> void:
+	## Explicit null source after coercion becomes the string "<null>",
+	## which fails the VALID_LOG_SOURCES check — user gets INVALID_PARAMS
+	## rather than a GDScript type error.
+	var handler := EditorHandler.new(McpLogBuffer.new())
+	var result := handler.get_logs({"source": null})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	assert_contains(result.error.message, "Invalid source")
 
@@ -535,3 +607,65 @@ func test_debugger_plugin_log_batch_no_buffer_is_safe() -> void:
 	var plugin := McpDebuggerPlugin.new(null, null)
 	plugin._capture("mcp:log_batch", [[["info", "x"]]], 0)
 	assert_true(true, "No crash when no game buffer is wired")
+
+
+# ----- GameLogger._log_error arg routing (PR #78 smoke bug) -----
+
+const _GAME_LOGGER_PATH := "res://addons/godot_ai/runtime/game_logger.gd"
+
+
+func test_game_logger_single_arg_push_warning_preserves_user_message() -> void:
+	## push_warning("warn-game") → code="warn-game", rationale="". The user's
+	## message must survive; before the fix, rationale was the only source and
+	## the text was discarded.
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var logger = load(_GAME_LOGGER_PATH).new()
+	logger._log_error("push_warning", "core/variant/variant_utility.cpp", 1034, "warn-game", "", false, 1, [])
+	var pending: Array = logger.drain()
+	assert_eq(pending.size(), 1)
+	assert_eq(pending[0][0], "warn")
+	assert_contains(pending[0][1], "warn-game", "User's message text must survive single-arg push_warning")
+
+
+func test_game_logger_single_arg_push_error_preserves_user_message() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var logger = load(_GAME_LOGGER_PATH).new()
+	logger._log_error("push_error", "core/variant/variant_utility.cpp", 1000, "err-game", "", false, 0, [])
+	var pending: Array = logger.drain()
+	assert_eq(pending.size(), 1)
+	assert_eq(pending[0][0], "error")
+	assert_contains(pending[0][1], "err-game", "User's message text must survive single-arg push_error")
+
+
+func test_game_logger_two_arg_push_error_prefers_rationale() -> void:
+	## push_error(code, rationale) — rationale wins, code is not surfaced.
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var logger = load(_GAME_LOGGER_PATH).new()
+	logger._log_error("my_func", "res://foo.gd", 42, "ERR_CODE", "detailed reason", false, 0, [])
+	var pending: Array = logger.drain()
+	assert_eq(pending.size(), 1)
+	assert_eq(pending[0][0], "error")
+	assert_contains(pending[0][1], "detailed reason", "Rationale should be used when present")
+	assert_true(not pending[0][1].contains("ERR_CODE"), "Code should not appear when rationale is present")
+
+
+func test_game_logger_printerr_routes_to_error_level() -> void:
+	## _log_message is the print/printerr channel — sanity-check it still works.
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var logger = load(_GAME_LOGGER_PATH).new()
+	logger._log_message("oops", true)
+	logger._log_message("hi", false)
+	var pending: Array = logger.drain()
+	assert_eq(pending.size(), 2)
+	assert_eq(pending[0][0], "error")
+	assert_eq(pending[0][1], "oops")
+	assert_eq(pending[1][0], "info")
+	assert_eq(pending[1][1], "hi")
