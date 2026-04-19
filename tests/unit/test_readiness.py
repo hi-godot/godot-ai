@@ -45,6 +45,11 @@ def test_require_writable_rejects_importing():
         require_writable(_make_runtime("importing"))
     assert exc_info.value.code == ErrorCode.EDITOR_NOT_READY
     assert "importing" in exc_info.value.message
+    assert exc_info.value.data == {"retryable": True, "state": "importing"}
+    # Structured hints are also embedded in the serialized form so MCP
+    # clients that only see str(exc) can still distinguish retryable cases.
+    assert "retryable=True" in str(exc_info.value)
+    assert "state=importing" in str(exc_info.value)
 
 
 def test_require_writable_rejects_playing():
@@ -52,12 +57,20 @@ def test_require_writable_rejects_playing():
         require_writable(_make_runtime("playing"))
     assert exc_info.value.code == ErrorCode.EDITOR_NOT_READY
     assert "play mode" in exc_info.value.message
+    assert exc_info.value.data == {"retryable": False, "state": "playing"}
+    assert "retryable=False" in str(exc_info.value)
 
 
 def test_session_readiness_in_to_dict():
     session = _make_session("importing")
     d = session.to_dict()
     assert d["readiness"] == "importing"
+
+
+def test_godot_command_error_without_data_preserves_legacy_format():
+    err = GodotCommandError(code=ErrorCode.EDITOR_NOT_READY, message="oops")
+    assert err.data == {}
+    assert str(err) == "EDITOR_NOT_READY: oops"
 
 
 def test_session_readiness_defaults_to_ready():

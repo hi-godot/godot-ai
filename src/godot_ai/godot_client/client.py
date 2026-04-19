@@ -15,10 +15,20 @@ logger = logging.getLogger(__name__)
 class GodotCommandError(Exception):
     """Raised when a Godot plugin command returns an error response."""
 
-    def __init__(self, code: str, message: str):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        data: dict[str, Any] | None = None,
+    ):
         self.code = code
         self.message = message
-        super().__init__(f"{code}: {message}")
+        self.data = data or {}
+        if self.data:
+            suffix = " [" + ", ".join(f"{k}={v}" for k, v in self.data.items()) + "]"
+            super().__init__(f"{code}: {message}{suffix}")
+        else:
+            super().__init__(f"{code}: {message}")
 
 
 class GodotClient:
