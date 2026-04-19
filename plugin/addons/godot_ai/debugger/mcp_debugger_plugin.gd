@@ -66,9 +66,16 @@ func request_game_screenshot(
 		return
 
 	_pending[request_id] = {"connection": connection}
-	var timer := Engine.get_main_loop().create_timer(timeout_sec)
-	timer.timeout.connect(func(): _on_timeout(request_id))
-	_pending[request_id]["timer"] = timer
+	## MainLoop has no create_timer — it's a SceneTree method. We're inside
+	## the editor, where the main loop is always a SceneTree, but GDScript's
+	## static typing still needs the cast. `create_timer` doesn't declare a
+	## return type in the engine bindings we see, so type `timer` explicitly
+	## rather than inferring.
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree != null:
+		var timer: SceneTreeTimer = tree.create_timer(timeout_sec)
+		timer.timeout.connect(func() -> void: _on_timeout(request_id))
+		_pending[request_id]["timer"] = timer
 
 	session.send_message("mcp:take_screenshot", [request_id, max_resolution])
 	if _log_buffer:

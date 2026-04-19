@@ -23,14 +23,13 @@ var _registered := false
 
 
 func _ready() -> void:
-	if OS.has_feature("editor") == false and not EngineDebugger.is_active():
-		## Non-editor, non-debug export build — nothing to do. The editor
-		## debugger is how the plugin reaches us; without it there's no caller.
-		return
+	## Only run in a game process with an active editor-debugger link. Skip
+	## in-editor (autoloads without @tool shouldn't instantiate in the
+	## editor, but belt-and-braces) and in exported release builds where
+	## the debugger channel doesn't exist.
 	if OS.has_feature("editor"):
-		## We are in the editor context (autoloads run here during plugin
-		## editor instantiation). Stay silent — the editor side of the plugin
-		## does its own handling.
+		return
+	if not EngineDebugger.is_active():
 		return
 	EngineDebugger.register_message_capture(CAPTURE_PREFIX, _on_debug_message)
 	_registered = true
