@@ -30,6 +30,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify ref is a version tag
+        # Guard against a manual workflow_dispatch on a branch ref (e.g.
+        # `main`), which would otherwise fall through and fail the version
+        # check with a confusing "tag (main) does not match..." message.
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: release.yml must run against a version tag (vX.Y.Z), got: $GITHUB_REF_NAME" >&2
+            echo "If dispatching manually, pick a v* tag in the ref dropdown." >&2
+            exit 1
+          fi
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

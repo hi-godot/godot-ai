@@ -18,6 +18,11 @@ on:
 
 permissions:
   contents: write
+  # actions: write is required so the "Trigger release workflow" step can
+  # call `gh workflow run release.yml` using the default GITHUB_TOKEN —
+  # without it the dispatch API returns "Resource not accessible by
+  # integration".
+  actions: write
 
 jobs:
   bump:
