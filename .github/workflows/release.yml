@@ -61,32 +61,41 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build plugin ZIP
-        # Wrap in an outer "godot-ai-plugin/" folder so Godot's AssetLib
-        # "Ignore asset root" default (which strips the zip's single top-level
-        # folder) removes the wrapper instead of addons/. A zip whose top
-        # entry is addons/ itself gets addons/ stripped on install, landing
-        # godot_ai/ at res:// outside the plugin path — the plugin never
-        # registers and scripts fail strict-warning parsing outside addons/.
+        # Keep `addons/` at the zip's top level. Godot's AssetLib install
+        # dialog ("Install from file" or AssetLib download) defaults
+        # "Ignore asset root" to UNCHECKED when the top entry is `addons/`,
+        # so files land at res://addons/godot_ai/ — the canonical plugin
+        # path where Godot's `debug/gdscript/warnings/exclude_addons` does
+        # the right thing.
         run: |
-          mkdir -p staging/godot-ai-plugin/addons
-          cp -r plugin/addons/godot_ai staging/godot-ai-plugin/addons/
+          mkdir -p staging/addons
+          cp -r plugin/addons/godot_ai staging/addons/
           cd staging
-          zip -r ../godot-ai-plugin.zip godot-ai-plugin/
+          zip -r ../godot-ai-plugin.zip addons/
 
       - name: Verify zip structure
         run: |
           # unzip -Z1 lists only entry names, one per line, no header/footer
           top=$(unzip -Z1 godot-ai-plugin.zip | awk -F/ '{print $1}' | sort -u)
-          if [ "$top" != "godot-ai-plugin" ]; then
-            echo "ERROR: expected single top-level folder 'godot-ai-plugin/' in zip, got:" >&2
+          if [ "$top" != "addons" ]; then
+            echo "ERROR: expected single top-level folder 'addons/' in zip, got:" >&2
             echo "$top" >&2
             exit 1
           fi
-          if ! unzip -Z1 godot-ai-plugin.zip | grep -qx 'godot-ai-plugin/addons/godot_ai/plugin.cfg'; then
-            echo "ERROR: plugin.cfg not at expected path godot-ai-plugin/addons/godot_ai/plugin.cfg" >&2
+          if ! unzip -Z1 godot-ai-plugin.zip | grep -qx 'addons/godot_ai/plugin.cfg'; then
+            echo "ERROR: plugin.cfg not at expected path addons/godot_ai/plugin.cfg" >&2
             exit 1
           fi
-          echo "Zip structure verified: godot-ai-plugin/addons/godot_ai/..."
+          # Guard against macOS iCloud-sync duplicates (filenames like `foo 2.gd`)
+          # sneaking in via a contaminated checkout. CI should never hit this
+          # on a fresh actions/checkout, but a manual build from a synced
+          # working tree could. Fail loudly if any are present.
+          if unzip -Z1 godot-ai-plugin.zip | grep -q ' 2\.'; then
+            echo "ERROR: zip contains iCloud-duplicate files (pattern ' 2.'):" >&2
+            unzip -Z1 godot-ai-plugin.zip | grep ' 2\.' >&2
+            exit 1
+          fi
+          echo "Zip structure verified: addons/godot_ai/..."
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
