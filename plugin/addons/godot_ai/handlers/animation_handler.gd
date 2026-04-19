@@ -100,11 +100,13 @@ func create_animation(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
 			"Invalid loop_mode '%s'. Valid: %s" % [loop_mode_str, ", ".join(_LOOP_MODES.keys())])
 
-	var resolved := _resolve_player(player_path)
+	var resolved := _resolve_player(player_path, true)
 	if resolved.has("error"):
 		return resolved
 	var player: AnimationPlayer = resolved.player
 	var library: AnimationLibrary = resolved.library
+	var created_player: bool = resolved.get("player_created", false)
+	var player_parent: Node = resolved.get("player_parent", null)
 	var created_library := false
 	if library == null:
 		library = AnimationLibrary.new()
@@ -123,7 +125,8 @@ func create_animation(params: Dictionary) -> Dictionary:
 	anim.loop_mode = _LOOP_MODES[loop_mode_str]
 
 	_commit_animation_add("MCP: Create animation %s" % anim_name,
-		player, library, created_library, anim_name, anim, old_anim)
+		player, library, created_library, anim_name, anim, old_anim,
+		created_player, player_parent)
 
 	return {
 		"data": {
@@ -131,7 +134,8 @@ func create_animation(params: Dictionary) -> Dictionary:
 			"name": anim_name,
 			"length": length,
 			"loop_mode": loop_mode_str,
-			"library_created": created_library,
+			"library_created": created_library or created_player,
+			"animation_player_created": created_player,
 			"overwritten": old_anim != null,
 			"undoable": true,
 		}
@@ -672,28 +676,8 @@ func create_simple(params: Dictionary) -> Dictionary:
 				"via animation_add_property_track instead of two separate tweens.")
 		seen_paths[dup_key] = true
 
-	var resolved := _resolve_or_create_player(player_path)
-	if resolved.has("error"):
-		return resolved
-	var player: AnimationPlayer = resolved.player
-	var library: AnimationLibrary = resolved.library
-	var created_library := false
-	if library == null:
-		library = AnimationLibrary.new()
-		created_library = true
-	var created_player: bool = resolved.get("player_created", false)
-	var player_parent: Node = resolved.get("player_parent", null)
-
-	var overwrite: bool = params.get("overwrite", false)
-	var old_anim: Animation = null
-	if library.has_animation(anim_name):
-		if not overwrite:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
-				"Animation '%s' already exists. Pass overwrite=true or delete it first." % anim_name)
-		old_anim = library.get_animation(anim_name)
-
-	# Compute auto length only when length is absent or null; reject explicit
-	# invalid values instead of silently falling through to auto-compute.
+	# Compute/validate length before resolving the player — a fresh auto-created
+	# AnimationPlayer is a detached Node that leaks if we return after creation.
 	var has_length: bool = params.has("length") and params.get("length") != null
 	var computed_length: float = 0.0
 	if has_length:
@@ -709,8 +693,33 @@ func create_simple(params: Dictionary) -> Dictionary:
 		if computed_length <= 0.0:
 			computed_length = 1.0
 
+	var resolved := _resolve_player(player_path, true)
+	if resolved.has("error"):
+		return resolved
+	var player: AnimationPlayer = resolved.player
+	var library: AnimationLibrary = resolved.library
+	var created_player: bool = resolved.get("player_created", false)
+	var player_parent: Node = resolved.get("player_parent", null)
+	var created_library := false
+	if library == null:
+		library = AnimationLibrary.new()
+		created_library = true
+
+	var overwrite: bool = params.get("overwrite", false)
+	var old_anim: Animation = null
+	if library.has_animation(anim_name):
+		if not overwrite:
+			if created_player:
+				player.queue_free()
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+				"Animation '%s' already exists. Pass overwrite=true or delete it first." % anim_name)
+		old_anim = library.get_animation(anim_name)
+
 	# Pre-coerce all tween values before touching the anim — coercion errors
 	# surface as INVALID_PARAMS, not silent garbage keyframes.
+	# When the player was auto-created, it isn't in the tree yet — pass its
+	# future parent so the coercer can still resolve target property types.
+	var coerce_root: Node = player_parent if created_player else null
 	var per_track_keyframes: Array = []
 	for spec in tweens:
 		var target: String = str(spec.get("target", ""))
@@ -719,11 +728,15 @@ func create_simple(params: Dictionary) -> Dictionary:
 		var duration: float = float(spec.get("duration", 1.0))
 		var delay: float = float(spec.get("delay", 0.0))
 		var trans_str = spec.get("transition", "linear")
-		var from_result := _coerce_value_for_track(spec.get("from"), track_path, player)
+		var from_result := _coerce_value_for_track(spec.get("from"), track_path, player, coerce_root)
 		if from_result.has("error"):
+			if created_player:
+				player.queue_free()
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "tween '%s': %s" % [track_path, from_result.error])
-		var to_result := _coerce_value_for_track(spec.get("to"), track_path, player)
+		var to_result := _coerce_value_for_track(spec.get("to"), track_path, player, coerce_root)
 		if to_result.has("error"):
+			if created_player:
+				player.queue_free()
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "tween '%s': %s" % [track_path, to_result.error])
 		per_track_keyframes.append({
 			"track_path": track_path,
@@ -745,7 +758,7 @@ func create_simple(params: Dictionary) -> Dictionary:
 	# creation (if any), and the animation add. A single Ctrl-Z rolls back all.
 	_commit_animation_add("MCP: Create animation %s (%d tracks)" % [anim_name, anim.get_track_count()],
 		player, library, created_library, anim_name, anim, old_anim,
-		player_parent, created_player)
+		created_player, player_parent)
 
 	return {
 		"data": {
@@ -754,7 +767,7 @@ func create_simple(params: Dictionary) -> Dictionary:
 			"length": computed_length,
 			"loop_mode": loop_mode_str,
 			"track_count": anim.get_track_count(),
-			"library_created": created_library,
+			"library_created": created_library or created_player,
 			"animation_player_created": created_player,
 			"overwritten": old_anim != null,
 			"undoable": true,
@@ -1210,10 +1223,11 @@ static func _direction_offset(kind: String, direction: String, distance: float) 
 # Helpers — undo
 # ============================================================================
 
-## Shared undo setup for create_animation and create_simple. Handles both
-## fresh-create and overwrite cases in a single atomic action. When
-## `created_player` is true, also bundles the AnimationPlayer add_child into
-## the same action so a single Ctrl-Z rolls back player + library + anim.
+## Shared undo setup for create_animation and create_simple. Handles fresh-
+## create, overwrite, library auto-create, and player auto-create in a single
+## atomic action. When `created_player` is true, the player already has the
+## library attached (eagerly, from `_instantiate_player`) and the library
+## doesn't need its own undo bookkeeping — it rides along with the add_child.
 func _commit_animation_add(
 	action_label: String,
 	player: AnimationPlayer,
@@ -1222,17 +1236,18 @@ func _commit_animation_add(
 	anim_name: String,
 	anim: Animation,
 	old_anim: Animation,  ## null when not overwriting
-	player_parent: Node = null,  ## non-null only when created_player is true
 	created_player: bool = false,
+	player_parent: Node = null,
 ) -> void:
 	_undo_redo.create_action(action_label)
-	if created_player and player_parent != null:
+	if created_player:
 		var scene_root := EditorInterface.get_edited_scene_root()
 		_undo_redo.add_do_method(player_parent, "add_child", player, true)
 		_undo_redo.add_do_method(player, "set_owner", scene_root)
-		_undo_redo.add_undo_method(player_parent, "remove_child", player)
 		_undo_redo.add_do_reference(player)
-	if created_library:
+		_undo_redo.add_do_reference(library)
+		_undo_redo.add_undo_method(player_parent, "remove_child", player)
+	elif created_library:
 		_undo_redo.add_do_method(player, "add_animation_library", "", library)
 		_undo_redo.add_undo_method(player, "remove_animation_library", "")
 		_undo_redo.add_do_reference(library)
@@ -1254,16 +1269,25 @@ func _commit_animation_add(
 # ============================================================================
 
 ## Resolve an AnimationPlayer and its default library for write operations.
-## Returns {player, library} on success, or an error dict.
-## library is null if the player exists but has no default library yet —
-## callers bundle an `add_animation_library` step into their undo action.
-func _resolve_player(player_path: String) -> Dictionary:
+## Returns {player, library, player_created, player_parent} on success, or an
+## error dict. library is null if the player exists but has no default library
+## yet — callers bundle an `add_animation_library` step into their undo action.
+##
+## When `create_if_missing` is true and `player_path` resolves to nothing, a
+## fresh AnimationPlayer is instantiated (with an empty default library attached
+## eagerly) but is NOT added to the scene tree — callers must bundle the
+## add_child step into their undo action via `_commit_animation_add`.
+## If the resolved node exists but isn't an AnimationPlayer, that's still an
+## error — we don't clobber an existing node of a different type.
+func _resolve_player(player_path: String, create_if_missing: bool = false) -> Dictionary:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 	var node := ScenePath.resolve(player_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % player_path)
+		if not create_if_missing:
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % player_path)
+		return _instantiate_player(player_path, scene_root)
 	if not node is AnimationPlayer:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
 			"Node at %s is not an AnimationPlayer (got %s)" % [player_path, node.get_class()])
@@ -1271,7 +1295,44 @@ func _resolve_player(player_path: String) -> Dictionary:
 	var lib: AnimationLibrary = null
 	if player.has_animation_library(""):
 		lib = player.get_animation_library("")
-	return {"player": player, "library": lib}
+	return {"player": player, "library": lib, "player_created": false, "player_parent": null}
+
+
+## Build a new AnimationPlayer (with empty default library) for insertion under
+## the parent implied by `player_path`. Returns an error dict if the parent
+## can't be resolved or the path has no usable leaf name.
+func _instantiate_player(player_path: String, scene_root: Node) -> Dictionary:
+	var slash := player_path.rfind("/")
+	var parent_path: String
+	var player_name: String
+	if slash < 0:
+		parent_path = ""
+		player_name = player_path
+	else:
+		parent_path = player_path.substr(0, slash)
+		player_name = player_path.substr(slash + 1)
+	if player_name.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			"Cannot auto-create AnimationPlayer: player_path '%s' has no leaf name" % player_path)
+	var parent: Node
+	if parent_path.is_empty():
+		parent = scene_root
+	else:
+		parent = ScenePath.resolve(parent_path, scene_root)
+	if parent == null:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			"Cannot auto-create AnimationPlayer at %s: %s" % [
+				player_path, ScenePath.format_parent_error(parent_path, scene_root)])
+	var new_player := AnimationPlayer.new()
+	new_player.name = player_name
+	var lib := AnimationLibrary.new()
+	new_player.add_animation_library("", lib)
+	return {
+		"player": new_player,
+		"library": lib,
+		"player_created": true,
+		"player_parent": parent,
+	}
 
 
 ## Like `_resolve_player`, but when the node at `player_path` doesn't exist,
@@ -1372,8 +1433,12 @@ func _resolve_animation(player: AnimationPlayer, anim_name: String) -> Dictionar
 ## yet (authoring-time path). Errors when the target exists but the
 ## property doesn't, or when parsing a typed value (Color/Vector2/Vector3)
 ## clearly fails — better to reject than silently store garbage.
-static func _coerce_value_for_track(value: Variant, track_path: String, player: AnimationPlayer) -> Dictionary:
-	var ctx := _resolve_track_prop_context(track_path, player)
+## `override_root_node` lets callers supply the root to resolve target paths
+## against when the player isn't in the tree yet (auto-create flow) — the
+## player's future parent stands in for the root the AnimationPlayer will
+## eventually use.
+static func _coerce_value_for_track(value: Variant, track_path: String, player: AnimationPlayer, override_root_node: Node = null) -> Dictionary:
+	var ctx := _resolve_track_prop_context(track_path, player, override_root_node)
 	if ctx.has("error"):
 		return {"error": ctx.error}
 	return _coerce_with_context(value, ctx)
@@ -1390,7 +1455,7 @@ static func _coerce_value_for_track(value: Variant, track_path: String, player: 
 ## boundary), resolves the base property on the target, and for known
 ## scalar subpaths (x/y/z/w on vectors, r/g/b/a on Color) narrows the
 ## coerce target to TYPE_FLOAT so JSON numbers land as floats, not dicts.
-static func _resolve_track_prop_context(track_path: String, player: AnimationPlayer) -> Dictionary:
+static func _resolve_track_prop_context(track_path: String, player: AnimationPlayer, override_root_node: Node = null) -> Dictionary:
 	var colon := track_path.find(":")
 	if colon < 0:
 		return {"pass_through": true}
@@ -1403,8 +1468,8 @@ static func _resolve_track_prop_context(track_path: String, player: AnimationPla
 	var prop_base := prop_full if sub_colon < 0 else prop_full.substr(0, sub_colon)
 	var prop_sub := "" if sub_colon < 0 else prop_full.substr(sub_colon + 1)
 
-	var root_node: Node = null
-	if player.is_inside_tree():
+	var root_node: Node = override_root_node
+	if root_node == null and player.is_inside_tree():
 		var rn := player.root_node
 		if rn != NodePath():
 			root_node = player.get_node_or_null(rn)

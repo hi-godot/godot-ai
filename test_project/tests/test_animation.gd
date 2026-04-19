@@ -1032,7 +1032,143 @@ func test_create_animation_reports_library_created_false_when_present() -> void:
 	assert_has_key(result, "data")
 	assert_eq(result.data.library_created, false,
 		"library_created should be false when the player already has one")
+	assert_eq(result.data.animation_player_created, false,
+		"animation_player_created should be false when the player already exists")
 	_remove_node(player_path)
+
+
+# ─── auto-create AnimationPlayer ─────────────────────────────────────────────
+
+func test_create_animation_auto_creates_player_when_missing() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var player_path := "/%s/AutoCreatedAP1" % scene_root.name
+	assert_true(ScenePath.resolve(player_path, scene_root) == null,
+		"precondition: player path should not resolve yet")
+
+	var result := _handler.create_animation({
+		"player_path": player_path,
+		"name": "idle",
+		"length": 1.0,
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.animation_player_created, true,
+		"should signal auto-creation in the response")
+	assert_eq(result.data.library_created, true,
+		"library_created should also be true for a fresh player")
+
+	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	assert_true(player != null, "AnimationPlayer should exist at the requested path")
+	assert_true(player.has_animation("idle"))
+
+	_remove_node(player_path)
+
+
+func test_create_animation_auto_create_is_undoable() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var player_path := "/%s/AutoCreatedAP2" % scene_root.name
+	var result := _handler.create_animation({
+		"player_path": player_path,
+		"name": "idle",
+		"length": 1.0,
+	})
+	assert_eq(result.data.animation_player_created, true)
+
+	# Undo: player AND animation should both vanish in one action.
+	_undo_redo.undo()
+	assert_true(ScenePath.resolve(player_path, scene_root) == null,
+		"undo should remove the auto-created player")
+
+	# Redo: player and animation come back.
+	_undo_redo.redo()
+	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	assert_true(player != null, "redo should restore the player")
+	assert_true(player.has_animation("idle"), "redo should restore the animation")
+
+	_remove_node(player_path)
+
+
+func test_create_animation_errors_when_path_is_wrong_node_type() -> void:
+	# If player_path resolves to an existing non-AnimationPlayer node, the
+	# original error still fires — we don't clobber another node.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var marker := Node3D.new()
+	marker.name = "NotAnAnimPlayer"
+	scene_root.add_child(marker)
+	marker.set_owner(scene_root)
+	var marker_path := "/%s/NotAnAnimPlayer" % scene_root.name
+
+	var result := _handler.create_animation({
+		"player_path": marker_path,
+		"name": "idle",
+		"length": 1.0,
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "is not an AnimationPlayer")
+
+	scene_root.remove_child(marker)
+	marker.queue_free()
+
+
+func test_create_animation_errors_when_parent_missing() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var result := _handler.create_animation({
+		"player_path": "/%s/MissingParent/AP" % scene_root.name,
+		"name": "idle",
+		"length": 1.0,
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "auto-create")
+
+
+func test_create_simple_auto_creates_player_and_coerces_vector_values() -> void:
+	# Critical for the auto-create flow: coercion uses the would-be parent as
+	# the root for resolving target paths, so {x,y,z} dicts still land as
+	# Vector3 keyframe values even though the player isn't in the tree yet.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var pivot := Node3D.new()
+	pivot.name = "AutoCreateHost"
+	scene_root.add_child(pivot)
+	pivot.set_owner(scene_root)
+
+	var player_path := "/%s/AutoCreateHost/AP" % scene_root.name
+	var result := _handler.create_simple({
+		"player_path": player_path,
+		"name": "slide",
+		"tweens": [
+			{"target": "..", "property": "position",
+			 "from": {"x": 0.0, "y": 0.0, "z": 0.0},
+			 "to": {"x": 1.0, "y": 2.0, "z": 3.0}, "duration": 0.5},
+		],
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.animation_player_created, true)
+
+	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	assert_true(player != null)
+	assert_true(player.has_animation("slide"))
+	var anim := player.get_animation("slide")
+	# Keyframe value must be a Vector3 — if coercion fell through to pass-
+	# through, this would be a Dictionary and animation playback would fail.
+	assert_true(anim.track_get_key_value(0, 1) is Vector3,
+		"auto-created player should still coerce vector dicts to Vector3")
+
+	scene_root.remove_child(pivot)
+	pivot.queue_free()
 
 
 # ─── animation_play empty name ───────────────────────────────────────────────
