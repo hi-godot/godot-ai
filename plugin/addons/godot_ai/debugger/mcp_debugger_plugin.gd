@@ -36,6 +36,15 @@ func _has_capture(prefix: String) -> bool:
 	return prefix == CAPTURE_PREFIX
 
 
+func _setup_session(session_id: int) -> void:
+	## Fires when a game (or remote debugger) attaches. If the CI smoke
+	## test never prints "[debug] session attached" for the capture
+	## request_id's window, the problem is that the game never started a
+	## debug session at all — autoload never ran, or play was rejected.
+	if _log_buffer:
+		_log_buffer.log("[debug] session attached (id=%d)" % session_id)
+
+
 func _capture(message: String, data: Array, _session_id: int) -> bool:
 	## Godot passes the full "prefix:tail" string as `message`.
 	match message:
@@ -44,6 +53,13 @@ func _capture(message: String, data: Array, _session_id: int) -> bool:
 			return true
 		"mcp:screenshot_error":
 			_on_screenshot_error(data)
+			return true
+		"mcp:hello":
+			## Unsolicited boot beacon from the game-side autoload so the
+			## editor log buffer can prove the autoload actually loaded
+			## and registered, independent of capture requests.
+			if _log_buffer:
+				_log_buffer.log("[debug] <- mcp:hello from game_helper")
 			return true
 	return false
 

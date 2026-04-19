@@ -23,16 +23,27 @@ var _registered := false
 
 
 func _ready() -> void:
-	## Only run in a game process with an active editor-debugger link. Skip
-	## in-editor (autoloads without @tool shouldn't instantiate in the
-	## editor, but belt-and-braces) and in exported release builds where
-	## the debugger channel doesn't exist.
+	## Only run in a game process. Autoloads without @tool shouldn't
+	## instantiate in the editor, but belt-and-braces in case a tool-mode
+	## addon pulls us in.
 	if OS.has_feature("editor"):
 		return
-	if not EngineDebugger.is_active():
-		return
+	## Register unconditionally. register_message_capture is safe to call
+	## before the debugger is active — the capture sits until a message
+	## arrives. Don't gate on EngineDebugger.is_active(): at _ready time
+	## the debug-channel handshake may not have completed yet, and if we
+	## skip registration we'll never notice it later.
 	EngineDebugger.register_message_capture(CAPTURE_PREFIX, _on_debug_message)
 	_registered = true
+	## Print is picked up by Godot's remote-stdout forwarder so it shows
+	## up in the editor's Output panel — useful for diagnosing why a
+	## capture request timed out.
+	print("[godot_ai game_helper] registered mcp capture (debugger active=%s)"
+		% EngineDebugger.is_active())
+	## Boot beacon so the editor side can confirm the autoload ran even
+	## if no screenshot was ever requested.
+	if EngineDebugger.is_active():
+		EngineDebugger.send_message("mcp:hello", [])
 
 
 func _exit_tree() -> void:
