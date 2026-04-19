@@ -21,11 +21,25 @@ const CAPTURE_PREFIX := "mcp"
 ## register the autoload's capture. 8s keeps the message responsive for
 ## interactive users while still covering slow-CI startup.
 const DEFAULT_TIMEOUT_SEC := 8.0
+## How long to wait for the game-side autoload to beacon mcp:hello
+## before sending the screenshot request. Godot's debugger drops
+## messages whose prefix has no registered capture, so sending
+## take_screenshot before the game registers its "mcp" capture is a
+## silent black hole. On CI the game subprocess has been observed
+## taking ~15s to boot + register.
+const GAME_READY_WAIT_SEC := 20.0
 
 var _log_buffer: McpLogBuffer
 
 ## Pending request_id -> {connection, deadline_ts, timer}
 var _pending: Dictionary = {}
+
+## Flipped true when the game-side autoload sends its "mcp:hello" boot
+## beacon on _ready. Reset when the debugger session drops (game stop).
+## Guards request_game_screenshot so we never send into a debugger
+## channel whose receiving capture hasn't been registered yet.
+var _game_ready := false
+signal game_ready
 
 
 func _init(log_buffer: McpLogBuffer = null) -> void:
@@ -46,9 +60,12 @@ func _capture(message: String, data: Array, _session_id: int) -> bool:
 			_on_screenshot_error(data)
 			return true
 		"mcp:hello":
-			## Unsolicited boot beacon from the game-side autoload so the
-			## editor log buffer can prove the autoload actually loaded
-			## and registered, independent of capture requests.
+			## Boot beacon from the game-side autoload. Tells us the
+			## game has registered its "mcp" capture and is safe to send
+			## take_screenshot to — before this, Godot's debugger would
+			## drop our message silently.
+			_game_ready = true
+			game_ready.emit()
 			if _log_buffer:
 				_log_buffer.log("[debug] <- mcp:hello from game_helper")
 			return true
@@ -69,6 +86,26 @@ func request_game_screenshot(
 		push_warning("MCP debugger: screenshot request missing request_id")
 		return
 
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		_send_error(connection, request_id, McpErrorCodes.INTERNAL_ERROR,
+			"Editor main loop is not a SceneTree — cannot schedule capture")
+		return
+
+	## Wait for the game-side autoload to register its "mcp" capture
+	## before sending. Godot's debugger drops messages whose prefix isn't
+	## registered, so sending early is a silent black hole. On a
+	## well-warmed desktop this returns immediately; on a slow CI runner
+	## it can take 10-20s for the game subprocess to boot.
+	if not _game_ready:
+		if _log_buffer:
+			_log_buffer.log("[debug] waiting for game_helper hello (%s)" % request_id)
+		await _wait_for_game_ready(tree, GAME_READY_WAIT_SEC)
+	if not _game_ready:
+		_send_error(connection, request_id, McpErrorCodes.INTERNAL_ERROR,
+			"Game-side autoload never registered its debugger capture within %ds. Is the game actually running? Check Project Settings → Autoload for _mcp_game_helper." % int(GAME_READY_WAIT_SEC))
+		return
+
 	var session: EditorDebuggerSession = _first_active_session()
 	if session == null:
 		_send_error(connection, request_id, McpErrorCodes.INTERNAL_ERROR,
@@ -76,20 +113,23 @@ func request_game_screenshot(
 		return
 
 	_pending[request_id] = {"connection": connection}
-	## MainLoop has no create_timer — it's a SceneTree method. We're inside
-	## the editor, where the main loop is always a SceneTree, but GDScript's
-	## static typing still needs the cast. `create_timer` doesn't declare a
-	## return type in the engine bindings we see, so type `timer` explicitly
-	## rather than inferring.
-	var tree := Engine.get_main_loop() as SceneTree
-	if tree != null:
-		var timer: SceneTreeTimer = tree.create_timer(timeout_sec)
-		timer.timeout.connect(func() -> void: _on_timeout(request_id))
-		_pending[request_id]["timer"] = timer
+	var timer: SceneTreeTimer = tree.create_timer(timeout_sec)
+	timer.timeout.connect(func() -> void: _on_timeout(request_id))
+	_pending[request_id]["timer"] = timer
 
 	session.send_message("mcp:take_screenshot", [request_id, max_resolution])
 	if _log_buffer:
 		_log_buffer.log("[debug] -> mcp:take_screenshot (%s)" % request_id)
+
+
+## Resolve when either mcp:hello arrives (_game_ready flips true) or
+## `max_wait_sec` elapses. Polls each frame via process_frame rather
+## than a monolithic sleep so the editor stays responsive and timing is
+## tight once the hello lands.
+func _wait_for_game_ready(tree: SceneTree, max_wait_sec: float) -> void:
+	var deadline := Time.get_ticks_msec() + int(max_wait_sec * 1000.0)
+	while not _game_ready and Time.get_ticks_msec() < deadline:
+		await tree.process_frame
 
 
 func _first_active_session() -> EditorDebuggerSession:
