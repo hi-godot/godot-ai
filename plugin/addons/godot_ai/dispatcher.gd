@@ -89,13 +89,16 @@ func tick(budget_ms: float = 4.0) -> Array[Dictionary]:
 func _dispatch(cmd: Dictionary) -> Dictionary:
 	var request_id: String = cmd.get("request_id", "")
 	var command: String = cmd.get("command", "")
-	var params: Dictionary = cmd.get("params", {})
-	## Thread the request_id through for handlers that produce deferred
-	## responses. Handlers not using this field simply ignore it.
+	var raw_params: Dictionary = cmd.get("params", {})
+	## Duplicate so the internal _request_id key we thread through doesn't
+	## mutate the queued command's params (which is the same dict we're
+	## about to JSON-log below, and which later readers like batch_execute
+	## shouldn't see dispatcher-internal metadata from).
+	var params: Dictionary = raw_params.duplicate()
 	params["_request_id"] = request_id
 
 	if mcp_logging:
-		_log_buffer.log("[recv] %s(%s)" % [command, JSON.stringify(cmd.get("params", {}))])
+		_log_buffer.log("[recv] %s(%s)" % [command, JSON.stringify(raw_params)])
 
 	var result: Dictionary
 

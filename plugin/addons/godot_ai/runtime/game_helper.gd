@@ -14,8 +14,10 @@ extends Node
 ## This autoload solves that by replying to "mcp:take_screenshot" debug
 ## messages with a PNG of Viewport.get_texture() from inside the game.
 ##
-## No-ops in the editor (OS.has_feature("editor")) and when the debugger
-## channel is inactive (e.g. exported release builds).
+## No-ops in the editor (Engine.is_editor_hint) and silently sits idle
+## when the debugger channel is inactive (e.g. exported release builds)
+## — register_message_capture is safe to call either way, it's
+## send_message that requires an active channel.
 
 const CAPTURE_PREFIX := "mcp"
 
