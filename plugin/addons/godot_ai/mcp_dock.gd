@@ -693,6 +693,13 @@ func _apply_row_status(client_id: String, status: McpClient.Status, error_msg: S
 # --- Update check & self-update ---
 
 func _check_for_updates() -> void:
+	## In a dev checkout `addons/godot_ai/` is a symlink into the canonical
+	## `plugin/` tree, so `FileAccess.open(..., WRITE)` during self-update
+	## follows the symlink and overwrites the user's source files in place.
+	## Devs update via `git pull`, not the dock — skip the GitHub check
+	## entirely to avoid even offering the destructive path. See #116.
+	if McpClientConfigurator.is_dev_checkout():
+		return
 	_http_request.request(RELEASES_URL, ["Accept: application/vnd.github+json"])
 
 
@@ -766,6 +773,18 @@ func _on_download_completed(result: int, response_code: int, _headers: PackedStr
 
 
 func _install_update() -> void:
+	## Belt-and-suspenders check. The banner is already gated on
+	## is_dev_checkout() in _check_for_updates, but a stale cached
+	## _latest_download_url or a code-path change that bypasses the banner
+	## gate would still reach here. In a dev checkout `addons/godot_ai/`
+	## is a symlink; writing into it clobbers the canonical source tree.
+	## Bail before touching disk. See #116.
+	if McpClientConfigurator.is_dev_checkout():
+		_update_btn.text = "Dev checkout — update via git"
+		_update_btn.disabled = true
+		_update_banner.visible = false
+		return
+
 	var zip_path := ProjectSettings.globalize_path(UPDATE_TEMP_ZIP)
 	var install_base := ProjectSettings.globalize_path("res://")
 
