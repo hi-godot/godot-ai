@@ -15,8 +15,10 @@ def register_session_tools(mcp: FastMCP) -> None:
 
         Returns session metadata for each connected editor instance:
         session_id, short name (project basename), godot_version, project_path,
-        editor_pid, current_scene, play_state, readiness, connected_at,
-        last_seen (heartbeat timestamp), and is_active flag.
+        plugin_version, server_version (this running MCP server's package
+        version — same for every session), editor_pid, current_scene,
+        play_state, readiness, connected_at, last_seen (heartbeat timestamp),
+        and is_active flag.
         """
         runtime = DirectRuntime.from_context(ctx)
         return session_handlers.session_list(runtime)

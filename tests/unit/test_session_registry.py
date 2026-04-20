@@ -103,6 +103,14 @@ class TestSessionRegistry:
         assert d["name"] == "test_project"
         assert d["editor_pid"] == 0
 
+    def test_to_dict_includes_server_version(self):
+        from godot_ai import __version__ as running_version
+
+        s = _make_session()
+        d = s.to_dict()
+        assert d["server_version"] == running_version
+        assert d["plugin_version"] == "0.0.1"
+
 
 class TestSessionMetadata:
     def test_name_derived_from_project_path(self):
