@@ -102,6 +102,20 @@ func _add_make_current_to_action(node: Node, type_str: String, scene_root: Node)
 		_undo_redo.add_undo_method(node, "clear_current")
 
 
+# Call AFTER commit_action() whenever the action registered a make_current DO.
+# Re-applies make_current() outside the action if the viewport doesn't yet
+# report the node as current. Idempotent — when the DO took effect normally
+# (the common path), this is a no-op. Closes a macOS-headless race where
+# `is_current()` can return false immediately after a committed
+# add_child → make_current sequence, leaving the handler's response
+# (current=true) out of sync with the viewport (observed CI run 24682342469).
+func _verify_current_after_commit(node: Node) -> void:
+	if node == null or not node.is_inside_tree():
+		return
+	if not _is_current(node):
+		node.make_current()
+
+
 # ============================================================================
 # camera_create
 # ============================================================================
@@ -144,6 +158,8 @@ func create_camera(params: Dictionary) -> Dictionary:
 		_add_make_current_to_action(node, type_str, scene_root)
 	_undo_redo.add_undo_method(parent, "remove_child", node)
 	_undo_redo.commit_action()
+	if make_current:
+		_verify_current_after_commit(node)
 
 	return {
 		"data": {
@@ -210,15 +226,19 @@ func configure(params: Dictionary) -> Dictionary:
 	for prop_name in coerced:
 		_undo_redo.add_do_property(node, prop_name, coerced[prop_name])
 		_undo_redo.add_undo_property(node, prop_name, old_values[prop_name])
+	var verify_current_after := false
 	if current_request != null:
 		var want_on: bool = bool(current_request)
 		var was_on: bool = _is_current(node)
 		if want_on and not was_on:
 			_add_make_current_to_action(node, type_str, scene_root)
+			verify_current_after = true
 		elif not want_on and was_on:
 			_undo_redo.add_do_method(node, "clear_current")
 			_undo_redo.add_undo_method(node, "make_current")
 	_undo_redo.commit_action()
+	if verify_current_after:
+		_verify_current_after_commit(node)
 
 	var applied: Array[String] = []
 	var serialized: Dictionary = {}
@@ -651,6 +671,8 @@ func apply_preset(params: Dictionary) -> Dictionary:
 		_add_make_current_to_action(node, type_str, scene_root)
 	_undo_redo.add_undo_method(parent, "remove_child", node)
 	_undo_redo.commit_action()
+	if make_current:
+		_verify_current_after_commit(node)
 
 	return {
 		"data": {
