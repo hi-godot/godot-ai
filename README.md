@@ -55,6 +55,8 @@ Or [download the latest release ZIP](https://github.com/hi-godot/godot-ai/releas
 
 In Godot, open the **AssetLib** tab, search for **Godot AI**, click **Download**, then **Install**. Note: Asset Library updates lag behind GitHub, so this version may not be the most recent.
 
+> 🚨 **If installing from the Asset Library**, most issues can be resolved by disabling and re-enabling the plugin in **Project > Project Settings > Plugins**.
+
 </details>
 
 ### 2. Enable the plugin
