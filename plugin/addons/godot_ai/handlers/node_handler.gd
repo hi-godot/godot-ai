@@ -260,6 +260,14 @@ func rename_node(params: Dictionary) -> Dictionary:
 	if new_name.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: new_name")
 
+	## The scene root's name is baked into the .tscn serialization and is
+	## referenced by every NodePath that starts with `/<root>` (AnimationPlayer
+	## tracks, RemoteTransform3D targets, exported NodePath @vars, etc.).
+	## Renaming it silently breaks those references. The MCP tool's docstring
+	## has always promised "Cannot rename the scene root" — enforce it. #122
+	if node == scene_root:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Cannot rename the scene root")
+
 	if new_name.validate_node_name() != new_name:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid characters in name: %s" % new_name)
 
@@ -276,12 +284,10 @@ func rename_node(params: Dictionary) -> Dictionary:
 			}
 		}
 
-	# Scene root has no siblings, so skip sibling collision check.
-	if node != scene_root:
-		var parent := node.get_parent()
-		for sibling in parent.get_children():
-			if sibling != node and String(sibling.name) == new_name:
-				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "A sibling already has the name '%s'" % new_name)
+	var parent := node.get_parent()
+	for sibling in parent.get_children():
+		if sibling != node and String(sibling.name) == new_name:
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "A sibling already has the name '%s'" % new_name)
 
 	_undo_redo.create_action("MCP: Rename %s to %s" % [old_name, new_name])
 	_undo_redo.add_do_property(node, "name", new_name)

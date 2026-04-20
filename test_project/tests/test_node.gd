@@ -476,21 +476,29 @@ func test_rename_node_basic() -> void:
 	_undo_redo.undo()
 
 
-func test_rename_node_scene_root() -> void:
-	# Renaming the scene root is allowed (not the .tscn file path, just the node name).
+func test_rename_node_scene_root_rejected() -> void:
+	## Issue #122 regression test. The tool docstring has always said
+	## "Cannot rename the scene root," but the handler silently allowed it
+	## until 1.2.3. The prior version of this test asserted the buggy
+	## behaviour (rename succeeds) — flipped to match the docstring.
+	##
+	## Renaming the scene root must be rejected because its name is baked
+	## into the .tscn serialization and into every NodePath that references
+	## `/<root>` (AnimationPlayer tracks, RemoteTransform3D targets,
+	## exported NodePath @vars, etc.). Silently renaming it breaks those
+	## references with no warning.
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		skip("No scene root — is a scene open?")
 		return
 	var old_name := String(scene_root.name)
+
 	var result := _handler.rename_node({"path": "/" + old_name, "new_name": "RenamedTestRoot"})
-	assert_has_key(result, "data")
-	assert_eq(result.data.name, "RenamedTestRoot")
-	assert_true(result.data.undoable)
-	# Restore the original name to avoid polluting other tests.
-	var restore := _handler.rename_node({"path": "/RenamedTestRoot", "new_name": old_name})
-	assert_has_key(restore, "data")
-	assert_eq(String(scene_root.name), old_name)
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "scene root")
+
+	## Scene root must be unchanged.
+	assert_eq(String(scene_root.name), old_name, "scene root name must not have changed")
 
 
 func test_rename_node_missing_name() -> void:
