@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import cached_property
 
+from godot_ai import __version__ as _SERVER_VERSION
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,6 +55,7 @@ class Session:
             "godot_version": self.godot_version,
             "project_path": self.project_path,
             "plugin_version": self.plugin_version,
+            "server_version": _SERVER_VERSION,
             "protocol_version": self.protocol_version,
             "current_scene": self.current_scene,
             "play_state": self.play_state,
