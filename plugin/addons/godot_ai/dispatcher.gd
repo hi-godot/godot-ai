@@ -2,12 +2,18 @@
 class_name McpDispatcher
 extends RefCounted
 
-## Routes incoming commands to handlers and manages the command queue
-## with a per-frame time budget.
+## Routes incoming commands to handlers and manages the command queue.
+##
+## Handlers may be synchronous or awaitable. Because a single awaitable
+## handler can span multiple frames, tick() kicks off a fire-and-forget
+## drain that delivers responses through `_response_sink`. Only one drain
+## runs at a time so ordering is preserved across `await` boundaries.
 
 var _command_queue: Array[Dictionary] = []
 var _handlers: Dictionary = {}  # command_name -> Callable
 var _log_buffer: McpLogBuffer
+var _response_sink: Callable = Callable()
+var _draining := false
 var mcp_logging := true
 
 
@@ -15,7 +21,12 @@ func _init(log_buffer: McpLogBuffer) -> void:
 	_log_buffer = log_buffer
 
 
-## Register a command handler. The callable receives (params: Dictionary) -> Dictionary.
+func set_response_sink(sink: Callable) -> void:
+	_response_sink = sink
+
+
+## Register a command handler. The callable receives (params: Dictionary) -> Dictionary
+## or an awaitable that eventually returns one.
 func register(command_name: String, handler: Callable) -> void:
 	_handlers[command_name] = handler
 
@@ -26,7 +37,7 @@ func register(command_name: String, handler: Callable) -> void:
 func dispatch_direct(command: String, params: Dictionary) -> Dictionary:
 	if not _handlers.has(command):
 		return McpErrorCodes.make(McpErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
-	return _call_handler(command, params)
+	return await _call_handler(command, params)
 
 
 ## Whether a command is registered.
@@ -66,24 +77,26 @@ func enqueue(cmd: Dictionary) -> void:
 const DEFERRED_RESPONSE := {"_deferred": true}
 
 
-## Process queued commands within a frame budget (milliseconds).
-## Returns an array of response dictionaries to send back.
-func tick(budget_ms: float = 4.0) -> Array[Dictionary]:
-	var responses: Array[Dictionary] = []
+## Start draining the queue. No-op if a drain is already in flight.
+func tick(budget_ms: float = 4.0) -> void:
+	if _draining or _command_queue.is_empty():
+		return
+	_drain(budget_ms)
+
+
+## Budget only bounds how many new commands we *start* in one window;
+## once a handler awaits we always see it through to completion.
+func _drain(budget_ms: float) -> void:
+	_draining = true
 	var start := Time.get_ticks_msec()
-	var idx := 0
-
-	while idx < _command_queue.size() and (Time.get_ticks_msec() - start) < budget_ms:
-		var cmd: Dictionary = _command_queue[idx]
-		var response := _dispatch(cmd)
-		if not response.get("_deferred", false):
-			responses.append(response)
-		idx += 1
-
-	if idx > 0:
-		_command_queue = _command_queue.slice(idx)
-
-	return responses
+	while not _command_queue.is_empty() and (Time.get_ticks_msec() - start) < budget_ms:
+		var cmd: Dictionary = _command_queue.pop_front()
+		var response: Dictionary = await _dispatch(cmd)
+		if response.get("_deferred", false):
+			continue
+		if _response_sink.is_valid():
+			_response_sink.call(response)
+	_draining = false
 
 
 func _dispatch(cmd: Dictionary) -> Dictionary:
@@ -103,7 +116,7 @@ func _dispatch(cmd: Dictionary) -> Dictionary:
 	var result: Dictionary
 
 	if _handlers.has(command):
-		result = _call_handler(command, params)
+		result = await _call_handler(command, params)
 	else:
 		result = McpErrorCodes.make(McpErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
 
@@ -128,7 +141,7 @@ func _dispatch(cmd: Dictionary) -> Dictionary:
 
 
 func _call_handler(command: String, params: Dictionary) -> Dictionary:
-	var result: Dictionary = _handlers[command].call(params)
+	var result: Dictionary = await _handlers[command].call(params)
 	## Handlers must return {"data": ...} on success or {"error": ...} on failure.
 	## Anything else (null, empty, missing keys) means the handler crashed
 	## mid-call — GDScript swallows the error and returns an empty dict.

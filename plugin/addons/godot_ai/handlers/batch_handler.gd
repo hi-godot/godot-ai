@@ -51,7 +51,7 @@ func batch_execute(params: Dictionary) -> Dictionary:
 		var cmd_name: String = item["command"]
 		var sub_params: Dictionary = item.get("params", {})
 
-		var raw_result: Dictionary = _dispatcher.dispatch_direct(cmd_name, sub_params)
+		var raw_result: Dictionary = await _dispatcher.dispatch_direct(cmd_name, sub_params)
 		var status: String = raw_result.get("status", "ok")
 
 		var result_entry: Dictionary = {"command": cmd_name, "status": status}

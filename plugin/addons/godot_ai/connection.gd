@@ -52,8 +52,7 @@ func _process(delta: float) -> void:
 			_check_state_changes()
 
 			if dispatcher:
-				for response in dispatcher.tick():
-					_send_json(response)
+				dispatcher.tick()
 
 		WebSocketPeer.STATE_CLOSED:
 			if _connected:

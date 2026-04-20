@@ -3726,6 +3726,44 @@ async def test_project_stop_handler_times_out_if_readiness_stuck():
     assert 0.9 <= elapsed < 1.5, f"Expected ~1s timeout, got {elapsed:.3f}s"
 
 
+async def test_project_stop_handler_uses_readiness_after_when_present():
+    """Issue #29: new plugin includes authoritative `readiness_after` in the
+    response, so the handler sets session.readiness directly and skips the
+    1s polling loop entirely — no `readiness_changed` event required."""
+    import time
+
+    from godot_ai.sessions.registry import Session
+
+    class ReadinessClient:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        async def send(self, command, params=None, session_id=None, timeout=5.0):
+            self.calls.append({"command": command, "params": params})
+            return {"stopped": True, "undoable": False, "readiness_after": "ready"}
+
+    client = ReadinessClient()
+    registry = SessionRegistry()
+    session = Session(
+        session_id="t@0003",
+        godot_version="4.6",
+        project_path="/tmp/test",
+        plugin_version="0.1.0",
+    )
+    session.readiness = "playing"
+    registry.register(session)
+    registry.set_active(session.session_id)
+    runtime = DirectRuntime(registry=registry, client=client)
+
+    t0 = time.monotonic()
+    result = await project_handlers.project_stop(runtime)
+    elapsed = time.monotonic() - t0
+    # No polling — the plugin already waited for the frame tick.
+    assert elapsed < 0.1, f"Expected no polling, got {elapsed:.3f}s"
+    assert session.readiness == "ready"
+    assert result["readiness_after"] == "ready"
+
+
 # ---------------------------------------------------------------------------
 # Material handler tests
 # ---------------------------------------------------------------------------

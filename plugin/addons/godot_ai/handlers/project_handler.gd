@@ -135,11 +135,19 @@ func stop_project(_params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Project is not running")
 
 	EditorInterface.stop_playing_scene()
+	## Yield twice so Godot can tick the stop-play state change. After this
+	## is_playing_scene() reflects truth and Connection.get_readiness() is
+	## authoritative — callers can use `readiness_after` without polling.
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree != null:
+		await tree.process_frame
+		await tree.process_frame
 	return {
 		"data": {
 			"stopped": true,
 			"undoable": false,
 			"reason": "Play/stop is a runtime action",
+			"readiness_after": Connection.get_readiness(),
 		}
 	}
 

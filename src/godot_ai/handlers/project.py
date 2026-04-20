@@ -39,23 +39,28 @@ async def project_run(
 
 
 async def project_stop(runtime: Runtime) -> dict:
-    """Stop the running game and wait for readiness to reflect the stop.
+    """Stop the running game and reflect the post-stop readiness.
 
-    The plugin's `_process` emits a `readiness_changed` event on the next
-    frame once `EditorInterface.is_playing_scene()` flips to false. A write
-    tool called immediately after this handler returns would otherwise race
-    the event and see stale `readiness="playing"`. We poll `session.readiness`
-    until it leaves "playing", bounded by a 1s timeout so a hung play process
-    doesn't block the handler indefinitely — in that case readiness stays
-    "playing" and the next write tool correctly blocks with EDITOR_NOT_READY.
+    The plugin's `stop_project` handler awaits two process_frames before
+    returning, so `readiness_after` in the response is authoritative — we
+    just copy it into the session and the next write tool sees truth
+    without a polling loop.
+
+    Older plugins (pre-#29) don't include `readiness_after`; fall back to
+    the legacy event-poll so a version-skew client still converges.
     """
     result = await runtime.send_command("stop_project")
     session = runtime.get_active_session()
-    if session is not None:
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + 1.0
-        while session.readiness == "playing" and loop.time() < deadline:
-            await asyncio.sleep(0.02)
+    if session is None:
+        return result
+    readiness_after = result.get("readiness_after")
+    if readiness_after is not None:
+        session.readiness = readiness_after
+        return result
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 1.0
+    while session.readiness == "playing" and loop.time() < deadline:
+        await asyncio.sleep(0.02)
     return result
 
 

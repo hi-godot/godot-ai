@@ -37,7 +37,7 @@ func run_tests(params: Dictionary) -> Dictionary:
 		"log_buffer": _log_buffer,
 	}
 
-	var results := _runner.run_suites(suites, suite_filter, test_filter, ctx, verbose)
+	var results: Dictionary = await _runner.run_suites(suites, suite_filter, test_filter, ctx, verbose)
 	if not discovery.errors.is_empty():
 		results["load_errors"] = discovery.errors
 	return {"data": results}

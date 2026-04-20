@@ -173,5 +173,5 @@ func test_run_project_autosave_false_restores_editor_setting() -> void:
 # ----- stop_project -----
 
 func test_stop_project_rejects_when_not_playing() -> void:
-	var result := _handler.stop_project({})
+	var result: Dictionary = await _handler.stop_project({})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)

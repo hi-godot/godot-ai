@@ -45,34 +45,34 @@ func _undo_for_scene(scene_root: Node) -> UndoRedo:
 # ----- Validation -----
 
 func test_rejects_non_list_commands() -> void:
-	var result := _handler.batch_execute({"commands": "nope"})
+	var result: Dictionary = await _handler.batch_execute({"commands": "nope"})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
 func test_rejects_empty_commands() -> void:
-	var result := _handler.batch_execute({"commands": []})
+	var result: Dictionary = await _handler.batch_execute({"commands": []})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
 func test_rejects_missing_command_field() -> void:
-	var result := _handler.batch_execute({"commands": [{"params": {}}]})
+	var result: Dictionary = await _handler.batch_execute({"commands": [{"params": {}}]})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
 func test_rejects_non_dict_item() -> void:
-	var result := _handler.batch_execute({"commands": [42]})
+	var result: Dictionary = await _handler.batch_execute({"commands": [42]})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
 func test_rejects_unknown_subcommand() -> void:
-	var result := _handler.batch_execute({"commands": [{"command": "does_not_exist"}]})
+	var result: Dictionary = await _handler.batch_execute({"commands": [{"command": "does_not_exist"}]})
 	assert_is_error(result, McpErrorCodes.UNKNOWN_COMMAND)
 
 
 func test_unknown_command_error_mentions_plugin_names() -> void:
 	# Simulates the common mistake: passing MCP tool name "node_create"
 	# instead of the plugin command "create_node".
-	var result := _handler.batch_execute({"commands": [{"command": "node_create"}]})
+	var result: Dictionary = await _handler.batch_execute({"commands": [{"command": "node_create"}]})
 	assert_is_error(result, McpErrorCodes.UNKNOWN_COMMAND)
 	var msg: String = result.error.message
 	assert_contains(msg, "plugin command names", "error should explain naming convention")
@@ -80,7 +80,7 @@ func test_unknown_command_error_mentions_plugin_names() -> void:
 
 
 func test_unknown_command_populates_suggestions_field() -> void:
-	var result := _handler.batch_execute({"commands": [{"command": "node_create"}]})
+	var result: Dictionary = await _handler.batch_execute({"commands": [{"command": "node_create"}]})
 	assert_is_error(result, McpErrorCodes.UNKNOWN_COMMAND)
 	assert_has_key(result.error, "data")
 	assert_has_key(result.error.data, "suggestions")
@@ -91,7 +91,7 @@ func test_unknown_command_populates_suggestions_field() -> void:
 
 func test_unknown_command_empty_suggestions_when_no_match() -> void:
 	# Pure gibberish should still error cleanly, with suggestions empty or low-similarity.
-	var result := _handler.batch_execute({"commands": [{"command": "zzzqqqxxx_totally_bogus"}]})
+	var result: Dictionary = await _handler.batch_execute({"commands": [{"command": "zzzqqqxxx_totally_bogus"}]})
 	assert_is_error(result, McpErrorCodes.UNKNOWN_COMMAND)
 	assert_has_key(result.error, "data")
 	assert_has_key(result.error.data, "suggestions")
@@ -100,7 +100,7 @@ func test_unknown_command_empty_suggestions_when_no_match() -> void:
 
 
 func test_rejects_batch_execute_as_subcommand() -> void:
-	var result := _handler.batch_execute({
+	var result: Dictionary = await _handler.batch_execute({
 		"commands": [{"command": "batch_execute", "params": {}}],
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
@@ -109,7 +109,7 @@ func test_rejects_batch_execute_as_subcommand() -> void:
 # ----- Success path -----
 
 func test_all_succeed_returns_results() -> void:
-	var result := _handler.batch_execute({
+	var result: Dictionary = await _handler.batch_execute({
 		"commands": [
 			{"command": "_ok_pure", "params": {}},
 			{"command": "_ok_pure", "params": {}},
@@ -125,7 +125,7 @@ func test_all_succeed_returns_results() -> void:
 
 
 func test_success_undoable_false_when_any_subcommand_not_undoable() -> void:
-	var result := _handler.batch_execute({
+	var result: Dictionary = await _handler.batch_execute({
 		"commands": [{"command": "_ok_pure", "params": {}}],
 	})
 	# _ok_pure returns undoable=false; batch reflects that.
@@ -135,7 +135,7 @@ func test_success_undoable_false_when_any_subcommand_not_undoable() -> void:
 # ----- Failure / stop semantics -----
 
 func test_stops_on_first_error() -> void:
-	var result := _handler.batch_execute({
+	var result: Dictionary = await _handler.batch_execute({
 		"commands": [
 			{"command": "_ok_pure", "params": {}},
 			{"command": "_fail_pure", "params": {}},
@@ -153,7 +153,7 @@ func test_stops_on_first_error() -> void:
 func test_no_rollback_when_undo_false() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var before_count := scene_root.get_child_count()
-	var result := _handler.batch_execute({
+	var result: Dictionary = await _handler.batch_execute({
 		"undo": false,
 		"commands": [
 			{"command": "create_node", "params": {"type": "Node3D", "name": "_BatchTempA", "parent_path": "/Main"}},
@@ -172,7 +172,7 @@ func test_no_rollback_when_undo_false() -> void:
 func test_rollback_on_failure_with_undo_true() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var before_count := scene_root.get_child_count()
-	var result := _handler.batch_execute({
+	var result: Dictionary = await _handler.batch_execute({
 		"commands": [
 			{"command": "create_node", "params": {"type": "Node3D", "name": "_BatchTempB", "parent_path": "/Main"}},
 			{"command": "_fail_pure", "params": {}},
@@ -188,7 +188,7 @@ func test_rollback_on_failure_with_undo_true() -> void:
 
 func test_real_multi_step_success() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var result := _handler.batch_execute({
+	var result: Dictionary = await _handler.batch_execute({
 		"commands": [
 			{"command": "create_node", "params": {"type": "Node3D", "name": "_BatchMulti", "parent_path": "/Main"}},
 			{"command": "set_property", "params": {"path": "/Main/_BatchMulti", "property": "position", "value": {"x": 1.0, "y": 2.0, "z": 3.0}}},

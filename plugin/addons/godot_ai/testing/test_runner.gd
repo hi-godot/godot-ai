@@ -19,7 +19,11 @@ func run_suite(suite: McpTestSuite, test_filter: String = "") -> void:
 
 		suite._reset()
 		suite.setup()
-		suite.call(method_name)
+		## `await` a coroutine test method (a test that uses `await` internally
+		## returns a GDScriptFunctionState that must be awaited to run to
+		## completion). `await` on a non-coroutine return resolves immediately,
+		## so synchronous tests are unaffected.
+		await suite.call(method_name)
 		suite.teardown()
 
 		## Issue #19 defence: free any `_McpTest*` nodes the test created, even
@@ -98,7 +102,7 @@ func run_suites(suites: Array, suite_filter: String = "", test_filter: String = 
 				"assertion_count": 0,
 			})
 		else:
-			run_suite(suite, test_filter)
+			await run_suite(suite, test_filter)
 		suite.suite_teardown()
 
 		## Remove any nodes the suite left behind (failed undo, missing cleanup).

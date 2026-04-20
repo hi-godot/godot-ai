@@ -183,6 +183,7 @@ func _enter_tree() -> void:
 	)
 
 	_connection.dispatcher = _dispatcher
+	_dispatcher.set_response_sink(_connection._send_json)
 	add_child(_connection)
 
 	# Dock panel
