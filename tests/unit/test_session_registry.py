@@ -111,6 +111,18 @@ class TestSessionRegistry:
         assert d["server_version"] == running_version
         assert d["plugin_version"] == "0.0.1"
 
+    def test_server_launch_mode_defaults_to_unknown(self):
+        ## A legacy plugin that doesn't populate server_launch_mode lands
+        ## as "unknown" — agents can detect this alongside plugin_version
+        ## to tell "old plugin" from "mode not detectable on this system".
+        s = _make_session()
+        assert s.server_launch_mode == "unknown"
+        assert s.to_dict()["server_launch_mode"] == "unknown"
+
+    def test_server_launch_mode_round_trips_through_to_dict(self):
+        s = _make_session(server_launch_mode="dev_venv")
+        assert s.to_dict()["server_launch_mode"] == "dev_venv"
+
 
 class TestSessionMetadata:
     def test_name_derived_from_project_path(self):
@@ -142,6 +154,7 @@ class TestSessionMetadata:
         original = s.last_seen
         ## busy-wait a tiny amount to guarantee timestamp delta
         import time
+
         time.sleep(0.001)
         s.touch()
         assert s.last_seen > original

@@ -66,6 +66,30 @@ func test_every_client_has_manual_command() -> void:
 		assert_true(not cmd.is_empty(), "%s missing manual command" % client_id)
 
 
+# ----- server launch mode -----
+
+
+func test_server_launch_mode_returns_known_string() -> void:
+	## get_server_launch_mode() powers the handshake field agents read to
+	## detect plugin/server version drift. Always returns one of four
+	## documented values so callers can pattern-match without guessing.
+	var mode := McpClientConfigurator.get_server_launch_mode()
+	assert_contains(["dev_venv", "uvx", "system", "unknown"], mode, "Unexpected launch mode: %s" % mode)
+
+
+func test_server_launch_mode_agrees_with_get_server_command() -> void:
+	## The two accessors resolve the same tiers; if get_server_command
+	## returns a non-empty command, get_server_launch_mode must not be
+	## "unknown" (and vice versa). Keeps the pair in sync against future
+	## refactors that add a fourth launcher to one but not the other.
+	var cmd := McpClientConfigurator.get_server_command()
+	var mode := McpClientConfigurator.get_server_launch_mode()
+	if cmd.is_empty():
+		assert_eq(mode, "unknown", "Empty command should map to unknown mode")
+	else:
+		assert_true(mode != "unknown", "Non-empty command must map to a concrete mode, got %s" % mode)
+
+
 # ----- path template -----
 
 func test_path_template_expands_home() -> void:

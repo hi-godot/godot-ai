@@ -26,6 +26,12 @@ class Session:
     play_state: str = "stopped"
     readiness: str = "ready"
     editor_pid: int = 0
+    ## Which launcher tier the plugin resolved the Python server from —
+    ## "dev_venv" | "uvx" | "system" | "unknown". Lets agents notice when a
+    ## plugin-level update left an older server running, or when a stray
+    ## dev `.venv` is silently overriding the published install. Older
+    ## plugins omit this in the handshake; default is "unknown".
+    server_launch_mode: str = "unknown"
     connected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_seen: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -61,6 +67,7 @@ class Session:
             "play_state": self.play_state,
             "readiness": self.readiness,
             "editor_pid": self.editor_pid,
+            "server_launch_mode": self.server_launch_mode,
             "connected_at": self.connected_at.isoformat(),
             "last_seen": self.last_seen.isoformat(),
         }

@@ -95,3 +95,28 @@ class TestHandshakeMessage:
         parsed = json.loads(raw)
         assert parsed["type"] == "handshake"
         assert parsed["session_id"] == "sess-001"
+
+    def test_server_launch_mode_defaults_to_unknown(self):
+        ## Older plugins omit server_launch_mode; server should parse the
+        ## handshake cleanly rather than reject it, and default to "unknown"
+        ## so agents can distinguish "old plugin" from "mode could not be
+        ## determined" via plugin_version.
+        msg = HandshakeMessage(
+            session_id="sess-001",
+            godot_version="4.4.1",
+            project_path="/tmp/project",
+            plugin_version="0.0.1",
+        )
+        assert msg.server_launch_mode == "unknown"
+
+    def test_server_launch_mode_parsed_when_supplied(self):
+        msg = HandshakeMessage.model_validate(
+            {
+                "session_id": "sess-001",
+                "godot_version": "4.4.1",
+                "project_path": "/tmp/project",
+                "plugin_version": "0.0.1",
+                "server_launch_mode": "dev_venv",
+            }
+        )
+        assert msg.server_launch_mode == "dev_venv"

@@ -128,6 +128,19 @@ static func get_server_command() -> Array[String]:
 	return []
 
 
+## Which tier `get_server_command` would resolve to, without side-effects.
+## Returned as a stable string so handshakes and session_list can expose it
+## to MCP callers. Values track the `Literal` on the Python side.
+static func get_server_launch_mode() -> String:
+	if not _cached_venv_python().is_empty():
+		return "dev_venv"
+	if not find_uvx().is_empty():
+		return "uvx"
+	if not _find_system_install().is_empty():
+		return "system"
+	return "unknown"
+
+
 static func find_uvx() -> String:
 	var names: Array[String] = []
 	names.append("uvx.exe" if OS.get_name() == "Windows" else "uvx")

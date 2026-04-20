@@ -64,6 +64,7 @@ class GodotWebSocketServer:
                 protocol_version=handshake.protocol_version,
                 readiness=handshake.readiness,
                 editor_pid=handshake.editor_pid,
+                server_launch_mode=handshake.server_launch_mode,
             )
             self.registry.register(session)
             self._connections[session_id] = ws

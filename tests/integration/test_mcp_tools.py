@@ -987,6 +987,32 @@ class TestSessionTools:
         result = await client.call_tool("session_activate", {"session_id": "no-such-session"})
         assert result.data["status"] == "error"
 
+    async def test_session_list_reports_server_launch_mode_from_handshake(self, harness):
+        ## End-to-end: plugin sends server_launch_mode in handshake →
+        ## websocket parses it → Session stores it → session_list surfaces it.
+        ## This is the signal agents use to detect "plugin self-updated but
+        ## old server still running" drift described in #113.
+        plugin = await harness.connect_plugin(
+            session_id="dev-session", server_launch_mode="dev_venv"
+        )
+        try:
+            session = harness.registry.get("dev-session")
+            assert session is not None
+            assert session.to_dict()["server_launch_mode"] == "dev_venv"
+        finally:
+            await plugin.close()
+
+    async def test_session_list_reports_unknown_for_legacy_plugin(self, harness):
+        ## Legacy plugin that doesn't send the field — envelope default
+        ## lands as "unknown" rather than dropping the handshake.
+        plugin = await harness.connect_plugin(session_id="legacy-session")
+        try:
+            session = harness.registry.get("legacy-session")
+            assert session is not None
+            assert session.to_dict()["server_launch_mode"] == "unknown"
+        finally:
+            await plugin.close()
+
 
 # ---------------------------------------------------------------------------
 # client_configure / client_status
@@ -2534,9 +2560,7 @@ class TestProjectRunTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "project_run", {"mode": "current", "autosave": False}
-        )
+        result = await client.call_tool("project_run", {"mode": "current", "autosave": False})
         await task
 
         assert not result.is_error

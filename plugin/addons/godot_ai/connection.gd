@@ -119,6 +119,7 @@ func _send_handshake() -> void:
 		"protocol_version": 1,
 		"readiness": _last_readiness,
 		"editor_pid": OS.get_process_id(),
+		"server_launch_mode": McpClientConfigurator.get_server_launch_mode(),
 	})
 
 

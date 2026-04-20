@@ -44,3 +44,8 @@ class HandshakeMessage(BaseModel):
     readiness: str = "ready"
     ## Optional because older plugins won't send it; server falls back to 0.
     editor_pid: int = 0
+    ## Which launcher tier the plugin resolved for the Python server. Older
+    ## plugins omit the field entirely, which lands as "unknown" on the
+    ## server — distinguishable from a live detection that returned
+    ## "unknown" only by plugin_version.
+    server_launch_mode: str = "unknown"

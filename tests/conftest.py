@@ -62,6 +62,7 @@ class ServerHarness:
         plugin_version: str = "0.0.1",
         readiness: str = "ready",
         editor_pid: int = 0,
+        server_launch_mode: str | None = None,
     ) -> MockGodotPlugin:
         ws = await websockets.connect(f"ws://127.0.0.1:{self.port}")
         handshake = {
@@ -74,6 +75,11 @@ class ServerHarness:
             "readiness": readiness,
             "editor_pid": editor_pid,
         }
+        ## Older plugins don't send server_launch_mode at all; keep the field
+        ## absent when caller passes None so tests can exercise both the
+        ## legacy ("falls through to 'unknown'") and explicit paths.
+        if server_launch_mode is not None:
+            handshake["server_launch_mode"] = server_launch_mode
         await ws.send(json.dumps(handshake))
         # Give the server a moment to process the handshake
         await asyncio.sleep(0.05)
