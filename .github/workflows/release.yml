@@ -26,7 +26,7 @@ jobs:
       id-token: write  # required for PyPI OIDC
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Verify ref is a version tag
         # Guard against a manual workflow_dispatch on a branch ref (e.g.
@@ -40,7 +40,7 @@ jobs:
           fi
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -78,7 +78,7 @@ jobs:
     needs: publish-pypi
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Build plugin ZIP
         # Ship `addons/` + `LICENSE` at the zip's top level. The multi-top
