@@ -154,4 +154,65 @@ if not version:
 print(f'Post-reload health OK: {project} on Godot {version}')
 "
 
+# --- Step 6: Exercise the game-logs path (issue #46 crash site) ---
+# Before the cleanup fix in _exit_tree, logs_read(source=game) on the
+# new plugin would segfault at GameLogBuffer.get_range's first _storage
+# access. This asserts the handler's typed array stays valid across a reload.
+echo "Verifying logs_read source=game..."
+GAMELOGS_RESULT=$(mcp_call_or_die "logs_read source=game" logs_read '{"count":10,"source":"game"}')
+echo "$GAMELOGS_RESULT" | python3 -c "
+import json, sys
+content = json.loads(sys.stdin.read())
+# A fresh editor has no game logs yet — we only care the call returned
+# without SIGSEGV and reports a sane shape. 'source' should echo 'game'.
+if content.get('source') != 'game':
+    print(f'FAIL: logs_read source=game returned wrong source: {content}')
+    sys.exit(1)
+total = content.get('total_count', -1)
+if total < 0:
+    print(f'FAIL: logs_read source=game missing total_count: {content}')
+    sys.exit(1)
+print(f'Game-logs path OK: total={total}, returned={content.get(\"returned_count\", 0)}')
+"
+
+# --- Step 7: Multi-reload churn (cumulative corruption regression) ---
+# The original issue report saw crashes after ~10 reloads. Do 9 more
+# reloads (10 total with step 2 above) interleaved with cheap tool
+# calls — catches both single-reload and cumulative-state regressions.
+echo "Running 9 more reload iterations..."
+for i in $(seq 2 10); do
+  mcp_call_or_die "editor_reload_plugin #$i" editor_reload_plugin '{}' > /dev/null
+  # Rotate the post-reload probe across the three reported-stable tools.
+  case $(( i % 3 )) in
+    0)
+      mcp_call_or_die "editor_state after reload #$i" editor_state '{}' > /dev/null
+      ;;
+    1)
+      mcp_call_or_die "node_find after reload #$i" node_find '{"name":"ReloadTestCube"}' > /dev/null
+      ;;
+    2)
+      mcp_call_or_die "logs_read source=game after reload #$i" logs_read '{"count":5,"source":"game"}' > /dev/null
+      ;;
+  esac
+  echo "  reload #$i OK"
+done
+
+# --- Step 8: Post-churn test_run (ResourceSaver.save path from issue #46) ---
+# The original crash report was "~10 reloads then run full test suite" —
+# the failing backtrace went through ResourceSaver::save during test
+# cleanup. Running the suite here exercises that exact path on top of
+# all the accumulated reload state.
+echo "Running GDScript test suite on reloaded plugin..."
+TESTS_RESULT=$(mcp_call_or_die "test_run post-churn" test_run '{"verbose":false}')
+echo "$TESTS_RESULT" | python3 -c "
+import json, sys
+content = json.loads(sys.stdin.read())
+failed = content.get('failed', -1)
+passed = content.get('passed', 0)
+if failed != 0:
+    print(f'FAIL: {failed} test(s) failed after reload churn (passed={passed})')
+    sys.exit(1)
+print(f'Post-churn test suite OK: {passed} passed, {failed} failed')
+"
+
 echo "Reload smoke test passed"

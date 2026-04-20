@@ -195,17 +195,40 @@ func _enter_tree() -> void:
 
 
 func _exit_tree() -> void:
+	## Outer-to-inner teardown. Dispatcher Callables hold RefCounted handlers
+	## alive past the point where Godot reloads their class_name scripts — the
+	## first post-reload call into a typed-array-holding handler (e.g.
+	## GameLogBuffer._storage) then SIGSEGVs against a stale class descriptor.
+	## See issue #46.
+
+	# Stop inbound work first so _process can't enqueue new commands or
+	# null-deref log_buffer on the next tick mid-teardown.
+	if _connection:
+		_connection.teardown()
+
+	# Break the Callable -> handler ref chain before dropping _handlers, so the
+	# array clear actually decrefs the handler RefCounteds to zero.
+	if _dispatcher:
+		_dispatcher.clear()
+
+	# Handler destructors run here, while their class_name scripts are still loaded.
+	_handlers.clear()
+
 	if _dock:
 		remove_control_from_docks(_dock)
 		_dock.queue_free()
 		_dock = null
 	if _connection:
-		_connection.disconnect_from_server()
 		_connection.queue_free()
 		_connection = null
 	if _debugger_plugin:
 		remove_debugger_plugin(_debugger_plugin)
 		_debugger_plugin = null
+
+	_dispatcher = null
+	_log_buffer = null
+	_game_log_buffer = null
+
 	_stop_server()
 	print("MCP | plugin unloaded")
 
