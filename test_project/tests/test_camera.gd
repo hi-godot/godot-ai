@@ -207,10 +207,21 @@ func test_configure_current_sibling_unmark_single_undo() -> void:
 	assert_eq(second_node.is_current(), true)
 	assert_eq(first_node.is_current(), false)
 
-	# One undo reverts both.
-	_undo_redo.undo()
-	assert_eq(second_node.is_current(), false)
-	assert_eq(first_node.is_current(), true, "Single undo should restore original current camera")
+	# One undo reverts both. Use editor_undo() so we explicitly target the
+	# scene's UndoRedo — EditorUndoRedoManager.undo() picks "newest" across
+	# histories by timestamp, which ties on fast runs (seen flaking on macOS
+	# headless CI).
+	var did_undo := editor_undo(_undo_redo)
+	assert_true(did_undo, "editor_undo returned false — no action was undone")
+	# Diagnostic detail if this ever flakes again: report viewport state and
+	# tree membership so we can tell a handler bug from a test-harness bug.
+	var viewport := scene_root.get_viewport()
+	var viewport_cam: Variant = viewport.get_camera_2d() if viewport != null else null
+	var diag := "viewport_cam=%s first_in_tree=%s second_in_tree=%s" % [
+		viewport_cam, first_node.is_inside_tree(), second_node.is_inside_tree()
+	]
+	assert_eq(second_node.is_current(), false, "After undo second should not be current. %s" % diag)
+	assert_eq(first_node.is_current(), true, "Single undo should restore original current camera. %s" % diag)
 
 
 # ============================================================================
