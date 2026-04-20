@@ -41,17 +41,19 @@
 
 ### 1. Install the plugin
 
-**Recommended — via the [Godot Asset Library](https://godotengine.org/asset-library/asset/5050):** in Godot, open the **AssetLib** tab, search for **Godot AI**, click **Download**, then **Install**.
-
-<details>
-<summary>Or install from source</summary>
+**Recommended — install from source** (always the latest):
 
 ```bash
 git clone https://github.com/hi-godot/godot-ai.git
 cp -r godot-ai/plugin/addons/godot_ai your-project/addons/
 ```
 
-Alternatively, [download the latest release ZIP](https://github.com/hi-godot/godot-ai/releases/latest) and extract `addons/godot_ai` into your project's `addons/` folder.
+Or [download the latest release ZIP](https://github.com/hi-godot/godot-ai/releases/latest) and extract `addons/godot_ai` into your project's `addons/` folder.
+
+<details>
+<summary>Or via the Godot Asset Library</summary>
+
+In Godot, open the **AssetLib** tab, search for **Godot AI**, click **Download**, then **Install**. Note: Asset Library updates lag behind GitHub, so this version may not be the most recent.
 
 </details>
 
