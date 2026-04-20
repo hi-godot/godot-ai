@@ -150,15 +150,25 @@ def _wait_for_godot_session(session_id: str, timeout: float = 120.0) -> None:
     raise RuntimeError(f"Godot session never registered; last err: {last_err}")
 
 
-def _wait_for_is_playing(session_id: str, timeout: float = 30.0) -> None:
+def _wait_for_game_capture_ready(session_id: str, timeout: float = 60.0) -> None:
+    ## is_playing flips when the editor *spawns* the game subprocess; it does
+    ## NOT imply the game's _mcp_game_helper autoload has reached _ready() and
+    ## registered its EngineDebugger "mcp" capture. Sending take_screenshot
+    ## before that registration silently lands in a dead channel and times
+    ## out — the historical 4s magic sleep here was an attempt to paper over
+    ## this race and was the source of the Windows-runner flake.
+    ##
+    ## game_capture_ready is the editor-side mirror of the game-side
+    ## "mcp:hello" boot beacon — it flips true exactly when the capture
+    ## handler is wired up, so polling it is the deterministic replacement.
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         state = _tool_call(session_id, "editor_state", {}, 100)
-        if state.get("is_playing"):
-            print(f"Project is playing (readiness={state.get('readiness')})")
+        if state.get("is_playing") and state.get("game_capture_ready"):
+            print(f"Game capture ready (readiness={state.get('readiness')})")
             return
         time.sleep(0.5)
-    raise RuntimeError("Project never reached is_playing=true")
+    raise RuntimeError("Game subprocess never registered its mcp capture")
 
 
 def _within_tolerance(a: tuple[int, int, int], b: tuple[int, int, int]) -> bool:
@@ -223,11 +233,7 @@ def main() -> int:
     _tool_call(session_id, "project_run", {"mode": "current"}, 11, timeout=20)
 
     try:
-        _wait_for_is_playing(session_id)
-        ## Give the game subprocess time to register its EngineDebugger
-        ## capture after main-loop startup. On CI this can take noticeably
-        ## longer than interactive use, so be generous here.
-        time.sleep(4.0)
+        _wait_for_game_capture_ready(session_id)
 
         print("Capturing source='game'")
         ## Fetch metadata (include_image=False) first: this is the easiest
