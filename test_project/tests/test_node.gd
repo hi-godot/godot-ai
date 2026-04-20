@@ -218,6 +218,49 @@ func test_reparent_to_self() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
+func test_reparent_to_own_descendant_errors_without_destroying_subtree() -> void:
+	## Issue #121 regression test. Before the fix, reparenting a node into one
+	## of its own descendants would silently succeed, destroying the entire
+	## subtree (both the node and the descendant disappeared from the scene).
+	## The cycle-check `new_parent.is_ancestor_of(node)` was inverted — it
+	## caught "reparent to own ancestor" (a valid operation) rather than
+	## "reparent to own descendant" (the one that creates a cycle).
+	##
+	## /Main/World has child /Main/World/Ground in the test scene. Attempting
+	## to reparent World → World/Ground must:
+	##   1. Return INVALID_PARAMS
+	##   2. Leave both /Main/World and /Main/World/Ground intact
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var world_before := scene_root.get_node_or_null("World")
+	var ground_before := scene_root.get_node_or_null("World/Ground")
+	assert_true(world_before != null, "precondition: /Main/World exists")
+	assert_true(ground_before != null, "precondition: /Main/World/Ground exists")
+
+	var result := _handler.reparent_node({"path": "/Main/World", "new_parent": "/Main/World/Ground"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+	## Scene must be unchanged — no accidental remove_child() should have run.
+	assert_true(scene_root.get_node_or_null("World") == world_before, "World must still exist at /Main/World")
+	assert_true(scene_root.get_node_or_null("World/Ground") == ground_before, "Ground must still exist at /Main/World/Ground")
+
+
+func test_reparent_to_ancestor_is_allowed() -> void:
+	## Coverage for the other half of the inverted cycle check: reparenting a
+	## node UP to one of its own ancestors (e.g. /Main/World/Ground → /Main)
+	## is a perfectly valid operation and must succeed. Before the #121 fix
+	## this path would have been rejected by the inverted check.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var ground := scene_root.get_node_or_null("World/Ground")
+	assert_true(ground != null, "precondition: /Main/World/Ground exists")
+
+	var result := _handler.reparent_node({"path": "/Main/World/Ground", "new_parent": "/Main"})
+	assert_has_key(result, "data")
+	assert_true(result.data.undoable, "reparent-up should be undoable")
+	assert_eq(scene_root.get_node_or_null("Ground"), ground, "Ground should now be a direct child of /Main")
+	## Restore via undo so the scene fixture is unchanged for sibling tests.
+	_undo_redo.undo()
+
+
 # ----- set_property -----
 
 func test_set_property_float() -> void:
