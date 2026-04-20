@@ -90,6 +90,30 @@ func test_server_launch_mode_agrees_with_get_server_command() -> void:
 		assert_true(mode != "unknown", "Non-empty command must map to a concrete mode, got %s" % mode)
 
 
+func test_uvx_server_command_uses_exact_pin_not_tilde() -> void:
+	## Regression guard for #133: the uvx branch of get_server_command must
+	## pin godot-ai with `==<version>`, not `~=<minor>`. With the tilde
+	## constraint, uvx would reuse a cached tool env that matched the
+	## minor — so an install first-spawning 1.2.0 would keep using 1.2.0
+	## after 1.2.1/1.2.2 landed. Exact pinning makes the cache key
+	## version-specific.
+	##
+	## Positive assertion only fires when the test env actually resolves
+	## to the uvx tier. In dev-venv environments (CI, most worktrees) the
+	## loop still runs as a negative assertion — no ~= anywhere — so a
+	## future regression that re-introduced the tilde would fail here too.
+	var cmd := McpClientConfigurator.get_server_command()
+	for arg in cmd:
+		assert_false(str(arg).contains("~="), "uvx command must not use ~= pin (got: %s)" % str(arg))
+	if McpClientConfigurator.get_server_launch_mode() == "uvx":
+		var has_exact_pin := false
+		for arg in cmd:
+			if str(arg).contains("godot-ai==") and str(arg).contains(McpClientConfigurator.get_plugin_version()):
+				has_exact_pin = true
+				break
+		assert_true(has_exact_pin, "uvx tier command should contain godot-ai==<plugin_version>; got %s" % str(cmd))
+
+
 # ----- path template -----
 
 func test_path_template_expands_home() -> void:

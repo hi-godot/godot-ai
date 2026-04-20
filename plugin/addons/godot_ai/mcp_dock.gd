@@ -815,18 +815,45 @@ func _install_update() -> void:
 	DirAccess.remove_absolute(zip_path)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(UPDATE_TEMP_DIR))
 
+	## Kill the old server before the reload so the re-enabled plugin spawns
+	## a fresh one against the new plugin version. Without this, the running
+	## Python process on port 8000 outlives the reload, `_start_server`
+	## short-circuits on "port already in use," and session_list reports
+	## `plugin_version != server_version` until the user restarts the
+	## editor. See issue #132.
+	if _plugin != null and _plugin.has_method("prepare_for_update_reload"):
+		_plugin.prepare_for_update_reload()
+
 	# Godot 4.4+ handles plugin reload safely. On 4.3 and older, toggling
 	# the plugin off/on can cause re-entrant server spawns, so we ask the
 	# user to restart the editor instead.
 	var version := Engine.get_version_info()
 	if version.get("minor", 0) >= 4:
-		_update_btn.text = "Reloading..."
-		_reload_after_update.call_deferred()
+		_update_btn.text = "Scanning..."
+		## Before reloading the plugin we MUST wait for Godot's filesystem
+		## scanner to see the newly-extracted files. Otherwise plugin.gd
+		## re-parses and its `class_name` references (GameLogBuffer,
+		## McpDebuggerPlugin, …) resolve against a ClassDB that hasn't
+		## picked up the new files yet — parse errors, dock tears down,
+		## plugin reports "enabled" with no UI. See issue #127.
+		var fs := EditorInterface.get_resource_filesystem()
+		if fs != null:
+			fs.filesystem_changed.connect(_on_filesystem_scanned_for_update, CONNECT_ONE_SHOT)
+			fs.scan()
+		else:
+			## Fallback: no filesystem accessor — defer and hope (matches
+			## the pre-#127 behaviour).
+			_reload_after_update.call_deferred()
 	else:
 		_update_btn.text = "Restart editor to apply"
 		_update_btn.disabled = true
 		_update_label.text = "Updated! Restart the editor."
 		_update_label.add_theme_color_override("font_color", Color.GREEN)
+
+
+func _on_filesystem_scanned_for_update() -> void:
+	_update_btn.text = "Reloading..."
+	_reload_after_update.call_deferred()
 
 
 func _reload_after_update() -> void:

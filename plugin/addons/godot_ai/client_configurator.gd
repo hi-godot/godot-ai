@@ -116,8 +116,16 @@ static func get_server_command() -> Array[String]:
 	var uvx := find_uvx()
 	if not uvx.is_empty():
 		var version := get_plugin_version()
-		print("MCP | using uvx (godot-ai~=%s)" % version)
-		return [uvx, "--from", "godot-ai~=%s" % version, "godot-ai"]
+		## Pin to the EXACT plugin version rather than `~=<minor>`. Under the
+		## tilde form, uvx was happy to reuse a cached tool env that matched
+		## the minor constraint — so an install that first spawned 1.2.0 kept
+		## using 1.2.0 even after 1.2.1/1.2.2 landed. Exact pinning makes the
+		## cache key version-specific: if the cached env matches, fast hit;
+		## otherwise uvx installs the exact version fresh. Keeps plugin and
+		## server version in lockstep without needing `--refresh-package` on
+		## every spawn. See issue #133.
+		print("MCP | using uvx (godot-ai==%s)" % version)
+		return [uvx, "--from", "godot-ai==%s" % version, "godot-ai"]
 
 	var system_cmd := _find_system_install()
 	if not system_cmd.is_empty():

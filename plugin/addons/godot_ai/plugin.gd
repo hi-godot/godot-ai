@@ -322,6 +322,17 @@ func _stop_server() -> void:
 		_server_pid = -1
 
 
+## Prepare for a plugin-self-update reload cycle: kill the server process
+## and reset the re-entrancy guard so the re-enabled plugin spawns a fresh
+## server. Without the reset, `_start_server` short-circuits on the static
+## flag after the reload — even though we just freed the port — and the
+## new plugin ends up talking to whatever process inherited port 8000
+## (or, if none exists, the server never starts at all). See #132.
+func prepare_for_update_reload() -> void:
+	_stop_server()
+	_server_started_this_session = false
+
+
 func start_dev_server() -> void:
 	## Start a dev server with --reload that survives plugin reloads.
 	## Kills any managed server first, waits for the port to free, then spawns.
