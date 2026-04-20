@@ -762,3 +762,43 @@ func test_create_node_requires_type_or_scene_path() -> void:
 	assert_contains(result.error.message, "type")
 
 
+# ----- scene_file guard (issue #74) -----
+# Every mutating node_handler entry point routes through either create_node
+# (which reads scene_file directly) or _resolve_node (which reads it via
+# params). Covering one of each is enough to show the wiring is live; the
+# helper's own behavior is covered in test_scene_path.
+
+func test_create_node_scene_file_mismatch_blocks_mutation() -> void:
+	var result := _handler.create_node({
+		"type": "Node",
+		"scene_file": "res://does/not/match.tscn",
+	})
+	assert_is_error(result, McpErrorCodes.EDITED_SCENE_MISMATCH)
+
+
+func test_resolve_node_scene_file_mismatch_blocks_mutation() -> void:
+	## rename_node routes through _resolve_node. If the guard fires early, the
+	## rename never reaches the node and no sibling-name validation happens.
+	var result := _handler.rename_node({
+		"path": "/Main/Camera3D",
+		"new_name": "ShouldNotRename",
+		"scene_file": "res://does/not/match.tscn",
+	})
+	assert_is_error(result, McpErrorCodes.EDITED_SCENE_MISMATCH)
+	## And it did NOT actually rename — the original node stays put.
+	var cam := EditorInterface.get_edited_scene_root().get_node_or_null("Camera3D")
+	assert_ne(cam, null, "Camera3D must still exist under the original name")
+
+
+func test_create_node_scene_file_matching_active_scene_passes() -> void:
+	var active := EditorInterface.get_edited_scene_root().scene_file_path
+	var result := _handler.create_node({
+		"type": "Node",
+		"name": "SceneFileGuardOK",
+		"scene_file": active,
+	})
+	assert_has_key(result, "data")
+	## Undo so we don't leak test state into downstream tests.
+	_undo_redo.undo()
+
+

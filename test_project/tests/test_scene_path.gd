@@ -133,3 +133,36 @@ func test_format_parent_error_null_root_returns_actionable_message() -> void:
 	assert_contains(msg, "/Foo")
 	assert_contains(msg, "No edited scene is open")
 	assert_false(msg.contains("<no scene>"), "should not leak placeholder")
+
+
+# ----- require_edited_scene: multi-call scene-drift guard (issue #74) -----
+
+func test_require_edited_scene_empty_expected_returns_current_root() -> void:
+	## Empty string = "target whatever is active"; matches pre-guard behavior
+	## so callers that don't opt in see no change.
+	var result := ScenePath.require_edited_scene("")
+	assert_has_key(result, "node")
+	assert_eq(result.node, EditorInterface.get_edited_scene_root())
+
+
+func test_require_edited_scene_matching_path_returns_root() -> void:
+	## Non-empty expected that matches current edited scene passes through.
+	var root := EditorInterface.get_edited_scene_root()
+	assert_ne(root, null, "test harness must have a scene open")
+	var result := ScenePath.require_edited_scene(root.scene_file_path)
+	assert_has_key(result, "node")
+	assert_eq(result.node, root)
+
+
+func test_require_edited_scene_mismatch_returns_structured_error() -> void:
+	## A non-empty expected that doesn't match the active scene must fail with
+	## EDITED_SCENE_MISMATCH, not silently target the wrong scene.
+	var result := ScenePath.require_edited_scene("res://this/does/not/match.tscn")
+	assert_is_error(result, McpErrorCodes.EDITED_SCENE_MISMATCH)
+	## Message must name both the expected and the active scene so the caller
+	## can diagnose drift without another call.
+	var active := EditorInterface.get_edited_scene_root().scene_file_path
+	assert_contains(result.error.message, "res://this/does/not/match.tscn")
+	assert_contains(result.error.message, active)
+	## And name the recovery tool so the caller isn't guessing.
+	assert_contains(result.error.message, "scene_open")

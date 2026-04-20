@@ -53,6 +53,33 @@ static func resolve(scene_path: String, scene_root: Node) -> Node:
 	return scene_root.get_node_or_null(scene_path)
 
 
+## Return the edited scene root, or an error dict if the editor has no open
+## scene or the open scene doesn't match `expected_scene_file`.
+##
+## `expected_scene_file` is the caller's `scene_file` parameter — an empty
+## string means "target whatever is currently edited" (current behaviour,
+## no guard). A non-empty value must match `scene_file_path` on the current
+## edited scene root exactly, or we return EDITED_SCENE_MISMATCH so the
+## caller can re-open the right scene.
+##
+## Shape on success: {"node": <scene_root>}. Shape on error matches
+## `McpErrorCodes.make()` so callers can propagate the result directly.
+static func require_edited_scene(expected_scene_file: String) -> Dictionary:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	if not expected_scene_file.is_empty() and root.scene_file_path != expected_scene_file:
+		var actual := root.scene_file_path if not root.scene_file_path.is_empty() else "<unsaved>"
+		return McpErrorCodes.make(
+			McpErrorCodes.EDITED_SCENE_MISMATCH,
+			(
+				"Expected edited scene \"%s\" but \"%s\" is active. "
+				+ "Call scene_open(\"%s\") first, or omit scene_file to target the active scene."
+			) % [expected_scene_file, actual, expected_scene_file],
+		)
+	return {"node": root}
+
+
 ## Format a "parent not found" error that names the path convention.
 ## Agents routinely try /root/Foo or absolute SceneTree paths; the bare
 ## "Parent not found: X" gave them no hint that paths are scene-relative.

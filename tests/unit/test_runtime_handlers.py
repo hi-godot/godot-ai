@@ -1682,6 +1682,20 @@ async def test_node_duplicate_handler():
     assert client.calls[-1]["params"] == {"path": "/Main/Enemy", "name": "Enemy2"}
 
 
+async def test_node_delete_handler_forwards_scene_file():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await node_handlers.node_delete(
+        runtime,
+        path="/Main/Enemy",
+        scene_file="res://game/main.tscn",
+    )
+    assert client.calls[-1]["params"] == {
+        "path": "/Main/Enemy",
+        "scene_file": "res://game/main.tscn",
+    }
+
+
 async def test_node_move_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)

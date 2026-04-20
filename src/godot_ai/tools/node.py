@@ -17,6 +17,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         name: str = "",
         parent_path: str = "",
         scene_path: str = "",
+        scene_file: str = "",
         session_id: str = "",
     ) -> dict:
         """Create (spawn / add) a new node (game object / entity) in the scene tree.
@@ -33,6 +34,10 @@ def register_node_tools(mcp: FastMCP) -> None:
                 "res://prefabs/enemy.tscn"). When provided, the scene is loaded
                 and instantiated instead of creating by type. Mutually exclusive
                 with type — if scene_path is given, type is ignored.
+            scene_file: Optional "res://..." path. When non-empty, the mutation
+                fails with EDITED_SCENE_MISMATCH if the editor's current scene
+                doesn't match — use it to guard multi-call sequences against
+                silent scene-drift between calls.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -42,6 +47,7 @@ def register_node_tools(mcp: FastMCP) -> None:
             name=name,
             parent_path=parent_path,
             scene_path=scene_path,
+            scene_file=scene_file,
         )
 
     @mcp.tool(meta=DEFER_META)
@@ -119,7 +125,9 @@ def register_node_tools(mcp: FastMCP) -> None:
         return await node_handlers.node_get_groups(runtime, path=path)
 
     @mcp.tool(meta=DEFER_META)
-    async def node_delete(ctx: Context, path: str, session_id: str = "") -> dict:
+    async def node_delete(
+        ctx: Context, path: str, scene_file: str = "", session_id: str = ""
+    ) -> dict:
         """Delete a node from the scene tree.
 
         Removes the node at the given path. This operation is undoable
@@ -127,16 +135,21 @@ def register_node_tools(mcp: FastMCP) -> None:
 
         Args:
             path: Scene path of the node to delete (e.g. "/Main/Enemy").
+            scene_file: Optional "res://..." path. When non-empty, the mutation
+                fails with EDITED_SCENE_MISMATCH if the editor's current scene
+                doesn't match — use it to guard multi-call sequences against
+                silent scene-drift between calls.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await node_handlers.node_delete(runtime, path=path)
+        return await node_handlers.node_delete(runtime, path=path, scene_file=scene_file)
 
     @mcp.tool(meta=DEFER_META)
     async def node_reparent(
         ctx: Context,
         path: str,
         new_parent: str,
+        scene_file: str = "",
         session_id: str = "",
     ) -> dict:
         """Move a node to a new parent in the scene tree.
@@ -147,10 +160,16 @@ def register_node_tools(mcp: FastMCP) -> None:
         Args:
             path: Scene path of the node to move (e.g. "/Main/Player").
             new_parent: Scene path of the new parent (e.g. "/Main/World").
+            scene_file: Optional "res://..." path. When non-empty, the mutation
+                fails with EDITED_SCENE_MISMATCH if the editor's current scene
+                doesn't match — use it to guard multi-call sequences against
+                silent scene-drift between calls.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await node_handlers.node_reparent(runtime, path=path, new_parent=new_parent)
+        return await node_handlers.node_reparent(
+            runtime, path=path, new_parent=new_parent, scene_file=scene_file
+        )
 
     @mcp.tool(meta=DEFER_META)
     async def node_set_property(
@@ -158,6 +177,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         path: str,
         property: str,
         value: str | int | float | bool | dict | list | None,
+        scene_file: str = "",
         session_id: str = "",
     ) -> dict:
         """Set a property on a node.
@@ -180,6 +200,10 @@ def register_node_tools(mcp: FastMCP) -> None:
             path: Scene path of the node (e.g. "/Main/Camera3D").
             property: Property name (e.g. "fov", "position", "visible", "mesh", "remote_path").
             value: New value for the property. Pass null (or "" for Resource properties) to clear.
+            scene_file: Optional "res://..." path. When non-empty, the mutation
+                fails with EDITED_SCENE_MISMATCH if the editor's current scene
+                doesn't match — use it to guard multi-call sequences against
+                silent scene-drift between calls.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -188,6 +212,7 @@ def register_node_tools(mcp: FastMCP) -> None:
             path=path,
             property=property,
             value=value,
+            scene_file=scene_file,
         )
 
     @mcp.tool(meta=DEFER_META)
@@ -195,6 +220,7 @@ def register_node_tools(mcp: FastMCP) -> None:
         ctx: Context,
         path: str,
         new_name: str,
+        scene_file: str = "",
         session_id: str = "",
     ) -> dict:
         """Rename a node in the scene tree.
@@ -211,16 +237,23 @@ def register_node_tools(mcp: FastMCP) -> None:
         Args:
             path: Scene path of the node to rename (e.g. "/Main/Player").
             new_name: New name for the node (e.g. "Hero").
+            scene_file: Optional "res://..." path. When non-empty, the mutation
+                fails with EDITED_SCENE_MISMATCH if the editor's current scene
+                doesn't match — use it to guard multi-call sequences against
+                silent scene-drift between calls.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await node_handlers.node_rename(runtime, path=path, new_name=new_name)
+        return await node_handlers.node_rename(
+            runtime, path=path, new_name=new_name, scene_file=scene_file
+        )
 
     @mcp.tool(meta=DEFER_META)
     async def node_duplicate(
         ctx: Context,
         path: str,
         name: str = "",
+        scene_file: str = "",
         session_id: str = "",
     ) -> dict:
         """Duplicate (clone / copy) a node and all its children.
@@ -231,16 +264,23 @@ def register_node_tools(mcp: FastMCP) -> None:
         Args:
             path: Scene path of the node to duplicate (e.g. "/Main/Enemy").
             name: Optional name for the duplicate. Godot auto-names if empty.
+            scene_file: Optional "res://..." path. When non-empty, the mutation
+                fails with EDITED_SCENE_MISMATCH if the editor's current scene
+                doesn't match — use it to guard multi-call sequences against
+                silent scene-drift between calls.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await node_handlers.node_duplicate(runtime, path=path, name=name)
+        return await node_handlers.node_duplicate(
+            runtime, path=path, name=name, scene_file=scene_file
+        )
 
     @mcp.tool(meta=DEFER_META)
     async def node_move(
         ctx: Context,
         path: str,
         index: int,
+        scene_file: str = "",
         session_id: str = "",
     ) -> dict:
         """Reorder a node among its siblings.
@@ -251,16 +291,21 @@ def register_node_tools(mcp: FastMCP) -> None:
         Args:
             path: Scene path of the node to move (e.g. "/Main/Player").
             index: New sibling index (0-based).
+            scene_file: Optional "res://..." path. When non-empty, the mutation
+                fails with EDITED_SCENE_MISMATCH if the editor's current scene
+                doesn't match — use it to guard multi-call sequences against
+                silent scene-drift between calls.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await node_handlers.node_move(runtime, path=path, index=index)
+        return await node_handlers.node_move(runtime, path=path, index=index, scene_file=scene_file)
 
     @mcp.tool(meta=DEFER_META)
     async def node_add_to_group(
         ctx: Context,
         path: str,
         group: str,
+        scene_file: str = "",
         session_id: str = "",
     ) -> dict:
         """Add a node to a group.
@@ -271,16 +316,23 @@ def register_node_tools(mcp: FastMCP) -> None:
         Args:
             path: Scene path of the node (e.g. "/Main/Enemy").
             group: Group name to add the node to (e.g. "enemies").
+            scene_file: Optional "res://..." path. When non-empty, the mutation
+                fails with EDITED_SCENE_MISMATCH if the editor's current scene
+                doesn't match — use it to guard multi-call sequences against
+                silent scene-drift between calls.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await node_handlers.node_add_to_group(runtime, path=path, group=group)
+        return await node_handlers.node_add_to_group(
+            runtime, path=path, group=group, scene_file=scene_file
+        )
 
     @mcp.tool(meta=DEFER_META)
     async def node_remove_from_group(
         ctx: Context,
         path: str,
         group: str,
+        scene_file: str = "",
         session_id: str = "",
     ) -> dict:
         """Remove a node from a group.
@@ -288,7 +340,13 @@ def register_node_tools(mcp: FastMCP) -> None:
         Args:
             path: Scene path of the node (e.g. "/Main/Enemy").
             group: Group name to remove the node from (e.g. "enemies").
+            scene_file: Optional "res://..." path. When non-empty, the mutation
+                fails with EDITED_SCENE_MISMATCH if the editor's current scene
+                doesn't match — use it to guard multi-call sequences against
+                silent scene-drift between calls.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await node_handlers.node_remove_from_group(runtime, path=path, group=group)
+        return await node_handlers.node_remove_from_group(
+            runtime, path=path, group=group, scene_file=scene_file
+        )

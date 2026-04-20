@@ -17,9 +17,10 @@ func create_node(params: Dictionary) -> Dictionary:
 	var parent_path: String = params.get("parent_path", "")
 	var scene_path: String = params.get("scene_path", "")
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var scene_check := ScenePath.require_edited_scene(params.get("scene_file", ""))
+	if scene_check.has("error"):
+		return scene_check
+	var scene_root: Node = scene_check.node
 
 	var parent: Node = scene_root
 	if not parent_path.is_empty():
@@ -600,9 +601,10 @@ func _resolve_node(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("path", "")
 	if node_path.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var scene_check := ScenePath.require_edited_scene(params.get("scene_file", ""))
+	if scene_check.has("error"):
+		return scene_check
+	var scene_root: Node = scene_check.node
 	var node := ScenePath.resolve(node_path, scene_root)
 	if node == null:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
