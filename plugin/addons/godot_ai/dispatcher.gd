@@ -20,6 +20,15 @@ func register(command_name: String, handler: Callable) -> void:
 	_handlers[command_name] = handler
 
 
+## Drop registered handlers, queued commands, and the log buffer ref so
+## plugin.gd can release RefCounted handlers before Godot reloads their
+## class_name scripts (issue #46). After clear(), the dispatcher is inert.
+func clear() -> void:
+	_handlers.clear()
+	_command_queue.clear()
+	_log_buffer = null
+
+
 ## Invoke a registered handler directly by name. Returns the handler's raw
 ## response dict (no request_id or status wrapping). Returns an UNKNOWN_COMMAND
 ## error dict if the command is not registered. Used by batch_execute.
