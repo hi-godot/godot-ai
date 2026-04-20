@@ -42,6 +42,24 @@ func test_editor_state_has_play_status() -> void:
 	assert_has_key(result.data, "is_playing")
 
 
+func test_editor_state_game_capture_ready_false_without_debugger_plugin() -> void:
+	## Default _handler has no debugger plugin injected — field must still be
+	## present and false so callers can poll unconditionally.
+	var result := _handler.get_editor_state({})
+	assert_has_key(result.data, "game_capture_ready")
+	assert_eq(result.data.game_capture_ready, false)
+
+
+func test_editor_state_game_capture_ready_tracks_debugger_plugin_flag() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, plugin)
+	var result := handler.get_editor_state({})
+	assert_eq(result.data.game_capture_ready, false, "starts false before mcp:hello")
+	plugin._game_ready = true
+	result = handler.get_editor_state({})
+	assert_eq(result.data.game_capture_ready, true, "flips true once beacon arrives")
+
+
 # ----- get_selection -----
 
 func test_selection_returns_data() -> void:
