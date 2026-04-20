@@ -130,11 +130,23 @@ func run_project(params: Dictionary) -> Dictionary:
 	}
 
 
-func stop_project(_params: Dictionary) -> Dictionary:
+func stop_project(params: Dictionary) -> Dictionary:
 	if not EditorInterface.is_playing_scene():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Project is not running")
 
 	EditorInterface.stop_playing_scene()
+
+	# stop_playing_scene() is async — is_playing_scene() only flips to false on
+	# the next frame, and readiness_changed follows in _process. Defer the
+	# response so we can reply with authoritative readiness instead of letting
+	# the server poll for the event. Issue #29.
+	var request_id: String = params.get("_request_id", "")
+	if _connection != null and not request_id.is_empty():
+		_finish_stop_project_deferred(request_id)
+		return McpDispatcher.DEFERRED_RESPONSE
+
+	# Fallback for contexts without a connection (e.g. batch_execute via
+	# dispatch_direct, or unit tests that instantiate the handler with null).
 	return {
 		"data": {
 			"stopped": true,
@@ -142,6 +154,27 @@ func stop_project(_params: Dictionary) -> Dictionary:
 			"reason": "Play/stop is a runtime action",
 		}
 	}
+
+
+func _finish_stop_project_deferred(request_id: String) -> void:
+	# Wait two frames so Godot can tick the stop-play state change. After this
+	# is_playing_scene() reflects truth and get_readiness() is authoritative.
+	# If the plugin tears down (_exit_tree frees _connection) during the await,
+	# is_instance_valid() goes false and we drop the response silently — the
+	# server's 5s request timeout will surface the failure to the caller.
+	var tree := _connection.get_tree()
+	await tree.process_frame
+	await tree.process_frame
+	if not is_instance_valid(_connection):
+		return
+	_connection.send_deferred_response(request_id, {
+		"data": {
+			"stopped": true,
+			"undoable": false,
+			"reason": "Play/stop is a runtime action",
+			"readiness_after": Connection.get_readiness(),
+		}
+	})
 
 
 func search_filesystem(params: Dictionary) -> Dictionary:

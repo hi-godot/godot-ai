@@ -3740,6 +3740,60 @@ async def test_project_stop_handler_times_out_if_readiness_stuck():
     assert 0.9 <= elapsed < 1.5, f"Expected ~1s timeout, got {elapsed:.3f}s"
 
 
+def _make_stop_project_runtime(
+    readiness_after: str, session_id: str
+) -> tuple[DirectRuntime, "Session"]:
+    from godot_ai.sessions.registry import Session
+
+    class ReadinessAfterStub(StubClient):
+        async def send(self, command, params=None, session_id=None, timeout=5.0):
+            self.calls.append({"command": command, "params": params})
+            return {"stopped": True, "undoable": False, "readiness_after": readiness_after}
+
+    registry = SessionRegistry()
+    session = Session(
+        session_id=session_id,
+        godot_version="4.6",
+        project_path="/tmp/test",
+        plugin_version="0.2.0",
+    )
+    session.readiness = "playing"
+    registry.register(session)
+    registry.set_active(session.session_id)
+    return DirectRuntime(registry=registry, client=ReadinessAfterStub()), session
+
+
+async def test_project_stop_handler_consumes_readiness_after():
+    """When plugin returns `readiness_after`, handler copies it to session.readiness
+    without polling — this is the happy path for issue #29 plugins."""
+    import time
+
+    runtime, session = _make_stop_project_runtime("no_scene", "t@0003")
+
+    t0 = time.monotonic()
+    result = await project_handlers.project_stop(runtime)
+    elapsed = time.monotonic() - t0
+    # No polling: plugin already waited, handler should return ~instantly.
+    assert elapsed < 0.1, f"Expected near-zero elapsed, got {elapsed:.3f}s"
+    assert session.readiness == "no_scene"
+    assert result["readiness_after"] == "no_scene"
+
+
+async def test_project_stop_handler_rejects_unknown_readiness_after():
+    """A buggy plugin returning a junk `readiness_after` must not corrupt
+    session state — we fall through to the polling fallback instead."""
+    import time
+
+    runtime, session = _make_stop_project_runtime("bogus_state", "t@0004")
+
+    t0 = time.monotonic()
+    await project_handlers.project_stop(runtime)
+    elapsed = time.monotonic() - t0
+    # Rejected → falls back to 1s polling loop (readiness stuck at "playing").
+    assert session.readiness == "playing"
+    assert 0.9 <= elapsed < 1.5, f"Expected polling fallback, got {elapsed:.3f}s"
+
+
 # ---------------------------------------------------------------------------
 # Material handler tests
 # ---------------------------------------------------------------------------

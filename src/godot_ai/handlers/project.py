@@ -8,6 +8,8 @@ from typing import Any
 from godot_ai.handlers._readiness import require_writable
 from godot_ai.runtime.interface import Runtime
 
+_KNOWN_READINESS = frozenset({"ready", "importing", "playing", "no_scene"})
+
 COMMON_SETTINGS = [
     "application/config/name",
     "application/config/description",
@@ -39,23 +41,35 @@ async def project_run(
 
 
 async def project_stop(runtime: Runtime) -> dict:
-    """Stop the running game and wait for readiness to reflect the stop.
+    """Stop the running game and reflect authoritative readiness in the session.
 
-    The plugin's `_process` emits a `readiness_changed` event on the next
-    frame once `EditorInterface.is_playing_scene()` flips to false. A write
-    tool called immediately after this handler returns would otherwise race
-    the event and see stale `readiness="playing"`. We poll `session.readiness`
-    until it leaves "playing", bounded by a 1s timeout so a hung play process
-    doesn't block the handler indefinitely — in that case readiness stays
-    "playing" and the next write tool correctly blocks with EDITOR_NOT_READY.
+    New plugins (issue #29) defer the stop response until after
+    `EditorInterface.stop_playing_scene()` has ticked two frames, then return
+    `readiness_after` in the payload — a ground-truth snapshot of
+    `Connection.get_readiness()` after the stop settled. We copy that straight
+    onto `session.readiness` so the next write tool can't race the
+    `readiness_changed` event.
+
+    Older plugins (pre-#29) omit `readiness_after` and the server still needs
+    to wait for the `readiness_changed` event. We fall back to polling
+    `session.readiness` bounded by a 1s timeout — a hung play process leaves
+    readiness at "playing" and the next write tool correctly blocks with
+    EDITOR_NOT_READY.
     """
     result = await runtime.send_command("stop_project")
     session = runtime.get_active_session()
-    if session is not None:
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + 1.0
-        while session.readiness == "playing" and loop.time() < deadline:
-            await asyncio.sleep(0.02)
+    if session is None:
+        return result
+
+    readiness_after = result.get("readiness_after")
+    if readiness_after in _KNOWN_READINESS:
+        session.readiness = readiness_after
+        return result
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 1.0
+    while session.readiness == "playing" and loop.time() < deadline:
+        await asyncio.sleep(0.02)
     return result
 
 
