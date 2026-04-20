@@ -226,39 +226,65 @@ func test_reparent_to_own_descendant_errors_without_destroying_subtree() -> void
 	## caught "reparent to own ancestor" (a valid operation) rather than
 	## "reparent to own descendant" (the one that creates a cycle).
 	##
-	## /Main/World has child /Main/World/Ground in the test scene. Attempting
-	## to reparent World → World/Ground must:
-	##   1. Return INVALID_PARAMS
-	##   2. Leave both /Main/World and /Main/World/Ground intact
+	## Build a throwaway _McpTestReparent/_McpTestChild subtree so the test
+	## can't pollute the shared scene fixture regardless of the outcome.
+	_handler.create_node({"type": "Node3D", "name": "_McpTestReparent", "parent_path": "/Main"})
+	_handler.create_node({"type": "Node3D", "name": "_McpTestChild", "parent_path": "/Main/_McpTestReparent"})
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var world_before := scene_root.get_node_or_null("World")
-	var ground_before := scene_root.get_node_or_null("World/Ground")
-	assert_true(world_before != null, "precondition: /Main/World exists")
-	assert_true(ground_before != null, "precondition: /Main/World/Ground exists")
+	var parent_before := scene_root.get_node_or_null("_McpTestReparent")
+	var child_before := scene_root.get_node_or_null("_McpTestReparent/_McpTestChild")
+	assert_true(parent_before != null, "precondition: parent subtree created")
+	assert_true(child_before != null, "precondition: child under parent created")
 
-	var result := _handler.reparent_node({"path": "/Main/World", "new_parent": "/Main/World/Ground"})
+	var result := _handler.reparent_node({
+		"path": "/Main/_McpTestReparent",
+		"new_parent": "/Main/_McpTestReparent/_McpTestChild",
+	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
-	## Scene must be unchanged — no accidental remove_child() should have run.
-	assert_true(scene_root.get_node_or_null("World") == world_before, "World must still exist at /Main/World")
-	assert_true(scene_root.get_node_or_null("World/Ground") == ground_before, "Ground must still exist at /Main/World/Ground")
+	## Subtree must be unchanged — no accidental remove_child() should have run.
+	assert_true(scene_root.get_node_or_null("_McpTestReparent") == parent_before, "parent must still exist")
+	assert_true(scene_root.get_node_or_null("_McpTestReparent/_McpTestChild") == child_before, "child must still exist under parent")
+
+	## Clean up both create actions.
+	_undo_redo.undo()
+	_undo_redo.undo()
 
 
 func test_reparent_to_ancestor_is_allowed() -> void:
 	## Coverage for the other half of the inverted cycle check: reparenting a
-	## node UP to one of its own ancestors (e.g. /Main/World/Ground → /Main)
-	## is a perfectly valid operation and must succeed. Before the #121 fix
-	## this path would have been rejected by the inverted check.
+	## node UP to one of its own ancestors is a perfectly valid operation and
+	## must succeed. Before the #121 fix this path would have been rejected
+	## by the inverted check.
+	##
+	## Build a throwaway _McpTestUpParent/_McpTestUpChild/_McpTestUpGrand
+	## subtree and reparent the grandchild up to the parent. Previous
+	## revisions of this test mutated shared scene nodes (/Main/World/Ground)
+	## and relied on _undo_redo.undo() to restore the scene for downstream
+	## suites — that teardown was flaky in CI and polluted scene_* tests.
+	_handler.create_node({"type": "Node3D", "name": "_McpTestUpParent", "parent_path": "/Main"})
+	_handler.create_node({"type": "Node3D", "name": "_McpTestUpChild", "parent_path": "/Main/_McpTestUpParent"})
+	_handler.create_node({"type": "Node3D", "name": "_McpTestUpGrand", "parent_path": "/Main/_McpTestUpParent/_McpTestUpChild"})
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var ground := scene_root.get_node_or_null("World/Ground")
-	assert_true(ground != null, "precondition: /Main/World/Ground exists")
 
-	var result := _handler.reparent_node({"path": "/Main/World/Ground", "new_parent": "/Main"})
+	var result := _handler.reparent_node({
+		"path": "/Main/_McpTestUpParent/_McpTestUpChild/_McpTestUpGrand",
+		"new_parent": "/Main/_McpTestUpParent",
+	})
 	assert_has_key(result, "data")
 	assert_true(result.data.undoable, "reparent-up should be undoable")
-	assert_eq(scene_root.get_node_or_null("Ground"), ground, "Ground should now be a direct child of /Main")
-	## Restore via undo so the scene fixture is unchanged for sibling tests.
-	_undo_redo.undo()
+	assert_true(scene_root.get_node_or_null("_McpTestUpParent/_McpTestUpGrand") != null,
+		"Grand should now be a direct child of _McpTestUpParent")
+
+	## Unwind: undo reparent, then undo each create. Even if the reparent
+	## undo is flaky, unwinding all 4 create actions guarantees the temp
+	## subtree is gone — the worst case leaves one of the temp nodes at
+	## /Main briefly, but all of them share the _McpTest prefix and are
+	## orphaned from scene fixture nodes.
+	_undo_redo.undo()  # reparent
+	_undo_redo.undo()  # create grand
+	_undo_redo.undo()  # create child
+	_undo_redo.undo()  # create parent
 
 
 # ----- set_property -----
