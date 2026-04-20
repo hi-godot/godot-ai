@@ -88,8 +88,9 @@ func delete_node(params: Dictionary) -> Dictionary:
 	var node_path: String = resolved.path
 	var scene_root: Node = resolved.scene_root
 
-	if node == scene_root:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Cannot delete the scene root")
+	var root_err := _reject_if_scene_root(node, scene_root, "delete")
+	if root_err != null:
+		return root_err
 
 	var parent := node.get_parent()
 	var idx := node.get_index()
@@ -126,8 +127,9 @@ func reparent_node(params: Dictionary) -> Dictionary:
 	if new_parent == null:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_parent_error(new_parent_path, scene_root))
 
-	if node == scene_root:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Cannot reparent the scene root")
+	var root_err := _reject_if_scene_root(node, scene_root, "reparent")
+	if root_err != null:
+		return root_err
 
 	# Prevent reparenting a node to one of its own descendants
 	if new_parent.is_ancestor_of(node) or new_parent == node:
@@ -307,8 +309,9 @@ func duplicate_node(params: Dictionary) -> Dictionary:
 	var node_path: String = resolved.path
 	var scene_root: Node = resolved.scene_root
 
-	if node == scene_root:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Cannot duplicate the scene root")
+	var root_err := _reject_if_scene_root(node, scene_root, "duplicate")
+	if root_err != null:
+		return root_err
 
 	var parent := node.get_parent()
 	var dup: Node = node.duplicate()
@@ -349,8 +352,9 @@ func move_node(params: Dictionary) -> Dictionary:
 	var node_path: String = resolved.path
 	var scene_root: Node = resolved.scene_root
 
-	if node == scene_root:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Cannot reorder the scene root")
+	var root_err := _reject_if_scene_root(node, scene_root, "reorder")
+	if root_err != null:
+		return root_err
 
 	if not "index" in params:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: index")
@@ -609,6 +613,14 @@ func _resolve_node(params: Dictionary) -> Dictionary:
 	if node == null:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
 	return {"node": node, "path": node_path, "scene_root": scene_root}
+
+
+## Reject operations targeting the scene root. Returns an INVALID_PARAMS error
+## dict with "Cannot <op> the scene root", or null if `node` is not the root.
+static func _reject_if_scene_root(node: Node, scene_root: Node, op: String) -> Variant:
+	if node == scene_root:
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Cannot %s the scene root" % op)
+	return null
 
 
 ## Convert a Godot Variant to a JSON-safe value.
