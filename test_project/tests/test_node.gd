@@ -233,8 +233,8 @@ func test_reparent_to_own_descendant_errors_without_destroying_subtree() -> void
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var parent_before := scene_root.get_node_or_null("_McpTestReparent")
 	var child_before := scene_root.get_node_or_null("_McpTestReparent/_McpTestChild")
-	assert_true(parent_before != null, "precondition: parent subtree created")
-	assert_true(child_before != null, "precondition: child under parent created")
+	assert_ne(parent_before, null, "precondition: parent subtree created")
+	assert_ne(child_before, null, "precondition: child under parent created")
 
 	var result := _handler.reparent_node({
 		"path": "/Main/_McpTestReparent",
@@ -243,12 +243,12 @@ func test_reparent_to_own_descendant_errors_without_destroying_subtree() -> void
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 	## Subtree must be unchanged — no accidental remove_child() should have run.
-	assert_true(scene_root.get_node_or_null("_McpTestReparent") == parent_before, "parent must still exist")
-	assert_true(scene_root.get_node_or_null("_McpTestReparent/_McpTestChild") == child_before, "child must still exist under parent")
+	assert_eq(scene_root.get_node_or_null("_McpTestReparent"), parent_before, "parent must still exist")
+	assert_eq(scene_root.get_node_or_null("_McpTestReparent/_McpTestChild"), child_before, "child must still exist under parent")
 
 	## Clean up both create actions.
-	_undo_redo.undo()
-	_undo_redo.undo()
+	editor_undo(_undo_redo)
+	editor_undo(_undo_redo)
 
 
 func test_reparent_to_ancestor_is_allowed() -> void:
@@ -273,18 +273,16 @@ func test_reparent_to_ancestor_is_allowed() -> void:
 	})
 	assert_has_key(result, "data")
 	assert_true(result.data.undoable, "reparent-up should be undoable")
-	assert_true(scene_root.get_node_or_null("_McpTestUpParent/_McpTestUpGrand") != null,
+	assert_ne(scene_root.get_node_or_null("_McpTestUpParent/_McpTestUpGrand"), null,
 		"Grand should now be a direct child of _McpTestUpParent")
 
-	## Unwind: undo reparent, then undo each create. Even if the reparent
-	## undo is flaky, unwinding all 4 create actions guarantees the temp
-	## subtree is gone — the worst case leaves one of the temp nodes at
-	## /Main briefly, but all of them share the _McpTest prefix and are
-	## orphaned from scene fixture nodes.
-	_undo_redo.undo()  # reparent
-	_undo_redo.undo()  # create grand
-	_undo_redo.undo()  # create child
-	_undo_redo.undo()  # create parent
+	## Unwind: undo reparent, then undo each create. editor_undo walks both
+	## scene and global histories so actions registered against different
+	## targets unwind reliably across the chain.
+	editor_undo(_undo_redo)  # reparent
+	editor_undo(_undo_redo)  # create grand
+	editor_undo(_undo_redo)  # create child
+	editor_undo(_undo_redo)  # create parent
 
 
 # ----- set_property -----
