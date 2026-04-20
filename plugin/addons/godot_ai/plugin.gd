@@ -276,19 +276,19 @@ func _ensure_game_helper_autoload() -> void:
 
 
 func _start_server() -> void:
-	## Four-way branch depending on port state + persisted managed-server
-	## record in EditorSettings. The record lets later editor sessions
-	## recognize and manage servers they didn't spawn themselves — without
-	## it, `_server_pid = -1` after a restart meant `prepare_for_update_reload`
-	## couldn't kill a server the update flow expected to replace. See #135.
+	## Branch on port state + EditorSettings record. The record lets a
+	## later editor session recognize and manage a server it didn't spawn
+	## itself; treating the stored `version` (not `pid`) as the "is this
+	## ours?" signal handles the uvx tier, where the recorded PID is a
+	## launcher that has long since exited. See #135 and #137.
 	##
-	##   port free                              -> spawn fresh, record PID
-	##   port in use, recorded PID alive,       -> adopt (set _server_pid
-	##     version matches                         from record; fast path)
-	##   port in use, recorded PID alive,       -> kill + respawn; handles
-	##     version mismatched                      manual file replace too
-	##   port in use, no live recorded PID      -> foreign server, just use
-	##                                             existing (don't touch)
+	##   port free                            -> spawn fresh, record PID
+	##   port in use, record.version matches  -> adopt the port owner
+	##                                              (self-heals stale PID)
+	##   port in use, record.version drifts   -> kill port owner + respawn
+	##                                              (fixes cold-start drift
+	##                                              from manual file replace)
+	##   port in use, no matching record      -> foreign server, leave alone
 	if _server_started_this_session:
 		## Guard against re-entrant spawns (e.g. plugin reload during update).
 		## The static flag persists across disable/enable cycles within the
@@ -300,24 +300,32 @@ func _start_server() -> void:
 
 	if _is_port_in_use(port):
 		var record := _read_managed_server_record()
-		if record.pid > 0 and _pid_alive(record.pid):
-			if record.version == current_version:
-				_server_pid = record.pid
-				_server_started_this_session = true
-				print("MCP | adopted managed server (PID %d, v%s)" % [record.pid, record.version])
-				return
-			## Version drift — our server but wrong version. Kill and respawn
-			## so the new plugin code talks to a matching server. Also
-			## recovers from the "user dropped a newer ZIP on disk outside
-			## the dock update flow, then restarted the editor" case.
+		if record.version == current_version:
+			## Version matches — this port is owned by a server we spawned
+			## at some point. Adopt the live port owner, ignoring any stale
+			## launcher PID that may still be in the record. Self-heal the
+			## record so next session's adopt can fast-path.
+			var owner := _find_pid_on_port(port)
+			if owner > 0:
+				_server_pid = owner
+				_write_managed_server_record(owner, current_version)
+			_server_started_this_session = true
+			print("MCP | adopted managed server (PID %d, v%s)" % [_server_pid, current_version])
+			return
+		if not record.version.is_empty():
+			## Version drift — our server but the plugin moved on. Kill
+			## the port owner (not the stale launcher PID) and respawn
+			## to match the current plugin version.
 			print("MCP | managed server v%s does not match plugin v%s, restarting"
 				% [record.version, current_version])
-			OS.kill(record.pid)
+			var owner := _find_pid_on_port(port)
+			if owner > 0:
+				OS.kill(owner)
 			_clear_managed_server_record()
 			_wait_for_port_free(port, 3.0)
 			## Fall through to spawn.
 		else:
-			## Foreign process on our port. Don't touch it. Just connect;
+			## No record claiming this port — foreign process. Don't touch;
 			## the WebSocket handshake will fail if it isn't actually ours
 			## and the reconnect loop will surface that.
 			_server_started_this_session = true
@@ -337,6 +345,10 @@ func _start_server() -> void:
 	_server_pid = OS.create_process(cmd, args)
 	if _server_pid > 0:
 		_server_started_this_session = true
+		## Record the launcher PID immediately so a same-session
+		## prepare_for_update_reload has something to kill. On the next
+		## editor start, _start_server's adopt branch self-heals the PID
+		## to the actual port owner (uvx's child).
 		_write_managed_server_record(_server_pid, current_version)
 		print("MCP | started server (PID %d, v%s): %s %s" % [_server_pid, current_version, cmd, " ".join(args)])
 	else:
@@ -355,12 +367,62 @@ func _is_port_in_use(port: int) -> bool:
 	return false
 
 
+## Return the PID currently listening on the given TCP port, or 0 if
+## the port is free. Used by the adopt and stop paths to recover the
+## real server PID when we can't trust _server_pid (e.g. uvx launcher
+## that has exited after spawning its child). See #137.
+func _find_pid_on_port(port: int) -> int:
+	var output: Array = []
+	if OS.get_name() == "Windows":
+		## netstat prints lines like:
+		##   TCP    0.0.0.0:8000    0.0.0.0:0    LISTENING    57865
+		var exit_code := OS.execute("netstat", ["-ano"], output, true)
+		if exit_code != 0 or output.is_empty():
+			return 0
+		for line in output:
+			var s := str(line)
+			if s.find(":%d " % port) >= 0 and s.find("LISTENING") >= 0:
+				var parts := s.split(" ", false)
+				if parts.size() > 0:
+					var pid := parts[parts.size() - 1].strip_edges()
+					if pid.is_valid_int():
+						return int(pid)
+		return 0
+	## POSIX: `lsof -ti:<port> -sTCP:LISTEN` returns only the PID.
+	var exit_code := OS.execute("lsof", ["-ti:%d" % port, "-sTCP:LISTEN"], output, true)
+	if exit_code != 0 or output.is_empty():
+		return 0
+	var pid_str := str(output[0]).strip_edges()
+	if pid_str.is_empty() or not pid_str.is_valid_int():
+		return 0
+	return int(pid_str)
+
+
 func _stop_server() -> void:
-	if _server_pid > 0:
+	if _server_pid <= 0:
+		return
+	## Kill both the process we tracked and the current port owner, if
+	## different. For direct-spawn tiers (.venv, system CLI) these are the
+	## same and we kill once. For the uvx tier the tracked PID is the
+	## launcher — which may be dead (adopted), still installing (about to
+	## spawn), or done spawning; killing both the launcher (if alive) and
+	## the port owner (if any) covers all three cases without races. See
+	## #137.
+	var killed: Array[int] = []
+	if _pid_alive(_server_pid):
 		OS.kill(_server_pid)
-		print("MCP | stopped server (PID %d)" % _server_pid)
-		_server_pid = -1
-		_clear_managed_server_record()
+		killed.append(_server_pid)
+	if _is_port_in_use(McpClientConfigurator.SERVER_HTTP_PORT):
+		var owner := _find_pid_on_port(McpClientConfigurator.SERVER_HTTP_PORT)
+		if owner > 0 and not killed.has(owner):
+			OS.kill(owner)
+			killed.append(owner)
+	if not killed.is_empty():
+		print("MCP | stopped server (PID %s)" % str(killed))
+	_server_pid = -1
+	_clear_managed_server_record()
+	## Brief wait so a follow-up spawn doesn't race a still-closing socket.
+	_wait_for_port_free(McpClientConfigurator.SERVER_HTTP_PORT, 2.0)
 
 
 ## True if the given PID corresponds to a live process. Uses POSIX `kill -0`
