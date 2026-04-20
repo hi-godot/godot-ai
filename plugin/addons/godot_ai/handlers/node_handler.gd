@@ -129,8 +129,14 @@ func reparent_node(params: Dictionary) -> Dictionary:
 	if node == scene_root:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Cannot reparent the scene root")
 
-	# Prevent reparenting a node to one of its own descendants
-	if new_parent.is_ancestor_of(node) or new_parent == node:
+	# Prevent reparenting a node to itself or to one of its own descendants.
+	# Godot's `A.is_ancestor_of(B)` returns true iff B is a descendant of A, so
+	# the direction here matters: we want `node.is_ancestor_of(new_parent)` to
+	# catch "new_parent is below node in the tree" and thus would create a
+	# cycle. The previous direction (`new_parent.is_ancestor_of(node)`) asked
+	# the opposite question — whether we were trying to move a node to one of
+	# its own ancestors — which is a perfectly valid operation. See issue #121.
+	if node == new_parent or node.is_ancestor_of(new_parent):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Cannot reparent a node to itself or its descendant")
 
 	var old_parent := node.get_parent()
