@@ -79,13 +79,14 @@ static func _is_current(cam: Node) -> bool:
 # unmarking previously-current siblings of the same class so a single
 # Ctrl-Z reverts the whole switch.
 #
-# Undo uses a single make_current() on the previously-current camera rather
-# than a separate clear_current() + make_current() pair. make_current() takes
-# over the viewport slot atomically, so the old camera naturally returns
-# is_current() == false without needing an explicit clear. The two-step
-# approach leaves the viewport temporarily with no current camera between
-# the clear and the make, which can cause unexpected state changes in the
-# editor before the second undo method fires.
+# Both DO and UNDO use a single make_current() call — never a
+# clear_current() + make_current() pair. make_current() takes over the
+# viewport slot atomically (Godot enforces one current camera per class
+# per viewport), so the displaced camera naturally returns
+# is_current() == false without an explicit clear. The two-step approach
+# leaves the viewport temporarily with no current camera between the
+# clear and the make, which races with editor cleanup on macOS headless
+# (observed flaking CI runs 24674252085, 24675424785).
 func _add_make_current_to_action(node: Node, type_str: String, scene_root: Node) -> void:
 	var prev_current: Node = null
 	for cam in _list_cameras_in_scene(scene_root, type_str):
@@ -93,7 +94,6 @@ func _add_make_current_to_action(node: Node, type_str: String, scene_root: Node)
 			continue
 		if _is_current(cam):
 			prev_current = cam
-			_undo_redo.add_do_method(cam, "clear_current")
 			break
 	_undo_redo.add_do_method(node, "make_current")
 	if prev_current != null:
