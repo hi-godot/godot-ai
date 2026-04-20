@@ -3,17 +3,40 @@
 from __future__ import annotations
 
 import argparse
+import tomllib
 from collections.abc import Sequence
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
+from pathlib import Path
 
-try:
-    __version__ = _pkg_version("godot-ai")
-except PackageNotFoundError:
-    # In-tree / unbuilt source tree (e.g. running pytest from a checkout
-    # without an editable install). Package metadata is only available after
-    # install, so fall back to a placeholder rather than crashing.
-    __version__ = "0+unknown"
+
+def _resolve_version(package_file: str | Path) -> str:
+    ## Try pyproject.toml first. Editable installs pin the dist-info
+    ## METADATA at install time, so `importlib.metadata.version("godot-ai")`
+    ## returns whatever the version was when the venv was created — e.g.
+    ## "0.0.1" on a venv made before the first release bump. Reading the
+    ## live pyproject keeps `godot_ai.__version__` and `session_list`'s
+    ## `server_version` honest against the current source tree.
+    ##
+    ## Order matters: dev checkouts have both a pyproject and dist-info;
+    ## wheel installs only have dist-info. Pyproject wins when both exist.
+    pyproject = Path(package_file).resolve().parent.parent.parent / "pyproject.toml"
+    if pyproject.is_file():
+        try:
+            with pyproject.open("rb") as f:
+                data = tomllib.load(f)
+            version = data.get("project", {}).get("version")
+            if isinstance(version, str) and version:
+                return version
+        except (OSError, tomllib.TOMLDecodeError):
+            pass
+    try:
+        return _pkg_version("godot-ai")
+    except PackageNotFoundError:
+        return "0+unknown"
+
+
+__version__ = _resolve_version(__file__)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
