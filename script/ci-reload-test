@@ -211,6 +211,8 @@ failed = content.get('failed', -1)
 passed = content.get('passed', 0)
 if failed != 0:
     print(f'FAIL: {failed} test(s) failed after reload churn (passed={passed})')
+    for f in content.get('failures', []):
+        print(f'  FAIL: {f[\"suite\"]}.{f[\"test\"]}: {f[\"message\"]}')
     sys.exit(1)
 print(f'Post-churn test suite OK: {passed} passed, {failed} failed')
 "
