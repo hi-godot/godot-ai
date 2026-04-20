@@ -14,3 +14,14 @@ const INTERNAL_ERROR := "INTERNAL_ERROR"
 ## Build a standard error response dictionary.
 static func make(code: String, message: String) -> Dictionary:
 	return {"status": "error", "error": {"code": code, "message": message}}
+
+
+## Return a NEW error dict with the original code and a prefixed message.
+## Prefer this over mutating `err["error"]["message"]` in place — callers
+## that want to add context ("Property '%s': …") shouldn't need to know
+## the internal shape of the dict returned by `make`.
+static func prefix_message(err: Dictionary, prefix: String) -> Dictionary:
+	var inner: Dictionary = err.get("error", {})
+	var code: String = inner.get("code", INTERNAL_ERROR)
+	var message: String = inner.get("message", "")
+	return make(code, "%s: %s" % [prefix, message])

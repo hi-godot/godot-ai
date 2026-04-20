@@ -277,14 +277,11 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary) ->
 			v = sub_res
 		else:
 			v = NodeHandler._coerce_value(v, target_type)
-			## #123: wrap the resource-property apply path with the same
-			## dict-coerce check set_property uses, so resource_create-style
-			## calls with wrong-shape dicts error instead of silently storing
-			## zero-filled Variants in the resource.
+			## Mirror set_property's coerce check so wrong-shape dicts error
+			## instead of writing zero-filled Variants (issue #123).
 			var coerce_err := NodeHandler._check_dict_coerce_failed(v, target_type)
 			if coerce_err != null:
-				coerce_err["error"]["message"] = "Property '%s': %s" % [key, coerce_err["error"]["message"]]
-				return coerce_err
+				return McpErrorCodes.prefix_message(coerce_err, "Property '%s'" % key)
 		res.set(key, v)
 	return null
 

@@ -229,10 +229,7 @@ func set_property(params: Dictionary) -> Dictionary:
 		instantiated_resource = true
 	else:
 		value = _coerce_value(value, target_type)
-		## #123: a Dictionary value that _coerce_value couldn't shape into
-		## the target type flows back unchanged. Detect the mismatch and
-		## refuse — writing an unshaped dict to a typed Variant property
-		## silently corrupts the scene (Godot zero-fills or leaves untouched).
+		## Refuse wrong-shape dicts that _coerce_value passed through (#123).
 		var coerce_err := _check_dict_coerce_failed(value, target_type)
 		if coerce_err != null:
 			return coerce_err
@@ -478,7 +475,6 @@ func _set_owner_recursive(node: Node, owner: Node) -> void:
 		_set_owner_recursive(child, owner)
 
 
-## Coerce a JSON value to match the expected Godot type.
 ## Detect a failed dict→typed-Variant coercion. Returns an INVALID_PARAMS
 ## error dict if `value` is still a Dictionary after a coercion attempt
 ## targeting a Vector2/Vector3/Color slot, else null. Message names the
@@ -510,16 +506,13 @@ static func _check_dict_coerce_failed(value: Variant, target_type: int) -> Varia
 
 ## Coerce JSON-shaped values into Godot Variants when the target property
 ## type is known. Returns the coerced value on success, or the input
-## unchanged on failure (the caller is then responsible for detecting
-## the type mismatch via an `is <Type>` check and raising INVALID_PARAMS).
+## unchanged on failure — callers detect the type mismatch via an
+## `is <Type>` check (curve_handler, texture_handler) or via the
+## `_check_dict_coerce_failed` helper (set_property, resource_handler).
 ##
-## The Dictionary→Vector2/Vector3/Color cases REQUIRE the canonical keys
-## to all be present. Before issue #123 this function fell back to
-## `dict.get("x", 0)`, silently zero-filling missing keys — so passing
-## a Color-shaped dict `{r,g,b,a}` for a Vector3 property would stuff
-## `(0, 0, 0)` into the scene with no warning. Strict key checks close
-## that gap; a wrong-shape dict now flows through unchanged so the
-## caller's type check fires.
+## Dictionary→Vector2/Vector3/Color cases REQUIRE all canonical keys;
+## wrong-shape dicts flow through unchanged. See issue #123 — previous
+## `dict.get(key, 0)` defaults silently zero-filled missing axes.
 static func _coerce_value(value: Variant, target_type: int) -> Variant:
 	match target_type:
 		TYPE_VECTOR2:

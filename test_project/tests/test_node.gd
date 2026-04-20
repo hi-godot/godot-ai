@@ -299,12 +299,10 @@ func test_set_property_vector3_rejects_partial_dict() -> void:
 func test_set_property_color_rejects_vector3_shaped_dict() -> void:
 	## Symmetric check for Color coercion. Before the fix, passing
 	## {x,y,z} to a Color slot would stuff Color(0,0,0,1) silently.
-	_handler.create_node({"type": "Node3D", "name": "_McpTestBadColor", "parent_path": "/Main"})
-	## WorldEnvironment would be cleaner but adds setup overhead — reuse
-	## the scripted check on _coerce_value directly for the Color branch.
+	## Exercises _coerce_value directly — the mismatch is detectable at
+	## the coercer boundary, no scene node needed.
 	var coerced = NodeHandler._coerce_value({"x": 1, "y": 0, "z": 0}, TYPE_COLOR)
 	assert_true(coerced is Dictionary, "Wrong-shape dict must flow through unchanged so caller's type check fires")
-	_undo_redo.undo()  # undo create
 
 
 func test_coerce_value_passes_right_shape_color() -> void:
