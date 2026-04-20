@@ -58,7 +58,8 @@ If you need worktree-specific test_project changes, use your own worktree (the o
 
 Write tools that mutate the scene (`script_attach`, `node_create`, `node_set_property`, etc.) dirty the scene in memory but don't touch disk. `project_run` with any mode internally calls `try_autosave()` → `_save_scene_with_preview()`, which **persists those in-memory mutations to the scene file on disk**. A common trap during live smoke tests: attach a throwaway script to `/Main`, run the scene to exercise `_ready()`, and discover the attachment is now committed to `test_project/main.tscn`.
 
-Two safe patterns:
+Three safe patterns:
+- **`project_run(autosave=False, …)`** suppresses Godot's save-before-running for the play call, so MCP scene mutations stay in memory and the `.tscn` on disk is untouched. Preferred for smoke tests; default stays `True` so existing callers see no behavior change.
 - **Attach to a throwaway scene** dedicated to smoke work, not to `main.tscn` or any scene a test suite depends on.
 - **Plan to revert**: after smoking, `git status` in the worktree and `git checkout -- test_project/<scene>` to undo any autosaved pollution. Verify before staging.
 

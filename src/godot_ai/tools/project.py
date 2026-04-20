@@ -17,6 +17,7 @@ def register_project_tools(mcp: FastMCP) -> None:
         ctx: Context,
         mode: str = "main",
         scene: str = "",
+        autosave: bool = True,
         session_id: str = "",
     ) -> dict:
         """Run (play / start) the Godot project (game) from the editor.
@@ -29,10 +30,16 @@ def register_project_tools(mcp: FastMCP) -> None:
         Args:
             mode: Run mode — "main", "current", or "custom". Default "main".
             scene: Scene path (e.g. "res://levels/level1.tscn"). Required when mode is "custom".
+            autosave: When True (default), Godot's save-before-running behavior
+                persists any in-memory scene mutations to disk. Pass False for
+                smoke tests where MCP mutations (script_attach, node_create, …)
+                should stay in memory and the .tscn on disk should be untouched.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await project_handlers.project_run(runtime, mode=mode, scene=scene)
+        return await project_handlers.project_run(
+            runtime, mode=mode, scene=scene, autosave=autosave
+        )
 
     @mcp.tool(meta=DEFER_META)
     async def project_stop(ctx: Context, session_id: str = "") -> dict:

@@ -148,6 +148,28 @@ func test_run_project_custom_empty_scene() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
+func test_run_project_autosave_false_restores_editor_setting() -> void:
+	## Issue #81: autosave=false must restore run/auto_save/save_before_running
+	## to its prior value even on the validation-error path (mode invalid).
+	## Guards against future refactors dropping the restore branch.
+	var autosave_key := "run/auto_save/save_before_running"
+	var editor_settings := EditorInterface.get_editor_settings()
+	if editor_settings == null or not editor_settings.has_setting(autosave_key):
+		return  ## setting not present in this engine build; skip
+	var prior = editor_settings.get_setting(autosave_key)
+	editor_settings.set_setting(autosave_key, true)
+
+	var result := _handler.run_project({"mode": "invalid_mode", "autosave": false})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_eq(
+		bool(editor_settings.get_setting(autosave_key)),
+		true,
+		"save_before_running must be restored after run_project returns",
+	)
+
+	editor_settings.set_setting(autosave_key, prior)
+
+
 # ----- stop_project -----
 
 func test_stop_project_rejects_when_not_playing() -> void:

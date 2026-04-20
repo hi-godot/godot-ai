@@ -24,10 +24,17 @@ async def project_settings_get(runtime: Runtime, key: str) -> dict:
     return await runtime.send_command("get_project_setting", {"key": key})
 
 
-async def project_run(runtime: Runtime, mode: str = "main", scene: str = "") -> dict:
-    params: dict[str, str] = {"mode": mode}
+async def project_run(
+    runtime: Runtime,
+    mode: str = "main",
+    scene: str = "",
+    autosave: bool = True,
+) -> dict:
+    params: dict[str, Any] = {"mode": mode}
     if scene:
         params["scene"] = scene
+    if not autosave:
+        params["autosave"] = False
     return await runtime.send_command("run_project", params)
 
 
