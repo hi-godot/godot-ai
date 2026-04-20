@@ -80,6 +80,17 @@ func disconnect_from_server() -> void:
 		_connected = false
 
 
+## Full pre-free cleanup for plugin unload: stop _process, close the
+## socket, and drop dispatcher/log_buffer refs so their Callable-held
+## RefCounted handlers decref before plugin.gd clears _handlers.
+## See issue #46 and plugin.gd::_exit_tree.
+func teardown() -> void:
+	set_process(false)
+	disconnect_from_server()
+	dispatcher = null
+	log_buffer = null
+
+
 func _connect_to_server() -> void:
 	var err := _peer.connect_to_url(_url)
 	if err != OK:

@@ -204,10 +204,7 @@ func _exit_tree() -> void:
 	# Stop inbound work first so _process can't enqueue new commands or
 	# null-deref log_buffer on the next tick mid-teardown.
 	if _connection:
-		_connection.set_process(false)
-		_connection.disconnect_from_server()
-		_connection.dispatcher = null
-		_connection.log_buffer = null
+		_connection.teardown()
 
 	# Break the Callable -> handler ref chain before dropping _handlers, so the
 	# array clear actually decrefs the handler RefCounteds to zero.
