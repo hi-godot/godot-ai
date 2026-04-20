@@ -235,6 +235,10 @@ func set_property(params: Dictionary) -> Dictionary:
 		instantiated_resource = true
 	else:
 		value = _coerce_value(value, target_type)
+		## Refuse wrong-shape dicts that _coerce_value passed through (#123).
+		var coerce_err := _check_dict_coerce_failed(value, target_type)
+		if coerce_err != null:
+			return coerce_err
 
 	_undo_redo.create_action("MCP: Set %s.%s" % [node.name, property])
 	_undo_redo.add_do_property(node, property, value)
@@ -483,18 +487,58 @@ func _set_owner_recursive(node: Node, owner: Node) -> void:
 		_set_owner_recursive(child, owner)
 
 
-## Coerce a JSON value to match the expected Godot type.
+## Detect a failed dict→typed-Variant coercion. Returns an INVALID_PARAMS
+## error dict if `value` is still a Dictionary after a coercion attempt
+## targeting a Vector2/Vector3/Color slot, else null. Message names the
+## expected keys and the keys actually received so agents self-correct
+## on the next retry.
+static func _check_dict_coerce_failed(value: Variant, target_type: int) -> Variant:
+	if not (value is Dictionary):
+		return null
+	var expected: Array[String] = []
+	var type_name := ""
+	match target_type:
+		TYPE_VECTOR2:
+			expected = ["x", "y"]
+			type_name = "Vector2"
+		TYPE_VECTOR3:
+			expected = ["x", "y", "z"]
+			type_name = "Vector3"
+		TYPE_COLOR:
+			expected = ["r", "g", "b"]  # "a" is optional
+			type_name = "Color"
+		_:
+			return null
+	var got_keys: Array = (value as Dictionary).keys()
+	return McpErrorCodes.make(
+		McpErrorCodes.INVALID_PARAMS,
+		"Cannot coerce dict to %s: expected keys %s; got %s" % [type_name, str(expected), str(got_keys)]
+	)
+
+
+## Coerce JSON-shaped values into Godot Variants when the target property
+## type is known. Returns the coerced value on success, or the input
+## unchanged on failure — callers detect the type mismatch via an
+## `is <Type>` check (curve_handler, texture_handler) or via the
+## `_check_dict_coerce_failed` helper (set_property, resource_handler).
+##
+## Dictionary→Vector2/Vector3/Color cases REQUIRE all canonical keys;
+## wrong-shape dicts flow through unchanged. See issue #123 — previous
+## `dict.get(key, 0)` defaults silently zero-filled missing axes.
 static func _coerce_value(value: Variant, target_type: int) -> Variant:
 	match target_type:
 		TYPE_VECTOR2:
 			if value is Dictionary:
-				return Vector2(value.get("x", 0), value.get("y", 0))
+				if value.has("x") and value.has("y"):
+					return Vector2(value["x"], value["y"])
 		TYPE_VECTOR3:
 			if value is Dictionary:
-				return Vector3(value.get("x", 0), value.get("y", 0), value.get("z", 0))
+				if value.has("x") and value.has("y") and value.has("z"):
+					return Vector3(value["x"], value["y"], value["z"])
 		TYPE_COLOR:
 			if value is Dictionary:
-				return Color(value.get("r", 0), value.get("g", 0), value.get("b", 0), value.get("a", 1))
+				if value.has("r") and value.has("g") and value.has("b"):
+					return Color(value["r"], value["g"], value["b"], value.get("a", 1.0))
 			if value is String:
 				return Color(value)
 		TYPE_BOOL:

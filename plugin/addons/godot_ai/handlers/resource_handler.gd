@@ -277,6 +277,11 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary) ->
 			v = sub_res
 		else:
 			v = NodeHandler._coerce_value(v, target_type)
+			## Mirror set_property's coerce check so wrong-shape dicts error
+			## instead of writing zero-filled Variants (issue #123).
+			var coerce_err := NodeHandler._check_dict_coerce_failed(v, target_type)
+			if coerce_err != null:
+				return McpErrorCodes.prefix_message(coerce_err, "Property '%s'" % key)
 		res.set(key, v)
 	return null
 

@@ -310,6 +310,83 @@ func test_set_property_missing_value() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
+func test_set_property_vector3_accepts_valid_dict() -> void:
+	## Positive guard for the #123 fix: a right-shape Vector3 dict must
+	## still coerce and land correctly. Prevents over-correcting the strict
+	## key check from breaking the happy path.
+	_handler.create_node({"type": "Node3D", "name": "_McpTestV3", "parent_path": "/Main"})
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestV3",
+		"property": "position",
+		"value": {"x": 1.0, "y": 2.0, "z": 3.0},
+	})
+	assert_has_key(result, "data")
+	assert_true(result.data.undoable)
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestV3") as Node3D
+	assert_eq(node.position, Vector3(1, 2, 3))
+	_undo_redo.undo()  # undo set
+	_undo_redo.undo()  # undo create
+
+
+func test_set_property_vector3_rejects_color_shaped_dict() -> void:
+	## Issue #123 regression: passing a Color-shaped dict {r,g,b,a} to a
+	## Vector3 slot used to silently zero-fill x/y/z and store (0,0,0)
+	## with status=ok. Must now return INVALID_PARAMS and leave the
+	## property unchanged.
+	_handler.create_node({"type": "Node3D", "name": "_McpTestBadV3", "parent_path": "/Main"})
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestBadV3") as Node3D
+	var original := node.position
+
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestBadV3",
+		"property": "position",
+		"value": {"r": 1, "g": 0, "b": 0, "a": 1},
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "Vector3")
+
+	assert_eq(node.position, original, "Position must be unchanged after a rejected coerce")
+	_undo_redo.undo()  # undo create
+
+
+func test_set_property_vector3_rejects_partial_dict() -> void:
+	## Second half of #123: a dict with some but not all required keys
+	## used to get the missing axes zero-filled (e.g. {x:1} → (1,0,0)).
+	## Must now reject.
+	_handler.create_node({"type": "Node3D", "name": "_McpTestPartial", "parent_path": "/Main"})
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestPartial",
+		"property": "position",
+		"value": {"x": 1},  # missing y, z
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	_undo_redo.undo()  # undo create
+
+
+func test_set_property_color_rejects_vector3_shaped_dict() -> void:
+	## Symmetric check for Color coercion. Before the fix, passing
+	## {x,y,z} to a Color slot would stuff Color(0,0,0,1) silently.
+	## Exercises _coerce_value directly — the mismatch is detectable at
+	## the coercer boundary, no scene node needed.
+	var coerced = NodeHandler._coerce_value({"x": 1, "y": 0, "z": 0}, TYPE_COLOR)
+	assert_true(coerced is Dictionary, "Wrong-shape dict must flow through unchanged so caller's type check fires")
+
+
+func test_coerce_value_passes_right_shape_color() -> void:
+	var coerced = NodeHandler._coerce_value({"r": 1.0, "g": 0.5, "b": 0.0, "a": 1.0}, TYPE_COLOR)
+	assert_true(coerced is Color)
+	assert_eq(coerced.r, 1.0)
+	assert_eq(coerced.g, 0.5)
+
+
+func test_coerce_value_accepts_color_without_alpha() -> void:
+	## Alpha is optional and defaults to 1.0 — {r,g,b} without 'a' is a
+	## valid shape. The strict check should only require r/g/b.
+	var coerced = NodeHandler._coerce_value({"r": 1.0, "g": 0.0, "b": 0.0}, TYPE_COLOR)
+	assert_true(coerced is Color)
+	assert_eq(coerced.a, 1.0)
+
+
 func test_set_property_resource_path() -> void:
 	## Use a fresh MeshInstance3D for a clean material_override slot.
 	_handler.create_node({
