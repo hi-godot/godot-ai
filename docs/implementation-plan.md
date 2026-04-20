@@ -1,6 +1,6 @@
 # Godot AI — Working Plan
 
-*Updated 2026-04-16 (PR #30 — materials + particles)*
+*Updated 2026-04-19 (UI polish findings from cyberpunk-hud-demo v3.2 pass)*
 
 This is the current working plan for Godot AI. It focuses on active and upcoming work only.
 
@@ -129,6 +129,10 @@ These are not the next things to do blindly. They are the extensions that matter
   - [ ] `theme_set_stylebox_texture` — 9-slice image-backed styleboxes for pixel-art UI (buttons, panels with real artwork)
   - [ ] `theme_set_font` + `theme_set_icon` — custom typography and icon sets (needs a Font / Texture2D resource handler first)
   - [ ] `ui_set_text` convenience — one call to set `.text` across Label / Button / LineEdit / RichTextLabel without remembering per-class property quirks
+  - [ ] `ui_set_richtext` — set `RichTextLabel.bbcode_text` with optional character-by-character reveal (tween on `visible_characters`). Unlocks terminal-style multi-color log feeds, inline-colored damage numbers, typewriter dialogue — RichTextLabel is currently the only Control with no targeted MCP tool. *(cyberpunk-hud-demo v3.2 polish pass)*
+  - [ ] `ui_animate_counter` — tween a numeric Label from an origin to a target value with an optional format string (`"{:,}"`, `"%04d"`, `"HP: %d"`). Wraps `Tween.tween_method` + per-frame label re-render — the fast-forward score / credits / HP counter pattern. *(cyberpunk-hud-demo v3.2 polish pass)*
+  - [ ] `control_panel_frame_recipe` — composite sci-fi HUD frame as one recipe: polyline outline with per-corner diagonal cut flags, optional inner double-stroke, chevron header band, bottom ruler ticks, corner flags. Sibling to `control_draw_recipe`. Auto-accounts for parent PanelContainer content_margin so the outline traces the panel's outer edge (resolves friction log [#23](https://github.com/hi-godot/cyberpunk-hud-demo/blob/polish/v2-terminal/docs/friction-log-cyberpunk-hud.md)). *(cyberpunk-hud-demo v3.2 polish pass)*
+  - [ ] `node_stylebox_override` — read the parent theme's stylebox for a given slot, duplicate, apply a patch dict, attach via `add_theme_stylebox_override`. Covers the per-instance override pattern: zero borders / corner_radius for an angular frame that takes over the border, or duplicate the HealthBar `fill` stylebox to flash bg_color without mutating the shared theme. *(cyberpunk-hud-demo v3.2 polish pass — used 3× by hand)*
 - [~] `camera_*` for follow, bounds, zoom, damping — shipped: `camera_create`, `camera_configure` (class-aware batch), `camera_set_limits_2d` (room bounds), `camera_set_damping_2d` (position/rotation smoothing + drag-margin deadzone), `camera_follow_2d` (reparent-based, one-undo), `camera_get`, `camera_list`, `camera_apply_preset` (topdown_2d, platformer_2d, cinematic_3d, action_3d). `current=true` auto-unmarks siblings of the same class in the same undo action. Pending: `camera_*` 3D follow via `SpringArm3D` rig (3D damping lives there too — Camera3D has no native smoothing) and screen shake (tracked as `animation_preset_shake`)
 - `resource.create` / `resource.save` / `resource.instantiate`
 - `scene.instantiate` and `scene.inherit`
@@ -136,6 +140,14 @@ These are not the next things to do blindly. They are the extensions that matter
 - `animation_player.*` / `animation_tree.*`
   - [~] AnimationPlayer scaffolding shipped (`animation_player_create`, `animation_create`, `animation_add_property_track`, `animation_add_method_track`, `animation_set_autoplay`, `animation_play`, `animation_stop`, `animation_list`, `animation_get`, `animation_create_simple` composer, `animation_delete`, `animation_validate`). `animation_create` and `animation_create_simple` support `overwrite` parameter for re-creating animations in place.
   - [ ] **Preset helpers** — `animation_preset_fade`, `animation_preset_slide_in`, `animation_preset_shake`, `animation_preset_pulse_loop`. Thin wrappers over `animation_create_simple` that bake in the right transition / loop_mode / two-keyframe shape for each effect. Cuts a "fade in this Panel" from a 6-line tween spec to one call.
+    - **Notes from cyberpunk-hud-demo v3.2 polish pass (2026-04-19):**
+      - `animation_preset_pulse_loop` should take a `property` arg (default `scale`, but `modulate:a`, `modulate`, `self_modulate`, `position`, and arbitrary sub-paths all came up). The existing `animation_preset_pulse` is scale-only — blocks modulate-alpha breathing, color pulses, position jitter. See friction log [#15](https://github.com/hi-godot/cyberpunk-hud-demo/blob/polish/v2-terminal/docs/friction-log-cyberpunk-hud.md).
+      - Five additional presets surfaced as hand-written `_process(delta) { phase += ...; queue_redraw() }` loops during the pass, each a one-call op if bundled:
+        - `animation_preset_bounce` — center-pivot scale overshoot with elastic settle (UI press feedback, Q/E/R-style affordances). Auto-sets `pivot_offset = size * 0.5` so the pop originates from the icon, not the top-left (subtle foot-gun today).
+        - `animation_preset_orbit` — position traversing a rect or circle perimeter at a phase rate, optional inward inset (orbiting "data packet" dots, HUD satellite markers).
+        - `animation_preset_sweep` — rotating arc-segment comet on a Control (cooldown-ring accents, radar scan overlays).
+        - `animation_preset_drift` — phase-driven position offset on one axis (CRT scanlines, marquee text, conveyor belts).
+        - Text counter is covered separately by `ui_animate_counter` above.
   - [ ] **Bezier and audio tracks** — `animation_add_bezier_track` (for hand-tuned curves where keyframe interpolation isn't enough) and `animation_add_audio_track` (timed AudioStreamPlayer cues; needs the audio resource handler first).
   - [ ] **`animation_tree.*`** — state-machine and blend-tree authoring for character locomotion (idle ↔ walk ↔ run blends, attack one-shots). Larger surface; depends on the AnimationPlayer being solid first.
   - [ ] **3D material fades / sub-resource paths** — animating a 3D mesh's transparency means tweening `MeshInstance3D:material_override:albedo_color`, which the value coercer needs to walk into. Today it falls through to raw value for nested resource paths. Requires extending `_coerce_value_for_track` to resolve `node:resource:property` chains, plus a worked example in the docstring.
