@@ -4,6 +4,12 @@ extends EditorPlugin
 const GAME_HELPER_AUTOLOAD_NAME := "_mcp_game_helper"
 const GAME_HELPER_AUTOLOAD_PATH := "res://addons/godot_ai/runtime/game_helper.gd"
 
+## EditorSettings keys used to remember which server process the plugin
+## spawned — survives editor restarts, lets a later editor session adopt
+## and manage a server it didn't spawn itself. See #135.
+const MANAGED_SERVER_PID_SETTING := "godot_ai/managed_server_pid"
+const MANAGED_SERVER_VERSION_SETTING := "godot_ai/managed_server_version"
+
 var _connection: Connection
 var _dispatcher: McpDispatcher
 var _log_buffer: McpLogBuffer
@@ -270,20 +276,53 @@ func _ensure_game_helper_autoload() -> void:
 
 
 func _start_server() -> void:
-	## If a server is already listening on our HTTP port, use it.
-	## This covers: CI (external server), another Godot instance, or manual start.
-	## NOTE: We only check port 8000 (HTTP), not 9500 (WebSocket). If a foreign
-	## process holds 8000, we'll assume it's a valid server. The WebSocket
-	## connection will fail and retry if the server isn't actually ours.
+	## Four-way branch depending on port state + persisted managed-server
+	## record in EditorSettings. The record lets later editor sessions
+	## recognize and manage servers they didn't spawn themselves — without
+	## it, `_server_pid = -1` after a restart meant `prepare_for_update_reload`
+	## couldn't kill a server the update flow expected to replace. See #135.
+	##
+	##   port free                              -> spawn fresh, record PID
+	##   port in use, recorded PID alive,       -> adopt (set _server_pid
+	##     version matches                         from record; fast path)
+	##   port in use, recorded PID alive,       -> kill + respawn; handles
+	##     version mismatched                      manual file replace too
+	##   port in use, no live recorded PID      -> foreign server, just use
+	##                                             existing (don't touch)
 	if _server_started_this_session:
-		# Guard against re-entrant spawns (e.g. plugin reload during update).
-		# The static flag persists across disable/enable cycles within the same
-		# editor session, preventing cascading server process creation.
+		## Guard against re-entrant spawns (e.g. plugin reload during update).
+		## The static flag persists across disable/enable cycles within the
+		## same editor session, preventing cascading server process creation.
 		return
-	if _is_port_in_use(McpClientConfigurator.SERVER_HTTP_PORT):
-		print("MCP | server already running on port %d, using existing" % McpClientConfigurator.SERVER_HTTP_PORT)
-		_server_started_this_session = true
-		return
+
+	var port := McpClientConfigurator.SERVER_HTTP_PORT
+	var current_version := McpClientConfigurator.get_plugin_version()
+
+	if _is_port_in_use(port):
+		var record := _read_managed_server_record()
+		if record.pid > 0 and _pid_alive(record.pid):
+			if record.version == current_version:
+				_server_pid = record.pid
+				_server_started_this_session = true
+				print("MCP | adopted managed server (PID %d, v%s)" % [record.pid, record.version])
+				return
+			## Version drift — our server but wrong version. Kill and respawn
+			## so the new plugin code talks to a matching server. Also
+			## recovers from the "user dropped a newer ZIP on disk outside
+			## the dock update flow, then restarted the editor" case.
+			print("MCP | managed server v%s does not match plugin v%s, restarting"
+				% [record.version, current_version])
+			OS.kill(record.pid)
+			_clear_managed_server_record()
+			_wait_for_port_free(port, 3.0)
+			## Fall through to spawn.
+		else:
+			## Foreign process on our port. Don't touch it. Just connect;
+			## the WebSocket handshake will fail if it isn't actually ours
+			## and the reconnect loop will surface that.
+			_server_started_this_session = true
+			print("MCP | foreign server already running on port %d, using existing" % port)
+			return
 
 	var server_cmd := McpClientConfigurator.get_server_command()
 	if server_cmd.is_empty():
@@ -293,12 +332,13 @@ func _start_server() -> void:
 	var cmd: String = server_cmd[0]
 	var args: Array[String] = []
 	args.assign(server_cmd.slice(1))
-	args.append_array(["--transport", "streamable-http", "--port", str(McpClientConfigurator.SERVER_HTTP_PORT)])
+	args.append_array(["--transport", "streamable-http", "--port", str(port)])
 
 	_server_pid = OS.create_process(cmd, args)
 	if _server_pid > 0:
 		_server_started_this_session = true
-		print("MCP | started server (PID %d): %s %s" % [_server_pid, cmd, " ".join(args)])
+		_write_managed_server_record(_server_pid, current_version)
+		print("MCP | started server (PID %d, v%s): %s %s" % [_server_pid, current_version, cmd, " ".join(args)])
 	else:
 		push_warning("MCP | failed to start server")
 
@@ -320,6 +360,74 @@ func _stop_server() -> void:
 		OS.kill(_server_pid)
 		print("MCP | stopped server (PID %d)" % _server_pid)
 		_server_pid = -1
+		_clear_managed_server_record()
+
+
+## True if the given PID corresponds to a live process. Uses POSIX `kill -0`
+## (doesn't actually kill — just probes whether the process exists) or the
+## Windows tasklist equivalent. Used by _start_server to distinguish a live
+## managed server that outlived its editor from a stale EditorSettings
+## record pointing at a PID that no longer exists.
+func _pid_alive(pid: int) -> bool:
+	if pid <= 0:
+		return false
+	if OS.get_name() == "Windows":
+		var output: Array = []
+		var exit_code := OS.execute("tasklist", ["/FI", "PID eq %d" % pid, "/NH", "/FO", "CSV"], output, true)
+		if exit_code != 0 or output.is_empty():
+			return false
+		## tasklist returns "INFO: No tasks ..." when the PID doesn't exist,
+		## otherwise a CSV row containing the PID. Match on the PID appearing
+		## as its own field rather than INFO-string substring.
+		for line in output:
+			if str(line).find("\"%d\"" % pid) >= 0:
+				return true
+		return false
+	var exit_code := OS.execute("kill", ["-0", str(pid)], [], true)
+	return exit_code == 0
+
+
+## Poll until the given port is no longer bound, or the timeout elapses.
+## Used after `OS.kill` in the update-flow restart branch so we don't race
+## the port-in-use check when we try to rebind.
+func _wait_for_port_free(port: int, timeout_s: float) -> void:
+	var deadline := Time.get_ticks_msec() + int(timeout_s * 1000.0)
+	while _is_port_in_use(port):
+		if Time.get_ticks_msec() >= deadline:
+			push_warning("MCP | port %d still in use after %.1fs — proceeding anyway" % [port, timeout_s])
+			return
+		OS.delay_msec(100)
+
+
+func _read_managed_server_record() -> Dictionary:
+	var es := EditorInterface.get_editor_settings()
+	if es == null:
+		return {"pid": 0, "version": ""}
+	var pid: int = 0
+	if es.has_setting(MANAGED_SERVER_PID_SETTING):
+		pid = int(es.get_setting(MANAGED_SERVER_PID_SETTING))
+	var version: String = ""
+	if es.has_setting(MANAGED_SERVER_VERSION_SETTING):
+		version = str(es.get_setting(MANAGED_SERVER_VERSION_SETTING))
+	return {"pid": pid, "version": version}
+
+
+func _write_managed_server_record(pid: int, version: String) -> void:
+	var es := EditorInterface.get_editor_settings()
+	if es == null:
+		return
+	es.set_setting(MANAGED_SERVER_PID_SETTING, pid)
+	es.set_setting(MANAGED_SERVER_VERSION_SETTING, version)
+
+
+func _clear_managed_server_record() -> void:
+	var es := EditorInterface.get_editor_settings()
+	if es == null:
+		return
+	if es.has_setting(MANAGED_SERVER_PID_SETTING):
+		es.set_setting(MANAGED_SERVER_PID_SETTING, 0)
+	if es.has_setting(MANAGED_SERVER_VERSION_SETTING):
+		es.set_setting(MANAGED_SERVER_VERSION_SETTING, "")
 
 
 ## Prepare for a plugin-self-update reload cycle: kill the server process

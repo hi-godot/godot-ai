@@ -523,7 +523,10 @@ func _refresh_setup_status() -> void:
 	if not uv_version.is_empty():
 		_setup_container.add_child(_make_status_row("uv", uv_version, Color.GREEN))
 		var ver := McpClientConfigurator.get_plugin_version()
-		_setup_container.add_child(_make_status_row("Server", "godot-ai ~= %s" % ver, Color.GREEN))
+		## Keep in sync with McpClientConfigurator.get_server_command — since
+		## v1.2.3 the uvx spawn uses exact pinning (==<version>) rather than
+		## the old compatible-with (~=<minor>) form. See #133.
+		_setup_container.add_child(_make_status_row("Server", "godot-ai == %s" % ver, Color.GREEN))
 	else:
 		_setup_container.add_child(_make_status_row("uv", "not found", Color.RED))
 		var install_btn := Button.new()
