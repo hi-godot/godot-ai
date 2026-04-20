@@ -105,6 +105,39 @@ func test_rect_op_all_dict_forms() -> void:
 	_remove_control(path)
 
 
+func test_rect_outline_preserves_width() -> void:
+	# filled=false takes the width branch of draw_recipe.gd's rect op.
+	# When filled=true (the default), width is dropped to silence Godot's
+	# "width has no effect when filled is true" warning (issue #98).
+	var path := _add_control("TestRectOutline")
+	if path.is_empty():
+		skip("Scene not ready")
+		return
+	var result := _handler.control_draw_recipe(
+		{
+			"path": path,
+			"ops":
+			[
+				{
+					"draw": "rect",
+					"rect": [0, 0, 10, 10],
+					"color": "red",
+					"filled": false,
+					"width": 3,
+				}
+			],
+		}
+	)
+	assert_has_key(result, "data")
+
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var node := ScenePath.resolve(path, scene_root)
+	var stored: Array = node.get_meta("_ops")
+	assert_eq(stored[0].filled, false)
+	assert_eq(stored[0].width, 3.0)
+	_remove_control(path)
+
+
 func test_polyline_points_stored_as_packed_array() -> void:
 	var path := _add_control("TestPolylineRecipe")
 	if path.is_empty():

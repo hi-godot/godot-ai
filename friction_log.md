@@ -19,7 +19,7 @@ running on `/Users/davidsarno/godot-assetlib-download-test/` — not the
 worktree's own `test_project/`. The installed plugin was 1.0.1; the PR
 code had to be rsync'd over from the worktree.
 
-### bug — `push_error("msg")` / `push_warning("msg")` lose the user's text
+### bug — `push_error("msg")` / `push_warning("msg")` lose the user's text — FIXED in PR #78
 
 `plugin/addons/godot_ai/runtime/game_logger.gd::_log_error` reads only the
 `rationale` argument from Godot's `Logger` virtual. For the **single-arg**
@@ -63,7 +63,7 @@ works correctly — the defect only hits the common single-arg case.
 Repro: `push_warning("warn-game"); push_error("err-game")` in `_ready()`,
 `project_run`, `logs_read(source="game")` → lines 3-4 in the response.
 
-### friction — `editor_reload_plugin` can't recover from newly-added files on disk
+### friction — `editor_reload_plugin` can't recover from newly-added files on disk — FIXED (editor_handler.gd now `fs.scan()` awaits before re-enabling)
 
 Sequence that breaks: rsync PR plugin over an older installed copy (adds
 new `.gd` files that declare `class_name`) → `editor_reload_plugin` →
@@ -118,7 +118,7 @@ to get PR code into the server. CLAUDE.md's worktree section already
 warns about this; a dock button or script one-liner for "restart server
 against *this* worktree" would remove the last of the friction.
 
-### friction — `scene_create` briefly rejects with `EDITOR_NOT_READY: importing`
+### friction — `scene_create` briefly rejects with `EDITOR_NOT_READY: importing` — FIXED in PR #95 (retryable/state hints on EDITOR_NOT_READY)
 
 Right after a `filesystem_write_text`, readiness flips to `importing` for
 ~1-2s while Godot reimports. `editor_state` still reports `no_scene`

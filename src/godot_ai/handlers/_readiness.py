@@ -11,7 +11,7 @@ from godot_ai.runtime.interface import Runtime
 # state (stop the game).
 _READINESS_INFO: dict[str, tuple[str, bool]] = {
     "importing": ("Editor is importing resources — try again shortly", True),
-    "playing": ("Editor is in play mode — stop the game first", False),
+    "playing": ("Editor is in play mode — call project_stop to stop the game, then retry", False),
 }
 
 

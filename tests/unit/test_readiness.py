@@ -57,6 +57,9 @@ def test_require_writable_rejects_playing():
         require_writable(_make_runtime("playing"))
     assert exc_info.value.code == ErrorCode.EDITOR_NOT_READY
     assert "play mode" in exc_info.value.message
+    # The message names the recovery tool so MCP clients don't have to
+    # infer "how do I unstick this" from the state string alone.
+    assert "project_stop" in exc_info.value.message
     assert exc_info.value.data == {"retryable": False, "state": "playing"}
     assert "retryable=False" in str(exc_info.value)
 

@@ -33,12 +33,19 @@ func _draw() -> void:
 					bool(op.get("antialiased", false))
 				)
 			"rect":
-				draw_rect(
-					op.rect,
-					op.color,
-					bool(op.get("filled", true)),
-					float(op.get("width", 1.0))
-				)
+				# Godot warns if `width` is passed when `filled` is true —
+				# width has no effect on filled rects. Split the call so we
+				# only pass width when stroking an outline.
+				var filled := bool(op.get("filled", true))
+				if filled:
+					draw_rect(op.rect, op.color, true)
+				else:
+					draw_rect(
+						op.rect,
+						op.color,
+						false,
+						float(op.get("width", 1.0))
+					)
 			"arc":
 				draw_arc(
 					op.center,
