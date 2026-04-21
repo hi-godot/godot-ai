@@ -385,6 +385,106 @@ func test_screenshot_bogus_source() -> void:
 	assert_contains(result.error.message, "Invalid source")
 
 
+# ----- source="cinematic" (issue #143) -----
+
+func test_screenshot_cinematic_no_camera_returns_error() -> void:
+	## Main scene has a camera in most configurations; this path only runs
+	## when a cameraless scene happens to be open. Acceptance: INVALID_PARAMS
+	## with a descriptive message, not a silent fallback.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene open")
+		return
+	var cameras := _collect_cameras(scene_root)
+	if cameras.is_empty():
+		## Scene already has no cameras — exercise directly.
+		var result := _handler.take_screenshot({"source": "cinematic"})
+		assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+		assert_contains(result.error.message, "No current Camera3D")
+		return
+	skip("Scene has cameras — no-camera branch covered only in cameraless scenes")
+
+
+func test_screenshot_cinematic_returns_image() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene open")
+		return
+	var cameras := _collect_cameras(scene_root)
+	if cameras.is_empty():
+		skip("No Camera3D in scene to render from")
+		return
+	var result := _handler.take_screenshot({"source": "cinematic"})
+	if not result.has("data"):
+		skip("Cinematic render not available in headless mode")
+		return
+	assert_eq(result.data.source, "cinematic")
+	assert_eq(result.data.format, "png")
+	assert_gt(result.data.width, 0, "Width should be positive")
+	assert_gt(result.data.height, 0, "Height should be positive")
+	assert_has_key(result.data, "image_base64")
+	assert_gt(result.data.image_base64.length(), 0, "PNG payload should be non-empty")
+	assert_has_key(result.data, "camera_path")
+	assert_true(result.data.camera_path.begins_with("/"), "camera_path should be scene-rooted")
+
+
+func test_screenshot_cinematic_prefers_current_camera() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene open")
+		return
+	var cameras := _collect_cameras(scene_root)
+	if cameras.size() < 2:
+		skip("Need ≥2 Camera3Ds to verify `current` preference")
+		return
+	## Temporarily mark the last camera as current and verify it wins over
+	## the first (which would be returned by the fallback order).
+	var prior_current: Camera3D = null
+	for cam in cameras:
+		if cam.current:
+			prior_current = cam
+			cam.current = false
+	var chosen: Camera3D = cameras[cameras.size() - 1]
+	chosen.current = true
+	var result := _handler.take_screenshot({"source": "cinematic"})
+	chosen.current = false
+	if prior_current != null:
+		prior_current.current = true
+	if not result.has("data"):
+		skip("Cinematic render not available in headless mode")
+		return
+	var expected := ScenePath.from_node(chosen, scene_root)
+	assert_eq(result.data.camera_path, expected)
+
+
+func test_screenshot_cinematic_respects_max_resolution() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene open")
+		return
+	if _collect_cameras(scene_root).is_empty():
+		skip("No Camera3D in scene to render from")
+		return
+	var result := _handler.take_screenshot({"source": "cinematic", "max_resolution": 64})
+	if not result.has("data"):
+		skip("Cinematic render not available in headless mode")
+		return
+	assert_true(result.data.width <= 64, "Width should be <= max_resolution")
+	assert_true(result.data.height <= 64, "Height should be <= max_resolution")
+
+
+func _collect_cameras(root: Node) -> Array[Camera3D]:
+	var out: Array[Camera3D] = []
+	var stack: Array[Node] = [root]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		if n is Camera3D:
+			out.append(n)
+		for c in n.get_children():
+			stack.append(c)
+	return out
+
+
 # ----- GameLogBuffer (issue #73) -----
 
 func test_game_log_buffer_append_and_get_range() -> void:

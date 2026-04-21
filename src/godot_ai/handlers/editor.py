@@ -113,6 +113,7 @@ async def editor_screenshot(
         "aabb_center",
         "aabb_size",
         "aabb_longest_ground_axis",
+        "camera_path",
     ):
         if key in result:
             metadata[key] = result[key]

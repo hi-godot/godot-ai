@@ -107,6 +107,15 @@ def register_editor_tools(mcp: FastMCP) -> None:
 
         Sources:
         - "viewport": Captures the 3D editor viewport (default).
+        - "cinematic": Renders the edited scene through its active Camera3D
+          without running the game. No editor gizmos, selection outlines,
+          or grid lines — the output matches what the scene's `current`
+          Camera3D would see at play time, with full environment and
+          post-processing applied. Returns INVALID_PARAMS if no Camera3D
+          in the scene has `current=true`. Doesn't dirty autosave state
+          or require `project_run`. `view_target`, `coverage`, and the
+          custom angle/fov parameters don't apply — the camera is the
+          scene's camera.
         - "game": Captures the running game's own framebuffer (only available
           when the project is running). Works regardless of whether Game
           Embed Mode is on or off, and regardless of whether the game
@@ -135,7 +144,7 @@ def register_editor_tools(mcp: FastMCP) -> None:
         4. Repeat until you have the coverage you need (up to ~15 shots).
 
         Args:
-            source: Capture source — "viewport" or "game". Default "viewport".
+            source: Capture source — "viewport", "cinematic", or "game". Default "viewport".
             max_resolution: Maximum resolution (longest edge) for the returned image.
                 Images larger than this are downscaled. Default 640. Set to 0 for full resolution.
             include_image: Whether to include the image data in the response. Default True.

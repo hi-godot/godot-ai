@@ -243,8 +243,10 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 				return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Missing request_id — cannot correlate deferred response")
 			_debugger_plugin.request_game_screenshot(request_id, max_resolution, _connection)
 			return McpDispatcher.DEFERRED_RESPONSE
+		"cinematic":
+			return _take_cinematic_screenshot(max_resolution)
 		_:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid source '%s' — use 'viewport' or 'game'" % source)
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid source '%s' — use 'viewport', 'cinematic', or 'game'" % source)
 
 	## Handle view_target: temporarily reposition the editor's own camera to
 	## frame one or more target nodes, force a render, capture, then restore.
@@ -393,6 +395,87 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to capture image from %s" % source)
 
 	return _finalize_image(image, source, max_resolution)
+
+
+## Render the edited scene through its active Camera3D without running the
+## game. Mirrors Godot's "Cinematic Preview" display mode but via a
+## throwaway SubViewport, so the output has no editor gizmos, selection
+## outlines, or grid lines.
+func _take_cinematic_screenshot(max_resolution: int) -> Dictionary:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+
+	var scene_camera := _find_current_camera_3d(scene_root)
+	if scene_camera == null:
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"No current Camera3D in scene — mark a Camera3D as `current` or add one to the scene",
+		)
+
+	## Default to a 16:9 HD capture; size is overridden by _finalize_image's
+	## `max_resolution` downscale step when requested.
+	var render_size := Vector2i(1920, 1080)
+	var edit_vp := EditorInterface.get_editor_viewport_3d()
+	if edit_vp != null:
+		var vs := edit_vp.get_visible_rect().size
+		if vs.x >= 1.0 and vs.y >= 1.0:
+			render_size = Vector2i(int(vs.x), int(vs.y))
+
+	var sub_vp := SubViewport.new()
+	sub_vp.size = render_size
+	sub_vp.own_world_3d = false
+	sub_vp.transparent_bg = false
+	sub_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+
+	var cam := Camera3D.new()
+	cam.fov = scene_camera.fov
+	cam.near = scene_camera.near
+	cam.far = scene_camera.far
+	cam.projection = scene_camera.projection
+	cam.size = scene_camera.size
+	cam.keep_aspect = scene_camera.keep_aspect
+	cam.cull_mask = scene_camera.cull_mask
+	cam.environment = scene_camera.environment
+	cam.attributes = scene_camera.attributes
+	cam.current = true
+
+	sub_vp.add_child(cam)
+	scene_root.add_child(sub_vp)
+	## global_transform is resolved against the ancestor Node3D chain, so it
+	## must be set after parenting — otherwise the camera ends up at origin.
+	cam.global_transform = scene_camera.global_transform
+
+	RenderingServer.force_draw(false)
+	var image: Image = sub_vp.get_texture().get_image()
+
+	scene_root.remove_child(sub_vp)
+	sub_vp.queue_free()
+
+	if image == null or image.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Cinematic render produced an empty image")
+
+	var result := _finalize_image(image, "cinematic", max_resolution)
+	result.data["camera_path"] = ScenePath.from_node(scene_camera, scene_root)
+	return result
+
+
+## Return the Camera3D that would be active if the scene were running.
+## Preference: a descendant with `current=true`, else the first Camera3D
+## found in a depth-first walk.
+func _find_current_camera_3d(root: Node) -> Camera3D:
+	var first: Camera3D = null
+	var stack: Array[Node] = [root]
+	while not stack.is_empty():
+		var node: Node = stack.pop_back()
+		if node is Camera3D:
+			if node.current:
+				return node
+			if first == null:
+				first = node
+		for child in node.get_children():
+			stack.append(child)
+	return first
 
 
 func _finalize_image(image: Image, source: String, max_resolution: int) -> Dictionary:

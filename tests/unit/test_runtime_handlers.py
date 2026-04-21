@@ -700,6 +700,8 @@ class StubClient:
                 result["azimuth"] = params["azimuth"]
             if "fov" in params:
                 result["fov"] = params["fov"]
+            if params.get("source") == "cinematic":
+                result["camera_path"] = "/Main/Camera3D"
             return result
         if command == "clear_logs":
             return {"cleared_count": 5}
@@ -2955,6 +2957,25 @@ async def test_editor_screenshot_handler_fov_passes_param():
     )
     assert client.calls[-1]["params"]["fov"] == 30.0
     assert result["fov"] == 30.0
+
+
+async def test_editor_screenshot_handler_cinematic_passes_source():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await editor_handlers.editor_screenshot(
+        runtime, source="cinematic", include_image=False
+    )
+    assert client.calls[-1]["params"]["source"] == "cinematic"
+    assert result["source"] == "cinematic"
+
+
+async def test_editor_screenshot_handler_cinematic_surfaces_camera_path():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await editor_handlers.editor_screenshot(
+        runtime, source="cinematic", include_image=False
+    )
+    assert result["camera_path"] == "/Main/Camera3D"
 
 
 # ---------------------------------------------------------------------------
