@@ -71,11 +71,9 @@ func create_gradient_texture(params: Dictionary) -> Dictionary:
 			)
 		offsets.append(float(stop["offset"]))
 		var color_value = NodeHandler._coerce_value(stop["color"], TYPE_COLOR)
-		if not (color_value is Color):
-			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
-				"stops[%d].color could not be coerced to Color" % i
-			)
+		var color_err := NodeHandler._check_coerced(color_value, TYPE_COLOR, "stops[%d].color" % i)
+		if color_err != null:
+			return color_err
 		colors.append(color_value)
 	gradient.offsets = offsets
 	gradient.colors = colors

@@ -168,6 +168,7 @@ static func _coerce_points(curve: Resource, points: Array) -> Dictionary:
 				"right_tangent": float(p.get("right_tangent", 0.0)),
 			})
 	elif curve is Curve2D:
+		var zero2 := {"x": 0, "y": 0}
 		for i in range(points.size()):
 			var p2 = points[i]
 			if not (p2 is Dictionary) or not p2.has("position"):
@@ -175,16 +176,21 @@ static func _coerce_points(curve: Resource, points: Array) -> Dictionary:
 					McpErrorCodes.INVALID_PARAMS,
 					"Curve2D points[%d] must have 'position' (and optional 'in', 'out')" % i
 				)}
-			var pos = NodeHandler._coerce_value(p2["position"], TYPE_VECTOR2)
-			var in_v = NodeHandler._coerce_value(p2.get("in", {"x": 0, "y": 0}), TYPE_VECTOR2)
-			var out_v = NodeHandler._coerce_value(p2.get("out", {"x": 0, "y": 0}), TYPE_VECTOR2)
-			if not (pos is Vector2 and in_v is Vector2 and out_v is Vector2):
-				return {"error": McpErrorCodes.make(
-					McpErrorCodes.INVALID_PARAMS,
-					"Curve2D points[%d] in/position/out must coerce to Vector2" % i
-				)}
-			snapshot.append({"position": pos, "in": in_v, "out": out_v})
+			var axes2 := {
+				"position": p2["position"],
+				"in": p2.get("in", zero2),
+				"out": p2.get("out", zero2),
+			}
+			var coerced2 := {}
+			for field in ["position", "in", "out"]:
+				var v = NodeHandler._coerce_value(axes2[field], TYPE_VECTOR2)
+				var err := NodeHandler._check_coerced(v, TYPE_VECTOR2, "Curve2D points[%d].%s" % [i, field])
+				if err != null:
+					return {"error": err}
+				coerced2[field] = v
+			snapshot.append(coerced2)
 	else:  # Curve3D
+		var zero3 := {"x": 0, "y": 0, "z": 0}
 		for i in range(points.size()):
 			var p3 = points[i]
 			if not (p3 is Dictionary) or not p3.has("position"):
@@ -192,16 +198,20 @@ static func _coerce_points(curve: Resource, points: Array) -> Dictionary:
 					McpErrorCodes.INVALID_PARAMS,
 					"Curve3D points[%d] must have 'position' (and optional 'in', 'out', 'tilt')" % i
 				)}
-			var pos3 = NodeHandler._coerce_value(p3["position"], TYPE_VECTOR3)
-			var in3 = NodeHandler._coerce_value(p3.get("in", {"x": 0, "y": 0, "z": 0}), TYPE_VECTOR3)
-			var out3 = NodeHandler._coerce_value(p3.get("out", {"x": 0, "y": 0, "z": 0}), TYPE_VECTOR3)
-			var tilt := float(p3.get("tilt", 0.0))
-			if not (pos3 is Vector3 and in3 is Vector3 and out3 is Vector3):
-				return {"error": McpErrorCodes.make(
-					McpErrorCodes.INVALID_PARAMS,
-					"Curve3D points[%d] in/position/out must coerce to Vector3" % i
-				)}
-			snapshot.append({"position": pos3, "in": in3, "out": out3, "tilt": tilt})
+			var axes3 := {
+				"position": p3["position"],
+				"in": p3.get("in", zero3),
+				"out": p3.get("out", zero3),
+			}
+			var coerced3 := {}
+			for field in ["position", "in", "out"]:
+				var v = NodeHandler._coerce_value(axes3[field], TYPE_VECTOR3)
+				var err := NodeHandler._check_coerced(v, TYPE_VECTOR3, "Curve3D points[%d].%s" % [i, field])
+				if err != null:
+					return {"error": err}
+				coerced3[field] = v
+			coerced3["tilt"] = float(p3.get("tilt", 0.0))
+			snapshot.append(coerced3)
 	return {"snapshot": snapshot}
 
 

@@ -351,3 +351,71 @@ func test_set_points_3d_invalid_point_shape() -> void:
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	_remove_node(p)
+
+
+func test_set_points_3d_wrong_shape_position_dict_reports_keys() -> void:
+	## A position dict with {r,g,b,a} instead of {x,y,z} used to return a
+	## generic "in/position/out must coerce to Vector3" message.
+	## With the _check_dict_coerce_failed + prefix_message migration the
+	## response should name the exact field and the keys seen, so an agent
+	## can self-correct without guessing which of position/in/out failed.
+	var p := _add_path_3d("TestCurve3DWrongPosShape")
+	if p == null:
+		skip("No scene root")
+		return
+	var result := _handler.set_points({
+		"points": [{"position": {"r": 1, "g": 0, "b": 0, "a": 1}}],
+		"path": p.get_path(),
+		"property": "curve",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	var msg: String = result.error.message
+	assert_contains(msg, "Curve3D points[0].position")
+	assert_contains(msg, "Vector3")
+	assert_contains(msg, "expected")  # pins the expected-vs-got keys diff
+	assert_contains(msg, "got")
+	assert_contains(msg, "r")  # got-keys list includes 'r'
+	_remove_node(p)
+
+
+func test_set_points_2d_wrong_shape_in_tangent_reports_field() -> void:
+	## Per-field prefix proves the migration distinguishes position vs.
+	## in vs. out when the caller sends the wrong shape for an optional
+	## tangent (Curve2D.in here).
+	var p := _add_path_2d("TestCurve2DBadInTangent")
+	if p == null:
+		skip("No scene root")
+		return
+	var result := _handler.set_points({
+		"points": [{
+			"position": {"x": 0, "y": 0},
+			"in": {"z": 0},  # missing x/y
+		}],
+		"path": p.get_path(),
+		"property": "curve",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	var msg: String = result.error.message
+	assert_contains(msg, "Curve2D points[0].in")
+	assert_contains(msg, "Vector2")
+	_remove_node(p)
+
+
+func test_set_points_2d_non_dict_position_is_rejected() -> void:
+	## Guard against the migration regressing on non-Dict inputs. A raw
+	## string was previously caught by the `is Vector2` fallback; the new
+	## helper must still reject it with a useful message.
+	var p := _add_path_2d("TestCurve2DStringPos")
+	if p == null:
+		skip("No scene root")
+		return
+	var result := _handler.set_points({
+		"points": [{"position": "not-a-vector"}],
+		"path": p.get_path(),
+		"property": "curve",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	var msg: String = result.error.message
+	assert_contains(msg, "Curve2D points[0].position")
+	assert_contains(msg, "Vector2")
+	_remove_node(p)
