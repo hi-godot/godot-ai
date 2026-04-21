@@ -146,6 +146,17 @@ func _build_ui() -> void:
 
 	add_child(status_row)
 
+	# Install-mode line — so a git-clone user doesn't press the yellow Update
+	# banner below and silently downgrade from main to the last release tag.
+	# See #144.
+	var install_label := Label.new()
+	install_label.add_theme_color_override("font_color", COLOR_MUTED)
+	install_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	install_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	install_label.text = _install_mode_text()
+	install_label.tooltip_text = _install_mode_tooltip()
+	add_child(install_label)
+
 	# --- Update banner (top of dock, hidden until check finds a newer version) ---
 	_update_banner = VBoxContainer.new()
 	_update_banner.add_theme_constant_override("separation", 4)
@@ -533,6 +544,34 @@ func _refresh_setup_status() -> void:
 		install_btn.text = "Install uv"
 		install_btn.pressed.connect(_on_install_uv)
 		_setup_container.add_child(install_btn)
+
+
+func _install_mode_text() -> String:
+	if McpClientConfigurator.is_dev_checkout():
+		return "Install: dev checkout — update via git pull"
+	return "Install: v%s" % McpClientConfigurator.get_plugin_version()
+
+
+func _install_mode_tooltip() -> String:
+	if not McpClientConfigurator.is_dev_checkout():
+		return "Plugin installed from a release ZIP, Asset Library, or source copy. Update button in this dock downloads the latest GitHub release."
+	var target := _resolve_plugin_symlink_target()
+	if target.is_empty():
+		return "Plugin source tree resolved via local .venv — press Reload Plugin after editing."
+	return "Plugin source: %s\nPress Reload Plugin after editing." % target
+
+
+func _resolve_plugin_symlink_target() -> String:
+	var addons_path := ProjectSettings.globalize_path("res://addons/godot_ai")
+	var dir := DirAccess.open(addons_path.get_base_dir())
+	if dir == null or not dir.is_link(addons_path):
+		return ""
+	var target := dir.read_link(addons_path)
+	if target.is_empty():
+		return ""
+	if target.is_relative_path():
+		target = addons_path.get_base_dir().path_join(target).simplify_path()
+	return target
 
 
 func _make_status_row(label_text: String, value_text: String, value_color: Color) -> HBoxContainer:
