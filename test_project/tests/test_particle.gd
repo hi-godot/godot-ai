@@ -58,6 +58,7 @@ func _create(node_name: String, type_str: String = "gpu_3d") -> Dictionary:
 func test_create_gpu_3d() -> void:
 	var result := _create("TestGPU3D", "gpu_3d")
 	if result.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	assert_has_key(result, "data")
 	assert_eq(result.data.class, "GPUParticles3D")
@@ -69,6 +70,7 @@ func test_create_gpu_3d() -> void:
 func test_create_gpu_2d() -> void:
 	var result := _create("TestGPU2D", "gpu_2d")
 	if result.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	assert_eq(result.data.class, "GPUParticles2D")
 	assert_eq(result.data.process_material_created, true)
@@ -78,6 +80,7 @@ func test_create_gpu_2d() -> void:
 func test_create_cpu_3d() -> void:
 	var result := _create("TestCPU3D", "cpu_3d")
 	if result.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	assert_eq(result.data.class, "CPUParticles3D")
 	assert_eq(result.data.process_material_created, false)
@@ -87,6 +90,7 @@ func test_create_cpu_3d() -> void:
 func test_create_cpu_2d() -> void:
 	var result := _create("TestCPU2D", "cpu_2d")
 	if result.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	assert_eq(result.data.class, "CPUParticles2D")
 
@@ -94,6 +98,7 @@ func test_create_cpu_2d() -> void:
 func test_create_invalid_type() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.create_particle({
 		"parent_path": "/" + scene_root.name,
@@ -106,6 +111,7 @@ func test_create_invalid_type() -> void:
 func test_create_attaches_process_material_to_gpu() -> void:
 	var result := _create("TestGPUHasProcess", "gpu_3d")
 	if result.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var node := ScenePath.resolve(result.data.path, scene_root) as GPUParticles3D
@@ -121,6 +127,7 @@ func test_create_attaches_process_material_to_gpu() -> void:
 func test_set_main_basic_props() -> void:
 	var r := _create("TestSetMain", "gpu_3d")
 	if r.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.set_main({
 		"node_path": r.data.path,
@@ -143,6 +150,7 @@ func test_set_main_basic_props() -> void:
 func test_set_main_unknown_property() -> void:
 	var r := _create("TestMainUnknown", "gpu_3d")
 	if r.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.set_main({
 		"node_path": r.data.path,
@@ -154,6 +162,7 @@ func test_set_main_unknown_property() -> void:
 func test_set_main_empty_dict() -> void:
 	var r := _create("TestMainEmpty", "gpu_3d")
 	if r.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.set_main({
 		"node_path": r.data.path,
@@ -169,6 +178,7 @@ func test_set_main_empty_dict() -> void:
 func test_set_process_gpu_emission_shape_enum() -> void:
 	var r := _create("TestProcessShape", "gpu_3d")
 	if r.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.set_process({
 		"node_path": r.data.path,
@@ -188,6 +198,7 @@ func test_set_process_gpu_emission_shape_enum() -> void:
 func test_set_process_color_ramp_coerces_to_texture() -> void:
 	var r := _create("TestProcessRamp", "gpu_3d")
 	if r.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.set_process({
 		"node_path": r.data.path,
@@ -212,6 +223,7 @@ func test_set_process_color_ramp_coerces_to_texture() -> void:
 func test_set_process_vector3_gravity() -> void:
 	var r := _create("TestProcessGravity", "gpu_3d")
 	if r.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.set_process({
 		"node_path": r.data.path,
@@ -228,6 +240,7 @@ func test_set_process_vector3_gravity() -> void:
 func test_set_process_auto_creates_process_material() -> void:
 	var r := _create("TestProcessAuto", "gpu_3d")
 	if r.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var node := ScenePath.resolve(r.data.path, scene_root) as GPUParticles3D
@@ -245,6 +258,7 @@ func test_set_process_auto_creates_process_material() -> void:
 func test_set_process_cpu_direct_on_node() -> void:
 	var r := _create("TestProcessCPU", "cpu_3d")
 	if r.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.set_process({
 		"node_path": r.data.path,
@@ -263,6 +277,7 @@ func test_set_process_cpu_direct_on_node() -> void:
 func test_set_process_invalid_shape_string() -> void:
 	var r := _create("TestProcessBadShape", "gpu_3d")
 	if r.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.set_process({
 		"node_path": r.data.path,
@@ -274,6 +289,7 @@ func test_set_process_invalid_shape_string() -> void:
 func test_set_process_invalid_color_ramp() -> void:
 	var r := _create("TestProcessBadRamp", "gpu_3d")
 	if r.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.set_process({
 		"node_path": r.data.path,
@@ -289,6 +305,7 @@ func test_set_process_invalid_color_ramp() -> void:
 func test_set_draw_pass_requires_valid_pass_number() -> void:
 	var r := _create("TestDrawPass", "gpu_3d")
 	if r.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.set_draw_pass({
 		"node_path": r.data.path,
@@ -300,6 +317,7 @@ func test_set_draw_pass_requires_valid_pass_number() -> void:
 func test_set_draw_pass_creates_default_mesh_when_empty() -> void:
 	var r := _create("TestDrawPassDefault", "gpu_3d")
 	if r.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var node := ScenePath.resolve(r.data.path, scene_root) as GPUParticles3D
@@ -322,6 +340,7 @@ func test_set_draw_pass_creates_default_mesh_when_empty() -> void:
 func test_restart_returns_non_undoable() -> void:
 	var r := _create("TestRestart", "gpu_3d")
 	if r.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.restart_particle({"node_path": r.data.path})
 	assert_has_key(result, "data")
@@ -335,6 +354,7 @@ func test_restart_returns_non_undoable() -> void:
 func test_get_returns_structured_snapshot() -> void:
 	var r := _create("TestGet", "gpu_3d")
 	if r.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	_handler.set_main({
 		"node_path": r.data.path,
@@ -352,6 +372,7 @@ func test_get_returns_structured_snapshot() -> void:
 func test_get_non_particle_node_errors() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var mi := MeshInstance3D.new()
 	mi.name = "NotAParticle"
@@ -370,6 +391,7 @@ func test_get_non_particle_node_errors() -> void:
 func test_apply_preset_fire() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.apply_preset({
 		"parent_path": "/" + scene_root.name,
@@ -389,6 +411,7 @@ func test_apply_preset_fire() -> void:
 func test_apply_preset_smoke_on_cpu() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.apply_preset({
 		"parent_path": "/" + scene_root.name,
@@ -404,6 +427,7 @@ func test_apply_preset_smoke_on_cpu() -> void:
 func test_apply_preset_spark_burst_is_one_shot() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.apply_preset({
 		"parent_path": "/" + scene_root.name,
@@ -420,6 +444,7 @@ func test_apply_preset_spark_burst_is_one_shot() -> void:
 func test_apply_preset_with_overrides() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.apply_preset({
 		"parent_path": "/" + scene_root.name,
@@ -440,6 +465,7 @@ func test_apply_preset_attaches_draw_material() -> void:
 	# The preset must auto-attach a StandardMaterial3D with vertex colour on.
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.apply_preset({
 		"parent_path": "/" + scene_root.name,
@@ -464,6 +490,7 @@ func test_apply_preset_attaches_draw_material() -> void:
 func test_apply_preset_lightning() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.apply_preset({
 		"parent_path": "/" + scene_root.name,
@@ -486,6 +513,7 @@ func test_create_attaches_default_draw_material() -> void:
 	# default material, otherwise color_ramp won't render.
 	var r := _create("TestDefaultDrawMat", "gpu_3d")
 	if r.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	assert_eq(r.data.draw_material_created, true)
 	var scene_root := EditorInterface.get_edited_scene_root()
@@ -498,6 +526,7 @@ func test_create_attaches_default_draw_material() -> void:
 func test_apply_preset_unknown() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.apply_preset({
 		"parent_path": "/" + scene_root.name,
@@ -510,6 +539,7 @@ func test_apply_preset_unknown() -> void:
 func test_apply_preset_invalid_type() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var result := _handler.apply_preset({
 		"parent_path": "/" + scene_root.name,

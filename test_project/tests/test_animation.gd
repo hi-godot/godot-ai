@@ -266,6 +266,7 @@ func test_add_property_track_rejects_missing_property() -> void:
 	# passed through silently; now it errors.
 	var player_path := _add_player("TestMissingProp")
 	if player_path.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
 	var result := _handler.add_property_track({
@@ -285,6 +286,7 @@ func test_add_property_track_undo_survives_interleaving() -> void:
 	# whatever happens to sit at the originally captured index.
 	var player_path := _add_player("TestInterleavedUndo")
 	if player_path.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
 	var scene_root := EditorInterface.get_edited_scene_root()
@@ -325,6 +327,7 @@ func test_add_method_track_rejects_bad_args() -> void:
 	# args must be an Array if provided — not a string, not a null.
 	var player_path := _add_player("TestBadArgs")
 	if player_path.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
 	var result := _handler.add_method_track({
@@ -341,6 +344,7 @@ func test_add_method_track_rejects_bad_args() -> void:
 func test_add_method_track_rejects_empty_method() -> void:
 	var player_path := _add_player("TestEmptyMethod")
 	if player_path.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
 	var result := _handler.add_method_track({
@@ -1354,6 +1358,7 @@ func test_delete_animation_in_non_default_library() -> void:
 	# Now it searches all libraries symmetrically with animation_get / animation_play.
 	var player_path := _add_player("TestDeleteNonDefault")
 	if player_path.is_empty():
+		skip("No scene root — is a scene open?")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer

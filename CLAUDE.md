@@ -142,6 +142,18 @@ Test suites extend `McpTestSuite` (assertion methods: `assert_true`, `assert_eq`
 - **Resilient discovery**: If a `.gd` file fails to load (parse error, duplicate method, wrong base class), the rest of the suites still run and the failing files are reported in `load_errors`.
 - **Suite isolation**: Each suite gets a fresh `ctx.duplicate()` so `suite_setup()` mutations can't leak to the next suite.
 
+### Test hygiene checklist — common silent-failure patterns to avoid
+
+A test that passes for the wrong reason is worse than a missing test: it ships a regression under a green check. Watch for these masking patterns when writing or reviewing tests:
+
+- **Bare `return` in a test body**. Every `return` in a `test_*` function must be preceded by either an `assert_*` call (for a real failure) or `skip("reason")` (for an environment precondition that can't be met). A silent `return` passes with zero assertions — the runner guardrail catches this now, but the failure message ("0 assertions") is noisier than a targeted `skip()` that reports *why* the test couldn't run.
+- **Counts instead of stored Variants**. Asserting `track_count == 1` or `child_count > 0` says nothing about the stored value. For mutation tools that take JSON dicts (Color, Vector2, Vector3, keyframe values), read back via `track_get_key_value`, `mi.mesh`, `mat.gravity`, etc. and assert `value is Color` / `value is Vector3`. See "Value coercion" in the "Write tools must be undoable" section above.
+- **`get_theme_*` (non-`_override`) getters**. Reading a theme value via `get_theme_color(...)` falls back through the theme chain — a broken `add_theme_color_override` will silently resolve to the default, passing the assertion. Always use `get_theme_color_override`, `get_theme_constant_override`, `get_theme_font_size_override`, `get_theme_stylebox_override` in override tests.
+- **`assert_has_key` without a follow-up value check**. Presence of `"data"` in a response says nothing about correctness. Every `assert_has_key(result, "data")` should be paired with at least one `assert_eq` / `assert_true` on a field inside `result.data`.
+- **`editor_undo()` / `editor_redo()` without checking the return**. The helper returns `bool` — `false` means the undo silently no-oped. For tests that assert post-undo state, capture `var did_undo := editor_undo(_undo_redo); assert_true(did_undo, "undo should succeed")` before asserting the rolled-back value.
+- **Bare `except: pass` in Python tests**. Swallowing exceptions can let a half-failed operation still pass the downstream assertion. Catch specific exceptions, and if you truly want to ignore a cleanup failure, log it.
+- **CI scripts that drop `failures[]`**. When a `script/ci-*` parses a `test_run` response, it must iterate `content.get("failures", [])` and print `{suite}.{test}: {message}` on failure — not just the passed/failed counts. The reference pattern is in `script/ci-godot-tests:117-119`.
+
 ## Testing against Godot
 
 1. Open `test_project/` in Godot, enable plugin in Project Settings > Plugins
@@ -332,5 +344,5 @@ New features don't ship without tests. Regressions are caught before they merge.
 - Don't use `pop_front()` on arrays in hot paths — use index + slice
 - Don't add error handling in individual tools — `GodotClient.send()` raises on errors
 - Don't use Python-style `"""docstrings"""` in GDScript — use `##` comments
-- Don't write GDScript tests that `return` without asserting — the runner flags these as failures. Use `assert_true(false, "reason")` before the `return` if a precondition isn't met
+- Don't write GDScript tests that `return` without asserting — the runner flags these as failures. Use `skip("reason")` for unmet environmental preconditions, or `assert_true(false, "reason")` when setup that should have worked failed. See "Test hygiene checklist" above
 - Don't forget the `overwrite` parameter on `animation_create` / `animation_create_simple` — without it, creating an animation with the same name errors instead of replacing

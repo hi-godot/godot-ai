@@ -268,6 +268,7 @@ void fragment() { ALBEDO = base_color * (1.0 + pulse); }
 
 func test_set_shader_param_float() -> void:
 	if not _make_shader_material():
+		assert_true(false, "shader material setup failed")
 		return
 	var result := _handler.set_shader_param({
 		"path": TEST_SHADER_MAT_PATH,
@@ -281,6 +282,7 @@ func test_set_shader_param_float() -> void:
 
 func test_set_shader_param_unknown_uniform() -> void:
 	if not _make_shader_material():
+		assert_true(false, "shader material setup failed")
 		return
 	var result := _handler.set_shader_param({
 		"path": TEST_SHADER_MAT_PATH,
@@ -315,6 +317,7 @@ func test_get_returns_properties() -> void:
 
 func test_get_includes_shader_parameters() -> void:
 	if not _make_shader_material():
+		assert_true(false, "shader material setup failed")
 		return
 	_handler.set_shader_param({"path": TEST_SHADER_MAT_PATH, "param": "pulse", "value": 0.5})
 	var result := _handler.get_material({"path": TEST_SHADER_MAT_PATH})
@@ -331,6 +334,7 @@ func test_assign_material_to_mesh() -> void:
 	_make_material()
 	var node := _add_mesh_node("TestAssignMesh") as Node
 	if node == null:
+		skip("No scene root — is a scene open?")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.assign_material({
@@ -348,6 +352,7 @@ func test_assign_material_to_mesh() -> void:
 func test_assign_create_if_missing() -> void:
 	var node := _add_mesh_node("TestAssignCreate") as Node
 	if node == null:
+		skip("No scene root — is a scene open?")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.assign_material({
@@ -364,6 +369,7 @@ func test_assign_create_if_missing() -> void:
 func test_assign_without_resource_or_create_fails() -> void:
 	var node := _add_mesh_node("TestAssignFail") as Node
 	if node == null:
+		skip("No scene root — is a scene open?")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.assign_material({
@@ -377,6 +383,7 @@ func test_assign_surface_index_out_of_range() -> void:
 	_make_material()
 	var node := _add_mesh_node("TestAssignSurface") as Node
 	if node == null:
+		skip("No scene root — is a scene open?")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.assign_material({
@@ -404,6 +411,7 @@ func test_assign_node_not_found() -> void:
 func test_apply_to_node_inline() -> void:
 	var node := _add_mesh_node("TestApplyInline") as Node
 	if node == null:
+		skip("No scene root — is a scene open?")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.apply_to_node({
@@ -425,6 +433,7 @@ func test_apply_to_node_inline() -> void:
 func test_apply_to_node_invalid_type() -> void:
 	var node := _add_mesh_node("TestApplyInvalid") as Node
 	if node == null:
+		skip("No scene root — is a scene open?")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.apply_to_node({
@@ -440,6 +449,7 @@ func test_apply_to_node_with_save_to() -> void:
 	_cleanup_file(TEST_MATERIAL_PATH_2)
 	var node := _add_mesh_node("TestApplySave") as Node
 	if node == null:
+		skip("No scene root — is a scene open?")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.apply_to_node({
@@ -461,6 +471,7 @@ func test_apply_to_node_with_save_to() -> void:
 func test_apply_preset_metal_to_node() -> void:
 	var node := _add_mesh_node("TestPresetMetal") as Node
 	if node == null:
+		skip("No scene root — is a scene open?")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.apply_preset({
@@ -476,6 +487,7 @@ func test_apply_preset_metal_to_node() -> void:
 func test_apply_preset_glass_to_node() -> void:
 	var node := _add_mesh_node("TestPresetGlass") as Node
 	if node == null:
+		skip("No scene root — is a scene open?")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.apply_preset({
@@ -494,6 +506,7 @@ func test_apply_preset_glass_to_node() -> void:
 func test_apply_preset_unknown() -> void:
 	var node := _add_mesh_node("TestPresetUnknown") as Node
 	if node == null:
+		skip("No scene root — is a scene open?")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.apply_preset({
@@ -522,6 +535,7 @@ func test_apply_preset_requires_target() -> void:
 func test_apply_preset_with_overrides() -> void:
 	var node := _add_mesh_node("TestPresetOverrides") as Node
 	if node == null:
+		skip("No scene root — is a scene open?")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.apply_preset({

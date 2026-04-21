@@ -534,6 +534,7 @@ func test_build_layout_theme_override_stylebox() -> void:
 	# actually install the resource.
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	# Create a throwaway StyleBoxFlat on disk.
 	var sb := StyleBoxFlat.new()

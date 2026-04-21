@@ -843,6 +843,7 @@ func test_create_node_scene_path_preserves_instance_link() -> void:
 	# We use a throwaway PackedScene to avoid self-instancing main.tscn.
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var tmp_root := Node2D.new()
 	tmp_root.name = "TmpInstanceRoot"
@@ -880,6 +881,7 @@ func test_create_node_scene_path_undo_redo() -> void:
 	# Undo removes the instance; redo restores it with the same scene link.
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	var tmp_root := Node2D.new()
 	tmp_root.name = "UndoInstanceRoot"
