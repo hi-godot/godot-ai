@@ -537,10 +537,28 @@ func _stop_server() -> void:
 	if not killed.is_empty():
 		print("MCP | stopped server (PID %s)" % str(killed))
 	_server_pid = -1
-	_clear_managed_server_record()
-	_clear_pid_file()
 	## Brief wait so a follow-up spawn doesn't race a still-closing socket.
 	_wait_for_port_free(port, 2.0)
+	## Only forget this server if the port is actually free. If the kill
+	## failed — e.g. a previous plugin version's buggy netstat parser
+	## targeted a bogus PID during the first v1.2.8 → v1.2.9 Update — then
+	## clearing the record would route the next _start_server down the
+	## "foreign server" branch, which leaves the zombie alone. Preserving
+	## the record keeps the next _start_server in the drift branch, which
+	## retries the kill with the current (fixed) parser. See issue filed
+	## as follow-up to PR #159.
+	_finalize_stop_if_port_free(port)
+
+
+## Clear the managed-server record and pid-file only if `port` is free.
+## Returns true when state was cleared. Extracted from `_stop_server` so
+## the "preserve on failed kill" contract is independently testable.
+func _finalize_stop_if_port_free(port: int) -> bool:
+	if _is_port_in_use(port):
+		return false
+	_clear_managed_server_record()
+	_clear_pid_file()
+	return true
 
 
 ## True if the given PID corresponds to a live process. Uses POSIX `kill -0`

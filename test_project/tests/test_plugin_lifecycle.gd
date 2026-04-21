@@ -9,6 +9,11 @@ extends McpTestSuite
 
 const GodotAiPlugin := preload("res://addons/godot_ai/plugin.gd")
 
+## Test port high enough to almost never collide with real services and
+## distinct from the plugin's SERVER_HTTP_PORT so the stop-finalize tests
+## don't interact with a developer's running managed server.
+const TEST_PORT := 65432
+
 
 func suite_name() -> String:
 	return "plugin_lifecycle"
@@ -22,6 +27,16 @@ func setup() -> void:
 
 func teardown() -> void:
 	GodotAiPlugin._server_started_this_session = false
+	## Stop-finalize tests write to EditorSettings + the pid-file on disk;
+	## scrub both so state doesn't leak across tests or outlast the suite.
+	var es := EditorInterface.get_editor_settings()
+	if es != null:
+		if es.has_setting(GodotAiPlugin.MANAGED_SERVER_PID_SETTING):
+			es.set_setting(GodotAiPlugin.MANAGED_SERVER_PID_SETTING, 0)
+		if es.has_setting(GodotAiPlugin.MANAGED_SERVER_VERSION_SETTING):
+			es.set_setting(GodotAiPlugin.MANAGED_SERVER_VERSION_SETTING, "")
+	if FileAccess.file_exists(GodotAiPlugin.SERVER_PID_FILE):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(GodotAiPlugin.SERVER_PID_FILE))
 
 
 func test_exit_tree_resets_spawn_guard() -> void:
@@ -70,3 +85,80 @@ func test_exit_tree_is_idempotent_when_guard_already_false() -> void:
 		not GodotAiPlugin._server_started_this_session,
 		"_exit_tree must not flip the guard back to true"
 	)
+
+
+func test_finalize_stop_clears_state_when_port_is_free() -> void:
+	## When the kill succeeded and nothing holds the port anymore,
+	## _stop_server's cleanup should drop the managed-server record and
+	## the pid-file. Standard happy path.
+	_seed_managed_record(12345, "1.2.9")
+	_seed_pid_file(12345)
+	var plugin := GodotAiPlugin.new()
+
+	var cleared := plugin._finalize_stop_if_port_free(TEST_PORT)
+	plugin.free()
+
+	assert_true(cleared, "expected _finalize_stop_if_port_free to return true when port free")
+	assert_eq(
+		_read_record_version(),
+		"",
+		"managed-server record must be cleared when port is free"
+	)
+	assert_true(
+		not FileAccess.file_exists(GodotAiPlugin.SERVER_PID_FILE),
+		"pid-file must be cleared when port is free"
+	)
+
+
+func test_finalize_stop_preserves_state_when_port_still_in_use() -> void:
+	## The regression the fix prevents: a failed kill leaves the port
+	## occupied. If state were cleared anyway, the next _start_server
+	## would see no record and take the "foreign server" branch, leaving
+	## the zombie alive and the new plugin adopting an outdated server.
+	## Preserving record + pid-file routes the next start through the
+	## drift branch where the current (fixed) kill code gets a second
+	## shot. See the v1.2.8 → v1.2.9 Update flow regression.
+	var listener := TCPServer.new()
+	var listen_err := listener.listen(TEST_PORT, "127.0.0.1")
+	assert_eq(listen_err, OK, "test setup: must be able to bind TEST_PORT")
+
+	_seed_managed_record(54321, "1.2.9")
+	_seed_pid_file(54321)
+	var plugin := GodotAiPlugin.new()
+
+	var cleared := plugin._finalize_stop_if_port_free(TEST_PORT)
+	plugin.free()
+	listener.stop()
+
+	assert_false(cleared, "expected _finalize_stop_if_port_free to return false when port busy")
+	assert_eq(
+		_read_record_version(),
+		"1.2.9",
+		"managed-server record must be preserved so drift branch can retry the kill"
+	)
+	assert_true(
+		FileAccess.file_exists(GodotAiPlugin.SERVER_PID_FILE),
+		"pid-file must be preserved so next _find_managed_pid has the deterministic hint"
+	)
+
+
+func _seed_managed_record(pid: int, version: String) -> void:
+	var es := EditorInterface.get_editor_settings()
+	if es == null:
+		return
+	es.set_setting(GodotAiPlugin.MANAGED_SERVER_PID_SETTING, pid)
+	es.set_setting(GodotAiPlugin.MANAGED_SERVER_VERSION_SETTING, version)
+
+
+func _seed_pid_file(pid: int) -> void:
+	var f := FileAccess.open(GodotAiPlugin.SERVER_PID_FILE, FileAccess.WRITE)
+	assert_true(f != null, "test setup: must be able to write pid-file")
+	f.store_string(str(pid))
+	f.close()
+
+
+func _read_record_version() -> String:
+	var es := EditorInterface.get_editor_settings()
+	if es == null or not es.has_setting(GodotAiPlugin.MANAGED_SERVER_VERSION_SETTING):
+		return ""
+	return str(es.get_setting(GodotAiPlugin.MANAGED_SERVER_VERSION_SETTING))
