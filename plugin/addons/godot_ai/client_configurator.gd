@@ -104,7 +104,15 @@ static func get_plugin_version() -> String:
 
 
 static func is_dev_checkout() -> bool:
-	return not _find_venv_python().is_empty()
+	return not _cached_venv_python().is_empty()
+
+
+## Mirrors the gate `_check_for_updates()` uses to suppress the update banner,
+## so the dock can explain to dev-checkout users why they never see it.
+static func get_install_mode_description() -> String:
+	if is_dev_checkout():
+		return "dev checkout — update via git pull"
+	return "v%s" % get_plugin_version()
 
 
 static func get_server_command() -> Array[String]:

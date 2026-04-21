@@ -16,6 +16,7 @@ var _plugin: EditorPlugin
 var _redock_btn: Button
 var _status_icon: ColorRect
 var _status_label: Label
+var _install_mode_label: Label
 var _client_grid: VBoxContainer
 var _client_configure_all_btn: Button
 var _clients_summary_label: Label
@@ -145,6 +146,11 @@ func _build_ui() -> void:
 	status_row.add_child(_redock_btn)
 
 	add_child(status_row)
+
+	_install_mode_label = Label.new()
+	_install_mode_label.text = "Install: %s" % McpClientConfigurator.get_install_mode_description()
+	_install_mode_label.add_theme_color_override("font_color", COLOR_MUTED)
+	add_child(_install_mode_label)
 
 	# --- Update banner (top of dock, hidden until check finds a newer version) ---
 	_update_banner = VBoxContainer.new()

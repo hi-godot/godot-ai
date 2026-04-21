@@ -90,6 +90,19 @@ func test_server_launch_mode_agrees_with_get_server_command() -> void:
 		assert_true(mode != "unknown", "Non-empty command must map to a concrete mode, got %s" % mode)
 
 
+func test_install_mode_description_matches_is_dev_checkout() -> void:
+	## Keep the dock's install-mode string locked to the same gate as the
+	## update-banner suppression in McpDock._check_for_updates, so the label
+	## can't silently disagree with whether the Update button will fire.
+	var description := McpClientConfigurator.get_install_mode_description()
+	assert_true(not description.is_empty(), "Install mode description must not be empty")
+	if McpClientConfigurator.is_dev_checkout():
+		assert_eq(description, "dev checkout — update via git pull")
+	else:
+		var expected := "v%s" % McpClientConfigurator.get_plugin_version()
+		assert_eq(description, expected)
+
+
 func test_uvx_server_command_uses_exact_pin_not_tilde() -> void:
 	## Regression guard for #133: the uvx branch of get_server_command must
 	## pin godot-ai with `==<version>`, not `~=<minor>`. With the tilde
