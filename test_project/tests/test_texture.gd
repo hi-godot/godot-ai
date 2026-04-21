@@ -81,6 +81,43 @@ func test_gradient_stop_missing_keys() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
+func test_gradient_stop_wrong_shape_color_reports_keys() -> void:
+	## Passing {x,y,z} where {r,g,b} is expected previously returned a
+	## generic "could not be coerced to Color" — the migration adds the
+	## prefix and the expected/got-keys breakdown so agents self-correct.
+	var result := _handler.create_gradient_texture({
+		"stops": [
+			{"offset": 0.0, "color": {"x": 1, "y": 0, "z": 0}},
+			{"offset": 1.0, "color": "#0000ff"},
+		],
+		"path": "/Main/Line",
+		"property": "texture",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	var msg: String = result.error.message
+	assert_contains(msg, "stops[0].color")
+	assert_contains(msg, "Color")
+	assert_contains(msg, "expected")  # pins the expected-vs-got keys diff
+	assert_contains(msg, "got")
+	assert_contains(msg, "r")  # expected-keys list includes 'r'
+
+
+func test_gradient_stop_non_dict_non_string_color_is_rejected() -> void:
+	## Non-Dict non-String inputs (int, array, etc.) must still error —
+	## _check_dict_coerce_failed only fires on Dicts, so the type-fallback
+	## check has to catch the rest.
+	var result := _handler.create_gradient_texture({
+		"stops": [
+			{"offset": 0.0, "color": 42},
+			{"offset": 1.0, "color": "#0000ff"},
+		],
+		"path": "/Main/Line",
+		"property": "texture",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "stops[0].color")
+
+
 # ----- gradient_texture_create happy paths -----
 
 func test_gradient_assigns_typed_gradient_and_colors() -> void:

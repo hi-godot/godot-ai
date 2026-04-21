@@ -491,6 +491,44 @@ func _set_owner_recursive(node: Node, owner: Node) -> void:
 		_set_owner_recursive(child, owner)
 
 
+## Canonical dict-key sets for dict→Variant coercion. Alpha on `COLOR_KEYS`
+## is optional — the coercer defaults it to 1.0 when absent.
+const VECTOR2_KEYS: Array[String] = ["x", "y"]
+const VECTOR3_KEYS: Array[String] = ["x", "y", "z"]
+const COLOR_KEYS: Array[String] = ["r", "g", "b"]
+
+
+## End-to-end coerce check for validation handlers (curve, texture,
+## resource properties). Returns a full `make(...)`-shaped error dict
+## (prefixed with `prefix`) if the value didn't land as the target
+## Variant type, else null. Dict-shape failures get the
+## `_check_dict_coerce_failed` message (expected-vs-got keys); non-dict
+## non-Vector inputs (String, int, …) get a generic "must coerce"
+## message.
+##
+## Only TYPE_VECTOR2 / TYPE_VECTOR3 / TYPE_COLOR are recognized — other
+## targets would false-negative on a valid value. Extend the match
+## alongside `_coerce_value` if you add a new coerce target.
+static func _check_coerced(value: Variant, target_type: int, prefix: String) -> Variant:
+	var err = _check_dict_coerce_failed(value, target_type)
+	if err != null:
+		return McpErrorCodes.prefix_message(err, prefix)
+	var ok := false
+	match target_type:
+		TYPE_VECTOR2:
+			ok = value is Vector2
+		TYPE_VECTOR3:
+			ok = value is Vector3
+		TYPE_COLOR:
+			ok = value is Color
+	if not ok:
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"%s: must coerce to %s, got %s" % [prefix, type_string(target_type), type_string(typeof(value))],
+		)
+	return null
+
+
 ## Detect a failed dict→typed-Variant coercion. Returns an INVALID_PARAMS
 ## error dict if `value` is still a Dictionary after a coercion attempt
 ## targeting a Vector2/Vector3/Color slot, else null. Message names the
@@ -503,13 +541,13 @@ static func _check_dict_coerce_failed(value: Variant, target_type: int) -> Varia
 	var type_name := ""
 	match target_type:
 		TYPE_VECTOR2:
-			expected = ["x", "y"]
+			expected = VECTOR2_KEYS
 			type_name = "Vector2"
 		TYPE_VECTOR3:
-			expected = ["x", "y", "z"]
+			expected = VECTOR3_KEYS
 			type_name = "Vector3"
 		TYPE_COLOR:
-			expected = ["r", "g", "b"]  # "a" is optional
+			expected = COLOR_KEYS
 			type_name = "Color"
 		_:
 			return null
@@ -532,17 +570,14 @@ static func _check_dict_coerce_failed(value: Variant, target_type: int) -> Varia
 static func _coerce_value(value: Variant, target_type: int) -> Variant:
 	match target_type:
 		TYPE_VECTOR2:
-			if value is Dictionary:
-				if value.has("x") and value.has("y"):
-					return Vector2(value["x"], value["y"])
+			if value is Dictionary and value.has_all(VECTOR2_KEYS):
+				return Vector2(value["x"], value["y"])
 		TYPE_VECTOR3:
-			if value is Dictionary:
-				if value.has("x") and value.has("y") and value.has("z"):
-					return Vector3(value["x"], value["y"], value["z"])
+			if value is Dictionary and value.has_all(VECTOR3_KEYS):
+				return Vector3(value["x"], value["y"], value["z"])
 		TYPE_COLOR:
-			if value is Dictionary:
-				if value.has("r") and value.has("g") and value.has("b"):
-					return Color(value["r"], value["g"], value["b"], value.get("a", 1.0))
+			if value is Dictionary and value.has_all(COLOR_KEYS):
+				return Color(value["r"], value["g"], value["b"], value.get("a", 1.0))
 			if value is String:
 				return Color(value)
 		TYPE_BOOL:

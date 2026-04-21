@@ -564,6 +564,22 @@ func test_coerce_array_passthrough() -> void:
 	assert_eq(coerced.size(), 3)
 
 
+func test_shared_key_constants_match_coercer_requirements() -> void:
+	## The shared key-list constants (#131) must stay aligned with what
+	## _coerce_value / _check_dict_coerce_failed actually require. If
+	## someone adds a new axis (e.g. Vector4) they should bump both.
+	assert_eq(NodeHandler.VECTOR2_KEYS, ["x", "y"])
+	assert_eq(NodeHandler.VECTOR3_KEYS, ["x", "y", "z"])
+	assert_eq(NodeHandler.COLOR_KEYS, ["r", "g", "b"])
+	# Dropping any required key must flip coercion off.
+	var missing_y = NodeHandler._coerce_value({"x": 1}, TYPE_VECTOR2)
+	assert_true(missing_y is Dictionary)
+	var missing_z = NodeHandler._coerce_value({"x": 1, "y": 2}, TYPE_VECTOR3)
+	assert_true(missing_z is Dictionary)
+	var missing_b = NodeHandler._coerce_value({"r": 1, "g": 0}, TYPE_COLOR)
+	assert_true(missing_b is Dictionary)
+
+
 func test_coerce_dictionary_passthrough() -> void:
 	var coerced = NodeHandler._coerce_value({"a": 1, "b": 2}, TYPE_DICTIONARY)
 	assert_true(coerced is Dictionary)
