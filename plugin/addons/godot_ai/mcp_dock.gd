@@ -16,6 +16,7 @@ var _plugin: EditorPlugin
 var _redock_btn: Button
 var _status_icon: ColorRect
 var _status_label: Label
+var _install_label: Label
 var _client_grid: VBoxContainer
 var _client_configure_all_btn: Button
 var _clients_summary_label: Label
@@ -145,6 +146,16 @@ func _build_ui() -> void:
 	status_row.add_child(_redock_btn)
 
 	add_child(status_row)
+
+	# Install-mode line: tells users whether they're on a tagged release
+	# (Update banner applies) or a dev checkout (updates via git pull).
+	# Surfaces info that otherwise only appears in the dev-mode Setup
+	# section. See #144.
+	_install_label = Label.new()
+	_install_label.add_theme_color_override("font_color", COLOR_MUTED)
+	_install_label.add_theme_font_size_override("font_size", 11)
+	_refresh_install_label()
+	add_child(_install_label)
 
 	# --- Update banner (top of dock, hidden until check finds a newer version) ---
 	_update_banner = VBoxContainer.new()
@@ -427,6 +438,20 @@ func _update_status() -> void:
 	_status_label.text = status_text
 
 	_update_dev_server_btn()
+
+
+func _refresh_install_label() -> void:
+	if _install_label == null:
+		return
+	var info := McpClientConfigurator.get_install_info()
+	if info.get("is_dev", false):
+		_install_label.text = "Install: dev checkout — update via git pull"
+		var resolved: String = info.get("resolved_path", "")
+		var path: String = resolved if not resolved.is_empty() else info.get("plugin_path", "")
+		_install_label.tooltip_text = "Plugin source: %s" % path
+	else:
+		_install_label.text = "Install: v%s" % info.get("version", "?")
+		_install_label.tooltip_text = "Use the Update banner to upgrade to the latest GitHub Release"
 
 
 func _update_log() -> void:

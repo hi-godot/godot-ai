@@ -90,6 +90,23 @@ func test_server_launch_mode_agrees_with_get_server_command() -> void:
 		assert_true(mode != "unknown", "Non-empty command must map to a concrete mode, got %s" % mode)
 
 
+func test_get_install_info_shape_and_dev_checkout_agreement() -> void:
+	## `get_install_info()` powers the dock's "Install: …" status line (#144).
+	## Must always return the full shape so the dock can render a line without
+	## special-casing None. `is_dev` field must agree with the existing
+	## `is_dev_checkout()` predicate so both callers see the same view of
+	## the world.
+	var info := McpClientConfigurator.get_install_info()
+	for key in ["is_dev", "version", "plugin_path", "resolved_path"]:
+		assert_has_key(info, key)
+	assert_eq(typeof(info["is_dev"]), TYPE_BOOL)
+	assert_eq(info["is_dev"], McpClientConfigurator.is_dev_checkout(),
+		"is_dev must match is_dev_checkout()")
+	assert_true((info["version"] as String).length() >= 1, "version must be non-empty")
+	assert_true((info["plugin_path"] as String).ends_with("addons/godot_ai"),
+		"plugin_path should point at addons/godot_ai, got %s" % info["plugin_path"])
+
+
 func test_uvx_server_command_uses_exact_pin_not_tilde() -> void:
 	## Regression guard for #133: the uvx branch of get_server_command must
 	## pin godot-ai with `==<version>`, not `~=<minor>`. With the tilde

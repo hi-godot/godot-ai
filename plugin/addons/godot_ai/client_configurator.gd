@@ -107,6 +107,52 @@ static func is_dev_checkout() -> bool:
 	return not _find_venv_python().is_empty()
 
 
+## Describes how the running plugin was installed. Powers the dock's
+## "Install: …" status line so users can self-diagnose why the Update
+## banner appears (or doesn't), and contributors across worktrees can
+## confirm which `plugin/` tree Godot is actually loading. See #144.
+##
+## Returns: {
+##   "is_dev": bool,           # true when a sibling .venv was found
+##   "version": String,        # from plugin.cfg, e.g. "1.2.8"
+##   "plugin_path": String,    # globalized res://addons/godot_ai path
+##   "resolved_path": String,  # symlink target when different, else ""
+## }
+static func get_install_info() -> Dictionary:
+	var plugin_path := ProjectSettings.globalize_path("res://addons/godot_ai").rstrip("/")
+	var resolved := _resolve_symlink(plugin_path)
+	return {
+		"is_dev": is_dev_checkout(),
+		"version": get_plugin_version(),
+		"plugin_path": plugin_path,
+		"resolved_path": resolved if resolved != plugin_path else "",
+	}
+
+
+## Best-effort symlink resolution. Returns the input path unchanged if the
+## OS tool isn't available or the path isn't a symlink.
+static func _resolve_symlink(path: String) -> String:
+	if path.is_empty():
+		return path
+	var output: Array = []
+	var exit_code: int
+	if OS.get_name() == "Windows":
+		# PowerShell's Get-Item exposes .Target for reparse points; absent on
+		# plain directories. Quote the path to survive spaces.
+		exit_code = OS.execute(
+			"powershell",
+			["-NoProfile", "-Command", "(Get-Item -LiteralPath '%s').Target" % path.replace("'", "''")],
+			output,
+			true,
+		)
+	else:
+		exit_code = OS.execute("readlink", ["-f", path], output, true)
+	if exit_code != 0 or output.is_empty():
+		return path
+	var resolved: String = output[0].strip_edges()
+	return resolved if not resolved.is_empty() else path
+
+
 static func get_server_command() -> Array[String]:
 	var venv_python := _cached_venv_python()
 	if not venv_python.is_empty():
