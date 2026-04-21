@@ -90,6 +90,20 @@ func test_server_launch_mode_agrees_with_get_server_command() -> void:
 		assert_true(mode != "unknown", "Non-empty command must map to a concrete mode, got %s" % mode)
 
 
+func test_install_mode_label_agrees_with_is_dev_checkout() -> void:
+	## The dock footer surfaces `is_dev_checkout()` so users can self-diagnose
+	## why the update banner is or isn't appearing. Dev checkouts must say so
+	## plainly; everyone else gets the pinned version. See #144.
+	var label := McpClientConfigurator.get_install_mode_label()
+	assert_false(label.is_empty(), "install-mode label must not be empty")
+	if McpClientConfigurator.is_dev_checkout():
+		assert_contains(label, "dev checkout", "dev checkout should be surfaced in label: %s" % label)
+		assert_contains(label, "git pull", "dev checkout label should hint at git pull: %s" % label)
+	else:
+		var version := McpClientConfigurator.get_plugin_version()
+		assert_contains(label, version, "release install label should contain plugin version %s; got %s" % [version, label])
+
+
 func test_uvx_server_command_uses_exact_pin_not_tilde() -> void:
 	## Regression guard for #133: the uvx branch of get_server_command must
 	## pin godot-ai with `==<version>`, not `~=<minor>`. With the tilde

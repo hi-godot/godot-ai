@@ -107,6 +107,17 @@ static func is_dev_checkout() -> bool:
 	return not _find_venv_python().is_empty()
 
 
+## Single-line install-mode description for the dock footer.
+## Mirrors `is_dev_checkout()` so users can self-diagnose why the update
+## banner is or isn't appearing: dev checkouts skip the GitHub check in
+## `_check_for_updates`, everyone else sees the banner when a newer release
+## tag is published. See #144.
+static func get_install_mode_label() -> String:
+	if is_dev_checkout():
+		return "Install: dev checkout — update via git pull"
+	return "Install: v%s" % get_plugin_version()
+
+
 static func get_server_command() -> Array[String]:
 	var venv_python := _cached_venv_python()
 	if not venv_python.is_empty():

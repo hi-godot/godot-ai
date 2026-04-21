@@ -282,6 +282,14 @@ func _build_ui() -> void:
 
 	add_child(HSeparator.new())
 
+	# Surfaces the result of `is_dev_checkout()` so users can self-diagnose
+	# why the update banner is or isn't appearing. See #144.
+	var install_label := Label.new()
+	install_label.text = McpClientConfigurator.get_install_mode_label()
+	install_label.add_theme_color_override("font_color", COLOR_MUTED)
+	install_label.add_theme_font_size_override("font_size", 11)
+	add_child(install_label)
+
 	# --- Dev mode toggle (always visible) ---
 	var dev_toggle_row := HBoxContainer.new()
 	var dev_toggle_label := Label.new()
