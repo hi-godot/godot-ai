@@ -244,6 +244,13 @@ func _exit_tree() -> void:
 	_game_log_buffer = null
 
 	_stop_server()
+	## Symmetric with prepare_for_update_reload: the static guard persists
+	## across disable/enable within a single editor session, so the re-enabled
+	## plugin instance's _start_server would short-circuit and never respawn.
+	## Pre-#159 this was masked — the old kill path usually left Python alive
+	## and the new instance adopted it on port 8000. Now that _stop_server is
+	## deterministic, nothing is left to adopt and the reload hangs.
+	_server_started_this_session = false
 	print("MCP | plugin unloaded")
 
 
