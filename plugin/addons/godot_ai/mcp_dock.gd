@@ -43,6 +43,14 @@ var _last_connected := false
 var _last_status_text := ""
 var _startup_grace_until_msec: int = 0
 
+## Crash banner (always visible, shown only when the plugin captures a
+## startup crash). See #146 — gives users the error text + a hint
+## instead of a silent reconnect spinner.
+var _crash_banner: VBoxContainer
+var _crash_hint_label: Label
+var _crash_output: RichTextLabel
+var _last_crash_signature := ""
+
 # First-run grace: uvx installs 60+ Python packages on first run (can take
 # 10-30s on a slow connection). Don't scare users with "Disconnected" during
 # that window — show "Starting server…" instead. After this expires, fall
@@ -145,6 +153,49 @@ func _build_ui() -> void:
 	status_row.add_child(_redock_btn)
 
 	add_child(status_row)
+
+	# --- Crash banner (hidden until the plugin captures a startup exit) ---
+	_crash_banner = VBoxContainer.new()
+	_crash_banner.add_theme_constant_override("separation", 4)
+	_crash_banner.visible = false
+
+	var crash_header := Label.new()
+	crash_header.text = "Server exited during startup"
+	crash_header.add_theme_font_size_override("font_size", 15)
+	crash_header.add_theme_color_override("font_color", Color(1.0, 0.4, 0.4))
+	_crash_banner.add_child(crash_header)
+
+	_crash_hint_label = Label.new()
+	_crash_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_crash_hint_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3))
+	_crash_banner.add_child(_crash_hint_label)
+
+	_crash_output = RichTextLabel.new()
+	_crash_output.bbcode_enabled = false
+	_crash_output.selection_enabled = true
+	_crash_output.scroll_active = true
+	_crash_output.fit_content = false
+	_crash_output.custom_minimum_size = Vector2(0, 100)
+	_crash_banner.add_child(_crash_output)
+
+	var crash_btn_row := HBoxContainer.new()
+	crash_btn_row.add_theme_constant_override("separation", 6)
+
+	var crash_restart_btn := Button.new()
+	crash_restart_btn.text = "Restart server"
+	crash_restart_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	crash_restart_btn.pressed.connect(_on_crash_restart)
+	crash_btn_row.add_child(crash_restart_btn)
+
+	var crash_copy_btn := Button.new()
+	crash_copy_btn.text = "Copy output"
+	crash_copy_btn.pressed.connect(_on_crash_copy_output)
+	crash_btn_row.add_child(crash_copy_btn)
+
+	_crash_banner.add_child(crash_btn_row)
+	_crash_banner.add_child(HSeparator.new())
+
+	add_child(_crash_banner)
 
 	# --- Update banner (top of dock, hidden until check finds a newer version) ---
 	_update_banner = VBoxContainer.new()
@@ -403,12 +454,18 @@ func _build_client_row(client_id: String) -> void:
 
 func _update_status() -> void:
 	var connected := _connection.is_connected
+	var exit_info := _get_server_exit_info()
 	var status_text: String
 	var status_color: Color
 
 	if connected:
 		status_text = "Connected"
 		status_color = Color.GREEN
+	elif not exit_info.is_empty():
+		## Server crashed during startup — promote to hard-red regardless
+		## of the grace window. #146
+		status_text = "Server exited"
+		status_color = Color.RED
 	elif Time.get_ticks_msec() < _startup_grace_until_msec:
 		# Inside startup grace — distinguish from real disconnect so first-run
 		# users don't assume it's broken while uvx is downloading packages.
@@ -417,6 +474,8 @@ func _update_status() -> void:
 	else:
 		status_text = "Disconnected"
 		status_color = Color.RED
+
+	_refresh_crash_banner(exit_info)
 
 	var changed := connected != _last_connected or status_text != _last_status_text
 	if not changed:
@@ -427,6 +486,73 @@ func _update_status() -> void:
 	_status_label.text = status_text
 
 	_update_dev_server_btn()
+
+
+func _get_server_exit_info() -> Dictionary:
+	if _plugin == null or not _plugin.has_method("get_server_exit_info"):
+		return {}
+	return _plugin.get_server_exit_info()
+
+
+func _refresh_crash_banner(exit_info: Dictionary) -> void:
+	if _crash_banner == null:
+		return
+	if exit_info.is_empty():
+		if _crash_banner.visible:
+			_crash_banner.visible = false
+			_last_crash_signature = ""
+		return
+
+	var hint: Dictionary = exit_info.get("hint", {})
+	var hint_text := str(hint.get("text", ""))
+	var output_lines: Array = exit_info.get("output", [])
+	var output_text := str(exit_info.get("output_text", ""))
+	## Signature lets us skip rebuilds on every frame while the banner
+	## is sticky — only refresh when the captured payload actually
+	## changes (e.g. after a restart). Hash the output text so two
+	## distinct failures can't collide on line-count + hint id alone.
+	var signature := "%s|%d" % [hint.get("id", ""), output_text.hash()]
+	if _crash_banner.visible and signature == _last_crash_signature:
+		return
+	_last_crash_signature = signature
+
+	if hint_text.is_empty():
+		_crash_hint_label.text = "The MCP server process exited shortly after starting. Captured output below — check for a port conflict, missing dependency, or Python error."
+	else:
+		_crash_hint_label.text = hint_text
+
+	_crash_output.clear()
+	if output_lines.is_empty():
+		_crash_output.add_text("(no output captured)")
+	else:
+		for line in output_lines:
+			_crash_output.add_text(str(line) + "\n")
+
+	_crash_banner.visible = true
+
+
+func _on_crash_restart() -> void:
+	if _plugin != null and _plugin.has_method("restart_server_after_exit"):
+		_plugin.restart_server_after_exit()
+	if _connection != null:
+		_connection.disconnect_from_server()
+		_connection._attempt_reconnect()
+	## Reset the grace window so the status flashes amber ("Starting server…")
+	## rather than jumping straight back to red while the fresh spawn warms up.
+	_startup_grace_until_msec = Time.get_ticks_msec() + STARTUP_GRACE_MSEC
+	_last_status_text = ""
+
+
+func _on_crash_copy_output() -> void:
+	var info := _get_server_exit_info()
+	if info.is_empty():
+		return
+	var text := str(info.get("output_text", ""))
+	var hint: Dictionary = info.get("hint", {})
+	var hint_text := str(hint.get("text", ""))
+	if not hint_text.is_empty():
+		text = "%s\n\n%s" % [hint_text, text]
+	DisplayServer.clipboard_set(text)
 
 
 func _update_log() -> void:

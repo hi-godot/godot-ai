@@ -20,8 +20,19 @@ var _handlers: Array = []  # prevent GC of RefCounted handlers
 var _debugger_plugin: McpDebuggerPlugin
 static var _server_started_this_session := false  # guard against re-entrant spawns
 
+## Captures server stdout/stderr and watches for early exit so the dock
+## can surface startup crashes (e.g. Windows port reservation / WinError
+## 10013) instead of spinning in "reconnecting…" forever. See #146.
+var _server_spawn: McpServerSpawn
+var _server_exit_info: Dictionary = {}
+
 
 func _enter_tree() -> void:
+	## `_process` is only needed while watching a freshly-spawned server;
+	## `_start_server` / `start_dev_server` turn it on after a successful
+	## pipe'd spawn, and `_process` itself turns it back off once the
+	## watch window ends or an exit is observed. See #146.
+	set_process(false)
 	_start_server()
 
 	_log_buffer = McpLogBuffer.new()
@@ -236,6 +247,9 @@ func _exit_tree() -> void:
 	_game_log_buffer = null
 
 	_stop_server()
+	if _server_spawn != null:
+		_server_spawn.release()
+		_server_spawn = null
 	print("MCP | plugin unloaded")
 
 
@@ -338,21 +352,46 @@ func _start_server() -> void:
 		return
 
 	var cmd: String = server_cmd[0]
-	var args: Array[String] = []
-	args.assign(server_cmd.slice(1))
-	args.append_array(["--transport", "streamable-http", "--port", str(port)])
+	var packed_args := _build_server_args(server_cmd.slice(1), port, false)
 
-	_server_pid = OS.create_process(cmd, args)
+	_server_spawn = McpServerSpawn.new()
+	_server_pid = _server_spawn.start(cmd, packed_args)
 	if _server_pid > 0:
 		_server_started_this_session = true
+		_server_exit_info = {}
 		## Record the launcher PID immediately so a same-session
 		## prepare_for_update_reload has something to kill. On the next
 		## editor start, _start_server's adopt branch self-heals the PID
 		## to the actual port owner (uvx's child).
 		_write_managed_server_record(_server_pid, current_version)
-		print("MCP | started server (PID %d, v%s): %s %s" % [_server_pid, current_version, cmd, " ".join(args)])
+		print("MCP | started server (PID %d, v%s): %s %s" % [_server_pid, current_version, cmd, " ".join(packed_args)])
+		if _server_spawn.was_piped():
+			set_process(true)
+		else:
+			## Fallback path (no pipes) — nothing to watch, so release
+			## the helper instead of running `_process` forever.
+			_server_spawn = null
 	else:
 		push_warning("MCP | failed to start server")
+		_server_spawn = null
+
+
+## Build the argv tail for the MCP server: the resolved command's own
+## tail, plus the transport/port flags (and --reload for dev servers).
+## Shared by `_start_server` and `start_dev_server`. `prefix` is the
+## `Array[String]` returned by `McpClientConfigurator.get_server_command()`
+## minus its first element (the program name).
+func _build_server_args(prefix: Array, port: int, with_reload: bool) -> PackedStringArray:
+	var args := PackedStringArray()
+	for a in prefix:
+		args.append(a)
+	args.append("--transport")
+	args.append("streamable-http")
+	args.append("--port")
+	args.append(str(port))
+	if with_reload:
+		args.append("--reload")
+	return args
 
 
 func _is_port_in_use(port: int) -> bool:
@@ -514,19 +553,22 @@ func start_dev_server() -> void:
 			return
 
 		var cmd: String = server_cmd[0]
-		var inner_args: Array[String] = []
-		inner_args.assign(server_cmd.slice(1))
-		inner_args.append_array([
-			"--transport", "streamable-http",
-			"--port", str(McpClientConfigurator.SERVER_HTTP_PORT),
-			"--reload",
-		])
+		var packed_args := _build_server_args(
+			server_cmd.slice(1), McpClientConfigurator.SERVER_HTTP_PORT, true
+		)
 
-		var pid := OS.create_process(cmd, inner_args)
+		_server_spawn = McpServerSpawn.new()
+		var pid := _server_spawn.start(cmd, packed_args)
 		if pid > 0:
-			print("MCP | started dev server with --reload (PID %d): %s %s" % [pid, cmd, " ".join(inner_args)])
+			_server_exit_info = {}
+			print("MCP | started dev server with --reload (PID %d): %s %s" % [pid, cmd, " ".join(packed_args)])
+			if _server_spawn.was_piped():
+				set_process(true)
+			else:
+				_server_spawn = null
 		else:
 			push_warning("MCP | failed to start dev server")
+			_server_spawn = null
 	)
 
 
@@ -553,3 +595,54 @@ func stop_dev_server() -> void:
 func is_dev_server_running() -> bool:
 	## Returns true if a server is running on the HTTP port that we didn't start as managed.
 	return _server_pid <= 0 and _is_port_in_use(McpClientConfigurator.SERVER_HTTP_PORT)
+
+
+func _process(_delta: float) -> void:
+	## Drive the spawn watcher from the editor's main loop. The helper
+	## returns true on the frame it first observes an exit; after that we
+	## snapshot the exit info for the dock and stop polling. See #146.
+	## `set_process(true)` is called after a successful pipe'd spawn;
+	## we turn it back off here once the spawn is done being watched.
+	if _server_spawn == null:
+		set_process(false)
+		return
+	if not _server_exit_info.is_empty():
+		set_process(false)
+		return
+	if _server_spawn.tick():
+		_server_exit_info = _server_spawn.exit_info(McpClientConfigurator.SERVER_HTTP_PORT)
+		var lines: Array = _server_exit_info.get("output", [])
+		var hint_dict: Dictionary = _server_exit_info.get("hint", {})
+		var hint_text: String = hint_dict.get("text", "")
+		var elapsed: int = _server_exit_info.get("elapsed_msec", 0)
+		push_warning("MCP | server exited %dms after spawn (%d lines captured)" % [elapsed, lines.size()])
+		if not hint_text.is_empty():
+			push_warning("MCP | %s" % hint_text)
+		for line in lines:
+			print("MCP | [server] %s" % line)
+	elif _server_spawn.is_past_watch_window():
+		_server_spawn.release()
+		_server_spawn = null
+		set_process(false)
+
+
+## Snapshot of the last server-spawn exit, if any. Empty dict while the
+## server is alive (or was never spawned by this session). Read by the
+## dock to show a crash banner with captured output + one-liner hint.
+## See #146.
+func get_server_exit_info() -> Dictionary:
+	return _server_exit_info
+
+
+## Clear the captured exit state and re-run the spawn path. Used by the
+## dock's crash-banner "Restart" button so the user can try again after
+## fixing the underlying cause (port reservation, missing module, etc.).
+func restart_server_after_exit() -> void:
+	_server_exit_info = {}
+	if _server_spawn != null:
+		_server_spawn.release()
+		_server_spawn = null
+	_server_pid = -1
+	_server_started_this_session = false
+	_clear_managed_server_record()
+	_start_server()  # turns `set_process` back on if the new spawn has pipes
