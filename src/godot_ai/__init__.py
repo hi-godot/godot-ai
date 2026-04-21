@@ -63,7 +63,20 @@ def main(argv: Sequence[str] | None = None) -> None:
         action="store_true",
         help="Auto-restart on source changes (dev mode, HTTP transports only)",
     )
+    parser.add_argument(
+        "--pid-file",
+        default=None,
+        help=(
+            "Write this process's PID to the given path on startup, unlink on "
+            "clean exit. The Godot plugin uses this to kill the real server "
+            "process when a launcher (uvx) PID would be unreliable."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    from godot_ai.runtime_info import install_pid_file
+
+    install_pid_file(args.pid_file)
 
     if args.reload and args.transport in ("sse", "streamable-http"):
         from godot_ai.asgi import run_with_reload

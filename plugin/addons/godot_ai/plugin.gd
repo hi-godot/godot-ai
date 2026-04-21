@@ -10,6 +10,14 @@ const GAME_HELPER_AUTOLOAD_PATH := "res://addons/godot_ai/runtime/game_helper.gd
 const MANAGED_SERVER_PID_SETTING := "godot_ai/managed_server_pid"
 const MANAGED_SERVER_VERSION_SETTING := "godot_ai/managed_server_version"
 
+## The Python server writes its own PID here on startup (passed as
+## `--pid-file`) and unlinks on clean exit. Deterministic replacement
+## for scraping `netstat -ano` to find the port owner — especially on
+## Windows where `OS.kill` on the uvx launcher doesn't take the Python
+## child with it, and the scrape was the only path to the real PID.
+## See issue for #154-era Windows update friction.
+const SERVER_PID_FILE := "user://godot_ai_server.pid"
+
 var _connection: Connection
 var _dispatcher: McpDispatcher
 var _log_buffer: McpLogBuffer
@@ -305,7 +313,7 @@ func _start_server() -> void:
 			## at some point. Adopt the live port owner, ignoring any stale
 			## launcher PID that may still be in the record. Self-heal the
 			## record so next session's adopt can fast-path.
-			var owner := _find_pid_on_port(port)
+			var owner := _find_managed_pid(port)
 			if owner > 0:
 				_server_pid = owner
 				_write_managed_server_record(owner, current_version)
@@ -318,10 +326,11 @@ func _start_server() -> void:
 			## to match the current plugin version.
 			print("MCP | managed server v%s does not match plugin v%s, restarting"
 				% [record.version, current_version])
-			var owner := _find_pid_on_port(port)
+			var owner := _find_managed_pid(port)
 			if owner > 0:
 				OS.kill(owner)
 			_clear_managed_server_record()
+			_clear_pid_file()
 			_wait_for_port_free(port, 3.0)
 			## Fall through to spawn.
 		else:
@@ -340,7 +349,16 @@ func _start_server() -> void:
 	var cmd: String = server_cmd[0]
 	var args: Array[String] = []
 	args.assign(server_cmd.slice(1))
-	args.append_array(["--transport", "streamable-http", "--port", str(port)])
+	args.append_array([
+		"--transport", "streamable-http",
+		"--port", str(port),
+		"--pid-file", ProjectSettings.globalize_path(SERVER_PID_FILE),
+	])
+
+	## Wipe any stale pid-file before spawning so a failed launch can't
+	## leave last session's PID sitting there for _find_managed_pid to
+	## read and act on.
+	_clear_pid_file()
 
 	_server_pid = OS.create_process(cmd, args)
 	if _server_pid > 0:
@@ -360,7 +378,7 @@ func _is_port_in_use(port: int) -> bool:
 	if OS.get_name() == "Windows":
 		var exit_code := OS.execute("netstat", ["-ano"], output, true)
 		if exit_code == 0 and output.size() > 0:
-			return output[0].find(":%d " % port) >= 0 and output[0].find("LISTENING") >= 0
+			return _parse_windows_netstat_listening(str(output[0]), port)
 	else:
 		var exit_code := OS.execute("lsof", ["-ti:%d" % port, "-sTCP:LISTEN"], output, true)
 		return exit_code == 0 and output.size() > 0 and not output[0].strip_edges().is_empty()
@@ -368,26 +386,23 @@ func _is_port_in_use(port: int) -> bool:
 
 
 ## Return the PID currently listening on the given TCP port, or 0 if
-## the port is free. Used by the adopt and stop paths to recover the
-## real server PID when we can't trust _server_pid (e.g. uvx launcher
-## that has exited after spawning its child). See #137.
+## the port is free. Netstat/lsof fallback; callers should prefer
+## `_find_managed_pid` which consults the Python-written pid-file first.
+##
+## Use when the pid-file is missing (pre-#154 server, or the server was
+## SIGKILL'd before writing it) to recover the port owner. On Windows
+## this parses `netstat -ano` line-by-line — Godot's `OS.execute` pushes
+## the whole stdout into `output[0]` as a single string, so an earlier
+## implementation that iterated `output` as if each element were a line
+## returned a garbage PID (the last whitespace-separated token in the
+## entire dump). See parser tests in tests/test_netstat_parser.gd.
 func _find_pid_on_port(port: int) -> int:
 	var output: Array = []
 	if OS.get_name() == "Windows":
-		## netstat prints lines like:
-		##   TCP    0.0.0.0:8000    0.0.0.0:0    LISTENING    57865
 		var exit_code := OS.execute("netstat", ["-ano"], output, true)
 		if exit_code != 0 or output.is_empty():
 			return 0
-		for line in output:
-			var s := str(line)
-			if s.find(":%d " % port) >= 0 and s.find("LISTENING") >= 0:
-				var parts := s.split(" ", false)
-				if parts.size() > 0:
-					var pid := parts[parts.size() - 1].strip_edges()
-					if pid.is_valid_int():
-						return int(pid)
-		return 0
+		return _parse_windows_netstat_pid(str(output[0]), port)
 	## POSIX: `lsof -ti:<port> -sTCP:LISTEN` returns only the PID.
 	var exit_code := OS.execute("lsof", ["-ti:%d" % port, "-sTCP:LISTEN"], output, true)
 	if exit_code != 0 or output.is_empty():
@@ -398,31 +413,127 @@ func _find_pid_on_port(port: int) -> int:
 	return int(pid_str)
 
 
+## Find the managed server PID deterministically: prefer the pid-file
+## the Python server writes on startup (see runtime_info.py), fall back
+## to scraping `netstat -ano` / `lsof` only when the file is missing or
+## stale. This is the replacement for raw port-scraping: on Windows the
+## uvx launcher PID doesn't cover the Python child, and netstat parsing
+## is fragile.
+##
+## Returns 0 when no server can be identified.
+func _find_managed_pid(port: int) -> int:
+	var pid := _read_pid_file()
+	if pid > 0 and _pid_alive(pid):
+		return pid
+	return _find_pid_on_port(port)
+
+
+## Parse the LISTENING line for `port` in a Windows `netstat -ano`
+## dump and return its PID, or 0 if no matching line is found.
+##
+## netstat prints rows like:
+##   TCP    0.0.0.0:8000    0.0.0.0:0    LISTENING    57865
+## (whitespace-separated, possibly with leading whitespace). Only rows
+## whose local address ends with `:<port>` AND state is `LISTENING`
+## qualify — substring-matching `:<port> ` against the whole dump was
+## the earlier bug; a remote address happening to include `:8000` would
+## false-positive.
+static func _parse_windows_netstat_pid(stdout: String, port: int) -> int:
+	var port_suffix := ":%d" % port
+	for line in stdout.split("\n"):
+		var s := line.strip_edges()
+		if s.is_empty():
+			continue
+		var fields := _split_on_whitespace(s)
+		## Minimum columns: proto, local, remote, state, pid
+		if fields.size() < 5:
+			continue
+		if fields[3] != "LISTENING":
+			continue
+		if not fields[1].ends_with(port_suffix):
+			continue
+		var pid_str := fields[fields.size() - 1]
+		if pid_str.is_valid_int():
+			return int(pid_str)
+	return 0
+
+
+## True if any row in a Windows `netstat -ano` dump is a LISTENING
+## entry for `port`. See `_parse_windows_netstat_pid` for the row
+## schema and why substring-matching the whole dump is wrong.
+static func _parse_windows_netstat_listening(stdout: String, port: int) -> bool:
+	return _parse_windows_netstat_pid(stdout, port) > 0
+
+
+static func _split_on_whitespace(s: String) -> PackedStringArray:
+	## `String.split(" ", false)` only splits on single spaces; netstat
+	## columns are separated by runs of spaces (and sometimes tabs).
+	## Collapse whitespace manually so PID-column extraction is robust.
+	var out: PackedStringArray = []
+	var cur := ""
+	for i in s.length():
+		var c := s.substr(i, 1)
+		if c == " " or c == "\t":
+			if not cur.is_empty():
+				out.append(cur)
+				cur = ""
+		else:
+			cur += c
+	if not cur.is_empty():
+		out.append(cur)
+	return out
+
+
+## Read the integer PID from SERVER_PID_FILE, or 0 if the file is
+## missing/empty/malformed. The file is written by the Python server
+## at startup (see --pid-file flag, plumbed in _start_server).
+static func _read_pid_file() -> int:
+	if not FileAccess.file_exists(SERVER_PID_FILE):
+		return 0
+	var f := FileAccess.open(SERVER_PID_FILE, FileAccess.READ)
+	if f == null:
+		return 0
+	var content := f.get_as_text().strip_edges()
+	f.close()
+	if content.is_empty() or not content.is_valid_int():
+		return 0
+	var pid := int(content)
+	return pid if pid > 0 else 0
+
+
+static func _clear_pid_file() -> void:
+	if FileAccess.file_exists(SERVER_PID_FILE):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(SERVER_PID_FILE))
+
+
 func _stop_server() -> void:
 	if _server_pid <= 0:
 		return
-	## Kill both the process we tracked and the current port owner, if
-	## different. For direct-spawn tiers (.venv, system CLI) these are the
-	## same and we kill once. For the uvx tier the tracked PID is the
-	## launcher — which may be dead (adopted), still installing (about to
-	## spawn), or done spawning; killing both the launcher (if alive) and
-	## the port owner (if any) covers all three cases without races. See
-	## #137.
+	## Kill both the process we tracked and the real Python PID if they
+	## differ. For direct-spawn tiers (.venv, system CLI) these match
+	## and we kill once. For the uvx tier `_server_pid` is the launcher
+	## — may be dead (adopted), still installing, or done spawning; on
+	## Windows, `OS.kill` is `TerminateProcess` and does NOT walk the
+	## child tree, so without an independent read of the real PID the
+	## Python child survives and port 8000 stays held. `_find_managed_pid`
+	## reads the pid-file the server wrote at startup (deterministic),
+	## falling back to netstat/lsof if the file is missing.
+	var port := McpClientConfigurator.SERVER_HTTP_PORT
 	var killed: Array[int] = []
 	if _pid_alive(_server_pid):
 		OS.kill(_server_pid)
 		killed.append(_server_pid)
-	if _is_port_in_use(McpClientConfigurator.SERVER_HTTP_PORT):
-		var owner := _find_pid_on_port(McpClientConfigurator.SERVER_HTTP_PORT)
-		if owner > 0 and not killed.has(owner):
-			OS.kill(owner)
-			killed.append(owner)
+	var real_pid := _find_managed_pid(port)
+	if real_pid > 0 and not killed.has(real_pid):
+		OS.kill(real_pid)
+		killed.append(real_pid)
 	if not killed.is_empty():
 		print("MCP | stopped server (PID %s)" % str(killed))
 	_server_pid = -1
 	_clear_managed_server_record()
+	_clear_pid_file()
 	## Brief wait so a follow-up spawn doesn't race a still-closing socket.
-	_wait_for_port_free(McpClientConfigurator.SERVER_HTTP_PORT, 2.0)
+	_wait_for_port_free(port, 2.0)
 
 
 ## True if the given PID corresponds to a live process. Uses POSIX `kill -0`
