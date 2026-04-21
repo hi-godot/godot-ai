@@ -121,6 +121,7 @@ func test_connect_signal_declared_but_uninstantiated_autoload() -> void:
 	# user at the right workaround, not a generic "not found".
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
+		skip("No scene root — is a scene open?")
 		return
 	# Inject a fake autoload entry pointing to a script path that isn't loaded.
 	# We don't actually register it with the editor — just set the setting so
