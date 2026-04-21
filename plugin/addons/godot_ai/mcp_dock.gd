@@ -21,6 +21,7 @@ var _client_configure_all_btn: Button
 var _clients_summary_label: Label
 var _clients_window: Window
 var _dev_mode_toggle: CheckButton
+var _install_label: Label
 
 ## Per-client UI handles, keyed by client id. Each entry holds the row's
 ## status dot, configure button, remove button, manual-command panel + text.
@@ -145,6 +146,18 @@ func _build_ui() -> void:
 	status_row.add_child(_redock_btn)
 
 	add_child(status_row)
+
+	# Install-mode line — so a git-clone user doesn't press the yellow Update
+	# banner below and silently downgrade from main to the last release tag.
+	# See #144.
+	_install_label = Label.new()
+	_install_label.add_theme_color_override("font_color", COLOR_MUTED)
+	_install_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_install_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_install_label.text = _install_mode_text()
+	_install_label.tooltip_text = _install_mode_tooltip()
+	_install_label.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(_install_label)
 
 	# --- Update banner (top of dock, hidden until check finds a newer version) ---
 	_update_banner = VBoxContainer.new()
@@ -533,6 +546,34 @@ func _refresh_setup_status() -> void:
 		install_btn.text = "Install uv"
 		install_btn.pressed.connect(_on_install_uv)
 		_setup_container.add_child(install_btn)
+
+
+func _install_mode_text() -> String:
+	if McpClientConfigurator.is_dev_checkout():
+		return "Install: dev checkout — update via git pull"
+	return "Install: v%s" % McpClientConfigurator.get_plugin_version()
+
+
+func _install_mode_tooltip() -> String:
+	if not McpClientConfigurator.is_dev_checkout():
+		return "Plugin installed from a release ZIP, Asset Library, or source copy. Update button in this dock downloads the latest GitHub release."
+	var target := _resolve_plugin_symlink_target()
+	if target.is_empty():
+		return "Plugin source tree resolved via local .venv — press Reload Plugin after editing."
+	return "Plugin source: %s\nPress Reload Plugin after editing." % target
+
+
+func _resolve_plugin_symlink_target() -> String:
+	var addons_path := ProjectSettings.globalize_path("res://addons/godot_ai")
+	var dir := DirAccess.open(addons_path.get_base_dir())
+	if dir == null or not dir.is_link(addons_path):
+		return ""
+	var target := dir.read_link(addons_path)
+	if target.is_empty():
+		return ""
+	if target.is_relative_path():
+		target = addons_path.get_base_dir().path_join(target).simplify_path()
+	return target
 
 
 func _make_status_row(label_text: String, value_text: String, value_color: Color) -> HBoxContainer:
