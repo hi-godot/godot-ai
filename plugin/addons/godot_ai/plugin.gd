@@ -506,6 +506,14 @@ func prepare_for_update_reload() -> void:
 func start_dev_server() -> void:
 	## Start a dev server with --reload that survives plugin reloads.
 	## Kills any managed server first, waits for the port to free, then spawns.
+	##
+	## PYTHONPATH handling: when `res://` sits inside a checkout that owns a
+	## `src/godot_ai/` (root repo or a git worktree), prepend that `src/` to
+	## PYTHONPATH so `import godot_ai` and uvicorn's `reload_dirs` both pick
+	## up *this* tree's source rather than the root repo's editable install.
+	## On the root repo the path matches the installed package, so this is a
+	## no-op; in a worktree it's what makes `--reload` actually watch the
+	## worktree's Python. See #84.
 	_stop_server()
 	get_tree().create_timer(0.5).timeout.connect(func():
 		var server_cmd := McpClientConfigurator.get_server_command()
@@ -522,9 +530,28 @@ func start_dev_server() -> void:
 			"--reload",
 		])
 
+		var worktree_src := McpClientConfigurator.find_worktree_src_dir(ProjectSettings.globalize_path("res://"))
+		var prev_pythonpath := OS.get_environment("PYTHONPATH")
+		if not worktree_src.is_empty():
+			var sep := ";" if OS.get_name() == "Windows" else ":"
+			var new_pp := worktree_src if prev_pythonpath.is_empty() else worktree_src + sep + prev_pythonpath
+			OS.set_environment("PYTHONPATH", new_pp)
+
 		var pid := OS.create_process(cmd, inner_args)
+
+		## Restore PYTHONPATH immediately — the spawned child has already
+		## copied the env, so the editor's own process state returns to
+		## baseline. Leaving it set would leak to any later OS.create_process
+		## from unrelated paths.
+		if not worktree_src.is_empty():
+			if prev_pythonpath.is_empty():
+				OS.unset_environment("PYTHONPATH")
+			else:
+				OS.set_environment("PYTHONPATH", prev_pythonpath)
+
 		if pid > 0:
-			print("MCP | started dev server with --reload (PID %d): %s %s" % [pid, cmd, " ".join(inner_args)])
+			var suffix := " (PYTHONPATH=%s)" % worktree_src if not worktree_src.is_empty() else ""
+			print("MCP | started dev server with --reload (PID %d): %s %s%s" % [pid, cmd, " ".join(inner_args), suffix])
 		else:
 			push_warning("MCP | failed to start dev server")
 	)

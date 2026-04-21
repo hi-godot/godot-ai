@@ -90,6 +90,46 @@ func test_server_launch_mode_agrees_with_get_server_command() -> void:
 		assert_true(mode != "unknown", "Non-empty command must map to a concrete mode, got %s" % mode)
 
 
+func test_find_worktree_src_dir_locates_sibling_src_godot_ai() -> void:
+	var root := _scratch_dir.path_join("fake_worktree")
+	var godot_ai := root.path_join("src/godot_ai")
+	var nested := root.path_join("test_project/addons/deep")
+	DirAccess.make_dir_recursive_absolute(godot_ai)
+	DirAccess.make_dir_recursive_absolute(nested)
+
+	var expected := root.path_join("src")
+	assert_eq(McpClientConfigurator.find_worktree_src_dir(root.path_join("test_project")), expected)
+	assert_eq(McpClientConfigurator.find_worktree_src_dir(nested), expected)
+	assert_eq(McpClientConfigurator.find_worktree_src_dir(root), expected)
+
+	DirAccess.remove_absolute(nested)
+	DirAccess.remove_absolute(root.path_join("test_project/addons"))
+	DirAccess.remove_absolute(root.path_join("test_project"))
+	DirAccess.remove_absolute(godot_ai)
+	DirAccess.remove_absolute(root.path_join("src"))
+	DirAccess.remove_absolute(root)
+
+
+func test_find_worktree_src_dir_returns_empty_when_no_src_on_path() -> void:
+	var bare := OS.get_user_data_dir().path_join("mcp_worktree_tests/bare")
+	DirAccess.make_dir_recursive_absolute(bare)
+	assert_eq(McpClientConfigurator.find_worktree_src_dir(bare), "")
+	DirAccess.remove_absolute(bare)
+	DirAccess.remove_absolute(OS.get_user_data_dir().path_join("mcp_worktree_tests"))
+
+
+func test_find_worktree_src_dir_ignores_unrelated_src_directory() -> void:
+	## An unrelated project's `src/` (no `godot_ai/` child) must not match —
+	## otherwise a worktree launched inside a polyglot repo would get a
+	## spurious PYTHONPATH override pointing at the wrong tree.
+	var root := _scratch_dir.path_join("fake_other_project")
+	DirAccess.make_dir_recursive_absolute(root.path_join("src/other_package"))
+	assert_eq(McpClientConfigurator.find_worktree_src_dir(root), "")
+	DirAccess.remove_absolute(root.path_join("src/other_package"))
+	DirAccess.remove_absolute(root.path_join("src"))
+	DirAccess.remove_absolute(root)
+
+
 func test_uvx_server_command_uses_exact_pin_not_tilde() -> void:
 	## Regression guard for #133: the uvx branch of get_server_command must
 	## pin godot-ai with `==<version>`, not `~=<minor>`. With the tilde

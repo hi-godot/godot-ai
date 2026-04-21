@@ -77,7 +77,7 @@ making `editor_reload_plugin` call
 `EditorInterface.get_resource_filesystem().scan()` and await
 `filesystem_changed` before the disable/enable toggle.
 
-### bug — SEGV in `GameLogBuffer.get_range` on the first call after `editor_reload_plugin`
+### bug — SEGV in `GameLogBuffer.get_range` on the first call after `editor_reload_plugin` — FIXED in PR #103 (explicit `_exit_tree` teardown; see issue #46)
 
 Same session (see setup for smoking PR #78 Copilot fixes). Rsync'd new
 plugin code on top of a running editor, called `editor_reload_plugin`
@@ -108,15 +108,22 @@ another repro datapoint.
 Workaround: relaunch Godot after a reload when possible. Long-term fix
 tracked in #46.
 
-### friction — `--reload` uvicorn uses the root repo's src, not the worktree's
+### friction — `--reload` uvicorn uses the root repo's src, not the worktree's — FIXED (`script/serve-this-worktree` + dock auto-detect; see issue #84)
 
 Dev server was running as `python -m godot_ai ... --reload` with the
 repo's editable install in `.venv`. `import godot_ai` resolves to
 `/Users/davidsarno/Documents/godot-ai/src/godot_ai/` regardless of which
 worktree I'm in. Had to kill and restart with `PYTHONPATH=<worktree>/src`
-to get PR code into the server. CLAUDE.md's worktree section already
-warns about this; a dock button or script one-liner for "restart server
-against *this* worktree" would remove the last of the friction.
+to get PR code into the server.
+
+Addressed in two places:
+- `script/serve-this-worktree` is the CLI one-liner (prepends
+  `<worktree>/src` to `PYTHONPATH`, frees the port, starts `--reload`).
+- The dock's **Start Dev Server** button now auto-detects a sibling
+  `src/godot_ai/` on the walk-up from `res://` and exports
+  `PYTHONPATH=<that>/src` for the spawn. On the root repo it matches the
+  editable install and is a no-op; in a worktree it makes the button Do
+  The Right Thing without any new UI.
 
 ### friction — `scene_create` briefly rejects with `EDITOR_NOT_READY: importing` — FIXED in PR #95 (retryable/state hints on EDITOR_NOT_READY)
 

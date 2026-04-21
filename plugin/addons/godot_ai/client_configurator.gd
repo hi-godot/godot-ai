@@ -191,6 +191,24 @@ static func _find_venv_python() -> String:
 	return ""
 
 
+## Walk up from `start_dir` looking for a sibling `src/godot_ai/` — returns
+## the absolute path of the enclosing `src/` dir, or "". Used by the dev
+## server launcher to prepend the caller's own source to PYTHONPATH so a
+## worktree-launched editor serves the worktree's Python, not the root
+## repo's editable install. See #84.
+static func find_worktree_src_dir(start_dir: String) -> String:
+	var dir := start_dir.rstrip("/")
+	for i in 5:
+		var candidate := dir.path_join("src/godot_ai")
+		if DirAccess.dir_exists_absolute(candidate):
+			return dir.path_join("src")
+		var parent := dir.get_base_dir()
+		if parent == dir:
+			break
+		dir = parent
+	return ""
+
+
 static func _find_system_install() -> String:
 	var cmd := "which" if OS.get_name() != "Windows" else "where"
 	var output: Array = []
