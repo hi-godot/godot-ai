@@ -107,6 +107,64 @@ static func is_dev_checkout() -> bool:
 	return not _find_venv_python().is_empty()
 
 
+## Human-readable install-mode summary for the dock UI.
+##
+## The dock surfaces this so users can tell at a glance whether their plugin
+## is a dev checkout (updates via `git pull`) or a regular install (updates
+## via the in-dock banner against the latest GitHub Release). See #144 —
+## before this, a README `git clone + cp -r` user had no way to know that
+## pressing the yellow Update button would silently downgrade them to the
+## last tagged release.
+##
+## Returns a Dictionary with:
+##   - label (String): one-line text for the dock row
+##   - tooltip (String): longer hover text explaining the update path
+##   - is_dev (bool): mirrors is_dev_checkout() — exposed so callers don't
+##     have to call both methods
+##   - symlink_target (String): resolved target of `addons/godot_ai` when it's
+##     a symlink (empty otherwise). Helps contributors working across
+##     worktrees confirm which `plugin/` tree Godot is using.
+static func describe_install_mode() -> Dictionary:
+	var is_dev := is_dev_checkout()
+	var version := get_plugin_version()
+	if is_dev:
+		var symlink_target := _resolve_addon_symlink()
+		var tooltip := "Plugin is a dev checkout — update via `git pull` in the source tree."
+		if not symlink_target.is_empty():
+			tooltip += "\nSymlinked to: %s" % symlink_target
+		return {
+			"label": "Install: dev checkout — update via git pull",
+			"tooltip": tooltip,
+			"is_dev": true,
+			"symlink_target": symlink_target,
+		}
+	return {
+		"label": "Install: v%s" % version,
+		"tooltip": "Plugin installed from a release (ZIP or Asset Library). Updates via the in-dock banner.",
+		"is_dev": false,
+		"symlink_target": "",
+	}
+
+
+## Resolve `res://addons/godot_ai` through any symlink to its real target.
+## Returns "" on Windows (no POSIX readlink) or when the path isn't a symlink.
+static func _resolve_addon_symlink() -> String:
+	if OS.get_name() == "Windows":
+		return ""
+	var addon_path := ProjectSettings.globalize_path("res://addons/godot_ai").rstrip("/")
+	var output: Array = []
+	# `readlink -f` resolves the full chain; works on Linux (GNU) and modern
+	# macOS (BSD readlink supports -f since 10.13). If it fails, we return "".
+	if OS.execute("readlink", ["-f", addon_path], output, true) != 0:
+		return ""
+	if output.is_empty():
+		return ""
+	var resolved: String = String(output[0]).strip_edges()
+	if resolved.is_empty() or resolved == addon_path:
+		return ""
+	return resolved
+
+
 static func get_server_command() -> Array[String]:
 	var venv_python := _cached_venv_python()
 	if not venv_python.is_empty():

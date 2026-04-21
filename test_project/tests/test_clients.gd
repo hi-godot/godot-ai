@@ -114,6 +114,57 @@ func test_uvx_server_command_uses_exact_pin_not_tilde() -> void:
 		assert_true(has_exact_pin, "uvx tier command should contain godot-ai==<plugin_version>; got %s" % str(cmd))
 
 
+# ----- install mode description (#144) -----
+
+
+func test_describe_install_mode_returns_required_keys() -> void:
+	var info := McpClientConfigurator.describe_install_mode()
+	for key in ["label", "tooltip", "is_dev", "symlink_target"]:
+		assert_has_key(info, key, "describe_install_mode() missing key: %s" % key)
+	assert_true(info.get("label", "") is String and not info["label"].is_empty(), "label must be non-empty String")
+	assert_true(info.get("tooltip", "") is String and not info["tooltip"].is_empty(), "tooltip must be non-empty String")
+	assert_true(info.get("is_dev") is bool, "is_dev must be bool")
+	assert_true(info.get("symlink_target") is String, "symlink_target must be String (may be empty)")
+
+
+func test_describe_install_mode_agrees_with_is_dev_checkout() -> void:
+	## Guard against the two accessors drifting — describe_install_mode is the
+	## dock-facing summary and MUST derive its is_dev flag from the same
+	## predicate the update-check path uses, or the dock would claim "dev
+	## checkout" for a user who still gets the downgrade-Update banner.
+	var info := McpClientConfigurator.describe_install_mode()
+	assert_eq(info.get("is_dev"), McpClientConfigurator.is_dev_checkout(), "is_dev must match is_dev_checkout()")
+
+
+func test_describe_install_mode_label_reflects_mode() -> void:
+	var info := McpClientConfigurator.describe_install_mode()
+	var label: String = info.get("label", "")
+	if info.get("is_dev"):
+		assert_contains(label, "dev checkout", "dev-mode label should say 'dev checkout' (got %s)" % label)
+		assert_contains(label, "git pull", "dev-mode label should mention git pull (got %s)" % label)
+	else:
+		var ver := McpClientConfigurator.get_plugin_version()
+		assert_contains(label, "v%s" % ver, "release-mode label should embed the plugin version (got %s)" % label)
+
+
+func test_describe_install_mode_symlink_target_consistent() -> void:
+	## Non-dev installs never set symlink_target. Dev-mode may or may not
+	## depending on whether the addon path is a real symlink in this env
+	## (CI may copy the addon instead of symlinking). Assert the envelope:
+	## - non-dev => symlink_target is empty
+	## - dev + non-empty => path exists and is absolute
+	var info := McpClientConfigurator.describe_install_mode()
+	var target: String = info.get("symlink_target", "")
+	if not info.get("is_dev"):
+		assert_true(target.is_empty(), "release installs must not expose symlink_target (got %s)" % target)
+		return
+	if target.is_empty():
+		skip("no symlink in this dev-mode environment (addon path may be a plain copy)")
+		return
+	assert_true(target.begins_with("/") or target.substr(1, 1) == ":", "symlink_target should be absolute (got %s)" % target)
+	assert_true(DirAccess.dir_exists_absolute(target) or FileAccess.file_exists(target), "symlink_target should exist on disk: %s" % target)
+
+
 # ----- path template -----
 
 func test_path_template_expands_home() -> void:

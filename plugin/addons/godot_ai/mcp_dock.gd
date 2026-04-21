@@ -16,6 +16,7 @@ var _plugin: EditorPlugin
 var _redock_btn: Button
 var _status_icon: ColorRect
 var _status_label: Label
+var _install_label: Label
 var _client_grid: VBoxContainer
 var _client_configure_all_btn: Button
 var _clients_summary_label: Label
@@ -145,6 +146,19 @@ func _build_ui() -> void:
 	status_row.add_child(_redock_btn)
 
 	add_child(status_row)
+
+	# --- Install mode row (always visible, tells users how updates work) ---
+	# See #144: README `git clone + cp -r` users had no way to tell their install
+	# from a dev checkout, so pressing the yellow Update banner could silently
+	# downgrade them to the last tagged release. Surfacing mode+version lets
+	# them self-diagnose before acting.
+	_install_label = Label.new()
+	_install_label.add_theme_color_override("font_color", COLOR_MUTED)
+	_install_label.add_theme_font_size_override("font_size", 11)
+	_install_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_install_label.mouse_filter = Control.MOUSE_FILTER_PASS
+	_refresh_install_label()
+	add_child(_install_label)
 
 	# --- Update banner (top of dock, hidden until check finds a newer version) ---
 	_update_banner = VBoxContainer.new()
@@ -691,6 +705,14 @@ func _apply_row_status(client_id: String, status: McpClient.Status, error_msg: S
 			configure_btn.text = "Retry"
 			remove_btn.visible = false
 			name_label.text = "%s — %s" % [base_name, error_msg] if not error_msg.is_empty() else base_name
+
+
+# --- Install mode ---
+
+func _refresh_install_label() -> void:
+	var info := McpClientConfigurator.describe_install_mode()
+	_install_label.text = info["label"]
+	_install_label.tooltip_text = info["tooltip"]
 
 
 # --- Update check & self-update ---
