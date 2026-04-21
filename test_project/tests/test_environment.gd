@@ -164,9 +164,9 @@ func test_create_undo_restores_previous_environment() -> void:
 	})
 	assert_has_key(result, "data")
 	assert_true(we.environment != null)
-	editor_undo(_undo_redo)
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_eq(we.environment, prev_env)
-	editor_redo(_undo_redo)
+	assert_true(editor_redo(_undo_redo), "redo should succeed")
 	assert_true(we.environment is Environment)
 	_remove_node(we)
 

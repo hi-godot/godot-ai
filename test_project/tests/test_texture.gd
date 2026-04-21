@@ -150,7 +150,7 @@ func test_gradient_assigns_typed_gradient_and_colors() -> void:
 	assert_eq(g.colors[0].r, 1.0)
 	assert_eq(g.colors[1].b, 1.0)
 	assert_eq(s.texture.fill, GradientTexture2D.FILL_RADIAL)
-	editor_undo(_undo_redo)
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_true(s.texture == null)
 	_remove_node(s)
 
@@ -208,7 +208,7 @@ func test_noise_assigns_typed_chain() -> void:
 	assert_eq(n.noise_type, FastNoiseLite.TYPE_PERLIN)
 	assert_eq(n.seed, 7)
 	assert_eq(n.fractal_octaves, 3)
-	editor_undo(_undo_redo)
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_true(s.texture == null)
 	_remove_node(s)
 

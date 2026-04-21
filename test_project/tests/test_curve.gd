@@ -125,7 +125,7 @@ func test_set_points_auto_creates_curve3d_when_null() -> void:
 	assert_eq(p.curve.point_count, 2)
 
 	# Undo should clear the slot back to null, not leave the auto-created curve.
-	editor_undo(_undo_redo)
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_true(p.curve == null, "Undo should clear the auto-created curve")
 	_remove_node(p)
 
@@ -237,10 +237,10 @@ func test_set_points_3d_undo_restores_old_points() -> void:
 	})
 	assert_has_key(result, "data")
 	assert_eq(p.curve.point_count, 2)
-	editor_undo(_undo_redo)
+	assert_true(editor_undo(_undo_redo), "curve point_count undo should succeed")
 	assert_eq(p.curve.point_count, 1)
 	assert_eq(p.curve.get_point_position(0), Vector3(10, 10, 10))
-	editor_redo(_undo_redo)
+	assert_true(editor_redo(_undo_redo), "curve point_count redo should succeed")
 	assert_eq(p.curve.point_count, 2)
 	_remove_node(p)
 

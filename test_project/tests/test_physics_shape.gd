@@ -129,7 +129,7 @@ func test_autofit_3d_box_creates_and_sizes_shape() -> void:
 	assert_eq(parts.collision.shape.size.x, 3.0)
 	assert_eq(parts.collision.shape.size.y, 1.0)
 	assert_eq(parts.collision.shape.size.z, 2.0)
-	editor_undo(_undo_redo)
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_true(parts.collision.shape == null)
 	_remove_node(parts.body)
 

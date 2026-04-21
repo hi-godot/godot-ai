@@ -494,7 +494,7 @@ func test_set_property_class_dict_instantiates_fresh_resource() -> void:
 	assert_eq(mi.mesh.size.x, 2.0)
 	assert_eq(mi.mesh.size.z, 4.0)
 	# Undo should restore null.
-	editor_undo(_undo_redo)
+	assert_true(editor_undo(_undo_redo), "mesh undo should succeed")
 	assert_true(mi.mesh == null)
 	if mi.get_parent():
 		mi.get_parent().remove_child(mi)

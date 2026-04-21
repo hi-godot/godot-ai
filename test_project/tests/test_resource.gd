@@ -266,9 +266,9 @@ func test_create_resource_undo_restores_previous_value() -> void:
 	})
 	assert_has_key(result, "data")
 	assert_true(mi.mesh is SphereMesh)
-	editor_undo(_undo_redo)
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_eq(mi.mesh, old_mesh, "Undo should restore the previous mesh value")
-	editor_redo(_undo_redo)
+	assert_true(editor_redo(_undo_redo), "redo should succeed")
 	assert_true(mi.mesh is SphereMesh, "Redo should re-apply the SphereMesh")
 	_remove_node(mi)
 
@@ -458,8 +458,8 @@ func test_create_resource_undo_survives_interleaving() -> void:
 	_undo_redo.commit_action()
 	# Undo the interleaved action first, then the original — mesh should
 	# still revert cleanly.
-	editor_undo(_undo_redo)  # undo rename
-	editor_undo(_undo_redo)  # undo mesh assign
+	assert_true(editor_undo(_undo_redo), "undo rename should succeed")
+	assert_true(editor_undo(_undo_redo), "undo mesh assign should succeed")
 	assert_true(mi.mesh == null or not (mi.mesh is BoxMesh), "Undo should have removed the BoxMesh")
 	_remove_node(mi)
 
