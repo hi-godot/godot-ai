@@ -16,6 +16,7 @@ var _plugin: EditorPlugin
 var _redock_btn: Button
 var _status_icon: ColorRect
 var _status_label: Label
+var _install_label: Label
 var _client_grid: VBoxContainer
 var _client_configure_all_btn: Button
 var _clients_summary_label: Label
@@ -145,6 +146,14 @@ func _build_ui() -> void:
 	status_row.add_child(_redock_btn)
 
 	add_child(status_row)
+
+	# See #144 — disambiguates dev checkout (update via git pull) from a
+	# release copy (update via the banner below).
+	_install_label = Label.new()
+	_install_label.add_theme_color_override("font_color", COLOR_MUTED)
+	_install_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_refresh_install_label()
+	add_child(_install_label)
 
 	# --- Update banner (top of dock, hidden until check finds a newer version) ---
 	_update_banner = VBoxContainer.new()
@@ -533,6 +542,42 @@ func _refresh_setup_status() -> void:
 		install_btn.text = "Install uv"
 		install_btn.pressed.connect(_on_install_uv)
 		_setup_container.add_child(install_btn)
+
+
+func _refresh_install_label() -> void:
+	if McpClientConfigurator.is_dev_checkout():
+		_install_label.text = "Install: dev checkout — update via git pull"
+		# Tooltip disambiguates which worktree's plugin/ tree the running
+		# editor is actually using — see the worktree section of CLAUDE.md.
+		_install_label.tooltip_text = _cached_addon_path()
+	else:
+		_install_label.text = "Install: v%s" % McpClientConfigurator.get_plugin_version()
+		_install_label.tooltip_text = ""
+
+
+static var _addon_path_cache: String = ""
+static var _addon_path_cached: bool = false
+
+
+static func _cached_addon_path() -> String:
+	if not _addon_path_cached:
+		_addon_path_cache = _resolve_addon_path()
+		_addon_path_cached = true
+	return _addon_path_cache
+
+
+static func _resolve_addon_path() -> String:
+	var addon_path := ProjectSettings.globalize_path("res://addons/godot_ai")
+	if OS.get_name() == "Windows":
+		return addon_path
+	# `readlink -f` resolves the full symlink chain; on a non-symlink it
+	# echoes the canonical absolute path.
+	var output: Array = []
+	if OS.execute("readlink", ["-f", addon_path], output, true) == 0 and output.size() > 0:
+		var resolved: String = output[0].strip_edges()
+		if not resolved.is_empty():
+			return resolved
+	return addon_path
 
 
 func _make_status_row(label_text: String, value_text: String, value_color: Color) -> HBoxContainer:
