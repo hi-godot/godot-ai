@@ -21,6 +21,7 @@ var _client_configure_all_btn: Button
 var _clients_summary_label: Label
 var _clients_window: Window
 var _dev_mode_toggle: CheckButton
+var _install_label: Label
 
 ## Per-client UI handles, keyed by client id. Each entry holds the row's
 ## status dot, configure button, remove button, manual-command panel + text.
@@ -149,13 +150,14 @@ func _build_ui() -> void:
 	# Install-mode line — so a git-clone user doesn't press the yellow Update
 	# banner below and silently downgrade from main to the last release tag.
 	# See #144.
-	var install_label := Label.new()
-	install_label.add_theme_color_override("font_color", COLOR_MUTED)
-	install_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	install_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	install_label.text = _install_mode_text()
-	install_label.tooltip_text = _install_mode_tooltip()
-	add_child(install_label)
+	_install_label = Label.new()
+	_install_label.add_theme_color_override("font_color", COLOR_MUTED)
+	_install_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_install_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_install_label.text = _install_mode_text()
+	_install_label.tooltip_text = _install_mode_tooltip()
+	_install_label.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(_install_label)
 
 	# --- Update banner (top of dock, hidden until check finds a newer version) ---
 	_update_banner = VBoxContainer.new()

@@ -39,6 +39,13 @@ func test_install_mode_tooltip_is_nonempty() -> void:
 	assert_false(tooltip.is_empty(), "Tooltip must not be empty")
 
 
+func test_install_label_mouse_filter_allows_tooltip() -> void:
+	# Label.mouse_filter defaults to IGNORE, which silently swallows hover
+	# events and prevents tooltip_text from ever firing. Regression guard.
+	_dock._build_ui()
+	assert_eq(_dock._install_label.mouse_filter, Control.MOUSE_FILTER_STOP)
+
+
 func test_dev_checkout_tooltip_exposes_symlink_target() -> void:
 	if not McpClientConfigurator.is_dev_checkout():
 		skip("only meaningful in dev checkout")
