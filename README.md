@@ -161,6 +161,8 @@ The plugin starts or reuses the Python server, connects over WebSocket, and expo
 
 See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for development setup, testing, and PR guidelines.
 
+**Windows contributors:** run `.\script\setup-dev.ps1` in PowerShell. It requires Windows Developer Mode to be enabled — without it, the committed `test_project/addons/godot_ai` symlink checks out as a text file and the plugin fails to load. The script will prompt you with a link to the Settings page if Developer Mode is off.
+
 </details>
 
 ---
