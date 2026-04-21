@@ -671,3 +671,8 @@ func stop_dev_server() -> void:
 func is_dev_server_running() -> bool:
 	## Returns true if a server is running on the HTTP port that we didn't start as managed.
 	return _server_pid <= 0 and _is_port_in_use(McpClientConfigurator.SERVER_HTTP_PORT)
+
+
+func has_managed_server() -> bool:
+	## Returns true if the plugin is currently managing a server process it spawned.
+	return _server_pid > 0

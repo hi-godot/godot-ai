@@ -594,19 +594,45 @@ func _make_status_row(label_text: String, value_text: String, value_color: Color
 	return row
 
 
+## Pure helper — given the two independent server states, return the button
+## label and tooltip. Factored out so tests can cover all three states without
+## spinning up a real server or plugin.
+static func _dev_server_btn_state(has_managed: bool, dev_running: bool) -> Dictionary:
+	var port := McpClientConfigurator.SERVER_HTTP_PORT
+	if has_managed:
+		return {
+			"text": "Switch to dev mode (--reload)",
+			"tooltip": "Stops the plugin's managed server and replaces it with a --reload dev server on port %d. The dev server auto-restarts when you edit Python sources." % port,
+		}
+	if dev_running:
+		return {
+			"text": "Exit dev mode",
+			"tooltip": "Stops the external dev server on port %d so the plugin's managed server can take over on next reload." % port,
+		}
+	return {
+		"text": "Start dev server",
+		"tooltip": "Spawns a --reload dev server on port %d. Auto-restarts when you edit Python sources." % port,
+	}
+
+
 func _update_dev_server_btn() -> void:
 	if _dev_server_btn == null:
 		return
-	if _plugin and _plugin.is_dev_server_running():
-		_dev_server_btn.text = "Stop Dev Server"
-	else:
-		_dev_server_btn.text = "Start Dev Server"
+	if _plugin == null:
+		return
+	var state := _dev_server_btn_state(_plugin.has_managed_server(), _plugin.is_dev_server_running())
+	_dev_server_btn.text = state["text"]
+	_dev_server_btn.tooltip_text = state["tooltip"]
 
 
 func _on_dev_server_pressed() -> void:
 	if _plugin == null:
 		return
-	if _plugin.is_dev_server_running():
+	if _plugin.has_managed_server():
+		# Managed server running — swap it for a --reload dev server.
+		# start_dev_server() calls _stop_server() internally before spawning.
+		_plugin.start_dev_server()
+	elif _plugin.is_dev_server_running():
 		_plugin.stop_dev_server()
 	else:
 		_plugin.start_dev_server()
