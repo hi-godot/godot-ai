@@ -44,6 +44,16 @@ var _last_connected := false
 var _last_status_text := ""
 var _startup_grace_until_msec: int = 0
 
+# Crash-status panel (populated when the plugin detects the spawned server
+# died before connecting). See issue #146.
+var _crash_panel: VBoxContainer
+var _crash_hint_label: Label
+var _crash_output: RichTextLabel
+## Last status Dict rendered into the panel — used to skip re-population
+## when nothing changed, which would otherwise reset the user's scroll
+## position on every frame. GDScript Dicts compare by value with `==`.
+var _last_server_status: Dictionary = {}
+
 # First-run grace: uvx installs 60+ Python packages on first run (can take
 # 10-30s on a slow connection). Don't scare users with "Disconnected" during
 # that window — show "Starting server…" instead. After this expires, fall
@@ -158,6 +168,38 @@ func _build_ui() -> void:
 	_install_label.tooltip_text = _install_mode_tooltip()
 	_install_label.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_install_label)
+
+	# --- Crash panel (shown when the spawned server exits before connecting) ---
+	_crash_panel = VBoxContainer.new()
+	_crash_panel.add_theme_constant_override("separation", 4)
+	_crash_panel.visible = false
+
+	var crash_header := Label.new()
+	crash_header.text = "Server exited"
+	crash_header.add_theme_font_size_override("font_size", 15)
+	crash_header.add_theme_color_override("font_color", Color(1.0, 0.45, 0.45))
+	_crash_panel.add_child(crash_header)
+
+	_crash_hint_label = Label.new()
+	_crash_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_crash_hint_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3))
+	_crash_panel.add_child(_crash_hint_label)
+
+	_crash_output = RichTextLabel.new()
+	_crash_output.custom_minimum_size = Vector2(0, 140)
+	_crash_output.bbcode_enabled = false
+	_crash_output.selection_enabled = true
+	_crash_output.scroll_following = false
+	_crash_panel.add_child(_crash_output)
+
+	var crash_retry := Button.new()
+	crash_retry.text = "Reload Plugin"
+	crash_retry.tooltip_text = "Re-run the spawn after fixing the underlying issue"
+	crash_retry.pressed.connect(_on_reload_plugin)
+	_crash_panel.add_child(crash_retry)
+
+	_crash_panel.add_child(HSeparator.new())
+	add_child(_crash_panel)
 
 	# --- Update banner (top of dock, hidden until check finds a newer version) ---
 	_update_banner = VBoxContainer.new()
@@ -419,9 +461,26 @@ func _update_status() -> void:
 	var status_text: String
 	var status_color: Color
 
+	## Spawn-supervision state trumps the grace window: if the plugin
+	## already knows the child process died, say so instead of promising
+	## "Starting server…" forever. See issue #146. The Dict is always
+	## present (plugin.get_server_status returns defaults even when we
+	## didn't spawn); GDScript `==` on Dicts compares by value so the
+	## `_update_crash_panel` diff stays cheap.
+	var server_status: Dictionary = _plugin.get_server_status()
+	var crashed: bool = server_status.get("crashed", false)
+	var port_excluded: bool = server_status.get("port_excluded", false)
+
 	if connected:
 		status_text = "Connected"
 		status_color = Color.GREEN
+	elif crashed:
+		var exit_ms: int = server_status.get("exit_ms", 0)
+		status_text = "Server exited after %.1fs" % (exit_ms / 1000.0)
+		status_color = Color.RED
+	elif port_excluded:
+		status_text = "Port %d reserved by Windows" % McpClientConfigurator.SERVER_HTTP_PORT
+		status_color = Color.RED
 	elif Time.get_ticks_msec() < _startup_grace_until_msec:
 		# Inside startup grace — distinguish from real disconnect so first-run
 		# users don't assume it's broken while uvx is downloading packages.
@@ -430,6 +489,8 @@ func _update_status() -> void:
 	else:
 		status_text = "Disconnected"
 		status_color = Color.RED
+
+	_update_crash_panel(server_status)
 
 	var changed := connected != _last_connected or status_text != _last_status_text
 	if not changed:
@@ -440,6 +501,34 @@ func _update_status() -> void:
 	_status_label.text = status_text
 
 	_update_dev_server_btn()
+
+
+func _update_crash_panel(server_status: Dictionary) -> void:
+	var crashed: bool = server_status.get("crashed", false)
+	var port_excluded: bool = server_status.get("port_excluded", false)
+	if not crashed and not port_excluded:
+		if _crash_panel.visible:
+			_crash_panel.visible = false
+			_last_server_status = {}
+		return
+	if server_status == _last_server_status:
+		return
+	_last_server_status = server_status.duplicate()
+	var hint: String = server_status.get("hint", "")
+	var output: PackedStringArray = server_status.get("output", PackedStringArray())
+	_crash_panel.visible = true
+	_crash_hint_label.text = hint
+	_crash_hint_label.visible = not hint.is_empty()
+	_crash_output.clear()
+	if output.is_empty() and port_excluded:
+		_crash_output.add_text(
+			"netsh interface ipv4 show excludedportrange protocol=tcp\n"
+			+ "reports port %d inside a reserved range — no bind attempted."
+				% McpClientConfigurator.SERVER_HTTP_PORT
+		)
+	else:
+		for line in output:
+			_crash_output.add_text(line + "\n")
 
 
 func _update_log() -> void:

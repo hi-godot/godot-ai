@@ -18,6 +18,15 @@ const MANAGED_SERVER_VERSION_SETTING := "godot_ai/managed_server_version"
 ## See issue for #154-era Windows update friction.
 const SERVER_PID_FILE := "user://godot_ai_server.pid"
 
+## How long we keep the spawned server's stdout/stderr pipes open and poll
+## for early exit. If the process is still alive when this expires, we
+## stop watching and close pipes. Crashes after this point get caught by
+## the usual disconnect flow.
+const SERVER_WATCH_MS := 30 * 1000
+## Only keep the last N captured lines — more than enough for a Python
+## traceback, small enough to render comfortably in the dock.
+const SERVER_OUTPUT_MAX_LINES := 40
+
 var _connection: Connection
 var _dispatcher: McpDispatcher
 var _log_buffer: McpLogBuffer
@@ -27,6 +36,21 @@ var _server_pid := -1
 var _handlers: Array = []  # prevent GC of RefCounted handlers
 var _debugger_plugin: McpDebuggerPlugin
 static var _server_started_this_session := false  # guard against re-entrant spawns
+
+## Captured state for server-spawn supervision (see _start_server_watch).
+## Populated only when WE spawn the process — adopt / foreign-server
+## branches leave these empty.
+var _server_stdio: FileAccess = null
+var _server_stderr: FileAccess = null
+var _server_spawn_ms: int = 0
+var _server_output: PackedStringArray = PackedStringArray()
+var _server_crashed: bool = false
+var _server_exit_ms: int = 0
+var _server_watch_timer: Timer = null
+## True when the spawn path detected Windows had excluded our port BEFORE
+## we tried to bind. Dock surfaces a pointed hint in this case rather
+## than waiting for the inevitable WinError 10013.
+var _server_port_excluded: bool = false
 
 
 func _enter_tree() -> void:
@@ -367,8 +391,27 @@ func _start_server() -> void:
 	## read and act on.
 	_clear_pid_file()
 
-	_server_pid = OS.create_process(cmd, args)
+	## Proactive Windows port-reservation check. WinError 10013 surfaces as
+	## an otherwise-silent spawn-then-exit because nothing owns the port;
+	## netstat shows nothing and the dock's reconnect spinner climbs
+	## forever. Catch it before we even try. See issue #146.
+	_server_port_excluded = WindowsPortReservation.is_port_excluded(port)
+	if _server_port_excluded:
+		push_warning("MCP | port %d is reserved by Windows (Hyper-V / WSL2 / Docker)" % port)
+
+	## execute_with_pipe captures stdout+stderr so early-exit crashes
+	## surface in the dock instead of vanishing into /dev/null. If the
+	## process survives the startup grace window we close the pipes in
+	## _stop_server_watch() — the typical case.
+	var result := OS.execute_with_pipe(cmd, args)
+	_server_pid = int(result.get("pid", 0)) if result is Dictionary else 0
 	if _server_pid > 0:
+		_server_stdio = result.get("stdio") as FileAccess
+		_server_stderr = result.get("stderr") as FileAccess
+		_server_spawn_ms = Time.get_ticks_msec()
+		_server_crashed = false
+		_server_exit_ms = 0
+		_server_output = PackedStringArray()
 		_server_started_this_session = true
 		## Record the launcher PID immediately so a same-session
 		## prepare_for_update_reload has something to kill. On the next
@@ -376,8 +419,92 @@ func _start_server() -> void:
 		## to the actual port owner (uvx's child).
 		_write_managed_server_record(_server_pid, current_version)
 		print("MCP | started server (PID %d, v%s): %s %s" % [_server_pid, current_version, cmd, " ".join(args)])
+		_start_server_watch()
 	else:
 		push_warning("MCP | failed to start server")
+
+
+## Start a 1s-tick timer that watches the spawned server for up to
+## SERVER_WATCH_MS. If the process dies inside the window we drain the
+## captured pipes and mark the server as crashed so the dock can surface
+## what went wrong. After the window expires we close the pipes so they
+## don't pin file descriptors or fill their kernel buffers. See #146.
+func _start_server_watch() -> void:
+	_stop_server_watch()
+	_server_watch_timer = Timer.new()
+	_server_watch_timer.wait_time = 1.0
+	_server_watch_timer.one_shot = false
+	_server_watch_timer.timeout.connect(_check_server_health)
+	add_child(_server_watch_timer)
+	_server_watch_timer.start()
+
+
+func _stop_server_watch() -> void:
+	if _server_watch_timer != null:
+		_server_watch_timer.stop()
+		_server_watch_timer.queue_free()
+		_server_watch_timer = null
+	_server_stdio = null
+	_server_stderr = null
+
+
+func _check_server_health() -> void:
+	if _server_pid <= 0:
+		_stop_server_watch()
+		return
+	if not _pid_alive(_server_pid) and not _server_crashed:
+		_server_crashed = true
+		_server_exit_ms = Time.get_ticks_msec() - _server_spawn_ms
+		_drain_server_output()
+		_log_buffer.log("server exited after %dms" % _server_exit_ms)
+		for line in _server_output:
+			_log_buffer.log("  | %s" % line)
+		_stop_server_watch()
+		return
+	if Time.get_ticks_msec() - _server_spawn_ms >= SERVER_WATCH_MS:
+		## Server survived startup — stop watching and release the pipes
+		## so the kernel can reclaim the FDs. Mid-session crashes after
+		## this point surface via the WebSocket disconnect path instead.
+		_stop_server_watch()
+
+
+## Drain captured stdout+stderr into _server_output. Only safe to call
+## once the child has exited — get_as_text blocks until EOF. Keeps the
+## last SERVER_OUTPUT_MAX_LINES lines so the dock can render without
+## overflowing.
+func _drain_server_output() -> void:
+	var lines := PackedStringArray()
+	var pipes: Array[FileAccess] = [_server_stdio, _server_stderr]
+	for f in pipes:
+		if f == null:
+			continue
+		var text: String = f.get_as_text()
+		for line in text.split("\n"):
+			var trimmed: String = line.strip_edges(false, true)
+			if not trimmed.is_empty():
+				lines.append(trimmed)
+	if lines.size() > SERVER_OUTPUT_MAX_LINES:
+		lines = lines.slice(lines.size() - SERVER_OUTPUT_MAX_LINES)
+	_server_output = lines
+
+
+## Snapshot of spawn-supervision state for the dock. Returns an empty
+## Dictionary-shaped payload in the adopt / foreign-server branches
+## where we didn't spawn anything ourselves.
+func get_server_status() -> Dictionary:
+	var port := McpClientConfigurator.SERVER_HTTP_PORT
+	var hint := ""
+	if _server_port_excluded:
+		hint = WindowsPortReservation.port_excluded_hint(port)
+	elif _server_crashed:
+		hint = WindowsPortReservation.hint_from_output(_server_output, port)
+	return {
+		"crashed": _server_crashed,
+		"output": _server_output,
+		"exit_ms": _server_exit_ms,
+		"port_excluded": _server_port_excluded,
+		"hint": hint,
+	}
 
 
 func _is_port_in_use(port: int) -> bool:
@@ -514,6 +641,7 @@ static func _clear_pid_file() -> void:
 
 
 func _stop_server() -> void:
+	_stop_server_watch()
 	if _server_pid <= 0:
 		return
 	## Kill both the process we tracked and the real Python PID if they
