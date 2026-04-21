@@ -685,6 +685,8 @@ class StubClient:
                 "format": "png",
                 "image_base64": img_b64,
             }
+            if params.get("source") == "cinematic":
+                result["camera_path"] = "/Main/Camera3D"
             if params.get("view_target"):
                 result["view_target"] = params["view_target"]
                 result["view_target_count"] = len(
@@ -2955,6 +2957,23 @@ async def test_editor_screenshot_handler_fov_passes_param():
     )
     assert client.calls[-1]["params"]["fov"] == 30.0
     assert result["fov"] == 30.0
+
+
+async def test_editor_screenshot_handler_cinematic_source():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await editor_handlers.editor_screenshot(runtime, source="cinematic", include_image=False)
+    assert client.calls[-1]["params"]["source"] == "cinematic"
+
+
+async def test_editor_screenshot_handler_cinematic_surfaces_camera_path():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await editor_handlers.editor_screenshot(
+        runtime, source="cinematic", include_image=False
+    )
+    assert result["source"] == "cinematic"
+    assert result["camera_path"] == "/Main/Camera3D"
 
 
 # ---------------------------------------------------------------------------

@@ -385,6 +385,104 @@ func test_screenshot_bogus_source() -> void:
 	assert_contains(result.error.message, "Invalid source")
 
 
+func test_screenshot_bogus_source_message_lists_cinematic() -> void:
+	## Make sure the error message surfaces the cinematic option alongside
+	## the two older sources — agents discovering the tool via errors
+	## should learn about the new source without reading docs.
+	var result := _handler.take_screenshot({"source": "bogus"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "cinematic")
+
+
+# ----- source="cinematic" (issue #143) -----
+
+static func _find_current_camera_3d(scene_root: Node) -> Camera3D:
+	## Local helper: walk the scene and return the first Camera3D with
+	## is_current()=true. Mirrors the lookup the cinematic handler does.
+	## Kept as a test-only helper so the production code stays free of
+	## single-call utilities.
+	for cam in CameraHandler._list_cameras_in_scene(scene_root, "3d"):
+		if cam.is_current():
+			return cam
+	return null
+
+
+func test_screenshot_cinematic_no_scene_errors() -> void:
+	## With no scene loaded there is nowhere to host the SubViewport. We
+	## can't easily close the currently-open scene from a test, so this
+	## test only executes when a scene is not open (skip otherwise).
+	if EditorInterface.get_edited_scene_root() != null:
+		skip("A scene is open; the no-scene branch requires an empty editor")
+		return
+	var result := _handler.take_screenshot({"source": "cinematic"})
+	assert_is_error(result, McpErrorCodes.EDITOR_NOT_READY)
+
+
+func test_screenshot_cinematic_no_active_camera_errors() -> void:
+	## main.tscn has /Main/Camera3D with current=true — temporarily flip
+	## it off so the handler must report the empty-active-camera case.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene open")
+		return
+	var existing := _find_current_camera_3d(scene_root)
+	if existing == null:
+		## Already in the shape we want; just call the handler.
+		var r := _handler.take_screenshot({"source": "cinematic"})
+		assert_is_error(r, McpErrorCodes.INVALID_PARAMS)
+		assert_contains(r.error.message, "current=true")
+		return
+	existing.current = false
+	var result := _handler.take_screenshot({"source": "cinematic"})
+	existing.current = true
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "current=true")
+
+
+func test_screenshot_cinematic_returns_camera_path() -> void:
+	## When a Camera3D with current=true is present, the response must
+	## surface its scene path so callers know which camera was picked.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene open")
+		return
+	var cam := _find_current_camera_3d(scene_root)
+	if cam == null:
+		skip("Scene has no Camera3D with current=true")
+		return
+	var expected_path := ScenePath.from_node(cam, scene_root)
+	var result := _handler.take_screenshot({"source": "cinematic"})
+	if not result.has("data"):
+		## Headless render can fail to produce an image; error path is
+		## acceptable so long as it's INTERNAL_ERROR with a clear msg
+		## (INVALID_PARAMS was already covered above).
+		assert_is_error(result, McpErrorCodes.INTERNAL_ERROR)
+		return
+	assert_eq(result.data.source, "cinematic")
+	assert_eq(result.data.camera_path, expected_path)
+	assert_has_key(result.data, "image_base64")
+	assert_true(result.data.width > 0, "Cinematic image should have a positive width")
+	assert_true(result.data.height > 0, "Cinematic image should have a positive height")
+
+
+func test_screenshot_cinematic_does_not_pollute_scene_tree() -> void:
+	## The throwaway SubViewport must be freed by the time the handler
+	## returns — otherwise every screenshot accretes a child node and
+	## eventually dirties the saved scene.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene open")
+		return
+	var cam := _find_current_camera_3d(scene_root)
+	if cam == null:
+		skip("Scene has no Camera3D with current=true")
+		return
+	var before := scene_root.get_child_count()
+	_handler.take_screenshot({"source": "cinematic"})
+	var after := scene_root.get_child_count()
+	assert_eq(after, before, "SubViewport must not survive the call")
+
+
 # ----- GameLogBuffer (issue #73) -----
 
 func test_game_log_buffer_append_and_get_range() -> void:

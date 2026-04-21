@@ -227,6 +227,12 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 			viewport = EditorInterface.get_editor_viewport_3d()
 			if viewport == null:
 				return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No 3D viewport available")
+		"cinematic":
+			## Render through the scene's `current=true` Camera3D into a
+			## throwaway SubViewport so the output shows the scene as the
+			## game camera sees it — full environment, no editor gizmos,
+			## no grid, no selection outlines — without running the game.
+			return _take_cinematic_screenshot(max_resolution)
 		"game":
 			if not EditorInterface.is_playing_scene():
 				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Game is not running — use source='viewport' or start the project first")
@@ -244,7 +250,7 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 			_debugger_plugin.request_game_screenshot(request_id, max_resolution, _connection)
 			return McpDispatcher.DEFERRED_RESPONSE
 		_:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid source '%s' — use 'viewport' or 'game'" % source)
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid source '%s' — use 'viewport', 'cinematic', or 'game'" % source)
 
 	## Handle view_target: temporarily reposition the editor's own camera to
 	## frame one or more target nodes, force a render, capture, then restore.
@@ -393,6 +399,93 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to capture image from %s" % source)
 
 	return _finalize_image(image, source, max_resolution)
+
+
+## Capture the scene as the active Camera3D sees it, without running the game.
+## Spawns a throwaway SubViewport under the scene root so it inherits the
+## scene's World3D (environment, lighting, sky). A Camera3D mirroring the
+## scene camera's render properties is set current on the SubViewport, one
+## frame is force-drawn, and the image is grabbed before teardown.
+func _take_cinematic_screenshot(max_resolution: int) -> Dictionary:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+
+	var scene_cam: Camera3D = null
+	for cam in CameraHandler._list_cameras_in_scene(scene_root, "3d"):
+		if cam.is_current():
+			scene_cam = cam
+			break
+	if scene_cam == null:
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"No Camera3D with current=true in scene — mark one as current or use source='viewport'",
+		)
+
+	var subviewport := SubViewport.new()
+	subviewport.size = _cinematic_viewport_size(max_resolution)
+	subviewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+	## own_world_3d=false inherits the scene's World3D so WorldEnvironment,
+	## DirectionalLight3D, and reflection probes apply to the render.
+	subviewport.own_world_3d = false
+	## Transient child — never set_owner, so the node stays out of the saved
+	## scene even if the editor autosaves mid-capture.
+	scene_root.add_child(subviewport)
+
+	var cam_copy := Camera3D.new()
+	subviewport.add_child(cam_copy)
+	cam_copy.fov = scene_cam.fov
+	cam_copy.near = scene_cam.near
+	cam_copy.far = scene_cam.far
+	cam_copy.projection = scene_cam.projection
+	cam_copy.size = scene_cam.size
+	cam_copy.frustum_offset = scene_cam.frustum_offset
+	cam_copy.h_offset = scene_cam.h_offset
+	cam_copy.v_offset = scene_cam.v_offset
+	cam_copy.keep_aspect = scene_cam.keep_aspect
+	cam_copy.cull_mask = scene_cam.cull_mask
+	cam_copy.environment = scene_cam.environment
+	cam_copy.attributes = scene_cam.attributes
+	cam_copy.compositor = scene_cam.compositor
+	## global_transform must be set after add_child so the basis resolves
+	## against the tree, not the parent-less identity transform.
+	cam_copy.global_transform = scene_cam.global_transform
+	cam_copy.current = true
+
+	RenderingServer.force_draw(false)
+
+	var image: Image = subviewport.get_texture().get_image()
+
+	## Immediate free (not queue_free) so a burst of cinematic calls can't
+	## stack pending-delete SubViewports under scene_root between frames.
+	scene_root.remove_child(subviewport)
+	subviewport.free()
+
+	if image == null or image.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Cinematic render produced an empty image")
+
+	var result := _finalize_image(image, "cinematic", max_resolution)
+	result.data["camera_path"] = ScenePath.from_node(scene_cam, scene_root)
+	return result
+
+
+## Render at the project's configured viewport aspect so the scene camera's
+## `keep_aspect` framing matches what the game would show. Scaled down to
+## `max_resolution` up front to avoid rendering pixels that `_finalize_image`
+## would just Lanczos-downscale away.
+static func _cinematic_viewport_size(max_resolution: int) -> Vector2i:
+	var w := int(ProjectSettings.get_setting("display/window/size/viewport_width", 1280))
+	var h := int(ProjectSettings.get_setting("display/window/size/viewport_height", 720))
+	if w <= 0 or h <= 0:
+		w = 1280
+		h = 720
+	if max_resolution > 0:
+		var longest := maxi(w, h)
+		if longest > max_resolution:
+			var scale := float(max_resolution) / float(longest)
+			w = maxi(1, int(w * scale))
+			h = maxi(1, int(h * scale))
+	return Vector2i(w, h)
 
 
 func _finalize_image(image: Image, source: String, max_resolution: int) -> Dictionary:
