@@ -79,6 +79,23 @@ static func _is_current(cam: Node) -> bool:
 # unmarking previously-current siblings of the same class so a single
 # Ctrl-Z reverts the whole switch.
 #
+# Both DO and UNDO route through `_apply_make_current` / `_apply_clear_current`
+# on the handler itself rather than calling Camera.make_current() directly.
+# The helpers do the make_current (or clear_current) call plus a one-shot
+# sync retry when the viewport hasn't yet reflected the change — macOS
+# headless occasionally reports `is_current() == false` immediately after
+# a committed make_current (observed CI run 24682342469) and symmetrically
+# still reports the displaced camera as current immediately after an undo
+# (observed CI runs 24682342469, 24692250322, 24696571517 — tracked in #140).
+# Registering the retry inside the undo action makes the undo path
+# race-proof without a separate post-commit hook.
+#
+# Because those callables bind to `self` (a RefCounted handler, not a scene
+# node), every action that calls this helper must pin its history via
+# `create_action(name, MERGE_DISABLE, scene_root)` — otherwise the
+# handler-bound ops land in GLOBAL_HISTORY while the scene-node ops land in
+# the scene's history, and a single editor_undo reverts only half the action.
+#
 # Both DO and UNDO use a single make_current() call — never a
 # clear_current() + make_current() pair. make_current() takes over the
 # viewport slot atomically (Godot enforces one current camera per class
@@ -95,25 +112,35 @@ func _add_make_current_to_action(node: Node, type_str: String, scene_root: Node)
 		if _is_current(cam):
 			prev_current = cam
 			break
-	_undo_redo.add_do_method(node, "make_current")
+	_undo_redo.add_do_method(self, "_apply_make_current", node)
 	if prev_current != null:
-		_undo_redo.add_undo_method(prev_current, "make_current")
+		_undo_redo.add_undo_method(self, "_apply_make_current", prev_current)
 	else:
-		_undo_redo.add_undo_method(node, "clear_current")
+		_undo_redo.add_undo_method(self, "_apply_clear_current", node)
 
 
-# Call AFTER commit_action() whenever the action registered a make_current DO.
-# Re-applies make_current() outside the action if the viewport doesn't yet
-# report the node as current. Idempotent — when the DO took effect normally
-# (the common path), this is a no-op. Closes a macOS-headless race where
-# `is_current()` can return false immediately after a committed
-# add_child → make_current sequence, leaving the handler's response
-# (current=true) out of sync with the viewport (observed CI run 24682342469).
-func _verify_current_after_commit(node: Node) -> void:
-	if node == null or not node.is_inside_tree():
+# Apply make_current on `cam` with a one-shot retry. Registered as the
+# do/undo callable by `_add_make_current_to_action`. See that function's
+# comment for why retry-in-action replaces the old post-commit-only hook.
+# Safe against a freed camera node — short-circuits if the node is gone
+# or not in the tree.
+func _apply_make_current(cam: Node) -> void:
+	if cam == null or not is_instance_valid(cam) or not cam.is_inside_tree():
 		return
-	if not _is_current(node):
-		node.make_current()
+	cam.make_current()
+	if not _is_current(cam):
+		cam.make_current()
+
+
+# Symmetric counterpart to `_apply_make_current` for the "no previous
+# current camera" branch (create_camera with make_current=true and no
+# sibling was current). clear_current errors in Godot if called on a
+# non-current camera, so guard on is_current first.
+func _apply_clear_current(cam: Node) -> void:
+	if cam == null or not is_instance_valid(cam) or not cam.is_inside_tree():
+		return
+	if _is_current(cam):
+		cam.clear_current()
 
 
 # ============================================================================
@@ -148,7 +175,10 @@ func create_camera(params: Dictionary) -> Dictionary:
 	if not node_name.is_empty():
 		node.name = node_name
 
-	_undo_redo.create_action("MCP: Create %s '%s'" % [_VALID_TYPES[type_str], node.name])
+	_undo_redo.create_action(
+		"MCP: Create %s '%s'" % [_VALID_TYPES[type_str], node.name],
+		UndoRedo.MERGE_DISABLE, scene_root
+	)
 	_undo_redo.add_do_method(parent, "add_child", node, true)
 	_undo_redo.add_do_method(node, "set_owner", scene_root)
 	_undo_redo.add_do_reference(node)
@@ -158,8 +188,6 @@ func create_camera(params: Dictionary) -> Dictionary:
 		_add_make_current_to_action(node, type_str, scene_root)
 	_undo_redo.add_undo_method(parent, "remove_child", node)
 	_undo_redo.commit_action()
-	if make_current:
-		_verify_current_after_commit(node)
 
 	return {
 		"data": {
@@ -222,23 +250,22 @@ func configure(params: Dictionary) -> Dictionary:
 		coerced[prop_name] = coerce_result.value
 		old_values[prop_name] = node.get(prop_name)
 
-	_undo_redo.create_action("MCP: Configure camera %s" % node.name)
+	_undo_redo.create_action(
+		"MCP: Configure camera %s" % node.name,
+		UndoRedo.MERGE_DISABLE, scene_root
+	)
 	for prop_name in coerced:
 		_undo_redo.add_do_property(node, prop_name, coerced[prop_name])
 		_undo_redo.add_undo_property(node, prop_name, old_values[prop_name])
-	var verify_current_after := false
 	if current_request != null:
 		var want_on: bool = bool(current_request)
 		var was_on: bool = _is_current(node)
 		if want_on and not was_on:
 			_add_make_current_to_action(node, type_str, scene_root)
-			verify_current_after = true
 		elif not want_on and was_on:
-			_undo_redo.add_do_method(node, "clear_current")
-			_undo_redo.add_undo_method(node, "make_current")
+			_undo_redo.add_do_method(self, "_apply_clear_current", node)
+			_undo_redo.add_undo_method(self, "_apply_make_current", node)
 	_undo_redo.commit_action()
-	if verify_current_after:
-		_verify_current_after_commit(node)
 
 	var applied: Array[String] = []
 	var serialized: Dictionary = {}
@@ -663,7 +690,10 @@ func apply_preset(params: Dictionary) -> Dictionary:
 		node.set(prop_name, coerce_result.value)
 		applied.append(prop_name)
 
-	_undo_redo.create_action("MCP: Apply camera preset %s" % preset_name)
+	_undo_redo.create_action(
+		"MCP: Apply camera preset %s" % preset_name,
+		UndoRedo.MERGE_DISABLE, scene_root
+	)
 	_undo_redo.add_do_method(parent, "add_child", node, true)
 	_undo_redo.add_do_method(node, "set_owner", scene_root)
 	_undo_redo.add_do_reference(node)
@@ -671,8 +701,6 @@ func apply_preset(params: Dictionary) -> Dictionary:
 		_add_make_current_to_action(node, type_str, scene_root)
 	_undo_redo.add_undo_method(parent, "remove_child", node)
 	_undo_redo.commit_action()
-	if make_current:
-		_verify_current_after_commit(node)
 
 	return {
 		"data": {

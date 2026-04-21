@@ -209,11 +209,10 @@ func test_configure_current_sibling_unmark_single_undo() -> void:
 
 	# One undo reverts both. Use editor_undo() so we explicitly target the
 	# scene's UndoRedo — EditorUndoRedoManager.undo() picks "newest" across
-	# histories by timestamp, which ties on fast runs (seen flaking on macOS
-	# headless CI).
+	# histories by timestamp, which ties on fast runs.
 	var did_undo := editor_undo(_undo_redo)
 	assert_true(did_undo, "editor_undo returned false — no action was undone")
-	# Diagnostic detail if this ever flakes again: report viewport state and
+	# Diagnostic detail if this ever regresses: report viewport state and
 	# tree membership so we can tell a handler bug from a test-harness bug.
 	var viewport := scene_root.get_viewport()
 	var viewport_cam: Variant = viewport.get_camera_2d() if viewport != null else null
