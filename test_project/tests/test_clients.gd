@@ -154,6 +154,191 @@ func test_uvx_server_command_uses_exact_pin_not_tilde() -> void:
 		assert_true(has_exact_pin, "uvx tier command should contain godot-ai==<plugin_version>; got %s" % str(cmd))
 
 
+# ----- mode override + symlink safety -----
+
+## Mode override has two sources (EditorSetting wins, env var is fallback).
+## These tests sit on isolated env-var territory — each one clears the
+## EditorSetting first so a stale UI selection in the editor running the
+## tests can't make the env-var path invisible. Any real UI selection is
+## saved + restored around the test body.
+
+func _clear_mode_override_setting() -> Variant:
+	## Save the current EditorSetting (if any), clear it, return the prior
+	## value so the test can restore. Returns null when the setting was
+	## unset entirely. Tests need the setting empty so the env var — which
+	## they DO control — takes effect.
+	var es := EditorInterface.get_editor_settings()
+	if es == null:
+		return null
+	var prior: Variant = null
+	if es.has_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING):
+		prior = es.get_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING)
+	es.set_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING, "")
+	return prior
+
+
+func _restore_mode_override_setting(prior: Variant) -> void:
+	var es := EditorInterface.get_editor_settings()
+	if es == null:
+		return
+	es.set_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING, prior if prior != null else "")
+
+
+func test_mode_override_returns_empty_when_unset() -> void:
+	var prior_setting: Variant = _clear_mode_override_setting()
+	var prior_env := OS.get_environment("GODOT_AI_MODE")
+	OS.unset_environment("GODOT_AI_MODE")
+	assert_eq(McpClientConfigurator.mode_override(), "")
+	if not prior_env.is_empty():
+		OS.set_environment("GODOT_AI_MODE", prior_env)
+	_restore_mode_override_setting(prior_setting)
+
+
+func test_mode_override_normalises_case_and_whitespace() -> void:
+	var prior_setting: Variant = _clear_mode_override_setting()
+	var prior_env := OS.get_environment("GODOT_AI_MODE")
+	OS.set_environment("GODOT_AI_MODE", "  USER  ")
+	assert_eq(McpClientConfigurator.mode_override(), "user")
+	OS.set_environment("GODOT_AI_MODE", "Dev")
+	assert_eq(McpClientConfigurator.mode_override(), "dev")
+	OS.set_environment("GODOT_AI_MODE", "whatever")
+	assert_eq(McpClientConfigurator.mode_override(), "", "unknown values fall back to auto")
+	if prior_env.is_empty():
+		OS.unset_environment("GODOT_AI_MODE")
+	else:
+		OS.set_environment("GODOT_AI_MODE", prior_env)
+	_restore_mode_override_setting(prior_setting)
+
+
+func test_is_dev_checkout_forced_user_mode() -> void:
+	## Without this override, the .venv-next-door heuristic would report
+	## true in any worktree that inherits the repo's .venv, making the
+	## update-check path untestable from dev. With the override, the flow
+	## can be exercised end-to-end.
+	var prior_setting: Variant = _clear_mode_override_setting()
+	var prior_env := OS.get_environment("GODOT_AI_MODE")
+	OS.set_environment("GODOT_AI_MODE", "user")
+	assert_false(McpClientConfigurator.is_dev_checkout(), "GODOT_AI_MODE=user must force user mode")
+	if prior_env.is_empty():
+		OS.unset_environment("GODOT_AI_MODE")
+	else:
+		OS.set_environment("GODOT_AI_MODE", prior_env)
+	_restore_mode_override_setting(prior_setting)
+
+
+func test_is_dev_checkout_forced_dev_mode() -> void:
+	var prior_setting: Variant = _clear_mode_override_setting()
+	var prior_env := OS.get_environment("GODOT_AI_MODE")
+	OS.set_environment("GODOT_AI_MODE", "dev")
+	assert_true(McpClientConfigurator.is_dev_checkout(), "GODOT_AI_MODE=dev must force dev mode")
+	if prior_env.is_empty():
+		OS.unset_environment("GODOT_AI_MODE")
+	else:
+		OS.set_environment("GODOT_AI_MODE", prior_env)
+	_restore_mode_override_setting(prior_setting)
+
+
+func test_addons_dir_is_symlink_returns_bool_without_crashing() -> void:
+	## Smoke test: the real value depends on how the test_project is laid
+	## out on the current machine. Inside the canonical worktree the addons
+	## dir is a symlink into plugin/addons/godot_ai, so we expect true; in
+	## a non-symlink layout (e.g. after a zip extract) the call must still
+	## return without crashing. The typed return forces a bool result.
+	var result: bool = McpClientConfigurator.addons_dir_is_symlink()
+	assert_true(result == true or result == false)
+
+
+func test_dropdown_flip_propagates_to_is_dev_checkout() -> void:
+	## End-to-end mechanism: flipping the dropdown value (via EditorSetting)
+	## must flip `is_dev_checkout()` regardless of what the .venv heuristic
+	## would otherwise return. This is the concrete chain the install label
+	## / update banner / `_check_for_updates` consume. The heuristic result
+	## varies by env (dev worktree has a .venv; CI uses system Python with
+	## no .venv in the repo root), so this test only asserts the overrides
+	## — both flips must work whether auto resolves to dev or user.
+	var es := EditorInterface.get_editor_settings()
+	if es == null:
+		skip("EditorInterface.get_editor_settings() unavailable in test env")
+		return
+	var had_setting := es.has_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING)
+	var prior_setting: Variant = es.get_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING) if had_setting else null
+	var prior_env := OS.get_environment("GODOT_AI_MODE")
+	OS.unset_environment("GODOT_AI_MODE")
+
+	# Dropdown=user → is_dev_checkout false (overrides heuristic in dev env,
+	# matches heuristic in CI — either way, must be false).
+	es.set_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING, "user")
+	assert_false(McpClientConfigurator.is_dev_checkout(), "Dropdown='user' must force is_dev_checkout=false")
+
+	# Dropdown=dev → is_dev_checkout true (matches heuristic in dev env,
+	# overrides in CI — either way, must be true).
+	es.set_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING, "dev")
+	assert_true(McpClientConfigurator.is_dev_checkout(), "Dropdown='dev' must force is_dev_checkout=true")
+
+	# Restore.
+	if had_setting:
+		es.set_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING, prior_setting)
+	else:
+		es.set_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING, "")
+	if not prior_env.is_empty():
+		OS.set_environment("GODOT_AI_MODE", prior_env)
+
+
+func test_editor_setting_beats_env_var() -> void:
+	## When both an EditorSetting and the env var are set, the EditorSetting
+	## wins — the UI dropdown always reflects the user's latest explicit
+	## choice even if a stale env var was inherited at launch.
+	var es := EditorInterface.get_editor_settings()
+	if es == null:
+		skip("EditorInterface.get_editor_settings() unavailable in test env")
+		return
+	var had_setting := es.has_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING)
+	var prior_setting: Variant = es.get_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING) if had_setting else null
+	var prior_env := OS.get_environment("GODOT_AI_MODE")
+
+	OS.set_environment("GODOT_AI_MODE", "dev")
+	es.set_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING, "user")
+	assert_eq(McpClientConfigurator.mode_override(), "user", "EditorSetting=user must override env=dev")
+
+	es.set_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING, "")
+	assert_eq(McpClientConfigurator.mode_override(), "dev", "Empty EditorSetting falls through to env var")
+
+	# Restore.
+	if had_setting:
+		es.set_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING, prior_setting)
+	else:
+		# No cross-platform "erase" on EditorSettings — leave an empty string
+		# which `mode_override()` treats identically to unset.
+		es.set_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING, "")
+	if prior_env.is_empty():
+		OS.unset_environment("GODOT_AI_MODE")
+	else:
+		OS.set_environment("GODOT_AI_MODE", prior_env)
+
+
+func test_is_symlink_detects_real_symlink() -> void:
+	## Create a temp symlink under user:// and assert the helper reports it
+	## as one. Skipped on Windows where `ln -s` requires admin privileges
+	## and the fsutil path isn't exercisable in a unit test.
+	if OS.get_name() == "Windows":
+		skip("symlink creation requires admin on Windows")
+		return
+	var target := _scratch_dir.path_join("symlink_target.txt")
+	var link := _scratch_dir.path_join("symlink_source")
+	_remove_if_exists(target)
+	_remove_if_exists(link)
+	var f := FileAccess.open(target, FileAccess.WRITE)
+	f.store_string("hello")
+	f.close()
+	var exit := OS.execute("ln", ["-s", target, link], [], true)
+	assert_eq(exit, 0, "ln -s must succeed in writable user://")
+	assert_true(McpClientConfigurator._is_symlink(link), "_is_symlink should detect freshly-created symlink")
+	assert_false(McpClientConfigurator._is_symlink(target), "_is_symlink should reject regular file")
+	# Cleanup
+	DirAccess.remove_absolute(link)
+	DirAccess.remove_absolute(target)
+
+
 # ----- path template -----
 
 func test_path_template_expands_home() -> void:

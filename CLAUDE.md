@@ -119,6 +119,16 @@ This bumps `plugin.cfg` + `pyproject.toml`, commits, tags, and pushes. The `rele
 
 The dock checks the GitHub releases API on startup. If a newer version exists, a yellow banner appears with an "Update" button that downloads the release ZIP, extracts it over the current `addons/godot_ai/`, and reloads the plugin. The server process is unaffected.
 
+In dev checkouts the check is skipped: `is_dev_checkout()` detects a nearby `.venv` and short-circuits to avoid offering a path that would overwrite tracked source (the addons dir is a symlink into `plugin/`). Three override knobs let you exercise the update flow without leaving the repo (resolved in priority order):
+
+1. **Dock dropdown** (`Mode override` in the dev-section of the MCP dock) — visible when `Developer mode` is on. Persists via EditorSetting `godot_ai/mode_override`. Choices: `Auto` / `Force user` / `Force dev`. Changing the dropdown immediately re-runs the update check so you can flip to "Force user" and watch the yellow banner appear in the same frame.
+2. **`GODOT_AI_MODE` env var** — fallback for CLI launches and CI. Values: `user` / `dev`. Only takes effect when the dock dropdown is `Auto` (the UI selection always wins).
+3. Neither set → the `.venv`-proximity heuristic runs as before.
+
+When either override reports `user`, the yellow update banner's label includes `(forced)` so testers don't forget they're in override mode.
+
+`_install_update` keeps a physical data-safety guard (`addons_dir_is_symlink()`) independent of the mode override: even in forced-user mode the self-install bails if `res://addons/godot_ai` is a symlink. To actually test the end-to-end extract path, unpack a release zip over a plain-directory copy of the addons dir (or test from a standalone project outside the dev tree).
+
 ## Testing
 
 ### Python tests
