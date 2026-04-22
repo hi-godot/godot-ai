@@ -668,14 +668,48 @@ func _find_pid_on_port(port: int) -> int:
 		if exit_code != 0 or output.is_empty():
 			return 0
 		return _parse_windows_netstat_pid(str(output[0]), port)
-	## POSIX: `lsof -ti:<port> -sTCP:LISTEN` returns only the PID.
+	## POSIX: `lsof -ti:<port> -sTCP:LISTEN` returns only the PID, but can
+	## emit multiple (newline-separated) — e.g. a `uvicorn --reload` dev
+	## server has both a reloader parent and a worker child bound to the
+	## same port. Return the first valid pid so the kill path at least hits
+	## SOMEONE; `_find_all_pids_on_port` covers the full-sweep kill case.
 	var exit_code := OS.execute("lsof", ["-ti:%d" % port, "-sTCP:LISTEN"], output, true)
 	if exit_code != 0 or output.is_empty():
 		return 0
-	var pid_str := str(output[0]).strip_edges()
-	if pid_str.is_empty() or not pid_str.is_valid_int():
-		return 0
-	return int(pid_str)
+	var pids := _parse_lsof_pids(str(output[0]))
+	return pids[0] if not pids.is_empty() else 0
+
+
+## POSIX-only sibling of `_find_pid_on_port` — returns every PID
+## bound LISTEN on `port`, so callers that need to tear down a process
+## group (e.g. `force_restart_server`) can reach both the reloader
+## parent and the worker. Windows netstat parser only ever returns one
+## LISTENER row per port so callers can skip this there.
+func _find_all_pids_on_port(port: int) -> Array[int]:
+	if OS.get_name() == "Windows":
+		var pids: Array[int] = []
+		var one := _find_pid_on_port(port)
+		if one > 0:
+			pids.append(one)
+		return pids
+	var output: Array = []
+	var exit_code := OS.execute("lsof", ["-ti:%d" % port, "-sTCP:LISTEN"], output, true)
+	if exit_code != 0 or output.is_empty():
+		var empty: Array[int] = []
+		return empty
+	return _parse_lsof_pids(str(output[0]))
+
+
+## Pure-parser for the `lsof -ti...` output shape: zero or more newline-
+## separated decimal PIDs. Extracted so tests can drive the dual-pid
+## (reloader parent + worker) case without spawning a real uvicorn.
+static func _parse_lsof_pids(raw: String) -> Array[int]:
+	var pids: Array[int] = []
+	for line in raw.strip_edges().split("\n", false):
+		var stripped := line.strip_edges()
+		if stripped.is_valid_int():
+			pids.append(int(stripped))
+	return pids
 
 
 ## Find the managed server PID deterministically: prefer the pid-file
@@ -935,9 +969,13 @@ func prepare_for_update_reload() -> void:
 ## server outlives every plugin reload.
 func force_restart_server() -> void:
 	var port := McpClientConfigurator.http_port()
-	var owner := _find_managed_pid(port)
-	if owner > 0:
-		OS.kill(owner)
+	## Kill every LISTENER on the port, not just the first one. A dev
+	## server run via `uvicorn --reload` owns port 8000 through both a
+	## reloader parent AND a worker child — killing only one (or zero,
+	## if the single-pid parse fell over on multi-line lsof output) leaves
+	## the other holding the port past `_wait_for_port_free`'s window.
+	for pid in _find_all_pids_on_port(port):
+		OS.kill(pid)
 	_clear_managed_server_record()
 	_clear_pid_file()
 	_wait_for_port_free(port, 5.0)

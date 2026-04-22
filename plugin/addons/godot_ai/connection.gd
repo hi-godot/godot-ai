@@ -67,6 +67,7 @@ func _process(delta: float) -> void:
 		WebSocketPeer.STATE_CLOSED:
 			if _connected:
 				_connected = false
+				_clear_on_disconnect()
 				var code := _peer.get_close_code()
 				log_buffer.log("disconnected (code %d)" % code)
 			_reconnect_timer -= delta
@@ -87,6 +88,15 @@ func disconnect_from_server() -> void:
 	if _connected:
 		_peer.close(1000, "Plugin unloading")
 		_connected = false
+
+
+## Reset per-connection state that was filled in by the previous server
+## and must NOT bleed into the next one. `force_restart_server` swaps
+## servers without reloading the plugin, so without this reset the dock
+## would keep showing the killed server's version until the next ack.
+## Also fires on plain reconnect-loop drops — correct either way.
+func _clear_on_disconnect() -> void:
+	server_version = ""
 
 
 ## Full pre-free cleanup for plugin unload: stop _process, close the

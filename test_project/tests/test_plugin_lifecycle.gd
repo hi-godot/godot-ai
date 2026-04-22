@@ -308,6 +308,53 @@ func test_process_self_disarms_after_deadline_without_connect() -> void:
 	assert_eq(deadline, 0, "_process must zero the deadline on timeout")
 
 
+# ----- lsof multi-pid parsing -----
+#
+# `_find_pid_on_port` / `_find_all_pids_on_port` drive the `force_restart_server`
+# kill path. Before this test, the parser collapsed "32696\n39824" (uvicorn's
+# reloader parent + worker both bound to the same port) into an invalid-int
+# check and returned 0 — so `OS.kill(0)` silently no-oped and the Restart
+# button went through the motions without actually killing anything.
+
+
+func test_parse_lsof_pids_single_line() -> void:
+	var pids := GodotAiPlugin._parse_lsof_pids("32696")
+	assert_eq(pids.size(), 1)
+	assert_eq(pids[0], 32696)
+
+
+func test_parse_lsof_pids_multi_line() -> void:
+	## The regression: uvicorn --reload binds both a reloader parent and
+	## a worker to port 8000. lsof -ti returns them newline-separated.
+	## Parser must yield both so `force_restart_server` can kill both.
+	var pids := GodotAiPlugin._parse_lsof_pids("32696\n39824")
+	assert_eq(pids.size(), 2)
+	assert_eq(pids[0], 32696)
+	assert_eq(pids[1], 39824)
+
+
+func test_parse_lsof_pids_trailing_newline() -> void:
+	## lsof output typically ends in \n; `split("\n", false)` drops the
+	## empty trailing segment, but we also guard via `is_valid_int` so
+	## any stray whitespace doesn't slip through as a fake pid.
+	var pids := GodotAiPlugin._parse_lsof_pids("32696\n39824\n")
+	assert_eq(pids.size(), 2)
+
+
+func test_parse_lsof_pids_empty_input() -> void:
+	var pids := GodotAiPlugin._parse_lsof_pids("")
+	assert_eq(pids.size(), 0)
+
+
+func test_parse_lsof_pids_ignores_non_numeric_lines() -> void:
+	## Defensive against lsof emitting a warning header on stderr that
+	## bleeds into stdout under rare conditions — the parser must drop
+	## non-numeric lines rather than returning a bogus pid.
+	var pids := GodotAiPlugin._parse_lsof_pids("lsof: WARNING\n32696\n")
+	assert_eq(pids.size(), 1)
+	assert_eq(pids[0], 32696)
+
+
 func _seed_managed_record(pid: int, version: String) -> void:
 	var es := EditorInterface.get_editor_settings()
 	if es == null:
