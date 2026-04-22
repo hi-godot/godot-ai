@@ -57,9 +57,17 @@ var _spawn_state: String = McpSpawnState.OK
 ## moment we respawn with `--refresh` so a second failure falls through
 ## to CRASHED instead of looping.
 var _refresh_retried: bool = false
+## Bounded deadline for `_watch_for_adoption_confirmation`. Zero when
+## disarmed. See that function's docstring.
+var _adoption_watch_deadline_ms: int = 0
 
 
 func _enter_tree() -> void:
+	## `_process` is only used by the adoption-confirmation watcher; keep
+	## it off until `_watch_for_adoption_confirmation` arms it, so the
+	## plugin has zero per-frame cost in the common case.
+	set_process(false)
+
 	## Register port overrides before spawn so `http_port()` / `ws_port()`
 	## return the user's configured values (if any) when `_start_server`
 	## builds the CLI args.
@@ -379,13 +387,16 @@ func _start_server() -> void:
 			_wait_for_port_free(port, 3.0)
 			## Fall through to spawn.
 		else:
-			## No record claiming this port — a foreign process owns it. We
-			## don't touch it, but the WebSocket handshake will never succeed
-			## because the foreign process doesn't speak MCP. Surface this to
-			## the dock so the user can pick a different port instead of
-			## watching "Disconnected" forever.
+			## No record claiming this port. Could be a non-MCP process
+			## (the handshake will never succeed → user sees FOREIGN_PORT
+			## and picks a different port) OR another editor's MCP server
+			## whose managed-record we just don't have locally — in which
+			## case our WebSocket WILL open and the diagnostic would be a
+			## lie. Flag FOREIGN_PORT preemptively, and arm a one-shot
+			## watcher that clears it if adoption actually succeeds.
 			_server_started_this_session = true
 			_set_spawn_state(McpSpawnState.FOREIGN_PORT)
+			_watch_for_adoption_confirmation()
 			print("MCP | foreign server already running on port %d, using existing" % port)
 			return
 
@@ -454,6 +465,48 @@ func _set_spawn_state(state: String) -> void:
 	if _spawn_state != McpSpawnState.OK:
 		return
 	_spawn_state = state
+
+
+## Arm the one-shot connection watcher. Called from `_start_server`'s
+## FOREIGN_PORT branch: we flagged the diagnostic preemptively assuming
+## the port holder doesn't speak MCP, but if it turns out to be another
+## editor's server our WebSocket will open and we need to retract the
+## diagnostic.
+##
+## We intentionally poll `_connection.is_connected` from `_process`
+## instead of wiring a new signal on Connection — signals would be
+## cleaner, but `class_name Connection` is cached by the editor across
+## plugin disable/enable, and a self-update that added a new signal
+## crashes `_enter_tree` with "invalid access to property" until the
+## user restarts Godot. Polling only reads `is_connected` (present on
+## every shipped Connection), so upgrades stay hot-reloadable.
+##
+## The watch self-disarms after SPAWN_GRACE_MS so per-frame cost drops
+## back to zero even if the foreign occupant never opens a WebSocket.
+func _watch_for_adoption_confirmation() -> void:
+	_adoption_watch_deadline_ms = Time.get_ticks_msec() + SPAWN_GRACE_MS
+	set_process(true)
+
+
+func _process(_delta: float) -> void:
+	if _connection != null and _connection.is_connected:
+		_on_connection_established()
+		_adoption_watch_deadline_ms = 0
+		set_process(false)
+		return
+	if Time.get_ticks_msec() >= _adoption_watch_deadline_ms:
+		_adoption_watch_deadline_ms = 0
+		set_process(false)
+
+
+## Bypasses `_set_spawn_state`'s first-writer-wins guard: the WebSocket
+## opening proves the occupant is a compatible MCP server (another
+## editor's session), so the preemptive FOREIGN_PORT diagnostic was a
+## false alarm and the dock shouldn't render the banner next to the
+## green "Connected" dot.
+func _on_connection_established() -> void:
+	if _spawn_state == McpSpawnState.FOREIGN_PORT:
+		_spawn_state = McpSpawnState.OK
 
 
 ## Start a 1s-tick timer that watches the spawned server for up to
