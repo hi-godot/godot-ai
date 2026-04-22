@@ -56,17 +56,17 @@ func test_drift_banner_hidden_when_no_mismatched_clients() -> void:
 	assert_false(_dock._drift_banner.visible, "Empty mismatched list must keep banner hidden")
 
 
-func test_drift_banner_surfaces_mismatched_clients_with_url() -> void:
-	## The banner copy must name the active server URL and the affected
-	## clients so the user can immediately see what's stale. The amber
-	## colour ties it visually to the per-row dot for the same clients.
+func test_drift_banner_surfaces_mismatched_client_names() -> void:
+	## The banner leads with the affected client display names — that's the
+	## only thing the user can act on. The active server URL is shown on
+	## the WS:/HTTP: line above and doesn't need to repeat here.
 	_dock._build_ui()
 	_dock._refresh_drift_banner(["claude_code"] as Array[String])
 	assert_true(_dock._drift_banner.visible, "Non-empty mismatched list must show banner")
-	assert_contains(_dock._drift_label.text, McpClientConfigurator.http_url(),
-		"Banner should mention the active server URL so the user knows what 'mismatched' means against")
 	assert_contains(_dock._drift_label.text, "Claude Code",
 		"Banner should list the display names of mismatched clients")
+	assert_contains(_dock._drift_label.text, "needs",
+		"Singular form for one mismatched client should read 'needs to be reconfigured'")
 
 
 func test_drift_banner_no_op_when_mismatched_set_unchanged() -> void:
@@ -78,7 +78,7 @@ func test_drift_banner_no_op_when_mismatched_set_unchanged() -> void:
 	_dock._refresh_drift_banner(["claude_code"] as Array[String])
 	assert_eq(_dock._last_mismatched_ids, ["claude_code"] as Array[String],
 		"Cache must reflect the most recent sweep so the Reconfigure button can iterate it")
-	var first_text := _dock._drift_label.text
+	var first_text: String = _dock._drift_label.text
 
 	# Mutate the label out-of-band; if the second call early-returns as it
 	# should, our text edit survives. If it ignores the cache and rewrites,

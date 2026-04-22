@@ -1051,13 +1051,11 @@ func _refresh_drift_banner(mismatched_ids: Array[String]) -> void:
 	var names: Array[String] = []
 	for id in mismatched_ids:
 		names.append(McpClientConfigurator.client_display_name(id))
-	var n := mismatched_ids.size()
-	var noun := "client config" if n == 1 else "client configs"
-	var verb := "points" if n == 1 else "point"
-	_drift_label.text = (
-		"%d %s %s at a different URL than %s — likely after a port change. Stale: %s."
-		% [n, noun, verb, McpClientConfigurator.http_url(), ", ".join(names)]
-	)
+	## Active server URL is already shown on the WS:/HTTP: line above the
+	## Clients section, so it doesn't need to repeat here. Lead with the
+	## client names — that's the only thing the user can act on.
+	var verb := "needs" if mismatched_ids.size() == 1 else "need"
+	_drift_label.text = "%s %s to be reconfigured." % [", ".join(names), verb]
 	_drift_banner.visible = true
 
 
