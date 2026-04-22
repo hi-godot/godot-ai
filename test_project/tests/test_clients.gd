@@ -238,14 +238,14 @@ func test_is_dev_checkout_forced_dev_mode() -> void:
 	_restore_mode_override_setting(prior_setting)
 
 
-func test_addons_dir_is_symlink_returns_bool_without_crashing() -> void:
-	## Smoke test: the real value depends on how the test_project is laid
-	## out on the current machine. Inside the canonical worktree the addons
-	## dir is a symlink into plugin/addons/godot_ai, so we expect true; in
-	## a non-symlink layout (e.g. after a zip extract) the call must still
-	## return without crashing. The typed return forces a bool result.
-	var result: bool = McpClientConfigurator.addons_dir_is_symlink()
-	assert_true(result == true or result == false)
+func test_addons_dir_is_symlink_detects_canonical_layout() -> void:
+	## `test_project/addons/godot_ai` is committed as a symlink
+	## (git mode 120000) pointing at `plugin/addons/godot_ai`, so the
+	## data-safety check must resolve that layout to `true`. If this
+	## fails, either the symlink didn't survive the checkout (git not
+	## preserving symlinks on the test platform) or DirAccess.is_link()
+	## behaves unexpectedly — both are real bugs worth surfacing here.
+	assert_true(McpClientConfigurator.addons_dir_is_symlink(), "res://addons/godot_ai is committed as a symlink; addons_dir_is_symlink() should report true")
 
 
 func test_dropdown_flip_propagates_to_is_dev_checkout() -> void:

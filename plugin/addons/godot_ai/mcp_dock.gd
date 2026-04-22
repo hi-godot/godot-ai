@@ -615,13 +615,20 @@ func _mode_override_index_from_setting() -> int:
 ## Called whenever `is_dev_checkout()`'s answer could have changed — repaints
 ## the install label/tooltip, rebuilds the setup container (Mode row, Dev
 ## Server button vs uv status), and clears any stale update banner so a
-## fresh `_check_for_updates()` paints over a clean slate.
+## fresh `_check_for_updates()` paints over a clean slate. The Update
+## button state is reset too: a prior install attempt may have left it
+## disabled with text like "Dev checkout — update via git" or "Extract
+## failed"; without this reset, flipping the dropdown and re-checking
+## would re-open the banner with the stale button text.
 func _refresh_install_mode_ui() -> void:
 	_install_label.text = _install_mode_text()
 	_install_label.tooltip_text = _install_mode_tooltip()
 	_refresh_setup_status()
 	_update_banner.visible = false
 	_latest_download_url = ""
+	if _update_btn != null:
+		_update_btn.text = "Update"
+		_update_btn.disabled = false
 
 
 func _on_mode_override_selected(index: int) -> void:
@@ -630,7 +637,13 @@ func _on_mode_override_selected(index: int) -> void:
 	if es != null:
 		es.set_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING, value)
 	_refresh_install_mode_ui()
-	_check_for_updates()
+	## Cancel any in-flight startup check before firing a new one, otherwise
+	## `_http_request.request()` can return ERR_BUSY and the dropdown flip
+	## silently fails to re-check. `call_deferred` lets the cancel settle
+	## before the new request goes out.
+	if _http_request != null:
+		_http_request.cancel_request()
+	_check_for_updates.call_deferred()
 	print("MCP | mode override -> %s" % (value if value else "auto"))
 
 
