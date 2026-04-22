@@ -103,8 +103,70 @@ static func get_plugin_version() -> String:
 	return "0.0.1"
 
 
+## Override for the dev-vs-user heuristic. Accepted values:
+##   "dev"   — force dev-checkout mode (skip update check + self-install)
+##   "user"  — force user-install mode (run update check, allow self-install)
+##            as long as the data-safety guard (addons_dir_is_symlink) passes
+##   other / unset — "auto": fall back to the .venv-proximity heuristic
+##
+## Use `user` to test the AssetLib self-update flow from inside a dev
+## checkout (there's a .venv nearby but `addons/godot_ai` is a plain copy —
+## e.g. after unpacking a release zip into `test_project/`).
+##
+## Two ways to set it, resolved in priority order:
+##   1. EditorSettings → `godot_ai/mode_override` — UI dropdown in the dock,
+##      persists per-editor-install. Wins over the env var so a UI action
+##      always takes effect without relaunching the editor.
+##   2. Env var `GODOT_AI_MODE` — useful for CLI launches and CI.
+const MODE_OVERRIDE_ENV := "GODOT_AI_MODE"
+const MODE_OVERRIDE_SETTING := "godot_ai/mode_override"
+
+
+static func mode_override() -> String:
+	# 1. EditorSetting wins — the user explicitly chose via the dock dropdown.
+	#    Guarded on `Engine.is_editor_hint()` so this is a no-op when the
+	#    plugin code runs inside the game subprocess (where EditorInterface
+	#    isn't available). See CLAUDE.md "Game-side code: gate on
+	#    Engine.is_editor_hint(), not OS.has_feature("editor")".
+	if Engine.is_editor_hint():
+		var es := EditorInterface.get_editor_settings()
+		if es != null and es.has_setting(MODE_OVERRIDE_SETTING):
+			var setting_val := str(es.get_setting(MODE_OVERRIDE_SETTING)).strip_edges().to_lower()
+			if setting_val == "dev" or setting_val == "user":
+				return setting_val
+	# 2. Env var fallback.
+	var raw := OS.get_environment(MODE_OVERRIDE_ENV).strip_edges().to_lower()
+	if raw == "dev" or raw == "user":
+		return raw
+	return ""
+
+
 static func is_dev_checkout() -> bool:
+	match mode_override():
+		"dev":
+			return true
+		"user":
+			return false
 	return not _find_venv_python().is_empty()
+
+
+## Data-safety check for self-install: is `res://addons/godot_ai` a symbolic
+## link? In a dev checkout this points at the canonical `plugin/` source
+## tree, and writing files into it would clobber tracked source. This check
+## is independent of `is_dev_checkout()` so a forced-user mode override
+## still cannot extract a release zip over the symlink.
+static func addons_dir_is_symlink() -> bool:
+	return _is_symlink(ProjectSettings.globalize_path("res://addons/godot_ai"))
+
+
+## Mirrors the idiom used in `mcp_dock.gd::_resolve_plugin_symlink_target` —
+## open the parent dir and ask Godot via `DirAccess.is_link()`, which
+## handles symlinks on POSIX and reparse points on Windows natively.
+static func _is_symlink(path: String) -> bool:
+	if path.is_empty():
+		return false
+	var dir := DirAccess.open(path.get_base_dir())
+	return dir != null and dir.is_link(path)
 
 
 static func get_server_command() -> Array[String]:
