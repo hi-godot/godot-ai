@@ -125,3 +125,22 @@ func test_dev_checkout_tooltip_exposes_symlink_target() -> void:
 	assert_contains(target, "godot_ai", "Symlink should point at a godot_ai plugin tree: %s" % target)
 	var tooltip: String = _dock._install_mode_tooltip()
 	assert_contains(tooltip, target, "Tooltip should embed the resolved target path")
+
+
+func test_update_precheck_failure_preserves_running_server() -> void:
+	## When `uvx --refresh --from godot-ai==<new>` fails — typically because
+	## PyPI's index cache still says the version doesn't exist right after a
+	## fresh publish — we MUST leave the running server alone and surface a
+	## retry hint. Tearing down the server before confirming uvx can resolve
+	## the new version is what put Discord users in an infinite reconnect
+	## loop (server exits ~5s after spawn, plugin reconnects forever).
+	_dock._build_ui()
+	_dock._remote_update_version = "9.9.9"
+	_dock._apply_update_precheck_result(1, "No solution found — godot-ai==9.9.9 is unsatisfiable")
+	assert_eq(_dock._update_btn.text, "Retry update",
+		"Failure must re-enable the button as a retry — not leave it stuck in 'Preparing server...'")
+	assert_false(_dock._update_btn.disabled, "User must be able to click to retry once PyPI propagates")
+	assert_contains(_dock._update_label.text, "9.9.9",
+		"Label must name the target version so the user knows which retry is pending")
+	assert_contains(_dock._update_label.text, "propagating",
+		"Label must explain the failure mode so the user doesn't assume their install is broken")

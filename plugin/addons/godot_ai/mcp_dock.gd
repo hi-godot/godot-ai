@@ -105,6 +105,15 @@ var _download_request: HTTPRequest
 var _update_label: Label
 var _update_btn: Button
 var _latest_download_url := ""
+var _remote_update_version := ""
+## Threaded precheck state. `uvx --refresh` re-queries PyPI for the target
+## version before we tear down the running server — guards against the
+## stale-index failure where uvx spawns, resolves "no such version," and
+## exits inside SPAWN_GRACE_MS, leaving the user in a reconnect loop when
+## the update was triggered within a minute of a fresh PyPI publish.
+var _update_precheck_thread: Thread
+var _update_precheck_timer: Timer
+var _update_precheck := {"done": false, "exit_code": -1, "output": ""}
 const RELEASES_URL := "https://api.github.com/repos/hi-godot/godot-ai/releases/latest"
 const RELEASES_PAGE := "https://github.com/hi-godot/godot-ai/releases/latest"
 const UPDATE_TEMP_DIR := "user://godot_ai_update/"
@@ -1155,6 +1164,7 @@ func _on_update_check_completed(result: int, response_code: int, _headers: Packe
 	var local_version := McpClientConfigurator.get_plugin_version()
 	if not _is_newer(remote_version, local_version):
 		return
+	_remote_update_version = remote_version
 
 	# Find the plugin ZIP asset URL
 	var assets: Array = json.get("assets", [])
@@ -1262,6 +1272,86 @@ func _install_update() -> void:
 	DirAccess.remove_absolute(zip_path)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(UPDATE_TEMP_DIR))
 
+	_run_update_precheck()
+
+
+## Verify uvx can actually fetch the target version from PyPI before we tear
+## down the running server. On a fresh release the user's uvx still has a
+## stale "latest versions" cache — the spawn-with-new-version silently fails
+## inside SPAWN_GRACE_MS and leaves the user in a reconnect loop (reported
+## on Discord for v1.3.2). `uvx --refresh` re-queries PyPI live; running it
+## in a Thread keeps the editor UI responsive while uvx hits the network.
+## Non-uvx launch tiers (dev_venv / system / unknown) don't resolve via
+## PyPI at spawn time so the precheck is skipped.
+func _run_update_precheck() -> void:
+	var launch_mode := McpClientConfigurator.get_server_launch_mode()
+	if launch_mode != "uvx":
+		_commit_update_reload()
+		return
+	var uvx := McpClientConfigurator.find_uvx()
+	if uvx.is_empty() or _remote_update_version.is_empty():
+		## No way to precheck — fall back to the old behaviour rather than
+		## blocking a legitimate update on our own missing inputs.
+		_commit_update_reload()
+		return
+
+	_update_btn.text = "Preparing server..."
+	_update_precheck = {"done": false, "exit_code": -1, "output": ""}
+	_update_precheck_thread = Thread.new()
+	_update_precheck_thread.start(_update_precheck_worker.bind(uvx, _remote_update_version))
+
+	if _update_precheck_timer == null:
+		_update_precheck_timer = Timer.new()
+		_update_precheck_timer.wait_time = 0.25
+		_update_precheck_timer.timeout.connect(_on_update_precheck_poll)
+		add_child(_update_precheck_timer)
+	_update_precheck_timer.start()
+
+
+func _update_precheck_worker(uvx: String, version: String) -> void:
+	var output: Array = []
+	var code := OS.execute(
+		uvx,
+		["--refresh", "--from", "godot-ai==" + version, "godot-ai", "--version"],
+		output,
+		true,
+	)
+	## Write result fields BEFORE flipping `done`. Main thread polls `done`;
+	## once it reads true it calls `wait_to_finish()` which fully syncs, so
+	## the subsequent reads of exit_code/output are safe.
+	_update_precheck.exit_code = code
+	_update_precheck.output = "\n".join(output)
+	_update_precheck.done = true
+
+
+func _on_update_precheck_poll() -> void:
+	if not _update_precheck.done:
+		return
+	_update_precheck_timer.stop()
+	_update_precheck_thread.wait_to_finish()
+	_update_precheck_thread = null
+	_apply_update_precheck_result(int(_update_precheck.exit_code), _update_precheck.output)
+
+
+## Dispatch on the precheck exit code. Split from the poll loop so tests can
+## exercise the UI-state transitions without spawning a real thread/process.
+func _apply_update_precheck_result(code: int, output: String) -> void:
+	if code == 0:
+		_commit_update_reload()
+		return
+	## Precheck failed — most commonly because PyPI's index still says this
+	## version doesn't exist (propagation delay right after a fresh publish).
+	## Leave the running server alone. The new plugin files are already on
+	## disk, so a later editor restart will pick them up with a fresh uvx
+	## index query (post-TTL) and the drift branch in `_start_server` will
+	## reconcile plugin/server versions.
+	print("MCP | update precheck failed (exit %d): %s" % [code, output])
+	_update_btn.text = "Retry update"
+	_update_btn.disabled = false
+	_update_label.text = "v%s still propagating — try again in a minute" % _remote_update_version
+
+
+func _commit_update_reload() -> void:
 	## Kill the old server before the reload so the re-enabled plugin spawns
 	## a fresh one against the new plugin version. Without this, the running
 	## Python process on port 8000 outlives the reload, `_start_server`
