@@ -12,6 +12,11 @@ const MODE_OVERRIDE_VALUES := ["", "user", "dev"]
 const MODE_OVERRIDE_LABELS := ["Auto", "Force user", "Force dev"]
 static var COLOR_MUTED := Color(0.7, 0.7, 0.7)
 static var COLOR_HEADER := Color(0.95, 0.95, 0.95)
+## Used for "in-progress" / "stale, action needed" UI: the startup-grace
+## status icon, the spawn-failure suggested-port hint, the drift banner,
+## and the per-row mismatch dot. One constant so a future palette tweak
+## doesn't have to find every literal.
+static var COLOR_AMBER := Color(1.0, 0.75, 0.25)
 
 var _connection: Connection
 var _log_buffer: McpLogBuffer
@@ -31,6 +36,27 @@ var _install_label: Label
 ## Per-client UI handles, keyed by client id. Each entry holds the row's
 ## status dot, configure button, remove button, manual-command panel + text.
 var _client_rows: Dictionary = {}
+
+# Drift banner — surfaced near the Clients section when one or more clients
+# have a stored entry whose URL no longer matches `http_url()` (typical after
+# the user changes `godot_ai/http_port`). Event-driven: refreshed on
+# plugin enter, after Apply+Reload, when the Clients window opens, and on
+# editor focus-in. See #166.
+var _drift_banner: VBoxContainer
+var _drift_label: Label
+## Sorted snapshot of the most recent mismatched-client set. Powers two things:
+## (a) the Reconfigure button reuses this list instead of re-running
+## `check_status` per row (saves ~18 filesystem reads per click), and
+## (b) `_refresh_drift_banner` early-returns when the set is unchanged so
+## focus-in sweeps don't repaint identical text. Mirrors the
+## `_last_server_status` pattern used by the crash panel.
+var _last_mismatched_ids: Array[String] = []
+## Debounce for `NOTIFICATION_APPLICATION_FOCUS_IN`. Each focus-in costs
+## ~18 filesystem reads on the main thread; a 2s window collapses
+## fast alt-tab cycles into a single sweep without making the banner
+## feel stale.
+var _last_focus_sweep_msec: int = 0
+const FOCUS_SWEEP_MIN_MSEC := 2000
 
 # Dev-mode only
 var _dev_section: VBoxContainer
@@ -108,6 +134,18 @@ func _notification(what: int) -> void:
 	# Detect dock/undock by watching for reparenting events.
 	if what == NOTIFICATION_PARENTED or what == NOTIFICATION_UNPARENTED:
 		_update_redock_visibility.call_deferred()
+	elif what == NOTIFICATION_APPLICATION_FOCUS_IN:
+		## Catches the case where the user edits an MCP client config in
+		## another app (or runs `claude mcp add` in a terminal) while Godot
+		## was unfocused. Debounced so a fast alt-tab cycle doesn't fire
+		## one sweep per focus-in. See #166.
+		if _client_rows.is_empty():
+			return
+		var now := Time.get_ticks_msec()
+		if now - _last_focus_sweep_msec < FOCUS_SWEEP_MIN_MSEC:
+			return
+		_last_focus_sweep_msec = now
+		_refresh_all_client_statuses.call_deferred()
 
 
 func _is_floating() -> bool:
@@ -146,7 +184,7 @@ func _build_ui() -> void:
 	_status_icon.custom_minimum_size = Vector2(14, 14)
 	# Amber on first paint — matches the "Starting server…" label text and
 	# distinguishes from a real disconnect (red).
-	_status_icon.color = Color(1.0, 0.75, 0.25)
+	_status_icon.color = COLOR_AMBER
 	var icon_center := CenterContainer.new()
 	icon_center.add_child(_status_icon)
 	status_row.add_child(icon_center)
@@ -317,6 +355,22 @@ func _build_ui() -> void:
 	clients_row.add_child(clients_open_btn)
 
 	add_child(clients_row)
+
+	# Drift banner — hidden until a sweep finds at least one mismatched client.
+	_drift_banner = VBoxContainer.new()
+	_drift_banner.add_theme_constant_override("separation", 4)
+	_drift_banner.visible = false
+	_drift_label = Label.new()
+	_drift_label.add_theme_color_override("font_color", COLOR_AMBER)
+	_drift_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_drift_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_drift_banner.add_child(_drift_label)
+	var drift_btn := Button.new()
+	drift_btn.text = "Reconfigure mismatched"
+	drift_btn.tooltip_text = "Re-run Configure on every client whose stored URL doesn't match the current server URL."
+	drift_btn.pressed.connect(_on_reconfigure_mismatched)
+	_drift_banner.add_child(drift_btn)
+	add_child(_drift_banner)
 
 	_clients_window = Window.new()
 	_clients_window.title = "Configure MCP Clients"
@@ -510,7 +564,7 @@ func _update_status() -> void:
 		## Inside startup grace — distinguish from real disconnect so
 		## first-run users don't assume it's broken while uvx downloads.
 		status_text = "Starting server…"
-		status_color = Color(1.0, 0.75, 0.25)  ## amber
+		status_color = COLOR_AMBER
 	else:
 		status_text = "Disconnected"
 		status_color = Color.RED
@@ -601,12 +655,6 @@ func _build_port_picker_section() -> void:
 
 	_port_picker_section.add_child(picker_row)
 	_crash_panel.add_child(_port_picker_section)
-	## TODO: a follow-up PR should add a client-config drift detector
-	## (event-driven, fires on plugin load / after Apply+Reload / on
-	## editor focus-in). When any configured client's stored URL no
-	## longer matches `http_url()`, it renders its own banner next to
-	## the Clients section — that's separate from this spawn-failure
-	## panel and shouldn't be wedged in here.
 
 
 func _on_apply_new_port() -> void:
@@ -616,6 +664,12 @@ func _on_apply_new_port() -> void:
 	var es := EditorInterface.get_editor_settings()
 	if es != null:
 		es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, new_port)
+	## Every saved client config now points at the old port. Re-sweep so the
+	## drift banner appears in the same frame the user committed the change —
+	## the plugin reload below will run a second sweep on its own first paint,
+	## but we want the banner up immediately rather than after the reload
+	## handshake races to completion. See #166.
+	_refresh_all_client_statuses()
 	## Reload after the setting is committed so `_start_server` reads the new
 	## port on the re-enabled plugin instance.
 	_on_reload_plugin()
@@ -910,6 +964,11 @@ func _on_configure_all_clients() -> void:
 func _on_open_clients_window() -> void:
 	if _clients_window == null:
 		return
+	## Re-sweep before the user has time to act on stale dot colors. Deferred
+	## so the popup paints immediately with last-known state — the fresh
+	## colors land on the next frame. Synchronous would block the popup paint
+	## for ~18 filesystem reads (~100-300ms with AV scanning). See #166.
+	_refresh_all_client_statuses.call_deferred()
 	# popup_centered() with a minsize forces the window to that size and
 	# centers on the parent viewport. Setting .size on a hidden Window
 	# doesn't always take effect, so we force it at popup time here.
@@ -928,10 +987,17 @@ func _refresh_clients_summary() -> void:
 	if _clients_summary_label == null:
 		return
 	var configured := 0
+	var mismatched := 0
 	for row in _client_rows.values():
-		if (row["dot"] as ColorRect).color == Color.GREEN:
+		var c := (row["dot"] as ColorRect).color
+		if c == Color.GREEN:
 			configured += 1
-	_clients_summary_label.text = "%d / %d configured" % [configured, _client_rows.size()]
+		elif c == COLOR_AMBER:
+			mismatched += 1
+	var text := "%d / %d configured" % [configured, _client_rows.size()]
+	if mismatched > 0:
+		text += " (%d stale)" % mismatched
+	_clients_summary_label.text = text
 
 
 func _show_manual_command_for(client_id: String) -> void:
@@ -954,10 +1020,56 @@ func _on_copy_manual_command(client_id: String) -> void:
 
 
 func _refresh_all_client_statuses() -> void:
+	## Single sweep: pass the per-client status through `_apply_row_status` for
+	## the row UI, then count mismatches for the drift banner. Each client's
+	## `check_status` is one filesystem read — fine to do all of them on the
+	## handful of trigger events documented in #166.
+	var mismatched_ids: Array[String] = []
 	for client_id in _client_rows:
 		var status := McpClientConfigurator.check_status(client_id)
 		_apply_row_status(client_id, status)
+		if status == McpClient.Status.CONFIGURED_MISMATCH:
+			mismatched_ids.append(client_id)
 	_refresh_clients_summary()
+	_refresh_drift_banner(mismatched_ids)
+
+
+func _refresh_drift_banner(mismatched_ids: Array[String]) -> void:
+	if _drift_banner == null:
+		return
+	## Sort so set-equality is order-independent — `_client_rows` iteration
+	## order is dict-insertion order, but a future change to the iteration
+	## site shouldn't make us repaint identical content.
+	mismatched_ids = mismatched_ids.duplicate()
+	mismatched_ids.sort()
+	if mismatched_ids == _last_mismatched_ids:
+		return
+	_last_mismatched_ids = mismatched_ids
+	if mismatched_ids.is_empty():
+		_drift_banner.visible = false
+		return
+	var names: Array[String] = []
+	for id in mismatched_ids:
+		names.append(McpClientConfigurator.client_display_name(id))
+	## Active server URL is already shown on the WS:/HTTP: line above the
+	## Clients section, so it doesn't need to repeat here. Lead with the
+	## client names — that's the only thing the user can act on.
+	var verb := "needs" if mismatched_ids.size() == 1 else "need"
+	_drift_label.text = "%s %s to be reconfigured." % [", ".join(names), verb]
+	_drift_banner.visible = true
+
+
+func _on_reconfigure_mismatched() -> void:
+	## Re-Configure every client whose URL is currently stale. Iterates the
+	## cached list from the most recent sweep instead of re-running
+	## `check_status` per row (saves ~18 filesystem reads per click). The
+	## trailing `_refresh_all_client_statuses()` re-sweeps anyway, so any
+	## entries the user manually fixed between sweep and click get re-counted
+	## as CONFIGURED there.
+	for client_id in _last_mismatched_ids:
+		if _client_rows.has(client_id):
+			_on_configure_client(client_id)
+	_refresh_all_client_statuses()
 
 
 func _apply_row_status(client_id: String, status: McpClient.Status, error_msg: String = "") -> void:
@@ -981,6 +1093,13 @@ func _apply_row_status(client_id: String, status: McpClient.Status, error_msg: S
 			remove_btn.visible = false
 			var installed := McpClientConfigurator.is_installed(client_id)
 			name_label.text = base_name if installed else "%s  (not detected)" % base_name
+		McpClient.Status.CONFIGURED_MISMATCH:
+			## Amber matches the dock-level drift banner so a glance at the
+			## row + the banner read as the same condition.
+			dot.color = COLOR_AMBER
+			configure_btn.text = "Reconfigure"
+			remove_btn.visible = true
+			name_label.text = "%s  (URL out of date)" % base_name
 		_:
 			dot.color = Color.RED
 			configure_btn.text = "Retry"

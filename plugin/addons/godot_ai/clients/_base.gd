@@ -6,7 +6,12 @@ extends RefCounted
 ## Subclasses set fields in _init(); they should not contain control flow.
 ## Strategies (json/toml/cli) consume these fields.
 
-enum Status { NOT_CONFIGURED, CONFIGURED, ERROR }
+## CONFIGURED_MISMATCH = an entry with our `SERVER_NAME` exists in the user's
+## client config, but its URL doesn't match `http_url()` — typical after the
+## user changes `godot_ai/http_port` and reloads. Distinguishing this from
+## `NOT_CONFIGURED` lets the dock surface a "your saved client URLs are stale"
+## banner instead of conflating it with "you never configured this client".
+enum Status { NOT_CONFIGURED, CONFIGURED, CONFIGURED_MISMATCH, ERROR }
 
 var id: String = ""                              ## stable key, e.g. "cursor"
 var display_name: String = ""                    ## "Cursor"
