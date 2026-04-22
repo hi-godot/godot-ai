@@ -246,7 +246,12 @@ static func _is_symlink(path: String) -> bool:
 	return dir != null and dir.is_link(path)
 
 
-static func get_server_command() -> Array[String]:
+## `refresh` forces uvx to re-fetch PyPI index metadata on spawn — used by
+## `_start_server`'s one-shot retry when the first attempt exited fast with
+## no pid-file on the uvx tier (stale-index-cache failure mode). No-op on
+## other tiers: dev_venv and system resolve locally, so the flag has nowhere
+## to go. See plugin.gd::_should_retry_with_refresh.
+static func get_server_command(refresh: bool = false) -> Array[String]:
 	var venv_python := _cached_venv_python()
 	if not venv_python.is_empty():
 		print("MCP | using dev venv: %s" % venv_python)
@@ -263,8 +268,12 @@ static func get_server_command() -> Array[String]:
 		## otherwise uvx installs the exact version fresh. Keeps plugin and
 		## server version in lockstep without needing `--refresh-package` on
 		## every spawn. See issue #133.
-		print("MCP | using uvx (godot-ai==%s)" % version)
-		return [uvx, "--from", "godot-ai==%s" % version, "godot-ai"]
+		print("MCP | using uvx (godot-ai==%s)%s" % [version, " [refresh]" if refresh else ""])
+		var cmd: Array[String] = [uvx]
+		if refresh:
+			cmd.append("--refresh")
+		cmd.append_array(["--from", "godot-ai==%s" % version, "godot-ai"])
+		return cmd
 
 	var system_cmd := _find_system_install()
 	if not system_cmd.is_empty():

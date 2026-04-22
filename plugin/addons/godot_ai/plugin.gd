@@ -51,6 +51,12 @@ var _server_watch_timer: Timer = null
 ## set at the exact point of failure and never cleared during the
 ## plugin session — reload the plugin to retry.
 var _spawn_state: String = McpSpawnState.OK
+## One-shot guard for the stale-uvx-index recovery (see
+## `_should_retry_with_refresh`). Reset at the top of `_start_server` so
+## each fresh spawn attempt gets its own refresh budget; set to true the
+## moment we respawn with `--refresh` so a second failure falls through
+## to CRASHED instead of looping.
+var _refresh_retried: bool = false
 
 
 func _enter_tree() -> void:
@@ -339,6 +345,8 @@ func _start_server() -> void:
 		## same editor session, preventing cascading server process creation.
 		return
 
+	_refresh_retried = false
+
 	var port := McpClientConfigurator.http_port()
 	var ws_port := McpClientConfigurator.ws_port()
 	var current_version := McpClientConfigurator.get_plugin_version()
@@ -390,12 +398,7 @@ func _start_server() -> void:
 	var cmd: String = server_cmd[0]
 	var args: Array[String] = []
 	args.assign(server_cmd.slice(1))
-	args.append_array([
-		"--transport", "streamable-http",
-		"--port", str(port),
-		"--ws-port", str(ws_port),
-		"--pid-file", ProjectSettings.globalize_path(SERVER_PID_FILE),
-	])
+	args.append_array(_build_server_flags(port, ws_port))
 
 	## Wipe any stale pid-file before spawning so a failed launch can't
 	## leave last session's PID sitting there for _find_managed_pid to
@@ -491,6 +494,10 @@ func _check_server_health() -> void:
 		_server_pid = real_pid
 	elif not _pid_alive(_server_pid):
 		if elapsed >= SPAWN_GRACE_MS and _spawn_state == McpSpawnState.OK:
+			if _should_retry_with_refresh():
+				_refresh_retried = true
+				_respawn_with_refresh()
+				return
 			_server_exit_ms = elapsed
 			_set_spawn_state(McpSpawnState.CRASHED)
 			_log_buffer.log("server exited after %dms — see Godot output log" % _server_exit_ms)
@@ -499,6 +506,70 @@ func _check_server_health() -> void:
 	if elapsed >= SERVER_WATCH_MS:
 		## Server survived startup — stop watching. Mid-session crashes
 		## after this point surface via the WebSocket disconnect path.
+		_stop_server_watch()
+
+
+## True when the first spawn looks like a stale-uvx-index failure and we
+## haven't already retried. Fail signal: launcher process already declared
+## dead by the caller, pid-file was never written (Python never got to
+## argparse), and we're on the uvx tier (the only tier where `--refresh`
+## means anything). Bug #172 — after a fresh PyPI publish, uvx's local
+## index metadata keeps saying the new version doesn't exist for ~10 min,
+## which cascaded into an infinite reconnect loop pre-#171. Retry-at-spawn
+## catches every entry path (Update, Reload Plugin, Reconnect, editor
+## restart, crash recovery) — unlike the older Update-only precheck.
+func _should_retry_with_refresh() -> bool:
+	return _retry_with_refresh_allowed(
+		_refresh_retried,
+		McpClientConfigurator.get_server_launch_mode(),
+		_read_pid_file(),
+	)
+
+
+## Pure decision helper — environment-state readers stay in the instance
+## method above, the logic lives here so tests can drive the three inputs
+## directly without spoofing static caches or pid-files on disk.
+static func _retry_with_refresh_allowed(already_retried: bool, launch_mode: String, pid_from_file: int) -> bool:
+	return (
+		not already_retried
+		and launch_mode == "uvx"
+		and pid_from_file == 0
+	)
+
+
+## Re-run `OS.create_process` with `--refresh` prepended to the uvx args
+## and reset the watch-loop baseline so the next tick evaluates the new
+## process, not the dead one. Does NOT flip `_server_started_this_session`
+## again (already true), does NOT touch the managed-server record (the
+## launcher PID is disposable — what matters is the Python child, which
+## writes its own pid-file if it gets that far).
+func _respawn_with_refresh() -> void:
+	var server_cmd := McpClientConfigurator.get_server_command(true)
+	if server_cmd.is_empty():
+		## Can't happen in practice — we only reach here after a successful
+		## first resolve of `get_server_command()` at the top of `_start_server`
+		## — but keep the shape symmetric so a future refactor doesn't silently
+		## break the retry.
+		return
+	var cmd: String = server_cmd[0]
+	var args: Array[String] = []
+	args.assign(server_cmd.slice(1))
+	args.append_array(_build_server_flags(McpClientConfigurator.http_port(), McpClientConfigurator.ws_port()))
+	_clear_pid_file()
+	_log_buffer.log("retrying with --refresh (PyPI index may be stale)")
+	_server_pid = OS.create_process(cmd, args)
+	if _server_pid > 0:
+		_server_spawn_ms = Time.get_ticks_msec()
+		_server_exit_ms = 0
+		var current_version := McpClientConfigurator.get_plugin_version()
+		_write_managed_server_record(_server_pid, current_version)
+		print("MCP | retried server (PID %d, v%s): %s %s" % [_server_pid, current_version, cmd, " ".join(args)])
+	else:
+		## OS.create_process returned -1 on the retry — can't distinguish this
+		## from a real crash, so surface CRASHED immediately rather than
+		## looping. `_refresh_retried` is already true so we won't try again.
+		_set_spawn_state(McpSpawnState.CRASHED)
+		_log_buffer.log("refresh retry failed to spawn — see Godot output log")
 		_stop_server_watch()
 
 
@@ -696,12 +767,27 @@ func _finalize_stop_if_port_free(port: int) -> bool:
 	return true
 
 
-## True if the given PID corresponds to a live process. Uses POSIX `kill -0`
-## (doesn't actually kill — just probes whether the process exists) or the
-## Windows tasklist equivalent. Used by _start_server to distinguish a live
+## Shared tail of the server CLI: transport, ports, and `--pid-file`. Both
+## the initial spawn in `_start_server` and the `--refresh` retry in
+## `_respawn_with_refresh` go through here so a new flag added in one place
+## can't silently drop out of the other.
+static func _build_server_flags(port: int, ws_port: int) -> Array[String]:
+	var flags: Array[String] = []
+	flags.assign([
+		"--transport", "streamable-http",
+		"--port", str(port),
+		"--ws-port", str(ws_port),
+		"--pid-file", ProjectSettings.globalize_path(SERVER_PID_FILE),
+	])
+	return flags
+
+
+## True if the given PID corresponds to a live (non-zombie) process.
+## POSIX uses `ps -o stat=` (see inline comment for the zombie rationale);
+## Windows uses `tasklist`. Called by `_start_server` to distinguish a live
 ## managed server that outlived its editor from a stale EditorSettings
-## record pointing at a PID that no longer exists.
-func _pid_alive(pid: int) -> bool:
+## record, and by `_check_server_health` to detect a fast-failing launcher.
+static func _pid_alive(pid: int) -> bool:
 	if pid <= 0:
 		return false
 	if OS.get_name() == "Windows":
@@ -716,8 +802,20 @@ func _pid_alive(pid: int) -> bool:
 			if str(line).find("\"%d\"" % pid) >= 0:
 				return true
 		return false
-	var exit_code := OS.execute("kill", ["-0", str(pid)], [], true)
-	return exit_code == 0
+	## `kill -0` returns 0 for BOTH running and zombie processes, and Godot
+	## never `waitpid`s on `OS.create_process` children — so an `uvx` launcher
+	## that fails-fast (~40ms for "no solution" on a bogus version, or a stale
+	## PyPI index) lingers as a zombie forever. `kill -0` would report it as
+	## alive, blocking the spawn-failure branch in `_check_server_health` from
+	## ever firing. Ask `ps` for the actual process state instead. State column
+	## codes on Darwin/Linux: running/sleeping (R/S/D/I/T), zombie (Z),
+	## unknown-but-exited (empty output / non-zero exit). See #172.
+	var output: Array = []
+	var exit_code := OS.execute("ps", ["-p", str(pid), "-o", "stat="], output, true)
+	if exit_code != 0 or output.is_empty():
+		return false
+	var stat := str(output[0]).strip_edges()
+	return not stat.is_empty() and not stat.begins_with("Z")
 
 
 ## Poll until the given port is no longer bound, or the timeout elapses.
