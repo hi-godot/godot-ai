@@ -89,6 +89,18 @@ ruff format src/ tests/      # format
 
 **macOS + Python 3.13 note**: Files inside `.venv` inherit the macOS hidden flag (dot-prefix directory). Python 3.13 skips hidden `.pth` files (CPython gh-113659), breaking editable installs. `script/setup-dev` generates a `sitecustomize.py` in the venv that adds `src/` to `sys.path` via normal import (unaffected by hidden flags). No manual `chflags` needed.
 
+**Windows note**: use `.\script\setup-dev.ps1` instead of `script/setup-dev`. The Windows script also re-hydrates the `test_project/addons/godot_ai` symlink, which on Windows requires `git config core.symlinks true` (the script sets it) plus Windows Developer Mode (Settings → Privacy & security → For developers). Without Developer Mode, git checks the file out as a plain text file containing the symlink target string instead of a real symlink, and Godot fails to load the plugin with errors like `Failed loading resource: res://addons/godot_ai/runtime/game_helper.gd` and a cascade of `Could not find base class "McpTestSuite"` parse errors in `test_project/tests/`. **Fallback when Developer Mode is unavailable** (e.g. transient sessions, restricted machines): create a directory junction by hand — junctions don't need admin or Developer Mode:
+
+```powershell
+# from repo root or worktree root
+Remove-Item -LiteralPath test_project\addons\godot_ai -Force
+New-Item -ItemType Junction -Path test_project\addons\godot_ai -Target ..\..\plugin\addons\godot_ai
+```
+
+Or in cmd: `mklink /J test_project\addons\godot_ai ..\..\plugin\addons\godot_ai`.
+
+**When troubleshooting any dev-environment / setup / dependency / symlink issue, scan `script/` first** for an existing fixer before doing it by hand. The project ships scripts for a reason — bypassing them re-introduces the bugs they were written to handle.
+
 ### Server lifecycle in dev
 
 The plugin manages the server process:
