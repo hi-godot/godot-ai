@@ -785,7 +785,7 @@ func _finalize_stop_if_port_free(port: int) -> bool:
 ## Windows tasklist equivalent. Used by _start_server to distinguish a live
 ## managed server that outlived its editor from a stale EditorSettings
 ## record pointing at a PID that no longer exists.
-func _pid_alive(pid: int) -> bool:
+static func _pid_alive(pid: int) -> bool:
 	if pid <= 0:
 		return false
 	if OS.get_name() == "Windows":
@@ -800,8 +800,20 @@ func _pid_alive(pid: int) -> bool:
 			if str(line).find("\"%d\"" % pid) >= 0:
 				return true
 		return false
-	var exit_code := OS.execute("kill", ["-0", str(pid)], [], true)
-	return exit_code == 0
+	## `kill -0` returns 0 for BOTH running and zombie processes, and Godot
+	## never `waitpid`s on `OS.create_process` children — so an `uvx` launcher
+	## that fails-fast (~40ms for "no solution" on a bogus version, or a stale
+	## PyPI index) lingers as a zombie forever. `kill -0` would report it as
+	## alive, blocking the spawn-failure branch in `_check_server_health` from
+	## ever firing. Ask `ps` for the actual process state instead. State column
+	## codes on Darwin/Linux: running/sleeping (R/S/D/I/T), zombie (Z),
+	## unknown-but-exited (empty output / non-zero exit). See #172.
+	var output: Array = []
+	var exit_code := OS.execute("ps", ["-p", str(pid), "-o", "stat="], output, true)
+	if exit_code != 0 or output.is_empty():
+		return false
+	var stat := str(output[0]).strip_edges()
+	return not stat.is_empty() and not stat.begins_with("Z")
 
 
 ## Poll until the given port is no longer bound, or the timeout elapses.

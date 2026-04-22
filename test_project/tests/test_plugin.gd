@@ -87,3 +87,53 @@ func test_get_server_command_default_omits_refresh() -> void:
 		return
 	for token in cmd:
 		assert_ne(token, "--refresh", "default get_server_command must never include --refresh")
+
+
+func test_pid_alive_rejects_zombie_children() -> void:
+	## Regression guard for the zombie-blindness that defeated the first
+	## draft of the retry wiring: `kill -0` returns success for BOTH
+	## running and zombie processes, and Godot never `waitpid`s on its
+	## `OS.create_process` children. A fast-failing uvx launcher would
+	## linger as a zombie, `_pid_alive` would report true forever, and
+	## the "launcher died" branch in `_check_server_health` (which
+	## gates both CRASHED transitions and the --refresh retry) would
+	## never fire. See #172.
+	if OS.get_name() == "Windows":
+		## Windows doesn't have POSIX zombies — `tasklist` shows the
+		## process as gone the moment it exits.
+		skip("zombie semantics are POSIX-specific")
+		return
+	var pid := OS.create_process("sleep", ["0"])
+	assert_gt(pid, 0, "must successfully spawn the sleep child")
+	## Give the child time to exit and enter zombie state (waiting for
+	## its parent — us — to reap it). 300ms is generous for a `sleep 0`
+	## that exits essentially instantly; under load 100ms can be flaky.
+	OS.delay_msec(300)
+	assert_false(
+		GodotAiPlugin._pid_alive(pid),
+		"zombie (exited, unreaped) child must NOT be reported as alive",
+	)
+
+
+func test_pid_alive_reports_running_process_as_alive() -> void:
+	## Positive case: our own process PID must be reported alive. Pairs
+	## with the zombie test — catches a regression where the ps-based
+	## check became too strict (e.g. rejects normal sleeping processes).
+	var own_pid := OS.get_process_id()
+	assert_gt(own_pid, 0, "sanity: OS.get_process_id must return a positive pid")
+	assert_true(
+		GodotAiPlugin._pid_alive(own_pid),
+		"the test runner's own process must be reported as alive",
+	)
+
+
+func test_pid_alive_returns_false_for_nonexistent_pid() -> void:
+	## PID 1 (init/launchd) always exists on any running POSIX system, so
+	## use a high PID that's essentially guaranteed free. `ps` exits non-zero
+	## when the PID doesn't exist, which must map to false, not true.
+	assert_false(
+		GodotAiPlugin._pid_alive(2147483646),
+		"a non-existent PID must be reported as dead",
+	)
+	assert_false(GodotAiPlugin._pid_alive(0), "pid <= 0 is never alive")
+	assert_false(GodotAiPlugin._pid_alive(-1), "negative pid is never alive")
