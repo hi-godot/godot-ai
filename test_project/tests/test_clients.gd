@@ -142,6 +142,84 @@ func test_find_worktree_src_dir_ignores_unrelated_src_directory() -> void:
 	DirAccess.remove_absolute(root)
 
 
+# ----- dev-venv detection requires sibling src/godot_ai -----
+#
+# Issue #178: `_find_venv_python` used to accept any `.venv/bin/python` it
+# found while walking up from `res://` — so a user with `~/.venv` (from an
+# unrelated Python project) got their venv picked up, `python -m godot_ai`
+# failed with ModuleNotFoundError ~5s in, and the reconnect logic looped
+# forever. These tests lock in the new rule: require a sibling `src/godot_ai/`
+# in the same parent dir before treating a `.venv` as a godot-ai dev venv.
+
+
+func test_find_venv_python_rejects_venv_without_godot_ai_src() -> void:
+	## The money test. Reproduces the reported bug scenario: a user HOME
+	## with `~/.venv/` from a data-science side project and no `src/godot_ai/`
+	## anywhere on the path. The plugin must fall through to the uvx tier
+	## instead of spawning the wrong interpreter.
+	var root := _scratch_dir.path_join("fake_user_home")
+	var venv_python := root.path_join(_venv_python_relpath())
+	DirAccess.make_dir_recursive_absolute(venv_python.get_base_dir())
+	_touch_file(venv_python)
+	assert_eq(McpClientConfigurator._find_venv_python_in(root), "", "Plain .venv with no sibling src/godot_ai/ must be rejected")
+	DirAccess.remove_absolute(venv_python)
+	DirAccess.remove_absolute(venv_python.get_base_dir())
+	DirAccess.remove_absolute(root.path_join(".venv"))
+	DirAccess.remove_absolute(root)
+
+
+func test_find_venv_python_accepts_venv_with_godot_ai_src() -> void:
+	## Positive case: real godot-ai dev checkout has both `.venv/` and
+	## `src/godot_ai/` as siblings at the worktree root. Both present →
+	## return the venv python path.
+	var root := _scratch_dir.path_join("fake_dev_checkout")
+	var venv_python := root.path_join(_venv_python_relpath())
+	DirAccess.make_dir_recursive_absolute(venv_python.get_base_dir())
+	_touch_file(venv_python)
+	DirAccess.make_dir_recursive_absolute(root.path_join("src/godot_ai"))
+	assert_eq(McpClientConfigurator._find_venv_python_in(root), venv_python)
+	DirAccess.remove_absolute(venv_python)
+	DirAccess.remove_absolute(venv_python.get_base_dir())
+	DirAccess.remove_absolute(root.path_join(".venv"))
+	DirAccess.remove_absolute(root.path_join("src/godot_ai"))
+	DirAccess.remove_absolute(root.path_join("src"))
+	DirAccess.remove_absolute(root)
+
+
+func test_find_venv_python_walks_up_from_nested_start_dir() -> void:
+	## Mirrors the real res:// layout: start_dir is `test_project/addons/*`
+	## deep inside a checkout; the venv and src/ live several levels up.
+	var root := _scratch_dir.path_join("nested_walk")
+	var deep := root.path_join("test_project/addons/pkg")
+	var venv_python := root.path_join(_venv_python_relpath())
+	DirAccess.make_dir_recursive_absolute(deep)
+	DirAccess.make_dir_recursive_absolute(venv_python.get_base_dir())
+	_touch_file(venv_python)
+	DirAccess.make_dir_recursive_absolute(root.path_join("src/godot_ai"))
+	assert_eq(McpClientConfigurator._find_venv_python_in(deep), venv_python)
+	DirAccess.remove_absolute(venv_python)
+	DirAccess.remove_absolute(venv_python.get_base_dir())
+	DirAccess.remove_absolute(root.path_join(".venv"))
+	DirAccess.remove_absolute(root.path_join("src/godot_ai"))
+	DirAccess.remove_absolute(root.path_join("src"))
+	DirAccess.remove_absolute(deep)
+	DirAccess.remove_absolute(root.path_join("test_project/addons"))
+	DirAccess.remove_absolute(root.path_join("test_project"))
+	DirAccess.remove_absolute(root)
+
+
+func test_find_venv_python_rejects_when_only_src_exists() -> void:
+	## Complement of the first test: `src/godot_ai/` present but no `.venv/`.
+	## Could happen if a user copied the source tree without running setup.
+	## Nothing to return — the helper is a venv locator, not a src locator.
+	var root := _scratch_dir.path_join("fake_src_only")
+	DirAccess.make_dir_recursive_absolute(root.path_join("src/godot_ai"))
+	assert_eq(McpClientConfigurator._find_venv_python_in(root), "")
+	DirAccess.remove_absolute(root.path_join("src/godot_ai"))
+	DirAccess.remove_absolute(root.path_join("src"))
+	DirAccess.remove_absolute(root)
+
+
 func test_uvx_server_command_uses_exact_pin_not_tilde() -> void:
 	## Regression guard for #133: the uvx branch of get_server_command must
 	## pin godot-ai with `==<version>`, not `~=<minor>`. With the tilde
@@ -243,6 +321,32 @@ func test_is_dev_checkout_forced_dev_mode() -> void:
 	var prior_env := OS.get_environment("GODOT_AI_MODE")
 	OS.set_environment("GODOT_AI_MODE", "dev")
 	assert_true(McpClientConfigurator.is_dev_checkout(), "GODOT_AI_MODE=dev must force dev mode")
+	if prior_env.is_empty():
+		OS.unset_environment("GODOT_AI_MODE")
+	else:
+		OS.set_environment("GODOT_AI_MODE", prior_env)
+	_restore_mode_override_setting(prior_setting)
+
+
+func test_get_server_command_forced_user_skips_dev_venv() -> void:
+	## Issue #178 workaround: forcing `user` mode must reroute
+	## `get_server_command` past the dev_venv tier, not just relabel the
+	## dock. Before this fix, a user whose `~/.venv` was wrongly detected
+	## had no UI-based escape — the dropdown would say "user install" but
+	## the spawn would still use the misidentified venv. Now flipping the
+	## override actually changes what gets spawned.
+	var prior_setting: Variant = _clear_mode_override_setting()
+	var prior_env := OS.get_environment("GODOT_AI_MODE")
+	OS.set_environment("GODOT_AI_MODE", "user")
+
+	assert_true(McpClientConfigurator.get_server_launch_mode() != "dev_venv", "mode=user must never resolve to dev_venv")
+
+	var cmd := McpClientConfigurator.get_server_command()
+	for arg in cmd:
+		var s := str(arg)
+		var is_venv_python := s.ends_with("/.venv/bin/python") or s.ends_with("\\.venv\\Scripts\\python.exe") or s.ends_with("/.venv/Scripts/python.exe")
+		assert_false(is_venv_python, "mode=user must not spawn a .venv python binary (got: %s)" % str(cmd))
+
 	if prior_env.is_empty():
 		OS.unset_environment("GODOT_AI_MODE")
 	else:
@@ -772,6 +876,19 @@ func _make_test_toml_client(path: String) -> McpClient:
 func _remove_if_exists(path: String) -> void:
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)
+
+
+## Relative path inside a scratch dir where `_find_venv_python_in` expects
+## to find the python binary — OS-dependent, mirrors the same conditional
+## in `client_configurator.gd::_find_venv_python_in`.
+func _venv_python_relpath() -> String:
+	return ".venv/Scripts/python.exe" if OS.get_name() == "Windows" else ".venv/bin/python"
+
+
+func _touch_file(path: String) -> void:
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	assert_true(f != null, "Failed to create scratch file at %s" % path)
+	f.close()
 
 
 ## Reset http/ws port overrides to the built-in defaults for the duration of

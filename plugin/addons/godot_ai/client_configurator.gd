@@ -252,10 +252,15 @@ static func _is_symlink(path: String) -> bool:
 ## other tiers: dev_venv and system resolve locally, so the flag has nowhere
 ## to go. See plugin.gd::_should_retry_with_refresh.
 static func get_server_command(refresh: bool = false) -> Array[String]:
-	var venv_python := _cached_venv_python()
-	if not venv_python.is_empty():
-		print("MCP | using dev venv: %s" % venv_python)
-		return [venv_python, "-m", "godot_ai"]
+	## `mode_override() == "user"` skips the dev_venv tier even when a nearby
+	## .venv exists — the UI dropdown then becomes an actual workaround for
+	## the "user venv misidentified as dev checkout" bug (#178), not just a
+	## cosmetic relabel.
+	if mode_override() != "user":
+		var venv_python := _cached_venv_python()
+		if not venv_python.is_empty():
+			print("MCP | using dev venv: %s" % venv_python)
+			return [venv_python, "-m", "godot_ai"]
 
 	var uvx := find_uvx()
 	if not uvx.is_empty():
@@ -288,7 +293,7 @@ static func get_server_command(refresh: bool = false) -> Array[String]:
 ## Returned as a stable string so handshakes and session_list can expose it
 ## to MCP callers. Values track the `Literal` on the Python side.
 static func get_server_launch_mode() -> String:
-	if not _cached_venv_python().is_empty():
+	if mode_override() != "user" and not _cached_venv_python().is_empty():
 		return "dev_venv"
 	if not find_uvx().is_empty():
 		return "uvx"
@@ -325,12 +330,22 @@ static func _cached_venv_python() -> String:
 
 
 static func _find_venv_python() -> String:
-	var dir := ProjectSettings.globalize_path("res://").rstrip("/")
+	return _find_venv_python_in(ProjectSettings.globalize_path("res://").rstrip("/"))
+
+
+## Pure path-based lookup so tests can drive it with a scratch dir instead of
+## monkey-patching `res://`. Only treats a `.venv/bin/python` as a godot-ai dev
+## venv if a sibling `src/godot_ai/` exists in the same parent dir — otherwise
+## an unrelated user venv (e.g. `~/.venv` from a data-science side project)
+## gets picked up and `python -m godot_ai` fails with ModuleNotFoundError about
+## 5s into startup, cascading into an infinite reconnect loop. See #178.
+static func _find_venv_python_in(start_dir: String) -> String:
+	var dir := start_dir.rstrip("/")
 	var python_name := "python" if OS.get_name() != "Windows" else "python.exe"
 	var venv_dir := ".venv/bin/" if OS.get_name() != "Windows" else ".venv/Scripts/"
 	for i in 5:
 		var venv_path := dir.path_join(venv_dir + python_name)
-		if FileAccess.file_exists(venv_path):
+		if FileAccess.file_exists(venv_path) and DirAccess.dir_exists_absolute(dir.path_join("src/godot_ai")):
 			return venv_path
 		var parent := dir.get_base_dir()
 		if parent == dir:
