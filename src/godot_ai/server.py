@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
@@ -54,7 +54,11 @@ class AppContext:
     client: GodotClient
 
 
-def create_server(ws_port: int = 9500) -> FastMCP:
+def create_server(
+    ws_port: int = 9500,
+    *,
+    exclude_domains: Iterable[str] | None = None,
+) -> FastMCP:
     logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
 
     # Capture ws_port in the lifespan closure
@@ -135,32 +139,62 @@ def create_server(ws_port: int = 9500) -> FastMCP:
         lifespan=_lifespan,
     )
 
-    register_session_tools(mcp)
-    register_editor_tools(mcp)
-    register_scene_tools(mcp)
-    register_node_tools(mcp)
-    register_project_tools(mcp)
-    register_script_tools(mcp)
-    register_resource_tools(mcp)
-    register_filesystem_tools(mcp)
-    register_client_tools(mcp)
-    register_signal_tools(mcp)
-    register_autoload_tools(mcp)
-    register_input_map_tools(mcp)
-    register_testing_tools(mcp)
-    register_batch_tools(mcp)
-    register_ui_tools(mcp)
-    register_control_tools(mcp)
-    register_theme_tools(mcp)
-    register_animation_tools(mcp)
-    register_material_tools(mcp)
-    register_particle_tools(mcp)
-    register_camera_tools(mcp)
-    register_audio_tools(mcp)
-    register_physics_shape_tools(mcp)
-    register_environment_tools(mcp)
-    register_texture_tools(mcp)
-    register_curve_tools(mcp)
+    exclude = set(exclude_domains or ())
+    if exclude:
+        logger.info("Excluding tool domains: %s", ", ".join(sorted(exclude)))
+
+    ## Core-bearing domains: always registered; `include_non_core=False` keeps
+    ## only the core tool alive when the user excluded that domain.
+    register_session_tools(mcp, include_non_core="session" not in exclude)
+    register_editor_tools(mcp, include_non_core="editor" not in exclude)
+    register_scene_tools(mcp, include_non_core="scene" not in exclude)
+    register_node_tools(mcp, include_non_core="node" not in exclude)
+
+    ## Non-core-bearing domains: dropped wholesale when excluded.
+    if "project" not in exclude:
+        register_project_tools(mcp)
+    if "script" not in exclude:
+        register_script_tools(mcp)
+    if "resource" not in exclude:
+        register_resource_tools(mcp)
+    if "filesystem" not in exclude:
+        register_filesystem_tools(mcp)
+    if "client" not in exclude:
+        register_client_tools(mcp)
+    if "signal" not in exclude:
+        register_signal_tools(mcp)
+    if "autoload" not in exclude:
+        register_autoload_tools(mcp)
+    if "input_map" not in exclude:
+        register_input_map_tools(mcp)
+    if "testing" not in exclude:
+        register_testing_tools(mcp)
+    if "batch" not in exclude:
+        register_batch_tools(mcp)
+    if "ui" not in exclude:
+        register_ui_tools(mcp)
+    if "control" not in exclude:
+        register_control_tools(mcp)
+    if "theme" not in exclude:
+        register_theme_tools(mcp)
+    if "animation" not in exclude:
+        register_animation_tools(mcp)
+    if "material" not in exclude:
+        register_material_tools(mcp)
+    if "particle" not in exclude:
+        register_particle_tools(mcp)
+    if "camera" not in exclude:
+        register_camera_tools(mcp)
+    if "audio" not in exclude:
+        register_audio_tools(mcp)
+    if "physics_shape" not in exclude:
+        register_physics_shape_tools(mcp)
+    if "environment" not in exclude:
+        register_environment_tools(mcp)
+    if "texture" not in exclude:
+        register_texture_tools(mcp)
+    if "curve" not in exclude:
+        register_curve_tools(mcp)
     register_session_resources(mcp)
     register_scene_resources(mcp)
     register_editor_resources(mcp)

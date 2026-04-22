@@ -779,6 +779,14 @@ static func _build_server_flags(port: int, ws_port: int) -> Array[String]:
 		"--ws-port", str(ws_port),
 		"--pid-file", ProjectSettings.globalize_path(SERVER_PID_FILE),
 	])
+	## Append `--exclude-domains` only when the user has actually picked at
+	## least one domain to drop. Skipping the empty case keeps spawns
+	## compatible with older (pre-1.4.2) servers that don't know the flag —
+	## relevant during staggered plugin/server upgrades in user-mode installs.
+	var excluded := McpClientConfigurator.excluded_domains()
+	if not excluded.is_empty():
+		flags.append("--exclude-domains")
+		flags.append(excluded)
 	return flags
 
 

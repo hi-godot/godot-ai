@@ -33,6 +33,20 @@ var _clients_window: Window
 var _dev_mode_toggle: CheckButton
 var _install_label: Label
 
+# Tools tab (secondary window, Tab 2) — domain-exclusion UI for clients
+# that cap total tool count (Antigravity: 100). Pending set is mutated by
+# checkbox clicks; saved set reflects what the spawned server actually
+# sees. `Apply & Restart Server` writes pending → setting and triggers a
+# plugin reload so the new server comes up with the trimmed list.
+var _tools_pending_excluded: PackedStringArray = PackedStringArray()
+var _tools_saved_excluded: PackedStringArray = PackedStringArray()
+var _tools_domain_checkboxes: Dictionary = {}
+var _tools_count_label: Label
+var _tools_apply_btn: Button
+var _tools_reset_btn: Button
+var _tools_dirty_warning: Label
+var _tools_close_confirm: ConfirmationDialog
+
 ## Per-client UI handles, keyed by client id. Each entry holds the row's
 ## status dot, configure button, remove button, manual-command panel + text.
 var _client_rows: Dictionary = {}
@@ -350,7 +364,8 @@ func _build_ui() -> void:
 	clients_row.add_child(_clients_summary_label)
 
 	var clients_open_btn := Button.new()
-	clients_open_btn.text = "Configure Clients"
+	clients_open_btn.text = "Clients & Tools"
+	clients_open_btn.tooltip_text = "Open the MCP settings window — configure AI clients or disable tool domains to fit under a client's hard tool-count cap (e.g. Antigravity's 100)."
 	clients_open_btn.pressed.connect(_on_open_clients_window)
 	clients_row.add_child(clients_open_btn)
 
@@ -373,8 +388,8 @@ func _build_ui() -> void:
 	add_child(_drift_banner)
 
 	_clients_window = Window.new()
-	_clients_window.title = "Configure MCP Clients"
-	_clients_window.min_size = Vector2i(560, 400)
+	_clients_window.title = "MCP Clients & Tools"
+	_clients_window.min_size = Vector2i(560, 460)
 	_clients_window.visible = false
 	_clients_window.close_requested.connect(_on_clients_window_close_requested)
 	add_child(_clients_window)
@@ -388,22 +403,32 @@ func _build_ui() -> void:
 	window_margin.add_theme_constant_override("margin_bottom", 12)
 	_clients_window.add_child(window_margin)
 
-	var window_body := VBoxContainer.new()
-	window_body.add_theme_constant_override("separation", 8)
-	window_margin.add_child(window_body)
+	## Two-tab secondary window: Clients (existing per-client rows) and Tools
+	## (domain-exclusion checkboxes for clients that cap total tool count,
+	## like Antigravity at 100). Adding a third tab is one more _build_*_tab
+	## call and a set_tab_title line — no surgery on the rest of the window.
+	var tabs := TabContainer.new()
+	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	window_margin.add_child(tabs)
+
+	var clients_tab := VBoxContainer.new()
+	clients_tab.name = "Clients"
+	clients_tab.add_theme_constant_override("separation", 8)
+	tabs.add_child(clients_tab)
 
 	_client_configure_all_btn = Button.new()
 	_client_configure_all_btn.text = "Configure all"
 	_client_configure_all_btn.tooltip_text = "Configure every client that isn't already pointing at this server"
 	_client_configure_all_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
 	_client_configure_all_btn.pressed.connect(_on_configure_all_clients)
-	window_body.add_child(_client_configure_all_btn)
+	clients_tab.add_child(_client_configure_all_btn)
 
 	var clients_scroll := ScrollContainer.new()
 	clients_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	clients_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	clients_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	window_body.add_child(clients_scroll)
+	clients_tab.add_child(clients_scroll)
 
 	_client_grid = VBoxContainer.new()
 	_client_grid.add_theme_constant_override("separation", 4)
@@ -412,6 +437,8 @@ func _build_ui() -> void:
 
 	for client_id in McpClientConfigurator.client_ids():
 		_build_client_row(client_id)
+
+	_build_tools_tab(tabs)
 
 	add_child(HSeparator.new())
 
@@ -992,6 +1019,11 @@ func _on_open_clients_window() -> void:
 	## colors land on the next frame. Synchronous would block the popup paint
 	## for ~18 filesystem reads (~100-300ms with AV scanning). See #166.
 	_refresh_all_client_statuses.call_deferred()
+	## Also re-sync the Tools tab from the persisted setting — another
+	## editor instance (or a hand-edit of editor_settings-4.tres) may have
+	## changed the excluded list while the window was closed.
+	_reset_tools_pending_from_setting()
+	_refresh_tools_ui_state()
 	# popup_centered() with a minsize forces the window to that size and
 	# centers on the parent viewport. Setting .size on a hidden Window
 	# doesn't always take effect, so we force it at popup time here.
@@ -999,6 +1031,246 @@ func _on_open_clients_window() -> void:
 
 
 func _on_clients_window_close_requested() -> void:
+	if _clients_window == null:
+		return
+	## If the user has checked/unchecked domains without applying, a close
+	## would silently throw the pending state away. Prompt; if they confirm
+	## discard, reset pending → saved so the window shows the persisted
+	## state the next time they open it.
+	if _tools_pending_excluded != _tools_saved_excluded:
+		_show_tools_close_confirm()
+		return
+	_clients_window.hide()
+
+
+# --- Tools tab (domain exclusion) ---
+
+func _build_tools_tab(tabs: TabContainer) -> void:
+	## Tab 2 — domain-exclusion checkboxes. Rendered once, on dock construction.
+	## `_reset_tools_pending_from_setting()` re-syncs checkbox state from the
+	## saved setting each time the window opens.
+	var tools_tab := VBoxContainer.new()
+	tools_tab.name = "Tools"
+	tools_tab.add_theme_constant_override("separation", 8)
+	tabs.add_child(tools_tab)
+
+	var intro := Label.new()
+	intro.text = (
+		"Some MCP clients cap tools per connection (Antigravity: 100). "
+		+ "Uncheck a domain to drop its non-core tools from this server. "
+		+ "Core tools stay on. Changes require a server restart."
+	)
+	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	intro.add_theme_color_override("font_color", COLOR_MUTED)
+	intro.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tools_tab.add_child(intro)
+
+	var count_row := HBoxContainer.new()
+	count_row.add_theme_constant_override("separation", 8)
+	var count_header := Label.new()
+	count_header.text = "Enabled:"
+	count_header.add_theme_color_override("font_color", COLOR_MUTED)
+	count_row.add_child(count_header)
+	_tools_count_label = Label.new()
+	_tools_count_label.add_theme_font_size_override("font_size", 15)
+	count_row.add_child(_tools_count_label)
+	_tools_dirty_warning = Label.new()
+	_tools_dirty_warning.add_theme_color_override("font_color", COLOR_AMBER)
+	_tools_dirty_warning.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tools_dirty_warning.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_tools_dirty_warning.visible = false
+	_tools_dirty_warning.text = "Unapplied changes"
+	count_row.add_child(_tools_dirty_warning)
+	tools_tab.add_child(count_row)
+
+	tools_tab.add_child(HSeparator.new())
+
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	tools_tab.add_child(scroll)
+
+	var grid := VBoxContainer.new()
+	grid.add_theme_constant_override("separation", 4)
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(grid)
+
+	## Core pseudo-row — disabled checkbox, always checked. Shows the 5
+	## always-loaded tools as a single line item so the user can see where
+	## their baseline tool budget goes without listing individual core names
+	## inline (tooltip has them).
+	var core_row := HBoxContainer.new()
+	core_row.add_theme_constant_override("separation", 8)
+	var core_chk := CheckBox.new()
+	core_chk.button_pressed = true
+	core_chk.disabled = true
+	core_chk.focus_mode = Control.FOCUS_NONE
+	core_row.add_child(core_chk)
+	var core_label := Label.new()
+	core_label.text = "Core (always on)"
+	core_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	core_row.add_child(core_label)
+	var core_count := Label.new()
+	core_count.text = "%d tools" % McpToolCatalog.CORE_TOOLS.size()
+	core_count.add_theme_color_override("font_color", COLOR_MUTED)
+	core_row.add_child(core_count)
+	core_row.tooltip_text = ", ".join(McpToolCatalog.CORE_TOOLS)
+	grid.add_child(core_row)
+
+	grid.add_child(HSeparator.new())
+
+	_tools_domain_checkboxes.clear()
+	for entry in McpToolCatalog.DOMAINS:
+		_build_tools_domain_row(grid, entry)
+
+	tools_tab.add_child(HSeparator.new())
+
+	var footer := HBoxContainer.new()
+	footer.add_theme_constant_override("separation", 8)
+
+	_tools_apply_btn = Button.new()
+	_tools_apply_btn.text = "Apply && Restart Server"
+	_tools_apply_btn.tooltip_text = "Save the excluded list to Editor Settings and reload the plugin so the server respawns with --exclude-domains."
+	_tools_apply_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tools_apply_btn.pressed.connect(_on_tools_apply)
+	footer.add_child(_tools_apply_btn)
+
+	_tools_reset_btn = Button.new()
+	_tools_reset_btn.text = "Reset to defaults"
+	_tools_reset_btn.tooltip_text = "Re-enable every domain (no --exclude-domains flag). Still needs Apply."
+	_tools_reset_btn.pressed.connect(_on_tools_reset)
+	footer.add_child(_tools_reset_btn)
+
+	tools_tab.add_child(footer)
+
+	_tools_close_confirm = ConfirmationDialog.new()
+	_tools_close_confirm.title = "Discard unapplied changes?"
+	_tools_close_confirm.dialog_text = (
+		"You've checked/unchecked domains but haven't clicked Apply.\n"
+		+ "Close the window and discard those changes?"
+	)
+	_tools_close_confirm.ok_button_text = "Discard"
+	_tools_close_confirm.confirmed.connect(_on_tools_discard_confirmed)
+	add_child(_tools_close_confirm)
+
+	_reset_tools_pending_from_setting()
+	_refresh_tools_ui_state()
+
+
+func _build_tools_domain_row(parent: VBoxContainer, entry: Dictionary) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+
+	var chk := CheckBox.new()
+	chk.button_pressed = true  # default; `_reset_tools_pending_from_setting` corrects
+	chk.toggled.connect(_on_tools_domain_toggled.bind(String(entry["id"])))
+	row.add_child(chk)
+
+	var name_label := Label.new()
+	name_label.text = String(entry["label"])
+	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(name_label)
+
+	var count_label := Label.new()
+	count_label.text = "%d tools" % int(entry["count"])
+	count_label.add_theme_color_override("font_color", COLOR_MUTED)
+	row.add_child(count_label)
+
+	## Hover tooltip = flat list of tool names in this domain. Lets the
+	## user decide without leaving the dock (e.g. "I just want to drop
+	## `animation_preset_*` — do I lose anything else?").
+	var tools_list: Array = entry.get("tools", [])
+	row.tooltip_text = ", ".join(tools_list)
+	name_label.tooltip_text = row.tooltip_text
+	count_label.tooltip_text = row.tooltip_text
+
+	parent.add_child(row)
+	_tools_domain_checkboxes[String(entry["id"])] = chk
+
+
+func _reset_tools_pending_from_setting() -> void:
+	## Read the saved setting → pending/saved arrays, then sync checkbox state.
+	## Unknown domain names in the setting (e.g. from an older plugin
+	## version) are silently dropped — matches the Python side's
+	## warn-and-continue behavior when it sees an unknown name.
+	var saved_raw := McpClientConfigurator.excluded_domains()
+	var saved := PackedStringArray()
+	if not saved_raw.is_empty():
+		for part in saved_raw.split(","):
+			var t := part.strip_edges()
+			if t.is_empty():
+				continue
+			if _tools_domain_checkboxes.has(t) and saved.find(t) == -1:
+				saved.append(t)
+	saved.sort()
+	_tools_saved_excluded = saved
+	_tools_pending_excluded = saved.duplicate()
+	for id in _tools_domain_checkboxes:
+		var chk: CheckBox = _tools_domain_checkboxes[id]
+		## `set_pressed_no_signal` — mutating programmatically should not
+		## fire the toggled handler, which would mutate pending back.
+		chk.set_pressed_no_signal(_tools_pending_excluded.find(id) == -1)
+
+
+func _on_tools_domain_toggled(pressed: bool, domain_id: String) -> void:
+	var idx := _tools_pending_excluded.find(domain_id)
+	if pressed and idx != -1:
+		_tools_pending_excluded.remove_at(idx)
+	elif not pressed and idx == -1:
+		_tools_pending_excluded.append(domain_id)
+		_tools_pending_excluded.sort()
+	_refresh_tools_ui_state()
+
+
+func _refresh_tools_ui_state() -> void:
+	if _tools_count_label == null:
+		return
+	var enabled := McpToolCatalog.enabled_tool_count(_tools_pending_excluded)
+	var total := McpToolCatalog.total_tool_count()
+	_tools_count_label.text = "%d / %d" % [enabled, total]
+	var dirty := _tools_pending_excluded != _tools_saved_excluded
+	_tools_dirty_warning.visible = dirty
+	_tools_apply_btn.disabled = not dirty
+	## Color the count when the user is over Antigravity's cap — a soft
+	## signal that their selection still won't fit. 100 is the Antigravity
+	## limit; other clients may cap higher, so this is advisory only.
+	if enabled > 100:
+		_tools_count_label.add_theme_color_override("font_color", COLOR_AMBER)
+	else:
+		_tools_count_label.remove_theme_color_override("font_color")
+
+
+func _on_tools_apply() -> void:
+	var canonical_excluded := McpToolCatalog.canonical(_tools_pending_excluded)
+	var es := EditorInterface.get_editor_settings()
+	if es != null:
+		es.set_setting(McpClientConfigurator.SETTING_EXCLUDED_DOMAINS, canonical_excluded)
+	_tools_saved_excluded = _tools_pending_excluded.duplicate()
+	_refresh_tools_ui_state()
+	## Plugin reload respawns the server with the new `--exclude-domains`
+	## flag (see `plugin.gd::_build_server_flags`). Mirrors the port-change
+	## Apply flow.
+	_on_reload_plugin()
+
+
+func _on_tools_reset() -> void:
+	_tools_pending_excluded = PackedStringArray()
+	for id in _tools_domain_checkboxes:
+		var chk: CheckBox = _tools_domain_checkboxes[id]
+		chk.set_pressed_no_signal(true)
+	_refresh_tools_ui_state()
+
+
+func _show_tools_close_confirm() -> void:
+	if _tools_close_confirm == null:
+		return
+	_tools_close_confirm.popup_centered()
+
+
+func _on_tools_discard_confirmed() -> void:
+	_reset_tools_pending_from_setting()
+	_refresh_tools_ui_state()
 	if _clients_window != null:
 		_clients_window.hide()
 

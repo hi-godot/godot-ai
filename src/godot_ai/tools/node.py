@@ -9,7 +9,24 @@ from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.tools import DEFER_META
 
 
-def register_node_tools(mcp: FastMCP) -> None:
+def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
+    @mcp.tool()
+    async def node_get_properties(ctx: Context, path: str, session_id: str = "") -> dict:
+        """Get all properties of a node.
+
+        Returns the property list with current values for the node at
+        the given scene path.
+
+        Args:
+            path: Scene path of the node (e.g. "/Main/Camera3D").
+            session_id: Optional Godot session to target. Empty = active session.
+        """
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
+        return await node_handlers.node_get_properties(runtime, path=path)
+
+    if not include_non_core:
+        return
+
     @mcp.tool(meta=DEFER_META)
     async def node_create(
         ctx: Context,
@@ -82,20 +99,6 @@ def register_node_tools(mcp: FastMCP) -> None:
             offset=offset,
             limit=limit,
         )
-
-    @mcp.tool()
-    async def node_get_properties(ctx: Context, path: str, session_id: str = "") -> dict:
-        """Get all properties of a node.
-
-        Returns the property list with current values for the node at
-        the given scene path.
-
-        Args:
-            path: Scene path of the node (e.g. "/Main/Camera3D").
-            session_id: Optional Godot session to target. Empty = active session.
-        """
-        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await node_handlers.node_get_properties(runtime, path=path)
 
     @mcp.tool(meta=DEFER_META)
     async def node_get_children(ctx: Context, path: str, session_id: str = "") -> dict:
