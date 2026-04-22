@@ -6,11 +6,14 @@ extends Node
 ## Only handles connect, reconnect, send, and receive.
 ## Command dispatch is owned by McpDispatcher.
 
-const DEFAULT_URL := "ws://127.0.0.1:%d" % McpClientConfigurator.SERVER_WS_PORT
 const RECONNECT_DELAYS: Array[float] = [1.0, 2.0, 4.0, 8.0, 10.0]
 
 var _peer := WebSocketPeer.new()
-var _url := DEFAULT_URL
+## Resolved from `McpClientConfigurator.ws_port()` in `_ready` so EditorSettings
+## overrides land before the first connect. Previously a file-scope const, which
+## baked the port at script compile time — meaning a reconfigured ws_port only
+## took effect on the next editor restart.
+var _url := ""
 var _connected := false
 var _reconnect_attempt := 0
 var _reconnect_timer := 0.0
@@ -25,6 +28,7 @@ var pause_processing := false
 
 func _ready() -> void:
 	_session_id = _make_session_id(ProjectSettings.globalize_path("res://"))
+	_url = "ws://127.0.0.1:%d" % McpClientConfigurator.ws_port()
 	## Increase outbound buffer for large messages (e.g. screenshot base64).
 	## Default is 64 KB; screenshots can be several MB.
 	_peer.outbound_buffer_size = 4 * 1024 * 1024  # 4 MB

@@ -102,7 +102,17 @@ def test_atexit_cleanup_tolerates_missing_file(tmp_path, _unregister_atexit):
 
 
 def test_install_pid_file_expands_user(tmp_path, monkeypatch, _unregister_atexit):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    ## `Path.expanduser()` reads different env vars per platform — Windows'
+    ## `ntpath.expanduser` ignores HOME and consults USERPROFILE (falling
+    ## back to HOMEDRIVE+HOMEPATH), while POSIX `posixpath.expanduser`
+    ## reads HOME. Point whichever applies at the tmp_path so `~/server.pid`
+    ## actually lands in the sandbox instead of the developer's real home.
+    if os.name == "nt":
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        monkeypatch.delenv("HOMEDRIVE", raising=False)
+        monkeypatch.delenv("HOMEPATH", raising=False)
+    else:
+        monkeypatch.setenv("HOME", str(tmp_path))
 
     path_arg = "~/server.pid"
     result = install_pid_file(path_arg)
