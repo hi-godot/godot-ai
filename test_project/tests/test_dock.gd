@@ -127,20 +127,15 @@ func test_dev_checkout_tooltip_exposes_symlink_target() -> void:
 	assert_contains(tooltip, target, "Tooltip should embed the resolved target path")
 
 
-func test_update_precheck_failure_preserves_running_server() -> void:
-	## When `uvx --refresh --from godot-ai==<new>` fails — typically because
-	## PyPI's index cache still says the version doesn't exist right after a
-	## fresh publish — we MUST leave the running server alone and surface a
-	## retry hint. Tearing down the server before confirming uvx can resolve
-	## the new version is what put Discord users in an infinite reconnect
-	## loop (server exits ~5s after spawn, plugin reconnects forever).
-	_dock._build_ui()
-	_dock._remote_update_version = "9.9.9"
-	_dock._apply_update_precheck_result(1, "No solution found — godot-ai==9.9.9 is unsatisfiable")
-	assert_eq(_dock._update_btn.text, "Retry update",
-		"Failure must re-enable the button as a retry — not leave it stuck in 'Preparing server...'")
-	assert_false(_dock._update_btn.disabled, "User must be able to click to retry once PyPI propagates")
-	assert_contains(_dock._update_label.text, "9.9.9",
-		"Label must name the target version so the user knows which retry is pending")
-	assert_contains(_dock._update_label.text, "propagating",
-		"Label must explain the failure mode so the user doesn't assume their install is broken")
+func test_crashed_body_mentions_pypi_propagation_on_uvx_tier() -> void:
+	## When both spawn attempts fail on the uvx tier, the dock panel should
+	## explain that PyPI propagation is the likely cause — so the user
+	## doesn't assume their install is corrupt. Non-uvx tiers keep the
+	## original traceback hint. See #172.
+	var body := McpDockScript._crash_body_for_state(McpSpawnState.CRASHED)
+	assert_false(body.is_empty(), "CRASHED body must not be empty")
+	if McpClientConfigurator.get_server_launch_mode() == "uvx":
+		assert_contains(body, "PyPI", "uvx-tier body should name PyPI as the likely cause")
+		assert_contains(body, "Reload Plugin", "uvx-tier body should direct the user to the retry action")
+	else:
+		assert_contains(body, "output log", "Non-uvx body should still point at Godot's traceback")
