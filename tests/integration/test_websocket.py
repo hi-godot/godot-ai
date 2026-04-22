@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
+import websockets
 
+from godot_ai import __version__ as _SERVER_VERSION
 from godot_ai.godot_client.client import GodotClient, GodotCommandError
 
 # ---------------------------------------------------------------------------
@@ -58,6 +61,36 @@ class TestHandshake:
         session = harness.registry.get("sess-no-pid")
         assert session.editor_pid == 0
         await plugin.close()
+
+    async def test_server_sends_handshake_ack_with_version(self, harness):
+        ## The dock's Server-row reads `Connection.server_version` to render
+        ## the TRUE running server version instead of the plugin's expected
+        ## version. Without the ack, the plugin falls back to "expected" and
+        ## can't surface the self-update-leaves-stale-server drift case
+        ## (plugin updated but foreign-adopted server still running).
+        ## Bypass the `connect_plugin` helper so we can observe the ack on
+        ## the wire directly — the helper drains it.
+        ws = await websockets.connect(f"ws://127.0.0.1:{harness.port}")
+        handshake = {
+            "type": "handshake",
+            "session_id": "ack-probe",
+            "godot_version": "4.4.1",
+            "project_path": "/tmp",
+            "plugin_version": "9.9.9",
+            "protocol_version": 1,
+            "readiness": "ready",
+            "editor_pid": 0,
+        }
+        await ws.send(json.dumps(handshake))
+
+        ack_raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
+        ack = json.loads(ack_raw)
+        assert ack["type"] == "handshake_ack"
+        assert ack["server_version"] == _SERVER_VERSION, (
+            "ack must quote the server's own package version (from "
+            "godot_ai.__version__), not echo the handshake's plugin_version"
+        )
+        await ws.close()
 
     async def test_inbound_message_updates_last_seen(self, harness):
         plugin = await harness.connect_plugin(session_id="sess-heartbeat")

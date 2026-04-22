@@ -18,6 +18,11 @@ var _connected := false
 var _reconnect_attempt := 0
 var _reconnect_timer := 0.0
 var _session_id := ""
+## Godot-AI Python package version reported by the server in its `handshake_ack`
+## reply. Empty until the ack lands. Older servers (pre-handshake_ack) leave
+## this empty forever — callers that gate on it (the dock's mismatch banner)
+## must treat empty as "unknown, don't raise a false alarm".
+var server_version := ""
 
 var dispatcher: McpDispatcher
 var log_buffer: McpLogBuffer
@@ -62,6 +67,7 @@ func _process(delta: float) -> void:
 		WebSocketPeer.STATE_CLOSED:
 			if _connected:
 				_connected = false
+				_clear_on_disconnect()
 				var code := _peer.get_close_code()
 				log_buffer.log("disconnected (code %d)" % code)
 			_reconnect_timer -= delta
@@ -82,6 +88,15 @@ func disconnect_from_server() -> void:
 	if _connected:
 		_peer.close(1000, "Plugin unloading")
 		_connected = false
+
+
+## Reset per-connection state that was filled in by the previous server
+## and must NOT bleed into the next one. `force_restart_server` swaps
+## servers without reloading the plugin, so without this reset the dock
+## would keep showing the killed server's version until the next ack.
+## Also fires on plain reconnect-loop drops — correct either way.
+func _clear_on_disconnect() -> void:
+	server_version = ""
 
 
 ## Full pre-free cleanup for plugin unload: stop _process, close the
@@ -132,7 +147,12 @@ func _handle_message(raw: String) -> void:
 	if parsed == null:
 		push_warning("MCP: failed to parse message: %s" % raw)
 		return
-	if parsed is Dictionary and parsed.has("request_id") and parsed.has("command"):
+	if not (parsed is Dictionary):
+		return
+	if parsed.get("type", "") == "handshake_ack":
+		server_version = str(parsed.get("server_version", ""))
+		return
+	if parsed.has("request_id") and parsed.has("command"):
 		if dispatcher:
 			dispatcher.enqueue(parsed)
 

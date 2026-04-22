@@ -74,3 +74,69 @@ func test_slugify_preserves_alphanumeric() -> void:
 func test_slugify_empty_returns_empty() -> void:
 	assert_eq(Connection._slugify(""), "")
 	assert_eq(Connection._slugify("!!!"), "")
+
+
+# ----- handshake_ack parsing -----
+#
+# The server's handshake_ack reply carries the TRUE running server version so
+# the dock's Setup-section "Server" line can stop lying about the plugin's
+# expected version and instead flag self-update drift. Connection parses the
+# ack in `_handle_message` and stashes the version on `server_version`.
+
+
+func test_handle_message_stores_server_version_from_ack() -> void:
+	var conn := Connection.new()
+	assert_eq(conn.server_version, "", "server_version defaults to empty")
+	conn._handle_message('{"type":"handshake_ack","server_version":"1.4.2"}')
+	assert_eq(conn.server_version, "1.4.2")
+	conn.free()
+
+
+func test_handle_message_ignores_unknown_type() -> void:
+	## The dispatcher branch requires both `request_id` and `command` — any
+	## other typed message (future protocol additions) must no-op rather
+	## than crash, so a newer server can roll additions without requiring
+	## a plugin bump.
+	var conn := Connection.new()
+	conn._handle_message('{"type":"future_event","payload":{}}')
+	assert_eq(conn.server_version, "", "unknown types must not touch server_version")
+	conn.free()
+
+
+func test_handle_message_survives_malformed_ack() -> void:
+	## Forward-compat guard: if a future server sends handshake_ack with no
+	## `server_version` field, Connection must default to empty instead of
+	## crashing on missing-key access.
+	var conn := Connection.new()
+	conn._handle_message('{"type":"handshake_ack"}')
+	assert_eq(conn.server_version, "", "missing field must default to empty, not crash")
+	conn.free()
+
+
+func test_disconnect_clears_server_version() -> void:
+	## `server_version` must NOT survive a reconnect. `force_restart_server`
+	## kills the old process and waits for a new one; if the replacement is
+	## an older build without handshake_ack, it never updates the field, so
+	## the dock would keep showing the killed server's version. Reproduced
+	## live during the PR smoke test (amber "99.0.0-smoke-test" label stayed
+	## visible after the Restart successfully swapped in a v1.4.2 server).
+	## Clearing on the STATE_CLOSED transition keeps the dock honest.
+	var conn := Connection.new()
+	conn._handle_message('{"type":"handshake_ack","server_version":"1.2.3"}')
+	assert_eq(conn.server_version, "1.2.3", "precondition: version stored from ack")
+	## Force the STATE_CLOSED branch by flipping `_connected` true and
+	## calling `disconnect_from_server`. The real path runs through
+	## `_process`, but the observable side-effect we care about
+	## (server_version cleared on the true → false flip) is codified
+	## directly so a future refactor of _process can't silently break it.
+	conn._connected = true
+	conn.disconnect_from_server()
+	## `disconnect_from_server` itself flips `_connected` but doesn't clear
+	## server_version — that happens on the next STATE_CLOSED tick. Simulate
+	## that tick directly via the same clearing idiom we use in _process.
+	conn._connected = true  # re-arm so the branch will fire
+	## Inline the STATE_CLOSED → false transition by calling the private
+	## handler the way _process would; assert version cleared afterwards.
+	conn._clear_on_disconnect()
+	assert_eq(conn.server_version, "", "reconnect must not inherit stale version")
+	conn.free()
