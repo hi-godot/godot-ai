@@ -398,12 +398,7 @@ func _start_server() -> void:
 	var cmd: String = server_cmd[0]
 	var args: Array[String] = []
 	args.assign(server_cmd.slice(1))
-	args.append_array([
-		"--transport", "streamable-http",
-		"--port", str(port),
-		"--ws-port", str(ws_port),
-		"--pid-file", ProjectSettings.globalize_path(SERVER_PID_FILE),
-	])
+	args.append_array(_build_server_flags(port, ws_port))
 
 	## Wipe any stale pid-file before spawning so a failed launch can't
 	## leave last session's PID sitting there for _find_managed_pid to
@@ -559,17 +554,9 @@ func _respawn_with_refresh() -> void:
 	var cmd: String = server_cmd[0]
 	var args: Array[String] = []
 	args.assign(server_cmd.slice(1))
-	var port := McpClientConfigurator.http_port()
-	var ws_port := McpClientConfigurator.ws_port()
-	args.append_array([
-		"--transport", "streamable-http",
-		"--port", str(port),
-		"--ws-port", str(ws_port),
-		"--pid-file", ProjectSettings.globalize_path(SERVER_PID_FILE),
-	])
+	args.append_array(_build_server_flags(McpClientConfigurator.http_port(), McpClientConfigurator.ws_port()))
 	_clear_pid_file()
 	_log_buffer.log("retrying with --refresh (PyPI index may be stale)")
-	print("MCP | retrying with --refresh (PyPI index may be stale)")
 	_server_pid = OS.create_process(cmd, args)
 	if _server_pid > 0:
 		_server_spawn_ms = Time.get_ticks_msec()
@@ -780,11 +767,26 @@ func _finalize_stop_if_port_free(port: int) -> bool:
 	return true
 
 
-## True if the given PID corresponds to a live process. Uses POSIX `kill -0`
-## (doesn't actually kill — just probes whether the process exists) or the
-## Windows tasklist equivalent. Used by _start_server to distinguish a live
+## Shared tail of the server CLI: transport, ports, and `--pid-file`. Both
+## the initial spawn in `_start_server` and the `--refresh` retry in
+## `_respawn_with_refresh` go through here so a new flag added in one place
+## can't silently drop out of the other.
+static func _build_server_flags(port: int, ws_port: int) -> Array[String]:
+	var flags: Array[String] = []
+	flags.assign([
+		"--transport", "streamable-http",
+		"--port", str(port),
+		"--ws-port", str(ws_port),
+		"--pid-file", ProjectSettings.globalize_path(SERVER_PID_FILE),
+	])
+	return flags
+
+
+## True if the given PID corresponds to a live (non-zombie) process.
+## POSIX uses `ps -o stat=` (see inline comment for the zombie rationale);
+## Windows uses `tasklist`. Called by `_start_server` to distinguish a live
 ## managed server that outlived its editor from a stale EditorSettings
-## record pointing at a PID that no longer exists.
+## record, and by `_check_server_health` to detect a fast-failing launcher.
 static func _pid_alive(pid: int) -> bool:
 	if pid <= 0:
 		return false
