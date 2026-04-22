@@ -536,7 +536,19 @@ func _build_client_row(client_id: String) -> void:
 
 func _update_status() -> void:
 	var connected := _connection.is_connected
-	var server_status: Dictionary = _plugin.get_server_status()
+	## During plugin self-update there's a brief window where this dock
+	## script is already the new version (Godot hot-reloads scripts on
+	## file change) but `_plugin` is still the old `EditorPlugin` instance
+	## (only `set_plugin_enabled(false, true)` re-instantiates that). When
+	## the new dock calls a method the old plugin doesn't have, `_process`
+	## errors every frame until the deferred `_reload_after_update` lands.
+	## Guard every `_plugin.<new_method>()` call with `has_method` so that
+	## window stays silent. See #168.
+	var server_status: Dictionary = (
+		_plugin.get_server_status()
+		if _plugin != null and _plugin.has_method("get_server_status")
+		else {}
+	)
 	var state: String = server_status.get("state", McpSpawnState.OK)
 
 	## One `match`/`elif` chain, one source of truth. Adding a new
@@ -901,6 +913,10 @@ func _update_dev_server_btn() -> void:
 	if _dev_server_btn == null:
 		return
 	if _plugin == null:
+		return
+	## Defensive guard against the self-update mixed-state window — see the
+	## comment in `_update_status` for the full story. Same #168.
+	if not (_plugin.has_method("has_managed_server") and _plugin.has_method("is_dev_server_running")):
 		return
 	var state := _dev_server_btn_state(_plugin.has_managed_server(), _plugin.is_dev_server_running())
 	_dev_server_btn.text = state["text"]
