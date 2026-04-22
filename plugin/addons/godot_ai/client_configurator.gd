@@ -254,7 +254,7 @@ static func _is_symlink(path: String) -> bool:
 static func get_server_command(refresh: bool = false) -> Array[String]:
 	## `mode_override() == "user"` skips the dev_venv tier even when a nearby
 	## .venv exists — the UI dropdown then becomes an actual workaround for
-	## the "user venv misidentified as dev checkout" bug (#178), not just a
+	## the "user venv misidentified as dev checkout" bug, not just a
 	## cosmetic relabel.
 	if mode_override() != "user":
 		var venv_python := _cached_venv_python()
@@ -338,7 +338,10 @@ static func _find_venv_python() -> String:
 ## venv if a sibling `src/godot_ai/` exists in the same parent dir — otherwise
 ## an unrelated user venv (e.g. `~/.venv` from a data-science side project)
 ## gets picked up and `python -m godot_ai` fails with ModuleNotFoundError about
-## 5s into startup, cascading into an infinite reconnect loop. See #178.
+## 5s into startup, cascading into an infinite reconnect loop. The retry-with-
+## refresh recovery in `plugin.gd::_should_retry_with_refresh` only fires on
+## the uvx tier, so the dev_venv misidentification has no escape hatch — the
+## detection has to be right the first time.
 static func _find_venv_python_in(start_dir: String) -> String:
 	var dir := start_dir.rstrip("/")
 	var python_name := "python" if OS.get_name() != "Windows" else "python.exe"

@@ -144,12 +144,12 @@ func test_find_worktree_src_dir_ignores_unrelated_src_directory() -> void:
 
 # ----- dev-venv detection requires sibling src/godot_ai -----
 #
-# Issue #178: `_find_venv_python` used to accept any `.venv/bin/python` it
-# found while walking up from `res://` — so a user with `~/.venv` (from an
-# unrelated Python project) got their venv picked up, `python -m godot_ai`
-# failed with ModuleNotFoundError ~5s in, and the reconnect logic looped
-# forever. These tests lock in the new rule: require a sibling `src/godot_ai/`
-# in the same parent dir before treating a `.venv` as a godot-ai dev venv.
+# `_find_venv_python` used to accept any `.venv/bin/python` it found while
+# walking up from `res://` — so a user with `~/.venv` (from an unrelated
+# Python project) got their venv picked up, `python -m godot_ai` failed with
+# ModuleNotFoundError ~5s in, and the reconnect logic looped forever. These
+# tests lock in the new rule: require a sibling `src/godot_ai/` in the same
+# parent dir before treating a `.venv` as a godot-ai dev venv.
 
 
 func test_find_venv_python_rejects_venv_without_godot_ai_src() -> void:
@@ -329,12 +329,12 @@ func test_is_dev_checkout_forced_dev_mode() -> void:
 
 
 func test_get_server_command_forced_user_skips_dev_venv() -> void:
-	## Issue #178 workaround: forcing `user` mode must reroute
-	## `get_server_command` past the dev_venv tier, not just relabel the
-	## dock. Before this fix, a user whose `~/.venv` was wrongly detected
-	## had no UI-based escape — the dropdown would say "user install" but
-	## the spawn would still use the misidentified venv. Now flipping the
-	## override actually changes what gets spawned.
+	## Forcing `user` mode must reroute `get_server_command` past the
+	## dev_venv tier, not just relabel the dock. Before this fix, a user
+	## whose `~/.venv` was wrongly detected had no UI-based escape — the
+	## dropdown would say "user install" but the spawn would still use
+	## the misidentified venv. Now flipping the override actually changes
+	## what gets spawned.
 	var prior_setting: Variant = _clear_mode_override_setting()
 	var prior_env := OS.get_environment("GODOT_AI_MODE")
 	OS.set_environment("GODOT_AI_MODE", "user")
