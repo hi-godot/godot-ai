@@ -142,6 +142,54 @@ func test_finalize_stop_preserves_state_when_port_still_in_use() -> void:
 	)
 
 
+# ----- spawn state machine -----
+#
+# `get_server_status()` is the dock's single source of truth for what
+# went wrong during startup. These tests pin down the contract: default
+# state OK, `_set_spawn_state` records the first specific diagnosis and
+# refuses later overwrites (so a PORT_EXCLUDED proactive hit can't be
+# clobbered by a follow-up CRASHED signal from the watch loop).
+
+
+func test_spawn_state_defaults_to_ok() -> void:
+	var plugin := GodotAiPlugin.new()
+	var status := plugin.get_server_status()
+	plugin.free()
+	assert_eq(status.get("state", ""), McpSpawnState.OK, "fresh plugin must report OK")
+
+
+func test_set_spawn_state_records_first_diagnosis() -> void:
+	var plugin := GodotAiPlugin.new()
+	plugin._set_spawn_state(McpSpawnState.FOREIGN_PORT)
+	var status := plugin.get_server_status()
+	plugin.free()
+	assert_eq(status.get("state", ""), McpSpawnState.FOREIGN_PORT)
+
+
+func test_set_spawn_state_does_not_overwrite_specific_diagnosis() -> void:
+	## The watch loop's CRASHED path fires late (up to SPAWN_GRACE_MS after
+	## spawn). If a more specific diagnosis already landed earlier — e.g.
+	## PORT_EXCLUDED from the proactive `netsh` check — the CRASHED code
+	## would overwrite it with a less actionable state. `_set_spawn_state`
+	## is first-writer-wins so the dock keeps showing the pointed message.
+	var plugin := GodotAiPlugin.new()
+	plugin._set_spawn_state(McpSpawnState.PORT_EXCLUDED)
+	plugin._set_spawn_state(McpSpawnState.CRASHED)
+	var status := plugin.get_server_status()
+	plugin.free()
+	assert_eq(status.get("state", ""), McpSpawnState.PORT_EXCLUDED, "first diagnosis must win")
+
+
+func test_get_server_status_shape_is_stable() -> void:
+	## Dock reads these keys; missing any is a render bug. Locked so a
+	## future refactor of the plugin-side dict can't silently drop one.
+	var plugin := GodotAiPlugin.new()
+	var status := plugin.get_server_status()
+	plugin.free()
+	assert_has_key(status, "state")
+	assert_has_key(status, "exit_ms")
+
+
 func _seed_managed_record(pid: int, version: String) -> void:
 	var es := EditorInterface.get_editor_settings()
 	if es == null:

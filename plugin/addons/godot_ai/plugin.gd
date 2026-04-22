@@ -40,15 +40,17 @@ static var _server_started_this_session := false  # guard against re-entrant spa
 
 ## Captured state for server-spawn supervision (see _start_server_watch).
 ## Populated only when WE spawn the process — adopt / foreign-server
-## branches leave these empty.
+## branches leave these at their defaults.
 var _server_spawn_ms: int = 0
-var _server_crashed: bool = false
 var _server_exit_ms: int = 0
 var _server_watch_timer: Timer = null
-## True when the spawn path detected Windows had excluded our port BEFORE
-## we tried to bind. Dock surfaces a pointed hint in this case rather
-## than waiting for the inevitable WinError 10013.
-var _server_port_excluded: bool = false
+## Outcome of the most recent `_start_server` attempt. One of the
+## `McpSpawnState.*` string constants; the dock switches on this to
+## decide which diagnostic panel to render. Default `OK` covers both
+## happy paths (spawned fresh / adopted existing). Failure states are
+## set at the exact point of failure and never cleared during the
+## plugin session — reload the plugin to retry.
+var _spawn_state: String = McpSpawnState.OK
 
 
 func _enter_tree() -> void:
@@ -369,15 +371,19 @@ func _start_server() -> void:
 			_wait_for_port_free(port, 3.0)
 			## Fall through to spawn.
 		else:
-			## No record claiming this port — foreign process. Don't touch;
-			## the WebSocket handshake will fail if it isn't actually ours
-			## and the reconnect loop will surface that.
+			## No record claiming this port — a foreign process owns it. We
+			## don't touch it, but the WebSocket handshake will never succeed
+			## because the foreign process doesn't speak MCP. Surface this to
+			## the dock so the user can pick a different port instead of
+			## watching "Disconnected" forever.
 			_server_started_this_session = true
+			_set_spawn_state(McpSpawnState.FOREIGN_PORT)
 			print("MCP | foreign server already running on port %d, using existing" % port)
 			return
 
 	var server_cmd := McpClientConfigurator.get_server_command()
 	if server_cmd.is_empty():
+		_set_spawn_state(McpSpawnState.NO_COMMAND)
 		push_warning("MCP | could not find server command")
 		return
 
@@ -399,10 +405,13 @@ func _start_server() -> void:
 	## Proactive Windows port-reservation check. WinError 10013 surfaces as
 	## an otherwise-silent spawn-then-exit because nothing owns the port;
 	## netstat shows nothing and the dock's reconnect spinner climbs
-	## forever. Catch it before we even try. See issue #146.
-	_server_port_excluded = WindowsPortReservation.is_port_excluded(port)
-	if _server_port_excluded:
+	## forever. Catch it before we even try and skip the spawn entirely —
+	## the port picker is the only useful next step. See issue #146.
+	if WindowsPortReservation.is_port_excluded(port):
+		_server_started_this_session = true
+		_set_spawn_state(McpSpawnState.PORT_EXCLUDED)
 		push_warning("MCP | port %d is reserved by Windows (Hyper-V / WSL2 / Docker)" % port)
+		return
 
 	## `OS.create_process` rather than `execute_with_pipe`: the pipe path
 	## had two Windows failure modes. (1) `execute_with_pipe` returned a
@@ -420,7 +429,6 @@ func _start_server() -> void:
 	_server_pid = OS.create_process(cmd, args)
 	if _server_pid > 0:
 		_server_spawn_ms = Time.get_ticks_msec()
-		_server_crashed = false
 		_server_exit_ms = 0
 		_server_started_this_session = true
 		## Record the launcher PID immediately so a same-session
@@ -431,7 +439,18 @@ func _start_server() -> void:
 		print("MCP | started server (PID %d, v%s): %s %s" % [_server_pid, current_version, cmd, " ".join(args)])
 		_start_server_watch()
 	else:
+		_set_spawn_state(McpSpawnState.CRASHED)
 		push_warning("MCP | failed to start server")
+
+
+## Record a non-OK spawn outcome. First writer wins: once a specific
+## diagnosis lands (e.g. PORT_EXCLUDED during the proactive check),
+## later fallback paths (e.g. CRASHED from the watch loop) don't
+## overwrite the more actionable state.
+func _set_spawn_state(state: String) -> void:
+	if _spawn_state != McpSpawnState.OK:
+		return
+	_spawn_state = state
 
 
 ## Start a 1s-tick timer that watches the spawned server for up to
@@ -471,9 +490,9 @@ func _check_server_health() -> void:
 	if real_pid > 0 and real_pid != _server_pid and _pid_alive(real_pid):
 		_server_pid = real_pid
 	elif not _pid_alive(_server_pid):
-		if elapsed >= SPAWN_GRACE_MS and not _server_crashed:
-			_server_crashed = true
+		if elapsed >= SPAWN_GRACE_MS and _spawn_state == McpSpawnState.OK:
 			_server_exit_ms = elapsed
+			_set_spawn_state(McpSpawnState.CRASHED)
 			_log_buffer.log("server exited after %dms — see Godot output log" % _server_exit_ms)
 			_stop_server_watch()
 		return
@@ -483,19 +502,15 @@ func _check_server_health() -> void:
 		_stop_server_watch()
 
 
-## Snapshot of spawn-supervision state for the dock. Returns an empty
-## Dictionary-shaped payload in the adopt / foreign-server branches
-## where we didn't spawn anything ourselves.
+## Snapshot of the server-spawn outcome for the dock.
+##
+## `state` is one of the `McpSpawnState.*` constants; the dock owns the
+## UI copy per state via its own `_crash_body_for_state`. `exit_ms` is
+## only meaningful for `CRASHED`.
 func get_server_status() -> Dictionary:
-	var port := McpClientConfigurator.http_port()
-	var hint := ""
-	if _server_port_excluded:
-		hint = WindowsPortReservation.port_excluded_hint(port)
 	return {
-		"crashed": _server_crashed,
+		"state": _spawn_state,
 		"exit_ms": _server_exit_ms,
-		"port_excluded": _server_port_excluded,
-		"hint": hint,
 	}
 
 

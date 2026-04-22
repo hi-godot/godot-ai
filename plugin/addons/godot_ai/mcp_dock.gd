@@ -50,14 +50,15 @@ var _last_connected := false
 var _last_status_text := ""
 var _startup_grace_until_msec: int = 0
 
-# Crash-status panel (populated when the plugin detects the spawned server
-# died before connecting). See issue #146.
+# Spawn-failure panel — rendered when `get_server_status` reports a
+# non-OK `state`. One panel, one body paragraph per state, no cascading
+# booleans. See `_crash_body_for_state`.
 var _crash_panel: VBoxContainer
-var _crash_hint_label: Label
 var _crash_output: RichTextLabel
-## Port-picker escape hatch — only visible inside the crash panel when the
-## plugin detected a Windows port reservation. Applies a new `godot_ai/http_port`
-## value and reloads the plugin so the spawn retries with the new port.
+## Port-picker escape hatch — visible inside the panel when the root
+## cause is port contention (PORT_EXCLUDED or FOREIGN_PORT). Applies a
+## new `godot_ai/http_port` value and reloads the plugin so the spawn
+## retries with the new port.
 var _port_picker_section: VBoxContainer
 var _port_picker_spinbox: SpinBox
 ## Last status Dict rendered into the panel — used to skip re-population
@@ -180,28 +181,20 @@ func _build_ui() -> void:
 	_install_label.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_install_label)
 
-	# --- Crash panel (shown when the spawned server exits before connecting) ---
+	# --- Spawn-failure panel (shown when `_start_server` reports a non-OK
+	# state via `get_server_status`). One body paragraph + the matching
+	# action; the top status label already carries the state headline.
 	_crash_panel = VBoxContainer.new()
-	_crash_panel.add_theme_constant_override("separation", 4)
+	_crash_panel.add_theme_constant_override("separation", 6)
 	_crash_panel.visible = false
 
-	var crash_header := Label.new()
-	crash_header.text = "Server exited"
-	crash_header.add_theme_font_size_override("font_size", 15)
-	crash_header.add_theme_color_override("font_color", Color(1.0, 0.45, 0.45))
-	_crash_panel.add_child(crash_header)
-
-	_crash_hint_label = Label.new()
-	_crash_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_crash_hint_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3))
-	_crash_panel.add_child(_crash_hint_label)
-
 	_crash_output = RichTextLabel.new()
-	_crash_output.custom_minimum_size = Vector2(0, 80)
+	_crash_output.custom_minimum_size = Vector2(0, 60)
 	_crash_output.bbcode_enabled = false
 	_crash_output.selection_enabled = true
 	_crash_output.scroll_following = false
 	_crash_output.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_crash_output.fit_content = true
 	_crash_panel.add_child(_crash_output)
 
 	_build_port_picker_section()
@@ -489,34 +482,35 @@ func _build_client_row(client_id: String) -> void:
 
 func _update_status() -> void:
 	var connected := _connection.is_connected
+	var server_status: Dictionary = _plugin.get_server_status()
+	var state: String = server_status.get("state", McpSpawnState.OK)
+
+	## One `match`/`elif` chain, one source of truth. Adding a new
+	## spawn outcome = one `McpSpawnState` constant + one arm here +
+	## one body string in `_crash_body_for_state`.
 	var status_text: String
 	var status_color: Color
-
-	## Spawn-supervision state trumps the grace window: if the plugin
-	## already knows the child process died, say so instead of promising
-	## "Starting server…" forever. See issue #146. The Dict is always
-	## present (plugin.get_server_status returns defaults even when we
-	## didn't spawn); GDScript `==` on Dicts compares by value so the
-	## `_update_crash_panel` diff stays cheap.
-	var server_status: Dictionary = _plugin.get_server_status()
-	var crashed: bool = server_status.get("crashed", false)
-	var port_excluded: bool = server_status.get("port_excluded", false)
-
 	if connected:
 		status_text = "Connected"
 		status_color = Color.GREEN
-	elif crashed:
+	elif state == McpSpawnState.CRASHED:
 		var exit_ms: int = server_status.get("exit_ms", 0)
 		status_text = "Server exited after %.1fs" % (exit_ms / 1000.0)
 		status_color = Color.RED
-	elif port_excluded:
+	elif state == McpSpawnState.PORT_EXCLUDED:
 		status_text = "Port %d reserved by Windows" % McpClientConfigurator.http_port()
 		status_color = Color.RED
+	elif state == McpSpawnState.FOREIGN_PORT:
+		status_text = "Port %d held by another process" % McpClientConfigurator.http_port()
+		status_color = Color.RED
+	elif state == McpSpawnState.NO_COMMAND:
+		status_text = "No server command found"
+		status_color = Color.RED
 	elif Time.get_ticks_msec() < _startup_grace_until_msec:
-		# Inside startup grace — distinguish from real disconnect so first-run
-		# users don't assume it's broken while uvx is downloading packages.
+		## Inside startup grace — distinguish from real disconnect so
+		## first-run users don't assume it's broken while uvx downloads.
 		status_text = "Starting server…"
-		status_color = Color(1.0, 0.75, 0.25)  # amber
+		status_color = Color(1.0, 0.75, 0.25)  ## amber
 	else:
 		status_text = "Disconnected"
 		status_color = Color.RED
@@ -534,10 +528,13 @@ func _update_status() -> void:
 	_update_dev_server_btn()
 
 
+## Render the diagnostic panel body for a given spawn state. The top
+## status label already names the problem; this answers "what do I do?".
+## Panel shows for any non-OK state; picker shows when the root cause
+## is port contention (same escape applies to PORT_EXCLUDED + FOREIGN_PORT).
 func _update_crash_panel(server_status: Dictionary) -> void:
-	var crashed: bool = server_status.get("crashed", false)
-	var port_excluded: bool = server_status.get("port_excluded", false)
-	if not crashed and not port_excluded:
+	var state: String = server_status.get("state", McpSpawnState.OK)
+	if state == McpSpawnState.OK:
 		if _crash_panel.visible:
 			_crash_panel.visible = false
 			_last_server_status = {}
@@ -545,50 +542,42 @@ func _update_crash_panel(server_status: Dictionary) -> void:
 	if server_status == _last_server_status:
 		return
 	_last_server_status = server_status.duplicate()
-	var hint: String = server_status.get("hint", "")
 	_crash_panel.visible = true
-	_crash_hint_label.text = hint
-	_crash_hint_label.visible = not hint.is_empty()
 	_crash_output.clear()
-	if port_excluded:
-		_crash_output.add_text(
-			"netsh interface ipv4 show excludedportrange protocol=tcp\n"
-			+ "reports port %d inside a reserved range — no bind attempted."
-				% McpClientConfigurator.http_port()
-		)
-	else:
-		_crash_output.add_text(
-			"The server process exited before the WebSocket handshake completed.\n"
-			+ "Check Godot's output log (bottom panel) for the Python traceback."
-		)
-	_port_picker_section.visible = port_excluded
-	if port_excluded:
-		## Seed the SpinBox with a suggested non-reserved port each time the
-		## panel surfaces. Idempotent for the common case where the user
-		## already has a good candidate queued up.
+	_crash_output.add_text(_crash_body_for_state(state))
+
+	var port_picker_visible := state == McpSpawnState.PORT_EXCLUDED or state == McpSpawnState.FOREIGN_PORT
+	_port_picker_section.visible = port_picker_visible
+	if port_picker_visible:
+		## Seed the SpinBox with a suggested non-reserved port each time
+		## the panel surfaces. Idempotent when the user already has a
+		## good candidate queued up.
 		_port_picker_spinbox.value = McpClientConfigurator.suggest_free_port(
 			McpClientConfigurator.http_port() + 1
 		)
+
+
+static func _crash_body_for_state(state: String) -> String:
+	## Single sentence per state. The top status label already names the
+	## problem; don't repeat it here. This copy answers "what do I do?".
+	var port := McpClientConfigurator.http_port()
+	match state:
+		McpSpawnState.PORT_EXCLUDED:
+			return "Windows (Hyper-V / WSL2 / Docker) reserved port %d. Pick a free port or try `net stop winnat; net start winnat` in an admin shell." % port
+		McpSpawnState.FOREIGN_PORT:
+			return "Another process is already bound to port %d. Pick a free port or stop the other process." % port
+		McpSpawnState.CRASHED:
+			return "The server exited before the WebSocket handshake. Check Godot's output log (bottom panel) for Python's traceback."
+		McpSpawnState.NO_COMMAND:
+			return "No godot-ai server found. Install `uv` via the Setup panel above, or run `pip install godot-ai`."
+		_:
+			return ""
 
 
 func _build_port_picker_section() -> void:
 	_port_picker_section = VBoxContainer.new()
 	_port_picker_section.add_theme_constant_override("separation", 4)
 	_port_picker_section.visible = false
-
-	var picker_label := Label.new()
-	picker_label.text = "Use a different HTTP port"
-	picker_label.add_theme_color_override("font_color", COLOR_HEADER)
-	_port_picker_section.add_child(picker_label)
-
-	var picker_hint := Label.new()
-	picker_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	picker_hint.text = (
-		"Pick a free port (1024–65535). Existing MCP client configs point at"
-		+ " the old URL — re-run Configure Clients after the reload."
-	)
-	picker_hint.add_theme_color_override("font_color", COLOR_MUTED)
-	_port_picker_section.add_child(picker_hint)
 
 	var picker_row := HBoxContainer.new()
 	picker_row.add_theme_constant_override("separation", 6)
@@ -612,6 +601,12 @@ func _build_port_picker_section() -> void:
 
 	_port_picker_section.add_child(picker_row)
 	_crash_panel.add_child(_port_picker_section)
+	## TODO: a follow-up PR should add a client-config drift detector
+	## (event-driven, fires on plugin load / after Apply+Reload / on
+	## editor focus-in). When any configured client's stored URL no
+	## longer matches `http_url()`, it renders its own banner next to
+	## the Clients section — that's separate from this spawn-failure
+	## panel and shouldn't be wedged in here.
 
 
 func _on_apply_new_port() -> void:
