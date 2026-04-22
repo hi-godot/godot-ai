@@ -190,6 +190,124 @@ func test_get_server_status_shape_is_stable() -> void:
 	assert_has_key(status, "exit_ms")
 
 
+func test_connection_established_clears_foreign_port() -> void:
+	## User-visible regression: on editor restart when a previous session's
+	## server is still on port 8000, `_start_server` hits the "no matching
+	## managed-server record" branch and preemptively sets FOREIGN_PORT.
+	## If the occupant happens to speak MCP (the common case — it's another
+	## editor's server), the WebSocket still connects and the dock ends up
+	## showing both "Connected" (green dot) and "Another process is already
+	## bound to port 8000" (warning banner). `_on_connection_established`
+	## must clear FOREIGN_PORT once the connection actually opens.
+	_seed_managed_record(99999, "other-version")
+	var plugin := GodotAiPlugin.new()
+	plugin._set_spawn_state(McpSpawnState.FOREIGN_PORT)
+	assert_eq(
+		plugin.get_server_status().get("state", ""),
+		McpSpawnState.FOREIGN_PORT,
+		"precondition: FOREIGN_PORT must be set before adoption-confirmation fires"
+	)
+
+	plugin._on_connection_established()
+	var state: String = plugin.get_server_status().get("state", "")
+	plugin.free()
+
+	assert_eq(
+		state,
+		McpSpawnState.OK,
+		"successful adoption (WebSocket opened) must clear FOREIGN_PORT diagnostic"
+	)
+
+
+func test_connection_established_preserves_crashed_state() -> void:
+	## Sanity check for the guard: only FOREIGN_PORT is preemptive enough
+	## to need post-hoc clearing. Other diagnoses (CRASHED, PORT_EXCLUDED,
+	## NO_COMMAND) are terminal — the server never came up, so no
+	## WebSocket can open and `_on_connection_established` should never
+	## fire in those states in the real flow. But if it ever does, don't
+	## paper over a real failure.
+	var plugin := GodotAiPlugin.new()
+	plugin._set_spawn_state(McpSpawnState.CRASHED)
+	plugin._on_connection_established()
+	var state: String = plugin.get_server_status().get("state", "")
+	plugin.free()
+	assert_eq(
+		state,
+		McpSpawnState.CRASHED,
+		"_on_connection_established must only clear FOREIGN_PORT, not other diagnoses"
+	)
+
+
+func test_watch_for_adoption_confirmation_arms_bounded_deadline() -> void:
+	## `_start_server`'s FOREIGN_PORT branch arms the adoption watcher
+	## instead of passively waiting. The watcher must be bounded — an
+	## un-bounded `set_process(true)` would poll every frame forever if
+	## the foreign occupant never opens a WebSocket, so we latch a
+	## deadline SPAWN_GRACE_MS in the future. `_process` self-disarms on
+	## first successful connect OR on deadline expiry, whichever comes
+	## first. This test just pins the deadline-arming half of the contract.
+	var plugin := GodotAiPlugin.new()
+	assert_eq(plugin._adoption_watch_deadline_ms, 0, "precondition: deadline disarmed")
+	var before_ms := Time.get_ticks_msec()
+	plugin._watch_for_adoption_confirmation()
+	var deadline := plugin._adoption_watch_deadline_ms
+	plugin.free()
+	assert_true(deadline >= before_ms, "deadline must be set into the future")
+	## Lower bound: SPAWN_GRACE_MS minus a generous 100ms slack for any
+	## scheduler jitter between `before_ms` and the latching call.
+	assert_true(
+		deadline - before_ms >= GodotAiPlugin.SPAWN_GRACE_MS - 100,
+		"deadline must be ~SPAWN_GRACE_MS (%dms) into the future" % GodotAiPlugin.SPAWN_GRACE_MS
+	)
+
+
+func test_process_clears_foreign_port_on_successful_connection() -> void:
+	## Integration test for the full adoption-confirm loop:
+	## `_watch_for_adoption_confirmation` arms the deadline + `_process`,
+	## then `_process` reads `_connection.is_connected` each frame. The
+	## previous two tests exercise each half in isolation; this one wires
+	## them together with a real Connection whose `_connected` we flip.
+	## Without this, a refactor that broke the `is_connected` check in
+	## `_process` (e.g. reading the wrong property) would slip through.
+	var plugin := GodotAiPlugin.new()
+	var conn := Connection.new()
+	plugin._connection = conn
+	plugin._set_spawn_state(McpSpawnState.FOREIGN_PORT)
+	plugin._watch_for_adoption_confirmation()
+	assert_true(plugin._adoption_watch_deadline_ms > 0, "precondition: watcher armed")
+
+	conn._connected = true  # simulate WebSocket STATE_OPEN transition
+	plugin._process(0.0)
+	var state: String = plugin.get_server_status().get("state", "")
+	var deadline := plugin._adoption_watch_deadline_ms
+	conn.free()
+	plugin.free()
+
+	assert_eq(state, McpSpawnState.OK, "_process must clear FOREIGN_PORT on first connect")
+	assert_eq(deadline, 0, "_process must disarm the deadline on successful adoption")
+
+
+func test_process_self_disarms_after_deadline_without_connect() -> void:
+	## If the foreign occupant never opens a WebSocket (e.g. it's a
+	## genuine non-MCP process), the watcher must give up after
+	## SPAWN_GRACE_MS so `_process` stops running every frame. The deadline
+	## stays zero afterwards, serving as the "disarmed" sentinel.
+	var plugin := GodotAiPlugin.new()
+	var conn := Connection.new()
+	plugin._connection = conn
+	plugin._set_spawn_state(McpSpawnState.FOREIGN_PORT)
+	plugin._adoption_watch_deadline_ms = Time.get_ticks_msec() - 1  # already expired
+	plugin.set_process(true)
+	plugin._process(0.0)
+	var state: String = plugin.get_server_status().get("state", "")
+	var deadline := plugin._adoption_watch_deadline_ms
+	conn.free()
+	plugin.free()
+
+	assert_eq(state, McpSpawnState.FOREIGN_PORT, "deadline expiry must leave FOREIGN_PORT set")
+	assert_eq(deadline, 0, "_process must zero the deadline on timeout")
+
+
 func _seed_managed_record(pid: int, version: String) -> void:
 	var es := EditorInterface.get_editor_settings()
 	if es == null:
