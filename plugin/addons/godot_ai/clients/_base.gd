@@ -6,7 +6,11 @@ extends RefCounted
 ## Subclasses set fields in _init(); they should not contain control flow.
 ## Strategies (json/toml/cli) consume these fields.
 
-enum Status { NOT_CONFIGURED, CONFIGURED, ERROR }
+## CONFIGURED_MISMATCH distinguishes "entry exists but URL is stale" from
+## "no entry at all" (NOT_CONFIGURED). The dock uses this to offer a
+## "Reconfigure mismatched" escape hatch after a port change without making
+## the user remember which clients they configured. See issue #166.
+enum Status { NOT_CONFIGURED, CONFIGURED, CONFIGURED_MISMATCH, ERROR }
 
 var id: String = ""                              ## stable key, e.g. "cursor"
 var display_name: String = ""                    ## "Cursor"

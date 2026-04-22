@@ -12,6 +12,7 @@ const MODE_OVERRIDE_VALUES := ["", "user", "dev"]
 const MODE_OVERRIDE_LABELS := ["Auto", "Force user", "Force dev"]
 static var COLOR_MUTED := Color(0.7, 0.7, 0.7)
 static var COLOR_HEADER := Color(0.95, 0.95, 0.95)
+static var COLOR_DRIFT := Color(1.0, 0.75, 0.25)  ## amber — drifted client URL
 
 var _connection: Connection
 var _log_buffer: McpLogBuffer
@@ -25,12 +26,36 @@ var _client_grid: VBoxContainer
 var _client_configure_all_btn: Button
 var _clients_summary_label: Label
 var _clients_window: Window
+## Drift banner — shown when ≥1 client has CONFIGURED_MISMATCH status
+## (usually after the user moves http_port). See issue #166.
+var _drift_banner: HBoxContainer
+var _drift_label: Label
+var _drift_reconfigure_btn: Button
 var _dev_mode_toggle: CheckButton
 var _install_label: Label
 
 ## Per-client UI handles, keyed by client id. Each entry holds the row's
 ## status dot, configure button, remove button, manual-command panel + text.
 var _client_rows: Dictionary = {}
+
+## Authoritative per-client status, keyed by client id. `_apply_row_status`
+## is the single writer; summary + drift banner + reconfigure-drifted read
+## from here instead of re-reading the dot color as state. Avoids a subtle
+## bug where a future theme change recolors the dot and silently breaks
+## the count.
+var _client_statuses: Dictionary = {}
+
+## Monotonic clock of the last focus-triggered status sweep. CLI clients
+## shell out (`claude mcp list`), so alt-tabbing rapidly between apps
+## must not re-run them on every focus event.
+var _last_focus_sweep_msec: int = 0
+const FOCUS_SWEEP_COOLDOWN_MSEC := 2000
+
+## Last drift count rendered into the banner. `_refresh_drift_banner` is
+## called from every client refresh — short-circuiting when nothing
+## changed keeps the label text from flickering and avoids redundant
+## layout passes.
+var _last_drift_count: int = -1
 
 # Dev-mode only
 var _dev_section: VBoxContainer
@@ -108,6 +133,18 @@ func _notification(what: int) -> void:
 	# Detect dock/undock by watching for reparenting events.
 	if what == NOTIFICATION_PARENTED or what == NOTIFICATION_UNPARENTED:
 		_update_redock_visibility.call_deferred()
+	# Re-sweep client statuses when the editor window regains focus so drift
+	# caused by external edits (another agent, a manual config edit, a peer
+	# session changing http_port) surfaces without making the user reopen
+	# the Clients window. Event-driven — no per-frame polling.
+	elif what == NOTIFICATION_APPLICATION_FOCUS_IN:
+		if _client_rows.is_empty():
+			return
+		var now := Time.get_ticks_msec()
+		if now - _last_focus_sweep_msec < FOCUS_SWEEP_COOLDOWN_MSEC:
+			return
+		_last_focus_sweep_msec = now
+		_refresh_all_client_statuses.call_deferred()
 
 
 func _is_floating() -> bool:
@@ -317,6 +354,21 @@ func _build_ui() -> void:
 	clients_row.add_child(clients_open_btn)
 
 	add_child(clients_row)
+
+	_drift_banner = HBoxContainer.new()
+	_drift_banner.add_theme_constant_override("separation", 6)
+	_drift_banner.visible = false
+	_drift_label = Label.new()
+	_drift_label.add_theme_color_override("font_color", COLOR_DRIFT)
+	_drift_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_drift_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_drift_banner.add_child(_drift_label)
+	_drift_reconfigure_btn = Button.new()
+	_drift_reconfigure_btn.text = "Reconfigure"
+	_drift_reconfigure_btn.tooltip_text = "Rewrite every client whose stored URL no longer matches this server"
+	_drift_reconfigure_btn.pressed.connect(_on_reconfigure_drifted_clients)
+	_drift_banner.add_child(_drift_reconfigure_btn)
+	add_child(_drift_banner)
 
 	_clients_window = Window.new()
 	_clients_window.title = "Configure MCP Clients"
@@ -601,12 +653,6 @@ func _build_port_picker_section() -> void:
 
 	_port_picker_section.add_child(picker_row)
 	_crash_panel.add_child(_port_picker_section)
-	## TODO: a follow-up PR should add a client-config drift detector
-	## (event-driven, fires on plugin load / after Apply+Reload / on
-	## editor focus-in). When any configured client's stored URL no
-	## longer matches `http_url()`, it renders its own banner next to
-	## the Clients section — that's separate from this spawn-failure
-	## panel and shouldn't be wedged in here.
 
 
 func _on_apply_new_port() -> void:
@@ -910,9 +956,9 @@ func _on_configure_all_clients() -> void:
 func _on_open_clients_window() -> void:
 	if _clients_window == null:
 		return
-	# popup_centered() with a minsize forces the window to that size and
-	# centers on the parent viewport. Setting .size on a hidden Window
-	# doesn't always take effect, so we force it at popup time here.
+	# Deferred so the popup can paint first; the sweep hits CLI shell-outs
+	# (`claude mcp list`) and would otherwise stall the window open.
+	_refresh_all_client_statuses.call_deferred()
 	_clients_window.popup_centered(Vector2i(640, 600))
 
 
@@ -922,16 +968,42 @@ func _on_clients_window_close_requested() -> void:
 
 
 func _refresh_clients_summary() -> void:
-	# Count from row dot colors — `_apply_row_status` is the single source of
-	# truth, and reading colors avoids re-running filesystem-hitting status
-	# checks on every refresh.
 	if _clients_summary_label == null:
 		return
 	var configured := 0
-	for row in _client_rows.values():
-		if (row["dot"] as ColorRect).color == Color.GREEN:
+	var drifted := 0
+	for status in _client_statuses.values():
+		if status == McpClient.Status.CONFIGURED:
 			configured += 1
+		elif status == McpClient.Status.CONFIGURED_MISMATCH:
+			drifted += 1
 	_clients_summary_label.text = "%d / %d configured" % [configured, _client_rows.size()]
+	_refresh_drift_banner(drifted)
+
+
+func _refresh_drift_banner(drifted: int) -> void:
+	if _drift_banner == null:
+		return
+	if drifted == _last_drift_count:
+		return
+	_last_drift_count = drifted
+	if drifted <= 0:
+		_drift_banner.visible = false
+		return
+	var port := McpClientConfigurator.http_port()
+	_drift_label.text = (
+		"%d client%s still point at an older URL (current: 127.0.0.1:%d)."
+		% [drifted, "" if drifted == 1 else "s", port]
+	)
+	_drift_banner.visible = true
+
+
+func _on_reconfigure_drifted_clients() -> void:
+	for client_id in _client_statuses:
+		if _client_statuses[client_id] != McpClient.Status.CONFIGURED_MISMATCH:
+			continue
+		_on_configure_client(client_id)
+	_refresh_clients_summary()
 
 
 func _show_manual_command_for(client_id: String) -> void:
@@ -964,6 +1036,7 @@ func _apply_row_status(client_id: String, status: McpClient.Status, error_msg: S
 	var row: Dictionary = _client_rows.get(client_id, {})
 	if row.is_empty():
 		return
+	_client_statuses[client_id] = status
 	var dot: ColorRect = row["dot"]
 	var configure_btn: Button = row["configure_btn"]
 	var remove_btn: Button = row["remove_btn"]
@@ -975,6 +1048,11 @@ func _apply_row_status(client_id: String, status: McpClient.Status, error_msg: S
 			configure_btn.text = "Reconfigure"
 			remove_btn.visible = true
 			name_label.text = base_name
+		McpClient.Status.CONFIGURED_MISMATCH:
+			dot.color = COLOR_DRIFT
+			configure_btn.text = "Reconfigure"
+			remove_btn.visible = true
+			name_label.text = "%s  (stale URL)" % base_name
 		McpClient.Status.NOT_CONFIGURED:
 			dot.color = COLOR_MUTED
 			configure_btn.text = "Configure"

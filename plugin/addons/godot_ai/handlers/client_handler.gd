@@ -39,6 +39,8 @@ func check_client_status(_params: Dictionary) -> Dictionary:
 				status_str = "configured"
 			McpClient.Status.NOT_CONFIGURED:
 				status_str = "not_configured"
+			McpClient.Status.CONFIGURED_MISMATCH:
+				status_str = "configured_mismatch"
 		clients.append({
 			"id": client_id,
 			"display_name": McpClientConfigurator.client_display_name(client_id),

@@ -18,8 +18,12 @@ func _init() -> void:
 		if exit_code != 0 or output.is_empty():
 			return McpClient.Status.NOT_CONFIGURED
 		var text: String = output[0]
-		if text.find(name) < 0 or text.find(url) < 0:
+		if text.find(name) < 0:
 			return McpClient.Status.NOT_CONFIGURED
+		# Server name is present but the URL isn't — drift (usually a port change).
+		# Surfacing as MISMATCH lets the dock offer a one-click reconfigure.
+		if text.find(url) < 0:
+			return McpClient.Status.CONFIGURED_MISMATCH
 		return McpClient.Status.CONFIGURED
 	manual_command_builder = func(name: String, url: String, _path: String) -> String:
 		return "claude mcp add --scope user --transport http %s %s" % [name, url]

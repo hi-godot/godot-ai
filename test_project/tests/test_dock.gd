@@ -46,6 +46,33 @@ func test_install_label_mouse_filter_allows_tooltip() -> void:
 	assert_eq(_dock._install_label.mouse_filter, Control.MOUSE_FILTER_STOP)
 
 
+func test_drift_banner_hidden_when_no_drift() -> void:
+	_dock._build_ui()
+	# Fresh dock with everything NOT_CONFIGURED by default → banner stays hidden.
+	_dock._refresh_drift_banner(0)
+	assert_false(_dock._drift_banner.visible, "Banner must stay hidden when no clients drifted")
+
+
+func test_drift_banner_visible_with_count_and_port() -> void:
+	_dock._build_ui()
+	_dock._refresh_drift_banner(3)
+	assert_true(_dock._drift_banner.visible, "Banner must surface when any client drifted")
+	# Label cites the drifted count and the current port so the user knows
+	# which server the reconfigure will point at. Prevents head-scratching
+	# about "3 clients drifted but drifted from what?".
+	var text: String = _dock._drift_label.text
+	assert_contains(text, "3")
+	assert_contains(text, str(McpClientConfigurator.http_port()))
+
+
+func test_drift_banner_singular_vs_plural() -> void:
+	_dock._build_ui()
+	_dock._refresh_drift_banner(1)
+	assert_contains(_dock._drift_label.text, "1 client ", "Singular count must not pluralize")
+	_dock._refresh_drift_banner(2)
+	assert_contains(_dock._drift_label.text, "2 clients", "Plural count must pluralize")
+
+
 func test_dev_checkout_tooltip_exposes_symlink_target() -> void:
 	if not McpClientConfigurator.is_dev_checkout():
 		skip("only meaningful in dev checkout")

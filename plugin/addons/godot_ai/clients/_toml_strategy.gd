@@ -57,8 +57,10 @@ static func check_status(client: McpClient, _server_name: String, server_url: St
 				configured_url = trimmed.substr(first + 1, last - first - 1)
 		elif trimmed.begins_with("enabled ="):
 			enabled = trimmed.to_lower().find("false") < 0
-	if configured_url != server_url or not enabled:
+	if not enabled:
 		return McpClient.Status.NOT_CONFIGURED
+	if configured_url != server_url:
+		return McpClient.Status.CONFIGURED_MISMATCH
 	return McpClient.Status.CONFIGURED
 
 

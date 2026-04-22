@@ -31,9 +31,12 @@ static func check_status(client: McpClient, server_name: String, server_url: Str
 	var entry = holder[server_name]
 	if not (entry is Dictionary):
 		return McpClient.Status.NOT_CONFIGURED
+	# Entry exists — if URL doesn't match our current server, it's drift, not absence.
+	# Lets the dock surface a "Reconfigure" banner after a port change instead of
+	# letting a stale URL silently disguise itself as "not configured".
 	if client.verify_entry.is_valid():
-		return McpClient.Status.CONFIGURED if client.verify_entry.call(entry, server_url) else McpClient.Status.NOT_CONFIGURED
-	return McpClient.Status.CONFIGURED if entry.get(client.entry_url_field, "") == server_url else McpClient.Status.NOT_CONFIGURED
+		return McpClient.Status.CONFIGURED if client.verify_entry.call(entry, server_url) else McpClient.Status.CONFIGURED_MISMATCH
+	return McpClient.Status.CONFIGURED if entry.get(client.entry_url_field, "") == server_url else McpClient.Status.CONFIGURED_MISMATCH
 
 
 static func remove(client: McpClient, server_name: String) -> Dictionary:

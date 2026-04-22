@@ -15,6 +15,11 @@ var _scratch_dir: String
 ## port if a test fails mid-flight.
 var _saved_http_port: Variant = null
 var _saved_ws_port: Variant = null
+## Captures `{client_id: original_path_template}` for any registry descriptor
+## a test redirects to a scratch file. `suite_teardown` restores these so a
+## mid-test failure (null deref, unexpected exception) can't leak a scratch
+## path into the next test run.
+var _registry_path_backups: Dictionary = {}
 
 
 func suite_name() -> String:
@@ -38,7 +43,25 @@ func suite_teardown() -> void:
 	# stays around for the next run; only the JSON / TOML files matter.
 	for f in DirAccess.get_files_at(_scratch_dir):
 		DirAccess.remove_absolute(_scratch_dir.path_join(f))
+	for client_id in _registry_path_backups:
+		var client := McpClientRegistry.get_by_id(client_id)
+		if client != null:
+			client.path_template = _registry_path_backups[client_id]
+	_registry_path_backups.clear()
 	_restore_port_settings()
+
+
+## Redirect a registered client's path_template to a scratch file for the
+## duration of the suite. Records the original so suite_teardown can restore
+## it even if the test fails mid-assertion.
+func _redirect_client_path(client_id: String, path: String) -> McpClient:
+	var client := McpClientRegistry.get_by_id(client_id)
+	if client == null:
+		return null
+	if not _registry_path_backups.has(client_id):
+		_registry_path_backups[client_id] = client.path_template
+	client.path_template = {"darwin": path, "windows": path, "linux": path, "unix": path}
+	return client
 
 
 # ----- registry sanity -----
@@ -465,9 +488,10 @@ func test_json_strategy_round_trip() -> void:
 	var status := McpJsonStrategy.check_status(client, "godot-ai", "http://127.0.0.1:8000/mcp")
 	assert_eq(status, McpClient.Status.CONFIGURED)
 
-	# A wrong URL should not be reported as configured.
+	# A wrong URL means drift (entry exists, stale URL), not absence.
+	# The dock uses this to show the "Reconfigure" banner after a port change.
 	var wrong_status := McpJsonStrategy.check_status(client, "godot-ai", "http://wrong/")
-	assert_eq(wrong_status, McpClient.Status.NOT_CONFIGURED)
+	assert_eq(wrong_status, McpClient.Status.CONFIGURED_MISMATCH)
 
 	var removed := McpJsonStrategy.remove(client, "godot-ai")
 	assert_eq(removed.get("status"), "ok")
@@ -629,6 +653,121 @@ func test_vscode_uses_servers_key_with_type_http() -> void:
 	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
 	assert_eq(entry.get("type", ""), "http")
 	assert_eq(entry.get("url", ""), "http://x")
+
+
+# ----- drift detection (CONFIGURED_MISMATCH) -----
+#
+# The dock's client-config drift banner (issue #166) fires when a stored
+# client entry exists but its URL no longer matches the server. These tests
+# lock in the three strategies' discrimination between NOT_CONFIGURED
+# (no entry) and CONFIGURED_MISMATCH (entry present, wrong URL).
+
+
+func test_json_strategy_reports_drift_not_absent_when_url_changes() -> void:
+	var path := _scratch_dir.path_join("drift.json")
+	_remove_if_exists(path)
+	var client := _make_test_json_client(path)
+	assert_eq(McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp").get("status"), "ok")
+	# Server moved to a new port — stored entry is now stale.
+	assert_eq(
+		McpJsonStrategy.check_status(client, "godot-ai", "http://127.0.0.1:8321/mcp"),
+		McpClient.Status.CONFIGURED_MISMATCH,
+		"Stored URL no longer matches — should report drift, not absence",
+	)
+
+
+func test_json_strategy_reports_not_configured_when_entry_absent() -> void:
+	var path := _scratch_dir.path_join("absent.json")
+	_remove_if_exists(path)
+	var client := _make_test_json_client(path)
+	# File doesn't exist yet — nothing configured.
+	assert_eq(
+		McpJsonStrategy.check_status(client, "godot-ai", "http://127.0.0.1:8000/mcp"),
+		McpClient.Status.NOT_CONFIGURED,
+	)
+
+
+func test_json_strategy_drift_uses_custom_verify_entry() -> void:
+	# Clients with a custom verifier (e.g. Antigravity's `serverUrl`/`disabled`
+	# pair) must still distinguish drift from absence. When verify_entry
+	# rejects a present entry, result should be MISMATCH, not NOT_CONFIGURED.
+	var path := _scratch_dir.path_join("verify_drift.json")
+	_remove_if_exists(path)
+	var client := McpClient.new()
+	client.id = "verify_test"
+	client.display_name = "Verify Test"
+	client.config_type = "json"
+	client.path_template = {"darwin": path, "windows": path, "linux": path, "unix": path}
+	client.server_key_path = PackedStringArray(["mcpServers"])
+	client.entry_builder = func(_n: String, u: String) -> Dictionary:
+		return {"serverUrl": u, "disabled": false}
+	client.verify_entry = func(entry: Dictionary, url: String) -> bool:
+		return entry.get("serverUrl", "") == url and not entry.get("disabled", true)
+
+	assert_eq(McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp").get("status"), "ok")
+	assert_eq(
+		McpJsonStrategy.check_status(client, "godot-ai", "http://127.0.0.1:9000/mcp"),
+		McpClient.Status.CONFIGURED_MISMATCH,
+	)
+
+
+func test_toml_strategy_reports_drift_when_url_changes() -> void:
+	var path := _scratch_dir.path_join("drift.toml")
+	_remove_if_exists(path)
+	var client := _make_test_toml_client(path)
+	assert_eq(McpTomlStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp").get("status"), "ok")
+	assert_eq(
+		McpTomlStrategy.check_status(client, "godot-ai", "http://127.0.0.1:8321/mcp"),
+		McpClient.Status.CONFIGURED_MISMATCH,
+	)
+
+
+func test_toml_strategy_enabled_false_reports_not_configured() -> void:
+	# A present-but-disabled Codex section is closer to absence than drift —
+	# the user explicitly opted out. Surfacing it as MISMATCH would be noisy
+	# (the reconfigure CTA would silently re-enable a server the user turned
+	# off).
+	var path := _scratch_dir.path_join("disabled.toml")
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string("[mcp_servers.\"godot-ai\"]\nurl = \"http://127.0.0.1:8000/mcp\"\nenabled = false\n")
+	f.close()
+	var client := _make_test_toml_client(path)
+	assert_eq(
+		McpTomlStrategy.check_status(client, "godot-ai", "http://127.0.0.1:8000/mcp"),
+		McpClient.Status.NOT_CONFIGURED,
+	)
+
+
+func test_handler_emits_configured_mismatch_string() -> void:
+	# End-to-end: configure a real registered client against a scratch JSON
+	# file, flip the plugin's http_port so the stored URL becomes stale, and
+	# assert the handler's wire output includes "configured_mismatch" for
+	# that client. Lands the enum → string mapping without relying on a
+	# duplicate match statement inside the test.
+	var path := _scratch_dir.path_join("handler_drift_cursor.json")
+	_remove_if_exists(path)
+	var cursor := _redirect_client_path("cursor", path)
+	assert_true(cursor != null, "cursor client missing from registry")
+
+	_clear_port_settings()
+	var es := EditorInterface.get_editor_settings()
+	assert_true(es != null, "EditorSettings unavailable")
+	es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, 8000)
+	assert_eq(McpClientConfigurator.configure("cursor").get("status"), "ok")
+
+	# Move the port so the stored URL no longer matches.
+	es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, 8321)
+
+	var result := _handler.check_client_status({})
+	assert_has_key(result, "data")
+	var entries: Array = result.data.clients
+	var cursor_status := ""
+	for entry in entries:
+		if entry.get("id", "") == "cursor":
+			cursor_status = entry.get("status", "")
+			break
+	assert_eq(cursor_status, "configured_mismatch")
+	_clear_port_settings()
 
 
 # ----- helpers -----
