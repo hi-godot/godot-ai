@@ -10,7 +10,7 @@ extends McpTestSuite
 const GodotAiPlugin := preload("res://addons/godot_ai/plugin.gd")
 
 ## Test port high enough to almost never collide with real services and
-## distinct from the plugin's SERVER_HTTP_PORT so the stop-finalize tests
+## distinct from the plugin's configured http_port() so the stop-finalize tests
 ## don't interact with a developer's running managed server.
 const TEST_PORT := 65432
 

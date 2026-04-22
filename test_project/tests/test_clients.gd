@@ -10,6 +10,11 @@ extends McpTestSuite
 
 var _handler: ClientHandler
 var _scratch_dir: String
+## Snapshot the user's live port overrides at suite entry so our
+## per-test set/clear dance doesn't leave the editor pointing at the wrong
+## port if a test fails mid-flight.
+var _saved_http_port: Variant = null
+var _saved_ws_port: Variant = null
 
 
 func suite_name() -> String:
@@ -20,6 +25,12 @@ func suite_setup(_ctx: Dictionary) -> void:
 	_handler = ClientHandler.new()
 	_scratch_dir = OS.get_user_data_dir().path_join("mcp_client_tests")
 	DirAccess.make_dir_recursive_absolute(_scratch_dir)
+	var es := EditorInterface.get_editor_settings()
+	if es != null:
+		if es.has_setting(McpClientConfigurator.SETTING_HTTP_PORT):
+			_saved_http_port = es.get_setting(McpClientConfigurator.SETTING_HTTP_PORT)
+		if es.has_setting(McpClientConfigurator.SETTING_WS_PORT):
+			_saved_ws_port = es.get_setting(McpClientConfigurator.SETTING_WS_PORT)
 
 
 func suite_teardown() -> void:
@@ -27,6 +38,7 @@ func suite_teardown() -> void:
 	# stays around for the next run; only the JSON / TOML files matter.
 	for f in DirAccess.get_files_at(_scratch_dir):
 		DirAccess.remove_absolute(_scratch_dir.path_join(f))
+	_restore_port_settings()
 
 
 # ----- registry sanity -----
@@ -339,6 +351,83 @@ func test_is_symlink_detects_real_symlink() -> void:
 	DirAccess.remove_absolute(target)
 
 
+# ----- port configuration -----
+#
+# http_port() / ws_port() read EditorSettings overrides and fall back to the
+# baked-in defaults when the override is unset or out of [1024, 65535]. Each
+# test owns its teardown via `_clear_port_settings` so a failure in the middle
+# can't leak a bogus port into later assertions or the user's real editor.
+
+
+func test_http_port_defaults_when_setting_absent() -> void:
+	_clear_port_settings()
+	assert_eq(McpClientConfigurator.http_port(), McpClientConfigurator.DEFAULT_HTTP_PORT)
+
+
+func test_http_port_reads_configured_value() -> void:
+	_clear_port_settings()
+	var es := EditorInterface.get_editor_settings()
+	assert_true(es != null, "EditorSettings unavailable")
+	es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, 8123)
+	assert_eq(McpClientConfigurator.http_port(), 8123)
+	_clear_port_settings()
+
+
+func test_http_port_rejects_out_of_range() -> void:
+	## Privileged ports and anything above 65535 must fall back to the default,
+	## not be returned verbatim — the Python server would refuse to bind and
+	## the dock would be left with a useless number in the label.
+	_clear_port_settings()
+	var es := EditorInterface.get_editor_settings()
+	assert_true(es != null, "EditorSettings unavailable")
+	es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, 80)
+	assert_eq(McpClientConfigurator.http_port(), McpClientConfigurator.DEFAULT_HTTP_PORT)
+	es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, 70000)
+	assert_eq(McpClientConfigurator.http_port(), McpClientConfigurator.DEFAULT_HTTP_PORT)
+	_clear_port_settings()
+
+
+func test_ws_port_defaults_when_setting_absent() -> void:
+	_clear_port_settings()
+	assert_eq(McpClientConfigurator.ws_port(), McpClientConfigurator.DEFAULT_WS_PORT)
+
+
+func test_ws_port_reads_configured_value() -> void:
+	_clear_port_settings()
+	var es := EditorInterface.get_editor_settings()
+	assert_true(es != null, "EditorSettings unavailable")
+	es.set_setting(McpClientConfigurator.SETTING_WS_PORT, 9600)
+	assert_eq(McpClientConfigurator.ws_port(), 9600)
+	_clear_port_settings()
+
+
+func test_ws_port_rejects_out_of_range() -> void:
+	_clear_port_settings()
+	var es := EditorInterface.get_editor_settings()
+	assert_true(es != null, "EditorSettings unavailable")
+	es.set_setting(McpClientConfigurator.SETTING_WS_PORT, 1023)
+	assert_eq(McpClientConfigurator.ws_port(), McpClientConfigurator.DEFAULT_WS_PORT)
+	es.set_setting(McpClientConfigurator.SETTING_WS_PORT, 99999)
+	assert_eq(McpClientConfigurator.ws_port(), McpClientConfigurator.DEFAULT_WS_PORT)
+	_clear_port_settings()
+
+
+func test_http_url_uses_current_http_port() -> void:
+	## http_url() is the single funnel every MCP-client descriptor flows through
+	## when building `url` / `serverUrl` / `httpUrl` entries. If it drifts from
+	## http_port() we would silently configure clients against the wrong port.
+	_clear_port_settings()
+	var es := EditorInterface.get_editor_settings()
+	assert_true(es != null, "EditorSettings unavailable")
+	es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, 8321)
+	assert_eq(McpClientConfigurator.http_url(), "http://127.0.0.1:8321/mcp")
+	_clear_port_settings()
+	assert_eq(
+		McpClientConfigurator.http_url(),
+		"http://127.0.0.1:%d/mcp" % McpClientConfigurator.DEFAULT_HTTP_PORT,
+	)
+
+
 # ----- path template -----
 
 func test_path_template_expands_home() -> void:
@@ -571,3 +660,29 @@ func _make_test_toml_client(path: String) -> McpClient:
 func _remove_if_exists(path: String) -> void:
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)
+
+
+## Reset http/ws port overrides to the built-in defaults for the duration of
+## a single test. The suite-level teardown restores whatever the user had
+## configured before the run so a mid-suite failure doesn't leave the editor
+## with a stomped port.
+func _clear_port_settings() -> void:
+	var es := EditorInterface.get_editor_settings()
+	if es == null:
+		return
+	es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, McpClientConfigurator.DEFAULT_HTTP_PORT)
+	es.set_setting(McpClientConfigurator.SETTING_WS_PORT, McpClientConfigurator.DEFAULT_WS_PORT)
+
+
+func _restore_port_settings() -> void:
+	var es := EditorInterface.get_editor_settings()
+	if es == null:
+		return
+	if _saved_http_port == null:
+		es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, McpClientConfigurator.DEFAULT_HTTP_PORT)
+	else:
+		es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, _saved_http_port)
+	if _saved_ws_port == null:
+		es.set_setting(McpClientConfigurator.SETTING_WS_PORT, McpClientConfigurator.DEFAULT_WS_PORT)
+	else:
+		es.set_setting(McpClientConfigurator.SETTING_WS_PORT, _saved_ws_port)

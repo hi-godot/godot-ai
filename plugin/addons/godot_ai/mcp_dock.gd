@@ -55,6 +55,11 @@ var _startup_grace_until_msec: int = 0
 var _crash_panel: VBoxContainer
 var _crash_hint_label: Label
 var _crash_output: RichTextLabel
+## Port-picker escape hatch — only visible inside the crash panel when the
+## plugin detected a Windows port reservation. Applies a new `godot_ai/http_port`
+## value and reloads the plugin so the spawn retries with the new port.
+var _port_picker_section: VBoxContainer
+var _port_picker_spinbox: SpinBox
 ## Last status Dict rendered into the panel — used to skip re-population
 ## when nothing changed, which would otherwise reset the user's scroll
 ## position on every frame. GDScript Dicts compare by value with `==`.
@@ -198,6 +203,8 @@ func _build_ui() -> void:
 	_crash_output.scroll_following = false
 	_crash_panel.add_child(_crash_output)
 
+	_build_port_picker_section()
+
 	var crash_retry := Button.new()
 	crash_retry.text = "Reload Plugin"
 	crash_retry.tooltip_text = "Re-run the spawn after fixing the underlying issue"
@@ -247,9 +254,9 @@ func _build_ui() -> void:
 	add_child(_dev_section)
 
 	_server_label = Label.new()
-	_server_label.text = "WS: %d  HTTP: %d" % [McpClientConfigurator.SERVER_WS_PORT, McpClientConfigurator.SERVER_HTTP_PORT]
 	_server_label.add_theme_color_override("font_color", COLOR_MUTED)
 	_dev_section.add_child(_server_label)
+	_refresh_server_label()
 
 	var btn_row := HBoxContainer.new()
 	btn_row.add_theme_constant_override("separation", 6)
@@ -502,7 +509,7 @@ func _update_status() -> void:
 		status_text = "Server exited after %.1fs" % (exit_ms / 1000.0)
 		status_color = Color.RED
 	elif port_excluded:
-		status_text = "Port %d reserved by Windows" % McpClientConfigurator.SERVER_HTTP_PORT
+		status_text = "Port %d reserved by Windows" % McpClientConfigurator.http_port()
 		status_color = Color.RED
 	elif Time.get_ticks_msec() < _startup_grace_until_msec:
 		# Inside startup grace — distinguish from real disconnect so first-run
@@ -547,11 +554,80 @@ func _update_crash_panel(server_status: Dictionary) -> void:
 		_crash_output.add_text(
 			"netsh interface ipv4 show excludedportrange protocol=tcp\n"
 			+ "reports port %d inside a reserved range — no bind attempted."
-				% McpClientConfigurator.SERVER_HTTP_PORT
+				% McpClientConfigurator.http_port()
 		)
 	else:
 		for line in output:
 			_crash_output.add_text(line + "\n")
+	_port_picker_section.visible = port_excluded
+	if port_excluded:
+		## Seed the SpinBox with a suggested non-reserved port each time the
+		## panel surfaces. Idempotent for the common case where the user
+		## already has a good candidate queued up.
+		_port_picker_spinbox.value = McpClientConfigurator.suggest_free_port(
+			McpClientConfigurator.http_port() + 1
+		)
+
+
+func _build_port_picker_section() -> void:
+	_port_picker_section = VBoxContainer.new()
+	_port_picker_section.add_theme_constant_override("separation", 4)
+	_port_picker_section.visible = false
+
+	var picker_label := Label.new()
+	picker_label.text = "Use a different HTTP port"
+	picker_label.add_theme_color_override("font_color", COLOR_HEADER)
+	_port_picker_section.add_child(picker_label)
+
+	var picker_hint := Label.new()
+	picker_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	picker_hint.text = (
+		"Pick a free port (1024–65535). Existing MCP client configs point at"
+		+ " the old URL — re-run Configure Clients after the reload."
+	)
+	picker_hint.add_theme_color_override("font_color", COLOR_MUTED)
+	_port_picker_section.add_child(picker_hint)
+
+	var picker_row := HBoxContainer.new()
+	picker_row.add_theme_constant_override("separation", 6)
+
+	_port_picker_spinbox = SpinBox.new()
+	_port_picker_spinbox.min_value = McpClientConfigurator.MIN_PORT
+	_port_picker_spinbox.max_value = McpClientConfigurator.MAX_PORT
+	_port_picker_spinbox.step = 1
+	_port_picker_spinbox.value = McpClientConfigurator.http_port()
+	_port_picker_spinbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	picker_row.add_child(_port_picker_spinbox)
+
+	var apply_btn := Button.new()
+	apply_btn.text = "Apply + Reload"
+	apply_btn.tooltip_text = (
+		"Saves godot_ai/http_port to Editor Settings and reloads the plugin so"
+		+ " the server spawns on the new port."
+	)
+	apply_btn.pressed.connect(_on_apply_new_port)
+	picker_row.add_child(apply_btn)
+
+	_port_picker_section.add_child(picker_row)
+	_crash_panel.add_child(_port_picker_section)
+
+
+func _on_apply_new_port() -> void:
+	var new_port: int = int(_port_picker_spinbox.value)
+	if new_port < McpClientConfigurator.MIN_PORT or new_port > McpClientConfigurator.MAX_PORT:
+		return
+	var es := EditorInterface.get_editor_settings()
+	if es != null:
+		es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, new_port)
+	## Reload after the setting is committed so `_start_server` reads the new
+	## port on the re-enabled plugin instance.
+	_on_reload_plugin()
+
+
+func _refresh_server_label() -> void:
+	if _server_label == null:
+		return
+	_server_label.text = "WS: %d  HTTP: %d" % [McpClientConfigurator.ws_port(), McpClientConfigurator.http_port()]
 
 
 func _update_log() -> void:
@@ -753,7 +829,7 @@ func _make_status_row(label_text: String, value_text: String, value_color: Color
 ## label and tooltip. Factored out so tests can cover all three states without
 ## spinning up a real server or plugin.
 static func _dev_server_btn_state(has_managed: bool, dev_running: bool) -> Dictionary:
-	var port := McpClientConfigurator.SERVER_HTTP_PORT
+	var port := McpClientConfigurator.http_port()
 	if has_managed:
 		return {
 			"text": "Switch to dev mode (--reload)",

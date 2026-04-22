@@ -6,7 +6,9 @@ extends RefCounted
 ##
 ## Per-client logic lives in clients/*.gd (one descriptor per client) and is
 ## dispatched through clients/_registry.gd. This file:
-##   - keeps server-side constants (SERVER_NAME, SERVER_HTTP_URL, ports)
+##   - owns server-side identifiers (SERVER_NAME, HTTP/WS port helpers)
+##   - registers the EditorSettings port overrides and resolves the live
+##     port/URL via `http_port()` / `ws_port()` / `http_url()`
 ##   - keeps server-launch discovery (.venv → uvx → system godot-ai)
 ##   - exposes string-id wrappers around configure / check_status / remove /
 ##     manual_command so callers don't need to touch the registry directly
@@ -15,9 +17,82 @@ extends RefCounted
 ## clients/_registry.gd. No edits required here.
 
 const SERVER_NAME := "godot-ai"
-const SERVER_WS_PORT := 9500
-const SERVER_HTTP_PORT := 8000
-const SERVER_HTTP_URL := "http://127.0.0.1:%d/mcp" % SERVER_HTTP_PORT
+
+## Fallback ports. Live port selection goes through `http_port()` / `ws_port()`,
+## which read overrides from EditorSettings first. Users on Windows whose 8000
+## is grabbed by Hyper-V / WSL2 / Docker can pick a different port in
+## Editor Settings > Plugins > godot_ai without touching code. See #146 for
+## the Windows-reservation diagnostics this is the escape hatch for.
+const DEFAULT_HTTP_PORT := 8000
+const DEFAULT_WS_PORT := 9500
+const SETTING_HTTP_PORT := "godot_ai/http_port"
+const SETTING_WS_PORT := "godot_ai/ws_port"
+const MIN_PORT := 1024
+const MAX_PORT := 65535
+
+
+## Active HTTP port: user override (if in range) or `DEFAULT_HTTP_PORT`.
+static func http_port() -> int:
+	return _read_port_setting(SETTING_HTTP_PORT, DEFAULT_HTTP_PORT)
+
+
+## Active WebSocket port: user override (if in range) or `DEFAULT_WS_PORT`.
+static func ws_port() -> int:
+	return _read_port_setting(SETTING_WS_PORT, DEFAULT_WS_PORT)
+
+
+static func http_url() -> String:
+	return "http://127.0.0.1:%d/mcp" % http_port()
+
+
+static func _read_port_setting(key: String, default_port: int) -> int:
+	var es := EditorInterface.get_editor_settings()
+	if es == null or not es.has_setting(key):
+		return default_port
+	var value: int = int(es.get_setting(key))
+	if value < MIN_PORT or value > MAX_PORT:
+		return default_port
+	return value
+
+
+## Register the port overrides in EditorSettings so they show up in the
+## editor's Settings > Plugins section with a range hint. Called once from
+## `plugin.gd._enter_tree` before `_start_server` so spawn args see the
+## configured values. Safe to call repeatedly — `add_property_info` is
+## idempotent and `set_initial_value` only seeds the default.
+static func ensure_settings_registered() -> void:
+	var es := EditorInterface.get_editor_settings()
+	if es == null:
+		return
+	_register_port_setting(es, SETTING_HTTP_PORT, DEFAULT_HTTP_PORT)
+	_register_port_setting(es, SETTING_WS_PORT, DEFAULT_WS_PORT)
+
+
+static func _register_port_setting(es: EditorSettings, key: String, default_port: int) -> void:
+	if not es.has_setting(key):
+		es.set_setting(key, default_port)
+	es.set_initial_value(key, default_port, false)
+	es.add_property_info({
+		"name": key,
+		"type": TYPE_INT,
+		"hint": PROPERTY_HINT_RANGE,
+		"hint_string": "%d,%d,1" % [MIN_PORT, MAX_PORT],
+	})
+
+
+## Walk `start`..`start+span-1` and return the first port that is NOT
+## currently excluded by Windows' winnat reservation table. Falls back to
+## `start` if nothing clears (caller can apply anyway — user may just
+## retry). On non-Windows this is a no-op: all ports pass, returns `start`.
+static func suggest_free_port(start: int, span: int = 100) -> int:
+	var candidate := clampi(start, MIN_PORT, MAX_PORT - span + 1)
+	for i in span:
+		var p := candidate + i
+		if p > MAX_PORT:
+			break
+		if not WindowsPortReservation.is_port_excluded(p):
+			return p
+	return candidate
 
 
 # --- Client operations (string id) ---------------------------------------
@@ -39,13 +114,14 @@ static func configure(id: String) -> Dictionary:
 	var client := McpClientRegistry.get_by_id(id)
 	if client == null:
 		return {"status": "error", "message": "Unknown client: %s" % id}
+	var url := http_url()
 	match client.config_type:
 		"json":
-			return McpJsonStrategy.configure(client, SERVER_NAME, SERVER_HTTP_URL)
+			return McpJsonStrategy.configure(client, SERVER_NAME, url)
 		"toml":
-			return McpTomlStrategy.configure(client, SERVER_NAME, SERVER_HTTP_URL)
+			return McpTomlStrategy.configure(client, SERVER_NAME, url)
 		"cli":
-			return McpCliStrategy.configure(client, SERVER_NAME, SERVER_HTTP_URL)
+			return McpCliStrategy.configure(client, SERVER_NAME, url)
 	return {"status": "error", "message": "Unknown config_type for %s: %s" % [id, client.config_type]}
 
 
@@ -53,13 +129,14 @@ static func check_status(id: String) -> McpClient.Status:
 	var client := McpClientRegistry.get_by_id(id)
 	if client == null:
 		return McpClient.Status.NOT_CONFIGURED
+	var url := http_url()
 	match client.config_type:
 		"json":
-			return McpJsonStrategy.check_status(client, SERVER_NAME, SERVER_HTTP_URL)
+			return McpJsonStrategy.check_status(client, SERVER_NAME, url)
 		"toml":
-			return McpTomlStrategy.check_status(client, SERVER_NAME, SERVER_HTTP_URL)
+			return McpTomlStrategy.check_status(client, SERVER_NAME, url)
 		"cli":
-			return McpCliStrategy.check_status(client, SERVER_NAME, SERVER_HTTP_URL)
+			return McpCliStrategy.check_status(client, SERVER_NAME, url)
 	return McpClient.Status.NOT_CONFIGURED
 
 
@@ -81,7 +158,7 @@ static func manual_command(id: String) -> String:
 	var client := McpClientRegistry.get_by_id(id)
 	if client == null or not client.manual_command_builder.is_valid():
 		return ""
-	return client.manual_command_builder.call(SERVER_NAME, SERVER_HTTP_URL, client.resolved_config_path())
+	return client.manual_command_builder.call(SERVER_NAME, http_url(), client.resolved_config_path())
 
 
 static func is_installed(id: String) -> bool:

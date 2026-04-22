@@ -54,6 +54,11 @@ var _server_port_excluded: bool = false
 
 
 func _enter_tree() -> void:
+	## Register port overrides before spawn so `http_port()` / `ws_port()`
+	## return the user's configured values (if any) when `_start_server`
+	## builds the CLI args.
+	McpClientConfigurator.ensure_settings_registered()
+
 	_start_server()
 
 	_log_buffer = McpLogBuffer.new()
@@ -334,7 +339,8 @@ func _start_server() -> void:
 		## same editor session, preventing cascading server process creation.
 		return
 
-	var port := McpClientConfigurator.SERVER_HTTP_PORT
+	var port := McpClientConfigurator.http_port()
+	var ws_port := McpClientConfigurator.ws_port()
 	var current_version := McpClientConfigurator.get_plugin_version()
 
 	if _is_port_in_use(port):
@@ -383,6 +389,7 @@ func _start_server() -> void:
 	args.append_array([
 		"--transport", "streamable-http",
 		"--port", str(port),
+		"--ws-port", str(ws_port),
 		"--pid-file", ProjectSettings.globalize_path(SERVER_PID_FILE),
 	])
 
@@ -492,7 +499,7 @@ func _drain_server_output() -> void:
 ## Dictionary-shaped payload in the adopt / foreign-server branches
 ## where we didn't spawn anything ourselves.
 func get_server_status() -> Dictionary:
-	var port := McpClientConfigurator.SERVER_HTTP_PORT
+	var port := McpClientConfigurator.http_port()
 	var hint := ""
 	if _server_port_excluded:
 		hint = WindowsPortReservation.port_excluded_hint(port)
@@ -653,7 +660,7 @@ func _stop_server() -> void:
 	## Python child survives and port 8000 stays held. `_find_managed_pid`
 	## reads the pid-file the server wrote at startup (deterministic),
 	## falling back to netstat/lsof if the file is missing.
-	var port := McpClientConfigurator.SERVER_HTTP_PORT
+	var port := McpClientConfigurator.http_port()
 	var killed: Array[int] = []
 	if _pid_alive(_server_pid):
 		OS.kill(_server_pid)
@@ -790,7 +797,8 @@ func start_dev_server() -> void:
 		inner_args.assign(server_cmd.slice(1))
 		inner_args.append_array([
 			"--transport", "streamable-http",
-			"--port", str(McpClientConfigurator.SERVER_HTTP_PORT),
+			"--port", str(McpClientConfigurator.http_port()),
+			"--ws-port", str(McpClientConfigurator.ws_port()),
 			"--reload",
 		])
 
@@ -829,7 +837,7 @@ func stop_dev_server() -> void:
 		_stop_server()
 		return
 	var output: Array = []
-	var port := McpClientConfigurator.SERVER_HTTP_PORT
+	var port := McpClientConfigurator.http_port()
 	if OS.get_name() == "Windows":
 		# Find PID listening on port, then kill
 		var exit_code := OS.execute("cmd", ["/c", "for /f \"tokens=5\" %%a in ('netstat -ano ^| findstr :%d ^| findstr LISTENING') do taskkill /PID %%a /F" % port], output, true)
@@ -843,7 +851,7 @@ func stop_dev_server() -> void:
 
 func is_dev_server_running() -> bool:
 	## Returns true if a server is running on the HTTP port that we didn't start as managed.
-	return _server_pid <= 0 and _is_port_in_use(McpClientConfigurator.SERVER_HTTP_PORT)
+	return _server_pid <= 0 and _is_port_in_use(McpClientConfigurator.http_port())
 
 
 func has_managed_server() -> bool:
