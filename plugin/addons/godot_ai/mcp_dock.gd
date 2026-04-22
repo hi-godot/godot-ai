@@ -197,10 +197,11 @@ func _build_ui() -> void:
 	_crash_panel.add_child(_crash_hint_label)
 
 	_crash_output = RichTextLabel.new()
-	_crash_output.custom_minimum_size = Vector2(0, 140)
+	_crash_output.custom_minimum_size = Vector2(0, 80)
 	_crash_output.bbcode_enabled = false
 	_crash_output.selection_enabled = true
 	_crash_output.scroll_following = false
+	_crash_output.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_crash_panel.add_child(_crash_output)
 
 	_build_port_picker_section()
@@ -545,20 +546,21 @@ func _update_crash_panel(server_status: Dictionary) -> void:
 		return
 	_last_server_status = server_status.duplicate()
 	var hint: String = server_status.get("hint", "")
-	var output: PackedStringArray = server_status.get("output", PackedStringArray())
 	_crash_panel.visible = true
 	_crash_hint_label.text = hint
 	_crash_hint_label.visible = not hint.is_empty()
 	_crash_output.clear()
-	if output.is_empty() and port_excluded:
+	if port_excluded:
 		_crash_output.add_text(
 			"netsh interface ipv4 show excludedportrange protocol=tcp\n"
 			+ "reports port %d inside a reserved range — no bind attempted."
 				% McpClientConfigurator.http_port()
 		)
 	else:
-		for line in output:
-			_crash_output.add_text(line + "\n")
+		_crash_output.add_text(
+			"The server process exited before the WebSocket handshake completed.\n"
+			+ "Check Godot's output log (bottom panel) for the Python traceback."
+		)
 	_port_picker_section.visible = port_excluded
 	if port_excluded:
 		## Seed the SpinBox with a suggested non-reserved port each time the

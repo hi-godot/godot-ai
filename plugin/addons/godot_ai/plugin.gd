@@ -18,14 +18,15 @@ const MANAGED_SERVER_VERSION_SETTING := "godot_ai/managed_server_version"
 ## See issue for #154-era Windows update friction.
 const SERVER_PID_FILE := "user://godot_ai_server.pid"
 
-## How long we keep the spawned server's stdout/stderr pipes open and poll
-## for early exit. If the process is still alive when this expires, we
-## stop watching and close pipes. Crashes after this point get caught by
-## the usual disconnect flow.
+## How long we watch the spawned server for early exit. If the process is
+## still alive when this expires, we stop watching. Mid-session crashes
+## after this point get caught by the WebSocket disconnect flow.
 const SERVER_WATCH_MS := 30 * 1000
-## Only keep the last N captured lines — more than enough for a Python
-## traceback, small enough to render comfortably in the dock.
-const SERVER_OUTPUT_MAX_LINES := 40
+## Python's import graph (FastMCP + Rich + uvicorn) plus the pid-file write
+## take a beat on cold starts, especially on Windows. Hold off on declaring
+## a spawn a crash until this window elapses so the watch loop has time to
+## observe either the pid-file (dev venv) or the port listening (uvx).
+const SPAWN_GRACE_MS := 5 * 1000
 
 var _connection: Connection
 var _dispatcher: McpDispatcher
@@ -40,10 +41,7 @@ static var _server_started_this_session := false  # guard against re-entrant spa
 ## Captured state for server-spawn supervision (see _start_server_watch).
 ## Populated only when WE spawn the process — adopt / foreign-server
 ## branches leave these empty.
-var _server_stdio: FileAccess = null
-var _server_stderr: FileAccess = null
 var _server_spawn_ms: int = 0
-var _server_output: PackedStringArray = PackedStringArray()
 var _server_crashed: bool = false
 var _server_exit_ms: int = 0
 var _server_watch_timer: Timer = null
@@ -406,19 +404,24 @@ func _start_server() -> void:
 	if _server_port_excluded:
 		push_warning("MCP | port %d is reserved by Windows (Hyper-V / WSL2 / Docker)" % port)
 
-	## execute_with_pipe captures stdout+stderr so early-exit crashes
-	## surface in the dock instead of vanishing into /dev/null. If the
-	## process survives the startup grace window we close the pipes in
-	## _stop_server_watch() — the typical case.
-	var result := OS.execute_with_pipe(cmd, args)
-	_server_pid = int(result.get("pid", 0)) if result is Dictionary else 0
+	## `OS.create_process` rather than `execute_with_pipe`: the pipe path
+	## had two Windows failure modes. (1) `execute_with_pipe` returned a
+	## shim PID that exited within ~100 ms after spawning the real Python —
+	## the watch loop then falsely reported "server exited" while Python
+	## was happily running. (2) Python's startup writes (Rich banner +
+	## uvicorn logs) overflowed the ~4 KB pipe buffer before the plugin
+	## drained it, stalling stdout and wedging the server before it could
+	## even write `--pid-file`. Result on every Windows dev-venv launch:
+	## empty crash panel + "server exited after 2–3 s" with no traceback.
+	## `create_process` returns the real Python PID and doesn't subject
+	## the child to pipe-buffer backpressure. We lose the captured stdout
+	## the dock used to render — Python's traceback goes to Godot's output
+	## log instead, which the crash-panel hint now points at.
+	_server_pid = OS.create_process(cmd, args)
 	if _server_pid > 0:
-		_server_stdio = result.get("stdio") as FileAccess
-		_server_stderr = result.get("stderr") as FileAccess
 		_server_spawn_ms = Time.get_ticks_msec()
 		_server_crashed = false
 		_server_exit_ms = 0
-		_server_output = PackedStringArray()
 		_server_started_this_session = true
 		## Record the launcher PID immediately so a same-session
 		## prepare_for_update_reload has something to kill. On the next
@@ -451,48 +454,33 @@ func _stop_server_watch() -> void:
 		_server_watch_timer.stop()
 		_server_watch_timer.queue_free()
 		_server_watch_timer = null
-	_server_stdio = null
-	_server_stderr = null
 
 
 func _check_server_health() -> void:
 	if _server_pid <= 0:
 		_stop_server_watch()
 		return
-	if not _pid_alive(_server_pid) and not _server_crashed:
-		_server_crashed = true
-		_server_exit_ms = Time.get_ticks_msec() - _server_spawn_ms
-		_drain_server_output()
-		_log_buffer.log("server exited after %dms" % _server_exit_ms)
-		for line in _server_output:
-			_log_buffer.log("  | %s" % line)
-		_stop_server_watch()
+	var elapsed := Time.get_ticks_msec() - _server_spawn_ms
+	## Python writes its real PID to `--pid-file` right after argparse —
+	## before the heavy imports. On Windows launchers (uvx) the direct
+	## child can exit quickly after spawning the real interpreter, so the
+	## pid-file is more reliable than `_server_pid` for liveness. Adopt
+	## the real PID whenever we see a live one; fall back to _server_pid
+	## otherwise.
+	var real_pid := _read_pid_file()
+	if real_pid > 0 and real_pid != _server_pid and _pid_alive(real_pid):
+		_server_pid = real_pid
+	elif not _pid_alive(_server_pid):
+		if elapsed >= SPAWN_GRACE_MS and not _server_crashed:
+			_server_crashed = true
+			_server_exit_ms = elapsed
+			_log_buffer.log("server exited after %dms — see Godot output log" % _server_exit_ms)
+			_stop_server_watch()
 		return
-	if Time.get_ticks_msec() - _server_spawn_ms >= SERVER_WATCH_MS:
-		## Server survived startup — stop watching and release the pipes
-		## so the kernel can reclaim the FDs. Mid-session crashes after
-		## this point surface via the WebSocket disconnect path instead.
+	if elapsed >= SERVER_WATCH_MS:
+		## Server survived startup — stop watching. Mid-session crashes
+		## after this point surface via the WebSocket disconnect path.
 		_stop_server_watch()
-
-
-## Drain captured stdout+stderr into _server_output. Only safe to call
-## once the child has exited — get_as_text blocks until EOF. Keeps the
-## last SERVER_OUTPUT_MAX_LINES lines so the dock can render without
-## overflowing.
-func _drain_server_output() -> void:
-	var lines := PackedStringArray()
-	var pipes: Array[FileAccess] = [_server_stdio, _server_stderr]
-	for f in pipes:
-		if f == null:
-			continue
-		var text: String = f.get_as_text()
-		for line in text.split("\n"):
-			var trimmed: String = line.strip_edges(false, true)
-			if not trimmed.is_empty():
-				lines.append(trimmed)
-	if lines.size() > SERVER_OUTPUT_MAX_LINES:
-		lines = lines.slice(lines.size() - SERVER_OUTPUT_MAX_LINES)
-	_server_output = lines
 
 
 ## Snapshot of spawn-supervision state for the dock. Returns an empty
@@ -503,11 +491,8 @@ func get_server_status() -> Dictionary:
 	var hint := ""
 	if _server_port_excluded:
 		hint = WindowsPortReservation.port_excluded_hint(port)
-	elif _server_crashed:
-		hint = WindowsPortReservation.hint_from_output(_server_output, port)
 	return {
 		"crashed": _server_crashed,
-		"output": _server_output,
 		"exit_ms": _server_exit_ms,
 		"port_excluded": _server_port_excluded,
 		"hint": hint,
