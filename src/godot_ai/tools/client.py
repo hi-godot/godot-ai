@@ -45,7 +45,10 @@ def register_client_tools(mcp: FastMCP) -> None:
         Returns a dict with a "clients" array. Each entry has:
             id            stable identifier (use with client_configure)
             display_name  human-readable name
-            status        "configured" | "not_configured" | "error"
+            status        "configured" | "not_configured" | "configured_mismatch" | "error"
+                          ("configured_mismatch" = an entry exists but its URL doesn't
+                           match the active server URL — typically after a port change.
+                           Re-run client_configure to update.)
             installed     bool — true if the client appears to be present locally
         """
         runtime = DirectRuntime.from_context(ctx)

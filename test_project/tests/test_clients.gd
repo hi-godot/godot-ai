@@ -465,9 +465,13 @@ func test_json_strategy_round_trip() -> void:
 	var status := McpJsonStrategy.check_status(client, "godot-ai", "http://127.0.0.1:8000/mcp")
 	assert_eq(status, McpClient.Status.CONFIGURED)
 
-	# A wrong URL should not be reported as configured.
+	# A wrong URL is drift, not "never configured" — the user re-configured
+	# at one point but the stored URL is now stale (most commonly because
+	# they changed `godot_ai/http_port`). Surfacing it as a distinct status
+	# lets the dock render an amber "stale" banner instead of conflating
+	# drift with a brand-new install.
 	var wrong_status := McpJsonStrategy.check_status(client, "godot-ai", "http://wrong/")
-	assert_eq(wrong_status, McpClient.Status.NOT_CONFIGURED)
+	assert_eq(wrong_status, McpClient.Status.CONFIGURED_MISMATCH)
 
 	var removed := McpJsonStrategy.remove(client, "godot-ai")
 	assert_eq(removed.get("status"), "ok")
@@ -493,6 +497,72 @@ func test_json_strategy_preserves_other_servers() -> void:
 	assert_true(parsed.has("mcpServers"))
 	assert_true(parsed["mcpServers"].has("someone-else"), "Existing entry was wiped")
 	assert_true(parsed["mcpServers"].has("godot-ai"), "Our entry not added")
+
+
+func test_json_strategy_distinguishes_missing_entry_from_url_drift() -> void:
+	## Three statuses, three causes — dock surfaces them as muted dot,
+	## green dot, amber dot respectively. Conflating "never configured"
+	## with "URL out of date" loses the drift signal.
+	var path := _scratch_dir.path_join("drift.json")
+	_remove_if_exists(path)
+	var client := _make_test_json_client(path)
+
+	# 1. No file at all → NOT_CONFIGURED.
+	assert_eq(
+		McpJsonStrategy.check_status(client, "godot-ai", "http://127.0.0.1:8000/mcp"),
+		McpClient.Status.NOT_CONFIGURED,
+	)
+
+	# 2. Configure at port 8000 → CONFIGURED at the matching URL.
+	McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	assert_eq(
+		McpJsonStrategy.check_status(client, "godot-ai", "http://127.0.0.1:8000/mcp"),
+		McpClient.Status.CONFIGURED,
+	)
+
+	# 3. Same file, but the active URL has shifted (user changed http_port).
+	#    Entry still exists under the same name — drift, not absence.
+	assert_eq(
+		McpJsonStrategy.check_status(client, "godot-ai", "http://127.0.0.1:9000/mcp"),
+		McpClient.Status.CONFIGURED_MISMATCH,
+	)
+
+	# 4. Entry under a *different* name leaves our slot empty → NOT_CONFIGURED.
+	var seed := {"mcpServers": {"someone-else": {"url": "http://127.0.0.1:8000/mcp"}}}
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(JSON.stringify(seed))
+	f.close()
+	assert_eq(
+		McpJsonStrategy.check_status(client, "godot-ai", "http://127.0.0.1:8000/mcp"),
+		McpClient.Status.NOT_CONFIGURED,
+	)
+
+
+func test_json_strategy_drift_with_verify_entry_callable() -> void:
+	## Clients with a custom `verify_entry` (Zed, Claude Desktop) take a
+	## different path through `check_status` than the default url-field
+	## comparison. Both must emit CONFIGURED_MISMATCH for drift, not
+	## NOT_CONFIGURED — the dock contract is the same regardless of how
+	## the check is wired.
+	var path := _scratch_dir.path_join("verify_drift.json")
+	_remove_if_exists(path)
+	var client := McpClient.new()
+	client.id = "verify_test"
+	client.display_name = "Verify Test"
+	client.config_type = "json"
+	client.path_template = {"darwin": path, "windows": path, "linux": path, "unix": path}
+	client.server_key_path = PackedStringArray(["mcpServers"])
+	client.entry_builder = func(_n: String, u: String) -> Dictionary:
+		return {"command": {"path": "npx", "args": ["-y", "mcp-remote", u]}}
+	client.verify_entry = func(entry: Dictionary, u: String) -> bool:
+		var args = entry.get("command", {}).get("args", [])
+		return args is Array and args.has(u)
+
+	McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	assert_eq(
+		McpJsonStrategy.check_status(client, "godot-ai", "http://127.0.0.1:9000/mcp"),
+		McpClient.Status.CONFIGURED_MISMATCH,
+	)
 
 
 func test_json_strategy_supports_nested_key_path() -> void:
@@ -530,6 +600,43 @@ func test_toml_strategy_round_trip() -> void:
 	var removed := McpTomlStrategy.remove(client, "godot-ai")
 	assert_eq(removed.get("status"), "ok")
 	assert_eq(McpTomlStrategy.check_status(client, "godot-ai", "http://127.0.0.1:8000/mcp"), McpClient.Status.NOT_CONFIGURED)
+
+
+func test_toml_strategy_distinguishes_missing_section_from_url_drift() -> void:
+	## Same three-state contract as the JSON strategy, in TOML shape.
+	## Section header present + url mismatch → CONFIGURED_MISMATCH.
+	## No matching header → NOT_CONFIGURED.
+	var path := _scratch_dir.path_join("drift.toml")
+	_remove_if_exists(path)
+	var client := _make_test_toml_client(path)
+
+	assert_eq(
+		McpTomlStrategy.check_status(client, "godot-ai", "http://127.0.0.1:8000/mcp"),
+		McpClient.Status.NOT_CONFIGURED,
+	)
+
+	McpTomlStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	assert_eq(
+		McpTomlStrategy.check_status(client, "godot-ai", "http://127.0.0.1:8000/mcp"),
+		McpClient.Status.CONFIGURED,
+	)
+
+	# Drift: section still present (we never re-configured) but the active
+	# server URL has shifted underneath it.
+	assert_eq(
+		McpTomlStrategy.check_status(client, "godot-ai", "http://127.0.0.1:9000/mcp"),
+		McpClient.Status.CONFIGURED_MISMATCH,
+	)
+
+	# Disabled section is also drift, not absence — the entry is there,
+	# the user just turned it off, and re-running Configure restores it.
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string("[mcp_servers.\"godot-ai\"]\nurl = \"http://127.0.0.1:8000/mcp\"\nenabled = false\n")
+	f.close()
+	assert_eq(
+		McpTomlStrategy.check_status(client, "godot-ai", "http://127.0.0.1:8000/mcp"),
+		McpClient.Status.CONFIGURED_MISMATCH,
+	)
 
 
 func test_toml_strategy_preserves_other_sections() -> void:
@@ -585,11 +692,16 @@ func test_handler_status_returns_array_of_clients() -> void:
 	assert_true(clients is Array)
 	assert_gt(clients.size(), 10)
 	# Each entry must include id / display_name / status / installed.
+	# `status` is one of the four documented strings; agents pattern-match
+	# against this set, so a fifth value being silently introduced would
+	# break them. The handler's `match` only emits these four.
+	var allowed_statuses := ["configured", "not_configured", "configured_mismatch", "error"]
 	for entry in clients:
 		assert_has_key(entry, "id")
 		assert_has_key(entry, "display_name")
 		assert_has_key(entry, "status")
 		assert_has_key(entry, "installed")
+		assert_contains(allowed_statuses, entry.status, "Unexpected status: %s" % entry.status)
 
 
 # ----- entry-builder shape sanity for shipped clients -----
