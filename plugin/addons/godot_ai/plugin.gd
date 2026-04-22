@@ -925,6 +925,27 @@ func prepare_for_update_reload() -> void:
 	_server_started_this_session = false
 
 
+## Kill whichever process is holding `http_port()` right now — by resolving
+## the port-owning PID via pid-file / netstat / lsof, independent of whether
+## we ever set `_server_pid` — then clear ownership state and respawn via
+## `_start_server`. The dock's version-mismatch banner wires here when the
+## plugin adopted a foreign server (no managed record, `_server_pid == -1`)
+## whose `server_version` drifts from the current plugin version. Without
+## this, `_stop_server` early-returns on `_server_pid <= 0` and the old
+## server outlives every plugin reload.
+func force_restart_server() -> void:
+	var port := McpClientConfigurator.http_port()
+	var owner := _find_managed_pid(port)
+	if owner > 0:
+		OS.kill(owner)
+	_clear_managed_server_record()
+	_clear_pid_file()
+	_wait_for_port_free(port, 5.0)
+	_server_started_this_session = false
+	_server_pid = -1
+	_start_server()
+
+
 func start_dev_server() -> void:
 	## Start a dev server with --reload that survives plugin reloads.
 	## Kills any managed server first, waits for the port to free, then spawns.

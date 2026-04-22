@@ -3040,6 +3040,13 @@ class TestPerCallSessionRouting:
         }
         await ws.send(json.dumps(handshake))
         await asyncio.sleep(0.05)
+        ## Drain handshake_ack so respond_* helpers' first recv lands on a
+        ## real command, not the ack.
+        try:
+            ack_raw = await asyncio.wait_for(ws.recv(), timeout=0.5)
+            assert json.loads(ack_raw).get("type") == "handshake_ack"
+        except asyncio.TimeoutError:
+            pass
         return MockGodotPlugin(ws=ws, session_id=session_id)
 
     async def test_session_id_routes_to_specific_session(self, mcp_stack):

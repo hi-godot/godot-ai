@@ -83,6 +83,14 @@ class ServerHarness:
         await ws.send(json.dumps(handshake))
         # Give the server a moment to process the handshake
         await asyncio.sleep(0.05)
+        ## Drain the server's handshake_ack so it doesn't pollute the first
+        ## `recv_command()` call in tests that don't care about the ack.
+        try:
+            ack_raw = await asyncio.wait_for(ws.recv(), timeout=0.5)
+            ack = json.loads(ack_raw)
+            assert ack.get("type") == "handshake_ack", f"expected handshake_ack, got {ack!r}"
+        except asyncio.TimeoutError:
+            pass
         return MockGodotPlugin(ws=ws, session_id=session_id)
 
 
@@ -107,6 +115,13 @@ async def mcp_stack():
         }
         await ws.send(json.dumps(handshake))
         await asyncio.sleep(0.05)
+        ## Drain handshake_ack so it doesn't pollute tests' first recv.
+        try:
+            ack_raw = await asyncio.wait_for(ws.recv(), timeout=0.5)
+            ack = json.loads(ack_raw)
+            assert ack.get("type") == "handshake_ack", f"expected handshake_ack, got {ack!r}"
+        except asyncio.TimeoutError:
+            pass
         plugin = MockGodotPlugin(ws=ws, session_id="mcp-test")
         yield client, plugin
         await plugin.close()

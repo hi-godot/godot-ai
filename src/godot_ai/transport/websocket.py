@@ -10,6 +10,7 @@ from typing import Any
 import websockets
 from websockets.asyncio.server import ServerConnection
 
+from godot_ai import __version__ as _SERVER_VERSION
 from godot_ai.protocol.envelope import CommandRequest, CommandResponse, HandshakeMessage
 from godot_ai.sessions.registry import Session, SessionRegistry
 
@@ -75,6 +76,16 @@ class GodotWebSocketServer:
                 handshake.godot_version,
                 handshake.project_path,
             )
+
+            ## Tell the plugin which server version it's talking to so the dock
+            ## can surface a banner when plugin_version != server_version (e.g.
+            ## after self-update when the plugin was adopting a foreign-port
+            ## server owned by another session and `_stop_server` couldn't kill
+            ## it because _server_pid was never set). See #174 follow-up.
+            await ws.send(json.dumps({
+                "type": "handshake_ack",
+                "server_version": _SERVER_VERSION,
+            }))
 
             # Listen for responses and events
             async for raw_msg in ws:

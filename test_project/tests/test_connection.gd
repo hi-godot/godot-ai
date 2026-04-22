@@ -74,3 +74,40 @@ func test_slugify_preserves_alphanumeric() -> void:
 func test_slugify_empty_returns_empty() -> void:
 	assert_eq(Connection._slugify(""), "")
 	assert_eq(Connection._slugify("!!!"), "")
+
+
+# ----- handshake_ack parsing -----
+#
+# The server's handshake_ack reply carries the TRUE running server version so
+# the dock's Setup-section "Server" line can stop lying about the plugin's
+# expected version and instead flag self-update drift. Connection parses the
+# ack in `_handle_message` and stashes the version on `server_version`.
+
+
+func test_handle_message_stores_server_version_from_ack() -> void:
+	var conn := Connection.new()
+	assert_eq(conn.server_version, "", "server_version defaults to empty")
+	conn._handle_message('{"type":"handshake_ack","server_version":"1.4.2"}')
+	assert_eq(conn.server_version, "1.4.2")
+	conn.free()
+
+
+func test_handle_message_ignores_unknown_type() -> void:
+	## The dispatcher branch requires both `request_id` and `command` — any
+	## other typed message (future protocol additions) must no-op rather
+	## than crash, so a newer server can roll additions without requiring
+	## a plugin bump.
+	var conn := Connection.new()
+	conn._handle_message('{"type":"future_event","payload":{}}')
+	assert_eq(conn.server_version, "", "unknown types must not touch server_version")
+	conn.free()
+
+
+func test_handle_message_survives_malformed_ack() -> void:
+	## Forward-compat guard: if a future server sends handshake_ack with no
+	## `server_version` field, Connection must default to empty instead of
+	## crashing on missing-key access.
+	var conn := Connection.new()
+	conn._handle_message('{"type":"handshake_ack"}')
+	assert_eq(conn.server_version, "", "missing field must default to empty, not crash")
+	conn.free()

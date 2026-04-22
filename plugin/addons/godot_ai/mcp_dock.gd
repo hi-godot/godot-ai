@@ -44,6 +44,23 @@ var _client_rows: Dictionary = {}
 # editor focus-in. See #166.
 var _drift_banner: VBoxContainer
 var _drift_label: Label
+## Handles for the Setup section's "Server" row. `_update_status` keeps
+## the label text/color in sync with `Connection.server_version` so the
+## dock reports the TRUE running server version, not the plugin's
+## expected version. See #174 follow-up — a plugin upgrade via self-
+## update can leave the plugin connected to an older adopted server
+## (foreign-port branch never sets `_server_pid`, so `_stop_server`
+## can't kill it); the line has to show the mismatch honestly.
+var _setup_server_label: Label
+## Last rendered server-version string. `_update_status` runs every
+## frame; early-outs text repaint when nothing changed. Empty means
+## "no line rendered yet" (dev-checkout branch doesn't render a
+## user-mode Server line).
+var _last_rendered_server_text: String = ""
+## Restart-server button shown next to the Setup container when
+## `Connection.server_version` drifts from the plugin version. Hidden
+## in the match case so the UI stays calm.
+var _version_restart_btn: Button
 ## Sorted snapshot of the most recent mismatched-client set. Powers two things:
 ## (a) the Reconfigure button reuses this list instead of re-running
 ## `check_status` per row (saves ~18 filesystem reads per click), and
@@ -582,6 +599,7 @@ func _update_status() -> void:
 		status_color = Color.RED
 
 	_update_crash_panel(server_status)
+	_refresh_server_version_label()
 
 	var changed := connected != _last_connected or status_text != _last_status_text
 	if not changed:
@@ -807,6 +825,52 @@ func _on_reconnect() -> void:
 		_connection._attempt_reconnect()
 
 
+## Setup-section "Server" row: always report the TRUE running server
+## version (from the handshake_ack) rather than the plugin's expected
+## version, and highlight the mismatch so self-update drift is visible
+## at a glance instead of silently masked by a green label.
+##
+## Three render states, keyed off `Connection.server_version`:
+## - empty (pre-ack or older server): show plugin's expected version,
+##   muted, no Restart button
+## - matches plugin: show it green, no Restart button
+## - diverges from plugin: show it amber, append "(plugin X)", show
+##   Restart button so the user can kill the stale occupant and respawn
+##   without restarting the editor
+func _refresh_server_version_label() -> void:
+	if _setup_server_label == null:
+		return
+	var plugin_ver := McpClientConfigurator.get_plugin_version()
+	var server_ver := _connection.server_version if _connection != null else ""
+	var text: String
+	var color: Color
+	var show_restart := false
+	if server_ver.is_empty():
+		text = "godot-ai == %s" % plugin_ver
+		color = COLOR_MUTED
+	elif server_ver == plugin_ver:
+		text = "godot-ai == %s" % server_ver
+		color = Color.GREEN
+	else:
+		text = "godot-ai == %s  (plugin %s)" % [server_ver, plugin_ver]
+		color = COLOR_AMBER
+		show_restart = true
+	if text == _last_rendered_server_text:
+		if _version_restart_btn != null and _version_restart_btn.visible != show_restart:
+			_version_restart_btn.visible = show_restart
+		return
+	_last_rendered_server_text = text
+	_setup_server_label.text = text
+	_setup_server_label.add_theme_color_override("font_color", color)
+	if _version_restart_btn != null:
+		_version_restart_btn.visible = show_restart
+
+
+func _on_restart_stale_server() -> void:
+	if _plugin != null and _plugin.has_method("force_restart_server"):
+		_plugin.force_restart_server()
+
+
 func _on_log_toggled(enabled: bool) -> void:
 	if _connection and _connection.dispatcher:
 		_connection.dispatcher.mcp_logging = enabled
@@ -836,11 +900,30 @@ func _refresh_setup_status() -> void:
 	var uv_version := McpClientConfigurator.check_uv_version()
 	if not uv_version.is_empty():
 		_setup_container.add_child(_make_status_row("uv", uv_version, Color.GREEN))
-		var ver := McpClientConfigurator.get_plugin_version()
-		## Keep in sync with McpClientConfigurator.get_server_command — since
-		## v1.2.3 the uvx spawn uses exact pinning (==<version>) rather than
-		## the old compatible-with (~=<minor>) form. See #133.
-		_setup_container.add_child(_make_status_row("Server", "godot-ai == %s" % ver, Color.GREEN))
+		## Build the Server row with a placeholder label we can update every
+		## frame. `_refresh_server_version_label` replaces the text + color
+		## once `Connection.server_version` lands via `handshake_ack`, and
+		## flips to amber + "(plugin X)" on drift. Pre-ack we show the
+		## plugin's expected version so the row isn't blank.
+		var server_row := HBoxContainer.new()
+		server_row.add_theme_constant_override("separation", 8)
+		var key_label := Label.new()
+		key_label.text = "Server"
+		key_label.add_theme_color_override("font_color", COLOR_MUTED)
+		key_label.custom_minimum_size = Vector2(60, 0)
+		server_row.add_child(key_label)
+		_setup_server_label = Label.new()
+		_setup_server_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		server_row.add_child(_setup_server_label)
+		_version_restart_btn = Button.new()
+		_version_restart_btn.text = "Restart"
+		_version_restart_btn.tooltip_text = "Kill the server on port %d and respawn with the plugin's bundled version" % McpClientConfigurator.http_port()
+		_version_restart_btn.pressed.connect(_on_restart_stale_server)
+		_version_restart_btn.visible = false
+		server_row.add_child(_version_restart_btn)
+		_setup_container.add_child(server_row)
+		_last_rendered_server_text = ""
+		_refresh_server_version_label()
 	else:
 		_setup_container.add_child(_make_status_row("uv", "not found", Color.RED))
 		var install_btn := Button.new()

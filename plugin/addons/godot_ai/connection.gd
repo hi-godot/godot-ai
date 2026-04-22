@@ -18,6 +18,11 @@ var _connected := false
 var _reconnect_attempt := 0
 var _reconnect_timer := 0.0
 var _session_id := ""
+## Godot-AI Python package version reported by the server in its `handshake_ack`
+## reply. Empty until the ack lands. Older servers (pre-handshake_ack) leave
+## this empty forever — callers that gate on it (the dock's mismatch banner)
+## must treat empty as "unknown, don't raise a false alarm".
+var server_version := ""
 
 var dispatcher: McpDispatcher
 var log_buffer: McpLogBuffer
@@ -132,7 +137,12 @@ func _handle_message(raw: String) -> void:
 	if parsed == null:
 		push_warning("MCP: failed to parse message: %s" % raw)
 		return
-	if parsed is Dictionary and parsed.has("request_id") and parsed.has("command"):
+	if not (parsed is Dictionary):
+		return
+	if parsed.get("type", "") == "handshake_ack":
+		server_version = str(parsed.get("server_version", ""))
+		return
+	if parsed.has("request_id") and parsed.has("command"):
 		if dispatcher:
 			dispatcher.enqueue(parsed)
 

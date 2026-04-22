@@ -110,6 +110,79 @@ func test_apply_row_status_renders_mismatch_as_amber_with_url_hint() -> void:
 		"Mismatched rows offer the same Reconfigure action as the banner")
 
 
+## Shared fixture for the three version-label tests. Inject a Label + Button
+## + Connection onto the dock so the pure refresh logic can be exercised
+## without depending on whether the test environment resolves as user mode
+## or dev checkout (the user-mode Server row is what owns these handles in
+## production — see `_refresh_setup_status`).
+func _seed_server_row(server_ver: String) -> Connection:
+	var conn := Connection.new()
+	_dock._connection = conn
+	_dock._setup_server_label = Label.new()
+	_dock._version_restart_btn = Button.new()
+	_dock._version_restart_btn.visible = false
+	_dock._last_rendered_server_text = ""
+	conn.server_version = server_ver
+	return conn
+
+
+func _cleanup_server_row(conn: Connection) -> void:
+	_dock._setup_server_label.free()
+	_dock._setup_server_label = null
+	_dock._version_restart_btn.free()
+	_dock._version_restart_btn = null
+	conn.free()
+
+
+func test_server_version_label_muted_when_ack_not_received() -> void:
+	## Pre-ack (connection just opened, or older server that doesn't send
+	## handshake_ack): show the plugin's expected version muted. Nothing to
+	## flag yet and no Restart button — we don't know what's actually running.
+	var conn := _seed_server_row("")
+	_dock._refresh_server_version_label()
+	var plugin_ver := McpClientConfigurator.get_plugin_version()
+	assert_eq(_dock._setup_server_label.text, "godot-ai == %s" % plugin_ver)
+	assert_false(_dock._version_restart_btn.visible, "Restart button stays hidden pre-ack")
+	_cleanup_server_row(conn)
+
+
+func test_server_version_label_green_when_server_matches_plugin() -> void:
+	## Post-ack + match: the happy path. Green label, no Restart button.
+	var plugin_ver := McpClientConfigurator.get_plugin_version()
+	var conn := _seed_server_row(plugin_ver)
+	_dock._refresh_server_version_label()
+	assert_eq(_dock._setup_server_label.text, "godot-ai == %s" % plugin_ver,
+		"Match: label omits the '(plugin X)' suffix since there's no drift to flag")
+	var color: Color = _dock._setup_server_label.get_theme_color_override("font_color")
+	assert_true(color == Color.GREEN,
+		"Matched version must render green, got %s" % str(color))
+	assert_false(_dock._version_restart_btn.visible,
+		"Restart button stays hidden when versions match")
+	_cleanup_server_row(conn)
+
+
+func test_server_version_label_amber_with_restart_on_mismatch() -> void:
+	## The money test: the bug scenario. Plugin is v1.4.2 but connected to
+	## a v1.3.3 server (common after self-update when a foreign-adopted
+	## server outlives the plugin upgrade). Label must expose both versions
+	## and the Restart button must surface. Regression guard — without
+	## this, the dock silently masks the drift and the user has no signal.
+	var conn := _seed_server_row("1.2.3-stale-for-test")
+	_dock._refresh_server_version_label()
+	var plugin_ver := McpClientConfigurator.get_plugin_version()
+	assert_contains(_dock._setup_server_label.text, "1.2.3-stale-for-test",
+		"Mismatch must show the actual server version, not the plugin's")
+	assert_contains(_dock._setup_server_label.text, plugin_ver,
+		"Mismatch must show the plugin version alongside so the drift is visible at a glance")
+	assert_eq(
+		_dock._setup_server_label.get_theme_color_override("font_color"),
+		McpDockScript.COLOR_AMBER,
+		"Mismatch must render amber, matching the drift banner's color"
+	)
+	assert_true(_dock._version_restart_btn.visible, "Restart button must surface on mismatch")
+	_cleanup_server_row(conn)
+
+
 func test_dev_checkout_tooltip_exposes_symlink_target() -> void:
 	if not McpClientConfigurator.is_dev_checkout():
 		skip("only meaningful in dev checkout")
