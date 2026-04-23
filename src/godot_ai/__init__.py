@@ -72,7 +72,25 @@ def main(argv: Sequence[str] | None = None) -> None:
             "process when a launcher (uvx) PID would be unreliable."
         ),
     )
+    parser.add_argument(
+        "--exclude-domains",
+        default="",
+        help=(
+            "Comma-separated list of tool domains to drop from registration "
+            "(e.g. 'audio,particle,theme'). Core tools (editor_state, "
+            "scene_get_hierarchy, node_get_properties, session_list, "
+            "session_activate) are always registered. Use this to fit under "
+            "a client's hard tool-count cap (Antigravity limits to 100)."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    from godot_ai.tools.domains import parse_exclude_list
+
+    try:
+        exclude_domains = parse_exclude_list(args.exclude_domains)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     from godot_ai.runtime_info import install_pid_file
 
@@ -81,12 +99,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.reload and args.transport in ("sse", "streamable-http"):
         from godot_ai.asgi import run_with_reload
 
-        run_with_reload(transport=args.transport, port=args.port, ws_port=args.ws_port)
+        run_with_reload(
+            transport=args.transport,
+            port=args.port,
+            ws_port=args.ws_port,
+            exclude_domains=exclude_domains,
+        )
         return
 
     from godot_ai.server import create_server
 
-    server = create_server(ws_port=args.ws_port)
+    server = create_server(ws_port=args.ws_port, exclude_domains=exclude_domains)
 
     transport_kwargs = {}
     if args.transport in ("sse", "streamable-http"):

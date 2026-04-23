@@ -9,7 +9,7 @@ from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.tools import DEFER_META
 
 
-def register_scene_tools(mcp: FastMCP) -> None:
+def register_scene_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
     @mcp.tool()
     async def scene_get_hierarchy(
         ctx: Context,
@@ -36,6 +36,9 @@ def register_scene_tools(mcp: FastMCP) -> None:
             offset=offset,
             limit=limit,
         )
+
+    if not include_non_core:
+        return
 
     @mcp.tool(meta=DEFER_META)
     async def scene_get_roots(ctx: Context, session_id: str = "") -> dict:

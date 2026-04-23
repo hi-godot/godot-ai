@@ -30,6 +30,14 @@ const SETTING_WS_PORT := "godot_ai/ws_port"
 const MIN_PORT := 1024
 const MAX_PORT := 65535
 
+## Comma-separated list of tool domains to drop from the server at spawn
+## time. Maps 1:1 onto the `--exclude-domains` CLI flag. Set via the dock's
+## "Tools" tab; a change requires a server restart (the dock handles this
+## by triggering a plugin reload). Unknown names are warned about on the
+## Python side and skipped, so an EditorSetting left over from a previous
+## plugin version can't wedge the spawn.
+const SETTING_EXCLUDED_DOMAINS := "godot_ai/excluded_domains"
+
 
 ## Active HTTP port: user override (if in range) or `DEFAULT_HTTP_PORT`.
 static func http_port() -> int:
@@ -78,6 +86,25 @@ static func _register_port_setting(es: EditorSettings, key: String, default_port
 		"hint": PROPERTY_HINT_RANGE,
 		"hint_string": "%d,%d,1" % [MIN_PORT, MAX_PORT],
 	})
+
+
+## Read the `godot_ai/excluded_domains` EditorSetting as a canonicalized
+## comma-separated list (sorted, deduplicated, whitespace-stripped). Returns
+## "" when the setting is missing or resolves to an empty set — callers can
+## skip appending the flag in that case so older servers that don't know
+## `--exclude-domains` don't see an empty argument.
+static func excluded_domains() -> String:
+	var es := EditorInterface.get_editor_settings()
+	if es == null or not es.has_setting(SETTING_EXCLUDED_DOMAINS):
+		return ""
+	var raw := str(es.get_setting(SETTING_EXCLUDED_DOMAINS))
+	var parts := PackedStringArray()
+	for p in raw.split(","):
+		var t := p.strip_edges()
+		if not t.is_empty() and parts.find(t) == -1:
+			parts.append(t)
+	parts.sort()
+	return ",".join(parts)
 
 
 ## Walk `start`..`start+span-1` and return the first port that is NOT

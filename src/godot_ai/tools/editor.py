@@ -11,7 +11,7 @@ from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.tools import DEFER_META, JsonCoerced
 
 
-def register_editor_tools(mcp: FastMCP) -> None:
+def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
     @mcp.tool()
     async def editor_state(ctx: Context, session_id: str = "") -> dict:
         """Get current Godot editor (IDE) state: version, readiness, open scene.
@@ -24,6 +24,9 @@ def register_editor_tools(mcp: FastMCP) -> None:
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await editor_handlers.editor_state(runtime)
+
+    if not include_non_core:
+        return
 
     @mcp.tool(meta=DEFER_META)
     async def editor_selection_get(ctx: Context, session_id: str = "") -> dict:

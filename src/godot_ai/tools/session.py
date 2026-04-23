@@ -8,7 +8,11 @@ from godot_ai.handlers import session as session_handlers
 from godot_ai.runtime.direct import DirectRuntime
 
 
-def register_session_tools(mcp: FastMCP) -> None:
+def register_session_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
+    ## session has no non-core tools — `include_non_core` is accepted for a
+    ## uniform call signature across core-bearing domains.
+    del include_non_core
+
     @mcp.tool()
     def session_list(ctx: Context) -> dict:
         """List all connected Godot editor sessions.

@@ -26,20 +26,23 @@ class StubServer:
 def test_create_app_uses_env_config(monkeypatch):
     app = object()
     server = StubServer(app)
-    calls: dict[str, int] = {}
+    calls: dict[str, object] = {}
 
-    def fake_create_server(ws_port: int):
+    def fake_create_server(ws_port: int, *, exclude_domains=None):
         calls["ws_port"] = ws_port
+        calls["exclude_domains"] = exclude_domains
         return server
 
     monkeypatch.setenv(asgi.DEV_TRANSPORT_ENV, "streamable-http")
     monkeypatch.setenv(asgi.DEV_WS_PORT_ENV, "9555")
+    monkeypatch.setenv(asgi.DEV_EXCLUDE_DOMAINS_ENV, "audio,theme")
     monkeypatch.setattr("godot_ai.server.create_server", fake_create_server)
 
     result = asgi.create_app()
 
     assert result is app
     assert calls["ws_port"] == 9555
+    assert calls["exclude_domains"] == {"audio", "theme"}
     assert server.http_calls == [{"transport": "streamable-http"}]
 
 
@@ -52,9 +55,15 @@ def test_run_with_reload_uses_uvicorn_factory(monkeypatch):
 
     monkeypatch.delenv(asgi.DEV_TRANSPORT_ENV, raising=False)
     monkeypatch.delenv(asgi.DEV_WS_PORT_ENV, raising=False)
+    monkeypatch.delenv(asgi.DEV_EXCLUDE_DOMAINS_ENV, raising=False)
     monkeypatch.setattr(asgi.uvicorn, "run", fake_run)
 
-    asgi.run_with_reload(transport="streamable-http", port=8123, ws_port=9555)
+    asgi.run_with_reload(
+        transport="streamable-http",
+        port=8123,
+        ws_port=9555,
+        exclude_domains={"audio", "theme"},
+    )
 
     assert calls["app"] == "godot_ai.asgi:create_app"
     assert calls["kwargs"] == {
@@ -70,6 +79,11 @@ def test_run_with_reload_uses_uvicorn_factory(monkeypatch):
     }
     assert asgi._get_dev_transport() == "streamable-http"
     assert asgi._get_dev_ws_port() == 9555
+    ## Canonicalized comma-separated list — set order isn't guaranteed, so
+    ## `run_with_reload` sorts before writing the env var.
+    import os
+
+    assert os.environ[asgi.DEV_EXCLUDE_DOMAINS_ENV] == "audio,theme"
 
 
 def test_main_uses_reloadable_runner_for_http_reload(monkeypatch):
@@ -88,15 +102,17 @@ def test_main_uses_reloadable_runner_for_http_reload(monkeypatch):
         "transport": "streamable-http",
         "port": 8123,
         "ws_port": 9555,
+        "exclude_domains": set(),
     }
 
 
 def test_main_runs_server_directly_without_reload(monkeypatch):
     server = StubServer(app=None)
-    calls: dict[str, int] = {}
+    calls: dict[str, object] = {}
 
-    def fake_create_server(ws_port: int):
+    def fake_create_server(ws_port: int, *, exclude_domains=None):
         calls["ws_port"] = ws_port
+        calls["exclude_domains"] = exclude_domains
         return server
 
     monkeypatch.setattr("godot_ai.server.create_server", fake_create_server)
@@ -104,7 +120,56 @@ def test_main_runs_server_directly_without_reload(monkeypatch):
     godot_ai.main(["--transport", "streamable-http", "--port", "8123", "--ws-port", "9555"])
 
     assert calls["ws_port"] == 9555
+    assert calls["exclude_domains"] == set()
     assert server.run_calls == [{"transport": "streamable-http", "port": 8123}]
+
+
+def test_main_forwards_exclude_domains_to_create_server(monkeypatch):
+    server = StubServer(app=None)
+    calls: dict[str, object] = {}
+
+    def fake_create_server(ws_port: int, *, exclude_domains=None):
+        calls["exclude_domains"] = exclude_domains
+        return server
+
+    monkeypatch.setattr("godot_ai.server.create_server", fake_create_server)
+
+    godot_ai.main(
+        [
+            "--transport",
+            "stdio",
+            "--exclude-domains",
+            "audio, particle ,theme",
+        ]
+    )
+
+    ## Whitespace is stripped and duplicates collapsed; the set has no order.
+    assert calls["exclude_domains"] == {"audio", "particle", "theme"}
+
+
+def test_main_rejects_unknown_exclude_domain(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "godot_ai.server.create_server",
+        lambda ws_port, *, exclude_domains=None: pytest.fail("should not reach create_server"),
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        godot_ai.main(["--transport", "stdio", "--exclude-domains", "bogus,audio"])
+    assert excinfo.value.code != 0
+    captured = capsys.readouterr()
+    assert "Unknown or non-excludable" in captured.err
+    assert "bogus" in captured.err
+
+
+def test_main_rejects_non_excludable_core_domain(monkeypatch):
+    monkeypatch.setattr(
+        "godot_ai.server.create_server",
+        lambda ws_port, *, exclude_domains=None: pytest.fail("should not reach create_server"),
+    )
+    ## `session` has only core tools, so excluding it would be a silent no-op.
+    ## The parser rejects it up front rather than letting the user think they
+    ## trimmed something.
+    with pytest.raises(SystemExit):
+        godot_ai.main(["--transport", "stdio", "--exclude-domains", "session"])
 
 
 def test_main_version_flag(capsys):
