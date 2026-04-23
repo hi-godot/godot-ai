@@ -1,0 +1,5 @@
+# Shell scripts and git hooks must use LF regardless of platform — CRLF
+# breaks the shebang parser on Unix and breaks `post-checkout` everywhere.
+script/*       text eol=lf
+.githooks/*    text eol=lf
+*.sh           text eol=lf

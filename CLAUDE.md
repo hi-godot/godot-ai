@@ -40,6 +40,21 @@ Claude Code sessions often run in git worktrees (`.claude/worktrees/<name>/`). B
 - **Passing info between sessions**: When writing prompts, handoff notes, or file references intended for another session, **always include the full worktree path** or specify the worktree name. Relative paths like `docs/friction-log.md` are ambiguous — a different session may be in a different worktree or on `main`. Use the absolute path.
 - **Merging**: Worktree branches must be merged to `main` and pulled into other worktrees for changes to propagate. The plugin symlink means GDScript changes propagate within the same worktree immediately, but not across worktrees.
 
+### Worktree health: `script/verify-worktree` + `post-checkout` hook
+
+Before editing *anything* in `plugin/` in a worktree, the worktree must pass two invariants:
+
+1. `plugin/addons/godot_ai/plugin.gd` exists (the worktree's `plugin/` is populated, not empty or sparse).
+2. `test_project/addons/godot_ai` is a real symlink (or Windows directory junction) into **this worktree's** `plugin/addons/godot_ai` — not a plain text file, not a stale copy, not pointing into main.
+
+`script/verify-worktree` (bash, works in git-bash on Windows) checks both and auto-heals the symlink via `mklink /J` when possible. It runs automatically via `.githooks/post-checkout` on every `git worktree add` and `git checkout <branch>`, so a freshly-created worktree is healthy by the time you start editing.
+
+Wiring: `script/setup-dev` and `setup-dev.ps1` both run `git config core.hooksPath .githooks` once. Worktrees share `.git/config` with the main repo, so the hook fires in every worktree automatically.
+
+**If you find a broken worktree** (empty `plugin/`, or `test_project/addons/godot_ai` is a text file): do NOT `git add` anything. Run `script/verify-worktree` to heal, or re-create the worktree. Committing plugin/ edits from a broken worktree stages phantom deletions that overwrite the canonical plugin code in main on push. This has happened 4+ times — the hook now prevents it.
+
+**Parallel plugin development IS supported** — each worktree has its own `plugin/` (standard git worktree semantics) and its own symlinked `test_project/addons/godot_ai`. Multiple Godot editors, one per worktree, all connect to the same MCP server on :8000; use `session_activate` (or `session_id` per call) to route. The ban is only on editing in *broken* worktrees.
+
 ### Godot editor + worktree safety
 
 **Always launch Godot from the root repo's `test_project/`, not from a worktree.** Worktrees can be auto-removed when their owning Claude Code session exits. MCP tools write files to whatever `test_project/` the editor is running — if that's a worktree that gets deleted, all uncommitted scene files, scripts, and themes are permanently lost.
