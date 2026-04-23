@@ -11,8 +11,10 @@ static func configure(client: McpClient, _server_name: String, server_url: Strin
 	if path.is_empty():
 		return {"status": "error", "message": "Could not resolve config path for %s" % client.display_name}
 
-	var content := _read_text(path)
-	var lines := _split_lines(content)
+	var read := _read_or_init(path)
+	if not read["ok"]:
+		return {"status": "error", "message": "Refusing to overwrite %s: %s. Fix or move the file, then re-run Configure." % [path, read["error"]]}
+	var lines: Array[String] = _split_lines(String(read["data"]))
 	var body: PackedStringArray = client.toml_body_builder.call(server_url)
 
 	var section := _find_section(lines, _all_headers(client))
@@ -41,7 +43,10 @@ static func check_status(client: McpClient, _server_name: String, server_url: St
 	var path := client.resolved_config_path()
 	if path.is_empty() or not FileAccess.file_exists(path):
 		return McpClient.Status.NOT_CONFIGURED
-	var lines := _split_lines(_read_text(path))
+	var read := _read_or_init(path)
+	if not read["ok"]:
+		return McpClient.Status.NOT_CONFIGURED
+	var lines: Array[String] = _split_lines(String(read["data"]))
 	var section := _find_section(lines, _all_headers(client))
 	if section.is_empty():
 		return McpClient.Status.NOT_CONFIGURED
@@ -68,7 +73,10 @@ static func remove(client: McpClient, _server_name: String) -> Dictionary:
 	var path := client.resolved_config_path()
 	if path.is_empty() or not FileAccess.file_exists(path):
 		return {"status": "ok", "message": "Not configured"}
-	var lines := _split_lines(_read_text(path))
+	var read := _read_or_init(path)
+	if not read["ok"]:
+		return {"status": "error", "message": "Refusing to rewrite %s: %s." % [path, read["error"]]}
+	var lines: Array[String] = _split_lines(String(read["data"]))
 	var headers := _all_headers(client)
 
 	var output: Array[String] = []
@@ -92,15 +100,20 @@ static func remove(client: McpClient, _server_name: String) -> Dictionary:
 
 # --- helpers --------------------------------------------------------------
 
-static func _read_text(path: String) -> String:
+## Returns {"ok": true, "data": String} when the file is absent or readable,
+## and {"ok": false, "error": String} when the file exists but cannot be
+## opened. Callers must NOT fall back to an empty string on the error path —
+## doing so blows away the user's other MCP entries on the next write.
+static func _read_or_init(path: String) -> Dictionary:
 	if not FileAccess.file_exists(path):
-		return ""
+		return {"ok": true, "data": ""}
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
-		return ""
+		var err := FileAccess.get_open_error()
+		return {"ok": false, "error": "could not open for reading (error %d)" % err}
 	var t := f.get_as_text()
 	f.close()
-	return t
+	return {"ok": true, "data": t}
 
 
 static func _split_lines(content: String) -> Array[String]:

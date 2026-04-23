@@ -603,6 +603,93 @@ func test_json_strategy_preserves_other_servers() -> void:
 	assert_true(parsed["mcpServers"].has("godot-ai"), "Our entry not added")
 
 
+func test_json_strategy_refuses_to_overwrite_unparseable_file() -> void:
+	## Regression: if the config file exists but we can't parse it (trailing
+	## comma, stray comment, truncated write), `configure()` used to silently
+	## fall back to `{}` and write only the godot-ai entry — wiping every
+	## other MCP the user had configured. Now it must refuse and surface an
+	## error so the user can inspect and recover.
+	var path := _scratch_dir.path_join("unparseable.json")
+	var bogus := "{\n  \"mcpServers\": {\n    \"someone-else\": {\"url\": \"http://other/\"},  // trailing comment\n  }\n"
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(bogus)
+	f.close()
+
+	var client := _make_test_json_client(path)
+	var result := McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	assert_eq(result.get("status"), "error", "Configure must error on unparseable JSON, not silently overwrite")
+	var msg: String = result.get("message", "")
+	assert_true(msg.find("Refusing to overwrite") >= 0, "Error message should flag refusal: %s" % msg)
+
+	# File on disk must be byte-for-byte what the user wrote. Anything else
+	# is data loss.
+	var check_file := FileAccess.open(path, FileAccess.READ)
+	var preserved := check_file.get_as_text()
+	check_file.close()
+	assert_eq(preserved, bogus, "Unparseable config file must not be mutated")
+
+
+func test_json_strategy_refuses_to_overwrite_non_object_root() -> void:
+	## JSON that parses fine but whose root isn't an object (a bare array, a
+	## string, a number) also can't be safely merged into. Refuse rather
+	## than overwriting.
+	var path := _scratch_dir.path_join("non_object_root.json")
+	var bogus := "[\"some\", \"array\"]"
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(bogus)
+	f.close()
+
+	var client := _make_test_json_client(path)
+	var result := McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	assert_eq(result.get("status"), "error")
+
+	var check_file := FileAccess.open(path, FileAccess.READ)
+	assert_eq(check_file.get_as_text(), bogus, "Non-object-root config must not be mutated")
+	check_file.close()
+
+
+func test_json_strategy_tolerates_utf8_bom() -> void:
+	## JSON saved with a UTF-8 BOM (common from Windows editors) parses as
+	## invalid under Godot's JSON.parse. Under the old strategy that meant a
+	## silent fall-through to `{}` and a wipe on the next write. The strategy
+	## must strip the BOM and preserve existing entries.
+	var path := _scratch_dir.path_join("bom.json")
+	var seed := {"mcpServers": {"someone-else": {"url": "http://other/"}}}
+	var body := "﻿" + JSON.stringify(seed)
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(body)
+	f.close()
+
+	var client := _make_test_json_client(path)
+	var result := McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	assert_eq(result.get("status"), "ok", "BOM-prefixed JSON should parse after strip")
+
+	var check_file := FileAccess.open(path, FileAccess.READ)
+	var parsed = JSON.parse_string(check_file.get_as_text())
+	check_file.close()
+	assert_true(parsed is Dictionary and parsed.has("mcpServers"))
+	assert_true(parsed["mcpServers"].has("someone-else"), "Existing entry wiped after BOM parse recovery")
+	assert_true(parsed["mcpServers"].has("godot-ai"), "godot-ai entry not added")
+
+
+func test_json_strategy_remove_refuses_unparseable_file() -> void:
+	## remove() has the same wipe-risk as configure() — it also round-trips
+	## through _read_or_init and writes back. Must refuse on bad input.
+	var path := _scratch_dir.path_join("remove_unparseable.json")
+	var bogus := "{not-valid-json"
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(bogus)
+	f.close()
+
+	var client := _make_test_json_client(path)
+	var result := McpJsonStrategy.remove(client, "godot-ai")
+	assert_eq(result.get("status"), "error")
+
+	var check_file := FileAccess.open(path, FileAccess.READ)
+	assert_eq(check_file.get_as_text(), bogus, "Unparseable config must not be mutated on remove")
+	check_file.close()
+
+
 func test_json_strategy_distinguishes_missing_entry_from_url_drift() -> void:
 	## Three statuses, three causes — dock surfaces them as muted dot,
 	## green dot, amber dot respectively. Conflating "never configured"
