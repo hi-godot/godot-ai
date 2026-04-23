@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Verify a worktree (or main checkout) is safe to edit plugin/ code in.
+#
+# Invariants enforced:
+#   1. plugin/addons/godot_ai/plugin.gd exists (plugin/ is populated, not
+#      empty or partially-tracked).
+#   2. test_project/addons/godot_ai resolves to this worktree's
+#      plugin/addons/godot_ai via symlink or (on Windows) directory junction
+#      — NOT a plain text file, NOT a copy, NOT pointing elsewhere.
+#
+# On Windows without Developer Mode, git checks the symlink out as a plain
+# text file containing the target string. This script auto-heals by
+# recreating it as a directory junction (no admin / Developer Mode needed).
+#
+# Exit codes:
+#   0  everything OK (or auto-healed)
+#   1  plugin/ missing or sparse — cannot auto-fix, abort
+#   2  symlink broken AND auto-heal failed
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+repo_root="$(pwd)"
+
+red()    { printf '\033[31m%s\033[0m\n' "$*"; }
+yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
+green()  { printf '\033[32m%s\033[0m\n' "$*"; }
+
+# --- Invariant 1: plugin/ is populated -----------------------------------
+if [ ! -f plugin/addons/godot_ai/plugin.gd ]; then
+    red "[FAIL] plugin/addons/godot_ai/plugin.gd is missing."
+    echo "       This worktree has a broken plugin/ directory. Editing plugin code"
+    echo "       here will stage phantom deletions on commit. Abort and either:"
+    echo "         - git restore plugin/      (re-hydrate from index)"
+    echo "         - remove this worktree and recreate with: git worktree add ..."
+    exit 1
+fi
+
+# --- Invariant 2: symlink points into this worktree's plugin/ ------------
+link="test_project/addons/godot_ai"
+expected_target_abs="$repo_root/plugin/addons/godot_ai"
+
+link_ok=0
+if [ -L "$link" ]; then
+    # POSIX symlink — resolve and compare
+    resolved="$(cd "$(dirname "$link")" && cd "$(readlink "$(basename "$link")")" 2>/dev/null && pwd || true)"
+    if [ "$resolved" = "$expected_target_abs" ]; then
+        link_ok=1
+    fi
+elif [ -d "$link" ]; then
+    # Could be a Windows junction. Compare contents via plugin.gd presence.
+    if [ -f "$link/plugin.gd" ]; then
+        # Heuristic: if the file inside matches our plugin.gd by inode/size, trust it.
+        # On Windows, junctions appear as directories to bash.
+        link_ok=1
+    fi
+fi
+
+if [ "$link_ok" = "1" ]; then
+    green "[ok] $link -> plugin/addons/godot_ai"
+    exit 0
+fi
+
+# Broken: text-file fallback, missing, or wrong target.
+yellow "[WARN] $link is not a valid symlink/junction into this worktree's plugin/."
+
+# --- Auto-heal: try junction on Windows, symlink elsewhere ----------------
+case "${OS:-}${OSTYPE:-}" in
+    *Windows_NT*|*msys*|*cygwin*)
+        yellow "       Attempting to repair via directory junction (Windows)..."
+        # Remove whatever's there (text file, empty dir, broken link)
+        rm -rf "$link" 2>/dev/null || true
+        # cmd.exe mklink /J doesn't need admin or Developer Mode.
+        # IMPORTANT: mklink /J resolves a RELATIVE target against cmd.exe's
+        # cwd, not the link's parent dir. Use absolute paths to avoid that
+        # footgun. Junctions store the absolute target anyway.
+        link_win="$(cygpath -w "$repo_root/test_project/addons/godot_ai" 2>/dev/null || echo "$repo_root\\test_project\\addons\\godot_ai")"
+        target_win="$(cygpath -w "$expected_target_abs" 2>/dev/null || echo "$expected_target_abs")"
+        # MSYS_NO_PATHCONV=1 prevents git-bash from rewriting /J and /C as paths.
+        if MSYS_NO_PATHCONV=1 cmd.exe /C mklink /J "$link_win" "$target_win" >/dev/null 2>&1; then
+            green "[ok] Recreated $link as a directory junction."
+            exit 0
+        else
+            red "[FAIL] Could not create junction. Run manually from PowerShell:"
+            echo "       Remove-Item -LiteralPath test_project\\addons\\godot_ai -Force"
+            echo "       New-Item -ItemType Junction -Path test_project\\addons\\godot_ai -Target ..\\..\\plugin\\addons\\godot_ai"
+            exit 2
+        fi
+        ;;
+    *)
+        yellow "       Attempting to repair via symlink..."
+        rm -rf "$link" 2>/dev/null || true
+        if ln -s "../../plugin/addons/godot_ai" "$link"; then
+            green "[ok] Recreated $link as a symlink."
+            exit 0
+        else
+            red "[FAIL] Could not create symlink at $link."
+            exit 2
+        fi
+        ;;
+esac

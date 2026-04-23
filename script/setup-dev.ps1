@@ -63,6 +63,12 @@ if (-not $devModeOn) {
 if ($LASTEXITCODE -ne 0) { throw "git config core.symlinks true failed" }
 Write-Host "[ok] git config core.symlinks=true (local)."
 
+# --- 2b. Shared hooks: post-checkout auto-verifies worktrees --------------
+# Git worktrees share .git/config with the main repo, so setting once covers all.
+& git config core.hooksPath .githooks
+if ($LASTEXITCODE -ne 0) { throw "git config core.hooksPath .githooks failed" }
+Write-Host "[ok] git config core.hooksPath=.githooks (post-checkout now auto-runs verify-worktree)."
+
 # --- 3. Re-materialize the plugin symlink ---------------------------------
 $symlinkPath = Join-Path $repoRoot 'test_project\addons\godot_ai'
 if (Test-Path -LiteralPath $symlinkPath) {

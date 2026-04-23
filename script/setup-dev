@@ -3,6 +3,15 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Enable shared hooks (.githooks/post-checkout auto-verifies worktrees
+# on `git worktree add` / `git checkout <branch>`). Safe to run repeatedly;
+# git worktrees share .git/config with the main repo, so setting once covers all.
+git config core.hooksPath .githooks
+
+# Verify this checkout is healthy (plugin/ populated, test_project symlink OK).
+# Auto-heals the Windows text-file symlink fallback when possible.
+./script/verify-worktree || true
+
 if [ ! -d .venv ]; then
     python3 -m venv .venv
 fi

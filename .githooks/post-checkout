@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Fires on:
+#   - git worktree add <new-worktree>
+#   - git checkout <branch>
+#   - git clone (initial checkout)
+#
+# Args: $1 = prev_HEAD  $2 = new_HEAD  $3 = flag (1 = branch checkout, 0 = file)
+#
+# We only run on branch-level checkouts. File-level checkouts (e.g.
+# `git checkout -- some_file`) shouldn't re-verify the whole worktree.
+
+set -e
+
+flag="${3:-0}"
+if [ "$flag" != "1" ]; then
+    exit 0
+fi
+
+# Find repo root. Inside a worktree, `git rev-parse --show-toplevel` returns
+# the worktree path (what we want). The verify script lives at script/verify-worktree.
+repo_top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "$repo_top" ] || [ ! -x "$repo_top/script/verify-worktree" ]; then
+    # Not fatal — older commits may not have the script yet.
+    exit 0
+fi
+
+# Don't block checkout on verification failure — just warn loudly.
+# A failing verify halting `git worktree add` would be more disruptive
+# than helpful. The auto-heal path catches the common Windows case.
+"$repo_top/script/verify-worktree" || {
+    echo ""
+    echo "[post-checkout] Worktree verification reported problems."
+    echo "[post-checkout] Fix before editing plugin/ code — see output above."
+    echo ""
+}
+
+exit 0
