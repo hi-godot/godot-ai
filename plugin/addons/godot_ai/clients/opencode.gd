@@ -12,7 +12,7 @@ func _init() -> void:
 	doc_url = "https://opencode.ai/docs/mcp-servers"
 	path_template = {
 		"unix": "~/.config/opencode/opencode.json",
-		"windows": "$APPDATA/opencode/opencode.json",
+		"windows": "$HOME/.config/opencode/opencode.json",
 	}
 	server_key_path = PackedStringArray(["mcp"])
 	entry_builder = func(_name: String, url: String) -> Dictionary:
