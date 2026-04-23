@@ -916,12 +916,38 @@ func test_gemini_cli_entry_uses_httpUrl() -> void:
 	assert_eq(entry.get("httpUrl", ""), "http://x")
 
 
-func test_claude_desktop_bridges_via_npx() -> void:
+func test_claude_desktop_bridges_via_uvx() -> void:
 	var c := McpClientRegistry.get_by_id("claude_desktop")
 	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
-	assert_eq(entry.get("command", ""), "npx")
+	assert_eq(entry.get("command", ""), "uvx")
 	var args = entry.get("args", [])
 	assert_true(args is Array)
+	assert_contains(args, "mcp-proxy")
+	assert_contains(args, "--transport")
+	assert_contains(args, "streamablehttp")
+	assert_contains(args, "http://x")
+
+
+func test_claude_desktop_verify_entry_accepts_uvx_form() -> void:
+	## Drift-detection: once we've written the new uvx entry, check_status
+	## must round-trip it as CONFIGURED (not MISMATCH). Guards against a
+	## verify_entry that still only recognises the old npx/mcp-remote shape.
+	var c := McpClientRegistry.get_by_id("claude_desktop")
+	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
+	assert_true(c.verify_entry.call(entry, "http://x"), "uvx entry should verify as a match")
+
+
+func test_zed_bridges_via_uvx() -> void:
+	var c := McpClientRegistry.get_by_id("zed")
+	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
+	var cmd = entry.get("command", {})
+	assert_true(cmd is Dictionary, "Zed entry.command must be a Dictionary (path+args shape)")
+	assert_eq(cmd.get("path", ""), "uvx")
+	var args = cmd.get("args", [])
+	assert_true(args is Array)
+	assert_contains(args, "mcp-proxy")
+	assert_contains(args, "--transport")
+	assert_contains(args, "streamablehttp")
 	assert_contains(args, "http://x")
 
 
