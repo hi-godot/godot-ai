@@ -916,13 +916,55 @@ func test_gemini_cli_entry_uses_httpUrl() -> void:
 	assert_eq(entry.get("httpUrl", ""), "http://x")
 
 
-func test_claude_desktop_bridges_via_npx() -> void:
+func test_claude_desktop_bridges_via_uvx() -> void:
 	var c := McpClientRegistry.get_by_id("claude_desktop")
 	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
-	assert_eq(entry.get("command", ""), "npx")
-	var args = entry.get("args", [])
-	assert_true(args is Array)
-	assert_contains(args, "http://x")
+	_assert_uvx_command(entry.get("command", ""))
+	_assert_mcp_proxy_bridge_args(entry.get("args", []), "http://x")
+
+
+func test_claude_desktop_verify_entry_accepts_uvx_form() -> void:
+	## Drift-detection: once we've written the new uvx entry, check_status
+	## must round-trip it as CONFIGURED (not MISMATCH). Guards against a
+	## verify_entry that still only recognises the old npx/mcp-remote shape.
+	var c := McpClientRegistry.get_by_id("claude_desktop")
+	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
+	assert_true(c.verify_entry.call(entry, "http://x"), "uvx entry should verify as a match")
+
+
+func test_zed_bridges_via_uvx() -> void:
+	var c := McpClientRegistry.get_by_id("zed")
+	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
+	var cmd = entry.get("command", {})
+	assert_true(cmd is Dictionary, "Zed entry.command must be a Dictionary (path+args shape)")
+	_assert_uvx_command(cmd.get("path", ""))
+	_assert_mcp_proxy_bridge_args(cmd.get("args", []), "http://x")
+
+
+func test_zed_verify_entry_accepts_uvx_form() -> void:
+	## Parity with claude_desktop drift-detection test — if Zed's entry_builder
+	## changes but verify_entry isn't updated in lock-step, this catches it.
+	var c := McpClientRegistry.get_by_id("zed")
+	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
+	assert_true(c.verify_entry.call(entry, "http://x"), "uvx entry should verify as a match")
+
+
+func test_mcp_proxy_bridge_args_pins_version() -> void:
+	## Security: mcp-proxy is pulled from PyPI at first-connect. Pinning the
+	## version protects every user from a malicious or broken future release.
+	## If MCP_PROXY_VERSION ever changes, the pinned arg must change with it.
+	var args := McpClient.mcp_proxy_bridge_args("http://x")
+	assert_eq(args[0], "mcp-proxy==" + McpClient.MCP_PROXY_VERSION)
+
+
+func test_resolve_uvx_path_returns_nonempty() -> void:
+	## Fallback contract: even if McpCliFinder comes up empty (CI with no
+	## uvx installed), we must still emit a well-formed command string so
+	## the config file is valid. The bare "uvx" fallback is fine — the user
+	## will get the same spawn failure they would have had anyway.
+	var resolved := McpClient.resolve_uvx_path()
+	assert_false(resolved.is_empty())
+	assert_true(resolved.get_file() == "uvx" or resolved.get_file() == "uvx.exe", "resolved path must end in uvx or uvx.exe, got: %s" % resolved)
 
 
 func test_vscode_uses_servers_key_with_type_http() -> void:
@@ -958,6 +1000,33 @@ func test_opencode_client_uses_home_config_on_windows() -> void:
 
 
 # ----- helpers -----
+
+func _assert_uvx_command(cmd: Variant) -> void:
+	## The bridge command may be a bare "uvx"/"uvx.exe" (CI fallback) or an
+	## absolute path resolved by McpCliFinder. Either is fine — just assert
+	## the basename matches uvx.
+	assert_true(cmd is String, "command must be a String, got: %s" % cmd)
+	var cmd_str: String = cmd
+	var basename := cmd_str.get_file()
+	assert_true(basename == "uvx" or basename == "uvx.exe", "command must resolve to uvx/uvx.exe, got: %s" % cmd_str)
+
+
+func _assert_mcp_proxy_bridge_args(args: Variant, expected_url: String) -> void:
+	## Shared shape check for any client that bridges stdio → streamable-http
+	## via `uvx mcp-proxy`. The first arg is a pinned version spec like
+	## `mcp-proxy==0.11.0` — match by prefix so this doesn't have to churn
+	## every time MCP_PROXY_VERSION bumps.
+	assert_true(args is Array, "bridge args must be an Array, got: %s" % args)
+	var has_mcp_proxy := false
+	for a in args:
+		if a is String and (a as String).begins_with("mcp-proxy"):
+			has_mcp_proxy = true
+			break
+	assert_true(has_mcp_proxy, "args must include an mcp-proxy entry, got: %s" % args)
+	assert_contains(args, "--transport")
+	assert_contains(args, "streamablehttp")
+	assert_contains(args, expected_url)
+
 
 func _make_test_json_client(path: String) -> McpClient:
 	var c := McpClient.new()
