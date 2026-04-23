@@ -7,7 +7,7 @@
 ```bash
 git clone https://github.com/hi-godot/godot-ai.git
 cd godot-ai
-script/setup-dev             # creates .venv, installs deps, installs git hooks
+script/setup-dev             # creates .venv, installs deps, builds plugin symlink, installs git hooks
 source .venv/bin/activate
 ```
 
@@ -16,27 +16,21 @@ source .venv/bin/activate
 ```powershell
 git clone https://github.com/hi-godot/godot-ai.git
 cd godot-ai
-.\script\setup-dev.ps1       # creates .venv, installs deps, fixes symlink, installs git hooks
+.\script\setup-dev.ps1       # creates .venv, installs deps, builds plugin junction, installs git hooks
 .venv\Scripts\Activate.ps1
 ```
 
-> **One-time per clone:** `setup-dev` installs a `post-checkout` git hook
-> (from `.githooks/`) into `.git/hooks/`. The hook auto-verifies worktree
-> integrity on every `git worktree add` and `git checkout <branch>` —
-> specifically, that `plugin/` is populated and `test_project/addons/godot_ai`
-> is a real symlink/junction into this worktree's `plugin/`. It auto-heals
-> the Windows text-file-fallback symlink via `mklink /J`. You only need to
-> run `setup-dev` once per clone; the hook fires in every worktree of that
-> clone from then on.
+> **Plugin link is built locally, not tracked in git.** `test_project/addons/godot_ai`
+> is a symlink (Unix) or directory junction (Windows) into `plugin/addons/godot_ai`,
+> created fresh by `setup-dev`. A clone without running `setup-dev` has no link and
+> Godot won't find the plugin. The Windows flavor uses `mklink /J`, which works
+> without admin rights and without Windows Developer Mode.
 
-> **Windows contributors:** `setup-dev.ps1` requires **Windows Developer Mode**
-> to be enabled — if it isn't, the script prompts you with a link to the Settings
-> page (`ms-settings:developers`). Without Developer Mode + `core.symlinks=true`,
-> the committed symlink at `test_project/addons/godot_ai` checks out as a plain
-> text file, and the plugin fails to load with *"Attempt to open script
-> 'res://addons/godot_ai/runtime/game_helper.gd' resulted in error 'File not
-> found'"*. Every branch switch can re-break the symlink until `core.symlinks`
-> is set in the repo — which `setup-dev.ps1` handles for you.
+> **One-time per clone:** `setup-dev` installs a `post-checkout` git hook
+> (from `.githooks/`) into `.git/hooks/`. The hook auto-builds the plugin
+> link on every `git worktree add` and `git checkout <branch>`, so every
+> future worktree of this clone gets a working link automatically. You only
+> need to run `setup-dev` once per clone.
 
 ## Testing
 

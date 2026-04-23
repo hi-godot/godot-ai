@@ -19,7 +19,7 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
 
 ## Key conventions
 
-- **GDScript plugin is the canonical copy** in `plugin/`. `test_project/addons/godot_ai` is a symlink — no copy needed.
+- **GDScript plugin is the canonical copy** in `plugin/`. `test_project/addons/godot_ai` is a locally-built symlink (or Windows junction) into `plugin/addons/godot_ai` — not tracked in git, created by `script/setup-dev` / `script/verify-worktree`.
 - **Error codes**: Defined in `protocol/errors.py` (Python) and `utils/error_codes.gd` (GDScript). Keep in sync. Use Godot's built-in `error_string(err)` to translate numeric error codes in error messages — do not write a custom lookup table.
 - **Tools return `dict`**: Handlers call `runtime.send_command(command, params)` which returns a dict or raises. Tools create a `DirectRuntime` and delegate to handlers.
 - **Plugin runs on main thread**: All GDScript executes in `_process()` with a 4ms frame budget. Never block. Use `call_deferred` for scene tree mutations.
@@ -42,18 +42,20 @@ Claude Code sessions often run in git worktrees (`.claude/worktrees/<name>/`). B
 
 ### Worktree health: `script/verify-worktree` + `post-checkout` hook
 
+`test_project/addons/godot_ai` is **not tracked in git** (see `.gitignore` and #185). Every working copy builds the link locally — as a symlink on Unix, as a directory junction on Windows. This avoids the Windows-without-Dev-Mode text-file-fallback trap and stops `git rebase` / `cherry-pick` from fighting the link on every checkout.
+
 Before editing *anything* in `plugin/` in a worktree, the worktree must pass two invariants:
 
 1. `plugin/addons/godot_ai/plugin.gd` exists (the worktree's `plugin/` is populated, not empty or sparse).
-2. `test_project/addons/godot_ai` is a real symlink (or Windows directory junction) into **this worktree's** `plugin/addons/godot_ai` — not a plain text file, not a stale copy, not pointing into main.
+2. `test_project/addons/godot_ai` is a real symlink (or Windows directory junction) into **this worktree's** `plugin/addons/godot_ai`.
 
-`script/verify-worktree` (bash, works in git-bash on Windows) checks both and auto-heals the symlink via `mklink /J` when possible. It runs automatically via a `post-checkout` hook on every `git worktree add` and `git checkout <branch>`, so a freshly-created worktree is healthy by the time you start editing.
+`script/verify-worktree` (bash, works in git-bash on Windows) checks both. If the link is missing or broken it creates/repairs it via `ln -s` or `mklink /J` — no admin rights, no Windows Developer Mode required. It runs automatically via a `post-checkout` hook on every `git worktree add` and `git checkout <branch>`, so a freshly-created worktree is healthy by the time you start editing.
 
 Wiring: `script/setup-dev` and `setup-dev.ps1` copy `.githooks/post-checkout` into `.git/hooks/post-checkout` (the default path git always looks at). `.git/hooks/` is shared across all worktrees of a clone, so one install covers every future worktree forever. A fresh clone on a new machine needs setup-dev run once before the hook is active — after that, it's automatic. (We don't use `core.hooksPath=.githooks` because git resolves that relative path against main's working tree, which may be on a branch without `.githooks/` — a trap that wasted a whole debugging cycle.)
 
-**If you find a broken worktree** (empty `plugin/`, or `test_project/addons/godot_ai` is a text file): do NOT `git add` anything. Run `script/verify-worktree` to heal, or re-create the worktree. Committing plugin/ edits from a broken worktree stages phantom deletions that overwrite the canonical plugin code in main on push. This has happened 4+ times — the hook now prevents it.
+**If you find a broken worktree** (empty `plugin/`, or the link missing/stale): do NOT `git add` anything. Run `script/verify-worktree` to heal, or re-create the worktree. Committing plugin/ edits from a broken worktree stages phantom deletions that overwrite the canonical plugin code in main on push.
 
-**Parallel plugin development IS supported** — each worktree has its own `plugin/` (standard git worktree semantics) and its own symlinked `test_project/addons/godot_ai`. Multiple Godot editors, one per worktree, all connect to the same MCP server on :8000; use `session_activate` (or `session_id` per call) to route. The ban is only on editing in *broken* worktrees.
+**Parallel plugin development IS supported** — each worktree has its own `plugin/` (standard git worktree semantics) and its own locally-built `test_project/addons/godot_ai` link. Multiple Godot editors, one per worktree, all connect to the same MCP server on :8000; use `session_activate` (or `session_id` per call) to route. The ban is only on editing in *broken* worktrees.
 
 ### Godot editor + worktree safety
 
@@ -104,11 +106,11 @@ ruff format src/ tests/      # format
 
 **macOS + Python 3.13 note**: Files inside `.venv` inherit the macOS hidden flag (dot-prefix directory). Python 3.13 skips hidden `.pth` files (CPython gh-113659), breaking editable installs. `script/setup-dev` generates a `sitecustomize.py` in the venv that adds `src/` to `sys.path` via normal import (unaffected by hidden flags). No manual `chflags` needed.
 
-**Windows note**: use `.\script\setup-dev.ps1` instead of `script/setup-dev`. The Windows script also re-hydrates the `test_project/addons/godot_ai` symlink, which on Windows requires `git config core.symlinks true` (the script sets it) plus Windows Developer Mode (Settings → Privacy & security → For developers). Without Developer Mode, git checks the file out as a plain text file containing the symlink target string instead of a real symlink, and Godot fails to load the plugin with errors like `Failed loading resource: res://addons/godot_ai/runtime/game_helper.gd` and a cascade of `Could not find base class "McpTestSuite"` parse errors in `test_project/tests/`. **Fallback when Developer Mode is unavailable** (e.g. transient sessions, restricted machines): create a directory junction by hand — junctions don't need admin or Developer Mode:
+**Windows note**: use `.\script\setup-dev.ps1` instead of `script/setup-dev`. The Windows script creates `test_project\addons\godot_ai` as a directory junction — no admin rights and no Windows Developer Mode required. If you ever need to recreate the link by hand (e.g. outside setup-dev), either form works:
 
 ```powershell
 # from repo root or worktree root
-Remove-Item -LiteralPath test_project\addons\godot_ai -Force
+Remove-Item -LiteralPath test_project\addons\godot_ai -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Junction -Path test_project\addons\godot_ai -Target ..\..\plugin\addons\godot_ai
 ```
 

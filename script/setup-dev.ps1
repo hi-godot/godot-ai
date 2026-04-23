@@ -21,49 +21,7 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 Set-Location $repoRoot
 Write-Host "Repo: $repoRoot"
 
-# --- 1. Windows Developer Mode check --------------------------------------
-$devModeKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
-$devModeOn = $false
-try {
-    $val = Get-ItemPropertyValue -Path $devModeKey -Name 'AllowDevelopmentWithoutDevLicense' -ErrorAction Stop
-    $devModeOn = ($val -eq 1)
-} catch {
-    $devModeOn = $false
-}
-
-if (-not $devModeOn) {
-    Write-Host ""
-    Write-Host "================================================================" -ForegroundColor Yellow
-    Write-Host " Windows Developer Mode is OFF" -ForegroundColor Yellow
-    Write-Host "================================================================" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "Without Developer Mode, git cannot create symlinks and the"
-    Write-Host "test_project/addons/godot_ai symlink will check out as a plain"
-    Write-Host "text file. Godot will then fail to load the plugin."
-    Write-Host ""
-    Write-Host "To enable Developer Mode:"
-    Write-Host "  1. Open Settings -> Privacy & security -> For developers"
-    Write-Host "     (or run: start ms-settings:developers)"
-    Write-Host "  2. Toggle 'Developer Mode' on"
-    Write-Host "  3. Re-run this script"
-    Write-Host ""
-    Write-Host "Alternatively, run this script from an Administrator PowerShell."
-    Write-Host ""
-    $resp = Read-Host "Continue anyway? Symlink hydration will likely fail. [y/N]"
-    if ($resp -notmatch '^[Yy]') {
-        Write-Host "Aborted. Enable Developer Mode and try again." -ForegroundColor Yellow
-        exit 1
-    }
-} else {
-    Write-Host "[ok] Windows Developer Mode is enabled."
-}
-
-# --- 2. core.symlinks for this repo ---------------------------------------
-& git config core.symlinks true
-if ($LASTEXITCODE -ne 0) { throw "git config core.symlinks true failed" }
-Write-Host "[ok] git config core.symlinks=true (local)."
-
-# --- 2b. Install git hooks to .git/hooks/ ---------------------------------
+# --- 1. Install git hooks to .git/hooks/ ----------------------------------
 # Copy .githooks/* (tracked) into .git/hooks/ (untracked, local-only) so
 # they fire on `git worktree add` and `git checkout <branch>` regardless
 # of which branch the main repo is currently on. .git/hooks/ is the path
@@ -87,27 +45,46 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "[ok] Cleared stale core.hooksPath config."
 }
 
-# --- 3. Re-materialize the plugin symlink ---------------------------------
-$symlinkPath = Join-Path $repoRoot 'test_project\addons\godot_ai'
-if (Test-Path -LiteralPath $symlinkPath) {
-    Remove-Item -LiteralPath $symlinkPath -Force -Recurse -ErrorAction SilentlyContinue
+# --- 2. Build the test_project plugin junction ----------------------------
+# The link is not tracked in git (see #185 / .gitignore). A directory
+# junction works without admin rights or Windows Developer Mode — unlike
+# real symlinks — so any Windows contributor can run this without changing
+# system settings.
+$addonsDir = Join-Path $repoRoot 'test_project\addons'
+if (-not (Test-Path -LiteralPath $addonsDir)) {
+    New-Item -ItemType Directory -Path $addonsDir -Force | Out-Null
 }
-& git checkout HEAD -- 'test_project/addons/godot_ai'
-if ($LASTEXITCODE -ne 0) { throw "git checkout of test_project/addons/godot_ai failed" }
 
-$item = Get-Item -LiteralPath $symlinkPath -Force
-$isSymlink = ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
-if ($isSymlink) {
-    Write-Host "[ok] test_project/addons/godot_ai is a symlink."
+$linkPath = Join-Path $addonsDir 'godot_ai'
+$targetPath = Join-Path $repoRoot 'plugin\addons\godot_ai'
+
+# If something already exists at the link path (stale junction, leftover
+# text file from an old clone, or a copy), remove it so we can build fresh.
+if (Test-Path -LiteralPath $linkPath) {
+    $existing = Get-Item -LiteralPath $linkPath -Force
+    $isReparse = ($existing.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+    if ($isReparse) {
+        # Use cmd /c rmdir so Windows treats the junction as a pointer and
+        # does NOT recurse into the target directory — avoids the Windows
+        # junction-deletion data-loss footgun that motivated #185.
+        & cmd /c rmdir (($linkPath) -replace '/', '\')
+    } else {
+        Remove-Item -LiteralPath $linkPath -Force -Recurse
+    }
+}
+
+& cmd /c mklink /J (($linkPath) -replace '/', '\') (($targetPath) -replace '/', '\') | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "mklink /J failed for $linkPath -> $targetPath" }
+
+$item = Get-Item -LiteralPath $linkPath -Force
+$isSymlinkOrJunction = ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+if ($isSymlinkOrJunction -and (Test-Path -LiteralPath (Join-Path $linkPath 'plugin.gd'))) {
+    Write-Host "[ok] test_project\addons\godot_ai -> plugin\addons\godot_ai (junction)"
 } else {
-    Write-Host ""
-    Write-Host "[WARN] test_project/addons/godot_ai did NOT hydrate as a symlink." -ForegroundColor Yellow
-    Write-Host "       The plugin will not load in Godot until this is fixed."
-    Write-Host "       Most common cause: Windows Developer Mode is off."
-    Write-Host ""
+    throw "test_project\addons\godot_ai did not materialize as a working junction."
 }
 
-# --- 4. Python venv via uv ------------------------------------------------
+# --- 3. Python venv via uv ------------------------------------------------
 $uv = Get-Command uv -ErrorAction SilentlyContinue
 if (-not $uv) {
     Write-Host ""
