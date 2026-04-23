@@ -920,12 +920,7 @@ func test_claude_desktop_bridges_via_uvx() -> void:
 	var c := McpClientRegistry.get_by_id("claude_desktop")
 	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
 	assert_eq(entry.get("command", ""), "uvx")
-	var args = entry.get("args", [])
-	assert_true(args is Array)
-	assert_contains(args, "mcp-proxy")
-	assert_contains(args, "--transport")
-	assert_contains(args, "streamablehttp")
-	assert_contains(args, "http://x")
+	_assert_mcp_proxy_bridge_args(entry.get("args", []), "http://x")
 
 
 func test_claude_desktop_verify_entry_accepts_uvx_form() -> void:
@@ -943,12 +938,7 @@ func test_zed_bridges_via_uvx() -> void:
 	var cmd = entry.get("command", {})
 	assert_true(cmd is Dictionary, "Zed entry.command must be a Dictionary (path+args shape)")
 	assert_eq(cmd.get("path", ""), "uvx")
-	var args = cmd.get("args", [])
-	assert_true(args is Array)
-	assert_contains(args, "mcp-proxy")
-	assert_contains(args, "--transport")
-	assert_contains(args, "streamablehttp")
-	assert_contains(args, "http://x")
+	_assert_mcp_proxy_bridge_args(cmd.get("args", []), "http://x")
 
 
 func test_vscode_uses_servers_key_with_type_http() -> void:
@@ -984,6 +974,17 @@ func test_opencode_client_uses_home_config_on_windows() -> void:
 
 
 # ----- helpers -----
+
+func _assert_mcp_proxy_bridge_args(args: Variant, expected_url: String) -> void:
+	## Shared shape check for any client that bridges stdio → streamable-http
+	## via `uvx mcp-proxy`. Keeps Claude Desktop / Zed / any future stdio-only
+	## client tests in lock-step with the bridge command shape.
+	assert_true(args is Array, "bridge args must be an Array, got: %s" % args)
+	assert_contains(args, "mcp-proxy")
+	assert_contains(args, "--transport")
+	assert_contains(args, "streamablehttp")
+	assert_contains(args, expected_url)
+
 
 func _make_test_json_client(path: String) -> McpClient:
 	var c := McpClient.new()
