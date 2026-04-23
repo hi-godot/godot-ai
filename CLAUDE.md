@@ -47,9 +47,9 @@ Before editing *anything* in `plugin/` in a worktree, the worktree must pass two
 1. `plugin/addons/godot_ai/plugin.gd` exists (the worktree's `plugin/` is populated, not empty or sparse).
 2. `test_project/addons/godot_ai` is a real symlink (or Windows directory junction) into **this worktree's** `plugin/addons/godot_ai` — not a plain text file, not a stale copy, not pointing into main.
 
-`script/verify-worktree` (bash, works in git-bash on Windows) checks both and auto-heals the symlink via `mklink /J` when possible. It runs automatically via `.githooks/post-checkout` on every `git worktree add` and `git checkout <branch>`, so a freshly-created worktree is healthy by the time you start editing.
+`script/verify-worktree` (bash, works in git-bash on Windows) checks both and auto-heals the symlink via `mklink /J` when possible. It runs automatically via a `post-checkout` hook on every `git worktree add` and `git checkout <branch>`, so a freshly-created worktree is healthy by the time you start editing.
 
-Wiring: `script/setup-dev` and `setup-dev.ps1` both run `git config core.hooksPath .githooks` once. Worktrees share `.git/config` with the main repo, so the hook fires in every worktree automatically.
+Wiring: `script/setup-dev` and `setup-dev.ps1` copy `.githooks/post-checkout` into `.git/hooks/post-checkout` (the default path git always looks at). `.git/hooks/` is shared across all worktrees of a clone, so one install covers every future worktree forever. A fresh clone on a new machine needs setup-dev run once before the hook is active — after that, it's automatic. (We don't use `core.hooksPath=.githooks` because git resolves that relative path against main's working tree, which may be on a branch without `.githooks/` — a trap that wasted a whole debugging cycle.)
 
 **If you find a broken worktree** (empty `plugin/`, or `test_project/addons/godot_ai` is a text file): do NOT `git add` anything. Run `script/verify-worktree` to heal, or re-create the worktree. Committing plugin/ edits from a broken worktree stages phantom deletions that overwrite the canonical plugin code in main on push. This has happened 4+ times — the hook now prevents it.
 

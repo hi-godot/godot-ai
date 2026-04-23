@@ -3,10 +3,27 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Enable shared hooks (.githooks/post-checkout auto-verifies worktrees
-# on `git worktree add` / `git checkout <branch>`). Safe to run repeatedly;
-# git worktrees share .git/config with the main repo, so setting once covers all.
-git config core.hooksPath .githooks
+# Install git hooks to .git/hooks/ so they fire on `git worktree add` and
+# `git checkout <branch>` regardless of which branch the main repo is on.
+#
+# We copy from .githooks/ (tracked) into .git/hooks/ (untracked, local-only).
+# Why not core.hooksPath=.githooks? Because git resolves that relative path
+# against the main repo's working tree, which may be on a branch that doesn't
+# contain .githooks/ — in which case the hook is silently invisible to every
+# worktree. Installing into .git/hooks/ (the default path git always checks)
+# avoids that trap. .git/hooks/ is shared across all worktrees, so one install
+# covers every future worktree of this clone.
+GIT_DIR="$(git rev-parse --git-common-dir)"
+if [ -d .githooks ]; then
+    for hook in .githooks/*; do
+        [ -f "$hook" ] || continue
+        name="$(basename "$hook")"
+        cp "$hook" "$GIT_DIR/hooks/$name"
+        chmod +x "$GIT_DIR/hooks/$name"
+    done
+fi
+# Clear any stale core.hooksPath from earlier setup-dev runs that used it.
+git config --unset core.hooksPath 2>/dev/null || true
 
 # Verify this checkout is healthy (plugin/ populated, test_project symlink OK).
 # Auto-heals the Windows text-file symlink fallback when possible.

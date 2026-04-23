@@ -63,11 +63,29 @@ if (-not $devModeOn) {
 if ($LASTEXITCODE -ne 0) { throw "git config core.symlinks true failed" }
 Write-Host "[ok] git config core.symlinks=true (local)."
 
-# --- 2b. Shared hooks: post-checkout auto-verifies worktrees --------------
-# Git worktrees share .git/config with the main repo, so setting once covers all.
-& git config core.hooksPath .githooks
-if ($LASTEXITCODE -ne 0) { throw "git config core.hooksPath .githooks failed" }
-Write-Host "[ok] git config core.hooksPath=.githooks (post-checkout now auto-runs verify-worktree)."
+# --- 2b. Install git hooks to .git/hooks/ ---------------------------------
+# Copy .githooks/* (tracked) into .git/hooks/ (untracked, local-only) so
+# they fire on `git worktree add` and `git checkout <branch>` regardless
+# of which branch the main repo is currently on. .git/hooks/ is the path
+# git always checks, and it is shared across all worktrees of this clone.
+#
+# We don't use core.hooksPath=.githooks because git resolves that relative
+# path against the main repo's working tree — if main is on a branch that
+# doesn't contain .githooks/, the hook is silently invisible.
+$gitCommonDir = (& git rev-parse --git-common-dir).Trim()
+if ($LASTEXITCODE -ne 0) { throw "git rev-parse --git-common-dir failed" }
+if (Test-Path -LiteralPath '.githooks') {
+    $hooksTargetDir = Join-Path $gitCommonDir 'hooks'
+    Get-ChildItem -LiteralPath '.githooks' -File | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $hooksTargetDir $_.Name) -Force
+    }
+    Write-Host "[ok] Installed .githooks/* into $hooksTargetDir"
+}
+# Clear any stale core.hooksPath from earlier setup-dev runs that used it.
+& git config --unset core.hooksPath 2>$null
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "[ok] Cleared stale core.hooksPath config."
+}
 
 # --- 3. Re-materialize the plugin symlink ---------------------------------
 $symlinkPath = Join-Path $repoRoot 'test_project\addons\godot_ai'
