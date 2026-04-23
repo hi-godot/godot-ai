@@ -85,3 +85,33 @@ static func _array_from_packed(packed: PackedStringArray) -> Array[String]:
 	for s in packed:
 		out.append(s)
 	return out
+
+
+# ----- stdio→http bridge helpers (Claude Desktop, Zed) --------------------
+
+## Pinned mcp-proxy release used by every stdio-only client's bridge. uvx's
+## cache key is version-specific, so pinning guarantees all users run the
+## same vetted bridge — a malicious or broken future release on PyPI can't
+## silently break everyone's Configure flow. Bump deliberately when the
+## upstream publishes something we want.
+const MCP_PROXY_VERSION := "0.11.0"
+
+
+## Resolve `uvx` to an absolute path. GUI-launched apps (Claude Desktop,
+## Zed) often run with a minimal PATH that excludes ~/.local/bin on macOS /
+## Linux, so a bare "uvx" string in the config would fail at spawn time
+## with the same "Server disconnected" symptom we're trying to cure. The
+## shared three-tier McpCliFinder covers the well-known install dirs;
+## returns bare "uvx" as a last-resort fallback so the entry is still
+## well-formed even if the lookup failed.
+static func resolve_uvx_path() -> String:
+	var names: Array[String] = []
+	names.append("uvx.exe" if OS.get_name() == "Windows" else "uvx")
+	var resolved := McpCliFinder.find(names)
+	return resolved if not resolved.is_empty() else "uvx"
+
+
+## Build the `mcp-proxy` bridge argv (without the leading uvx command).
+## Callers splice this into the client-specific command shape.
+static func mcp_proxy_bridge_args(url: String) -> Array:
+	return ["mcp-proxy==" + MCP_PROXY_VERSION, "--transport", "streamablehttp", url]
