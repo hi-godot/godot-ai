@@ -934,6 +934,29 @@ func test_vscode_uses_servers_key_with_type_http() -> void:
 	assert_eq(entry.get("url", ""), "http://x")
 
 
+func test_opencode_client_uses_home_config_on_windows() -> void:
+	## Regression: OpenCode reads its MCP config from
+	## ~/.config/opencode/opencode.json on ALL platforms (verified via
+	## `opencode debug paths`). The Windows descriptor used to point at
+	## $APPDATA/opencode/opencode.json, so auto-configure silently wrote
+	## to a file OpenCode never read.
+	var c := McpClientRegistry.get_by_id("opencode")
+	assert_true(c != null, "opencode client must be registered")
+	assert_true(c.path_template.has("windows"), "opencode descriptor must declare a windows path_template entry")
+	var windows_template: String = c.path_template["windows"]
+	assert_contains(windows_template, "$HOME", "windows template must use $HOME, got: %s" % windows_template)
+	assert_false(windows_template.contains("$APPDATA"), "windows template must not use $APPDATA, got: %s" % windows_template)
+
+	var home := OS.get_environment("HOME")
+	if home.is_empty():
+		home = OS.get_environment("USERPROFILE")
+	if home.is_empty():
+		skip("HOME / USERPROFILE not set")
+		return
+	var resolved := McpPathTemplate.expand(windows_template)
+	assert_eq(resolved, home.path_join(".config/opencode/opencode.json"))
+
+
 # ----- helpers -----
 
 func _make_test_json_client(path: String) -> McpClient:
