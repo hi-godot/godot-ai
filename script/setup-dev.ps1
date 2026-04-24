@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Stop'
 $isWin = if ($PSVersionTable.PSVersion.Major -lt 6) {
     $env:OS -eq 'Windows_NT'
 } else {
-    [bool]$IsWindows
+    [bool](Get-Variable -Name IsWindows -ValueOnly -ErrorAction SilentlyContinue)
 }
 
 if (-not $isWin) {
