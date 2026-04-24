@@ -1006,6 +1006,65 @@ func test_roo_code_verify_flags_pre_189_typeless_entry_as_drift() -> void:
 	assert_false(c.verify_entry.call(url_drift, "http://x"), "URL drift must still register as drift")
 
 
+func test_cline_pins_streamable_http_transport() -> void:
+	## Parallel to the Roo #189 fix: without an explicit "type", Cline also
+	## defaults to SSE transport and our streamable-http /mcp endpoint returns
+	## HTTP 400. Cline's schema accepts "streamableHttp" (camelCase) — distinct
+	## from Roo's "streamable-http" — per src/services/mcp/schemas.ts upstream.
+	var c := McpClientRegistry.get_by_id("cline")
+	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
+	assert_eq(entry.get("type", ""), "streamableHttp")
+	assert_eq(entry.get("url", ""), "http://x")
+	var manual: String = c.manual_command_builder.call("godot-ai", "http://x", "/tmp/cline.json")
+	assert_contains(manual, "\"type\": \"streamableHttp\"")
+
+
+func test_cline_verify_flags_pre_fix_typeless_entry_as_drift() -> void:
+	## Users who configured Cline before this fix have a correct URL but no
+	## "type" field — the URL-only default verifier would report CONFIGURED and
+	## hide the broken SSE negotiation. verify_entry must treat a missing/wrong
+	## type as drift so the dock prompts them to re-configure.
+	var c := McpClientRegistry.get_by_id("cline")
+	assert_true(c.verify_entry.is_valid(), "cline must supply verify_entry")
+	var current: Dictionary = c.entry_builder.call("godot-ai", "http://x")
+	assert_true(c.verify_entry.call(current, "http://x"), "current entry must verify")
+	var legacy_typeless := {"url": "http://x", "disabled": false, "autoApprove": []}
+	assert_false(c.verify_entry.call(legacy_typeless, "http://x"), "pre-fix typeless entry must register as drift")
+	var legacy_sse := {"type": "sse", "url": "http://x", "disabled": false, "autoApprove": []}
+	assert_false(c.verify_entry.call(legacy_sse, "http://x"), "explicit sse entry must register as drift")
+	var wrong_case := {"type": "streamable-http", "url": "http://x", "disabled": false, "autoApprove": []}
+	assert_false(c.verify_entry.call(wrong_case, "http://x"), "Roo's kebab-case 'streamable-http' must register as drift in Cline (Cline accepts only 'streamableHttp')")
+	var url_drift := {"type": "streamableHttp", "url": "http://other", "disabled": false, "autoApprove": []}
+	assert_false(c.verify_entry.call(url_drift, "http://x"), "URL drift must still register as drift")
+
+
+func test_kilo_code_pins_streamable_http_transport() -> void:
+	## Parallel to the Roo #189 fix. Kilo Code is a Roo Code fork (legacy v5.x)
+	## and its McpHub.ts validates against {"stdio", "sse", "streamable-http"}
+	## — same kebab-case spelling as Roo, distinct from Cline's camelCase.
+	var c := McpClientRegistry.get_by_id("kilo_code")
+	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
+	assert_eq(entry.get("type", ""), "streamable-http")
+	assert_eq(entry.get("url", ""), "http://x")
+	var manual: String = c.manual_command_builder.call("godot-ai", "http://x", "/tmp/kilo.json")
+	assert_contains(manual, "\"type\": \"streamable-http\"")
+
+
+func test_kilo_code_verify_flags_pre_fix_typeless_entry_as_drift() -> void:
+	## Pre-fix Kilo entries have a correct URL but no "type" field. verify_entry
+	## must flag them as drift so the dock prompts a re-configure.
+	var c := McpClientRegistry.get_by_id("kilo_code")
+	assert_true(c.verify_entry.is_valid(), "kilo_code must supply verify_entry")
+	var current: Dictionary = c.entry_builder.call("godot-ai", "http://x")
+	assert_true(c.verify_entry.call(current, "http://x"), "current entry must verify")
+	var legacy_typeless := {"url": "http://x", "disabled": false, "alwaysAllow": []}
+	assert_false(c.verify_entry.call(legacy_typeless, "http://x"), "pre-fix typeless entry must register as drift")
+	var legacy_sse := {"type": "sse", "url": "http://x", "disabled": false, "alwaysAllow": []}
+	assert_false(c.verify_entry.call(legacy_sse, "http://x"), "explicit sse entry must register as drift")
+	var url_drift := {"type": "streamable-http", "url": "http://other", "disabled": false, "alwaysAllow": []}
+	assert_false(c.verify_entry.call(url_drift, "http://x"), "URL drift must still register as drift")
+
+
 func test_opencode_client_uses_home_config_on_windows() -> void:
 	## Regression: OpenCode reads its MCP config from
 	## ~/.config/opencode/opencode.json on ALL platforms (verified via
