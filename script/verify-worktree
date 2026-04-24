@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
-# Verify a worktree (or main checkout) is safe to edit plugin/ code in.
+# Verify a worktree (or main checkout) is safe to edit plugin/ code in, and
+# ensure test_project/addons/godot_ai points to this worktree's plugin/.
 #
 # Invariants enforced:
-#   1. plugin/addons/godot_ai/plugin.gd exists (plugin/ is populated, not
-#      empty or partially-tracked).
+#   1. plugin/addons/godot_ai/plugin.gd exists (plugin/ is populated).
 #   2. test_project/addons/godot_ai resolves to this worktree's
-#      plugin/addons/godot_ai via symlink or (on Windows) directory junction
-#      — NOT a plain text file, NOT a copy, NOT pointing elsewhere.
+#      plugin/addons/godot_ai via symlink or (on Windows) directory junction.
 #
-# On Windows without Developer Mode, git checks the symlink out as a plain
-# text file containing the target string. This script auto-heals by
-# recreating it as a directory junction (no admin / Developer Mode needed).
+# The link is NOT tracked in git (see .gitignore) — this script builds it
+# locally from scratch on fresh clones and `git worktree add`, and repairs
+# it if something mangled it. It's idempotent and safe to run anytime.
 #
 # Exit codes:
-#   0  everything OK (or auto-healed)
+#   0  link OK (already valid or just created/repaired)
 #   1  plugin/ missing or sparse — cannot auto-fix, abort
-#   2  symlink broken AND auto-heal failed
+#   2  link creation failed (permission / FS error)
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -35,7 +34,7 @@ if [ ! -f plugin/addons/godot_ai/plugin.gd ]; then
     exit 1
 fi
 
-# --- Invariant 2: symlink points into this worktree's plugin/ ------------
+# --- Invariant 2: link points into this worktree's plugin/ ---------------
 link="test_project/addons/godot_ai"
 expected_target_abs="$repo_root/plugin/addons/godot_ai"
 
@@ -48,9 +47,8 @@ if [ -L "$link" ]; then
     fi
 elif [ -d "$link" ]; then
     # Could be a Windows junction. Compare contents via plugin.gd presence.
+    # On Windows, junctions appear as directories to bash.
     if [ -f "$link/plugin.gd" ]; then
-        # Heuristic: if the file inside matches our plugin.gd by inode/size, trust it.
-        # On Windows, junctions appear as directories to bash.
         link_ok=1
     fi
 fi
@@ -60,13 +58,11 @@ if [ "$link_ok" = "1" ]; then
     exit 0
 fi
 
-# Broken: text-file fallback, missing, or wrong target.
-yellow "[WARN] $link is not a valid symlink/junction into this worktree's plugin/."
+# Missing, broken, or pointing elsewhere — (re)create it.
+mkdir -p "$(dirname "$link")"
 
-# --- Auto-heal: try junction on Windows, symlink elsewhere ----------------
 case "${OS:-}${OSTYPE:-}" in
     *Windows_NT*|*msys*|*cygwin*)
-        yellow "       Attempting to repair via directory junction (Windows)..."
         # Remove whatever's there (text file, empty dir, broken link)
         rm -rf "$link" 2>/dev/null || true
         # cmd.exe mklink /J doesn't need admin or Developer Mode.
@@ -77,20 +73,19 @@ case "${OS:-}${OSTYPE:-}" in
         target_win="$(cygpath -w "$expected_target_abs" 2>/dev/null || echo "$expected_target_abs")"
         # MSYS_NO_PATHCONV=1 prevents git-bash from rewriting /J and /C as paths.
         if MSYS_NO_PATHCONV=1 cmd.exe /C mklink /J "$link_win" "$target_win" >/dev/null 2>&1; then
-            green "[ok] Recreated $link as a directory junction."
+            green "[ok] Created $link as a directory junction."
             exit 0
         else
             red "[FAIL] Could not create junction. Run manually from PowerShell:"
-            echo "       Remove-Item -LiteralPath test_project\\addons\\godot_ai -Force"
+            echo "       Remove-Item -LiteralPath test_project\\addons\\godot_ai -Force -ErrorAction SilentlyContinue"
             echo "       New-Item -ItemType Junction -Path test_project\\addons\\godot_ai -Target ..\\..\\plugin\\addons\\godot_ai"
             exit 2
         fi
         ;;
     *)
-        yellow "       Attempting to repair via symlink..."
         rm -rf "$link" 2>/dev/null || true
         if ln -s "../../plugin/addons/godot_ai" "$link"; then
-            green "[ok] Recreated $link as a symlink."
+            green "[ok] Created $link as a symlink."
             exit 0
         else
             red "[FAIL] Could not create symlink at $link."

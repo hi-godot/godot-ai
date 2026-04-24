@@ -25,8 +25,10 @@ fi
 # Clear any stale core.hooksPath from earlier setup-dev runs that used it.
 git config --unset core.hooksPath 2>/dev/null || true
 
-# Verify this checkout is healthy (plugin/ populated, test_project symlink OK).
-# Auto-heals the Windows text-file symlink fallback when possible.
+# Build (or repair) the test_project/addons/godot_ai -> plugin/addons/godot_ai
+# link. The link is not tracked in git (see #185 / .gitignore); this script
+# creates it on fresh clones and every `git worktree add` does the same via
+# the post-checkout hook.
 ./script/verify-worktree || true
 
 if [ ! -d .venv ]; then

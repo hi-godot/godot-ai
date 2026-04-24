@@ -45,6 +45,13 @@ Thumbs.db
 *.exe
 *.AppImage
 
+# Plugin symlink/junction into test_project/ — built locally by
+# script/setup-dev (bash) or script/setup-dev.ps1 (Windows). Not tracked
+# because a committed symlink checks out as a plain text file on Windows
+# without Developer Mode and fights multi-step git ops (rebase,
+# cherry-pick) on every platform. See #185.
+test_project/addons/godot_ai
+
 # Local demo scene (not tracked in repo)
 test_project/tests/space_city.tscn
 test_project/tests/space_city_assets/

@@ -8,6 +8,11 @@
 #
 # We only run on branch-level checkouts. File-level checkouts (e.g.
 # `git checkout -- some_file`) shouldn't re-verify the whole worktree.
+#
+# The hook's job: make sure test_project/addons/godot_ai exists and points
+# into this worktree's plugin/. Since the link is no longer tracked in git
+# (see #185 / .gitignore), git never creates or updates it on checkout —
+# this hook is how freshly-added worktrees get their link.
 
 set -e
 
@@ -26,7 +31,7 @@ fi
 
 # Don't block checkout on verification failure — just warn loudly.
 # A failing verify halting `git worktree add` would be more disruptive
-# than helpful. The auto-heal path catches the common Windows case.
+# than helpful.
 "$repo_top/script/verify-worktree" || {
     echo ""
     echo "[post-checkout] Worktree verification reported problems."
