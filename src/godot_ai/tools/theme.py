@@ -48,11 +48,11 @@ def register_theme_tools(mcp: FastMCP) -> None:
         tool_name="theme_manage",
         description=_DESCRIPTION,
         ops={
-            "create": lambda rt, p: theme_handlers.theme_create(rt, **p),
-            "set_color": lambda rt, p: theme_handlers.theme_set_color(rt, **p),
-            "set_constant": lambda rt, p: theme_handlers.theme_set_constant(rt, **p),
-            "set_font_size": lambda rt, p: theme_handlers.theme_set_font_size(rt, **p),
-            "set_stylebox_flat": lambda rt, p: theme_handlers.theme_set_stylebox_flat(rt, **p),
-            "apply": lambda rt, p: theme_handlers.theme_apply(rt, **p),
+            "create": theme_handlers.theme_create,
+            "set_color": theme_handlers.theme_set_color,
+            "set_constant": theme_handlers.theme_set_constant,
+            "set_font_size": theme_handlers.theme_set_font_size,
+            "set_stylebox_flat": theme_handlers.theme_set_stylebox_flat,
+            "apply": theme_handlers.theme_apply,
         },
     )

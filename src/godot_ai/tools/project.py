@@ -63,8 +63,8 @@ def register_project_tools(mcp: FastMCP) -> None:
         tool_name="project_manage",
         description=_DESCRIPTION,
         ops={
-            "stop": lambda rt, p: project_handlers.project_stop(rt, **p),
-            "settings_get": lambda rt, p: project_handlers.project_settings_get(rt, **p),
-            "settings_set": lambda rt, p: project_handlers.project_settings_set(rt, **p),
+            "stop": project_handlers.project_stop,
+            "settings_get": project_handlers.project_settings_get,
+            "settings_set": project_handlers.project_settings_set,
         },
     )

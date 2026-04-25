@@ -35,9 +35,9 @@ def register_input_map_tools(mcp: FastMCP) -> None:
         tool_name="input_map_manage",
         description=_DESCRIPTION,
         ops={
-            "list": lambda rt, p: input_map_handlers.input_map_list(rt, **p),
-            "add_action": lambda rt, p: input_map_handlers.input_map_add_action(rt, **p),
-            "remove_action": lambda rt, p: input_map_handlers.input_map_remove_action(rt, **p),
-            "bind_event": lambda rt, p: input_map_handlers.input_map_bind_event(rt, **p),
+            "list": input_map_handlers.input_map_list,
+            "add_action": input_map_handlers.input_map_add_action,
+            "remove_action": input_map_handlers.input_map_remove_action,
+            "bind_event": input_map_handlers.input_map_bind_event,
         },
     )

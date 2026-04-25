@@ -28,8 +28,8 @@ def register_signal_tools(mcp: FastMCP) -> None:
         tool_name="signal_manage",
         description=_DESCRIPTION,
         ops={
-            "list": lambda rt, p: signal_handlers.signal_list(rt, **p),
-            "connect": lambda rt, p: signal_handlers.signal_connect(rt, **p),
-            "disconnect": lambda rt, p: signal_handlers.signal_disconnect(rt, **p),
+            "list": signal_handlers.signal_list,
+            "connect": signal_handlers.signal_connect,
+            "disconnect": signal_handlers.signal_disconnect,
         },
     )

@@ -398,9 +398,7 @@ class TestResourceErrorPath:
         async def respond():
             cmd = await plugin.recv_command()
             assert cmd["command"] == "get_node_properties"
-            await plugin.send_error(
-                cmd["request_id"], "INVALID_PARAMS", "no such node"
-            )
+            await plugin.send_error(cmd["request_id"], "INVALID_PARAMS", "no such node")
 
         task = asyncio.create_task(respond())
         result = await client.read_resource("godot://node/Bogus/properties")

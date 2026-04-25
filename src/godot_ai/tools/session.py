@@ -54,6 +54,6 @@ def register_session_tools(mcp: FastMCP, *, include_non_core: bool = True) -> No
         tool_name="session_manage",
         description=_DESCRIPTION,
         ops={
-            "list": lambda rt, p: session_handlers.session_list(rt, **p),
+            "list": session_handlers.session_list,
         },
     )

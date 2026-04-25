@@ -58,6 +58,6 @@ def register_testing_tools(mcp: FastMCP) -> None:
         tool_name="test_manage",
         description=_DESCRIPTION,
         ops={
-            "results_get": lambda rt, p: testing_handlers.test_results_get(rt, **p),
+            "results_get": testing_handlers.test_results_get,
         },
     )

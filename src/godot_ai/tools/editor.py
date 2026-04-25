@@ -43,6 +43,8 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         """Get current Godot editor state: version, readiness, open scene, play state.
 
         Resource form: ``godot://editor/state`` — prefer for active-session reads.
+        Also reachable as ``editor_manage(op="state")`` (same handler) for clients
+        that prefer a single rolled-up tool.
 
         Args:
             session_id: Optional Godot session to target. Empty = active session.
@@ -165,11 +167,11 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         tool_name="editor_manage",
         description=_DESCRIPTION,
         ops={
-            "state": lambda rt, p: editor_handlers.editor_state(rt, **p),
-            "selection_get": lambda rt, p: editor_handlers.editor_selection_get(rt, **p),
-            "selection_set": lambda rt, p: editor_handlers.editor_selection_set(rt, **p),
-            "monitors_get": lambda rt, p: editor_handlers.performance_monitors_get(rt, **p),
-            "quit": lambda rt, p: editor_handlers.editor_quit(rt, **p),
-            "logs_clear": lambda rt, p: editor_handlers.logs_clear(rt, **p),
+            "state": editor_handlers.editor_state,
+            "selection_get": editor_handlers.editor_selection_get,
+            "selection_set": editor_handlers.editor_selection_set,
+            "monitors_get": editor_handlers.performance_monitors_get,
+            "quit": editor_handlers.editor_quit,
+            "logs_clear": editor_handlers.logs_clear,
         },
     )

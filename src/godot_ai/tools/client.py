@@ -31,8 +31,8 @@ def register_client_tools(mcp: FastMCP) -> None:
         tool_name="client_manage",
         description=_DESCRIPTION,
         ops={
-            "status": lambda rt, p: client_handlers.client_status(rt, **p),
-            "configure": lambda rt, p: client_handlers.client_configure(rt, **p),
-            "remove": lambda rt, p: client_handlers.client_remove(rt, **p),
+            "status": client_handlers.client_status,
+            "configure": client_handlers.client_configure,
+            "remove": client_handlers.client_remove,
         },
     )

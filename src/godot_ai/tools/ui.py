@@ -41,9 +41,9 @@ def register_ui_tools(mcp: FastMCP) -> None:
         tool_name="ui_manage",
         description=_DESCRIPTION,
         ops={
-            "set_anchor_preset": lambda rt, p: ui_handlers.ui_set_anchor_preset(rt, **p),
-            "set_text": lambda rt, p: ui_handlers.ui_set_text(rt, **p),
-            "build_layout": lambda rt, p: ui_handlers.ui_build_layout(rt, **p),
-            "draw_recipe": lambda rt, p: control_handlers.control_draw_recipe(rt, **p),
+            "set_anchor_preset": ui_handlers.ui_set_anchor_preset,
+            "set_text": ui_handlers.ui_set_text,
+            "build_layout": ui_handlers.ui_build_layout,
+            "draw_recipe": control_handlers.control_draw_recipe,
         },
     )

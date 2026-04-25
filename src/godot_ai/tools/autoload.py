@@ -28,8 +28,8 @@ def register_autoload_tools(mcp: FastMCP) -> None:
         tool_name="autoload_manage",
         description=_DESCRIPTION,
         ops={
-            "list": lambda rt, p: autoload_handlers.autoload_list(rt, **p),
-            "add": lambda rt, p: autoload_handlers.autoload_add(rt, **p),
-            "remove": lambda rt, p: autoload_handlers.autoload_remove(rt, **p),
+            "list": autoload_handlers.autoload_list,
+            "add": autoload_handlers.autoload_add,
+            "remove": autoload_handlers.autoload_remove,
         },
     )

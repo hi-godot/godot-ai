@@ -33,9 +33,9 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
         tool_name="filesystem_manage",
         description=_DESCRIPTION,
         ops={
-            "read_text": lambda rt, p: filesystem_handlers.filesystem_read_text(rt, **p),
-            "write_text": lambda rt, p: filesystem_handlers.filesystem_write_text(rt, **p),
-            "reimport": lambda rt, p: filesystem_handlers.filesystem_reimport(rt, **p),
-            "search": lambda rt, p: filesystem_handlers.filesystem_search(rt, **p),
+            "read_text": filesystem_handlers.filesystem_read_text,
+            "write_text": filesystem_handlers.filesystem_write_text,
+            "reimport": filesystem_handlers.filesystem_reimport,
+            "search": filesystem_handlers.filesystem_search,
         },
     )

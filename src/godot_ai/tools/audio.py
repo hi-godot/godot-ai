@@ -46,11 +46,11 @@ def register_audio_tools(mcp: FastMCP) -> None:
         tool_name="audio_manage",
         description=_DESCRIPTION,
         ops={
-            "player_create": lambda rt, p: audio_handlers.audio_player_create(rt, **p),
-            "player_set_stream": lambda rt, p: audio_handlers.audio_player_set_stream(rt, **p),
-            "player_set_playback": lambda rt, p: audio_handlers.audio_player_set_playback(rt, **p),
-            "play": lambda rt, p: audio_handlers.audio_play(rt, **p),
-            "stop": lambda rt, p: audio_handlers.audio_stop(rt, **p),
-            "list": lambda rt, p: audio_handlers.audio_list(rt, **p),
+            "player_create": audio_handlers.audio_player_create,
+            "player_set_stream": audio_handlers.audio_player_set_stream,
+            "player_set_playback": audio_handlers.audio_player_set_playback,
+            "play": audio_handlers.audio_play,
+            "stop": audio_handlers.audio_stop,
+            "list": audio_handlers.audio_list,
         },
     )

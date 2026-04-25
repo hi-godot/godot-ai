@@ -110,8 +110,8 @@ def register_script_tools(mcp: FastMCP) -> None:
         tool_name="script_manage",
         description=_DESCRIPTION,
         ops={
-            "read": lambda rt, p: script_handlers.script_read(rt, **p),
-            "detach": lambda rt, p: script_handlers.script_detach(rt, **p),
-            "find_symbols": lambda rt, p: script_handlers.script_find_symbols(rt, **p),
+            "read": script_handlers.script_read,
+            "detach": script_handlers.script_detach,
+            "find_symbols": script_handlers.script_find_symbols,
         },
     )

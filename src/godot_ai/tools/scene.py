@@ -90,8 +90,8 @@ def register_scene_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None
         tool_name="scene_manage",
         description=_DESCRIPTION,
         ops={
-            "create": lambda rt, p: scene_handlers.scene_create(rt, **p),
-            "save_as": lambda rt, p: scene_handlers.scene_save_as(rt, **p),
-            "get_roots": lambda rt, p: scene_handlers.scene_get_roots(rt, **p),
+            "create": scene_handlers.scene_create,
+            "save_as": scene_handlers.scene_save_as,
+            "get_roots": scene_handlers.scene_get_roots,
         },
     )

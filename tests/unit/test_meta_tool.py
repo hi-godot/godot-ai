@@ -66,7 +66,8 @@ def test_register_rejects_empty_ops():
 
 
 # ---------------------------------------------------------------------------
-# Dispatch — happy path
+# Dispatch — happy path. Handlers are invoked as ``handler(runtime, **params)``,
+# so test handlers accept the same keyword args the dispatcher unpacks.
 # ---------------------------------------------------------------------------
 
 
@@ -85,13 +86,13 @@ async def test_dispatch_routes_to_correct_handler():
     )
     assert result == {"v": "beta"}
     alpha.assert_not_called()
-    beta.assert_awaited_once_with(runtime, {"k": 1})
+    beta.assert_awaited_once_with(runtime, k=1)
 
 
 @pytest.mark.asyncio
 async def test_dispatch_handles_sync_handlers():
-    def sync_handler(rt, p):
-        return {"sync": True, **p}
+    def sync_handler(rt, a):
+        return {"sync": True, "a": a}
 
     result = await dispatch_manage_op(
         ops={"go": sync_handler},
@@ -107,8 +108,8 @@ async def test_dispatch_handles_sync_handlers():
 async def test_dispatch_defaults_params_to_empty_dict():
     captured: dict[str, Any] = {}
 
-    async def handler(rt, p):
-        captured["got"] = p
+    async def handler(rt):
+        captured["called"] = True
         return {}
 
     await dispatch_manage_op(
@@ -118,7 +119,7 @@ async def test_dispatch_defaults_params_to_empty_dict():
         op="go",
         params=None,
     )
-    assert captured["got"] == {}
+    assert captured["called"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -178,8 +179,9 @@ async def test_dispatch_rejects_non_dict_params():
 
 @pytest.mark.asyncio
 async def test_dispatch_unwraps_typeerror_from_handler():
-    async def picky(rt, p):
-        raise TypeError("missing 1 required positional argument: 'path'")
+    async def picky(rt, path):
+        del rt, path  # noqa: silenced unused for the test fixture
+        raise TypeError("missing 1 required positional argument: 'value'")
 
     with pytest.raises(GodotCommandError) as exc:
         await dispatch_manage_op(
@@ -187,11 +189,11 @@ async def test_dispatch_unwraps_typeerror_from_handler():
             tool_name="x_manage",
             runtime=None,
             op="go",
-            params={"unrelated": 1},
+            params={"path": "/foo"},
         )
     assert exc.value.code == ErrorCode.INVALID_PARAMS
     assert "x_manage.go" in exc.value.message
-    assert exc.value.data["received"] == ["unrelated"]
+    assert exc.value.data["received"] == ["path"]
 
 
 # ---------------------------------------------------------------------------
@@ -210,12 +212,10 @@ def test_coerce_object_string_to_dict():
 
 
 def test_coerce_leaves_plain_strings_untouched():
-    out = _coerce_stringified_json_values({"name": "Alice", "label": "[draft]"})
-    ## Both inputs are valid JSON strings ("Alice" — no, that's a bare word —
-    ## but "[draft]" does start with [ and parses as ["draft"] only if quoted.
-    ## Real "[draft]" is NOT valid JSON — should fall through unchanged.
+    ## Neither value is JSON list/dict-shaped — both must pass through untouched.
+    out = _coerce_stringified_json_values({"name": "Alice", "label": "draft"})
     assert out["name"] == "Alice"
-    assert out["label"] == "[draft]"
+    assert out["label"] == "draft"
 
 
 def test_coerce_leaves_non_json_prefixed_strings_untouched():
@@ -232,27 +232,32 @@ def test_coerce_preserves_native_types():
 
 
 def test_coerce_only_attempts_array_or_object_prefixes():
-    ## "true" is valid JSON, but it's not list/dict-shaped — leave alone.
+    ## "true" is valid JSON but not list/dict-shaped — leave alone.
     out = _coerce_stringified_json_values({"flag": "true"})
     assert out["flag"] == "true"
 
 
-def test_dispatch_applies_coercion_before_handler():
+def test_coerce_returns_input_unchanged_when_no_coercion_needed():
+    ## Fast path: no string values, no prefix matches → return same dict (not a copy).
+    params = {"n": 1, "b": True, "s": "plain", "lst": [1, 2]}
+    out = _coerce_stringified_json_values(params)
+    assert out is params
+
+
+@pytest.mark.asyncio
+async def test_dispatch_applies_coercion_before_handler():
     captured: dict[str, Any] = {}
 
-    async def handler(rt, p):
-        captured["got"] = p
+    async def handler(rt, paths):
+        del rt
+        captured["paths"] = paths
         return {}
 
-    import asyncio
-
-    asyncio.run(
-        dispatch_manage_op(
-            ops={"go": handler},
-            tool_name="x_manage",
-            runtime=None,
-            op="go",
-            params={"paths": '["one", "two"]'},
-        )
+    await dispatch_manage_op(
+        ops={"go": handler},
+        tool_name="x_manage",
+        runtime=None,
+        op="go",
+        params={"paths": '["one", "two"]'},
     )
-    assert captured["got"] == {"paths": ["one", "two"]}
+    assert captured["paths"] == ["one", "two"]

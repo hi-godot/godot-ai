@@ -66,19 +66,15 @@ def register_resource_tools(mcp: FastMCP) -> None:
         tool_name="resource_manage",
         description=_DESCRIPTION,
         ops={
-            "search": lambda rt, p: resource_handlers.resource_search(rt, **p),
-            "load": lambda rt, p: resource_handlers.resource_load(rt, **p),
-            "assign": lambda rt, p: resource_handlers.resource_assign(rt, **p),
-            "get_info": lambda rt, p: resource_handlers.resource_get_info(rt, **p),
-            "create": lambda rt, p: resource_handlers.resource_create(rt, **p),
-            "curve_set_points": lambda rt, p: curve_handlers.curve_set_points(rt, **p),
-            "environment_create": lambda rt, p: environment_handlers.environment_create(rt, **p),
-            "physics_shape_autofit": lambda rt, p: physics_shape_handlers.physics_shape_autofit(
-                rt, **p
-            ),
-            "gradient_texture_create": lambda rt, p: texture_handlers.gradient_texture_create(
-                rt, **p
-            ),
-            "noise_texture_create": lambda rt, p: texture_handlers.noise_texture_create(rt, **p),
+            "search": resource_handlers.resource_search,
+            "load": resource_handlers.resource_load,
+            "assign": resource_handlers.resource_assign,
+            "get_info": resource_handlers.resource_get_info,
+            "create": resource_handlers.resource_create,
+            "curve_set_points": curve_handlers.curve_set_points,
+            "environment_create": environment_handlers.environment_create,
+            "physics_shape_autofit": physics_shape_handlers.physics_shape_autofit,
+            "gradient_texture_create": texture_handlers.gradient_texture_create,
+            "noise_texture_create": texture_handlers.noise_texture_create,
         },
     )
