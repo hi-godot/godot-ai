@@ -180,7 +180,7 @@ async def test_dispatch_rejects_non_dict_params():
 @pytest.mark.asyncio
 async def test_dispatch_unwraps_typeerror_from_handler():
     async def picky(rt, path):
-        del rt, path  # noqa: silenced unused for the test fixture
+        del rt, path  ## absorb unused args; the test only cares about the raise below
         raise TypeError("missing 1 required positional argument: 'value'")
 
     with pytest.raises(GodotCommandError) as exc:
