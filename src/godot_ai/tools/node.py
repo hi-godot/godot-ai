@@ -24,10 +24,7 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await node_handlers.node_get_properties(runtime, path=path)
 
-    if not include_non_core:
-        return
-
-    @mcp.tool(meta=DEFER_META)
+    @mcp.tool()
     async def node_create(
         ctx: Context,
         type: str = "",
@@ -66,6 +63,133 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
             scene_path=scene_path,
             scene_file=scene_file,
         )
+
+    @mcp.tool()
+    async def node_delete(
+        ctx: Context, path: str, scene_file: str = "", session_id: str = ""
+    ) -> dict:
+        """Delete a node from the scene tree.
+
+        Removes the node at the given path. This operation is undoable
+        via Ctrl+Z in the Godot editor. Cannot delete the scene root.
+
+        Args:
+            path: Scene path of the node to delete (e.g. "/Main/Enemy").
+            scene_file: Optional "res://..." path. When non-empty, the mutation
+                fails with EDITED_SCENE_MISMATCH if the editor's current scene
+                doesn't match — use it to guard multi-call sequences against
+                silent scene-drift between calls.
+            session_id: Optional Godot session to target. Empty = active session.
+        """
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
+        return await node_handlers.node_delete(runtime, path=path, scene_file=scene_file)
+
+    @mcp.tool()
+    async def node_set_property(
+        ctx: Context,
+        path: str,
+        property: str,
+        value: str | int | float | bool | dict | list | None,
+        scene_file: str = "",
+        session_id: str = "",
+    ) -> dict:
+        """Set a property on a node.
+
+        Coerces `value` to match the property's declared type:
+
+        - Vector2/Vector3: dict with x/y/z keys
+        - Color: dict with r/g/b/a keys, or hex string ("#ff0000")
+        - NodePath: string ("../Other/Node")
+        - Resource: res:// path string (loads and assigns); pass null or "" to clear.
+          For a fresh built-in Resource instance, pass a dict with a "__class__"
+          key — e.g. value={"__class__": "BoxMesh", "size": {"x": 2, "y": 2, "z": 2}}
+          instantiates a BoxMesh with that size and assigns it. See resource_create
+          for more control (save to .tres, validation errors).
+        - StringName: plain string
+        - Array/Dictionary: pass a JSON list/object
+        - bool/int/float: JSON primitives
+
+        Args:
+            path: Scene path of the node (e.g. "/Main/Camera3D").
+            property: Property name (e.g. "fov", "position", "visible", "mesh", "remote_path").
+            value: New value for the property. Pass null (or "" for Resource properties) to clear.
+            scene_file: Optional "res://..." path. When non-empty, the mutation
+                fails with EDITED_SCENE_MISMATCH if the editor's current scene
+                doesn't match — use it to guard multi-call sequences against
+                silent scene-drift between calls.
+            session_id: Optional Godot session to target. Empty = active session.
+        """
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
+        return await node_handlers.node_set_property(
+            runtime,
+            path=path,
+            property=property,
+            value=value,
+            scene_file=scene_file,
+        )
+
+    @mcp.tool()
+    async def node_reparent(
+        ctx: Context,
+        path: str,
+        new_parent: str,
+        scene_file: str = "",
+        session_id: str = "",
+    ) -> dict:
+        """Move a node to a new parent in the scene tree.
+
+        Reparents the node, preserving its children. Cannot reparent the
+        scene root or move a node to one of its own descendants.
+
+        Args:
+            path: Scene path of the node to move (e.g. "/Main/Player").
+            new_parent: Scene path of the new parent (e.g. "/Main/World").
+            scene_file: Optional "res://..." path. When non-empty, the mutation
+                fails with EDITED_SCENE_MISMATCH if the editor's current scene
+                doesn't match — use it to guard multi-call sequences against
+                silent scene-drift between calls.
+            session_id: Optional Godot session to target. Empty = active session.
+        """
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
+        return await node_handlers.node_reparent(
+            runtime, path=path, new_parent=new_parent, scene_file=scene_file
+        )
+
+    @mcp.tool()
+    async def node_rename(
+        ctx: Context,
+        path: str,
+        new_name: str,
+        scene_file: str = "",
+        session_id: str = "",
+    ) -> dict:
+        """Rename a node in the scene tree.
+
+        Changes the node's `name`. Fails if a sibling already has that name,
+        or if the name contains `/`, `:`, or `@`. Cannot rename the scene root.
+
+        Note: `NodePath` properties on OTHER nodes that pointed at this node
+        (e.g. a camera's `remote_path`) will not be auto-updated. Scripts that
+        reference this node by name (`$OldName`, `get_node("OldName")`) also
+        need manual fixes. Children of the renamed node keep working because
+        their paths are relative.
+
+        Args:
+            path: Scene path of the node to rename (e.g. "/Main/Player").
+            new_name: New name for the node (e.g. "Hero").
+            scene_file: Optional "res://..." path. When non-empty, the mutation
+                fails with EDITED_SCENE_MISMATCH if the editor's current scene
+                doesn't match — use it to guard multi-call sequences against
+                silent scene-drift between calls.
+            session_id: Optional Godot session to target. Empty = active session.
+        """
+        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
+        return await node_handlers.node_rename(
+            runtime, path=path, new_name=new_name, scene_file=scene_file
+        )
+
+    if not include_non_core:
+        return
 
     @mcp.tool(meta=DEFER_META)
     async def node_find(
@@ -126,130 +250,6 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await node_handlers.node_get_groups(runtime, path=path)
-
-    @mcp.tool(meta=DEFER_META)
-    async def node_delete(
-        ctx: Context, path: str, scene_file: str = "", session_id: str = ""
-    ) -> dict:
-        """Delete a node from the scene tree.
-
-        Removes the node at the given path. This operation is undoable
-        via Ctrl+Z in the Godot editor. Cannot delete the scene root.
-
-        Args:
-            path: Scene path of the node to delete (e.g. "/Main/Enemy").
-            scene_file: Optional "res://..." path. When non-empty, the mutation
-                fails with EDITED_SCENE_MISMATCH if the editor's current scene
-                doesn't match — use it to guard multi-call sequences against
-                silent scene-drift between calls.
-            session_id: Optional Godot session to target. Empty = active session.
-        """
-        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await node_handlers.node_delete(runtime, path=path, scene_file=scene_file)
-
-    @mcp.tool(meta=DEFER_META)
-    async def node_reparent(
-        ctx: Context,
-        path: str,
-        new_parent: str,
-        scene_file: str = "",
-        session_id: str = "",
-    ) -> dict:
-        """Move a node to a new parent in the scene tree.
-
-        Reparents the node, preserving its children. Cannot reparent the
-        scene root or move a node to one of its own descendants.
-
-        Args:
-            path: Scene path of the node to move (e.g. "/Main/Player").
-            new_parent: Scene path of the new parent (e.g. "/Main/World").
-            scene_file: Optional "res://..." path. When non-empty, the mutation
-                fails with EDITED_SCENE_MISMATCH if the editor's current scene
-                doesn't match — use it to guard multi-call sequences against
-                silent scene-drift between calls.
-            session_id: Optional Godot session to target. Empty = active session.
-        """
-        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await node_handlers.node_reparent(
-            runtime, path=path, new_parent=new_parent, scene_file=scene_file
-        )
-
-    @mcp.tool(meta=DEFER_META)
-    async def node_set_property(
-        ctx: Context,
-        path: str,
-        property: str,
-        value: str | int | float | bool | dict | list | None,
-        scene_file: str = "",
-        session_id: str = "",
-    ) -> dict:
-        """Set a property on a node.
-
-        Coerces `value` to match the property's declared type:
-
-        - Vector2/Vector3: dict with x/y/z keys
-        - Color: dict with r/g/b/a keys, or hex string ("#ff0000")
-        - NodePath: string ("../Other/Node")
-        - Resource: res:// path string (loads and assigns); pass null or "" to clear.
-          For a fresh built-in Resource instance, pass a dict with a "__class__"
-          key — e.g. value={"__class__": "BoxMesh", "size": {"x": 2, "y": 2, "z": 2}}
-          instantiates a BoxMesh with that size and assigns it. See resource_create
-          for more control (save to .tres, validation errors).
-        - StringName: plain string
-        - Array/Dictionary: pass a JSON list/object
-        - bool/int/float: JSON primitives
-
-        Args:
-            path: Scene path of the node (e.g. "/Main/Camera3D").
-            property: Property name (e.g. "fov", "position", "visible", "mesh", "remote_path").
-            value: New value for the property. Pass null (or "" for Resource properties) to clear.
-            scene_file: Optional "res://..." path. When non-empty, the mutation
-                fails with EDITED_SCENE_MISMATCH if the editor's current scene
-                doesn't match — use it to guard multi-call sequences against
-                silent scene-drift between calls.
-            session_id: Optional Godot session to target. Empty = active session.
-        """
-        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await node_handlers.node_set_property(
-            runtime,
-            path=path,
-            property=property,
-            value=value,
-            scene_file=scene_file,
-        )
-
-    @mcp.tool(meta=DEFER_META)
-    async def node_rename(
-        ctx: Context,
-        path: str,
-        new_name: str,
-        scene_file: str = "",
-        session_id: str = "",
-    ) -> dict:
-        """Rename a node in the scene tree.
-
-        Changes the node's `name`. Fails if a sibling already has that name,
-        or if the name contains `/`, `:`, or `@`. Cannot rename the scene root.
-
-        Note: `NodePath` properties on OTHER nodes that pointed at this node
-        (e.g. a camera's `remote_path`) will not be auto-updated. Scripts that
-        reference this node by name (`$OldName`, `get_node("OldName")`) also
-        need manual fixes. Children of the renamed node keep working because
-        their paths are relative.
-
-        Args:
-            path: Scene path of the node to rename (e.g. "/Main/Player").
-            new_name: New name for the node (e.g. "Hero").
-            scene_file: Optional "res://..." path. When non-empty, the mutation
-                fails with EDITED_SCENE_MISMATCH if the editor's current scene
-                doesn't match — use it to guard multi-call sequences against
-                silent scene-drift between calls.
-            session_id: Optional Godot session to target. Empty = active session.
-        """
-        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await node_handlers.node_rename(
-            runtime, path=path, new_name=new_name, scene_file=scene_file
-        )
 
     @mcp.tool(meta=DEFER_META)
     async def node_duplicate(

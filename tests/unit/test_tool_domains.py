@@ -63,14 +63,20 @@ def test_parse_rejects_core_only_session_domain():
         parse_exclude_list("session")
 
 
+def test_parse_rejects_core_only_batch_domain():
+    ## `batch` is all-core — same reasoning as session.
+    with pytest.raises(ValueError, match="batch"):
+        parse_exclude_list("batch")
+
+
 def test_core_bearing_domains_are_all_known():
     assert CORE_BEARING_DOMAINS <= set(DOMAINS)
 
 
-def test_excludable_domains_excludes_session_only():
-    ## session has only core tools → never excludable. Every other registered
-    ## domain must be excludable.
-    assert EXCLUDABLE_DOMAINS == set(DOMAINS) - {"session"}
+def test_excludable_domains_excludes_all_core_only_domains():
+    ## session and batch have only core tools → never excludable. Every other
+    ## registered domain must be excludable.
+    assert EXCLUDABLE_DOMAINS == set(DOMAINS) - {"session", "batch"}
 
 
 # --- create_server() filtering ---
@@ -94,13 +100,15 @@ def test_create_server_drops_whole_non_core_domain():
 
 
 def test_create_server_preserves_core_when_core_bearing_domain_excluded():
-    ## Excluding `node` drops node_create, node_find, … but keeps
+    ## Excluding `node` drops node_find, node_duplicate, … but keeps the
+    ## node CRUD core tools (node_create, node_set_property, …) and
     ## node_get_properties. Same for editor/scene.
     trimmed = set(_list_tools(create_server(exclude_domains={"editor", "scene", "node"})))
     for core_name in CORE_TOOLS:
         assert core_name in trimmed, f"{core_name} should survive exclusion"
     ## And the non-core members really are gone.
-    assert "node_create" not in trimmed
+    assert "node_find" not in trimmed
+    assert "node_duplicate" not in trimmed
     assert "editor_selection_get" not in trimmed
     assert "scene_open" not in trimmed
 

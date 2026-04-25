@@ -52,23 +52,32 @@ DOMAINS: tuple[str, ...] = (
 ## Domains that contain at least one core (always-loaded) tool. When the
 ## user excludes one of these, only its non-core tools are dropped; the
 ## core tool is still registered.
-CORE_BEARING_DOMAINS: frozenset[str] = frozenset({"session", "editor", "scene", "node"})
+CORE_BEARING_DOMAINS: frozenset[str] = frozenset({"session", "editor", "scene", "node", "batch"})
 
-## The 5 core tools that survive any exclusion. Displayed as a disabled
-## "Core" row in the plugin UI. Order mirrors the flat namespace the
-## server exposes; not functionally significant.
+## Core tools that survive any exclusion — the minimum viable agent surface
+## (read state, build and edit scene trees, compose multi-step edits).
+## Displayed as a disabled "Core" row in the plugin UI. Order mirrors the
+## flat namespace the server exposes; not functionally significant.
 CORE_TOOLS: tuple[str, ...] = (
     "session_list",
     "session_activate",
     "editor_state",
     "scene_get_hierarchy",
     "node_get_properties",
+    "node_create",
+    "node_delete",
+    "node_set_property",
+    "node_reparent",
+    "node_rename",
+    "batch_execute",
 )
 
-## Domains the user can toggle off. `session` has no non-core tools, so
-## excluding it would be a no-op; we reject it up front so an accidental
-## `--exclude-domains session` doesn't silently do nothing.
-EXCLUDABLE_DOMAINS: frozenset[str] = frozenset(DOMAINS) - {"session"}
+## Domains the user can toggle off. A domain is excludable iff at least one
+## of its tools is non-core; if every tool is in CORE_TOOLS, excluding the
+## domain would be a no-op — we reject those up front so an accidental
+## `--exclude-domains session` doesn't silently do nothing. When a future
+## domain ends up fully-core, add it here.
+EXCLUDABLE_DOMAINS: frozenset[str] = frozenset(DOMAINS) - {"session", "batch"}
 
 
 def parse_exclude_list(raw: str | Iterable[str] | None) -> set[str]:
