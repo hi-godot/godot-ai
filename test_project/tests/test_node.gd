@@ -372,6 +372,111 @@ func test_set_property_color_rejects_vector3_shaped_dict() -> void:
 	assert_true(coerced is Dictionary, "Wrong-shape dict must flow through unchanged so caller's type check fires")
 
 
+# ----- #191 — non-dict inputs to compound targets must error loudly -----
+
+func test_set_property_vector3_rejects_array_input() -> void:
+	## Issue #191: passing [x,y,z] to a Vector3 property used to flow
+	## through _coerce_value unchanged and Godot default-constructed
+	## Vector3.ZERO via add_do_property. Must now reject and leave the
+	## property untouched.
+	_handler.create_node({"type": "Node3D", "name": "_McpTestArrV3", "parent_path": "/Main"})
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestArrV3") as Node3D
+	var original := node.position
+
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestArrV3",
+		"property": "position",
+		"value": [5, 5, 5],
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "Vector3")
+	## Read back the stored Variant — the silent-zero failure mode would
+	## leave the node at (0,0,0) even though the response said "error".
+	assert_eq(node.position, original, "Position must be unchanged after rejected array coerce")
+	_undo_redo.undo()  # undo create
+
+
+func test_set_property_vector3_rejects_json_string_input() -> void:
+	## Issue #191: a JSON string like "{\"x\":1,...}" used to fall through
+	## to add_do_property and store Vector3.ZERO.
+	_handler.create_node({"type": "Node3D", "name": "_McpTestStrV3", "parent_path": "/Main"})
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestStrV3") as Node3D
+	var original := node.position
+
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestStrV3",
+		"property": "position",
+		"value": "{\"x\":1,\"y\":2,\"z\":3}",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "Vector3")
+	assert_eq(node.position, original, "Position must be unchanged after rejected string coerce")
+	_undo_redo.undo()  # undo create
+
+
+func test_set_property_vector2_rejects_array_input() -> void:
+	## Symmetric guard for Vector2.
+	_handler.create_node({"type": "Sprite2D", "name": "_McpTestArrV2", "parent_path": "/Main"})
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestArrV2") as Sprite2D
+	var original := node.position
+
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestArrV2",
+		"property": "position",
+		"value": [1, 2],
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "Vector2")
+	assert_eq(node.position, original, "Position must be unchanged after rejected array coerce")
+	_undo_redo.undo()  # undo create
+
+
+func test_set_property_color_rejects_array_input() -> void:
+	## Symmetric guard for Color.
+	_handler.create_node({"type": "Sprite2D", "name": "_McpTestArrColor", "parent_path": "/Main"})
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestArrColor") as Sprite2D
+	var original := node.modulate
+
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestArrColor",
+		"property": "modulate",
+		"value": [1, 0, 0, 1],
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "Color")
+	assert_eq(node.modulate, original, "Modulate must be unchanged after rejected array coerce")
+	_undo_redo.undo()  # undo create
+
+
+func test_check_coerced_array_vector3_returns_invalid_params() -> void:
+	## Direct unit check on the helper — no scene needed. Pins the
+	## error shape so the message format change in #191 stays bisect-friendly.
+	var coerce_err: Variant = NodeHandler._check_coerced([1, 2, 3], TYPE_VECTOR3)
+	assert_true(coerce_err is Dictionary, "Non-coerced Array input must produce an error dict")
+	assert_eq(coerce_err.error.code, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(coerce_err.error.message, "Vector3")
+	assert_contains(coerce_err.error.message, "Array")  # names the received type
+
+
+func test_check_coerced_noop_for_non_compound_target() -> void:
+	## TYPE_INT / TYPE_FLOAT / TYPE_BOOL are not handled by _coerce_value
+	## as compound targets; the strict check must return null so Godot's
+	## setter handles them. Otherwise every non-Vector property mutation
+	## would false-fail.
+	assert_eq(NodeHandler._check_coerced(42, TYPE_INT), null)
+	assert_eq(NodeHandler._check_coerced(true, TYPE_BOOL), null)
+	assert_eq(NodeHandler._check_coerced("hello", TYPE_STRING), null)
+	assert_eq(NodeHandler._check_coerced(null, TYPE_OBJECT), null)
+
+
+func test_check_coerced_passes_correct_compound_value() -> void:
+	## Right-typed compound values must pass through (return null) so the
+	## strict check doesn't false-fail the happy path.
+	assert_eq(NodeHandler._check_coerced(Vector3(1, 2, 3), TYPE_VECTOR3), null)
+	assert_eq(NodeHandler._check_coerced(Vector2(1, 2), TYPE_VECTOR2), null)
+	assert_eq(NodeHandler._check_coerced(Color(1, 0, 0), TYPE_COLOR), null)
+
+
 func test_coerce_value_passes_right_shape_color() -> void:
 	var coerced = NodeHandler._coerce_value({"r": 1.0, "g": 0.5, "b": 0.0, "a": 1.0}, TYPE_COLOR)
 	assert_true(coerced is Color)

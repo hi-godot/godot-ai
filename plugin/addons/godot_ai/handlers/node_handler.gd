@@ -237,8 +237,10 @@ func set_property(params: Dictionary) -> Dictionary:
 		instantiated_resource = true
 	else:
 		value = _coerce_value(value, target_type)
-		## Refuse wrong-shape dicts that _coerce_value passed through (#123).
-		var coerce_err := _check_dict_coerce_failed(value, target_type)
+		## Refuse any value that didn't land as the target compound Variant
+		## — wrong-shape dict (#123) or non-dict input like list / JSON string
+		## that used to silently default-construct Vector3.ZERO (#191).
+		var coerce_err := _check_coerced(value, target_type)
 		if coerce_err != null:
 			return coerce_err
 
@@ -498,21 +500,19 @@ const VECTOR3_KEYS: Array[String] = ["x", "y", "z"]
 const COLOR_KEYS: Array[String] = ["r", "g", "b"]
 
 
-## End-to-end coerce check for validation handlers (curve, texture,
-## resource properties). Returns a full `make(...)`-shaped error dict
-## (prefixed with `prefix`) if the value didn't land as the target
-## Variant type, else null. Dict-shape failures get the
-## `_check_dict_coerce_failed` message (expected-vs-got keys); non-dict
-## non-Vector inputs (String, int, …) get a generic "must coerce"
-## message.
+## End-to-end coerce check for compound JSON-shaped targets
+## (Vector2/Vector3/Color). Returns a full `make(...)`-shaped error dict
+## if `value` didn't land as the target Variant after `_coerce_value`,
+## else null. Wrong-shape dicts get the `_check_dict_coerce_failed`
+## message (expected-vs-got keys); non-dict inputs (Array, String,
+## primitive) name the received type and a JSON shape hint. No-op for
+## non-compound targets — Godot's setter handles those.
 ##
-## Only TYPE_VECTOR2 / TYPE_VECTOR3 / TYPE_COLOR are recognized — other
-## targets would false-negative on a valid value. Extend the match
-## alongside `_coerce_value` if you add a new coerce target.
-static func _check_coerced(value: Variant, target_type: int, prefix: String) -> Variant:
-	var err = _check_dict_coerce_failed(value, target_type)
-	if err != null:
-		return McpErrorCodes.prefix_message(err, prefix)
+## Used by set_property, resource_handler, and validation handlers
+## (curve, texture). Issue #191 — passing a list, JSON string, or
+## anything else to a Vector3 property used to silently store
+## Vector3.ZERO; this gates that path.
+static func _check_coerced(value: Variant, target_type: int, prefix: String = "") -> Variant:
 	var ok := false
 	match target_type:
 		TYPE_VECTOR2:
@@ -521,12 +521,34 @@ static func _check_coerced(value: Variant, target_type: int, prefix: String) -> 
 			ok = value is Vector3
 		TYPE_COLOR:
 			ok = value is Color
-	if not ok:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
-			"%s: must coerce to %s, got %s" % [prefix, type_string(target_type), type_string(typeof(value))],
-		)
-	return null
+		_:
+			return null
+	if ok:
+		return null
+	var dict_err := _check_dict_coerce_failed(value, target_type)
+	if dict_err != null:
+		return McpErrorCodes.prefix_message(dict_err, prefix)
+	var err := McpErrorCodes.make(
+		McpErrorCodes.INVALID_PARAMS,
+		"Cannot coerce %s to %s; expected a dict like %s" % [
+			type_string(typeof(value)), type_string(target_type), _shape_hint(target_type),
+		],
+	)
+	return McpErrorCodes.prefix_message(err, prefix)
+
+
+## Build a "{\"x\":1,...}" hint string from the canonical key constants
+## so adding a key (e.g. Vector4) only touches VECTORN_KEYS.
+static func _shape_hint(target_type: int) -> String:
+	var keys: Array[String] = []
+	match target_type:
+		TYPE_VECTOR2: keys = VECTOR2_KEYS
+		TYPE_VECTOR3: keys = VECTOR3_KEYS
+		TYPE_COLOR: keys = COLOR_KEYS
+	var pairs: Array[String] = []
+	for k in keys:
+		pairs.append("\"%s\":0" % k)
+	return "{" + ",".join(pairs) + "}"
 
 
 ## Detect a failed dict→typed-Variant coercion. Returns an INVALID_PARAMS
