@@ -203,6 +203,16 @@ func set_property(params: Dictionary) -> Dictionary:
 
 	var instantiated_resource := false
 
+	# Some MCP clients (Cline) stringify the documented {"__class__": "BoxMesh", ...}
+	# value before sending. Promote that string back to a Dictionary here so the
+	# `__class__` branch below handles it, instead of the next branch treating
+	# the JSON blob as a res:// path and emitting "Resource not found: {...}".
+	# See #206.
+	if target_type == TYPE_OBJECT and value is String and value.begins_with("{"):
+		var json := JSON.new()
+		if json.parse(value) == OK and json.data is Dictionary and (json.data as Dictionary).has("__class__"):
+			value = json.data
+
 	if target_type == TYPE_OBJECT and value is String:
 		if value == "":
 			value = null
