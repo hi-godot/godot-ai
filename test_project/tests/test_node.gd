@@ -228,8 +228,7 @@ func test_reparent_to_own_descendant_errors_without_destroying_subtree() -> void
 	##
 	## Build a throwaway _McpTestReparent/_McpTestChild subtree so the test
 	## can't pollute the shared scene fixture regardless of the outcome.
-	_handler.create_node({"type": "Node3D", "name": "_McpTestReparent", "parent_path": "/Main"})
-	_handler.create_node({"type": "Node3D", "name": "_McpTestChild", "parent_path": "/Main/_McpTestReparent"})
+	var chain := _build_temp_chain(["_McpTestReparent", "_McpTestChild"] as Array[String])
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var parent_before := scene_root.get_node_or_null("_McpTestReparent")
 	var child_before := scene_root.get_node_or_null("_McpTestReparent/_McpTestChild")
@@ -238,7 +237,7 @@ func test_reparent_to_own_descendant_errors_without_destroying_subtree() -> void
 
 	var result := _handler.reparent_node({
 		"path": "/Main/_McpTestReparent",
-		"new_parent": "/Main/_McpTestReparent/_McpTestChild",
+		"new_parent": chain.leaf_path,
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
@@ -246,9 +245,7 @@ func test_reparent_to_own_descendant_errors_without_destroying_subtree() -> void
 	assert_eq(scene_root.get_node_or_null("_McpTestReparent"), parent_before, "parent must still exist")
 	assert_eq(scene_root.get_node_or_null("_McpTestReparent/_McpTestChild"), child_before, "child must still exist under parent")
 
-	## Clean up both create actions.
-	editor_undo(_undo_redo)
-	editor_undo(_undo_redo)
+	chain.teardown.call()
 
 
 func test_reparent_to_ancestor_is_allowed() -> void:
@@ -262,13 +259,13 @@ func test_reparent_to_ancestor_is_allowed() -> void:
 	## revisions of this test mutated shared scene nodes (/Main/World/Ground)
 	## and relied on _undo_redo.undo() to restore the scene for downstream
 	## suites — that teardown was flaky in CI and polluted scene_* tests.
-	_handler.create_node({"type": "Node3D", "name": "_McpTestUpParent", "parent_path": "/Main"})
-	_handler.create_node({"type": "Node3D", "name": "_McpTestUpChild", "parent_path": "/Main/_McpTestUpParent"})
-	_handler.create_node({"type": "Node3D", "name": "_McpTestUpGrand", "parent_path": "/Main/_McpTestUpParent/_McpTestUpChild"})
+	var chain := _build_temp_chain(
+		["_McpTestUpParent", "_McpTestUpChild", "_McpTestUpGrand"] as Array[String]
+	)
 	var scene_root := EditorInterface.get_edited_scene_root()
 
 	var result := _handler.reparent_node({
-		"path": "/Main/_McpTestUpParent/_McpTestUpChild/_McpTestUpGrand",
+		"path": chain.leaf_path,
 		"new_parent": "/Main/_McpTestUpParent",
 	})
 	assert_has_key(result, "data")
@@ -276,13 +273,26 @@ func test_reparent_to_ancestor_is_allowed() -> void:
 	assert_ne(scene_root.get_node_or_null("_McpTestUpParent/_McpTestUpGrand"), null,
 		"Grand should now be a direct child of _McpTestUpParent")
 
-	## Unwind: undo reparent, then undo each create. editor_undo walks both
-	## scene and global histories so actions registered against different
-	## targets unwind reliably across the chain.
+	## Unwind: undo reparent first, then unwind each create via the helper.
+	## editor_undo walks both scene and global histories so actions registered
+	## against different targets unwind reliably across the chain.
 	editor_undo(_undo_redo)  # reparent
-	editor_undo(_undo_redo)  # create grand
-	editor_undo(_undo_redo)  # create child
-	editor_undo(_undo_redo)  # create parent
+	chain.teardown.call()
+
+
+## Build a nested chain of throwaway Node3D test nodes under /Main, returning
+## the deepest path and a teardown closure that unwinds each create via undo.
+## Used by the reparent regression tests; promote to test_suite.gd if a third
+## caller appears.
+func _build_temp_chain(names: Array[String]) -> Dictionary:
+	var parent_path := "/Main"
+	for name in names:
+		_handler.create_node({"type": "Node3D", "name": name, "parent_path": parent_path})
+		parent_path += "/" + name
+	var teardown := func() -> void:
+		for _i in names.size():
+			editor_undo(_undo_redo)
+	return {"leaf_path": parent_path, "teardown": teardown}
 
 
 # ----- set_property -----
