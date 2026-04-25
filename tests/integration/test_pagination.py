@@ -8,17 +8,11 @@ from godot_ai.godot_client.client import GodotClient
 
 
 def _make_nodes(count: int) -> list[dict]:
-    return [
-        {"name": f"Node{i}", "type": "Node3D", "path": f"/Root/Node{i}"}
-        for i in range(count)
-    ]
+    return [{"name": f"Node{i}", "type": "Node3D", "path": f"/Root/Node{i}"} for i in range(count)]
 
 
 def _make_files(count: int) -> list[dict]:
-    return [
-        {"path": f"res://file_{i}.gd", "type": "GDScript"}
-        for i in range(count)
-    ]
+    return [{"path": f"res://file_{i}.gd", "type": "GDScript"} for i in range(count)]
 
 
 class TestSceneHierarchyPagination:

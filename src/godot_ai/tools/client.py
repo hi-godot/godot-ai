@@ -1,55 +1,38 @@
-"""MCP tools for configuring AI clients to use Godot AI."""
+"""MCP tool for configuring AI clients to use Godot AI."""
 
 from __future__ import annotations
 
-from fastmcp import Context, FastMCP
+from fastmcp import FastMCP
 
 from godot_ai.handlers import client as client_handlers
-from godot_ai.runtime.direct import DirectRuntime
-from godot_ai.tools import DEFER_META
+from godot_ai.tools._meta_tool import register_manage_tool
+
+_DESCRIPTION = """\
+Configure AI clients to use this Godot AI MCP server. Writes / removes
+client config files (Claude Code, Codex, Antigravity, Cursor, Windsurf,
+Zed, etc.).
+
+Ops:
+  • status()
+        List every supported client with id, display_name, status
+        (configured | not_configured | configured_mismatch | error),
+        and installed flag.
+  • configure(client)
+        Write the MCP server entry into the named client's config file.
+        ``client`` is one of the ids returned by status().
+  • remove(client)
+        Remove this server's entry from the named client's config.
+"""
 
 
 def register_client_tools(mcp: FastMCP) -> None:
-    @mcp.tool(meta=DEFER_META)
-    async def client_configure(ctx: Context, client: str) -> dict:
-        """Configure an AI client to connect to the Godot AI server.
-
-        Writes the necessary MCP server configuration so the client knows
-        how to launch and connect to this server.
-
-        Args:
-            client: The client id to configure. Currently supported:
-                claude_code, claude_desktop, codex, antigravity,
-                cursor, windsurf, vscode, vscode_insiders, zed,
-                gemini_cli, cline, kilo_code, roo_code, kiro, trae,
-                cherry_studio, opencode, qwen_code.
-                Call client_status to discover the live list.
-        """
-        runtime = DirectRuntime.from_context(ctx)
-        return await client_handlers.client_configure(runtime, client=client)
-
-    @mcp.tool(meta=DEFER_META)
-    async def client_remove(ctx: Context, client: str) -> dict:
-        """Remove the Godot AI MCP server entry from a client's config.
-
-        Args:
-            client: The client id to remove (same set as client_configure).
-        """
-        runtime = DirectRuntime.from_context(ctx)
-        return await client_handlers.client_remove(runtime, client=client)
-
-    @mcp.tool(meta=DEFER_META)
-    async def client_status(ctx: Context) -> dict:
-        """List every supported client and whether it's configured / installed.
-
-        Returns a dict with a "clients" array. Each entry has:
-            id            stable identifier (use with client_configure)
-            display_name  human-readable name
-            status        "configured" | "not_configured" | "configured_mismatch" | "error"
-                          ("configured_mismatch" = an entry exists but its URL doesn't
-                           match the active server URL — typically after a port change.
-                           Re-run client_configure to update.)
-            installed     bool — true if the client appears to be present locally
-        """
-        runtime = DirectRuntime.from_context(ctx)
-        return await client_handlers.client_status(runtime)
+    register_manage_tool(
+        mcp,
+        tool_name="client_manage",
+        description=_DESCRIPTION,
+        ops={
+            "status": lambda rt, p: client_handlers.client_status(rt, **p),
+            "configure": lambda rt, p: client_handlers.client_configure(rt, **p),
+            "remove": lambda rt, p: client_handlers.client_remove(rt, **p),
+        },
+    )

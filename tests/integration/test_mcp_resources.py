@@ -76,9 +76,7 @@ class TestSceneHierarchyResource:
             cmd = await plugin.recv_command()
             assert cmd["command"] == "get_scene_tree"
             assert cmd["params"]["depth"] == 10
-            await plugin.send_response(
-                cmd["request_id"], {"nodes": nodes, "total_count": 2}
-            )
+            await plugin.send_response(cmd["request_id"], {"nodes": nodes, "total_count": 2})
 
         task = asyncio.create_task(respond())
         result = await client.read_resource("godot://scene/hierarchy")
@@ -146,9 +144,7 @@ class TestProjectSettingsResource:
                 cmd = await plugin.recv_command()
                 assert cmd["command"] == "get_project_setting"
                 key = cmd["params"]["key"]
-                await plugin.send_response(
-                    cmd["request_id"], {"key": key, "value": f"val_{key}"}
-                )
+                await plugin.send_response(cmd["request_id"], {"key": key, "value": f"val_{key}"})
 
         task = asyncio.create_task(respond())
         result = await client.read_resource("godot://project/settings")

@@ -1,121 +1,103 @@
 # Available Tools
 
-Godot AI exposes 120+ MCP tools. They're grouped below by domain.
+Godot AI exposes ~39 MCP tools — ~18 high-traffic verbs as named tools, plus
+one rolled-up `<domain>_manage` per domain that takes `op="..."` + a `params`
+dict. The rollup pattern keeps the tool count well below the 100-tool caps
+some clients enforce while still exposing every action.
 
-## Sessions and Editor
+The plugin command surface (over WebSocket) is unchanged; only the MCP tool
+names move. Inside `batch_execute`'s `commands[].command` field, keep using
+the underlying plugin command names (e.g. `create_node`, `set_property`),
+not the MCP tool names.
 
-| Tool | Description |
-|------|-------------|
-| `session_list` | List connected Godot editor sessions |
-| `session_activate` | Set the active session for multi-editor routing |
-| `editor_state` | Read Godot version, project name, current scene, and play state |
-| `editor_selection_get` / `editor_selection_set` | Read or set the editor selection |
-| `editor_screenshot` | Capture the 3D editor viewport or the running game's framebuffer. `source="game"` works in every embed / floating / separate-window mode via the debugger-channel bridge (requires the `_mcp_game_helper` autoload, registered automatically when the plugin is enabled) |
-| `editor_reload_plugin` / `editor_quit` | Reload the plugin or quit the editor |
-| `logs_read` / `logs_clear` | Read or clear recent log lines. `source="plugin"` (default) returns MCP traffic; `source="game"` returns `print` / `push_error` / `push_warning` from the running game with per-run `run_id`, `is_running`, and `dropped_count`; `source="all"` returns both streams. Game capture requires Godot 4.5+ (Logger API) and the `_mcp_game_helper` autoload registered automatically by the plugin |
-| `performance_monitors_get` | Read Godot performance monitors (FPS, memory, draw calls, etc.) |
-| `batch_execute` | Run multiple plugin commands in one round trip |
-
-## Scene and Nodes
+## Always-loaded core tools
 
 | Tool | Description |
 |------|-------------|
-| `scene_create` / `scene_open` / `scene_save` / `scene_save_as` | Create, open, and save scenes |
-| `scene_get_hierarchy` / `scene_get_roots` | Read the scene tree or list open scenes |
-| `node_create` / `node_delete` / `node_duplicate` | Create, delete, or duplicate nodes |
-| `node_rename` / `node_reparent` / `node_move` | Rename, reparent, or reorder nodes |
-| `node_find` | Search nodes by name, type, or group |
-| `node_get_properties` / `node_set_property` | Read or write node properties |
-| `node_get_children` | Read direct children for a node |
-| `node_add_to_group` / `node_remove_from_group` / `node_get_groups` | Manage group membership |
+| `editor_state` | Editor version, project name, current scene, readiness, play state |
+| `scene_get_hierarchy` | Paginated scene tree walk (depth, offset, limit) |
+| `node_get_properties` | Full property snapshot of a node |
+| `session_activate` | Pin subsequent calls to a specific connected editor |
 
-## Scripts and Signals
+## Top-level deferred verbs (high-traffic write/read)
 
 | Tool | Description |
 |------|-------------|
-| `script_create` / `script_read` / `script_patch` | Create, read, or patch GDScript files |
-| `script_attach` / `script_detach` | Attach or detach scripts from nodes |
-| `script_find_symbols` | Find class, function, or signal symbols in project scripts |
-| `signal_list` / `signal_connect` / `signal_disconnect` | Inspect and wire up signals |
+| `batch_execute` | Run multiple plugin commands atomically (rollback on first error) |
+| `node_create` / `node_set_property` / `node_find` | Common node writes + search |
+| `scene_open` / `scene_save` | Open and save scenes |
+| `script_create` / `script_attach` / `script_patch` | Create, attach, anchor-edit GDScript files |
+| `project_run` | Play the project (autosave persists in-memory MCP edits unless `autosave=False`) |
+| `test_run` | Run GDScript test suites in the editor |
+| `logs_read` | Read plugin / game / combined log buffers (game source needs `_mcp_game_helper` autoload) |
+| `editor_screenshot` | Capture editor viewport, cinematic camera, or running game framebuffer |
+| `editor_reload_plugin` | Reload the plugin and wait for reconnect (server must be external) |
+| `animation_create` | Create an Animation clip (auto-creates AnimationPlayer + library if missing) |
 
-## Resources, Materials, Textures
+## Domain rollups (`<domain>_manage`)
 
-| Tool | Description |
-|------|-------------|
-| `resource_create` / `resource_load` / `resource_assign` / `resource_get_info` / `resource_search` | Create, load, assign, and search `.tres` / `.res` resources |
-| `material_create` / `material_list` / `material_get` | Create and inspect materials |
-| `material_assign` / `material_apply_to_node` / `material_apply_preset` | Assign materials and apply named presets |
-| `material_set_param` / `material_set_shader_param` | Set material or shader parameters |
-| `gradient_texture_create` / `noise_texture_create` | Generate gradient or noise textures |
-| `curve_set_points` | Set points on a `Curve` resource |
+Each rollup is a single MCP tool dispatched by `op` name + `params` dict.
+The `op` field is a `Literal[...]` enum so MCP clients with schema-aware
+autocomplete still see every valid verb. Unknown ops surface a structured
+error with fuzzy `data.suggestions`.
 
-## UI, Controls, Theme
+Calls take the form:
 
-| Tool | Description |
-|------|-------------|
-| `ui_build_layout` | Build a Control layout tree from a recipe |
-| `ui_set_text` / `ui_set_anchor_preset` | Set Control text or anchor preset |
-| `control_draw_recipe` | Attach a procedural draw recipe script to a Control |
-| `theme_create` / `theme_apply` | Create themes and apply them to Controls |
-| `theme_set_color` / `theme_set_constant` / `theme_set_font_size` / `theme_set_stylebox_flat` | Edit theme entries |
+```json
+{"op": "set_color", "params": {"theme_path": "res://theme.tres",
+                                "class_name": "Label", "name": "font_color",
+                                "value": "#ff0000"}}
+```
 
-## Animation
+| Tool | Ops |
+|------|-----|
+| `scene_manage` | `create`, `save_as`, `get_roots` |
+| `node_manage` | `get_children`, `get_groups`, `delete`, `duplicate`, `rename`, `move`, `reparent`, `add_to_group`, `remove_from_group` |
+| `script_manage` | `read`, `detach`, `find_symbols` |
+| `project_manage` | `stop`, `settings_get`, `settings_set` |
+| `editor_manage` | `state`, `selection_get`, `selection_set`, `monitors_get`, `quit`, `logs_clear` |
+| `session_manage` | `list` |
+| `test_manage` | `results_get` |
+| `animation_manage` | `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
+| `material_manage` | `create`, `set_param`, `set_shader_param`, `get`, `list`, `assign`, `apply_to_node`, `apply_preset` |
+| `audio_manage` | `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
+| `particle_manage` | `create`, `set_main`, `set_process`, `set_draw_pass`, `restart`, `get`, `apply_preset` |
+| `camera_manage` | `create`, `configure`, `set_limits_2d`, `set_damping_2d`, `follow_2d`, `get`, `list`, `apply_preset` |
+| `signal_manage` | `list`, `connect`, `disconnect` |
+| `input_map_manage` | `list`, `add_action`, `remove_action`, `bind_event` |
+| `autoload_manage` | `list`, `add`, `remove` |
+| `filesystem_manage` | `read_text`, `write_text`, `reimport`, `search` |
+| `theme_manage` | `create`, `set_color`, `set_constant`, `set_font_size`, `set_stylebox_flat`, `apply` |
+| `ui_manage` | `set_anchor_preset`, `set_text`, `build_layout`, `draw_recipe` |
+| `resource_manage` | `search`, `load`, `assign`, `get_info`, `create`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `gradient_texture_create`, `noise_texture_create` |
+| `client_manage` | `status`, `configure`, `remove` |
 
-| Tool | Description |
-|------|-------------|
-| `animation_player_create` | Create an `AnimationPlayer` node |
-| `animation_create` / `animation_create_simple` / `animation_delete` | Create or delete animations |
-| `animation_list` / `animation_get` / `animation_validate` | Inspect and validate animations |
-| `animation_add_property_track` / `animation_add_method_track` | Add property or method tracks |
-| `animation_play` / `animation_stop` / `animation_set_autoplay` | Playback controls |
-| `animation_preset_fade` / `animation_preset_pulse` / `animation_preset_shake` / `animation_preset_slide` | Named animation presets |
-
-## Audio
-
-| Tool | Description |
-|------|-------------|
-| `audio_player_create` / `audio_list` | Create and list audio players |
-| `audio_play` / `audio_stop` | Control playback |
-| `audio_player_set_stream` / `audio_player_set_playback` | Assign streams and tune playback |
-
-## Particles, Environment, Camera
-
-| Tool | Description |
-|------|-------------|
-| `particle_create` / `particle_get` / `particle_restart` | Create, inspect, restart particle systems |
-| `particle_set_main` / `particle_set_process` / `particle_set_draw_pass` / `particle_apply_preset` | Configure particle nodes |
-| `environment_create` | Create a `WorldEnvironment` with a configured `Environment` |
-| `camera_create` / `camera_list` / `camera_get` | Create and inspect cameras |
-| `camera_configure` / `camera_apply_preset` | Tune camera settings or apply presets |
-| `camera_follow_2d` / `camera_set_limits_2d` / `camera_set_damping_2d` | 2D camera helpers |
-| `physics_shape_autofit` | Auto-fit a collision shape to a mesh |
-
-## Project, Filesystem, Input
-
-| Tool | Description |
-|------|-------------|
-| `project_settings_get` / `project_settings_set` | Read or write Godot project settings |
-| `project_run` / `project_stop` | Run or stop the project from the editor |
-| `autoload_add` / `autoload_remove` / `autoload_list` | Manage autoload singletons |
-| `filesystem_search` / `filesystem_read_text` / `filesystem_write_text` / `filesystem_reimport` | Search, read, write, and reimport project files |
-| `input_map_add_action` / `input_map_remove_action` / `input_map_bind_event` / `input_map_list` | Manage the project input map |
-
-## Testing and Client Setup
-
-| Tool | Description |
-|------|-------------|
-| `test_run` | Run GDScript test suites inside the editor |
-| `test_results_get` | Read the most recent test results without rerunning |
-| `client_configure` / `client_remove` / `client_status` | Configure, remove, or check supported MCP clients |
+Every rolled-up tool also accepts an optional top-level `session_id` for
+per-call multi-editor routing (sibling of `op` and `params`, *not* nested
+inside `params`).
 
 ## MCP Resources
 
+Read-only URIs served alongside the tool surface. They don't count against
+tool caps and are preferred for active-session reads when the client
+surfaces them. The matching tool form is the fallback for clients that
+don't, and the only path that supports `session_id` pinning.
+
 | Resource URI | Description |
-|-------------|-------------|
-| `godot://sessions` | Connected editor sessions with metadata |
-| `godot://scene/current` | Current scene path, project name, and play state |
-| `godot://scene/hierarchy` | Full scene hierarchy from the active editor |
+|--------------|-------------|
+| `godot://sessions` | All connected editor sessions with metadata |
+| `godot://editor/state` | Editor version, project, current scene, readiness, play state |
 | `godot://selection/current` | Current editor selection |
+| `godot://logs/recent` | Last 100 plugin log lines |
+| `godot://scene/current` | Active scene path + project + play state |
+| `godot://scene/hierarchy` | Full scene hierarchy from the active editor |
+| `godot://node/{path}/properties` | All properties of a node by scene path |
+| `godot://node/{path}/children` | Direct children (name, type, path each) |
+| `godot://node/{path}/groups` | Group memberships for a node |
+| `godot://script/{path}` | GDScript source by res:// path (drop the `res://` prefix) |
 | `godot://project/info` | Active project metadata |
 | `godot://project/settings` | Common project settings subset |
-| `godot://logs/recent` | Recent editor log lines |
+| `godot://materials` | All Material resources under res:// |
+| `godot://input_map` | Project input actions and their bound events |
+| `godot://performance` | Performance singleton snapshot |
+| `godot://test/results` | Most recent `test_run` results |

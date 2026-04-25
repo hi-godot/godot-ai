@@ -12,8 +12,11 @@ from fastmcp import FastMCP
 
 from godot_ai.godot_client.client import GodotClient
 from godot_ai.resources.editor import register_editor_resources
+from godot_ai.resources.library import register_library_resources
+from godot_ai.resources.nodes import register_node_resources
 from godot_ai.resources.project import register_project_resources
 from godot_ai.resources.scenes import register_scene_resources
+from godot_ai.resources.scripts import register_script_resources
 from godot_ai.resources.sessions import register_session_resources
 from godot_ai.sessions.registry import SessionRegistry
 from godot_ai.tools.animation import register_animation_tools
@@ -22,16 +25,12 @@ from godot_ai.tools.autoload import register_autoload_tools
 from godot_ai.tools.batch import register_batch_tools
 from godot_ai.tools.camera import register_camera_tools
 from godot_ai.tools.client import register_client_tools
-from godot_ai.tools.control import register_control_tools
-from godot_ai.tools.curve import register_curve_tools
 from godot_ai.tools.editor import register_editor_tools
-from godot_ai.tools.environment import register_environment_tools
 from godot_ai.tools.filesystem import register_filesystem_tools
 from godot_ai.tools.input_map import register_input_map_tools
 from godot_ai.tools.material import register_material_tools
 from godot_ai.tools.node import register_node_tools
 from godot_ai.tools.particle import register_particle_tools
-from godot_ai.tools.physics_shape import register_physics_shape_tools
 from godot_ai.tools.project import register_project_tools
 from godot_ai.tools.resource import register_resource_tools
 from godot_ai.tools.scene import register_scene_tools
@@ -39,7 +38,6 @@ from godot_ai.tools.script import register_script_tools
 from godot_ai.tools.session import register_session_tools
 from godot_ai.tools.signal import register_signal_tools
 from godot_ai.tools.testing import register_testing_tools
-from godot_ai.tools.texture import register_texture_tools
 from godot_ai.tools.theme import register_theme_tools
 from godot_ai.tools.ui import register_ui_tools
 from godot_ai.transport.websocket import GodotWebSocketServer
@@ -84,57 +82,60 @@ def create_server(
         "Godot AI",
         instructions=(
             "Production-grade Godot MCP server with persistent editor integration.\n\n"
-            "Tool categories (namespace prefixes — useful for tool-search queries):\n"
-            "  session_*        — list and activate connected editor sessions\n"
-            "  editor_*         — editor state, selection, screenshot, logs, quit, reload plugin\n"
-            "  scene_*          — open/save scenes (levels/maps), inspect the scene tree\n"
-            "  node_*           — create, inspect, modify, duplicate, group, reparent nodes\n"
-            "  script_*         — create, read, attach, detach, outline GDScript files\n"
-            "  resource_*       — search, load, assign, and CREATE built-in Resources "
-            "(BoxMesh, BoxShape3D, Curve, Gradient, StyleBox*, PhysicsMaterial, etc.) "
-            "inline or as .tres files — see resource_create\n"
-            "  signal_*         — list, connect, disconnect node signals (events / callbacks)\n"
-            "  input_map_*      — manage input actions (keybindings, keyboard/mouse/gamepad)\n"
-            "  autoload_*       — manage autoload singletons (global scripts)\n"
-            "  project_*        — run/stop the game, read/write project settings\n"
-            "  filesystem_*     — read/write text files, search assets, reimport\n"
-            "  performance_*    — FPS, memory, draw calls, and other runtime metrics\n"
-            "  logs_*           — read or clear the editor log buffer\n"
-            "  test_*           — run GDScript test suites and fetch results\n"
-            "  batch_execute    — compose multi-step scene edits atomically\n"
-            "  ui_*             — Control layout helpers "
-            "(anchor presets, declarative layout builder)\n"
-            "  control_*        — attach vector _draw() ops to Controls "
-            "(gauges, radar, corner brackets, scanlines, crosshairs, waveforms)\n"
-            "  theme_*          — author Theme resources "
-            "(colors, stylebox, font sizes) — Godot's CSS-like styling\n"
-            "  animation_*      — AnimationPlayer authoring "
-            "(tracks, keyframes, autoplay) — hover pulses, slide-ins, shakes, fades\n"
-            "  animation_preset_* — one-call canned animations "
-            "(fade, slide, shake, pulse) — no tween specs needed\n"
-            "  material_*       — author Materials "
-            "(StandardMaterial3D, ORM, ShaderMaterial) — "
-            "paint, albedo, metal, glass, emission, shader uniforms\n"
-            "  particle_*       — author particle emitters "
-            "(GPUParticles2D/3D, CPUParticles2D/3D) — "
-            "fire, smoke, sparks, magic, rain, explosion\n"
-            "  camera_*         — Camera2D/Camera3D authoring "
-            "(follow, bounds, zoom, damping, smoothing, drag margins, deadzone)\n"
-            "  audio_*          — author sound effects and music "
-            "(AudioStreamPlayer/2D/3D) — load streams, play, stop, list audio assets\n"
-            "  physics_shape_*  — size CollisionShape2D/3D to match sibling visuals "
-            "(box, sphere, capsule, cylinder / rectangle, circle, capsule)\n"
-            "  environment_*    — author WorldEnvironment chain "
-            "(Environment + Sky + SkyMaterial) with presets: "
-            "default, sunset, night, fog\n"
-            "  gradient_texture_*, noise_texture_* — procedural 2D textures "
-            "(gradients for Line2D/Sprite2D, FastNoiseLite + NoiseTexture2D for heightmaps)\n"
-            "  curve_*          — author Curve/Curve2D/Curve3D point lists "
-            "for Path3D routes, particle ramps, and easing curves\n"
-            "  client_*         — configure AI clients (Claude Code, Codex, Antigravity)\n\n"
-            "Always connect to an editor session first (session_list / session_activate). "
-            "Write operations require session readiness; check editor_state if a call is "
-            "rejected as 'not writable'."
+            "Tool surface — ~18 named verbs + per-domain `<domain>_manage` rollups:\n\n"
+            "Core named verbs (always loaded — common reads + high-traffic writes):\n"
+            "  editor_state                      — readiness, version, current scene\n"
+            "  scene_get_hierarchy               — paginated scene tree walk\n"
+            "  node_get_properties               — full property snapshot\n"
+            "  session_activate                  — pin commands to one editor\n"
+            "  node_create / node_set_property / node_find\n"
+            "  scene_open / scene_save\n"
+            "  script_create / script_attach / script_patch\n"
+            "  project_run, test_run, batch_execute, logs_read\n"
+            "  editor_screenshot, editor_reload_plugin, animation_create\n\n"
+            "Domain rollups (one tool per domain; pass `op=` + a `params` dict):\n"
+            "  scene_manage     create, save_as, get_roots\n"
+            "  node_manage      get_children, get_groups, delete, duplicate, rename,\n"
+            "                   move, reparent, add_to_group, remove_from_group\n"
+            "  script_manage    read, detach, find_symbols\n"
+            "  project_manage   stop, settings_get, settings_set\n"
+            "  editor_manage    state, selection_get/set, monitors_get, quit, logs_clear\n"
+            "  session_manage   list\n"
+            "  test_manage      results_get\n"
+            "  animation_manage player_create, delete, validate, add_property_track,\n"
+            "                   add_method_track, set_autoplay, play, stop, list, get,\n"
+            "                   create_simple, preset_fade/slide/shake/pulse\n"
+            "  material_manage  create, set_param, set_shader_param, get, list, assign,\n"
+            "                   apply_to_node, apply_preset\n"
+            "  audio_manage     player_create, player_set_stream, player_set_playback,\n"
+            "                   play, stop, list\n"
+            "  particle_manage  create, set_main, set_process, set_draw_pass, restart,\n"
+            "                   get, apply_preset\n"
+            "  camera_manage    create, configure, set_limits_2d, set_damping_2d,\n"
+            "                   follow_2d, get, list, apply_preset\n"
+            "  signal_manage    list, connect, disconnect\n"
+            "  input_map_manage list, add_action, remove_action, bind_event\n"
+            "  autoload_manage  list, add, remove\n"
+            "  filesystem_manage read_text, write_text, reimport, search\n"
+            "  theme_manage     create, set_color, set_constant, set_font_size,\n"
+            "                   set_stylebox_flat, apply\n"
+            "  ui_manage        set_anchor_preset, set_text, build_layout, draw_recipe\n"
+            "  resource_manage  search, load, assign, get_info, create,\n"
+            "                   curve_set_points, environment_create,\n"
+            "                   physics_shape_autofit, gradient_texture_create,\n"
+            "                   noise_texture_create\n"
+            "  client_manage    status, configure, remove\n\n"
+            "Resources (read-only URIs, no tool-count cost — prefer for active-session "
+            "reads when the client surfaces them):\n"
+            "  godot://sessions, godot://editor/state, godot://selection/current,\n"
+            "  godot://logs/recent, godot://scene/current, godot://scene/hierarchy,\n"
+            "  godot://node/{path}/properties|children|groups,\n"
+            "  godot://script/{path}, godot://project/info, godot://project/settings,\n"
+            "  godot://materials, godot://input_map, godot://performance,\n"
+            "  godot://test/results\n\n"
+            "Always connect to an editor session first (session_activate or "
+            'session_manage(op="list")). Write operations require session readiness; '
+            "check editor_state if a call is rejected as 'not writable'."
         ),
         lifespan=_lifespan,
     )
@@ -143,7 +144,7 @@ def create_server(
     if exclude:
         logger.info("Excluding tool domains: %s", ", ".join(sorted(exclude)))
 
-    ## Core-bearing domains: always registered; `include_non_core=False` keeps
+    ## Core-bearing domains: always registered. ``include_non_core=False`` keeps
     ## only the core tool alive when the user excluded that domain.
     register_session_tools(mcp, include_non_core="session" not in exclude)
     register_editor_tools(mcp, include_non_core="editor" not in exclude)
@@ -173,8 +174,6 @@ def create_server(
         register_batch_tools(mcp)
     if "ui" not in exclude:
         register_ui_tools(mcp)
-    if "control" not in exclude:
-        register_control_tools(mcp)
     if "theme" not in exclude:
         register_theme_tools(mcp)
     if "animation" not in exclude:
@@ -187,17 +186,13 @@ def create_server(
         register_camera_tools(mcp)
     if "audio" not in exclude:
         register_audio_tools(mcp)
-    if "physics_shape" not in exclude:
-        register_physics_shape_tools(mcp)
-    if "environment" not in exclude:
-        register_environment_tools(mcp)
-    if "texture" not in exclude:
-        register_texture_tools(mcp)
-    if "curve" not in exclude:
-        register_curve_tools(mcp)
+
     register_session_resources(mcp)
     register_scene_resources(mcp)
     register_editor_resources(mcp)
     register_project_resources(mcp)
+    register_node_resources(mcp)
+    register_script_resources(mcp)
+    register_library_resources(mcp)
 
     return mcp

@@ -61,4 +61,3 @@ async def current_scene_resource_data(runtime: Runtime) -> dict:
 
 async def scene_hierarchy_resource_data(runtime: Runtime) -> dict:
     return await runtime.send_command("get_scene_tree", {"depth": 10})
-

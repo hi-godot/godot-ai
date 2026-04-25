@@ -1,180 +1,84 @@
-"""MCP tools for resource search, inspection, and assignment."""
+"""MCP tool for resource search, inspection, assignment, and creation.
+
+Absorbs single-verb domains: ``curve``, ``environment``, ``physics_shape``,
+and ``texture`` (gradient/noise procedural textures). All Resource-class
+operations live here.
+"""
 
 from __future__ import annotations
 
-from fastmcp import Context, FastMCP
+from fastmcp import FastMCP
 
+from godot_ai.handlers import curve as curve_handlers
+from godot_ai.handlers import environment as environment_handlers
+from godot_ai.handlers import physics_shape as physics_shape_handlers
 from godot_ai.handlers import resource as resource_handlers
-from godot_ai.runtime.direct import DirectRuntime
-from godot_ai.tools import DEFER_META
+from godot_ai.handlers import texture as texture_handlers
+from godot_ai.tools._meta_tool import register_manage_tool
+
+_DESCRIPTION = """\
+Resource (asset) search, inspection, assignment, and creation. Covers
+generic Resource subclasses plus specialized authoring (Curve, Environment,
+physics shapes, gradient/noise textures).
+
+Ops:
+  • search(type="", path="", offset=0, limit=100)
+        Search for resources by type or path. Type matching includes
+        subclasses. At least one filter required. Paginated.
+  • load(path)
+        Inspect a .tres / .res — returns type and editor-visible properties.
+  • assign(path, property, resource_path)
+        Load and assign a resource to a node property. Undoable.
+  • get_info(type)
+        Introspect a Resource class — properties, parent, abstract flag,
+        concrete_subclasses (for abstract bases). Read-only.
+  • create(type, properties=None, path="", property="", resource_path="",
+            overwrite=False)
+        Instantiate a Resource subclass. Either path+property (assign to a
+        node, undoable) or resource_path (save to .tres). For specific
+        families (Curve, Environment, etc.) prefer the dedicated ops.
+  • curve_set_points(points, path="", property="", resource_path="")
+        Replace all points on a Curve / Curve2D / Curve3D. Auto-creates
+        the curve resource if the slot is empty (curve_created flag).
+  • environment_create(path="", preset="default", properties=None,
+                        sky=None, resource_path="", overwrite=False)
+        Build Environment + Sky chain. Presets: default | clear | sunset
+        | night | fog. Either assign to a WorldEnvironment node or save .tres.
+  • physics_shape_autofit(path, source_path="", shape_type="")
+        Size a CollisionShape2D/3D to a sibling visual's bounds. Auto-creates
+        the concrete Shape subclass if needed.
+  • gradient_texture_create(stops, width=256, height=1, fill="linear",
+                              path="", property="", resource_path="",
+                              overwrite=False)
+        Build GradientTexture2D from color stops. fill: linear | radial | square.
+  • noise_texture_create(noise_type="simplex_smooth", width=512, height=512,
+                          frequency=0.01, seed=0, fractal_octaves=0,
+                          path="", property="", resource_path="",
+                          overwrite=False)
+        Build NoiseTexture2D wrapping FastNoiseLite. Noise types: simplex |
+        simplex_smooth | perlin | cellular | value | value_cubic.
+"""
 
 
 def register_resource_tools(mcp: FastMCP) -> None:
-    @mcp.tool(meta=DEFER_META)
-    async def resource_search(
-        ctx: Context,
-        type: str = "",
-        path: str = "",
-        offset: int = 0,
-        limit: int = 100,
-        session_id: str = "",
-    ) -> dict:
-        """Search for resources (assets: meshes, textures, materials, scenes) by type or path.
-
-        At least one filter must be provided. Results are paginated.
-        Type matching includes subclasses (e.g. type="Texture2D" finds
-        CompressedTexture2D, ImageTexture, etc.).
-
-        Args:
-            type: Resource type to filter by (e.g. "PackedScene", "Texture2D", "Material").
-            path: Substring match on the resource file path (case-insensitive).
-            offset: Number of results to skip. Default 0.
-            limit: Maximum number of results to return. Default 100.
-            session_id: Optional Godot session to target. Empty = active session.
-        """
-        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await resource_handlers.resource_search(
-            runtime,
-            type=type,
-            path=path,
-            offset=offset,
-            limit=limit,
-        )
-
-    @mcp.tool(meta=DEFER_META)
-    async def resource_load(ctx: Context, path: str, session_id: str = "") -> dict:
-        """Inspect a resource's (asset's) properties — materials, meshes, textures, .tres files.
-
-        Loads the resource at the given path and returns its type and
-        all editor-visible properties with their current values.
-
-        Args:
-            path: File path starting with res:// (e.g. "res://materials/ground.tres").
-            session_id: Optional Godot session to target. Empty = active session.
-        """
-        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await resource_handlers.resource_load(runtime, path=path)
-
-    @mcp.tool(meta=DEFER_META)
-    async def resource_assign(
-        ctx: Context,
-        path: str,
-        property: str,
-        resource_path: str,
-        session_id: str = "",
-    ) -> dict:
-        """Assign a resource (asset — mesh, texture, material, etc.) to a node property.
-
-        Loads the resource at resource_path and sets it on the specified
-        property of the node at path. This operation is undoable via
-        Ctrl+Z in the Godot editor.
-
-        Args:
-            path: Scene path of the node (e.g. "/Main/Ground").
-            property: Property name that accepts a resource (e.g. "mesh", "material_override").
-            resource_path: File path of the resource (e.g. "res://meshes/cube.tres").
-            session_id: Optional Godot session to target. Empty = active session.
-        """
-        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await resource_handlers.resource_assign(
-            runtime,
-            path=path,
-            property=property,
-            resource_path=resource_path,
-        )
-
-    @mcp.tool(meta=DEFER_META)
-    async def resource_get_info(
-        ctx: Context,
-        type: str,
-        session_id: str = "",
-    ) -> dict:
-        """Introspect a Godot Resource class — list properties, parent, subclasses.
-
-        Read-only. Call this before resource_create to discover which properties
-        a type accepts (e.g. CylinderMesh uses `top_radius` / `bottom_radius`,
-        not `radius`). Works on abstract base classes too — passing "Shape3D"
-        or "Material" returns `concrete_subclasses` so you know what to
-        instantiate.
-
-        Returns:
-            - `type`: the class name (echoed)
-            - `parent_class`: immediate parent class
-            - `can_instantiate` / `is_abstract`: whether resource_create can
-              use this type directly
-            - `properties`: list of editor-visible properties, each with
-              `name`, `type` (Godot type string), `hint`, `usage`
-            - `property_count`: convenience count
-            - `concrete_subclasses` (abstract types only): sorted list of
-              instantiable Resource subclasses
-
-        Args:
-            type: Godot class name (e.g. "CylinderMesh", "Shape3D", "StyleBox").
-                Must be a Resource subclass.
-            session_id: Optional Godot session to target. Empty = active.
-        """
-        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await resource_handlers.resource_get_info(runtime, type=type)
-
-    @mcp.tool(meta=DEFER_META)
-    async def resource_create(
-        ctx: Context,
-        type: str,
-        properties: dict | None = None,
-        path: str = "",
-        property: str = "",
-        resource_path: str = "",
-        overwrite: bool = False,
-        session_id: str = "",
-    ) -> dict:
-        """Instantiate a built-in Godot Resource subclass in-memory or as a .tres file.
-
-        Covers primitive meshes (BoxMesh, SphereMesh, CylinderMesh, CapsuleMesh,
-        PlaneMesh, TorusMesh, PrismMesh, QuadMesh), physics shapes (BoxShape3D,
-        SphereShape3D, CapsuleShape3D, CylinderShape3D, RectangleShape2D,
-        CircleShape2D, CapsuleShape2D, ...), curves (Curve, Curve2D, Curve3D),
-        gradients (Gradient), StyleBox variants, PhysicsMaterial, Environment,
-        Sky, SkyMaterial, ProceduralSkyMaterial, and any other concrete Resource
-        subclass — i.e. everything ClassDB.can_instantiate() allows.
-
-        Exactly one of {path+property, resource_path} must be given:
-        - path+property: instantiate and assign to the node slot in one
-          undoable action (undo restores the previous value).
-        - resource_path: instantiate and save as a .tres/.res file on disk
-          (not undoable — file creation is persistent). When the file did
-          not exist before, the response includes `data.cleanup.rm` listing
-          it so callers running transient smoke tests can feed the list into
-          a final cleanup step; omitted on overwrite.
-
-        For compound resources with their own authoring tools, prefer those:
-        material_create (Materials), animation_create (Animations),
-        theme_create (Themes). Use environment_create, gradient_texture_create,
-        noise_texture_create, physics_shape_autofit, or curve_set_points for
-        those specific families where composing sub-resources matters.
-
-        Args:
-            type: Godot class name to instantiate (e.g. "BoxMesh", "BoxShape3D",
-                "Curve", "StyleBoxFlat"). Must be a concrete Resource subclass.
-            properties: Optional dict of initial property values. Values are
-                coerced the same way set_property does — e.g. {"size": {"x": 2,
-                "y": 2, "z": 2}} lands as a Vector3, colors as Color, etc.
-            path: Scene path of a node to receive the resource (e.g.
-                "/Main/Mesh"). Mutually exclusive with resource_path.
-            property: Property name on that node (e.g. "mesh", "shape",
-                "texture"). Required when path is given.
-            resource_path: res:// destination to save as a .tres/.res file.
-                Mutually exclusive with path+property.
-            overwrite: Allow replacing an existing file at resource_path.
-                Default false.
-            session_id: Optional Godot session to target. Empty = active.
-        """
-        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await resource_handlers.resource_create(
-            runtime,
-            type=type,
-            properties=properties,
-            path=path,
-            property=property,
-            resource_path=resource_path,
-            overwrite=overwrite,
-        )
+    register_manage_tool(
+        mcp,
+        tool_name="resource_manage",
+        description=_DESCRIPTION,
+        ops={
+            "search": lambda rt, p: resource_handlers.resource_search(rt, **p),
+            "load": lambda rt, p: resource_handlers.resource_load(rt, **p),
+            "assign": lambda rt, p: resource_handlers.resource_assign(rt, **p),
+            "get_info": lambda rt, p: resource_handlers.resource_get_info(rt, **p),
+            "create": lambda rt, p: resource_handlers.resource_create(rt, **p),
+            "curve_set_points": lambda rt, p: curve_handlers.curve_set_points(rt, **p),
+            "environment_create": lambda rt, p: environment_handlers.environment_create(rt, **p),
+            "physics_shape_autofit": lambda rt, p: physics_shape_handlers.physics_shape_autofit(
+                rt, **p
+            ),
+            "gradient_texture_create": lambda rt, p: texture_handlers.gradient_texture_create(
+                rt, **p
+            ),
+            "noise_texture_create": lambda rt, p: texture_handlers.noise_texture_create(rt, **p),
+        },
+    )

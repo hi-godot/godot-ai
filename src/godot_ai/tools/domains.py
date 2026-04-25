@@ -20,6 +20,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 ## Registration order matches server.create_server(). Keep in sync.
+##
+## Single-verb / sub-domain entries (control, curve, environment,
+## physics_shape, texture) were folded into adjacent ``*_manage`` rollups
+## (``ui_manage`` and ``resource_manage``) and no longer appear as standalone
+## domains.
 DOMAINS: tuple[str, ...] = (
     "session",
     "editor",
@@ -36,17 +41,12 @@ DOMAINS: tuple[str, ...] = (
     "testing",
     "batch",
     "ui",
-    "control",
     "theme",
     "animation",
     "material",
     "particle",
     "camera",
     "audio",
-    "physics_shape",
-    "environment",
-    "texture",
-    "curve",
 )
 
 ## Domains that contain at least one core (always-loaded) tool. When the
@@ -54,11 +54,11 @@ DOMAINS: tuple[str, ...] = (
 ## core tool is still registered.
 CORE_BEARING_DOMAINS: frozenset[str] = frozenset({"session", "editor", "scene", "node"})
 
-## The 5 core tools that survive any exclusion. Displayed as a disabled
-## "Core" row in the plugin UI. Order mirrors the flat namespace the
-## server exposes; not functionally significant.
+## The 4 core tools that survive any exclusion. Displayed as a disabled
+## "Core" row in the plugin UI. ``session_list`` moved to ``godot://sessions``
+## resource + ``session_manage(op="list")``; ``session_activate`` is the only
+## session core tool left.
 CORE_TOOLS: tuple[str, ...] = (
-    "session_list",
     "session_activate",
     "editor_state",
     "scene_get_hierarchy",

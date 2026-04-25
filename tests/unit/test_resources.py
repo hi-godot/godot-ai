@@ -46,7 +46,10 @@ class TestResourceRegistration:
         assert "godot://logs/recent" in await self._resource_uris(mcp)
 
     async def test_total_resource_count(self, mcp):
-        assert len(await self._resource_uris(mcp)) == 7
+        ## 7 originals + 5 list resources (editor/state, materials, input_map,
+        ## performance, test/results). Node + script templates are exposed as
+        ## resource templates rather than concrete resource URIs.
+        assert len(await self._resource_uris(mcp)) == 12
 
 
 class TestCommonSettingsList:

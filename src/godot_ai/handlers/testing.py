@@ -28,4 +28,3 @@ async def test_results_get(runtime: Runtime, verbose: bool = False) -> dict:
     if verbose:
         params["verbose"] = True
     return await runtime.send_command("get_test_results", params)
-

@@ -72,7 +72,7 @@ class TestSceneGetRootsTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("scene_get_roots", {})
+        result = await client.call_tool("scene_manage", {"op": "get_roots", "params": {}})
         await task
 
         assert result.data["current"] == "res://main.tscn"
@@ -104,7 +104,8 @@ class TestSceneCreateTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "scene_create", {"path": "res://scenes/level.tscn", "root_type": "Node2D"}
+            "scene_manage",
+            {"op": "create", "params": {"path": "res://scenes/level.tscn", "root_type": "Node2D"}},
         )
         await task
 
@@ -132,7 +133,9 @@ class TestSceneCreateTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("scene_create", {"path": "res://new.tscn"})
+        result = await client.call_tool(
+            "scene_manage", {"op": "create", "params": {"path": "res://new.tscn"}}
+        )
         await task
         assert result.data["root_type"] == "Node3D"
 
@@ -154,8 +157,8 @@ class TestSceneCreateTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "scene_create",
-            {"path": "res://scenes/market.tscn", "root_name": "Market"},
+            "scene_manage",
+            {"op": "create", "params": {"path": "res://scenes/market.tscn", "root_name": "Market"}},
         )
         await task
         assert result.data["root_name"] == "Market"
@@ -230,7 +233,9 @@ class TestSceneSaveAsTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("scene_save_as", {"path": "res://backup/main_copy.tscn"})
+        result = await client.call_tool(
+            "scene_manage", {"op": "save_as", "params": {"path": "res://backup/main_copy.tscn"}}
+        )
         await task
 
         assert result.data["path"] == "res://backup/main_copy.tscn"
@@ -282,7 +287,7 @@ class TestEditorSelectionGetTool:
             await plugin.send_response(cmd["request_id"], {"selected": ["/Main/Camera3D"]})
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("editor_selection_get", {})
+        result = await client.call_tool("editor_manage", {"op": "selection_get", "params": {}})
         await task
 
         assert result.data["selected"] == ["/Main/Camera3D"]
@@ -452,7 +457,9 @@ class TestNodeReadTools:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("node_get_children", {"path": "/Main/World"})
+        result = await client.call_tool(
+            "node_manage", {"op": "get_children", "params": {"path": "/Main/World"}}
+        )
         await task
 
         assert result.data["children"][0]["name"] == "Ground"
@@ -466,7 +473,9 @@ class TestNodeReadTools:
             await plugin.send_response(cmd["request_id"], {"groups": ["enemies", "damageable"]})
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("node_get_groups", {"path": "/Main/Enemy"})
+        result = await client.call_tool(
+            "node_manage", {"op": "get_groups", "params": {"path": "/Main/Enemy"}}
+        )
         await task
 
         assert "enemies" in result.data["groups"]
@@ -519,7 +528,9 @@ class TestNodeDeleteTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("node_delete", {"path": "/Main/Enemy"})
+        result = await client.call_tool(
+            "node_manage", {"op": "delete", "params": {"path": "/Main/Enemy"}}
+        )
         await task
 
         assert result.data["path"] == "/Main/Enemy"
@@ -552,7 +563,8 @@ class TestNodeReparentTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "node_reparent", {"path": "/Main/Player", "new_parent": "/Main/World"}
+            "node_manage",
+            {"op": "reparent", "params": {"path": "/Main/Player", "new_parent": "/Main/World"}},
         )
         await task
 
@@ -623,7 +635,9 @@ class TestNodeRenameTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("node_rename", {"path": "/Main/Player", "new_name": "Hero"})
+        result = await client.call_tool(
+            "node_manage", {"op": "rename", "params": {"path": "/Main/Player", "new_name": "Hero"}}
+        )
         await task
 
         assert result.data["name"] == "Hero"
@@ -658,7 +672,9 @@ class TestNodeDuplicateTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("node_duplicate", {"path": "/Main/Enemy", "name": "Enemy2"})
+        result = await client.call_tool(
+            "node_manage", {"op": "duplicate", "params": {"path": "/Main/Enemy", "name": "Enemy2"}}
+        )
         await task
 
         assert result.data["name"] == "Enemy2"
@@ -690,7 +706,9 @@ class TestNodeMoveTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("node_move", {"path": "/Main/Camera3D", "index": 2})
+        result = await client.call_tool(
+            "node_manage", {"op": "move", "params": {"path": "/Main/Camera3D", "index": 2}}
+        )
         await task
 
         assert result.data["new_index"] == 2
@@ -717,7 +735,8 @@ class TestNodeGroupTools:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "node_add_to_group", {"path": "/Main/Enemy", "group": "enemies"}
+            "node_manage",
+            {"op": "add_to_group", "params": {"path": "/Main/Enemy", "group": "enemies"}},
         )
         await task
 
@@ -738,7 +757,8 @@ class TestNodeGroupTools:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "node_remove_from_group", {"path": "/Main/Enemy", "group": "enemies"}
+            "node_manage",
+            {"op": "remove_from_group", "params": {"path": "/Main/Enemy", "group": "enemies"}},
         )
         await task
 
@@ -770,8 +790,8 @@ class TestEditorSelectionSetTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "editor_selection_set",
-            {"paths": ["/Main/Camera3D", "/Main/World"]},
+            "editor_manage",
+            {"op": "selection_set", "params": {"paths": ["/Main/Camera3D", "/Main/World"]}},
         )
         await task
 
@@ -795,8 +815,8 @@ class TestEditorSelectionSetTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "editor_selection_set",
-            {"paths": ["/Main/Camera3D", "/Main/Ghost"]},
+            "editor_manage",
+            {"op": "selection_set", "params": {"paths": ["/Main/Camera3D", "/Main/Ghost"]}},
         )
         await task
 
@@ -822,7 +842,9 @@ class TestProjectSettingsGetTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("project_settings_get", {"key": "application/config/name"})
+        result = await client.call_tool(
+            "project_manage", {"op": "settings_get", "params": {"key": "application/config/name"}}
+        )
         await task
 
         assert result.data["value"] == "MyGame"
@@ -855,8 +877,11 @@ class TestProjectSettingsSetTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "project_settings_set",
-            {"key": "display/window/size/viewport_width", "value": 1920},
+            "project_manage",
+            {
+                "op": "settings_set",
+                "params": {"key": "display/window/size/viewport_width", "value": 1920},
+            },
         )
         await task
 
@@ -881,7 +906,8 @@ class TestFilesystemSearchTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "filesystem_search", {"type": "GDScript", "offset": 5, "limit": 10}
+            "filesystem_manage",
+            {"op": "search", "params": {"type": "GDScript", "offset": 5, "limit": 10}},
         )
         await task
 
@@ -910,7 +936,7 @@ class TestEditorQuitTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("editor_quit", {})
+        result = await client.call_tool("editor_manage", {"op": "quit", "params": {}})
         await task
 
         assert result.data["status"] == "quitting"
@@ -972,7 +998,7 @@ class TestReloadPluginTool:
 class TestSessionTools:
     async def test_session_list_returns_connected_session(self, mcp_stack):
         client, plugin = mcp_stack
-        result = await client.call_tool("session_list", {})
+        result = await client.call_tool("session_manage", {"op": "list", "params": {}})
         assert result.data["count"] == 1
         assert result.data["sessions"][0]["session_id"] == "mcp-test"
         assert result.data["sessions"][0]["is_active"] is True
@@ -1047,7 +1073,7 @@ class TestClientTools:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("client_status", {})
+        result = await client.call_tool("client_manage", {"op": "status", "params": {}})
         await task
         clients = {entry["id"]: entry for entry in result.data["clients"]}
         assert clients["claude_code"]["status"] == "configured"
@@ -1063,7 +1089,9 @@ class TestClientTools:
             await plugin.send_response(cmd["request_id"], {"status": "ok"})
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("client_configure", {"client": "codex"})
+        result = await client.call_tool(
+            "client_manage", {"op": "configure", "params": {"client": "codex"}}
+        )
         await task
         assert result.data["status"] == "ok"
 
@@ -1077,7 +1105,9 @@ class TestClientTools:
             await plugin.send_response(cmd["request_id"], {"status": "ok"})
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("client_remove", {"client": "cursor"})
+        result = await client.call_tool(
+            "client_manage", {"op": "remove", "params": {"client": "cursor"}}
+        )
         await task
         assert result.data["status"] == "ok"
 
@@ -1124,7 +1154,7 @@ class TestTestingTools:
             await plugin.send_response(cmd["request_id"], {"passed": 5, "failed": 1, "results": []})
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("test_results_get", {})
+        result = await client.call_tool("test_manage", {"op": "results_get", "params": {}})
         await task
         assert result.data["failed"] == 1
 
@@ -1309,7 +1339,9 @@ class TestScriptReadTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("script_read", {"path": "res://scripts/player.gd"})
+        result = await client.call_tool(
+            "script_manage", {"op": "read", "params": {"path": "res://scripts/player.gd"}}
+        )
         await task
 
         assert result.data["content"] == "extends Node3D\n"
@@ -1374,7 +1406,9 @@ class TestScriptDetachTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("script_detach", {"path": "/Main/Player"})
+        result = await client.call_tool(
+            "script_manage", {"op": "detach", "params": {"path": "/Main/Player"}}
+        )
         await task
 
         assert result.data["removed_script"] == "res://scripts/player.gd"
@@ -1392,7 +1426,9 @@ class TestScriptDetachTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("script_detach", {"path": "/Main/Player"})
+        result = await client.call_tool(
+            "script_manage", {"op": "detach", "params": {"path": "/Main/Player"}}
+        )
         await task
 
         assert result.data["had_script"] is False
@@ -1427,7 +1463,9 @@ class TestScriptFindSymbolsTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("script_find_symbols", {"path": "res://scripts/player.gd"})
+        result = await client.call_tool(
+            "script_manage", {"op": "find_symbols", "params": {"path": "res://scripts/player.gd"}}
+        )
         await task
 
         assert result.data["class_name"] == "Player"
@@ -1457,7 +1495,8 @@ class TestResourceSearchTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "resource_search", {"type": "Material", "offset": 2, "limit": 2}
+            "resource_manage",
+            {"op": "search", "params": {"type": "Material", "offset": 2, "limit": 2}},
         )
         await task
 
@@ -1491,7 +1530,9 @@ class TestResourceLoadTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("resource_load", {"path": "res://materials/ground.tres"})
+        result = await client.call_tool(
+            "resource_manage", {"op": "load", "params": {"path": "res://materials/ground.tres"}}
+        )
         await task
 
         assert result.data["type"] == "StandardMaterial3D"
@@ -1526,11 +1567,14 @@ class TestResourceAssignTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "resource_assign",
+            "resource_manage",
             {
-                "path": "/Main/Ground",
-                "property": "material_override",
-                "resource_path": "res://materials/ground.tres",
+                "op": "assign",
+                "params": {
+                    "path": "/Main/Ground",
+                    "property": "material_override",
+                    "resource_path": "res://materials/ground.tres",
+                },
             },
         )
         await task
@@ -1569,12 +1613,15 @@ class TestResourceCreateTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "resource_create",
+            "resource_manage",
             {
-                "type": "BoxMesh",
-                "path": "/Main/Mesh",
-                "property": "mesh",
-                "properties": {"size": {"x": 2, "y": 2, "z": 2}},
+                "op": "create",
+                "params": {
+                    "type": "BoxMesh",
+                    "path": "/Main/Mesh",
+                    "property": "mesh",
+                    "properties": {"size": {"x": 2, "y": 2, "z": 2}},
+                },
             },
         )
         await task
@@ -1607,12 +1654,15 @@ class TestResourceCreateTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "resource_create",
+            "resource_manage",
             {
-                "type": "BoxShape3D",
-                "resource_path": "res://shapes/box.tres",
-                "properties": {"size": {"x": 1, "y": 2, "z": 1}},
-                "overwrite": True,
+                "op": "create",
+                "params": {
+                    "type": "BoxShape3D",
+                    "resource_path": "res://shapes/box.tres",
+                    "properties": {"size": {"x": 1, "y": 2, "z": 1}},
+                    "overwrite": True,
+                },
             },
         )
         await task
@@ -1650,7 +1700,9 @@ class TestResourceGetInfoTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("resource_get_info", {"type": "BoxMesh"})
+        result = await client.call_tool(
+            "resource_manage", {"op": "get_info", "params": {"type": "BoxMesh"}}
+        )
         await task
 
         assert result.data["type"] == "BoxMesh"
@@ -1683,7 +1735,9 @@ class TestResourceGetInfoTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("resource_get_info", {"type": "Shape3D"})
+        result = await client.call_tool(
+            "resource_manage", {"op": "get_info", "params": {"type": "Shape3D"}}
+        )
         await task
 
         assert result.data["is_abstract"] is True
@@ -1722,8 +1776,11 @@ class TestCurveSetPointsTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "curve_set_points",
-            {"points": points, "path": "/Main/Path3D", "property": "curve"},
+            "resource_manage",
+            {
+                "op": "curve_set_points",
+                "params": {"points": points, "path": "/Main/Path3D", "property": "curve"},
+            },
         )
         await task
 
@@ -1764,11 +1821,14 @@ class TestTextureTools:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "gradient_texture_create",
+            "resource_manage",
             {
-                "stops": stops,
-                "path": "/Main/Line",
-                "property": "texture",
+                "op": "gradient_texture_create",
+                "params": {
+                    "stops": stops,
+                    "path": "/Main/Line",
+                    "property": "texture",
+                },
             },
         )
         await task
@@ -1798,10 +1858,13 @@ class TestTextureTools:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "noise_texture_create",
+            "resource_manage",
             {
-                "noise_type": "simplex",
-                "resource_path": "res://noise.tres",
+                "op": "noise_texture_create",
+                "params": {
+                    "noise_type": "simplex",
+                    "resource_path": "res://noise.tres",
+                },
             },
         )
         await task
@@ -1837,8 +1900,8 @@ class TestEnvironmentCreateTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "environment_create",
-            {"path": "/Main/World", "preset": "sunset"},
+            "resource_manage",
+            {"op": "environment_create", "params": {"path": "/Main/World", "preset": "sunset"}},
         )
         await task
 
@@ -1876,11 +1939,14 @@ class TestPhysicsShapeAutofitTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "physics_shape_autofit",
+            "resource_manage",
             {
-                "path": "/Main/Body/Collision",
-                "source_path": "/Main/Body/Mesh",
-                "shape_type": "box",
+                "op": "physics_shape_autofit",
+                "params": {
+                    "path": "/Main/Body/Collision",
+                    "source_path": "/Main/Body/Mesh",
+                    "shape_type": "box",
+                },
             },
         )
         await task
@@ -1914,7 +1980,9 @@ class TestFilesystemReadTextTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("filesystem_read_text", {"path": "res://project.godot"})
+        result = await client.call_tool(
+            "filesystem_manage", {"op": "read_text", "params": {"path": "res://project.godot"}}
+        )
         await task
 
         assert result.data["content"] == "[gd_scene]\n"
@@ -1946,8 +2014,11 @@ class TestFilesystemWriteTextTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "filesystem_write_text",
-            {"path": "res://data/config.json", "content": '{"key": "val"}'},
+            "filesystem_manage",
+            {
+                "op": "write_text",
+                "params": {"path": "res://data/config.json", "content": '{"key": "val"}'},
+            },
         )
         await task
 
@@ -1981,7 +2052,8 @@ class TestImportReimportTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "filesystem_reimport", {"paths": ["res://icon.png", "res://logo.png"]}
+            "filesystem_manage",
+            {"op": "reimport", "params": {"paths": ["res://icon.png", "res://logo.png"]}},
         )
         await task
 
@@ -2014,7 +2086,9 @@ class TestSignalListTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("signal_list", {"path": "/Main/Button"})
+        result = await client.call_tool(
+            "signal_manage", {"op": "list", "params": {"path": "/Main/Button"}}
+        )
         await task
 
         assert result.data["signal_count"] == 1
@@ -2042,12 +2116,15 @@ class TestSignalConnectTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "signal_connect",
+            "signal_manage",
             {
-                "path": "/Main/Button",
-                "signal": "pressed",
-                "target": "/Main/Player",
-                "method": "_on_pressed",
+                "op": "connect",
+                "params": {
+                    "path": "/Main/Button",
+                    "signal": "pressed",
+                    "target": "/Main/Player",
+                    "method": "_on_pressed",
+                },
             },
         )
         await task
@@ -2075,12 +2152,15 @@ class TestSignalDisconnectTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "signal_disconnect",
+            "signal_manage",
             {
-                "path": "/Main/Button",
-                "signal": "pressed",
-                "target": "/Main/Player",
-                "method": "_on_pressed",
+                "op": "disconnect",
+                "params": {
+                    "path": "/Main/Button",
+                    "signal": "pressed",
+                    "target": "/Main/Player",
+                    "method": "_on_pressed",
+                },
             },
         )
         await task
@@ -2115,7 +2195,7 @@ class TestAutoloadListTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("autoload_list", {})
+        result = await client.call_tool("autoload_manage", {"op": "list", "params": {}})
         await task
 
         assert result.data["count"] == 1
@@ -2143,8 +2223,8 @@ class TestAutoloadAddTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "autoload_add",
-            {"name": "AudioBus", "path": "res://audio_bus.gd"},
+            "autoload_manage",
+            {"op": "add", "params": {"name": "AudioBus", "path": "res://audio_bus.gd"}},
         )
         await task
 
@@ -2165,7 +2245,9 @@ class TestAutoloadRemoveTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("autoload_remove", {"name": "AudioBus"})
+        result = await client.call_tool(
+            "autoload_manage", {"op": "remove", "params": {"name": "AudioBus"}}
+        )
         await task
 
         assert result.data["removed"] is True
@@ -2194,7 +2276,7 @@ class TestInputMapListTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("input_map_list", {})
+        result = await client.call_tool("input_map_manage", {"op": "list", "params": {}})
         await task
 
         assert result.data["count"] == 1
@@ -2215,7 +2297,9 @@ class TestInputMapAddActionTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("input_map_add_action", {"action": "attack"})
+        result = await client.call_tool(
+            "input_map_manage", {"op": "add_action", "params": {"action": "attack"}}
+        )
         await task
 
         assert result.data["action"] == "attack"
@@ -2235,7 +2319,9 @@ class TestInputMapRemoveActionTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("input_map_remove_action", {"action": "attack"})
+        result = await client.call_tool(
+            "input_map_manage", {"op": "remove_action", "params": {"action": "attack"}}
+        )
         await task
 
         assert result.data["removed"] is True
@@ -2262,8 +2348,11 @@ class TestInputMapBindEventTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "input_map_bind_event",
-            {"action": "jump", "event_type": "key", "keycode": "Space"},
+            "input_map_manage",
+            {
+                "op": "bind_event",
+                "params": {"action": "jump", "event_type": "key", "keycode": "Space"},
+            },
         )
         await task
 
@@ -2290,15 +2379,18 @@ class TestInputMapBindEventTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "input_map_bind_event",
+            "input_map_manage",
             {
-                "action": "save",
-                "event_type": "key",
-                "keycode": "S",
-                "ctrl": True,
-                "alt": True,
-                "shift": True,
-                "meta": True,
+                "op": "bind_event",
+                "params": {
+                    "action": "save",
+                    "event_type": "key",
+                    "keycode": "S",
+                    "ctrl": True,
+                    "alt": True,
+                    "shift": True,
+                    "meta": True,
+                },
             },
         )
         await task
@@ -2323,8 +2415,11 @@ class TestInputMapBindEventTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "input_map_bind_event",
-            {"action": "shoot", "event_type": "mouse_button", "button": 1},
+            "input_map_manage",
+            {
+                "op": "bind_event",
+                "params": {"action": "shoot", "event_type": "mouse_button", "button": 1},
+            },
         )
         await task
 
@@ -2356,7 +2451,9 @@ class TestInputMapListBuiltinFilter:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("input_map_list", {"include_builtin": True})
+        result = await client.call_tool(
+            "input_map_manage", {"op": "list", "params": {"include_builtin": True}}
+        )
         await task
 
         assert result.data["count"] == 1
@@ -2465,7 +2562,7 @@ class TestLogsClearTool:
             await plugin.send_response(cmd["request_id"], {"cleared_count": 12})
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("logs_clear", {})
+        result = await client.call_tool("editor_manage", {"op": "logs_clear", "params": {}})
         await task
 
         assert not result.is_error
@@ -2580,7 +2677,7 @@ class TestProjectStopTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("project_stop", {})
+        result = await client.call_tool("project_manage", {"op": "stop", "params": {}})
         await task
 
         assert not result.is_error
@@ -2861,7 +2958,7 @@ class TestPerformanceMonitorsGetTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("performance_monitors_get", {})
+        result = await client.call_tool("editor_manage", {"op": "monitors_get", "params": {}})
         await task
 
         assert not result.is_error
@@ -2884,8 +2981,8 @@ class TestPerformanceMonitorsGetTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "performance_monitors_get",
-            {"monitors": ["time/fps"]},
+            "editor_manage",
+            {"op": "monitors_get", "params": {"monitors": ["time/fps"]}},
         )
         await task
 
@@ -3063,7 +3160,7 @@ class TestPerCallSessionRouting:
                 )
 
             task = asyncio.create_task(respond_active())
-            result = await client.call_tool("scene_get_roots", {})
+            result = await client.call_tool("scene_manage", {"op": "get_roots", "params": {}})
             await task
             assert result.data["current"] == "res://from_a.tscn"
 
@@ -3076,7 +3173,9 @@ class TestPerCallSessionRouting:
                 )
 
             task = asyncio.create_task(respond_b())
-            result = await client.call_tool("scene_get_roots", {"session_id": "proj-b@0002"})
+            result = await client.call_tool(
+                "scene_manage", {"op": "get_roots", "params": {}, "session_id": "proj-b@0002"}
+            )
             await task
             assert result.data["current"] == "res://from_b.tscn"
         finally:
@@ -3160,8 +3259,11 @@ class TestJsonStringParamCoercion:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "editor_selection_set",
-            {"paths": json.dumps(["/Main/Camera3D", "/Main/World"])},
+            "editor_manage",
+            {
+                "op": "selection_set",
+                "params": {"paths": json.dumps(["/Main/Camera3D", "/Main/World"])},
+            },
         )
         await task
         assert result.data["count"] == 2
@@ -3179,8 +3281,8 @@ class TestJsonStringParamCoercion:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "filesystem_reimport",
-            {"paths": json.dumps(["res://a.png", "res://b.png"])},
+            "filesystem_manage",
+            {"op": "reimport", "params": {"paths": json.dumps(["res://a.png", "res://b.png"])}},
         )
         await task
         assert result.data["count"] == 2
@@ -3197,8 +3299,8 @@ class TestJsonStringParamCoercion:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "performance_monitors_get",
-            {"monitors": json.dumps(["time/fps"])},
+            "editor_manage",
+            {"op": "monitors_get", "params": {"monitors": json.dumps(["time/fps"])}},
         )
         await task
         assert result.data["monitors"]["time/fps"] == 60
@@ -3216,24 +3318,37 @@ class TestJsonStringParamCoercion:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "filesystem_reimport",
-            {"paths": ["res://x.png"]},
+            "filesystem_manage",
+            {"op": "reimport", "params": {"paths": ["res://x.png"]}},
         )
         await task
         assert result.data["count"] == 1
 
-    async def test_malformed_json_string_still_raises_validation(self, mcp_stack):
-        """A non-JSON string must fall through and fail pydantic validation."""
-        client, _plugin = mcp_stack
+    async def test_malformed_json_string_falls_through_unchanged(self, mcp_stack):
+        """A non-JSON string is left as-is (only ``[``/``{``-prefixed strings coerce).
+
+        The post-refactor meta-tool layer only attempts coercion on values
+        that *look* like JSON arrays/objects. Strings that aren't valid JSON
+        and don't start with ``[`` or ``{`` pass through to the handler
+        unchanged. The plugin then surfaces whatever error its own handler
+        produces. This test verifies the value is preserved verbatim.
+        """
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["params"]["paths"] == "not-json-at-all"
+            await plugin.send_error(cmd["request_id"], "INVALID_PARAMS", "paths must be a list")
+
+        task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "filesystem_reimport",
-            {"paths": "not-json-at-all"},
+            "filesystem_manage",
+            {"op": "reimport", "params": {"paths": "not-json-at-all"}},
             raise_on_error=False,
         )
+        await task
         assert result.is_error
-        error_text = str(result.content).lower()
-        assert "paths" in error_text
-        assert "input should be a valid list" in error_text or "list_type" in error_text
+        assert "paths must be a list" in str(result.content)
 
 
 # ---------------------------------------------------------------------------
@@ -3269,8 +3384,8 @@ class TestUiSetAnchorPresetTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "ui_set_anchor_preset",
-            {"path": "/Main/HUD", "preset": "full_rect"},
+            "ui_manage",
+            {"op": "set_anchor_preset", "params": {"path": "/Main/HUD", "preset": "full_rect"}},
         )
         await task
 
@@ -3300,12 +3415,15 @@ class TestUiSetAnchorPresetTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "ui_set_anchor_preset",
+            "ui_manage",
             {
-                "path": "/Main/HUD/Panel",
-                "preset": "center",
-                "resize_mode": "keep_size",
-                "margin": 16,
+                "op": "set_anchor_preset",
+                "params": {
+                    "path": "/Main/HUD/Panel",
+                    "preset": "center",
+                    "resize_mode": "keep_size",
+                    "margin": 16,
+                },
             },
         )
         await task
@@ -3340,8 +3458,8 @@ class TestUiSetTextTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "ui_set_text",
-            {"path": "/Main/HUD/Score", "text": "100"},
+            "ui_manage",
+            {"op": "set_text", "params": {"path": "/Main/HUD/Score", "text": "100"}},
         )
         await task
 
@@ -3363,8 +3481,8 @@ class TestUiSetTextTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "ui_set_text",
-            {"path": "/Main/Camera3D", "text": "x"},
+            "ui_manage",
+            {"op": "set_text", "params": {"path": "/Main/Camera3D", "text": "x"}},
             raise_on_error=False,
         )
         await task
@@ -3398,17 +3516,20 @@ class TestUiBuildLayoutTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "ui_build_layout",
+            "ui_manage",
             {
-                "tree": {
-                    "type": "VBoxContainer",
-                    "name": "PauseMenu",
-                    "children": [
-                        {"type": "Label", "properties": {"text": "Paused"}},
-                        {"type": "Button", "properties": {"text": "Resume"}},
-                    ],
+                "op": "build_layout",
+                "params": {
+                    "tree": {
+                        "type": "VBoxContainer",
+                        "name": "PauseMenu",
+                        "children": [
+                            {"type": "Label", "properties": {"text": "Paused"}},
+                            {"type": "Button", "properties": {"text": "Resume"}},
+                        ],
+                    },
+                    "parent_path": "/Main/HUD",
                 },
-                "parent_path": "/Main/HUD",
             },
         )
         await task
@@ -3431,8 +3552,8 @@ class TestUiBuildLayoutTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "ui_build_layout",
-            {"tree": '{"type": "Panel"}'},
+            "ui_manage",
+            {"op": "build_layout", "params": {"tree": '{"type": "Panel"}'}},
         )
         await task
         assert result.data["node_count"] == 1
@@ -3465,7 +3586,9 @@ class TestThemeCreateTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("theme_create", {"path": "res://ui/themes/game.tres"})
+        result = await client.call_tool(
+            "theme_manage", {"op": "create", "params": {"path": "res://ui/themes/game.tres"}}
+        )
         await task
         assert result.data["path"] == "res://ui/themes/game.tres"
 
@@ -3493,12 +3616,15 @@ class TestThemeSetColorTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "theme_set_color",
+            "theme_manage",
             {
-                "theme_path": "res://ui/themes/game.tres",
-                "class_name": "Label",
-                "name": "font_color",
-                "value": "#e0e0ff",
+                "op": "set_color",
+                "params": {
+                    "theme_path": "res://ui/themes/game.tres",
+                    "class_name": "Label",
+                    "name": "font_color",
+                    "value": "#e0e0ff",
+                },
             },
         )
         await task
@@ -3528,12 +3654,15 @@ class TestThemeSetConstantTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "theme_set_constant",
+            "theme_manage",
             {
-                "theme_path": "res://ui/themes/game.tres",
-                "class_name": "VBoxContainer",
-                "name": "separation",
-                "value": 16,
+                "op": "set_constant",
+                "params": {
+                    "theme_path": "res://ui/themes/game.tres",
+                    "class_name": "VBoxContainer",
+                    "name": "separation",
+                    "value": 16,
+                },
             },
         )
         await task
@@ -3562,12 +3691,15 @@ class TestThemeSetFontSizeTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "theme_set_font_size",
+            "theme_manage",
             {
-                "theme_path": "res://ui/themes/game.tres",
-                "class_name": "Label",
-                "name": "font_size",
-                "value": 24,
+                "op": "set_font_size",
+                "params": {
+                    "theme_path": "res://ui/themes/game.tres",
+                    "class_name": "Label",
+                    "name": "font_size",
+                    "value": 24,
+                },
             },
         )
         await task
@@ -3607,15 +3739,18 @@ class TestThemeSetStyleboxFlatTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "theme_set_stylebox_flat",
+            "theme_manage",
             {
-                "theme_path": "res://ui/themes/game.tres",
-                "class_name": "Button",
-                "name": "normal",
-                "bg_color": "#101820",
-                "border_color": "#00ffff",
-                "border": {"all": 2},
-                "corners": {"all": 8},
+                "op": "set_stylebox_flat",
+                "params": {
+                    "theme_path": "res://ui/themes/game.tres",
+                    "class_name": "Button",
+                    "name": "normal",
+                    "bg_color": "#101820",
+                    "border_color": "#00ffff",
+                    "border": {"all": 2},
+                    "corners": {"all": 8},
+                },
             },
         )
         await task
@@ -3654,15 +3789,18 @@ class TestThemeSetStyleboxFlatTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "theme_set_stylebox_flat",
+            "theme_manage",
             {
-                "theme_path": "res://themes/game.tres",
-                "class_name": "Button",
-                "name": "normal",
-                "border": {"all": 1, "top": 4, "bottom": 2},
-                "corners": {"top_left": 12},
-                "margins": {"top": 16.0},
-                "shadow": {"color": "#000000", "size": 6},
+                "op": "set_stylebox_flat",
+                "params": {
+                    "theme_path": "res://themes/game.tres",
+                    "class_name": "Button",
+                    "name": "normal",
+                    "border": {"all": 1, "top": 4, "bottom": 2},
+                    "corners": {"top_left": 12},
+                    "margins": {"top": 16.0},
+                    "shadow": {"color": "#000000", "size": 6},
+                },
             },
         )
         await task
@@ -3693,10 +3831,13 @@ class TestThemeApplyTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "theme_apply",
+            "theme_manage",
             {
-                "node_path": "/Main/HUD",
-                "theme_path": "res://ui/themes/game.tres",
+                "op": "apply",
+                "params": {
+                    "node_path": "/Main/HUD",
+                    "theme_path": "res://ui/themes/game.tres",
+                },
             },
         )
         await task
@@ -3719,7 +3860,9 @@ class TestThemeApplyTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("theme_apply", {"node_path": "/Main/HUD"})
+        result = await client.call_tool(
+            "theme_manage", {"op": "apply", "params": {"node_path": "/Main/HUD"}}
+        )
         await task
         assert result.data["cleared"] is True
 
@@ -3748,7 +3891,9 @@ class TestAnimationPlayerCreateTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("animation_player_create", {"parent_path": "/Main"})
+        result = await client.call_tool(
+            "animation_manage", {"op": "player_create", "params": {"parent_path": "/Main"}}
+        )
         await task
         assert result.data["path"] == "/Main/AnimationPlayer"
         assert result.data["undoable"] is True
@@ -3771,7 +3916,8 @@ class TestAnimationPlayerCreateTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "animation_player_create", {"parent_path": "/Main", "name": "MyPlayer"}
+            "animation_manage",
+            {"op": "player_create", "params": {"parent_path": "/Main", "name": "MyPlayer"}},
         )
         await task
         assert result.data["name"] == "MyPlayer"
@@ -3888,12 +4034,15 @@ class TestAnimationAddPropertyTrackTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "animation_add_property_track",
+            "animation_manage",
             {
-                "player_path": "/Main/AP",
-                "animation_name": "fade",
-                "track_path": "Panel:modulate",
-                "keyframes": keyframes,
+                "op": "add_property_track",
+                "params": {
+                    "player_path": "/Main/AP",
+                    "animation_name": "fade",
+                    "track_path": "Panel:modulate",
+                    "keyframes": keyframes,
+                },
             },
         )
         await task
@@ -3922,12 +4071,15 @@ class TestAnimationAddPropertyTrackTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "animation_add_property_track",
+            "animation_manage",
             {
-                "player_path": "/Main/AP",
-                "animation_name": "anim",
-                "track_path": ".:modulate",
-                "keyframes": '[{"time": 0.0, "value": 1.0}]',
+                "op": "add_property_track",
+                "params": {
+                    "player_path": "/Main/AP",
+                    "animation_name": "anim",
+                    "track_path": ".:modulate",
+                    "keyframes": '[{"time": 0.0, "value": 1.0}]',
+                },
             },
         )
         await task
@@ -3957,12 +4109,15 @@ class TestAnimationAddMethodTrackTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "animation_add_method_track",
+            "animation_manage",
             {
-                "player_path": "/Main/AP",
-                "animation_name": "die",
-                "target_node_path": ".",
-                "keyframes": [{"time": 1.0, "method": "queue_free"}],
+                "op": "add_method_track",
+                "params": {
+                    "player_path": "/Main/AP",
+                    "animation_name": "die",
+                    "target_node_path": ".",
+                    "keyframes": [{"time": 1.0, "method": "queue_free"}],
+                },
             },
         )
         await task
@@ -3990,8 +4145,8 @@ class TestAnimationSetAutoplayTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "animation_set_autoplay",
-            {"player_path": "/Main/AP", "animation_name": "idle"},
+            "animation_manage",
+            {"op": "set_autoplay", "params": {"player_path": "/Main/AP", "animation_name": "idle"}},
         )
         await task
         assert result.data["cleared"] is False
@@ -4014,7 +4169,9 @@ class TestAnimationSetAutoplayTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("animation_set_autoplay", {"player_path": "/Main/AP"})
+        result = await client.call_tool(
+            "animation_manage", {"op": "set_autoplay", "params": {"player_path": "/Main/AP"}}
+        )
         await task
         assert result.data["cleared"] is True
 
@@ -4038,7 +4195,8 @@ class TestAnimationPlaybackTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "animation_play", {"player_path": "/Main/AP", "animation_name": "idle"}
+            "animation_manage",
+            {"op": "play", "params": {"player_path": "/Main/AP", "animation_name": "idle"}},
         )
         await task
         assert result.data["undoable"] is False
@@ -4059,7 +4217,9 @@ class TestAnimationPlaybackTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("animation_stop", {"player_path": "/Main/AP"})
+        result = await client.call_tool(
+            "animation_manage", {"op": "stop", "params": {"player_path": "/Main/AP"}}
+        )
         await task
         assert result.data["undoable"] is False
 
@@ -4084,7 +4244,9 @@ class TestAnimationListTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("animation_list", {"player_path": "/Main/AP"})
+        result = await client.call_tool(
+            "animation_manage", {"op": "list", "params": {"player_path": "/Main/AP"}}
+        )
         await task
         assert result.data["count"] == 1
         assert result.data["animations"][0]["name"] == "idle"
@@ -4121,7 +4283,8 @@ class TestAnimationGetTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "animation_get", {"player_path": "/Main/AP", "animation_name": "fade"}
+            "animation_manage",
+            {"op": "get", "params": {"player_path": "/Main/AP", "animation_name": "fade"}},
         )
         await task
         assert result.data["name"] == "fade"
@@ -4162,8 +4325,11 @@ class TestAnimationCreateSimpleTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "animation_create_simple",
-            {"player_path": "/Main/AP", "name": "fade_in", "tweens": tweens},
+            "animation_manage",
+            {
+                "op": "create_simple",
+                "params": {"player_path": "/Main/AP", "name": "fade_in", "tweens": tweens},
+            },
         )
         await task
         assert result.data["track_count"] == 1
@@ -4190,15 +4356,18 @@ class TestAnimationCreateSimpleTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "animation_create_simple",
+            "animation_manage",
             {
-                "player_path": "/Main/AP",
-                "name": "pulse",
-                "loop_mode": "pingpong",
-                "tweens": (
-                    '[{"target":"Button","property":"scale",'
-                    '"from":{"x":1,"y":1},"to":{"x":1.1,"y":1.1},"duration":0.4}]'
-                ),
+                "op": "create_simple",
+                "params": {
+                    "player_path": "/Main/AP",
+                    "name": "pulse",
+                    "loop_mode": "pingpong",
+                    "tweens": (
+                        '[{"target":"Button","property":"scale",'
+                        '"from":{"x":1,"y":1},"to":{"x":1.1,"y":1.1},"duration":0.4}]'
+                    ),
+                },
             },
         )
         await task
@@ -4225,8 +4394,8 @@ class TestAnimationDeleteTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "animation_delete",
-            {"player_path": "/Main/AP", "animation_name": "idle"},
+            "animation_manage",
+            {"op": "delete", "params": {"player_path": "/Main/AP", "animation_name": "idle"}},
         )
         await task
         assert result.data["undoable"] is True
@@ -4258,8 +4427,8 @@ class TestAnimationValidateTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "animation_validate",
-            {"player_path": "/Main/AP", "animation_name": "walk"},
+            "animation_manage",
+            {"op": "validate", "params": {"player_path": "/Main/AP", "animation_name": "walk"}},
         )
         await task
         assert result.data["valid"] is False
@@ -4296,12 +4465,15 @@ class TestAnimationPresetTools:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "animation_preset_fade",
+            "animation_manage",
             {
-                "player_path": "/Main/AP",
-                "target_path": "Panel",
-                "mode": "in",
-                "duration": 0.5,
+                "op": "preset_fade",
+                "params": {
+                    "player_path": "/Main/AP",
+                    "target_path": "Panel",
+                    "mode": "in",
+                    "duration": 0.5,
+                },
             },
         )
         await task
@@ -4331,14 +4503,17 @@ class TestAnimationPresetTools:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "animation_preset_fade",
+            "animation_manage",
             {
-                "player_path": "/Main/AP",
-                "target_path": "HUD",
-                "mode": "out",
-                "duration": 0.25,
-                "animation_name": "hud_flash",
-                "overwrite": True,
+                "op": "preset_fade",
+                "params": {
+                    "player_path": "/Main/AP",
+                    "target_path": "HUD",
+                    "mode": "out",
+                    "duration": 0.25,
+                    "animation_name": "hud_flash",
+                    "overwrite": True,
+                },
             },
         )
         await task
@@ -4372,13 +4547,16 @@ class TestAnimationPresetTools:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "animation_preset_slide",
+            "animation_manage",
             {
-                "player_path": "/Main/AP",
-                "target_path": "Menu",
-                "direction": "left",
-                "mode": "in",
-                "distance": 250.0,
+                "op": "preset_slide",
+                "params": {
+                    "player_path": "/Main/AP",
+                    "target_path": "Menu",
+                    "direction": "left",
+                    "mode": "in",
+                    "distance": 250.0,
+                },
             },
         )
         await task
@@ -4409,8 +4587,8 @@ class TestAnimationPresetTools:
 
         task = asyncio.create_task(respond())
         await client.call_tool(
-            "animation_preset_slide",
-            {"player_path": "/Main/AP", "target_path": "Menu"},
+            "animation_manage",
+            {"op": "preset_slide", "params": {"player_path": "/Main/AP", "target_path": "Menu"}},
         )
         await task
 
@@ -4442,14 +4620,17 @@ class TestAnimationPresetTools:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "animation_preset_shake",
+            "animation_manage",
             {
-                "player_path": "/Main/AP",
-                "target_path": "Camera",
-                "intensity": 8.0,
-                "duration": 0.2,
-                "frequency": 60.0,
-                "seed": 42,
+                "op": "preset_shake",
+                "params": {
+                    "player_path": "/Main/AP",
+                    "target_path": "Camera",
+                    "intensity": 8.0,
+                    "duration": 0.2,
+                    "frequency": 60.0,
+                    "seed": 42,
+                },
             },
         )
         await task
@@ -4481,13 +4662,16 @@ class TestAnimationPresetTools:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "animation_preset_pulse",
+            "animation_manage",
             {
-                "player_path": "/Main/AP",
-                "target_path": "Button",
-                "from_scale": 1.0,
-                "to_scale": 1.25,
-                "duration": 0.3,
+                "op": "preset_pulse",
+                "params": {
+                    "player_path": "/Main/AP",
+                    "target_path": "Button",
+                    "from_scale": 1.0,
+                    "to_scale": 1.25,
+                    "duration": 0.3,
+                },
             },
         )
         await task
@@ -4523,7 +4707,9 @@ class TestMaterialCreateTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("material_create", {"path": "res://materials/red.tres"})
+        result = await client.call_tool(
+            "material_manage", {"op": "create", "params": {"path": "res://materials/red.tres"}}
+        )
         await task
         assert result.data["class"] == "StandardMaterial3D"
         assert result.data["undoable"] is False
@@ -4549,11 +4735,14 @@ class TestMaterialCreateTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "material_create",
+            "material_manage",
             {
-                "path": "res://mat/shader.tres",
-                "type": "shader",
-                "shader_path": "res://shaders/pulse.gdshader",
+                "op": "create",
+                "params": {
+                    "path": "res://mat/shader.tres",
+                    "type": "shader",
+                    "shader_path": "res://shaders/pulse.gdshader",
+                },
             },
         )
         await task
@@ -4582,11 +4771,14 @@ class TestMaterialSetParamTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "material_set_param",
+            "material_manage",
             {
-                "path": "res://materials/red.tres",
-                "param": "albedo_color",
-                "value": "#ff0000",
+                "op": "set_param",
+                "params": {
+                    "path": "res://materials/red.tres",
+                    "param": "albedo_color",
+                    "value": "#ff0000",
+                },
             },
         )
         await task
@@ -4615,11 +4807,14 @@ class TestMaterialSetShaderParamTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "material_set_shader_param",
+            "material_manage",
             {
-                "path": "res://mat/shader.tres",
-                "param": "pulse_strength",
-                "value": 0.75,
+                "op": "set_shader_param",
+                "params": {
+                    "path": "res://mat/shader.tres",
+                    "param": "pulse_strength",
+                    "value": 0.75,
+                },
             },
         )
         await task
@@ -4649,10 +4844,13 @@ class TestMaterialAssignTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "material_assign",
+            "material_manage",
             {
-                "node_path": "/Main/Box",
-                "resource_path": "res://materials/red.tres",
+                "op": "assign",
+                "params": {
+                    "node_path": "/Main/Box",
+                    "resource_path": "res://materials/red.tres",
+                },
             },
         )
         await task
@@ -4687,7 +4885,9 @@ class TestMaterialGetTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("material_get", {"path": "res://materials/red.tres"})
+        result = await client.call_tool(
+            "material_manage", {"op": "get", "params": {"path": "res://materials/red.tres"}}
+        )
         await task
         assert result.data["class"] == "StandardMaterial3D"
 
@@ -4713,8 +4913,8 @@ class TestMaterialListTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "material_list",
-            {"root": "res://materials", "type": "StandardMaterial3D"},
+            "material_manage",
+            {"op": "list", "params": {"root": "res://materials", "type": "StandardMaterial3D"}},
         )
         await task
         assert result.data["count"] == 1
@@ -4748,10 +4948,13 @@ class TestMaterialApplyToNodeTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "material_apply_to_node",
+            "material_manage",
             {
-                "node_path": "/Main/Box",
-                "params": {"albedo_color": "#00ff00", "metallic": 0.5},
+                "op": "apply_to_node",
+                "params": {
+                    "node_path": "/Main/Box",
+                    "params": {"albedo_color": "#00ff00", "metallic": 0.5},
+                },
             },
         )
         await task
@@ -4783,8 +4986,8 @@ class TestMaterialApplyPresetTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "material_apply_preset",
-            {"preset": "glass", "node_path": "/Main/Box"},
+            "material_manage",
+            {"op": "apply_preset", "params": {"preset": "glass", "node_path": "/Main/Box"}},
         )
         await task
         assert result.data["assigned"] is True
@@ -4822,7 +5025,9 @@ class TestParticleCreateTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("particle_create", {"parent_path": "/Main", "name": "Fire"})
+        result = await client.call_tool(
+            "particle_manage", {"op": "create", "params": {"parent_path": "/Main", "name": "Fire"}}
+        )
         await task
         assert result.data["process_material_created"] is True
         assert result.data["draw_pass_mesh_created"] is True
@@ -4848,10 +5053,13 @@ class TestParticleSetMainTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "particle_set_main",
+            "particle_manage",
             {
-                "node_path": "/Main/Fire",
-                "properties": {"amount": 120, "lifetime": 2.0},
+                "op": "set_main",
+                "params": {
+                    "node_path": "/Main/Fire",
+                    "properties": {"amount": 120, "lifetime": 2.0},
+                },
             },
         )
         await task
@@ -4880,11 +5088,14 @@ class TestParticleSetProcessTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "particle_set_process",
+            "particle_manage",
             {
-                "node_path": "/Main/Fire",
-                "properties": {
-                    "color_ramp": {"stops": [{"time": 0, "color": [1, 1, 1, 1]}]},
+                "op": "set_process",
+                "params": {
+                    "node_path": "/Main/Fire",
+                    "properties": {
+                        "color_ramp": {"stops": [{"time": 0, "color": [1, 1, 1, 1]}]},
+                    },
                 },
             },
         )
@@ -4918,11 +5129,14 @@ class TestParticleSetDrawPassTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "particle_set_draw_pass",
+            "particle_manage",
             {
-                "node_path": "/Main/Fire",
-                "pass_": 2,
-                "mesh": "res://meshes/spark.mesh",
+                "op": "set_draw_pass",
+                "params": {
+                    "node_path": "/Main/Fire",
+                    "pass_": 2,
+                    "mesh": "res://meshes/spark.mesh",
+                },
             },
         )
         await task
@@ -4958,8 +5172,11 @@ class TestParticleApplyPresetTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "particle_apply_preset",
-            {"parent_path": "/Main", "name": "Fire", "preset": "fire"},
+            "particle_manage",
+            {
+                "op": "apply_preset",
+                "params": {"parent_path": "/Main", "name": "Fire", "preset": "fire"},
+            },
         )
         await task
         assert result.data["process_material_created"] is True
@@ -4983,7 +5200,9 @@ class TestParticleRestartTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("particle_restart", {"node_path": "/Main/Fire"})
+        result = await client.call_tool(
+            "particle_manage", {"op": "restart", "params": {"node_path": "/Main/Fire"}}
+        )
         await task
         assert result.data["undoable"] is False
 
@@ -5017,7 +5236,9 @@ class TestParticleGetTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("particle_get", {"node_path": "/Main/Fire"})
+        result = await client.call_tool(
+            "particle_manage", {"op": "get", "params": {"node_path": "/Main/Fire"}}
+        )
         await task
         assert result.data["main"]["amount"] == 80
         assert result.data["draw_passes"][0]["mesh_class"] == "QuadMesh"
@@ -5055,7 +5276,9 @@ class TestCameraCreateTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("camera_create", {"parent_path": "/Main", "name": "Cam"})
+        result = await client.call_tool(
+            "camera_manage", {"op": "create", "params": {"parent_path": "/Main", "name": "Cam"}}
+        )
         await task
         assert result.data["class"] == "Camera2D"
 
@@ -5082,12 +5305,15 @@ class TestCameraCreateTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "camera_create",
+            "camera_manage",
             {
-                "parent_path": "/Main",
-                "name": "Cam3D",
-                "type": "3d",
-                "make_current": True,
+                "op": "create",
+                "params": {
+                    "parent_path": "/Main",
+                    "name": "Cam3D",
+                    "type": "3d",
+                    "make_current": True,
+                },
             },
         )
         await task
@@ -5116,10 +5342,13 @@ class TestCameraConfigureTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "camera_configure",
+            "camera_manage",
             {
-                "camera_path": "/Main/Cam",
-                "properties": {"zoom": {"x": 2.0, "y": 2.0}},
+                "op": "configure",
+                "params": {
+                    "camera_path": "/Main/Cam",
+                    "properties": {"zoom": {"x": 2.0, "y": 2.0}},
+                },
             },
         )
         await task
@@ -5145,10 +5374,13 @@ class TestCameraConfigureTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "camera_configure",
+            "camera_manage",
             {
-                "camera_path": "/Main/Cam3D",
-                "properties": {"keep_aspect": "keep_height"},
+                "op": "configure",
+                "params": {
+                    "camera_path": "/Main/Cam3D",
+                    "properties": {"keep_aspect": "keep_height"},
+                },
             },
         )
         await task
@@ -5179,8 +5411,11 @@ class TestCameraSetLimits2DTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "camera_set_limits_2d",
-            {"camera_path": "/Main/Cam", "left": -500, "right": 500},
+            "camera_manage",
+            {
+                "op": "set_limits_2d",
+                "params": {"camera_path": "/Main/Cam", "left": -500, "right": 500},
+            },
         )
         await task
         assert "limit_left" in result.data["applied"]
@@ -5218,13 +5453,16 @@ class TestCameraSetDamping2DTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "camera_set_damping_2d",
+            "camera_manage",
             {
-                "camera_path": "/Main/Cam",
-                "position_speed": 4.0,
-                "rotation_speed": 3.0,
-                "drag_margins": {"left": 0.2, "right": 0.2},
-                "drag_horizontal_enabled": True,
+                "op": "set_damping_2d",
+                "params": {
+                    "camera_path": "/Main/Cam",
+                    "position_speed": 4.0,
+                    "rotation_speed": 3.0,
+                    "drag_margins": {"left": 0.2, "right": 0.2},
+                    "drag_horizontal_enabled": True,
+                },
             },
         )
         await task
@@ -5247,8 +5485,8 @@ class TestCameraSetDamping2DTool:
 
         task = asyncio.create_task(respond())
         await client.call_tool(
-            "camera_set_damping_2d",
-            {"camera_path": "/Main/Cam", "position_speed": 5.0},
+            "camera_manage",
+            {"op": "set_damping_2d", "params": {"camera_path": "/Main/Cam", "position_speed": 5.0}},
         )
         await task
 
@@ -5280,11 +5518,14 @@ class TestCameraFollow2DTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "camera_follow_2d",
+            "camera_manage",
             {
-                "camera_path": "/Main/Cam",
-                "target_path": "/Main/Player",
-                "smoothing_speed": 6.0,
+                "op": "follow_2d",
+                "params": {
+                    "camera_path": "/Main/Cam",
+                    "target_path": "/Main/Player",
+                    "smoothing_speed": 6.0,
+                },
             },
         )
         await task
@@ -5312,7 +5553,7 @@ class TestCameraGetTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("camera_get", {})
+        result = await client.call_tool("camera_manage", {"op": "get", "params": {}})
         await task
         assert result.data["resolved_via"] == "current"
 
@@ -5345,7 +5586,7 @@ class TestCameraListTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("camera_list", {})
+        result = await client.call_tool("camera_manage", {"op": "list", "params": {}})
         await task
         assert len(result.data["cameras"]) == 2
 
@@ -5376,11 +5617,14 @@ class TestCameraApplyPresetTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "camera_apply_preset",
+            "camera_manage",
             {
-                "parent_path": "/Main",
-                "name": "Cam",
-                "preset": "topdown_2d",
+                "op": "apply_preset",
+                "params": {
+                    "parent_path": "/Main",
+                    "name": "Cam",
+                    "preset": "topdown_2d",
+                },
             },
         )
         await task
@@ -5410,12 +5654,15 @@ class TestCameraApplyPresetTool:
 
         task = asyncio.create_task(respond())
         await client.call_tool(
-            "camera_apply_preset",
+            "camera_manage",
             {
-                "parent_path": "/Main",
-                "name": "Cam",
-                "preset": "topdown_2d",
-                "overrides": {"zoom": {"x": 3.0, "y": 3.0}},
+                "op": "apply_preset",
+                "params": {
+                    "parent_path": "/Main",
+                    "name": "Cam",
+                    "preset": "topdown_2d",
+                    "overrides": {"zoom": {"x": 3.0, "y": 3.0}},
+                },
             },
         )
         await task
@@ -5451,8 +5698,11 @@ class TestAudioPlayerCreateTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "audio_player_create",
-            {"parent_path": "/Main", "name": "Footsteps", "type": "3d"},
+            "audio_manage",
+            {
+                "op": "player_create",
+                "params": {"parent_path": "/Main", "name": "Footsteps", "type": "3d"},
+            },
         )
         await task
         assert result.data["class"] == "AudioStreamPlayer3D"
@@ -5483,8 +5733,11 @@ class TestAudioPlayerSetStreamTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "audio_player_set_stream",
-            {"player_path": "/Main/Footsteps", "stream_path": "res://sfx/step.ogg"},
+            "audio_manage",
+            {
+                "op": "player_set_stream",
+                "params": {"player_path": "/Main/Footsteps", "stream_path": "res://sfx/step.ogg"},
+            },
         )
         await task
         assert result.data["stream_class"] == "AudioStreamOggVorbis"
@@ -5512,8 +5765,11 @@ class TestAudioPlayerSetPlaybackTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "audio_player_set_playback",
-            {"player_path": "/Main/Music", "volume_db": -3.0},
+            "audio_manage",
+            {
+                "op": "player_set_playback",
+                "params": {"player_path": "/Main/Music", "volume_db": -3.0},
+            },
         )
         await task
         assert result.data["applied"] == ["volume_db"]
@@ -5542,7 +5798,9 @@ class TestAudioPlayTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("audio_play", {"player_path": "/Main/Footsteps"})
+        result = await client.call_tool(
+            "audio_manage", {"op": "play", "params": {"player_path": "/Main/Footsteps"}}
+        )
         await task
         assert result.data["undoable"] is False
         assert result.data["playing"] is True
@@ -5566,7 +5824,9 @@ class TestAudioStopTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("audio_stop", {"player_path": "/Main/Footsteps"})
+        result = await client.call_tool(
+            "audio_manage", {"op": "stop", "params": {"player_path": "/Main/Footsteps"}}
+        )
         await task
         assert result.data["playing"] is False
 
@@ -5595,7 +5855,7 @@ class TestAudioListTool:
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("audio_list", {})
+        result = await client.call_tool("audio_manage", {"op": "list", "params": {}})
         await task
         assert result.data["count"] == 1
         assert result.data["streams"][0]["class"] == "AudioStreamOggVorbis"
@@ -5634,8 +5894,8 @@ class TestControlDrawRecipeTool:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "control_draw_recipe",
-            {"path": "/Main/HUD/Panel", "ops": ops},
+            "ui_manage",
+            {"op": "draw_recipe", "params": {"path": "/Main/HUD/Panel", "ops": ops}},
         )
         await task
         assert result.data["ops_count"] == 2
@@ -5661,8 +5921,8 @@ class TestControlDrawRecipeTool:
 
         task = asyncio.create_task(respond())
         await client.call_tool(
-            "control_draw_recipe",
-            {"path": "/Foo", "ops": [], "clear_existing": False},
+            "ui_manage",
+            {"op": "draw_recipe", "params": {"path": "/Foo", "ops": [], "clear_existing": False}},
         )
         await task
 
@@ -5688,10 +5948,13 @@ class TestControlDrawRecipeTool:
 
         task = asyncio.create_task(respond())
         await client.call_tool(
-            "control_draw_recipe",
+            "ui_manage",
             {
-                "path": "/Foo",
-                "ops": '[{"draw":"circle","center":[5,5],"radius":3,"color":"red"}]',
+                "op": "draw_recipe",
+                "params": {
+                    "path": "/Foo",
+                    "ops": '[{"draw":"circle","center":[5,5],"radius":3,"color":"red"}]',
+                },
             },
         )
         await task

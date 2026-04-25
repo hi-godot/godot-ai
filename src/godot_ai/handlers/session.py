@@ -88,4 +88,3 @@ def session_activate(runtime: Runtime, session_id: str) -> dict:
 
 def session_resource_data(runtime: Runtime) -> dict:
     return session_list(runtime)
-

@@ -1,14 +1,32 @@
-"""MCP tools for project settings and run/stop."""
+"""MCP tools for project run/stop and project settings.
+
+Top-level: ``project_run`` (high-traffic). Everything else (stop, settings_get,
+settings_set) collapses into ``project_manage``.
+"""
 
 from __future__ import annotations
-
-from typing import Any
 
 from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import project as project_handlers
 from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.tools import DEFER_META
+from godot_ai.tools._meta_tool import register_manage_tool
+
+_DESCRIPTION = """\
+Project run/stop and project.godot settings.
+
+Resource form: ``godot://project/info`` and ``godot://project/settings``
+— prefer for active-session reads.
+
+Ops:
+  • stop()
+        Stop the running project (game). Errors if not running.
+  • settings_get(key)
+        Read a ProjectSettings key (e.g. "application/config/name").
+  • settings_set(key, value)
+        Write a ProjectSettings key and persist to project.godot.
+"""
 
 
 def register_project_tools(mcp: FastMCP) -> None:
@@ -20,20 +38,19 @@ def register_project_tools(mcp: FastMCP) -> None:
         autosave: bool = True,
         session_id: str = "",
     ) -> dict:
-        """Run (play / start) the Godot project (game) from the editor.
+        """Run (play) the Godot project from the editor.
 
-        Starts the game in one of three modes:
+        Modes:
         - "main": Run the project's main scene (default).
         - "current": Run the currently open scene.
-        - "custom": Run a specific scene by path (requires `scene` param).
+        - "custom": Run a specific scene (requires ``scene``).
 
         Args:
-            mode: Run mode — "main", "current", or "custom". Default "main".
-            scene: Scene path (e.g. "res://levels/level1.tscn"). Required when mode is "custom".
-            autosave: When True (default), Godot's save-before-running behavior
-                persists any in-memory scene mutations to disk. Pass False for
-                smoke tests where MCP mutations (script_attach, node_create, …)
-                should stay in memory and the .tscn on disk should be untouched.
+            mode: "main" | "current" | "custom". Default "main".
+            scene: Scene path (e.g. "res://levels/level1.tscn"). Required for "custom".
+            autosave: When True (default), Godot persists in-memory MCP scene
+                mutations to disk before running. Pass False for smoke tests
+                where MCP edits should stay in memory.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -41,50 +58,13 @@ def register_project_tools(mcp: FastMCP) -> None:
             runtime, mode=mode, scene=scene, autosave=autosave
         )
 
-    @mcp.tool(meta=DEFER_META)
-    async def project_stop(ctx: Context, session_id: str = "") -> dict:
-        """Stop (halt / exit) the running Godot project (game).
-
-        Stops the currently playing scene. Returns an error if the project
-        is not running.
-
-        Args:
-            session_id: Optional Godot session to target. Empty = active session.
-        """
-        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await project_handlers.project_stop(runtime)
-
-    @mcp.tool(meta=DEFER_META)
-    async def project_settings_get(ctx: Context, key: str, session_id: str = "") -> dict:
-        """Get a Godot project setting by key.
-
-        Reads from ProjectSettings (e.g. "application/config/name",
-        "display/window/size/viewport_width", "physics/2d/default_gravity").
-
-        Args:
-            key: The setting key path (e.g. "application/config/name").
-            session_id: Optional Godot session to target. Empty = active session.
-        """
-        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await project_handlers.project_settings_get(runtime, key=key)
-
-    @mcp.tool(meta=DEFER_META)
-    async def project_settings_set(
-        ctx: Context,
-        key: str,
-        value: Any,
-        session_id: str = "",
-    ) -> dict:
-        """Set a Godot project setting by key.
-
-        Writes to ProjectSettings and saves to project.godot.
-        Common keys: "application/config/name",
-        "display/window/size/viewport_width", "physics/2d/default_gravity".
-
-        Args:
-            key: The setting key path (e.g. "application/config/name").
-            value: The value to set (string, int, float, or bool).
-            session_id: Optional Godot session to target. Empty = active session.
-        """
-        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await project_handlers.project_settings_set(runtime, key=key, value=value)
+    register_manage_tool(
+        mcp,
+        tool_name="project_manage",
+        description=_DESCRIPTION,
+        ops={
+            "stop": lambda rt, p: project_handlers.project_stop(rt, **p),
+            "settings_get": lambda rt, p: project_handlers.project_settings_get(rt, **p),
+            "settings_set": lambda rt, p: project_handlers.project_settings_set(rt, **p),
+        },
+    )

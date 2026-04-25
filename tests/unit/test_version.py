@@ -59,9 +59,7 @@ def test_resolve_version_falls_back_to_metadata_when_pyproject_missing(tmp_path,
     assert _resolve_version(fake_pkg_file) == "9.9.9"
 
 
-def test_resolve_version_falls_back_to_placeholder_when_nothing_available(
-    tmp_path, monkeypatch
-):
+def test_resolve_version_falls_back_to_placeholder_when_nothing_available(tmp_path, monkeypatch):
     from godot_ai import _resolve_version
 
     repo_root = tmp_path / "repo"

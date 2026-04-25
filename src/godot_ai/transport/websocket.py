@@ -82,10 +82,14 @@ class GodotWebSocketServer:
             ## after self-update when the plugin was adopting a foreign-port
             ## server owned by another session and `_stop_server` couldn't kill
             ## it because _server_pid was never set). See #174 follow-up.
-            await ws.send(json.dumps({
-                "type": "handshake_ack",
-                "server_version": _SERVER_VERSION,
-            }))
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "handshake_ack",
+                        "server_version": _SERVER_VERSION,
+                    }
+                )
+            )
 
             # Listen for responses and events
             async for raw_msg in ws:

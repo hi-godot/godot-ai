@@ -1,4 +1,8 @@
-"""MCP tools for script creation, reading, and management."""
+"""MCP tools for script creation, reading, and management.
+
+Top-level: ``script_create``, ``script_attach``, ``script_patch`` (high-traffic).
+Everything else (detach, read, find_symbols) collapses into ``script_manage``.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +11,21 @@ from fastmcp import Context, FastMCP
 from godot_ai.handlers import script as script_handlers
 from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.tools import DEFER_META
+from godot_ai.tools._meta_tool import register_manage_tool
+
+_DESCRIPTION = """\
+Script (.gd) reading, detachment, and outline.
+
+Resource form: ``godot://script/{path}`` — prefer for active-session reads.
+
+Ops:
+  • read(path)
+        Read full source, line count, file size.
+  • detach(path)
+        Remove the currently attached script from a node. Undoable.
+  • find_symbols(path)
+        Outline a .gd — class_name, extends, functions, signals, @export vars.
+"""
 
 
 def register_script_tools(mcp: FastMCP) -> None:
@@ -17,21 +36,15 @@ def register_script_tools(mcp: FastMCP) -> None:
         content: str = "",
         session_id: str = "",
     ) -> dict:
-        """Create a new GDScript source file (.gd code file) on disk.
+        """Create a new GDScript source file (.gd) on disk.
 
-        Writes the given content to a .gd file in the Godot project.
-        If the file already exists it will be overwritten. Triggers a
-        filesystem scan so the editor picks up the new file.
-
-        When this call creates a new file (the path did not exist before),
-        the response includes `data.cleanup.rm` listing the `.gd` plus the
-        `.gd.uid` sidecar Godot generates — callers running transient smoke
-        tests can feed that list into a final cleanup step. On overwrite the
-        field is omitted so the caller doesn't rm files they already had.
+        Writes content to a .gd file in the project. Overwrites if it exists.
+        Triggers a filesystem scan. New files include ``data.cleanup.rm``
+        listing the .gd + .gd.uid sidecar; overwrite omits it.
 
         Args:
-            path: File path starting with res:// (e.g. "res://scripts/player.gd").
-            content: GDScript source code to write. Empty creates a blank file.
+            path: res:// path (e.g. "res://scripts/player.gd").
+            content: GDScript source. Empty creates a blank file.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -46,25 +59,18 @@ def register_script_tools(mcp: FastMCP) -> None:
         replace_all: bool = False,
         session_id: str = "",
     ) -> dict:
-        """Patch (partial edit / string-replace) a GDScript file in place.
+        """Anchor-based string-replace edit on a .gd file.
 
-        Anchor-based edit: finds an exact occurrence of `old_text` in the file
-        and replaces it with `new_text`. Use this instead of `script_create`
-        when you only need to change a function, add a signal, or fix a line —
-        it avoids rewriting (and possibly losing) the rest of the file.
-
-        If `old_text` matches multiple places, the call fails unless
-        `replace_all=true` is passed. If it matches zero places, the call
-        fails. Exact byte match — whitespace is significant.
-
-        Triggers a filesystem scan so the editor picks up the edit. Not
-        undoable via Ctrl+Z (filesystem edits bypass editor undo).
+        Finds an exact ``old_text`` and replaces with ``new_text``. Fails
+        on multiple matches unless ``replace_all=True``; fails on zero matches.
+        Exact byte match (whitespace significant). Triggers filesystem scan.
+        Not undoable via Ctrl+Z.
 
         Args:
-            path: File path starting with res:// and ending with .gd (e.g. "res://scripts/player.gd").
-            old_text: Exact substring to find. Must be unique unless replace_all=true.
-            new_text: Replacement text. Can be empty to delete.
-            replace_all: If true, replace every occurrence. Default false.
+            path: res:// path ending in .gd.
+            old_text: Exact substring to find. Must be unique unless replace_all.
+            new_text: Replacement (empty deletes).
+            replace_all: Replace every occurrence. Default False.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -77,19 +83,6 @@ def register_script_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool(meta=DEFER_META)
-    async def script_read(ctx: Context, path: str, session_id: str = "") -> dict:
-        """Read the contents of a GDScript file.
-
-        Returns the full source code, line count, and file size.
-
-        Args:
-            path: File path starting with res:// (e.g. "res://scripts/player.gd").
-            session_id: Optional Godot session to target. Empty = active session.
-        """
-        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await script_handlers.script_read(runtime, path=path)
-
-    @mcp.tool(meta=DEFER_META)
     async def script_attach(
         ctx: Context,
         path: str,
@@ -98,13 +91,11 @@ def register_script_tools(mcp: FastMCP) -> None:
     ) -> dict:
         """Attach a script to a node in the scene tree.
 
-        Assigns the script at script_path to the node at path. If the
-        node already has a script, it is replaced. This operation is
-        undoable via Ctrl+Z in the Godot editor.
+        Replaces any existing script on the node. Undoable.
 
         Args:
             path: Scene path of the node (e.g. "/Main/Player").
-            script_path: File path of the script (e.g. "res://scripts/player.gd").
+            script_path: res:// path of the .gd (e.g. "res://scripts/player.gd").
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -114,30 +105,13 @@ def register_script_tools(mcp: FastMCP) -> None:
             script_path=script_path,
         )
 
-    @mcp.tool(meta=DEFER_META)
-    async def script_detach(ctx: Context, path: str, session_id: str = "") -> dict:
-        """Remove the script from a node.
-
-        Detaches whatever script is currently assigned to the node.
-        This operation is undoable via Ctrl+Z in the Godot editor.
-
-        Args:
-            path: Scene path of the node (e.g. "/Main/Player").
-            session_id: Optional Godot session to target. Empty = active session.
-        """
-        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await script_handlers.script_detach(runtime, path=path)
-
-    @mcp.tool(meta=DEFER_META)
-    async def script_find_symbols(ctx: Context, path: str, session_id: str = "") -> dict:
-        """Inspect (outline) a GDScript file — functions, methods, signals, class_name, exports.
-
-        Parses the script and returns its class_name, extends base,
-        function definitions, signal declarations, and @export variables.
-
-        Args:
-            path: File path starting with res:// (e.g. "res://scripts/player.gd").
-            session_id: Optional Godot session to target. Empty = active session.
-        """
-        runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await script_handlers.script_find_symbols(runtime, path=path)
+    register_manage_tool(
+        mcp,
+        tool_name="script_manage",
+        description=_DESCRIPTION,
+        ops={
+            "read": lambda rt, p: script_handlers.script_read(rt, **p),
+            "detach": lambda rt, p: script_handlers.script_detach(rt, **p),
+            "find_symbols": lambda rt, p: script_handlers.script_find_symbols(rt, **p),
+        },
+    )

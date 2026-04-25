@@ -31,4 +31,3 @@ class Runtime(Protocol):
     async def wait_for_session(
         self, exclude_id: str | None = None, timeout: float = 15.0
     ) -> Session: ...
-
