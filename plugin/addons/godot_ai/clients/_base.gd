@@ -13,6 +13,22 @@ extends RefCounted
 ## banner instead of conflating it with "you never configured this client".
 enum Status { NOT_CONFIGURED, CONFIGURED, CONFIGURED_MISMATCH, ERROR }
 
+
+## Lowercase string label for a `Status` value. Single source of truth so the
+## MCP `client_status` tool, the dock, and the verify-after-write diagnostic
+## in `McpClientConfigurator` all emit the same names — agents pattern-match
+## against this set, so a fifth value being silently introduced would break
+## them.
+static func status_label(status: Status) -> String:
+	match status:
+		Status.CONFIGURED:
+			return "configured"
+		Status.NOT_CONFIGURED:
+			return "not_configured"
+		Status.CONFIGURED_MISMATCH:
+			return "configured_mismatch"
+	return "error"
+
 var id: String = ""                              ## stable key, e.g. "cursor"
 var display_name: String = ""                    ## "Cursor"
 var config_type: String = ""                     ## "json" | "toml" | "cli"
