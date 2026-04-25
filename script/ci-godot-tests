@@ -7,7 +7,7 @@ set -euo pipefail
 SERVER_URL="http://127.0.0.1:8000/mcp"
 HEADERS=(-H "Content-Type: application/json" -H "Accept: application/json, text/event-stream")
 
-# Wait for Godot plugin to connect (session_list returns count > 0)
+# Wait for Godot plugin to connect (session_manage(op="list") returns count > 0)
 echo "Waiting for Godot plugin to connect..."
 for i in $(seq 1 60); do
   SESSION_ID=$(curl -si "$SERVER_URL" -X POST "${HEADERS[@]}" \
@@ -25,7 +25,7 @@ for i in $(seq 1 60); do
 
   SESSIONS=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
     -H "Mcp-Session-Id: $SESSION_ID" \
-    -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session_list","arguments":{}}}')
+    -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session_manage","arguments":{"op":"list"}}}')
 
   if echo "$SESSIONS" | grep -q '"count":'; then
     COUNT=$(echo "$SESSIONS" | python3 -c "
@@ -59,7 +59,7 @@ fi
 # Verify a Godot session is actually connected before running tests
 FINAL_COUNT=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
   -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"session_list","arguments":{}}}' \
+  -d '{"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"session_manage","arguments":{"op":"list"}}}' \
   | python3 -c "
 import json, sys
 raw = sys.stdin.read()

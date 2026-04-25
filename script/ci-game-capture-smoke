@@ -140,7 +140,7 @@ def _wait_for_godot_session(session_id: str, timeout: float = 120.0) -> None:
     last_err: Exception | None = None
     while time.monotonic() < deadline:
         try:
-            result = _tool_call(session_id, "session_list", {}, 2)
+            result = _tool_call(session_id, "session_manage", {"op": "list"}, 2)
             if result.get("count", 0) > 0:
                 print(f"Godot session connected: {result.get('active_session_id') or result}")
                 return
@@ -178,7 +178,7 @@ def _within_tolerance(a: tuple[int, int, int], b: tuple[int, int, int]) -> bool:
 def _dump_diagnostics(session_id: str) -> None:
     """On failure, print everything that could explain what happened."""
     try:
-        autoloads = _tool_call(session_id, "autoload_list", {}, 900)
+        autoloads = _tool_call(session_id, "autoload_manage", {"op": "list"}, 900)
         print("\n[diag] autoloads:", json.dumps(autoloads, indent=2))
     except Exception as exc:
         print(f"[diag] autoload_list failed: {exc}")
@@ -187,8 +187,8 @@ def _dump_diagnostics(session_id: str) -> None:
         ## the autoload entry before the subprocess spawned?
         proj = _tool_call(
             session_id,
-            "filesystem_read_text",
-            {"path": "res://project.godot"},
+            "filesystem_manage",
+            {"op": "read_text", "params": {"path": "res://project.godot"}},
             901,
         )
         text = proj.get("content", "")

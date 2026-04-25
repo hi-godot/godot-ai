@@ -59,7 +59,7 @@ curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
 
 # Verify Godot is connected before quitting
 echo "Verifying Godot session..."
-SESSIONS=$(mcp_call session_list '{}')
+SESSIONS=$(mcp_call session_manage '{"op":"list"}')
 COUNT=$(echo "$SESSIONS" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('count',0))")
 
 if [ "$COUNT" -eq 0 ] 2>/dev/null; then
@@ -70,7 +70,7 @@ echo "Godot session active (count: $COUNT)"
 
 # Call editor_quit
 echo "Calling editor_quit..."
-QUIT_RESULT=$(mcp_call editor_quit '{}')
+QUIT_RESULT=$(mcp_call editor_manage '{"op":"quit"}')
 echo "$QUIT_RESULT" | python3 -c "
 import json, sys
 content = json.loads(sys.stdin.read())
@@ -86,8 +86,8 @@ print(f'editor_quit OK: {content.get(\"message\", \"\")}')
 echo "Waiting for session to disconnect..."
 for i in $(seq 1 20); do
   sleep 0.5
-  # session_list may fail if the MCP session expired — that's also fine
-  SESSIONS=$(mcp_call session_list '{}' 2>/dev/null || echo '{"count":0}')
+  # session_manage may fail if the MCP session expired — that's also fine
+  SESSIONS=$(mcp_call session_manage '{"op":"list"}' 2>/dev/null || echo '{"count":0}')
   COUNT=$(echo "$SESSIONS" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('count',0))" 2>/dev/null || echo "0")
   if [ "$COUNT" -eq 0 ] 2>/dev/null; then
     echo "Session disconnected after ~$((i / 2))s"
