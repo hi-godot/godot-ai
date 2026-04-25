@@ -822,7 +822,12 @@ func test_cli_strategy_returns_typed_error_on_stale_cli_register_args() -> void:
 	## "CLI not found" otherwise). Use the bash/sh interpreter that exists
 	## on every CI runner we ship for; if none is available the test
 	## skips rather than reporting a false negative.
-	var probe_names: Array[String] = ["sh", "bash"] if OS.get_name() != "Windows" else ["cmd.exe"]
+	var probe_names: Array[String] = []
+	if OS.get_name() == "Windows":
+		probe_names.append("cmd.exe")
+	else:
+		probe_names.append("sh")
+		probe_names.append("bash")
 	var resolved := McpCliFinder.find(probe_names)
 	if resolved.is_empty():
 		skip("No portable shell on PATH to exercise the CLI strategy")
