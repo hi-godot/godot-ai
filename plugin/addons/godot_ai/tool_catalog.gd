@@ -6,9 +6,10 @@ extends RefCounted
 ## so the UI can render checkboxes, tool counts, and tooltips without
 ## round-tripping to a running server.
 ##
-## DO NOT EDIT by hand. tests/unit/test_tool_catalog_parity.py verifies
-## this file against actual tool registration and fails CI when they drift;
-## the failure message prints the up-to-date catalog body for paste-over.
+## DO NOT EDIT by hand. tests/unit/test_tool_domains.py (test
+## `test_gdscript_catalog_matches_python_registration`) verifies this file
+## against actual tool registration and fails CI when they drift; the
+## failure message prints the up-to-date catalog body for paste-over.
 ##
 ## The core tools are always registered and cannot be excluded — they
 ## render as a single grayed-out "Core" row in the UI.
