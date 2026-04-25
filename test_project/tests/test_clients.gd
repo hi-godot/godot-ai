@@ -847,6 +847,113 @@ func test_toml_strategy_preserves_other_sections() -> void:
 	assert_contains(content, "[mcp_servers.\"godot-ai\"]")
 
 
+# ----- configure/remove verify-after-write (#201) -----
+#
+# A strategy returning `status: ok` is necessary but not sufficient — a write
+# can land on a file the user's installed client doesn't actually read (path
+# resolution mismatch), or a remove can be a silent no-op when the entry was
+# stored under an unexpected key. The facade re-reads live state after every
+# successful write so the dock surfaces a real error instead of a green dot
+# the user can't act on.
+
+func test_verify_post_state_passes_through_strategy_error() -> void:
+	## A strategy-level error must not be transmuted into a verification
+	## error — the original message is more actionable. Same client doesn't
+	## even need to be touched on the verify side.
+	var client := _make_test_json_client(_scratch_dir.path_join("verify_passthrough.json"))
+	var err_result := {"status": "error", "message": "original strategy failure"}
+	var got: Dictionary = McpClientConfigurator._verify_post_state(
+		client, err_result, McpClient.Status.CONFIGURED, _verify_test_url(), "configure",
+	)
+	assert_eq(got, err_result, "Verify must not rewrite strategy errors")
+
+
+func test_verify_post_state_returns_ok_when_actual_matches_expected() -> void:
+	var path := _scratch_dir.path_join("verify_match.json")
+	_remove_if_exists(path)
+	var client := _make_test_json_client(path)
+	var url := _verify_test_url()
+	# Establish CONFIGURED state on disk so the verify read sees what the
+	# strategy claims it wrote.
+	McpJsonStrategy.configure(client, McpClientConfigurator.SERVER_NAME, url)
+	var ok_result := {"status": "ok", "message": "wrote"}
+	var got: Dictionary = McpClientConfigurator._verify_post_state(
+		client, ok_result, McpClient.Status.CONFIGURED, url, "configure",
+	)
+	assert_eq(got, ok_result, "Verify must pass through ok results when state matches")
+
+
+func test_verify_post_state_errors_when_configure_did_not_land() -> void:
+	## The classic #201 shape: strategy reports ok but the entry isn't on
+	## disk after the fact (e.g. the strategy wrote to a stale temp file, or
+	## the read-back path resolves elsewhere). Surface a loud error with the
+	## resolved config path so the user can self-diagnose instead of staring
+	## at a green dot in the dock.
+	var path := _scratch_dir.path_join("verify_missing.json")
+	_remove_if_exists(path)
+	var client := _make_test_json_client(path)
+	# File doesn't exist → check_status returns NOT_CONFIGURED → verify
+	# rejects the spurious "ok".
+	var ok_result := {"status": "ok", "message": "claims to have written"}
+	var got: Dictionary = McpClientConfigurator._verify_post_state(
+		client, ok_result, McpClient.Status.CONFIGURED, _verify_test_url(), "configure",
+	)
+	assert_eq(got.get("status"), "error")
+	var msg: String = got.get("message", "")
+	assert_contains(msg, "not_configured", "Error must name the actual status: %s" % msg)
+	assert_contains(msg, "configured", "Error must name the expected status: %s" % msg)
+	assert_contains(msg, path, "Error must include the resolved config path: %s" % msg)
+
+
+func test_verify_post_state_errors_when_remove_left_entry_behind() -> void:
+	## Symmetric case: remove returns ok but the entry still parses on
+	## read-back. Most realistic in TOML clients with multiple aliases or
+	## JSON files where the user maintains a custom server_name we don't
+	## know about — but the contract is the same: never lie to the dock.
+	var path := _scratch_dir.path_join("verify_leftover.json")
+	_remove_if_exists(path)
+	var client := _make_test_json_client(path)
+	var url := _verify_test_url()
+	# Real configure so the entry is actually present.
+	McpJsonStrategy.configure(client, McpClientConfigurator.SERVER_NAME, url)
+	var ok_result := {"status": "ok", "message": "claims removed"}
+	var got: Dictionary = McpClientConfigurator._verify_post_state(
+		client, ok_result, McpClient.Status.NOT_CONFIGURED, url, "remove",
+	)
+	assert_eq(got.get("status"), "error")
+	var msg: String = got.get("message", "")
+	assert_contains(msg, "configured", "Error must name the actual status: %s" % msg)
+	assert_contains(msg, "not_configured", "Error must name the expected status: %s" % msg)
+	assert_contains(msg, path, "Error must include the resolved config path: %s" % msg)
+
+
+func test_verify_post_state_treats_drift_as_failure_after_configure() -> void:
+	## CONFIGURED_MISMATCH is "entry present but URL is wrong" — for a
+	## just-completed configure that wrote `http_url()`, drift means the
+	## write didn't actually update the URL. Treat as a verification
+	## failure so the dock can't show a green dot for stale state.
+	var path := _scratch_dir.path_join("verify_drift_after_configure.json")
+	_remove_if_exists(path)
+	var client := _make_test_json_client(path)
+	# Pre-seed an entry with a stale URL.
+	var seed := {"mcpServers": {McpClientConfigurator.SERVER_NAME: {"url": "http://stale/"}}}
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(JSON.stringify(seed))
+	f.close()
+	var ok_result := {"status": "ok", "message": "wrote — but didn't"}
+	var got: Dictionary = McpClientConfigurator._verify_post_state(
+		client, ok_result, McpClient.Status.CONFIGURED, _verify_test_url(), "configure",
+	)
+	assert_eq(got.get("status"), "error")
+	assert_contains(got.get("message", ""), "configured_mismatch")
+
+
+## Pinned URL for verify tests so a port flip in EditorSettings between
+## suite_setup and the assertion can't drift us from match to mismatch.
+func _verify_test_url() -> String:
+	return "http://127.0.0.1:%d/mcp" % McpClientConfigurator.DEFAULT_HTTP_PORT
+
+
 # ----- atomic write -----
 
 func test_atomic_write_replaces_existing_content() -> void:

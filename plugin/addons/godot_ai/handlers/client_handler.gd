@@ -33,18 +33,10 @@ func check_client_status(_params: Dictionary) -> Dictionary:
 	var clients := []
 	for client_id in McpClientConfigurator.client_ids():
 		var status := McpClientConfigurator.check_status(client_id)
-		var status_str := "error"
-		match status:
-			McpClient.Status.CONFIGURED:
-				status_str = "configured"
-			McpClient.Status.NOT_CONFIGURED:
-				status_str = "not_configured"
-			McpClient.Status.CONFIGURED_MISMATCH:
-				status_str = "configured_mismatch"
 		clients.append({
 			"id": client_id,
 			"display_name": McpClientConfigurator.client_display_name(client_id),
-			"status": status_str,
+			"status": McpClient.status_label(status),
 			"installed": McpClientConfigurator.is_installed(client_id),
 		})
 	return {"data": {"clients": clients}}
