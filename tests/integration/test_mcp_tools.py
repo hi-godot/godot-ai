@@ -597,6 +597,43 @@ class TestNodeSetPropertyTool:
         assert result.data["old_value"] == 75
         assert result.data["undoable"] is True
 
+    async def test_set_property_dict_value_round_trips_intact(self, mcp_stack):
+        ## Issue #191 regression guard: Vector3 dicts must arrive at the
+        ## plugin as JSON objects, not as a stringified blob or coerced
+        ## primitive. The bug surfaces when middleware (or pydantic union
+        ## resolution) flattens the dict somewhere between the tool call
+        ## and the WebSocket frame; verifying the literal `params.value`
+        ## the plugin sees catches that drift before the GDScript-side
+        ## coercer ever runs.
+        client, plugin = mcp_stack
+        vec = {"x": -8.0, "y": 4.5, "z": 1.0}
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "set_property"
+            assert cmd["params"]["value"] == vec
+            assert isinstance(cmd["params"]["value"], dict)
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Player",
+                    "property": "position",
+                    "value": vec,
+                    "old_value": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "node_set_property",
+            {"path": "/Main/Player", "property": "position", "value": vec},
+        )
+        await task
+
+        assert result.data["value"] == vec
+        assert result.data["undoable"] is True
+
 
 # ---------------------------------------------------------------------------
 # node_rename

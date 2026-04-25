@@ -372,6 +372,106 @@ func test_set_property_color_rejects_vector3_shaped_dict() -> void:
 	assert_true(coerced is Dictionary, "Wrong-shape dict must flow through unchanged so caller's type check fires")
 
 
+func test_set_property_vector3_rejects_array() -> void:
+	## Issue #191: passing an Array to a Vector3 slot used to pass through
+	## _check_dict_coerce_failed (which only fires on dicts) and silently
+	## land Vector3.ZERO via Godot's add_do_property fallback.
+	_handler.create_node({"type": "Node3D", "name": "_McpTestArr", "parent_path": "/Main"})
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestArr") as Node3D
+	var original := node.position
+
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestArr",
+		"property": "position",
+		"value": [1, 2, 3],
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "Vector3")
+	assert_eq(node.position, original, "Position must be unchanged after a rejected coerce")
+	_undo_redo.undo()  # undo create
+
+
+func test_set_property_vector3_rejects_int() -> void:
+	## Issue #191: scalar input to a Vector3 slot is the most insidious
+	## case — Godot accepts the int and silently zero-fills.
+	_handler.create_node({"type": "Node3D", "name": "_McpTestInt", "parent_path": "/Main"})
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestInt") as Node3D
+	var original := node.position
+
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestInt",
+		"property": "position",
+		"value": 5,
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_eq(node.position, original, "Position must be unchanged after a rejected coerce")
+	_undo_redo.undo()  # undo create
+
+
+func test_set_property_color_rejects_array() -> void:
+	## Issue #191 mirror for Color targets.
+	_handler.create_node({
+		"type": "DirectionalLight3D",
+		"name": "_McpTestLight",
+		"parent_path": "/Main",
+	})
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestLight",
+		"property": "light_color",
+		"value": [1, 0, 0],
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "Color")
+	_undo_redo.undo()  # undo create
+
+
+func test_set_property_vector3_accepts_json_string_dict() -> void:
+	## Issue #191: some MCP clients/middleware stringify nested-dict tool
+	## args (Cline's task_progress lookalikes, naive JSON-RPC bridges).
+	## Tolerate a JSON-encoded dict for compound targets so the call
+	## succeeds instead of silently zero-defaulting.
+	_handler.create_node({"type": "Node3D", "name": "_McpTestJsonV3", "parent_path": "/Main"})
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestJsonV3",
+		"property": "position",
+		"value": '{"x": -8, "y": 4, "z": 1}',
+	})
+	assert_has_key(result, "data")
+	assert_true(result.data.undoable)
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestJsonV3") as Node3D
+	assert_eq(node.position, Vector3(-8, 4, 1))
+	_undo_redo.undo()  # undo set
+	_undo_redo.undo()  # undo create
+
+
+func test_coerce_value_parses_json_string_for_vector3() -> void:
+	## Direct coercer check — JSON-encoded dict for a Vector3 slot must
+	## land as a real Vector3 (not pass through unchanged as a String).
+	var coerced = NodeHandler._coerce_value('{"x":1,"y":2,"z":3}', TYPE_VECTOR3)
+	assert_true(coerced is Vector3)
+	assert_eq(coerced, Vector3(1, 2, 3))
+
+
+func test_coerce_value_preserves_color_hex_string() -> void:
+	## The JSON-string parse path (#191) must not interfere with the
+	## existing Color-from-hex-string contract. Hex strings don't begin
+	## with `{` or `[`, so they bypass JSON.parse_string and go straight
+	## to the Color(value) constructor.
+	var coerced = NodeHandler._coerce_value("#ff0000", TYPE_COLOR)
+	assert_true(coerced is Color)
+	assert_eq(coerced.r, 1.0)
+	assert_eq(coerced.g, 0.0)
+	assert_eq(coerced.b, 0.0)
+
+
+func test_coerce_value_invalid_json_string_passes_through() -> void:
+	## Garbage JSON that begins with `{` shouldn't crash — JSON.parse_string
+	## returns null, the value stays as a String, and the caller's
+	## _check_coerced fires the loud error.
+	var coerced = NodeHandler._coerce_value("{not valid json}", TYPE_VECTOR3)
+	assert_true(coerced is String, "Unparseable JSON must flow through unchanged so the type check fires")
+
+
 func test_coerce_value_passes_right_shape_color() -> void:
 	var coerced = NodeHandler._coerce_value({"r": 1.0, "g": 0.5, "b": 0.0, "a": 1.0}, TYPE_COLOR)
 	assert_true(coerced is Color)

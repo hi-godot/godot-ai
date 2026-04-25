@@ -237,8 +237,10 @@ func set_property(params: Dictionary) -> Dictionary:
 		instantiated_resource = true
 	else:
 		value = _coerce_value(value, target_type)
-		## Refuse wrong-shape dicts that _coerce_value passed through (#123).
-		var coerce_err := _check_dict_coerce_failed(value, target_type)
+		## Refuse uncoercible values that would silently zero-default at
+		## `add_do_property` (#123 — wrong-shape dicts; #191 — non-dict
+		## values like Array/String/int landing on a Vector slot).
+		var coerce_err := _check_coerced(value, target_type, "Property '%s'" % property)
 		if coerce_err != null:
 			return coerce_err
 
@@ -497,19 +499,34 @@ const VECTOR2_KEYS: Array[String] = ["x", "y"]
 const VECTOR3_KEYS: Array[String] = ["x", "y", "z"]
 const COLOR_KEYS: Array[String] = ["r", "g", "b"]
 
+## Variant types that `_check_coerced` enforces on. Extracted to avoid
+## per-call array allocation in `set_property`'s hot path.
+const VECTORLIKE_TYPES: Array[int] = [TYPE_VECTOR2, TYPE_VECTOR3, TYPE_COLOR]
 
-## End-to-end coerce check for validation handlers (curve, texture,
-## resource properties). Returns a full `make(...)`-shaped error dict
-## (prefixed with `prefix`) if the value didn't land as the target
-## Variant type, else null. Dict-shape failures get the
+## Variant types whose String inputs `_coerce_value` will JSON-parse first
+## (clients/middleware sometimes stringify nested dict args — #191).
+## Superset of VECTORLIKE_TYPES; ARRAY/DICTIONARY land here too because
+## a stringified `"[1,2]"` should reach the consumer as an Array.
+const JSON_PARSE_STRING_TARGETS: Array[int] = [
+	TYPE_VECTOR2, TYPE_VECTOR3, TYPE_COLOR, TYPE_ARRAY, TYPE_DICTIONARY
+]
+
+
+## End-to-end coerce check for set_property and validation handlers
+## (curve, texture, resource properties). Returns a full `make(...)`-shaped
+## error dict (prefixed with `prefix`) if the value didn't land as the
+## target Variant type, else null. Dict-shape failures get the
 ## `_check_dict_coerce_failed` message (expected-vs-got keys); non-dict
-## non-Vector inputs (String, int, …) get a generic "must coerce"
-## message.
+## non-Vector inputs (String, int, …) get a generic "must coerce" message.
 ##
-## Only TYPE_VECTOR2 / TYPE_VECTOR3 / TYPE_COLOR are recognized — other
-## targets would false-negative on a valid value. Extend the match
-## alongside `_coerce_value` if you add a new coerce target.
+## Only TYPE_VECTOR2 / TYPE_VECTOR3 / TYPE_COLOR are gated — other targets
+## are passed through untouched (returns null) so this stays safe to call
+## generically from set_property without false-positives on TYPE_BOOL /
+## TYPE_FLOAT / TYPE_OBJECT / etc. Extend the match alongside `_coerce_value`
+## if you add a new coerce target.
 static func _check_coerced(value: Variant, target_type: int, prefix: String) -> Variant:
+	if not (target_type in VECTORLIKE_TYPES):
+		return null
 	var err = _check_dict_coerce_failed(value, target_type)
 	if err != null:
 		return McpErrorCodes.prefix_message(err, prefix)
@@ -562,12 +579,24 @@ static func _check_dict_coerce_failed(value: Variant, target_type: int) -> Varia
 ## type is known. Returns the coerced value on success, or the input
 ## unchanged on failure — callers detect the type mismatch via an
 ## `is <Type>` check (curve_handler, texture_handler) or via the
-## `_check_dict_coerce_failed` helper (set_property, resource_handler).
+## `_check_coerced` helper (set_property, resource_handler).
 ##
 ## Dictionary→Vector2/Vector3/Color cases REQUIRE all canonical keys;
 ## wrong-shape dicts flow through unchanged. See issue #123 — previous
 ## `dict.get(key, 0)` defaults silently zero-filled missing axes.
+##
+## String inputs to compound targets (Vector2/3/Color/Array/Dictionary)
+## are first parsed as JSON when they begin with `{` or `[` — some
+## clients/middleware stringify nested-dict tool args (#191). Hex Color
+## strings (`"#ff0000"`, `"red"`) bypass JSON parse and hit the
+## `Color(value)` constructor below.
 static func _coerce_value(value: Variant, target_type: int) -> Variant:
+	if value is String and target_type in JSON_PARSE_STRING_TARGETS:
+		var s: String = (value as String).strip_edges()
+		if s.begins_with("{") or s.begins_with("["):
+			var parsed = JSON.parse_string(s)
+			if parsed != null:
+				value = parsed
 	match target_type:
 		TYPE_VECTOR2:
 			if value is Dictionary and value.has_all(VECTOR2_KEYS):
