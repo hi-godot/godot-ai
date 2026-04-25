@@ -110,6 +110,34 @@ func test_apply_row_status_renders_mismatch_as_amber_with_url_hint() -> void:
 		"Mismatched rows offer the same Reconfigure action as the banner")
 
 
+func test_drift_banner_clears_after_per_row_reconfigure() -> void:
+	## Regression: clicking Reconfigure on a row in the Clients & Tools window
+	## updates the row dot, but the dock-level drift banner used to stay stale
+	## ("Claude Code needs to be reconfigured") until the next sweep. The fix
+	## routes per-row mutations through `_refresh_clients_summary`, which now
+	## re-derives the banner from row dots so banner, summary count, and
+	## `_last_mismatched_ids` cache all stay in sync.
+	_dock._build_ui()
+	var any_id := McpClientConfigurator.client_ids()[0]
+
+	# Simulate a sweep finding this client mismatched.
+	_dock._apply_row_status(any_id, McpClient.Status.CONFIGURED_MISMATCH)
+	_dock._refresh_clients_summary()
+	assert_true(_dock._drift_banner.visible,
+		"Banner must surface once a row goes amber")
+	assert_eq(_dock._last_mismatched_ids, [any_id] as Array[String],
+		"Reconfigure-mismatched cache must reflect the amber row")
+
+	# Simulate the user clicking Reconfigure on that row in the full window —
+	# `_on_configure_client` flips the dot to green and calls summary refresh.
+	_dock._apply_row_status(any_id, McpClient.Status.CONFIGURED)
+	_dock._refresh_clients_summary()
+	assert_false(_dock._drift_banner.visible,
+		"Banner must clear once the last amber row is reconfigured")
+	assert_eq(_dock._last_mismatched_ids, [] as Array[String],
+		"Cache must drop the now-green client so a follow-up Reconfigure-mismatched click is a no-op")
+
+
 ## Shared fixture for the three version-label tests. Inject a Label + Button
 ## + Connection onto the dock so the pure refresh logic can be exercised
 ## without depending on whether the test environment resolves as user mode
