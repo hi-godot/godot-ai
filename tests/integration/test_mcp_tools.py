@@ -1019,8 +1019,12 @@ class TestSessionTools:
         ## `Unexpected keyword argument` and force a wasteful retry.
         client, _plugin = mcp_stack
         result = await client.call_tool(
-            "session_list",
-            {"task_progress": "- [x] checked the editor state"},
+            "session_manage",
+            {
+                "op": "list",
+                "params": {},
+                "task_progress": "- [x] checked the editor state",
+            },
         )
         assert result.data["count"] == 1
         assert result.data["sessions"][0]["session_id"] == "mcp-test"
