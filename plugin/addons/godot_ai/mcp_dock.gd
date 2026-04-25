@@ -1361,21 +1361,26 @@ func _on_tools_discard_confirmed() -> void:
 func _refresh_clients_summary() -> void:
 	# Count from row dot colors — `_apply_row_status` is the single source of
 	# truth, and reading colors avoids re-running filesystem-hitting status
-	# checks on every refresh.
+	# checks on every refresh. Also re-derives the drift banner from the same
+	# dots so per-row mutations (Configure/Reconfigure/Remove on a row in the
+	# Clients & Tools window) keep the dock-level banner in sync without an
+	# extra sweep — without this, the banner stays stale after a successful
+	# Reconfigure until the next focus-in or window-open sweep. See #166.
 	if _clients_summary_label == null:
 		return
 	var configured := 0
-	var mismatched := 0
-	for row in _client_rows.values():
-		var c := (row["dot"] as ColorRect).color
+	var mismatched_ids: Array[String] = []
+	for client_id in _client_rows:
+		var c := (_client_rows[client_id]["dot"] as ColorRect).color
 		if c == Color.GREEN:
 			configured += 1
 		elif c == COLOR_AMBER:
-			mismatched += 1
+			mismatched_ids.append(client_id)
 	var text := "%d / %d configured" % [configured, _client_rows.size()]
-	if mismatched > 0:
-		text += " (%d stale)" % mismatched
+	if mismatched_ids.size() > 0:
+		text += " (%d stale)" % mismatched_ids.size()
 	_clients_summary_label.text = text
+	_refresh_drift_banner(mismatched_ids)
 
 
 func _show_manual_command_for(client_id: String) -> void:
@@ -1399,17 +1404,14 @@ func _on_copy_manual_command(client_id: String) -> void:
 
 func _refresh_all_client_statuses() -> void:
 	## Single sweep: pass the per-client status through `_apply_row_status` for
-	## the row UI, then count mismatches for the drift banner. Each client's
-	## `check_status` is one filesystem read — fine to do all of them on the
-	## handful of trigger events documented in #166.
-	var mismatched_ids: Array[String] = []
+	## the row UI, then let `_refresh_clients_summary` re-derive the count and
+	## the drift banner from the dots. Each client's `check_status` is one
+	## filesystem read — fine to do all of them on the handful of trigger
+	## events documented in #166.
 	for client_id in _client_rows:
 		var status := McpClientConfigurator.check_status(client_id)
 		_apply_row_status(client_id, status)
-		if status == McpClient.Status.CONFIGURED_MISMATCH:
-			mismatched_ids.append(client_id)
 	_refresh_clients_summary()
-	_refresh_drift_banner(mismatched_ids)
 
 
 func _refresh_drift_banner(mismatched_ids: Array[String]) -> void:
