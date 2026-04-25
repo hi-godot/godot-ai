@@ -90,3 +90,34 @@ static func format_parent_error(path: String, scene_root: Node) -> String:
 		return "Parent not found: %s. No edited scene is open." % path
 	var root_name := str(scene_root.name)
 	return "Parent not found: %s. Paths are relative to the edited scene root (e.g. \"/%s\" or \"\"), not the SceneTree. Scene root is \"/%s\"." % [path, root_name, root_name]
+
+
+## Format a "node not found" error that names the path convention and, when
+## possible, suggests a corrected path. Agents routinely pass /root/Foo
+## (runtime SceneTree) or unprefixed names; the bare "Node not found: X"
+## gives no hint that paths are edited-scene-relative.
+##
+## Suggestion logic (highest-confidence first):
+##   1. /root/<X>[/...] where <X> is not the scene root → suggest /<sceneRoot>/<X>[/...]
+##   2. path doesn't start with "/" → suggest "/<sceneRoot>/<path>"
+##   3. otherwise no concrete "did you mean", just the convention reminder.
+static func format_node_error(path: String, scene_root: Node) -> String:
+	if scene_root == null:
+		return "Node not found: %s. No edited scene is open." % path
+	var root_name := str(scene_root.name)
+	var suggestion := ""
+
+	if path.begins_with("/root/"):
+		var after_root := path.substr(6)  # "/root/" is 6 chars
+		# Only suggest if the segment after /root/ isn't already the scene root
+		# (resolve() handles /root/<sceneRoot>/... as an alias, so a failure
+		# with that prefix means a deeper segment is wrong — no clean rewrite).
+		var first_seg := after_root.split("/")[0]
+		if first_seg != root_name and not first_seg.is_empty():
+			suggestion = "/" + root_name + "/" + after_root
+	elif not path.begins_with("/") and not path.is_empty():
+		suggestion = "/" + root_name + "/" + path
+
+	if suggestion.is_empty():
+		return "Node not found: %s. Paths are relative to the edited scene root (e.g. \"/%s/Child\"), not runtime /root/... paths. Scene root is \"/%s\"." % [path, root_name, root_name]
+	return "Node not found: %s. Did you mean \"%s\"? Paths are relative to the edited scene root, not runtime /root/... paths. Scene root is \"/%s\"." % [path, suggestion, root_name]

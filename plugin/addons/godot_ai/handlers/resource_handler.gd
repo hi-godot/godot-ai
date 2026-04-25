@@ -113,7 +113,7 @@ func assign_resource(params: Dictionary) -> Dictionary:
 
 	var node := ScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
 
 	# Verify property exists
 	var found := false
@@ -294,7 +294,7 @@ func _assign_created_resource(res: Resource, type_str: String, node_path: String
 
 	var node := ScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
 
 	var found := false
 	var prop_type: int = TYPE_NIL

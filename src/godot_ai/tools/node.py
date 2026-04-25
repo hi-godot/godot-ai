@@ -58,7 +58,9 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
         active-session reads.
 
         Args:
-            path: Scene path of the node (e.g. "/Main/Camera3D").
+            path: Scene path relative to the edited scene root (e.g.
+                "/Main/Camera3D"), NOT runtime "/root/..." paths. Derive
+                from prior tool responses or scene_get_hierarchy.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -86,10 +88,14 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
         Args:
             type: Godot node class (e.g. "Node3D", "MeshInstance3D").
             name: Optional name; Godot auto-names if empty.
-            parent_path: Parent scene path (e.g. "/Main"). Empty = scene root.
+            parent_path: Parent path relative to the edited scene root (e.g.
+                "/Main"), NOT runtime "/root/...". Empty = scene root.
             scene_path: Optional res:// path of a PackedScene to instantiate.
             scene_file: Optional editor-scene guard (EDITED_SCENE_MISMATCH).
             session_id: Optional Godot session to target. Empty = active session.
+
+        Returns the created node's full path in ``data.path`` — use it as the
+        prefix for subsequent commands targeting this node.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await node_handlers.node_create(
@@ -122,7 +128,8 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
         - StringName: plain string. Array/Dictionary: JSON list/object.
 
         Args:
-            path: Scene path of the node.
+            path: Scene path relative to the edited scene root (e.g.
+                "/Main/Camera3D"), NOT runtime "/root/..." paths.
             property: Property name (e.g. "fov", "position", "mesh").
             value: New value. Pass null (or "" for resources) to clear.
             scene_file: Optional editor-scene guard.

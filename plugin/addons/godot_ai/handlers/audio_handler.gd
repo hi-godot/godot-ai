@@ -325,7 +325,7 @@ func _resolve_player(player_path: String) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 	var node := ScenePath.resolve(player_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % player_path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(player_path, scene_root))
 	var is_player := node is AudioStreamPlayer \
 		or node is AudioStreamPlayer2D \
 		or node is AudioStreamPlayer3D

@@ -154,7 +154,7 @@ func _assign_texture(tex: Resource, sub_resources: Array, node_path: String, pro
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 	var node := ScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
 
 	var found := false
 	var prop_type: int = TYPE_NIL

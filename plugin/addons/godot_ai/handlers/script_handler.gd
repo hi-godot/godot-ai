@@ -164,7 +164,7 @@ func attach_script(params: Dictionary) -> Dictionary:
 
 	var node := ScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
 
 	if not ResourceLoader.exists(script_path):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Script not found: %s" % script_path)
@@ -202,7 +202,7 @@ func detach_script(params: Dictionary) -> Dictionary:
 
 	var node := ScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
 
 	var old_script: Script = node.get_script()
 	if old_script == null:

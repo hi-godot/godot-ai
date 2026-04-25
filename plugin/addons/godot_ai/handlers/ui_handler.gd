@@ -87,7 +87,7 @@ func set_anchor_preset(params: Dictionary) -> Dictionary:
 
 	var node := ScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
 	if not node is Control:
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
@@ -157,7 +157,7 @@ func set_text(params: Dictionary) -> Dictionary:
 
 	var node := ScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
 	var node_type := node.get_class()
 	if not node is Control:
 		return McpErrorCodes.make(

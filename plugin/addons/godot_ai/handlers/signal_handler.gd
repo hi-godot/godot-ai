@@ -22,7 +22,7 @@ func list_signals(params: Dictionary) -> Dictionary:
 
 	var node := ScenePath.resolve(path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(path, scene_root))
 
 	var signals: Array[Dictionary] = []
 	for sig in node.get_signal_list():
