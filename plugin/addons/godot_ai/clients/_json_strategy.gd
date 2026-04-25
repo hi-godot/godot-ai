@@ -14,6 +14,8 @@ static func configure(client: McpClient, server_name: String, server_url: String
 	var read := _read_or_init(path)
 	if not read["ok"]:
 		return {"status": "error", "message": "Refusing to overwrite %s: %s. Fix or move the file, then re-run Configure." % [path, read["error"]]}
+	if not client.entry_builder.is_valid():
+		return McpClient.stale_callable_status(client)
 	var config: Dictionary = read["data"]
 	var holder := _ensure_path(config, client.server_key_path)
 	holder[server_name] = client.entry_builder.call(server_name, server_url)

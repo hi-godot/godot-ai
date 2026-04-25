@@ -115,3 +115,15 @@ static func resolve_uvx_path() -> String:
 ## Callers splice this into the client-specific command shape.
 static func mcp_proxy_bridge_args(url: String) -> Array:
 	return ["mcp-proxy==" + MCP_PROXY_VERSION, "--transport", "streamablehttp", url]
+
+
+## Uniform error payload for every strategy site that invokes a
+## descriptor-supplied Callable. Toggling the plugin off/on frees the
+## McpClient the lambda captured; calling the stale Callable then crashes
+## Godot, so each site must `is_valid()`-guard first and surface this
+## restart-required hint instead. See issue #192.
+static func stale_callable_status(client: McpClient) -> Dictionary:
+	return {
+		"status": "error",
+		"message": "%s configurator was invalidated by a live plugin reload — restart the editor to recover." % client.display_name,
+	}

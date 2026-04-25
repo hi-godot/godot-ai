@@ -16,6 +16,8 @@ static func configure(client: McpClient, server_name: String, server_url: String
 		var pre_args = client.cli_unregister_args.call(server_name)
 		OS.execute(cli, pre_args, [], true)
 
+	if not client.cli_register_args.is_valid():
+		return McpClient.stale_callable_status(client)
 	var args = client.cli_register_args.call(server_name, server_url)
 	var output: Array = []
 	var exit_code := OS.execute(cli, args, output, true)
@@ -39,7 +41,7 @@ static func remove(client: McpClient, server_name: String) -> Dictionary:
 	if cli.is_empty():
 		return {"status": "error", "message": "%s CLI not found" % client.display_name}
 	if not client.cli_unregister_args.is_valid():
-		return {"status": "error", "message": "%s descriptor missing cli_unregister_args" % client.display_name}
+		return McpClient.stale_callable_status(client)
 	var args = client.cli_unregister_args.call(server_name)
 	var output: Array = []
 	var exit_code := OS.execute(cli, args, output, true)
