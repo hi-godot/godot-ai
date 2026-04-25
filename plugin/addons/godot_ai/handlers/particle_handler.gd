@@ -712,7 +712,7 @@ func _resolve_particle(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 	var node := ScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
 	var is_particle := node is GPUParticles3D or node is GPUParticles2D \
 		or node is CPUParticles3D or node is CPUParticles2D
 	if not is_particle:

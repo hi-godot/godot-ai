@@ -135,6 +135,77 @@ func test_format_parent_error_null_root_returns_actionable_message() -> void:
 	assert_false(msg.contains("<no scene>"), "should not leak placeholder")
 
 
+# ----- format_node_error: agent-readable message with "did you mean" -----
+
+func test_format_node_error_root_prefix_suggests_scene_relative_path() -> void:
+	## The signature mistake (Cline's failure mode): /root/<NotSceneRoot>/...
+	## We can rewrite that to /<sceneRoot>/<rest> with high confidence.
+	var root := _make_tree()
+	var msg := ScenePath.format_node_error("/root/Cube0", root)
+	assert_contains(msg, "/root/Cube0")
+	assert_contains(msg, "Did you mean")
+	assert_contains(msg, "/Main/Cube0")
+	assert_contains(msg, "/Main")
+	root.queue_free()
+
+
+func test_format_node_error_root_prefix_with_descendant_suggests_full_rewrite() -> void:
+	var root := _make_tree()
+	var msg := ScenePath.format_node_error("/root/Foo/Bar/Baz", root)
+	assert_contains(msg, "Did you mean")
+	assert_contains(msg, "/Main/Foo/Bar/Baz")
+	root.queue_free()
+
+
+func test_format_node_error_root_prefix_matching_scene_root_no_suggestion() -> void:
+	## /root/Main/... is already aliased by resolve(), so a failure with that
+	## prefix means a deeper segment is wrong — there's no clean rewrite to
+	## suggest. Fall back to the convention reminder.
+	var root := _make_tree()
+	var msg := ScenePath.format_node_error("/root/Main/Nope", root)
+	assert_false(msg.contains("Did you mean"), "no clean rewrite available")
+	assert_contains(msg, "relative to the edited scene root")
+	root.queue_free()
+
+
+func test_format_node_error_unprefixed_path_suggests_scene_relative() -> void:
+	## Bare "Cube0" with no leading slash → suggest "/Main/Cube0".
+	var root := _make_tree()
+	var msg := ScenePath.format_node_error("Cube0", root)
+	assert_contains(msg, "Did you mean")
+	assert_contains(msg, "/Main/Cube0")
+	root.queue_free()
+
+
+func test_format_node_error_already_relative_path_no_suggestion() -> void:
+	## /Main/Nope is correctly formatted but doesn't resolve — no rewrite
+	## possible, just remind about the convention so the agent can re-check
+	## the actual node names via scene_get_hierarchy.
+	var root := _make_tree()
+	var msg := ScenePath.format_node_error("/Main/Nope", root)
+	assert_false(msg.contains("Did you mean"))
+	assert_contains(msg, "Node not found: /Main/Nope")
+	assert_contains(msg, "/Main")
+	root.queue_free()
+
+
+func test_format_node_error_null_root_returns_actionable_message() -> void:
+	var msg := ScenePath.format_node_error("/root/Foo", null)
+	assert_contains(msg, "/root/Foo")
+	assert_contains(msg, "No edited scene is open")
+	assert_false(msg.contains("<no scene>"), "should not leak placeholder")
+
+
+func test_format_node_error_mentions_runtime_root_anti_pattern() -> void:
+	## The message must explicitly call out that /root/... is wrong, not just
+	## that "paths are relative". Agents need the antipattern named to
+	## connect their mistake to the fix.
+	var root := _make_tree()
+	var msg := ScenePath.format_node_error("/root/X", root)
+	assert_contains(msg, "/root/")
+	root.queue_free()
+
+
 # ----- require_edited_scene: multi-call scene-drift guard (issue #74) -----
 
 func test_require_edited_scene_empty_expected_returns_current_root() -> void:

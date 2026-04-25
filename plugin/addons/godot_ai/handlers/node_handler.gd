@@ -734,7 +734,7 @@ func _resolve_node(params: Dictionary) -> Dictionary:
 	var scene_root: Node = scene_check.node
 	var node := ScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
 	return {"node": node, "path": node_path, "scene_root": scene_root}
 
 

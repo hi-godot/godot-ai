@@ -349,7 +349,7 @@ func assign_material(params: Dictionary) -> Dictionary:
 
 	var node := ScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
 
 	var slot: String = params.get("slot", "override")
 	var resource_path: String = params.get("resource_path", "")
@@ -443,7 +443,7 @@ func apply_to_node(params: Dictionary) -> Dictionary:
 
 	var node := ScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
 
 	var slot: String = params.get("slot", "override")
 	var slot_result := _resolve_slot_property(node, slot)
@@ -583,7 +583,7 @@ func apply_preset(params: Dictionary) -> Dictionary:
 			return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 		var node := ScenePath.resolve(node_path, scene_root)
 		if node == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
 		var slot_result := _resolve_slot_property(node, params.get("slot", "override"))
 		if slot_result.has("error"):
 			return slot_result

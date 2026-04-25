@@ -563,7 +563,7 @@ func get_camera(params: Dictionary) -> Dictionary:
 	else:
 		node = ScenePath.resolve(camera_path, scene_root)
 		if node == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % camera_path)
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(camera_path, scene_root))
 		if not _is_camera(node):
 			return McpErrorCodes.make(
 				McpErrorCodes.INVALID_PARAMS,
@@ -751,7 +751,7 @@ func _resolve_camera(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 	var node := ScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
 	if not _is_camera(node):
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,

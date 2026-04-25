@@ -118,7 +118,7 @@ func _assign_environment(env: Environment, sky: Sky, sky_material: ProceduralSky
 
 	var node := ScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
 	if not (node is WorldEnvironment):
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,

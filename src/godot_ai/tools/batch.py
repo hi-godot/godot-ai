@@ -34,6 +34,10 @@ def register_batch_tools(mcp: FastMCP) -> None:
         that modify the currently edited scene. `batch_execute` itself is not
         allowed as a sub-command.
 
+        Scene paths are relative to the edited scene root (e.g. "/Main/Enemy"),
+        NOT runtime "/root/..." paths. The example below assumes the scene
+        root is named "Main" — substitute the actual root name.
+
         Example:
             commands=[
               {"command": "create_node",

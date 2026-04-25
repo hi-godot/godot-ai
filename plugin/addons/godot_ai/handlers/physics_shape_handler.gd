@@ -41,7 +41,7 @@ func autofit(params: Dictionary) -> Dictionary:
 
 	var node := ScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % node_path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
 
 	var is_3d := node is CollisionShape3D
 	var is_2d := node is CollisionShape2D

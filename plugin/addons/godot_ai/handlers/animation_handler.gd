@@ -1286,7 +1286,7 @@ func _resolve_player(player_path: String, create_if_missing: bool = false) -> Di
 	var node := ScenePath.resolve(player_path, scene_root)
 	if node == null:
 		if not create_if_missing:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % player_path)
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(player_path, scene_root))
 		return _instantiate_player(player_path, scene_root)
 	if not node is AnimationPlayer:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
@@ -1388,7 +1388,7 @@ func _resolve_player_read(player_path: String) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 	var node := ScenePath.resolve(player_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % player_path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(player_path, scene_root))
 	if not node is AnimationPlayer:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
 			"Node at %s is not an AnimationPlayer (got %s)" % [player_path, node.get_class()])

@@ -33,7 +33,7 @@ func control_draw_recipe(params: Dictionary) -> Dictionary:
 
 	var node := ScenePath.resolve(path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Node not found: %s" % path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(path, scene_root))
 	if not node is Control:
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
