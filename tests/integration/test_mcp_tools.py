@@ -5974,3 +5974,62 @@ class TestControlDrawRecipeTool:
             },
         )
         await task
+
+
+# ---------------------------------------------------------------------------
+# *_manage with stringified params (#206)
+# ---------------------------------------------------------------------------
+
+
+class TestManageRollupAcceptsStringifiedParams:
+    async def test_scene_manage_with_stringified_params(self, mcp_stack):
+        """Cline-style stringified params dict reaches the handler intact."""
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_open_scenes"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"scenes": ["res://main.tscn"], "current": "res://main.tscn"},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "scene_manage",
+            {"op": "get_roots", "params": "{}"},
+        )
+        await task
+
+        assert result.data["current"] == "res://main.tscn"
+
+    async def test_scene_manage_with_stringified_params_carrying_values(self, mcp_stack):
+        """Stringified params with real keys land in the underlying handler."""
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "create_scene"
+            assert cmd["params"]["path"] == "res://demo.tscn"
+            assert cmd["params"]["root_type"] == "Node3D"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://demo.tscn",
+                    "root_type": "Node3D",
+                    "root_name": "demo",
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "scene_manage",
+            {
+                "op": "create",
+                "params": '{"path": "res://demo.tscn", "root_type": "Node3D"}',
+            },
+        )
+        await task
+
+        assert result.data["path"] == "res://demo.tscn"
