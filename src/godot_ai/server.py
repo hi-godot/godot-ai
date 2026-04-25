@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from fastmcp import FastMCP
 
 from godot_ai.godot_client.client import GodotClient
+from godot_ai.middleware import StripClientWrapperKwargs
 from godot_ai.resources.editor import register_editor_resources
 from godot_ai.resources.library import register_library_resources
 from godot_ai.resources.nodes import register_node_resources
@@ -139,6 +140,10 @@ def create_server(
         ),
         lifespan=_lifespan,
     )
+
+    ## Tolerate known client-injected wrapper kwargs (Cline's task_progress,
+    ## etc.) so strict pydantic schemas don't reject every call. See #193.
+    mcp.add_middleware(StripClientWrapperKwargs())
 
     exclude = set(exclude_domains or ())
     if exclude:

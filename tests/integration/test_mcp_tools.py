@@ -1013,6 +1013,18 @@ class TestSessionTools:
         result = await client.call_tool("session_activate", {"session_id": "no-such-session"})
         assert result.data["status"] == "error"
 
+    async def test_call_tolerates_cline_task_progress_kwarg(self, mcp_stack):
+        ## #193 — Cline injects `task_progress` into every tools/call. With
+        ## strict pydantic schemas the call would otherwise fail with
+        ## `Unexpected keyword argument` and force a wasteful retry.
+        client, _plugin = mcp_stack
+        result = await client.call_tool(
+            "session_list",
+            {"task_progress": "- [x] checked the editor state"},
+        )
+        assert result.data["count"] == 1
+        assert result.data["sessions"][0]["session_id"] == "mcp-test"
+
     async def test_session_list_reports_server_launch_mode_from_handshake(self, harness):
         ## End-to-end: plugin sends server_launch_mode in handshake →
         ## websocket parses it → Session stores it → session_list surfaces it.
