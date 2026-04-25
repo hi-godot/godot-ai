@@ -115,3 +115,18 @@ static func resolve_uvx_path() -> String:
 ## Callers splice this into the client-specific command shape.
 static func mcp_proxy_bridge_args(url: String) -> Array:
 	return ["mcp-proxy==" + MCP_PROXY_VERSION, "--transport", "streamablehttp", url]
+
+
+## Strategy-shaped error for descriptor Callables that have outlived their
+## owning instance. `McpClient` Callables capture `self` from the descriptor
+## built in `_init()`; after a live plugin reload (Project Settings → Plugins
+## toggle off/on without restarting the editor), those Callables can outlive
+## the instance — `is_valid()` flips false and calling them crashes the
+## editor. Strategies must short-circuit to this error so the dock row
+## degrades to "failed [Retry]" instead of taking the editor down.
+## Restarting the editor rebuilds descriptors with fresh, valid Callables.
+static func stale_callable_error(client: McpClient, field: String) -> Dictionary:
+	return {
+		"status": "error",
+		"message": "%s: stale %s callable after live plugin reload — restart the editor and try again." % [client.display_name, field],
+	}

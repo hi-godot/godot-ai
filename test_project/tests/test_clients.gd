@@ -775,6 +775,72 @@ func test_json_strategy_supports_nested_key_path() -> void:
 	assert_eq(status, McpClient.Status.CONFIGURED)
 
 
+# ----- stale-callable safety after live plugin reload (#192) -----
+#
+# `McpClient` descriptors hold Callables built in `_init()` that capture the
+# descriptor instance. After `set_plugin_enabled(false/true)` the editor can
+# end up with descriptors whose Callables outlived their owning instance —
+# `is_valid()` returns false, calling them crashes the editor. The strategies
+# must short-circuit to a typed error in that state so the dock row degrades
+# to "failed [Retry]" with an actionable message instead.
+#
+# We can't actually trigger a live plugin reload from inside a test without
+# tearing the runner down, so we simulate the post-reload state by pointing
+# the relevant Callable at the default `Callable()` (which has
+# `is_valid() == false` from construction).
+
+
+func test_json_strategy_returns_typed_error_on_stale_entry_builder() -> void:
+	var path := _scratch_dir.path_join("stale_entry_builder.json")
+	_remove_if_exists(path)
+	var client := _make_test_json_client(path)
+	client.entry_builder = Callable()  # simulates post-reload stale callable
+
+	var result := McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	assert_eq(result.get("status"), "error", "Stale entry_builder must return error, not crash")
+	assert_contains(result.get("message", ""), "stale")
+	assert_contains(result.get("message", ""), "entry_builder")
+	assert_false(FileAccess.file_exists(path), "Config file must not be written when builder is stale")
+
+
+func test_toml_strategy_returns_typed_error_on_stale_toml_body_builder() -> void:
+	var path := _scratch_dir.path_join("stale_body_builder.toml")
+	_remove_if_exists(path)
+	var client := _make_test_toml_client(path)
+	client.toml_body_builder = Callable()
+
+	var result := McpTomlStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	assert_eq(result.get("status"), "error", "Stale toml_body_builder must return error, not crash")
+	assert_contains(result.get("message", ""), "stale")
+	assert_contains(result.get("message", ""), "toml_body_builder")
+	assert_false(FileAccess.file_exists(path), "Config file must not be written when builder is stale")
+
+
+func test_cli_strategy_returns_typed_error_on_stale_cli_register_args() -> void:
+	## The CLI strategy needs a resolvable cli executable name to reach the
+	## stale-callable check (the `_resolve_cli` step short-circuits with
+	## "CLI not found" otherwise). Use the bash/sh interpreter that exists
+	## on every CI runner we ship for; if none is available the test
+	## skips rather than reporting a false negative.
+	var probe_names: Array[String] = ["sh", "bash"] if OS.get_name() != "Windows" else ["cmd.exe"]
+	var resolved := McpCliFinder.find(probe_names)
+	if resolved.is_empty():
+		skip("No portable shell on PATH to exercise the CLI strategy")
+		return
+
+	var client := McpClient.new()
+	client.id = "cli_test"
+	client.display_name = "CLI Test"
+	client.config_type = "cli"
+	client.cli_names = PackedStringArray(probe_names)
+	# cli_register_args left as default Callable() — the stale state.
+
+	var result := McpCliStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	assert_eq(result.get("status"), "error", "Stale cli_register_args must return error, not crash")
+	assert_contains(result.get("message", ""), "stale")
+	assert_contains(result.get("message", ""), "cli_register_args")
+
+
 # ----- TOML strategy round-trip -----
 
 func test_toml_strategy_round_trip() -> void:

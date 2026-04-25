@@ -11,6 +11,9 @@ static func configure(client: McpClient, server_name: String, server_url: String
 	if cli.is_empty():
 		return {"status": "error", "message": "%s CLI not found" % client.display_name}
 
+	if not client.cli_register_args.is_valid():
+		return McpClient.stale_callable_error(client, "cli_register_args")
+
 	# Best-effort prior cleanup so re-configure is idempotent.
 	if client.cli_unregister_args.is_valid():
 		var pre_args = client.cli_unregister_args.call(server_name)

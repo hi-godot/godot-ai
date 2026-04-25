@@ -11,6 +11,9 @@ static func configure(client: McpClient, _server_name: String, server_url: Strin
 	if path.is_empty():
 		return {"status": "error", "message": "Could not resolve config path for %s" % client.display_name}
 
+	if not client.toml_body_builder.is_valid():
+		return McpClient.stale_callable_error(client, "toml_body_builder")
+
 	var read := _read_or_init(path)
 	if not read["ok"]:
 		return {"status": "error", "message": "Refusing to overwrite %s: %s. Fix or move the file, then re-run Configure." % [path, read["error"]]}
