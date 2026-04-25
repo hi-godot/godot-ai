@@ -8,11 +8,15 @@ from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import batch as batch_handlers
 from godot_ai.runtime.direct import DirectRuntime
-from godot_ai.tools import DEFER_META, JsonCoerced
+from godot_ai.tools import JsonCoerced
 
 
-def register_batch_tools(mcp: FastMCP) -> None:
-    @mcp.tool(meta=DEFER_META)
+def register_batch_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
+    ## batch has no non-core tools — `include_non_core` is accepted for a
+    ## uniform call signature across core-bearing domains.
+    del include_non_core
+
+    @mcp.tool()
     async def batch_execute(
         ctx: Context,
         commands: Annotated[list[dict], JsonCoerced],

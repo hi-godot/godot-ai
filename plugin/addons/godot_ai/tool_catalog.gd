@@ -10,12 +10,18 @@ extends RefCounted
 ## this file against actual tool registration and fails CI when they drift;
 ## the failure message prints the up-to-date catalog body for paste-over.
 ##
-## The five core tools are always registered and cannot be excluded — they
+## The core tools are always registered and cannot be excluded — they
 ## render as a single grayed-out "Core" row in the UI.
 
 const CORE_TOOLS := [
+	"batch_execute",
 	"editor_state",
+	"node_create",
+	"node_delete",
 	"node_get_properties",
+	"node_rename",
+	"node_reparent",
+	"node_set_property",
 	"scene_get_hierarchy",
 	"session_activate",
 	"session_list",
@@ -31,7 +37,6 @@ const DOMAINS := [
 	{"id": "animation", "label": "animation", "count": 16, "tools": ["animation_add_method_track", "animation_add_property_track", "animation_create", "animation_create_simple", "animation_delete", "animation_get", "animation_list", "animation_play", "animation_player_create", "animation_preset_fade", "animation_preset_pulse", "animation_preset_shake", "animation_preset_slide", "animation_set_autoplay", "animation_stop", "animation_validate"]},
 	{"id": "audio", "label": "audio", "count": 6, "tools": ["audio_list", "audio_play", "audio_player_create", "audio_player_set_playback", "audio_player_set_stream", "audio_stop"]},
 	{"id": "autoload", "label": "autoload", "count": 3, "tools": ["autoload_add", "autoload_list", "autoload_remove"]},
-	{"id": "batch", "label": "batch", "count": 1, "tools": ["batch_execute"]},
 	{"id": "camera", "label": "camera", "count": 8, "tools": ["camera_apply_preset", "camera_configure", "camera_create", "camera_follow_2d", "camera_get", "camera_list", "camera_set_damping_2d", "camera_set_limits_2d"]},
 	{"id": "client", "label": "client", "count": 3, "tools": ["client_configure", "client_remove", "client_status"]},
 	{"id": "control", "label": "control", "count": 1, "tools": ["control_draw_recipe"]},
@@ -41,7 +46,7 @@ const DOMAINS := [
 	{"id": "filesystem", "label": "filesystem", "count": 4, "tools": ["filesystem_read_text", "filesystem_reimport", "filesystem_search", "filesystem_write_text"]},
 	{"id": "input_map", "label": "input_map", "count": 4, "tools": ["input_map_add_action", "input_map_bind_event", "input_map_list", "input_map_remove_action"]},
 	{"id": "material", "label": "material", "count": 8, "tools": ["material_apply_preset", "material_apply_to_node", "material_assign", "material_create", "material_get", "material_list", "material_set_param", "material_set_shader_param"]},
-	{"id": "node", "label": "node", "count": 12, "tools": ["node_add_to_group", "node_create", "node_delete", "node_duplicate", "node_find", "node_get_children", "node_get_groups", "node_move", "node_remove_from_group", "node_rename", "node_reparent", "node_set_property"]},
+	{"id": "node", "label": "node", "count": 7, "tools": ["node_add_to_group", "node_duplicate", "node_find", "node_get_children", "node_get_groups", "node_move", "node_remove_from_group"]},
 	{"id": "particle", "label": "particle", "count": 7, "tools": ["particle_apply_preset", "particle_create", "particle_get", "particle_restart", "particle_set_draw_pass", "particle_set_main", "particle_set_process"]},
 	{"id": "physics_shape", "label": "physics_shape", "count": 1, "tools": ["physics_shape_autofit"]},
 	{"id": "project", "label": "project", "count": 4, "tools": ["project_run", "project_settings_get", "project_settings_set", "project_stop"]},

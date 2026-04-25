@@ -149,6 +149,7 @@ def create_server(
     register_editor_tools(mcp, include_non_core="editor" not in exclude)
     register_scene_tools(mcp, include_non_core="scene" not in exclude)
     register_node_tools(mcp, include_non_core="node" not in exclude)
+    register_batch_tools(mcp, include_non_core="batch" not in exclude)
 
     ## Non-core-bearing domains: dropped wholesale when excluded.
     if "project" not in exclude:
@@ -169,8 +170,6 @@ def create_server(
         register_input_map_tools(mcp)
     if "testing" not in exclude:
         register_testing_tools(mcp)
-    if "batch" not in exclude:
-        register_batch_tools(mcp)
     if "ui" not in exclude:
         register_ui_tools(mcp)
     if "control" not in exclude:

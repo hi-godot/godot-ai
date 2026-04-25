@@ -1,8 +1,8 @@
 """MCP tool modules.
 
 `DEFER_META` marks a tool as deferred-loading for clients using Anthropic
-tool search. Core tools (always loaded: editor_state, scene_get_hierarchy,
-node_get_properties, session_list, session_activate) omit it.
+tool search. Core tools (always loaded — see CORE_TOOLS in
+`godot_ai.tools.domains`) omit it.
 
 `JsonCoerced` is a pydantic `BeforeValidator` that JSON-decodes string
 inputs before list/dict validation runs. Some MCP clients (Claude Code
