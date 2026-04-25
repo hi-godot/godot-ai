@@ -68,6 +68,11 @@ def register_scene_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None
     async def scene_open(ctx: Context, path: str, session_id: str = "") -> dict:
         """Open an existing scene file (.tscn) in the editor.
 
+        If ``path`` is already the currently edited scene this is a no-op
+        — the in-memory state (including any unsaved MCP mutations) is
+        preserved. To force a re-read from disk, ``scene_open`` a different
+        scene first or save & reload manually.
+
         Args:
             path: File path of the scene to open (e.g. "res://main.tscn").
             session_id: Optional Godot session to target. Empty = active session.

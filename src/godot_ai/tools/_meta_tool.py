@@ -142,6 +142,13 @@ async def dispatch_manage_op(
 ) -> dict:
     """Run one op against ``runtime`` with ``params``.
 
+    Note: when called via FastMCP, op-name validation has already happened
+    at the Pydantic schema boundary (the wrapper's ``op`` parameter is a
+    ``Literal`` of registered op names). The ``difflib`` suggestion path
+    below only fires for direct dispatcher calls — e.g. unit tests, or
+    a hypothetical future caller that bypasses the schema. Pydantic's
+    own ``literal_error`` message already enumerates valid alternatives.
+
     Extracted from the closure so unit tests can drive it without spinning
     up a full FastMCP context. Handlers are called as
     ``handler(runtime, **params)`` — the ``ops`` map holds bare handler

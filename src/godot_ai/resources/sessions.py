@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+from typing import Any
 
 from fastmcp import Context, FastMCP
 
@@ -12,7 +12,7 @@ from godot_ai.runtime.direct import DirectRuntime
 
 def register_session_resources(mcp: FastMCP) -> None:
     @mcp.resource("godot://sessions", mime_type="application/json")
-    def get_sessions(ctx: Context) -> str:
+    def get_sessions(ctx: Context) -> dict[str, Any]:
         """All connected Godot editor sessions and their metadata."""
         runtime = DirectRuntime.from_context(ctx)
-        return json.dumps(session_handlers.session_resource_data(runtime))
+        return session_handlers.session_resource_data(runtime)
