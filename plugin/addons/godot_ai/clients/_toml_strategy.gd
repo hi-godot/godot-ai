@@ -14,6 +14,8 @@ static func configure(client: McpClient, _server_name: String, server_url: Strin
 	var read := _read_or_init(path)
 	if not read["ok"]:
 		return {"status": "error", "message": "Refusing to overwrite %s: %s. Fix or move the file, then re-run Configure." % [path, read["error"]]}
+	if not client.toml_body_builder.is_valid():
+		return McpClient.stale_callable_status(client)
 	var lines: Array[String] = _split_lines(String(read["data"]))
 	var body: PackedStringArray = client.toml_body_builder.call(server_url)
 

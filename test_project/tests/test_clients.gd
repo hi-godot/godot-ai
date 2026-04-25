@@ -756,6 +756,66 @@ func test_json_strategy_drift_with_verify_entry_callable() -> void:
 	)
 
 
+## #192 — Lambdas captured in McpClient._init() reference the descriptor
+## instance; toggling the plugin off/on in Project Settings frees the
+## instance and leaves the registry holding stale Callables that crash hard
+## the moment they're invoked. A default-constructed Callable is the closest
+## stand-in we can build in a test — both stale and unset report
+## `is_valid() == false`. The strategies must short-circuit with the shared
+## restart-the-editor message instead of dereferencing the invalid call.
+
+func test_json_strategy_returns_clean_error_when_entry_builder_callable_is_stale() -> void:
+	var path := _scratch_dir.path_join("stale_entry_builder.json")
+	_remove_if_exists(path)
+	var client := _make_test_json_client(path)
+	client.entry_builder = Callable()
+
+	var result := McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	_assert_stale_callable_error(result, client)
+	assert_false(FileAccess.file_exists(path), "Strategy must not write the config file when the callable is stale")
+
+
+func test_toml_strategy_returns_clean_error_when_body_builder_callable_is_stale() -> void:
+	var path := _scratch_dir.path_join("stale_toml_body.toml")
+	_remove_if_exists(path)
+	var client := _make_test_toml_client(path)
+	client.toml_body_builder = Callable()
+
+	var result := McpTomlStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	_assert_stale_callable_error(result, client)
+	assert_false(FileAccess.file_exists(path), "Strategy must not write the config file when the callable is stale")
+
+
+func test_cli_strategy_returns_clean_error_when_register_args_callable_is_stale() -> void:
+	## The strategy resolves the CLI binary before invoking the Callable;
+	## point at `sh` / `cmd.exe` so the resolver succeeds on every test host
+	## and the guard is the line under test.
+	var client := McpClient.new()
+	client.id = "stale_cli_test"
+	client.display_name = "Stale CLI Test"
+	client.config_type = "cli"
+	client.cli_names = PackedStringArray(["cmd.exe"] if OS.get_name() == "Windows" else ["sh"])
+	client.cli_register_args = Callable()
+
+	var result := McpCliStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	_assert_stale_callable_error(result, client)
+
+
+func test_cli_strategy_remove_returns_clean_error_when_unregister_args_callable_is_stale() -> void:
+	## remove() had a pre-existing guard with a different message; after #192
+	## it now routes through stale_callable_status alongside configure(). Same
+	## crash hazard, same recovery — keep the dock-facing wording uniform.
+	var client := McpClient.new()
+	client.id = "stale_cli_remove_test"
+	client.display_name = "Stale CLI Remove Test"
+	client.config_type = "cli"
+	client.cli_names = PackedStringArray(["cmd.exe"] if OS.get_name() == "Windows" else ["sh"])
+	client.cli_unregister_args = Callable()
+
+	var result := McpCliStrategy.remove(client, "godot-ai")
+	_assert_stale_callable_error(result, client)
+
+
 func test_json_strategy_supports_nested_key_path() -> void:
 	var path := _scratch_dir.path_join("nested.json")
 	_remove_if_exists(path)
@@ -1115,6 +1175,13 @@ func _assert_mcp_proxy_bridge_args(args: Variant, expected_url: String) -> void:
 	assert_contains(args, "--transport")
 	assert_contains(args, "streamablehttp")
 	assert_contains(args, expected_url)
+
+
+func _assert_stale_callable_error(result: Dictionary, client: McpClient) -> void:
+	assert_eq(result.get("status"), "error")
+	var msg: String = result.get("message", "")
+	assert_contains(msg, client.display_name, "stale-callable error must name the client, got: %s" % msg)
+	assert_contains(msg, "restart the editor", "stale-callable error must suggest editor restart, got: %s" % msg)
 
 
 func _make_test_json_client(path: String) -> McpClient:
