@@ -140,3 +140,36 @@ func test_disconnect_clears_server_version() -> void:
 	conn._clear_on_disconnect()
 	assert_eq(conn.server_version, "", "reconnect must not inherit stale version")
 	conn.free()
+
+
+# ----- reconnect backoff and logging -----
+
+
+func test_reconnect_delay_caps_at_sixty_seconds() -> void:
+	var expected: Array[float] = [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 60.0]
+	for i in range(expected.size()):
+		assert_eq(Connection._reconnect_delay_for_attempt(i), expected[i])
+	assert_eq(Connection._reconnect_delay_for_attempt(7), 60.0)
+	assert_eq(Connection._reconnect_delay_for_attempt(42), 60.0)
+
+
+func test_reconnect_logging_includes_initial_attempts() -> void:
+	for attempt in range(1, 6):
+		assert_true(
+			Connection._should_log_reconnect_attempt(attempt),
+			"attempt %d should be logged for immediate diagnostics" % attempt,
+		)
+
+
+func test_reconnect_logging_throttles_later_attempts() -> void:
+	assert_false(Connection._should_log_reconnect_attempt(6), "attempt 6 should be quiet")
+	assert_false(Connection._should_log_reconnect_attempt(9), "attempt 9 should be quiet")
+	assert_true(
+		Connection._should_log_reconnect_attempt(10),
+		"attempt 10 should log periodic progress",
+	)
+	assert_false(Connection._should_log_reconnect_attempt(11), "attempt 11 should be quiet again")
+	assert_true(
+		Connection._should_log_reconnect_attempt(20),
+		"attempt 20 should log periodic progress",
+	)

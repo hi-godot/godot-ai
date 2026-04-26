@@ -6,7 +6,9 @@ extends Node
 ## Only handles connect, reconnect, send, and receive.
 ## Command dispatch is owned by McpDispatcher.
 
-const RECONNECT_DELAYS: Array[float] = [1.0, 2.0, 4.0, 8.0, 10.0]
+const RECONNECT_DELAYS: Array[float] = [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 60.0]
+const RECONNECT_VERBOSE_ATTEMPTS := 5
+const RECONNECT_LOG_EVERY_N_ATTEMPTS := 10
 
 var _peer := WebSocketPeer.new()
 ## Resolved from `McpClientConfigurator.ws_port()` in `_ready` so EditorSettings
@@ -117,14 +119,34 @@ func _connect_to_server() -> void:
 
 
 func _attempt_reconnect() -> void:
-	var delay_idx := mini(_reconnect_attempt, RECONNECT_DELAYS.size() - 1)
-	var delay := RECONNECT_DELAYS[delay_idx]
+	var delay := _reconnect_delay_for_attempt(_reconnect_attempt)
 	_reconnect_attempt += 1
 	_reconnect_timer = delay
-	log_buffer.log("reconnecting in %.0fs (attempt %d)" % [delay, _reconnect_attempt])
+	if _should_log_reconnect_attempt(_reconnect_attempt):
+		log_buffer.log(
+			"reconnecting (attempt %d; next retry in %.0fs if needed)"
+			% [_reconnect_attempt, delay]
+		)
+	## Always create a fresh WebSocketPeer before reconnecting. A peer that has
+	## reached STATE_CLOSED is terminal; reusing it can leave the editor stuck in
+	## a quiet reconnect loop after the Python server restarts.
 	_peer = WebSocketPeer.new()
 	_peer.outbound_buffer_size = 4 * 1024 * 1024  # 4 MB
 	_connect_to_server()
+
+
+static func _reconnect_delay_for_attempt(attempt_index: int) -> float:
+	var delay_idx := mini(attempt_index, RECONNECT_DELAYS.size() - 1)
+	return RECONNECT_DELAYS[delay_idx]
+
+
+static func _should_log_reconnect_attempt(attempt_number: int) -> bool:
+	## Log the first few failures for immediate diagnostics, then only periodic
+	## progress markers. Reconnect continues indefinitely; the log should not.
+	return (
+		attempt_number <= RECONNECT_VERBOSE_ATTEMPTS
+		or attempt_number % RECONNECT_LOG_EVERY_N_ATTEMPTS == 0
+	)
 
 
 func _send_handshake() -> void:
