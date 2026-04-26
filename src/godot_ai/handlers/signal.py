@@ -6,8 +6,10 @@ from godot_ai.handlers._readiness import require_writable
 from godot_ai.runtime.interface import Runtime
 
 
-async def signal_list(runtime: Runtime, path: str) -> dict:
-    return await runtime.send_command("list_signals", {"path": path})
+async def signal_list(runtime: Runtime, path: str, include_editor: bool = False) -> dict:
+    return await runtime.send_command(
+        "list_signals", {"path": path, "include_editor": include_editor}
+    )
 
 
 async def signal_connect(

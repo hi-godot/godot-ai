@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
 import websockets
 
 # ---------------------------------------------------------------------------
@@ -6033,3 +6034,27 @@ class TestManageRollupAcceptsStringifiedParams:
         await task
 
         assert result.data["path"] == "res://demo.tscn"
+
+
+# ---------------------------------------------------------------------------
+# *_manage op typo "Did you mean" hint (#211)
+# ---------------------------------------------------------------------------
+
+
+class TestManageRollupHintsOnOpTypo:
+    async def test_op_typo_surfaces_did_you_mean_message(self, mcp_stack):
+        """Typo'd op hits the middleware hint, not the raw Pydantic enum dump."""
+        from fastmcp.exceptions import ToolError
+
+        client, _plugin = mcp_stack
+
+        with pytest.raises(ToolError) as info:
+            await client.call_tool(
+                "node_manage",
+                {"op": "get_childen", "params": {"path": "/Main"}},
+            )
+
+        msg = str(info.value)
+        assert "'get_childen'" in msg
+        assert "did you mean" in msg.lower()
+        assert "'get_children'" in msg

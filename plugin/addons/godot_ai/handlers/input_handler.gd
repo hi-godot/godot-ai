@@ -11,8 +11,11 @@ func list_actions(params: Dictionary) -> Dictionary:
 	var actions: Array[Dictionary] = []
 	for action_name in InputMap.get_actions():
 		var name_str := str(action_name)
-		var is_builtin := name_str.begins_with("ui_")
-		if is_builtin and not include_builtin:
+		## User-authored actions are exactly those persisted in project.godot;
+		## drops not just ``ui_*`` but also editor-runtime namespaces like
+		## ``spatial_editor/*``. See #213.
+		var is_user_action := ProjectSettings.has_setting("input/" + name_str)
+		if not include_builtin and not is_user_action:
 			continue
 		var events: Array[Dictionary] = []
 		for event in InputMap.action_get_events(action_name):
@@ -21,7 +24,7 @@ func list_actions(params: Dictionary) -> Dictionary:
 			"name": name_str,
 			"events": events,
 			"event_count": events.size(),
-			"is_builtin": is_builtin,
+			"is_builtin": not is_user_action,
 		})
 	return {"data": {"actions": actions, "count": actions.size()}}
 

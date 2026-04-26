@@ -15,8 +15,12 @@ Resource form: ``godot://input_map`` — prefer for active-session reads.
 
 Ops:
   • list(include_builtin=False)
-        List input actions and their bound events. Set include_builtin=True
-        to include Godot's built-in ``ui_*`` actions.
+        List input actions and their bound events. By default only
+        user-authored actions (those persisted in ``project.godot`` under
+        ``input/<name>``) are returned; pass ``include_builtin=True`` to
+        also surface Godot's ``ui_*`` and editor-runtime actions
+        (``spatial_editor/*``, etc.). The ``is_builtin`` field on each
+        entry is true for any action not authored by the user.
   • add_action(action, deadzone=0.5)
         Create a new empty input action.
   • remove_action(action)

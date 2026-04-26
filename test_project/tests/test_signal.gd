@@ -49,6 +49,43 @@ func test_list_signals_no_scene() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
+func test_list_signals_hides_editor_internal_connections_by_default() -> void:
+	## Bug #213: SceneTreeEditor observers connect to every scene node and
+	## previously surfaced as user-authored connections. Default filter
+	## drops connections whose target is outside the edited scene tree.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var path := "/" + scene_root.name
+	var result := _handler.list_signals({"path": path})
+	assert_has_key(result, "data")
+	assert_has_key(result.data, "connections")
+	assert_has_key(result.data, "editor_connection_count")
+	for conn in result.data.connections:
+		var target_path: String = conn.target
+		assert_false(target_path.contains("SceneTreeEditor"),
+			"Editor-internal SceneTreeEditor connection leaked into default list: %s" % target_path)
+		assert_false(target_path.contains("DockSlot"),
+			"Editor-internal dock connection leaked into default list: %s" % target_path)
+
+
+func test_list_signals_include_editor_surfaces_internal_connections() -> void:
+	## Opt-in flag returns the editor-side connections that the default
+	## filter hides. On a real editor scene there's almost always at least
+	## one — assert the include_editor count is >= the default count.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var path := "/" + scene_root.name
+	var default_result := _handler.list_signals({"path": path})
+	var full_result := _handler.list_signals({"path": path, "include_editor": true})
+	assert_has_key(full_result, "data")
+	assert_true(full_result.data.connection_count >= default_result.data.connection_count,
+		"include_editor should not hide any user connections")
+
+
 # ----- connect_signal -----
 
 func test_connect_signal_missing_params() -> void:

@@ -11,7 +11,11 @@ from dataclasses import dataclass
 from fastmcp import FastMCP
 
 from godot_ai.godot_client.client import GodotClient
-from godot_ai.middleware import ParseStringifiedParams, StripClientWrapperKwargs
+from godot_ai.middleware import (
+    HintOpTypoOnManage,
+    ParseStringifiedParams,
+    StripClientWrapperKwargs,
+)
 from godot_ai.resources.editor import register_editor_resources
 from godot_ai.resources.library import register_library_resources
 from godot_ai.resources.nodes import register_node_resources
@@ -149,6 +153,11 @@ def create_server(
     ## strict-mode Pydantic rejects them. Some clients (Cline) auto-serialize
     ## nested objects. See #206.
     mcp.add_middleware(ParseStringifiedParams())
+
+    ## Rewrite Pydantic literal_error on ``<domain>_manage`` op typos with a
+    ## ``difflib``-derived "Did you mean" hint, since op typos are the most
+    ## common rollup-misuse pattern. See #211.
+    mcp.add_middleware(HintOpTypoOnManage())
 
     exclude = set(exclude_domains or ())
     if exclude:
