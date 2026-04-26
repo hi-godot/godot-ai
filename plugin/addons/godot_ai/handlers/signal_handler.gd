@@ -51,7 +51,7 @@ func list_signals(params: Dictionary) -> Dictionary:
 					continue
 			connections.append({
 				"signal": sig.name,
-				"target": ScenePath.from_node(target, scene_root) if target is Node else str(target),
+				"target": _serialize_target(target, scene_root),
 				"method": callable.get_method(),
 				"is_editor": is_editor_target,
 			})
@@ -80,6 +80,22 @@ func _target_is_user_scope(target: Node, scene_root: Node) -> bool:
 		if target.get_parent() == root and ProjectSettings.has_setting("autoload/" + target.name):
 			return true
 	return false
+
+
+## Autoloads instantiated at edit time live under /root, not under
+## scene_root. ScenePath.from_node would emit a "/Main/../../Autoload"
+## path that walks out of the scene root — which both reads as confusing
+## and conflicts with our user-scope-doesn't-walk-out invariant. Use the
+## same form connect_signal accepts as input ("/AutoloadName") instead.
+func _serialize_target(target: Object, scene_root: Node) -> String:
+	if not (target is Node):
+		return str(target)
+	var node: Node = target
+	if ProjectSettings.has_setting("autoload/" + node.name):
+		var tree := Engine.get_main_loop()
+		if tree is SceneTree and node.get_parent() == (tree as SceneTree).root:
+			return "/" + node.name
+	return ScenePath.from_node(node, scene_root)
 
 
 func connect_signal(params: Dictionary) -> Dictionary:
