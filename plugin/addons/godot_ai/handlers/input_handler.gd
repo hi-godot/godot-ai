@@ -15,8 +15,9 @@ func list_actions(params: Dictionary) -> Dictionary:
 		if not include_builtin and is_builtin:
 			continue
 		# Editor-runtime actions (e.g. spatial_editor/freelook_left) live in
-		# InputMap but never appear under input/ in project.godot. Treat
-		# "user-authored" as "registered in ProjectSettings".
+		# InputMap but never appear under input/ in project.godot. When
+		# include_builtin is false, treat only non-ui_* actions registered in
+		# ProjectSettings as "user-authored".
 		if not include_builtin and not ProjectSettings.has_setting("input/" + name_str):
 			continue
 		var events: Array[Dictionary] = []
