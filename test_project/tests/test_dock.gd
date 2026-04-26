@@ -157,6 +157,25 @@ func test_refresh_cooldown_helper_only_blocks_automatic_refreshes() -> void:
 		"No completed refresh means no cooldown")
 
 
+func test_exit_tree_drains_orphaned_refresh_threads() -> void:
+	## Regression for the static-var orphan bug surfaced on the plugin disable
+	## path (editor_reload_plugin, Project Settings toggle): the McpDock
+	## script class is itself reloaded, which wipes
+	## `_orphaned_client_status_refresh_threads` and GCs any Thread still in
+	## it mid-execution → `~Thread … destroyed without its completion having
+	## been realized` plus GDScript VM corruption (Opcode: 0, IP-bounds
+	## errors, intermittent SIGSEGV). `_exit_tree` must drain the orphan list
+	## synchronously before returning, so no GDScript work straddles the
+	## script-class reload boundary.
+	var t := Thread.new()
+	var err := t.start(func() -> int: return 42)
+	assert_eq(err, OK, "Test fixture failed to start thread")
+	McpDockScript._orphaned_client_status_refresh_threads.append(t)
+	_dock._exit_tree()
+	assert_true(McpDockScript._orphaned_client_status_refresh_threads.is_empty(),
+		"_exit_tree must clear the orphan list synchronously after waiting on each thread")
+
+
 ## Shared fixture for the three version-label tests. Inject a Label + Button
 ## + Connection onto the dock so the pure refresh logic can be exercised
 ## without depending on whether the test environment resolves as user mode
