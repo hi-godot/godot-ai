@@ -726,6 +726,204 @@ func test_serialize_dictionary_recursive() -> void:
 	assert_eq(result["name"], "x")
 
 
+# Issue #214: AABB / Rect2 / Transform / Packed* used to come back as Godot's
+# debug-print strings (e.g. "[P: (0,0,0), S: (0,0,0)]" or "[]"), so agents
+# couldn't programmatically inspect or round-trip them. Each test below
+# asserts a specific structured shape — count-only / `is Dictionary` checks
+# would silently pass against the old broken behavior on most of these.
+
+func test_serialize_aabb_returns_position_and_size() -> void:
+	var result = NodeHandler._serialize_value(AABB(Vector3(1, 2, 3), Vector3(4, 5, 6)))
+	assert_true(result is Dictionary)
+	assert_has_key(result, "position")
+	assert_has_key(result, "size")
+	assert_eq(result["position"]["x"], 1.0)
+	assert_eq(result["position"]["y"], 2.0)
+	assert_eq(result["position"]["z"], 3.0)
+	assert_eq(result["size"]["x"], 4.0)
+	assert_eq(result["size"]["y"], 5.0)
+	assert_eq(result["size"]["z"], 6.0)
+
+
+func test_serialize_rect2_returns_position_and_size() -> void:
+	var result = NodeHandler._serialize_value(Rect2(1, 2, 3, 4))
+	assert_true(result is Dictionary)
+	assert_eq(result["position"]["x"], 1.0)
+	assert_eq(result["position"]["y"], 2.0)
+	assert_eq(result["size"]["x"], 3.0)
+	assert_eq(result["size"]["y"], 4.0)
+
+
+func test_serialize_rect2i_returns_position_and_size() -> void:
+	var result = NodeHandler._serialize_value(Rect2i(1, 2, 3, 4))
+	assert_true(result is Dictionary)
+	assert_eq(result["position"]["x"], 1)
+	assert_eq(result["size"]["y"], 4)
+
+
+func test_serialize_vector2i_returns_xy_dict() -> void:
+	var result = NodeHandler._serialize_value(Vector2i(7, 8))
+	assert_true(result is Dictionary)
+	assert_eq(result["x"], 7)
+	assert_eq(result["y"], 8)
+
+
+func test_serialize_vector3i_returns_xyz_dict() -> void:
+	var result = NodeHandler._serialize_value(Vector3i(7, 8, 9))
+	assert_true(result is Dictionary)
+	assert_eq(result["x"], 7)
+	assert_eq(result["y"], 8)
+	assert_eq(result["z"], 9)
+
+
+func test_serialize_vector4_returns_xyzw_dict() -> void:
+	var result = NodeHandler._serialize_value(Vector4(1, 2, 3, 4))
+	assert_true(result is Dictionary)
+	assert_eq(result["x"], 1.0)
+	assert_eq(result["y"], 2.0)
+	assert_eq(result["z"], 3.0)
+	assert_eq(result["w"], 4.0)
+
+
+func test_serialize_quaternion_returns_xyzw_dict() -> void:
+	var result = NodeHandler._serialize_value(Quaternion(0.1, 0.2, 0.3, 1.0))
+	assert_true(result is Dictionary)
+	assert_eq(result["w"], 1.0)
+
+
+func test_serialize_plane_returns_normal_and_d() -> void:
+	var result = NodeHandler._serialize_value(Plane(Vector3(0, 1, 0), 5))
+	assert_true(result is Dictionary)
+	assert_has_key(result, "normal")
+	assert_eq(result["normal"]["y"], 1.0)
+	assert_eq(result["d"], 5.0)
+
+
+func test_serialize_basis_returns_three_column_vectors() -> void:
+	var result = NodeHandler._serialize_value(Basis.IDENTITY)
+	assert_true(result is Dictionary)
+	# Identity basis: x=(1,0,0), y=(0,1,0), z=(0,0,1).
+	assert_eq(result["x"]["x"], 1.0)
+	assert_eq(result["y"]["y"], 1.0)
+	assert_eq(result["z"]["z"], 1.0)
+
+
+func test_serialize_transform2d_returns_basis_cols_and_origin() -> void:
+	var result = NodeHandler._serialize_value(Transform2D(0.0, Vector2(7, 8)))
+	assert_true(result is Dictionary)
+	assert_has_key(result, "x")
+	assert_has_key(result, "y")
+	assert_has_key(result, "origin")
+	assert_eq(result["origin"]["x"], 7.0)
+	assert_eq(result["origin"]["y"], 8.0)
+
+
+func test_serialize_transform3d_returns_basis_and_origin() -> void:
+	var result = NodeHandler._serialize_value(Transform3D(Basis.IDENTITY, Vector3(1, 2, 3)))
+	assert_true(result is Dictionary)
+	assert_has_key(result, "basis")
+	assert_has_key(result, "origin")
+	# Basis serializes recursively, so origin should be a {x,y,z} dict.
+	assert_eq(result["origin"]["x"], 1.0)
+	assert_eq(result["basis"]["x"]["x"], 1.0)
+
+
+func test_serialize_projection_returns_four_column_vectors() -> void:
+	var result = NodeHandler._serialize_value(Projection.IDENTITY)
+	assert_true(result is Dictionary)
+	for axis in ["x", "y", "z", "w"]:
+		assert_has_key(result, axis)
+		assert_has_key(result[axis], "w")  # column vectors are Vector4
+
+
+func test_serialize_packed_float32_array_returns_array_of_floats() -> void:
+	var packed := PackedFloat32Array([1.5, 2.5, 3.5])
+	var result = NodeHandler._serialize_value(packed)
+	assert_true(result is Array)
+	assert_eq(result.size(), 3)
+	assert_eq(result[0], 1.5)
+	assert_true(result[2] is float)
+
+
+func test_serialize_packed_float32_empty_returns_empty_array() -> void:
+	# Issue #214 repro: Label.tab_stops used to come back as the string "[]".
+	var result = NodeHandler._serialize_value(PackedFloat32Array())
+	assert_true(result is Array)
+	assert_eq(result.size(), 0)
+
+
+func test_serialize_packed_int32_array_returns_array_of_ints() -> void:
+	var result = NodeHandler._serialize_value(PackedInt32Array([10, 20, 30]))
+	assert_true(result is Array)
+	assert_eq(result[1], 20)
+
+
+func test_serialize_packed_byte_array_returns_array_of_ints() -> void:
+	var result = NodeHandler._serialize_value(PackedByteArray([0, 128, 255]))
+	assert_true(result is Array)
+	assert_eq(result[2], 255)
+
+
+func test_serialize_packed_string_array_returns_array_of_strings() -> void:
+	var result = NodeHandler._serialize_value(PackedStringArray(["a", "bb", "ccc"]))
+	assert_true(result is Array)
+	assert_eq(result[1], "bb")
+	assert_true(result[0] is String)
+
+
+func test_serialize_packed_vector2_array_returns_xy_dicts() -> void:
+	var packed := PackedVector2Array([Vector2(1, 2), Vector2(3, 4)])
+	var result = NodeHandler._serialize_value(packed)
+	assert_true(result is Array)
+	assert_eq(result.size(), 2)
+	assert_eq(result[0]["x"], 1.0)
+	assert_eq(result[1]["y"], 4.0)
+
+
+func test_serialize_packed_vector3_array_returns_xyz_dicts() -> void:
+	var result = NodeHandler._serialize_value(PackedVector3Array([Vector3(1, 2, 3)]))
+	assert_true(result is Array)
+	assert_eq(result[0]["z"], 3.0)
+
+
+func test_serialize_packed_color_array_returns_rgba_dicts() -> void:
+	var result = NodeHandler._serialize_value(PackedColorArray([Color(1, 0, 0, 0.5)]))
+	assert_true(result is Array)
+	assert_eq(result[0]["r"], 1.0)
+	assert_eq(result[0]["a"], 0.5)
+
+
+func test_get_node_properties_aabb_value_is_structured() -> void:
+	# End-to-end: a MeshInstance3D has `custom_aabb: AABB`. The repro in
+	# issue #214 was getting `"[P: (0.0, 0.0, 0.0), S: (0.0, 0.0, 0.0)]"`
+	# back as a string from this exact path.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var mi := MeshInstance3D.new()
+	mi.name = "_McpAabbProbe%s" % str(Time.get_ticks_usec())
+	mi.custom_aabb = AABB(Vector3(1, 2, 3), Vector3(4, 5, 6))
+	scene_root.add_child(mi)
+	mi.owner = scene_root
+	var node_path := "/%s/%s" % [scene_root.name, mi.name]
+	var result := _handler.get_node_properties({"path": node_path})
+	mi.queue_free()
+	assert_has_key(result, "data")
+	var found_aabb := false
+	for prop in result.data.properties:
+		if prop.name == "custom_aabb":
+			found_aabb = true
+			assert_eq(prop.type, "AABB")
+			assert_true(prop.value is Dictionary, "custom_aabb value must be structured, got: %s" % str(prop.value))
+			assert_has_key(prop.value, "position")
+			assert_has_key(prop.value, "size")
+			assert_eq(prop.value.position.x, 1.0)
+			assert_eq(prop.value.size.z, 6.0)
+			break
+	assert_true(found_aabb, "custom_aabb property not found on MeshInstance3D")
+
+
 # ----- rename_node -----
 
 func test_rename_node_basic() -> void:
