@@ -159,6 +159,8 @@ async def test_stale_mcp_session_diagnostic_passes_through_when_request_has_no_s
 
 @pytest.mark.anyio
 async def test_stale_mcp_session_diagnostic_leaves_other_responses_unchanged():
+    # Use the session header so this exercises the buffering code path's
+    # non-404 short-circuit, not just the request-level gate.
     async def ok_response(scope, receive, send):
         await send(
             {
@@ -171,7 +173,10 @@ async def test_stale_mcp_session_diagnostic_leaves_other_responses_unchanged():
 
     app = StaleMcpSessionDiagnosticMiddleware(ok_response)
 
-    sent = await _single_http_request(app)
+    sent = await _single_http_request(
+        app,
+        headers=[(b"mcp-session-id", b"live-session-id")],
+    )
 
     assert sent == [
         {
@@ -198,7 +203,10 @@ async def test_stale_mcp_session_diagnostic_streams_non_404_responses_unchanged(
 
     app = StaleMcpSessionDiagnosticMiddleware(streaming_response)
 
-    sent = await _single_http_request(app)
+    sent = await _single_http_request(
+        app,
+        headers=[(b"mcp-session-id", b"live-session-id")],
+    )
 
     assert sent == [
         {
@@ -235,7 +243,10 @@ async def test_stale_mcp_session_diagnostic_passes_unhandled_asgi_messages_throu
 
     app = StaleMcpSessionDiagnosticMiddleware(extension_message_response)
 
-    sent = await _single_http_request(app)
+    sent = await _single_http_request(
+        app,
+        headers=[(b"mcp-session-id", b"live-session-id")],
+    )
 
     assert sent == [
         {
@@ -243,6 +254,59 @@ async def test_stale_mcp_session_diagnostic_passes_unhandled_asgi_messages_throu
             "info": {"note": "kept for downstream middleware"},
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_stale_mcp_session_diagnostic_ignores_non_dict_jsonrpc_payloads():
+    # A 404 with a JSON body that isn't the SDK's stale-session shape (here a
+    # list, and a dict whose error field is a string) must pass through.
+    async def list_payload_response(scope, receive, send):
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 404,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b'[{"jsonrpc":"2.0","error":{"message":"Session not found"}}]',
+                "more_body": False,
+            }
+        )
+
+    app = StaleMcpSessionDiagnosticMiddleware(list_payload_response)
+    sent = await _single_http_request(
+        app,
+        headers=[(b"mcp-session-id", b"stale-session-id")],
+    )
+    body = json.loads(sent[1]["body"])
+    assert isinstance(body, list)
+
+    async def string_error_response(scope, receive, send):
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 404,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b'{"jsonrpc":"2.0","id":"server-error","error":"Session not found"}',
+                "more_body": False,
+            }
+        )
+
+    app = StaleMcpSessionDiagnosticMiddleware(string_error_response)
+    sent = await _single_http_request(
+        app,
+        headers=[(b"mcp-session-id", b"stale-session-id")],
+    )
+    body = json.loads(sent[1]["body"])
+    assert body["error"] == "Session not found"
 
 
 @pytest.mark.anyio
