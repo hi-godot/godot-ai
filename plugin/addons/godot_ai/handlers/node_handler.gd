@@ -417,7 +417,11 @@ func add_to_group(params: Dictionary) -> Dictionary:
 	var node: Node = resolved.node
 	var node_path: String = resolved.path
 
-	var group: String = params.get("group", "")
+	var group_value: Variant = params.get("group", "")
+	var type_err := McpParamValidators.require_string("group", group_value)
+	if type_err != null:
+		return type_err
+	var group: String = group_value
 	if group.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: group")
 
@@ -445,7 +449,11 @@ func remove_from_group(params: Dictionary) -> Dictionary:
 	var node: Node = resolved.node
 	var node_path: String = resolved.path
 
-	var group: String = params.get("group", "")
+	var group_value: Variant = params.get("group", "")
+	var type_err := McpParamValidators.require_string("group", group_value)
+	if type_err != null:
+		return type_err
+	var group: String = group_value
 	if group.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: group")
 

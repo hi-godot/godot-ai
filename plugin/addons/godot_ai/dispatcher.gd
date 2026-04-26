@@ -136,14 +136,30 @@ func _dispatch(cmd: Dictionary) -> Dictionary:
 	return result
 
 
+## Truncate JSON-stringified args at this many chars when stuffing them into
+## a malformed-result error message — large dicts shouldn't bloat the
+## response, but a few hundred chars usually pinpoints which param was the
+## wrong shape.
+const _MALFORMED_ARGS_MAX := 400
+
+
 func _call_handler(command: String, params: Dictionary) -> Dictionary:
 	var result: Dictionary = _handlers[command].call(params)
 	## Handlers must return {"data": ...} on success or {"error": ...} on failure.
 	## Anything else (null, empty, missing keys) means the handler crashed
 	## mid-call — GDScript swallows the error and returns an empty dict.
 	if result == null or not (result.has("data") or result.has("error") or result.has("_deferred")):
-		return McpErrorCodes.make(
-			McpErrorCodes.INTERNAL_ERROR,
-			"Handler '%s' returned malformed result (likely crashed — check Godot console)" % command,
-		)
+		var safe_params := params.duplicate()
+		safe_params.erase("_request_id")
+		var args_json := JSON.stringify(safe_params)
+		if args_json.length() > _MALFORMED_ARGS_MAX:
+			args_json = args_json.substr(0, _MALFORMED_ARGS_MAX) + "..."
+		var msg := (
+			"Handler '%s' returned malformed result — likely a runtime error in the handler "
+			+ "(e.g. param type mismatch). Check the Godot console for the GDScript backtrace. "
+			+ "Args received: %s"
+		) % [command, args_json]
+		if mcp_logging and _log_buffer != null:
+			_log_buffer.log("[error] %s -> malformed result; args=%s" % [command, args_json])
+		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, msg)
 	return result

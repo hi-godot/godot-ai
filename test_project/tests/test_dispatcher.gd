@@ -23,7 +23,7 @@ func test_dispatch_direct_converts_empty_dict_to_internal_error() -> void:
 	var result := d.dispatch_direct("returns_empty", {})
 	assert_is_error(result, McpErrorCodes.INTERNAL_ERROR)
 	assert_contains(result.error.message, "returns_empty")
-	assert_contains(result.error.message, "likely crashed")
+	assert_contains(result.error.message, "malformed result")
 
 
 func test_dispatch_direct_converts_null_result_to_internal_error() -> void:
@@ -71,3 +71,66 @@ func test_dispatch_direct_unknown_command_unchanged() -> void:
 	d.mcp_logging = false
 	var result := d.dispatch_direct("never_registered", {})
 	assert_is_error(result, McpErrorCodes.UNKNOWN_COMMAND)
+
+
+# ----- malformed-result error surfaces args + writes to log buffer (#210) -----
+
+
+func test_malformed_result_message_includes_received_args() -> void:
+	## When a handler crashes / returns junk, the agent has no way to inspect
+	## Godot's console. Surface what the handler was called with so the
+	## agent can spot a param type mismatch from outside the editor.
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	d.register("crashy", func(_p): return {})
+	var result := d.dispatch_direct("crashy", {"path": "/Main", "group": ["a", "b"]})
+	assert_is_error(result, McpErrorCodes.INTERNAL_ERROR)
+	assert_contains(result.error.message, "crashy")
+	assert_contains(result.error.message, "/Main")
+	assert_contains(result.error.message, "group")
+
+
+func test_malformed_result_message_strips_internal_request_id() -> void:
+	## The dispatcher threads `_request_id` into the duplicated params dict
+	## for handlers that need it (deferred responses); it must not leak back
+	## into a user-facing error message.
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	d.register("crashy", func(_p): return {})
+	var result := d.dispatch_direct("crashy", {"_request_id": "secret-rid-123"})
+	assert_is_error(result, McpErrorCodes.INTERNAL_ERROR)
+	assert_true(
+		result.error.message.find("secret-rid-123") == -1,
+		"_request_id must not appear in the user-facing error message",
+	)
+
+
+func test_malformed_result_writes_error_line_to_log_buffer() -> void:
+	## logs_read is the only out-of-editor channel for post-crash context.
+	## Confirm a line lands there alongside the protocol response.
+	var buf := McpLogBuffer.new()
+	var d := McpDispatcher.new(buf)
+	d.mcp_logging = true
+	d.register("crashy", func(_p): return {})
+	d.dispatch_direct("crashy", {"path": "/Main"})
+	var lines := buf.get_recent(20)
+	var found := false
+	for line in lines:
+		if line.find("[error]") != -1 and line.find("crashy") != -1:
+			found = true
+			break
+	assert_true(found, "malformed result should log an [error] line")
+
+
+func test_malformed_result_truncates_long_args() -> void:
+	## Avoid bloating responses with huge param dumps — a few hundred chars
+	## is usually enough to identify the bad field.
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	d.register("crashy", func(_p): return {})
+	var big := ""
+	for i in range(200):
+		big += "x"
+	var result := d.dispatch_direct("crashy", {"blob": big + big + big})
+	assert_is_error(result, McpErrorCodes.INTERNAL_ERROR)
+	assert_contains(result.error.message, "...")

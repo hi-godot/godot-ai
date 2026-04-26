@@ -764,6 +764,44 @@ class TestNodeGroupTools:
 
         assert result.data["group"] == "enemies"
 
+    async def test_add_to_group_array_value_returns_invalid_params(self, mcp_stack):
+        ## #210 repro: agent passes `group` as a JSON-string-looking list. The
+        ## meta-tool layer's `_coerce_json_strings` decodes it into an Array
+        ## before the plugin sees it (recv shows `"group":["a","b"]`). Without
+        ## the GDScript-side typeof() guard added in this fix, the typed
+        ## assignment `var group: String = ...` runtime-errored and the
+        ## dispatcher surfaced an opaque INTERNAL_ERROR. With the guard, the
+        ## plugin now sends back a structured INVALID_PARAMS that names the
+        ## bad param. We mock the plugin sending the new error shape and
+        ## confirm the meta-tool surfaces it cleanly to the client.
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "add_to_group"
+            ## The coercion middleware decoded the JSON-list string into a
+            ## real array. The plugin now type-checks the value and rejects.
+            assert cmd["params"]["group"] == ["a", "b"]
+            await plugin.send_error(
+                cmd["request_id"],
+                "INVALID_PARAMS",
+                "Param 'group' must be a String, got Array",
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "node_manage",
+            {
+                "op": "add_to_group",
+                "params": {"path": "/Main/Enemy", "group": '["a","b"]'},
+            },
+            raise_on_error=False,
+        )
+        await task
+        assert result.is_error
+        assert "must be a String" in str(result.content)
+        assert "group" in str(result.content)
+
 
 # ---------------------------------------------------------------------------
 # editor_selection_set
