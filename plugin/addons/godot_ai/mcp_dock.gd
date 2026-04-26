@@ -172,11 +172,25 @@ func _process(_delta: float) -> void:
 
 
 func _exit_tree() -> void:
+	## Block on any in-flight refresh worker before letting the dock leave the
+	## tree. The plugin disable path (editor_reload_plugin, Project Settings
+	## toggle) reloads the McpDock script class — which wipes the static
+	## `_orphaned_client_status_refresh_threads`, GCs the Thread objects mid-
+	## execution, and triggers `~Thread … destroyed without its completion
+	## having been realized` plus GDScript VM corruption (Opcode: 0, IP-bounds
+	## errors, intermittent SIGSEGV). Probes finish in well under a second
+	## under normal conditions; if a CLI probe genuinely hung, the runtime
+	## timeout path (`_abandon_client_status_refresh_thread`) has already
+	## moved that thread into the orphan list, so we drain it here too.
 	_client_status_refresh_shutdown_requested = true
 	_client_status_refresh_generation += 1
 	if _client_status_refresh_thread != null:
-		_orphaned_client_status_refresh_threads.append(_client_status_refresh_thread)
+		_client_status_refresh_thread.wait_to_finish()
 		_client_status_refresh_thread = null
+	for thread in _orphaned_client_status_refresh_threads:
+		if thread != null:
+			thread.wait_to_finish()
+	_orphaned_client_status_refresh_threads.clear()
 	_client_status_refresh_in_flight = false
 	_client_status_refresh_pending = false
 	_client_status_refresh_pending_force = false
