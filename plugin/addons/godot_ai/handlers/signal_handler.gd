@@ -52,7 +52,7 @@ func list_signals(params: Dictionary) -> Dictionary:
 				continue
 			connections.append({
 				"signal": sig.name,
-				"target": ScenePath.from_node(target, scene_root) if target is Node else str(target),
+				"target": _format_target_path(target, scene_root),
 				"method": callable.get_method(),
 			})
 
@@ -69,13 +69,14 @@ func list_signals(params: Dictionary) -> Dictionary:
 
 
 ## A target is "editor-internal" when it's a Node sitting outside the edited
-## scene tree AND not an autoload singleton — typical case is the
-## SceneTreeEditor dock listening for visibility/script/state changes on
+## scene tree AND not anywhere under a declared autoload — typical case is
+## the SceneTreeEditor dock listening for visibility/script/state changes on
 ## every scene node. Connections to autoloads (declared under ``autoload/*``
 ## in ProjectSettings) are user-authored even though they live under
-## ``/root/<Name>`` rather than under the edited scene root, so they stay
-## visible. Non-Node targets (anonymous Callables, RefCounted listeners
-## etc.) also stay visible — we can't reliably classify them.
+## ``/root/<Name>`` rather than under the edited scene root, so the autoload
+## root *and* any descendant of it stay visible. Non-Node targets
+## (anonymous Callables, RefCounted listeners etc.) also stay visible — we
+## can't reliably classify them.
 func _is_editor_internal_target(target: Object, scene_root: Node) -> bool:
 	if not (target is Node):
 		return false
@@ -84,9 +85,50 @@ func _is_editor_internal_target(target: Object, scene_root: Node) -> bool:
 		return false
 	if scene_root.is_ancestor_of(node_target):
 		return false
-	if ProjectSettings.has_setting("autoload/" + str(node_target.name)):
+	if _is_under_autoload(node_target):
 		return false
 	return true
+
+
+## True if `node` is a declared autoload root or sits anywhere under one.
+## When the node is in the SceneTree we read its absolute path
+## (``/root/<Name>/...``) and check the first segment after ``/root/``;
+## this covers connections to deep descendants of editor-instanced
+## autoloads (e.g. ``/root/MyAutoload/Foo/Bar``). When the node isn't in
+## the tree (test fixtures often construct nodes in isolation), we walk
+## the parent chain and match each ancestor's ``name`` against the
+## autoload key as a best-effort fallback.
+static func _is_under_autoload(node: Node) -> bool:
+	if node.is_inside_tree():
+		var path := str(node.get_path())
+		if not path.begins_with("/root/"):
+			return false
+		var first_segment := path.substr(6).split("/", true, 1)[0]
+		return ProjectSettings.has_setting("autoload/" + first_segment)
+	var cursor: Node = node
+	while cursor != null:
+		if ProjectSettings.has_setting("autoload/" + str(cursor.name)):
+			return true
+		cursor = cursor.get_parent()
+	return false
+
+
+## Serialize a connection's target path. Descendants of (or equal to) the
+## edited scene root render as the usual scene-relative form
+## (``/Main/Camera3D``). Non-descendants — autoload subtrees in particular
+## — render as their canonical absolute SceneTree path
+## (``/root/MyAutoload/Child``) instead of a scene-relative path full of
+## ``..`` segments, which agents can't navigate back to. Non-Node targets
+## (anonymous Callables, etc.) fall back to their string representation.
+static func _format_target_path(target: Object, scene_root: Node) -> String:
+	if not (target is Node):
+		return str(target)
+	var node_target: Node = target
+	if node_target == scene_root or scene_root.is_ancestor_of(node_target):
+		return ScenePath.from_node(node_target, scene_root)
+	if node_target.is_inside_tree():
+		return str(node_target.get_path())
+	return ScenePath.from_node(node_target, scene_root)
 
 
 func connect_signal(params: Dictionary) -> Dictionary:
