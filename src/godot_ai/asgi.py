@@ -52,7 +52,10 @@ class StaleMcpSessionDiagnosticMiddleware:
         return getattr(self.app, name)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
+        # The SDK only emits "Session not found" when the client sent an
+        # mcp-session-id header. Skip buffering for everything else so unrelated
+        # HTTP 404s keep their original streaming/timing semantics.
+        if scope["type"] != "http" or not _request_has_mcp_session_id(scope):
             await self.app(scope, receive, send)
             return
 
@@ -81,11 +84,11 @@ class StaleMcpSessionDiagnosticMiddleware:
 
     async def _send_response(
         self,
-        start_message: Message | None,
+        start_message: Message,
         body: bytes,
         send: Send,
     ) -> None:
-        rewritten = self._rewrite_stale_session_body(start_message, body)
+        rewritten = self._rewrite_stale_session_body(body)
         response_body = rewritten if rewritten is not None else body
         headers = start_message.get("headers", [])
         if rewritten is not None:
@@ -95,7 +98,7 @@ class StaleMcpSessionDiagnosticMiddleware:
         await send(start_message)
         await send({"type": "http.response.body", "body": response_body, "more_body": False})
 
-    def _rewrite_stale_session_body(self, start_message: Message, body: bytes) -> bytes | None:
+    def _rewrite_stale_session_body(self, body: bytes) -> bytes | None:
         try:
             payload = json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -108,12 +111,16 @@ class StaleMcpSessionDiagnosticMiddleware:
         return json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
     def _is_sdk_session_not_found(self, payload: Any) -> bool:
-        return (
-            isinstance(payload, dict)
-            and payload.get("jsonrpc") == "2.0"
-            and isinstance(payload.get("error"), dict)
-            and payload["error"].get("message") == "Session not found"
-        )
+        # Match on multiple stable SDK signals (code + id + message) to avoid
+        # rewriting unrelated JSON-RPC 404s that happen to share one field.
+        if not isinstance(payload, dict) or payload.get("jsonrpc") != "2.0":
+            return False
+        if payload.get("id") != "server-error":
+            return False
+        error = payload.get("error")
+        if not isinstance(error, dict):
+            return False
+        return error.get("code") == -32600 and error.get("message") == "Session not found"
 
     def _headers_without_content_length(self, headers: Any) -> list[tuple[bytes, bytes]]:
         return [
@@ -129,6 +136,10 @@ class StaleMcpSessionDiagnosticMiddleware:
         if any(key.lower() == b"content-type" for key, _ in headers):
             return headers
         return [*headers, (b"content-type", b"application/json")]
+
+
+def _request_has_mcp_session_id(scope: Scope) -> bool:
+    return any(key.lower() == b"mcp-session-id" for key, _ in scope.get("headers", []))
 
 
 def _get_dev_transport() -> str:
