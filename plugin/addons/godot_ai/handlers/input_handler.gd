@@ -7,11 +7,17 @@ extends RefCounted
 
 
 func list_actions(params: Dictionary) -> Dictionary:
+	## Default returns only user-authored actions — those persisted to
+	## ``project.godot`` under ``input/<name>``. Editor-runtime actions like
+	## ``ui_*`` (built-ins) and ``spatial_editor/*`` (the 3D viewport's
+	## freelook/orbit/pan keybindings) live only on InputMap and are filtered
+	## out unless ``include_builtin`` is true.
 	var include_builtin: bool = params.get("include_builtin", false)
 	var actions: Array[Dictionary] = []
 	for action_name in InputMap.get_actions():
 		var name_str := str(action_name)
-		var is_builtin := name_str.begins_with("ui_")
+		var is_user_defined := ProjectSettings.has_setting("input/" + name_str)
+		var is_builtin := not is_user_defined
 		if is_builtin and not include_builtin:
 			continue
 		var events: Array[Dictionary] = []

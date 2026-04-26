@@ -41,6 +41,50 @@ func test_list_signals_unknown_node() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
+func test_list_signals_filters_editor_internal_by_default() -> void:
+	## The SceneTree dock observes signals like ``child_order_changed`` on every
+	## scene root. Without filtering those leak into the response and look like
+	## user-authored connections. By default we drop them and surface a count.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var path := "/" + scene_root.name
+	var result := _handler.list_signals({"path": path})
+	assert_has_key(result, "data")
+	assert_has_key(result.data, "editor_connection_count")
+	for conn in result.data.connections:
+		assert_has_key(conn, "origin")
+		assert_true(
+			conn.origin == "scene" or conn.origin == "autoload",
+			"Default list should not return origin=%s" % conn.origin,
+		)
+
+
+func test_list_signals_include_editor_internal_returns_them() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var path := "/" + scene_root.name
+	var default_result := _handler.list_signals({"path": path})
+	var with_editor := _handler.list_signals({"path": path, "include_editor_internal": true})
+	assert_has_key(with_editor, "data")
+	assert_true(
+		with_editor.data.connection_count >= default_result.data.connection_count,
+		"include_editor_internal must not drop connections",
+	)
+	## If the editor surfaces internal observers at all, at least one entry
+	## should have origin="editor" when the flag is on.
+	if with_editor.data.editor_connection_count > 0:
+		var saw_editor := false
+		for conn in with_editor.data.connections:
+			if conn.origin == "editor":
+				saw_editor = true
+				break
+		assert_true(saw_editor, "include_editor_internal should surface origin=editor entries")
+
+
 func test_list_signals_no_scene() -> void:
 	## If no scene is open this should report EDITOR_NOT_READY.
 	## We can't easily test this in-editor since a scene is always open,

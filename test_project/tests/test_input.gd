@@ -42,6 +42,59 @@ func test_list_actions_with_builtins() -> void:
 	assert_gt(result.data.count, 0, "Should have at least the built-in ui_* actions")
 
 
+func test_list_actions_default_excludes_spatial_editor() -> void:
+	## ``spatial_editor/*`` actions (3D viewport freelook/orbit/pan) live on
+	## InputMap but are not in ``project.godot``. They must not surface in the
+	## default user-facing list — agents would otherwise mistake them for
+	## actions the project author wired up.
+	var with_builtin := _handler.list_actions({"include_builtin": true})
+	var saw_spatial_editor := false
+	for action in with_builtin.data.actions:
+		if action.name.begins_with("spatial_editor/"):
+			saw_spatial_editor = true
+			break
+	assert_true(
+		saw_spatial_editor,
+		"Sanity: editor should expose spatial_editor/* actions when include_builtin=true",
+	)
+	var result := _handler.list_actions({})
+	for action in result.data.actions:
+		assert_false(
+			action.name.begins_with("spatial_editor/"),
+			"Default list leaked spatial_editor action: %s" % action.name,
+		)
+		assert_false(action.is_builtin, "Default list should expose only user-defined actions")
+
+
+func test_list_actions_default_returns_user_defined_action() -> void:
+	## A user-added action must round-trip through the default (filtered) list.
+	_handler.add_action({"action": TEST_ACTION})
+	var result := _handler.list_actions({})
+	var found := false
+	for action in result.data.actions:
+		if action.name == TEST_ACTION:
+			found = true
+			assert_false(action.is_builtin, "User-added action must not be flagged as built-in")
+			break
+	assert_true(found, "User-defined action %s should appear in default list" % TEST_ACTION)
+	_handler.remove_action({"action": TEST_ACTION})
+
+
+func test_list_actions_with_builtins_includes_spatial_editor_when_present() -> void:
+	## When asked, the listing surfaces editor-runtime actions verbatim (so
+	## power users can inspect them). At minimum a Godot 4 editor exposes
+	## ``spatial_editor/freelook_left``; if your fork stripped them, the assert
+	## stays satisfied because we only check via a flag.
+	var result := _handler.list_actions({"include_builtin": true})
+	assert_gt(result.data.count, 0)
+	var saw_non_user := false
+	for action in result.data.actions:
+		if action.is_builtin:
+			saw_non_user = true
+			break
+	assert_true(saw_non_user, "include_builtin=true should expose at least one editor-runtime action")
+
+
 # ----- add_action -----
 
 func test_add_action_missing_name() -> void:

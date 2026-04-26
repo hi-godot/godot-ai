@@ -2111,6 +2111,44 @@ class TestSignalListTool:
         assert result.data["signals"][0]["name"] == "pressed"
 
 
+class TestSignalListEditorInternalFilter:
+    async def test_list_passes_include_editor_internal_through(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "list_signals"
+            assert cmd["params"]["include_editor_internal"] is True
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main",
+                    "signals": [],
+                    "signal_count": 0,
+                    "connections": [
+                        {
+                            "signal": "child_order_changed",
+                            "target": "/Main/../../EditorNode/SceneTreeEditor",
+                            "method": "_node_renamed",
+                            "origin": "editor",
+                        }
+                    ],
+                    "connection_count": 1,
+                    "editor_connection_count": 1,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "signal_manage",
+            {"op": "list", "params": {"path": "/Main", "include_editor_internal": True}},
+        )
+        await task
+
+        assert result.data["connections"][0]["origin"] == "editor"
+        assert result.data["editor_connection_count"] == 1
+
+
 class TestSignalConnectTool:
     async def test_connect_signal(self, mcp_stack):
         client, plugin = mcp_stack

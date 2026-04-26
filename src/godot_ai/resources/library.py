@@ -34,7 +34,11 @@ def register_library_resources(mcp: FastMCP) -> None:
 
     @mcp.resource("godot://input_map", mime_type="application/json")
     async def get_input_map(ctx: Context) -> dict[str, Any]:
-        """All input map actions and their bound events. Excludes built-in ui_*."""
+        """User-authored input map actions and their bound events.
+
+        Returns only actions persisted to ``project.godot``. Editor-runtime
+        actions (``ui_*``, ``spatial_editor/*``, etc.) are excluded.
+        """
         runtime = DirectRuntime.from_context(ctx)
         return await safe_payload(input_map_handlers.input_map_list(runtime))
 

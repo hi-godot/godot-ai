@@ -24,6 +24,8 @@ func list_signals(params: Dictionary) -> Dictionary:
 	if node == null:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(path, scene_root))
 
+	var include_editor_internal: bool = params.get("include_editor_internal", false)
+
 	var signals: Array[Dictionary] = []
 	for sig in node.get_signal_list():
 		var args: Array[Dictionary] = []
@@ -35,16 +37,23 @@ func list_signals(params: Dictionary) -> Dictionary:
 		})
 
 	var connections: Array[Dictionary] = []
+	var editor_connection_count := 0
 	for sig in signals:
 		for conn in node.get_signal_connection_list(sig.name):
 			var callable: Callable = conn.get("callable", Callable())
 			var target := callable.get_object()
 			if target == null:
 				continue  # skip connections to freed objects
+			var origin := _connection_origin(target, scene_root)
+			if origin == "editor":
+				editor_connection_count += 1
+				if not include_editor_internal:
+					continue
 			connections.append({
 				"signal": sig.name,
 				"target": ScenePath.from_node(target, scene_root) if target is Node else str(target),
 				"method": callable.get_method(),
+				"origin": origin,
 			})
 
 	return {
@@ -54,8 +63,29 @@ func list_signals(params: Dictionary) -> Dictionary:
 			"signal_count": signals.size(),
 			"connections": connections,
 			"connection_count": connections.size(),
+			"editor_connection_count": editor_connection_count,
 		}
 	}
+
+
+## Classify where a signal's target object lives.
+## Returns "scene" (in/under the edited scene), "autoload" (a registered
+## ProjectSettings autoload), or "editor" (anything else — usually the editor
+## docks observing the SceneTree).
+static func _connection_origin(target: Object, scene_root: Node) -> String:
+	if not (target is Node):
+		return "scene"
+	var node := target as Node
+	if node == scene_root or scene_root.is_ancestor_of(node):
+		return "scene"
+	var tree := node.get_tree()
+	if tree != null and tree.root != null:
+		var cursor := node
+		while cursor.get_parent() != null and cursor.get_parent() != tree.root:
+			cursor = cursor.get_parent()
+		if cursor.get_parent() == tree.root and ProjectSettings.has_setting("autoload/" + str(cursor.name)):
+			return "autoload"
+	return "editor"
 
 
 func connect_signal(params: Dictionary) -> Dictionary:
