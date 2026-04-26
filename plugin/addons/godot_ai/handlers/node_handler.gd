@@ -421,7 +421,7 @@ func add_to_group(params: Dictionary) -> Dictionary:
 	var type_err := McpParamValidators.require_string("group", group_value)
 	if type_err != null:
 		return type_err
-	var group: String = group_value
+	var group := String(group_value)
 	if group.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: group")
 
@@ -453,7 +453,7 @@ func remove_from_group(params: Dictionary) -> Dictionary:
 	var type_err := McpParamValidators.require_string("group", group_value)
 	if type_err != null:
 		return type_err
-	var group: String = group_value
+	var group := String(group_value)
 	if group.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: group")
 
