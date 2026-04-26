@@ -7,9 +7,11 @@ import logging
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import Any
 
 from fastmcp import FastMCP
 
+from godot_ai.asgi import StaleMcpSessionDiagnosticMiddleware
 from godot_ai.godot_client.client import GodotClient
 from godot_ai.middleware import (
     HintOpTypoOnManage,
@@ -57,6 +59,17 @@ class AppContext:
     client: GodotClient
 
 
+class GodotAIFastMCP(FastMCP):
+    """FastMCP server with Godot AI's ASGI diagnostics for HTTP transports."""
+
+    def http_app(self, *args: Any, **kwargs: Any):
+        app = super().http_app(*args, **kwargs)
+        transport = kwargs.get("transport", "http")
+        if transport in ("http", "streamable-http"):
+            return StaleMcpSessionDiagnosticMiddleware(app)
+        return app
+
+
 def create_server(
     ws_port: int = 9500,
     *,
@@ -83,7 +96,7 @@ def create_server(
             except (asyncio.CancelledError, OSError):
                 pass
 
-    mcp = FastMCP(
+    mcp = GodotAIFastMCP(
         "Godot AI",
         instructions=(
             "Production-grade Godot MCP server with persistent editor integration.\n\n"
