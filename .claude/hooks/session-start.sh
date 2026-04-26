@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 # Claude Code on the web: install dev deps + headless Godot so MCP tools work.
 # Idempotent — safe to re-run; cached artifacts are reused after the first session.
+#
+# Runs in async mode: the session starts immediately while this bootstraps in
+# the background. Cold-start race window is ~60s (pip + Godot download), warm
+# is ~15s (editor launch). Quick readiness checks before firing dependent
+# commands:
+#   - venv:    test -x .venv/bin/pytest
+#   - godot:   command -v godot
+#   - editor:  pgrep -f 'godot.*--editor' >/dev/null
+#   - server:  curl -sf -o /dev/null http://127.0.0.1:8000/mcp -X POST \
+#                -H 'Content-Type: application/json' \
+#                -H 'Accept: application/json, text/event-stream' \
+#                -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}'
+echo '{"async": true, "asyncTimeout": 300000}'
+
 set -euo pipefail
 
 # Only run inside Claude Code on the web. Local sessions already have setup-dev.
