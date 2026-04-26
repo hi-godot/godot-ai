@@ -138,6 +138,25 @@ func test_drift_banner_clears_after_per_row_reconfigure() -> void:
 		"Cache must drop the now-green client so a follow-up Reconfigure-mismatched click is a no-op")
 
 
+func test_focus_in_auto_refresh_is_enabled_with_async_cooldown() -> void:
+	## Focus-in should still refresh client status, but the refresh path must be
+	## async/cooldown-protected so it does not run blocking CLI checks on the
+	## editor thread during OS/window refocus.
+	assert_true(_dock._should_refresh_client_statuses_on_focus_in(),
+		"Editor focus-in should request the async client-status refresh")
+	assert_eq(McpDockScript.CLIENT_STATUS_REFRESH_COOLDOWN_MSEC, 15 * 1000,
+		"Focus-in refresh cooldown is intentionally short and explicit")
+
+
+func test_refresh_cooldown_helper_only_blocks_automatic_refreshes() -> void:
+	_dock._last_client_status_refresh_completed_msec = Time.get_ticks_msec()
+	assert_true(_dock._is_client_status_refresh_in_cooldown(),
+		"Recent automatic refresh should be inside cooldown")
+	_dock._last_client_status_refresh_completed_msec = 0
+	assert_false(_dock._is_client_status_refresh_in_cooldown(),
+		"No completed refresh means no cooldown")
+
+
 ## Shared fixture for the three version-label tests. Inject a Label + Button
 ## + Connection onto the dock so the pure refresh logic can be exercised
 ## without depending on whether the test environment resolves as user mode

@@ -161,6 +161,13 @@ static func check_status(id: String) -> McpClient.Status:
 	return _dispatch_check_status(client, http_url())
 
 
+static func check_status_for_url(id: String, url: String) -> McpClient.Status:
+	var client := McpClientRegistry.get_by_id(id)
+	if client == null:
+		return McpClient.Status.NOT_CONFIGURED
+	return _dispatch_check_status(client, url)
+
+
 static func remove(id: String) -> Dictionary:
 	var client := McpClientRegistry.get_by_id(id)
 	if client == null:

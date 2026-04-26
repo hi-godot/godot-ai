@@ -10,6 +10,7 @@ const DEV_MODE_SETTING := "godot_ai/dev_mode"
 ## EditorSetting and read by `McpClientConfigurator.mode_override()`.
 const MODE_OVERRIDE_VALUES := ["", "user", "dev"]
 const MODE_OVERRIDE_LABELS := ["Auto", "Force user", "Force dev"]
+const CLIENT_STATUS_REFRESH_COOLDOWN_MSEC := 15 * 1000
 static var COLOR_MUTED := Color(0.7, 0.7, 0.7)
 static var COLOR_HEADER := Color(0.95, 0.95, 0.95)
 ## Used for "in-progress" / "stale, action needed" UI: the startup-grace
@@ -53,9 +54,11 @@ var _client_rows: Dictionary = {}
 
 # Drift banner — surfaced near the Clients section when one or more clients
 # have a stored entry whose URL no longer matches `http_url()` (typical after
-# the user changes `godot_ai/http_port`). Event-driven: refreshed on
-# plugin enter, after Apply+Reload, when the Clients window opens, and on
-# editor focus-in. See #166.
+# the user changes `godot_ai/http_port`). Refreshes are stale-while-refreshing:
+# cached row dots/banner remain visible while a background worker performs the
+# potentially blocking config/CLI probes, then the main thread applies results.
+# Automatic focus-in refreshes use a short cooldown to avoid repeated sweeps
+# during tab-away/tab-back churn. See #166 and #226.
 var _drift_banner: VBoxContainer
 var _drift_label: Label
 ## Handles for the Setup section's "Server" row. `_update_status` keeps
@@ -79,15 +82,14 @@ var _version_restart_btn: Button
 ## (a) the Reconfigure button reuses this list instead of re-running
 ## `check_status` per row (saves ~18 filesystem reads per click), and
 ## (b) `_refresh_drift_banner` early-returns when the set is unchanged so
-## focus-in sweeps don't repaint identical text. Mirrors the
+## repeated explicit refreshes don't repaint identical text. Mirrors the
 ## `_last_server_status` pattern used by the crash panel.
 var _last_mismatched_ids: Array[String] = []
-## Debounce for `NOTIFICATION_APPLICATION_FOCUS_IN`. Each focus-in costs
-## ~18 filesystem reads on the main thread; a 2s window collapses
-## fast alt-tab cycles into a single sweep without making the banner
-## feel stale.
-var _last_focus_sweep_msec: int = 0
-const FOCUS_SWEEP_MIN_MSEC := 2000
+var _client_status_refresh_thread: Thread
+var _client_status_refresh_in_flight := false
+var _client_status_refresh_pending := false
+var _client_status_refresh_pending_force := false
+var _last_client_status_refresh_completed_msec: int = 0
 
 # Dev-mode only
 var _dev_section: VBoxContainer
@@ -166,17 +168,15 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_PARENTED or what == NOTIFICATION_UNPARENTED:
 		_update_redock_visibility.call_deferred()
 	elif what == NOTIFICATION_APPLICATION_FOCUS_IN:
-		## Catches the case where the user edits an MCP client config in
-		## another app (or runs `claude mcp add` in a terminal) while Godot
-		## was unfocused. Debounced so a fast alt-tab cycle doesn't fire
-		## one sweep per focus-in. See #166.
-		if _client_rows.is_empty():
-			return
-		var now := Time.get_ticks_msec()
-		if now - _last_focus_sweep_msec < FOCUS_SWEEP_MIN_MSEC:
-			return
-		_last_focus_sweep_msec = now
-		_refresh_all_client_statuses.call_deferred()
+		if _should_refresh_client_statuses_on_focus_in():
+			_request_client_status_refresh(false)
+
+
+func _should_refresh_client_statuses_on_focus_in() -> bool:
+	## Focus-in is part of Godot/editor window activation. Keep automatic refresh,
+	## but only through the async/cooldown-protected path; never run a blocking
+	## client-status sweep directly from this notification.
+	return true
 
 
 func _is_floating() -> bool:
@@ -380,6 +380,12 @@ func _build_ui() -> void:
 	_clients_summary_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	clients_row.add_child(_clients_summary_label)
 
+	var clients_refresh_btn := Button.new()
+	clients_refresh_btn.text = "Refresh"
+	clients_refresh_btn.tooltip_text = "Refresh client status in the background. Cached status stays visible while checks run."
+	clients_refresh_btn.pressed.connect(_on_refresh_clients_pressed)
+	clients_row.add_child(clients_refresh_btn)
+
 	var clients_open_btn := Button.new()
 	clients_open_btn.text = "Clients & Tools"
 	clients_open_btn.tooltip_text = "Open the MCP settings window — configure AI clients or disable tool domains to fit under a client's hard tool-count cap (e.g. Antigravity's 100)."
@@ -503,7 +509,7 @@ func _build_ui() -> void:
 	# Apply initial dev-mode visibility
 	_apply_dev_mode_visibility()
 	_refresh_setup_status.call_deferred()
-	_refresh_all_client_statuses.call_deferred()
+	_refresh_clients_summary.call_deferred()
 
 
 func _make_header(text: String) -> Label:
@@ -1086,22 +1092,27 @@ func _on_remove_client(client_id: String) -> void:
 	_refresh_clients_summary()
 
 
+func _on_refresh_clients_pressed() -> void:
+	_request_client_status_refresh(true)
+
+
 func _on_configure_all_clients() -> void:
-	for client_id in McpClientConfigurator.client_ids():
-		if McpClientConfigurator.check_status(client_id) == McpClient.Status.CONFIGURED:
+	for client_id in _client_rows:
+		var dot: ColorRect = _client_rows[client_id]["dot"]
+		if dot.color == Color.GREEN:
 			continue
-		_on_configure_client(client_id)
+		_on_configure_client(String(client_id))
 	_refresh_clients_summary()
 
 
 func _on_open_clients_window() -> void:
 	if _clients_window == null:
 		return
-	## Re-sweep before the user has time to act on stale dot colors. Deferred
-	## so the popup paints immediately with last-known state — the fresh
-	## colors land on the next frame. Synchronous would block the popup paint
-	## for ~18 filesystem reads (~100-300ms with AV scanning). See #166.
-	_refresh_all_client_statuses.call_deferred()
+	## Re-sweep before the user has time to act on stale dot colors. The request
+	## is async/stale-while-refreshing so the popup paints immediately with
+	## last-known state; the fresh colors land when the background worker returns.
+	## This is an explicit user action, so it bypasses the focus-in cooldown.
+	_request_client_status_refresh(true)
 	## Also re-sync the Tools tab from the persisted setting — another
 	## editor instance (or a hand-edit of editor_settings-4.tres) may have
 	## changed the excluded list while the window was closed.
@@ -1365,7 +1376,7 @@ func _refresh_clients_summary() -> void:
 	# dots so per-row mutations (Configure/Reconfigure/Remove on a row in the
 	# Clients & Tools window) keep the dock-level banner in sync without an
 	# extra sweep — without this, the banner stays stale after a successful
-	# Reconfigure until the next focus-in or window-open sweep. See #166.
+	# Reconfigure until the next explicit refresh or window-open sweep. See #166.
 	if _clients_summary_label == null:
 		return
 	var configured := 0
@@ -1403,15 +1414,83 @@ func _on_copy_manual_command(client_id: String) -> void:
 
 
 func _refresh_all_client_statuses() -> void:
-	## Single sweep: pass the per-client status through `_apply_row_status` for
-	## the row UI, then let `_refresh_clients_summary` re-derive the count and
-	## the drift banner from the dots. Each client's `check_status` is one
-	## filesystem read — fine to do all of them on the handful of trigger
-	## events documented in #166.
+	## Compatibility wrapper for older explicit call sites. Treat this as a manual
+	## refresh: it bypasses focus-in cooldown but still runs probes off the editor
+	## main thread.
+	_request_client_status_refresh(true)
+
+
+func _is_client_status_refresh_in_cooldown() -> bool:
+	if _last_client_status_refresh_completed_msec <= 0:
+		return false
+	return Time.get_ticks_msec() - _last_client_status_refresh_completed_msec < CLIENT_STATUS_REFRESH_COOLDOWN_MSEC
+
+
+func _request_client_status_refresh(force: bool = false) -> bool:
+	## Stale-while-refreshing: do not clear dots, summary, or the drift banner
+	## when a refresh is requested. The existing UI remains visible until the
+	## background worker's result is applied on the main thread.
+	if _client_status_refresh_in_flight:
+		_client_status_refresh_pending = true
+		_client_status_refresh_pending_force = _client_status_refresh_pending_force or force
+		return false
+	if not force and _is_client_status_refresh_in_cooldown():
+		return false
+	if _client_rows.is_empty():
+		return false
+
+	var client_ids: Array[String] = []
 	for client_id in _client_rows:
-		var status := McpClientConfigurator.check_status(client_id)
-		_apply_row_status(client_id, status)
+		client_ids.append(String(client_id))
+	var server_url := McpClientConfigurator.http_url()
+
+	_client_status_refresh_in_flight = true
+	_client_status_refresh_pending = false
+	_client_status_refresh_pending_force = false
+	_client_status_refresh_thread = Thread.new()
+	var err := _client_status_refresh_thread.start(
+		Callable(self, "_run_client_status_refresh_worker").bind(client_ids, server_url)
+	)
+	if err != OK:
+		_client_status_refresh_in_flight = false
+		_client_status_refresh_thread = null
+		return false
+	return true
+
+
+func _run_client_status_refresh_worker(client_ids: Array[String], server_url: String) -> void:
+	var results: Dictionary = {}
+	for client_id in client_ids:
+		var status := McpClientConfigurator.check_status_for_url(client_id, server_url)
+		var installed := false
+		if status == McpClient.Status.NOT_CONFIGURED:
+			installed = McpClientConfigurator.is_installed(client_id)
+		results[client_id] = {"status": status, "installed": installed}
+	call_deferred("_apply_client_status_refresh_results", results)
+
+
+func _apply_client_status_refresh_results(results: Dictionary) -> void:
+	if _client_status_refresh_thread != null:
+		_client_status_refresh_thread.wait_to_finish()
+		_client_status_refresh_thread = null
+
+	for client_id in results:
+		var result: Dictionary = results[client_id]
+		_apply_row_status(
+			String(client_id),
+			result.get("status", McpClient.Status.NOT_CONFIGURED),
+			"",
+			result.get("installed", false)
+		)
 	_refresh_clients_summary()
+	_last_client_status_refresh_completed_msec = Time.get_ticks_msec()
+	_client_status_refresh_in_flight = false
+
+	if _client_status_refresh_pending:
+		var pending_force := _client_status_refresh_pending_force
+		_client_status_refresh_pending = false
+		_client_status_refresh_pending_force = false
+		_request_client_status_refresh(pending_force)
 
 
 func _refresh_drift_banner(mismatched_ids: Array[String]) -> void:
@@ -1452,7 +1531,12 @@ func _on_reconfigure_mismatched() -> void:
 	_refresh_all_client_statuses()
 
 
-func _apply_row_status(client_id: String, status: McpClient.Status, error_msg: String = "") -> void:
+func _apply_row_status(
+	client_id: String,
+	status: McpClient.Status,
+	error_msg: String = "",
+	installed_override: Variant = null,
+) -> void:
 	var row: Dictionary = _client_rows.get(client_id, {})
 	if row.is_empty():
 		return
@@ -1471,7 +1555,7 @@ func _apply_row_status(client_id: String, status: McpClient.Status, error_msg: S
 			dot.color = COLOR_MUTED
 			configure_btn.text = "Configure"
 			remove_btn.visible = false
-			var installed := McpClientConfigurator.is_installed(client_id)
+			var installed: bool = installed_override if installed_override != null else McpClientConfigurator.is_installed(client_id)
 			name_label.text = base_name if installed else "%s  (not detected)" % base_name
 		McpClient.Status.CONFIGURED_MISMATCH:
 			## Amber matches the dock-level drift banner so a glance at the
