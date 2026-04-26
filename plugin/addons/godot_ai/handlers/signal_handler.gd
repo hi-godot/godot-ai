@@ -68,12 +68,14 @@ func list_signals(params: Dictionary) -> Dictionary:
 	}
 
 
-## A target is "editor-internal" when it's a Node whose tree position is
-## outside the edited scene — typical case is the SceneTreeEditor dock
-## listening for visibility/script/state changes on every scene node. Such
-## connections aren't user-authored and would otherwise mislead an agent
-## into thinking the user wired them up by hand. Non-Node targets (autoload
-## singletons, anonymous Callables, etc.) stay visible.
+## A target is "editor-internal" when it's a Node sitting outside the edited
+## scene tree AND not an autoload singleton — typical case is the
+## SceneTreeEditor dock listening for visibility/script/state changes on
+## every scene node. Connections to autoloads (declared under ``autoload/*``
+## in ProjectSettings) are user-authored even though they live under
+## ``/root/<Name>`` rather than under the edited scene root, so they stay
+## visible. Non-Node targets (anonymous Callables, RefCounted listeners
+## etc.) also stay visible — we can't reliably classify them.
 func _is_editor_internal_target(target: Object, scene_root: Node) -> bool:
 	if not (target is Node):
 		return false
@@ -81,6 +83,8 @@ func _is_editor_internal_target(target: Object, scene_root: Node) -> bool:
 	if node_target == scene_root:
 		return false
 	if scene_root.is_ancestor_of(node_target):
+		return false
+	if ProjectSettings.has_setting("autoload/" + str(node_target.name)):
 		return false
 	return true
 

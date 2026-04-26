@@ -86,6 +86,44 @@ func test_list_signals_include_editor_surfaces_internal_connections() -> void:
 		"include_editor should not hide any user connections")
 
 
+func test_is_editor_internal_target_keeps_autoload_targets() -> void:
+	## Bug #213 review: autoload singletons live under /root/<Name>, which
+	## is outside the edited scene tree, so a naive "outside scene_root"
+	## filter would also hide legitimate connections to autoloads. The
+	## ``autoload/<name>`` ProjectSetting whitelist must keep them visible.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+
+	## Inject a fake autoload entry and a Node sitting where an autoload
+	## would live (parented under a freestanding Node so we don't touch the
+	## edited scene). The Node's ``name`` matches the autoload key.
+	var setting_key := "autoload/_TestAutoloadFilter"
+	var had_before := ProjectSettings.has_setting(setting_key)
+	var before_value: Variant = ProjectSettings.get_setting(setting_key) if had_before else null
+	ProjectSettings.set_setting(setting_key, "*res://tests/does_not_exist.gd")
+
+	var fake_autoload := Node.new()
+	fake_autoload.name = "_TestAutoloadFilter"
+	var unrelated_target := Node.new()
+	unrelated_target.name = "_NotAnAutoload"
+	## Don't add to tree — the helper only needs the Node + a name + the
+	## ProjectSettings entry to classify it.
+
+	assert_false(_handler._is_editor_internal_target(fake_autoload, scene_root),
+		"Autoload-named node should NOT be classified as editor-internal")
+	assert_true(_handler._is_editor_internal_target(unrelated_target, scene_root),
+		"Non-autoload node outside the edited scene SHOULD be editor-internal")
+
+	fake_autoload.free()
+	unrelated_target.free()
+	if had_before:
+		ProjectSettings.set_setting(setting_key, before_value)
+	else:
+		ProjectSettings.set_setting(setting_key, null)
+
+
 # ----- connect_signal -----
 
 func test_connect_signal_missing_params() -> void:

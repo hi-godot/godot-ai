@@ -28,7 +28,7 @@ def register_node_manage():
     MANAGE_TOOL_OPS.pop("node_manage", None)
 
 
-def _make_op_validation_error(typed: str, ops: tuple[str, ...]) -> ValidationError:
+def _make_op_validation_error(typed, ops: tuple[str, ...]) -> ValidationError:
     """Trigger a real Pydantic literal_error for a Literal[ops] field.
 
     Mirrors what FastMCP raises when a ``<domain>_manage`` call's ``op``
@@ -148,13 +148,68 @@ class TestHintOpTypoOnManage:
             await mw.on_call_tool(ctx, await _raise_call_next(RuntimeError("boom")))
 
     async def test_handles_missing_op_argument(self, register_node_manage):
-        ## ``op`` missing entirely is a different shape of error (a
-        ## ``missing`` type on most schemas, but Pydantic can still raise
-        ## a literal_error against an empty input). The middleware should
-        ## still emit a useful message even with no typed-op to compare.
+        ## arguments=None means the middleware can't recover what the user
+        ## sent. Surface "op must be a string" (not the misleading empty
+        ## placeholder ``Unknown op ''``) and still list the valid ops.
         mw = HintOpTypoOnManage()
         exc = _make_op_validation_error("", register_node_manage)
         ctx = _FakeContext(message=CallToolRequestParams(name="node_manage", arguments=None))
         with pytest.raises(ToolError) as info:
             await mw.on_call_tool(ctx, await _raise_call_next(exc))
-        assert "Valid ops" in str(info.value)
+        msg = str(info.value)
+        assert "must be a string" in msg
+        assert "Valid ops" in msg
+
+    async def test_handles_non_string_op_value(self, register_node_manage):
+        ## Pydantic raises literal_error when ``op`` is e.g. an int. We
+        ## should not coerce to ``''`` and emit ``Unknown op ''`` — instead
+        ## report the actual value and its type so the user can see what
+        ## they sent.
+        op_literal = Literal[register_node_manage]  # type: ignore[valid-type]
+        wrapper_ta = TypeAdapter(dict[str, op_literal])  # type: ignore[valid-type]
+        try:
+            wrapper_ta.validate_python({"op": 123})
+        except ValidationError as raised:
+            exc = raised
+        else:
+            raise AssertionError("Pydantic accepted int op unexpectedly")
+
+        mw = HintOpTypoOnManage()
+        ctx = _FakeContext(message=CallToolRequestParams(name="node_manage", arguments={"op": 123}))
+        with pytest.raises(ToolError) as info:
+            await mw.on_call_tool(ctx, await _raise_call_next(exc))
+        msg = str(info.value)
+        assert "must be a string" in msg
+        assert "int" in msg
+        assert "123" in msg
+        assert "Valid ops" in msg
+
+    async def test_does_not_mask_other_validation_errors(self, register_node_manage):
+        ## When a request fails on both ``op`` AND another field, rewriting
+        ## to a narrow op-only hint would silently drop the other errors.
+        ## Fall through to Pydantic's default message instead.
+        from pydantic import BaseModel
+
+        op_literal = Literal[register_node_manage]  # type: ignore[valid-type]
+
+        class _ManageCall(BaseModel):
+            op: op_literal  # type: ignore[valid-type]
+            params: dict | None = None
+
+        try:
+            _ManageCall(op="get_childen", params="not-a-dict")  # type: ignore[arg-type]
+        except ValidationError as raised:
+            exc = raised
+        else:
+            raise AssertionError("Pydantic accepted invalid call unexpectedly")
+        assert len(exc.errors()) >= 2  # sanity: we constructed multi-error case
+
+        mw = HintOpTypoOnManage()
+        ctx = _FakeContext(
+            message=CallToolRequestParams(
+                name="node_manage",
+                arguments={"op": "get_childen", "params": "not-a-dict"},
+            )
+        )
+        with pytest.raises(ValidationError):
+            await mw.on_call_tool(ctx, await _raise_call_next(exc))
