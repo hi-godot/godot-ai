@@ -85,9 +85,6 @@ class StaleMcpSessionDiagnosticMiddleware:
         body: bytes,
         send: Send,
     ) -> None:
-        if start_message is None:
-            return
-
         rewritten = self._rewrite_stale_session_body(start_message, body)
         response_body = rewritten if rewritten is not None else body
         headers = start_message.get("headers", [])
@@ -99,8 +96,6 @@ class StaleMcpSessionDiagnosticMiddleware:
         await send({"type": "http.response.body", "body": response_body, "more_body": False})
 
     def _rewrite_stale_session_body(self, start_message: Message, body: bytes) -> bytes | None:
-        if start_message.get("status") != HTTPStatus.NOT_FOUND:
-            return None
         try:
             payload = json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
