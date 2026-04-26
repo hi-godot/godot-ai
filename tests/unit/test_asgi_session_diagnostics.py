@@ -162,3 +162,11 @@ def test_create_server_wraps_streamable_http_app_with_stale_session_diagnostic()
     app = server.http_app(transport="streamable-http")
 
     assert isinstance(app, StaleMcpSessionDiagnosticMiddleware)
+
+
+def test_stale_mcp_session_diagnostic_preserves_fastmcp_app_state():
+    server = create_server()
+
+    app = server.http_app(transport="streamable-http")
+
+    assert app.state is app.app.state

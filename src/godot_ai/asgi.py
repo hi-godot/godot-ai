@@ -41,6 +41,16 @@ class StaleMcpSessionDiagnosticMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
+    def __getattr__(self, name: str) -> Any:
+        """Expose wrapped ASGI app attributes used by FastMCP's runner.
+
+        FastMCP inspects attributes such as ``state`` on the object returned by
+        ``http_app()`` before handing it to uvicorn. Keep this middleware
+        transparent for those app-level attributes while still intercepting HTTP
+        response bodies at call time.
+        """
+        return getattr(self.app, name)
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
