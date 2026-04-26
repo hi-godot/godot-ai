@@ -35,12 +35,18 @@ func list_signals(params: Dictionary) -> Dictionary:
 		})
 
 	var connections: Array[Dictionary] = []
+	var editor_connection_count := 0
 	for sig in signals:
 		for conn in node.get_signal_connection_list(sig.name):
 			var callable: Callable = conn.get("callable", Callable())
 			var target := callable.get_object()
 			if target == null:
 				continue  # skip connections to freed objects
+			# Editor UI (SceneTreeEditor, docks) wires observers on scene
+			# nodes — hide them so agents see only user-authored connections.
+			if target is Node and not _is_user_target(target, scene_root):
+				editor_connection_count += 1
+				continue
 			connections.append({
 				"signal": sig.name,
 				"target": ScenePath.from_node(target, scene_root) if target is Node else str(target),
@@ -54,8 +60,23 @@ func list_signals(params: Dictionary) -> Dictionary:
 			"signal_count": signals.size(),
 			"connections": connections,
 			"connection_count": connections.size(),
+			"editor_connection_count": editor_connection_count,
 		}
 	}
+
+
+## True if target is in the edited scene tree, or a registered autoload directly under /root.
+static func _is_user_target(target: Node, scene_root: Node) -> bool:
+	if target == scene_root or scene_root.is_ancestor_of(target):
+		return true
+	var tree := target.get_tree()
+	if tree == null or target.get_parent() != tree.root:
+		return false
+	return _is_declared_autoload(target.name)
+
+
+static func _is_declared_autoload(name: StringName) -> bool:
+	return ProjectSettings.has_setting("autoload/" + name)
 
 
 func connect_signal(params: Dictionary) -> Dictionary:
@@ -151,7 +172,7 @@ func _resolve_node_or_autoload(path: String, scene_root: Node, role: String) -> 
 		return {"node": node}
 
 	var name := path.trim_prefix("/")
-	if ProjectSettings.has_setting("autoload/" + name):
+	if _is_declared_autoload(name):
 		# Autoload is declared — see if the editor has it instanced.
 		var tree := Engine.get_main_loop()
 		if tree is SceneTree:

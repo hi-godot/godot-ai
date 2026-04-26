@@ -12,7 +12,12 @@ func list_actions(params: Dictionary) -> Dictionary:
 	for action_name in InputMap.get_actions():
 		var name_str := str(action_name)
 		var is_builtin := name_str.begins_with("ui_")
-		if is_builtin and not include_builtin:
+		if not include_builtin and is_builtin:
+			continue
+		# Editor-runtime actions (e.g. spatial_editor/freelook_left) live in
+		# InputMap but never appear under input/ in project.godot. Treat
+		# "user-authored" as "registered in ProjectSettings".
+		if not include_builtin and not ProjectSettings.has_setting("input/" + name_str):
 			continue
 		var events: Array[Dictionary] = []
 		for event in InputMap.action_get_events(action_name):

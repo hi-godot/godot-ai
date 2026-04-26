@@ -31,6 +31,57 @@ func test_list_signals_returns_signals() -> void:
 	assert_gt(result.data.signal_count, 0, "Root node should have signals")
 
 
+func test_list_signals_filters_editor_internal_connections() -> void:
+	## list_signals should hide connections whose target lives outside the
+	## edited scene (editor UI like SceneTreeEditor wires up observers on the
+	## scene root). Simulate by parking a Node directly under /root and
+	## connecting one of the scene root's signals to it — structurally
+	## identical to an editor-internal listener.
+	const OBSERVER_NAME := "_McpTestFakeEditorObserver"
+	const SIG_NAME := "renamed"  # Stable Node signal — every scene root has it.
+
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var tree := scene_root.get_tree()
+	if tree == null:
+		skip("Scene tree unavailable")
+		return
+	var path := "/" + scene_root.name
+
+	var baseline := _handler.list_signals({"path": path})
+	var before_user: int = baseline.data.connection_count
+	var before_editor: int = baseline.data.editor_connection_count
+
+	# Capture-then-tear-down-then-assert: gather all values into locals, fully
+	# undo the fixture, only then run asserts. Guarantees the fake observer
+	# never leaks past this test even if every assertion fails.
+	var observer := Node.new()
+	observer.name = OBSERVER_NAME
+	tree.root.add_child(observer)
+	var callable := Callable(observer, "queue_free")
+	scene_root.connect(SIG_NAME, callable)
+
+	var result := _handler.list_signals({"path": path})
+	var observed_targets: Array = []
+	for conn in result.data.connections:
+		observed_targets.append(str(conn.target))
+	var observed_user_count: int = result.data.connection_count
+	var observed_editor_count: int = result.data.editor_connection_count
+
+	scene_root.disconnect(SIG_NAME, callable)
+	observer.queue_free()
+
+	for target_str in observed_targets:
+		assert_false(target_str.contains(OBSERVER_NAME),
+			"connections[] must not include nodes parked outside the edited scene")
+	assert_eq(observed_user_count, before_user,
+		"User-visible connection count must not include editor-internal listeners")
+	assert_eq(observed_editor_count, before_editor + 1,
+		"Editor-internal listener should be tallied separately, not in connections[]")
+
+
 func test_list_signals_missing_path() -> void:
 	var result := _handler.list_signals({})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)

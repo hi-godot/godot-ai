@@ -13,7 +13,9 @@ Signals (Godot's event/observer mechanism) — list, connect, disconnect.
 Ops:
   • list(path)
         List all signals on the node and their current connections (built-in
-        and custom).
+        and custom). Editor-internal listeners (SceneTreeEditor, dock UI) are
+        hidden from ``connections``; their count is reported separately as
+        ``editor_connection_count``.
   • connect(path, signal, target, method)
         Connect a signal from ``path`` to a method on the target node.
         Undoable.

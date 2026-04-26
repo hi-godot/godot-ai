@@ -42,6 +42,48 @@ func test_list_actions_with_builtins() -> void:
 	assert_gt(result.data.count, 0, "Should have at least the built-in ui_* actions")
 
 
+func test_list_actions_filters_editor_runtime_actions() -> void:
+	## Editor-runtime actions (e.g. spatial_editor/freelook_left) live in
+	## InputMap but never appear under input/ in project.godot. Simulate one by
+	## adding directly to InputMap without registering a ProjectSettings entry,
+	## and confirm list_actions(include_builtin=False) hides it.
+	const RUNTIME_ACTION := "_McpTestRuntimeAction"
+	if InputMap.has_action(RUNTIME_ACTION):
+		InputMap.erase_action(RUNTIME_ACTION)
+	InputMap.add_action(RUNTIME_ACTION)
+	# Capture-then-tear-down-then-assert: collect listings, then erase the
+	# runtime action, then check. Keeps the fixture from leaking past this
+	# test if any assertion fails.
+	var precondition_in_settings := ProjectSettings.has_setting("input/" + RUNTIME_ACTION)
+	var default_names := _action_names(_handler.list_actions({}))
+	var full_names := _action_names(_handler.list_actions({"include_builtin": true}))
+	InputMap.erase_action(RUNTIME_ACTION)
+
+	assert_false(precondition_in_settings,
+		"Precondition: the simulated runtime action must not be in ProjectSettings")
+	assert_false(default_names.has(RUNTIME_ACTION),
+		"Editor-runtime actions (no input/<name> in project.godot) should be hidden by default")
+	assert_true(full_names.has(RUNTIME_ACTION),
+		"include_builtin=True should expose every InputMap action, including runtime-only ones")
+
+
+func test_list_actions_includes_user_authored() -> void:
+	## A user-authored action (registered in ProjectSettings via add_action)
+	## must appear in the default include_builtin=False listing.
+	_handler.add_action({"action": TEST_ACTION})
+	var names := _action_names(_handler.list_actions({}))
+	_handler.remove_action({"action": TEST_ACTION})
+	assert_true(names.has(TEST_ACTION),
+		"User-authored action should appear in default listing")
+
+
+func _action_names(result: Dictionary) -> Array:
+	var names: Array = []
+	for action in result.data.actions:
+		names.append(action.name)
+	return names
+
+
 # ----- add_action -----
 
 func test_add_action_missing_name() -> void:
