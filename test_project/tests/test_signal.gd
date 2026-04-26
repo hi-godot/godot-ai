@@ -124,6 +124,87 @@ func test_is_editor_internal_target_keeps_autoload_targets() -> void:
 		ProjectSettings.set_setting(setting_key, null)
 
 
+func test_is_editor_internal_target_keeps_autoload_descendants() -> void:
+	## Copilot review on #222: the previous filter only allowed autoload
+	## *roots*. Connections targeting a node *under* an autoload (e.g.
+	## /root/MyAutoload/Child) were misclassified as editor-internal and
+	## hidden from list_signals. Exercise the detached parent-chain
+	## fallback used by the helper when the fixture isn't reachable from
+	## /root — the real production path (in-tree autoloads with
+	## /root/<Name>/... paths) is exercised by the underlying
+	## ProjectSettings + Node.get_path() machinery.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+
+	var setting_key := "autoload/_TestAutoloadDescendants"
+	var had_before := ProjectSettings.has_setting(setting_key)
+	var before_value: Variant = ProjectSettings.get_setting(setting_key) if had_before else null
+	ProjectSettings.set_setting(setting_key, "*res://tests/does_not_exist.gd")
+
+	## Detached fixture: child whose parent name matches the autoload key.
+	var fake_parent := Node.new()
+	fake_parent.name = "_TestAutoloadDescendants"
+	var detached_child := Node.new()
+	detached_child.name = "Child"
+	var detached_grandchild := Node.new()
+	detached_grandchild.name = "GrandChild"
+	fake_parent.add_child(detached_child)
+	detached_child.add_child(detached_grandchild)
+
+	## Sanity-check the fixture before exercising the helper, so a setup
+	## regression doesn't masquerade as a logic bug.
+	assert_true(ProjectSettings.has_setting(setting_key),
+		"setup: autoload setting should be present after set_setting")
+	assert_eq(detached_child.get_parent(), fake_parent,
+		"setup: detached_child.get_parent() should be fake_parent")
+
+	assert_false(_handler._is_editor_internal_target(detached_child, scene_root),
+		"Direct autoload child should NOT be classified as editor-internal")
+	assert_false(_handler._is_editor_internal_target(detached_grandchild, scene_root),
+		"Deeper autoload descendant should NOT be classified as editor-internal")
+
+	fake_parent.free()
+	if had_before:
+		ProjectSettings.set_setting(setting_key, before_value)
+	else:
+		ProjectSettings.set_setting(setting_key, null)
+
+
+func test_format_target_path_uses_absolute_for_non_descendants() -> void:
+	## Copilot review on #222: when list_signals surfaces a connection
+	## targeting a non-descendant (e.g. an autoload subtree) the previous
+	## ScenePath.from_node() output was a scene-relative path with ``..``
+	## segments like ``/Main/../../root/MyAutoload/Child`` — unparseable for
+	## agents and not round-trippable through scene-path resolution. The
+	## new formatter emits the canonical absolute SceneTree path for
+	## non-descendants instead.
+	##
+	## We use the editor's own base Control as a guaranteed-in-tree node
+	## that lives outside the edited scene; mutating /root from a test is
+	## fragile in editor context, so we read from existing tree nodes only.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var base := EditorInterface.get_base_control()
+	if base == null or not base.is_inside_tree():
+		skip("Editor base control not available")
+		return
+	if scene_root.is_ancestor_of(base):
+		skip("base control is inside edited scene — fixture invalid")
+		return
+
+	var formatted := SignalHandler._format_target_path(base, scene_root)
+	assert_eq(formatted, str(base.get_path()),
+		"Non-descendant in-tree target should serialize as its absolute SceneTree path, got: %s" % formatted)
+	assert_true(formatted.begins_with("/root/"),
+		"Absolute SceneTree path should start with /root/, got: %s" % formatted)
+	assert_false(formatted.contains(".."),
+		"Formatted target path must not contain '..' segments: %s" % formatted)
+
+
 # ----- connect_signal -----
 
 func test_connect_signal_missing_params() -> void:
