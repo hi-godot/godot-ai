@@ -50,8 +50,18 @@ func test_list_actions_hides_editor_internal_namespaces() -> void:
 	## actions like ``spatial_editor/freelook_left`` leak through on the
 	## default (``include_builtin=False``) path. Cross-check that the new
 	## "must exist in project.godot" filter hides them.
-	var result := _handler.list_actions({})
-	for action in result.data.actions:
+	##
+	## The test project's project.godot has no ``[input]`` section so the
+	## default-filtered list is empty — comparing against the full
+	## ``include_builtin=true`` count is what proves the filter is doing
+	## work, not just iterating zero entries.
+	var with_builtin := _handler.list_actions({"include_builtin": true})
+	var default := _handler.list_actions({})
+	assert_has_key(with_builtin, "data")
+	assert_has_key(default, "data")
+	assert_true(with_builtin.data.count > default.data.count,
+		"include_builtin=true must surface entries the default filter hides")
+	for action in default.data.actions:
 		assert_false(str(action.name).begins_with("spatial_editor/"),
 			"Editor-internal spatial_editor/* must not appear in default list")
 		assert_false(str(action.name).begins_with("ui_"),
