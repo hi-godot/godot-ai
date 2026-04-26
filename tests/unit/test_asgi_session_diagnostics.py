@@ -110,13 +110,51 @@ async def test_stale_mcp_session_diagnostic_handles_chunked_stale_session_body()
 
     app = StaleMcpSessionDiagnosticMiddleware(sdk_stale_session_response)
 
-    sent = await _single_http_request(app)
+    sent = await _single_http_request(
+        app,
+        headers=[(b"mcp-session-id", b"stale-session-id")],
+    )
 
     assert sent[0]["status"] == 404
     assert (b"content-type", b"application/json") in sent[0]["headers"]
     body = json.loads(sent[1]["body"])
     assert body["error"]["message"] == STALE_MCP_SESSION_MESSAGE
     assert body["error"]["data"]["action"] == "reinitialize_mcp_session"
+
+
+@pytest.mark.anyio
+async def test_stale_mcp_session_diagnostic_passes_through_when_request_has_no_session_id():
+    # Without an mcp-session-id header the SDK never emits its stale-session
+    # response, so the middleware must not buffer or rewrite anything.
+    async def stale_looking_response(scope, receive, send):
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 404,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "server-error",
+                        "error": {"code": -32600, "message": "Session not found"},
+                    }
+                ).encode(),
+                "more_body": False,
+            }
+        )
+
+    app = StaleMcpSessionDiagnosticMiddleware(stale_looking_response)
+
+    sent = await _single_http_request(app)
+
+    body = json.loads(sent[1]["body"])
+    assert body["error"] == {"code": -32600, "message": "Session not found"}
+    assert "data" not in body["error"]
 
 
 @pytest.mark.anyio
@@ -221,7 +259,10 @@ async def test_stale_mcp_session_diagnostic_leaves_other_404_responses_unchanged
 
     app = StaleMcpSessionDiagnosticMiddleware(not_found_response)
 
-    sent = await _single_http_request(app)
+    sent = await _single_http_request(
+        app,
+        headers=[(b"mcp-session-id", b"stale-session-id")],
+    )
 
     assert sent == [
         {
@@ -254,10 +295,45 @@ async def test_stale_mcp_session_diagnostic_leaves_other_json_rpc_404_errors_unc
 
     app = StaleMcpSessionDiagnosticMiddleware(json_rpc_not_found_response)
 
-    sent = await _single_http_request(app)
+    sent = await _single_http_request(
+        app,
+        headers=[(b"mcp-session-id", b"stale-session-id")],
+    )
 
     body = json.loads(sent[1]["body"])
     assert body["error"] == {"code": -32000, "message": "Tool not found"}
+    assert "data" not in body["error"]
+
+
+@pytest.mark.anyio
+async def test_stale_mcp_session_diagnostic_requires_matching_jsonrpc_id():
+    # An unrelated 404 that happens to share the SDK's "Session not found"
+    # message but uses a different JSON-RPC id must not be rewritten.
+    async def lookalike_response(scope, receive, send):
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": "request-1",
+                "error": {"code": -32600, "message": "Session not found"},
+            }
+        ).encode()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 404,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": body, "more_body": False})
+
+    app = StaleMcpSessionDiagnosticMiddleware(lookalike_response)
+
+    sent = await _single_http_request(
+        app,
+        headers=[(b"mcp-session-id", b"stale-session-id")],
+    )
+
+    body = json.loads(sent[1]["body"])
     assert "data" not in body["error"]
 
 
