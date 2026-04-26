@@ -24,6 +24,11 @@ func list_signals(params: Dictionary) -> Dictionary:
 	if node == null:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(path, scene_root))
 
+	## Default: hide editor-internal connections (SceneTreeEditor observers
+	## live on every scene node and would otherwise dominate the response).
+	## Pass include_editor=true to see them. See #213.
+	var include_editor: bool = params.get("include_editor", false)
+
 	var signals: Array[Dictionary] = []
 	for sig in node.get_signal_list():
 		var args: Array[Dictionary] = []
@@ -35,12 +40,16 @@ func list_signals(params: Dictionary) -> Dictionary:
 		})
 
 	var connections: Array[Dictionary] = []
+	var editor_connection_count := 0
 	for sig in signals:
 		for conn in node.get_signal_connection_list(sig.name):
 			var callable: Callable = conn.get("callable", Callable())
 			var target := callable.get_object()
 			if target == null:
 				continue  # skip connections to freed objects
+			if not include_editor and _is_editor_internal_target(target, scene_root):
+				editor_connection_count += 1
+				continue
 			connections.append({
 				"signal": sig.name,
 				"target": ScenePath.from_node(target, scene_root) if target is Node else str(target),
@@ -54,8 +63,30 @@ func list_signals(params: Dictionary) -> Dictionary:
 			"signal_count": signals.size(),
 			"connections": connections,
 			"connection_count": connections.size(),
+			"editor_connection_count": editor_connection_count,
 		}
 	}
+
+
+## A target is "editor-internal" when it's a Node sitting outside the edited
+## scene tree AND not an autoload singleton — typical case is the
+## SceneTreeEditor dock listening for visibility/script/state changes on
+## every scene node. Connections to autoloads (declared under ``autoload/*``
+## in ProjectSettings) are user-authored even though they live under
+## ``/root/<Name>`` rather than under the edited scene root, so they stay
+## visible. Non-Node targets (anonymous Callables, RefCounted listeners
+## etc.) also stay visible — we can't reliably classify them.
+func _is_editor_internal_target(target: Object, scene_root: Node) -> bool:
+	if not (target is Node):
+		return false
+	var node_target: Node = target
+	if node_target == scene_root:
+		return false
+	if scene_root.is_ancestor_of(node_target):
+		return false
+	if ProjectSettings.has_setting("autoload/" + str(node_target.name)):
+		return false
+	return true
 
 
 func connect_signal(params: Dictionary) -> Dictionary:

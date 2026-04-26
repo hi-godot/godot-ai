@@ -8,11 +8,19 @@ extends RefCounted
 
 func list_actions(params: Dictionary) -> Dictionary:
 	var include_builtin: bool = params.get("include_builtin", false)
+	## Authoritative source for user-authored actions is the ``[input]``
+	## section of ``project.godot``. ``ProjectSettings.has_setting`` is not
+	## reliable here because Godot registers ``ui_*`` defaults via
+	## ``GLOBAL_DEF_BASIC``, which makes ``has_setting`` return true for
+	## them. Reading the file via ``ConfigFile`` distinguishes the user's
+	## entries from engine-registered defaults regardless of namespace.
+	## See #213.
+	var user_authored := _read_user_authored_actions()
 	var actions: Array[Dictionary] = []
 	for action_name in InputMap.get_actions():
 		var name_str := str(action_name)
-		var is_builtin := name_str.begins_with("ui_")
-		if is_builtin and not include_builtin:
+		var is_user_action := user_authored.has(name_str)
+		if not include_builtin and not is_user_action:
 			continue
 		var events: Array[Dictionary] = []
 		for event in InputMap.action_get_events(action_name):
@@ -21,9 +29,21 @@ func list_actions(params: Dictionary) -> Dictionary:
 			"name": name_str,
 			"events": events,
 			"event_count": events.size(),
-			"is_builtin": is_builtin,
+			"is_builtin": not is_user_action,
 		})
 	return {"data": {"actions": actions, "count": actions.size()}}
+
+
+func _read_user_authored_actions() -> Dictionary:
+	var cfg := ConfigFile.new()
+	if cfg.load("res://project.godot") != OK:
+		return {}
+	if not cfg.has_section("input"):
+		return {}
+	var result: Dictionary = {}
+	for key in cfg.get_section_keys("input"):
+		result[key] = true
+	return result
 
 
 func add_action(params: Dictionary) -> Dictionary:

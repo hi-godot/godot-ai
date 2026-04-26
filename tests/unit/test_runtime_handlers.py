@@ -2557,7 +2557,7 @@ async def test_signal_list_handler():
     assert result["signal_count"] == 2
     assert result["signals"][0]["name"] == "ready"
     assert client.calls[-1]["command"] == "list_signals"
-    assert client.calls[-1]["params"] == {"path": "/Main/Player"}
+    assert client.calls[-1]["params"] == {"path": "/Main/Player", "include_editor": False}
 
 
 async def test_signal_connect_handler():

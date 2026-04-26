@@ -50,9 +50,7 @@ class TestParseStringifiedParams:
         seen: list[dict | None] = []
         mw = ParseStringifiedParams()
         original = {"op": "list", "params": {"limit": 10}}
-        ctx = _FakeContext(
-            message=CallToolRequestParams(name="session_manage", arguments=original)
-        )
+        ctx = _FakeContext(message=CallToolRequestParams(name="session_manage", arguments=original))
         await mw.on_call_tool(ctx, await _record_arguments_call_next(seen))
 
         ## Same dict identity: middleware mustn't reallocate when there's
@@ -94,9 +92,7 @@ class TestParseStringifiedParams:
     async def test_handles_none_arguments(self):
         seen: list[dict | None] = []
         mw = ParseStringifiedParams()
-        ctx = _FakeContext(
-            message=CallToolRequestParams(name="editor_state", arguments=None)
-        )
+        ctx = _FakeContext(message=CallToolRequestParams(name="editor_state", arguments=None))
         await mw.on_call_tool(ctx, await _record_arguments_call_next(seen))
         assert seen == [None]
 

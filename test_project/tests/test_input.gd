@@ -33,13 +33,39 @@ func test_list_actions_excludes_builtins_by_default() -> void:
 	assert_has_key(result.data, "actions")
 	assert_has_key(result.data, "count")
 	for action in result.data.actions:
-		assert_false(action.is_builtin, "Default should exclude ui_* actions")
+		assert_false(action.is_builtin, "Default should only return user-authored actions")
+		## Cross-check: the action must actually exist in project.godot.
+		assert_true(ProjectSettings.has_setting("input/" + action.name),
+			"Default-filtered action should be authored in project.godot: %s" % action.name)
 
 
 func test_list_actions_with_builtins() -> void:
 	var result := _handler.list_actions({"include_builtin": true})
 	assert_has_key(result, "data")
 	assert_gt(result.data.count, 0, "Should have at least the built-in ui_* actions")
+
+
+func test_list_actions_hides_editor_internal_namespaces() -> void:
+	## Bug #213: the previous ``begins_with("ui_")`` filter let editor-runtime
+	## actions like ``spatial_editor/freelook_left`` leak through on the
+	## default (``include_builtin=False``) path. Cross-check that the new
+	## "must exist in project.godot" filter hides them.
+	##
+	## The test project's project.godot has no ``[input]`` section so the
+	## default-filtered list is empty — comparing against the full
+	## ``include_builtin=true`` count is what proves the filter is doing
+	## work, not just iterating zero entries.
+	var with_builtin := _handler.list_actions({"include_builtin": true})
+	var default := _handler.list_actions({})
+	assert_has_key(with_builtin, "data")
+	assert_has_key(default, "data")
+	assert_true(with_builtin.data.count > default.data.count,
+		"include_builtin=true must surface entries the default filter hides")
+	for action in default.data.actions:
+		assert_false(str(action.name).begins_with("spatial_editor/"),
+			"Editor-internal spatial_editor/* must not appear in default list")
+		assert_false(str(action.name).begins_with("ui_"),
+			"Built-in ui_* must not appear in default list")
 
 
 # ----- add_action -----

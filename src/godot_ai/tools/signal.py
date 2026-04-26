@@ -11,9 +11,12 @@ _DESCRIPTION = """\
 Signals (Godot's event/observer mechanism) — list, connect, disconnect.
 
 Ops:
-  • list(path)
+  • list(path, include_editor=False)
         List all signals on the node and their current connections (built-in
-        and custom).
+        and custom). By default editor-internal connections (the
+        SceneTreeEditor dock and friends) are filtered out — pass
+        ``include_editor=True`` to surface them. The response carries
+        ``editor_connection_count`` so an agent can tell how many were hidden.
   • connect(path, signal, target, method)
         Connect a signal from ``path`` to a method on the target node.
         Undoable.
