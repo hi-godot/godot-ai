@@ -69,12 +69,19 @@ func list_signals(params: Dictionary) -> Dictionary:
 
 
 ## Classify where a signal's target object lives.
-## Returns "scene" (in/under the edited scene), "autoload" (a registered
-## ProjectSettings autoload), or "editor" (anything else — usually the editor
-## docks observing the SceneTree).
+## Returns one of:
+##   "scene"    — target is a Node in or under the edited scene root.
+##   "autoload" — target is a Node under a registered ProjectSettings autoload
+##                that's instantiated at edit time.
+##   "object"   — target is a non-Node Object (typically a Resource / RefCounted
+##                held by user scripts). Kept in the default list because it's
+##                almost always user-authored data.
+##   "editor"   — Node target outside the scene tree and not an autoload, e.g.
+##                the SceneTreeEditor dock observing scene state. Filtered out
+##                of the default list.
 static func _connection_origin(target: Object, scene_root: Node) -> String:
 	if not (target is Node):
-		return "scene"
+		return "object"
 	var node := target as Node
 	if node == scene_root or scene_root.is_ancestor_of(node):
 		return "scene"

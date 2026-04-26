@@ -16,8 +16,10 @@ Ops:
         observer connections (e.g. the SceneTree dock listening for
         ``child_order_changed``) are filtered out by default and counted in
         ``editor_connection_count``; set include_editor_internal=True to see
-        them. Each connection carries an ``origin`` of ``"scene"``,
-        ``"autoload"``, or ``"editor"``.
+        them. Each connection carries an ``origin`` of ``"scene"`` (Node in
+        the edited scene), ``"autoload"`` (a registered autoload),
+        ``"object"`` (non-Node Object target — kept by default), or
+        ``"editor"`` (filtered by default).
   • connect(path, signal, target, method)
         Connect a signal from ``path`` to a method on the target node.
         Undoable.

@@ -56,7 +56,7 @@ func test_list_signals_filters_editor_internal_by_default() -> void:
 	for conn in result.data.connections:
 		assert_has_key(conn, "origin")
 		assert_true(
-			conn.origin == "scene" or conn.origin == "autoload",
+			conn.origin == "scene" or conn.origin == "autoload" or conn.origin == "object",
 			"Default list should not return origin=%s" % conn.origin,
 		)
 

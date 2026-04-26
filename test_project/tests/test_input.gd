@@ -81,10 +81,11 @@ func test_list_actions_default_returns_user_defined_action() -> void:
 
 
 func test_list_actions_with_builtins_includes_spatial_editor_when_present() -> void:
-	## When asked, the listing surfaces editor-runtime actions verbatim (so
-	## power users can inspect them). At minimum a Godot 4 editor exposes
-	## ``spatial_editor/freelook_left``; if your fork stripped them, the assert
-	## stays satisfied because we only check via a flag.
+	## When asked, the listing surfaces built-in/editor-runtime actions so
+	## power users can inspect them. Some Godot 4 editor builds expose
+	## actions such as ``spatial_editor/freelook_left``, but this test only
+	## asserts the more general contract: include_builtin=true must return at
+	## least one action flagged as built-in.
 	var result := _handler.list_actions({"include_builtin": true})
 	assert_gt(result.data.count, 0)
 	var saw_non_user := false
