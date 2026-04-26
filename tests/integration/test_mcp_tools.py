@@ -2110,6 +2110,34 @@ class TestSignalListTool:
         assert result.data["signal_count"] == 1
         assert result.data["signals"][0]["name"] == "pressed"
 
+    async def test_list_signals_forwards_include_editor(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "list_signals"
+            assert cmd["params"] == {"path": "/Main", "include_editor": True}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main",
+                    "signals": [],
+                    "signal_count": 0,
+                    "connections": [],
+                    "connection_count": 0,
+                    "editor_connection_count": 5,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "signal_manage",
+            {"op": "list", "params": {"path": "/Main", "include_editor": True}},
+        )
+        await task
+
+        assert result.data["editor_connection_count"] == 5
+
 
 class TestSignalConnectTool:
     async def test_connect_signal(self, mcp_stack):

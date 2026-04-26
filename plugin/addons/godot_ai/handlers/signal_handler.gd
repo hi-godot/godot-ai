@@ -24,6 +24,8 @@ func list_signals(params: Dictionary) -> Dictionary:
 	if node == null:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(path, scene_root))
 
+	var include_editor: bool = params.get("include_editor", false)
+
 	var signals: Array[Dictionary] = []
 	for sig in node.get_signal_list():
 		var args: Array[Dictionary] = []
@@ -35,16 +37,23 @@ func list_signals(params: Dictionary) -> Dictionary:
 		})
 
 	var connections: Array[Dictionary] = []
+	var editor_connection_count := 0
 	for sig in signals:
 		for conn in node.get_signal_connection_list(sig.name):
 			var callable: Callable = conn.get("callable", Callable())
 			var target := callable.get_object()
 			if target == null:
 				continue  # skip connections to freed objects
+			var is_editor_target := target is Node and not _target_is_user_scope(target, scene_root)
+			if is_editor_target:
+				editor_connection_count += 1
+				if not include_editor:
+					continue
 			connections.append({
 				"signal": sig.name,
 				"target": ScenePath.from_node(target, scene_root) if target is Node else str(target),
 				"method": callable.get_method(),
+				"is_editor": is_editor_target,
 			})
 
 	return {
@@ -54,8 +63,23 @@ func list_signals(params: Dictionary) -> Dictionary:
 			"signal_count": signals.size(),
 			"connections": connections,
 			"connection_count": connections.size(),
+			"editor_connection_count": editor_connection_count,
 		}
 	}
+
+
+## A connection target is "user scope" if it lives in the edited scene tree
+## or is a declared autoload — anything else (editor docks, inspector) is
+## the editor observing the scene and should not be reported as user wiring.
+func _target_is_user_scope(target: Node, scene_root: Node) -> bool:
+	if target == scene_root or scene_root.is_ancestor_of(target):
+		return true
+	var tree := Engine.get_main_loop()
+	if tree is SceneTree:
+		var root := (tree as SceneTree).root
+		if target.get_parent() == root and ProjectSettings.has_setting("autoload/" + target.name):
+			return true
+	return false
 
 
 func connect_signal(params: Dictionary) -> Dictionary:

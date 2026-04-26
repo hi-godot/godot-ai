@@ -2560,6 +2560,18 @@ async def test_signal_list_handler():
     assert client.calls[-1]["params"] == {"path": "/Main/Player"}
 
 
+async def test_signal_list_handler_with_include_editor():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await signal_handlers.signal_list(
+        runtime, path="/Main/Player", include_editor=True
+    )
+    assert client.calls[-1]["params"] == {
+        "path": "/Main/Player",
+        "include_editor": True,
+    }
+
+
 async def test_signal_connect_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)

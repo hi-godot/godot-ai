@@ -31,6 +31,52 @@ func test_list_signals_returns_signals() -> void:
 	assert_gt(result.data.signal_count, 0, "Root node should have signals")
 
 
+func test_list_signals_filters_editor_observer_connections() -> void:
+	## The SceneTree dock connects to scene-root signals like
+	## child_order_changed / editor_state_changed to keep its UI in sync.
+	## A user asking "what's connected to /Main?" should not see those.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var path := "/" + scene_root.name
+	var result := _handler.list_signals({"path": path})
+	assert_has_key(result, "data")
+	assert_has_key(result.data, "editor_connection_count")
+	for conn in result.data.connections:
+		assert_false(conn.get("is_editor", false),
+			"Default list should drop editor observer connections, got: %s" % conn)
+		var target_str: String = conn.get("target", "")
+		assert_false(target_str.contains("SceneTreeEditor"),
+			"User-scope connections should not target SceneTreeEditor, got: %s" % target_str)
+		assert_false(target_str.contains("/.."),
+			"User-scope target paths should not walk out of the scene root: %s" % target_str)
+
+
+func test_list_signals_with_include_editor_surfaces_dropped_observers() -> void:
+	## include_editor=true is the debugging path: connections marked
+	## is_editor=true should appear AND their count should match what the
+	## default filter dropped.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var path := "/" + scene_root.name
+	var filtered := _handler.list_signals({"path": path})
+	var unfiltered := _handler.list_signals({"path": path, "include_editor": true})
+	assert_has_key(filtered, "data")
+	assert_has_key(unfiltered, "data")
+	var dropped: int = filtered.data.editor_connection_count
+	var editor_flagged := 0
+	for conn in unfiltered.data.connections:
+		if conn.get("is_editor", false):
+			editor_flagged += 1
+	assert_eq(editor_flagged, dropped,
+		"is_editor=true entries in include_editor should match the default-filtered count")
+	assert_eq(unfiltered.data.connection_count, filtered.data.connection_count + dropped,
+		"include_editor=true should restore exactly the dropped observers")
+
+
 func test_list_signals_missing_path() -> void:
 	var result := _handler.list_signals({})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)

@@ -42,6 +42,39 @@ func test_list_actions_with_builtins() -> void:
 	assert_gt(result.data.count, 0, "Should have at least the built-in ui_* actions")
 
 
+func test_list_actions_excludes_editor_runtime_namespaces() -> void:
+	## InputMap.get_actions() exposes spatial_editor/* and other editor-runtime
+	## namespaces alongside user actions. The default filter must drop them
+	## so an agent listing actions in a project with zero user-defined
+	## actions doesn't see "freelook_left" et al.
+	var result := _handler.list_actions({})
+	assert_has_key(result, "data")
+	for action in result.data.actions:
+		var name: String = action.name
+		assert_false(name.begins_with("spatial_editor/"),
+			"Default list should exclude spatial_editor/* actions, got: %s" % name)
+		assert_true(ProjectSettings.has_setting("input/" + name),
+			"Default list should only return ProjectSettings-backed actions, got: %s" % name)
+
+
+func test_list_actions_include_builtin_surfaces_editor_namespaces() -> void:
+	## include_builtin=true is the debugging path — it should include
+	## ui_* AND any other editor-runtime namespace InputMap exposes.
+	var result := _handler.list_actions({"include_builtin": true})
+	assert_has_key(result, "data")
+	var found_non_user := false
+	for action in result.data.actions:
+		var name: String = action.name
+		if not ProjectSettings.has_setting("input/" + name):
+			found_non_user = true
+			assert_true(action.is_builtin,
+				"Editor-runtime action should be flagged is_builtin: %s" % name)
+	## Editor always defines ui_accept etc., so the include path must
+	## surface at least one non-user action in any environment.
+	assert_true(found_non_user,
+		"include_builtin=true should surface at least one non-user action")
+
+
 # ----- add_action -----
 
 func test_add_action_missing_name() -> void:

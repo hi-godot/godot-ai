@@ -11,7 +11,12 @@ func list_actions(params: Dictionary) -> Dictionary:
 	var actions: Array[Dictionary] = []
 	for action_name in InputMap.get_actions():
 		var name_str := str(action_name)
-		var is_builtin := name_str.begins_with("ui_")
+		## "Built-in" = not authored by the user. Includes ui_* and editor-
+		## runtime namespaces like spatial_editor/* that InputMap exposes
+		## but project.godot doesn't store. ProjectSettings.has_setting is
+		## the authoritative origin check — it survives future Godot
+		## additions of new editor namespaces too.
+		var is_builtin := not ProjectSettings.has_setting("input/" + name_str)
 		if is_builtin and not include_builtin:
 			continue
 		var events: Array[Dictionary] = []
