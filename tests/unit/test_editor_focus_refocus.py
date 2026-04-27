@@ -51,12 +51,31 @@ def test_clients_window_open_requests_nonblocking_refresh() -> None:
 
 
 def test_initial_paint_requests_async_status_refresh() -> None:
-    """Cold editor open should still populate client dots without waiting for focus-in."""
+    """Cold editor open should still populate client dots without waiting for focus-in.
+
+    The refresh is deferred past Godot's GDScript hot-reload settle window (issue
+    #233 — self-update path crashes if the worker fires while strategy bytecode
+    is mid-swap), but ``_schedule_initial_client_status_refresh`` ultimately calls
+    ``_request_client_status_refresh(true)`` so the dock populates without
+    requiring a focus-in event. Locking in the call site here so a future
+    refactor doesn't accidentally drop the auto-spawn entirely.
+    """
 
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
     build_block = source.split("func _build_ui() -> void:", 1)[1].split("\n\nfunc ", 1)[0]
+    assert "_schedule_initial_client_status_refresh()" in build_block, (
+        "_build_ui must schedule the initial refresh"
+    )
 
-    assert "_request_client_status_refresh.call_deferred(true)" in build_block
+    helper_block = source.split(
+        "func _schedule_initial_client_status_refresh() -> void:", 1
+    )[1].split("\n\nfunc ", 1)[0]
+    assert "_request_client_status_refresh(true)" in helper_block, (
+        "Helper must ultimately call the force-refresh path"
+    )
+    assert "CLIENT_STATUS_REFRESH_INITIAL_DELAY_SEC" in helper_block, (
+        "Helper must defer past hot-reload settle window"
+    )
 
 
 def test_worker_uses_main_thread_probe_snapshot_for_cli_paths() -> None:

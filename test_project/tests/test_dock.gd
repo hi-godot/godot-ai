@@ -157,6 +157,19 @@ func test_refresh_cooldown_helper_only_blocks_automatic_refreshes() -> void:
 		"No completed refresh means no cooldown")
 
 
+func test_initial_refresh_delay_is_past_typical_hot_reload_settle() -> void:
+	## Regression for #233: the self-update path extracts a fresh release zip
+	## over `addons/godot_ai/` then toggles `set_plugin_enabled`. The new
+	## dock's first auto-refresh worker must NOT fire while Godot is still
+	## hot-reloading strategy bytecode (`_json_strategy`, `client_configurator`,
+	## …) — the worker walks into a script mid-swap and aborts the editor
+	## (KERN_INVALID_ADDRESS / SIGABRT). The initial-delay constant is the
+	## settle margin; locking it in keeps a future "0-delay would be snappier"
+	## refactor from re-introducing the crash.
+	assert_true(McpDockScript.CLIENT_STATUS_REFRESH_INITIAL_DELAY_SEC >= 1.0,
+		"Initial refresh delay must be at least 1s — empirical hot-reload settle")
+
+
 func test_exit_tree_drains_orphaned_refresh_threads() -> void:
 	## Regression for the static-var orphan bug surfaced on the plugin disable
 	## path (editor_reload_plugin, Project Settings toggle): the McpDock
