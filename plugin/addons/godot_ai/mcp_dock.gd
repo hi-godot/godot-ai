@@ -182,6 +182,11 @@ func _exit_tree() -> void:
 	## under normal conditions; if a CLI probe genuinely hung, the runtime
 	## timeout path (`_abandon_client_status_refresh_thread`) has already
 	## moved that thread into the orphan list, so we drain it here too.
+	##
+	## `wait_to_finish` is unbounded by design: GDScript's Thread API has no
+	## timeout, and a polling/abandon fallback would just re-introduce the
+	## GC-mid-execution crash this fix exists to prevent. Blocking the editor
+	## briefly on plugin-reload is strictly better than the SIGSEGV.
 	_client_status_refresh_shutdown_requested = true
 	_client_status_refresh_generation += 1
 	if _client_status_refresh_thread != null:
