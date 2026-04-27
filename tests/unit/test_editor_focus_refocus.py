@@ -50,54 +50,78 @@ def test_clients_window_open_requests_nonblocking_refresh() -> None:
     assert "_refresh_all_client_statuses.call_deferred" not in block
 
 
-def test_initial_paint_runs_first_refresh_synchronously_on_main_thread() -> None:
-    """Cold editor open populates client dots via a sync main-thread probe (#235).
+def test_initial_paint_warms_worker_call_graph_before_threading() -> None:
+    """Cold editor open pre-warms strategy bytecode on main, then defers CLI to worker (#235).
 
-    Deterministic replacement for the prior 1.5s settle timer (#234). The very
-    first refresh after `_build_ui` MUST NOT spawn a worker thread — doing so
-    would race Godot's lazy GDScript hot-reload of plugin scripts on the
-    self-update path, segfaulting the editor (#233). Running the first probe
-    inline on the main thread forces the bytecode swap to happen here,
-    eliminating the race by construction; subsequent refreshes (focus-in,
-    manual click) safely use the worker once the swap is complete.
+    Deterministic replacement for the prior 1.5s settle timer (#234), with the
+    cold-start hitch minimized so #228's responsiveness win for focus-in /
+    refocus paths is not regressed.
 
-    Asserts the call chain end-to-end so a future "make startup snappier"
-    refactor can't silently re-introduce the timer-or-thread approach.
+    The race: Godot's lazy GDScript hot-reload of overwritten plugin files
+    swaps bytecode on first dereference. A worker spawned from a fresh
+    `_build_ui` walks straight into `_json_strategy.*` / `_cli_strategy.*` /
+    `client_configurator.*` mid-swap → SIGABRT (#233).
+
+    The fix: dereference every script the worker will touch on the main
+    thread *before* the worker starts. After this helper, bytecode is
+    stable everywhere the worker reaches → no race possible.
+
+      • `client_status_probe_snapshot` (called per client on main) warms
+        `_cli_strategy.gd` / `_cli_finder.gd` for CLI clients via
+        `resolve_cli_path`.
+      • Sync `check_status_for_url_with_cli_path` on JSON/TOML clients
+        (file-read + parse, ~5–20ms each) warms `_json_strategy.gd` /
+        `_toml_strategy.gd` and the configurator dispatch.
+      • CLI clients are bundled into a deferred batch and probed by the
+        worker — slow `OS.execute` calls stay off-thread, preserving #228.
+
+    The structural assertions below lock in this hybrid: a future "make
+    startup snappier" refactor can't drop the warming step (re-introducing
+    the race), and a future "be more conservative" refactor can't move the
+    CLI probes back on-thread (regressing #228's responsiveness fix).
     """
 
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
     build_block = source.split("func _build_ui() -> void:", 1)[1].split("\n\nfunc ", 1)[0]
     assert "_perform_initial_client_status_refresh()" in build_block, (
-        "_build_ui must call the sync initial-refresh helper"
+        "_build_ui must call the initial-refresh helper"
     )
 
     helper_block = source.split("func _perform_initial_client_status_refresh() -> void:", 1)[
         1
     ].split("\n\nfunc ", 1)[0]
-    assert "Thread.new()" not in helper_block, (
-        "First refresh must not spawn a worker thread — that's the race we're "
-        "preventing. See #233 / #235."
+    assert "client_status_probe_snapshot(" in helper_block, (
+        "Helper must call client_status_probe_snapshot per client on main — "
+        "this is what dereferences `_cli_strategy.gd` / `_cli_finder.gd` for "
+        "CLI clients before the worker spawns. See #235."
     )
-    assert ".start(" not in helper_block, "First refresh must not start any thread directly."
+    assert "check_status_for_url_with_cli_path(" in helper_block, (
+        "Helper must run a sync check_status_for_url_with_cli_path for "
+        "JSON/TOML clients on main — that warms `_json_strategy.gd` / "
+        "`_toml_strategy.gd` so the worker (if it spawns) can't race the "
+        "lazy hot-reload bytecode swap. See #235."
+    )
+    assert "deferred_cli_probes" in helper_block, (
+        "Helper must batch CLI probes for the deferred (worker) phase. "
+        "Without this split, the cold-start path either (a) runs CLI probes "
+        "on main and re-introduces #228's per-focus editor freezes, or "
+        "(b) skips warming and races GDScript hot-reload (#233)."
+    )
     assert "await " not in helper_block, (
-        "First refresh must be synchronous — no timer, no signal awaits. The "
-        "deterministic guarantee is `same thread as _build_ui`, which falls "
-        "apart if execution suspends."
+        "Helper must be a single straight-line block — no timer awaits, no "
+        "signal awaits. Suspending mid-helper would let GDScript reload the "
+        "very scripts we're trying to dereference, voiding the warming."
     )
     assert "create_timer" not in helper_block, (
-        "First refresh must not gate on a wall-clock timer (the heuristic "
-        "stopgap from #234 that #235 replaces)."
-    )
-    assert "_apply_client_status_refresh_results(" in helper_block, (
-        "Helper must apply results inline — no `call_deferred`, no thread "
-        "callback. That inline application is what proves the sync semantics."
+        "Helper must not gate on a wall-clock timer (the heuristic stopgap "
+        "from #234 that #235 replaces)."
     )
 
     constants_block = source.split("class_name McpDock", 1)[1].split("\nvar ", 1)[0]
     assert "CLIENT_STATUS_REFRESH_INITIAL_DELAY_MSEC" not in constants_block, (
         "The settle-timer constant from #234 must be removed — keeping it "
-        "alongside the sync helper would falsely imply a residual timer-based "
-        "gate. See #235."
+        "alongside the sync-warming helper would falsely imply a residual "
+        "timer-based gate. See #235."
     )
 
 
