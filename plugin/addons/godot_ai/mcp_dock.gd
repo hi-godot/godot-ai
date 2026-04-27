@@ -12,15 +12,11 @@ const MODE_OVERRIDE_VALUES := ["", "user", "dev"]
 const MODE_OVERRIDE_LABELS := ["Auto", "Force user", "Force dev"]
 const CLIENT_STATUS_REFRESH_COOLDOWN_MSEC := 15 * 1000
 const CLIENT_STATUS_REFRESH_TIMEOUT_MSEC := 30 * 1000
-## Delay before the very first auto-refresh fires after `_build_ui`. Godot's
-## lazy GDScript hot-reload of `addons/godot_ai/*.gd` doesn't fully settle by
-## the time the new dock is in the tree on the self-update path
-## (`_install_update` extracts a new release zip then toggles
-## `set_plugin_enabled`). Worker walking into a strategy whose bytecode is
-## mid-swap aborts the editor (KERN_INVALID_ADDRESS / SIGABRT, see #233).
-## 1.5s is comfortable margin past typical settle (<500ms empirically) while
-## still feeling instant in the dock.
-const CLIENT_STATUS_REFRESH_INITIAL_DELAY_SEC := 1.5
+## Delay before the very first auto-refresh fires after `_build_ui` —
+## settle margin past Godot's lazy GDScript hot-reload of plugin scripts
+## on the self-update path. Empirical settle is <500ms; 1500 is 3× margin.
+## See issue #233.
+const CLIENT_STATUS_REFRESH_INITIAL_DELAY_MSEC := 1500
 static var COLOR_MUTED := Color(0.7, 0.7, 0.7)
 static var COLOR_HEADER := Color(0.95, 0.95, 0.95)
 ## Used for "in-progress" / "stale, action needed" UI: the startup-grace
@@ -1525,18 +1521,11 @@ func _prune_orphaned_client_status_refresh_threads() -> void:
 
 func _schedule_initial_client_status_refresh() -> void:
 	## Defer the first auto-refresh past Godot's lazy GDScript hot-reload
-	## window. On the self-update path (`_install_update` extracts a release
-	## zip over `addons/godot_ai/`, then toggles `set_plugin_enabled`), the
-	## new dock spawns its first worker while strategy GDScript bytecode is
-	## still being swapped on the main thread. The worker walks into
-	## `_json_strategy.check_status` / `client_configurator.*` mid-swap and
-	## aborts (`KERN_INVALID_ADDRESS` / SIGABRT, see issue #233). Filesystem
-	## signals like `is_scanning()` / `filesystem_changed` flip back to false
-	## before the bytecode swap completes, so a signal-based gate doesn't
-	## bracket the race; a timer does. `NOTIFICATION_APPLICATION_FOCUS_IN`
-	## also won't fire — the editor is already focused when the user clicks
-	## Update and stays focused through the reload.
-	await get_tree().create_timer(CLIENT_STATUS_REFRESH_INITIAL_DELAY_SEC).timeout
+	## window — racing it segfaults the editor on the self-update path.
+	## Filesystem signals don't bracket the race (they fire before bytecode
+	## swap completes) and FOCUS_IN doesn't fire on in-place plugin reload,
+	## so a fixed-delay timer is the only mechanism that works. See #233.
+	await get_tree().create_timer(CLIENT_STATUS_REFRESH_INITIAL_DELAY_MSEC / 1000.0).timeout
 	if _client_status_refresh_shutdown_requested:
 		return
 	if not is_inside_tree():
