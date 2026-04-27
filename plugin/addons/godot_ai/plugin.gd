@@ -4,6 +4,13 @@ extends EditorPlugin
 const GAME_HELPER_AUTOLOAD_NAME := "_mcp_game_helper"
 const GAME_HELPER_AUTOLOAD_PATH := "res://addons/godot_ai/runtime/game_helper.gd"
 
+## Editor-process Logger subclass — captures parse errors, @tool runtime
+## errors, and push_error/push_warning so the LLM can read them via
+## `logs_read(source="editor")`. Loaded dynamically because
+## `extends Logger` requires Godot 4.5+; gating on ClassDB at registration
+## time keeps the plugin loadable on 4.4. See issue #231.
+const EDITOR_LOGGER_PATH := "res://addons/godot_ai/runtime/editor_logger.gd"
+
 ## EditorSettings keys used to remember which server process the plugin
 ## spawned — survives editor restarts, lets a later editor session adopt
 ## and manage a server it didn't spawn itself. See #135.
@@ -32,6 +39,11 @@ var _connection: Connection
 var _dispatcher: McpDispatcher
 var _log_buffer: McpLogBuffer
 var _game_log_buffer: GameLogBuffer
+var _editor_log_buffer: EditorLogBuffer
+## Untyped — script extends Godot 4.5+'s Logger class, loaded via load() so
+## the plugin still parses on 4.4. Null on Godot < 4.5 or before
+## `_attach_editor_logger` runs; "attached" state IS exactly "non-null".
+var _editor_logger
 var _dock: McpDock
 var _server_pid := -1
 var _handlers: Array = []  # prevent GC of RefCounted handlers
@@ -77,6 +89,8 @@ func _enter_tree() -> void:
 
 	_log_buffer = McpLogBuffer.new()
 	_game_log_buffer = GameLogBuffer.new()
+	_editor_log_buffer = EditorLogBuffer.new()
+	_attach_editor_logger()
 	_dispatcher = McpDispatcher.new(_log_buffer)
 
 	_connection = Connection.new()
@@ -86,7 +100,7 @@ func _enter_tree() -> void:
 	add_debugger_plugin(_debugger_plugin)
 	_ensure_game_helper_autoload()
 
-	var editor_handler := EditorHandler.new(_log_buffer, _connection, _debugger_plugin, _game_log_buffer)
+	var editor_handler := EditorHandler.new(_log_buffer, _connection, _debugger_plugin, _game_log_buffer, _editor_log_buffer)
 	var scene_handler := SceneHandler.new(_connection)
 	var node_handler := NodeHandler.new(get_undo_redo())
 	var project_handler := ProjectHandler.new(_connection)
@@ -282,9 +296,16 @@ func _exit_tree() -> void:
 		remove_debugger_plugin(_debugger_plugin)
 		_debugger_plugin = null
 
+	## Detach the editor logger BEFORE nulling the buffer. After remove_logger
+	## returns, Godot guarantees no further virtual calls — so the logger's
+	## next access to `_buffer` (if any in flight) lands on a still-live
+	## ref-counted buffer, not a freed one.
+	_detach_editor_logger()
+
 	_dispatcher = null
 	_log_buffer = null
 	_game_log_buffer = null
+	_editor_log_buffer = null
 
 	_stop_server()
 	## Symmetric with prepare_for_update_reload: the static guard persists
@@ -295,6 +316,36 @@ func _exit_tree() -> void:
 	## deterministic, nothing is left to adopt and the reload hangs.
 	_server_started_this_session = false
 	print("MCP | plugin unloaded")
+
+
+## Attach editor_logger.gd as a Godot logger so editor-process script
+## errors (parse errors, @tool runtime errors, EditorPlugin errors,
+## push_error/push_warning) flow into _editor_log_buffer for
+## logs_read(source="editor"). Logger subclassing is 4.5+ only; the
+## ClassDB gate keeps the plugin loadable on 4.4 with no-op editor logs
+## (the buffer stays empty, logs_read returns no entries).
+##
+## Limitation called out in the issue: parse errors fired *before* the
+## plugin's _enter_tree (e.g. during the editor's initial filesystem
+## scan, or for scripts that fail on first project open) happen before
+## add_logger is called and are not captured. There's no public API to
+## drain the editor's already-emitted error history; rescanning the
+## file would re-emit them but at the cost of disrupting the user's
+## editing state, so we accept the gap.
+func _attach_editor_logger() -> void:
+	if not (ClassDB.class_exists("Logger") and OS.has_method("add_logger")):
+		return
+	var logger_script := load(EDITOR_LOGGER_PATH)
+	if logger_script == null:
+		return
+	_editor_logger = logger_script.new(_editor_log_buffer)
+	OS.call("add_logger", _editor_logger)
+
+
+func _detach_editor_logger() -> void:
+	if _editor_logger != null and OS.has_method("remove_logger"):
+		OS.call("remove_logger", _editor_logger)
+	_editor_logger = null
 
 
 ## Register the game-side autoload on plugin enable. Runs the helper inside

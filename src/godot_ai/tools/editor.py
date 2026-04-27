@@ -64,7 +64,7 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         since_run_id: str = "",
         session_id: str = "",
     ) -> dict:
-        """Read recent log lines from the Godot editor or running game.
+        """Read recent log lines from the Godot editor, plugin, or running game.
 
         Resource form: ``godot://logs/recent`` — prefer for active-session reads.
 
@@ -74,15 +74,24 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
           via ``_mcp_game_helper`` autoload (Godot 4.5+). Buffer 2000, clears
           on each ``project_run``. Entries: {source, level, text}; response
           carries run_id, is_running, dropped_count.
-        - "all": plugin lines first, then game lines (with source per entry).
+        - "editor": editor-process script errors — parse errors, @tool/
+          EditorPlugin runtime errors, push_error/push_warning (Godot 4.5+).
+          Use when the editor's Output panel shows red lines but other
+          sources turned up nothing. Buffer 500, persists across
+          ``project_run``. Entries: {source, level, text, path, line,
+          function}. Filtered to .gd/.cs in the user project;
+          addons/godot_ai/ dropped. Errors fired before plugin enable are
+          not captured.
+        - "all": plugin → editor → game lines (with source per entry).
 
         Tail pattern: poll with offset=N + since_run_id=R. ``stale_run_id: true``
         means the buffer has rotated; reset offset to 0 and capture new run_id.
+        ``run_id`` is empty for ``source="editor"`` (editor logs don't rotate).
 
         Args:
             count: Max lines to return. Default 50.
             offset: Lines to skip. Default 0.
-            source: "plugin" | "game" | "all". Default "plugin".
+            source: "plugin" | "game" | "editor" | "all". Default "plugin".
             since_run_id: Stale-detection token from a previous response.
             session_id: Optional Godot session to target. Empty = active session.
         """
