@@ -17,8 +17,8 @@ func _init() -> void:
 		"linux": "$XDG_CONFIG_HOME/Claude/claude_desktop_config.json",
 	}
 	server_key_path = PackedStringArray(["mcpServers"])
-	## "flat" bridge: `{"command": "<uvx>", "args": [...]}`. The default
+	## FLAT bridge: `{"command": "<uvx>", "args": [...]}`. The default
 	## verifier ALSO accepts a future url-style entry (Claude Desktop has
 	## been tolerant of both forms since the npx→uvx bridge migration).
-	entry_uvx_bridge = "flat"
+	entry_uvx_bridge = McpClient.UvxBridge.FLAT
 	detect_paths = PackedStringArray(path_template.values())

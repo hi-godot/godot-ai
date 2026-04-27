@@ -229,16 +229,24 @@ The plugin auto-configures 18+ MCP clients via a registry + strategy system in
 `plugin/addons/godot_ai/clients/`:
 
 - `_base.gd` — `McpClient` descriptor (data only: id, display_name, config_type,
-  path_template, server_key_path, entry_builder, …)
+  path_template, server_key_path, entry_url_field, entry_extra_fields,
+  entry_uvx_bridge, cli_register_template, cli_status_args, toml_body_template,
+  …). Descriptors carry no `Callable` fields and no control flow — strategies
+  interpret the data. The `test_descriptors_are_data_only` suite enforces this
+  (issue #229: hot-reloaded per-client lambdas raced with worker threads).
 - `_registry.gd` — explicit `preload(...)` list of every client. Adding a client
   means: write `clients/<name>.gd` extending `McpClient`, then append one
   preload here. No edits to dock or facade required.
 - `_json_strategy.gd` / `_toml_strategy.gd` / `_cli_strategy.gd` — three
   reusable writers, selected by descriptor `config_type`. **No per-client
-  branching** inside strategies — non-standard entry shapes (Claude Desktop's
-  `npx mcp-remote` bridge, Antigravity's `serverUrl`, Zed's `command`/`settings`
-  shape) supply their own `entry_builder` (and optionally a `verify_entry`
-  callable for status checks).
+  branching** inside strategies — non-standard entry shapes are expressed
+  declaratively: `entry_url_field` overrides the URL key (Antigravity's
+  `serverUrl`, Gemini's `httpUrl`); `entry_extra_fields` adds verbatim keys
+  (Roo's `type: streamable-http`, OpenCode's `enabled: true`); `entry_uvx_bridge`
+  composes the stdio→HTTP bridge shape for stdio-only clients (Claude Desktop's
+  `flat`, Zed's `nested`).
+- `_manual_command.gd` — synthesizes the dock's "Run this manually" string
+  from the same declarative fields. No per-client builders.
 - `_path_template.gd` — expands `~`, `$HOME`, `$APPDATA`, `$XDG_CONFIG_HOME`,
   `$LOCALAPPDATA`, `$USERPROFILE`; picks the right per-OS entry from a
   `{"darwin": ..., "windows": ..., "linux": ...}` (or `"unix"` shorthand) map.

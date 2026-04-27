@@ -17,8 +17,8 @@ func _init() -> void:
 		"windows": "$APPDATA/Zed/settings.json",
 	}
 	server_key_path = PackedStringArray(["context_servers"])
-	## "nested" bridge: `{"command": {"path": <uvx>, "args": [...]}, "settings": {}}`.
+	## NESTED bridge: `{"command": {"path": <uvx>, "args": [...]}, "settings": {}}`.
 	## Verifier requires the bridge form (no url-style fallback) — Zed has
 	## never spoken HTTP natively.
-	entry_uvx_bridge = "nested"
+	entry_uvx_bridge = McpClient.UvxBridge.NESTED
 	detect_paths = PackedStringArray(path_template.values())

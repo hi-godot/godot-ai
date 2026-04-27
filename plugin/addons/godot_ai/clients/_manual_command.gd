@@ -60,7 +60,7 @@ static func _toml_header(client: McpClient) -> String:
 	var parts := client.toml_section_path
 	if parts.size() < 2:
 		return "[%s]" % ".".join(parts)
-	var section := ".".join(McpClient._array_from_packed(_packed_slice(parts, 0, parts.size() - 1)))
+	var section := ".".join(McpClient._array_from_packed(McpClient._packed_slice(parts, 0, parts.size() - 1)))
 	var name := parts[parts.size() - 1]
 	return "[%s.\"%s\"]" % [section, name]
 
@@ -98,10 +98,3 @@ static func _format_value(value: Variant) -> String:
 	if value == null:
 		return "null"
 	return str(value)
-
-
-static func _packed_slice(packed: PackedStringArray, from: int, to: int) -> PackedStringArray:
-	var out := PackedStringArray()
-	for i in range(from, to):
-		out.append(packed[i])
-	return out

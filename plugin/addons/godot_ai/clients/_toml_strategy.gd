@@ -146,7 +146,7 @@ static func _primary_header(client: McpClient) -> String:
 	var parts := client.toml_section_path
 	if parts.size() < 2:
 		return "[%s]" % ".".join(parts)
-	var section := ".".join(_packed_slice(parts, 0, parts.size() - 1))
+	var section := ".".join(McpClient._packed_slice(parts, 0, parts.size() - 1))
 	var name := parts[parts.size() - 1]
 	return "[%s.\"%s\"]" % [section, name]
 
@@ -183,10 +183,3 @@ static func _find_section(lines: Array[String], headers: Array[String]) -> Dicti
 					break
 			return {"start": i, "end": end}
 	return {}
-
-
-static func _packed_slice(packed: PackedStringArray, from: int, to: int) -> PackedStringArray:
-	var out := PackedStringArray()
-	for i in range(from, to):
-		out.append(packed[i])
-	return out

@@ -4,19 +4,14 @@ extends RefCounted
 
 ## Descriptor for one MCP client (Cursor, Claude Desktop, Codex, ...).
 ##
-## Subclasses set fields in `_init()` and contain NO Callables, NO control
-## flow, NO logic. Strategies (json/toml/cli) interpret these fields.
+## Subclasses set fields in `_init()` and MUST NOT carry Callables — strategies
+## (json/toml/cli) interpret the data. Enforced by
+## `test_clients.gd::test_descriptors_are_data_only`.
 ##
-## This is enforced by `test_clients.gd::test_descriptors_are_data_only` —
-## any Variant property whose runtime value is a `Callable` fails the suite.
-##
-## Why: per-client `.gd` files get hot-reloaded on disk-mtime change. Any
-## descriptor-supplied lambda is GDScript bytecode living in a hot-reloadable
-## script — if a worker thread is mid-call when the file gets swapped (git
-## checkout, in-IDE save, the dock's self-update flow) the IP walks off a
-## cliff and the editor SEGVs (issue #229). It also independently solves the
-## "stale Callable after plugin disable+enable" crash from issue #192:
-## without Callables there's nothing to go stale.
+## Why no Callables: per-client `.gd` files get hot-reloaded on disk-mtime
+## change. A worker thread mid-call into a descriptor lambda races the
+## bytecode swap and SEGVs (issue #229). Bonus: also obsoletes the stale-
+## Callable workaround from #192.
 
 ## CONFIGURED_MISMATCH = an entry with our `SERVER_NAME` exists in the user's
 ## client config, but its URL doesn't match `http_url()` — typical after the
@@ -69,12 +64,16 @@ var entry_url_field: String = "url"
 var entry_extra_fields: Dictionary = {}
 
 ## stdio→HTTP bridge mode for clients that don't speak HTTP natively.
-##   ""        — no bridge; entry is `{[entry_url_field]: url, **entry_extra_fields}`
-##   "flat"    — Claude Desktop shape: `{"command": <uvx>, "args": [...bridge...]}`
-##               Verifier ALSO accepts a future url-style entry.
-##   "nested"  — Zed shape: `{"command": {"path": <uvx>, "args": [...]}, "settings": {}}`
-##               Verifier requires the bridge form (no url-style fallback).
-var entry_uvx_bridge: String = ""
+##   NONE    — entry is `{[entry_url_field]: url, **entry_extra_fields}`
+##   FLAT    — Claude Desktop shape: `{"command": <uvx>, "args": [...bridge...]}`
+##             Verifier ALSO accepts a future url-style entry.
+##   NESTED  — Zed shape: `{"command": {"path": <uvx>, "args": [...]}, "settings": {}}`
+##             Verifier requires the bridge form (no url-style fallback).
+##
+## Enum (vs. String) so a typo in a descriptor fails at parse time instead of
+## silently falling through `match` to the non-bridge path.
+enum UvxBridge { NONE, FLAT, NESTED }
+var entry_uvx_bridge: UvxBridge = UvxBridge.NONE
 
 ## Paths whose existence implies the user has this client installed.
 ## Used purely for the dock's "installed" badge.
@@ -124,6 +123,16 @@ static func _array_from_packed(packed: PackedStringArray) -> Array[String]:
 	var out: Array[String] = []
 	for s in packed:
 		out.append(s)
+	return out
+
+
+## Slice a PackedStringArray into a new PackedStringArray over [from, to).
+## Used by `_toml_strategy` and `_manual_command` to peel the section path
+## apart for `[a.b."c"]` header rendering.
+static func _packed_slice(packed: PackedStringArray, from: int, to: int) -> PackedStringArray:
+	var out := PackedStringArray()
+	for i in range(from, to):
+		out.append(packed[i])
 	return out
 
 

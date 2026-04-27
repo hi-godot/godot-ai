@@ -97,10 +97,32 @@ func test_descriptors_are_data_only() -> void:
 				continue
 			var prop_name: String = prop.name
 			var value = client.get(prop_name)
-			assert_false(
-				value is Callable,
-				"%s.%s is a Callable — descriptors must be data-only (issue #229)" % [client.id, prop_name],
+			var crumb: String = _find_callable(value, "%s.%s" % [client.id, prop_name])
+			assert_true(
+				crumb.is_empty(),
+				"%s — descriptors must be data-only (issue #229)" % crumb,
 			)
+
+
+## Recursively walk a Variant looking for a Callable — top-level OR nested
+## inside a Dictionary / Array. Returns the breadcrumb path of the offending
+## field (e.g. "claude_desktop.entry_extra_fields[\"hook\"]") on hit, or "" on
+## clean. Catches `entry_extra_fields = {"hook": Callable()}`-style sneaks
+## that a top-level type check would miss.
+func _find_callable(value: Variant, breadcrumb: String) -> String:
+	if value is Callable:
+		return breadcrumb
+	if value is Dictionary:
+		for k in value:
+			var hit := _find_callable(value[k], "%s[%s]" % [breadcrumb, JSON.stringify(k)])
+			if not hit.is_empty():
+				return hit
+	elif value is Array:
+		for i in value.size():
+			var hit := _find_callable(value[i], "%s[%d]" % [breadcrumb, i])
+			if not hit.is_empty():
+				return hit
+	return ""
 
 
 func test_every_client_has_manual_command() -> void:
@@ -773,7 +795,7 @@ func test_json_strategy_drift_with_bridge_entry() -> void:
 	client.config_type = "json"
 	client.path_template = {"darwin": path, "windows": path, "linux": path, "unix": path}
 	client.server_key_path = PackedStringArray(["mcpServers"])
-	client.entry_uvx_bridge = "flat"
+	client.entry_uvx_bridge = McpClient.UvxBridge.FLAT
 
 	McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
 	assert_eq(
@@ -1050,7 +1072,7 @@ func test_gemini_cli_entry_uses_httpUrl() -> void:
 
 func test_claude_desktop_bridges_via_uvx() -> void:
 	var c := McpClientRegistry.get_by_id("claude_desktop")
-	assert_eq(c.entry_uvx_bridge, "flat", "claude_desktop must declare flat uvx bridge")
+	assert_eq(c.entry_uvx_bridge, McpClient.UvxBridge.FLAT, "claude_desktop must declare FLAT uvx bridge")
 	var entry := McpJsonStrategy.build_entry(c, "http://x")
 	_assert_uvx_command(entry.get("command", ""))
 	_assert_mcp_proxy_bridge_args(entry.get("args", []), "http://x")
@@ -1077,7 +1099,7 @@ func test_claude_desktop_verify_entry_accepts_future_url_form() -> void:
 
 func test_zed_bridges_via_uvx() -> void:
 	var c := McpClientRegistry.get_by_id("zed")
-	assert_eq(c.entry_uvx_bridge, "nested", "zed must declare nested uvx bridge")
+	assert_eq(c.entry_uvx_bridge, McpClient.UvxBridge.NESTED, "zed must declare NESTED uvx bridge")
 	var entry := McpJsonStrategy.build_entry(c, "http://x")
 	var cmd = entry.get("command", {})
 	assert_true(cmd is Dictionary, "Zed entry.command must be a Dictionary (path+args shape)")

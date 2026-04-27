@@ -66,12 +66,12 @@ static func remove(client: McpClient, server_name: String) -> Dictionary:
 ## (Claude Desktop, Zed) it composes the uvx + mcp-proxy command shape.
 static func build_entry(client: McpClient, server_url: String) -> Dictionary:
 	match client.entry_uvx_bridge:
-		"flat":
+		McpClient.UvxBridge.FLAT:
 			return {
 				"command": McpClient.resolve_uvx_path(),
 				"args": McpClient.mcp_proxy_bridge_args(server_url),
 			}
-		"nested":
+		McpClient.UvxBridge.NESTED:
 			return {
 				"command": {
 					"path": McpClient.resolve_uvx_path(),
@@ -95,7 +95,7 @@ static func build_entry(client: McpClient, server_url: String) -> Dictionary:
 ## entries that lack the type field fail verification and surface as drift.
 static func verify_entry(client: McpClient, entry: Dictionary, server_url: String) -> bool:
 	match client.entry_uvx_bridge:
-		"flat":
+		McpClient.UvxBridge.FLAT:
 			# Future url-style entry: accept if Claude Desktop ever speaks HTTP natively.
 			if entry.get(client.entry_url_field, "") == server_url:
 				return true
@@ -105,7 +105,7 @@ static func verify_entry(client: McpClient, entry: Dictionary, server_url: Strin
 			var uvx_like := (cmd as String).get_file() == "uvx" or (cmd as String).get_file() == "uvx.exe"
 			var args = entry.get("args", [])
 			return uvx_like and args is Array and args.has(server_url)
-		"nested":
+		McpClient.UvxBridge.NESTED:
 			var cmd_obj = entry.get("command", {})
 			if not (cmd_obj is Dictionary):
 				return false
