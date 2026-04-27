@@ -1515,52 +1515,25 @@ func _prune_orphaned_client_status_refresh_threads() -> void:
 
 
 func _perform_initial_client_status_refresh() -> void:
-	## Hybrid first-refresh: sync the fast strategies on main, defer CLI to
-	## the worker. Deterministic fix for #233 / #235 — replaces the prior
-	## 1.5s settle timer (#234) without re-introducing the per-focus editor
-	## hitches that #228 fixed.
+	## Pre-warm strategy bytecode on main, defer CLI probes to the worker.
 	##
-	## The race we're avoiding: Godot's GDScript hot-reload of overwritten
-	## plugin files is *lazy* — `set_plugin_enabled(true)` returns before
-	## arbitrary referenced scripts have been bytecode-swapped, and the swap
-	## happens on first dereference. A worker spawned from a fresh `_build_ui`
-	## walks straight into `_json_strategy.check_status` /
-	## `_cli_strategy.check_status_with_cli_path` / `client_configurator.*`
-	## while their bytecode pages are mid-swap → SIGABRT in the worker.
+	## Godot's GDScript hot-reload of overwritten plugin files is lazy: the
+	## bytecode swap happens on first dereference, not at `set_plugin_enabled`
+	## time. A worker thread spawned from a fresh `_build_ui` walks into
+	## `_json_strategy.*` / `_cli_strategy.*` / `client_configurator.*` while
+	## bytecode pages are mid-swap → SIGABRT. Dereferencing those scripts on
+	## main first forces the swap to complete here; the worker then finds
+	## stable bytecode. Filesystem signals don't bracket the swap window
+	## (they fire before bytecode replacement), and FOCUS_IN doesn't fire on
+	## in-place plugin reload because the editor stays focused — so neither
+	## works as a gate. See #233 / #235.
 	##
-	## The fix: dereference every script the worker will touch on the main
-	## thread first, so the bytecode swap completes here. After this helper
-	## returns, the worker's call graph has stable bytecode → no race.
+	## Phase 1 (sync, on main): for each client, snapshot warms the CLI call
+	## graph via `resolve_cli_path`; for non-CLI clients, sync `check_status`
+	## warms `_json_strategy.gd` / `_toml_strategy.gd`. Phase 2 (worker): CLI
+	## probes only, race-safe because Phase 1 dereferenced their call graph.
 	##
-	## How the warming maps to actual calls:
-	##   - `client_status_probe_snapshot` for each client (already used by
-	##     the worker path) calls `McpCliStrategy.resolve_cli_path` for CLI
-	##     clients → dereferences `_cli_strategy.gd`, `_cli_finder.gd`,
-	##     `_path_template.gd` on main.
-	##   - For JSON/TOML clients we run `check_status_for_url_with_cli_path`
-	##     synchronously on main — file-read + JSON/TOML parse, ~5–20ms per
-	##     client. The act of dispatching warms `_json_strategy.gd` /
-	##     `_toml_strategy.gd`, `_atomic_write.gd`, the configurator dispatch.
-	##   - CLI clients are bundled into a deferred batch and probed by the
-	##     worker, which is now race-free because every script in its call
-	##     graph was just dereferenced on main.
-	##
-	## This keeps the editor responsive: the on-main freeze is bounded by
-	## the JSON/TOML probe count (~120–250ms for a typical install), not
-	## by the slow `OS.execute` CLI calls (~100ms–1s each × 7 clients) that
-	## #228 moved off-thread in the first place. Focus-in, manual refresh,
-	## and configure/remove keep using the worker via `_request_client_
-	## status_refresh` — no path that #228 made async is reverted.
-	##
-	## Why a signal-based gate isn't sufficient: filesystem signals
-	## (`is_scanning()`, `filesystem_changed`) flip back to false *before*
-	## the bytecode swap completes (confirmed in #229 / #233), and
-	## `NOTIFICATION_APPLICATION_FOCUS_IN` doesn't fire on in-place plugin
-	## reload because the editor stays focused. Pre-warming on main is the
-	## only mechanism that's deterministic by construction.
-	##
-	## GDScript tests instantiate the dock via `McpDockScript.new()` without
-	## adding to the tree, so the helper is a no-op outside the tree.
+	## No-op outside the tree — GDScript tests instantiate via `new()`.
 	if not is_inside_tree():
 		return
 	if _client_rows.is_empty():
@@ -1570,77 +1543,32 @@ func _perform_initial_client_status_refresh() -> void:
 	if _client_status_refresh_in_flight:
 		return
 
-	_client_status_refresh_in_flight = true
-	_client_status_refresh_pending = false
-	_client_status_refresh_pending_force = false
-	_client_status_refresh_timed_out = false
-	_client_status_refresh_started_msec = Time.get_ticks_msec()
-	_client_status_refresh_generation += 1
-	var generation := _client_status_refresh_generation
-	_refresh_clients_summary()
-
+	var generation := _begin_client_status_refresh_run()
 	var server_url := McpClientConfigurator.http_url()
-	var sync_results: Dictionary = {}
 	var deferred_cli_probes: Array[Dictionary] = []
 
 	for client_id in _client_rows:
-		if _client_status_refresh_shutdown_requested:
-			_client_status_refresh_in_flight = false
-			return
 		var client := McpClientRegistry.get_by_id(String(client_id))
 		if client == null:
 			continue
-		## Snapshot warms the CLI call graph (`_cli_strategy.gd` /
-		## `_cli_finder.gd`) on main for CLI clients via `resolve_cli_path`,
-		## and surfaces `installed` for JSON/TOML clients.
 		var probe := McpClientConfigurator.client_status_probe_snapshot(String(client_id))
 		if probe.is_empty():
 			continue
 		if client.config_type == "cli":
 			deferred_cli_probes.append(probe)
-		else:
-			## Sync probe for JSON/TOML — fast file-read + parse, and the
-			## act of dispatching warms `_json_strategy.gd` /
-			## `_toml_strategy.gd` on main.
-			var status := McpClientConfigurator.check_status_for_url_with_cli_path(
-				String(client_id), server_url, ""
-			)
-			sync_results[String(client_id)] = {
-				"status": status,
-				"installed": bool(probe.get("installed", false))
-			}
-
-	## Apply Phase 1 (JSON/TOML) results immediately — each was probed on
-	## main with stable bytecode, so no need to wait for Phase 2.
-	for sync_id in sync_results:
-		var sync_result: Dictionary = sync_results[sync_id]
+			continue
+		var status := McpClientConfigurator.check_status_for_url_with_cli_path(
+			String(client_id), server_url, ""
+		)
 		_apply_row_status(
-			String(sync_id),
-			sync_result.get("status", McpClient.Status.NOT_CONFIGURED),
-			"",
-			sync_result.get("installed", false)
+			String(client_id), status, "", bool(probe.get("installed", false))
 		)
 	_refresh_clients_summary()
 
-	if deferred_cli_probes.is_empty() or _client_status_refresh_shutdown_requested:
-		## No CLI probes to defer — finalize without spawning a worker. We
-		## already applied results above; mirror the bookkeeping that
-		## `_apply_client_status_refresh_results` would do at the end of
-		## a normal worker callback.
-		_last_client_status_refresh_completed_msec = Time.get_ticks_msec()
-		_client_status_refresh_in_flight = false
-		_client_status_refresh_timed_out = false
-		_refresh_clients_summary()
+	if deferred_cli_probes.is_empty():
+		_finalize_completed_refresh()
 		return
 
-	## Phase 2: spawn the worker for the CLI probes only. Safe to thread
-	## now because `_cli_strategy.gd` / `_cli_finder.gd` were just
-	## dereferenced on main via `client_status_probe_snapshot`, and
-	## `client_configurator.gd` was dereferenced by the JSON/TOML
-	## dispatches above. The worker's callback applies the CLI subset on
-	## top of the rows already painted in Phase 1 — `_apply_row_status` is
-	## per-`client_id`, so the JSON/TOML rows we just painted aren't
-	## overwritten or cleared.
 	_client_status_refresh_thread = Thread.new()
 	var err := _client_status_refresh_thread.start(
 		Callable(self, "_run_client_status_refresh_worker").bind(
@@ -1652,6 +1580,31 @@ func _perform_initial_client_status_refresh() -> void:
 		_client_status_refresh_timed_out = false
 		_client_status_refresh_thread = null
 		_refresh_clients_summary()
+
+
+func _begin_client_status_refresh_run() -> int:
+	## Marks a refresh as starting and returns the new generation token.
+	## Generation is bumped here (not at completion) so that a worker callback
+	## arriving after `_abandon_client_status_refresh_thread` or `_exit_tree`
+	## fires can be detected as stale via generation mismatch.
+	_client_status_refresh_in_flight = true
+	_client_status_refresh_pending = false
+	_client_status_refresh_pending_force = false
+	_client_status_refresh_timed_out = false
+	_client_status_refresh_started_msec = Time.get_ticks_msec()
+	_client_status_refresh_generation += 1
+	_refresh_clients_summary()
+	return _client_status_refresh_generation
+
+
+func _finalize_completed_refresh() -> void:
+	## Stamps cooldown and clears in-flight state. Called at the end of every
+	## refresh that successfully applied results — the worker callback path
+	## and the no-CLI fast path in `_perform_initial_client_status_refresh`.
+	_last_client_status_refresh_completed_msec = Time.get_ticks_msec()
+	_client_status_refresh_in_flight = false
+	_client_status_refresh_timed_out = false
+	_refresh_clients_summary()
 
 
 func _request_client_status_refresh(force: bool = false) -> bool:
@@ -1678,14 +1631,7 @@ func _request_client_status_refresh(force: bool = false) -> bool:
 		client_probes.append(McpClientConfigurator.client_status_probe_snapshot(String(client_id)))
 	var server_url := McpClientConfigurator.http_url()
 
-	_client_status_refresh_in_flight = true
-	_client_status_refresh_pending = false
-	_client_status_refresh_pending_force = false
-	_client_status_refresh_timed_out = false
-	_client_status_refresh_started_msec = Time.get_ticks_msec()
-	_client_status_refresh_generation += 1
-	var generation := _client_status_refresh_generation
-	_refresh_clients_summary()
+	var generation := _begin_client_status_refresh_run()
 	_client_status_refresh_thread = Thread.new()
 	var err := _client_status_refresh_thread.start(
 		Callable(self, "_run_client_status_refresh_worker").bind(client_probes, server_url, generation)
@@ -1731,10 +1677,7 @@ func _apply_client_status_refresh_results(results: Dictionary, generation: int) 
 			"",
 			result.get("installed", false)
 		)
-	_last_client_status_refresh_completed_msec = Time.get_ticks_msec()
-	_client_status_refresh_in_flight = false
-	_client_status_refresh_timed_out = false
-	_refresh_clients_summary()
+	_finalize_completed_refresh()
 
 	if _client_status_refresh_pending:
 		var pending_force := _client_status_refresh_pending_force
