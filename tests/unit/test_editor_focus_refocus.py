@@ -26,7 +26,7 @@ def test_client_status_refresh_runs_on_background_thread_and_applies_deferred() 
     assert "var _client_status_refresh_thread: Thread" in source
     assert "_client_status_refresh_thread.start" in source
     assert "McpClientConfigurator.check_status" in source
-    assert "call_deferred(\"_apply_client_status_refresh_results" in source
+    assert 'call_deferred("_apply_client_status_refresh_results' in source
 
 
 def test_client_status_refresh_coalesces_and_manual_refresh_bypasses_cooldown() -> None:
@@ -50,27 +50,54 @@ def test_clients_window_open_requests_nonblocking_refresh() -> None:
     assert "_refresh_all_client_statuses.call_deferred" not in block
 
 
-def test_initial_paint_requests_async_status_refresh() -> None:
-    """Cold editor open populates client dots via the deferred helper (#233).
+def test_initial_paint_runs_first_refresh_synchronously_on_main_thread() -> None:
+    """Cold editor open populates client dots via a sync main-thread probe (#235).
 
-    Asserts the call chain end-to-end so a future refactor can't accidentally
-    drop the auto-spawn or remove the hot-reload settle delay.
+    Deterministic replacement for the prior 1.5s settle timer (#234). The very
+    first refresh after `_build_ui` MUST NOT spawn a worker thread — doing so
+    would race Godot's lazy GDScript hot-reload of plugin scripts on the
+    self-update path, segfaulting the editor (#233). Running the first probe
+    inline on the main thread forces the bytecode swap to happen here,
+    eliminating the race by construction; subsequent refreshes (focus-in,
+    manual click) safely use the worker once the swap is complete.
+
+    Asserts the call chain end-to-end so a future "make startup snappier"
+    refactor can't silently re-introduce the timer-or-thread approach.
     """
 
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
     build_block = source.split("func _build_ui() -> void:", 1)[1].split("\n\nfunc ", 1)[0]
-    assert "_schedule_initial_client_status_refresh()" in build_block, (
-        "_build_ui must schedule the initial refresh"
+    assert "_perform_initial_client_status_refresh()" in build_block, (
+        "_build_ui must call the sync initial-refresh helper"
     )
 
-    helper_block = source.split(
-        "func _schedule_initial_client_status_refresh() -> void:", 1
-    )[1].split("\n\nfunc ", 1)[0]
-    assert "_request_client_status_refresh(true)" in helper_block, (
-        "Helper must ultimately call the force-refresh path"
+    helper_block = source.split("func _perform_initial_client_status_refresh() -> void:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+    assert "Thread.new()" not in helper_block, (
+        "First refresh must not spawn a worker thread — that's the race we're "
+        "preventing. See #233 / #235."
     )
-    assert "CLIENT_STATUS_REFRESH_INITIAL_DELAY_MSEC" in helper_block, (
-        "Helper must defer past hot-reload settle window"
+    assert ".start(" not in helper_block, "First refresh must not start any thread directly."
+    assert "await " not in helper_block, (
+        "First refresh must be synchronous — no timer, no signal awaits. The "
+        "deterministic guarantee is `same thread as _build_ui`, which falls "
+        "apart if execution suspends."
+    )
+    assert "create_timer" not in helper_block, (
+        "First refresh must not gate on a wall-clock timer (the heuristic "
+        "stopgap from #234 that #235 replaces)."
+    )
+    assert "_apply_client_status_refresh_results(" in helper_block, (
+        "Helper must apply results inline — no `call_deferred`, no thread "
+        "callback. That inline application is what proves the sync semantics."
+    )
+
+    constants_block = source.split("class_name McpDock", 1)[1].split("\nvar ", 1)[0]
+    assert "CLIENT_STATUS_REFRESH_INITIAL_DELAY_MSEC" not in constants_block, (
+        "The settle-timer constant from #234 must be removed — keeping it "
+        "alongside the sync helper would falsely imply a residual timer-based "
+        "gate. See #235."
     )
 
 

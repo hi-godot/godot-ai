@@ -12,11 +12,6 @@ const MODE_OVERRIDE_VALUES := ["", "user", "dev"]
 const MODE_OVERRIDE_LABELS := ["Auto", "Force user", "Force dev"]
 const CLIENT_STATUS_REFRESH_COOLDOWN_MSEC := 15 * 1000
 const CLIENT_STATUS_REFRESH_TIMEOUT_MSEC := 30 * 1000
-## Delay before the very first auto-refresh fires after `_build_ui` —
-## settle margin past Godot's lazy GDScript hot-reload of plugin scripts
-## on the self-update path. Empirical settle is <500ms; 1500 is 3× margin.
-## See issue #233.
-const CLIENT_STATUS_REFRESH_INITIAL_DELAY_MSEC := 1500
 static var COLOR_MUTED := Color(0.7, 0.7, 0.7)
 static var COLOR_HEADER := Color(0.95, 0.95, 0.95)
 ## Used for "in-progress" / "stale, action needed" UI: the startup-grace
@@ -552,7 +547,7 @@ func _build_ui() -> void:
 	# Apply initial dev-mode visibility
 	_apply_dev_mode_visibility()
 	_refresh_setup_status.call_deferred()
-	_schedule_initial_client_status_refresh()
+	_perform_initial_client_status_refresh()
 
 
 func _make_header(text: String) -> Label:
@@ -1519,26 +1514,81 @@ func _prune_orphaned_client_status_refresh_threads() -> void:
 			_orphaned_client_status_refresh_threads.remove_at(i)
 
 
-func _schedule_initial_client_status_refresh() -> void:
-	## Defer the first auto-refresh past Godot's lazy GDScript hot-reload
-	## window — racing it segfaults the editor on the self-update path.
-	## Filesystem signals don't bracket the race (they fire before bytecode
-	## swap completes) and FOCUS_IN doesn't fire on in-place plugin reload,
-	## so a fixed-delay timer is the only mechanism that works. See #233.
-	## (Tracked in #235; this is the interim heuristic stopgap.)
-	## Pre-await `get_tree()` capture: GDScript tests instantiate the dock
-	## via `McpDockScript.new()` without adding to the tree, so `get_tree()`
-	## is null and `null.create_timer(...)` would error. Bail cleanly when
-	## not in tree — the deferred refresh is a no-op outside the editor.
-	var tree := get_tree()
-	if tree == null or not is_inside_tree():
-		return
-	await tree.create_timer(CLIENT_STATUS_REFRESH_INITIAL_DELAY_MSEC / 1000.0).timeout
-	if _client_status_refresh_shutdown_requested:
-		return
+func _perform_initial_client_status_refresh() -> void:
+	## Run the first refresh synchronously on the main thread, never via the
+	## worker. Deterministic fix for #233 / #235 — replaces the prior 1.5s
+	## settle timer (#234).
+	##
+	## Why sync, not threaded: Godot's GDScript hot-reload of overwritten
+	## plugin files is *lazy* — `set_plugin_enabled(true)` returns before
+	## arbitrary referenced scripts have been bytecode-swapped, and the swap
+	## happens on first dereference. A worker spawned from a fresh `_build_ui`
+	## walks straight into `_json_strategy.check_status` /
+	## `client_configurator.*` while their bytecode pages are mid-swap →
+	## SIGABRT in the worker. By doing the very first probe on the main
+	## thread, the dereference (and its swap) happens here, on the same
+	## thread the editor uses. After this call returns, every script the
+	## worker would ever touch has stable bytecode, so subsequent refreshes
+	## (focus-in, manual click, configure/remove) can safely use the worker.
+	##
+	## No filesystem signal brackets the swap (`is_scanning()` /
+	## `filesystem_changed` flip back to false *before* the swap completes,
+	## confirmed in #229 / #233), and `NOTIFICATION_APPLICATION_FOCUS_IN`
+	## doesn't fire on in-place plugin reload because the editor stays
+	## focused throughout — so neither a signal-based gate nor a deferred
+	## focus-driven refresh is sufficient. The sync-on-main approach is the
+	## only mechanism that's deterministic by construction (no thread →
+	## no race), which is why the 1.5s heuristic timer was replaced.
+	##
+	## Cost: the editor briefly blocks while CLI probes (`OS.execute(...,
+	## true)`) run sequentially. Empirically <1s on warm caches; bounded by
+	## `CLIENT_STATUS_REFRESH_TIMEOUT_MSEC` for the (very rare) hung-CLI
+	## case. The pre-#234 timer already imposed a 1.5s window during which
+	## the dock was visibly empty; replacing that with a same-order sync
+	## window is acceptable for the cold-start moment.
+	##
+	## GDScript tests instantiate the dock via `McpDockScript.new()` without
+	## adding to the tree, so the helper is a no-op outside the tree.
 	if not is_inside_tree():
 		return
-	_request_client_status_refresh(true)
+	if _client_rows.is_empty():
+		return
+	if _client_status_refresh_shutdown_requested:
+		return
+	if _client_status_refresh_in_flight:
+		## A worker started somehow between `_build_ui` and us — let it
+		## finish; subsequent refreshes find warm bytecode either way.
+		return
+
+	_client_status_refresh_in_flight = true
+	_client_status_refresh_pending = false
+	_client_status_refresh_pending_force = false
+	_client_status_refresh_timed_out = false
+	_client_status_refresh_started_msec = Time.get_ticks_msec()
+	_client_status_refresh_generation += 1
+	var generation := _client_status_refresh_generation
+	_refresh_clients_summary()
+
+	var server_url := McpClientConfigurator.http_url()
+	var results: Dictionary = {}
+	for client_id in _client_rows:
+		if _client_status_refresh_shutdown_requested:
+			_client_status_refresh_in_flight = false
+			return
+		var probe := McpClientConfigurator.client_status_probe_snapshot(String(client_id))
+		var status := McpClientConfigurator.check_status_for_url_with_cli_path(
+			String(client_id),
+			server_url,
+			String(probe.get("cli_path", ""))
+		)
+		results[String(client_id)] = {
+			"status": status,
+			"installed": bool(probe.get("installed", false))
+		}
+
+	## `_apply_client_status_refresh_results` null-checks the worker thread,
+	## so calling it directly from the sync path (thread is null) is fine.
+	_apply_client_status_refresh_results(results, generation)
 
 
 func _request_client_status_refresh(force: bool = false) -> bool:

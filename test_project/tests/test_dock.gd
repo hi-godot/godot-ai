@@ -157,11 +157,27 @@ func test_refresh_cooldown_helper_only_blocks_automatic_refreshes() -> void:
 		"No completed refresh means no cooldown")
 
 
-func test_initial_refresh_delay_is_past_typical_hot_reload_settle() -> void:
-	## Regression for #233 — locks the settle margin so a "0-delay would be
-	## snappier" refactor can't silently re-introduce the self-update crash.
-	assert_true(McpDockScript.CLIENT_STATUS_REFRESH_INITIAL_DELAY_MSEC >= 1000,
-		"Initial refresh delay must be at least 1s — empirical hot-reload settle")
+func test_initial_refresh_helper_replaces_settle_timer_constant() -> void:
+	## #234 shipped a `CLIENT_STATUS_REFRESH_INITIAL_DELAY_MSEC` heuristic that
+	## #235 replaces with a deterministic sync gate. The constant must be gone
+	## — keeping it alongside the sync helper would falsely imply a residual
+	## timer-based fix.
+	##
+	## The full structural guard ("the helper has no Thread/await/timer") lives
+	## in `tests/unit/test_editor_focus_refocus.py` because GDScript can't
+	## introspect its own AST. This GDScript-side test is the script-class
+	## guard for the constant itself: if a future merge adds it back (e.g.
+	## resurrecting #234's stopgap on top of #235), `get_script_constant_map`
+	## will catch it on the next test run.
+	var script: GDScript = McpDockScript
+	var has_constant := false
+	for entry in script.get_script_constant_map():
+		if String(entry) == "CLIENT_STATUS_REFRESH_INITIAL_DELAY_MSEC":
+			has_constant = true
+			break
+	assert_false(has_constant,
+		"CLIENT_STATUS_REFRESH_INITIAL_DELAY_MSEC must be removed — sync first "
+		"refresh (#235) deterministically replaces the timer (#234).")
 
 
 func test_exit_tree_drains_orphaned_refresh_threads() -> void:
