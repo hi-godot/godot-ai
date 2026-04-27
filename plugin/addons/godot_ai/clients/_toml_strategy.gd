@@ -2,8 +2,9 @@
 class_name McpTomlStrategy
 extends RefCounted
 
-## Minimal TOML upsert: replace or insert one [section."name"] block produced by
-## `client.toml_body_builder`. Generalized from the original Codex-only logic.
+## Minimal TOML upsert: replace or insert one [section."name"] block whose body
+## comes from substituting `{url}` in `client.toml_body_template`. No
+## descriptor-supplied Callables — see `_base.gd`.
 
 
 static func configure(client: McpClient, _server_name: String, server_url: String) -> Dictionary:
@@ -14,10 +15,10 @@ static func configure(client: McpClient, _server_name: String, server_url: Strin
 	var read := _read_or_init(path)
 	if not read["ok"]:
 		return {"status": "error", "message": "Refusing to overwrite %s: %s. Fix or move the file, then re-run Configure." % [path, read["error"]]}
-	if not client.toml_body_builder.is_valid():
-		return McpClient.stale_callable_status(client)
+	if client.toml_body_template.is_empty():
+		return {"status": "error", "message": "%s descriptor missing toml_body_template" % client.display_name}
 	var lines: Array[String] = _split_lines(String(read["data"]))
-	var body: PackedStringArray = client.toml_body_builder.call(server_url)
+	var body: PackedStringArray = format_body(client.toml_body_template, server_url)
 
 	var section := _find_section(lines, _all_headers(client))
 	var header := _primary_header(client)
@@ -98,6 +99,14 @@ static func remove(client: McpClient, _server_name: String) -> Dictionary:
 	if not McpAtomicWrite.write(path, "\n".join(output)):
 		return {"status": "error", "message": "Cannot write to %s" % path}
 	return {"status": "ok", "message": "%s configuration removed" % client.display_name}
+
+
+## Substitute `{url}` in every body-template line.
+static func format_body(template: PackedStringArray, server_url: String) -> PackedStringArray:
+	var out := PackedStringArray()
+	for line in template:
+		out.append(String(line).replace("{url}", server_url))
+	return out
 
 
 # --- helpers --------------------------------------------------------------

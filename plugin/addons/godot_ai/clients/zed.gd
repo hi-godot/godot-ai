@@ -17,19 +17,8 @@ func _init() -> void:
 		"windows": "$APPDATA/Zed/settings.json",
 	}
 	server_key_path = PackedStringArray(["context_servers"])
-	entry_builder = func(_name: String, url: String) -> Dictionary:
-		return {
-			"command": {"path": McpClient.resolve_uvx_path(), "args": McpClient.mcp_proxy_bridge_args(url)},
-			"settings": {},
-		}
-	verify_entry = func(entry: Dictionary, url: String) -> bool:
-		var cmd = entry.get("command", {})
-		if not (cmd is Dictionary):
-			return false
-		var args = cmd.get("args", [])
-		return args is Array and args.has(url)
+	## "nested" bridge: `{"command": {"path": <uvx>, "args": [...]}, "settings": {}}`.
+	## Verifier requires the bridge form (no url-style fallback) — Zed has
+	## never spoken HTTP natively.
+	entry_uvx_bridge = "nested"
 	detect_paths = PackedStringArray(path_template.values())
-	manual_command_builder = func(name: String, url: String, path: String) -> String:
-		var uvx := McpClient.resolve_uvx_path()
-		var proxy_arg := "mcp-proxy==" + McpClient.MCP_PROXY_VERSION
-		return "Edit %s and add under \"context_servers\":\n  \"%s\": { \"command\": { \"path\": \"%s\", \"args\": [\"%s\", \"--transport\", \"streamablehttp\", \"%s\"] }, \"settings\": {} }" % [path, name, uvx, proxy_arg, url]

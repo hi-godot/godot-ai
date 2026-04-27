@@ -3,8 +3,20 @@ class_name McpClient
 extends RefCounted
 
 ## Descriptor for one MCP client (Cursor, Claude Desktop, Codex, ...).
-## Subclasses set fields in _init(); they should not contain control flow.
-## Strategies (json/toml/cli) consume these fields.
+##
+## Subclasses set fields in `_init()` and contain NO Callables, NO control
+## flow, NO logic. Strategies (json/toml/cli) interpret these fields.
+##
+## This is enforced by `test_clients.gd::test_descriptors_are_data_only` —
+## any Variant property whose runtime value is a `Callable` fails the suite.
+##
+## Why: per-client `.gd` files get hot-reloaded on disk-mtime change. Any
+## descriptor-supplied lambda is GDScript bytecode living in a hot-reloadable
+## script — if a worker thread is mid-call when the file gets swapped (git
+## checkout, in-IDE save, the dock's self-update flow) the IP walks off a
+## cliff and the editor SEGVs (issue #229). It also independently solves the
+## "stale Callable after plugin disable+enable" crash from issue #192:
+## without Callables there's nothing to go stale.
 
 ## CONFIGURED_MISMATCH = an entry with our `SERVER_NAME` exists in the user's
 ## client config, but its URL doesn't match `http_url()` — typical after the
@@ -45,14 +57,24 @@ var path_template: Dictionary = {}
 ## OpenCode:                               ["mcp"]
 var server_key_path: PackedStringArray = PackedStringArray()
 
-## func(server_name: String, server_url: String) -> Dictionary
-## Returns the JSON object stored under server_key_path[server_name].
-var entry_builder: Callable = Callable()
-
-## Optional: custom verifier. func(entry: Dictionary, server_url: String) -> bool
-## Defaults: a JSON entry passes if entry[entry_url_field] == server_url.
+## Field inside the entry dict that holds our server URL.
+## "url" by default; some clients use "serverUrl" or "httpUrl".
 var entry_url_field: String = "url"
-var verify_entry: Callable = Callable()
+
+## Verbatim extra fields merged into the entry alongside `entry_url_field`.
+## Used to pin transport `type` (Cline / Roo / Kilo / VS Code), set
+## `disabled: false` flags, etc. The default verifier asserts every key here
+## still has the declared value in a stored entry — a typeless legacy entry
+## fails verification and surfaces as drift.
+var entry_extra_fields: Dictionary = {}
+
+## stdio→HTTP bridge mode for clients that don't speak HTTP natively.
+##   ""        — no bridge; entry is `{[entry_url_field]: url, **entry_extra_fields}`
+##   "flat"    — Claude Desktop shape: `{"command": <uvx>, "args": [...bridge...]}`
+##               Verifier ALSO accepts a future url-style entry.
+##   "nested"  — Zed shape: `{"command": {"path": <uvx>, "args": [...]}, "settings": {}}`
+##               Verifier requires the bridge form (no url-style fallback).
+var entry_uvx_bridge: String = ""
 
 ## Paths whose existence implies the user has this client installed.
 ## Used purely for the dock's "installed" badge.
@@ -60,22 +82,24 @@ var detect_paths: PackedStringArray = PackedStringArray()
 
 # CLI clients --------------------------------------------------------------
 var cli_names: PackedStringArray = PackedStringArray()
-var cli_register_args: Callable = Callable()
-var cli_unregister_args: Callable = Callable()
-var cli_status_check: Callable = Callable()  ## func(cli_path, name, url) -> Status
+## Argument templates with `{name}` and `{url}` tokens; the strategy
+## substitutes them at call time. Tokens are matched verbatim — no escaping
+## semantics, no shell expansion. Today only `claude_code` populates these.
+var cli_register_template: PackedStringArray = PackedStringArray()
+var cli_unregister_template: PackedStringArray = PackedStringArray()
+## Args run to read current state; stdout is scanned for the server name and
+## URL. Presence of `name` AND `url` → CONFIGURED, name only → MISMATCH,
+## neither → NOT_CONFIGURED.
+var cli_status_args: PackedStringArray = PackedStringArray()
 
 # Codex / TOML clients -----------------------------------------------------
 ## Dotted TOML path under which our entry lives, e.g. ["mcp_servers", "godot-ai"].
 ## Strategies build the [section."name"] header from this.
 var toml_section_path: PackedStringArray = PackedStringArray()
 var toml_legacy_section_aliases: PackedStringArray = PackedStringArray()
-## Lines (without the [header]) emitted under the section.
-## func(server_url) -> PackedStringArray
-var toml_body_builder: Callable = Callable()
-
-# Manual fallback ----------------------------------------------------------
-## func(server_name, server_url, resolved_path) -> String
-var manual_command_builder: Callable = Callable()
+## Lines (without the [header]) emitted under the section, with `{url}`
+## tokens. Substituted at call time.
+var toml_body_template: PackedStringArray = PackedStringArray()
 
 
 ## Resolved absolute config path for this client on the current OS.
@@ -131,15 +155,3 @@ static func resolve_uvx_path() -> String:
 ## Callers splice this into the client-specific command shape.
 static func mcp_proxy_bridge_args(url: String) -> Array:
 	return ["mcp-proxy==" + MCP_PROXY_VERSION, "--transport", "streamablehttp", url]
-
-
-## Uniform error payload for every strategy site that invokes a
-## descriptor-supplied Callable. Toggling the plugin off/on frees the
-## McpClient the lambda captured; calling the stale Callable then crashes
-## Godot, so each site must `is_valid()`-guard first and surface this
-## restart-required hint instead. See issue #192.
-static func stale_callable_status(client: McpClient) -> Dictionary:
-	return {
-		"status": "error",
-		"message": "%s configurator was invalidated by a live plugin reload — restart the editor to recover." % client.display_name,
-	}

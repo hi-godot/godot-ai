@@ -8,22 +8,8 @@ func _init() -> void:
 	config_type = "cli"
 	doc_url = "https://docs.anthropic.com/en/docs/claude-code"
 	cli_names = PackedStringArray(["claude", "claude.exe"] if OS.get_name() == "Windows" else ["claude"])
-	cli_register_args = func(name: String, url: String) -> Array[String]:
-		return ["mcp", "add", "--scope", "user", "--transport", "http", name, url]
-	cli_unregister_args = func(name: String) -> Array[String]:
-		return ["mcp", "remove", name]
-	cli_status_check = func(cli: String, name: String, url: String) -> McpClient.Status:
-		var output: Array = []
-		var exit_code := OS.execute(cli, ["mcp", "list"], output, true)
-		if exit_code != 0 or output.is_empty():
-			return McpClient.Status.NOT_CONFIGURED
-		var text: String = output[0]
-		if text.find(name) < 0:
-			return McpClient.Status.NOT_CONFIGURED
-		## Server registered, but pointing somewhere else — drift after a
-		## port change. Surface as mismatch so the dock offers Reconfigure.
-		if text.find(url) < 0:
-			return McpClient.Status.CONFIGURED_MISMATCH
-		return McpClient.Status.CONFIGURED
-	manual_command_builder = func(name: String, url: String, _path: String) -> String:
-		return "claude mcp add --scope user --transport http %s %s" % [name, url]
+	cli_register_template = PackedStringArray(
+		["mcp", "add", "--scope", "user", "--transport", "http", "{name}", "{url}"]
+	)
+	cli_unregister_template = PackedStringArray(["mcp", "remove", "{name}"])
+	cli_status_args = PackedStringArray(["mcp", "list"])

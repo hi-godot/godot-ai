@@ -3,7 +3,8 @@ class_name McpJsonStrategy
 extends RefCounted
 
 ## Read–merge–write strategy for JSON-backed MCP clients.
-## All knobs come from the McpClient descriptor — no per-client branches in here.
+## All knobs come from the McpClient descriptor as plain data — no Callables.
+## See `_base.gd` for why descriptors are data-only.
 
 
 static func configure(client: McpClient, server_name: String, server_url: String) -> Dictionary:
@@ -14,11 +15,9 @@ static func configure(client: McpClient, server_name: String, server_url: String
 	var read := _read_or_init(path)
 	if not read["ok"]:
 		return {"status": "error", "message": "Refusing to overwrite %s: %s. Fix or move the file, then re-run Configure." % [path, read["error"]]}
-	if not client.entry_builder.is_valid():
-		return McpClient.stale_callable_status(client)
 	var config: Dictionary = read["data"]
 	var holder := _ensure_path(config, client.server_key_path)
-	holder[server_name] = client.entry_builder.call(server_name, server_url)
+	holder[server_name] = build_entry(client, server_url)
 
 	if not McpAtomicWrite.write(path, JSON.stringify(config, "\t")):
 		return {"status": "error", "message": "Cannot write to %s" % path}
@@ -42,9 +41,7 @@ static func check_status(client: McpClient, server_name: String, server_url: Str
 	## An entry under `server_name` exists — if the URL doesn't match,
 	## that's drift (the user changed the port and the client config is stale),
 	## not "never configured". The dock surfaces that as an amber banner.
-	if client.verify_entry.is_valid():
-		return McpClient.Status.CONFIGURED if client.verify_entry.call(entry, server_url) else McpClient.Status.CONFIGURED_MISMATCH
-	return McpClient.Status.CONFIGURED if entry.get(client.entry_url_field, "") == server_url else McpClient.Status.CONFIGURED_MISMATCH
+	return McpClient.Status.CONFIGURED if verify_entry(client, entry, server_url) else McpClient.Status.CONFIGURED_MISMATCH
 
 
 static func remove(client: McpClient, server_name: String) -> Dictionary:
@@ -61,6 +58,65 @@ static func remove(client: McpClient, server_name: String) -> Dictionary:
 		if not McpAtomicWrite.write(path, JSON.stringify(config, "\t")):
 			return {"status": "error", "message": "Cannot write to %s" % path}
 	return {"status": "ok", "message": "%s configuration removed" % client.display_name}
+
+
+## Synthesize the entry dict the strategy will write under
+## `server_key_path[server_name]`. For non-bridge clients this is just
+## `{[entry_url_field]: url, **entry_extra_fields}`. For bridge clients
+## (Claude Desktop, Zed) it composes the uvx + mcp-proxy command shape.
+static func build_entry(client: McpClient, server_url: String) -> Dictionary:
+	match client.entry_uvx_bridge:
+		"flat":
+			return {
+				"command": McpClient.resolve_uvx_path(),
+				"args": McpClient.mcp_proxy_bridge_args(server_url),
+			}
+		"nested":
+			return {
+				"command": {
+					"path": McpClient.resolve_uvx_path(),
+					"args": McpClient.mcp_proxy_bridge_args(server_url),
+				},
+				"settings": {},
+			}
+	var entry: Dictionary = {client.entry_url_field: server_url}
+	for k in client.entry_extra_fields:
+		entry[k] = client.entry_extra_fields[k]
+	return entry
+
+
+## Default verifier for a stored entry. For bridge clients, recognise the
+## bridge form (and, for `flat`, the future url-style form too — keeps the
+## tolerance Claude Desktop has had since the npx-bridge migration).
+##
+## For non-bridge clients: assert `entry[entry_url_field] == url` AND every
+## key in `entry_extra_fields` matches verbatim. Type-pinning for Cline /
+## Roo / Kilo (`type: "streamable-http"` etc.) falls out of this — pre-fix
+## entries that lack the type field fail verification and surface as drift.
+static func verify_entry(client: McpClient, entry: Dictionary, server_url: String) -> bool:
+	match client.entry_uvx_bridge:
+		"flat":
+			# Future url-style entry: accept if Claude Desktop ever speaks HTTP natively.
+			if entry.get(client.entry_url_field, "") == server_url:
+				return true
+			var cmd = entry.get("command", "")
+			if not (cmd is String):
+				return false
+			var uvx_like := (cmd as String).get_file() == "uvx" or (cmd as String).get_file() == "uvx.exe"
+			var args = entry.get("args", [])
+			return uvx_like and args is Array and args.has(server_url)
+		"nested":
+			var cmd_obj = entry.get("command", {})
+			if not (cmd_obj is Dictionary):
+				return false
+			var nargs = cmd_obj.get("args", [])
+			return nargs is Array and nargs.has(server_url)
+	if entry.get(client.entry_url_field, "") != server_url:
+		return false
+	for k in client.entry_extra_fields:
+		if entry.get(k) != client.entry_extra_fields[k]:
+			return false
+	return true
 
 
 ## Returns {"ok": true, "data": Dictionary} when the file is absent or parses

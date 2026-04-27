@@ -21,13 +21,5 @@ func _init() -> void:
 	## the type explicitly. Cline's schema uses "streamableHttp" (camelCase,
 	## see src/services/mcp/schemas.ts in the cline repo) — distinct from
 	## Roo's "streamable-http" string. Parallel to the Roo fix in #190.
-	entry_builder = func(_name: String, url: String) -> Dictionary:
-		return {"type": "streamableHttp", "url": url, "disabled": false, "autoApprove": []}
-	## Flag pre-fix entries (correct URL, missing or wrong "type") as drift so
-	## upgrading users get nudged to re-configure rather than silently keeping
-	## the broken SSE-default entry.
-	verify_entry = func(entry: Dictionary, url: String) -> bool:
-		return entry.get("url", "") == url and entry.get("type", "") == "streamableHttp"
+	entry_extra_fields = {"type": "streamableHttp", "disabled": false, "autoApprove": []}
 	detect_paths = PackedStringArray(path_template.values())
-	manual_command_builder = func(name: String, url: String, path: String) -> String:
-		return "Edit %s and add under \"mcpServers\":\n  \"%s\": { \"type\": \"streamableHttp\", \"url\": \"%s\", \"disabled\": false, \"autoApprove\": [] }" % [path, name, url]

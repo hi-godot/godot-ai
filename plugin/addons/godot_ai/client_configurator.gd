@@ -235,9 +235,9 @@ static func _verify_post_state(
 
 static func manual_command(id: String) -> String:
 	var client := McpClientRegistry.get_by_id(id)
-	if client == null or not client.manual_command_builder.is_valid():
+	if client == null:
 		return ""
-	return client.manual_command_builder.call(SERVER_NAME, http_url(), client.resolved_config_path())
+	return McpManualCommand.build(client, SERVER_NAME, http_url(), client.resolved_config_path())
 
 
 static func is_installed(id: String) -> bool:

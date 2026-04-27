@@ -17,18 +17,8 @@ func _init() -> void:
 		"linux": "$XDG_CONFIG_HOME/Claude/claude_desktop_config.json",
 	}
 	server_key_path = PackedStringArray(["mcpServers"])
-	entry_builder = func(_name: String, url: String) -> Dictionary:
-		return {"command": McpClient.resolve_uvx_path(), "args": McpClient.mcp_proxy_bridge_args(url)}
-	verify_entry = func(entry: Dictionary, url: String) -> bool:
-		# Accept both the bridge form we write and a future url-style entry.
-		if entry.get("url", "") == url:
-			return true
-		var cmd: String = entry.get("command", "")
-		var uvx_like := cmd.get_file() == "uvx" or cmd.get_file() == "uvx.exe"
-		var args = entry.get("args", [])
-		return uvx_like and args is Array and args.has(url)
+	## "flat" bridge: `{"command": "<uvx>", "args": [...]}`. The default
+	## verifier ALSO accepts a future url-style entry (Claude Desktop has
+	## been tolerant of both forms since the npx→uvx bridge migration).
+	entry_uvx_bridge = "flat"
 	detect_paths = PackedStringArray(path_template.values())
-	manual_command_builder = func(name: String, url: String, path: String) -> String:
-		var uvx := McpClient.resolve_uvx_path()
-		var proxy_arg := "mcp-proxy==" + McpClient.MCP_PROXY_VERSION
-		return "Edit %s and add under \"mcpServers\":\n  \"%s\": { \"command\": \"%s\", \"args\": [\"%s\", \"--transport\", \"streamablehttp\", \"%s\"] }" % [path, name, uvx, proxy_arg, url]

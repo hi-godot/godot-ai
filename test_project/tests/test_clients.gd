@@ -65,11 +65,42 @@ func test_every_client_has_required_fields() -> void:
 		assert_true(not client.display_name.is_empty(), "%s missing display_name" % client.id)
 		assert_contains(["json", "toml", "cli"], client.config_type, "%s has unexpected config_type %s" % [client.id, client.config_type])
 		if client.config_type == "json":
-			assert_true(client.entry_builder.is_valid(), "%s json client missing entry_builder" % client.id)
 			assert_gt(client.server_key_path.size(), 0, "%s missing server_key_path" % client.id)
 		elif client.config_type == "cli":
 			assert_gt(client.cli_names.size(), 0, "%s cli client missing cli_names" % client.id)
-			assert_true(client.cli_register_args.is_valid(), "%s cli client missing cli_register_args" % client.id)
+			assert_gt(client.cli_register_template.size(), 0, "%s cli client missing cli_register_template" % client.id)
+		elif client.config_type == "toml":
+			assert_gt(client.toml_section_path.size(), 0, "%s toml client missing toml_section_path" % client.id)
+			assert_gt(client.toml_body_template.size(), 0, "%s toml client missing toml_body_template" % client.id)
+
+
+func test_descriptors_are_data_only() -> void:
+	## #229 race-surface guard: every shipped descriptor must be pure data.
+	## A worker thread walking a Callable on a hot-reloadable per-client `.gd`
+	## file is what blew up in the issue — when the bytecode swaps under the
+	## running thread, the IP walks off a cliff (Opcode: 0, Bad address
+	## index, signal 11). Removing all Callable-typed fields on descriptors
+	## reduces the worker's GDScript-IP exposure to the strategy files alone,
+	## which churn far less. It also makes #192's stale-Callable workaround
+	## obsolete: nothing to go stale.
+	##
+	## If this test fails, you almost certainly added a Callable field to
+	## either McpClient (`_base.gd`) or one of the per-client descriptors.
+	## Move the logic into the matching strategy and supply declarative data
+	## (PackedStringArray template, Dictionary, scalar) on the descriptor
+	## instead. See `_base.gd` doc-comment for the rationale.
+	for client in McpClientRegistry.all():
+		var props := client.get_property_list()
+		for prop in props:
+			# Skip script/internal properties — only inspect user-defined fields.
+			if (prop.usage & PROPERTY_USAGE_SCRIPT_VARIABLE) == 0:
+				continue
+			var prop_name: String = prop.name
+			var value = client.get(prop_name)
+			assert_false(
+				value is Callable,
+				"%s.%s is a Callable — descriptors must be data-only (issue #229)" % [client.id, prop_name],
+			)
 
 
 func test_every_client_has_manual_command() -> void:
@@ -729,12 +760,11 @@ func test_json_strategy_distinguishes_missing_entry_from_url_drift() -> void:
 	)
 
 
-func test_json_strategy_drift_with_verify_entry_callable() -> void:
-	## Clients with a custom `verify_entry` (Zed, Claude Desktop) take a
-	## different path through `check_status` than the default url-field
-	## comparison. Both must emit CONFIGURED_MISMATCH for drift, not
-	## NOT_CONFIGURED — the dock contract is the same regardless of how
-	## the check is wired.
+func test_json_strategy_drift_with_bridge_entry() -> void:
+	## Bridge clients (Claude Desktop "flat", Zed "nested") run through a
+	## different verify path in `_json_strategy.verify_entry` than the
+	## default url-field comparison. Drift must still surface as
+	## CONFIGURED_MISMATCH, not NOT_CONFIGURED — dock contract is the same.
 	var path := _scratch_dir.path_join("verify_drift.json")
 	_remove_if_exists(path)
 	var client := McpClient.new()
@@ -743,77 +773,13 @@ func test_json_strategy_drift_with_verify_entry_callable() -> void:
 	client.config_type = "json"
 	client.path_template = {"darwin": path, "windows": path, "linux": path, "unix": path}
 	client.server_key_path = PackedStringArray(["mcpServers"])
-	client.entry_builder = func(_n: String, u: String) -> Dictionary:
-		return {"command": {"path": "npx", "args": ["-y", "mcp-remote", u]}}
-	client.verify_entry = func(entry: Dictionary, u: String) -> bool:
-		var args = entry.get("command", {}).get("args", [])
-		return args is Array and args.has(u)
+	client.entry_uvx_bridge = "flat"
 
 	McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
 	assert_eq(
 		McpJsonStrategy.check_status(client, "godot-ai", "http://127.0.0.1:9000/mcp"),
 		McpClient.Status.CONFIGURED_MISMATCH,
 	)
-
-
-## #192 — Lambdas captured in McpClient._init() reference the descriptor
-## instance; toggling the plugin off/on in Project Settings frees the
-## instance and leaves the registry holding stale Callables that crash hard
-## the moment they're invoked. A default-constructed Callable is the closest
-## stand-in we can build in a test — both stale and unset report
-## `is_valid() == false`. The strategies must short-circuit with the shared
-## restart-the-editor message instead of dereferencing the invalid call.
-
-func test_json_strategy_returns_clean_error_when_entry_builder_callable_is_stale() -> void:
-	var path := _scratch_dir.path_join("stale_entry_builder.json")
-	_remove_if_exists(path)
-	var client := _make_test_json_client(path)
-	client.entry_builder = Callable()
-
-	var result := McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
-	_assert_stale_callable_error(result, client)
-	assert_false(FileAccess.file_exists(path), "Strategy must not write the config file when the callable is stale")
-
-
-func test_toml_strategy_returns_clean_error_when_body_builder_callable_is_stale() -> void:
-	var path := _scratch_dir.path_join("stale_toml_body.toml")
-	_remove_if_exists(path)
-	var client := _make_test_toml_client(path)
-	client.toml_body_builder = Callable()
-
-	var result := McpTomlStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
-	_assert_stale_callable_error(result, client)
-	assert_false(FileAccess.file_exists(path), "Strategy must not write the config file when the callable is stale")
-
-
-func test_cli_strategy_returns_clean_error_when_register_args_callable_is_stale() -> void:
-	## The strategy resolves the CLI binary before invoking the Callable;
-	## point at `sh` / `cmd.exe` so the resolver succeeds on every test host
-	## and the guard is the line under test.
-	var client := McpClient.new()
-	client.id = "stale_cli_test"
-	client.display_name = "Stale CLI Test"
-	client.config_type = "cli"
-	client.cli_names = PackedStringArray(["cmd.exe"] if OS.get_name() == "Windows" else ["sh"])
-	client.cli_register_args = Callable()
-
-	var result := McpCliStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
-	_assert_stale_callable_error(result, client)
-
-
-func test_cli_strategy_remove_returns_clean_error_when_unregister_args_callable_is_stale() -> void:
-	## remove() had a pre-existing guard with a different message; after #192
-	## it now routes through stale_callable_status alongside configure(). Same
-	## crash hazard, same recovery — keep the dock-facing wording uniform.
-	var client := McpClient.new()
-	client.id = "stale_cli_remove_test"
-	client.display_name = "Stale CLI Remove Test"
-	client.config_type = "cli"
-	client.cli_names = PackedStringArray(["cmd.exe"] if OS.get_name() == "Windows" else ["sh"])
-	client.cli_unregister_args = Callable()
-
-	var result := McpCliStrategy.remove(client, "godot-ai")
-	_assert_stale_callable_error(result, client)
 
 
 func test_json_strategy_supports_nested_key_path() -> void:
@@ -826,8 +792,7 @@ func test_json_strategy_supports_nested_key_path() -> void:
 	client.path_template = {"darwin": path, "windows": path, "linux": path, "unix": path}
 	# Mirror OpenCode's `mcp.<name>` shape.
 	client.server_key_path = PackedStringArray(["mcp"])
-	client.entry_builder = func(_n: String, u: String) -> Dictionary:
-		return {"type": "remote", "url": u}
+	client.entry_extra_fields = {"type": "remote"}
 
 	var result := McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
 	assert_eq(result.get("status"), "ok")
@@ -1066,26 +1031,27 @@ func test_handler_status_returns_array_of_clients() -> void:
 
 func test_cursor_entry_uses_url() -> void:
 	var c := McpClientRegistry.get_by_id("cursor")
-	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
+	var entry := McpJsonStrategy.build_entry(c, "http://x")
 	assert_eq(entry.get("url", ""), "http://x")
 
 
 func test_antigravity_entry_uses_serverUrl() -> void:
 	var c := McpClientRegistry.get_by_id("antigravity")
-	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
+	var entry := McpJsonStrategy.build_entry(c, "http://x")
 	assert_eq(entry.get("serverUrl", ""), "http://x")
 	assert_eq(entry.get("disabled", true), false)
 
 
 func test_gemini_cli_entry_uses_httpUrl() -> void:
 	var c := McpClientRegistry.get_by_id("gemini_cli")
-	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
+	var entry := McpJsonStrategy.build_entry(c, "http://x")
 	assert_eq(entry.get("httpUrl", ""), "http://x")
 
 
 func test_claude_desktop_bridges_via_uvx() -> void:
 	var c := McpClientRegistry.get_by_id("claude_desktop")
-	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
+	assert_eq(c.entry_uvx_bridge, "flat", "claude_desktop must declare flat uvx bridge")
+	var entry := McpJsonStrategy.build_entry(c, "http://x")
 	_assert_uvx_command(entry.get("command", ""))
 	_assert_mcp_proxy_bridge_args(entry.get("args", []), "http://x")
 
@@ -1093,15 +1059,26 @@ func test_claude_desktop_bridges_via_uvx() -> void:
 func test_claude_desktop_verify_entry_accepts_uvx_form() -> void:
 	## Drift-detection: once we've written the new uvx entry, check_status
 	## must round-trip it as CONFIGURED (not MISMATCH). Guards against a
-	## verify_entry that still only recognises the old npx/mcp-remote shape.
+	## verifier that still only recognises the old npx/mcp-remote shape.
 	var c := McpClientRegistry.get_by_id("claude_desktop")
-	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
-	assert_true(c.verify_entry.call(entry, "http://x"), "uvx entry should verify as a match")
+	var entry := McpJsonStrategy.build_entry(c, "http://x")
+	assert_true(McpJsonStrategy.verify_entry(c, entry, "http://x"), "uvx entry should verify as a match")
+
+
+func test_claude_desktop_verify_entry_accepts_future_url_form() -> void:
+	## Tolerance preserved from the pre-refactor verifier: a hypothetical
+	## future Claude Desktop that speaks HTTP natively would write a plain
+	## `{"url": "..."}` entry. The flat-bridge verifier must accept that
+	## shape too so we don't downgrade-classify it as drift.
+	var c := McpClientRegistry.get_by_id("claude_desktop")
+	var future_entry := {"url": "http://x"}
+	assert_true(McpJsonStrategy.verify_entry(c, future_entry, "http://x"), "future url-style entry should verify")
 
 
 func test_zed_bridges_via_uvx() -> void:
 	var c := McpClientRegistry.get_by_id("zed")
-	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
+	assert_eq(c.entry_uvx_bridge, "nested", "zed must declare nested uvx bridge")
+	var entry := McpJsonStrategy.build_entry(c, "http://x")
 	var cmd = entry.get("command", {})
 	assert_true(cmd is Dictionary, "Zed entry.command must be a Dictionary (path+args shape)")
 	_assert_uvx_command(cmd.get("path", ""))
@@ -1109,11 +1086,11 @@ func test_zed_bridges_via_uvx() -> void:
 
 
 func test_zed_verify_entry_accepts_uvx_form() -> void:
-	## Parity with claude_desktop drift-detection test — if Zed's entry_builder
-	## changes but verify_entry isn't updated in lock-step, this catches it.
+	## Parity with claude_desktop drift-detection test — if Zed's entry shape
+	## changes but the verifier isn't updated in lock-step, this catches it.
 	var c := McpClientRegistry.get_by_id("zed")
-	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
-	assert_true(c.verify_entry.call(entry, "http://x"), "uvx entry should verify as a match")
+	var entry := McpJsonStrategy.build_entry(c, "http://x")
+	assert_true(McpJsonStrategy.verify_entry(c, entry, "http://x"), "uvx entry should verify as a match")
 
 
 func test_mcp_proxy_bridge_args_pins_version() -> void:
@@ -1138,7 +1115,7 @@ func test_vscode_uses_servers_key_with_type_http() -> void:
 	var c := McpClientRegistry.get_by_id("vscode")
 	assert_eq(c.server_key_path.size(), 1)
 	assert_eq(c.server_key_path[0], "servers")
-	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
+	var entry := McpJsonStrategy.build_entry(c, "http://x")
 	assert_eq(entry.get("type", ""), "http")
 	assert_eq(entry.get("url", ""), "http://x")
 
@@ -1149,28 +1126,28 @@ func test_roo_code_pins_streamable_http_transport() -> void:
 	## The entry and the manual-command string must both pin the type so the
 	## out-of-the-box config negotiates the right transport.
 	var c := McpClientRegistry.get_by_id("roo_code")
-	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
+	var entry := McpJsonStrategy.build_entry(c, "http://x")
 	assert_eq(entry.get("type", ""), "streamable-http")
 	assert_eq(entry.get("url", ""), "http://x")
-	var manual: String = c.manual_command_builder.call("godot-ai", "http://x", "/tmp/roo.json")
+	var manual := McpManualCommand.build(c, "godot-ai", "http://x", "/tmp/roo.json")
 	assert_contains(manual, "\"type\": \"streamable-http\"")
 
 
 func test_roo_code_verify_flags_pre_189_typeless_entry_as_drift() -> void:
 	## Users who configured Roo before the #189 fix have a correct URL but no
 	## "type" field — the URL-only default verifier would report CONFIGURED and
-	## hide the broken SSE negotiation. verify_entry must treat a missing/wrong
-	## type as drift so the dock prompts them to re-configure.
+	## hide the broken SSE negotiation. The default verifier (deep-equal of
+	## entry_extra_fields) treats a missing/wrong type as drift so the dock
+	## prompts them to re-configure.
 	var c := McpClientRegistry.get_by_id("roo_code")
-	assert_true(c.verify_entry.is_valid(), "roo_code must supply verify_entry")
-	var current: Dictionary = c.entry_builder.call("godot-ai", "http://x")
-	assert_true(c.verify_entry.call(current, "http://x"), "current entry must verify")
+	var current := McpJsonStrategy.build_entry(c, "http://x")
+	assert_true(McpJsonStrategy.verify_entry(c, current, "http://x"), "current entry must verify")
 	var legacy_typeless := {"url": "http://x", "disabled": false, "alwaysAllow": []}
-	assert_false(c.verify_entry.call(legacy_typeless, "http://x"), "pre-#189 typeless entry must register as drift")
+	assert_false(McpJsonStrategy.verify_entry(c, legacy_typeless, "http://x"), "pre-#189 typeless entry must register as drift")
 	var legacy_sse := {"type": "sse", "url": "http://x", "disabled": false, "alwaysAllow": []}
-	assert_false(c.verify_entry.call(legacy_sse, "http://x"), "explicit sse entry must register as drift")
+	assert_false(McpJsonStrategy.verify_entry(c, legacy_sse, "http://x"), "explicit sse entry must register as drift")
 	var url_drift := {"type": "streamable-http", "url": "http://other", "disabled": false, "alwaysAllow": []}
-	assert_false(c.verify_entry.call(url_drift, "http://x"), "URL drift must still register as drift")
+	assert_false(McpJsonStrategy.verify_entry(c, url_drift, "http://x"), "URL drift must still register as drift")
 
 
 func test_cline_pins_streamable_http_transport() -> void:
@@ -1179,30 +1156,29 @@ func test_cline_pins_streamable_http_transport() -> void:
 	## HTTP 400. Cline's schema accepts "streamableHttp" (camelCase) — distinct
 	## from Roo's "streamable-http" — per src/services/mcp/schemas.ts upstream.
 	var c := McpClientRegistry.get_by_id("cline")
-	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
+	var entry := McpJsonStrategy.build_entry(c, "http://x")
 	assert_eq(entry.get("type", ""), "streamableHttp")
 	assert_eq(entry.get("url", ""), "http://x")
-	var manual: String = c.manual_command_builder.call("godot-ai", "http://x", "/tmp/cline.json")
+	var manual := McpManualCommand.build(c, "godot-ai", "http://x", "/tmp/cline.json")
 	assert_contains(manual, "\"type\": \"streamableHttp\"")
 
 
 func test_cline_verify_flags_pre_fix_typeless_entry_as_drift() -> void:
 	## Users who configured Cline before this fix have a correct URL but no
 	## "type" field — the URL-only default verifier would report CONFIGURED and
-	## hide the broken SSE negotiation. verify_entry must treat a missing/wrong
-	## type as drift so the dock prompts them to re-configure.
+	## hide the broken SSE negotiation. The default verifier deep-equals every
+	## entry_extra_fields key, so a missing/wrong type registers as drift.
 	var c := McpClientRegistry.get_by_id("cline")
-	assert_true(c.verify_entry.is_valid(), "cline must supply verify_entry")
-	var current: Dictionary = c.entry_builder.call("godot-ai", "http://x")
-	assert_true(c.verify_entry.call(current, "http://x"), "current entry must verify")
+	var current := McpJsonStrategy.build_entry(c, "http://x")
+	assert_true(McpJsonStrategy.verify_entry(c, current, "http://x"), "current entry must verify")
 	var legacy_typeless := {"url": "http://x", "disabled": false, "autoApprove": []}
-	assert_false(c.verify_entry.call(legacy_typeless, "http://x"), "pre-fix typeless entry must register as drift")
+	assert_false(McpJsonStrategy.verify_entry(c, legacy_typeless, "http://x"), "pre-fix typeless entry must register as drift")
 	var legacy_sse := {"type": "sse", "url": "http://x", "disabled": false, "autoApprove": []}
-	assert_false(c.verify_entry.call(legacy_sse, "http://x"), "explicit sse entry must register as drift")
+	assert_false(McpJsonStrategy.verify_entry(c, legacy_sse, "http://x"), "explicit sse entry must register as drift")
 	var wrong_case := {"type": "streamable-http", "url": "http://x", "disabled": false, "autoApprove": []}
-	assert_false(c.verify_entry.call(wrong_case, "http://x"), "Roo's kebab-case 'streamable-http' must register as drift in Cline (Cline accepts only 'streamableHttp')")
+	assert_false(McpJsonStrategy.verify_entry(c, wrong_case, "http://x"), "Roo's kebab-case 'streamable-http' must register as drift in Cline (Cline accepts only 'streamableHttp')")
 	var url_drift := {"type": "streamableHttp", "url": "http://other", "disabled": false, "autoApprove": []}
-	assert_false(c.verify_entry.call(url_drift, "http://x"), "URL drift must still register as drift")
+	assert_false(McpJsonStrategy.verify_entry(c, url_drift, "http://x"), "URL drift must still register as drift")
 
 
 func test_kilo_code_pins_streamable_http_transport() -> void:
@@ -1210,26 +1186,26 @@ func test_kilo_code_pins_streamable_http_transport() -> void:
 	## and its McpHub.ts validates against {"stdio", "sse", "streamable-http"}
 	## — same kebab-case spelling as Roo, distinct from Cline's camelCase.
 	var c := McpClientRegistry.get_by_id("kilo_code")
-	var entry: Dictionary = c.entry_builder.call("godot-ai", "http://x")
+	var entry := McpJsonStrategy.build_entry(c, "http://x")
 	assert_eq(entry.get("type", ""), "streamable-http")
 	assert_eq(entry.get("url", ""), "http://x")
-	var manual: String = c.manual_command_builder.call("godot-ai", "http://x", "/tmp/kilo.json")
+	var manual := McpManualCommand.build(c, "godot-ai", "http://x", "/tmp/kilo.json")
 	assert_contains(manual, "\"type\": \"streamable-http\"")
 
 
 func test_kilo_code_verify_flags_pre_fix_typeless_entry_as_drift() -> void:
-	## Pre-fix Kilo entries have a correct URL but no "type" field. verify_entry
-	## must flag them as drift so the dock prompts a re-configure.
+	## Pre-fix Kilo entries have a correct URL but no "type" field. The
+	## default verifier (deep-equal of entry_extra_fields) flags them as
+	## drift so the dock prompts a re-configure.
 	var c := McpClientRegistry.get_by_id("kilo_code")
-	assert_true(c.verify_entry.is_valid(), "kilo_code must supply verify_entry")
-	var current: Dictionary = c.entry_builder.call("godot-ai", "http://x")
-	assert_true(c.verify_entry.call(current, "http://x"), "current entry must verify")
+	var current := McpJsonStrategy.build_entry(c, "http://x")
+	assert_true(McpJsonStrategy.verify_entry(c, current, "http://x"), "current entry must verify")
 	var legacy_typeless := {"url": "http://x", "disabled": false, "alwaysAllow": []}
-	assert_false(c.verify_entry.call(legacy_typeless, "http://x"), "pre-fix typeless entry must register as drift")
+	assert_false(McpJsonStrategy.verify_entry(c, legacy_typeless, "http://x"), "pre-fix typeless entry must register as drift")
 	var legacy_sse := {"type": "sse", "url": "http://x", "disabled": false, "alwaysAllow": []}
-	assert_false(c.verify_entry.call(legacy_sse, "http://x"), "explicit sse entry must register as drift")
+	assert_false(McpJsonStrategy.verify_entry(c, legacy_sse, "http://x"), "explicit sse entry must register as drift")
 	var url_drift := {"type": "streamable-http", "url": "http://other", "disabled": false, "alwaysAllow": []}
-	assert_false(c.verify_entry.call(url_drift, "http://x"), "URL drift must still register as drift")
+	assert_false(McpJsonStrategy.verify_entry(c, url_drift, "http://x"), "URL drift must still register as drift")
 
 
 func test_opencode_client_uses_home_config_on_windows() -> void:
@@ -1284,13 +1260,6 @@ func _assert_mcp_proxy_bridge_args(args: Variant, expected_url: String) -> void:
 	assert_contains(args, expected_url)
 
 
-func _assert_stale_callable_error(result: Dictionary, client: McpClient) -> void:
-	assert_eq(result.get("status"), "error")
-	var msg: String = result.get("message", "")
-	assert_contains(msg, client.display_name, "stale-callable error must name the client, got: %s" % msg)
-	assert_contains(msg, "restart the editor", "stale-callable error must suggest editor restart, got: %s" % msg)
-
-
 func _make_test_json_client(path: String) -> McpClient:
 	var c := McpClient.new()
 	c.id = "json_test"
@@ -1298,8 +1267,9 @@ func _make_test_json_client(path: String) -> McpClient:
 	c.config_type = "json"
 	c.path_template = {"darwin": path, "windows": path, "linux": path, "unix": path}
 	c.server_key_path = PackedStringArray(["mcpServers"])
-	c.entry_builder = func(_n: String, u: String) -> Dictionary:
-		return {"url": u}
+	# entry_url_field defaults to "url"; entry_extra_fields stays empty
+	# → strategy synthesises `{"url": <url>}`, matching the pre-refactor
+	# entry_builder lambda.
 	return c
 
 
@@ -1310,8 +1280,7 @@ func _make_test_toml_client(path: String) -> McpClient:
 	c.config_type = "toml"
 	c.path_template = {"darwin": path, "windows": path, "linux": path, "unix": path}
 	c.toml_section_path = PackedStringArray(["mcp_servers", "godot-ai"])
-	c.toml_body_builder = func(u: String) -> PackedStringArray:
-		return PackedStringArray(["url = \"%s\"" % u, "enabled = true"])
+	c.toml_body_template = PackedStringArray(["url = \"{url}\"", "enabled = true"])
 	return c
 
 
