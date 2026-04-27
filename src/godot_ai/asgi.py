@@ -123,11 +123,7 @@ class StaleMcpSessionDiagnosticMiddleware:
         return error.get("code") == -32600 and error.get("message") == "Session not found"
 
     def _headers_without_content_length(self, headers: Any) -> list[tuple[bytes, bytes]]:
-        return [
-            (key, value)
-            for key, value in headers
-            if key.lower() != b"content-length"
-        ]
+        return [(key, value) for key, value in headers if key.lower() != b"content-length"]
 
     def _ensure_json_content_type(
         self,
