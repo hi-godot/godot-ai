@@ -1525,7 +1525,15 @@ func _schedule_initial_client_status_refresh() -> void:
 	## Filesystem signals don't bracket the race (they fire before bytecode
 	## swap completes) and FOCUS_IN doesn't fire on in-place plugin reload,
 	## so a fixed-delay timer is the only mechanism that works. See #233.
-	await get_tree().create_timer(CLIENT_STATUS_REFRESH_INITIAL_DELAY_MSEC / 1000.0).timeout
+	## (Tracked in #235; this is the interim heuristic stopgap.)
+	## Pre-await `get_tree()` capture: GDScript tests instantiate the dock
+	## via `McpDockScript.new()` without adding to the tree, so `get_tree()`
+	## is null and `null.create_timer(...)` would error. Bail cleanly when
+	## not in tree — the deferred refresh is a no-op outside the editor.
+	var tree := get_tree()
+	if tree == null or not is_inside_tree():
+		return
+	await tree.create_timer(CLIENT_STATUS_REFRESH_INITIAL_DELAY_MSEC / 1000.0).timeout
 	if _client_status_refresh_shutdown_requested:
 		return
 	if not is_inside_tree():
