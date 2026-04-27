@@ -131,6 +131,43 @@ func test_every_client_has_manual_command() -> void:
 		assert_true(not cmd.is_empty(), "%s missing manual command" % client_id)
 
 
+func test_manual_command_escapes_backslashes_in_paths() -> void:
+	## Regression: `_format_value` used to interpolate strings with bare `"..."`
+	## quoting, so a Windows uvx path like `C:\Users\foo\uvx.exe` rendered as
+	## `"C:\Users\foo\uvx.exe"` — invalid JSON, unsafe to paste into a config
+	## file. The fix routes leaf strings through `JSON.stringify`, which
+	## escapes backslashes / quotes / newlines per the JSON spec.
+	##
+	## Build a synthetic flat-bridge client with a path containing every
+	## hazardous char so the inline JSON the manual command emits parses
+	## back without errors.
+	var client := McpClient.new()
+	client.id = "manual_escape_test"
+	client.display_name = "Escape Test"
+	client.config_type = "json"
+	client.path_template = {"darwin": "/tmp/m.json", "windows": "/tmp/m.json", "linux": "/tmp/m.json", "unix": "/tmp/m.json"}
+	client.server_key_path = PackedStringArray(["mcpServers"])
+	client.entry_extra_fields = {
+		"command": "C:\\Users\\foo bar\\uvx.exe",
+		"hint": "say \"hello\"\nworld",
+	}
+
+	var manual := McpManualCommand.build(client, "godot-ai", "http://x", "/tmp/m.json")
+	# Extract the JSON object body — everything from the first `{` after the
+	# entry key onwards to the matching trailing `}`.
+	var first_brace := manual.find("{")
+	assert_gt(first_brace, 0, "manual command should contain a JSON-ish entry")
+	var entry_text := manual.substr(first_brace)
+	var parsed = JSON.parse_string(entry_text)
+	assert_true(
+		parsed is Dictionary,
+		"manual-command entry must be valid JSON; got: %s" % entry_text,
+	)
+	assert_eq(parsed.get("command"), "C:\\Users\\foo bar\\uvx.exe")
+	assert_eq(parsed.get("hint"), "say \"hello\"\nworld")
+	assert_eq(parsed.get("url"), "http://x")
+
+
 # ----- server launch mode -----
 
 

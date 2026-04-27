@@ -69,20 +69,26 @@ static func _toml_header(client: McpClient) -> String:
 ## pre-refactor manual-command style: `{ "k": v, "k": v }` with spaces.
 ## Pre-existing manual-command tests assert the exact substring shape; this
 ## keeps them stable.
+##
+## Uses `JSON.stringify` for every leaf String (key OR value) so paths
+## containing backslashes / quotes / newlines render as syntactically valid
+## JSON. A Windows uvx path like `C:\Users\foo\uvx.exe` would otherwise be
+## emitted as `"C:\Users\foo\uvx.exe"` — invalid JSON, unsafe to paste.
 static func _format_entry_inline(entry: Dictionary) -> String:
 	var parts: Array[String] = []
 	for k in entry:
-		parts.append("\"%s\": %s" % [String(k), _format_value(entry[k])])
+		parts.append("%s: %s" % [JSON.stringify(String(k)), _format_value(entry[k])])
 	if parts.is_empty():
 		return "{}"
 	return "{ %s }" % ", ".join(parts)
 
 
 static func _format_value(value: Variant) -> String:
-	if value is String:
-		return "\"%s\"" % value
-	if value is bool:
-		return "true" if value else "false"
+	# Strings, bools, numbers, null all round-trip correctly through JSON.stringify
+	# without spurious quoting of non-string scalars (true → `true`, 5 → `5`).
+	# Arrays and Dictionaries are formatted manually so the inline ` { k: v } `
+	# spacing matches the pre-refactor manual-command output shape that tests
+	# pin with assert_contains.
 	if value is Array:
 		var arr_parts: Array[String] = []
 		for v in value:
@@ -91,10 +97,8 @@ static func _format_value(value: Variant) -> String:
 	if value is Dictionary:
 		var d_parts: Array[String] = []
 		for k in value:
-			d_parts.append("\"%s\": %s" % [String(k), _format_value(value[k])])
+			d_parts.append("%s: %s" % [JSON.stringify(String(k)), _format_value(value[k])])
 		if d_parts.is_empty():
 			return "{}"
 		return "{ %s }" % ", ".join(d_parts)
-	if value == null:
-		return "null"
-	return str(value)
+	return JSON.stringify(value)
