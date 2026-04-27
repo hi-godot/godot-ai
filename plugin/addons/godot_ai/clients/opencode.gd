@@ -15,5 +15,7 @@ func _init() -> void:
 		"windows": "$HOME/.config/opencode/opencode.json",
 	}
 	server_key_path = PackedStringArray(["mcp"])
-	entry_extra_fields = {"type": "remote", "enabled": true}
+	entry_extra_fields = {"type": "remote"}
+	## `enabled` is user-state (they may have toggled the server off).
+	entry_initial_fields = {"enabled": true}
 	detect_paths = PackedStringArray(path_template.values())

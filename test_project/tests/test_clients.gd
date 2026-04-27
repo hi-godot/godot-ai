@@ -1267,6 +1267,81 @@ func test_kilo_code_verify_flags_pre_fix_typeless_entry_as_drift() -> void:
 	assert_false(McpJsonStrategy.verify_entry(c, url_drift, "http://x"), "URL drift must still register as drift")
 
 
+# ----- entry_initial_fields: user-state preservation across reconfigure -----
+
+func test_verify_entry_ignores_initial_field_drift() -> void:
+	## Default verifier must NOT compare `entry_initial_fields` keys: those are
+	## user-state (auto-approval lists, `disabled` toggles) that the user is
+	## expected to mutate after the initial Configure. A user with a customised
+	## `alwaysAllow` array must not be flagged as drift — otherwise the dock's
+	## Configure-All-Mismatched sweep silently overwrites their state.
+	var c := McpClientRegistry.get_by_id("roo_code")
+	var customised := {
+		"type": "streamable-http",
+		"url": "http://x",
+		"disabled": false,
+		"alwaysAllow": ["session_manage", "node_create"],  # ← user-added
+	}
+	assert_true(McpJsonStrategy.verify_entry(c, customised, "http://x"),
+		"User-customised alwaysAllow must verify as CONFIGURED, not drift")
+	var disabled_by_user := {
+		"type": "streamable-http",
+		"url": "http://x",
+		"disabled": true,  # ← user disabled the entry
+		"alwaysAllow": [],
+	}
+	assert_true(McpJsonStrategy.verify_entry(c, disabled_by_user, "http://x"),
+		"User-disabled entry must verify as CONFIGURED — they explicitly turned it off")
+
+
+func test_build_entry_preserves_existing_initial_fields() -> void:
+	## Reconfigure must not overwrite user-mutable state with descriptor
+	## defaults. The strategy passes the existing entry to `build_entry`; this
+	## test locks in that contract by simulating a reconfigure on an entry the
+	## user has customised.
+	var c := McpClientRegistry.get_by_id("roo_code")
+	var existing := {
+		"type": "streamable-http",
+		"url": "http://old:8000/mcp",
+		"disabled": true,
+		"alwaysAllow": ["session_manage", "node_create"],
+	}
+	var rebuilt := McpJsonStrategy.build_entry(c, "http://new:8001/mcp", existing)
+	assert_eq(rebuilt.get("url"), "http://new:8001/mcp", "URL must be force-updated to current server_url")
+	assert_eq(rebuilt.get("type"), "streamable-http", "type pin must be force-set from entry_extra_fields")
+	assert_eq(rebuilt.get("disabled"), true,
+		"existing `disabled: true` must survive — user explicitly turned the entry off")
+	assert_eq(rebuilt.get("alwaysAllow"), ["session_manage", "node_create"],
+		"existing alwaysAllow array must survive — wiping it would silently revoke user auto-approvals")
+
+
+func test_build_entry_seeds_initial_fields_when_absent() -> void:
+	## First-time Configure (no existing entry) must populate initial defaults
+	## so the dock surfaces a fully-formed entry — same shape as pre-split.
+	var c := McpClientRegistry.get_by_id("roo_code")
+	var fresh := McpJsonStrategy.build_entry(c, "http://x")  # existing = null
+	assert_eq(fresh.get("type"), "streamable-http", "type pin must be set on fresh entries")
+	assert_eq(fresh.get("disabled"), false, "initial `disabled: false` must seed on fresh entries")
+	assert_eq(fresh.get("alwaysAllow"), [], "initial `alwaysAllow: []` must seed on fresh entries")
+
+
+func test_build_entry_force_overwrites_drifted_required_fields() -> void:
+	## A user (or upstream) entry with a wrong `type` value gets corrected on
+	## reconfigure — the type pin is in `entry_extra_fields` precisely because
+	## a wrong value breaks transport negotiation. User-state preservation
+	## must not extend to broken transport pins.
+	var c := McpClientRegistry.get_by_id("roo_code")
+	var legacy_sse := {
+		"type": "sse",  # ← wrong, broken transport
+		"url": "http://old/mcp",
+		"disabled": false,
+		"alwaysAllow": ["session_manage"],
+	}
+	var rebuilt := McpJsonStrategy.build_entry(c, "http://new/mcp", legacy_sse)
+	assert_eq(rebuilt.get("type"), "streamable-http", "type pin must overwrite legacy SSE")
+	assert_eq(rebuilt.get("alwaysAllow"), ["session_manage"], "user state still preserved across the type fix")
+
+
 func test_opencode_client_uses_home_config_on_windows() -> void:
 	## Regression: OpenCode reads its MCP config from
 	## ~/.config/opencode/opencode.json on ALL platforms (verified via

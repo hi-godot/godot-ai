@@ -19,5 +19,11 @@ func _init() -> void:
 	## recommended remote transport). See issue #189. The default verifier
 	## requires every entry_extra_fields key to match, so a pre-#189 typeless
 	## entry surfaces as drift instead of silently passing as configured.
-	entry_extra_fields = {"type": "streamable-http", "disabled": false, "alwaysAllow": []}
+	entry_extra_fields = {"type": "streamable-http"}
+	## `disabled` and `alwaysAllow` are user-state (they may have flipped the
+	## entry off, or auto-approved specific tools like `session_manage`).
+	## Seed on first Configure but preserve across reconfigure — without this
+	## split, the Configure-All-Mismatched sweep silently wipes the user's
+	## auto-approval list every time the type pin or URL drifts.
+	entry_initial_fields = {"disabled": false, "alwaysAllow": []}
 	detect_paths = PackedStringArray(path_template.values())

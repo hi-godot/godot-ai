@@ -56,15 +56,31 @@ var server_key_path: PackedStringArray = PackedStringArray()
 ## "url" by default; some clients use "serverUrl" or "httpUrl".
 var entry_url_field: String = "url"
 
-## Verbatim extra fields merged into the entry alongside `entry_url_field`.
-## Used to pin transport `type` (Cline / Roo / Kilo / VS Code), set
-## `disabled: false` flags, etc. The default verifier asserts every key here
-## still has the declared value in a stored entry — a typeless legacy entry
-## fails verification and surfaces as drift.
+## Required entry fields — written on every Configure AND verified by the
+## default verifier. Use this for transport pins (e.g. `type:
+## "streamable-http"`) where a missing/wrong value breaks negotiation: a
+## legacy entry without the pin fails verification and surfaces as drift.
+##
+## DO NOT put user-mutable state here (auto-approval lists, `disabled`
+## flags, opt-in toggles). Verifying those treats every user customisation
+## as drift, and Configure-All-Mismatched then silently overwrites them
+## back to defaults — see the `entry_initial_fields` doc below.
 var entry_extra_fields: Dictionary = {}
 
+## Default fields written ONLY when the entry doesn't yet exist. Reconfigure
+## preserves whatever the user (or the client itself) has set; the verifier
+## ignores these keys entirely. Use for opt-in flags and user-state arrays —
+## e.g. Roo / Cline / Kilo `alwaysAllow` / `autoApprove` lists, `disabled:
+## false`, `isActive: true`. The pre-#229 behaviour was equivalent: per-
+## client `entry_builder` lambdas seeded these as defaults but the
+## per-client `verify_entry` lambdas only checked transport pins, so a
+## user-customised array was `CONFIGURED`, not drift. Splitting the field
+## restores that contract under the data-only descriptor model.
+var entry_initial_fields: Dictionary = {}
+
 ## stdio→HTTP bridge mode for clients that don't speak HTTP natively.
-##   NONE    — entry is `{[entry_url_field]: url, **entry_extra_fields}`
+##   NONE    — entry is `{[entry_url_field]: url, **entry_extra_fields,
+##             ...entry_initial_fields (only for new entries)}`
 ##   FLAT    — Claude Desktop shape: `{"command": <uvx>, "args": [...bridge...]}`
 ##             Verifier ALSO accepts a future url-style entry.
 ##   NESTED  — Zed shape: `{"command": {"path": <uvx>, "args": [...]}, "settings": {}}`

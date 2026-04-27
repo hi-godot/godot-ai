@@ -21,5 +21,9 @@ func _init() -> void:
 	## the type explicitly. Cline's schema uses "streamableHttp" (camelCase,
 	## see src/services/mcp/schemas.ts in the cline repo) — distinct from
 	## Roo's "streamable-http" string. Parallel to the Roo fix in #190.
-	entry_extra_fields = {"type": "streamableHttp", "disabled": false, "autoApprove": []}
+	entry_extra_fields = {"type": "streamableHttp"}
+	## `disabled` and `autoApprove` are user-state (they may have flipped the
+	## entry off, or auto-approved specific tools). Seed on first Configure
+	## but preserve across reconfigure — see `entry_initial_fields` in `_base.gd`.
+	entry_initial_fields = {"disabled": false, "autoApprove": []}
 	detect_paths = PackedStringArray(path_template.values())

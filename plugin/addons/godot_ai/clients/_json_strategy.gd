@@ -17,7 +17,12 @@ static func configure(client: McpClient, server_name: String, server_url: String
 		return {"status": "error", "message": "Refusing to overwrite %s: %s. Fix or move the file, then re-run Configure." % [path, read["error"]]}
 	var config: Dictionary = read["data"]
 	var holder := _ensure_path(config, client.server_key_path)
-	holder[server_name] = build_entry(client, server_url)
+	## Pass the existing entry through so `build_entry` can preserve user-mutable
+	## state (auto-approval lists, `disabled` toggles) instead of resetting it
+	## to descriptor defaults on every Configure click. See `entry_initial_fields`
+	## docs in `_base.gd`.
+	var existing: Variant = holder.get(server_name, null)
+	holder[server_name] = build_entry(client, server_url, existing)
 
 	if not McpAtomicWrite.write(path, JSON.stringify(config, "\t")):
 		return {"status": "error", "message": "Cannot write to %s" % path}
@@ -61,10 +66,14 @@ static func remove(client: McpClient, server_name: String) -> Dictionary:
 
 
 ## Synthesize the entry dict the strategy will write under
-## `server_key_path[server_name]`. For non-bridge clients this is just
-## `{[entry_url_field]: url, **entry_extra_fields}`. For bridge clients
-## (Claude Desktop, Zed) it composes the uvx + mcp-proxy command shape.
-static func build_entry(client: McpClient, server_url: String) -> Dictionary:
+## `server_key_path[server_name]`. For non-bridge clients this is the
+## existing entry (if any) with `entry_url_field` + every
+## `entry_extra_fields` key force-set (the verified type pins) and every
+## `entry_initial_fields` key set ONLY when absent (preserves user state
+## like `alwaysAllow`/`autoApprove` arrays). For bridge clients (Claude
+## Desktop, Zed) it composes the uvx + mcp-proxy command shape unconditionally
+## — the bridge form has no user-mutable surface.
+static func build_entry(client: McpClient, server_url: String, existing: Variant = null) -> Dictionary:
 	match client.entry_uvx_bridge:
 		McpClient.UvxBridge.FLAT:
 			return {
@@ -79,9 +88,13 @@ static func build_entry(client: McpClient, server_url: String) -> Dictionary:
 				},
 				"settings": {},
 			}
-	var entry: Dictionary = {client.entry_url_field: server_url}
+	var entry: Dictionary = (existing as Dictionary).duplicate() if existing is Dictionary else {}
+	entry[client.entry_url_field] = server_url
 	for k in client.entry_extra_fields:
 		entry[k] = client.entry_extra_fields[k]
+	for k in client.entry_initial_fields:
+		if not entry.has(k):
+			entry[k] = client.entry_initial_fields[k]
 	return entry
 
 

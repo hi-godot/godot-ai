@@ -12,5 +12,6 @@ func _init() -> void:
 		"windows": "$USERPROFILE/.kiro/settings/mcp.json",
 	}
 	server_key_path = PackedStringArray(["mcpServers"])
-	entry_extra_fields = {"disabled": false}
+	## `disabled` is user-state — preserved across reconfigure.
+	entry_initial_fields = {"disabled": false}
 	detect_paths = PackedStringArray(path_template.values())

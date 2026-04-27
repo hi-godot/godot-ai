@@ -16,5 +16,9 @@ func _init() -> void:
 	## Kilo Code (like Roo) defaults a typeless entry to SSE transport, which
 	## returns HTTP 400 against our streamable-http endpoint on `/mcp`. Pin
 	## the type explicitly. Parallel to the Roo fix in #190.
-	entry_extra_fields = {"type": "streamable-http", "disabled": false, "alwaysAllow": []}
+	entry_extra_fields = {"type": "streamable-http"}
+	## `disabled` and `alwaysAllow` are user-state (they may have flipped the
+	## entry off, or auto-approved specific tools). Seed on first Configure
+	## but preserve across reconfigure — see `entry_initial_fields` in `_base.gd`.
+	entry_initial_fields = {"disabled": false, "alwaysAllow": []}
 	detect_paths = PackedStringArray(path_template.values())

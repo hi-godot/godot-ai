@@ -13,5 +13,8 @@ func _init() -> void:
 		"linux": "$XDG_CONFIG_HOME/CherryStudio/mcp_servers.json",
 	}
 	server_key_path = PackedStringArray(["mcpServers"])
-	entry_extra_fields = {"type": "streamableHttp", "isActive": true}
+	entry_extra_fields = {"type": "streamableHttp"}
+	## `isActive` is user-state (they may have toggled the server off in the UI).
+	## Seed on first Configure but preserve across reconfigure.
+	entry_initial_fields = {"isActive": true}
 	detect_paths = PackedStringArray(path_template.values())
