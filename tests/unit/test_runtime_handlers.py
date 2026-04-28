@@ -75,15 +75,46 @@ class StubClient:
                     "is_running": True,
                     "dropped_count": 0,
                 }
+            if source == "editor":
+                req_offset = int(params_dict.get("offset", 0))
+                req_count = int(params_dict.get("count", 50))
+                all_entries = [
+                    {
+                        "source": "editor",
+                        "level": "error",
+                        "text": f"editor err {i}",
+                        "path": f"res://script_{i}.gd",
+                        "line": 10 + i,
+                        "function": "_ready",
+                    }
+                    for i in range(3)
+                ]
+                page = all_entries[req_offset : req_offset + req_count]
+                return {
+                    "source": "editor",
+                    "lines": page,
+                    "total_count": len(all_entries),
+                    "returned_count": len(page),
+                    "offset": req_offset,
+                    "dropped_count": 0,
+                }
             if source == "all":
                 return {
                     "source": "all",
                     "lines": [
                         {"source": "plugin", "level": "info", "text": "p0"},
+                        {
+                            "source": "editor",
+                            "level": "error",
+                            "text": "ed-err",
+                            "path": "res://foo.gd",
+                            "line": 7,
+                            "function": "_init",
+                        },
                         {"source": "game", "level": "warn", "text": "g0"},
                     ],
-                    "total_count": 2,
-                    "returned_count": 2,
+                    "total_count": 3,
+                    "returned_count": 3,
                     "offset": 0,
                     "run_id": "rstub",
                     "is_running": True,
@@ -1249,10 +1280,54 @@ async def test_logs_read_handler_source_all_returns_structured():
     result = await editor_handlers.logs_read(runtime, source="all")
 
     assert result["source"] == "all"
-    assert result["lines"][0]["source"] == "plugin"
-    assert result["lines"][1]["source"] == "game"
-    assert result["lines"][1]["level"] == "warn"
+    sources = [entry["source"] for entry in result["lines"]]
+    assert sources == ["plugin", "editor", "game"]
+    assert result["lines"][1]["level"] == "error"
+    assert result["lines"][1]["path"] == "res://foo.gd"
+    assert result["lines"][2]["level"] == "warn"
     assert result["run_id"] == "rstub"
+
+
+async def test_logs_read_handler_source_editor_passes_through():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+
+    result = await editor_handlers.logs_read(runtime, count=2, offset=1, source="editor")
+
+    last_call = client.calls[-1]
+    assert last_call["command"] == "get_logs"
+    assert last_call["params"] == {"count": 2, "offset": 1, "source": "editor"}
+
+    assert result["source"] == "editor"
+    assert result["lines"] == [
+        {
+            "source": "editor",
+            "level": "error",
+            "text": "editor err 1",
+            "path": "res://script_1.gd",
+            "line": 11,
+            "function": "_ready",
+        },
+        {
+            "source": "editor",
+            "level": "error",
+            "text": "editor err 2",
+            "path": "res://script_2.gd",
+            "line": 12,
+            "function": "_ready",
+        },
+    ]
+    assert result["total_count"] == 3
+    assert result["returned_count"] == 2
+    assert result["offset"] == 1
+    assert result["limit"] == 2
+    assert result["dropped_count"] == 0
+    ## Editor logs don't rotate (no run_id) — but the response shape stays
+    ## consistent with game/all so dashboards don't have to special-case.
+    assert result["run_id"] == ""
+    assert result["is_running"] is False
+    assert result["stale_run_id"] is False
+    assert result["has_more"] is False
 
 
 async def test_logs_read_handler_plugin_normalizes_structured_payload():

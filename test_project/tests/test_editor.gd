@@ -695,6 +695,315 @@ func test_get_logs_source_all_includes_both_streams() -> void:
 	assert_eq(result.data.lines[2].text, "game-c")
 
 
+# ----- EditorLogBuffer (issue #231) -----
+
+func test_editor_log_buffer_append_and_get_range() -> void:
+	var buf := EditorLogBuffer.new()
+	buf.append("error", "Parse Error", "res://broken.gd", 12, "")
+	buf.append("warn", "deprecation", "res://foo.gd", 4, "_ready")
+	var entries := buf.get_range(0, 10)
+	assert_eq(entries.size(), 2)
+	assert_eq(entries[0].source, "editor")
+	assert_eq(entries[0].level, "error")
+	assert_eq(entries[0].text, "Parse Error")
+	assert_eq(entries[0].path, "res://broken.gd")
+	assert_eq(entries[0].line, 12)
+	assert_eq(entries[1].level, "warn")
+	assert_eq(entries[1].function, "_ready")
+	assert_eq(buf.total_count(), 2)
+
+
+func test_editor_log_buffer_unknown_level_coerces_to_info() -> void:
+	var buf := EditorLogBuffer.new()
+	buf.append("fatal", "huh")
+	assert_eq(buf.get_range(0, 1)[0].level, "info", "Unknown level should coerce to info")
+
+
+func test_editor_log_buffer_missing_fields_default_to_empty() -> void:
+	## A logger that omits structured fields (e.g. printerr without script
+	## context) should still produce a well-formed entry — callers iterating
+	## response shape never KeyError.
+	var buf := EditorLogBuffer.new()
+	buf.append("error", "bare")
+	var e := buf.get_range(0, 1)[0]
+	assert_eq(e.path, "")
+	assert_eq(e.line, 0)
+	assert_eq(e.function, "")
+
+
+func test_editor_log_buffer_ring_evicts_and_tracks_dropped() -> void:
+	var buf := EditorLogBuffer.new()
+	var cap := EditorLogBuffer.MAX_LINES
+	for i in range(cap + 7):
+		buf.append("error", "n %d" % i, "res://x.gd", i)
+	assert_eq(buf.total_count(), cap, "Buffer should cap at MAX_LINES")
+	assert_eq(buf.dropped_count(), 7, "Should record 7 evictions")
+	## Oldest 7 dropped: first remaining entry should be index 7.
+	var first := buf.get_range(0, 1)
+	assert_eq(first[0].text, "n 7")
+
+
+func test_editor_log_buffer_clear_resets_counts() -> void:
+	var buf := EditorLogBuffer.new()
+	for i in range(5):
+		buf.append("error", "n %d" % i)
+	var cleared := buf.clear()
+	assert_eq(cleared, 5, "clear() should report cleared count")
+	assert_eq(buf.total_count(), 0)
+	assert_eq(buf.dropped_count(), 0)
+
+
+# ----- get_logs source="editor" routing (issue #231) -----
+
+func test_get_logs_source_editor_empty_when_no_buffer() -> void:
+	## Plugin started without an editor buffer (e.g. Godot 4.4 where the
+	## logger never attached) should still answer the source — empty page,
+	## no crash — so `logs_read(source="editor")` is unconditionally safe
+	## to call.
+	var handler := EditorHandler.new(McpLogBuffer.new())
+	var result := handler.get_logs({"source": "editor", "count": 10})
+	assert_has_key(result, "data")
+	assert_eq(result.data.source, "editor")
+	assert_eq(result.data.lines.size(), 0)
+	assert_eq(result.data.total_count, 0)
+	assert_eq(result.data.dropped_count, 0)
+
+
+func test_get_logs_source_editor_returns_buffered_entries() -> void:
+	var ed_buf := EditorLogBuffer.new()
+	ed_buf.append("error", "Parse Error: Expected statement", "res://broken.gd", 17, "")
+	ed_buf.append("warn", "Integer division", "res://math.gd", 3, "_compute")
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, null, null, ed_buf)
+	var result := handler.get_logs({"source": "editor", "count": 10})
+	assert_eq(result.data.source, "editor")
+	assert_eq(result.data.lines.size(), 2)
+	assert_eq(result.data.lines[0].text, "Parse Error: Expected statement")
+	assert_eq(result.data.lines[0].path, "res://broken.gd")
+	assert_eq(result.data.lines[0].line, 17)
+	assert_eq(result.data.lines[1].level, "warn")
+	assert_eq(result.data.lines[1].function, "_compute")
+
+
+func test_get_logs_source_editor_offset_applies() -> void:
+	var ed_buf := EditorLogBuffer.new()
+	for i in range(5):
+		ed_buf.append("error", "e %d" % i, "res://x.gd", i)
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, null, null, ed_buf)
+	var result := handler.get_logs({"source": "editor", "count": 2, "offset": 2})
+	assert_eq(result.data.returned_count, 2)
+	assert_eq(result.data.lines[0].text, "e 2")
+	assert_eq(result.data.lines[1].text, "e 3")
+	assert_eq(result.data.offset, 2)
+	assert_eq(result.data.total_count, 5)
+
+
+func test_get_logs_source_all_includes_editor_between_plugin_and_game() -> void:
+	var plugin_buf := McpLogBuffer.new()
+	plugin_buf.log("plugin-a")
+	var ed_buf := EditorLogBuffer.new()
+	ed_buf.append("error", "parse err", "res://x.gd", 1, "")
+	var game_buf := GameLogBuffer.new()
+	game_buf.append("info", "game-runtime")
+	var handler := EditorHandler.new(plugin_buf, null, null, game_buf, ed_buf)
+	var result := handler.get_logs({"source": "all", "count": 10})
+	assert_eq(result.data.lines.size(), 3)
+	## Order: plugin → editor → game.
+	assert_eq(result.data.lines[0].source, "plugin")
+	assert_eq(result.data.lines[1].source, "editor")
+	assert_eq(result.data.lines[1].text, "parse err")
+	assert_eq(result.data.lines[2].source, "game")
+
+
+func test_get_logs_source_all_dropped_count_includes_editor() -> void:
+	## The dropped_count surfaced by source="all" should aggregate across
+	## both ring buffers so a caller polling for "are we losing entries"
+	## doesn't have to read each source separately.
+	var ed_buf := EditorLogBuffer.new()
+	for i in range(EditorLogBuffer.MAX_LINES + 3):
+		ed_buf.append("error", "x %d" % i)
+	var game_buf := GameLogBuffer.new()
+	for i in range(GameLogBuffer.MAX_LINES + 4):
+		game_buf.append("info", "g %d" % i)
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, null, game_buf, ed_buf)
+	var result := handler.get_logs({"source": "all", "count": 1})
+	assert_eq(result.data.dropped_count, 7, "Editor (3) + game (4) drops should sum")
+
+
+func test_get_logs_source_invalid_message_lists_editor() -> void:
+	## After adding the new source, the validator's error message should
+	## list it so users see a complete option set in their typo correction.
+	var handler := EditorHandler.new(McpLogBuffer.new())
+	var result := handler.get_logs({"source": "bogus"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "editor")
+
+
+# ----- EditorLogger filtering (issue #231) -----
+
+const _EDITOR_LOGGER_PATH := "res://addons/godot_ai/runtime/editor_logger.gd"
+
+
+func test_editor_logger_captures_user_script_parse_error() -> void:
+	## Simulate Godot's parser firing _log_error with the offending .gd
+	## file as `file`. The buffer should receive a structured entry with
+	## the path/line/level so the LLM can navigate straight to the bug.
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var ed_buf := EditorLogBuffer.new()
+	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
+	logger._log_error(
+		"_parse",
+		"res://broken.gd",
+		42,
+		"Parse Error: Expected statement, got 'EOF' instead.",
+		"",
+		false,
+		2,  ## SCRIPT
+		[],
+	)
+	var entries := ed_buf.get_range(0, 10)
+	assert_eq(entries.size(), 1, "User script parse error should be captured")
+	assert_eq(entries[0].level, "error")
+	assert_eq(entries[0].path, "res://broken.gd")
+	assert_eq(entries[0].line, 42)
+	assert_contains(entries[0].text, "Parse Error")
+
+
+func test_editor_logger_warn_error_type_maps_to_warn_level() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var ed_buf := EditorLogBuffer.new()
+	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
+	logger._log_error("_run", "res://x.gd", 3, "deprecated", "", false, 1, [])
+	var entries := ed_buf.get_range(0, 10)
+	assert_eq(entries.size(), 1)
+	assert_eq(entries[0].level, "warn")
+
+
+func test_editor_logger_drops_internal_godot_cpp_noise() -> void:
+	## Errors that originate in Godot's C++ code with no script backtrace
+	## (e.g. "scene/main/scene_tree.cpp" warnings) should be filtered —
+	## otherwise the editor's normal startup chatter buries the parse
+	## errors callers actually want.
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var ed_buf := EditorLogBuffer.new()
+	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
+	logger._log_error("foo", "scene/main/scene_tree.cpp", 1234, "noise", "", false, 0, [])
+	assert_eq(ed_buf.total_count(), 0, "C++-source errors with no script backtrace should be filtered")
+
+
+func test_editor_logger_drops_godot_ai_addon_to_avoid_feedback_loop() -> void:
+	## We push_warning ourselves from plugin.gd. Capturing those would
+	## amplify on every reload and pollute the buffer the dock reads.
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var ed_buf := EditorLogBuffer.new()
+	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
+	logger._log_error("_start_server", "res://addons/godot_ai/plugin.gd", 100, "self-noise", "", false, 1, [])
+	assert_eq(ed_buf.total_count(), 0, "addons/godot_ai/ paths should be filtered")
+
+
+func test_editor_logger_uses_script_backtrace_for_push_error() -> void:
+	## push_error/push_warning fire with file=core/variant/variant_utility.cpp;
+	## the actual user location lives in the first script_backtrace frame.
+	## Without this remapping, every push_error from user code would be
+	## filtered as C++ noise.
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var ed_buf := EditorLogBuffer.new()
+	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
+
+	## Build a stub backtrace object with the same getter shape Godot
+	## passes via _log_error. ScriptBacktrace can't be constructed in
+	## tests, so a minimal duck-typed stub stands in.
+	var bt := StubBacktrace.new("res://user_tool.gd", 17, "_handle_event")
+	logger._log_error(
+		"push_error",
+		"core/variant/variant_utility.cpp",
+		1000,
+		"user-flagged-bug",
+		"",
+		false,
+		0,
+		[bt],
+	)
+	var entries := ed_buf.get_range(0, 10)
+	assert_eq(entries.size(), 1, "push_error from user code should be captured via backtrace")
+	assert_eq(entries[0].path, "res://user_tool.gd")
+	assert_eq(entries[0].line, 17)
+	assert_eq(entries[0].function, "_handle_event")
+	assert_contains(entries[0].text, "user-flagged-bug")
+
+
+func test_editor_logger_drops_push_error_from_plugin_via_backtrace() -> void:
+	## A push_warning called from inside addons/godot_ai/ should be filtered
+	## even though file points at variant_utility.cpp — the backtrace gives
+	## us the real source path, and that's the path we filter on.
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var ed_buf := EditorLogBuffer.new()
+	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
+	var bt := StubBacktrace.new("res://addons/godot_ai/plugin.gd", 50, "_attach_editor_logger")
+	logger._log_error(
+		"push_warning",
+		"core/variant/variant_utility.cpp",
+		1000,
+		"internal noise",
+		"",
+		false,
+		1,
+		[bt],
+	)
+	assert_eq(ed_buf.total_count(), 0, "Backtrace inside godot_ai addon should still filter")
+
+
+func test_editor_logger_no_op_when_buffer_unset() -> void:
+	## Defensive: instantiated without a buffer (the default), the logger
+	## must silently no-op rather than crash. Covers the brief window
+	## during plugin shutdown after `_detach_editor_logger` has run but a
+	## stray Logger virtual is still in flight.
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var logger = load(_EDITOR_LOGGER_PATH).new()
+	logger._log_error("f", "res://x.gd", 1, "msg", "", false, 0, [])
+	assert_true(true, "No crash when buffer is null")
+
+
+func test_editor_logger_is_user_script_predicate() -> void:
+	## Static helper — script `extends Logger` so it only parses on
+	## Godot 4.5+. Skip on older where load() returns null.
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var script = load(_EDITOR_LOGGER_PATH)
+	assert_true(script._is_user_script("res://foo.gd"))
+	assert_true(script._is_user_script("res://Bar.cs"))
+	assert_true(script._is_user_script("/abs/path/foo.gd"))
+	assert_true(script._is_user_script("foo.GD"), "Case-insensitive .gd match")
+	assert_false(script._is_user_script(""))
+	assert_false(script._is_user_script("scene/main/scene_tree.cpp"))
+	assert_false(script._is_user_script("res://image.png"))
+
+
+func test_editor_logger_is_in_godot_ai_addon_predicate() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var script = load(_EDITOR_LOGGER_PATH)
+	assert_true(script._is_in_godot_ai_addon("res://addons/godot_ai/plugin.gd"))
+	assert_true(script._is_in_godot_ai_addon("/abs/project/addons/godot_ai/handler.gd"))
+	assert_false(script._is_in_godot_ai_addon("res://user_script.gd"))
+	assert_false(script._is_in_godot_ai_addon("res://addons/other_plugin/foo.gd"))
+
+
 # ----- McpDebuggerPlugin: log batch capture (issue #73) -----
 
 func test_debugger_plugin_log_batch_appends_to_buffer() -> void:
@@ -787,3 +1096,48 @@ func test_game_logger_printerr_routes_to_error_level() -> void:
 	assert_eq(pending[0][1], "oops")
 	assert_eq(pending[1][0], "info")
 	assert_eq(pending[1][1], "hi")
+
+
+func test_game_logger_uses_script_backtrace_for_push_error() -> void:
+	## push_error from game-side .gd lands with file=variant_utility.cpp;
+	## the queued text must report the user's GDScript location (from the
+	## first backtrace frame), not the C++ wrapper. Mirrors the
+	## editor_logger backtrace-remap test — game_logger went uncovered
+	## until the LogBacktrace.resolve_error extraction.
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var logger = load(_GAME_LOGGER_PATH).new()
+	var bt := StubBacktrace.new("res://player.gd", 88, "_take_damage")
+	logger._log_error(
+		"push_error",
+		"core/variant/variant_utility.cpp",
+		1000,
+		"hp went negative",
+		"",
+		false,
+		0,
+		[bt],
+	)
+	var pending: Array = logger.drain()
+	assert_eq(pending.size(), 1)
+	assert_eq(pending[0][0], "error")
+	assert_contains(pending[0][1], "hp went negative")
+	assert_contains(pending[0][1], "res://player.gd:88", "Backtrace path:line should land in the formatted text")
+	assert_contains(pending[0][1], "_take_damage", "Backtrace function should land in the formatted text")
+	assert_true(not pending[0][1].contains("variant_utility.cpp"), "C++ wrapper path should be replaced by the backtrace")
+
+
+func test_game_logger_falls_back_to_original_file_when_no_backtrace() -> void:
+	## A two-arg push_error from a real .gd file (rationale-form) reports
+	## file=res://foo.gd directly with no backtrace; the formatted loc
+	## suffix should still appear so users can navigate to the source.
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var logger = load(_GAME_LOGGER_PATH).new()
+	logger._log_error("my_func", "res://foo.gd", 42, "ERR_CODE", "detailed reason", false, 0, [])
+	var pending: Array = logger.drain()
+	assert_eq(pending.size(), 1)
+	assert_contains(pending[0][1], "res://foo.gd:42", "Fallback path:line should appear when no backtrace is present")
+	assert_contains(pending[0][1], "my_func", "Fallback function name should appear when no backtrace is present")

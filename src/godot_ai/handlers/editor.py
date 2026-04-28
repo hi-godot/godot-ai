@@ -142,7 +142,7 @@ async def logs_clear(runtime: Runtime) -> dict:
     return await runtime.send_command("clear_logs")
 
 
-_VALID_LOG_SOURCES = ("plugin", "game", "all")
+_VALID_LOG_SOURCES = ("plugin", "game", "editor", "all")
 
 
 async def logs_read(
@@ -153,7 +153,7 @@ async def logs_read(
     since_run_id: str = "",
 ) -> dict:
     if source not in _VALID_LOG_SOURCES:
-        raise ValueError(f"Invalid source '{source}' — use 'plugin', 'game', or 'all'")
+        raise ValueError(f"Invalid source '{source}' — use 'plugin', 'game', 'editor', or 'all'")
 
     if source == "plugin":
         ## Backward-compatible shape: callers asking for the default

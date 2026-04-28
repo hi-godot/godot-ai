@@ -390,6 +390,58 @@ class TestLogsReadTool:
         assert data["lines"] == []
         assert data["run_id"] == "rNEW"
 
+    async def test_source_editor_returns_structured_script_errors(self, mcp_stack):
+        client, plugin = mcp_stack
+        entries = [
+            {
+                "source": "editor",
+                "level": "error",
+                "text": "Parse Error: Expected statement, got 'EOF' instead.",
+                "path": "res://broken.gd",
+                "line": 12,
+                "function": "",
+            },
+            {
+                "source": "editor",
+                "level": "warn",
+                "text": "Integer division: 5 / 2",
+                "path": "res://math.gd",
+                "line": 4,
+                "function": "_compute",
+            },
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_logs"
+            assert cmd["params"]["source"] == "editor"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "source": "editor",
+                    "lines": entries,
+                    "total_count": 2,
+                    "returned_count": 2,
+                    "offset": 0,
+                    "dropped_count": 0,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("logs_read", {"source": "editor"})
+        await task
+
+        data = result.data
+        assert data["source"] == "editor"
+        assert data["lines"] == entries
+        ## run_id and is_running are absent in the plugin payload but the
+        ## tool fills them with empty defaults so the response schema stays
+        ## stable across sources.
+        assert data["run_id"] == ""
+        assert data["is_running"] is False
+        assert data["dropped_count"] == 0
+        assert data["stale_run_id"] is False
+
 
 # ---------------------------------------------------------------------------
 # node_find
