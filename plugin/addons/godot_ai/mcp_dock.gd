@@ -2168,6 +2168,34 @@ func _install_update() -> void:
 
 
 func _on_filesystem_scanned_for_update() -> void:
+	## Belt-and-suspenders: verify the new release's plugin.gd actually parses
+	## before we fire `set_plugin_enabled(false/true)`. If the new release adds
+	## a class_name'd file that's referenced by a typed-var declaration in
+	## plugin.gd (or its transitive dependencies), GDScript's parser can fail
+	## to resolve the new class_name during hot-reload — `plugin.gd` then
+	## fails to compile and the v2.1.x plugin enters a degraded state. The
+	## subsequent `_exit_tree` cascade has been observed to SIGABRT in the
+	## wild (#242).
+	##
+	## `ResourceLoader.load` returns `null` when a script has a parse error,
+	## so a single load is enough to detect the hazard. On failure, fall back
+	## to the same "Restart editor to apply" surface the pre-Godot-4.4 path
+	## already uses — the user manually restarts, picks up the new files
+	## fresh from disk, and dodges the in-place reload entirely.
+	##
+	## The check itself is cheap (the script's already in the editor's cache
+	## post-`fs.scan()`) and only runs once per update install.
+	if ResourceLoader.load("res://addons/godot_ai/plugin.gd") == null:
+		_self_update_in_progress = false
+		_update_btn.text = "Restart editor to apply"
+		_update_btn.disabled = true
+		_update_label.text = (
+			"Updated! Restart the editor to apply — auto-reload skipped because "
+			"the new release added a script class plugin.gd parses against "
+			"(safe-mode fallback, see #242)."
+		)
+		_update_label.add_theme_color_override("font_color", Color.GREEN)
+		return
 	_update_btn.text = "Reloading..."
 	_reload_after_update.call_deferred()
 

@@ -209,6 +209,112 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
     )
 
 
+def test_plugin_gd_avoids_typed_class_name_for_log_buffers() -> None:
+    """plugin.gd's `_game_log_buffer` / `_editor_log_buffer` must be untyped (#242).
+
+    Hot-reload during self-update parses the new release's plugin.gd before
+    its dependent class_name'd files are guaranteed to be in the global class
+    table. A typed declaration like `var _editor_log_buffer: EditorLogBuffer`
+    fails to resolve when `EditorLogBuffer` is a class_name added in this
+    release (and similarly for `GameLogBuffer` when its `extends` chain
+    changes to reference a new class_name).
+
+    Failed plugin.gd parse → degraded plugin state → set_plugin_enabled(false)
+    fires _exit_tree on a half-broken dock → SIGABRT in the user's wild
+    (issue #242, observed on v2.1.1 → v2.1.2).
+
+    Lock the untyped pattern so a future contributor doesn't "fix" the
+    apparent oversight by re-typing the field. The runtime parameter checks
+    on EditorHandler / GameLogger callees still enforce the type fence —
+    the typing just moves from plugin.gd's parse to the call site's runtime
+    check, breaking the chicken-and-egg with class_name registration order.
+
+    Same lesson as the existing untyped `_editor_logger` pattern.
+    """
+
+    plugin_source = (PLUGIN_ROOT / "plugin.gd").read_text()
+
+    # Find the var declarations. Allow whitespace around `var`.
+    forbidden_decls = (
+        "var _game_log_buffer: GameLogBuffer",
+        "var _editor_log_buffer: EditorLogBuffer",
+    )
+    for forbidden in forbidden_decls:
+        assert forbidden not in plugin_source, (
+            f"plugin.gd must not declare `{forbidden}` — typed-var declarations "
+            "against class_names that may be added or refactored in future "
+            "releases break self-update hot-reload (#242). Use untyped + "
+            "`preload()` instead, like the existing `_editor_logger` field."
+        )
+
+    # And confirm the corresponding preload sites exist (preload-resolved
+    # construction doesn't require the global class_name registry to be
+    # ahead of plugin.gd's parse).
+    assert 'preload("res://addons/godot_ai/utils/game_log_buffer.gd").new()' in plugin_source, (
+        "plugin.gd must construct `_game_log_buffer` via "
+        "`preload(...).new()` — the path-based load resolves at "
+        "script-load time without needing GameLogBuffer's class_name "
+        "registered first."
+    )
+    assert 'preload("res://addons/godot_ai/utils/editor_log_buffer.gd").new()' in plugin_source, (
+        "plugin.gd must construct `_editor_log_buffer` via "
+        "`preload(...).new()` — same reason as above for EditorLogBuffer."
+    )
+
+
+def test_install_update_falls_back_on_plugin_parse_failure() -> None:
+    """`_on_filesystem_scanned_for_update` must verify plugin.gd parses before reload (#242).
+
+    Even with the untyped-log-buffer fix, future releases could introduce
+    other parse hazards (renamed `class_name`s, removed inheritance bases,
+    refactored cross-class references). The install flow's belt-and-suspenders
+    is to load the new plugin.gd via `ResourceLoader.load` after `fs.scan()`
+    completes; `null` return = parse error = bail out of the in-place reload
+    and fall back to the same "Restart editor to apply" message the
+    pre-Godot-4.4 path uses.
+
+    This avoids exercising `set_plugin_enabled(false/true)`'s _exit_tree
+    cascade against a degraded plugin instance — the observed crash mode
+    in #242.
+    """
+
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    block = source.split(
+        "func _on_filesystem_scanned_for_update() -> void:", 1
+    )[1].split("\n\nfunc ", 1)[0]
+
+    assert 'ResourceLoader.load("res://addons/godot_ai/plugin.gd")' in block, (
+        "_on_filesystem_scanned_for_update must verify the new plugin.gd "
+        "parses (via ResourceLoader.load) before triggering "
+        "_reload_after_update. Without this gate, a parse error in the new "
+        "release leaves the v2.1.x plugin in a degraded state when "
+        "set_plugin_enabled(false) fires its _exit_tree cascade. See #242."
+    )
+    assert "_self_update_in_progress = false" in block, (
+        "On parse failure, the install flag must be cleared so the dock "
+        "instance can resume normal refresh once the user restarts the "
+        "editor manually (matching the pre-Godot-4.4 fallback path)."
+    )
+    assert "Restart the editor" in block, (
+        "On parse failure, surface the same 'Restart the editor to apply' "
+        "user-facing message that the pre-Godot-4.4 path already uses. "
+        "That message is a known-good fallback path."
+    )
+
+    # Also confirm the bail-out happens BEFORE _reload_after_update is queued.
+    parse_check_idx = block.find('ResourceLoader.load("res://addons/godot_ai/plugin.gd")')
+    reload_call_idx = block.find("_reload_after_update.call_deferred()")
+    assert parse_check_idx > 0 and reload_call_idx > 0, (
+        "Test fixture broken: expected both ResourceLoader.load and "
+        "_reload_after_update.call_deferred in the function body."
+    )
+    assert parse_check_idx < reload_call_idx, (
+        "Parse check must run BEFORE the deferred reload call — a parse "
+        "failure must short-circuit and not fall through into the in-place "
+        "set_plugin_enabled cycle."
+    )
+
+
 def test_worker_uses_main_thread_probe_snapshot_for_cli_paths() -> None:
     """CLI path discovery caches should not be mutated from the refresh worker."""
 

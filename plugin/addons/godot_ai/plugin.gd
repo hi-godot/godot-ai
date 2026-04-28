@@ -38,8 +38,22 @@ const SPAWN_GRACE_MS := 5 * 1000
 var _connection: Connection
 var _dispatcher: McpDispatcher
 var _log_buffer: McpLogBuffer
-var _game_log_buffer: GameLogBuffer
-var _editor_log_buffer: EditorLogBuffer
+## Untyped — `GameLogBuffer` and `EditorLogBuffer` are class_names whose
+## inheritance chain has changed between releases (v2.1.2 refactored both to
+## extend `StructuredLogRing`, a class_name that didn't exist in v2.1.1).
+## A typed declaration here is a self-update hazard: when `_install_update`
+## extracts the new release's files and `fs.scan()` triggers script reload,
+## the parser hits these typed-vars before the new dependent class_names
+## are registered in the global table → plugin.gd parse error → v2.1.x
+## plugin fails to load → set_plugin_enabled(false)'s _exit_tree cascade
+## fires on a degraded dock instance → SIGABRT. See #242.
+##
+## Same lesson as the existing `_editor_logger` field below: untyped + load
+## via `preload()` at construction time. The `preload()` is resolved at
+## script-load and doesn't need the global class_name registry to be ahead
+## of plugin.gd's parse, breaking the chicken-and-egg.
+var _game_log_buffer
+var _editor_log_buffer
 ## Untyped — script extends Godot 4.5+'s Logger class, loaded via load() so
 ## the plugin still parses on 4.4. Null on Godot < 4.5 or before
 ## `_attach_editor_logger` runs; "attached" state IS exactly "non-null".
@@ -88,8 +102,10 @@ func _enter_tree() -> void:
 	_start_server()
 
 	_log_buffer = McpLogBuffer.new()
-	_game_log_buffer = GameLogBuffer.new()
-	_editor_log_buffer = EditorLogBuffer.new()
+	## See the `_game_log_buffer` / `_editor_log_buffer` declaration comment
+	## above for why these go through `preload()` instead of `ClassName.new()`.
+	_game_log_buffer = preload("res://addons/godot_ai/utils/game_log_buffer.gd").new()
+	_editor_log_buffer = preload("res://addons/godot_ai/utils/editor_log_buffer.gd").new()
 	_attach_editor_logger()
 	_dispatcher = McpDispatcher.new(_log_buffer)
 
