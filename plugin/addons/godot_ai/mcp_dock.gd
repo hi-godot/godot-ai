@@ -95,6 +95,12 @@ var _client_status_refresh_started_msec: int = 0
 var _client_status_refresh_generation: int = 0
 var _client_status_refresh_shutdown_requested := false
 var _client_status_refresh_timed_out := false
+## Set for the duration of `_install_update` — extract-overwrite of plugin
+## scripts on disk would crash any worker mid-`GDScriptFunction::call`
+## (confirmed via SIGABRT in `VBoxContainer(McpDock)::_run_client_status_refresh_worker`).
+## Gates every spawn path (focus-in, manual button, deferred initial refresh)
+## while `true`; the in-flight worker is drained at start of install.
+var _self_update_in_progress := false
 static var _orphaned_client_status_refresh_threads: Array[Thread] = []
 
 # Dev-mode only
@@ -188,6 +194,15 @@ func _exit_tree() -> void:
 	## GC-mid-execution crash this fix exists to prevent. Blocking the editor
 	## briefly on plugin-reload is strictly better than the SIGSEGV.
 	_client_status_refresh_shutdown_requested = true
+	_drain_client_status_refresh_workers()
+
+
+func _drain_client_status_refresh_workers() -> void:
+	## Block until any in-flight refresh worker (and any orphaned workers from
+	## a prior timeout) finish, then clear refresh state. Same blocking
+	## semantics as the `_exit_tree` drain — see #232. Used by `_exit_tree`
+	## (dock teardown) and `_install_update` (before extract overwrites
+	## plugin scripts on disk).
 	_client_status_refresh_generation += 1
 	if _client_status_refresh_thread != null:
 		_client_status_refresh_thread.wait_to_finish()
@@ -1540,6 +1555,8 @@ func _perform_initial_client_status_refresh() -> void:
 		return
 	if _client_status_refresh_shutdown_requested:
 		return
+	if _self_update_in_progress:
+		return
 	if _client_status_refresh_in_flight:
 		return
 
@@ -1611,6 +1628,14 @@ func _request_client_status_refresh(force: bool = false) -> bool:
 	## Stale-while-refreshing: do not clear dots, summary, or the drift banner
 	## when a refresh is requested. The existing UI remains visible until the
 	## background worker's result is applied on the main thread.
+	if _self_update_in_progress:
+		## Self-update is overwriting plugin scripts on disk; spawning a worker
+		## now would crash it inside `GDScriptFunction::call` once the bytecode
+		## swap reaches a script the worker is mid-call into. Focus-in /
+		## manual button / cooldown timer all funnel through here, so one
+		## gate covers every spawn path during the install window. The flag
+		## dies with the dock instance during `set_plugin_enabled(false)`.
+		return false
 	if _client_status_refresh_in_flight:
 		if force and _has_client_status_refresh_timed_out():
 			_abandon_client_status_refresh_thread()
@@ -1874,11 +1899,22 @@ func _install_update() -> void:
 		_update_banner.visible = false
 		return
 
+	## Block worker spawning + drain in-flight worker BEFORE we start
+	## overwriting plugin scripts on disk. Without this, focus-in landing
+	## anywhere in the extract→reload window spawns a worker that walks
+	## into a partially-overwritten script and SIGABRTs inside
+	## `GDScriptFunction::call`. The flag is also checked by
+	## `_request_client_status_refresh` and `_perform_initial_client_status_refresh`,
+	## so every spawn path is gated.
+	_self_update_in_progress = true
+	_drain_client_status_refresh_workers()
+
 	var zip_path := ProjectSettings.globalize_path(UPDATE_TEMP_ZIP)
 	var install_base := ProjectSettings.globalize_path("res://")
 
 	var reader := ZIPReader.new()
 	if reader.open(zip_path) != OK:
+		_self_update_in_progress = false
 		_update_btn.text = "Extract failed"
 		_update_btn.disabled = false
 		return
@@ -1939,6 +1975,10 @@ func _install_update() -> void:
 			## the pre-#127 behaviour).
 			_reload_after_update.call_deferred()
 	else:
+		## Pre-4.4 Godot: no plugin reload, dock stays alive on the new files.
+		## Clear the install flag so refreshes resume on the OLD dock instance
+		## until the user restarts the editor.
+		_self_update_in_progress = false
 		_update_btn.text = "Restart editor to apply"
 		_update_btn.disabled = true
 		_update_label.text = "Updated! Restart the editor."

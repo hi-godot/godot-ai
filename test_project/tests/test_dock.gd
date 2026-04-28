@@ -199,6 +199,41 @@ func test_exit_tree_drains_orphaned_refresh_threads() -> void:
 		"_exit_tree must clear the orphan list synchronously after waiting on each thread")
 
 
+func test_self_update_in_progress_blocks_request_refresh() -> void:
+	## Race B regression: while `_install_update` is overwriting plugin scripts
+	## on disk, every refresh-spawn path (focus-in, manual button, cooldown
+	## timer, deferred initial refresh) must short-circuit. Spawning a worker
+	## that walks into a half-overwritten script crashes inside
+	## `GDScriptFunction::call` (confirmed by SIGABRT in
+	## `VBoxContainer(McpDock)::_run_client_status_refresh_worker`).
+	##
+	## `_request_client_status_refresh` is the funnel for every spawn path,
+	## so gating here covers focus-in (`_notification` → handler) without
+	## needing a separate gate at each call site.
+	_dock._self_update_in_progress = true
+	var ok := _dock._request_client_status_refresh(false)
+	assert_false(ok, "Refresh must not spawn a worker while self-update is in progress")
+	assert_eq(_dock._client_status_refresh_thread, null,
+		"No worker thread should have been started while self-update is in progress")
+	assert_false(_dock._client_status_refresh_in_flight,
+		"In-flight flag should not flip on while self-update is in progress")
+	_dock._self_update_in_progress = false
+
+
+func test_drain_helper_does_not_poison_shutdown_flag() -> void:
+	## `_install_update` calls `_drain_client_status_refresh_workers` to clear
+	## any in-flight refresh worker before extracting plugin scripts. The
+	## install can fail (e.g. zip open error) — when it does, the dock stays
+	## alive and refreshes must resume on the OLD instance. So unlike
+	## `_exit_tree`'s drain, the install-time drain must NOT set
+	## `_client_status_refresh_shutdown_requested` (which is one-way and
+	## permanently disables refreshes for the dock instance).
+	_dock._drain_client_status_refresh_workers()
+	assert_false(_dock._client_status_refresh_shutdown_requested,
+		"_drain_client_status_refresh_workers must not set shutdown_requested — "
+		"that's only for permanent dock teardown via _exit_tree.")
+
+
 ## Shared fixture for the three version-label tests. Inject a Label + Button
 ## + Connection onto the dock so the pure refresh logic can be exercised
 ## without depending on whether the test environment resolves as user mode
