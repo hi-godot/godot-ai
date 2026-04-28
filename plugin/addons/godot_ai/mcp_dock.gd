@@ -2189,11 +2189,7 @@ func _on_filesystem_scanned_for_update() -> void:
 		_self_update_in_progress = false
 		_update_btn.text = "Restart editor to apply"
 		_update_btn.disabled = true
-		_update_label.text = (
-			"Updated! Restart the editor to apply — auto-reload skipped because "
-			"the new release added a script class plugin.gd parses against "
-			"(safe-mode fallback, see #242)."
-		)
+		_update_label.text = "Updated! Restart the editor to apply — auto-reload skipped (safe-mode fallback, see #242)."
 		_update_label.add_theme_color_override("font_color", Color.GREEN)
 		return
 	_update_btn.text = "Reloading..."
