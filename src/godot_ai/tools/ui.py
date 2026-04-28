@@ -28,6 +28,10 @@ Ops:
         Atomically build a UI subtree from a nested spec
         ({type, name?, properties?, anchor_preset?, anchor_margin?, theme?,
         children?}). Validates everything before mutating.
+        `properties` is direct node properties only. Theme constants like
+        container spacing live under `theme_override_constants/<name>` —
+        e.g. `{"theme_override_constants/separation": 8}` on a
+        VBoxContainer, not `{"separation": 8}` (which errors).
   • draw_recipe(path, ops, clear_existing=True)
         Attach a declarative list of vector _draw() ops to a Control —
         radar sweeps, gauges, corner brackets, crosshairs, waveforms.

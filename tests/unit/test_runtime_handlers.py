@@ -3173,7 +3173,7 @@ async def test_ui_build_layout_handler_forwards_tree_and_parent():
     tree = {
         "type": "VBoxContainer",
         "name": "PauseMenu",
-        "properties": {"separation": 16},
+        "properties": {"theme_override_constants/separation": 16},
         "children": [{"type": "Label", "properties": {"text": "Paused"}}],
     }
     result = await ui_handlers.ui_build_layout(runtime, tree=tree, parent_path="/Main/HUD")
