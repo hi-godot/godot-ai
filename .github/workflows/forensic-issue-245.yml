@@ -6,6 +6,12 @@ name: Forensic / issue-245 dictionary hot-reload
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - dlight/wizardly-payne-37369d
+    paths:
+      - .github/workflows/forensic-issue-245.yml
+      - docs/forensic/issue-245/**
 
 jobs:
   synthetic:
