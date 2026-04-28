@@ -330,3 +330,149 @@ func test_crashed_body_mentions_pypi_propagation_on_uvx_tier() -> void:
 		assert_contains(body, "Reload Plugin", "uvx-tier body should direct the user to the retry action")
 	else:
 		assert_contains(body, "output log", "Non-uvx body should still point at Godot's traceback")
+
+
+# --- Configure / Remove run off-thread (issue #239) ----------------------
+
+func _first_client_id() -> String:
+	var ids := McpClientConfigurator.client_ids()
+	if ids.is_empty():
+		return ""
+	return ids[0]
+
+
+func test_set_row_action_in_flight_disables_both_buttons_and_marks_amber() -> void:
+	## Issue #239 surface: clicking Configure on a CLI client used to
+	## block main on `OS.execute`. The new flow dispatches to a worker;
+	## while the worker is in flight the row must look "busy" so the
+	## user doesn't assume nothing happened and click again. The verb
+	## lands on the button the user clicked — not the name label —
+	## otherwise a long row error message would compete with the badge
+	## for the same horizontal space.
+	_dock._build_ui()
+	var any_id := _first_client_id()
+	if any_id.is_empty():
+		skip("No clients registered")
+		return
+	_dock._set_row_action_in_flight(any_id, "configure")
+	var row: Dictionary = _dock._client_rows[any_id]
+	assert_true((row["configure_btn"] as Button).disabled,
+		"Configure button must be disabled while worker is in flight")
+	assert_true((row["remove_btn"] as Button).disabled,
+		"Remove button must also be disabled — a click during in-flight could queue stale work")
+	assert_eq((row["dot"] as ColorRect).color, McpDockScript.COLOR_AMBER,
+		"Dot turns amber so the row reads as 'busy', not green/red")
+	assert_contains((row["configure_btn"] as Button).text, "Configuring",
+		"Configure-in-flight verb must land on the configure button itself")
+
+
+func test_set_row_action_in_flight_uses_removing_label_for_remove_action() -> void:
+	## The verb must track the action — Configuring/Removing — otherwise a
+	## Remove click silently shows "Configuring…" and the user thinks they
+	## hit the wrong button. We also verify the configure button's text
+	## stays untouched so the two states don't overlap.
+	_dock._build_ui()
+	var any_id := _first_client_id()
+	if any_id.is_empty():
+		skip("No clients registered")
+		return
+	_dock._set_row_action_in_flight(any_id, "remove")
+	var row: Dictionary = _dock._client_rows[any_id]
+	assert_contains((row["remove_btn"] as Button).text, "Removing",
+		"Remove action must show 'Removing…' on the remove button itself")
+	assert_false(str((row["configure_btn"] as Button).text).contains("Removing"),
+		"Configure button must not be tagged with the Remove verb")
+
+
+func test_finalize_action_buttons_reenables_after_in_flight() -> void:
+	_dock._build_ui()
+	var any_id := _first_client_id()
+	if any_id.is_empty():
+		skip("No clients registered")
+		return
+	_dock._set_row_action_in_flight(any_id, "configure")
+	_dock._finalize_action_buttons(any_id)
+	var row: Dictionary = _dock._client_rows[any_id]
+	assert_false((row["configure_btn"] as Button).disabled,
+		"Configure button must re-enable after the worker resolves")
+	assert_false((row["remove_btn"] as Button).disabled,
+		"Remove button must re-enable too")
+
+
+func test_dispatch_client_action_short_circuits_during_self_update() -> void:
+	## Same gate the refresh worker honors: while `_install_update` is
+	## overwriting plugin scripts on disk, spawning a worker that walks
+	## into `_cli_strategy.gd` mid-bytecode-swap SIGABRTs the editor.
+	_dock._build_ui()
+	var any_id := _first_client_id()
+	if any_id.is_empty():
+		skip("No clients registered")
+		return
+	_dock._self_update_in_progress = true
+	_dock._dispatch_client_action(any_id, "configure")
+	assert_false(_dock._client_action_threads.has(any_id),
+		"No worker thread must be created while self-update is in progress")
+	_dock._self_update_in_progress = false
+
+
+func test_dispatch_client_action_noop_when_slot_already_in_flight() -> void:
+	## Double-click guard: a second click while the first worker is still
+	## running must not start a second thread on the same row. Without
+	## this, the row's button/label state would race between the two
+	## workers' deferred callbacks.
+	_dock._build_ui()
+	var any_id := _first_client_id()
+	if any_id.is_empty():
+		skip("No clients registered")
+		return
+	## Plant a sentinel in the slot so the dispatch sees it as in-flight
+	## without us having to actually spawn (and then drain) a real
+	## subprocess. Cleared in teardown so we don't leak the entry.
+	var sentinel := Thread.new()
+	_dock._client_action_threads[any_id] = sentinel
+	_dock._dispatch_client_action(any_id, "configure")
+	assert_eq(_dock._client_action_threads[any_id], sentinel,
+		"Dispatch must leave the existing slot untouched while in flight")
+	_dock._client_action_threads.erase(any_id)
+
+
+func test_apply_status_refresh_results_skips_rows_with_in_flight_action() -> void:
+	## Race scenario: user clicks Configure (worker thread starts), then
+	## focus-out/focus-in fires while the worker is still running. The
+	## refresh worker returns a stale "NOT_CONFIGURED" snapshot; if we
+	## let it through, the in-flight "Configuring…" badge gets clobbered.
+	_dock._build_ui()
+	var any_id := _first_client_id()
+	if any_id.is_empty():
+		skip("No clients registered")
+		return
+	_dock._set_row_action_in_flight(any_id, "configure")
+	_dock._client_action_threads[any_id] = Thread.new()
+	_dock._client_status_refresh_generation = 1
+	var results := {
+		any_id: {
+			"status": McpClient.Status.NOT_CONFIGURED,
+			"installed": true,
+			"error_msg": "",
+		}
+	}
+	_dock._apply_client_status_refresh_results(results, 1)
+	var row: Dictionary = _dock._client_rows[any_id]
+	assert_contains((row["configure_btn"] as Button).text, "Configuring",
+		"In-flight Configuring badge on the button must survive a concurrent refresh result")
+	assert_eq((row["dot"] as ColorRect).color, McpDockScript.COLOR_AMBER,
+		"Dot must stay amber while the action worker hasn't completed")
+	_dock._client_action_threads.erase(any_id)
+
+
+func test_drain_client_action_workers_clears_dictionaries() -> void:
+	## `_install_update` calls this drain before extracting the release
+	## zip, same reason as the refresh worker drain — a worker mid-call
+	## into a half-overwritten script SIGABRTs the editor.
+	_dock._client_action_threads["sentinel-id"] = null
+	_dock._client_action_generations["sentinel-id"] = 7
+	_dock._drain_client_action_workers()
+	assert_true(_dock._client_action_threads.is_empty(),
+		"Drain must empty the action-thread map")
+	assert_true(_dock._client_action_generations.is_empty(),
+		"Drain must also clear generation tokens so a follow-up dispatch starts fresh")

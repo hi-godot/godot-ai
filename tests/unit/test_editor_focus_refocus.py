@@ -220,7 +220,10 @@ def test_worker_uses_main_thread_probe_snapshot_for_cli_paths() -> None:
     )[0]
 
     assert "client_status_probe_snapshot" in dock_source
-    assert "check_status_for_url_with_cli_path" in worker_block
+    # Worker uses the details variant so probe timeouts (issue #238) can
+    # surface as "probe timed out" on the row instead of being silently
+    # conflated with NOT_CONFIGURED.
+    assert "check_status_details_for_url_with_cli_path" in worker_block
     assert "McpClientConfigurator.is_installed" not in worker_block
     assert "resolve_cli_path" in configurator_source
     assert "check_status_with_cli_path" in cli_source

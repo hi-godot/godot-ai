@@ -169,12 +169,21 @@ static func check_status_for_url(id: String, url: String) -> McpClient.Status:
 
 
 static func check_status_for_url_with_cli_path(id: String, url: String, cli_path: String) -> McpClient.Status:
+	return check_status_details_for_url_with_cli_path(id, url, cli_path).get("status", McpClient.Status.NOT_CONFIGURED)
+
+
+## Detailed variant used by the dock refresh worker. Returns
+## `{"status": Status, "error_msg": String}` so the worker can surface
+## "probe timed out" on the row instead of silently flipping it to
+## NOT_CONFIGURED. Callers that only need the status can use the simpler
+## helper above.
+static func check_status_details_for_url_with_cli_path(id: String, url: String, cli_path: String) -> Dictionary:
 	var client := McpClientRegistry.get_by_id(id)
 	if client == null:
-		return McpClient.Status.NOT_CONFIGURED
+		return {"status": McpClient.Status.NOT_CONFIGURED, "error_msg": ""}
 	if client.config_type == "cli" and cli_path.is_empty():
-		return McpClient.Status.NOT_CONFIGURED
-	return _dispatch_check_status_with_cli_path(client, url, cli_path)
+		return {"status": McpClient.Status.NOT_CONFIGURED, "error_msg": ""}
+	return _dispatch_check_status_with_cli_path_details(client, url, cli_path)
 
 
 static func client_status_probe_snapshot(id: String) -> Dictionary:
@@ -229,16 +238,20 @@ static func _dispatch_check_status(client: McpClient, url: String) -> McpClient.
 
 
 static func _dispatch_check_status_with_cli_path(client: McpClient, url: String, cli_path: String) -> McpClient.Status:
+	return _dispatch_check_status_with_cli_path_details(client, url, cli_path).get("status", McpClient.Status.NOT_CONFIGURED)
+
+
+static func _dispatch_check_status_with_cli_path_details(client: McpClient, url: String, cli_path: String) -> Dictionary:
 	match client.config_type:
 		"json":
-			return McpJsonStrategy.check_status(client, SERVER_NAME, url)
+			return {"status": McpJsonStrategy.check_status(client, SERVER_NAME, url), "error_msg": ""}
 		"toml":
-			return McpTomlStrategy.check_status(client, SERVER_NAME, url)
+			return {"status": McpTomlStrategy.check_status(client, SERVER_NAME, url), "error_msg": ""}
 		"cli":
 			if cli_path.is_empty():
-				return McpCliStrategy.check_status(client, SERVER_NAME, url)
-			return McpCliStrategy.check_status_with_cli_path(client, SERVER_NAME, url, cli_path)
-	return McpClient.Status.NOT_CONFIGURED
+				return McpCliStrategy.check_status_details(client, SERVER_NAME, url, McpCliStrategy.resolve_cli_path(client))
+			return McpCliStrategy.check_status_details(client, SERVER_NAME, url, cli_path)
+	return {"status": McpClient.Status.NOT_CONFIGURED, "error_msg": ""}
 
 
 ## After a configure/remove returns ok, re-read the live status. If it doesn't
