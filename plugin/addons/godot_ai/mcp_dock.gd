@@ -2142,20 +2142,30 @@ func _install_update() -> void:
 	var version := Engine.get_version_info()
 	if version.get("minor", 0) >= 4:
 		_update_btn.text = "Scanning..."
-		## Before reloading the plugin we MUST wait for Godot's filesystem
-		## scanner to see the newly-extracted files. Otherwise plugin.gd
-		## re-parses and its `class_name` references (GameLogBuffer,
-		## McpDebuggerPlugin, …) resolve against a ClassDB that hasn't
-		## picked up the new files yet — parse errors, dock tears down,
-		## plugin reports "enabled" with no UI. See issue #127.
-		var fs := EditorInterface.get_resource_filesystem()
-		if fs != null:
-			fs.filesystem_changed.connect(_on_filesystem_scanned_for_update, CONNECT_ONE_SHOT)
-			fs.scan()
+		## Hand off to the plugin to (a) free THIS dock instance while we
+		## still own pre-update bytecode that matches our field shape, and
+		## (b) drive the filesystem-scan + `set_plugin_enabled` cycle from
+		## the plugin side. Without (a), the post-scan hot-reload pairs
+		## the new dock bytecode with our pre-update field storage; new
+		## typed Dictionary fields land as `Variant::NIL` instead of `{}`,
+		## and the new `_exit_tree`'s `<dict>.keys()` SIGSEGVs cross-OS.
+		## See #245 for the forensic trail and the cross-platform CI run.
+		##
+		## `detach_dock_for_update` was added in v2.1.3. The fallback
+		## arm preserves the v2.1.2 in-place reload behaviour for the
+		## (unreachable, defensive) case where `_plugin` doesn't expose
+		## the new method — same crash hazard, same UX as before.
+		if _plugin != null and _plugin.has_method("detach_dock_for_update"):
+			_plugin.detach_dock_for_update()
 		else:
-			## Fallback: no filesystem accessor — defer and hope (matches
-			## the pre-#127 behaviour).
-			_reload_after_update.call_deferred()
+			var fs := EditorInterface.get_resource_filesystem()
+			if fs != null:
+				fs.filesystem_changed.connect(_on_filesystem_scanned_for_update, CONNECT_ONE_SHOT)
+				fs.scan()
+			else:
+				## Fallback: no filesystem accessor — defer and hope
+				## (matches the pre-#127 behaviour).
+				_reload_after_update.call_deferred()
 	else:
 		## Pre-4.4 Godot: no plugin reload, dock stays alive on the new files.
 		## Clear the install flag so refreshes resume on the OLD dock instance
@@ -2167,6 +2177,9 @@ func _install_update() -> void:
 		_update_label.add_theme_color_override("font_color", Color.GREEN)
 
 
+## Legacy fallback used only when `_plugin.detach_dock_for_update`
+## isn't available. v2.1.3+ routes through plugin.detach_dock_for_update
+## instead — see #245.
 func _on_filesystem_scanned_for_update() -> void:
 	_update_btn.text = "Reloading..."
 	_reload_after_update.call_deferred()

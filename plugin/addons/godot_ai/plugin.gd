@@ -1018,6 +1018,73 @@ func prepare_for_update_reload() -> void:
 	_server_started_this_session = false
 
 
+## Tear down the live McpDock instance and drive the post-extract scan +
+## set_plugin_enabled cycle from the plugin instead of from the dock.
+##
+## Why this isn't done from the dock itself: at the moment the filesystem
+## scan completes and the script class for `mcp_dock.gd` hot-reloads,
+## any McpDock instance that survives gets its existing storage paired
+## with the new bytecode. New typed fields the new version declared
+## (e.g. `var _client_action_threads: Dictionary = {}`) come through
+## with `Variant::NIL` storage instead of running their `= {}`
+## initializer — confirmed cross-platform on Godot 4.6.2-stable
+## (ubuntu-latest, macos-latest, windows-latest) per #245's CI run. The
+## new bytecode then reads those fields as Dictionary in `_exit_tree`
+## (e.g. `_client_action_threads.keys()`) and SIGSEGVs in
+## `Dictionary::keys()` against a null `_p`. That's #242.
+##
+## Freeing the dock here, on pre-update bytecode that matches the
+## pre-update field shape, makes its `_exit_tree` cascade run cleanly
+## against fields it actually owns. The subsequent `set_plugin_enabled`
+## cycle finds `_dock == null` and skips the dock teardown branch in
+## `plugin._exit_tree`. When the plugin re-enables, `_enter_tree` builds
+## a fresh dock under the new class — every field initialized via its
+## declared default, no NIL storage, no crash.
+##
+## This protects v(N) → v(N+1) upgrades. It cannot retroactively fix
+## v(N-1) users hitting `_install_update` without this method, since the
+## currently-running `_install_update` is the one that decides whether
+## to call this. v2.1.1 and v2.1.2 → next-release upgrades will still
+## hit the original crash via the old code path; documented in release
+## notes alongside this fix.
+func detach_dock_for_update() -> void:
+	if _dock != null and is_instance_valid(_dock):
+		remove_control_from_docks(_dock)
+		_dock.queue_free()
+		_dock = null
+
+	## Mirror the dock's prior post-extract sequence: wait for Godot's
+	## filesystem scanner to see the newly-extracted files before we
+	## toggle the plugin off, otherwise plugin.gd re-parses against a
+	## ClassDB that hasn't ingested the new class_name'd scripts yet
+	## (issue #127). Use ONE_SHOT so reconnects on subsequent updates
+	## don't pile up.
+	var fs := EditorInterface.get_resource_filesystem()
+	if fs != null:
+		fs.filesystem_changed.connect(_on_filesystem_scanned_post_extract, CONNECT_ONE_SHOT)
+		fs.scan()
+	else:
+		_reload_after_extract.call_deferred()
+
+
+func _on_filesystem_scanned_post_extract() -> void:
+	_reload_after_extract.call_deferred()
+
+
+## Toggle the plugin off→on to load the freshly-extracted scripts.
+## Lives on plugin.gd (not the dock) because the dock instance has been
+## freed by `detach_dock_for_update` by this point. The plugin instance
+## itself survives the hot-reload of `plugin.gd`'s class — but its
+## existing fields are nullable references (`_connection`,
+## `_log_buffer`, `_dock`, …), each guarded with `if _xxx:` in
+## `_exit_tree`. None of them are typed Dictionary/Array fields read
+## via builtin methods, so the same NIL-storage hazard that crashed
+## the dock doesn't fire here.
+func _reload_after_extract() -> void:
+	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", false)
+	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", true)
+
+
 ## Kill whichever process is holding `http_port()` right now — by resolving
 ## the port-owning PID via pid-file / netstat / lsof, independent of whether
 ## we ever set `_server_pid` — then clear ownership state and respawn via
