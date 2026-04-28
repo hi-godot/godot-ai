@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godot_ai"
@@ -125,6 +126,106 @@ def test_initial_paint_warms_worker_call_graph_before_threading() -> None:
     )
 
 
+def test_client_status_refresh_defers_while_editor_filesystem_is_busy() -> None:
+    """Refresh workers must not race Godot's script reload/documentation pass."""
+
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+
+    assert "var _client_status_refresh_deferred_until_filesystem_ready := false" in source
+    assert "var _client_status_refresh_deferred_force := false" in source
+    assert "var _client_status_refresh_deferred_initial := false" in source
+
+    process_block = source.split("func _process(_delta: float) -> void:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+    assert "_retry_deferred_client_status_refresh()" in process_block
+
+    init_block = source.split(
+        "func _perform_initial_client_status_refresh() -> void:", 1
+    )[1].split("\n\nfunc ", 1)[0]
+    request_block = source.split(
+        "func _request_client_status_refresh(force: bool = false) -> bool:", 1
+    )[1].split("\n\nfunc ", 1)[0]
+    assert "_is_editor_filesystem_busy()" in init_block
+    assert "_defer_initial_client_status_refresh_until_filesystem_ready()" in init_block
+
+    assert "_is_editor_filesystem_busy()" in request_block
+    busy_request_block = request_block.split("if _is_editor_filesystem_busy():", 1)[
+        1
+    ].split("\n\n", 1)[0]
+    assert "if force:" in busy_request_block
+    assert "_defer_client_status_refresh_until_filesystem_ready(force)" in busy_request_block
+    assert busy_request_block.index("if force:") < busy_request_block.index("return false")
+
+    initial_defer_block = source.split(
+        "func _defer_initial_client_status_refresh_until_filesystem_ready() -> void:", 1
+    )[1].split("\n\nfunc ", 1)[0]
+    assert "_client_status_refresh_deferred_until_filesystem_ready = true" in initial_defer_block
+    assert "_client_status_refresh_deferred_initial = true" in initial_defer_block
+
+
+def test_focus_refresh_is_opportunistic_while_editor_filesystem_is_busy() -> None:
+    """Focus-in status refresh should never be treated as important editor work."""
+
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    focus_block = _focus_in_block(source)
+    request_block = source.split(
+        "func _request_client_status_refresh(force: bool = false) -> bool:", 1
+    )[1].split("\n\nfunc ", 1)[0]
+    busy_request_block = request_block.split("if _is_editor_filesystem_busy():", 1)[
+        1
+    ].split("\n\n", 1)[0]
+
+    assert "_request_client_status_refresh(false)" in focus_block
+    assert "_defer_client_status_refresh_until_filesystem_ready(force)" in busy_request_block
+    assert "if force:" in busy_request_block
+    assert "_refresh_all_client_statuses" not in focus_block
+    assert "client_status_probe_snapshot(" not in focus_block
+    assert "check_status" not in focus_block
+
+
+def test_deferred_manual_refresh_replays_through_async_request_path_only() -> None:
+    """Queued manual refreshes should not reintroduce PR #228's sync sweep."""
+
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    retry_block = source.split("func _retry_deferred_client_status_refresh() -> void:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+
+    for block in (retry_block,):
+        assert "_is_editor_filesystem_busy()" in block
+        assert "_request_client_status_refresh(force)" in block
+        assert "_refresh_all_client_statuses" not in block
+        assert "client_status_probe_snapshot(" not in block
+        assert "check_status" not in block
+
+    assert "_client_status_refresh_deferred_initial = false" in retry_block
+    assert "else:" in retry_block
+    assert "_request_client_status_refresh(force)" in retry_block
+
+    busy_block = source.split("func _is_editor_filesystem_busy() -> bool:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+    assert "EditorInterface.get_resource_filesystem()" in busy_block
+    assert "fs.is_scanning()" in busy_block
+
+
+def test_deferred_initial_refresh_replays_warmup_path() -> None:
+    """Scan-delayed initial paint must preserve #235's main-thread warm-up."""
+
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    retry_block = source.split("func _retry_deferred_client_status_refresh() -> void:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+
+    assert "var initial := _client_status_refresh_deferred_initial" in retry_block
+    assert "if initial:" in retry_block
+    assert "_perform_initial_client_status_refresh()" in retry_block
+    assert retry_block.index("if initial:") < retry_block.index(
+        "_request_client_status_refresh(force)"
+    )
+
+
 def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> None:
     """Self-update must drain in-flight workers + block new ones before any file write.
 
@@ -158,6 +259,7 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
 
     flag_set_idx = install_block.find("_self_update_in_progress = true")
     drain_idx = install_block.find("_drain_client_status_refresh_workers()")
+    handoff_idx = install_block.find("install_downloaded_update")
     first_write_idx = install_block.find("f.store_buffer(content)")
     symlink_return_idx = install_block.find("addons_dir_is_symlink()")
 
@@ -173,7 +275,7 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
     )
     assert first_write_idx > 0, (
         "Test fixture broken: could not locate the extract-write site "
-        "(`f.store_buffer(content)`) inside `_install_update`."
+        "(`f.store_buffer(content)`) inside `_install_update`'s legacy path."
     )
     assert symlink_return_idx > 0, (
         "Test fixture broken: could not locate the symlink-safety check."
@@ -188,6 +290,12 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
     assert drain_idx < first_write_idx, (
         "Drain must complete before any file write. Otherwise an in-flight "
         "worker can race the overwrite of the script it's mid-call into."
+    )
+    assert drain_idx < handoff_idx < first_write_idx, (
+        "The normal Godot 4.4+ path must hand off to the update runner after "
+        "the worker drain but before the legacy in-dock extract loop. The "
+        "runner disables the old plugin before extraction so plugin-owned "
+        "instances do not hot-reload in place."
     )
 
     request_block = source.split(
@@ -206,6 +314,99 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
         "_perform_initial_client_status_refresh must also short-circuit on "
         "the self-update flag — defensive even though the new dock instance "
         "wouldn't normally see this flag set."
+    )
+
+
+def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> None:
+    """The in-place update workaround depends on this exact order (#245/#247)."""
+
+    plugin_source = (PLUGIN_ROOT / "plugin.gd").read_text()
+    runner_source = (PLUGIN_ROOT / "update_reload_runner.gd").read_text()
+
+    assert "UPDATE_RELOAD_RUNNER_SCRIPT" in plugin_source
+    handoff_block = plugin_source.split(
+        "func install_downloaded_update(", 1
+    )[1].split("\n\nfunc ", 1)[0]
+    assert "prepare_for_update_reload()" in handoff_block
+    assert "remove_control_from_docks(_dock)" in handoff_block
+    assert "remove_control_from_docks(source_dock)" in handoff_block
+    assert "_dock = null" in handoff_block
+    assert "runner.start(zip_path, temp_dir, detached_dock)" in handoff_block
+
+    assert '_wait_frames(PRE_DISABLE_DRAIN_FRAMES, "_disable_old_plugin")' in runner_source
+
+    disable_block = runner_source.split("func _disable_old_plugin() -> void:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+    assert 'set_plugin_enabled(PLUGIN_CFG_PATH, false)' in disable_block
+    assert '_wait_frames(POST_DISABLE_DRAIN_FRAMES, "_extract_and_scan")' in disable_block
+
+    extract_block = runner_source.split("func _extract_and_scan() -> void:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+    assert "_extract_update()" in extract_block
+    assert "_cleanup_update_temp()" in extract_block
+    assert "_start_filesystem_scan()" in extract_block
+
+    scan_block = runner_source.split("func _start_filesystem_scan() -> void:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+    assert "fs.filesystem_changed.connect(_on_filesystem_changed, CONNECT_ONE_SHOT)" in scan_block
+    assert "fs.scan()" in scan_block
+    assert "FILESYSTEM_SCAN_TIMEOUT" not in runner_source
+    assert "_scan_timeout" not in runner_source
+    process_block = runner_source.split("func _process(_delta: float) -> void:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+    assert "_finish_scan_wait()" not in process_block, (
+        "Do not treat a frame-count timeout as filesystem-scan completion. "
+        "Re-enabling before `filesystem_changed` can parse plugin.gd before "
+        "Godot has registered newly extracted class_name scripts."
+    )
+
+    finish_block = runner_source.split("func _finish_scan_wait() -> void:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+    assert "_enable_new_plugin.call_deferred()" in finish_block
+
+    enable_block = runner_source.split("func _enable_new_plugin() -> void:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+    assert 'set_plugin_enabled(PLUGIN_CFG_PATH, true)' in enable_block
+    assert '_wait_frames(POST_ENABLE_FREE_FRAMES, "_cleanup_and_finish")' in enable_block
+
+    cleanup_block = runner_source.split("func _cleanup_and_finish() -> void:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+    assert "_cleanup_detached_dock()" in cleanup_block
+    assert "queue_free()" in cleanup_block
+
+    extract_update_block = runner_source.split("func _extract_update() -> bool:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+    assert "FileAccess.get_open_error()" in extract_update_block
+    assert "var write_error := f.get_error()" in extract_update_block
+    assert "return false" in extract_update_block
+
+    assert "OS.create_process" not in runner_source
+    assert "get_tree().quit" not in runner_source
+    assert "await " not in runner_source, (
+        "The runner script is itself under addons/godot_ai, so fs.scan() can "
+        "hot-reload it. It must not suspend with await across that reload; "
+        "use _process/signal callbacks instead."
+    )
+
+
+def test_self_update_runner_does_not_introduce_typed_variant_storage_hazards() -> None:
+    """The runner is the only plugin-owned script instance expected to survive scan."""
+
+    runner_source = (PLUGIN_ROOT / "update_reload_runner.gd").read_text()
+    risky_field = re.compile(r"^\s*var\s+\w+\s*:\s*(?:Dictionary|Array)(?:\[|[\s=])", re.M)
+
+    assert risky_field.search(runner_source) is None, (
+        "Do not add typed Dictionary/Array fields to update_reload_runner.gd. "
+        "That instance intentionally survives fs.scan() and would recreate "
+        "the #245 NIL-storage crash class."
     )
 
 
