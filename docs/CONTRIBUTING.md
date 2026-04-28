@@ -66,6 +66,16 @@ If your local clone has a valid `origin` GitHub remote, you can omit `owner/repo
 script/ci-find-regression-range
 ```
 
+### Local self-update smoke
+
+For changes that touch self-update, plugin reload handoff, or install/extract logic, run the interactive local harness:
+
+```bash
+script/local-self-update-smoke
+```
+
+It creates a disposable project with a physical `addons/godot_ai/` copy, stages a synthetic v(N+1) plugin ZIP, launches Godot, and prints the single manual action: click Update in the Godot AI dock. After you close Godot normally, the script verifies the fixture version advanced, the update temp dir was consumed, and no new macOS `Godot*.ips` crash report appeared.
+
 ## Dev Server with Auto-Reload
 
 For Python-side changes without restarting Godot:

@@ -87,6 +87,26 @@ Run real-project smoke tests for:
 - reading logs or screenshots
 - exporting or otherwise exercising the release surface
 
+### Interactive self-update smoke
+
+Self-update changes require a local interactive smoke because the crash fixed in #250 does not reproduce in headless Godot CI. Run:
+
+```bash
+script/local-self-update-smoke
+```
+
+The harness prepares a disposable project from the current branch as v(N), builds a synthetic v(N+1) release ZIP with a typed Dict/Array `_exit_tree` trigger, forces the Update banner to install the local ZIP, records the pre-run macOS DiagnosticReports baseline, and launches Godot. The operator step is only to click Update in the dock.
+
+Passing criteria:
+
+- the editor process stays alive without manual or programmatic restart
+- the installed fixture plugin version advances to v(N+1)
+- `user://godot_ai_update/` is consumed after install
+- no new `Godot*.ips` appears on macOS
+- the vNext `_exit_tree` trigger does not print during the update window
+
+Treat this as release-blocking local coverage for self-update, plugin reload handoff, and install/extract changes. It is not a replacement for headless CI; it covers the interactive editor path that CI currently cannot exercise reliably.
+
 ---
 
 ## What New Tool Families Should Add
@@ -109,6 +129,7 @@ The CI stack should exercise at least four tiers:
 - Python unit and integration tests (3 OS x 2 Python versions)
 - Godot-side editor test suites (3 OS via `chickensoft-games/setup-godot@v2` on GitHub Actions runners) — **headless**; no rendering
 - release-surface smoke, especially install and packaging paths once distribution work is active (3 OS)
+- local interactive self-update smoke for update/reload/extract changes (`script/local-self-update-smoke`)
 - **pixel-level capture smoke** for tools that cross the editor → game-process boundary (3 OS). The `game-capture-smoke-{linux,macos,windows}` jobs launch Godot with a real rendering driver (`xvfb-run -a ... godot --rendering-driver opengl3` on Linux, windowed on macOS and Windows), play `test_project/capture_smoke.tscn` (four colored quadrants), round-trip `editor_screenshot(source="game")` through the debugger-channel bridge, decode the returned PNG with Pillow, and assert the centre of each quadrant matches the expected color within tolerance. Catches regressions in the `_mcp_game_helper` autoload registration, the `DEFERRED_RESPONSE` dispatcher path, and the `Connection.send_deferred_response` reply pipeline — none of which are exercised by the headless Godot test suite.
 
 ### CI hardening measures

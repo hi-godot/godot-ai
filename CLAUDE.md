@@ -147,7 +147,9 @@ This bumps `plugin.cfg` + `pyproject.toml`, commits, tags, and pushes. The `rele
 
 ### Self-update
 
-The dock checks the GitHub releases API on startup. If a newer version exists, a yellow banner appears with an "Update" button that downloads the release ZIP, extracts it over the current `addons/godot_ai/`, and reloads the plugin. The server process is unaffected.
+The dock checks the GitHub releases API on startup. If a newer version exists, a yellow banner appears with an "Update" button that downloads the release ZIP, hands off to `update_reload_runner.gd`, disables the old plugin, extracts over the current `addons/godot_ai/`, waits for Godot's filesystem scan, and enables a fresh plugin instance. There must be no manual editor restart and no programmatic `OS.create_process` + `quit` restart in this path.
+
+The server process is intentionally prepared for reload, not left untouched: `prepare_for_update_reload()` stops the managed server and resets the spawn guard so the re-enabled plugin starts or adopts the correct server for the new plugin version.
 
 In dev checkouts the check is skipped: `is_dev_checkout()` detects a nearby `.venv` and short-circuits to avoid offering a path that would overwrite tracked source (the addons dir is a symlink into `plugin/`). Three override knobs let you exercise the update flow without leaving the repo (resolved in priority order):
 
@@ -158,6 +160,22 @@ In dev checkouts the check is skipped: `is_dev_checkout()` detects a nearby `.ve
 When either override reports `user`, the yellow update banner's label includes `(forced)` so testers don't forget they're in override mode.
 
 `_install_update` keeps a physical data-safety guard (`addons_dir_is_symlink()`) independent of the mode override: even in forced-user mode the self-install bails if `res://addons/godot_ai` is a symlink. To actually test the end-to-end extract path, unpack a release zip over a plain-directory copy of the addons dir (or test from a standalone project outside the dev tree).
+
+For self-update changes, run the local interactive smoke harness:
+
+```bash
+script/local-self-update-smoke
+```
+
+Agent trigger: this smoke is required whenever a change touches any of these areas:
+
+- `mcp_dock.gd` update check/download/install paths
+- `update_reload_runner.gd`
+- `plugin.gd` plugin disable/enable, dock detach, or update handoff paths
+- server reload prep around `prepare_for_update_reload()`
+- release ZIP layout or install/extract behavior
+
+The harness creates a disposable project with a physical addon copy, stages a synthetic v(N+1) ZIP that adds a new typed Dict/Array field read from `_exit_tree`, forces the Update banner to use that local ZIP, records the macOS DiagnosticReports baseline, and launches Godot. The only operator action is to click Update in the dock. Passing means the editor stays alive without restart, the plugin version advances, `user://godot_ai_update/` is consumed, no new Godot `.ips` appears, and the vNext `_exit_tree` trigger does not print during the update window.
 
 ## Testing
 
@@ -221,7 +239,8 @@ current working tree's `test_project/`.
    - For write tools: verify the change is visible in the editor, and verify undo works (Ctrl+Z in Godot)
    - For read tools: compare response against what you see in the editor
    - Check `editor_state` to confirm readiness field is present
-7. Only commit when all of the above are green
+7. If the change touches self-update, plugin reload handoff, or install/extract logic, run `script/local-self-update-smoke` and click Update in the launched fixture.
+8. Only commit when all of the above are green
 
 ## Client configuration
 
