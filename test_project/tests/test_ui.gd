@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const UiHandler := preload("res://addons/godot_ai/handlers/ui_handler.gd")
+
 ## Tests for UiHandler — Control layout helpers (anchor presets).
 
 var _handler: UiHandler
@@ -84,7 +86,7 @@ func test_set_anchor_preset_keep_size_mode() -> void:
 		skip("Scene not ready — _add_control returned empty path")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(path, scene_root)
+	var node := McpScenePath.resolve(path, scene_root)
 	(node as Control).size = Vector2(100, 50)
 	var result := _handler.set_anchor_preset({
 		"path": path, "preset": "center", "resize_mode": "keep_size"
@@ -167,7 +169,7 @@ func test_set_anchor_preset_is_undoable() -> void:
 		skip("Scene not ready — _add_control returned empty path")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var ctl := ScenePath.resolve(path, scene_root) as Control
+	var ctl := McpScenePath.resolve(path, scene_root) as Control
 	var before_left := ctl.anchor_left
 	var before_right := ctl.anchor_right
 	_handler.set_anchor_preset({"path": path, "preset": "full_rect"})
@@ -196,7 +198,7 @@ func test_set_text_on_label() -> void:
 	assert_true(result.data.undoable)
 	# Verify the live node was actually updated.
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var label := ScenePath.resolve(path, scene_root) as Label
+	var label := McpScenePath.resolve(path, scene_root) as Label
 	assert_eq(label.text, "Hello")
 	_remove_control(path)
 
@@ -332,7 +334,7 @@ func test_build_layout_creates_simple_tree() -> void:
 	var result := _handler.build_layout({"tree": spec})
 	assert_has_key(result, "data")
 	assert_eq(result.data.node_count, 3)
-	var root := ScenePath.resolve(result.data.root_path, scene_root)
+	var root := McpScenePath.resolve(result.data.root_path, scene_root)
 	assert_true(root != null)
 	assert_true(root is Panel)
 	assert_eq(root.get_child_count(), 2)
@@ -388,7 +390,7 @@ func test_build_layout_applies_anchor_preset_and_coerces_color() -> void:
 	}
 	var result := _handler.build_layout({"tree": spec})
 	assert_has_key(result, "data")
-	var node: ColorRect = ScenePath.resolve(result.data.root_path, scene_root)
+	var node: ColorRect = McpScenePath.resolve(result.data.root_path, scene_root)
 	assert_true(node != null)
 	assert_eq(node.anchor_right, 1.0, "anchor_preset=full_rect should set anchor_right=1")
 	# Color coerced from hex — "#112233" -> r~=0.067, g~=0.133, b~=0.2

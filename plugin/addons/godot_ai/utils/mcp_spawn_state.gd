@@ -11,7 +11,7 @@ extends RefCounted
 ##
 ## State is authored by `plugin.gd::_start_server` (once per plugin
 ## session) and `plugin.gd::_check_server_health` (on late spawn death).
-## It does NOT track runtime connection health — that's `Connection`'s
+## It does NOT track runtime connection health — that's `McpConnection`'s
 ## job and is reflected by the green/red status dot.
 
 ## Happy path: we spawned or adopted a managed server. The dock hides

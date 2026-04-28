@@ -243,7 +243,7 @@ func _remove_control(path: String) -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		return
-	var node := ScenePath.resolve(path, scene_root)
+	var node := McpScenePath.resolve(path, scene_root)
 	if node != null:
 		node.get_parent().remove_child(node)
 		node.queue_free()

@@ -1,5 +1,4 @@
 @tool
-class_name UiHandler
 extends RefCounted
 
 ## Handles UI-specific (Control) layout helpers: anchor presets, etc.
@@ -85,9 +84,9 @@ func set_anchor_preset(params: Dictionary) -> Dictionary:
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 
-	var node := ScenePath.resolve(node_path, scene_root)
+	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
 	if not node is Control:
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
@@ -155,9 +154,9 @@ func set_text(params: Dictionary) -> Dictionary:
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 
-	var node := ScenePath.resolve(node_path, scene_root)
+	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
 	var node_type := node.get_class()
 	if not node is Control:
 		return McpErrorCodes.make(
@@ -231,9 +230,9 @@ func build_layout(params: Dictionary) -> Dictionary:
 	var parent_path: String = params.get("parent_path", "")
 	var parent: Node = scene_root
 	if not parent_path.is_empty() and parent_path != "/":
-		parent = ScenePath.resolve(parent_path, scene_root)
+		parent = McpScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_parent_error(parent_path, scene_root))
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_parent_error(parent_path, scene_root))
 
 	# Validate + build in memory first; if anything fails, free and bail.
 	var built := _build_subtree(tree)
@@ -253,7 +252,7 @@ func build_layout(params: Dictionary) -> Dictionary:
 
 	return {
 		"data": {
-			"root_path": ScenePath.from_node(root_node, scene_root),
+			"root_path": McpScenePath.from_node(root_node, scene_root),
 			"node_count": created.size(),
 			"undoable": true,
 		}

@@ -1,5 +1,4 @@
 @tool
-class_name ScriptHandler
 extends RefCounted
 
 ## Handles script creation, reading, attaching, detaching, and symbol inspection.
@@ -51,7 +50,7 @@ func create_script(params: Dictionary) -> Dictionary:
 	}
 	# `.gd.uid` is the sidecar Godot generates on scan; list both so the caller
 	# can rm the full set in one go.
-	ResourceIO.attach_cleanup_hint(data, existed_before, [path, path + ".uid"])
+	McpResourceIO.attach_cleanup_hint(data, existed_before, [path, path + ".uid"])
 	return {"data": data}
 
 
@@ -162,9 +161,9 @@ func attach_script(params: Dictionary) -> Dictionary:
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 
-	var node := ScenePath.resolve(node_path, scene_root)
+	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
 
 	if not ResourceLoader.exists(script_path):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Script not found: %s" % script_path)
@@ -200,9 +199,9 @@ func detach_script(params: Dictionary) -> Dictionary:
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 
-	var node := ScenePath.resolve(node_path, scene_root)
+	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
 
 	var old_script: Script = node.get_script()
 	if old_script == null:

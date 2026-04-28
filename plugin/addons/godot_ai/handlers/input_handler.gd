@@ -1,5 +1,4 @@
 @tool
-class_name InputHandler
 extends RefCounted
 
 ## Handles input action listing, creation, removal, and event binding.

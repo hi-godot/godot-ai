@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const EnvironmentHandler := preload("res://addons/godot_ai/handlers/environment_handler.gd")
+
 ## Tests for EnvironmentHandler — create Environment + Sky + SkyMaterial.
 
 var _handler: EnvironmentHandler

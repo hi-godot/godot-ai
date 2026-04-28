@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const TextureHandler := preload("res://addons/godot_ai/handlers/texture_handler.gd")
+
 ## Tests for TextureHandler — GradientTexture2D + NoiseTexture2D creation.
 
 var _handler: TextureHandler

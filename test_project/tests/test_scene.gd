@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const SceneHandler := preload("res://addons/godot_ai/handlers/scene_handler.gd")
+
 ## Tests for SceneHandler — scene tree reading and node search.
 ## Runs against the test_project main.tscn scene:
 ##   Main (Node3D)

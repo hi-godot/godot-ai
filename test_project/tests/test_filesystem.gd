@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const FilesystemHandler := preload("res://addons/godot_ai/handlers/filesystem_handler.gd")
+
 ## Tests for FilesystemHandler — file read/write and reimport.
 
 var _handler: FilesystemHandler

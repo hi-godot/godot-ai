@@ -1,6 +1,9 @@
 @tool
 extends McpTestSuite
 
+const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
+const ScriptHandler := preload("res://addons/godot_ai/handlers/script_handler.gd")
+
 ## Tests for ScriptHandler — script creation, reading, attach/detach, and symbol inspection.
 
 var _handler: ScriptHandler
@@ -244,7 +247,7 @@ func test_read_script_not_found() -> void:
 func test_attach_script_basic() -> void:
 	# Clean up any leftover node from a prior run
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var stale := ScenePath.resolve("/Main/_McpTestAttach", scene_root)
+	var stale := McpScenePath.resolve("/Main/_McpTestAttach", scene_root)
 	if stale:
 		stale.get_parent().remove_child(stale)
 		stale.queue_free()

@@ -128,7 +128,7 @@ _process(delta)
 
 ### `_enter_tree()`
 
-- create `Connection`
+- create `McpConnection`
 - create `Dispatcher`
 - register handlers
 - start connection attempt
@@ -232,7 +232,7 @@ live-edit — via three cooperating pieces:
   then sends `mcp:take_screenshot`. The game's capture replies with a PNG
   of `get_tree().root.get_texture().get_image()` as base64. The
   editor-side plugin pushes the reply back over the MCP WebSocket via
-  `Connection.send_deferred_response` with the original `request_id`.
+  `McpConnection.send_deferred_response` with the original `request_id`.
 
 ### Deferred-Response Pattern
 
@@ -249,7 +249,7 @@ sentinel:
   queued command is not mutated). Deferred handlers read it and hand it
   off to whatever async source ultimately produces the reply.
 - When the reply arrives (debugger capture, timeout, etc.), the async
-  source calls `Connection.send_deferred_response(request_id, payload)`,
+  source calls `McpConnection.send_deferred_response(request_id, payload)`,
   which JSON-serialises with `request_id` attached and ships it over the
   WebSocket just like a normal response.
 

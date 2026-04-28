@@ -1,5 +1,5 @@
 @tool
-class_name WindowsPortReservation
+class_name McpWindowsPortReservation
 extends RefCounted
 
 ## Detects whether Windows has reserved a TCP port range that covers the

@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const CameraHandler := preload("res://addons/godot_ai/handlers/camera_handler.gd")
+
 ## Tests for CameraHandler — Camera2D/Camera3D authoring, configure,
 ## limits, damping, follow, presets.
 ##
@@ -37,7 +39,7 @@ func _remove_by_path(path: String) -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		return
-	var node := ScenePath.resolve(path, scene_root)
+	var node := McpScenePath.resolve(path, scene_root)
 	if node != null and node.get_parent() != null:
 		node.get_parent().remove_child(node)
 		node.queue_free()
@@ -107,8 +109,8 @@ func test_create_with_make_current_unmarks_sibling() -> void:
 		return
 	var second := _create("CamSecond", "2d", true)
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var first_node := ScenePath.resolve(first.data.path, scene_root) as Camera2D
-	var second_node := ScenePath.resolve(second.data.path, scene_root) as Camera2D
+	var first_node := McpScenePath.resolve(first.data.path, scene_root) as Camera2D
+	var second_node := McpScenePath.resolve(second.data.path, scene_root) as Camera2D
 	assert_true(first_node != null)
 	assert_true(second_node != null)
 	assert_eq(second_node.is_current(), true)
@@ -122,8 +124,8 @@ func test_make_current_does_not_cross_classes() -> void:
 		return
 	var cam3d := _create("ThreeDim", "3d", true)
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var n2 := ScenePath.resolve(cam2d.data.path, scene_root) as Camera2D
-	var n3 := ScenePath.resolve(cam3d.data.path, scene_root) as Camera3D
+	var n2 := McpScenePath.resolve(cam2d.data.path, scene_root) as Camera2D
+	var n3 := McpScenePath.resolve(cam3d.data.path, scene_root) as Camera3D
 	assert_eq(n2.is_current(), true, "Camera2D current should not be touched when Camera3D becomes current")
 	assert_eq(n3.is_current(), true)
 
@@ -144,7 +146,7 @@ func test_configure_applies_zoom_vector() -> void:
 	assert_has_key(result, "data")
 	assert_true(result.data.undoable)
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(r.data.path, scene_root) as Camera2D
+	var node := McpScenePath.resolve(r.data.path, scene_root) as Camera2D
 	assert_eq(node.zoom, Vector2(2.0, 2.0))
 
 
@@ -159,7 +161,7 @@ func test_configure_enum_by_name() -> void:
 	})
 	assert_has_key(result, "data")
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(r.data.path, scene_root) as Camera3D
+	var node := McpScenePath.resolve(r.data.path, scene_root) as Camera3D
 	assert_eq(node.keep_aspect, Camera3D.KEEP_HEIGHT)
 	assert_eq(node.projection, Camera3D.PROJECTION_ORTHOGONAL)
 
@@ -195,8 +197,8 @@ func test_configure_current_sibling_unmark_single_undo() -> void:
 		return
 	var second := _create("UndoSecond", "2d", false)
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var first_node := ScenePath.resolve(first.data.path, scene_root) as Camera2D
-	var second_node := ScenePath.resolve(second.data.path, scene_root) as Camera2D
+	var first_node := McpScenePath.resolve(first.data.path, scene_root) as Camera2D
+	var second_node := McpScenePath.resolve(second.data.path, scene_root) as Camera2D
 
 	# Flip current to second via configure.
 	var result := _handler.configure({
@@ -233,7 +235,7 @@ func test_set_limits_2d_partial() -> void:
 		assert_true(false, "No scene open")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(r.data.path, scene_root) as Camera2D
+	var node := McpScenePath.resolve(r.data.path, scene_root) as Camera2D
 	var original_top: int = node.limit_top
 	var original_bottom: int = node.limit_bottom
 	var result := _handler.set_limits_2d({
@@ -279,7 +281,7 @@ func test_set_damping_2d_enables_smoothing_when_speed_set() -> void:
 		assert_true(false, "No scene open")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(r.data.path, scene_root) as Camera2D
+	var node := McpScenePath.resolve(r.data.path, scene_root) as Camera2D
 	assert_eq(node.position_smoothing_enabled, false, "precondition: smoothing off")
 	var result := _handler.set_damping_2d({
 		"camera_path": r.data.path,
@@ -296,7 +298,7 @@ func test_set_damping_2d_zero_speed_disables() -> void:
 		assert_true(false, "No scene open")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(r.data.path, scene_root) as Camera2D
+	var node := McpScenePath.resolve(r.data.path, scene_root) as Camera2D
 	node.position_smoothing_enabled = true
 	var result := _handler.set_damping_2d({
 		"camera_path": r.data.path,
@@ -312,7 +314,7 @@ func test_set_damping_2d_drag_margins_partial() -> void:
 		assert_true(false, "No scene open")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(r.data.path, scene_root) as Camera2D
+	var node := McpScenePath.resolve(r.data.path, scene_root) as Camera2D
 	var original_top := node.drag_top_margin
 	var original_bottom := node.drag_bottom_margin
 	var result := _handler.set_damping_2d({
@@ -383,13 +385,13 @@ func test_follow_2d_reparents_and_zeros() -> void:
 		return
 	var target := _create_target("Player")
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var cam := ScenePath.resolve(r.data.path, scene_root) as Camera2D
+	var cam := McpScenePath.resolve(r.data.path, scene_root) as Camera2D
 	cam.position = Vector2(42, 24)
 	cam.rotation = 0.5
 
 	var result := _handler.follow_2d({
 		"camera_path": r.data.path,
-		"target_path": ScenePath.from_node(target, scene_root),
+		"target_path": McpScenePath.from_node(target, scene_root),
 		"smoothing_speed": 6.0,
 	})
 	assert_has_key(result, "data")
@@ -413,8 +415,8 @@ func test_follow_2d_noop_when_already_child() -> void:
 	cam.owner = scene_root
 	_track_node(cam)
 
-	var target_path := ScenePath.from_node(target, scene_root)
-	var cam_path := ScenePath.from_node(cam, scene_root)
+	var target_path := McpScenePath.from_node(target, scene_root)
+	var cam_path := McpScenePath.from_node(cam, scene_root)
 	var result := _handler.follow_2d({
 		"camera_path": cam_path,
 		"target_path": target_path,
@@ -433,19 +435,19 @@ func test_follow_2d_undo_restores_parent() -> void:
 		return
 	var target := _create_target("Player3")
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var cam := ScenePath.resolve(r.data.path, scene_root) as Camera2D
+	var cam := McpScenePath.resolve(r.data.path, scene_root) as Camera2D
 	var original_parent := cam.get_parent()
 
 	var _result := _handler.follow_2d({
 		"camera_path": r.data.path,
-		"target_path": ScenePath.from_node(target, scene_root),
+		"target_path": McpScenePath.from_node(target, scene_root),
 	})
 	assert_eq(cam.get_parent(), target)
 
 	_undo_redo.undo()
 	assert_eq(cam.get_parent(), original_parent, "Undo should restore original parent")
 	# Refresh the _created_paths entry since the path changed after reparent/undo.
-	_created_paths = [ScenePath.from_node(cam, scene_root)]
+	_created_paths = [McpScenePath.from_node(cam, scene_root)]
 
 
 func test_follow_2d_target_not_node2d() -> void:
@@ -464,7 +466,7 @@ func test_follow_2d_target_not_node2d() -> void:
 	_track_node(plain)
 	var result := _handler.follow_2d({
 		"camera_path": r.data.path,
-		"target_path": ScenePath.from_node(plain, scene_root),
+		"target_path": McpScenePath.from_node(plain, scene_root),
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
@@ -524,7 +526,7 @@ func test_get_rejects_non_camera() -> void:
 	scene_root.add_child(plain, true)
 	plain.owner = scene_root
 	_track_node(plain)
-	var result := _handler.get_camera({"camera_path": ScenePath.from_node(plain, scene_root)})
+	var result := _handler.get_camera({"camera_path": McpScenePath.from_node(plain, scene_root)})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
@@ -564,7 +566,7 @@ func test_apply_preset_topdown_2d() -> void:
 	assert_eq(result.data.class, "Camera2D")
 	_created_paths.append(result.data.path)
 
-	var node := ScenePath.resolve(result.data.path, scene_root) as Camera2D
+	var node := McpScenePath.resolve(result.data.path, scene_root) as Camera2D
 	assert_true(node != null)
 	assert_eq(node.zoom, Vector2(2.0, 2.0))
 	assert_eq(node.position_smoothing_enabled, true)
@@ -585,7 +587,7 @@ func test_apply_preset_cinematic_3d() -> void:
 	assert_has_key(result, "data")
 	assert_eq(result.data.type, "3d")
 	_created_paths.append(result.data.path)
-	var node := ScenePath.resolve(result.data.path, scene_root) as Camera3D
+	var node := McpScenePath.resolve(result.data.path, scene_root) as Camera3D
 	assert_true(abs(node.fov - 40.0) < 0.1)
 
 
@@ -615,7 +617,7 @@ func test_apply_preset_with_override() -> void:
 	})
 	assert_has_key(result, "data")
 	_created_paths.append(result.data.path)
-	var node := ScenePath.resolve(result.data.path, scene_root) as Camera2D
+	var node := McpScenePath.resolve(result.data.path, scene_root) as Camera2D
 	assert_eq(node.zoom, Vector2(3.5, 3.5))
 
 

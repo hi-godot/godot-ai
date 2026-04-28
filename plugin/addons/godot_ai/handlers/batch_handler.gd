@@ -1,5 +1,4 @@
 @tool
-class_name BatchHandler
 extends RefCounted
 
 ## Executes a list of sub-commands through the dispatcher with stop-on-first-error

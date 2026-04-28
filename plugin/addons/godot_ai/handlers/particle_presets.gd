@@ -1,5 +1,4 @@
 @tool
-class_name ParticlePresets
 extends RefCounted
 
 ## Curated particle effect blueprints.

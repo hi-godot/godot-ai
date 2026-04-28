@@ -1,8 +1,9 @@
 @tool
-class_name NodeHandler
 extends RefCounted
 
 ## Handles node creation and manipulation with undo/redo support.
+
+const ResourceHandler := preload("res://addons/godot_ai/handlers/resource_handler.gd")
 
 var _undo_redo: EditorUndoRedoManager
 
@@ -17,16 +18,16 @@ func create_node(params: Dictionary) -> Dictionary:
 	var parent_path: String = params.get("parent_path", "")
 	var scene_path: String = params.get("scene_path", "")
 
-	var scene_check := ScenePath.require_edited_scene(params.get("scene_file", ""))
+	var scene_check := McpScenePath.require_edited_scene(params.get("scene_file", ""))
 	if scene_check.has("error"):
 		return scene_check
 	var scene_root: Node = scene_check.node
 
 	var parent: Node = scene_root
 	if not parent_path.is_empty():
-		parent = ScenePath.resolve(parent_path, scene_root)
+		parent = McpScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_parent_error(parent_path, scene_root))
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_parent_error(parent_path, scene_root))
 
 	var new_node: Node
 
@@ -71,8 +72,8 @@ func create_node(params: Dictionary) -> Dictionary:
 	var response := {
 		"name": new_node.name,
 		"type": new_node.get_class(),
-		"path": ScenePath.from_node(new_node, scene_root),
-		"parent_path": ScenePath.from_node(parent, scene_root),
+		"path": McpScenePath.from_node(new_node, scene_root),
+		"parent_path": McpScenePath.from_node(parent, scene_root),
 		"undoable": true,
 	}
 	if not scene_path.is_empty():
@@ -123,9 +124,9 @@ func reparent_node(params: Dictionary) -> Dictionary:
 	if new_parent_path.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: new_parent")
 
-	var new_parent := ScenePath.resolve(new_parent_path, scene_root)
+	var new_parent := McpScenePath.resolve(new_parent_path, scene_root)
 	if new_parent == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_parent_error(new_parent_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_parent_error(new_parent_path, scene_root))
 
 	var root_err := _reject_if_scene_root(node, scene_root, "reparent")
 	if root_err != null:
@@ -161,9 +162,9 @@ func reparent_node(params: Dictionary) -> Dictionary:
 
 	return {
 		"data": {
-			"path": ScenePath.from_node(node, scene_root),
-			"old_parent": ScenePath.from_node(old_parent, scene_root),
-			"new_parent": ScenePath.from_node(new_parent, scene_root),
+			"path": McpScenePath.from_node(node, scene_root),
+			"old_parent": McpScenePath.from_node(old_parent, scene_root),
+			"new_parent": McpScenePath.from_node(new_parent, scene_root),
 			"undoable": true,
 		}
 	}
@@ -320,7 +321,7 @@ func rename_node(params: Dictionary) -> Dictionary:
 
 	return {
 		"data": {
-			"path": ScenePath.from_node(node, scene_root),
+			"path": McpScenePath.from_node(node, scene_root),
 			"old_path": node_path,
 			"name": String(node.name),
 			"old_name": old_name,
@@ -363,7 +364,7 @@ func duplicate_node(params: Dictionary) -> Dictionary:
 
 	return {
 		"data": {
-			"path": ScenePath.from_node(dup, scene_root),
+			"path": McpScenePath.from_node(dup, scene_root),
 			"original_path": node_path,
 			"name": dup.name,
 			"type": dup.get_class(),
@@ -487,7 +488,7 @@ func set_selection(params: Dictionary) -> Dictionary:
 	var not_found: Array[String] = []
 	for path_variant in paths:
 		var path: String = str(path_variant)
-		var node := ScenePath.resolve(path, scene_root)
+		var node := McpScenePath.resolve(path, scene_root)
 		if node:
 			selection.add_node(node)
 			selected.append(path)
@@ -697,7 +698,7 @@ func get_children(params: Dictionary) -> Dictionary:
 		children.append({
 			"name": child.name,
 			"type": child.get_class(),
-			"path": ScenePath.from_node(child, scene_root),
+			"path": McpScenePath.from_node(child, scene_root),
 			"children_count": child.get_child_count(),
 		})
 	return {
@@ -736,13 +737,13 @@ func _resolve_node(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("path", "")
 	if node_path.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
-	var scene_check := ScenePath.require_edited_scene(params.get("scene_file", ""))
+	var scene_check := McpScenePath.require_edited_scene(params.get("scene_file", ""))
 	if scene_check.has("error"):
 		return scene_check
 	var scene_root: Node = scene_check.node
-	var node := ScenePath.resolve(node_path, scene_root)
+	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
 	return {"node": node, "path": node_path, "scene_root": scene_root}
 
 

@@ -1,17 +1,16 @@
 @tool
-class_name EditorHandler
 extends RefCounted
 
 ## Handles editor state, selection, log, screenshot, and performance commands.
 
 var _log_buffer: McpLogBuffer
-var _connection: Connection
+var _connection: McpConnection
 var _debugger_plugin: McpDebuggerPlugin
-var _game_log_buffer: GameLogBuffer
-var _editor_log_buffer: EditorLogBuffer
+var _game_log_buffer: McpGameLogBuffer
+var _editor_log_buffer: McpEditorLogBuffer
 
 
-func _init(log_buffer: McpLogBuffer, connection: Connection = null, debugger_plugin: McpDebuggerPlugin = null, game_log_buffer: GameLogBuffer = null, editor_log_buffer: EditorLogBuffer = null) -> void:
+func _init(log_buffer: McpLogBuffer, connection: McpConnection = null, debugger_plugin: McpDebuggerPlugin = null, game_log_buffer: McpGameLogBuffer = null, editor_log_buffer: McpEditorLogBuffer = null) -> void:
 	_log_buffer = log_buffer
 	_connection = connection
 	_debugger_plugin = debugger_plugin
@@ -27,7 +26,7 @@ func get_editor_state(_params: Dictionary) -> Dictionary:
 			"project_name": ProjectSettings.get_setting("application/config/name", ""),
 			"current_scene": scene_root.scene_file_path if scene_root else "",
 			"is_playing": EditorInterface.is_playing_scene(),
-			"readiness": Connection.get_readiness(),
+			"readiness": McpConnection.get_readiness(),
 			## True once the game subprocess autoload has beaconed mcp:hello;
 			## false between Play→Stop cycles. Lets capture-source=game callers
 			## poll for a real ready signal instead of guessing with sleep().
@@ -41,7 +40,7 @@ func get_selection(_params: Dictionary) -> Dictionary:
 	var selected := EditorInterface.get_selection().get_selected_nodes()
 	var paths: Array[String] = []
 	for node in selected:
-		paths.append(ScenePath.from_node(node, scene_root))
+		paths.append(McpScenePath.from_node(node, scene_root))
 	return {"data": {"selected_paths": paths, "count": paths.size()}}
 
 
@@ -276,7 +275,7 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 			## via the debugger channel: the `_mcp_game_helper` autoload
 			## inside the game process replies with a PNG, and
 			## McpDebuggerPlugin pushes the response back through our
-			## WebSocket with the same request_id via Connection.send_deferred_response.
+			## WebSocket with the same request_id via McpConnection.send_deferred_response.
 			if _debugger_plugin == null or _connection == null:
 				return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable — plugin may not be fully initialised")
 			var request_id: String = params.get("_request_id", "")
@@ -310,7 +309,7 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 		var targets: Array[Node3D] = []
 		var not_found: Array[String] = []
 		for p in unique_paths:
-			var node := ScenePath.resolve(p, scene_root)
+			var node := McpScenePath.resolve(p, scene_root)
 			if node == null:
 				not_found.append(p)
 			elif not node is Node3D:
@@ -497,7 +496,7 @@ func _take_cinematic_screenshot(max_resolution: int) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Cinematic render produced an empty image")
 
 	var result := _finalize_image(image, "cinematic", max_resolution)
-	result.data["camera_path"] = ScenePath.from_node(scene_camera, scene_root)
+	result.data["camera_path"] = McpScenePath.from_node(scene_camera, scene_root)
 	return result
 
 

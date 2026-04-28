@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const AnimationHandler := preload("res://addons/godot_ai/handlers/animation_handler.gd")
+
 ## Tests for AnimationHandler — AnimationPlayer authoring.
 ##
 ## NOTE: GDScript tests must not call save_scene, scene_create, scene_open,
@@ -41,7 +43,7 @@ func _remove_node(path: String) -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		return
-	var node := ScenePath.resolve(path, scene_root)
+	var node := McpScenePath.resolve(path, scene_root)
 	if node != null:
 		node.get_parent().remove_child(node)
 		node.queue_free()
@@ -70,7 +72,7 @@ func test_player_create_attaches_default_library() -> void:
 		skip("Scene not ready — _add_player returned empty path")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(path, scene_root) as AnimationPlayer
 	assert_true(player != null, "Node should exist")
 	assert_true(player.has_animation_library(""), "Default library should be attached")
 	_remove_node(path)
@@ -134,7 +136,7 @@ func test_animation_create_with_loop_mode() -> void:
 
 	# Verify actual Animation resource was created with correct settings.
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	assert_true(player.has_animation("pulse"))
 	var anim: Animation = player.get_animation("pulse")
 	assert_eq(anim.length, 0.5)
@@ -176,7 +178,7 @@ func test_animation_create_is_undoable() -> void:
 		skip("Scene not ready — _add_player returned empty path")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 
 	_handler.create_animation({"player_path": player_path, "name": "fade", "length": 0.3})
 	assert_true(player.has_animation("fade"), "Animation should exist after create")
@@ -213,7 +215,7 @@ func test_add_property_track_basic() -> void:
 
 	# Verify track was actually added to the Animation.
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	var anim: Animation = player.get_animation("anim")
 	assert_eq(anim.get_track_count(), 1)
 	_remove_node(player_path)
@@ -243,7 +245,7 @@ func test_add_property_track_is_undoable() -> void:
 		return
 	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	var anim: Animation = player.get_animation("anim")
 
 	# Scene root is Node3D — use .:visible (a real bool property) rather than
@@ -290,7 +292,7 @@ func test_add_property_track_undo_survives_interleaving() -> void:
 		return
 	_handler.create_animation({"player_path": player_path, "name": "anim", "length": 1.0})
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	var anim: Animation = player.get_animation("anim")
 
 	# Add track A on .:position.
@@ -396,7 +398,7 @@ func test_add_property_track_coerces_vector3_dict() -> void:
 		],
 	})
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	var anim: Animation = player.get_animation("anim")
 	var k0 = anim.track_get_key_value(0, 0)
 	var k1 = anim.track_get_key_value(0, 1)
@@ -427,7 +429,7 @@ func test_add_property_track_accepts_vector_subpath() -> void:
 	})
 	assert_has_key(result, "data")
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	var anim: Animation = player.get_animation("bob")
 	var k0 = anim.track_get_key_value(0, 0)
 	var k1 = anim.track_get_key_value(0, 1)
@@ -469,7 +471,7 @@ func test_create_simple_accepts_color_subpath() -> void:
 		],
 	})
 	assert_has_key(result, "data")
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	var anim: Animation = player.get_animation("fade")
 	var k0 = anim.track_get_key_value(0, 0)
 	var k1 = anim.track_get_key_value(0, 1)
@@ -501,7 +503,7 @@ func test_create_simple_coerces_vector3() -> void:
 		],
 	})
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	var anim: Animation = player.get_animation("slide")
 	var start = anim.track_get_key_value(0, 0)
 	var end = anim.track_get_key_value(0, 1)
@@ -583,7 +585,7 @@ func test_add_method_track_basic() -> void:
 
 	# Verify track was added as a method track.
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	var anim: Animation = player.get_animation("anim")
 	assert_eq(anim.get_track_count(), 1)
 	assert_eq(anim.track_get_type(0), Animation.TYPE_METHOD)
@@ -641,7 +643,7 @@ func test_set_autoplay_basic() -> void:
 	assert_true(result.data.undoable)
 
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	assert_eq(player.autoplay, "idle")
 	_remove_node(player_path)
 
@@ -672,7 +674,7 @@ func test_set_autoplay_empty_clears() -> void:
 	assert_true(result.data.cleared)
 
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	assert_eq(player.autoplay, "")
 	_remove_node(player_path)
 
@@ -830,7 +832,7 @@ func test_create_simple_is_undoable() -> void:
 		skip("Scene not ready — _add_player returned empty path")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 
 	_handler.create_simple({
 		"player_path": player_path,
@@ -880,7 +882,7 @@ func _add_bare_player(player_name: String) -> String:
 	player.name = player_name
 	scene_root.add_child(player, true)
 	player.set_owner(scene_root)
-	return ScenePath.from_node(player, scene_root)
+	return McpScenePath.from_node(player, scene_root)
 
 
 func test_create_animation_auto_attaches_default_library() -> void:
@@ -889,7 +891,7 @@ func test_create_animation_auto_attaches_default_library() -> void:
 		skip("Scene not ready — _add_bare_player returned empty path")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(path, scene_root) as AnimationPlayer
 	assert_true(not player.has_animation_library(""), "precondition: no default library")
 
 	var result := _handler.create_animation({
@@ -922,7 +924,7 @@ func test_create_simple_auto_attaches_default_library() -> void:
 		skip("Scene not ready — _add_bare_player returned empty path")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(path, scene_root) as AnimationPlayer
 
 	var result := _handler.create_simple({
 		"player_path": path,
@@ -952,7 +954,7 @@ func test_create_simple_auto_creates_animation_player() -> void:
 		skip("No scene root — is a scene open?")
 		return
 	var player_path := "/" + scene_root.name + "/AutoPlayer86"
-	if ScenePath.resolve(player_path, scene_root) != null:
+	if McpScenePath.resolve(player_path, scene_root) != null:
 		skip("AutoPlayer86 already exists in scene — rerun after cleanup")
 		return
 
@@ -970,14 +972,14 @@ func test_create_simple_auto_creates_animation_player() -> void:
 		"animation_player_created should be true when the player didn't exist")
 	assert_true(result.data.library_created,
 		"library_created should be true — fresh player has no library")
-	var created := ScenePath.resolve(player_path, scene_root)
+	var created := McpScenePath.resolve(player_path, scene_root)
 	assert_true(created is AnimationPlayer,
 		"AnimationPlayer should exist at %s after create_simple" % player_path)
 	assert_true((created as AnimationPlayer).has_animation("bob"))
 
 	# Single Ctrl-Z rolls back everything.
 	_undo_redo.undo()
-	assert_true(ScenePath.resolve(player_path, scene_root) == null,
+	assert_true(McpScenePath.resolve(player_path, scene_root) == null,
 		"undo should remove the auto-created AnimationPlayer from the scene")
 
 
@@ -1049,7 +1051,7 @@ func test_create_animation_auto_creates_player_when_missing() -> void:
 		skip("No scene root")
 		return
 	var player_path := "/%s/AutoCreatedAP1" % scene_root.name
-	assert_true(ScenePath.resolve(player_path, scene_root) == null,
+	assert_true(McpScenePath.resolve(player_path, scene_root) == null,
 		"precondition: player path should not resolve yet")
 
 	var result := _handler.create_animation({
@@ -1063,7 +1065,7 @@ func test_create_animation_auto_creates_player_when_missing() -> void:
 	assert_eq(result.data.library_created, true,
 		"library_created should also be true for a fresh player")
 
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	assert_true(player != null, "AnimationPlayer should exist at the requested path")
 	assert_true(player.has_animation("idle"))
 
@@ -1085,12 +1087,12 @@ func test_create_animation_auto_create_is_undoable() -> void:
 
 	# Undo: player AND animation should both vanish in one action.
 	_undo_redo.undo()
-	assert_true(ScenePath.resolve(player_path, scene_root) == null,
+	assert_true(McpScenePath.resolve(player_path, scene_root) == null,
 		"undo should remove the auto-created player")
 
 	# Redo: player and animation come back.
 	_undo_redo.redo()
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	assert_true(player != null, "redo should restore the player")
 	assert_true(player.has_animation("idle"), "redo should restore the animation")
 
@@ -1162,7 +1164,7 @@ func test_create_simple_auto_creates_player_and_coerces_vector_values() -> void:
 	assert_has_key(result, "data")
 	assert_eq(result.data.animation_player_created, true)
 
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	assert_true(player != null)
 	assert_true(player.has_animation("slide"))
 	var anim := player.get_animation("slide")
@@ -1254,7 +1256,7 @@ func test_get_accepts_library_qualified_name() -> void:
 		skip("Scene not ready — _add_player returned empty path")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 
 	# Attach a named library with a clip directly — the handler API targets the
 	# default library today; this test covers the read-path robustness only.
@@ -1302,7 +1304,7 @@ func test_get_labels_value_and_method_tracks_distinctly() -> void:
 	# imported resources or future tools will, and get_animation must label
 	# them honestly instead of reporting "method".
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	var anim: Animation = player.get_animation("mixed")
 	var bezier_idx := anim.add_track(Animation.TYPE_BEZIER)
 	anim.track_set_path(bezier_idx, NodePath(".:rotation"))
@@ -1361,7 +1363,7 @@ func test_delete_animation_in_non_default_library() -> void:
 		skip("No scene root — is a scene open?")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 
 	var lib := AnimationLibrary.new()
 	var anim := Animation.new()
@@ -1502,7 +1504,7 @@ func _add_sibling(node: Node, sibling_name: String) -> Node:
 
 func _fetch_anim(player_path: String, anim_name: String) -> Animation:
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var player := ScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	if player == null or not player.has_animation(anim_name):
 		return null
 	return player.get_animation(anim_name)

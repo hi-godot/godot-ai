@@ -1,7 +1,7 @@
 @tool
 extends McpTestSuite
 
-## Tests for ScenePath — the path resolver/formatter shared by every
+## Tests for McpScenePath — the path resolver/formatter shared by every
 ## scene-mutating handler. Uses a freestanding Node tree (no dependency
 ## on the edited scene) so behavior is deterministic.
 
@@ -32,13 +32,13 @@ func _make_tree() -> Node:
 
 func test_resolve_root_prefix_returns_scene_root() -> void:
 	var root := _make_tree()
-	assert_eq(ScenePath.resolve("/Main", root), root)
+	assert_eq(McpScenePath.resolve("/Main", root), root)
 	root.queue_free()
 
 
 func test_resolve_descendant_via_root_prefix() -> void:
 	var root := _make_tree()
-	var cam := ScenePath.resolve("/Main/Camera3D", root)
+	var cam := McpScenePath.resolve("/Main/Camera3D", root)
 	assert_ne(cam, null, "should find Camera3D")
 	assert_eq(cam.name, "Camera3D")
 	root.queue_free()
@@ -46,7 +46,7 @@ func test_resolve_descendant_via_root_prefix() -> void:
 
 func test_resolve_nested_descendant() -> void:
 	var root := _make_tree()
-	var ground := ScenePath.resolve("/Main/World/Ground", root)
+	var ground := McpScenePath.resolve("/Main/World/Ground", root)
 	assert_ne(ground, null)
 	assert_eq(ground.name, "Ground")
 	root.queue_free()
@@ -58,13 +58,13 @@ func test_resolve_root_alias_with_scene_name_returns_scene_root() -> void:
 	## /root/Main → scene root. This is the agent's most common mistake;
 	## resolving it (instead of erroring) saves a round trip.
 	var root := _make_tree()
-	assert_eq(ScenePath.resolve("/root/Main", root), root)
+	assert_eq(McpScenePath.resolve("/root/Main", root), root)
 	root.queue_free()
 
 
 func test_resolve_root_alias_with_descendant() -> void:
 	var root := _make_tree()
-	var cam := ScenePath.resolve("/root/Main/Camera3D", root)
+	var cam := McpScenePath.resolve("/root/Main/Camera3D", root)
 	assert_ne(cam, null)
 	assert_eq(cam.name, "Camera3D")
 	root.queue_free()
@@ -72,7 +72,7 @@ func test_resolve_root_alias_with_descendant() -> void:
 
 func test_resolve_root_alias_nested_descendant() -> void:
 	var root := _make_tree()
-	var ground := ScenePath.resolve("/root/Main/World/Ground", root)
+	var ground := McpScenePath.resolve("/root/Main/World/Ground", root)
 	assert_ne(ground, null)
 	assert_eq(ground.name, "Ground")
 	root.queue_free()
@@ -88,7 +88,7 @@ func test_resolve_does_not_hijack_editor_internal_root_paths() -> void:
 	## Path doesn't match alias prefix "/root/Main" → falls through to the
 	## absolute-path fallback (which returns null here because root isn't
 	## actually in any SceneTree, but the key behavior is "don't strip /root").
-	assert_eq(ScenePath.resolve("/root/@EditorNode@1/Main/Camera3D", root), null)
+	assert_eq(McpScenePath.resolve("/root/@EditorNode@1/Main/Camera3D", root), null)
 	root.queue_free()
 
 
@@ -96,19 +96,19 @@ func test_resolve_does_not_hijack_editor_internal_root_paths() -> void:
 
 func test_resolve_unknown_path_returns_null() -> void:
 	var root := _make_tree()
-	assert_eq(ScenePath.resolve("/Main/DoesNotExist", root), null)
+	assert_eq(McpScenePath.resolve("/Main/DoesNotExist", root), null)
 	root.queue_free()
 
 
 func test_resolve_null_scene_root_returns_null() -> void:
-	assert_eq(ScenePath.resolve("/Main", null), null)
+	assert_eq(McpScenePath.resolve("/Main", null), null)
 
 
 # ----- format_parent_error: agent-readable message -----
 
 func test_format_parent_error_names_scene_root() -> void:
 	var root := _make_tree()
-	var msg := ScenePath.format_parent_error("/SomeBogusPath", root)
+	var msg := McpScenePath.format_parent_error("/SomeBogusPath", root)
 	assert_contains(msg, "/SomeBogusPath")
 	assert_contains(msg, "/Main")
 	assert_contains(msg, "relative to the edited scene root")
@@ -120,7 +120,7 @@ func test_format_parent_error_uses_generic_paths_wording() -> void:
 	## Helper is shared across param names (parent_path, new_parent, …); the
 	## message must not hardcode any specific param name.
 	var root := _make_tree()
-	var msg := ScenePath.format_parent_error("/X", root)
+	var msg := McpScenePath.format_parent_error("/X", root)
 	assert_false(msg.contains("parent_path"), "should not name a specific param")
 	assert_contains(msg, "Paths are relative")
 	root.queue_free()
@@ -129,7 +129,7 @@ func test_format_parent_error_uses_generic_paths_wording() -> void:
 func test_format_parent_error_null_root_returns_actionable_message() -> void:
 	## When no scene is open there's no scene_root to suggest. Return a
 	## message that points at the real problem instead of "/<no scene>".
-	var msg := ScenePath.format_parent_error("/Foo", null)
+	var msg := McpScenePath.format_parent_error("/Foo", null)
 	assert_contains(msg, "/Foo")
 	assert_contains(msg, "No edited scene is open")
 	assert_false(msg.contains("<no scene>"), "should not leak placeholder")
@@ -141,7 +141,7 @@ func test_format_node_error_root_prefix_suggests_scene_relative_path() -> void:
 	## The signature mistake (Cline's failure mode): /root/<NotSceneRoot>/...
 	## We can rewrite that to /<sceneRoot>/<rest> with high confidence.
 	var root := _make_tree()
-	var msg := ScenePath.format_node_error("/root/Cube0", root)
+	var msg := McpScenePath.format_node_error("/root/Cube0", root)
 	assert_contains(msg, "/root/Cube0")
 	assert_contains(msg, "Did you mean")
 	assert_contains(msg, "/Main/Cube0")
@@ -151,7 +151,7 @@ func test_format_node_error_root_prefix_suggests_scene_relative_path() -> void:
 
 func test_format_node_error_root_prefix_with_descendant_suggests_full_rewrite() -> void:
 	var root := _make_tree()
-	var msg := ScenePath.format_node_error("/root/Foo/Bar/Baz", root)
+	var msg := McpScenePath.format_node_error("/root/Foo/Bar/Baz", root)
 	assert_contains(msg, "Did you mean")
 	assert_contains(msg, "/Main/Foo/Bar/Baz")
 	root.queue_free()
@@ -162,7 +162,7 @@ func test_format_node_error_root_prefix_matching_scene_root_no_suggestion() -> v
 	## prefix means a deeper segment is wrong — there's no clean rewrite to
 	## suggest. Fall back to the convention reminder.
 	var root := _make_tree()
-	var msg := ScenePath.format_node_error("/root/Main/Nope", root)
+	var msg := McpScenePath.format_node_error("/root/Main/Nope", root)
 	assert_false(msg.contains("Did you mean"), "no clean rewrite available")
 	assert_contains(msg, "relative to the edited scene root")
 	root.queue_free()
@@ -171,7 +171,7 @@ func test_format_node_error_root_prefix_matching_scene_root_no_suggestion() -> v
 func test_format_node_error_unprefixed_path_suggests_scene_relative() -> void:
 	## Bare "Cube0" with no leading slash → suggest "/Main/Cube0".
 	var root := _make_tree()
-	var msg := ScenePath.format_node_error("Cube0", root)
+	var msg := McpScenePath.format_node_error("Cube0", root)
 	assert_contains(msg, "Did you mean")
 	assert_contains(msg, "/Main/Cube0")
 	root.queue_free()
@@ -182,7 +182,7 @@ func test_format_node_error_already_relative_path_no_suggestion() -> void:
 	## possible, just remind about the convention so the agent can re-check
 	## the actual node names via scene_get_hierarchy.
 	var root := _make_tree()
-	var msg := ScenePath.format_node_error("/Main/Nope", root)
+	var msg := McpScenePath.format_node_error("/Main/Nope", root)
 	assert_false(msg.contains("Did you mean"))
 	assert_contains(msg, "Node not found: /Main/Nope")
 	assert_contains(msg, "/Main")
@@ -190,7 +190,7 @@ func test_format_node_error_already_relative_path_no_suggestion() -> void:
 
 
 func test_format_node_error_null_root_returns_actionable_message() -> void:
-	var msg := ScenePath.format_node_error("/root/Foo", null)
+	var msg := McpScenePath.format_node_error("/root/Foo", null)
 	assert_contains(msg, "/root/Foo")
 	assert_contains(msg, "No edited scene is open")
 	assert_false(msg.contains("<no scene>"), "should not leak placeholder")
@@ -201,7 +201,7 @@ func test_format_node_error_mentions_runtime_root_anti_pattern() -> void:
 	## that "paths are relative". Agents need the antipattern named to
 	## connect their mistake to the fix.
 	var root := _make_tree()
-	var msg := ScenePath.format_node_error("/root/X", root)
+	var msg := McpScenePath.format_node_error("/root/X", root)
 	assert_contains(msg, "/root/")
 	root.queue_free()
 
@@ -211,7 +211,7 @@ func test_format_node_error_mentions_runtime_root_anti_pattern() -> void:
 func test_require_edited_scene_empty_expected_returns_current_root() -> void:
 	## Empty string = "target whatever is active"; matches pre-guard behavior
 	## so callers that don't opt in see no change.
-	var result := ScenePath.require_edited_scene("")
+	var result := McpScenePath.require_edited_scene("")
 	assert_has_key(result, "node")
 	assert_eq(result.node, EditorInterface.get_edited_scene_root())
 
@@ -220,7 +220,7 @@ func test_require_edited_scene_matching_path_returns_root() -> void:
 	## Non-empty expected that matches current edited scene passes through.
 	var root := EditorInterface.get_edited_scene_root()
 	assert_ne(root, null, "test harness must have a scene open")
-	var result := ScenePath.require_edited_scene(root.scene_file_path)
+	var result := McpScenePath.require_edited_scene(root.scene_file_path)
 	assert_has_key(result, "node")
 	assert_eq(result.node, root)
 
@@ -228,7 +228,7 @@ func test_require_edited_scene_matching_path_returns_root() -> void:
 func test_require_edited_scene_mismatch_returns_structured_error() -> void:
 	## A non-empty expected that doesn't match the active scene must fail with
 	## EDITED_SCENE_MISMATCH, not silently target the wrong scene.
-	var result := ScenePath.require_edited_scene("res://this/does/not/match.tscn")
+	var result := McpScenePath.require_edited_scene("res://this/does/not/match.tscn")
 	assert_is_error(result, McpErrorCodes.EDITED_SCENE_MISMATCH)
 	## Message must name both the expected and the active scene so the caller
 	## can diagnose drift without another call.

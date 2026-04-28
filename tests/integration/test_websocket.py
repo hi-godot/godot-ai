@@ -63,7 +63,7 @@ class TestHandshake:
         await plugin.close()
 
     async def test_server_sends_handshake_ack_with_version(self, harness):
-        ## The dock's Server-row reads `Connection.server_version` to render
+        ## The dock's Server-row reads `McpConnection.server_version` to render
         ## the TRUE running server version instead of the plugin's expected
         ## version. Without the ack, the plugin falls back to "expected" and
         ## can't surface the self-update-leaves-stale-server drift case

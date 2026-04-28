@@ -1,5 +1,5 @@
 @tool
-class_name Connection
+class_name McpConnection
 extends Node
 
 ## WebSocket transport to the Godot AI Python server.

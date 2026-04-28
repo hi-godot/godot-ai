@@ -1,5 +1,4 @@
 @tool
-class_name MaterialValues
 extends RefCounted
 
 ## Value coercion helpers for material authoring.

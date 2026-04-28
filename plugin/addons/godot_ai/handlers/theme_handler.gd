@@ -1,5 +1,4 @@
 @tool
-class_name ThemeHandler
 extends RefCounted
 
 ## Handles Theme resource authoring: creating, modifying color/constant/font-size/
@@ -393,9 +392,9 @@ func apply_theme(params: Dictionary) -> Dictionary:
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 
-	var node := ScenePath.resolve(node_path, scene_root)
+	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
 	if not node is Control and not node is Window:
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,

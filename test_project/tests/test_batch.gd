@@ -1,6 +1,9 @@
 @tool
 extends McpTestSuite
 
+const BatchHandler := preload("res://addons/godot_ai/handlers/batch_handler.gd")
+const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
+
 ## Tests for BatchHandler — stop-on-first-error and rollback semantics.
 
 var _handler: BatchHandler

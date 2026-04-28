@@ -1,13 +1,14 @@
 @tool
-class_name ProjectHandler
 extends RefCounted
 
 ## Handles project settings and filesystem search commands.
 
-var _connection: Connection
+const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
+
+var _connection: McpConnection
 
 
-func _init(connection: Connection = null) -> void:
+func _init(connection: McpConnection = null) -> void:
 	_connection = connection
 
 
@@ -172,7 +173,7 @@ func _finish_stop_project_deferred(request_id: String) -> void:
 			"stopped": true,
 			"undoable": false,
 			"reason": "Play/stop is a runtime action",
-			"readiness_after": Connection.get_readiness(),
+			"readiness_after": McpConnection.get_readiness(),
 		}
 	})
 

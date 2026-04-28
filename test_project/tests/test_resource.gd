@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ResourceHandler := preload("res://addons/godot_ai/handlers/resource_handler.gd")
+
 ## Tests for ResourceHandler — resource search, load, and assign.
 
 var _handler: ResourceHandler

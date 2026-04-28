@@ -46,7 +46,7 @@ async def project_stop(runtime: Runtime) -> dict:
     New plugins (issue #29) defer the stop response until after
     `EditorInterface.stop_playing_scene()` has ticked two frames, then return
     `readiness_after` in the payload — a ground-truth snapshot of
-    `Connection.get_readiness()` after the stop settled. We copy that straight
+    `McpConnection.get_readiness()` after the stop settled. We copy that straight
     onto `session.readiness` so the next write tool can't race the
     `readiness_changed` event.
 

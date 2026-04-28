@@ -1,5 +1,4 @@
 @tool
-class_name AutoloadHandler
 extends RefCounted
 
 ## Handles autoload listing, adding, and removing via ProjectSettings.

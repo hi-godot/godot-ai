@@ -20,7 +20,7 @@ static var COLOR_HEADER := Color(0.95, 0.95, 0.95)
 ## doesn't have to find every literal.
 static var COLOR_AMBER := Color(1.0, 0.75, 0.25)
 
-var _connection: Connection
+var _connection: McpConnection
 var _log_buffer: McpLogBuffer
 var _plugin: EditorPlugin
 
@@ -63,7 +63,7 @@ var _client_rows: Dictionary = {}
 var _drift_banner: VBoxContainer
 var _drift_label: Label
 ## Handles for the Setup section's "Server" row. `_update_status` keeps
-## the label text/color in sync with `Connection.server_version` so the
+## the label text/color in sync with `McpConnection.server_version` so the
 ## dock reports the TRUE running server version, not the plugin's
 ## expected version. See #174 follow-up — a plugin upgrade via self-
 ## update can leave the plugin connected to an older adopted server
@@ -76,7 +76,7 @@ var _setup_server_label: Label
 ## user-mode Server line).
 var _last_rendered_server_text: String = ""
 ## Restart-server button shown next to the Setup container when
-## `Connection.server_version` drifts from the plugin version. Hidden
+## `McpConnection.server_version` drifts from the plugin version. Hidden
 ## in the match case so the UI stays calm.
 var _version_restart_btn: Button
 ## Sorted snapshot of the most recent mismatched-client set. Powers two things:
@@ -179,7 +179,7 @@ const UPDATE_TEMP_DIR := "user://godot_ai_update/"
 const UPDATE_TEMP_ZIP := "user://godot_ai_update/update.zip"
 
 
-func setup(connection: Connection, log_buffer: McpLogBuffer, plugin: EditorPlugin) -> void:
+func setup(connection: McpConnection, log_buffer: McpLogBuffer, plugin: EditorPlugin) -> void:
 	_connection = connection
 	_log_buffer = log_buffer
 	_plugin = plugin
@@ -986,7 +986,7 @@ func _on_reconnect() -> void:
 ## version, and highlight the mismatch so self-update drift is visible
 ## at a glance instead of silently masked by a green label.
 ##
-## Three render states, keyed off `Connection.server_version`:
+## Three render states, keyed off `McpConnection.server_version`:
 ## - empty (pre-ack or older server): show plugin's expected version,
 ##   muted, no Restart button
 ## - matches plugin: show it green, no Restart button
@@ -1058,7 +1058,7 @@ func _refresh_setup_status() -> void:
 		_setup_container.add_child(_make_status_row("uv", uv_version, Color.GREEN))
 		## Build the Server row with a placeholder label we can update every
 		## frame. `_refresh_server_version_label` replaces the text + color
-		## once `Connection.server_version` lands via `handshake_ack`, and
+		## once `McpConnection.server_version` lands via `handshake_ack`, and
 		## flips to amber + "(plugin X)" on drift. Pre-ack we show the
 		## plugin's expected version so the row isn't blank.
 		var server_row := HBoxContainer.new()
@@ -2200,7 +2200,7 @@ func _install_update() -> void:
 		_update_btn.text = "Scanning..."
 		## Before reloading the plugin we MUST wait for Godot's filesystem
 		## scanner to see the newly-extracted files. Otherwise plugin.gd
-		## re-parses and its `class_name` references (GameLogBuffer,
+		## re-parses and its `class_name` references (McpGameLogBuffer,
 		## McpDebuggerPlugin, …) resolve against a ClassDB that hasn't
 		## picked up the new files yet — parse errors, dock tears down,
 		## plugin reports "enabled" with no UI. See issue #127.

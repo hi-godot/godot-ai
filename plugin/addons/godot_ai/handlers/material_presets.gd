@@ -1,5 +1,4 @@
 @tool
-class_name MaterialPresets
 extends RefCounted
 
 ## Curated material preset blueprints.

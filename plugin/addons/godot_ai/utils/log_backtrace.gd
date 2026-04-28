@@ -1,9 +1,9 @@
 @tool
-class_name LogBacktrace
+class_name McpLogBacktrace
 extends RefCounted
 
 ## Helpers for interpreting Godot's `_log_error` virtual arguments.
-## (Named `LogBacktrace`, not `ScriptBacktrace`: Godot ships a built-in
+## (Named `McpLogBacktrace`, not `ScriptBacktrace`: Godot ships a built-in
 ## `ScriptBacktrace` class — the type of `script_backtraces[i]` entries
 ## — so class_name'ing ours the same would collide. Verified against
 ## the engine's `--doctool` output in 4.6.)

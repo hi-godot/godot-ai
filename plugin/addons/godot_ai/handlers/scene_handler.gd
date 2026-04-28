@@ -1,13 +1,12 @@
 @tool
-class_name SceneHandler
 extends RefCounted
 
 ## Handles scene tree reading and node search.
 
-var _connection: Connection
+var _connection: McpConnection
 
 
-func _init(connection: Connection = null) -> void:
+func _init(connection: McpConnection = null) -> void:
 	_connection = connection
 
 
@@ -71,7 +70,7 @@ func _find_recursive(node: Node, scene_root: Node, name_filter: String, type_fil
 		out.append({
 			"name": node.name,
 			"type": node.get_class(),
-			"path": ScenePath.from_node(node, scene_root),
+			"path": McpScenePath.from_node(node, scene_root),
 		})
 
 	for child in node.get_children():
@@ -228,7 +227,7 @@ func _walk_tree(node: Node, out: Array[Dictionary], depth: int, max_depth: int, 
 	out.append({
 		"name": node.name,
 		"type": node.get_class(),
-		"path": ScenePath.from_node(node, scene_root),
+		"path": McpScenePath.from_node(node, scene_root),
 		"children_count": node.get_child_count(),
 	})
 	for child in node.get_children():

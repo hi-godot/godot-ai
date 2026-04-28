@@ -1,5 +1,4 @@
 @tool
-class_name CameraPresets
 extends RefCounted
 
 ## Opinionated Camera2D / Camera3D presets.
