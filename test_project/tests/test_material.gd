@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const MaterialHandler := preload("res://addons/godot_ai/handlers/material_handler.gd")
+
 ## Tests for MaterialHandler — StandardMaterial3D, ORM, CanvasItemMaterial,
 ## ShaderMaterial authoring.
 ##
@@ -338,7 +340,7 @@ func test_assign_material_to_mesh() -> void:
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.assign_material({
-		"node_path": ScenePath.from_node(node, scene_root),
+		"node_path": McpScenePath.from_node(node, scene_root),
 		"resource_path": TEST_MATERIAL_PATH,
 		"slot": "override",
 	})
@@ -356,7 +358,7 @@ func test_assign_create_if_missing() -> void:
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.assign_material({
-		"node_path": ScenePath.from_node(node, scene_root),
+		"node_path": McpScenePath.from_node(node, scene_root),
 		"create_if_missing": true,
 		"type": "standard",
 	})
@@ -373,7 +375,7 @@ func test_assign_without_resource_or_create_fails() -> void:
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.assign_material({
-		"node_path": ScenePath.from_node(node, scene_root),
+		"node_path": McpScenePath.from_node(node, scene_root),
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	_remove_node(node)
@@ -387,7 +389,7 @@ func test_assign_surface_index_out_of_range() -> void:
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.assign_material({
-		"node_path": ScenePath.from_node(node, scene_root),
+		"node_path": McpScenePath.from_node(node, scene_root),
 		"resource_path": TEST_MATERIAL_PATH,
 		"slot": "surface_99",
 	})
@@ -415,7 +417,7 @@ func test_apply_to_node_inline() -> void:
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.apply_to_node({
-		"node_path": ScenePath.from_node(node, scene_root),
+		"node_path": McpScenePath.from_node(node, scene_root),
 		"type": "standard",
 		"params": {"albedo_color": "#00ff00", "metallic": 0.5},
 	})
@@ -437,7 +439,7 @@ func test_apply_to_node_invalid_type() -> void:
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.apply_to_node({
-		"node_path": ScenePath.from_node(node, scene_root),
+		"node_path": McpScenePath.from_node(node, scene_root),
 		"type": "garbage",
 		"params": {},
 	})
@@ -453,7 +455,7 @@ func test_apply_to_node_with_save_to() -> void:
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.apply_to_node({
-		"node_path": ScenePath.from_node(node, scene_root),
+		"node_path": McpScenePath.from_node(node, scene_root),
 		"type": "standard",
 		"params": {"metallic": 0.8},
 		"save_to": TEST_MATERIAL_PATH_2,
@@ -476,7 +478,7 @@ func test_apply_preset_metal_to_node() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.apply_preset({
 		"preset": "metal",
-		"node_path": ScenePath.from_node(node, scene_root),
+		"node_path": McpScenePath.from_node(node, scene_root),
 	})
 	assert_has_key(result, "data")
 	assert_eq(result.data.preset, "metal")
@@ -492,7 +494,7 @@ func test_apply_preset_glass_to_node() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.apply_preset({
 		"preset": "glass",
-		"node_path": ScenePath.from_node(node, scene_root),
+		"node_path": McpScenePath.from_node(node, scene_root),
 	})
 	assert_has_key(result, "data")
 	# Glass preset must coerce transparency="alpha" -> enum
@@ -511,7 +513,7 @@ func test_apply_preset_unknown() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.apply_preset({
 		"preset": "not_a_real_preset",
-		"node_path": ScenePath.from_node(node, scene_root),
+		"node_path": McpScenePath.from_node(node, scene_root),
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	_remove_node(node)
@@ -540,7 +542,7 @@ func test_apply_preset_with_overrides() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.apply_preset({
 		"preset": "metal",
-		"node_path": ScenePath.from_node(node, scene_root),
+		"node_path": McpScenePath.from_node(node, scene_root),
 		"overrides": {"metallic": 0.5, "roughness": 0.9},
 	})
 	assert_has_key(result, "data")

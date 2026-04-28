@@ -1,5 +1,4 @@
 @tool
-class_name CurveHandler
 extends RefCounted
 
 ## Replaces all points on a Curve / Curve2D / Curve3D resource. The point
@@ -8,6 +7,8 @@ extends RefCounted
 ## Dedicated tool rather than a property set because Curve2D/Curve3D.add_point
 ## is a method call, not a property — resource_create's `properties` dict can't
 ## reach it.
+
+const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
 
 var _undo_redo: EditorUndoRedoManager
 
@@ -22,7 +23,7 @@ func set_points(params: Dictionary) -> Dictionary:
 	var resource_path: String = params.get("resource_path", "")
 	var new_points: Array = params.get("points", [])
 
-	var home_err := ResourceIO.validate_home(params)
+	var home_err := McpResourceIO.validate_home(params)
 	if home_err != null:
 		return home_err
 	var has_file_target := not resource_path.is_empty()
@@ -54,9 +55,9 @@ func set_points(params: Dictionary) -> Dictionary:
 		var scene_root := EditorInterface.get_edited_scene_root()
 		if scene_root == null:
 			return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-		node = ScenePath.resolve(node_path, scene_root)
+		node = McpScenePath.resolve(node_path, scene_root)
 		if node == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
 		if not (property in node):
 			return McpErrorCodes.make(
 				McpErrorCodes.INVALID_PARAMS,
@@ -95,7 +96,7 @@ func set_points(params: Dictionary) -> Dictionary:
 		_apply_snapshot_to_curve(curve, new_snapshot)
 		# curve_set_points EDITS an existing .tres, so override the default
 		# "delete to revert" message via extra_fields.
-		return ResourceIO.save_to_disk(curve, resource_path, true, "Curve", {
+		return McpResourceIO.save_to_disk(curve, resource_path, true, "Curve", {
 			"curve_class": curve.get_class(),
 			"point_count": new_snapshot.size(),
 			"reason": "File save is persistent; edit the .tres file manually to revert",

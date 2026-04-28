@@ -1,5 +1,4 @@
 @tool
-class_name AnimationHandler
 extends RefCounted
 
 ## Handles AnimationPlayer authoring: creating players, animations, tracks,
@@ -49,9 +48,9 @@ func create_player(params: Dictionary) -> Dictionary:
 
 	var parent: Node = scene_root
 	if not parent_path.is_empty():
-		parent = ScenePath.resolve(parent_path, scene_root)
+		parent = McpScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_parent_error(parent_path, scene_root))
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_parent_error(parent_path, scene_root))
 
 	var player := AnimationPlayer.new()
 	if not node_name.is_empty():
@@ -71,8 +70,8 @@ func create_player(params: Dictionary) -> Dictionary:
 
 	return {
 		"data": {
-			"path": ScenePath.from_node(player, scene_root),
-			"parent_path": ScenePath.from_node(parent, scene_root),
+			"path": McpScenePath.from_node(player, scene_root),
+			"parent_path": McpScenePath.from_node(parent, scene_root),
 			"name": String(player.name),
 			"undoable": true,
 		}
@@ -1283,10 +1282,10 @@ func _resolve_player(player_path: String, create_if_missing: bool = false) -> Di
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-	var node := ScenePath.resolve(player_path, scene_root)
+	var node := McpScenePath.resolve(player_path, scene_root)
 	if node == null:
 		if not create_if_missing:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(player_path, scene_root))
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(player_path, scene_root))
 		return _instantiate_player(player_path, scene_root)
 	if not node is AnimationPlayer:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
@@ -1318,11 +1317,11 @@ func _instantiate_player(player_path: String, scene_root: Node) -> Dictionary:
 	if parent_path.is_empty():
 		parent = scene_root
 	else:
-		parent = ScenePath.resolve(parent_path, scene_root)
+		parent = McpScenePath.resolve(parent_path, scene_root)
 	if parent == null:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
 			"Cannot auto-create AnimationPlayer at %s: %s" % [
-				player_path, ScenePath.format_parent_error(parent_path, scene_root)])
+				player_path, McpScenePath.format_parent_error(parent_path, scene_root)])
 	var new_player := AnimationPlayer.new()
 	new_player.name = player_name
 	var lib := AnimationLibrary.new()
@@ -1347,7 +1346,7 @@ func _resolve_or_create_player(player_path: String) -> Dictionary:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-	if ScenePath.resolve(player_path, scene_root) != null:
+	if McpScenePath.resolve(player_path, scene_root) != null:
 		# Node exists — delegate so the type-mismatch error stays identical
 		# to _resolve_player's.
 		var existing := _resolve_player(player_path)
@@ -1366,7 +1365,7 @@ func _resolve_or_create_player(player_path: String) -> Dictionary:
 	if parent_path.is_empty() or parent_path == "/":
 		parent = scene_root
 	else:
-		parent = ScenePath.resolve(parent_path, scene_root)
+		parent = McpScenePath.resolve(parent_path, scene_root)
 		if parent == null:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
 				"Node not found: %s (and its parent %s also does not exist — create the parent first)" %
@@ -1386,9 +1385,9 @@ func _resolve_player_read(player_path: String) -> Dictionary:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-	var node := ScenePath.resolve(player_path, scene_root)
+	var node := McpScenePath.resolve(player_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(player_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(player_path, scene_root))
 	if not node is AnimationPlayer:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
 			"Node at %s is not an AnimationPlayer (got %s)" % [player_path, node.get_class()])

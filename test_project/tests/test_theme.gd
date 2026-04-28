@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ThemeHandler := preload("res://addons/godot_ai/handlers/theme_handler.gd")
+
 ## Tests for ThemeHandler — Theme resource authoring.
 
 var _handler: ThemeHandler

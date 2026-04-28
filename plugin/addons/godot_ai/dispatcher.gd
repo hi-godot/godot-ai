@@ -69,7 +69,7 @@ func enqueue(cmd: Dictionary) -> void:
 
 ## Handlers whose response flows out-of-band (e.g. debugger-channel capture)
 ## return this marker so tick() skips auto-sending a response. The handler is
-## responsible for pushing the final response via Connection._send_json when
+## responsible for pushing the final response via McpConnection._send_json when
 ## the async operation completes. The request_id is threaded through params
 ## under the "_request_id" key so the handler can correlate the response.
 const DEFERRED_RESPONSE := {"_deferred": true}

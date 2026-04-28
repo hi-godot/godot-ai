@@ -1,5 +1,5 @@
 @tool
-class_name ResourceIO
+class_name McpResourceIO
 extends RefCounted
 
 ## Shared helpers for "save a Resource to .tres" and the mutually-exclusive

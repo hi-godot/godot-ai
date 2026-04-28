@@ -1,5 +1,4 @@
 @tool
-class_name ControlDrawRecipeHandler
 extends RefCounted
 
 ## Handles the control_draw_recipe MCP command. Attaches a shared DrawRecipe
@@ -9,6 +8,7 @@ extends RefCounted
 ## single undo step.
 
 const DRAW_RECIPE_SCRIPT := preload("res://addons/godot_ai/runtime/draw_recipe.gd")
+const UiHandler := preload("res://addons/godot_ai/handlers/ui_handler.gd")
 
 var _undo_redo: EditorUndoRedoManager
 
@@ -31,9 +31,9 @@ func control_draw_recipe(params: Dictionary) -> Dictionary:
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 
-	var node := ScenePath.resolve(path, scene_root)
+	var node := McpScenePath.resolve(path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(path, scene_root))
 	if not node is Control:
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
@@ -74,7 +74,7 @@ func control_draw_recipe(params: Dictionary) -> Dictionary:
 	return {
 		"data":
 		{
-			"path": ScenePath.from_node(node, scene_root),
+			"path": McpScenePath.from_node(node, scene_root),
 			"ops_count": coerced_ops.size(),
 			"script_attached": old_script == null,
 			"script_replaced": old_script != null and old_script != DRAW_RECIPE_SCRIPT,

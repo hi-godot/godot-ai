@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
+
 ## Tests for NodeHandler — node reads and writes.
 
 var _handler: NodeHandler
@@ -1060,7 +1062,7 @@ func test_move_node_out_of_range() -> void:
 func test_add_to_group() -> void:
 	## Ensure clean state: remove from group if left over from a previous run
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var cam := ScenePath.resolve("/Main/Camera3D", scene_root)
+	var cam := McpScenePath.resolve("/Main/Camera3D", scene_root)
 	if cam and cam.is_in_group("_mcp_test_group"):
 		cam.remove_from_group("_mcp_test_group")
 
@@ -1126,7 +1128,7 @@ func test_add_to_group_accepts_string_name_value() -> void:
 	## String() before the typed local so the assignment can't trip a
 	## StringName→String type-mismatch at runtime.
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var cam := ScenePath.resolve("/Main/Camera3D", scene_root)
+	var cam := McpScenePath.resolve("/Main/Camera3D", scene_root)
 	if cam and cam.is_in_group("_mcp_test_sn_group"):
 		cam.remove_from_group("_mcp_test_sn_group")
 

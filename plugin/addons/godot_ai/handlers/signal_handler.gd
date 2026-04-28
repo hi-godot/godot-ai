@@ -1,5 +1,4 @@
 @tool
-class_name SignalHandler
 extends RefCounted
 
 ## Handles signal listing, connecting, and disconnecting on scene nodes.
@@ -20,9 +19,9 @@ func list_signals(params: Dictionary) -> Dictionary:
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 
-	var node := ScenePath.resolve(path, scene_root)
+	var node := McpScenePath.resolve(path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(path, scene_root))
 
 	## Default: hide editor-internal connections (SceneTreeEditor observers
 	## live on every scene node and would otherwise dominate the response).
@@ -58,7 +57,7 @@ func list_signals(params: Dictionary) -> Dictionary:
 
 	return {
 		"data": {
-			"path": ScenePath.from_node(node, scene_root),
+			"path": McpScenePath.from_node(node, scene_root),
 			"signals": signals,
 			"signal_count": signals.size(),
 			"connections": connections,
@@ -125,10 +124,10 @@ static func _format_target_path(target: Object, scene_root: Node) -> String:
 		return str(target)
 	var node_target: Node = target
 	if node_target == scene_root or scene_root.is_ancestor_of(node_target):
-		return ScenePath.from_node(node_target, scene_root)
+		return McpScenePath.from_node(node_target, scene_root)
 	if node_target.is_inside_tree():
 		return str(node_target.get_path())
-	return ScenePath.from_node(node_target, scene_root)
+	return McpScenePath.from_node(node_target, scene_root)
 
 
 func connect_signal(params: Dictionary) -> Dictionary:
@@ -219,7 +218,7 @@ func _resolve_signal_params(params: Dictionary) -> Dictionary:
 ##      silent "not found" hides the real reason the connection can't be made.
 ##   4. Not in scene and not a declared autoload → returns INVALID_PARAMS.
 func _resolve_node_or_autoload(path: String, scene_root: Node, role: String) -> Dictionary:
-	var node := ScenePath.resolve(path, scene_root)
+	var node := McpScenePath.resolve(path, scene_root)
 	if node != null:
 		return {"node": node}
 
@@ -243,9 +242,9 @@ func _resolve_node_or_autoload(path: String, scene_root: Node, role: String) -> 
 
 func _signal_response(source: Node, signal_name: String, target: Node, method: String, scene_root: Node) -> Dictionary:
 	return {
-		"source": ScenePath.from_node(source, scene_root),
+		"source": McpScenePath.from_node(source, scene_root),
 		"signal": signal_name,
-		"target": ScenePath.from_node(target, scene_root),
+		"target": McpScenePath.from_node(target, scene_root),
 		"method": method,
 		"undoable": true,
 	}

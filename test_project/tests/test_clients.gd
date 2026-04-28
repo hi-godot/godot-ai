@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ClientHandler := preload("res://addons/godot_ai/handlers/client_handler.gd")
+
 ## Tests for the client configuration registry + strategies.
 ##
 ## Per-client production paths point at real config files on the user's

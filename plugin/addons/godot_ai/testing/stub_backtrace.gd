@@ -1,5 +1,4 @@
 @tool
-class_name StubBacktrace
 extends RefCounted
 
 ## Minimal duck-typed stand-in for Godot's built-in `ScriptBacktrace`
@@ -11,7 +10,7 @@ extends RefCounted
 ## doesn't expose a constructor for the real ScriptBacktrace.
 ##
 ## Single-frame is enough: both loggers only consult the first non-empty
-## frame of `script_backtraces` (via `LogBacktrace.resolve_error`).
+## frame of `script_backtraces` (via `McpLogBacktrace.resolve_error`).
 
 var _file: String
 var _line: int

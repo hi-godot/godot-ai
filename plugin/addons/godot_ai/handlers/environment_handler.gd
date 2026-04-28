@@ -1,10 +1,11 @@
 @tool
-class_name EnvironmentHandler
 extends RefCounted
 
 ## Creates an Environment (+ optional Sky + ProceduralSkyMaterial) chain and
 ## either assigns it to a WorldEnvironment node or saves it to a .tres file.
 ## Bundles sub-resource creation + assignment in a single undo action.
+
+const ResourceHandler := preload("res://addons/godot_ai/handlers/resource_handler.gd")
 
 var _undo_redo: EditorUndoRedoManager
 
@@ -32,7 +33,7 @@ func create_environment(params: Dictionary) -> Dictionary:
 
 	# environment_create targets the whole WorldEnvironment node (no separate
 	# `property` param) — pass require_property=false.
-	var home_err := ResourceIO.validate_home(params, false)
+	var home_err := McpResourceIO.validate_home(params, false)
 	if home_err != null:
 		return home_err
 
@@ -116,9 +117,9 @@ func _assign_environment(env: Environment, sky: Sky, sky_material: ProceduralSky
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 
-	var node := ScenePath.resolve(node_path, scene_root)
+	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
 	if not (node is WorldEnvironment):
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
@@ -149,6 +150,6 @@ func _assign_environment(env: Environment, sky: Sky, sky_material: ProceduralSky
 
 
 func _save_environment(env: Environment, _sky: Sky, _sky_material: ProceduralSkyMaterial, resource_path: String, overwrite: bool, preset: String) -> Dictionary:
-	return ResourceIO.save_to_disk(env, resource_path, overwrite, "Environment", {
+	return McpResourceIO.save_to_disk(env, resource_path, overwrite, "Environment", {
 		"preset": preset,
 	})

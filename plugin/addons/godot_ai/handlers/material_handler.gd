@@ -1,5 +1,4 @@
 @tool
-class_name MaterialHandler
 extends RefCounted
 
 ## Handles Material authoring: creating .tres files, setting BaseMaterial3D
@@ -9,6 +8,8 @@ extends RefCounted
 ## Undo pattern mirrors AnimationHandler (single create_action bundles
 ## every dependency spawn).
 
+const MaterialValues := preload("res://addons/godot_ai/handlers/material_values.gd")
+const MaterialPresets := preload("res://addons/godot_ai/handlers/material_presets.gd")
 
 const _TYPE_TO_CLASS := {
 	"standard": "StandardMaterial3D",
@@ -347,9 +348,9 @@ func assign_material(params: Dictionary) -> Dictionary:
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 
-	var node := ScenePath.resolve(node_path, scene_root)
+	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
 
 	var slot: String = params.get("slot", "override")
 	var resource_path: String = params.get("resource_path", "")
@@ -441,9 +442,9 @@ func apply_to_node(params: Dictionary) -> Dictionary:
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 
-	var node := ScenePath.resolve(node_path, scene_root)
+	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
 
 	var slot: String = params.get("slot", "override")
 	var slot_result := _resolve_slot_property(node, slot)
@@ -581,9 +582,9 @@ func apply_preset(params: Dictionary) -> Dictionary:
 		var scene_root := EditorInterface.get_edited_scene_root()
 		if scene_root == null:
 			return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-		var node := ScenePath.resolve(node_path, scene_root)
+		var node := McpScenePath.resolve(node_path, scene_root)
 		if node == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
 		var slot_result := _resolve_slot_property(node, params.get("slot", "override"))
 		if slot_result.has("error"):
 			return slot_result

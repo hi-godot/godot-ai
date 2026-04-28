@@ -7,7 +7,7 @@ extends EditorDebuggerPlugin
 ## The game-side counterpart (`plugin/addons/godot_ai/runtime/game_helper.gd`,
 ## registered as autoload `_mcp_game_helper`) listens on EngineDebugger's
 ## message channel. This plugin sends "mcp:take_screenshot" requests and
-## routes the replies back through the WebSocket Connection using the
+## routes the replies back through the WebSocket McpConnection using the
 ## request_id the MCP dispatcher threaded through params.
 ##
 ## Why this exists: the game always runs as a separate OS process. Even
@@ -30,7 +30,7 @@ const DEFAULT_TIMEOUT_SEC := 8.0
 const GAME_READY_WAIT_SEC := 20.0
 
 var _log_buffer: McpLogBuffer
-var _game_log_buffer: GameLogBuffer
+var _game_log_buffer: McpGameLogBuffer
 
 ## Pending request_id -> {connection, deadline_ts, timer}
 var _pending: Dictionary = {}
@@ -43,7 +43,7 @@ var _game_ready := false
 signal game_ready
 
 
-func _init(log_buffer: McpLogBuffer = null, game_log_buffer: GameLogBuffer = null) -> void:
+func _init(log_buffer: McpLogBuffer = null, game_log_buffer: McpGameLogBuffer = null) -> void:
 	_log_buffer = log_buffer
 	_game_log_buffer = game_log_buffer
 
@@ -119,7 +119,7 @@ func _on_log_batch(data: Array) -> void:
 func request_game_screenshot(
 	request_id: String,
 	max_resolution: int,
-	connection: Connection,
+	connection: McpConnection,
 	timeout_sec: float = DEFAULT_TIMEOUT_SEC,
 ) -> void:
 	if request_id.is_empty():
@@ -152,7 +152,7 @@ func _wait_then_send(
 	tree: SceneTree,
 	request_id: String,
 	max_resolution: int,
-	connection: Connection,
+	connection: McpConnection,
 	timeout_sec: float,
 ) -> void:
 	var deadline := Time.get_ticks_msec() + int(GAME_READY_WAIT_SEC * 1000.0)
@@ -171,7 +171,7 @@ func _send_take_screenshot(
 	tree: SceneTree,
 	request_id: String,
 	max_resolution: int,
-	connection: Connection,
+	connection: McpConnection,
 	timeout_sec: float,
 ) -> void:
 	var session: EditorDebuggerSession = _first_active_session()
@@ -208,7 +208,7 @@ func _on_screenshot_response(data: Array) -> void:
 		return
 	_clear_pending(request_id)
 
-	var connection: Connection = pending.connection
+	var connection: McpConnection = pending.connection
 	if connection == null or not is_instance_valid(connection):
 		return
 
@@ -236,7 +236,7 @@ func _on_screenshot_error(data: Array) -> void:
 	if pending == null:
 		return
 	_clear_pending(request_id)
-	var connection: Connection = pending.connection
+	var connection: McpConnection = pending.connection
 	if connection == null or not is_instance_valid(connection):
 		return
 	_send_error(connection, request_id, McpErrorCodes.INTERNAL_ERROR, message)
@@ -247,7 +247,7 @@ func _on_timeout(request_id: String) -> void:
 	if pending == null:
 		return
 	_pending.erase(request_id)
-	var connection: Connection = pending.connection
+	var connection: McpConnection = pending.connection
 	if connection == null or not is_instance_valid(connection):
 		return
 	_send_error(connection, request_id, McpErrorCodes.INTERNAL_ERROR,
@@ -256,7 +256,7 @@ func _on_timeout(request_id: String) -> void:
 		_log_buffer.log("[debug] !! screenshot timeout (%s)" % request_id)
 
 
-func _send_error(connection: Connection, request_id: String, code: String, message: String) -> void:
+func _send_error(connection: McpConnection, request_id: String, code: String, message: String) -> void:
 	if connection == null or not is_instance_valid(connection):
 		return
 	var err := McpErrorCodes.make(code, message)

@@ -1,5 +1,4 @@
 @tool
-class_name CameraHandler
 extends RefCounted
 
 ## Handles Camera2D / Camera3D authoring — create, configure, bounds, damping,
@@ -9,6 +8,8 @@ extends RefCounted
 ## Setting current=true auto-unmarks previously-current cameras of the same
 ## class in the same action so one Ctrl-Z reverts the switch.
 
+const CameraValues := preload("res://addons/godot_ai/handlers/camera_values.gd")
+const CameraPresets := preload("res://addons/godot_ai/handlers/camera_presets.gd")
 
 const _VALID_TYPES := {
 	"2d": "Camera2D",
@@ -165,9 +166,9 @@ func create_camera(params: Dictionary) -> Dictionary:
 
 	var parent: Node = scene_root
 	if not parent_path.is_empty():
-		parent = ScenePath.resolve(parent_path, scene_root)
+		parent = McpScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_parent_error(parent_path, scene_root))
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_parent_error(parent_path, scene_root))
 
 	var node := _instantiate_camera(type_str)
 	if node == null:
@@ -191,8 +192,8 @@ func create_camera(params: Dictionary) -> Dictionary:
 
 	return {
 		"data": {
-			"path": ScenePath.from_node(node, scene_root),
-			"parent_path": ScenePath.from_node(parent, scene_root),
+			"path": McpScenePath.from_node(node, scene_root),
+			"parent_path": McpScenePath.from_node(parent, scene_root),
 			"name": String(node.name),
 			"type": type_str,
 			"class": _VALID_TYPES[type_str],
@@ -468,7 +469,7 @@ func follow_2d(params: Dictionary) -> Dictionary:
 	var target_path: String = params.get("target_path", "")
 	if target_path.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: target_path")
-	var target := ScenePath.resolve(target_path, scene_root)
+	var target := McpScenePath.resolve(target_path, scene_root)
 	if target == null:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Target not found: %s" % target_path)
 	if not (target is Node2D) and target != scene_root:
@@ -527,8 +528,8 @@ func follow_2d(params: Dictionary) -> Dictionary:
 
 	return {
 		"data": {
-			"path": ScenePath.from_node(node, scene_root),
-			"target_path": ScenePath.from_node(target, scene_root),
+			"path": McpScenePath.from_node(node, scene_root),
+			"target_path": McpScenePath.from_node(target, scene_root),
 			"reparented": reparented,
 			"smoothing_speed": smoothing_speed,
 			"zero_transform": zero_transform and (target is Node2D),
@@ -561,9 +562,9 @@ func get_camera(params: Dictionary) -> Dictionary:
 			node = all_cams[0]
 			resolved_via = "first"
 	else:
-		node = ScenePath.resolve(camera_path, scene_root)
+		node = McpScenePath.resolve(camera_path, scene_root)
 		if node == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(camera_path, scene_root))
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(camera_path, scene_root))
 		if not _is_camera(node):
 			return McpErrorCodes.make(
 				McpErrorCodes.INVALID_PARAMS,
@@ -596,7 +597,7 @@ func get_camera(params: Dictionary) -> Dictionary:
 
 	return {
 		"data": {
-			"path": ScenePath.from_node(node, scene_root),
+			"path": McpScenePath.from_node(node, scene_root),
 			"type": type_str,
 			"class": node.get_class(),
 			"current": _is_current(node),
@@ -619,7 +620,7 @@ func list_cameras(_params: Dictionary) -> Dictionary:
 	var out: Array[Dictionary] = []
 	for cam in cams:
 		out.append({
-			"path": ScenePath.from_node(cam, scene_root),
+			"path": McpScenePath.from_node(cam, scene_root),
 			"class": cam.get_class(),
 			"type": _camera_type_str(cam),
 			"current": _is_current(cam),
@@ -662,9 +663,9 @@ func apply_preset(params: Dictionary) -> Dictionary:
 
 	var parent: Node = scene_root
 	if not parent_path.is_empty():
-		parent = ScenePath.resolve(parent_path, scene_root)
+		parent = McpScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_parent_error(parent_path, scene_root))
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_parent_error(parent_path, scene_root))
 
 	var node := _instantiate_camera(type_str)
 	node.name = node_name
@@ -704,8 +705,8 @@ func apply_preset(params: Dictionary) -> Dictionary:
 
 	return {
 		"data": {
-			"path": ScenePath.from_node(node, scene_root),
-			"parent_path": ScenePath.from_node(parent, scene_root),
+			"path": McpScenePath.from_node(node, scene_root),
+			"parent_path": McpScenePath.from_node(parent, scene_root),
 			"name": node_name,
 			"preset": preset_name,
 			"type": type_str,
@@ -749,9 +750,9 @@ func _resolve_camera(params: Dictionary) -> Dictionary:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-	var node := ScenePath.resolve(node_path, scene_root)
+	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
 	if not _is_camera(node):
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,

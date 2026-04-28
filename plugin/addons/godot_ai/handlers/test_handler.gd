@@ -1,5 +1,4 @@
 @tool
-class_name TestHandler
 extends RefCounted
 
 ## Discovers and runs McpTestSuite scripts from res://tests/.

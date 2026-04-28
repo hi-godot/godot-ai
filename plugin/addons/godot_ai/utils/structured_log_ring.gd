@@ -1,5 +1,5 @@
 @tool
-class_name StructuredLogRing
+class_name McpStructuredLogRing
 extends RefCounted
 
 ## Head-indexed circular buffer of structured log entries shared by
@@ -101,7 +101,7 @@ func _logical_to_physical(logical: int) -> int:
 
 
 ## Reset the ring to empty. Subclasses with a mutex wrap this with their
-## lock; subclasses that surface `clear` to callers (EditorLogBuffer)
+## lock; subclasses that surface `clear` to callers (McpEditorLogBuffer)
 ## return the prior size from their wrapper.
 func _clear_storage() -> void:
 	_storage.clear()

@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const SignalHandler := preload("res://addons/godot_ai/handlers/signal_handler.gd")
+
 ## Tests for SignalHandler — signal listing, connecting, and disconnecting.
 
 var _handler: SignalHandler
@@ -175,7 +177,7 @@ func test_is_editor_internal_target_keeps_autoload_descendants() -> void:
 func test_format_target_path_uses_absolute_for_non_descendants() -> void:
 	## Copilot review on #222: when list_signals surfaces a connection
 	## targeting a non-descendant (e.g. an autoload subtree) the previous
-	## ScenePath.from_node() output was a scene-relative path with ``..``
+	## McpScenePath.from_node() output was a scene-relative path with ``..``
 	## segments like ``/Main/../../root/MyAutoload/Child`` — unparseable for
 	## agents and not round-trippable through scene-path resolution. The
 	## new formatter emits the canonical absolute SceneTree path for

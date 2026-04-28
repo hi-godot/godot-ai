@@ -18,6 +18,36 @@ const MANAGED_SERVER_PID_SETTING := "godot_ai/managed_server_pid"
 const MANAGED_SERVER_VERSION_SETTING := "godot_ai/managed_server_version"
 const UPDATE_RELOAD_RUNNER_SCRIPT := preload("res://addons/godot_ai/update_reload_runner.gd")
 
+## Handlers — preloaded as consts instead of registered via `class_name` so
+## they don't pollute the project-wide global scope. A user project that
+## happens to define its own `InputHandler`, `SceneHandler`, etc. would
+## otherwise hard-error on plugin enable.
+const EditorHandler := preload("res://addons/godot_ai/handlers/editor_handler.gd")
+const SceneHandler := preload("res://addons/godot_ai/handlers/scene_handler.gd")
+const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
+const ProjectHandler := preload("res://addons/godot_ai/handlers/project_handler.gd")
+const ClientHandler := preload("res://addons/godot_ai/handlers/client_handler.gd")
+const ScriptHandler := preload("res://addons/godot_ai/handlers/script_handler.gd")
+const ResourceHandler := preload("res://addons/godot_ai/handlers/resource_handler.gd")
+const FilesystemHandler := preload("res://addons/godot_ai/handlers/filesystem_handler.gd")
+const SignalHandler := preload("res://addons/godot_ai/handlers/signal_handler.gd")
+const AutoloadHandler := preload("res://addons/godot_ai/handlers/autoload_handler.gd")
+const InputHandler := preload("res://addons/godot_ai/handlers/input_handler.gd")
+const TestHandler := preload("res://addons/godot_ai/handlers/test_handler.gd")
+const BatchHandler := preload("res://addons/godot_ai/handlers/batch_handler.gd")
+const UiHandler := preload("res://addons/godot_ai/handlers/ui_handler.gd")
+const ThemeHandler := preload("res://addons/godot_ai/handlers/theme_handler.gd")
+const AnimationHandler := preload("res://addons/godot_ai/handlers/animation_handler.gd")
+const MaterialHandler := preload("res://addons/godot_ai/handlers/material_handler.gd")
+const ParticleHandler := preload("res://addons/godot_ai/handlers/particle_handler.gd")
+const CameraHandler := preload("res://addons/godot_ai/handlers/camera_handler.gd")
+const AudioHandler := preload("res://addons/godot_ai/handlers/audio_handler.gd")
+const PhysicsShapeHandler := preload("res://addons/godot_ai/handlers/physics_shape_handler.gd")
+const EnvironmentHandler := preload("res://addons/godot_ai/handlers/environment_handler.gd")
+const TextureHandler := preload("res://addons/godot_ai/handlers/texture_handler.gd")
+const CurveHandler := preload("res://addons/godot_ai/handlers/curve_handler.gd")
+const ControlDrawRecipeHandler := preload("res://addons/godot_ai/handlers/control_draw_recipe_handler.gd")
+
 ## The Python server writes its own PID here on startup (passed as
 ## `--pid-file`) and unlinks on clean exit. Deterministic replacement
 ## for scraping `netstat -ano` to find the port owner — especially on
@@ -36,11 +66,11 @@ const SERVER_WATCH_MS := 30 * 1000
 ## observe either the pid-file (dev venv) or the port listening (uvx).
 const SPAWN_GRACE_MS := 5 * 1000
 
-var _connection: Connection
+var _connection: McpConnection
 var _dispatcher: McpDispatcher
 var _log_buffer: McpLogBuffer
-var _game_log_buffer: GameLogBuffer
-var _editor_log_buffer: EditorLogBuffer
+var _game_log_buffer: McpGameLogBuffer
+var _editor_log_buffer: McpEditorLogBuffer
 ## Untyped — script extends Godot 4.5+'s Logger class, loaded via load() so
 ## the plugin still parses on 4.4. Null on Godot < 4.5 or before
 ## `_attach_editor_logger` runs; "attached" state IS exactly "non-null".
@@ -89,12 +119,12 @@ func _enter_tree() -> void:
 	_start_server()
 
 	_log_buffer = McpLogBuffer.new()
-	_game_log_buffer = GameLogBuffer.new()
-	_editor_log_buffer = EditorLogBuffer.new()
+	_game_log_buffer = McpGameLogBuffer.new()
+	_editor_log_buffer = McpEditorLogBuffer.new()
 	_attach_editor_logger()
 	_dispatcher = McpDispatcher.new(_log_buffer)
 
-	_connection = Connection.new()
+	_connection = McpConnection.new()
 	_connection.log_buffer = _log_buffer
 
 	_debugger_plugin = McpDebuggerPlugin.new(_log_buffer, _game_log_buffer)
@@ -270,7 +300,7 @@ func _exit_tree() -> void:
 	## Outer-to-inner teardown. Dispatcher Callables hold RefCounted handlers
 	## alive past the point where Godot reloads their class_name scripts — the
 	## first post-reload call into a typed-array-holding handler (e.g.
-	## GameLogBuffer._storage) then SIGSEGVs against a stale class descriptor.
+	## McpGameLogBuffer._storage) then SIGSEGVs against a stale class descriptor.
 	## See issue #46.
 
 	# Stop inbound work first so _process can't enqueue new commands or
@@ -473,7 +503,7 @@ func _start_server() -> void:
 	## netstat shows nothing and the dock's reconnect spinner climbs
 	## forever. Catch it before we even try and skip the spawn entirely —
 	## the port picker is the only useful next step. See issue #146.
-	if WindowsPortReservation.is_port_excluded(port):
+	if McpWindowsPortReservation.is_port_excluded(port):
 		_server_started_this_session = true
 		_set_spawn_state(McpSpawnState.PORT_EXCLUDED)
 		push_warning("MCP | port %d is reserved by Windows (Hyper-V / WSL2 / Docker)" % port)
@@ -526,12 +556,12 @@ func _set_spawn_state(state: String) -> void:
 ## diagnostic.
 ##
 ## We intentionally poll `_connection.is_connected` from `_process`
-## instead of wiring a new signal on Connection — signals would be
-## cleaner, but `class_name Connection` is cached by the editor across
+## instead of wiring a new signal on McpConnection — signals would be
+## cleaner, but `class_name McpConnection` is cached by the editor across
 ## plugin disable/enable, and a self-update that added a new signal
 ## crashes `_enter_tree` with "invalid access to property" until the
 ## user restarts Godot. Polling only reads `is_connected` (present on
-## every shipped Connection), so upgrades stay hot-reloadable.
+## every shipped McpConnection), so upgrades stay hot-reloadable.
 ##
 ## The watch self-disarms after SPAWN_GRACE_MS so per-frame cost drops
 ## back to zero even if the foreign occupant never opens a WebSocket.

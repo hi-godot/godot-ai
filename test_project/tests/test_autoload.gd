@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const AutoloadHandler := preload("res://addons/godot_ai/handlers/autoload_handler.gd")
+
 ## Tests for AutoloadHandler — autoload listing, adding, and removing.
 
 var _handler: AutoloadHandler

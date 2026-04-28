@@ -24,13 +24,13 @@ extends Logger
 ## valuable source later, _log_message can be added behind the same filter.
 ##
 ## Logger virtuals can be called from any thread (e.g. async script
-## loaders push parse errors off the main thread). EditorLogBuffer is
+## loaders push parse errors off the main thread). McpEditorLogBuffer is
 ## mutex-protected so we can append directly without an intermediate queue.
 
 const ADDON_PATH_MARKER := "/addons/godot_ai/"
 
-## EditorLogBuffer — untyped because this script is loaded dynamically and
-## EditorLogBuffer's class_name isn't yet registered on the parser at the
+## McpEditorLogBuffer — untyped because this script is loaded dynamically and
+## McpEditorLogBuffer's class_name isn't yet registered on the parser at the
 ## time `extends Logger` resolves. Constructor-injected so the hot path
 ## doesn't need a per-call null check.
 var _buffer
@@ -58,7 +58,7 @@ func _log_error(
 	## paying for resolve_error's call frame + dict allocation.
 	if not _is_user_script(file) and script_backtraces.is_empty():
 		return
-	var resolved := LogBacktrace.resolve_error(
+	var resolved := McpLogBacktrace.resolve_error(
 		function, file, line, code, rationale, error_type, script_backtraces,
 	)
 	if not _is_user_script(resolved.path):

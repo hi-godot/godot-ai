@@ -1,5 +1,4 @@
 @tool
-class_name ClientHandler
 extends RefCounted
 
 ## Handles MCP client configuration commands.

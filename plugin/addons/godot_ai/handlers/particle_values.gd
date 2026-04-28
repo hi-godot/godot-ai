@@ -1,9 +1,9 @@
 @tool
-class_name ParticleValues
 extends RefCounted
 
 ## Value coercion + gradient/curve builders for particle properties.
 
+const MaterialValues := preload("res://addons/godot_ai/handlers/material_values.gd")
 
 const _EMISSION_SHAPES := {
 	"point": ParticleProcessMaterial.EMISSION_SHAPE_POINT,

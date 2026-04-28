@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ControlDrawRecipeHandler := preload("res://addons/godot_ai/handlers/control_draw_recipe_handler.gd")
+
 ## Live-editor tests for ControlDrawRecipeHandler — control_draw_recipe command.
 ## Covers: op validation, value coercion (Color/Vector2/Rect2/PackedVector2Array),
 ## script attachment, meta persistence, undo/redo round-trips, error paths.
@@ -51,7 +53,7 @@ func test_line_op_lands_and_coerces() -> void:
 	assert_true(result.data.undoable)
 
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(path, scene_root)
+	var node := McpScenePath.resolve(path, scene_root)
 	assert_true(node.get_script() == DRAW_RECIPE_SCRIPT, "DrawRecipe script attached")
 	assert_true(node.has_meta("_ops"), "_ops meta set")
 
@@ -96,7 +98,7 @@ func test_rect_op_all_dict_forms() -> void:
 	assert_eq(result.data.ops_count, 3)
 
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(path, scene_root)
+	var node := McpScenePath.resolve(path, scene_root)
 	var stored: Array = node.get_meta("_ops")
 	assert_true(stored[0].rect is Rect2)
 	assert_eq(stored[0].rect, Rect2(0, 0, 10, 10))
@@ -131,7 +133,7 @@ func test_rect_outline_preserves_width() -> void:
 	assert_has_key(result, "data")
 
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(path, scene_root)
+	var node := McpScenePath.resolve(path, scene_root)
 	var stored: Array = node.get_meta("_ops")
 	assert_eq(stored[0].filled, false)
 	assert_eq(stored[0].width, 3.0)
@@ -159,7 +161,7 @@ func test_polyline_points_stored_as_packed_array() -> void:
 	)
 	assert_has_key(result, "data")
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(path, scene_root)
+	var node := McpScenePath.resolve(path, scene_root)
 	var stored: Array = node.get_meta("_ops")
 	var pts: Variant = stored[0].points
 	assert_eq(typeof(pts), TYPE_PACKED_VECTOR2_ARRAY, "points stored as PackedVector2Array")
@@ -227,7 +229,7 @@ func test_undo_reverts_clean_node() -> void:
 		skip("Scene not ready")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(path, scene_root)
+	var node := McpScenePath.resolve(path, scene_root)
 
 	var result := _handler.control_draw_recipe(
 		{
@@ -257,7 +259,7 @@ func test_undo_preserves_prior_meta() -> void:
 		skip("Scene not ready")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(path, scene_root)
+	var node := McpScenePath.resolve(path, scene_root)
 
 	var ops_a: Array = [{"draw": "circle", "center": [1, 1], "radius": 1, "color": "red"}]
 	var r1 := _handler.control_draw_recipe({"path": path, "ops": ops_a})
@@ -324,7 +326,7 @@ func test_missing_required_op_field_errors() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	assert_contains(result.error.message, "'to'")
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(path, scene_root)
+	var node := McpScenePath.resolve(path, scene_root)
 	assert_false(node.has_meta("_ops"), "invalid op must not mutate node")
 	assert_true(node.get_script() == null)
 	_remove_control(path)
@@ -349,7 +351,7 @@ func test_existing_user_script_rejected_when_clear_existing_false() -> void:
 		skip("Scene not ready")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(path, scene_root)
+	var node := McpScenePath.resolve(path, scene_root)
 
 	var user_script := GDScript.new()
 	user_script.source_code = "@tool\nextends Control\n"
@@ -377,7 +379,7 @@ func test_reinvoke_idempotent_replaces_meta() -> void:
 		skip("Scene not ready")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(path, scene_root)
+	var node := McpScenePath.resolve(path, scene_root)
 
 	var r1 := _handler.control_draw_recipe(
 		{
@@ -421,7 +423,7 @@ func test_zero_ops_succeeds() -> void:
 	assert_eq(result.data.ops_count, 0)
 
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(path, scene_root)
+	var node := McpScenePath.resolve(path, scene_root)
 	assert_true(node.has_meta("_ops"))
 	var stored: Array = node.get_meta("_ops")
 	assert_eq(stored.size(), 0)

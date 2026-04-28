@@ -41,7 +41,7 @@ func _log_error(
 	## location has nowhere structured to land for the game side, so we
 	## inline it into `text`. editor_logger keeps the resolved fields
 	## as structured columns instead.
-	var resolved := LogBacktrace.resolve_error(
+	var resolved := McpLogBacktrace.resolve_error(
 		function, file, line, code, rationale, error_type, script_backtraces,
 	)
 	var loc := ""

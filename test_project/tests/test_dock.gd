@@ -229,12 +229,12 @@ func test_drain_helper_does_not_poison_shutdown_flag() -> void:
 
 
 ## Shared fixture for the three version-label tests. Inject a Label + Button
-## + Connection onto the dock so the pure refresh logic can be exercised
+## + McpConnection onto the dock so the pure refresh logic can be exercised
 ## without depending on whether the test environment resolves as user mode
 ## or dev checkout (the user-mode Server row is what owns these handles in
 ## production — see `_refresh_setup_status`).
-func _seed_server_row(server_ver: String) -> Connection:
-	var conn := Connection.new()
+func _seed_server_row(server_ver: String) -> McpConnection:
+	var conn := McpConnection.new()
 	_dock._connection = conn
 	_dock._setup_server_label = Label.new()
 	_dock._version_restart_btn = Button.new()
@@ -244,7 +244,7 @@ func _seed_server_row(server_ver: String) -> Connection:
 	return conn
 
 
-func _cleanup_server_row(conn: Connection) -> void:
+func _cleanup_server_row(conn: McpConnection) -> void:
 	_dock._setup_server_label.free()
 	_dock._setup_server_label = null
 	_dock._version_restart_btn.free()

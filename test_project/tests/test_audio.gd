@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const AudioHandler := preload("res://addons/godot_ai/handlers/audio_handler.gd")
+
 ## Tests for AudioHandler — AudioStreamPlayer / 2D / 3D node authoring,
 ## stream assignment, playback properties, editor-preview play/stop, and
 ## audio asset listing.
@@ -62,7 +64,7 @@ func _remove_by_path(path: String) -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		return
-	var node := ScenePath.resolve(path, scene_root)
+	var node := McpScenePath.resolve(path, scene_root)
 	if node != null and node.get_parent() != null:
 		node.get_parent().remove_child(node)
 		node.queue_free()
@@ -116,7 +118,7 @@ func test_create_3d() -> void:
 	var result := _create("TestPlayer3D", "3d")
 	assert_has_key(result, "data")
 	assert_eq(result.data.class, "AudioStreamPlayer3D")
-	var node := ScenePath.resolve(result.data.path, scene_root) as AudioStreamPlayer3D
+	var node := McpScenePath.resolve(result.data.path, scene_root) as AudioStreamPlayer3D
 	assert_true(node != null, "Created node should resolve as AudioStreamPlayer3D")
 
 
@@ -163,7 +165,7 @@ func test_set_stream_loads_and_assigns() -> void:
 	assert_true(result.data.undoable)
 	# Critical: read back the stored value — must be an AudioStream, not a string.
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(r.data.path, scene_root) as AudioStreamPlayer
+	var node := McpScenePath.resolve(r.data.path, scene_root) as AudioStreamPlayer
 	assert_true(node.stream is AudioStream,
 		"stream must be AudioStream (got %s)" % type_string(typeof(node.stream)))
 
@@ -218,7 +220,7 @@ func test_set_stream_on_non_player_errors() -> void:
 	scene_root.add_child(mi)
 	mi.owner = scene_root
 	var result := _handler.set_stream({
-		"player_path": ScenePath.from_node(mi, scene_root),
+		"player_path": McpScenePath.from_node(mi, scene_root),
 		"stream_path": _fixture_path,
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
@@ -245,7 +247,7 @@ func test_set_playback_all_fields() -> void:
 	assert_has_key(result, "data")
 	assert_true(result.data.undoable)
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(r.data.path, scene_root) as AudioStreamPlayer
+	var node := McpScenePath.resolve(r.data.path, scene_root) as AudioStreamPlayer
 	assert_true(abs(node.volume_db - (-6.0)) < 0.01)
 	assert_true(abs(node.pitch_scale - 1.25) < 0.01)
 	assert_eq(node.autoplay, true)
@@ -258,7 +260,7 @@ func test_set_playback_partial_update_leaves_others_unchanged() -> void:
 		assert_true(false, "Player creation failed")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
-	var node := ScenePath.resolve(r.data.path, scene_root) as AudioStreamPlayer
+	var node := McpScenePath.resolve(r.data.path, scene_root) as AudioStreamPlayer
 	var old_pitch := node.pitch_scale
 	var old_bus := String(node.bus)
 	var result := _handler.set_playback({

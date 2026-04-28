@@ -1,6 +1,9 @@
 @tool
 extends McpTestSuite
 
+const EditorHandler := preload("res://addons/godot_ai/handlers/editor_handler.gd")
+const StubBacktrace := preload("res://addons/godot_ai/testing/stub_backtrace.gd")
+
 ## Tests for EditorHandler — editor state, selection, and logs.
 
 var _handler: EditorHandler
@@ -160,7 +163,7 @@ func test_screenshot_view_target_duplicates() -> void:
 	var target_path := ""
 	for child in scene_root.get_children():
 		if child is Node3D:
-			target_path = ScenePath.from_node(child, scene_root)
+			target_path = McpScenePath.from_node(child, scene_root)
 			break
 	if target_path.is_empty():
 		skip("No Node3D target found in scene")
@@ -182,7 +185,7 @@ func test_screenshot_view_target_single_path_unchanged() -> void:
 	var target_path := ""
 	for child in scene_root.get_children():
 		if child is Node3D:
-			target_path = ScenePath.from_node(child, scene_root)
+			target_path = McpScenePath.from_node(child, scene_root)
 			break
 	if target_path.is_empty():
 		skip("No Node3D target found in scene")
@@ -242,11 +245,11 @@ func test_screenshot_coverage_with_view_target() -> void:
 	var target_path := ""
 	var preferred := scene_root.get_node_or_null("SnowGroup")
 	if preferred != null and preferred is Node3D:
-		target_path = ScenePath.from_node(preferred, scene_root)
+		target_path = McpScenePath.from_node(preferred, scene_root)
 	else:
 		for child in scene_root.get_children():
 			if child is Node3D:
-				target_path = ScenePath.from_node(child, scene_root)
+				target_path = McpScenePath.from_node(child, scene_root)
 				break
 	if target_path.is_empty():
 		skip("No Node3D target found in scene")
@@ -281,7 +284,7 @@ func test_screenshot_view_target_has_aabb_metadata() -> void:
 	var target_path := ""
 	for child in scene_root.get_children():
 		if child is Node3D:
-			target_path = ScenePath.from_node(child, scene_root)
+			target_path = McpScenePath.from_node(child, scene_root)
 			break
 	if target_path.is_empty():
 		skip("No Node3D target found in scene")
@@ -304,7 +307,7 @@ func test_screenshot_custom_angles() -> void:
 	var target_path := ""
 	for child in scene_root.get_children():
 		if child is Node3D:
-			target_path = ScenePath.from_node(child, scene_root)
+			target_path = McpScenePath.from_node(child, scene_root)
 			break
 	if target_path.is_empty():
 		skip("No Node3D target found in scene")
@@ -329,7 +332,7 @@ func test_screenshot_custom_fov() -> void:
 	var target_path := ""
 	for child in scene_root.get_children():
 		if child is Node3D:
-			target_path = ScenePath.from_node(child, scene_root)
+			target_path = McpScenePath.from_node(child, scene_root)
 			break
 	if target_path.is_empty():
 		skip("No Node3D target found in scene")
@@ -453,7 +456,7 @@ func test_screenshot_cinematic_prefers_current_camera() -> void:
 	if not result.has("data"):
 		skip("Cinematic render not available in headless mode")
 		return
-	var expected := ScenePath.from_node(chosen, scene_root)
+	var expected := McpScenePath.from_node(chosen, scene_root)
 	assert_eq(result.data.camera_path, expected)
 
 
@@ -485,10 +488,10 @@ func _collect_cameras(root: Node) -> Array[Camera3D]:
 	return out
 
 
-# ----- GameLogBuffer (issue #73) -----
+# ----- McpGameLogBuffer (issue #73) -----
 
 func test_game_log_buffer_append_and_get_range() -> void:
-	var buf := GameLogBuffer.new()
+	var buf := McpGameLogBuffer.new()
 	buf.append("info", "hello")
 	buf.append("warn", "almost out of fuel")
 	buf.append("error", "boom")
@@ -503,7 +506,7 @@ func test_game_log_buffer_append_and_get_range() -> void:
 
 
 func test_game_log_buffer_get_range_offset_and_count() -> void:
-	var buf := GameLogBuffer.new()
+	var buf := McpGameLogBuffer.new()
 	for i in range(5):
 		buf.append("info", "line %d" % i)
 	var page := buf.get_range(2, 2)
@@ -513,15 +516,15 @@ func test_game_log_buffer_get_range_offset_and_count() -> void:
 
 
 func test_game_log_buffer_unknown_level_coerces_to_info() -> void:
-	var buf := GameLogBuffer.new()
+	var buf := McpGameLogBuffer.new()
 	buf.append("not-a-level", "weird")
 	var entries := buf.get_range(0, 10)
 	assert_eq(entries[0].level, "info", "Unknown level should coerce to info")
 
 
 func test_game_log_buffer_ring_evicts_and_tracks_dropped() -> void:
-	var buf := GameLogBuffer.new()
-	var cap := GameLogBuffer.MAX_LINES
+	var buf := McpGameLogBuffer.new()
+	var cap := McpGameLogBuffer.MAX_LINES
 	for i in range(cap + 5):
 		buf.append("info", "n %d" % i)
 	assert_eq(buf.total_count(), cap, "Buffer should cap at MAX_LINES")
@@ -532,7 +535,7 @@ func test_game_log_buffer_ring_evicts_and_tracks_dropped() -> void:
 
 
 func test_game_log_buffer_clear_for_new_run_rotates_run_id() -> void:
-	var buf := GameLogBuffer.new()
+	var buf := McpGameLogBuffer.new()
 	buf.append("info", "before")
 	## Time.get_ticks_msec changes between calls — guarantees distinct ids.
 	var first_id := buf.clear_for_new_run()
@@ -549,8 +552,8 @@ func test_game_log_buffer_preserves_order_after_multiple_wraps() -> void:
 	## Post O(1)-circular-buffer rewrite: verify that two full wraps still
 	## leave entries in correct logical order, and that get_range across the
 	## wrap boundary doesn't return the physical-slot order by mistake.
-	var buf := GameLogBuffer.new()
-	var cap := GameLogBuffer.MAX_LINES
+	var buf := McpGameLogBuffer.new()
+	var cap := McpGameLogBuffer.MAX_LINES
 	## Fill cap, then wrap 1.5 times: total 2.5 * cap writes.
 	var total := cap * 5 / 2
 	for i in range(total):
@@ -571,8 +574,8 @@ func test_game_log_buffer_preserves_order_after_multiple_wraps() -> void:
 
 
 func test_game_log_buffer_get_recent_works_after_wrap() -> void:
-	var buf := GameLogBuffer.new()
-	var cap := GameLogBuffer.MAX_LINES
+	var buf := McpGameLogBuffer.new()
+	var cap := McpGameLogBuffer.MAX_LINES
 	for i in range(cap + 10):
 		buf.append("info", "w %d" % i)
 	var tail := buf.get_recent(3)
@@ -651,7 +654,7 @@ func test_get_logs_source_game_empty_when_no_buffer() -> void:
 
 
 func test_get_logs_source_game_returns_buffered_entries() -> void:
-	var game_buf := GameLogBuffer.new()
+	var game_buf := McpGameLogBuffer.new()
 	game_buf.clear_for_new_run()
 	game_buf.append("info", "spawned 12 blocks")
 	game_buf.append("error", "null deref")
@@ -665,7 +668,7 @@ func test_get_logs_source_game_returns_buffered_entries() -> void:
 
 
 func test_get_logs_source_game_offset_applies() -> void:
-	var game_buf := GameLogBuffer.new()
+	var game_buf := McpGameLogBuffer.new()
 	for i in range(5):
 		game_buf.append("info", "g %d" % i)
 	var handler := EditorHandler.new(McpLogBuffer.new(), null, null, game_buf)
@@ -681,7 +684,7 @@ func test_get_logs_source_all_includes_both_streams() -> void:
 	var plugin_buf := McpLogBuffer.new()
 	plugin_buf.log("plugin-a")
 	plugin_buf.log("plugin-b")
-	var game_buf := GameLogBuffer.new()
+	var game_buf := McpGameLogBuffer.new()
 	game_buf.append("warn", "game-c")
 	var handler := EditorHandler.new(plugin_buf, null, null, game_buf)
 	var result := handler.get_logs({"source": "all", "count": 10})
@@ -695,10 +698,10 @@ func test_get_logs_source_all_includes_both_streams() -> void:
 	assert_eq(result.data.lines[2].text, "game-c")
 
 
-# ----- EditorLogBuffer (issue #231) -----
+# ----- McpEditorLogBuffer (issue #231) -----
 
 func test_editor_log_buffer_append_and_get_range() -> void:
-	var buf := EditorLogBuffer.new()
+	var buf := McpEditorLogBuffer.new()
 	buf.append("error", "Parse Error", "res://broken.gd", 12, "")
 	buf.append("warn", "deprecation", "res://foo.gd", 4, "_ready")
 	var entries := buf.get_range(0, 10)
@@ -714,7 +717,7 @@ func test_editor_log_buffer_append_and_get_range() -> void:
 
 
 func test_editor_log_buffer_unknown_level_coerces_to_info() -> void:
-	var buf := EditorLogBuffer.new()
+	var buf := McpEditorLogBuffer.new()
 	buf.append("fatal", "huh")
 	assert_eq(buf.get_range(0, 1)[0].level, "info", "Unknown level should coerce to info")
 
@@ -723,7 +726,7 @@ func test_editor_log_buffer_missing_fields_default_to_empty() -> void:
 	## A logger that omits structured fields (e.g. printerr without script
 	## context) should still produce a well-formed entry — callers iterating
 	## response shape never KeyError.
-	var buf := EditorLogBuffer.new()
+	var buf := McpEditorLogBuffer.new()
 	buf.append("error", "bare")
 	var e := buf.get_range(0, 1)[0]
 	assert_eq(e.path, "")
@@ -732,8 +735,8 @@ func test_editor_log_buffer_missing_fields_default_to_empty() -> void:
 
 
 func test_editor_log_buffer_ring_evicts_and_tracks_dropped() -> void:
-	var buf := EditorLogBuffer.new()
-	var cap := EditorLogBuffer.MAX_LINES
+	var buf := McpEditorLogBuffer.new()
+	var cap := McpEditorLogBuffer.MAX_LINES
 	for i in range(cap + 7):
 		buf.append("error", "n %d" % i, "res://x.gd", i)
 	assert_eq(buf.total_count(), cap, "Buffer should cap at MAX_LINES")
@@ -744,7 +747,7 @@ func test_editor_log_buffer_ring_evicts_and_tracks_dropped() -> void:
 
 
 func test_editor_log_buffer_clear_resets_counts() -> void:
-	var buf := EditorLogBuffer.new()
+	var buf := McpEditorLogBuffer.new()
 	for i in range(5):
 		buf.append("error", "n %d" % i)
 	var cleared := buf.clear()
@@ -770,7 +773,7 @@ func test_get_logs_source_editor_empty_when_no_buffer() -> void:
 
 
 func test_get_logs_source_editor_returns_buffered_entries() -> void:
-	var ed_buf := EditorLogBuffer.new()
+	var ed_buf := McpEditorLogBuffer.new()
 	ed_buf.append("error", "Parse Error: Expected statement", "res://broken.gd", 17, "")
 	ed_buf.append("warn", "Integer division", "res://math.gd", 3, "_compute")
 	var handler := EditorHandler.new(McpLogBuffer.new(), null, null, null, ed_buf)
@@ -785,7 +788,7 @@ func test_get_logs_source_editor_returns_buffered_entries() -> void:
 
 
 func test_get_logs_source_editor_offset_applies() -> void:
-	var ed_buf := EditorLogBuffer.new()
+	var ed_buf := McpEditorLogBuffer.new()
 	for i in range(5):
 		ed_buf.append("error", "e %d" % i, "res://x.gd", i)
 	var handler := EditorHandler.new(McpLogBuffer.new(), null, null, null, ed_buf)
@@ -800,9 +803,9 @@ func test_get_logs_source_editor_offset_applies() -> void:
 func test_get_logs_source_all_includes_editor_between_plugin_and_game() -> void:
 	var plugin_buf := McpLogBuffer.new()
 	plugin_buf.log("plugin-a")
-	var ed_buf := EditorLogBuffer.new()
+	var ed_buf := McpEditorLogBuffer.new()
 	ed_buf.append("error", "parse err", "res://x.gd", 1, "")
-	var game_buf := GameLogBuffer.new()
+	var game_buf := McpGameLogBuffer.new()
 	game_buf.append("info", "game-runtime")
 	var handler := EditorHandler.new(plugin_buf, null, null, game_buf, ed_buf)
 	var result := handler.get_logs({"source": "all", "count": 10})
@@ -818,11 +821,11 @@ func test_get_logs_source_all_dropped_count_includes_editor() -> void:
 	## The dropped_count surfaced by source="all" should aggregate across
 	## both ring buffers so a caller polling for "are we losing entries"
 	## doesn't have to read each source separately.
-	var ed_buf := EditorLogBuffer.new()
-	for i in range(EditorLogBuffer.MAX_LINES + 3):
+	var ed_buf := McpEditorLogBuffer.new()
+	for i in range(McpEditorLogBuffer.MAX_LINES + 3):
 		ed_buf.append("error", "x %d" % i)
-	var game_buf := GameLogBuffer.new()
-	for i in range(GameLogBuffer.MAX_LINES + 4):
+	var game_buf := McpGameLogBuffer.new()
+	for i in range(McpGameLogBuffer.MAX_LINES + 4):
 		game_buf.append("info", "g %d" % i)
 	var handler := EditorHandler.new(McpLogBuffer.new(), null, null, game_buf, ed_buf)
 	var result := handler.get_logs({"source": "all", "count": 1})
@@ -850,7 +853,7 @@ func test_editor_logger_captures_user_script_parse_error() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return
-	var ed_buf := EditorLogBuffer.new()
+	var ed_buf := McpEditorLogBuffer.new()
 	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
 	logger._log_error(
 		"_parse",
@@ -874,7 +877,7 @@ func test_editor_logger_warn_error_type_maps_to_warn_level() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return
-	var ed_buf := EditorLogBuffer.new()
+	var ed_buf := McpEditorLogBuffer.new()
 	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
 	logger._log_error("_run", "res://x.gd", 3, "deprecated", "", false, 1, [])
 	var entries := ed_buf.get_range(0, 10)
@@ -890,7 +893,7 @@ func test_editor_logger_drops_internal_godot_cpp_noise() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return
-	var ed_buf := EditorLogBuffer.new()
+	var ed_buf := McpEditorLogBuffer.new()
 	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
 	logger._log_error("foo", "scene/main/scene_tree.cpp", 1234, "noise", "", false, 0, [])
 	assert_eq(ed_buf.total_count(), 0, "C++-source errors with no script backtrace should be filtered")
@@ -902,7 +905,7 @@ func test_editor_logger_drops_godot_ai_addon_to_avoid_feedback_loop() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return
-	var ed_buf := EditorLogBuffer.new()
+	var ed_buf := McpEditorLogBuffer.new()
 	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
 	logger._log_error("_start_server", "res://addons/godot_ai/plugin.gd", 100, "self-noise", "", false, 1, [])
 	assert_eq(ed_buf.total_count(), 0, "addons/godot_ai/ paths should be filtered")
@@ -916,7 +919,7 @@ func test_editor_logger_uses_script_backtrace_for_push_error() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return
-	var ed_buf := EditorLogBuffer.new()
+	var ed_buf := McpEditorLogBuffer.new()
 	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
 
 	## Build a stub backtrace object with the same getter shape Godot
@@ -948,7 +951,7 @@ func test_editor_logger_drops_push_error_from_plugin_via_backtrace() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return
-	var ed_buf := EditorLogBuffer.new()
+	var ed_buf := McpEditorLogBuffer.new()
 	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
 	var bt := StubBacktrace.new("res://addons/godot_ai/plugin.gd", 50, "_attach_editor_logger")
 	logger._log_error(
@@ -1007,7 +1010,7 @@ func test_editor_logger_is_in_godot_ai_addon_predicate() -> void:
 # ----- McpDebuggerPlugin: log batch capture (issue #73) -----
 
 func test_debugger_plugin_log_batch_appends_to_buffer() -> void:
-	var game_buf := GameLogBuffer.new()
+	var game_buf := McpGameLogBuffer.new()
 	var plugin := McpDebuggerPlugin.new(null, game_buf)
 	plugin._capture("mcp:log_batch", [[
 		["info", "alpha"],
@@ -1020,7 +1023,7 @@ func test_debugger_plugin_log_batch_appends_to_buffer() -> void:
 
 
 func test_debugger_plugin_hello_rotates_run_id() -> void:
-	var game_buf := GameLogBuffer.new()
+	var game_buf := McpGameLogBuffer.new()
 	game_buf.append("info", "stale from previous run")
 	var plugin := McpDebuggerPlugin.new(null, game_buf)
 	plugin._capture("mcp:hello", [], 0)
@@ -1103,7 +1106,7 @@ func test_game_logger_uses_script_backtrace_for_push_error() -> void:
 	## the queued text must report the user's GDScript location (from the
 	## first backtrace frame), not the C++ wrapper. Mirrors the
 	## editor_logger backtrace-remap test — game_logger went uncovered
-	## until the LogBacktrace.resolve_error extraction.
+	## until the McpLogBacktrace.resolve_error extraction.
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return

@@ -1,5 +1,4 @@
 @tool
-class_name CameraValues
 extends RefCounted
 
 ## Value coercion helpers for camera authoring.

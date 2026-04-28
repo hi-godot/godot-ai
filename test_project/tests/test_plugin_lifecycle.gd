@@ -266,11 +266,11 @@ func test_process_clears_foreign_port_on_successful_connection() -> void:
 	## `_watch_for_adoption_confirmation` arms the deadline + `_process`,
 	## then `_process` reads `_connection.is_connected` each frame. The
 	## previous two tests exercise each half in isolation; this one wires
-	## them together with a real Connection whose `_connected` we flip.
+	## them together with a real McpConnection whose `_connected` we flip.
 	## Without this, a refactor that broke the `is_connected` check in
 	## `_process` (e.g. reading the wrong property) would slip through.
 	var plugin := GodotAiPlugin.new()
-	var conn := Connection.new()
+	var conn := McpConnection.new()
 	plugin._connection = conn
 	plugin._set_spawn_state(McpSpawnState.FOREIGN_PORT)
 	plugin._watch_for_adoption_confirmation()
@@ -293,7 +293,7 @@ func test_process_self_disarms_after_deadline_without_connect() -> void:
 	## SPAWN_GRACE_MS so `_process` stops running every frame. The deadline
 	## stays zero afterwards, serving as the "disarmed" sentinel.
 	var plugin := GodotAiPlugin.new()
-	var conn := Connection.new()
+	var conn := McpConnection.new()
 	plugin._connection = conn
 	plugin._set_spawn_state(McpSpawnState.FOREIGN_PORT)
 	plugin._adoption_watch_deadline_ms = Time.get_ticks_msec() - 1  # already expired

@@ -1,5 +1,4 @@
 @tool
-class_name FilesystemHandler
 extends RefCounted
 
 ## Handles file read/write operations and reimport within the Godot project.
@@ -69,7 +68,7 @@ func write_file(params: Dictionary) -> Dictionary:
 		"undoable": false,
 		"reason": "File system operations cannot be undone via editor undo",
 	}
-	ResourceIO.attach_cleanup_hint(data, existed_before, [path])
+	McpResourceIO.attach_cleanup_hint(data, existed_before, [path])
 	return {"data": data}
 
 

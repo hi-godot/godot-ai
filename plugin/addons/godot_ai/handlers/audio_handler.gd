@@ -1,5 +1,4 @@
 @tool
-class_name AudioHandler
 extends RefCounted
 
 ## Handles AudioStreamPlayer / 2D / 3D authoring — node creation, stream
@@ -57,9 +56,9 @@ func create_player(params: Dictionary) -> Dictionary:
 
 	var parent: Node = scene_root
 	if not parent_path.is_empty():
-		parent = ScenePath.resolve(parent_path, scene_root)
+		parent = McpScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_parent_error(parent_path, scene_root))
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_parent_error(parent_path, scene_root))
 
 	var node := _instantiate_player(type_str)
 	if node == null:
@@ -76,8 +75,8 @@ func create_player(params: Dictionary) -> Dictionary:
 
 	return {
 		"data": {
-			"path": ScenePath.from_node(node, scene_root),
-			"parent_path": ScenePath.from_node(parent, scene_root),
+			"path": McpScenePath.from_node(node, scene_root),
+			"parent_path": McpScenePath.from_node(parent, scene_root),
 			"name": String(node.name),
 			"type": type_str,
 			"class": _VALID_TYPES[type_str],
@@ -323,9 +322,9 @@ func _resolve_player(player_path: String) -> Dictionary:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-	var node := ScenePath.resolve(player_path, scene_root)
+	var node := McpScenePath.resolve(player_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(player_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(player_path, scene_root))
 	var is_player := node is AudioStreamPlayer \
 		or node is AudioStreamPlayer2D \
 		or node is AudioStreamPlayer3D

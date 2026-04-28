@@ -1,11 +1,11 @@
 @tool
-class_name GameLogBuffer
-extends StructuredLogRing
+class_name McpGameLogBuffer
+extends McpStructuredLogRing
 
 ## Ring buffer for game-process log lines (print, push_warning, push_error)
 ## ferried back from the playing game over the EngineDebugger channel.
 ##
-## Larger cap than EditorLogBuffer because games can be noisy. `run_id`
+## Larger cap than McpEditorLogBuffer because games can be noisy. `run_id`
 ## rotates each time clear_for_new_run() fires (called on the game's
 ## mcp:hello boot beacon), giving agents a stable cursor for "lines since
 ## this play started".

@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ProjectHandler := preload("res://addons/godot_ai/handlers/project_handler.gd")
+
 ## Tests for ProjectHandler — project settings and filesystem search.
 
 var _handler: ProjectHandler

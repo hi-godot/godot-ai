@@ -1,5 +1,5 @@
 @tool
-class_name ScenePath
+class_name McpScenePath
 extends RefCounted
 
 ## Utility for converting between Godot internal node paths and clean

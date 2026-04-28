@@ -156,7 +156,7 @@ print(f'Post-reload health OK: {project} on Godot {version}')
 
 # --- Step 6: Exercise the game-logs path (issue #46 crash site) ---
 # Before the cleanup fix in _exit_tree, logs_read(source=game) on the
-# new plugin would segfault at GameLogBuffer.get_range's first _storage
+# new plugin would segfault at McpGameLogBuffer.get_range's first _storage
 # access. This asserts the handler's typed array stays valid across a reload.
 echo "Verifying logs_read source=game..."
 GAMELOGS_RESULT=$(mcp_call_or_die "logs_read source=game" logs_read '{"count":10,"source":"game"}')

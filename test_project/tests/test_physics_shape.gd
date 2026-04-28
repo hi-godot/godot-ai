@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const PhysicsShapeHandler := preload("res://addons/godot_ai/handlers/physics_shape_handler.gd")
+
 ## Tests for PhysicsShapeHandler — autofit CollisionShape* to sibling bounds.
 
 var _handler: PhysicsShapeHandler

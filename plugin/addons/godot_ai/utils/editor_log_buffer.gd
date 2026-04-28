@@ -1,12 +1,12 @@
 @tool
-class_name EditorLogBuffer
-extends StructuredLogRing
+class_name McpEditorLogBuffer
+extends McpStructuredLogRing
 
 ## Ring buffer for editor-process script errors and warnings (parse errors,
 ## @tool runtime errors, EditorPlugin errors, push_error/push_warning) captured
 ## by editor_logger.gd's Logger subclass.
 ##
-## Smaller cap than GameLogBuffer (500 vs 2000) — the editor only emits errors,
+## Smaller cap than McpGameLogBuffer (500 vs 2000) — the editor only emits errors,
 ## not the full println firehose a game can produce. No run_id rotation: editor
 ## errors persist across project_run cycles (they're about *editing* state, not
 ## about the playing game).
@@ -15,7 +15,7 @@ extends StructuredLogRing
 ## async script-loader threads emitting parse errors), and the buffer is
 ## read on the main thread by EditorHandler.get_logs. Each public method
 ## wraps the base ring's lockless helpers in `_mutex.lock()/unlock()` —
-## the base stays lockless so GameLogBuffer's hot path doesn't pay an
+## the base stays lockless so McpGameLogBuffer's hot path doesn't pay an
 ## unused mutex cost.
 ##
 ## Entry shape: {source: "editor", level: "info"|"warn"|"error",

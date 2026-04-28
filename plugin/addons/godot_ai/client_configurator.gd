@@ -117,7 +117,7 @@ static func suggest_free_port(start: int, span: int = 100) -> int:
 		var p := candidate + i
 		if p > MAX_PORT:
 			break
-		if not WindowsPortReservation.is_port_excluded(p):
+		if not McpWindowsPortReservation.is_port_excluded(p):
 			return p
 	return candidate
 

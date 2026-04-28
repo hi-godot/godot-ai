@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const InputHandler := preload("res://addons/godot_ai/handlers/input_handler.gd")
+
 ## Tests for InputHandler — input action listing, adding, removing, binding.
 
 var _handler: InputHandler

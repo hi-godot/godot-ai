@@ -1,5 +1,4 @@
 @tool
-class_name PhysicsShapeHandler
 extends RefCounted
 
 ## Sizes a CollisionShape2D/CollisionShape3D to match a visual sibling's
@@ -39,9 +38,9 @@ func autofit(params: Dictionary) -> Dictionary:
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 
-	var node := ScenePath.resolve(node_path, scene_root)
+	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
 
 	var is_3d := node is CollisionShape3D
 	var is_2d := node is CollisionShape2D
@@ -61,7 +60,7 @@ func autofit(params: Dictionary) -> Dictionary:
 				"No visual sibling found to measure — pass source_path explicitly (e.g. a MeshInstance3D or Sprite2D)"
 			)
 	else:
-		source = ScenePath.resolve(source_path, scene_root)
+		source = McpScenePath.resolve(source_path, scene_root)
 		if source == null:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Source node not found: %s" % source_path)
 
@@ -124,7 +123,7 @@ func autofit(params: Dictionary) -> Dictionary:
 	return {
 		"data": {
 			"path": node_path,
-			"source_path": ScenePath.from_node(source, scene_root) if source_path.is_empty() else source_path,
+			"source_path": McpScenePath.from_node(source, scene_root) if source_path.is_empty() else source_path,
 			"shape_type": shape_type,
 			"shape_class": shape_class,
 			"shape_created": needs_new_shape,

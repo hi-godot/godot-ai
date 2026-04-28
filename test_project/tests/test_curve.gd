@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const CurveHandler := preload("res://addons/godot_ai/handlers/curve_handler.gd")
+
 ## Tests for CurveHandler — set points on Curve/Curve2D/Curve3D resources.
 
 var _handler: CurveHandler
