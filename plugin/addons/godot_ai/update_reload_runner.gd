@@ -102,10 +102,25 @@ func _extract_update() -> bool:
 			var dir := file_path.get_base_dir()
 			DirAccess.make_dir_recursive_absolute(install_base.path_join(dir))
 			var content := reader.read_file(file_path)
-			var f := FileAccess.open(install_base.path_join(file_path), FileAccess.WRITE)
-			if f != null:
-				f.store_buffer(content)
-				f.close()
+			var target_path := install_base.path_join(file_path)
+			var f := FileAccess.open(target_path, FileAccess.WRITE)
+			if f == null:
+				print("MCP | update extract failed: could not write %s (error %d)" % [
+					target_path,
+					FileAccess.get_open_error(),
+				])
+				reader.close()
+				return false
+			f.store_buffer(content)
+			var write_error := f.get_error()
+			f.close()
+			if write_error != OK:
+				print("MCP | update extract failed: write error %d for %s" % [
+					write_error,
+					target_path,
+				])
+				reader.close()
+				return false
 
 	reader.close()
 	return true

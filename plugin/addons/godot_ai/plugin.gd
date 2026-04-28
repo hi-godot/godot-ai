@@ -1033,6 +1033,7 @@ func install_downloaded_update(zip_path: String, temp_dir: String, source_dock: 
 		_dock = null
 	elif source_dock != null and is_instance_valid(source_dock):
 		detached_dock = source_dock
+		remove_control_from_docks(source_dock)
 
 	var runner = UPDATE_RELOAD_RUNNER_SCRIPT.new()
 	var parent: Node = EditorInterface.get_base_control()

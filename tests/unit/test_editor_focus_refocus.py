@@ -133,6 +133,7 @@ def test_client_status_refresh_defers_while_editor_filesystem_is_busy() -> None:
 
     assert "var _client_status_refresh_deferred_until_filesystem_ready := false" in source
     assert "var _client_status_refresh_deferred_force := false" in source
+    assert "var _client_status_refresh_deferred_initial := false" in source
 
     process_block = source.split("func _process(_delta: float) -> void:", 1)[
         1
@@ -146,7 +147,7 @@ def test_client_status_refresh_defers_while_editor_filesystem_is_busy() -> None:
         "func _request_client_status_refresh(force: bool = false) -> bool:", 1
     )[1].split("\n\nfunc ", 1)[0]
     assert "_is_editor_filesystem_busy()" in init_block
-    assert "_defer_client_status_refresh_until_filesystem_ready(" in init_block
+    assert "_defer_initial_client_status_refresh_until_filesystem_ready()" in init_block
 
     assert "_is_editor_filesystem_busy()" in request_block
     busy_request_block = request_block.split("if _is_editor_filesystem_busy():", 1)[
@@ -155,6 +156,12 @@ def test_client_status_refresh_defers_while_editor_filesystem_is_busy() -> None:
     assert "if force:" in busy_request_block
     assert "_defer_client_status_refresh_until_filesystem_ready(force)" in busy_request_block
     assert busy_request_block.index("if force:") < busy_request_block.index("return false")
+
+    initial_defer_block = source.split(
+        "func _defer_initial_client_status_refresh_until_filesystem_ready() -> void:", 1
+    )[1].split("\n\nfunc ", 1)[0]
+    assert "_client_status_refresh_deferred_until_filesystem_ready = true" in initial_defer_block
+    assert "_client_status_refresh_deferred_initial = true" in initial_defer_block
 
 
 def test_focus_refresh_is_opportunistic_while_editor_filesystem_is_busy() -> None:
@@ -177,8 +184,8 @@ def test_focus_refresh_is_opportunistic_while_editor_filesystem_is_busy() -> Non
     assert "check_status" not in focus_block
 
 
-def test_deferred_refresh_replays_through_async_request_path_only() -> None:
-    """Queued manual/initial refreshes should not reintroduce PR #228's sync sweep."""
+def test_deferred_manual_refresh_replays_through_async_request_path_only() -> None:
+    """Queued manual refreshes should not reintroduce PR #228's sync sweep."""
 
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
     retry_block = source.split("func _retry_deferred_client_status_refresh() -> void:", 1)[
@@ -192,11 +199,31 @@ def test_deferred_refresh_replays_through_async_request_path_only() -> None:
         assert "client_status_probe_snapshot(" not in block
         assert "check_status" not in block
 
+    assert "_client_status_refresh_deferred_initial = false" in retry_block
+    assert "else:" in retry_block
+    assert "_request_client_status_refresh(force)" in retry_block
+
     busy_block = source.split("func _is_editor_filesystem_busy() -> bool:", 1)[
         1
     ].split("\n\nfunc ", 1)[0]
     assert "EditorInterface.get_resource_filesystem()" in busy_block
     assert "fs.is_scanning()" in busy_block
+
+
+def test_deferred_initial_refresh_replays_warmup_path() -> None:
+    """Scan-delayed initial paint must preserve #235's main-thread warm-up."""
+
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    retry_block = source.split("func _retry_deferred_client_status_refresh() -> void:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+
+    assert "var initial := _client_status_refresh_deferred_initial" in retry_block
+    assert "if initial:" in retry_block
+    assert "_perform_initial_client_status_refresh()" in retry_block
+    assert retry_block.index("if initial:") < retry_block.index(
+        "_request_client_status_refresh(force)"
+    )
 
 
 def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> None:
@@ -302,6 +329,7 @@ def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> Non
     )[1].split("\n\nfunc ", 1)[0]
     assert "prepare_for_update_reload()" in handoff_block
     assert "remove_control_from_docks(_dock)" in handoff_block
+    assert "remove_control_from_docks(source_dock)" in handoff_block
     assert "_dock = null" in handoff_block
     assert "runner.start(zip_path, temp_dir, detached_dock)" in handoff_block
 
@@ -352,6 +380,14 @@ def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> Non
     ].split("\n\nfunc ", 1)[0]
     assert "_cleanup_detached_dock()" in cleanup_block
     assert "queue_free()" in cleanup_block
+
+    extract_update_block = runner_source.split("func _extract_update() -> bool:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+    assert "FileAccess.get_open_error()" in extract_update_block
+    assert "var write_error := f.get_error()" in extract_update_block
+    assert "return false" in extract_update_block
+
     assert "OS.create_process" not in runner_source
     assert "get_tree().quit" not in runner_source
     assert "await " not in runner_source, (

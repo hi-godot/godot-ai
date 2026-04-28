@@ -97,6 +97,7 @@ var _client_status_refresh_shutdown_requested := false
 var _client_status_refresh_timed_out := false
 var _client_status_refresh_deferred_until_filesystem_ready := false
 var _client_status_refresh_deferred_force := false
+var _client_status_refresh_deferred_initial := false
 ## Set for the duration of `_install_update` — extract-overwrite of plugin
 ## scripts on disk would crash any worker mid-`GDScriptFunction::call`
 ## (confirmed via SIGABRT in `VBoxContainer(McpDock)::_run_client_status_refresh_worker`).
@@ -1732,7 +1733,7 @@ func _perform_initial_client_status_refresh() -> void:
 	if _self_update_in_progress:
 		return
 	if _is_editor_filesystem_busy():
-		_defer_client_status_refresh_until_filesystem_ready(false)
+		_defer_initial_client_status_refresh_until_filesystem_ready()
 		return
 	if _client_status_refresh_in_flight:
 		return
@@ -1856,6 +1857,11 @@ func _is_editor_filesystem_busy() -> bool:
 	return fs != null and fs.is_scanning()
 
 
+func _defer_initial_client_status_refresh_until_filesystem_ready() -> void:
+	_client_status_refresh_deferred_until_filesystem_ready = true
+	_client_status_refresh_deferred_initial = true
+
+
 func _defer_client_status_refresh_until_filesystem_ready(force: bool) -> void:
 	## Godot can still be reparsing/reloading plugin scripts while the editor
 	## filesystem is busy. Do not spawn a worker into that window: the worker
@@ -1875,10 +1881,15 @@ func _retry_deferred_client_status_refresh() -> void:
 	if _is_editor_filesystem_busy():
 		return
 
+	var initial := _client_status_refresh_deferred_initial
 	var force := _client_status_refresh_deferred_force
 	_client_status_refresh_deferred_until_filesystem_ready = false
 	_client_status_refresh_deferred_force = false
-	_request_client_status_refresh(force)
+	_client_status_refresh_deferred_initial = false
+	if initial:
+		_perform_initial_client_status_refresh()
+	else:
+		_request_client_status_refresh(force)
 
 
 func _run_client_status_refresh_worker(client_probes: Array[Dictionary], server_url: String, generation: int) -> void:
