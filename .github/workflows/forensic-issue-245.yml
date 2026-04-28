@@ -1,0 +1,85 @@
+name: Forensic / issue-245 dictionary hot-reload
+
+# Manual one-shot to verify the macOS-only "newly-injected typed Dictionary
+# field stays NIL after hot-reload" bug across Linux, macOS, and Windows
+# Godot 4.6.2-stable runners. Triggered via workflow_dispatch only.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  synthetic:
+    name: Synthetic / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 4.6.2
+          use-dotnet: false
+
+      - name: Run synthetic dictionary-injection test (Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          set +e
+          godot --headless --editor \
+            --path docs/forensic/issue-245/repro-dictinject \
+            --quit-after 1500 > /tmp/synthetic.log 2>&1
+          rc=$?
+          echo "::group::Full Godot output"
+          cat /tmp/synthetic.log
+          echo "::endgroup::"
+          echo "exit code: $rc"
+          echo
+          echo "===== Verdict ====="
+          if grep -q "post-reload property names" /tmp/synthetic.log; then
+            grep "post-reload property names" /tmp/synthetic.log
+          fi
+          if grep -q "inst.get('injected_dict')" /tmp/synthetic.log; then
+            grep "inst.get('injected_dict')" /tmp/synthetic.log
+          fi
+          if grep -q "Program crashed with signal" /tmp/synthetic.log; then
+            echo "RESULT: CRASH (Dictionary::keys on null _p)"
+          elif grep -q "DONE — no SIGABRT" /tmp/synthetic.log; then
+            echo "RESULT: OK (no crash, hot-reload initialized field correctly)"
+          else
+            echo "RESULT: INDETERMINATE (test did not complete normally; rc=$rc)"
+          fi
+
+      - name: Run synthetic dictionary-injection test (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $log = "$env:TEMP\synthetic.log"
+          # `godot.exe` is on PATH after setup-godot
+          & godot --headless --editor `
+            --path docs/forensic/issue-245/repro-dictinject `
+            --quit-after 1500 *> $log
+          $rc = $LASTEXITCODE
+          Write-Host "::group::Full Godot output"
+          Get-Content $log
+          Write-Host "::endgroup::"
+          Write-Host "exit code: $rc"
+          Write-Host ""
+          Write-Host "===== Verdict ====="
+          $content = Get-Content $log -Raw
+          if ($content -match "post-reload property names: .*") {
+            Write-Host $matches[0]
+          }
+          if ($content -match "inst\.get\('injected_dict'\): .*") {
+            Write-Host $matches[0]
+          }
+          if ($content -match "Program crashed with signal") {
+            Write-Host "RESULT: CRASH (Dictionary::keys on null _p)"
+          } elseif ($content -match "DONE — no SIGABRT") {
+            Write-Host "RESULT: OK (no crash, hot-reload initialized field correctly)"
+          } else {
+            Write-Host "RESULT: INDETERMINATE (test did not complete normally; rc=$rc)"
+          }
