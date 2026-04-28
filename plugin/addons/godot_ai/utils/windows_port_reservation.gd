@@ -55,6 +55,31 @@ static func parse_excluded(text: String, port: int) -> bool:
 	return false
 
 
+## Return the first port in `start`..`start+span-1` that is not excluded by
+## Windows' port reservation table. Runs `netsh` once, unlike probing every
+## candidate with `is_port_excluded`, which keeps fallback port selection cheap
+## when Hyper-V / WSL2 / Docker reserve many adjacent ranges.
+static func suggest_non_excluded_port(start: int, span: int = 2048, max_port: int = 65535) -> int:
+	if OS.get_name() != "Windows":
+		return start
+	var output: Array = []
+	var exit_code := OS.execute("netsh", NETSH_ARGS, output, true)
+	if exit_code != 0 or output.is_empty():
+		return start
+	return suggest_non_excluded_port_from_output(str(output[0]), start, span, max_port)
+
+
+## Pure parser-backed helper for tests and for `suggest_non_excluded_port`.
+static func suggest_non_excluded_port_from_output(text: String, start: int, span: int = 2048, max_port: int = 65535) -> int:
+	for i in span:
+		var p := start + i
+		if p > max_port:
+			break
+		if not parse_excluded(text, p):
+			return p
+	return start
+
+
 ## User-facing hint for the proactive port-reservation detection path —
 ## rendered when `is_port_excluded(port)` returns true *before* we even
 ## try to bind. Same copy as the post-crash WinError-10013 branch in

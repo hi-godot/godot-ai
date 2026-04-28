@@ -123,6 +123,7 @@ func teardown() -> void:
 
 
 func _connect_to_server() -> void:
+	_url = "ws://127.0.0.1:%d" % McpClientConfigurator.ws_port()
 	var err := _peer.connect_to_url(_url)
 	if err != OK:
 		log_buffer.log("failed to initiate connection (error %d)" % err)
