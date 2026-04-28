@@ -2091,6 +2091,12 @@ func _install_update() -> void:
 	_drain_client_status_refresh_workers()
 	_drain_client_action_workers()
 
+	var version := Engine.get_version_info()
+	if version.get("minor", 0) >= 4 and _plugin != null and _plugin.has_method("install_downloaded_update"):
+		_update_btn.text = "Reloading..."
+		_plugin.install_downloaded_update(UPDATE_TEMP_ZIP, UPDATE_TEMP_DIR, self)
+		return
+
 	var zip_path := ProjectSettings.globalize_path(UPDATE_TEMP_ZIP)
 	var install_base := ProjectSettings.globalize_path("res://")
 
@@ -2139,7 +2145,6 @@ func _install_update() -> void:
 	# Godot 4.4+ handles plugin reload safely. On 4.3 and older, toggling
 	# the plugin off/on can cause re-entrant server spawns, so we ask the
 	# user to restart the editor instead.
-	var version := Engine.get_version_info()
 	if version.get("minor", 0) >= 4:
 		_update_btn.text = "Scanning..."
 		## Before reloading the plugin we MUST wait for Godot's filesystem

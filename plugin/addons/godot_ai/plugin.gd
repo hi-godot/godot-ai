@@ -16,6 +16,7 @@ const EDITOR_LOGGER_PATH := "res://addons/godot_ai/runtime/editor_logger.gd"
 ## and manage a server it didn't spawn itself. See #135.
 const MANAGED_SERVER_PID_SETTING := "godot_ai/managed_server_pid"
 const MANAGED_SERVER_VERSION_SETTING := "godot_ai/managed_server_version"
+const UPDATE_RELOAD_RUNNER_SCRIPT := preload("res://addons/godot_ai/update_reload_runner.gd")
 
 ## The Python server writes its own PID here on startup (passed as
 ## `--pid-file`) and unlinks on clean exit. Deterministic replacement
@@ -1016,6 +1017,29 @@ func _clear_managed_server_record() -> void:
 func prepare_for_update_reload() -> void:
 	_stop_server()
 	_server_started_this_session = false
+
+
+## Hand the self-update over to a tiny runner that is not owned by this
+## EditorPlugin. The runner keeps the editor process alive, but disables this
+## plugin before extracting/scanning the new scripts so every plugin-owned
+## instance tears down on pre-update bytecode and pre-update field storage.
+func install_downloaded_update(zip_path: String, temp_dir: String, source_dock: Control) -> void:
+	prepare_for_update_reload()
+
+	var detached_dock = null
+	if _dock != null and is_instance_valid(_dock):
+		detached_dock = _dock
+		remove_control_from_docks(_dock)
+		_dock = null
+	elif source_dock != null and is_instance_valid(source_dock):
+		detached_dock = source_dock
+
+	var runner = UPDATE_RELOAD_RUNNER_SCRIPT.new()
+	var parent: Node = EditorInterface.get_base_control()
+	if parent == null:
+		parent = get_tree().root
+	parent.add_child(runner)
+	runner.start(zip_path, temp_dir, detached_dock)
 
 
 ## Kill whichever process is holding `http_port()` right now — by resolving
