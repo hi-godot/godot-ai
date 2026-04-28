@@ -113,11 +113,19 @@ for line in raw.split('\n'):
         passed = content.get('passed', 0)
         failed = content.get('failed', 0)
         total = content.get('total', 0)
+        load_errors = content.get('load_errors', []) or []
         print(f'Godot tests: {passed}/{total} passed, {failed} failed')
         if content.get('failures'):
             for f in content['failures']:
                 print(f'  FAIL: {f[\"suite\"]}.{f[\"test\"]}: {f[\"message\"]}')
+        if load_errors:
+            print(f'  LOAD ERRORS: {len(load_errors)} test file(s) failed to parse:')
+            for le in load_errors:
+                print(f'    - {le}')
         if failed > 0:
+            sys.exit(1)
+        if load_errors:
+            print('ERROR: At least one test file failed to load (parse error?). Treating as failure so silent test-loss does not slip past CI.')
             sys.exit(1)
         if total == 0:
             print('ERROR: No tests ran — Godot plugin may not have connected')

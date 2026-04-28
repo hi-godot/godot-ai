@@ -175,9 +175,7 @@ func test_initial_refresh_helper_replaces_settle_timer_constant() -> void:
 		if String(entry) == "CLIENT_STATUS_REFRESH_INITIAL_DELAY_MSEC":
 			has_constant = true
 			break
-	assert_false(has_constant,
-		"CLIENT_STATUS_REFRESH_INITIAL_DELAY_MSEC must be removed — sync first "
-		"refresh (#235) deterministically replaces the timer (#234).")
+	assert_false(has_constant, "CLIENT_STATUS_REFRESH_INITIAL_DELAY_MSEC must be removed — #235 replaces #234's timer with a deterministic gate")
 
 
 func test_exit_tree_drains_orphaned_refresh_threads() -> void:
@@ -211,12 +209,10 @@ func test_self_update_in_progress_blocks_request_refresh() -> void:
 	## so gating here covers focus-in (`_notification` → handler) without
 	## needing a separate gate at each call site.
 	_dock._self_update_in_progress = true
-	var ok := _dock._request_client_status_refresh(false)
+	var ok: bool = _dock._request_client_status_refresh(false)
 	assert_false(ok, "Refresh must not spawn a worker while self-update is in progress")
-	assert_eq(_dock._client_status_refresh_thread, null,
-		"No worker thread should have been started while self-update is in progress")
-	assert_false(_dock._client_status_refresh_in_flight,
-		"In-flight flag should not flip on while self-update is in progress")
+	assert_eq(_dock._client_status_refresh_thread, null, "No worker thread should have been started while self-update is in progress")
+	assert_false(_dock._client_status_refresh_in_flight, "In-flight flag should not flip on while self-update is in progress")
 	_dock._self_update_in_progress = false
 
 
@@ -229,9 +225,7 @@ func test_drain_helper_does_not_poison_shutdown_flag() -> void:
 	## `_client_status_refresh_shutdown_requested` (which is one-way and
 	## permanently disables refreshes for the dock instance).
 	_dock._drain_client_status_refresh_workers()
-	assert_false(_dock._client_status_refresh_shutdown_requested,
-		"_drain_client_status_refresh_workers must not set shutdown_requested — "
-		"that's only for permanent dock teardown via _exit_tree.")
+	assert_false(_dock._client_status_refresh_shutdown_requested, "drain must not set shutdown_requested — only _exit_tree does")
 
 
 ## Shared fixture for the three version-label tests. Inject a Label + Button
