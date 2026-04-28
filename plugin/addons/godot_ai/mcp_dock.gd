@@ -95,6 +95,8 @@ var _client_status_refresh_started_msec: int = 0
 var _client_status_refresh_generation: int = 0
 var _client_status_refresh_shutdown_requested := false
 var _client_status_refresh_timed_out := false
+var _client_status_refresh_deferred_until_filesystem_ready := false
+var _client_status_refresh_deferred_force := false
 ## Set for the duration of `_install_update` — extract-overwrite of plugin
 ## scripts on disk would crash any worker mid-`GDScriptFunction::call`
 ## (confirmed via SIGABRT in `VBoxContainer(McpDock)::_run_client_status_refresh_worker`).
@@ -192,6 +194,7 @@ func _process(_delta: float) -> void:
 		return
 	_prune_orphaned_client_status_refresh_threads()
 	_check_client_status_refresh_timeout()
+	_retry_deferred_client_status_refresh()
 	_update_status()
 	if _log_section.visible:
 		_update_log()
@@ -1728,6 +1731,9 @@ func _perform_initial_client_status_refresh() -> void:
 		return
 	if _self_update_in_progress:
 		return
+	if _is_editor_filesystem_busy():
+		_defer_client_status_refresh_until_filesystem_ready(false)
+		return
 	if _client_status_refresh_in_flight:
 		return
 
@@ -1821,6 +1827,10 @@ func _request_client_status_refresh(force: bool = false) -> bool:
 		return false
 	if _client_rows.is_empty():
 		return false
+	if _is_editor_filesystem_busy():
+		if force:
+			_defer_client_status_refresh_until_filesystem_ready(force)
+		return false
 
 	var client_probes: Array[Dictionary] = []
 	for client_id in _client_rows:
@@ -1839,6 +1849,36 @@ func _request_client_status_refresh(force: bool = false) -> bool:
 		_refresh_clients_summary()
 		return false
 	return true
+
+
+func _is_editor_filesystem_busy() -> bool:
+	var fs := EditorInterface.get_resource_filesystem()
+	return fs != null and fs.is_scanning()
+
+
+func _defer_client_status_refresh_until_filesystem_ready(force: bool) -> void:
+	## Godot can still be reparsing/reloading plugin scripts while the editor
+	## filesystem is busy. Do not spawn a worker into that window: the worker
+	## can call plugin GDScript while the main thread is reloading it, which
+	## crashes in `GDScriptFunction::call`.
+	_client_status_refresh_deferred_until_filesystem_ready = true
+	_client_status_refresh_deferred_force = _client_status_refresh_deferred_force or force
+
+
+func _retry_deferred_client_status_refresh() -> void:
+	if not _client_status_refresh_deferred_until_filesystem_ready:
+		return
+	if _self_update_in_progress or _client_status_refresh_shutdown_requested:
+		return
+	if _client_status_refresh_in_flight:
+		return
+	if _is_editor_filesystem_busy():
+		return
+
+	var force := _client_status_refresh_deferred_force
+	_client_status_refresh_deferred_until_filesystem_ready = false
+	_client_status_refresh_deferred_force = false
+	_request_client_status_refresh(force)
 
 
 func _run_client_status_refresh_worker(client_probes: Array[Dictionary], server_url: String, generation: int) -> void:

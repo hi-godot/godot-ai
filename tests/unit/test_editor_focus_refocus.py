@@ -126,6 +126,79 @@ def test_initial_paint_warms_worker_call_graph_before_threading() -> None:
     )
 
 
+def test_client_status_refresh_defers_while_editor_filesystem_is_busy() -> None:
+    """Refresh workers must not race Godot's script reload/documentation pass."""
+
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+
+    assert "var _client_status_refresh_deferred_until_filesystem_ready := false" in source
+    assert "var _client_status_refresh_deferred_force := false" in source
+
+    process_block = source.split("func _process(_delta: float) -> void:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+    assert "_retry_deferred_client_status_refresh()" in process_block
+
+    init_block = source.split(
+        "func _perform_initial_client_status_refresh() -> void:", 1
+    )[1].split("\n\nfunc ", 1)[0]
+    request_block = source.split(
+        "func _request_client_status_refresh(force: bool = false) -> bool:", 1
+    )[1].split("\n\nfunc ", 1)[0]
+    assert "_is_editor_filesystem_busy()" in init_block
+    assert "_defer_client_status_refresh_until_filesystem_ready(" in init_block
+
+    assert "_is_editor_filesystem_busy()" in request_block
+    busy_request_block = request_block.split("if _is_editor_filesystem_busy():", 1)[
+        1
+    ].split("\n\n", 1)[0]
+    assert "if force:" in busy_request_block
+    assert "_defer_client_status_refresh_until_filesystem_ready(force)" in busy_request_block
+    assert busy_request_block.index("if force:") < busy_request_block.index("return false")
+
+
+def test_focus_refresh_is_opportunistic_while_editor_filesystem_is_busy() -> None:
+    """Focus-in status refresh should never be treated as important editor work."""
+
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    focus_block = _focus_in_block(source)
+    request_block = source.split(
+        "func _request_client_status_refresh(force: bool = false) -> bool:", 1
+    )[1].split("\n\nfunc ", 1)[0]
+    busy_request_block = request_block.split("if _is_editor_filesystem_busy():", 1)[
+        1
+    ].split("\n\n", 1)[0]
+
+    assert "_request_client_status_refresh(false)" in focus_block
+    assert "_defer_client_status_refresh_until_filesystem_ready(force)" in busy_request_block
+    assert "if force:" in busy_request_block
+    assert "_refresh_all_client_statuses" not in focus_block
+    assert "client_status_probe_snapshot(" not in focus_block
+    assert "check_status" not in focus_block
+
+
+def test_deferred_refresh_replays_through_async_request_path_only() -> None:
+    """Queued manual/initial refreshes should not reintroduce PR #228's sync sweep."""
+
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    retry_block = source.split("func _retry_deferred_client_status_refresh() -> void:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+
+    for block in (retry_block,):
+        assert "_is_editor_filesystem_busy()" in block
+        assert "_request_client_status_refresh(force)" in block
+        assert "_refresh_all_client_statuses" not in block
+        assert "client_status_probe_snapshot(" not in block
+        assert "check_status" not in block
+
+    busy_block = source.split("func _is_editor_filesystem_busy() -> bool:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+    assert "EditorInterface.get_resource_filesystem()" in busy_block
+    assert "fs.is_scanning()" in busy_block
+
+
 def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> None:
     """Self-update must drain in-flight workers + block new ones before any file write.
 
@@ -252,7 +325,16 @@ def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> Non
     ].split("\n\nfunc ", 1)[0]
     assert "fs.filesystem_changed.connect(_on_filesystem_changed, CONNECT_ONE_SHOT)" in scan_block
     assert "fs.scan()" in scan_block
-    assert "set_process(true)" in scan_block
+    assert "FILESYSTEM_SCAN_TIMEOUT" not in runner_source
+    assert "_scan_timeout" not in runner_source
+    process_block = runner_source.split("func _process(_delta: float) -> void:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+    assert "_finish_scan_wait()" not in process_block, (
+        "Do not treat a frame-count timeout as filesystem-scan completion. "
+        "Re-enabling before `filesystem_changed` can parse plugin.gd before "
+        "Godot has registered newly extracted class_name scripts."
+    )
 
     finish_block = runner_source.split("func _finish_scan_wait() -> void:", 1)[
         1

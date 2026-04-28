@@ -13,7 +13,6 @@ const PLUGIN_CFG_PATH := "res://addons/godot_ai/plugin.cfg"
 const PRE_DISABLE_DRAIN_FRAMES := 8
 const POST_DISABLE_DRAIN_FRAMES := 2
 const POST_ENABLE_FREE_FRAMES := 8
-const FILESYSTEM_SCAN_TIMEOUT_FRAMES := 300
 
 var _zip_path := ""
 var _temp_dir := ""
@@ -22,7 +21,6 @@ var _started := false
 var _next_step := ""
 var _frames_remaining := 0
 var _waiting_for_scan := false
-var _scan_timeout_frames := 0
 
 
 func start(zip_path: String, temp_dir: String, detached_dock) -> void:
@@ -36,12 +34,6 @@ func start(zip_path: String, temp_dir: String, detached_dock) -> void:
 
 
 func _process(_delta: float) -> void:
-	if _waiting_for_scan:
-		_scan_timeout_frames -= 1
-		if _scan_timeout_frames <= 0:
-			_finish_scan_wait()
-		return
-
 	if _frames_remaining <= 0:
 		set_process(false)
 		return
@@ -86,11 +78,9 @@ func _start_filesystem_scan() -> void:
 		return
 
 	_waiting_for_scan = true
-	_scan_timeout_frames = FILESYSTEM_SCAN_TIMEOUT_FRAMES
 	if not fs.filesystem_changed.is_connected(_on_filesystem_changed):
 		fs.filesystem_changed.connect(_on_filesystem_changed, CONNECT_ONE_SHOT)
 	fs.scan()
-	set_process(true)
 
 
 func _extract_update() -> bool:
