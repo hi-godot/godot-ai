@@ -465,14 +465,43 @@ func test_apply_status_refresh_results_skips_rows_with_in_flight_action() -> voi
 	_dock._client_action_threads.erase(any_id)
 
 
-func test_drain_client_action_workers_clears_dictionaries() -> void:
+func test_drain_client_action_workers_clears_threads_and_bumps_generation() -> void:
 	## `_install_update` calls this drain before extracting the release
 	## zip, same reason as the refresh worker drain — a worker mid-call
-	## into a half-overwritten script SIGABRTs the editor.
+	## into a half-overwritten script SIGABRTs the editor. The drain
+	## bumps generation per-row so any pending `call_deferred(
+	## "_apply_client_action_result")` from a worker that finished after
+	## the drain detects the mismatch and short-circuits before touching
+	## restored UI state.
 	_dock._client_action_threads["sentinel-id"] = null
 	_dock._client_action_generations["sentinel-id"] = 7
 	_dock._drain_client_action_workers()
 	assert_true(_dock._client_action_threads.is_empty(),
-		"Drain must empty the action-thread map")
-	assert_true(_dock._client_action_generations.is_empty(),
-		"Drain must also clear generation tokens so a follow-up dispatch starts fresh")
+		"Drain must empty the action-thread map so a follow-up dispatch starts fresh")
+	assert_eq(int(_dock._client_action_generations.get("sentinel-id", 0)), 8,
+		"Drain must bump generation so any late call_deferred from the drained worker is rejected as stale")
+
+
+func test_drain_client_action_workers_restores_in_flight_row_buttons() -> void:
+	## Issue #239 follow-up: `_install_update` has a bail-out branch (zip
+	## extract failure) that clears `_self_update_in_progress` and leaves
+	## the dock alive. Without restoring the row UI in the drain, an
+	## in-flight Configure / Remove would leave the buttons disabled and
+	## the active button stuck on "Configuring…" / "Removing…" forever
+	## because `_apply_client_action_result` never runs after we erase
+	## the thread slot.
+	_dock._build_ui()
+	var any_id := _first_client_id()
+	if any_id.is_empty():
+		skip("No clients registered")
+		return
+	_dock._set_row_action_in_flight(any_id, "configure")
+	_dock._client_action_threads[any_id] = null
+	_dock._drain_client_action_workers()
+	var row: Dictionary = _dock._client_rows[any_id]
+	assert_false((row["configure_btn"] as Button).disabled,
+		"Drain must re-enable the configure button so the user can retry")
+	assert_false((row["remove_btn"] as Button).disabled,
+		"Drain must re-enable the remove button too")
+	assert_false(str((row["configure_btn"] as Button).text).contains("Configuring"),
+		"Drain must clear the in-flight badge from the configure button")

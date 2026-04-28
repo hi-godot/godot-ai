@@ -113,9 +113,15 @@ static var _orphaned_client_status_refresh_threads: Array[Thread] = []
 ## Per-client (not single-slot) so Configure-all can fan out — the
 ## workers are independent, only the row UI is shared, and McpCliExec
 ## bounds the wall-clock for each.
+##
+## No orphan-thread list (unlike the refresh worker): action threads
+## never get abandoned mid-flight. McpCliExec's wall-clock budget caps
+## the worst case at ~10s, so the `_exit_tree` / `_install_update` drain
+## blocks briefly and finishes — there's no path that "gives up" on an
+## action thread the way `_abandon_client_status_refresh_thread` does
+## for the refresh worker.
 var _client_action_threads: Dictionary = {}
 var _client_action_generations: Dictionary = {}
-static var _orphaned_client_action_threads: Array[Thread] = []
 
 # Dev-mode only
 var _dev_section: VBoxContainer
@@ -185,7 +191,6 @@ func _process(_delta: float) -> void:
 	if _connection == null:
 		return
 	_prune_orphaned_client_status_refresh_threads()
-	_prune_orphaned_client_action_threads()
 	_check_client_status_refresh_timeout()
 	_update_status()
 	if _log_section.visible:
@@ -239,26 +244,32 @@ func _drain_client_action_workers() -> void:
 	## `~Thread … destroyed without its completion having been realized` →
 	## VM corruption. Bounded by `McpCliExec` wall-clock budgets, so the
 	## worst case is a ~10s blocking drain, vs. an unbounded SIGSEGV.
+	##
+	## Generation-bumped per-row so any pending `call_deferred(
+	## "_apply_client_action_result")` from a worker that finished after we
+	## started draining detects the generation mismatch and short-circuits
+	## without touching freed UI state.
+	##
+	## After draining, restore the row UI for any in-flight rows: bare
+	## `_client_action_threads.clear()` would leave the dock stuck showing
+	## "Configuring…" / "Removing…" with disabled buttons forever — a
+	## user-visible failure mode for the install-update bail-out branch
+	## (zip extract failure clears `_self_update_in_progress` and the dock
+	## stays alive).
 	for client_id in _client_action_threads.keys():
 		var t: Thread = _client_action_threads[client_id]
 		if t != null:
 			t.wait_to_finish()
+		_client_action_generations[client_id] = int(_client_action_generations.get(client_id, 0)) + 1
+		_finalize_action_buttons(String(client_id))
+		var row: Dictionary = _client_rows.get(String(client_id), {})
+		if not row.is_empty():
+			_apply_row_status(
+				String(client_id),
+				row.get("status", McpClient.Status.NOT_CONFIGURED),
+				""
+			)
 	_client_action_threads.clear()
-	_client_action_generations.clear()
-	for thread in _orphaned_client_action_threads:
-		if thread != null:
-			thread.wait_to_finish()
-	_orphaned_client_action_threads.clear()
-
-
-func _prune_orphaned_client_action_threads() -> void:
-	for i in range(_orphaned_client_action_threads.size() - 1, -1, -1):
-		var thread := _orphaned_client_action_threads[i]
-		if thread == null:
-			_orphaned_client_action_threads.remove_at(i)
-		elif not thread.is_alive():
-			thread.wait_to_finish()
-			_orphaned_client_action_threads.remove_at(i)
 
 
 func _notification(what: int) -> void:
@@ -1213,12 +1224,18 @@ func _dispatch_client_action(client_id: String, action: String) -> void:
 		return
 
 	_set_row_action_in_flight(client_id, action)
+	## Snapshot `server_url` on main: `http_url()` reads
+	## `EditorInterface.get_editor_settings()`, which is main-thread-only.
+	## The status-refresh worker uses the same pattern — see
+	## `_perform_initial_client_status_refresh` and
+	## `_request_client_status_refresh`.
+	var server_url := McpClientConfigurator.http_url()
 	var generation := int(_client_action_generations.get(client_id, 0)) + 1
 	_client_action_generations[client_id] = generation
 	var thread := Thread.new()
 	_client_action_threads[client_id] = thread
 	var err := thread.start(
-		Callable(self, "_run_client_action_worker").bind(client_id, action, generation)
+		Callable(self, "_run_client_action_worker").bind(client_id, action, server_url, generation)
 	)
 	if err != OK:
 		_client_action_threads.erase(client_id)
@@ -1227,12 +1244,12 @@ func _dispatch_client_action(client_id: String, action: String) -> void:
 		_refresh_clients_summary()
 
 
-func _run_client_action_worker(client_id: String, action: String, generation: int) -> void:
+func _run_client_action_worker(client_id: String, action: String, server_url: String, generation: int) -> void:
 	var result: Dictionary
 	if action == "remove":
-		result = McpClientConfigurator.remove(client_id)
+		result = McpClientConfigurator.remove(client_id, server_url)
 	else:
-		result = McpClientConfigurator.configure(client_id)
+		result = McpClientConfigurator.configure(client_id, server_url)
 	if not _client_status_refresh_shutdown_requested:
 		call_deferred("_apply_client_action_result", client_id, action, result, generation)
 

@@ -44,8 +44,11 @@ static func configure(client: McpClient, server_name: String, server_url: String
 		return {"status": "error", "message": "Failed to spawn %s CLI" % client.display_name}
 	if int(result.get("exit_code", -1)) == 0:
 		return {"status": "ok", "message": "%s configured (HTTP: %s)" % [client.display_name, server_url]}
-	var stdout := str(result.get("stdout", "")).strip_edges()
-	var err := stdout if not stdout.is_empty() else "exit code %d" % int(result.get("exit_code", -1))
+	## `claude mcp add` writes its real failure diagnostics to stderr, so
+	## prefer `output` (stdout + stderr) over `stdout` alone — otherwise
+	## the user sees "exit code 1" instead of the actual error.
+	var combined := str(result.get("output", "")).strip_edges()
+	var err := combined if not combined.is_empty() else "exit code %d" % int(result.get("exit_code", -1))
 	return {"status": "error", "message": "Failed to configure %s: %s" % [client.display_name, err]}
 
 
@@ -111,8 +114,11 @@ static func remove(client: McpClient, server_name: String) -> Dictionary:
 		return {"status": "error", "message": "Failed to spawn %s CLI" % client.display_name}
 	if int(result.get("exit_code", -1)) == 0:
 		return {"status": "ok", "message": "%s configuration removed" % client.display_name}
-	var stdout := str(result.get("stdout", "")).strip_edges()
-	var err := stdout if not stdout.is_empty() else "exit code %d" % int(result.get("exit_code", -1))
+	## `claude mcp add` writes its real failure diagnostics to stderr, so
+	## prefer `output` (stdout + stderr) over `stdout` alone — otherwise
+	## the user sees "exit code 1" instead of the actual error.
+	var combined := str(result.get("output", "")).strip_edges()
+	var err := combined if not combined.is_empty() else "exit code %d" % int(result.get("exit_code", -1))
 	return {"status": "error", "message": "Failed to remove %s: %s" % [client.display_name, err]}
 
 

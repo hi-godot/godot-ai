@@ -137,14 +137,19 @@ static func client_display_name(id: String) -> String:
 	return c.display_name if c != null else id
 
 
-static func configure(id: String) -> Dictionary:
+## Pass an explicit `url` when calling from a worker thread: `http_url()`
+## reads `EditorInterface.get_editor_settings()`, which is main-thread-only.
+## Empty defaults to the live server URL — appropriate for MCP-tool callers
+## that always run on main.
+static func configure(id: String, url: String = "") -> Dictionary:
 	var client := McpClientRegistry.get_by_id(id)
 	if client == null:
 		return {"status": "error", "message": "Unknown client: %s" % id}
 	## Capture `url` once so a port flip in EditorSettings between write and
 	## verify can't trigger a spurious CONFIGURED_MISMATCH against an entry
 	## that just landed correctly.
-	var url := http_url()
+	if url.is_empty():
+		url = http_url()
 	var result := _dispatch_configure(client, url)
 	## Trust-but-verify: a strategy may report ok and have actually written the
 	## file, yet the entry is missing/stale on the read-back path — most often
@@ -200,11 +205,15 @@ static func client_status_probe_snapshot(id: String) -> Dictionary:
 	return {"id": id, "cli_path": cli_path, "installed": installed}
 
 
-static func remove(id: String) -> Dictionary:
+## Pass an explicit `url` when calling from a worker thread — see
+## `configure()` above for why. The url is only used to format the
+## verify-after-write diagnostic message; the remove itself doesn't need it.
+static func remove(id: String, url: String = "") -> Dictionary:
 	var client := McpClientRegistry.get_by_id(id)
 	if client == null:
 		return {"status": "error", "message": "Unknown client: %s" % id}
-	var url := http_url()
+	if url.is_empty():
+		url = http_url()
 	var result := _dispatch_remove(client)
 	return _verify_post_state(client, result, McpClient.Status.NOT_CONFIGURED, url, "remove")
 
