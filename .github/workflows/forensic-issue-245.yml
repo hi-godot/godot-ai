@@ -1,0 +1,60 @@
+name: Forensic / issue-245 dictionary hot-reload
+
+# Manual one-shot to verify the "newly-introduced typed Dictionary field
+# stays NIL after hot-reload" bug across Linux, macOS, and Windows Godot
+# 4.6.2-stable runners. Initial macOS run from a Mac confirmed the crash;
+# this workflow checks Linux + Windows + a second macOS for completeness.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - tmp/forensic-issue-245-run
+    paths:
+      - .github/workflows/forensic-issue-245.yml
+      - docs/forensic/issue-245/**
+
+jobs:
+  synthetic:
+    name: Synthetic / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 4.6.2
+          use-dotnet: false
+
+      - name: Run synthetic dictionary-injection test
+        shell: bash
+        run: |
+          set +e
+          godot --headless --editor \
+            --path docs/forensic/issue-245/repro-dictinject \
+            --quit-after 1500 > synthetic.log 2>&1
+          rc=$?
+          echo "::group::Full Godot output"
+          cat synthetic.log
+          echo "::endgroup::"
+          echo "exit code: $rc"
+          echo
+          echo "===== Verdict ====="
+          if grep -q "post-reload property names" synthetic.log; then
+            grep "post-reload property names" synthetic.log
+          fi
+          if grep -q "inst.get('injected_dict')" synthetic.log; then
+            grep "inst.get('injected_dict')" synthetic.log
+          fi
+          if grep -q "Program crashed with signal" synthetic.log; then
+            echo "RESULT: CRASH (Dictionary::keys on null _p)"
+          elif grep -q "DONE — no SIGABRT" synthetic.log; then
+            echo "RESULT: OK (no crash, hot-reload initialized field correctly)"
+          else
+            echo "RESULT: INDETERMINATE (test did not complete normally; rc=$rc)"
+          fi

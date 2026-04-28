@@ -1,0 +1,13 @@
+; Engine configuration file for synthetic Dictionary-injection hot-reload test.
+
+config_version=5
+
+[application]
+
+config/name="repro-dictinject"
+config/features=PackedStringArray("4.6")
+run/main_scene="res://main.tscn"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/repro/plugin.cfg")
