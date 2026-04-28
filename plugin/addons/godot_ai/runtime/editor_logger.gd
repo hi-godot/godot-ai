@@ -50,12 +50,13 @@ func _log_error(
 	error_type: int,
 	script_backtraces: Array,
 ) -> void:
-	## LogBacktrace.resolve_error coalesces the per-virtual-arg shape
-	## (level mapping, rationale-vs-code fallback, backtrace-driven source
-	## remap) so editor_logger and game_logger don't drift on their own
-	## copies of those rules. Filtering is editor-only — game_logger keeps
-	## everything — so we apply it here against the resolved path.
 	if _buffer == null:
+		return
+	## Cheap reject for the firehose: when `file` is already non-user (the
+	## bulk of editor-internal C++ chatter) and there's no backtrace to
+	## remap from, the resolved path can only stay non-user — drop without
+	## paying for resolve_error's call frame + dict allocation.
+	if not _is_user_script(file) and script_backtraces.is_empty():
 		return
 	var resolved := LogBacktrace.resolve_error(
 		function, file, line, code, rationale, error_type, script_backtraces,

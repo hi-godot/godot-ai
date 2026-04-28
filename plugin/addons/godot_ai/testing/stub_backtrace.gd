@@ -10,8 +10,8 @@ extends RefCounted
 ## backtrace-remapping path without a live script execution — Godot
 ## doesn't expose a constructor for the real ScriptBacktrace.
 ##
-## Single-frame is enough: both loggers only consult `script_backtraces[0]`'s
-## frame 0 (via `LogBacktrace.resolve_error`).
+## Single-frame is enough: both loggers only consult the first non-empty
+## frame of `script_backtraces` (via `LogBacktrace.resolve_error`).
 
 var _file: String
 var _line: int

@@ -57,7 +57,7 @@ func get_recent(count: int) -> Array[Dictionary]:
 	## Single-lock so the size we compute `start` from can't race against
 	## a concurrent append between the size read and the slice copy.
 	_mutex.lock()
-	var size := _storage.size()
+	var size := _total_count_unlocked()
 	var start := maxi(0, size - count)
 	var out := _get_range_unlocked(start, size - start)
 	_mutex.unlock()
@@ -66,21 +66,21 @@ func get_recent(count: int) -> Array[Dictionary]:
 
 func total_count() -> int:
 	_mutex.lock()
-	var n := _storage.size()
+	var n := _total_count_unlocked()
 	_mutex.unlock()
 	return n
 
 
 func dropped_count() -> int:
 	_mutex.lock()
-	var n := _dropped_count
+	var n := _dropped_count_unlocked()
 	_mutex.unlock()
 	return n
 
 
 func clear() -> int:
 	_mutex.lock()
-	var n := _storage.size()
+	var n := _total_count_unlocked()
 	_clear_storage()
 	_mutex.unlock()
 	return n

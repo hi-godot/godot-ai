@@ -72,12 +72,23 @@ func get_recent(count: int) -> Array[Dictionary]:
 	return _get_range_unlocked(start, size - start)
 
 
-func total_count() -> int:
+## Lockless accessors. Subclasses with a mutex use these under their lock
+## so the field reads stay encapsulated in the base instead of leaking
+## `_storage` / `_dropped_count` reach-through into the subclass.
+func _total_count_unlocked() -> int:
 	return _storage.size()
 
 
-func dropped_count() -> int:
+func _dropped_count_unlocked() -> int:
 	return _dropped_count
+
+
+func total_count() -> int:
+	return _total_count_unlocked()
+
+
+func dropped_count() -> int:
+	return _dropped_count_unlocked()
 
 
 ## Translate a logical index (0 = oldest retained) to a physical

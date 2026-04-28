@@ -3,9 +3,10 @@ class_name LogBacktrace
 extends RefCounted
 
 ## Helpers for interpreting Godot's `_log_error` virtual arguments.
-## (Named `LogBacktrace`, not `ScriptBacktrace`, because Godot 4.5+ ships
-## a built-in `ScriptBacktrace` class — the type of `script_backtraces[i]`
-## entries — and class_name'ing ours the same would collide.)
+## (Named `LogBacktrace`, not `ScriptBacktrace`: Godot ships a built-in
+## `ScriptBacktrace` class — the type of `script_backtraces[i]` entries
+## — so class_name'ing ours the same would collide. Verified against
+## the engine's `--doctool` output in 4.6.)
 ##
 ## Both `editor_logger.gd` and `game_logger.gd` need to:
 ##   - Map `error_type` (0=ERROR, 1=WARNING, 2=SCRIPT, 3=SHADER) to a
@@ -48,6 +49,9 @@ static func resolve_error(
 	var src_file := file
 	var src_line := line
 	var src_function := function
+	## First non-empty frame wins, not just `script_backtraces[0]` —
+	## chained errors can leave the leading entry empty with the actual
+	## user frame in `script_backtraces[1]`.
 	for bt in script_backtraces:
 		if bt != null and bt.get_frame_count() > 0:
 			src_file = bt.get_frame_file(0)
