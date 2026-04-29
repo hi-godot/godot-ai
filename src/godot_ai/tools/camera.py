@@ -23,9 +23,12 @@ Ops:
         Create a Camera2D ("2d") or Camera3D ("3d"). When make_current=True,
         unmarks previously current cameras of the same class in one undo.
   • configure(camera_path, properties)
-        Batch-set properties. Class-aware. Enum-by-name (projection,
-        keep_aspect, anchor_mode, doppler_tracking, process_callback).
-        Vector2 dict coercion for zoom/offset.
+        Batch-set camera-specific properties (zoom, fov, projection, smoothing,
+        drag, limits …). Class-aware. Enum-by-name (projection, keep_aspect,
+        anchor_mode, doppler_tracking, process_callback). Vector2 dict
+        coercion for zoom/offset. Transforms (position, rotation, scale,
+        transform, global_*) live on the Node — set those via
+        node_set_property, not here.
   • set_limits_2d(camera_path, left?, right?, top?, bottom?, smoothed?)
         Set Camera2D bounds. Pass only the edges to change.
   • set_damping_2d(camera_path, position_speed?, rotation_speed?,
