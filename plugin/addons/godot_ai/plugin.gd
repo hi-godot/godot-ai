@@ -16,6 +16,7 @@ const EDITOR_LOGGER_PATH := "res://addons/godot_ai/runtime/editor_logger.gd"
 ## and manage a server it didn't spawn itself. See #135.
 const MANAGED_SERVER_PID_SETTING := "godot_ai/managed_server_pid"
 const MANAGED_SERVER_VERSION_SETTING := "godot_ai/managed_server_version"
+const MANAGED_SERVER_WS_PORT_SETTING := "godot_ai/managed_server_ws_port"
 const UPDATE_RELOAD_RUNNER_SCRIPT := preload("res://addons/godot_ai/update_reload_runner.gd")
 
 ## Handlers — preloaded as consts instead of registered via `class_name` so
@@ -83,6 +84,7 @@ var _server_pid := -1
 var _handlers: Array = []  # prevent GC of RefCounted handlers
 var _debugger_plugin: McpDebuggerPlugin
 static var _server_started_this_session := false  # guard against re-entrant spawns
+static var _resolved_ws_port := McpClientConfigurator.DEFAULT_WS_PORT
 
 ## Captured state for server-spawn supervision (see _start_server_watch).
 ## Populated only when WE spawn the process — adopt / foreign-server
@@ -126,9 +128,9 @@ func _enter_tree() -> void:
 	## builds the CLI args.
 	McpClientConfigurator.ensure_settings_registered()
 
+	_log_buffer = McpLogBuffer.new()
 	_start_server()
 
-	_log_buffer = McpLogBuffer.new()
 	_game_log_buffer = McpGameLogBuffer.new()
 	_editor_log_buffer = McpEditorLogBuffer.new()
 	_attach_editor_logger()
@@ -136,6 +138,7 @@ func _enter_tree() -> void:
 
 	_connection = McpConnection.new()
 	_connection.log_buffer = _log_buffer
+	_connection.ws_port = _resolved_ws_port
 	_connection.connect_blocked = _connection_blocked
 	_connection.connect_block_reason = _server_status_message
 	if not _connection_blocked and _spawn_state == McpSpawnState.OK:
@@ -460,6 +463,26 @@ func _start_server() -> void:
 	if _is_port_in_use(port):
 		var record := _read_managed_server_record()
 		var record_version := str(record.get("version", ""))
+		var record_ws_port := int(record.get("ws_port", 0))
+		## Trust the cached WS port from the managed record only when the
+		## record is current ownership proof — i.e. the recorded plugin
+		## version matches the installed plugin. A stale record can carry
+		## a stale resolved WS port from an older install (e.g. 9500 from
+		## a v2.2.0 record vs the current 10500 after a Windows-reservation
+		## collision pushed it). Trusting it would let the compatibility
+		## check report a bogus WS mismatch against a live current-
+		## compatible server, which the version-drift branch could then
+		## translate into killing an unrelated external process. This
+		## aligns the cached WS port with the ownership-proof gate that
+		## the stale-record-clear-on-adoption path (#259) already enforces
+		## for the PID/version fields.
+		_set_resolved_ws_port(_resolved_ws_port_for_existing_server(
+			record_ws_port,
+			record_version,
+			current_version,
+			_resolve_ws_port()
+		))
+		ws_port = _resolved_ws_port
 		var live := _probe_live_server_status(port)
 		var live_version := _verified_status_version(live)
 		var live_ws_port := _verified_status_ws_port(live)
@@ -511,6 +534,9 @@ func _start_server() -> void:
 			_set_incompatible_server(live, current_version, port)
 			push_warning(_server_status_message)
 			return
+
+	_set_resolved_ws_port(_resolve_ws_port())
+	ws_port = _resolved_ws_port
 
 	var server_cmd := McpClientConfigurator.get_server_command()
 	if server_cmd.is_empty():
@@ -575,14 +601,18 @@ func _set_incompatible_server(live: Dictionary, expected_version: String, port: 
 	_server_expected_version = expected_version
 	_server_actual_version = _live_version_for_message(live)
 	_server_dev_version_mismatch_allowed = false
-	_server_status_message = _incompatible_server_message(live, expected_version, port)
+	_server_status_message = _incompatible_server_message(live, expected_version, port, _resolved_ws_port)
 	_refresh_dock_client_statuses()
 
 
-static func _incompatible_server_message(live: Dictionary, expected_version: String, port: int) -> String:
+static func _incompatible_server_message(
+	live: Dictionary,
+	expected_version: String,
+	port: int,
+	expected_ws_port: int
+) -> String:
 	var version := _live_version_for_message(live)
 	var actual_ws_port := _live_ws_port_for_message(live)
-	var expected_ws_port := McpClientConfigurator.ws_port()
 	if not version.is_empty():
 		if actual_ws_port > 0 and actual_ws_port != expected_ws_port:
 			return (
@@ -954,7 +984,7 @@ func _respawn_with_refresh() -> void:
 	var cmd: String = server_cmd[0]
 	var args: Array[String] = []
 	args.assign(server_cmd.slice(1))
-	args.append_array(_build_server_flags(McpClientConfigurator.http_port(), McpClientConfigurator.ws_port()))
+	args.append_array(_build_server_flags(McpClientConfigurator.http_port(), _resolved_ws_port))
 	_clear_pid_file()
 	_log_buffer.log("retrying with --refresh (PyPI index may be stale)")
 	_server_pid = OS.create_process(cmd, args)
@@ -991,6 +1021,66 @@ func get_server_status() -> Dictionary:
 		"dev_version_mismatch_allowed": _server_dev_version_mismatch_allowed,
 		"connection_blocked": _connection_blocked,
 	}
+
+
+func get_resolved_ws_port() -> int:
+	return _resolved_ws_port
+
+
+func _set_resolved_ws_port(port: int) -> void:
+	_resolved_ws_port = port
+	if _connection != null:
+		_connection.ws_port = port
+
+
+func _resolve_ws_port() -> int:
+	var configured := McpClientConfigurator.ws_port()
+	var resolved := McpWindowsPortReservation.suggest_non_excluded_port(
+		configured,
+		2048,
+		McpClientConfigurator.MAX_PORT
+	)
+	if resolved != configured:
+		var message := "WebSocket port %d is reserved by Windows; using %d" % [configured, resolved]
+		print("MCP | %s" % message)
+		if _log_buffer != null:
+			_log_buffer.log(message)
+	return resolved
+
+
+## Choose the WS port to expect when a server is already bound to our
+## HTTP port. Returns the cached `ws_port` from the managed record only
+## when that record is current ownership proof (its recorded plugin
+## version matches the installed plugin); otherwise returns the freshly
+## resolved port from current settings + Windows reservation logic.
+##
+## Pure helper so the ownership-proof gate is testable without spinning
+## up an editor + a live server. See the call site in `_start_server`
+## for the full rationale.
+static func _resolved_ws_port_for_existing_server(
+	record_ws_port: int,
+	record_version: String,
+	current_version: String,
+	fresh_resolved: int
+) -> int:
+	if record_ws_port <= 0:
+		return fresh_resolved
+	if current_version.is_empty() or record_version != current_version:
+		return fresh_resolved
+	return record_ws_port
+
+
+static func _resolve_ws_port_from_output(
+	configured_port: int,
+	netsh_output: String,
+	span: int = 2048
+) -> int:
+	return McpWindowsPortReservation.suggest_non_excluded_port_from_output(
+		netsh_output,
+		configured_port,
+		span,
+		McpClientConfigurator.MAX_PORT
+	)
 
 
 func _is_port_in_use(port: int) -> bool:
@@ -1283,14 +1373,17 @@ func _wait_for_port_free(port: int, timeout_s: float) -> void:
 func _read_managed_server_record() -> Dictionary:
 	var es := EditorInterface.get_editor_settings()
 	if es == null:
-		return {"pid": 0, "version": ""}
+		return {"pid": 0, "version": "", "ws_port": 0}
 	var pid: int = 0
 	if es.has_setting(MANAGED_SERVER_PID_SETTING):
 		pid = int(es.get_setting(MANAGED_SERVER_PID_SETTING))
 	var version: String = ""
 	if es.has_setting(MANAGED_SERVER_VERSION_SETTING):
 		version = str(es.get_setting(MANAGED_SERVER_VERSION_SETTING))
-	return {"pid": pid, "version": version}
+	var ws_port: int = 0
+	if es.has_setting(MANAGED_SERVER_WS_PORT_SETTING):
+		ws_port = int(es.get_setting(MANAGED_SERVER_WS_PORT_SETTING))
+	return {"pid": pid, "version": version, "ws_port": ws_port}
 
 
 func _write_managed_server_record(pid: int, version: String) -> void:
@@ -1299,6 +1392,7 @@ func _write_managed_server_record(pid: int, version: String) -> void:
 		return
 	es.set_setting(MANAGED_SERVER_PID_SETTING, pid)
 	es.set_setting(MANAGED_SERVER_VERSION_SETTING, version)
+	es.set_setting(MANAGED_SERVER_WS_PORT_SETTING, _resolved_ws_port)
 
 
 func _clear_managed_server_record() -> void:
@@ -1309,6 +1403,8 @@ func _clear_managed_server_record() -> void:
 		es.set_setting(MANAGED_SERVER_PID_SETTING, 0)
 	if es.has_setting(MANAGED_SERVER_VERSION_SETTING):
 		es.set_setting(MANAGED_SERVER_VERSION_SETTING, "")
+	if es.has_setting(MANAGED_SERVER_WS_PORT_SETTING):
+		es.set_setting(MANAGED_SERVER_WS_PORT_SETTING, 0)
 
 
 ## Prepare for a plugin-self-update reload cycle: kill the server process
@@ -1405,12 +1501,13 @@ func start_dev_server() -> void:
 			return
 
 		var cmd: String = server_cmd[0]
+		_set_resolved_ws_port(_resolve_ws_port())
 		var inner_args: Array[String] = []
 		inner_args.assign(server_cmd.slice(1))
 		inner_args.append_array([
 			"--transport", "streamable-http",
 			"--port", str(McpClientConfigurator.http_port()),
-			"--ws-port", str(McpClientConfigurator.ws_port()),
+			"--ws-port", str(_resolved_ws_port),
 			"--reload",
 		])
 

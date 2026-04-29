@@ -46,10 +46,7 @@ static func http_port() -> int:
 
 ## Active WebSocket port: user override (if in range) or `DEFAULT_WS_PORT`.
 static func ws_port() -> int:
-	var port := _read_port_setting(SETTING_WS_PORT, DEFAULT_WS_PORT)
-	if McpWindowsPortReservation.is_port_excluded(port):
-		return suggest_free_port(port + 1, 2048)
-	return port
+	return _read_port_setting(SETTING_WS_PORT, DEFAULT_WS_PORT)
 
 
 static func http_url() -> String:
@@ -110,10 +107,12 @@ static func excluded_domains() -> String:
 	return ",".join(parts)
 
 
-## Walk `start`..`start+span-1` and return the first port that is NOT
-## currently excluded by Windows' winnat reservation table. Falls back to
-## `start` if nothing clears (caller can apply anyway — user may just
-## retry). On non-Windows this is a no-op: all ports pass, returns `start`.
+## Clamp `start` into the legal port range, then walk
+## `candidate`..`candidate+span-1` and return the first port that is NOT
+## currently excluded by Windows' winnat reservation table. Falls back to the
+## clamped candidate if nothing clears (caller can apply anyway — user may
+## just retry). On non-Windows this is a no-op: all ports pass, returns the
+## clamped candidate.
 static func suggest_free_port(start: int, span: int = 2048) -> int:
 	var candidate := clampi(start, MIN_PORT, MAX_PORT - span + 1)
 	return McpWindowsPortReservation.suggest_non_excluded_port(candidate, span, MAX_PORT)

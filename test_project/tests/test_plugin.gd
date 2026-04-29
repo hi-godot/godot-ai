@@ -89,6 +89,37 @@ func test_get_server_command_default_omits_refresh() -> void:
 		assert_ne(token, "--refresh", "default get_server_command must never include --refresh")
 
 
+func test_resolve_ws_port_from_output_skips_reserved_configured_port() -> void:
+	var output := """
+Protocol tcp Port Exclusion Ranges
+
+Start Port    End Port
+----------    --------
+    9491          9590
+    9591          9690
+"""
+	assert_eq(
+		GodotAiPlugin._resolve_ws_port_from_output(9500, output),
+		9691,
+		"configured WS port inside adjacent excluded ranges should move to first clear port",
+	)
+
+
+func test_resolve_ws_port_from_output_keeps_unreserved_configured_port() -> void:
+	var output := """
+Protocol tcp Port Exclusion Ranges
+
+Start Port    End Port
+----------    --------
+    9491          9590
+"""
+	assert_eq(
+		GodotAiPlugin._resolve_ws_port_from_output(10500, output),
+		10500,
+		"unreserved configured WS port should stay stable",
+	)
+
+
 func test_pid_alive_rejects_zombie_children() -> void:
 	## Regression guard for the zombie-blindness that defeated the first
 	## draft of the retry wiring: `kill -0` returns success for BOTH

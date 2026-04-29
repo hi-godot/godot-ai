@@ -83,6 +83,13 @@ func test_parse_empty_input_returns_false() -> void:
 	assert_false(McpWindowsPortReservation.parse_excluded("\n\n", 8000))
 
 
+func test_parse_excluded_ranges_extracts_ranges() -> void:
+	var ranges := McpWindowsPortReservation.parse_excluded_ranges(SAMPLE_NETSH_OUTPUT)
+	assert_true(ranges.has(Vector2i(80, 80)), "single-port range should be preserved")
+	assert_true(ranges.has(Vector2i(8000, 8099)), "multi-port range should be preserved")
+	assert_true(ranges.has(Vector2i(50000, 50059)), "high range should be preserved")
+
+
 # ----- suggest_non_excluded_port_from_output -----
 
 func test_suggest_non_excluded_port_skips_reserved_ranges() -> void:

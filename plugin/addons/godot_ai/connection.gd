@@ -11,10 +11,10 @@ const RECONNECT_VERBOSE_ATTEMPTS := 5
 const RECONNECT_LOG_EVERY_N_ATTEMPTS := 10
 
 var _peer := WebSocketPeer.new()
-## Resolved from `McpClientConfigurator.ws_port()` in `_ready` so EditorSettings
-## overrides land before the first connect. Previously a file-scope const, which
-## baked the port at script compile time — meaning a reconfigured ws_port only
-## took effect on the next editor restart.
+## Set by plugin.gd after resolving the configured WebSocket port once for the
+## server spawn. Reconnects reuse this cached value so they keep dialing the
+## same port the Python server was asked to bind.
+var ws_port := McpClientConfigurator.DEFAULT_WS_PORT
 var _url := ""
 var _connected := false
 var _reconnect_attempt := 0
@@ -41,7 +41,6 @@ var pause_processing := false
 
 func _ready() -> void:
 	_session_id = _make_session_id(ProjectSettings.globalize_path("res://"))
-	_url = "ws://127.0.0.1:%d" % McpClientConfigurator.ws_port()
 	## Increase outbound buffer for large messages (e.g. screenshot base64).
 	## Default is 64 KB; screenshots can be several MB.
 	_peer.outbound_buffer_size = 4 * 1024 * 1024  # 4 MB
@@ -123,7 +122,7 @@ func teardown() -> void:
 
 
 func _connect_to_server() -> void:
-	_url = "ws://127.0.0.1:%d" % McpClientConfigurator.ws_port()
+	_url = "ws://127.0.0.1:%d" % ws_port
 	var err := _peer.connect_to_url(_url)
 	if err != OK:
 		log_buffer.log("failed to initiate connection (error %d)" % err)

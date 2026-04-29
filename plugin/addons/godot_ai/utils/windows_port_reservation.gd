@@ -39,6 +39,12 @@ static func is_port_excluded(port: int) -> bool:
 ##
 ##   * - Administered port exclusions.
 static func parse_excluded(text: String, port: int) -> bool:
+	return _ranges_contain(parse_excluded_ranges(text), port)
+
+
+## Parse the `netsh` excluded-port-range output once into inclusive ranges.
+static func parse_excluded_ranges(text: String) -> Array[Vector2i]:
+	var ranges: Array[Vector2i] = []
 	for line in text.split("\n"):
 		var trimmed := line.strip_edges()
 		if trimmed.is_empty() or trimmed.begins_with("-") or trimmed.begins_with("*"):
@@ -50,7 +56,13 @@ static func parse_excluded(text: String, port: int) -> bool:
 			continue
 		var start_p := int(parts[0])
 		var end_p := int(parts[1])
-		if port >= start_p and port <= end_p:
+		ranges.append(Vector2i(start_p, end_p))
+	return ranges
+
+
+static func _ranges_contain(ranges: Array[Vector2i], port: int) -> bool:
+	for r in ranges:
+		if port >= r.x and port <= r.y:
 			return true
 	return false
 
@@ -71,11 +83,17 @@ static func suggest_non_excluded_port(start: int, span: int = 2048, max_port: in
 
 ## Pure parser-backed helper for tests and for `suggest_non_excluded_port`.
 static func suggest_non_excluded_port_from_output(text: String, start: int, span: int = 2048, max_port: int = 65535) -> int:
-	for i in span:
-		var p := start + i
-		if p > max_port:
-			break
-		if not parse_excluded(text, p):
+	var ranges := parse_excluded_ranges(text)
+	var limit := mini(start + span - 1, max_port)
+	var p := start
+	while p <= limit:
+		var advanced := false
+		for r in ranges:
+			if p >= r.x and p <= r.y:
+				p = r.y + 1
+				advanced = true
+				break
+		if not advanced:
 			return p
 	return start
 

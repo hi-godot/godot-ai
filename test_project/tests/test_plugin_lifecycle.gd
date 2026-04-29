@@ -41,6 +41,8 @@ func teardown() -> void:
 			es.set_setting(GodotAiPlugin.MANAGED_SERVER_PID_SETTING, 0)
 		if es.has_setting(GodotAiPlugin.MANAGED_SERVER_VERSION_SETTING):
 			es.set_setting(GodotAiPlugin.MANAGED_SERVER_VERSION_SETTING, "")
+		if es.has_setting(GodotAiPlugin.MANAGED_SERVER_WS_PORT_SETTING):
+			es.set_setting(GodotAiPlugin.MANAGED_SERVER_WS_PORT_SETTING, 0)
 	if FileAccess.file_exists(GodotAiPlugin.SERVER_PID_FILE):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(GodotAiPlugin.SERVER_PID_FILE))
 
@@ -248,6 +250,110 @@ func test_external_compatible_adoption_clears_stale_managed_record() -> void:
 		FileAccess.file_exists(GodotAiPlugin.SERVER_PID_FILE),
 		"stale pid-file must be cleared with the stale record"
 	)
+	assert_false(can_restart, "external adoption must not authorize managed restart")
+
+
+func test_resolved_ws_port_drops_stale_record_value() -> void:
+	## Regression for the cached-ws-port + stale-ownership interaction.
+	## Setup mirrors the bad shape from the field:
+	##
+	##   - managed record carries an old plugin version (`2.1.0`) and the
+	##     resolved WS port that older install picked (`9500`)
+	##   - the live server on the same HTTP port speaks the *current* plugin
+	##     version on a *different* current WS port (`10500`, e.g. because
+	##     the user upgraded the plugin and Windows started reserving 9500)
+	##
+	## Before the gate: `_start_server` would seed `_resolved_ws_port` with
+	## the stale `9500` from the record, the compatibility check would then
+	## report a WS-mismatch against the live `10500`, the version-drift
+	## branch would treat the matching-but-stale-version record as
+	## ownership proof, and we'd kill an unrelated external process.
+	##
+	## After the gate: a stale record has its `ws_port` discarded, the
+	## fresh-resolved value is used instead, the compatibility check
+	## succeeds against the live current server, and adoption flows through
+	## the external path (which then clears the stale record). End-to-end
+	## tested below by composing this helper with `_adopt_compatible_server`.
+	var stale_record_ws := 9500
+	var fresh_resolved := 10500
+	var stale := GodotAiPlugin._resolved_ws_port_for_existing_server(
+		stale_record_ws, "2.1.0", "2.2.0", fresh_resolved
+	)
+	assert_eq(stale, fresh_resolved, "stale record version must drop the cached ws_port")
+
+	var matching := GodotAiPlugin._resolved_ws_port_for_existing_server(
+		stale_record_ws, "2.2.0", "2.2.0", fresh_resolved
+	)
+	assert_eq(
+		matching,
+		stale_record_ws,
+		"matching record version is current ownership proof — keep the cached ws_port"
+	)
+
+	var missing := GodotAiPlugin._resolved_ws_port_for_existing_server(
+		0, "2.2.0", "2.2.0", fresh_resolved
+	)
+	assert_eq(missing, fresh_resolved, "no cached ws_port -> use fresh-resolved")
+
+	var no_record := GodotAiPlugin._resolved_ws_port_for_existing_server(
+		stale_record_ws, "", "2.2.0", fresh_resolved
+	)
+	assert_eq(no_record, fresh_resolved, "empty record version is not ownership proof")
+
+	## Defensive: an empty `current_version` (handler not initialised yet)
+	## must not collapse to `record_version == current_version == ""` and
+	## start treating any record as ownership proof.
+	var empty_current := GodotAiPlugin._resolved_ws_port_for_existing_server(
+		stale_record_ws, "", "", fresh_resolved
+	)
+	assert_eq(empty_current, fresh_resolved, "empty current version cannot be ownership proof")
+
+
+func test_stale_ws_port_does_not_authorize_killing_external_server() -> void:
+	## End-to-end shape of the regression: a stale managed record (old
+	## version, old cached `ws_port`) sitting in EditorSettings, and a
+	## live current-version server bound to a different current WS port.
+	## Composed from the two units the live `_start_server` runs in
+	## sequence: drop the stale cached ws_port, then route the matching
+	## live server through the external-adoption path which clears the
+	## stale record. If either step regresses, the version-drift branch
+	## could re-acquire ownership and kill the external process.
+	const STALE_RECORD_WS := 9500
+	const LIVE_CURRENT_WS := 10500
+	const CURRENT := "2.2.0"
+	const STALE := "2.1.0"
+	_seed_managed_record(11111, STALE)
+	_seed_pid_file(11111)
+
+	## Step 1: WS-port resolver must drop the stale cached value, otherwise
+	## the compatibility check below would falsely report ws_port_mismatch.
+	var resolved := GodotAiPlugin._resolved_ws_port_for_existing_server(
+		STALE_RECORD_WS, STALE, CURRENT, LIVE_CURRENT_WS
+	)
+	assert_eq(resolved, LIVE_CURRENT_WS, "stale ws_port must be ignored before the compatibility probe")
+
+	## Step 2: with the freshly-resolved expected port, a live current
+	## server passes compatibility — the precondition for adoption.
+	var compatibility := GodotAiPlugin._server_status_compatibility(
+		CURRENT, CURRENT, LIVE_CURRENT_WS, resolved, false
+	)
+	assert_true(
+		bool(compatibility.get("compatible", false)),
+		"live current server on the actual current WS port must be compatible"
+	)
+
+	## Step 3: adoption with a stale record version routes through the
+	## external path and clears the stale record — same contract #259
+	## locked in for PID + version, now extended to ws_port.
+	var plugin := GodotAiPlugin.new()
+	var owner_label := plugin._adopt_compatible_server(STALE, CURRENT, 22222)
+	var server_pid := plugin._server_pid
+	var can_restart := plugin.can_restart_managed_server()
+	plugin.free()
+
+	assert_eq(owner_label, "external", "stale-version live server must adopt as external")
+	assert_eq(server_pid, -1, "external adoption must not record a managed PID we could later kill")
+	assert_eq(_read_record_version(), "", "stale record must be cleared on external adoption")
 	assert_false(can_restart, "external adoption must not authorize managed restart")
 
 
