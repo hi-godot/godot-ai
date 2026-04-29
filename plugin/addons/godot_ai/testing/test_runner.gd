@@ -9,12 +9,22 @@ var _results: Array[Dictionary] = []
 var _last_run_ms: int = 0
 
 
-func run_suite(suite: McpTestSuite, test_filter: String = "") -> void:
+func run_suite(suite: McpTestSuite, test_filter: String = "", exclude_test_filter: String = "") -> void:
 	var name := suite.suite_name()
 	var methods := _get_test_methods(suite)
 
 	for method_name in methods:
 		if not test_filter.is_empty() and method_name.find(test_filter) == -1:
+			continue
+		if not exclude_test_filter.is_empty() and method_name.find(exclude_test_filter) != -1:
+			_results.append({
+				"suite": name,
+				"test": method_name,
+				"passed": true,
+				"skipped": true,
+				"message": "Excluded by exclude_test_name filter",
+				"assertion_count": 0,
+			})
 			continue
 
 		suite._reset()
@@ -60,7 +70,7 @@ func run_suite(suite: McpTestSuite, test_filter: String = "") -> void:
 		})
 
 
-func run_suites(suites: Array, suite_filter: String = "", test_filter: String = "", ctx: Dictionary = {}, verbose: bool = false) -> Dictionary:
+func run_suites(suites: Array, suite_filter: String = "", test_filter: String = "", ctx: Dictionary = {}, verbose: bool = false, exclude_test_filter: String = "") -> Dictionary:
 	_results.clear()
 	var start := Time.get_ticks_msec()
 
@@ -98,7 +108,7 @@ func run_suites(suites: Array, suite_filter: String = "", test_filter: String = 
 				"assertion_count": 0,
 			})
 		else:
-			run_suite(suite, test_filter)
+			run_suite(suite, test_filter, exclude_test_filter)
 		suite.suite_teardown()
 
 		## Remove any nodes the suite left behind (failed undo, missing cleanup).

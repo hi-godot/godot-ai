@@ -1252,6 +1252,23 @@ class TestTestingTools:
         await task
         assert result.data["passed"] == 2
 
+    async def test_run_tests_with_exclude_test_name(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "run_tests"
+            assert cmd["params"]["exclude_test_name"] == "test_flaky"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"passed": 2, "failed": 0, "skipped": 1, "results": []},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("test_run", {"exclude_test_name": "test_flaky"})
+        await task
+        assert result.data["skipped"] == 1
+
     async def test_get_test_results(self, mcp_stack):
         client, plugin = mcp_stack
 
