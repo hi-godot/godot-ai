@@ -1125,18 +1125,19 @@ func _find_pid_on_port(port: int) -> int:
 	return pids[0] if not pids.is_empty() else 0
 
 
-## POSIX-only sibling of `_find_pid_on_port` — returns every PID
-## bound LISTEN on `port`, so callers that need to tear down a process
-## group (e.g. `force_restart_server`) can reach both the reloader
-## parent and the worker. Windows netstat parser only ever returns one
-## LISTENER row per port so callers can skip this there.
+## Sibling of `_find_pid_on_port` — returns every PID bound LISTEN on
+## `port`, so callers that need to tear down a process group (e.g.
+## `force_restart_server`) can reach both the reloader parent and the
+## worker. On Windows, stale uvicorn parents can leave multiple netstat
+## listener rows for the same port, so collect every matching row there too.
 func _find_all_pids_on_port(port: int) -> Array[int]:
 	if OS.get_name() == "Windows":
-		var pids: Array[int] = []
-		var one := _find_pid_on_port(port)
-		if one > 0:
-			pids.append(one)
-		return pids
+		var output: Array = []
+		var exit_code := OS.execute("netstat", ["-ano"], output, true)
+		if exit_code != 0 or output.is_empty():
+			var empty: Array[int] = []
+			return empty
+		return _parse_windows_netstat_pids(str(output[0]), port)
 	var output: Array = []
 	var exit_code := OS.execute("lsof", ["-ti:%d" % port, "-sTCP:LISTEN"], output, true)
 	if exit_code != 0 or output.is_empty():
@@ -1154,6 +1155,17 @@ static func _parse_lsof_pids(raw: String) -> Array[int]:
 		var stripped := line.strip_edges()
 		if stripped.is_valid_int():
 			pids.append(int(stripped))
+	return pids
+
+
+static func _parse_pid_lines(raw: String) -> Array[int]:
+	var pids: Array[int] = []
+	for line in raw.strip_edges().split("\n", false):
+		var stripped := line.strip_edges()
+		if stripped.is_valid_int():
+			var pid := int(stripped)
+			if pid > 0 and not pids.has(pid):
+				pids.append(pid)
 	return pids
 
 
@@ -1183,6 +1195,12 @@ func _find_managed_pid(port: int) -> int:
 ## the earlier bug; a remote address happening to include `:8000` would
 ## false-positive.
 static func _parse_windows_netstat_pid(stdout: String, port: int) -> int:
+	var pids := _parse_windows_netstat_pids(stdout, port)
+	return pids[0] if not pids.is_empty() else 0
+
+
+static func _parse_windows_netstat_pids(stdout: String, port: int) -> Array[int]:
+	var pids: Array[int] = []
 	var port_suffix := ":%d" % port
 	for line in stdout.split("\n"):
 		var s := line.strip_edges()
@@ -1198,8 +1216,10 @@ static func _parse_windows_netstat_pid(stdout: String, port: int) -> int:
 			continue
 		var pid_str := fields[fields.size() - 1]
 		if pid_str.is_valid_int():
-			return int(pid_str)
-	return 0
+			var pid := int(pid_str)
+			if pid > 0 and not pids.has(pid):
+				pids.append(pid)
+	return pids
 
 
 ## True if any row in a Windows `netstat -ano` dump is a LISTENING
@@ -1265,13 +1285,13 @@ func _stop_server() -> void:
 	## falling back to netstat/lsof if the file is missing.
 	var port := McpClientConfigurator.http_port()
 	var killed: Array[int] = []
-	if _pid_alive(_server_pid):
-		OS.kill(_server_pid)
-		killed.append(_server_pid)
+	var candidates: Array[int] = [_server_pid]
 	var real_pid := _find_managed_pid(port)
-	if real_pid > 0 and not killed.has(real_pid):
-		OS.kill(real_pid)
-		killed.append(real_pid)
+	if real_pid > 0:
+		candidates.append(real_pid)
+	for pid in _find_all_pids_on_port(port):
+		candidates.append(pid)
+	killed = _kill_processes_and_windows_spawn_children(candidates)
 	if not killed.is_empty():
 		print("MCP | stopped server (PID %s)" % str(killed))
 	_server_pid = -1
@@ -1472,8 +1492,7 @@ func force_restart_server() -> void:
 	## reloader parent AND a worker child — killing only one (or zero,
 	## if the single-pid parse fell over on multi-line lsof output) leaves
 	## the other holding the port past `_wait_for_port_free`'s window.
-	for pid in _find_all_pids_on_port(port):
-		OS.kill(pid)
+	_kill_processes_and_windows_spawn_children(_find_all_pids_on_port(port))
 	_clear_managed_server_record()
 	_clear_pid_file()
 	_wait_for_port_free(port, 5.0)
@@ -1548,14 +1567,61 @@ func stop_dev_server() -> void:
 	var output: Array = []
 	var port := McpClientConfigurator.http_port()
 	if OS.get_name() == "Windows":
-		# Find PID listening on port, then kill
-		var exit_code := OS.execute("cmd", ["/c", "for /f \"tokens=5\" %%a in ('netstat -ano ^| findstr :%d ^| findstr LISTENING') do taskkill /PID %%a /F" % port], output, true)
-		if exit_code == 0:
+		var killed := _kill_processes_and_windows_spawn_children(_find_all_pids_on_port(port))
+		if not killed.is_empty():
 			print("MCP | stopped dev server on port %d" % port)
 	else:
 		var exit_code := OS.execute("bash", ["-c", "lsof -ti:%d -sTCP:LISTEN | xargs kill 2>/dev/null" % port], output, true)
 		if exit_code == 0:
 			print("MCP | stopped dev server on port %d" % port)
+
+
+func _kill_processes_and_windows_spawn_children(pids: Array[int]) -> Array[int]:
+	var unique: Array[int] = []
+	for pid in pids:
+		if pid > 0 and not unique.has(pid):
+			unique.append(pid)
+	if OS.get_name() == "Windows":
+		for child_pid in _find_windows_spawn_children(unique):
+			if not unique.has(child_pid):
+				unique.append(child_pid)
+	var killed: Array[int] = []
+	for pid in unique:
+		if OS.get_name() == "Windows":
+			var output: Array = []
+			var exit_code := OS.execute("taskkill", ["/PID", str(pid), "/T", "/F"], output, true)
+			if exit_code == 0 or not _pid_alive(pid):
+				killed.append(pid)
+		else:
+			OS.kill(pid)
+			killed.append(pid)
+	return killed
+
+
+func _find_windows_spawn_children(parent_pids: Array[int]) -> Array[int]:
+	if parent_pids.is_empty():
+		var empty: Array[int] = []
+		return empty
+	var found: Array[int] = []
+	for parent_pid in parent_pids:
+		var output: Array = []
+		var script := (
+			"Get-CimInstance Win32_Process | "
+			+ "Where-Object { $_.CommandLine -like '*spawn_main(parent_pid=%d*' } | "
+			+ "ForEach-Object { $_.ProcessId }"
+		) % parent_pid
+		var exit_code := OS.execute(
+			"powershell.exe",
+			["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+			output,
+			true
+		)
+		if exit_code != 0 or output.is_empty():
+			continue
+		for pid in _parse_pid_lines(str(output[0])):
+			if not found.has(pid):
+				found.append(pid)
+	return found
 
 
 func is_dev_server_running() -> bool:

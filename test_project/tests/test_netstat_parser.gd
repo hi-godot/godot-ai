@@ -37,6 +37,29 @@ func test_find_pid_returns_listening_row_for_port() -> void:
 	assert_eq(pid, 57865, "should return PID from the LISTENING row for :8000")
 
 
+func test_find_pids_returns_every_listening_row_for_port() -> void:
+	var sample := (
+		"  TCP    127.0.0.1:8001    0.0.0.0:0          LISTENING       36936\n"
+		+ "  TCP    127.0.0.1:8001    0.0.0.0:0          LISTENING       46396\n"
+		+ "  TCP    127.0.0.1:8001    127.0.0.1:12305    ESTABLISHED     46396\n"
+		+ "  TCP    127.0.0.1:12305   127.0.0.1:8001     ESTABLISHED     2884\n"
+	)
+	var pids := GodotAiPlugin._parse_windows_netstat_pids(sample, 8001)
+	assert_eq(pids.size(), 2)
+	assert_eq(pids[0], 36936)
+	assert_eq(pids[1], 46396)
+
+
+func test_find_pids_deduplicates_duplicate_listening_rows() -> void:
+	var sample := (
+		"  TCP    127.0.0.1:8001    0.0.0.0:0    LISTENING    46396\n"
+		+ "  TCP    127.0.0.1:8001    0.0.0.0:0    LISTENING    46396\n"
+	)
+	var pids := GodotAiPlugin._parse_windows_netstat_pids(sample, 8001)
+	assert_eq(pids.size(), 1)
+	assert_eq(pids[0], 46396)
+
+
 func test_find_pid_ignores_established_rows_matching_port() -> void:
 	## Row 4 has :8000 in the Foreign Address column and state ESTABLISHED.
 	## Old parser matched `:8000` anywhere, new one requires the LISTENING
@@ -138,6 +161,13 @@ func test_split_handles_tabs() -> void:
 func test_split_empty_string() -> void:
 	var fields := GodotAiPlugin._split_on_whitespace("")
 	assert_eq(fields.size(), 0)
+
+
+func test_parse_pid_lines_ignores_noise_and_deduplicates() -> void:
+	var pids := GodotAiPlugin._parse_pid_lines("19088\nnot-a-pid\n19088\n40064\n")
+	assert_eq(pids.size(), 2)
+	assert_eq(pids[0], 19088)
+	assert_eq(pids[1], 40064)
 
 
 # ----- pid-file round trip -----

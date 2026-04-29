@@ -395,6 +395,7 @@ func test_incompatible_server_message_names_actual_version_when_discoverable() -
 		{"version": "1.2.10"},
 		"2.2.0",
 		8000,
+		McpClientConfigurator.ws_port(),
 	)
 	assert_contains(message, "Port 8000 is occupied by godot-ai server v1.2.10")
 	assert_contains(message, "plugin expects v2.2.0")
@@ -406,6 +407,7 @@ func test_incompatible_server_message_names_ws_port_mismatch() -> void:
 		{"name": "godot-ai", "version": "2.2.0", "ws_port": 9600},
 		"2.2.0",
 		8000,
+		McpClientConfigurator.ws_port(),
 	)
 	assert_contains(message, "using WS port 9600")
 	assert_contains(message, "with WS port %d" % McpClientConfigurator.ws_port())
