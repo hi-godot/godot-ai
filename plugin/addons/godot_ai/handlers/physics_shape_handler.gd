@@ -53,12 +53,10 @@ func autofit(params: Dictionary) -> Dictionary:
 	var source_path: String = params.get("source_path", "")
 	var source: Node = null
 	if source_path.is_empty():
-		source = _find_bounds_sibling(node, is_3d)
-		if source == null:
-			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
-				"No visual sibling found to measure — pass source_path explicitly (e.g. a MeshInstance3D or Sprite2D)"
-			)
+		var search := _find_bounds_visual(node, is_3d, scene_root)
+		if search.has("error"):
+			return search.error
+		source = search.source
 	else:
 		source = McpScenePath.resolve(source_path, scene_root)
 		if source == null:
@@ -133,21 +131,71 @@ func autofit(params: Dictionary) -> Dictionary:
 	}
 
 
-## Find the first sibling of `collision_node` that provides bounds we can
-## measure. For 3D: any VisualInstance3D (MeshInstance3D, CSGShape3D, etc.).
-## For 2D: Sprite2D or TextureRect with an item rect.
-static func _find_bounds_sibling(collision_node: Node, is_3d: bool) -> Node:
+## Returns `{source: Node}` on success, `{error: <error dict>}` on failure.
+## Ambiguous tier-2 matches put candidate scene paths in
+## `error.data.candidates` so callers can pick one explicitly.
+static func _find_bounds_visual(collision_node: Node, is_3d: bool, scene_root: Node) -> Dictionary:
 	var parent := collision_node.get_parent()
 	if parent == null:
-		return null
-	for sibling in parent.get_children():
-		if sibling == collision_node:
+		return {"error": _no_visual_error(is_3d)}
+
+	# Tier 1: direct siblings of the collision shape. Uses the broad
+	# VisualInstance3D filter for backwards compatibility — callers who put
+	# the visual directly next to the collision picked it on purpose.
+	var siblings := _measurable_visuals(parent.get_children(), collision_node, is_3d, false)
+	if not siblings.is_empty():
+		return {"source": siblings[0]}
+
+	# Tier 2: parent siblings (uncles). Tighten the filter to
+	# GeometryInstance3D so we don't auto-pick a Light3D / DirectionalLight3D
+	# as a collision source. Auto-pick only when unambiguous; surface
+	# multiple candidates so the agent chooses.
+	var grandparent := parent.get_parent()
+	if grandparent == null:
+		return {"error": _no_visual_error(is_3d)}
+	var uncles := _measurable_visuals(grandparent.get_children(), parent, is_3d, true)
+	if uncles.size() == 1:
+		return {"source": uncles[0]}
+	if uncles.size() > 1:
+		var paths: Array[String] = []
+		for n in uncles:
+			paths.append(McpScenePath.from_node(n, scene_root))
+		var msg := "Multiple visual candidates near %s — pass source_path explicitly. Candidates: %s" % [
+			McpScenePath.from_node(collision_node, scene_root),
+			", ".join(paths),
+		]
+		var err := McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, msg)
+		err["error"]["data"] = {"candidates": paths}
+		return {"error": err}
+	return {"error": _no_visual_error(is_3d)}
+
+
+## Filter `nodes` for ones we can measure as a collision source. When
+## `strict` is true (tier 2 / uncles) only GeometryInstance3D counts in 3D —
+## avoids picking up lights as accidental sources. 2D filter is already
+## narrow enough that strictness doesn't change behavior.
+static func _measurable_visuals(nodes: Array, exclude: Node, is_3d: bool, strict: bool) -> Array[Node]:
+	var out: Array[Node] = []
+	for n in nodes:
+		if n == exclude:
 			continue
-		if is_3d and sibling is VisualInstance3D:
-			return sibling
-		if not is_3d and (sibling is Sprite2D or sibling is TextureRect):
-			return sibling
-	return null
+		if is_3d:
+			if strict:
+				if n is GeometryInstance3D:
+					out.append(n)
+			elif n is VisualInstance3D:
+				out.append(n)
+		elif n is Sprite2D or n is TextureRect:
+			out.append(n)
+	return out
+
+
+static func _no_visual_error(is_3d: bool) -> Dictionary:
+	var hint := "MeshInstance3D" if is_3d else "Sprite2D"
+	return McpErrorCodes.make(
+		McpErrorCodes.INVALID_PARAMS,
+		"No visual found near collision shape — searched siblings and parent-siblings. Pass source_path explicitly (e.g. a %s)" % hint,
+	)
 
 
 ## Measure the visual bounds of `source`. Returns {aabb: AABB} for 3D or

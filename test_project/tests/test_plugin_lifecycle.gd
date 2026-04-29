@@ -468,11 +468,32 @@ func test_verified_matching_server_clears_foreign_port() -> void:
 
 
 func test_verified_old_server_becomes_incompatible_and_blocks_connection() -> void:
+	## Force user-mode for the duration of this test so the dev-checkout
+	## heuristic — which silently treats any version mismatch as compatible
+	## when run from a `.venv`-adjacent worktree — can't make 1.2.10 look
+	## OK against an expected 2.2.0. Without this the test is non-
+	## deterministic across CI runners and dev machines.
+	var prior_setting: Variant = null
+	var es := EditorInterface.get_editor_settings()
+	if es != null and es.has_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING):
+		prior_setting = es.get_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING)
+	var prior_env := OS.get_environment("GODOT_AI_MODE")
+	if es != null:
+		es.set_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING, "user")
+	OS.set_environment("GODOT_AI_MODE", "user")
+
 	var plugin := GodotAiPlugin.new()
 	plugin._server_expected_version = "2.2.0"
 	plugin._on_server_version_verified("1.2.10")
 	var status := plugin.get_server_status()
 	plugin.free()
+
+	if es != null:
+		es.set_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING, prior_setting if prior_setting != null else "")
+	if prior_env.is_empty():
+		OS.unset_environment("GODOT_AI_MODE")
+	else:
+		OS.set_environment("GODOT_AI_MODE", prior_env)
 
 	assert_eq(status.get("state", ""), McpSpawnState.INCOMPATIBLE_SERVER)
 	assert_eq(status.get("actual_version", ""), "1.2.10")
