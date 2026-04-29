@@ -5,10 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._readiness import require_writable, sync_readiness_from_snapshot
 from godot_ai.runtime.interface import Runtime
-
-_KNOWN_READINESS = frozenset({"ready", "importing", "playing", "no_scene"})
 
 COMMON_SETTINGS = [
     "application/config/name",
@@ -57,13 +55,11 @@ async def project_stop(runtime: Runtime) -> dict:
     EDITOR_NOT_READY.
     """
     result = await runtime.send_command("stop_project")
-    session = runtime.get_active_session()
-    if session is None:
+    if sync_readiness_from_snapshot(runtime, result.get("readiness_after")):
         return result
 
-    readiness_after = result.get("readiness_after")
-    if readiness_after in _KNOWN_READINESS:
-        session.readiness = readiness_after
+    session = runtime.get_active_session()
+    if session is None:
         return result
 
     loop = asyncio.get_running_loop()

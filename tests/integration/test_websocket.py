@@ -10,6 +10,9 @@ import websockets
 
 from godot_ai import __version__ as _SERVER_VERSION
 from godot_ai.godot_client.client import GodotClient, GodotCommandError
+from godot_ai.handlers import editor as editor_handlers
+from godot_ai.handlers import scene as scene_handlers
+from godot_ai.runtime.direct import DirectRuntime
 
 # ---------------------------------------------------------------------------
 # Handshake
@@ -287,3 +290,83 @@ class TestMultipleSessions:
         assert harness.registry.get("keep-a") is None
         assert harness.registry.get("keep-b") is not None
         await plugin_b.close()
+
+
+# --- Issue #262: editor_state self-heals a stale "playing" cache ---
+
+
+class TestEditorStateSelfHeal:
+    async def test_editor_state_then_scene_save_no_stale_playing_block(self, harness):
+        plugin = await harness.connect_plugin(session_id="sh-1", readiness="playing")
+        client = GodotClient(harness.server, harness.registry)
+        runtime = DirectRuntime(registry=harness.registry, client=client)
+        session = harness.registry.get("sh-1")
+        assert session.readiness == "playing"
+
+        async def mock_plugin_loop():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_editor_state"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "godot_version": "4.4.1",
+                    "project_name": "p",
+                    "current_scene": "res://main.tscn",
+                    "is_playing": False,
+                    "readiness": "ready",
+                },
+            )
+            # Without the self-heal the runtime never reaches save_scene —
+            # require_writable raises EDITOR_NOT_READY against the stale
+            # "playing" cache before send_command runs. Receiving the
+            # save_scene command is the test.
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "save_scene"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"path": "res://main.tscn", "undoable": False},
+            )
+
+        task = asyncio.create_task(mock_plugin_loop())
+        try:
+            state = await editor_handlers.editor_state(runtime)
+            assert state["readiness"] == "ready"
+            assert session.readiness == "ready"
+            saved = await scene_handlers.scene_save(runtime)
+            assert saved["path"] == "res://main.tscn"
+        finally:
+            await asyncio.wait_for(task, timeout=2.0)
+            await plugin.close()
+
+    async def test_editor_state_promotes_cache_to_playing_when_truly_playing(self, harness):
+        """Self-heal is bidirectional — a stale 'ready' cache also reconciles
+        so the next write correctly blocks instead of slipping through."""
+        plugin = await harness.connect_plugin(session_id="sh-2", readiness="ready")
+        client = GodotClient(harness.server, harness.registry)
+        runtime = DirectRuntime(registry=harness.registry, client=client)
+        session = harness.registry.get("sh-2")
+        assert session.readiness == "ready"
+
+        async def mock_plugin():
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "godot_version": "4.4.1",
+                    "project_name": "p",
+                    "current_scene": "res://main.tscn",
+                    "is_playing": True,
+                    "readiness": "playing",
+                },
+            )
+
+        task = asyncio.create_task(mock_plugin())
+        try:
+            await editor_handlers.editor_state(runtime)
+            assert session.readiness == "playing"
+            with pytest.raises(GodotCommandError) as exc_info:
+                await scene_handlers.scene_save(runtime)
+            assert exc_info.value.code == "EDITOR_NOT_READY"
+        finally:
+            await asyncio.wait_for(task, timeout=2.0)
+            await plugin.close()

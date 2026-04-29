@@ -46,6 +46,12 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         Also reachable as ``editor_manage(op="state")`` (same handler) for clients
         that prefer a single rolled-up tool.
 
+        Side effect: refreshes the server's session readiness cache from the
+        live editor reply. Useful as a recovery step after a write call is
+        rejected as ``EDITOR_NOT_READY (state=playing)`` when you already know
+        the game has stopped — calling ``editor_state`` once syncs the cache
+        and the next write proceeds. Issue #262.
+
         Args:
             session_id: Optional Godot session to target. Empty = active session.
         """

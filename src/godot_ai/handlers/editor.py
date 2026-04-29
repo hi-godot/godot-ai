@@ -9,7 +9,7 @@ import logging
 from fastmcp.tools.base import Image as McpImage
 from mcp.types import TextContent
 
-from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._readiness import require_writable, sync_readiness_from_snapshot
 from godot_ai.runtime.interface import Runtime
 from godot_ai.sessions.registry import Session
 from godot_ai.tools._pagination import paginate
@@ -18,7 +18,26 @@ logger = logging.getLogger(__name__)
 
 
 async def editor_state(runtime: Runtime) -> dict:
-    return await runtime.send_command("get_editor_state")
+    """Read live editor state and self-heal the session readiness cache.
+
+    The plugin emits ``readiness_changed`` events when ``_check_state_changes``
+    notices a transition, but ``_process`` is paused around save/play frames
+    (see ``McpConnection.pause_processing``), so the event can lag actual state
+    by one or more ticks. During that window the server's ``session.readiness``
+    cache stays at the previous value and a write call gated by
+    ``require_writable`` is rejected even though the editor is already
+    writeable. Issue #262 reproduced exactly that with an ``editor_state ->
+    scene_save`` sequence: editor_state returned ``is_playing: false`` while
+    the cache still said ``playing``, blocking the save.
+
+    The plugin's ``get_editor_state`` reads ``EditorInterface.is_playing_scene``
+    and ``McpConnection.get_readiness`` directly, so its ``readiness`` field is
+    authoritative. Copy it onto the session so a subsequent ``require_writable``
+    can't disagree with the value the agent just observed.
+    """
+    result = await runtime.send_command("get_editor_state")
+    sync_readiness_from_snapshot(runtime, result.get("readiness"))
+    return result
 
 
 async def editor_selection_get(runtime: Runtime) -> dict:
