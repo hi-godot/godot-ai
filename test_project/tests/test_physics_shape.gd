@@ -240,15 +240,22 @@ func test_autofit_2d_rectangle() -> void:
 # ----- source auto-detection -----
 
 func test_autofit_no_sibling_visual_errors() -> void:
-	# Wrap in a fresh Node3D so the scene root's other children don't leak
-	# in as sibling candidates.
+	# Two-level nesting so neither tier-1 (direct siblings) nor tier-2
+	# (parent siblings / uncles) leaks in scene-root-level visuals — e.g.
+	# a `ReloadTestCube` left over from `script/ci-reload-test`, which
+	# otherwise becomes an uncle of LonelyCollision and makes autofit
+	# return data instead of the expected error.
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		skip("No scene root")
 		return
+	var outer := Node3D.new()
+	outer.name = "IsolatedCollisionOuter"
+	scene_root.add_child(outer)
+	outer.set_owner(scene_root)
 	var isolated := Node3D.new()
 	isolated.name = "IsolatedCollisionHost"
-	scene_root.add_child(isolated)
+	outer.add_child(isolated)
 	isolated.set_owner(scene_root)
 	var col := CollisionShape3D.new()
 	col.name = "LonelyCollision"
@@ -257,7 +264,7 @@ func test_autofit_no_sibling_visual_errors() -> void:
 	var result := _handler.autofit({"path": col.get_path()})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	assert_contains(result.error.message, "source_path")
-	_remove_node(isolated)
+	_remove_node(outer)
 
 
 func test_autofit_explicit_source_path() -> void:
