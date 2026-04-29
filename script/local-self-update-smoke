@@ -76,9 +76,17 @@ def parse_args() -> argparse.Namespace:
         "--server-version",
         default="",
         help=(
-            "Published godot-ai Python package version for the smoke fixture "
-            "(default: base version). Keeps synthetic vNext plugin.cfg values "
-            "from trying to install a fake PyPI package."
+            "Published godot-ai Python package version for the base smoke fixture "
+            "(default: base version)."
+        ),
+    )
+    parser.add_argument(
+        "--next-server-version",
+        default="",
+        help=(
+            "Published godot-ai Python package version for the vNext fixture "
+            "(default: --server-version). Use with --base-version/--next-version "
+            "to smoke old-to-current server replacement."
         ),
     )
     parser.add_argument(
@@ -113,6 +121,7 @@ def main() -> int:
         base_version = args.base_version or read_plugin_version(PLUGIN_ROOT / "plugin.cfg")
         next_version = args.next_version or bump_patch_version(base_version)
         server_version = args.server_version or base_version
+        next_server_version = args.next_server_version or server_version
         baseline = diagnostic_reports_snapshot()
 
         prepare_project(
@@ -120,6 +129,7 @@ def main() -> int:
             base_version=base_version,
             next_version=next_version,
             server_version=server_version,
+            next_server_version=next_server_version,
             http_port=args.http_port,
             ws_port=args.ws_port,
             force=args.force,
@@ -131,6 +141,7 @@ def main() -> int:
             base_version,
             next_version,
             server_version,
+            next_server_version,
             baseline,
         )
 
@@ -167,6 +178,7 @@ def prepare_project(
     base_version: str,
     next_version: str,
     server_version: str,
+    next_server_version: str,
     http_port: int,
     ws_port: int,
     force: bool,
@@ -199,7 +211,7 @@ def prepare_project(
     patch_fixture_plugin(
         vnext_root,
         version=next_version,
-        server_version=server_version,
+        server_version=next_server_version,
         http_port=http_port,
         ws_port=ws_port,
         force_local_update=False,
@@ -584,6 +596,7 @@ def print_instructions(
     base_version: str,
     next_version: str,
     server_version: str,
+    next_server_version: str,
     baseline: set[Path],
 ) -> None:
     latest = max(baseline, key=lambda path: path.stat().st_mtime, default=None)
@@ -592,7 +605,8 @@ def print_instructions(
     print(f"  project:      {project_dir}")
     print(f"  base version: {base_version}")
     print(f"  next version: {next_version}")
-    print(f"  server pkg:   godot-ai=={server_version}")
+    print(f"  base server:  godot-ai=={server_version}")
+    print(f"  next server:  godot-ai=={next_server_version}")
     print(f"  local zip:    {project_dir / SMOKE_DIR / SMOKE_ZIP_NAME}")
     if latest is not None:
         print(f"  latest .ips:  {latest}")

@@ -437,7 +437,8 @@ func _start_server() -> void:
 	## launcher that has long since exited. See #135 and #137.
 	##
 	##   port free                            -> spawn fresh, record PID
-	##   port in use, record.version matches  -> adopt the port owner
+	##   port in use, record.version matches
+	##        + live verification passes       -> adopt the port owner
 	##                                              (self-heals stale PID)
 	##   port in use, record.version drifts   -> kill port owner + respawn
 	##                                              (fixes cold-start drift
@@ -458,6 +459,7 @@ func _start_server() -> void:
 
 	if _is_port_in_use(port):
 		var record := _read_managed_server_record()
+		var record_version := str(record.get("version", ""))
 		var live := _probe_live_server_status(port)
 		var live_version := _verified_status_version(live)
 		var live_ws_port := _verified_status_ws_port(live)
@@ -481,7 +483,7 @@ func _start_server() -> void:
 			## its PID. Otherwise reuse the external/dev server without
 			## recording ownership, so plugin unloads never kill it.
 			var owner := _find_managed_pid(port)
-			if record.version == current_version and owner > 0:
+			if record_version == current_version and owner > 0:
 				_server_pid = owner
 				_write_managed_server_record(owner, current_version)
 			_server_started_this_session = true
@@ -489,12 +491,12 @@ func _start_server() -> void:
 			print("MCP | adopted %s server (PID %d, live v%s, WS %d, plugin v%s)"
 				% [owner_label, _server_pid, _server_actual_version, live_ws_port, current_version])
 			return
-		if not record.version.is_empty():
+		if _managed_record_has_version_drift(record_version, current_version):
 			## Version drift — our server but the plugin moved on. Kill
 			## the port owner (not the stale launcher PID) and respawn
 			## to match the current plugin version.
 			print("MCP | managed server v%s does not match plugin v%s, restarting"
-				% [record.version, current_version])
+				% [record_version, current_version])
 			var owner := _find_managed_pid(port)
 			if owner > 0:
 				OS.kill(owner)
@@ -503,11 +505,11 @@ func _start_server() -> void:
 			_wait_for_port_free(port, 3.0)
 			## Fall through to spawn.
 		else:
-			## No record claiming this port and the live status probe did
-			## not verify an exact/current-compatible godot-ai server. Do
-			## not open the WebSocket: an old server can accept the plugin
-			## session while still exposing an incompatible HTTP/MCP tool
-			## surface to clients such as Antigravity.
+			## No recorded version drift and the live status probe did not
+			## verify an exact/current-compatible godot-ai server. A stale
+			## matching record alone is not enough ownership proof to kill
+			## the current port owner, and opening the WebSocket could route
+			## clients to an incompatible HTTP/MCP tool surface.
 			_server_started_this_session = true
 			_set_incompatible_server(live, current_version, port)
 			push_warning(_server_status_message)
@@ -634,6 +636,10 @@ static func _server_status_compatibility(
 	if actual_ws_port != expected_ws_port:
 		return {"compatible": false, "reason": "ws_port_mismatch", "dev_mismatch_allowed": false}
 	return version_result
+
+
+static func _managed_record_has_version_drift(record_version: String, current_version: String) -> bool:
+	return not record_version.is_empty() and record_version != current_version
 
 
 static func _probe_live_server_status(port: int, timeout_ms: int = SERVER_STATUS_PROBE_TIMEOUT_MS) -> Dictionary:

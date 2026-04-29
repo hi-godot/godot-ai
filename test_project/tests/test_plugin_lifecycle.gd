@@ -211,6 +211,21 @@ func test_server_status_compatibility_requires_matching_ws_port() -> void:
 	assert_eq(wrong_ws.get("reason", ""), "ws_port_mismatch")
 
 
+func test_managed_record_restart_requires_recorded_version_drift() -> void:
+	assert_true(
+		GodotAiPlugin._managed_record_has_version_drift("2.1.0", "2.2.0"),
+		"older managed record must still authorize update restart"
+	)
+	assert_false(
+		GodotAiPlugin._managed_record_has_version_drift("2.2.0", "2.2.0"),
+		"matching managed record must not authorize killing an unverified port owner"
+	)
+	assert_false(
+		GodotAiPlugin._managed_record_has_version_drift("", "2.2.0"),
+		"missing managed record must not authorize restart"
+	)
+
+
 func test_server_version_compatibility_requires_exact_match_in_release_mode() -> void:
 	var exact := GodotAiPlugin._server_version_compatibility("2.2.0", "2.2.0", false)
 	var old := GodotAiPlugin._server_version_compatibility("1.2.10", "2.2.0", false)
