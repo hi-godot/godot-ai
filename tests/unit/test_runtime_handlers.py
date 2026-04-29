@@ -140,6 +140,7 @@ class StubClient:
                 "project_name": "TestProject",
                 "is_playing": False,
                 "godot_version": "4.4.1",
+                "readiness": "ready",
             }
         if command == "get_selection":
             return {"selected": ["/Main/Camera3D"]}
