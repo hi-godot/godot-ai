@@ -45,8 +45,11 @@ Ops:
         Build Environment + Sky chain. Presets: default | clear | sunset
         | night | fog. Either assign to a WorldEnvironment node or save .tres.
   • physics_shape_autofit(path, source_path="", shape_type="")
-        Size a CollisionShape2D/3D to a sibling visual's bounds. Auto-creates
-        the concrete Shape subclass if needed.
+        Size a CollisionShape2D/3D to a nearby visual's bounds. Searches
+        direct siblings then parent-siblings (handles nested
+        Body→Collision layouts). Ambiguous matches return candidate paths
+        in error.data.candidates. Auto-creates the concrete Shape subclass
+        if needed.
   • gradient_texture_create(stops, width=256, height=1, fill="linear",
                               path="", property="", resource_path="",
                               overwrite=False)
