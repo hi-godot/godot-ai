@@ -1840,6 +1840,13 @@ async def test_run_tests_handler_with_suite_and_test_name():
     assert client.calls[-1]["params"] == {"suite": "scene", "test_name": "test_tree"}
 
 
+async def test_run_tests_handler_with_exclude_test_name():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await testing_handlers.test_run(runtime, exclude_test_name="test_flaky")
+    assert client.calls[-1]["params"] == {"exclude_test_name": "test_flaky"}
+
+
 async def test_get_test_results_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)

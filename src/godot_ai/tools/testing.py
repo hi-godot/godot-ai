@@ -31,6 +31,7 @@ def register_testing_tools(mcp: FastMCP) -> None:
         ctx: Context,
         suite: str = "",
         test_name: str = "",
+        exclude_test_name: str = "",
         verbose: bool = False,
         session_id: str = "",
     ) -> dict:
@@ -45,12 +46,17 @@ def register_testing_tools(mcp: FastMCP) -> None:
             suite: Run only the named suite (e.g. "scene", "node", "editor").
                 Empty runs all suites.
             test_name: Run only tests whose name contains this substring.
+            exclude_test_name: Skip tests whose name contains this substring.
             verbose: Include every individual test result. Default False.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
         return await testing_handlers.test_run(
-            runtime, suite=suite, test_name=test_name, verbose=verbose
+            runtime,
+            suite=suite,
+            test_name=test_name,
+            exclude_test_name=exclude_test_name,
+            verbose=verbose,
         )
 
     register_manage_tool(

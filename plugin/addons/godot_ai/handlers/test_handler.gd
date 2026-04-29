@@ -18,6 +18,7 @@ func _init(undo_redo: EditorUndoRedoManager, log_buffer: McpLogBuffer) -> void:
 func run_tests(params: Dictionary) -> Dictionary:
 	var suite_filter: String = params.get("suite", "")
 	var test_filter: String = params.get("test_name", "")
+	var exclude_test_filter: String = params.get("exclude_test_name", "")
 	var verbose: bool = params.get("verbose", false)
 
 	var discovery := _discover_suites()
@@ -36,7 +37,7 @@ func run_tests(params: Dictionary) -> Dictionary:
 		"log_buffer": _log_buffer,
 	}
 
-	var results := _runner.run_suites(suites, suite_filter, test_filter, ctx, verbose)
+	var results := _runner.run_suites(suites, suite_filter, test_filter, ctx, verbose, exclude_test_filter)
 	if not discovery.errors.is_empty():
 		results["load_errors"] = discovery.errors
 	return {"data": results}

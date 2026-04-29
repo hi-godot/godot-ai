@@ -30,6 +30,14 @@ class _PassingSuite extends McpTestSuite:
 		assert_true(true)
 
 
+class _FilterSuite extends McpTestSuite:
+	func suite_name() -> String: return "inner_filter"
+	func test_excluded_flaky_case() -> void:
+		assert_true(false, "excluded test body should not run")
+	func test_kept_case() -> void:
+		assert_true(true)
+
+
 class _CtxMutatorSuite extends McpTestSuite:
 	var _seen_ctx: Dictionary
 	func suite_name() -> String: return "inner_ctx"
@@ -103,6 +111,14 @@ func test_single_assertion_test_passes() -> void:
 	var result := runner.run_suites([_PassingSuite.new()])
 	assert_eq(result.passed, 1)
 	assert_eq(result.failed, 0)
+
+
+func test_exclude_test_name_skips_matching_tests() -> void:
+	var runner := McpTestRunner.new()
+	var result := runner.run_suites([_FilterSuite.new()], "", "", {}, false, "excluded")
+	assert_eq(result.passed, 1)
+	assert_eq(result.failed, 0)
+	assert_eq(result.skipped, 1)
 
 
 # ----- ctx deep-copy isolation -----
