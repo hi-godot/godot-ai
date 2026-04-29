@@ -5,10 +5,20 @@ from __future__ import annotations
 import subprocess
 import sys
 import zipfile
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from types import ModuleType
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "script" / "local-self-update-smoke"
+
+
+def load_smoke_script() -> ModuleType:
+    loader = SourceFileLoader("local_self_update_smoke", str(SCRIPT))
+    module = ModuleType(loader.name)
+    module.__file__ = str(SCRIPT)
+    loader.exec_module(module)
+    return module
 
 
 def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
@@ -60,6 +70,8 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
 
     base_plugin = (project / "addons" / "godot_ai" / "plugin.gd").read_text()
     assert "godot_ai_self_update_smoke/managed_server_pid" in base_plugin
+    assert 'const SELF_UPDATE_SMOKE_EXPECTED_SERVER_VERSION := "2.2.0"' in base_plugin
+    assert "McpClientConfigurator.get_plugin_version()" not in base_plugin
 
     zip_path = project / "self_update_smoke" / "godot-ai-plugin-vnext.zip"
     assert zip_path.exists()
@@ -67,16 +79,24 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
         names = set(zf.namelist())
         assert "addons/godot_ai/plugin.cfg" in names
         assert "addons/godot_ai/mcp_dock.gd" in names
+        assert "addons/godot_ai/utils/self_update_smoke_base.gd" in names
+        assert "addons/godot_ai/utils/self_update_smoke_child.gd" in names
         vnext_cfg = zf.read("addons/godot_ai/plugin.cfg").decode()
         vnext_dock = zf.read("addons/godot_ai/mcp_dock.gd").decode()
         vnext_configurator = zf.read("addons/godot_ai/client_configurator.gd").decode()
         vnext_plugin = zf.read("addons/godot_ai/plugin.gd").decode()
+        vnext_base = zf.read("addons/godot_ai/utils/self_update_smoke_base.gd").decode()
+        vnext_child = zf.read("addons/godot_ai/utils/self_update_smoke_child.gd").decode()
 
     assert 'version="2.2.1-self-update-smoke"' in vnext_cfg
     assert "smoke://local-prestaged" not in vnext_dock
     assert 'var _self_update_smoke_trigger: Dictionary = {"armed": true}' in vnext_dock
     assert 'var _self_update_smoke_array_trigger: Array[String] = ["armed"]' in vnext_dock
     assert "MCP | [self-update-smoke vnext _exit_tree]" in vnext_dock
+    assert "SelfUpdateSmokeChild" in vnext_dock
+    assert "class_name McpSelfUpdateSmokeBase" in vnext_base
+    assert "class_name McpSelfUpdateSmokeChild" in vnext_child
+    assert "extends McpSelfUpdateSmokeBase" in vnext_child
     assert "const DEFAULT_HTTP_PORT := 18000" in vnext_configurator
     assert 'const SELF_UPDATE_SMOKE_SERVER_VERSION := "2.2.0"' in vnext_configurator
     assert 'godot-ai==%s" % version' in vnext_configurator
@@ -86,6 +106,35 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
     assert "static func ensure_settings_registered() -> void:" in vnext_configurator
     assert "static func _register_port_setting(" in vnext_configurator
     assert "godot_ai_self_update_smoke/managed_server_pid" in vnext_plugin
+    assert 'const SELF_UPDATE_SMOKE_EXPECTED_SERVER_VERSION := "2.2.0"' in vnext_plugin
+    assert "McpClientConfigurator.get_plugin_version()" not in vnext_plugin
+
+
+def test_self_update_smoke_log_verifier_rejects_external_adoption() -> None:
+    smoke = load_smoke_script()
+    lines = [
+        "MCP | foreign server already running on port 18000, using existing",
+        "MCP | self-update smoke: staged local zip /tmp/update.zip",
+        "MCP | stopped server (PID [123])",
+        "MCP | update runner enabling new plugin",
+    ]
+
+    assert smoke.smoke_adopted_existing_server_before_update(lines)
+    assert not smoke.smoke_started_own_server_before_update(lines)
+    assert smoke.smoke_stopped_server_during_update(lines)
+
+
+def test_self_update_smoke_log_verifier_requires_managed_stop_after_staging() -> None:
+    smoke = load_smoke_script()
+    lines = [
+        "MCP | started server (PID 123, v2.2.1): godot-ai",
+        "MCP | self-update smoke: staged local zip /tmp/update.zip",
+        "MCP | update runner enabling new plugin",
+    ]
+
+    assert smoke.smoke_started_own_server_before_update(lines)
+    assert not smoke.smoke_adopted_existing_server_before_update(lines)
+    assert not smoke.smoke_stopped_server_during_update(lines)
 
 
 def test_self_update_smoke_harness_refuses_unmarked_existing_dir(tmp_path: Path) -> None:

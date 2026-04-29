@@ -1051,6 +1051,7 @@ func _refresh_server_version_label() -> void:
 				and _plugin.can_restart_managed_server()
 			)
 	if text == _last_rendered_server_text:
+		_setup_server_label.add_theme_color_override("font_color", color)
 		if _version_restart_btn != null and _version_restart_btn.visible != show_restart:
 			_version_restart_btn.visible = show_restart
 		return

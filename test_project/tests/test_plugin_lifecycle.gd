@@ -226,6 +226,46 @@ func test_managed_record_restart_requires_recorded_version_drift() -> void:
 	)
 
 
+func test_external_compatible_adoption_clears_stale_managed_record() -> void:
+	## If a live compatible server is verified but its managed record does
+	## not match the current plugin version, the plugin treats it as external.
+	## That must also clear the stale record; otherwise later restart paths
+	## would treat the old record as ownership proof and kill the external
+	## process.
+	_seed_managed_record(11111, "2.1.0")
+	_seed_pid_file(11111)
+	var plugin := GodotAiPlugin.new()
+
+	var owner_label := plugin._adopt_compatible_server("2.1.0", "2.2.0", 22222)
+	var can_restart := plugin.can_restart_managed_server()
+	var server_pid := plugin._server_pid
+	plugin.free()
+
+	assert_eq(owner_label, "external")
+	assert_eq(server_pid, -1, "external adoption must not keep a managed PID")
+	assert_eq(_read_record_version(), "", "stale managed record must be cleared")
+	assert_false(
+		FileAccess.file_exists(GodotAiPlugin.SERVER_PID_FILE),
+		"stale pid-file must be cleared with the stale record"
+	)
+	assert_false(can_restart, "external adoption must not authorize managed restart")
+
+
+func test_matching_compatible_adoption_keeps_managed_ownership() -> void:
+	_seed_managed_record(11111, "2.2.0")
+	var plugin := GodotAiPlugin.new()
+
+	var owner_label := plugin._adopt_compatible_server("2.2.0", "2.2.0", 22222)
+	var can_restart := plugin.can_restart_managed_server()
+	var server_pid := plugin._server_pid
+	plugin.free()
+
+	assert_eq(owner_label, "managed")
+	assert_eq(server_pid, 22222)
+	assert_eq(_read_record_version(), "2.2.0")
+	assert_true(can_restart, "managed adoption must keep restart authorization")
+
+
 func test_server_version_compatibility_requires_exact_match_in_release_mode() -> void:
 	var exact := GodotAiPlugin._server_version_compatibility("2.2.0", "2.2.0", false)
 	var old := GodotAiPlugin._server_version_compatibility("1.2.10", "2.2.0", false)

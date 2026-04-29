@@ -3,8 +3,9 @@
 
 This harness creates a disposable Godot project with a physical
 addons/godot_ai directory, patches that fixture only, and stages a synthetic
-v(N+1) plugin ZIP that adds a typed Dict/Array hot-reload trigger. The
-operator still performs the one step that matters: click Update in the dock.
+v(N+1) plugin ZIP that adds a typed Dict/Array hot-reload trigger plus a new
+class_name dependency chain. The operator still performs the one step that
+matters: click Update in the dock.
 """
 
 from __future__ import annotations
@@ -218,6 +219,7 @@ def prepare_project(
         next_version=next_version,
     )
     patch_vnext_hot_reload_trigger(vnext_root / "mcp_dock.gd")
+    patch_vnext_topology_change(vnext_root)
 
     zip_path = project_dir / SMOKE_DIR / SMOKE_ZIP_NAME
     zip_path.parent.mkdir()
@@ -304,6 +306,7 @@ def patch_fixture_plugin(
     patch_port_isolation(addon_dir / "client_configurator.gd", http_port, ws_port)
     patch_server_package_pin(addon_dir / "client_configurator.gd", server_version)
     patch_managed_record_isolation(addon_dir / "plugin.gd")
+    patch_expected_server_version(addon_dir / "plugin.gd", server_version)
     if force_local_update:
         patch_local_update_banner(addon_dir / "mcp_dock.gd", next_version)
 
@@ -414,6 +417,27 @@ def patch_managed_record_isolation(path: Path) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def patch_expected_server_version(path: Path, server_version: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    marker = "const MANAGED_SERVER_VERSION_SETTING := "
+    line_start = text.find(marker)
+    if line_start < 0:
+        raise HarnessError(f"Could not find MANAGED_SERVER_VERSION_SETTING in {path}")
+    line_end = text.find("\n", line_start)
+    if line_end < 0:
+        raise HarnessError(f"Could not find MANAGED_SERVER_VERSION_SETTING line end in {path}")
+    text = (
+        text[: line_end + 1]
+        + f'const SELF_UPDATE_SMOKE_EXPECTED_SERVER_VERSION := "{server_version}"\n'
+        + text[line_end + 1 :]
+    )
+    text = text.replace(
+        "McpClientConfigurator.get_plugin_version()",
+        "SELF_UPDATE_SMOKE_EXPECTED_SERVER_VERSION",
+    )
+    path.write_text(text, encoding="utf-8")
+
+
 def patch_local_update_banner(path: Path, next_version: str) -> None:
     text = path.read_text(encoding="utf-8")
     text = replace_once(
@@ -519,6 +543,50 @@ def patch_vnext_hot_reload_trigger(path: Path) -> None:
         1,
     )
     path.write_text(text, encoding="utf-8")
+
+
+def patch_vnext_topology_change(addon_dir: Path) -> None:
+    utils_dir = addon_dir / "utils"
+    base_path = utils_dir / "self_update_smoke_base.gd"
+    child_path = utils_dir / "self_update_smoke_child.gd"
+    base_path.write_text(
+        """@tool
+class_name McpSelfUpdateSmokeBase
+extends RefCounted
+
+
+func marker() -> String:
+\treturn "base"
+""",
+        encoding="utf-8",
+    )
+    child_path.write_text(
+        """@tool
+class_name McpSelfUpdateSmokeChild
+extends McpSelfUpdateSmokeBase
+
+
+func marker() -> String:
+\treturn "child:" + super.marker()
+""",
+        encoding="utf-8",
+    )
+
+    dock_path = addon_dir / "mcp_dock.gd"
+    text = dock_path.read_text(encoding="utf-8")
+    marker = 'const UPDATE_TEMP_ZIP := "user://godot_ai_update/update.zip"\n'
+    text = replace_once(
+        dock_path,
+        text,
+        marker,
+        (
+            marker
+            + "const SelfUpdateSmokeChild := preload("
+            + '"res://addons/godot_ai/utils/self_update_smoke_child.gd")\n'
+        ),
+        "self-update smoke topology preload",
+    )
+    dock_path.write_text(text, encoding="utf-8")
 
 
 def replace_function(text: str, signature: str, replacement: str) -> str:
@@ -694,6 +762,21 @@ def verify_post_run(
     else:
         print("PASS: vNext _exit_tree trigger did not run during the update window")
 
+    if smoke_adopted_existing_server_before_update(lines):
+        print("FAIL: smoke fixture adopted an existing server before update; clear the smoke ports first")
+        ok = False
+    elif smoke_started_own_server_before_update(lines):
+        print("PASS: smoke fixture started its own server before update")
+    else:
+        print("FAIL: smoke fixture did not start its own server before update")
+        ok = False
+
+    if smoke_stopped_server_during_update(lines):
+        print("PASS: self-update stopped the managed smoke server")
+    else:
+        print("FAIL: self-update did not stop a managed smoke server")
+        ok = False
+
     new_reports = new_diagnostic_reports(baseline, started)
     if new_reports:
         print("FAIL: new Godot crash reports:")
@@ -724,6 +807,46 @@ def vnext_exit_tree_during_update(lines: list[str]) -> bool:
         if staged and SMOKE_TRIGGER_LOG in line and not new_plugin_loaded:
             return True
     return False
+
+
+def smoke_started_own_server_before_update(lines: list[str]) -> bool:
+    return any("MCP | started server" in line for line in smoke_lines_before_update(lines))
+
+
+def smoke_adopted_existing_server_before_update(lines: list[str]) -> bool:
+    external_signals = (
+        "MCP | adopted external server",
+        "MCP | foreign server already running",
+        "foreign server already running",
+    )
+    return any(
+        any(signal in line for signal in external_signals)
+        for line in smoke_lines_before_update(lines)
+    )
+
+
+def smoke_stopped_server_during_update(lines: list[str]) -> bool:
+    staged = False
+    for line in lines:
+        if "MCP | self-update smoke: staged local zip" in line:
+            staged = True
+            continue
+        if not staged:
+            continue
+        if "MCP | update runner enabling new plugin" in line:
+            return False
+        if "MCP | stopped server" in line:
+            return True
+    return False
+
+
+def smoke_lines_before_update(lines: list[str]) -> list[str]:
+    before: list[str] = []
+    for line in lines:
+        if "MCP | self-update smoke: staged local zip" in line:
+            break
+        before.append(line)
+    return before
 
 
 def print_new_reports(baseline: set[Path], started: float) -> None:

@@ -318,7 +318,7 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
 
 
 def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> None:
-    """The in-place update workaround depends on this exact order (#245/#247)."""
+    """The in-process update path must never expose a half-written addon tree."""
 
     plugin_source = (PLUGIN_ROOT / "plugin.gd").read_text()
     runner_source = (PLUGIN_ROOT / "update_reload_runner.gd").read_text()
@@ -344,13 +344,25 @@ def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> Non
     extract_block = runner_source.split("func _extract_and_scan() -> void:", 1)[
         1
     ].split("\n\nfunc ", 1)[0]
-    assert "_extract_update()" in extract_block
-    assert "_cleanup_update_temp()" in extract_block
-    assert "_start_filesystem_scan()" in extract_block
+    assert "_read_update_manifest()" in extract_block
+    assert "_install_zip_paths(_new_file_paths)" in extract_block
+    assert '_start_filesystem_scan("_install_existing_files_and_scan")' in extract_block
+    assert "_install_existing_files_and_scan.call_deferred()" in extract_block
 
-    scan_block = runner_source.split("func _start_filesystem_scan() -> void:", 1)[
+    assert "INSTALL_BASE_PATH" in runner_source
+    assert "TEMP_FILE_SUFFIX" in runner_source
+    assert "ZIP_ADDON_PREFIX" in runner_source
+    assert "STAGING_DIR_NAME" not in runner_source
+    assert "rename_absolute(live_path, backup_path)" not in runner_source
+
+    scan_block = runner_source.split("func _start_filesystem_scan", 1)[
         1
     ].split("\n\nfunc ", 1)[0]
+    assert (
+        'var deferred_step := next_step if not next_step.is_empty() else "_enable_new_plugin"'
+        in scan_block
+    )
+    assert "call_deferred(deferred_step)" in scan_block
     assert "fs.filesystem_changed.connect(_on_filesystem_changed, CONNECT_ONE_SHOT)" in scan_block
     assert "fs.scan()" in scan_block
     assert "FILESYSTEM_SCAN_TIMEOUT" not in runner_source
@@ -367,7 +379,8 @@ def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> Non
     finish_block = runner_source.split("func _finish_scan_wait() -> void:", 1)[
         1
     ].split("\n\nfunc ", 1)[0]
-    assert "_enable_new_plugin.call_deferred()" in finish_block
+    assert 'next_step = "_enable_new_plugin"' in finish_block
+    assert "call_deferred(next_step)" in finish_block
 
     enable_block = runner_source.split("func _enable_new_plugin() -> void:", 1)[
         1
@@ -381,12 +394,42 @@ def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> Non
     assert "_cleanup_detached_dock()" in cleanup_block
     assert "queue_free()" in cleanup_block
 
-    extract_update_block = runner_source.split("func _extract_update() -> bool:", 1)[
+    manifest_block = runner_source.split("func _read_update_manifest() -> bool:", 1)[
         1
     ].split("\n\nfunc ", 1)[0]
-    assert "FileAccess.get_open_error()" in extract_update_block
-    assert "var write_error := f.get_error()" in extract_update_block
-    assert "return false" in extract_update_block
+    assert "_is_safe_zip_addon_file(file_path)" in manifest_block
+    assert "unsafe zip path" in manifest_block
+    assert "_new_file_paths.clear()" in manifest_block
+    assert "_existing_file_paths.clear()" in manifest_block
+    assert "_new_file_paths.append(file_path)" in manifest_block
+    assert "_existing_file_paths.append(file_path)" in manifest_block
+    assert "FileAccess.file_exists(target_path)" in manifest_block
+    assert "zip is missing plugin.cfg" in manifest_block
+    assert "zip is missing plugin.gd" in manifest_block
+
+    existing_block = runner_source.split("func _install_existing_files_and_scan() -> void:", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+    assert "_install_zip_paths(_existing_file_paths)" in existing_block
+    assert "_cleanup_update_temp()" in existing_block
+    assert '_start_filesystem_scan("_enable_new_plugin")' in existing_block
+
+    safe_path_block = runner_source.split("func _is_safe_zip_addon_file(", 1)[
+        1
+    ].split("\n\nfunc ", 1)[0]
+    assert "file_path.is_absolute_path()" in safe_path_block
+    assert 'file_path.contains("\\\\")' in safe_path_block
+    assert 'segment == ".."' in safe_path_block
+    assert "segment.is_empty()" in safe_path_block
+
+    install_file_block = runner_source.split("func _install_zip_file(", 1)[1].split(
+        "\n\nfunc ", 1
+    )[0]
+    assert "var temp_path := target_path + TEMP_FILE_SUFFIX" in install_file_block
+    assert "FileAccess.open(temp_path, FileAccess.WRITE)" in install_file_block
+    assert "DirAccess.rename_absolute(temp_path, target_path)" in install_file_block
+    assert "FileAccess.open(target_path, FileAccess.WRITE)" not in install_file_block
+    assert "DirAccess.remove_absolute(target_path)" in install_file_block
 
     assert "OS.create_process" not in runner_source
     assert "get_tree().quit" not in runner_source

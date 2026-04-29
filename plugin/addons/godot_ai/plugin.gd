@@ -483,11 +483,8 @@ func _start_server() -> void:
 			## its PID. Otherwise reuse the external/dev server without
 			## recording ownership, so plugin unloads never kill it.
 			var owner := _find_managed_pid(port)
-			if record_version == current_version and owner > 0:
-				_server_pid = owner
-				_write_managed_server_record(owner, current_version)
+			var owner_label := _adopt_compatible_server(record_version, current_version, owner)
 			_server_started_this_session = true
-			var owner_label := "managed" if _server_pid > 0 else "external"
 			print("MCP | adopted %s server (PID %d, live v%s, WS %d, plugin v%s)"
 				% [owner_label, _server_pid, _server_actual_version, live_ws_port, current_version])
 			return
@@ -1323,6 +1320,17 @@ func _clear_managed_server_record() -> void:
 func prepare_for_update_reload() -> void:
 	_stop_server()
 	_server_started_this_session = false
+
+
+func _adopt_compatible_server(record_version: String, current_version: String, owner: int) -> String:
+	if record_version == current_version and owner > 0:
+		_server_pid = owner
+		_write_managed_server_record(owner, current_version)
+		return "managed"
+	_server_pid = -1
+	_clear_managed_server_record()
+	_clear_pid_file()
+	return "external"
 
 
 ## Hand the self-update over to a tiny runner that is not owned by this
