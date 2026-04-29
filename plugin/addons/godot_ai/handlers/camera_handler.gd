@@ -58,6 +58,8 @@ const _KEYS_3D := [
 ]
 
 const _DAMPING_MARGIN_KEYS := ["left", "top", "right", "bottom"]
+const _CURRENT_SETTLE_ATTEMPTS := 3
+const _CURRENT_SETTLE_DELAY_MSEC := 2
 
 
 var _undo_redo: EditorUndoRedoManager
@@ -82,14 +84,12 @@ static func _is_current(cam: Node) -> bool:
 #
 # Both DO and UNDO route through `_apply_make_current` / `_apply_clear_current`
 # on the handler itself rather than calling Camera.make_current() directly.
-# The helpers do the make_current (or clear_current) call plus a one-shot
-# sync retry when the viewport hasn't yet reflected the change — macOS
-# headless occasionally reports `is_current() == false` immediately after
-# a committed make_current (observed CI run 24682342469) and symmetrically
-# still reports the displaced camera as current immediately after an undo
-# (observed CI runs 24682342469, 24692250322, 24696571517 — tracked in #140).
-# Registering the retry inside the undo action makes the undo path
-# race-proof without a separate post-commit hook.
+# The helpers do the make_current (or clear_current) call plus bounded sync
+# settling when the viewport hasn't yet reflected the change — macOS headless
+# occasionally reports `is_current() == false` immediately after a committed
+# make_current (observed CI run 24682342469) and symmetrically still reports
+# the displaced camera as current immediately after an undo (observed CI runs
+# 24682342469, 24692250322, 24696571517, 25079965242 — tracked in #140).
 #
 # Because those callables bind to `self` (a RefCounted handler, not a scene
 # node), every action that calls this helper must pin its history via
@@ -120,17 +120,54 @@ func _add_make_current_to_action(node: Node, type_str: String, scene_root: Node)
 		_undo_redo.add_undo_method(self, "_apply_clear_current", node)
 
 
-# Apply make_current on `cam` with a one-shot retry. Registered as the
+# Apply make_current on `cam` with bounded synchronous settling. Registered as the
 # do/undo callable by `_add_make_current_to_action`. See that function's
-# comment for why retry-in-action replaces the old post-commit-only hook.
+# comment for why the undo path needs the retry inside the action itself.
 # Safe against a freed camera node — short-circuits if the node is gone
 # or not in the tree.
 func _apply_make_current(cam: Node) -> void:
 	if cam == null or not is_instance_valid(cam) or not cam.is_inside_tree():
 		return
-	cam.make_current()
-	if not _is_current(cam):
+	for attempt in range(_CURRENT_SETTLE_ATTEMPTS):
 		cam.make_current()
+		_force_camera_refresh(cam)
+		if _is_current(cam):
+			return
+		_displace_stale_camera_2d(cam)
+		if _is_current(cam):
+			return
+		if attempt < _CURRENT_SETTLE_ATTEMPTS - 1:
+			OS.delay_msec(_CURRENT_SETTLE_DELAY_MSEC)
+
+
+# Call after commit_action() whenever the action registered a make_current DO.
+# The undo path cannot use a post-undo hook, so it relies on `_apply_make_current`
+# directly; create/configure/apply_preset get this extra post-commit verifier.
+func _verify_current_after_commit(node: Node) -> void:
+	_apply_make_current(node)
+
+
+func _force_camera_refresh(cam: Node) -> void:
+	if cam is Camera2D:
+		(cam as Camera2D).force_update_scroll()
+
+
+func _displace_stale_camera_2d(target: Node) -> void:
+	if not (target is Camera2D):
+		return
+	var viewport := target.get_viewport()
+	if viewport == null:
+		return
+	var stale := viewport.get_camera_2d()
+	if stale == null or stale == target or not is_instance_valid(stale):
+		return
+	var was_enabled := stale.enabled
+	if was_enabled:
+		stale.enabled = false
+	target.make_current()
+	_force_camera_refresh(target)
+	if was_enabled:
+		stale.enabled = true
 
 
 # Symmetric counterpart to `_apply_make_current` for the "no previous
@@ -189,6 +226,8 @@ func create_camera(params: Dictionary) -> Dictionary:
 		_add_make_current_to_action(node, type_str, scene_root)
 	_undo_redo.add_undo_method(parent, "remove_child", node)
 	_undo_redo.commit_action()
+	if make_current:
+		_verify_current_after_commit(node)
 
 	return {
 		"data": {
@@ -258,15 +297,19 @@ func configure(params: Dictionary) -> Dictionary:
 	for prop_name in coerced:
 		_undo_redo.add_do_property(node, prop_name, coerced[prop_name])
 		_undo_redo.add_undo_property(node, prop_name, old_values[prop_name])
+	var verify_current_after := false
 	if current_request != null:
 		var want_on: bool = bool(current_request)
 		var was_on: bool = _is_current(node)
 		if want_on and not was_on:
 			_add_make_current_to_action(node, type_str, scene_root)
+			verify_current_after = true
 		elif not want_on and was_on:
 			_undo_redo.add_do_method(self, "_apply_clear_current", node)
 			_undo_redo.add_undo_method(self, "_apply_make_current", node)
 	_undo_redo.commit_action()
+	if verify_current_after:
+		_verify_current_after_commit(node)
 
 	var applied: Array[String] = []
 	var serialized: Dictionary = {}
@@ -702,6 +745,8 @@ func apply_preset(params: Dictionary) -> Dictionary:
 		_add_make_current_to_action(node, type_str, scene_root)
 	_undo_redo.add_undo_method(parent, "remove_child", node)
 	_undo_redo.commit_action()
+	if make_current:
+		_verify_current_after_commit(node)
 
 	return {
 		"data": {
