@@ -4,10 +4,17 @@ extends RefCounted
 ## Handles script creation, reading, attaching, detaching, and symbol inspection.
 
 var _undo_redo: EditorUndoRedoManager
+var _connection: McpConnection
+
+# Bounded settle window for `ResourceLoader.exists(path)` after `scan()` so that
+# an agent calling create_script -> attach_script back-to-back doesn't race the
+# editor's import pipeline (#261). Polled once per frame.
+const _IMPORT_SETTLE_MAX_FRAMES := 300  # ~5s at 60fps; bails out and replies anyway.
 
 
-func _init(undo_redo: EditorUndoRedoManager) -> void:
+func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null) -> void:
 	_undo_redo = undo_redo
+	_connection = connection
 
 
 func create_script(params: Dictionary) -> Dictionary:
@@ -51,7 +58,36 @@ func create_script(params: Dictionary) -> Dictionary:
 	# `.gd.uid` is the sidecar Godot generates on scan; list both so the caller
 	# can rm the full set in one go.
 	McpResourceIO.attach_cleanup_hint(data, existed_before, [path, path + ".uid"])
+
+	# scan() is async — ResourceLoader.exists(path) returns false until Godot's
+	# filesystem pipeline finishes. If we reply now, an immediate attach_script
+	# races and 404s (#261). Defer the response until the resource is visible
+	# (or a bounded timeout elapses). For freshly-created files we wait; on
+	# overwrite the resource was already known to ResourceLoader, so reply now.
+	var request_id: String = params.get("_request_id", "")
+	if not existed_before and _connection != null and not request_id.is_empty():
+		_finish_create_script_deferred(request_id, path, data)
+		return McpDispatcher.DEFERRED_RESPONSE
+
+	# Synchronous fallback: batch_execute (no request_id) and unit-test contexts
+	# (no connection) get the immediate reply that the previous behaviour gave.
 	return {"data": data}
+
+
+func _finish_create_script_deferred(request_id: String, path: String, data: Dictionary) -> void:
+	var tree := _connection.get_tree()
+	var frames := 0
+	while frames < _IMPORT_SETTLE_MAX_FRAMES and not ResourceLoader.exists(path):
+		await tree.process_frame
+		frames += 1
+	# If the plugin tears down (_exit_tree frees _connection) during the await,
+	# is_instance_valid() goes false and we drop the response silently — the
+	# server's request timeout will surface the failure to the caller.
+	if not is_instance_valid(_connection):
+		return
+	var payload := data.duplicate()
+	payload["import_settled"] = frames < _IMPORT_SETTLE_MAX_FRAMES
+	_connection.send_deferred_response(request_id, {"data": payload})
 
 
 func read_script(params: Dictionary) -> Dictionary:
