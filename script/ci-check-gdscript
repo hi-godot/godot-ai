@@ -22,7 +22,8 @@ else
 fi
 
 # Check for parse errors in the import output.
-ERRORS=$(grep -ciE "SCRIPT ERROR|Parse Error|Failed to load script" "$IMPORT_LOG" 2>/dev/null || echo "0")
+ERRORS=$(grep -ciE "SCRIPT ERROR|Parse Error|Failed to load script" "$IMPORT_LOG" 2>/dev/null || true)
+ERRORS="${ERRORS:-0}"
 
 if [ "$ERRORS" -gt 0 ]; then
   echo "GDScript parse errors found:"

@@ -327,6 +327,38 @@ func test_server_version_label_amber_without_restart_when_ownership_unproven() -
 	_cleanup_server_row(conn)
 
 
+func test_server_version_label_repaints_color_when_state_changes_without_text_change() -> void:
+	## The label text for "server vX, expected vY" is identical before and
+	## after the plugin marks the server incompatible; the color must still
+	## repaint from amber to red so the blocked state is visible.
+	var conn := _seed_server_row("1.2.3-stale-for-test")
+	var plugin := GodotAiPlugin.new()
+	plugin._server_actual_version = "1.2.3-stale-for-test"
+	plugin._server_expected_version = "2.2.0"
+	plugin._spawn_state = McpSpawnState.OK
+	_dock._plugin = plugin
+
+	_dock._refresh_server_version_label()
+	assert_eq(
+		_dock._setup_server_label.get_theme_color("font_color"),
+		McpDockScript.COLOR_AMBER,
+		"precondition: mismatch starts amber while not blocked"
+	)
+
+	plugin._spawn_state = McpSpawnState.INCOMPATIBLE_SERVER
+	_dock._refresh_server_version_label()
+	assert_eq(
+		_dock._setup_server_label.get_theme_color("font_color"),
+		Color.RED,
+		"same label text must repaint red when state becomes incompatible"
+	)
+	assert_false(_dock._version_restart_btn.visible, "incompatible state must hide Restart")
+
+	_dock._plugin = null
+	plugin.free()
+	_cleanup_server_row(conn)
+
+
 func test_dev_checkout_tooltip_exposes_symlink_target() -> void:
 	if not McpClientConfigurator.is_dev_checkout():
 		skip("only meaningful in dev checkout")
