@@ -19,6 +19,12 @@ const MANAGED_SERVER_VERSION_SETTING := "godot_ai/managed_server_version"
 const MANAGED_SERVER_WS_PORT_SETTING := "godot_ai/managed_server_ws_port"
 const UPDATE_RELOAD_RUNNER_SCRIPT := preload("res://addons/godot_ai/update_reload_runner.gd")
 
+## Preloaded so `_stop_server` / `force_restart_server` can reference the
+## sweep without depending on the editor's `class_name` scan running first.
+## See utils/uv_cache_cleanup.gd for what this does and why it lives next
+## to the server-stop hot path.
+const UvCacheCleanup := preload("res://addons/godot_ai/utils/uv_cache_cleanup.gd")
+
 ## Handlers — preloaded as consts instead of registered via `class_name` so
 ## they don't pollute the project-wide global scope. A user project that
 ## happens to define its own `InputHandler`, `SceneHandler`, etc. would
@@ -1306,6 +1312,12 @@ func _stop_server() -> void:
 	## retries the kill with the current (fixed) parser. See issue filed
 	## as follow-up to PR #159.
 	_finalize_stop_if_port_free(port)
+	## Sweep stale `uvx` build venvs now that the server's hard-linked
+	## `_pydantic_core.pyd` mapping is gone. Without this, the next
+	## `uvx mcp-proxy` invocation from Claude Desktop's MCP launcher fails
+	## to clean its build dir and the MCP transport never starts. See
+	## `utils/uv_cache_cleanup.gd` for the full hard-link explanation.
+	UvCacheCleanup.purge_stale_builds()
 
 
 ## Clear the managed-server record and pid-file only if `port` is free.
@@ -1496,6 +1508,12 @@ func force_restart_server() -> void:
 	_clear_managed_server_record()
 	_clear_pid_file()
 	_wait_for_port_free(port, 5.0)
+	## Same rationale as `_stop_server`: the server child python just
+	## released its `pydantic_core` mapping, so this is the only window in
+	## which the hard-linked copies under `builds-v0\.tmp*` are deletable.
+	## Sweep before respawning so the upcoming `uvx mcp-proxy` build doesn't
+	## inherit the same cleanup-failure path that triggered the restart.
+	UvCacheCleanup.purge_stale_builds()
 	_server_started_this_session = false
 	_server_pid = -1
 	_start_server()

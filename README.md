@@ -155,6 +155,54 @@ The plugin starts or reuses the Python server, connects over WebSocket, and expo
 </details>
 
 <details>
+<summary><strong>Windows: <code>uvx mcp-proxy</code> won't start (<code>pywin32</code> install fails)</strong></summary>
+
+Symptom (in your MCP client's server log):
+
+```text
+error: Failed to install: pywin32-311-cp313-cp313-win_amd64.whl (pywin32==311)
+  Caused by: failed to remove directory `C:\Users\<you>\AppData\Local\uv\cache\builds-v0\.tmpXXXXXX\Lib\site-packages\pywin32-311.data`: ... os error 32
+```
+
+Cause: uv hard-links shared `.pyd` files (notably
+`pydantic_core/_pydantic_core.cp313-win_amd64.pyd`) from `archive-v0\` into
+each new `builds-v0\.tmpXXXXXX\` build venv. The running `godot-ai` Python
+process has the same `.pyd` mapped via `LoadLibrary` — and because hard
+links share the inode, Windows refuses to delete it under any path until
+every process unmaps it. uv's post-install cleanup of the build venv then
+dies on a stale lock; the misleading `pywin32` mention is just the last
+package in the resolution order, not the actual lock holder.
+
+**Mitigation in this plugin:** `_stop_server` and `force_restart_server`
+both call `McpUvCacheCleanup.purge_stale_builds()` immediately after
+killing the server children, while the `.pyd` is briefly unmapped. See
+[`plugin/addons/godot_ai/utils/uv_cache_cleanup.gd`](plugin/addons/godot_ai/utils/uv_cache_cleanup.gd).
+
+**Recommended belt-and-braces:** tell uv to copy instead of hard-link by
+setting `UV_LINK_MODE=copy` in the MCP launcher's environment. This also
+removes the reverse race where an MCP client spawns `uvx mcp-proxy`
+*while* a server child is still holding the `.pyd`. Example for Claude
+Desktop's `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "godot-ai": {
+      "command": "uvx",
+      "args": ["mcp-proxy", "--transport", "streamablehttp", "http://127.0.0.1:8000/mcp"],
+      "env": { "UV_LINK_MODE": "copy" }
+    }
+  }
+}
+```
+
+If you've already hit the lock, kill stray `python.exe` children whose
+command line contains `spawn_main(parent_pid=...)` and delete
+`%LOCALAPPDATA%\uv\cache\builds-v0\.tmp*` manually before retrying.
+
+</details>
+
+<details>
 <summary><strong>Contributing</strong></summary>
 
 See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for development setup, testing, and PR guidelines.
