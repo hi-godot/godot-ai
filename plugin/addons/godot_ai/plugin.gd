@@ -65,6 +65,9 @@ const SERVER_WATCH_MS := 30 * 1000
 ## a spawn a crash until this window elapses so the watch loop has time to
 ## observe either the pid-file (dev venv) or the port listening (uvx).
 const SPAWN_GRACE_MS := 5 * 1000
+const SERVER_STATUS_PATH := "/godot-ai/status"
+const SERVER_STATUS_PROBE_TIMEOUT_MS := 800
+const SERVER_HANDSHAKE_VERSION_TIMEOUT_MS := 5 * 1000
 
 var _connection: McpConnection
 var _dispatcher: McpDispatcher
@@ -103,6 +106,13 @@ var _refresh_retried: bool = false
 ## Bounded deadline for `_watch_for_adoption_confirmation`. Zero when
 ## disarmed. See that function's docstring.
 var _adoption_watch_deadline_ms: int = 0
+var _server_expected_version := ""
+var _server_actual_version := ""
+var _server_status_message := ""
+var _server_dev_version_mismatch_allowed := false
+var _connection_blocked := false
+var _awaiting_server_version := false
+var _server_version_deadline_ms: int = 0
 
 
 func _enter_tree() -> void:
@@ -126,6 +136,10 @@ func _enter_tree() -> void:
 
 	_connection = McpConnection.new()
 	_connection.log_buffer = _log_buffer
+	_connection.connect_blocked = _connection_blocked
+	_connection.connect_block_reason = _server_status_message
+	if not _connection_blocked and _spawn_state == McpSpawnState.OK:
+		_arm_server_version_check()
 
 	_debugger_plugin = McpDebuggerPlugin.new(_log_buffer, _game_log_buffer)
 	add_debugger_plugin(_debugger_plugin)
@@ -428,7 +442,7 @@ func _start_server() -> void:
 	##   port in use, record.version drifts   -> kill port owner + respawn
 	##                                              (fixes cold-start drift
 	##                                              from manual file replace)
-	##   port in use, no matching record      -> foreign server, leave alone
+	##   port in use, no verified live match  -> block adoption + warn
 	if _server_started_this_session:
 		## Guard against re-entrant spawns (e.g. plugin reload during update).
 		## The static flag persists across disable/enable cycles within the
@@ -440,20 +454,40 @@ func _start_server() -> void:
 	var port := McpClientConfigurator.http_port()
 	var ws_port := McpClientConfigurator.ws_port()
 	var current_version := McpClientConfigurator.get_plugin_version()
+	_server_expected_version = current_version
 
 	if _is_port_in_use(port):
 		var record := _read_managed_server_record()
-		if record.version == current_version:
-			## Version matches — this port is owned by a server we spawned
-			## at some point. Adopt the live port owner, ignoring any stale
-			## launcher PID that may still be in the record. Self-heal the
-			## record so next session's adopt can fast-path.
+		var live := _probe_live_server_status(port)
+		var live_version := _verified_status_version(live)
+		var live_ws_port := _verified_status_ws_port(live)
+		var compatibility := _server_status_compatibility(
+			live_version,
+			current_version,
+			live_ws_port,
+			ws_port,
+			McpClientConfigurator.is_dev_checkout()
+		)
+		if compatibility.get("compatible", false):
+			_server_actual_version = live_version
+			_server_dev_version_mismatch_allowed = bool(compatibility.get("dev_mismatch_allowed", false))
+			if _server_dev_version_mismatch_allowed:
+				_server_status_message = (
+					"Using dev server v%s on WS port %d with plugin v%s "
+					+ "(dev checkout version mismatch allowed)."
+				) % [_server_actual_version, live_ws_port, current_version]
+			## Version verified — this port speaks current-compatible godot-ai.
+			## If the managed record matches, adopt ownership and self-heal
+			## its PID. Otherwise reuse the external/dev server without
+			## recording ownership, so plugin unloads never kill it.
 			var owner := _find_managed_pid(port)
-			if owner > 0:
+			if record.version == current_version and owner > 0:
 				_server_pid = owner
 				_write_managed_server_record(owner, current_version)
 			_server_started_this_session = true
-			print("MCP | adopted managed server (PID %d, v%s)" % [_server_pid, current_version])
+			var owner_label := "managed" if _server_pid > 0 else "external"
+			print("MCP | adopted %s server (PID %d, live v%s, WS %d, plugin v%s)"
+				% [owner_label, _server_pid, _server_actual_version, live_ws_port, current_version])
 			return
 		if not record.version.is_empty():
 			## Version drift — our server but the plugin moved on. Kill
@@ -469,17 +503,14 @@ func _start_server() -> void:
 			_wait_for_port_free(port, 3.0)
 			## Fall through to spawn.
 		else:
-			## No record claiming this port. Could be a non-MCP process
-			## (the handshake will never succeed → user sees FOREIGN_PORT
-			## and picks a different port) OR another editor's MCP server
-			## whose managed-record we just don't have locally — in which
-			## case our WebSocket WILL open and the diagnostic would be a
-			## lie. Flag FOREIGN_PORT preemptively, and arm a one-shot
-			## watcher that clears it if adoption actually succeeds.
+			## No record claiming this port and the live status probe did
+			## not verify an exact/current-compatible godot-ai server. Do
+			## not open the WebSocket: an old server can accept the plugin
+			## session while still exposing an incompatible HTTP/MCP tool
+			## surface to clients such as Antigravity.
 			_server_started_this_session = true
-			_set_spawn_state(McpSpawnState.FOREIGN_PORT)
-			_watch_for_adoption_confirmation()
-			print("MCP | foreign server already running on port %d, using existing" % port)
+			_set_incompatible_server(live, current_version, port)
+			push_warning(_server_status_message)
 			return
 
 	var server_cmd := McpClientConfigurator.get_server_command()
@@ -539,6 +570,173 @@ func _start_server() -> void:
 		push_warning("MCP | failed to start server")
 
 
+func _set_incompatible_server(live: Dictionary, expected_version: String, port: int) -> void:
+	_spawn_state = McpSpawnState.INCOMPATIBLE_SERVER
+	_connection_blocked = true
+	_server_expected_version = expected_version
+	_server_actual_version = _live_version_for_message(live)
+	_server_dev_version_mismatch_allowed = false
+	_server_status_message = _incompatible_server_message(live, expected_version, port)
+	_refresh_dock_client_statuses()
+
+
+static func _incompatible_server_message(live: Dictionary, expected_version: String, port: int) -> String:
+	var version := _live_version_for_message(live)
+	var actual_ws_port := _live_ws_port_for_message(live)
+	var expected_ws_port := McpClientConfigurator.ws_port()
+	if not version.is_empty():
+		if actual_ws_port > 0 and actual_ws_port != expected_ws_port:
+			return (
+				"Port %d is occupied by godot-ai server v%s using WS port %d; "
+				+ "plugin expects v%s with WS port %d. Stop the old server or "
+				+ "change both HTTP and WS ports."
+			) % [port, version, actual_ws_port, expected_version, expected_ws_port]
+		return (
+			"Port %d is occupied by godot-ai server v%s; plugin expects v%s. "
+			+ "Stop the old server or change both HTTP and WS ports."
+		) % [port, version, expected_version]
+	var status_code := int(live.get("status_code", 0))
+	if status_code > 0:
+		return (
+			"Port %d is occupied by an unverified server (status endpoint returned HTTP %d); "
+			+ "plugin expects godot-ai v%s. Stop the other server or change both HTTP and WS ports."
+		) % [port, status_code, expected_version]
+	return (
+		"Port %d is occupied by another process; plugin expects godot-ai v%s. "
+		+ "Stop the other process or change both HTTP and WS ports."
+	) % [port, expected_version]
+
+
+static func _server_version_compatibility(actual_version: String, expected_version: String, is_dev_checkout: bool) -> Dictionary:
+	if actual_version.is_empty():
+		return {"compatible": false, "reason": "unknown", "dev_mismatch_allowed": false}
+	if actual_version == expected_version:
+		return {"compatible": true, "reason": "exact", "dev_mismatch_allowed": false}
+	if is_dev_checkout:
+		return {"compatible": true, "reason": "dev_mismatch", "dev_mismatch_allowed": true}
+	return {"compatible": false, "reason": "version_mismatch", "dev_mismatch_allowed": false}
+
+
+static func _server_status_compatibility(
+	actual_version: String,
+	expected_version: String,
+	actual_ws_port: int,
+	expected_ws_port: int,
+	is_dev_checkout: bool,
+) -> Dictionary:
+	var version_result := _server_version_compatibility(
+		actual_version,
+		expected_version,
+		is_dev_checkout
+	)
+	if not bool(version_result.get("compatible", false)):
+		return version_result
+	if actual_ws_port != expected_ws_port:
+		return {"compatible": false, "reason": "ws_port_mismatch", "dev_mismatch_allowed": false}
+	return version_result
+
+
+static func _probe_live_server_status(port: int, timeout_ms: int = SERVER_STATUS_PROBE_TIMEOUT_MS) -> Dictionary:
+	var result := {
+		"reachable": false,
+		"version": "",
+		"name": "",
+		"ws_port": 0,
+		"status_code": 0,
+		"error": "",
+	}
+	var client := HTTPClient.new()
+	var err := client.connect_to_host("127.0.0.1", port)
+	if err != OK:
+		result["error"] = "connect_%d" % err
+		return result
+	var deadline := Time.get_ticks_msec() + timeout_ms
+	while client.get_status() == HTTPClient.STATUS_RESOLVING or client.get_status() == HTTPClient.STATUS_CONNECTING:
+		client.poll()
+		if Time.get_ticks_msec() >= deadline:
+			result["error"] = "connect_timeout"
+			return result
+		OS.delay_msec(10)
+	if client.get_status() != HTTPClient.STATUS_CONNECTED:
+		result["error"] = "connect_status_%d" % client.get_status()
+		return result
+	err = client.request(HTTPClient.METHOD_GET, SERVER_STATUS_PATH, ["Accept: application/json"])
+	if err != OK:
+		result["error"] = "request_%d" % err
+		return result
+	var body := PackedByteArray()
+	while true:
+		var status := client.get_status()
+		if status == HTTPClient.STATUS_REQUESTING or status == HTTPClient.STATUS_BODY:
+			client.poll()
+			var chunk := client.read_response_body_chunk()
+			if chunk.size() > 0:
+				body.append_array(chunk)
+		elif status == HTTPClient.STATUS_CONNECTED:
+			break
+		else:
+			result["error"] = "response_status_%d" % status
+			return result
+		if Time.get_ticks_msec() >= deadline:
+			result["error"] = "response_timeout"
+			return result
+		OS.delay_msec(10)
+	var response_code := client.get_response_code()
+	result["status_code"] = response_code
+	if response_code != 200:
+		result["error"] = "http_%d" % response_code
+		return result
+	var parsed = JSON.parse_string(body.get_string_from_utf8())
+	if not (parsed is Dictionary):
+		result["error"] = "invalid_json"
+		return result
+	result["reachable"] = true
+	result["name"] = str(parsed.get("name", ""))
+	result["version"] = _extract_server_version(parsed)
+	result["ws_port"] = int(parsed.get("ws_port", 0))
+	return result
+
+
+static func _extract_server_version(payload: Dictionary) -> String:
+	var version := str(payload.get("server_version", ""))
+	if version.is_empty():
+		version = str(payload.get("version", ""))
+	return version
+
+
+static func _verified_status_version(live: Dictionary) -> String:
+	if str(live.get("name", "")) != "godot-ai":
+		return ""
+	return str(live.get("version", ""))
+
+
+static func _verified_status_ws_port(live: Dictionary) -> int:
+	if str(live.get("name", "")) != "godot-ai":
+		return 0
+	return int(live.get("ws_port", 0))
+
+
+static func _live_version_for_message(live: Dictionary) -> String:
+	if live.has("name") and str(live.get("name", "")) != "godot-ai":
+		return ""
+	return str(live.get("version", ""))
+
+
+static func _live_ws_port_for_message(live: Dictionary) -> int:
+	if live.has("name") and str(live.get("name", "")) != "godot-ai":
+		return 0
+	return int(live.get("ws_port", 0))
+
+
+func _refresh_dock_client_statuses() -> bool:
+	if _dock == null:
+		return false
+	if not _dock.has_method("_refresh_all_client_statuses"):
+		return false
+	_dock.call("_refresh_all_client_statuses")
+	return true
+
+
 ## Record a non-OK spawn outcome. First writer wins: once a specific
 ## diagnosis lands (e.g. PORT_EXCLUDED during the proactive check),
 ## later fallback paths (e.g. CRASHED from the watch loop) don't
@@ -564,31 +762,92 @@ func _set_spawn_state(state: String) -> void:
 ## every shipped McpConnection), so upgrades stay hot-reloadable.
 ##
 ## The watch self-disarms after SPAWN_GRACE_MS so per-frame cost drops
-## back to zero even if the foreign occupant never opens a WebSocket.
+## back to zero if it is ever armed by a legacy adoption path.
 func _watch_for_adoption_confirmation() -> void:
 	_adoption_watch_deadline_ms = Time.get_ticks_msec() + SPAWN_GRACE_MS
-	set_process(true)
+	_update_process_enabled()
+
+
+func _arm_server_version_check() -> void:
+	_awaiting_server_version = true
+	_server_version_deadline_ms = 0
+	_update_process_enabled()
+
+
+func _update_process_enabled() -> void:
+	set_process(_adoption_watch_deadline_ms > 0 or _awaiting_server_version)
 
 
 func _process(_delta: float) -> void:
-	if _connection != null and _connection.is_connected:
-		_on_connection_established()
+	var now := Time.get_ticks_msec()
+	if _awaiting_server_version:
+		if _connection != null and _connection.is_connected:
+			if _server_version_deadline_ms == 0:
+				_server_version_deadline_ms = now + SERVER_HANDSHAKE_VERSION_TIMEOUT_MS
+			if not _connection.server_version.is_empty():
+				_on_server_version_verified(_connection.server_version)
+			elif now >= _server_version_deadline_ms:
+				_on_server_version_unverified()
+	if _adoption_watch_deadline_ms > 0 and now >= _adoption_watch_deadline_ms:
 		_adoption_watch_deadline_ms = 0
-		set_process(false)
-		return
-	if Time.get_ticks_msec() >= _adoption_watch_deadline_ms:
-		_adoption_watch_deadline_ms = 0
-		set_process(false)
+	_update_process_enabled()
 
 
-## Bypasses `_set_spawn_state`'s first-writer-wins guard: the WebSocket
-## opening proves the occupant is a compatible MCP server (another
-## editor's session), so the preemptive FOREIGN_PORT diagnostic was a
-## false alarm and the dock shouldn't render the banner next to the
-## green "Connected" dot.
+## A WebSocket opening only proves the occupant speaks enough of the editor
+## protocol to accept a session. Compatibility is decided by the server
+## version in `handshake_ack`, so this only arms that check.
 func _on_connection_established() -> void:
 	if _spawn_state == McpSpawnState.FOREIGN_PORT:
-		_spawn_state = McpSpawnState.OK
+		_arm_server_version_check()
+
+
+func _on_server_version_verified(version: String) -> void:
+	_awaiting_server_version = false
+	_server_version_deadline_ms = 0
+	_server_actual_version = version
+	var expected := _server_expected_version
+	if expected.is_empty():
+		expected = McpClientConfigurator.get_plugin_version()
+		_server_expected_version = expected
+	var compatibility := _server_version_compatibility(
+		version,
+		expected,
+		McpClientConfigurator.is_dev_checkout()
+	)
+	if compatibility.get("compatible", false):
+		_server_dev_version_mismatch_allowed = bool(compatibility.get("dev_mismatch_allowed", false))
+		if _server_dev_version_mismatch_allowed:
+			_server_status_message = (
+				"Using dev server v%s with plugin v%s (dev checkout version mismatch allowed)."
+				% [version, expected]
+			)
+		if _spawn_state == McpSpawnState.FOREIGN_PORT:
+			_spawn_state = McpSpawnState.OK
+		_update_process_enabled()
+		return
+	var live := {"version": version, "status_code": 200, "name": "godot-ai"}
+	_set_incompatible_server(live, expected, McpClientConfigurator.http_port())
+	if _connection != null:
+		_connection.connect_blocked = true
+		_connection.connect_block_reason = _server_status_message
+		_connection.disconnect_from_server()
+	_update_process_enabled()
+
+
+func _on_server_version_unverified() -> void:
+	_awaiting_server_version = false
+	_server_version_deadline_ms = 0
+	var expected := _server_expected_version
+	if expected.is_empty():
+		expected = McpClientConfigurator.get_plugin_version()
+		_server_expected_version = expected
+	var live := {"version": "", "status_code": 0, "error": "missing_handshake_ack"}
+	_set_incompatible_server(live, expected, McpClientConfigurator.http_port())
+	if _connection != null:
+		_connection.connect_blocked = true
+		_connection.connect_block_reason = _server_status_message
+		_connection.disconnect_from_server()
+	_update_process_enabled()
 
 
 ## Start a 1s-tick timer that watches the spawned server for up to
@@ -635,6 +894,9 @@ func _check_server_health() -> void:
 				return
 			_server_exit_ms = elapsed
 			_set_spawn_state(McpSpawnState.CRASHED)
+			_awaiting_server_version = false
+			_server_version_deadline_ms = 0
+			_update_process_enabled()
 			_log_buffer.log("server exited after %dms — see Godot output log" % _server_exit_ms)
 			_stop_server_watch()
 		return
@@ -704,6 +966,9 @@ func _respawn_with_refresh() -> void:
 		## from a real crash, so surface CRASHED immediately rather than
 		## looping. `_refresh_retried` is already true so we won't try again.
 		_set_spawn_state(McpSpawnState.CRASHED)
+		_awaiting_server_version = false
+		_server_version_deadline_ms = 0
+		_update_process_enabled()
 		_log_buffer.log("refresh retry failed to spawn — see Godot output log")
 		_stop_server_watch()
 
@@ -717,6 +982,11 @@ func get_server_status() -> Dictionary:
 	return {
 		"state": _spawn_state,
 		"exit_ms": _server_exit_ms,
+		"actual_version": _server_actual_version,
+		"expected_version": _server_expected_version,
+		"message": _server_status_message,
+		"dev_version_mismatch_allowed": _server_dev_version_mismatch_allowed,
+		"connection_blocked": _connection_blocked,
 	}
 
 
@@ -1082,6 +1352,10 @@ func install_downloaded_update(zip_path: String, temp_dir: String, source_dock: 
 ## this, `_stop_server` early-returns on `_server_pid <= 0` and the old
 ## server outlives every plugin reload.
 func force_restart_server() -> void:
+	if not can_restart_managed_server():
+		push_warning("MCP | refusing to kill server on port %d without managed-server ownership proof"
+			% McpClientConfigurator.http_port())
+		return
 	var port := McpClientConfigurator.http_port()
 	## Kill every LISTENER on the port, not just the first one. A dev
 	## server run via `uvicorn --reload` owns port 8000 through both a
@@ -1181,3 +1455,13 @@ func is_dev_server_running() -> bool:
 func has_managed_server() -> bool:
 	## Returns true if the plugin is currently managing a server process it spawned.
 	return _server_pid > 0
+
+
+func can_restart_managed_server() -> bool:
+	## Restart is allowed only when we have ownership proof. A live PID
+	## means this plugin spawned/adopted a managed server; a non-empty
+	## managed record is the cross-session proof used by the drift branch.
+	if _server_pid > 0:
+		return true
+	var record := _read_managed_server_record()
+	return not str(record.get("version", "")).is_empty()

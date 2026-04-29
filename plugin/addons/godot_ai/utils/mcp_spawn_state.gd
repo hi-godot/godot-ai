@@ -30,6 +30,11 @@ const PORT_EXCLUDED := "port_excluded"
 ## PORT_EXCLUDED, just a different root cause.
 const FOREIGN_PORT := "foreign_port"
 
+## HTTP port is held by a godot-ai server or MCP-looking process whose
+## live version could not be verified as compatible with this plugin.
+## The plugin must not silently adopt it or mark client setup healthy.
+const INCOMPATIBLE_SERVER := "incompatible_server"
+
 ## Our spawned process exited inside the startup grace window. Python
 ## stdout/stderr went to Godot's output log (no pipe capture), so the
 ## dock points the user there instead of rendering empty output.

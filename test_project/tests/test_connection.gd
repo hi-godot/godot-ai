@@ -173,3 +173,23 @@ func test_reconnect_logging_throttles_later_attempts() -> void:
 		McpConnection._should_log_reconnect_attempt(20),
 		"attempt 20 should log periodic progress",
 	)
+
+
+func test_blocked_connection_logs_once_and_stops_reconnect_loop() -> void:
+	## Regression from the stale-server live smoke: blocked adoption logged the
+	## actionable warning every reconnect tick because `_attempt_reconnect`
+	## returned before resetting the timer. A blocked connection should surface
+	## one clear message and then stop processing until the plugin is reloaded.
+	var conn := McpConnection.new()
+	var buffer := McpLogBuffer.new()
+	conn.log_buffer = buffer
+	conn.connect_blocked = true
+	conn.connect_block_reason = "blocked for test"
+
+	conn._attempt_reconnect()
+	conn._attempt_reconnect()
+
+	assert_eq(buffer.total_count(), 1, "blocked reconnect must log once, not every tick")
+	assert_eq(buffer.get_recent(1)[0], "MCP | blocked for test")
+	assert_false(conn.is_processing(), "blocked reconnect must stop Connection processing")
+	conn.free()

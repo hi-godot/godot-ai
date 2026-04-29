@@ -6,6 +6,7 @@ extends McpTestSuite
 ## whatever mode the current test environment is actually running in.
 
 const McpDockScript = preload("res://addons/godot_ai/mcp_dock.gd")
+const GodotAiPlugin := preload("res://addons/godot_ai/plugin.gd")
 
 var _dock: Node
 
@@ -108,6 +109,28 @@ func test_apply_row_status_renders_mismatch_as_amber_with_url_hint() -> void:
 		"Mismatched row must label itself so the user reads it as drift")
 	assert_eq((row["configure_btn"] as Button).text, "Reconfigure",
 		"Mismatched rows offer the same Reconfigure action as the banner")
+
+
+func test_incompatible_server_marks_clients_unhealthy() -> void:
+	## URL-only client checks are not enough when the URL points at an old
+	## server with an incompatible tool surface. The dock must not show green
+	## client rows while the plugin has blocked server adoption.
+	_dock._build_ui()
+	var plugin := GodotAiPlugin.new()
+	plugin._set_incompatible_server({"version": "1.2.10"}, "2.2.0", 8000)
+	_dock._plugin = plugin
+
+	var any_id := McpClientConfigurator.client_ids()[0]
+	_dock._refresh_all_client_statuses()
+	var row: Dictionary = _dock._client_rows[any_id]
+	var dot: ColorRect = row["dot"]
+	assert_eq(dot.color, Color.RED, "Blocked incompatible server must render client rows red")
+	assert_contains(
+		(row["name_label"] as Label).text,
+		"Port 8000 is occupied by godot-ai server v1.2.10",
+		"Client row must explain the live server mismatch instead of looking healthy"
+	)
+	plugin.free()
 
 
 func test_drift_banner_clears_after_per_row_reconfigure() -> void:
@@ -253,13 +276,16 @@ func _cleanup_server_row(conn: McpConnection) -> void:
 
 
 func test_server_version_label_muted_when_ack_not_received() -> void:
-	## Pre-ack (connection just opened, or older server that doesn't send
-	## handshake_ack): show the plugin's expected version muted. Nothing to
-	## flag yet and no Restart button — we don't know what's actually running.
+	## Pre-ack: show the expected version only as an unverified target.
+	## The row must not state "godot-ai == <plugin>" as a fact until the
+	## live server has reported that exact version.
 	var conn := _seed_server_row("")
 	_dock._refresh_server_version_label()
 	var plugin_ver := McpClientConfigurator.get_plugin_version()
-	assert_eq(_dock._setup_server_label.text, "godot-ai == %s" % plugin_ver)
+	assert_eq(
+		_dock._setup_server_label.text,
+		"checking live version (expected godot-ai == %s)" % plugin_ver
+	)
 	assert_false(_dock._version_restart_btn.visible, "Restart button stays hidden pre-ack")
 	_cleanup_server_row(conn)
 
@@ -279,12 +305,12 @@ func test_server_version_label_green_when_server_matches_plugin() -> void:
 	_cleanup_server_row(conn)
 
 
-func test_server_version_label_amber_with_restart_on_mismatch() -> void:
+func test_server_version_label_amber_without_restart_when_ownership_unproven() -> void:
 	## The money test: the bug scenario. Plugin is v1.4.2 but connected to
 	## a v1.3.3 server (common after self-update when a foreign-adopted
-	## server outlives the plugin upgrade). Label must expose both versions
-	## and the Restart button must surface. Regression guard — without
-	## this, the dock silently masks the drift and the user has no signal.
+	## server outlives the plugin upgrade). Label must expose both versions.
+	## The Restart button stays hidden without plugin-provided ownership proof
+	## so the dock does not offer to kill an arbitrary foreign process.
 	var conn := _seed_server_row("1.2.3-stale-for-test")
 	_dock._refresh_server_version_label()
 	var plugin_ver := McpClientConfigurator.get_plugin_version()
@@ -297,7 +323,7 @@ func test_server_version_label_amber_with_restart_on_mismatch() -> void:
 		McpDockScript.COLOR_AMBER,
 		"Mismatch must render amber, matching the drift banner's color"
 	)
-	assert_true(_dock._version_restart_btn.visible, "Restart button must surface on mismatch")
+	assert_false(_dock._version_restart_btn.visible, "Restart button requires ownership proof")
 	_cleanup_server_row(conn)
 
 
@@ -505,3 +531,26 @@ func test_drain_client_action_workers_restores_in_flight_row_buttons() -> void:
 		"Drain must re-enable the remove button too")
 	assert_false(str((row["configure_btn"] as Button).text).contains("Configuring"),
 		"Drain must clear the in-flight badge from the configure button")
+
+
+func test_incompatible_server_body_uses_actionable_message() -> void:
+	var body := McpDockScript._crash_body_for_state(
+		McpSpawnState.INCOMPATIBLE_SERVER,
+		{"message": "Port 8000 is occupied by godot-ai server v1.2.10; plugin expects v2.2.0. Stop the old server or change both HTTP and WS ports."},
+	)
+	assert_contains(body, "godot-ai server v1.2.10")
+	assert_contains(body, "plugin expects v2.2.0")
+	assert_contains(body, "change both HTTP and WS ports")
+
+
+func test_incompatible_server_hides_http_only_port_picker() -> void:
+	## Incompatible godot-ai servers commonly hold both HTTP and WS ports.
+	## The quick picker only changes HTTP, so showing it here advertises a
+	## partial recovery path that can leave the editor disconnected.
+	_dock._build_ui()
+	_dock._update_crash_panel({
+		"state": McpSpawnState.INCOMPATIBLE_SERVER,
+		"message": "Port 8000 is occupied by godot-ai server v1.2.10",
+	})
+	assert_true(_dock._crash_panel.visible, "diagnostic panel still shows")
+	assert_false(_dock._port_picker_section.visible, "HTTP-only picker must stay hidden")

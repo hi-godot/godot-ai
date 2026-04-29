@@ -10,7 +10,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
+from godot_ai import __version__ as _SERVER_VERSION
 from godot_ai.asgi import StaleMcpSessionDiagnosticMiddleware
 from godot_ai.godot_client.client import GodotClient
 from godot_ai.middleware import (
@@ -175,6 +178,19 @@ def create_server(
     exclude = set(exclude_domains or ())
     if exclude:
         logger.info("Excluding tool domains: %s", ", ".join(sorted(exclude)))
+
+    @mcp.custom_route("/godot-ai/status", methods=["GET"], include_in_schema=False)
+    async def godot_ai_status(_request: Request) -> JSONResponse:
+        """Small unauthenticated probe used by the editor before reusing a port."""
+        return JSONResponse(
+            {
+                "name": "godot-ai",
+                "server_version": _SERVER_VERSION,
+                "ws_port": ws_port,
+                "tool_surface": "rollup",
+                "exclude_domains": sorted(exclude),
+            }
+        )
 
     ## Core-bearing domains: always registered. ``include_non_core=False`` keeps
     ## only the core tool alive when the user excluded that domain.

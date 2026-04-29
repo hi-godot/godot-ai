@@ -28,6 +28,12 @@ var server_version := ""
 
 var dispatcher: McpDispatcher
 var log_buffer: McpLogBuffer
+## Set by plugin.gd when the HTTP port is occupied by an incompatible or
+## unverified server. Keeping the Connection node alive lets handlers and the
+## dock share one object, but no WebSocket is opened to the wrong server.
+var connect_blocked := false
+var connect_block_reason := ""
+var _blocked_notice_logged := false
 ## Set to true to skip _process() during operations like save_scene
 ## that may trigger re-entrant frame processing.
 var pause_processing := false
@@ -39,6 +45,10 @@ func _ready() -> void:
 	## Increase outbound buffer for large messages (e.g. screenshot base64).
 	## Default is 64 KB; screenshots can be several MB.
 	_peer.outbound_buffer_size = 4 * 1024 * 1024  # 4 MB
+	if connect_blocked:
+		_log_blocked_notice_once()
+		set_process(false)
+		return
 	_connect_to_server()
 	_hook_editor_signals()
 
@@ -119,6 +129,10 @@ func _connect_to_server() -> void:
 
 
 func _attempt_reconnect() -> void:
+	if connect_blocked:
+		_log_blocked_notice_once()
+		set_process(false)
+		return
 	var delay := _reconnect_delay_for_attempt(_reconnect_attempt)
 	_reconnect_attempt += 1
 	_reconnect_timer = delay
@@ -147,6 +161,14 @@ static func _should_log_reconnect_attempt(attempt_number: int) -> bool:
 		attempt_number <= RECONNECT_VERBOSE_ATTEMPTS
 		or attempt_number % RECONNECT_LOG_EVERY_N_ATTEMPTS == 0
 	)
+
+
+func _log_blocked_notice_once() -> void:
+	if _blocked_notice_logged:
+		return
+	_blocked_notice_logged = true
+	if log_buffer and not connect_block_reason.is_empty():
+		log_buffer.log(connect_block_reason)
 
 
 func _send_handshake() -> void:

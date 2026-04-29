@@ -9,6 +9,12 @@ extends McpTestSuite
 
 const GodotAiPlugin := preload("res://addons/godot_ai/plugin.gd")
 
+class _RefreshDock extends McpDock:
+	var refresh_calls := 0
+	func _refresh_all_client_statuses() -> void:
+		refresh_calls += 1
+
+
 ## Test port high enough to almost never collide with real services and
 ## distinct from the plugin's configured http_port() so the stop-finalize tests
 ## don't interact with a developer's running managed server.
@@ -188,17 +194,80 @@ func test_get_server_status_shape_is_stable() -> void:
 	plugin.free()
 	assert_has_key(status, "state")
 	assert_has_key(status, "exit_ms")
+	assert_has_key(status, "actual_version")
+	assert_has_key(status, "expected_version")
+	assert_has_key(status, "message")
+	assert_has_key(status, "connection_blocked")
 
 
-func test_connection_established_clears_foreign_port() -> void:
-	## User-visible regression: on editor restart when a previous session's
-	## server is still on port 8000, `_start_server` hits the "no matching
-	## managed-server record" branch and preemptively sets FOREIGN_PORT.
-	## If the occupant happens to speak MCP (the common case — it's another
-	## editor's server), the WebSocket still connects and the dock ends up
-	## showing both "Connected" (green dot) and "Another process is already
-	## bound to port 8000" (warning banner). `_on_connection_established`
-	## must clear FOREIGN_PORT once the connection actually opens.
+func test_server_status_compatibility_requires_matching_ws_port() -> void:
+	var ok := GodotAiPlugin._server_status_compatibility("2.2.0", "2.2.0", 9500, 9500, false)
+	var wrong_ws := GodotAiPlugin._server_status_compatibility("2.2.0", "2.2.0", 9600, 9500, false)
+	assert_true(bool(ok.get("compatible", false)), "matching version + WS port must be compatible")
+	assert_false(
+		bool(wrong_ws.get("compatible", true)),
+		"same-version server on the wrong WS port must not be adopted"
+	)
+	assert_eq(wrong_ws.get("reason", ""), "ws_port_mismatch")
+
+
+func test_server_version_compatibility_requires_exact_match_in_release_mode() -> void:
+	var exact := GodotAiPlugin._server_version_compatibility("2.2.0", "2.2.0", false)
+	var old := GodotAiPlugin._server_version_compatibility("1.2.10", "2.2.0", false)
+	var unknown := GodotAiPlugin._server_version_compatibility("", "2.2.0", false)
+	assert_true(bool(exact.get("compatible", false)), "exact release version must be compatible")
+	assert_false(bool(old.get("compatible", true)), "old release server must be incompatible")
+	assert_false(bool(unknown.get("compatible", true)), "unknown live version must be incompatible")
+
+
+func test_server_version_compatibility_allows_visible_dev_mismatch() -> void:
+	var result := GodotAiPlugin._server_version_compatibility("2.2.0-dev", "2.2.0", true)
+	assert_true(bool(result.get("compatible", false)), "dev checkout may reuse a mismatched dev server")
+	assert_true(
+		bool(result.get("dev_mismatch_allowed", false)),
+		"dev mismatch must be flagged so the dock can render it visibly"
+	)
+
+
+func test_incompatible_server_message_names_actual_version_when_discoverable() -> void:
+	var message := GodotAiPlugin._incompatible_server_message(
+		{"version": "1.2.10"},
+		"2.2.0",
+		8000,
+	)
+	assert_contains(message, "Port 8000 is occupied by godot-ai server v1.2.10")
+	assert_contains(message, "plugin expects v2.2.0")
+	assert_contains(message, "change both HTTP and WS ports")
+
+
+func test_incompatible_server_message_names_ws_port_mismatch() -> void:
+	var message := GodotAiPlugin._incompatible_server_message(
+		{"name": "godot-ai", "version": "2.2.0", "ws_port": 9600},
+		"2.2.0",
+		8000,
+	)
+	assert_contains(message, "using WS port 9600")
+	assert_contains(message, "with WS port %d" % McpClientConfigurator.ws_port())
+	assert_contains(message, "change both HTTP and WS ports")
+
+
+func test_incompatible_transition_refreshes_dock_client_statuses() -> void:
+	var plugin := GodotAiPlugin.new()
+	var dock := _RefreshDock.new()
+	plugin._dock = dock
+	plugin._set_incompatible_server({"version": "1.2.10"}, "2.2.0", 8000)
+	var calls := dock.refresh_calls
+	dock.free()
+	plugin.free()
+
+	assert_eq(calls, 1, "late incompatible transition must resweep dock client status")
+
+
+func test_connection_established_waits_for_version_before_clearing_foreign_port() -> void:
+	## A WebSocket opening is not enough proof anymore: old pre-rollup
+	## servers accept the plugin session while still exposing an incompatible
+	## HTTP/MCP tool surface. FOREIGN_PORT only clears after the live server
+	## version is verified.
 	_seed_managed_record(99999, "other-version")
 	var plugin := GodotAiPlugin.new()
 	plugin._set_spawn_state(McpSpawnState.FOREIGN_PORT)
@@ -210,12 +279,45 @@ func test_connection_established_clears_foreign_port() -> void:
 
 	plugin._on_connection_established()
 	var state: String = plugin.get_server_status().get("state", "")
+	var awaiting := plugin._awaiting_server_version
 	plugin.free()
 
 	assert_eq(
 		state,
-		McpSpawnState.OK,
-		"successful adoption (WebSocket opened) must clear FOREIGN_PORT diagnostic"
+		McpSpawnState.FOREIGN_PORT,
+		"opening the WebSocket must not clear FOREIGN_PORT before version verification"
+	)
+	assert_true(awaiting, "connection establishment must arm the server-version check")
+
+
+func test_verified_matching_server_clears_foreign_port() -> void:
+	var plugin := GodotAiPlugin.new()
+	var plugin_ver := McpClientConfigurator.get_plugin_version()
+	plugin._server_expected_version = plugin_ver
+	plugin._set_spawn_state(McpSpawnState.FOREIGN_PORT)
+	plugin._on_server_version_verified(plugin_ver)
+	var status := plugin.get_server_status()
+	plugin.free()
+
+	assert_eq(status.get("state", ""), McpSpawnState.OK)
+	assert_eq(status.get("actual_version", ""), plugin_ver)
+	assert_false(bool(status.get("connection_blocked", true)))
+
+
+func test_verified_old_server_becomes_incompatible_and_blocks_connection() -> void:
+	var plugin := GodotAiPlugin.new()
+	plugin._server_expected_version = "2.2.0"
+	plugin._on_server_version_verified("1.2.10")
+	var status := plugin.get_server_status()
+	plugin.free()
+
+	assert_eq(status.get("state", ""), McpSpawnState.INCOMPATIBLE_SERVER)
+	assert_eq(status.get("actual_version", ""), "1.2.10")
+	assert_true(bool(status.get("connection_blocked", false)))
+	assert_contains(
+		str(status.get("message", "")),
+		"Port %d is occupied by godot-ai server v1.2.10; plugin expects v2.2.0"
+			% McpClientConfigurator.http_port(),
 	)
 
 
@@ -261,30 +363,30 @@ func test_watch_for_adoption_confirmation_arms_bounded_deadline() -> void:
 	)
 
 
-func test_process_clears_foreign_port_on_successful_connection() -> void:
+func test_process_clears_foreign_port_after_matching_version_ack() -> void:
 	## Integration test for the full adoption-confirm loop:
 	## `_watch_for_adoption_confirmation` arms the deadline + `_process`,
-	## then `_process` reads `_connection.is_connected` each frame. The
-	## previous two tests exercise each half in isolation; this one wires
-	## them together with a real McpConnection whose `_connected` we flip.
-	## Without this, a refactor that broke the `is_connected` check in
-	## `_process` (e.g. reading the wrong property) would slip through.
+	## then `_process` waits for McpConnection.server_version. Mere connection
+	## is insufficient; a matching ack is what authorizes adoption.
 	var plugin := GodotAiPlugin.new()
 	var conn := McpConnection.new()
 	plugin._connection = conn
+	plugin._server_expected_version = McpClientConfigurator.get_plugin_version()
 	plugin._set_spawn_state(McpSpawnState.FOREIGN_PORT)
 	plugin._watch_for_adoption_confirmation()
+	plugin._arm_server_version_check()
 	assert_true(plugin._adoption_watch_deadline_ms > 0, "precondition: watcher armed")
 
 	conn._connected = true  # simulate WebSocket STATE_OPEN transition
+	conn.server_version = plugin._server_expected_version
 	plugin._process(0.0)
 	var state: String = plugin.get_server_status().get("state", "")
 	var deadline := plugin._adoption_watch_deadline_ms
 	conn.free()
 	plugin.free()
 
-	assert_eq(state, McpSpawnState.OK, "_process must clear FOREIGN_PORT on first connect")
-	assert_eq(deadline, 0, "_process must disarm the deadline on successful adoption")
+	assert_eq(state, McpSpawnState.OK, "_process must clear FOREIGN_PORT after version match")
+	assert_true(deadline > 0, "adoption deadline is independent of version verification")
 
 
 func test_process_self_disarms_after_deadline_without_connect() -> void:

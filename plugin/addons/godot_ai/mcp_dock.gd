@@ -723,6 +723,8 @@ func _update_status() -> void:
 		else {}
 	)
 	var state: String = server_status.get("state", McpSpawnState.OK)
+	if state == McpSpawnState.INCOMPATIBLE_SERVER:
+		connected = false
 
 	## One `match`/`elif` chain, one source of truth. Adding a new
 	## spawn outcome = one `McpSpawnState` constant + one arm here +
@@ -730,14 +732,22 @@ func _update_status() -> void:
 	var status_text: String
 	var status_color: Color
 	if connected:
-		status_text = "Connected"
-		status_color = Color.GREEN
+		if bool(server_status.get("dev_version_mismatch_allowed", false)):
+			var actual := str(server_status.get("actual_version", ""))
+			status_text = "Connected (dev server v%s)" % actual if not actual.is_empty() else "Connected (dev server)"
+			status_color = COLOR_AMBER
+		else:
+			status_text = "Connected"
+			status_color = Color.GREEN
 	elif state == McpSpawnState.CRASHED:
 		var exit_ms: int = server_status.get("exit_ms", 0)
 		status_text = "Server exited after %.1fs" % (exit_ms / 1000.0)
 		status_color = Color.RED
 	elif state == McpSpawnState.PORT_EXCLUDED:
 		status_text = "Port %d reserved by Windows" % McpClientConfigurator.http_port()
+		status_color = Color.RED
+	elif state == McpSpawnState.INCOMPATIBLE_SERVER:
+		status_text = "Incompatible server on port %d" % McpClientConfigurator.http_port()
 		status_color = Color.RED
 	elif state == McpSpawnState.FOREIGN_PORT:
 		status_text = "Port %d held by another process" % McpClientConfigurator.http_port()
@@ -770,8 +780,10 @@ func _update_status() -> void:
 
 ## Render the diagnostic panel body for a given spawn state. The top
 ## status label already names the problem; this answers "what do I do?".
-## Panel shows for any non-OK state; picker shows when the root cause
-## is port contention (same escape applies to PORT_EXCLUDED + FOREIGN_PORT).
+## Panel shows for any non-OK state; picker shows only when moving the HTTP
+## port alone is a valid recovery. Incompatible godot-ai servers commonly
+## hold both HTTP and WS ports, so their message points to Editor Settings
+## instead of offering the HTTP-only quick picker.
 func _update_crash_panel(server_status: Dictionary) -> void:
 	var state: String = server_status.get("state", McpSpawnState.OK)
 	if state == McpSpawnState.OK:
@@ -784,9 +796,12 @@ func _update_crash_panel(server_status: Dictionary) -> void:
 	_last_server_status = server_status.duplicate()
 	_crash_panel.visible = true
 	_crash_output.clear()
-	_crash_output.add_text(_crash_body_for_state(state))
+	_crash_output.add_text(_crash_body_for_state(state, server_status))
 
-	var port_picker_visible := state == McpSpawnState.PORT_EXCLUDED or state == McpSpawnState.FOREIGN_PORT
+	var port_picker_visible := (
+		state == McpSpawnState.PORT_EXCLUDED
+		or state == McpSpawnState.FOREIGN_PORT
+	)
 	_port_picker_section.visible = port_picker_visible
 	if port_picker_visible:
 		## Seed the SpinBox with a suggested non-reserved port each time
@@ -797,13 +812,18 @@ func _update_crash_panel(server_status: Dictionary) -> void:
 		)
 
 
-static func _crash_body_for_state(state: String) -> String:
+static func _crash_body_for_state(state: String, server_status: Dictionary = {}) -> String:
 	## Single sentence per state. The top status label already names the
 	## problem; don't repeat it here. This copy answers "what do I do?".
 	var port := McpClientConfigurator.http_port()
 	match state:
 		McpSpawnState.PORT_EXCLUDED:
 			return "Windows (Hyper-V / WSL2 / Docker) reserved port %d. Pick a free port or try `net stop winnat; net start winnat` in an admin shell." % port
+		McpSpawnState.INCOMPATIBLE_SERVER:
+			var message := str(server_status.get("message", ""))
+			if not message.is_empty():
+				return message
+			return "Port %d is occupied by an incompatible server. Stop it or change both HTTP and WS ports." % port
 		McpSpawnState.FOREIGN_PORT:
 			return "Another process is already bound to port %d. Pick a free port or stop the other process." % port
 		McpSpawnState.CRASHED:
@@ -986,31 +1006,50 @@ func _on_reconnect() -> void:
 ## version, and highlight the mismatch so self-update drift is visible
 ## at a glance instead of silently masked by a green label.
 ##
-## Three render states, keyed off `McpConnection.server_version`:
-## - empty (pre-ack or older server): show plugin's expected version,
-##   muted, no Restart button
+## Render states, keyed off live version metadata:
+## - empty (pre-ack): show the expected version only as an unverified target
 ## - matches plugin: show it green, no Restart button
-## - diverges from plugin: show it amber, append "(plugin X)", show
-##   Restart button so the user can kill the stale occupant and respawn
-##   without restarting the editor
+## - dev mismatch: show amber with an explicit dev marker
+## - release mismatch: show actual vs expected; only surface Restart when the
+##   plugin has ownership proof for the process
 func _refresh_server_version_label() -> void:
 	if _setup_server_label == null:
 		return
 	var plugin_ver := McpClientConfigurator.get_plugin_version()
+	var server_status: Dictionary = (
+		_plugin.get_server_status()
+		if _plugin != null and _plugin.has_method("get_server_status")
+		else {}
+	)
 	var server_ver := _connection.server_version if _connection != null else ""
+	if server_ver.is_empty():
+		server_ver = str(server_status.get("actual_version", ""))
+	var expected_ver := str(server_status.get("expected_version", ""))
+	if expected_ver.is_empty():
+		expected_ver = plugin_ver
 	var text: String
 	var color: Color
 	var show_restart := false
 	if server_ver.is_empty():
-		text = "godot-ai == %s" % plugin_ver
+		text = "checking live version (expected godot-ai == %s)" % expected_ver
 		color = COLOR_MUTED
-	elif server_ver == plugin_ver:
+	elif server_ver == expected_ver:
 		text = "godot-ai == %s" % server_ver
 		color = Color.GREEN
 	else:
-		text = "godot-ai == %s  (plugin %s)" % [server_ver, plugin_ver]
-		color = COLOR_AMBER
-		show_restart = true
+		var dev_allowed := bool(server_status.get("dev_version_mismatch_allowed", false))
+		if dev_allowed:
+			text = "godot-ai == %s  (plugin %s, dev)" % [server_ver, expected_ver]
+			color = COLOR_AMBER
+		else:
+			text = "godot-ai == %s  (expected %s)" % [server_ver, expected_ver]
+			color = Color.RED if server_status.get("state", "") == McpSpawnState.INCOMPATIBLE_SERVER else COLOR_AMBER
+			show_restart = (
+				server_status.get("state", "") != McpSpawnState.INCOMPATIBLE_SERVER
+				and _plugin != null
+				and _plugin.has_method("can_restart_managed_server")
+				and _plugin.can_restart_managed_server()
+			)
 	if text == _last_rendered_server_text:
 		if _version_restart_btn != null and _version_restart_btn.visible != show_restart:
 			_version_restart_btn.visible = show_restart
@@ -1195,6 +1234,10 @@ func _on_install_uv() -> void:
 # --- Client section ---
 
 func _on_configure_client(client_id: String) -> void:
+	if _server_blocks_client_health():
+		_apply_row_status(client_id, McpClient.Status.ERROR, _server_blocked_client_message())
+		_refresh_clients_summary()
+		return
 	_dispatch_client_action(client_id, "configure")
 
 
@@ -1269,6 +1312,10 @@ func _apply_client_action_result(client_id: String, action: String, result: Dict
 			t.wait_to_finish()
 		_client_action_threads.erase(client_id)
 	_finalize_action_buttons(client_id)
+	if _server_blocks_client_health():
+		_apply_row_status(client_id, McpClient.Status.ERROR, _server_blocked_client_message())
+		_refresh_clients_summary()
+		return
 
 	var success_status := McpClient.Status.NOT_CONFIGURED if action == "remove" else McpClient.Status.CONFIGURED
 	if result.get("status") == "ok":
@@ -1326,6 +1373,11 @@ func _on_refresh_clients_pressed() -> void:
 
 
 func _on_configure_all_clients() -> void:
+	if _server_blocks_client_health():
+		for client_id in _client_rows:
+			_apply_row_status(String(client_id), McpClient.Status.ERROR, _server_blocked_client_message())
+		_refresh_clients_summary()
+		return
 	if _client_status_refresh_in_flight:
 		return
 	for client_id in _client_rows:
@@ -1651,6 +1703,11 @@ func _refresh_all_client_statuses() -> void:
 	## Compatibility wrapper for older explicit call sites. Treat this as a manual
 	## refresh: it bypasses focus-in cooldown but still runs probes off the editor
 	## main thread.
+	if _server_blocks_client_health():
+		for client_id in _client_rows:
+			_apply_row_status(String(client_id), McpClient.Status.ERROR, _server_blocked_client_message())
+		_refresh_clients_summary()
+		return
 	_request_client_status_refresh(true)
 
 
@@ -1738,6 +1795,12 @@ func _perform_initial_client_status_refresh() -> void:
 	if _client_status_refresh_in_flight:
 		return
 
+	if _server_blocks_client_health():
+		for client_id in _client_rows:
+			_apply_row_status(String(client_id), McpClient.Status.ERROR, _server_blocked_client_message())
+		_refresh_clients_summary()
+		return
+
 	var generation := _begin_client_status_refresh_run()
 	var server_url := McpClientConfigurator.http_url()
 	var deferred_cli_probes: Array[Dictionary] = []
@@ -1806,6 +1869,11 @@ func _request_client_status_refresh(force: bool = false) -> bool:
 	## Stale-while-refreshing: do not clear dots, summary, or the drift banner
 	## when a refresh is requested. The existing UI remains visible until the
 	## background worker's result is applied on the main thread.
+	if _server_blocks_client_health():
+		for client_id in _client_rows:
+			_apply_row_status(String(client_id), McpClient.Status.ERROR, _server_blocked_client_message())
+		_refresh_clients_summary()
+		return false
 	if _self_update_in_progress:
 		## Self-update is overwriting plugin scripts on disk; spawning a worker
 		## now would crash it inside `GDScriptFunction::call` once the bytecode
@@ -1919,6 +1987,11 @@ func _apply_client_status_refresh_results(results: Dictionary, generation: int) 
 	if _client_status_refresh_thread != null:
 		_client_status_refresh_thread.wait_to_finish()
 		_client_status_refresh_thread = null
+	if _server_blocks_client_health():
+		for client_id in _client_rows:
+			_apply_row_status(String(client_id), McpClient.Status.ERROR, _server_blocked_client_message())
+		_finalize_completed_refresh()
+		return
 
 	for client_id in results:
 		## Skip rows whose Configure / Remove worker is still running so the
@@ -1941,6 +2014,21 @@ func _apply_client_status_refresh_results(results: Dictionary, generation: int) 
 		_client_status_refresh_pending = false
 		_client_status_refresh_pending_force = false
 		_request_client_status_refresh(pending_force)
+
+
+func _server_blocks_client_health() -> bool:
+	if _plugin == null or not _plugin.has_method("get_server_status"):
+		return false
+	var status: Dictionary = _plugin.get_server_status()
+	return status.get("state", McpSpawnState.OK) == McpSpawnState.INCOMPATIBLE_SERVER
+
+
+func _server_blocked_client_message() -> String:
+	if _plugin == null or not _plugin.has_method("get_server_status"):
+		return "server incompatible"
+	var status: Dictionary = _plugin.get_server_status()
+	var message := str(status.get("message", ""))
+	return message if not message.is_empty() else "server incompatible"
 
 
 func _refresh_drift_banner(mismatched_ids: Array[String]) -> void:
