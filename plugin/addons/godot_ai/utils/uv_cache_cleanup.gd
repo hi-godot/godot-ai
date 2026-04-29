@@ -76,6 +76,7 @@ static func purge_directory(builds_root: String) -> Dictionary:
 	var dir := DirAccess.open(builds_root)
 	if dir == null:
 		return result
+	dir.include_hidden = true
 
 	## Pass 1: collect names. Iterating + renaming in the same walk would
 	## confuse DirAccess's internal cursor on NTFS.
@@ -114,6 +115,7 @@ static func purge_directory(builds_root: String) -> Dictionary:
 	## see how many genuinely-locked dirs we couldn't reach.
 	var dir2 := DirAccess.open(builds_root)
 	if dir2 != null:
+		dir2.include_hidden = true
 		dir2.list_dir_begin()
 		var e := dir2.get_next()
 		while e != "":
@@ -134,6 +136,7 @@ static func _remove_recursive(path: String) -> bool:
 		## (an empty dir handle-leak path) and report based on existence.
 		DirAccess.remove_absolute(path)
 		return not DirAccess.dir_exists_absolute(path)
+	dir.include_hidden = true
 	dir.list_dir_begin()
 	var entry := dir.get_next()
 	while entry != "":
