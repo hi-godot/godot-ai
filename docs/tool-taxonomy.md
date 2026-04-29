@@ -1,8 +1,8 @@
 # Godot AI — Tool Taxonomy
 
-*Updated 2026-04-16*
+*Updated 2026-04-29 (note about `<domain>_manage` rollups; mark shipped polish multipliers)*
 
-This document describes the intended Godot-native tool surface.
+This document describes the intended Godot-native tool surface. Names below use dot-form (`scene.create`, `node.set_property`, etc.) as a logical taxonomy. The published MCP names use underscores (`scene_create` → `scene_manage(op="create")` after the rollup collapse) — see implementation-plan.md "Tool Surface Compactness" for the published-name mapping.
 
 Use the related docs for the adjacent concerns:
 
@@ -155,21 +155,21 @@ These are the next layers once the core runtime loop is dependable.
 
 ### Better 2D game-production tools
 
-- `ui.*` for HUDs, menus, upgrade screens, theme/layout work
-- `camera.*` for follow, bounds, zoom, shake, and capture helpers
-- `animation_*` — AnimationPlayer authoring shipped (player + animation creation, property/method tracks, autoplay, dev-time play/stop, list/get, `animation_create_simple` composer, `animation_delete`, `animation_validate`). `animation_create` and `animation_create_simple` support an `overwrite` parameter to replace existing animations in place. Auto-attaches a default `AnimationLibrary` on first write. Works for 2D, 3D, and UI; `animation_tree.*`, bezier/audio tracks, preset helpers, and 3D material-fade coercion are tracked as follow-ups in `implementation-plan.md`.
-- `audio.*`
+- `ui.*` — anchor presets, `ui_build_layout` composer, `ui_set_text` cross-Control text setter, and `control_draw_recipe` runtime shipped; `theme_*` (color/constant/font-size/stylebox_flat) authoring shipped; pixel-art / custom typography (`theme_set_font`, `theme_set_stylebox_texture`) still pending
+- `camera.*` — Camera2D 2D family (create/configure/limits/damping/follow/get/list + 4 presets) shipped; 3D follow via SpringArm3D rig and screen shake still pending
+- `animation_*` — AnimationPlayer authoring shipped (player + animation creation, property/method tracks, autoplay, dev-time play/stop, list/get, `animation_create_simple` composer, `animation_delete`, `animation_validate`, four `animation_preset_*` one-call helpers — fade/slide/shake/pulse). `animation_create` and `animation_create_simple` support an `overwrite` parameter to replace existing animations in place. Auto-attaches a default `AnimationLibrary` on first write. Works for 2D, 3D, and UI; `animation_tree.*`, bezier/audio tracks, and 3D material-fade coercion are tracked as follow-ups in `implementation-plan.md`.
+- `audio.*` — `audio_player_create` 1D/2D/3D + `set_stream`/`set_playback`/`play`/`stop`/`list` shipped (under `audio_manage`)
 
 These are the tools that move the project from "functional prototype" toward "readable and polished prototype."
 
 ### Strong polish multipliers
 
-- `material.*`
-- `shader.*`
-- `particles.*`
-- `physics.*` helpers
-- light `tilemap.*`
-- light `navigation.*`
+- `material.*` — Standard / ORM / CanvasItem / Shader authoring shipped with 6 presets and shader uniform support
+- `particles.*` — GPU+CPU 2D+3D shipped with 7 presets; auto-default billboard draw material so color_ramp renders out of the box
+- `shader.*` — still pending; today shaders are authored via `filesystem_write_text` + `material_set_shader_param`
+- `physics.*` helpers — `physics_shape_autofit` op (under `resource_manage`) derives a Shape2D/Shape3D from a target node's bounds; layer/mask/body helpers still pending
+- light `tilemap.*` — pending
+- light `navigation.*` — pending
 
 These matter, but they should come after the project can already run, inspect, and safely iterate.
 
@@ -201,7 +201,7 @@ These should anchor the first serious release.
 
 ### Capabilities that should not be cloned literally
 
-- `manage_*` blob tools with huge optional schemas
+- `manage_*` blob tools with huge optional schemas (where every op accepts every parameter and the model has to guess) — note: our `<domain>_manage` rollups are deliberately *not* this anti-pattern. Each op carries its own typed `params` dict; the dynamic `Literal[...]` enum exposes the full op list to schema-aware clients; the `op="<verb>"` shape exists only to satisfy hard tool-count caps in clients that ignore Anthropic's `defer_loading`. Schema-aware clients see every op with its real signature.
 - package-manager assumptions tied to another engine's ecosystem
 - package-specific VFX or camera abstractions that Godot does not have
 - any naming layer that hides Godot's actual scene/node/resource model

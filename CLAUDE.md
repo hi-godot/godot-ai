@@ -65,7 +65,7 @@ Wiring: `script/setup-dev` and `setup-dev.ps1` copy `.githooks/post-checkout` in
 
 ```bash
 # SAFE — root repo, never auto-cleaned:
-/Applications/Godot_mono.app/Contents/MacOS/Godot --editor --path /Users/davidsarno/Documents/godot-ai/test_project/
+/Applications/Godot_mono.app/Contents/MacOS/Godot --editor --path /Users/davidsarno/godot-ai/test_project/
 
 # DANGEROUS — worktree, can vanish:
 /Applications/Godot_mono.app/Contents/MacOS/Godot --editor --path .claude/worktrees/some-name/test_project/
@@ -98,7 +98,7 @@ Sometimes you're directed at another session's PR worktree (e.g. to fix a bug th
 ## Dev workflow
 
 ```bash
-cd ~/Documents/godot-ai
+cd ~/godot-ai
 script/setup-dev             # creates .venv, installs deps, applies macOS .pth fix
 source .venv/bin/activate
 pytest -v                    # run tests
@@ -182,7 +182,7 @@ The harness creates a disposable project with a physical addon copy, stages a sy
 
 ### Python tests
 ```bash
-pytest -v                    # 388 unit + integration tests
+pytest -v                    # 686 unit + integration tests
 ```
 
 ### Godot-side tests

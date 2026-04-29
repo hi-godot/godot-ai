@@ -1,6 +1,6 @@
 # Godot AI — Working Plan
 
-*Updated 2026-04-19 (UI polish findings from cyberpunk-hud-demo v3.2 pass)*
+*Updated 2026-04-29 (audio_*, ui_set_text, animation_preset_*, resource_create, control_draw_recipe shipped; tool surface collapsed to ~39 via `<domain>_manage` rollups)*
 
 This is the current working plan for Godot AI. It focuses on active and upcoming work only.
 
@@ -28,7 +28,7 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 - [x] Runtime feedback loop: `project.run`/`project.stop`, `editor.screenshot`, `performance.get_monitors`, `logs.clear`
 - [ ] Runtime iteration loop is complete enough for AI-driven feel tuning
 - [ ] Release/install path is complete enough for new users
-- [~] Polished game-production extensions have started — `ui_*` (anchor presets, `ui_build_layout` composer, `theme_override_*` pseudo-properties), `theme_*` (color/constant/font-size/stylebox_flat with nested `border`/`corners`/`margins`/`shadow` dicts, `apply`), `animation_*` (AnimationPlayer + `animation_create_simple` composer + delete/validate + overwrite support, undo robust to history interleaving), `material_*` (Standard / ORM / CanvasItem / Shader with enum-by-name + 6 presets), `particle_*` (GPU+CPU 2D+3D with 7 presets, auto-attached billboard draw material so color_ramp renders out of the box), and `camera_*` (Camera2D/Camera3D create/configure/limits/damping/follow/get/list + 4 presets, sibling-unmark on `current=true`, one-undo reparent-based follow) shipped; `audio_*`, dedicated `shader_*` CRUD, animation preset helpers, and 3D follow (SpringArm3D rig) still pending
+- [~] Polished game-production extensions have started — `ui_*` (anchor presets, `ui_build_layout` composer, `theme_override_*` pseudo-properties, `ui_set_text` cross-Control text setter, `control_draw_recipe` reusable runtime), `theme_*` (color/constant/font-size/stylebox_flat with nested `border`/`corners`/`margins`/`shadow` dicts, `apply`), `animation_*` (AnimationPlayer + `animation_create_simple` composer + delete/validate + overwrite support + four `animation_preset_*` one-call helpers — fade/slide/shake/pulse, undo robust to history interleaving), `material_*` (Standard / ORM / CanvasItem / Shader with enum-by-name + 6 presets), `particle_*` (GPU+CPU 2D+3D with 7 presets, auto-attached billboard draw material so color_ramp renders out of the box), `camera_*` (Camera2D/Camera3D create/configure/limits/damping/follow/get/list + 4 presets, sibling-unmark on `current=true`, one-undo reparent-based follow), `audio_*` (AudioStreamPlayer 1D/2D/3D create/configure/play/stop/list), `resource_*` (built-in Resource instantiation: `create`, `get_info`, `curve_set_points`, `environment_create`, `gradient_texture_create`, `noise_texture_create`, `physics_shape_autofit`) shipped; dedicated `shader_*` CRUD and 3D camera follow (SpringArm3D rig) still pending
 
 ## What This Plan Optimizes For
 
@@ -80,7 +80,7 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 - [x] batch execution is shipped with a clear contract
 - [x] multi-instance routing works in practice
 - [x] `script.patch` decision is made (shipped: anchor-based replace)
-- [x] test coverage and smoke coverage increase where the new runtime loop needs it (388 Python + 345 GDScript = 733 total)
+- [x] test coverage and smoke coverage increase where the new runtime loop needs it (686 Python + 991 GDScript = 1677 total)
 
 ---
 
@@ -88,10 +88,10 @@ Historical bootstrap material, architecture detail, packaging mechanics, go/no-g
 
 See [Packaging & Distribution](packaging-distribution.md) for full detail. The short version:
 
-- [x] clean install docs for Claude Code, Claude Desktop, Codex, and Antigravity (README + dock auto-configure with manual fallback)
-- [ ] PyPI / `uvx` path works reliably
+- [x] clean install docs for Claude Code, Claude Desktop, Codex, and Antigravity (README + dock auto-configure with manual fallback for 18 clients including Cursor, Cline, Roo Code, Kilo, OpenCode, Zed, Windsurf, VS Code/Insiders, Trae, Kiro, Gemini CLI, Cherry Studio, Qwen Code)
+- [x] PyPI / `uvx` path works reliably — automated via `bump-and-release.yml`; live on PyPI as `godot-ai`; `uvx --from godot-ai~=VERSION godot-ai` is the canonical user-install command. Stdio-only clients (Claude Desktop, Zed) bridge through `uvx mcp-proxy`. Stale-index retries (`--refresh`) and cache priming on self-update prevent flaky first-run failures.
 - [ ] desktop binary path is real, not aspirational
-- [~] plugin is downloadable from the Godot AssetLib — release ZIP workflow ships `godot-ai-plugin.zip` via GitHub Releases; AssetLib submission in progress; dock has self-update check
+- [x] plugin is downloadable from the Godot AssetLib — live as [asset/5050](https://godotengine.org/asset-library/asset/5050) and on the new [Godot Asset Store](https://store.godotengine.org/asset/dlight/godot-ai/); release ZIP workflow ships `godot-ai-plugin.zip` via GitHub Releases; dock self-update banner offers one-click upgrades that survive without an editor restart (`update_reload_runner.gd` handoff). Local self-update smoke (`script/local-self-update-smoke`) is the regression gate.
 - [x] CI covers Python tests, Godot-side tests, and release-smoke install paths (3 OS × 2 Python + 3 OS Godot + release-smoke). Linux CI uses `chickensoft-games/setup-godot` on `ubuntu-latest`. GDScript parse validation (`ci-check-gdscript`) runs before tests. Step timeouts prevent hangs.
 - [x] bump-and-release workflow — `gh workflow run bump-and-release.yml -f bump=patch/minor/major` bumps versions, commits, tags, and triggers release build
 - [ ] compatibility guidance is published and maintained
@@ -101,18 +101,21 @@ Release is not just packaging. It is install flow, docs, smoke coverage, and sup
 
 ---
 
-## Tool Search Friendliness
+## Tool Surface Compactness + Search Friendliness
 
-Anthropic's tool search (`tool_search_tool_regex_20251119` / `tool_search_tool_bm25_20251119`) lets clients defer loading tool definitions until the model searches for them. Our surface will grow past the 30-50 tool threshold where selection accuracy starts to degrade, so the MCP server needs to be a good citizen in that system.
+Two pressures shape the published tool surface: tool-search-aware clients want descriptive names + `defer_loading` so they can find tools by keyword, while non-search clients (Antigravity, etc.) hard-cap at ~40 tools and ignore `defer_loading`.
 
 - [x] audit every tool name for consistent, searchable namespacing (`scene_*`, `node_*`, `script_*`, `signal_*`, `input_map_*`, `editor_*`, `project_*`, `resource_*`, `filesystem_*`, etc.) — no ambiguous or one-off prefixes
 - [x] audit every tool description so it contains the keywords a user would naturally use to describe the task (e.g. `screenshot`, `viewport`, `game view`, `input action`, `autoload singleton`) in addition to the Godot term
 - [x] audit argument names and argument descriptions — tool search indexes these too
-- [x] document which tools should stay non-deferred (the 3-5 most common: likely `editor_state`, `scene_get_hierarchy`, `node_get_properties`, plus session tools) and mark the rest `defer_loading: true` in the server's MCP advertisement where the protocol permits
+- [x] document which tools should stay non-deferred (the 4 always-loaded core: `editor_state`, `scene_get_hierarchy`, `node_get_properties`, `session_activate`) and mark the rest `defer_loading: true` in the server's MCP advertisement where the protocol permits
 - [x] add a short "available tool categories" blurb to the server's MCP server instructions so clients using tool search have a map of what to search for
 - [x] verify the published surface still works for clients that do not use tool search (no tool should require a specific discovery path)
+- [x] **Collapse 118 MCP tools to ~39 via `<domain>_manage` rollups (PR #203):** each domain exposes one rolled-up tool that takes `op="<verb>"` + a `params` dict, alongside the highest-traffic verbs that stay as named tools. Schema-aware clients still see every op via the dynamic `Literal[...]` enum built by `register_manage_tool` in `src/godot_ai/tools/_meta_tool.py`. Total surface: 4 core + ~15 named verbs + ~20 rollups = ~39 tools.
+- [x] **Per-deploy tool exclusion (PR #170/#177):** `--exclude-domains audio,particle,...` CLI flag and `EditorSettings`-backed dock UI drop entire domains for tool-capped clients while keeping the core 4 alive. `tool_catalog.gd` mirrors `domains.py` so the dock can render checkboxes without round-tripping to a running server; CI keeps them in sync via `tests/unit/test_tool_domains.py`.
+- [x] **Resource-form reads (`godot://...`):** read-only URIs mirror the cheap reads (`godot://node/{path}/properties`, `godot://script/{path}`, `godot://materials`, etc.) so they don't count against the tool cap. Tool form remains for `session_id`-pinned reads.
 
-**Why this matters:** Once the tool count crosses ~50, clients that load every definition upfront start paying a real context-window tax and the model starts picking wrong tools. Writing names and descriptions with search in mind is cheap now and costly to retrofit later.
+**Why this matters:** Once the tool count crosses ~50, clients that load every definition upfront start paying a real context-window tax and the model starts picking wrong tools. The rollup collapse + `--exclude-domains` keeps every client (search-aware or not) under its budget while preserving the full op surface for schema-aware clients.
 
 ---
 
@@ -128,7 +131,7 @@ These are not the next things to do blindly. They are the extensions that matter
   - [x] `theme_create` / `theme_set_color` / `theme_set_constant` / `theme_set_font_size` / `theme_set_stylebox_flat` / `theme_apply` — Theme authoring (Godot's CSS-analog)
   - [ ] `theme_set_stylebox_texture` — 9-slice image-backed styleboxes for pixel-art UI (buttons, panels with real artwork)
   - [ ] `theme_set_font` + `theme_set_icon` — custom typography and icon sets (needs a Font / Texture2D resource handler first)
-  - [ ] `ui_set_text` convenience — one call to set `.text` across Label / Button / LineEdit / RichTextLabel without remembering per-class property quirks
+  - [x] `ui_set_text` convenience — one call to set `.text` across Label / Button / LineEdit / RichTextLabel without remembering per-class property quirks. Shipped as `ui_manage(op="set_text", ...)` (PR #40)
   - [ ] `ui_set_richtext` — set `RichTextLabel.bbcode_text` with optional character-by-character reveal (tween on `visible_characters`). Unlocks terminal-style multi-color log feeds, inline-colored damage numbers, typewriter dialogue — RichTextLabel is currently the only Control with no targeted MCP tool. *(cyberpunk-hud-demo v3.2 polish pass)*
   - [ ] `ui_animate_counter` — tween a numeric Label from an origin to a target value with an optional format string (`"{:,}"`, `"%04d"`, `"HP: %d"`). Wraps `Tween.tween_method` + per-frame label re-render — the fast-forward score / credits / HP counter pattern. *(cyberpunk-hud-demo v3.2 polish pass)*
   - [ ] `control_panel_frame_recipe` — composite sci-fi HUD frame as one recipe: polyline outline with per-corner diagonal cut flags, optional inner double-stroke, chevron header band, bottom ruler ticks, corner flags. Sibling to `control_draw_recipe`. Auto-accounts for parent PanelContainer content_margin so the outline traces the panel's outer edge (resolves friction log [#23](https://github.com/hi-godot/cyberpunk-hud-demo/blob/polish/v2-terminal/docs/friction-log-cyberpunk-hud.md)). *(cyberpunk-hud-demo v3.2 polish pass)*
@@ -139,7 +142,7 @@ These are not the next things to do blindly. They are the extensions that matter
   - [~] `node_create` now supports a `scene_path` parameter for instancing a `.tscn` as a child node. This covers the basic "instance a prefab" use case. Dedicated `scene.instantiate` (with transform overrides) and `scene.inherit` (inherited scenes) are still pending for full reusable-scene workflows.
 - `animation_player.*` / `animation_tree.*`
   - [~] AnimationPlayer scaffolding shipped (`animation_player_create`, `animation_create`, `animation_add_property_track`, `animation_add_method_track`, `animation_set_autoplay`, `animation_play`, `animation_stop`, `animation_list`, `animation_get`, `animation_create_simple` composer, `animation_delete`, `animation_validate`). `animation_create` and `animation_create_simple` support `overwrite` parameter for re-creating animations in place.
-  - [ ] **Preset helpers** — `animation_preset_fade`, `animation_preset_slide_in`, `animation_preset_shake`, `animation_preset_pulse_loop`. Thin wrappers over `animation_create_simple` that bake in the right transition / loop_mode / two-keyframe shape for each effect. Cuts a "fade in this Panel" from a 6-line tween spec to one call.
+  - [x] **Preset helpers** — `animation_preset_fade`, `animation_preset_slide`, `animation_preset_shake`, `animation_preset_pulse` shipped (PR #39) as `animation_manage(op="preset_*", ...)`. Thin wrappers over `animation_create_simple` that bake in the right transition / loop_mode / two-keyframe shape for each effect. Cuts a "fade in this Panel" from a 6-line tween spec to one call.
     - **Notes from cyberpunk-hud-demo v3.2 polish pass (2026-04-19):**
       - `animation_preset_pulse_loop` should take a `property` arg (default `scale`, but `modulate:a`, `modulate`, `self_modulate`, `position`, and arbitrary sub-paths all came up). The existing `animation_preset_pulse` is scale-only — blocks modulate-alpha breathing, color pulses, position jitter. See friction log [#15](https://github.com/hi-godot/cyberpunk-hud-demo/blob/polish/v2-terminal/docs/friction-log-cyberpunk-hud.md).
       - Five additional presets surfaced as hand-written `_process(delta) { phase += ...; queue_redraw() }` loops during the pass, each a one-call op if bundled:
@@ -228,11 +231,11 @@ tracked above.
 - [x] run/stop plus screenshot capture and basic performance sampling
 - [x] `batch.execute` and a safe partial-edit story
 - [ ] data-authoring surface for upgrades, enemies, room data, and reusable scenes
-- [~] `ui.*` for HUD and upgrade selection — anchor presets, declarative `ui_build_layout` composer, and `theme_*` authoring shipped; still need `ui_set_text`, `theme_set_font`, `theme_set_stylebox_texture` for pixel-art / custom typography
+- [~] `ui.*` for HUD and upgrade selection — anchor presets, declarative `ui_build_layout` composer, `ui_set_text`, `control_draw_recipe` runtime, and `theme_*` authoring shipped; still need `theme_set_font`, `theme_set_stylebox_texture` for pixel-art / custom typography
 - [~] `camera_*` for follow, bounds, zoom, damping — 2D surface shipped (see Tier 1 above); 3D follow / SpringArm3D rig and screen shake (`animation_preset_shake`) still pending
-- [~] `animation_player.*` shipped; `audio.*` still pending for combat readability and feel
+- [x] `animation_player.*` shipped; `audio.*` shipped (`audio_player_create` 1D/2D/3D + `set_stream`/`set_playback`/`play`/`stop`/`list` under `audio_manage`)
 - [~] `material_*` and `particle_*` shipped (see Tier 2 above); still need a dedicated `shader_*` CRUD surface for `.gdshader` editing outside of `filesystem_write_text`
-- [ ] light `physics.*` and optionally `tilemap.*` / `navigation.*` if rooms become more authored
+- [~] light `physics.*` started (`physics_shape_autofit` op under `resource_manage` derives a `Shape2D`/`Shape3D` from a target node's bounds and walks parent-siblings); still need layer/mask/body helpers, plus optional `tilemap.*` / `navigation.*` if rooms become more authored
 
 ### Versioned Milestones (v1 / v2 / v3)
 
