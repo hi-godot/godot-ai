@@ -283,7 +283,7 @@ func configure(params: Dictionary) -> Dictionary:
 			if prop_name in _NODE_TRANSFORM_KEYS:
 				msg += (
 					". Transforms live on the Node, not on the camera config — "
-					+ "use node_set_property(path=%s, properties={\"%s\": ...})" % [node_path, prop_name]
+					+ "use node_set_property(path=%s, property=\"%s\", value=...)" % [node_path, prop_name]
 				)
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, msg)
 		if prop_name == "current":
