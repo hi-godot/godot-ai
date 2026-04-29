@@ -190,6 +190,25 @@ func test_configure_empty_dict() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
+func test_configure_transform_key_suggests_node_set_property() -> void:
+	# Transform-shaped keys live on the Node, not in the camera config schema.
+	# Rejecting them must point at node_set_property explicitly — otherwise
+	# an agent falls back to fuzzy-matching the listed camera keys.
+	var r := _create("RejectPos", "3d")
+	if r.is_empty():
+		assert_true(false, "No scene open")
+		return
+	for bad_key in ["position", "rotation", "scale", "transform", "global_position"]:
+		var result := _handler.configure({
+			"camera_path": r.data.path,
+			"properties": {bad_key: 0},
+		})
+		assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+		assert_contains(result.error.message, "node_set_property",
+			"Rejecting camera_configure(%s) should suggest node_set_property" % bad_key)
+		assert_contains(result.error.message, bad_key)
+
+
 func test_configure_current_sibling_unmark_single_undo() -> void:
 	var first := _create("UndoFirst", "2d", true)
 	if first.is_empty():

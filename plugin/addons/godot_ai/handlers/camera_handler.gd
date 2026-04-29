@@ -57,6 +57,14 @@ const _KEYS_3D := [
 	"current",
 ]
 
+# Transform-shaped keys live on Node2D / Node3D, not in the camera-specific
+# schema — rejecting them without a hint sends agents searching for the wrong
+# tool.
+const _NODE_TRANSFORM_KEYS := [
+	"position", "rotation", "scale", "transform",
+	"global_position", "global_rotation", "global_scale", "global_transform",
+]
+
 const _DAMPING_MARGIN_KEYS := ["left", "top", "right", "bottom"]
 const _CURRENT_SETTLE_ATTEMPTS := 3
 const _CURRENT_SETTLE_DELAY_MSEC := 2
@@ -269,12 +277,15 @@ func configure(params: Dictionary) -> Dictionary:
 	for property in properties:
 		var prop_name: String = String(property)
 		if not (prop_name in valid_keys):
-			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
-				"Property '%s' not valid for %s. Valid: %s" % [
-					prop_name, _VALID_TYPES[type_str], ", ".join(valid_keys)
-				]
-			)
+			var msg := "Property '%s' not valid for %s. Valid: %s" % [
+				prop_name, _VALID_TYPES[type_str], ", ".join(valid_keys)
+			]
+			if prop_name in _NODE_TRANSFORM_KEYS:
+				msg += (
+					". Transforms live on the Node, not on the camera config — "
+					+ "use node_set_property(path=%s, property=\"%s\", value=...)" % [node_path, prop_name]
+				)
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, msg)
 		if prop_name == "current":
 			current_request = bool(properties[prop_name])
 			continue

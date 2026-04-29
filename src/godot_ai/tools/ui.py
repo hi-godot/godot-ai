@@ -22,6 +22,9 @@ Ops:
         center_bottom | center | left_wide | top_wide | right_wide |
         bottom_wide | vcenter_wide | hcenter_wide | full_rect.
         resize_mode: minsize | keep_width | keep_height | keep_size.
+        Target must be a Control. CanvasLayer is the canonical HUD parent
+        but is not a Control — put a Control child under the CanvasLayer and
+        apply the preset to that overlay.
   • set_text(path, text)
         Set text on a Label/Button/LineEdit/TextEdit/RichTextLabel.
   • build_layout(tree, parent_path="")
@@ -32,6 +35,9 @@ Ops:
         container spacing live under `theme_override_constants/<name>` —
         e.g. `{"theme_override_constants/separation": 8}` on a
         VBoxContainer, not `{"separation": 8}` (which errors).
+        `theme` and `anchor_preset` require a Control / Window — for a HUD,
+        nest a Control under a CanvasLayer and apply them to the Control
+        child, not the layer itself.
   • draw_recipe(path, ops, clear_existing=True)
         Attach a declarative list of vector _draw() ops to a Control —
         radar sweeps, gauges, corner brackets, crosshairs, waveforms.

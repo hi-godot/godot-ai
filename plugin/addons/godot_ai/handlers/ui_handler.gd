@@ -88,9 +88,12 @@ func set_anchor_preset(params: Dictionary) -> Dictionary:
 	if node == null:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
 	if not node is Control:
+		var got_class: String = node.get_class()
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
-			"Node %s is not a Control (got %s)" % [node_path, node.get_class()]
+			"Node %s is not a Control (got %s)%s" % [
+				node_path, got_class, _canvas_layer_overlay_hint(got_class)
+			]
 		)
 
 	var control := node as Control
@@ -307,7 +310,12 @@ func _build_subtree(spec: Dictionary) -> Dictionary:
 				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "theme path must point to a Theme resource: %s" % theme_path)
 			if not node is Control and not node is Window:
 				node.free()
-				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "theme can only be set on Control / Window (got %s)" % node_type)
+				return McpErrorCodes.make(
+					McpErrorCodes.INVALID_PARAMS,
+					"theme can only be set on Control / Window (got %s)%s" % [
+						node_type, _canvas_layer_overlay_hint(node_type)
+					]
+				)
 			node.theme = theme_res as Theme
 
 	# Anchor preset — applied before children so children inherit sensible anchors.
@@ -318,7 +326,12 @@ func _build_subtree(spec: Dictionary) -> Dictionary:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown anchor_preset: %s" % preset_name)
 		if not node is Control:
 			node.free()
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "anchor_preset requires a Control (got %s)" % node_type)
+			return McpErrorCodes.make(
+				McpErrorCodes.INVALID_PARAMS,
+				"anchor_preset requires a Control (got %s)%s" % [
+					node_type, _canvas_layer_overlay_hint(node_type)
+				]
+			)
 		var preset_value: int = _PRESETS[preset_name]
 		var margin: int = int(spec.get("anchor_margin", 0))
 		(node as Control).set_anchors_and_offsets_preset(preset_value, Control.PRESET_MODE_MINSIZE, margin)
@@ -500,3 +513,16 @@ static func _coerce_for_type(value: Variant, prop_type: int) -> Dictionary:
 				return {"ok": true, "value": NodePath(value)}
 			return {"ok": false}
 	return {"ok": true, "value": value}
+
+
+# CanvasLayer is the canonical HUD parent but isn't a Control, so applying
+# Control-only properties (theme, anchor_preset) to it is a common mistake.
+# The recovery shape is always the same: nest a Control child under the layer.
+static func _canvas_layer_overlay_hint(node_class: String) -> String:
+	if node_class != "CanvasLayer":
+		return ""
+	return (
+		". CanvasLayer is not a Control — add a Control (e.g. Panel or Control "
+		+ "with anchor_preset=full_rect) as its child and apply theme / "
+		+ "anchor_preset to that overlay."
+	)

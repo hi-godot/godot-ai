@@ -161,6 +161,27 @@ func test_set_anchor_preset_non_control_node() -> void:
 	assert_contains(result.error.message, "not a Control")
 
 
+func test_set_anchor_preset_canvas_layer_suggests_control_overlay() -> void:
+	# Applying anchor_preset directly to a CanvasLayer is the common HUD-shaped
+	# mistake. A bare "not a Control" rejection isn't actionable — the error
+	# must spell out the Control-child overlay fix.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "TestUiCanvasLayer"
+	scene_root.add_child(layer)
+	layer.owner = scene_root
+	var path := "/" + scene_root.name + "/TestUiCanvasLayer"
+	var result := _handler.set_anchor_preset({"path": path, "preset": "full_rect"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "CanvasLayer")
+	assert_contains(result.error.message, "Control")
+	scene_root.remove_child(layer)
+	layer.queue_free()
+
+
 # ----- undo -----
 
 func test_set_anchor_preset_is_undoable() -> void:
@@ -406,6 +427,32 @@ func test_build_layout_rejects_anchor_preset_on_non_control() -> void:
 		"tree": {"type": "Node", "anchor_preset": "center"}
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_build_layout_anchor_preset_on_canvas_layer_suggests_control_overlay() -> void:
+	# build_layout({type: CanvasLayer, anchor_preset: ...}) is the common
+	# HUD-shaped mistake. Reject with the Control-child fix spelled out.
+	var result := _handler.build_layout({
+		"tree": {"type": "CanvasLayer", "anchor_preset": "full_rect"}
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "CanvasLayer")
+	assert_contains(result.error.message, "Control")
+
+
+func test_build_layout_theme_on_canvas_layer_suggests_control_overlay() -> void:
+	# Same shape but for the `theme` field — must reject with the same hint.
+	var theme_path := "res://tests/_mcp_test_canvas_layer_theme.tres"
+	ResourceSaver.save(Theme.new(), theme_path)
+	var result := _handler.build_layout({
+		"tree": {"type": "CanvasLayer", "theme": theme_path}
+	})
+	# Clean up before asserting so a failed assert can't leak the .tres.
+	if FileAccess.file_exists(theme_path):
+		DirAccess.remove_absolute(theme_path)
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "CanvasLayer")
+	assert_contains(result.error.message, "Control")
 
 
 func test_build_layout_is_undoable() -> void:
