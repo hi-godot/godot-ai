@@ -16,7 +16,14 @@ const EDITOR_LOGGER_PATH := "res://addons/godot_ai/runtime/editor_logger.gd"
 ## and manage a server it didn't spawn itself. See #135.
 const MANAGED_SERVER_PID_SETTING := "godot_ai/managed_server_pid"
 const MANAGED_SERVER_VERSION_SETTING := "godot_ai/managed_server_version"
+const MANAGED_SERVER_WS_PORT_SETTING := "godot_ai/managed_server_ws_port"
 const UPDATE_RELOAD_RUNNER_SCRIPT := preload("res://addons/godot_ai/update_reload_runner.gd")
+
+## Preloaded so `_stop_server` / `force_restart_server` can reference the
+## sweep without depending on the editor's `class_name` scan running first.
+## See utils/uv_cache_cleanup.gd for what this does and why it lives next
+## to the server-stop hot path.
+const UvCacheCleanup := preload("res://addons/godot_ai/utils/uv_cache_cleanup.gd")
 
 ## Handlers — preloaded as consts instead of registered via `class_name` so
 ## they don't pollute the project-wide global scope. A user project that
@@ -83,6 +90,7 @@ var _server_pid := -1
 var _handlers: Array = []  # prevent GC of RefCounted handlers
 var _debugger_plugin: McpDebuggerPlugin
 static var _server_started_this_session := false  # guard against re-entrant spawns
+static var _resolved_ws_port := McpClientConfigurator.DEFAULT_WS_PORT
 
 ## Captured state for server-spawn supervision (see _start_server_watch).
 ## Populated only when WE spawn the process — adopt / foreign-server
@@ -126,9 +134,9 @@ func _enter_tree() -> void:
 	## builds the CLI args.
 	McpClientConfigurator.ensure_settings_registered()
 
+	_log_buffer = McpLogBuffer.new()
 	_start_server()
 
-	_log_buffer = McpLogBuffer.new()
 	_game_log_buffer = McpGameLogBuffer.new()
 	_editor_log_buffer = McpEditorLogBuffer.new()
 	_attach_editor_logger()
@@ -136,6 +144,7 @@ func _enter_tree() -> void:
 
 	_connection = McpConnection.new()
 	_connection.log_buffer = _log_buffer
+	_connection.ws_port = _resolved_ws_port
 	_connection.connect_blocked = _connection_blocked
 	_connection.connect_block_reason = _server_status_message
 	if not _connection_blocked and _spawn_state == McpSpawnState.OK:
@@ -460,6 +469,26 @@ func _start_server() -> void:
 	if _is_port_in_use(port):
 		var record := _read_managed_server_record()
 		var record_version := str(record.get("version", ""))
+		var record_ws_port := int(record.get("ws_port", 0))
+		## Trust the cached WS port from the managed record only when the
+		## record is current ownership proof — i.e. the recorded plugin
+		## version matches the installed plugin. A stale record can carry
+		## a stale resolved WS port from an older install (e.g. 9500 from
+		## a v2.2.0 record vs the current 10500 after a Windows-reservation
+		## collision pushed it). Trusting it would let the compatibility
+		## check report a bogus WS mismatch against a live current-
+		## compatible server, which the version-drift branch could then
+		## translate into killing an unrelated external process. This
+		## aligns the cached WS port with the ownership-proof gate that
+		## the stale-record-clear-on-adoption path (#259) already enforces
+		## for the PID/version fields.
+		_set_resolved_ws_port(_resolved_ws_port_for_existing_server(
+			record_ws_port,
+			record_version,
+			current_version,
+			_resolve_ws_port()
+		))
+		ws_port = _resolved_ws_port
 		var live := _probe_live_server_status(port)
 		var live_version := _verified_status_version(live)
 		var live_ws_port := _verified_status_ws_port(live)
@@ -511,6 +540,9 @@ func _start_server() -> void:
 			_set_incompatible_server(live, current_version, port)
 			push_warning(_server_status_message)
 			return
+
+	_set_resolved_ws_port(_resolve_ws_port())
+	ws_port = _resolved_ws_port
 
 	var server_cmd := McpClientConfigurator.get_server_command()
 	if server_cmd.is_empty():
@@ -575,14 +607,18 @@ func _set_incompatible_server(live: Dictionary, expected_version: String, port: 
 	_server_expected_version = expected_version
 	_server_actual_version = _live_version_for_message(live)
 	_server_dev_version_mismatch_allowed = false
-	_server_status_message = _incompatible_server_message(live, expected_version, port)
+	_server_status_message = _incompatible_server_message(live, expected_version, port, _resolved_ws_port)
 	_refresh_dock_client_statuses()
 
 
-static func _incompatible_server_message(live: Dictionary, expected_version: String, port: int) -> String:
+static func _incompatible_server_message(
+	live: Dictionary,
+	expected_version: String,
+	port: int,
+	expected_ws_port: int
+) -> String:
 	var version := _live_version_for_message(live)
 	var actual_ws_port := _live_ws_port_for_message(live)
-	var expected_ws_port := McpClientConfigurator.ws_port()
 	if not version.is_empty():
 		if actual_ws_port > 0 and actual_ws_port != expected_ws_port:
 			return (
@@ -954,7 +990,7 @@ func _respawn_with_refresh() -> void:
 	var cmd: String = server_cmd[0]
 	var args: Array[String] = []
 	args.assign(server_cmd.slice(1))
-	args.append_array(_build_server_flags(McpClientConfigurator.http_port(), McpClientConfigurator.ws_port()))
+	args.append_array(_build_server_flags(McpClientConfigurator.http_port(), _resolved_ws_port))
 	_clear_pid_file()
 	_log_buffer.log("retrying with --refresh (PyPI index may be stale)")
 	_server_pid = OS.create_process(cmd, args)
@@ -991,6 +1027,66 @@ func get_server_status() -> Dictionary:
 		"dev_version_mismatch_allowed": _server_dev_version_mismatch_allowed,
 		"connection_blocked": _connection_blocked,
 	}
+
+
+func get_resolved_ws_port() -> int:
+	return _resolved_ws_port
+
+
+func _set_resolved_ws_port(port: int) -> void:
+	_resolved_ws_port = port
+	if _connection != null:
+		_connection.ws_port = port
+
+
+func _resolve_ws_port() -> int:
+	var configured := McpClientConfigurator.ws_port()
+	var resolved := McpWindowsPortReservation.suggest_non_excluded_port(
+		configured,
+		2048,
+		McpClientConfigurator.MAX_PORT
+	)
+	if resolved != configured:
+		var message := "WebSocket port %d is reserved by Windows; using %d" % [configured, resolved]
+		print("MCP | %s" % message)
+		if _log_buffer != null:
+			_log_buffer.log(message)
+	return resolved
+
+
+## Choose the WS port to expect when a server is already bound to our
+## HTTP port. Returns the cached `ws_port` from the managed record only
+## when that record is current ownership proof (its recorded plugin
+## version matches the installed plugin); otherwise returns the freshly
+## resolved port from current settings + Windows reservation logic.
+##
+## Pure helper so the ownership-proof gate is testable without spinning
+## up an editor + a live server. See the call site in `_start_server`
+## for the full rationale.
+static func _resolved_ws_port_for_existing_server(
+	record_ws_port: int,
+	record_version: String,
+	current_version: String,
+	fresh_resolved: int
+) -> int:
+	if record_ws_port <= 0:
+		return fresh_resolved
+	if current_version.is_empty() or record_version != current_version:
+		return fresh_resolved
+	return record_ws_port
+
+
+static func _resolve_ws_port_from_output(
+	configured_port: int,
+	netsh_output: String,
+	span: int = 2048
+) -> int:
+	return McpWindowsPortReservation.suggest_non_excluded_port_from_output(
+		netsh_output,
+		configured_port,
+		span,
+		McpClientConfigurator.MAX_PORT
+	)
 
 
 func _is_port_in_use(port: int) -> bool:
@@ -1035,18 +1131,19 @@ func _find_pid_on_port(port: int) -> int:
 	return pids[0] if not pids.is_empty() else 0
 
 
-## POSIX-only sibling of `_find_pid_on_port` — returns every PID
-## bound LISTEN on `port`, so callers that need to tear down a process
-## group (e.g. `force_restart_server`) can reach both the reloader
-## parent and the worker. Windows netstat parser only ever returns one
-## LISTENER row per port so callers can skip this there.
+## Sibling of `_find_pid_on_port` — returns every PID bound LISTEN on
+## `port`, so callers that need to tear down a process group (e.g.
+## `force_restart_server`) can reach both the reloader parent and the
+## worker. On Windows, stale uvicorn parents can leave multiple netstat
+## listener rows for the same port, so collect every matching row there too.
 func _find_all_pids_on_port(port: int) -> Array[int]:
 	if OS.get_name() == "Windows":
-		var pids: Array[int] = []
-		var one := _find_pid_on_port(port)
-		if one > 0:
-			pids.append(one)
-		return pids
+		var output: Array = []
+		var exit_code := OS.execute("netstat", ["-ano"], output, true)
+		if exit_code != 0 or output.is_empty():
+			var empty: Array[int] = []
+			return empty
+		return _parse_windows_netstat_pids(str(output[0]), port)
 	var output: Array = []
 	var exit_code := OS.execute("lsof", ["-ti:%d" % port, "-sTCP:LISTEN"], output, true)
 	if exit_code != 0 or output.is_empty():
@@ -1064,6 +1161,17 @@ static func _parse_lsof_pids(raw: String) -> Array[int]:
 		var stripped := line.strip_edges()
 		if stripped.is_valid_int():
 			pids.append(int(stripped))
+	return pids
+
+
+static func _parse_pid_lines(raw: String) -> Array[int]:
+	var pids: Array[int] = []
+	for line in raw.strip_edges().split("\n", false):
+		var stripped := line.strip_edges()
+		if stripped.is_valid_int():
+			var pid := int(stripped)
+			if pid > 0 and not pids.has(pid):
+				pids.append(pid)
 	return pids
 
 
@@ -1093,6 +1201,12 @@ func _find_managed_pid(port: int) -> int:
 ## the earlier bug; a remote address happening to include `:8000` would
 ## false-positive.
 static func _parse_windows_netstat_pid(stdout: String, port: int) -> int:
+	var pids := _parse_windows_netstat_pids(stdout, port)
+	return pids[0] if not pids.is_empty() else 0
+
+
+static func _parse_windows_netstat_pids(stdout: String, port: int) -> Array[int]:
+	var pids: Array[int] = []
 	var port_suffix := ":%d" % port
 	for line in stdout.split("\n"):
 		var s := line.strip_edges()
@@ -1108,8 +1222,10 @@ static func _parse_windows_netstat_pid(stdout: String, port: int) -> int:
 			continue
 		var pid_str := fields[fields.size() - 1]
 		if pid_str.is_valid_int():
-			return int(pid_str)
-	return 0
+			var pid := int(pid_str)
+			if pid > 0 and not pids.has(pid):
+				pids.append(pid)
+	return pids
 
 
 ## True if any row in a Windows `netstat -ano` dump is a LISTENING
@@ -1175,13 +1291,13 @@ func _stop_server() -> void:
 	## falling back to netstat/lsof if the file is missing.
 	var port := McpClientConfigurator.http_port()
 	var killed: Array[int] = []
-	if _pid_alive(_server_pid):
-		OS.kill(_server_pid)
-		killed.append(_server_pid)
+	var candidates: Array[int] = [_server_pid]
 	var real_pid := _find_managed_pid(port)
-	if real_pid > 0 and not killed.has(real_pid):
-		OS.kill(real_pid)
-		killed.append(real_pid)
+	if real_pid > 0:
+		candidates.append(real_pid)
+	for pid in _find_all_pids_on_port(port):
+		candidates.append(pid)
+	killed = _kill_processes_and_windows_spawn_children(candidates)
 	if not killed.is_empty():
 		print("MCP | stopped server (PID %s)" % str(killed))
 	_server_pid = -1
@@ -1196,6 +1312,12 @@ func _stop_server() -> void:
 	## retries the kill with the current (fixed) parser. See issue filed
 	## as follow-up to PR #159.
 	_finalize_stop_if_port_free(port)
+	## Sweep stale `uvx` build venvs now that the server's hard-linked
+	## `_pydantic_core.pyd` mapping is gone. Without this, the next
+	## `uvx mcp-proxy` invocation from Claude Desktop's MCP launcher fails
+	## to clean its build dir and the MCP transport never starts. See
+	## `utils/uv_cache_cleanup.gd` for the full hard-link explanation.
+	UvCacheCleanup.purge_stale_builds()
 
 
 ## Clear the managed-server record and pid-file only if `port` is free.
@@ -1283,14 +1405,17 @@ func _wait_for_port_free(port: int, timeout_s: float) -> void:
 func _read_managed_server_record() -> Dictionary:
 	var es := EditorInterface.get_editor_settings()
 	if es == null:
-		return {"pid": 0, "version": ""}
+		return {"pid": 0, "version": "", "ws_port": 0}
 	var pid: int = 0
 	if es.has_setting(MANAGED_SERVER_PID_SETTING):
 		pid = int(es.get_setting(MANAGED_SERVER_PID_SETTING))
 	var version: String = ""
 	if es.has_setting(MANAGED_SERVER_VERSION_SETTING):
 		version = str(es.get_setting(MANAGED_SERVER_VERSION_SETTING))
-	return {"pid": pid, "version": version}
+	var ws_port: int = 0
+	if es.has_setting(MANAGED_SERVER_WS_PORT_SETTING):
+		ws_port = int(es.get_setting(MANAGED_SERVER_WS_PORT_SETTING))
+	return {"pid": pid, "version": version, "ws_port": ws_port}
 
 
 func _write_managed_server_record(pid: int, version: String) -> void:
@@ -1299,6 +1424,7 @@ func _write_managed_server_record(pid: int, version: String) -> void:
 		return
 	es.set_setting(MANAGED_SERVER_PID_SETTING, pid)
 	es.set_setting(MANAGED_SERVER_VERSION_SETTING, version)
+	es.set_setting(MANAGED_SERVER_WS_PORT_SETTING, _resolved_ws_port)
 
 
 func _clear_managed_server_record() -> void:
@@ -1309,6 +1435,8 @@ func _clear_managed_server_record() -> void:
 		es.set_setting(MANAGED_SERVER_PID_SETTING, 0)
 	if es.has_setting(MANAGED_SERVER_VERSION_SETTING):
 		es.set_setting(MANAGED_SERVER_VERSION_SETTING, "")
+	if es.has_setting(MANAGED_SERVER_WS_PORT_SETTING):
+		es.set_setting(MANAGED_SERVER_WS_PORT_SETTING, 0)
 
 
 ## Prepare for a plugin-self-update reload cycle: kill the server process
@@ -1376,11 +1504,16 @@ func force_restart_server() -> void:
 	## reloader parent AND a worker child — killing only one (or zero,
 	## if the single-pid parse fell over on multi-line lsof output) leaves
 	## the other holding the port past `_wait_for_port_free`'s window.
-	for pid in _find_all_pids_on_port(port):
-		OS.kill(pid)
+	_kill_processes_and_windows_spawn_children(_find_all_pids_on_port(port))
 	_clear_managed_server_record()
 	_clear_pid_file()
 	_wait_for_port_free(port, 5.0)
+	## Same rationale as `_stop_server`: the server child python just
+	## released its `pydantic_core` mapping, so this is the only window in
+	## which the hard-linked copies under `builds-v0\.tmp*` are deletable.
+	## Sweep before respawning so the upcoming `uvx mcp-proxy` build doesn't
+	## inherit the same cleanup-failure path that triggered the restart.
+	UvCacheCleanup.purge_stale_builds()
 	_server_started_this_session = false
 	_server_pid = -1
 	_start_server()
@@ -1405,12 +1538,13 @@ func start_dev_server() -> void:
 			return
 
 		var cmd: String = server_cmd[0]
+		_set_resolved_ws_port(_resolve_ws_port())
 		var inner_args: Array[String] = []
 		inner_args.assign(server_cmd.slice(1))
 		inner_args.append_array([
 			"--transport", "streamable-http",
 			"--port", str(McpClientConfigurator.http_port()),
-			"--ws-port", str(McpClientConfigurator.ws_port()),
+			"--ws-port", str(_resolved_ws_port),
 			"--reload",
 		])
 
@@ -1451,14 +1585,61 @@ func stop_dev_server() -> void:
 	var output: Array = []
 	var port := McpClientConfigurator.http_port()
 	if OS.get_name() == "Windows":
-		# Find PID listening on port, then kill
-		var exit_code := OS.execute("cmd", ["/c", "for /f \"tokens=5\" %%a in ('netstat -ano ^| findstr :%d ^| findstr LISTENING') do taskkill /PID %%a /F" % port], output, true)
-		if exit_code == 0:
+		var killed := _kill_processes_and_windows_spawn_children(_find_all_pids_on_port(port))
+		if not killed.is_empty():
 			print("MCP | stopped dev server on port %d" % port)
 	else:
 		var exit_code := OS.execute("bash", ["-c", "lsof -ti:%d -sTCP:LISTEN | xargs kill 2>/dev/null" % port], output, true)
 		if exit_code == 0:
 			print("MCP | stopped dev server on port %d" % port)
+
+
+func _kill_processes_and_windows_spawn_children(pids: Array[int]) -> Array[int]:
+	var unique: Array[int] = []
+	for pid in pids:
+		if pid > 0 and not unique.has(pid):
+			unique.append(pid)
+	if OS.get_name() == "Windows":
+		for child_pid in _find_windows_spawn_children(unique):
+			if not unique.has(child_pid):
+				unique.append(child_pid)
+	var killed: Array[int] = []
+	for pid in unique:
+		if OS.get_name() == "Windows":
+			var output: Array = []
+			var exit_code := OS.execute("taskkill", ["/PID", str(pid), "/T", "/F"], output, true)
+			if exit_code == 0 or not _pid_alive(pid):
+				killed.append(pid)
+		else:
+			OS.kill(pid)
+			killed.append(pid)
+	return killed
+
+
+func _find_windows_spawn_children(parent_pids: Array[int]) -> Array[int]:
+	if parent_pids.is_empty():
+		var empty: Array[int] = []
+		return empty
+	var found: Array[int] = []
+	for parent_pid in parent_pids:
+		var output: Array = []
+		var script := (
+			"Get-CimInstance Win32_Process | "
+			+ "Where-Object { $_.CommandLine -like '*spawn_main(parent_pid=%d*' } | "
+			+ "ForEach-Object { $_.ProcessId }"
+		) % parent_pid
+		var exit_code := OS.execute(
+			"powershell.exe",
+			["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+			output,
+			true
+		)
+		if exit_code != 0 or output.is_empty():
+			continue
+		for pid in _parse_pid_lines(str(output[0])):
+			if not found.has(pid):
+				found.append(pid)
+	return found
 
 
 func is_dev_server_running() -> bool:

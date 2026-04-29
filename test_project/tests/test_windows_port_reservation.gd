@@ -83,6 +83,57 @@ func test_parse_empty_input_returns_false() -> void:
 	assert_false(McpWindowsPortReservation.parse_excluded("\n\n", 8000))
 
 
+func test_parse_excluded_ranges_extracts_ranges() -> void:
+	var ranges := McpWindowsPortReservation.parse_excluded_ranges(SAMPLE_NETSH_OUTPUT)
+	assert_true(ranges.has(Vector2i(80, 80)), "single-port range should be preserved")
+	assert_true(ranges.has(Vector2i(8000, 8099)), "multi-port range should be preserved")
+	assert_true(ranges.has(Vector2i(50000, 50059)), "high range should be preserved")
+
+
+# ----- suggest_non_excluded_port_from_output -----
+
+func test_suggest_non_excluded_port_skips_reserved_ranges() -> void:
+	var output := """
+Protocol tcp Port Exclusion Ranges
+
+Start Port    End Port
+----------    --------
+    9491          9590
+    9591          9690
+    9691          9790
+
+* - Administered port exclusions.
+"""
+	assert_eq(
+		McpWindowsPortReservation.suggest_non_excluded_port_from_output(output, 9501, 2048),
+		9791,
+		"fallback should skip every reserved range that follows the configured WS port",
+	)
+
+
+func test_suggest_non_excluded_port_returns_start_when_available() -> void:
+	assert_eq(
+		McpWindowsPortReservation.suggest_non_excluded_port_from_output(SAMPLE_NETSH_OUTPUT, 8100, 100),
+		8100,
+		"unreserved start port should be returned unchanged",
+	)
+
+
+func test_suggest_non_excluded_port_falls_back_when_span_exhausted() -> void:
+	var output := """
+Protocol tcp Port Exclusion Ranges
+
+Start Port    End Port
+----------    --------
+    9501          9503
+"""
+	assert_eq(
+		McpWindowsPortReservation.suggest_non_excluded_port_from_output(output, 9501, 3),
+		9501,
+		"if every candidate is reserved, preserve the existing fallback behavior",
+	)
+
+
 # ----- hint_from_output -----
 
 func test_hint_matches_winerror_10013() -> void:

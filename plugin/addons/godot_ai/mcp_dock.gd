@@ -891,7 +891,10 @@ func _on_apply_new_port() -> void:
 func _refresh_server_label() -> void:
 	if _server_label == null:
 		return
-	_server_label.text = "WS: %d  HTTP: %d" % [McpClientConfigurator.ws_port(), McpClientConfigurator.http_port()]
+	var ws_port := McpClientConfigurator.ws_port()
+	if _plugin != null and _plugin.has_method("get_resolved_ws_port"):
+		ws_port = int(_plugin.get_resolved_ws_port())
+	_server_label.text = "WS: %d  HTTP: %d" % [ws_port, McpClientConfigurator.http_port()]
 
 
 func _update_log() -> void:

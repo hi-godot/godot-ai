@@ -39,6 +39,12 @@ static func is_port_excluded(port: int) -> bool:
 ##
 ##   * - Administered port exclusions.
 static func parse_excluded(text: String, port: int) -> bool:
+	return _ranges_contain(parse_excluded_ranges(text), port)
+
+
+## Parse the `netsh` excluded-port-range output once into inclusive ranges.
+static func parse_excluded_ranges(text: String) -> Array[Vector2i]:
+	var ranges: Array[Vector2i] = []
 	for line in text.split("\n"):
 		var trimmed := line.strip_edges()
 		if trimmed.is_empty() or trimmed.begins_with("-") or trimmed.begins_with("*"):
@@ -50,9 +56,46 @@ static func parse_excluded(text: String, port: int) -> bool:
 			continue
 		var start_p := int(parts[0])
 		var end_p := int(parts[1])
-		if port >= start_p and port <= end_p:
+		ranges.append(Vector2i(start_p, end_p))
+	return ranges
+
+
+static func _ranges_contain(ranges: Array[Vector2i], port: int) -> bool:
+	for r in ranges:
+		if port >= r.x and port <= r.y:
 			return true
 	return false
+
+
+## Return the first port in `start`..`start+span-1` that is not excluded by
+## Windows' port reservation table. Runs `netsh` once, unlike probing every
+## candidate with `is_port_excluded`, which keeps fallback port selection cheap
+## when Hyper-V / WSL2 / Docker reserve many adjacent ranges.
+static func suggest_non_excluded_port(start: int, span: int = 2048, max_port: int = 65535) -> int:
+	if OS.get_name() != "Windows":
+		return start
+	var output: Array = []
+	var exit_code := OS.execute("netsh", NETSH_ARGS, output, true)
+	if exit_code != 0 or output.is_empty():
+		return start
+	return suggest_non_excluded_port_from_output(str(output[0]), start, span, max_port)
+
+
+## Pure parser-backed helper for tests and for `suggest_non_excluded_port`.
+static func suggest_non_excluded_port_from_output(text: String, start: int, span: int = 2048, max_port: int = 65535) -> int:
+	var ranges := parse_excluded_ranges(text)
+	var limit := mini(start + span - 1, max_port)
+	var p := start
+	while p <= limit:
+		var advanced := false
+		for r in ranges:
+			if p >= r.x and p <= r.y:
+				p = r.y + 1
+				advanced = true
+				break
+		if not advanced:
+			return p
+	return start
 
 
 ## User-facing hint for the proactive port-reservation detection path —
