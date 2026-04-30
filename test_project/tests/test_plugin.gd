@@ -89,6 +89,39 @@ func test_get_server_command_default_omits_refresh() -> void:
 		assert_ne(token, "--refresh", "default get_server_command must never include --refresh")
 
 
+func test_headless_launch_disables_mcp_by_default() -> void:
+	assert_true(
+		GodotAiPlugin._mcp_disabled_for_headless(PackedStringArray(["--headless", "--editor"]), "", ""),
+		"--headless must disable MCP startup by default"
+	)
+	assert_true(
+		GodotAiPlugin._mcp_disabled_for_headless(PackedStringArray(["--editor"]), "headless", ""),
+		"headless DisplayServer must disable MCP startup by default"
+	)
+
+
+func test_headless_launch_allows_explicit_override() -> void:
+	assert_false(
+		GodotAiPlugin._mcp_disabled_for_headless(PackedStringArray(["--headless", "--editor"]), "headless", "1"),
+		"GODOT_AI_ALLOW_HEADLESS=1 must preserve CI/headless MCP sessions"
+	)
+	assert_false(
+		GodotAiPlugin._mcp_disabled_for_headless(PackedStringArray(["--headless", "--editor"]), "headless", "true"),
+		"truthy GODOT_AI_ALLOW_HEADLESS values must preserve MCP startup"
+	)
+
+
+func test_display_driver_headless_args_disable_mcp() -> void:
+	assert_true(
+		GodotAiPlugin._mcp_disabled_for_headless(PackedStringArray(["--display-driver", "headless"]), "", ""),
+		"--display-driver headless must disable MCP startup"
+	)
+	assert_true(
+		GodotAiPlugin._mcp_disabled_for_headless(PackedStringArray(["--display-driver=headless"]), "", ""),
+		"--display-driver=headless must disable MCP startup"
+	)
+
+
 func test_resolve_ws_port_from_output_skips_reserved_configured_port() -> void:
 	var output := """
 Protocol tcp Port Exclusion Ranges

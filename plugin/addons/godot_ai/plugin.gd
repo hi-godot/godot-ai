@@ -25,36 +25,6 @@ const UPDATE_RELOAD_RUNNER_SCRIPT := preload("res://addons/godot_ai/update_reloa
 ## to the server-stop hot path.
 const UvCacheCleanup := preload("res://addons/godot_ai/utils/uv_cache_cleanup.gd")
 
-## Handlers — preloaded as consts instead of registered via `class_name` so
-## they don't pollute the project-wide global scope. A user project that
-## happens to define its own `InputHandler`, `SceneHandler`, etc. would
-## otherwise hard-error on plugin enable.
-const EditorHandler := preload("res://addons/godot_ai/handlers/editor_handler.gd")
-const SceneHandler := preload("res://addons/godot_ai/handlers/scene_handler.gd")
-const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
-const ProjectHandler := preload("res://addons/godot_ai/handlers/project_handler.gd")
-const ClientHandler := preload("res://addons/godot_ai/handlers/client_handler.gd")
-const ScriptHandler := preload("res://addons/godot_ai/handlers/script_handler.gd")
-const ResourceHandler := preload("res://addons/godot_ai/handlers/resource_handler.gd")
-const FilesystemHandler := preload("res://addons/godot_ai/handlers/filesystem_handler.gd")
-const SignalHandler := preload("res://addons/godot_ai/handlers/signal_handler.gd")
-const AutoloadHandler := preload("res://addons/godot_ai/handlers/autoload_handler.gd")
-const InputHandler := preload("res://addons/godot_ai/handlers/input_handler.gd")
-const TestHandler := preload("res://addons/godot_ai/handlers/test_handler.gd")
-const BatchHandler := preload("res://addons/godot_ai/handlers/batch_handler.gd")
-const UiHandler := preload("res://addons/godot_ai/handlers/ui_handler.gd")
-const ThemeHandler := preload("res://addons/godot_ai/handlers/theme_handler.gd")
-const AnimationHandler := preload("res://addons/godot_ai/handlers/animation_handler.gd")
-const MaterialHandler := preload("res://addons/godot_ai/handlers/material_handler.gd")
-const ParticleHandler := preload("res://addons/godot_ai/handlers/particle_handler.gd")
-const CameraHandler := preload("res://addons/godot_ai/handlers/camera_handler.gd")
-const AudioHandler := preload("res://addons/godot_ai/handlers/audio_handler.gd")
-const PhysicsShapeHandler := preload("res://addons/godot_ai/handlers/physics_shape_handler.gd")
-const EnvironmentHandler := preload("res://addons/godot_ai/handlers/environment_handler.gd")
-const TextureHandler := preload("res://addons/godot_ai/handlers/texture_handler.gd")
-const CurveHandler := preload("res://addons/godot_ai/handlers/curve_handler.gd")
-const ControlDrawRecipeHandler := preload("res://addons/godot_ai/handlers/control_draw_recipe_handler.gd")
-
 ## The Python server writes its own PID here on startup (passed as
 ## `--pid-file`) and unlinks on clean exit. Deterministic replacement
 ## for scraping `netstat -ano` to find the port owner — especially on
@@ -121,6 +91,7 @@ var _server_dev_version_mismatch_allowed := false
 var _connection_blocked := false
 var _awaiting_server_version := false
 var _server_version_deadline_ms: int = 0
+var _headless_disabled := false
 
 
 func _enter_tree() -> void:
@@ -128,6 +99,11 @@ func _enter_tree() -> void:
 	## it off until `_watch_for_adoption_confirmation` arms it, so the
 	## plugin has zero per-frame cost in the common case.
 	set_process(false)
+
+	if _mcp_disabled_for_headless_launch():
+		_headless_disabled = true
+		print("MCP | plugin disabled in headless mode")
+		return
 
 	## Register port overrides before spawn so `http_port()` / `ws_port()`
 	## return the user's configured values (if any) when `_start_server`
@@ -154,31 +130,61 @@ func _enter_tree() -> void:
 	add_debugger_plugin(_debugger_plugin)
 	_ensure_game_helper_autoload()
 
-	var editor_handler := EditorHandler.new(_log_buffer, _connection, _debugger_plugin, _game_log_buffer, _editor_log_buffer)
-	var scene_handler := SceneHandler.new(_connection)
-	var node_handler := NodeHandler.new(get_undo_redo())
-	var project_handler := ProjectHandler.new(_connection)
-	var client_handler := ClientHandler.new()
-	var script_handler := ScriptHandler.new(get_undo_redo(), _connection)
-	var resource_handler := ResourceHandler.new(get_undo_redo())
-	var filesystem_handler := FilesystemHandler.new()
-	var signal_handler := SignalHandler.new(get_undo_redo())
-	var autoload_handler := AutoloadHandler.new()
-	var input_handler := InputHandler.new()
-	var test_handler := TestHandler.new(get_undo_redo(), _log_buffer)
-	var batch_handler := BatchHandler.new(_dispatcher, get_undo_redo())
-	var ui_handler := UiHandler.new(get_undo_redo())
-	var theme_handler := ThemeHandler.new(get_undo_redo())
-	var animation_handler := AnimationHandler.new(get_undo_redo())
-	var material_handler := MaterialHandler.new(get_undo_redo())
-	var particle_handler := ParticleHandler.new(get_undo_redo())
-	var camera_handler := CameraHandler.new(get_undo_redo())
-	var audio_handler := AudioHandler.new(get_undo_redo())
-	var physics_shape_handler := PhysicsShapeHandler.new(get_undo_redo())
-	var environment_handler := EnvironmentHandler.new(get_undo_redo())
-	var texture_handler := TextureHandler.new(get_undo_redo())
-	var curve_handler := CurveHandler.new(get_undo_redo())
-	var control_draw_recipe_handler := ControlDrawRecipeHandler.new(get_undo_redo())
+	## Handlers are loaded after the headless guard instead of as top-level
+	## preloads so `godot --headless` does not parse the full tool graph.
+	## Keep these script-local rather than `class_name` to avoid colliding with
+	## user-project classes named InputHandler, SceneHandler, etc.
+	var EditorHandler = preload("res://addons/godot_ai/handlers/editor_handler.gd")
+	var SceneHandler = preload("res://addons/godot_ai/handlers/scene_handler.gd")
+	var NodeHandler = preload("res://addons/godot_ai/handlers/node_handler.gd")
+	var ProjectHandler = preload("res://addons/godot_ai/handlers/project_handler.gd")
+	var ClientHandler = preload("res://addons/godot_ai/handlers/client_handler.gd")
+	var ScriptHandler = preload("res://addons/godot_ai/handlers/script_handler.gd")
+	var ResourceHandler = preload("res://addons/godot_ai/handlers/resource_handler.gd")
+	var FilesystemHandler = preload("res://addons/godot_ai/handlers/filesystem_handler.gd")
+	var SignalHandler = preload("res://addons/godot_ai/handlers/signal_handler.gd")
+	var AutoloadHandler = preload("res://addons/godot_ai/handlers/autoload_handler.gd")
+	var InputHandler = preload("res://addons/godot_ai/handlers/input_handler.gd")
+	var TestHandler = preload("res://addons/godot_ai/handlers/test_handler.gd")
+	var BatchHandler = preload("res://addons/godot_ai/handlers/batch_handler.gd")
+	var UiHandler = preload("res://addons/godot_ai/handlers/ui_handler.gd")
+	var ThemeHandler = preload("res://addons/godot_ai/handlers/theme_handler.gd")
+	var AnimationHandler = preload("res://addons/godot_ai/handlers/animation_handler.gd")
+	var MaterialHandler = preload("res://addons/godot_ai/handlers/material_handler.gd")
+	var ParticleHandler = preload("res://addons/godot_ai/handlers/particle_handler.gd")
+	var CameraHandler = preload("res://addons/godot_ai/handlers/camera_handler.gd")
+	var AudioHandler = preload("res://addons/godot_ai/handlers/audio_handler.gd")
+	var PhysicsShapeHandler = preload("res://addons/godot_ai/handlers/physics_shape_handler.gd")
+	var EnvironmentHandler = preload("res://addons/godot_ai/handlers/environment_handler.gd")
+	var TextureHandler = preload("res://addons/godot_ai/handlers/texture_handler.gd")
+	var CurveHandler = preload("res://addons/godot_ai/handlers/curve_handler.gd")
+	var ControlDrawRecipeHandler = preload("res://addons/godot_ai/handlers/control_draw_recipe_handler.gd")
+
+	var editor_handler = EditorHandler.new(_log_buffer, _connection, _debugger_plugin, _game_log_buffer, _editor_log_buffer)
+	var scene_handler = SceneHandler.new(_connection)
+	var node_handler = NodeHandler.new(get_undo_redo())
+	var project_handler = ProjectHandler.new(_connection)
+	var client_handler = ClientHandler.new()
+	var script_handler = ScriptHandler.new(get_undo_redo(), _connection)
+	var resource_handler = ResourceHandler.new(get_undo_redo())
+	var filesystem_handler = FilesystemHandler.new()
+	var signal_handler = SignalHandler.new(get_undo_redo())
+	var autoload_handler = AutoloadHandler.new()
+	var input_handler = InputHandler.new()
+	var test_handler = TestHandler.new(get_undo_redo(), _log_buffer)
+	var batch_handler = BatchHandler.new(_dispatcher, get_undo_redo())
+	var ui_handler = UiHandler.new(get_undo_redo())
+	var theme_handler = ThemeHandler.new(get_undo_redo())
+	var animation_handler = AnimationHandler.new(get_undo_redo())
+	var material_handler = MaterialHandler.new(get_undo_redo())
+	var particle_handler = ParticleHandler.new(get_undo_redo())
+	var camera_handler = CameraHandler.new(get_undo_redo())
+	var audio_handler = AudioHandler.new(get_undo_redo())
+	var physics_shape_handler = PhysicsShapeHandler.new(get_undo_redo())
+	var environment_handler = EnvironmentHandler.new(get_undo_redo())
+	var texture_handler = TextureHandler.new(get_undo_redo())
+	var curve_handler = CurveHandler.new(get_undo_redo())
+	var control_draw_recipe_handler = ControlDrawRecipeHandler.new(get_undo_redo())
 	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler, ui_handler, theme_handler, animation_handler, material_handler, particle_handler, camera_handler, audio_handler, physics_shape_handler, environment_handler, texture_handler, curve_handler, control_draw_recipe_handler]
 
 	_dispatcher.register("get_editor_state", editor_handler.get_editor_state)
@@ -320,6 +326,11 @@ func _enter_tree() -> void:
 
 
 func _exit_tree() -> void:
+	if _headless_disabled:
+		_server_started_this_session = false
+		_headless_disabled = false
+		return
+
 	## Outer-to-inner teardown. Dispatcher Callables hold RefCounted handlers
 	## alive past the point where Godot reloads their class_name scripts — the
 	## first post-reload call into a typed-array-holding handler (e.g.
@@ -407,7 +418,43 @@ func _detach_editor_logger() -> void:
 ## framebuffer captures over EngineDebugger messages. Removed on
 ## _disable_plugin so disabling the plugin leaves project.godot clean.
 func _enable_plugin() -> void:
+	if _mcp_disabled_for_headless_launch():
+		return
 	_ensure_game_helper_autoload()
+
+
+static func _mcp_disabled_for_headless_launch() -> bool:
+	return _mcp_disabled_for_headless(
+		OS.get_cmdline_args(),
+		DisplayServer.get_name(),
+		OS.get_environment("GODOT_AI_ALLOW_HEADLESS")
+	)
+
+
+static func _mcp_disabled_for_headless(args: PackedStringArray, display_name: String, allow_value: String) -> bool:
+	if _env_truthy(allow_value):
+		return false
+	return _args_request_headless(args) or display_name.to_lower() == "headless"
+
+
+static func _args_request_headless(args: PackedStringArray) -> bool:
+	for i in range(args.size()):
+		var arg := args[i]
+		if arg == "--headless":
+			return true
+		if arg == "--display-driver" and i + 1 < args.size() and args[i + 1] == "headless":
+			return true
+		if arg.begins_with("--display-driver=") and arg.get_slice("=", 1) == "headless":
+			return true
+	return false
+
+
+static func _env_truthy(value: String) -> bool:
+	match value.strip_edges().to_lower():
+		"1", "true", "yes", "on":
+			return true
+		_:
+			return false
 
 
 func _disable_plugin() -> void:

@@ -143,7 +143,7 @@ jobs:
           bash script/ci-check-gdscript /tmp/godot-import.log
 
       - name: Start Godot editor (headless)
-        run: godot --headless --path test_project --editor &
+        run: GODOT_AI_ALLOW_HEADLESS=1 godot --headless --path test_project --editor &
 
       - name: Run handler tests
         timeout-minutes: 3
@@ -308,7 +308,7 @@ jobs:
       - name: Start Godot editor (headless)
         run: |
           godot --headless --path test_project --import || true
-          godot --headless --path test_project --editor &
+          GODOT_AI_ALLOW_HEADLESS=1 godot --headless --path test_project --editor &
 
       - name: Run handler tests
         run: bash script/ci-godot-tests
@@ -351,7 +351,7 @@ jobs:
         shell: bash
         run: |
           godot --headless --path test_project --import || true
-          godot --headless --path test_project --editor &
+          GODOT_AI_ALLOW_HEADLESS=1 godot --headless --path test_project --editor &
 
       - name: Run handler tests
         shell: bash
