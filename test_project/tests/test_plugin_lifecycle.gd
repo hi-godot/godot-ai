@@ -300,6 +300,159 @@ func test_commandline_fingerprint_is_case_insensitive_and_requires_flag() -> voi
 		GodotAiPlugin._commandline_is_godot_ai_server("C:/Python/python.exe -m godot_ai"),
 		"brand alone is not enough ownership proof"
 	)
+	assert_false(
+		GodotAiPlugin._commandline_is_godot_ai_server(""),
+		"empty cmdline (lookup failure) must never be accepted as proof"
+	)
+
+
+func test_commandline_fingerprint_ignores_brand_in_pidfile_path() -> void:
+	## Regression: the pidfile path itself is `<user>/godot_ai_server.pid`,
+	## so a substring brand search would falsely match an unrelated process
+	## that happens to reference a similarly-named pidfile. The brand must
+	## come from somewhere outside the --pid-file value.
+	assert_false(
+		GodotAiPlugin._commandline_is_godot_ai_server(
+			"someprogram --pid-file /var/run/godot_ai_server.pid --transport tcp"
+		),
+		"brand in pidfile path alone must not satisfy ownership proof"
+	)
+	assert_false(
+		GodotAiPlugin._commandline_is_godot_ai_server(
+			"someprogram --pid-file=/var/run/godot_ai_server.pid --transport tcp"
+		),
+		"--pid-file=<value> form must also strip the path before brand search"
+	)
+	assert_true(
+		GodotAiPlugin._commandline_is_godot_ai_server(
+			"/usr/bin/python -m godot_ai --transport streamable-http --pid-file /tmp/godot_ai_server.pid"
+		),
+		"real server invocation has brand outside the pidfile value, must still match"
+	)
+
+
+func test_strip_pidfile_value_handles_space_and_equals_forms() -> void:
+	## Whitespace form: keep the bare flag, drop the value.
+	assert_eq(
+		GodotAiPlugin._strip_pidfile_value("foo --pid-file /tmp/x.pid bar"),
+		"foo --pid-file  bar"
+	)
+	## Equals form: same outcome.
+	assert_eq(
+		GodotAiPlugin._strip_pidfile_value("foo --pid-file=/tmp/x.pid bar"),
+		"foo --pid-file  bar"
+	)
+	## No --pid-file flag: returned unchanged.
+	assert_eq(
+		GodotAiPlugin._strip_pidfile_value("foo --transport tcp"),
+		"foo --transport tcp"
+	)
+
+
+func test_pid_cmdline_rejects_sentinel_pids() -> void:
+	## Init/PID 1 and pid 0 must never be considered candidates for kill.
+	## A stale pidfile that somehow contains 0 or 1 has to bail before any
+	## OS lookup, otherwise we'd risk targeting init on POSIX.
+	var plugin := GodotAiPlugin.new()
+	assert_false(plugin._pid_cmdline_is_godot_ai(0), "pid 0 must never match")
+	assert_false(plugin._pid_cmdline_is_godot_ai(1), "pid 1 (init) must never match")
+	plugin.free()
+
+
+func test_posix_pid_commandline_reads_procfs_despite_zero_length() -> void:
+	## procfs pseudo-files (/proc/<pid>/cmdline) report length 0 even though
+	## they have content. If we sized the read by `get_length()` we'd get
+	## an empty string back and the legacy pidfile proof would silently
+	## fail on Linux. Verify the chunked-read path actually returns data
+	## for a known-live PID (the editor itself).
+	if not FileAccess.file_exists("/proc/self/cmdline"):
+		skip("/proc not available — Linux-only test")
+		return
+	var plugin := GodotAiPlugin.new()
+	var cmd := plugin._posix_pid_commandline(OS.get_process_id())
+	plugin.free()
+	assert_false(
+		cmd.is_empty(),
+		"chunked read must return non-empty cmdline for the editor's own PID"
+	)
+	## The editor cmdline must contain the Godot binary path; this also
+	## confirms NUL-to-space conversion produced a usable string.
+	assert_true(
+		cmd.to_lower().find("godot") >= 0,
+		"editor cmdline should contain 'godot' substring, got: %s" % cmd
+	)
+
+
+func test_pid_cmdline_rejects_unrelated_local_pid() -> void:
+	## Regression for the cross-platform pidfile-proof bug: previously the
+	## non-Windows path returned true unconditionally, so a stale pidfile
+	## whose PID had been recycled by an unrelated listener could be accepted
+	## as a kill target. Now the function must actually inspect the cmdline.
+	## The current Godot editor process is a convenient stand-in for an
+	## "unrelated" PID — its cmdline contains no `--pid-file` / `--transport`
+	## flags, so the brand+flag fingerprint must reject it.
+	if OS.get_name() == "Windows":
+		skip("POSIX-only path: Windows uses PowerShell, exercised elsewhere")
+		return
+	var plugin := GodotAiPlugin.new()
+	var godot_pid := OS.get_process_id()
+	var matches := plugin._pid_cmdline_is_godot_ai(godot_pid)
+	plugin.free()
+	assert_false(
+		matches,
+		"editor PID's cmdline lacks --pid-file/--transport, must not match godot-ai server fingerprint"
+	)
+
+
+class _RealCmdlinePlugin extends GodotAiPlugin:
+	## Exercises the real `_pid_cmdline_is_godot_ai` inside the kill-target
+	## path. Mocks the pidfile / liveness lookups but lets the cmdline
+	## fingerprint flow through to the OS-specific reader (`/proc` on Linux,
+	## `ps` on macOS/*BSD, PowerShell on Windows). Regression coverage for
+	## the bug where the POSIX path returned true unconditionally.
+	var listener_pids: Array[int] = []
+	var pid_file_pid := 0
+	var alive_pids: Array[int] = []
+
+	func _read_pid_file_for_proof() -> int:
+		return pid_file_pid
+
+	func _pid_alive_for_proof(pid: int) -> bool:
+		return alive_pids.has(pid)
+
+
+func test_legacy_pidfile_kill_targets_requires_real_brand_proof() -> void:
+	## Spawn a benign child (`sleep`) so we have an unrelated live PID we
+	## can plant in the pidfile slot. Without the fix, `_legacy_pidfile_kill_targets`
+	## would return [child_pid] on POSIX because the cmdline check returned
+	## true unconditionally. With the fix, the child's cmdline (no
+	## --pid-file / --transport) is rejected and no kill targets are produced.
+	if OS.get_name() == "Windows":
+		skip("POSIX-only regression: Windows path covered by netstat parser tests")
+		return
+	var sleep_path := "/bin/sleep"
+	if not FileAccess.file_exists(sleep_path):
+		sleep_path = "/usr/bin/sleep"
+		if not FileAccess.file_exists(sleep_path):
+			skip("sleep(1) not available on this host")
+			return
+	var child_pid := OS.create_process(sleep_path, ["30"])
+	if child_pid <= 0:
+		skip("OS.create_process unavailable in this test environment")
+		return
+	var plugin := _RealCmdlinePlugin.new()
+	plugin.listener_pids = [child_pid] as Array[int]
+	plugin.pid_file_pid = child_pid
+	plugin.alive_pids = [child_pid] as Array[int]
+
+	var targets := plugin._legacy_pidfile_kill_targets(TEST_PORT, plugin.listener_pids)
+	plugin.free()
+	OS.kill(child_pid)
+
+	assert_true(
+		targets.is_empty(),
+		"unrelated live PID in pidfile must not produce kill targets without brand+flag cmdline proof"
+	)
 
 
 func test_strong_proof_accepts_live_managed_record_pid() -> void:
