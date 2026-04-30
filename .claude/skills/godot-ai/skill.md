@@ -80,11 +80,11 @@ Test guardrails: the runner flags tests with 0 assertions as failures (catches s
 
 ## GDScript conventions
 
-- Handlers are `@tool` RefCounted classes with `class_name`
+- Handlers are `@tool` `RefCounted` scripts with **no** `class_name` — load them via `const X := preload("res://addons/godot_ai/handlers/foo_handler.gd")` from `plugin.gd`. The `Mcp*`-prefixed `class_name` is reserved for utility classes shared across the project (e.g. `McpScenePath`, `McpPropertyErrors`, `McpParamValidators`); see #253 for why bare `class_name`s on handlers are forbidden.
 - Return `{"data": {...}}` on success, `McpErrorCodes.make(code, msg)` on failure — include the failing parameter value and use `error_string(err)` for Godot error codes
 - All scene mutations must use `EditorUndoRedoManager` — response includes `"undoable": true`
 - The dispatcher detects empty/null handler results and reports `INTERNAL_ERROR` — a handler crash no longer looks like success
-- Use `ScenePath.from_node()` / `ScenePath.resolve()` for clean paths like `/Main/Camera3D`
+- Use `McpScenePath.from_node()` / `McpScenePath.resolve()` for clean paths like `/Main/Camera3D`
 - Use `##` for doc comments, typed arrays (`Array[String]`), never Python-style `"""`
 - Main thread only — 4ms frame budget in `_process()`, use `call_deferred` for mutations
 
