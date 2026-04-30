@@ -6,10 +6,12 @@ extends RefCounted
 var _undo_redo: EditorUndoRedoManager
 var _connection: McpConnection
 
-# Bounded settle window for `ResourceLoader.exists(path)` after `scan()` so that
-# an agent calling create_script -> attach_script back-to-back doesn't race the
-# editor's import pipeline (#261). Polled once per frame.
-const _IMPORT_SETTLE_MAX_FRAMES := 300  # ~5s at 60fps; bails out and replies anyway.
+# Bounded settle window for `ResourceLoader.exists(path)` after `scan()` so
+# that an agent calling create_script -> attach_script back-to-back doesn't
+# race the editor's import pipeline (#261). Polled once per frame, with an
+# elapsed-time cap below the Python client's default 5s command timeout.
+const _IMPORT_SETTLE_MAX_FRAMES := 300
+const _IMPORT_SETTLE_MAX_MSEC := 4500
 
 
 func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null) -> void:
@@ -77,7 +79,12 @@ func create_script(params: Dictionary) -> Dictionary:
 func _finish_create_script_deferred(request_id: String, path: String, data: Dictionary) -> void:
 	var tree := _connection.get_tree()
 	var frames := 0
-	while frames < _IMPORT_SETTLE_MAX_FRAMES and not ResourceLoader.exists(path):
+	var deadline_ms := Time.get_ticks_msec() + _IMPORT_SETTLE_MAX_MSEC
+	while (
+		frames < _IMPORT_SETTLE_MAX_FRAMES
+		and Time.get_ticks_msec() < deadline_ms
+		and not ResourceLoader.exists(path)
+	):
 		await tree.process_frame
 		frames += 1
 	# If the plugin tears down (_exit_tree frees _connection) during the await,
@@ -86,7 +93,7 @@ func _finish_create_script_deferred(request_id: String, path: String, data: Dict
 	if not is_instance_valid(_connection):
 		return
 	var payload := data.duplicate()
-	payload["import_settled"] = frames < _IMPORT_SETTLE_MAX_FRAMES
+	payload["import_settled"] = ResourceLoader.exists(path)
 	_connection.send_deferred_response(request_id, {"data": payload})
 
 

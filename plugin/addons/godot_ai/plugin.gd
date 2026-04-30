@@ -1729,6 +1729,18 @@ func can_recover_incompatible_server() -> bool:
 	return not str(proof.get("proof", "")).is_empty()
 
 
+func _resume_connection_after_recovery() -> void:
+	if _connection == null:
+		return
+	if _spawn_state != McpSpawnState.OK or _connection_blocked:
+		return
+	_connection.connect_blocked = false
+	_connection.connect_block_reason = ""
+	_connection.server_version = ""
+	_connection.set_process(true)
+	_arm_server_version_check()
+
+
 func recover_incompatible_server() -> bool:
 	if _spawn_state != McpSpawnState.INCOMPATIBLE_SERVER:
 		return false
@@ -1757,6 +1769,7 @@ func recover_incompatible_server() -> bool:
 	_server_started_this_session = false
 	_server_pid = -1
 	_start_server()
+	_resume_connection_after_recovery()
 	return true
 
 

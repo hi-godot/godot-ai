@@ -30,6 +30,7 @@ class ErrorDetail(BaseModel):
 
     code: str
     message: str
+    data: dict[str, Any] = Field(default_factory=dict)
 
 
 class HandshakeMessage(BaseModel):
