@@ -6,7 +6,6 @@ This document defines how Godot AI should prove that new capability is real, sta
 
 Use the related docs for adjacent concerns:
 
-- [proposal.md](proposal.md) for the product case
 - [implementation-plan.md](implementation-plan.md) for active priorities
 - [packaging-distribution.md](packaging-distribution.md) for release-smoke install coverage
 

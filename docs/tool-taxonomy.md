@@ -6,7 +6,6 @@ This document describes the intended Godot-native tool surface. Names below use 
 
 Use the related docs for the adjacent concerns:
 
-- [proposal.md](proposal.md) for the product case and scope
 - [implementation-plan.md](implementation-plan.md) for what is being built next
 - [plugin-architecture.md](plugin-architecture.md) for the plugin/server model
 

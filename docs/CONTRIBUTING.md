@@ -27,7 +27,7 @@ cd godot-ai
 > without admin rights and without Windows Developer Mode.
 
 > **One-time per clone:** `setup-dev` installs a `post-checkout` git hook
-> (from `.githooks/`) into `.git/hooks/`. The hook auto-builds the plugin
+> (from `script/githooks/`) into `.git/hooks/`. The hook auto-builds the plugin
 > link on every `git worktree add` and `git checkout <branch>`, so every
 > future worktree of this clone gets a working link automatically. You only
 > need to run `setup-dev` once per clone.

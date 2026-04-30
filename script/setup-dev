@@ -6,16 +6,16 @@ cd "$(dirname "$0")/.."
 # Install git hooks to .git/hooks/ so they fire on `git worktree add` and
 # `git checkout <branch>` regardless of which branch the main repo is on.
 #
-# We copy from .githooks/ (tracked) into .git/hooks/ (untracked, local-only).
-# Why not core.hooksPath=.githooks? Because git resolves that relative path
-# against the main repo's working tree, which may be on a branch that doesn't
-# contain .githooks/ — in which case the hook is silently invisible to every
-# worktree. Installing into .git/hooks/ (the default path git always checks)
-# avoids that trap. .git/hooks/ is shared across all worktrees, so one install
-# covers every future worktree of this clone.
+# We copy from script/githooks/ (tracked) into .git/hooks/ (untracked,
+# local-only). Why not core.hooksPath=script/githooks? Because git resolves
+# that relative path against the main repo's working tree, which may be on a
+# branch that doesn't contain script/githooks/ — in which case the hook is
+# silently invisible to every worktree. Installing into .git/hooks/ (the
+# default path git always checks) avoids that trap. .git/hooks/ is shared
+# across all worktrees, so one install covers every future worktree.
 GIT_DIR="$(git rev-parse --git-common-dir)"
-if [ -d .githooks ]; then
-    for hook in .githooks/*; do
+if [ -d script/githooks ]; then
+    for hook in script/githooks/*; do
         [ -f "$hook" ] || continue
         name="$(basename "$hook")"
         cp "$hook" "$GIT_DIR/hooks/$name"

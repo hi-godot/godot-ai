@@ -4,17 +4,12 @@
 
 This is the current working plan for Godot AI. It focuses on active and upcoming work only.
 
-Historical bootstrap material, architecture detail, packaging mechanics, go/no-go gates, and the risk register now live in separate docs:
+Adjacent reference docs:
 
-- [Architecture Proposal](proposal.md)
-- [Tool Taxonomy](tool-taxonomy.md)
-- [Foundation History](history-foundation-phases.md)
-- [Plugin Architecture](plugin-architecture.md)
-- [Testing Strategy](testing-strategy.md)
-- [Packaging & Distribution](packaging-distribution.md)
-- [Product Positioning](product-positioning.md)
-- [Go/No-Go Gates](go-no-go-gates.md)
-- [Risk Register](risk-register.md)
+- [Tool Taxonomy](tool-taxonomy.md) — design rules and intended Godot-native tool surface
+- [Plugin Architecture](plugin-architecture.md) — server/plugin interaction model
+- [Testing Strategy](testing-strategy.md) — verification and CI patterns
+- [Packaging & Distribution](packaging-distribution.md) — release, install, and naming mechanics
 
 ---
 

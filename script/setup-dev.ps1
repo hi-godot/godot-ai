@@ -24,22 +24,22 @@ Set-Location $repoRoot
 Write-Host "Repo: $repoRoot"
 
 # --- 1. Install git hooks to .git/hooks/ ----------------------------------
-# Copy .githooks/* (tracked) into .git/hooks/ (untracked, local-only) so
-# they fire on `git worktree add` and `git checkout <branch>` regardless
+# Copy script/githooks/* (tracked) into .git/hooks/ (untracked, local-only)
+# so they fire on `git worktree add` and `git checkout <branch>` regardless
 # of which branch the main repo is currently on. .git/hooks/ is the path
 # git always checks, and it is shared across all worktrees of this clone.
 #
-# We don't use core.hooksPath=.githooks because git resolves that relative
-# path against the main repo's working tree — if main is on a branch that
-# doesn't contain .githooks/, the hook is silently invisible.
+# We don't use core.hooksPath=script/githooks because git resolves that
+# relative path against the main repo's working tree — if main is on a
+# branch that doesn't contain script/githooks/, the hook is silently invisible.
 $gitCommonDir = (& git rev-parse --git-common-dir).Trim()
 if ($LASTEXITCODE -ne 0) { throw "git rev-parse --git-common-dir failed" }
-if (Test-Path -LiteralPath '.githooks') {
+if (Test-Path -LiteralPath 'script/githooks') {
     $hooksTargetDir = Join-Path $gitCommonDir 'hooks'
-    Get-ChildItem -LiteralPath '.githooks' -File | ForEach-Object {
+    Get-ChildItem -LiteralPath 'script/githooks' -File | ForEach-Object {
         Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $hooksTargetDir $_.Name) -Force
     }
-    Write-Host "[ok] Installed .githooks/* into $hooksTargetDir"
+    Write-Host "[ok] Installed script/githooks/* into $hooksTargetDir"
 }
 # Clear any stale core.hooksPath from earlier setup-dev runs that used it.
 & git config --unset core.hooksPath 2>$null
