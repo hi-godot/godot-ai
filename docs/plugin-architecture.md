@@ -1,6 +1,6 @@
 # Godot AI — Plugin Architecture
 
-*Updated 2026-04-13*
+*Updated 2026-04-29 (refresh file-structure tree, server-side modules, session metadata, and handshake JSON to match shipped code; add `<domain>_manage` rollups + resources + middleware to server responsibilities)*
 
 This document is the architecture reference for the Godot-side plugin and the server-to-plugin interaction model.
 
@@ -18,37 +18,40 @@ Use the related docs for adjacent concerns:
 The core shape is:
 
 ```text
-AI Client → MCP (stdio / HTTP / SSE) → Python FastMCP server → WebSocket → Godot EditorPlugin
-
-Optional side path:
-
-Python FastMCP server → headless Godot process for exports, CI, and recovery workflows
+AI Client → MCP (streamable-http, SSE, stdio) → Python FastMCP server
+                                                 ↓
+                                          WebSocket :9500
+                                                 ↓
+                                       Godot EditorPlugin
 ```
 
 The plugin is persistent. It does not spin up per command. That is the foundation for:
 
 - live editor inspection
 - safe scene mutation
-- session tracking
-- runtime feedback loops
-- eventually multi-instance routing
+- session tracking (multi-editor, with per-call routing)
+- runtime feedback loops (game-side capture, performance monitors, logs)
 
 ---
 
 ## Server Responsibilities
 
-The Python server should own orchestration, not editor mutation.
+The Python server owns orchestration, not editor mutation.
 
 That includes:
 
-- MCP transport and tool/resource registration
-- session registry and active-session resolution
-- request validation and structured error mapping
-- job tracking for long-running operations
-- typed client communication with the plugin
-- CLI entry points for diagnostics, packaging, and headless flows
+- MCP transport (FastMCP v3 over streamable-http, SSE, or stdio) and tool/resource registration
+- the rolled-up tool surface — ~15 named verbs plus per-domain `<domain>_manage` tools wired by `tools/_meta_tool.py::register_manage_tool`, which builds a dynamic `Literal[...]` op enum so schema-aware clients see every op
+- read-only `godot://...` MCP resources (sessions, editor state, scenes, nodes, scripts, project, materials, performance, test results) that mirror the cheap reads and don't count against tool-cap budgets
+- per-call session routing — every Godot-talking tool accepts an optional `session_id`, bound at the `DirectRuntime` boundary so `require_writable` and downstream handlers see the pinned session, not the active one
+- middleware that smooths over client quirks: `StripClientWrapperKwargs` (Cline's `task_progress`), `ParseStringifiedParams` (clients that auto-stringify nested params for `_manage` calls), `HintOpTypoOnManage` (rewrites Pydantic `literal_error` with a `difflib`-derived "Did you mean" hint)
+- session registry and active-session resolution, with `<project-slug>@<4hex>` IDs and substring/path matching in `session_activate`
+- request validation and structured error mapping (`protocol/errors.py`)
+- job tracking for long-running operations and the deferred-response pattern for replies that flow back over a different channel (game capture)
+- the `--exclude-domains` CLI flag and dock UI knob, so tool-capped clients (Antigravity, etc.) can drop entire domains at server start while keeping the four core tools alive
+- CLI entry points for diagnostics and packaging (`python -m godot_ai`, the dev `--reload` runner via `src/godot_ai/asgi.py`)
 
-The plugin should stay thin. Complex orchestration belongs in Python; direct editor work belongs in Godot.
+The plugin stays thin. Complex orchestration belongs in Python; direct editor work belongs in Godot.
 
 ---
 
@@ -57,38 +60,64 @@ The plugin should stay thin. Complex orchestration belongs in Python; direct edi
 ```text
 plugin/addons/godot_ai/
 ├── plugin.cfg
-├── plugin.gd
-├── connection.gd
-├── dispatcher.gd
-├── mcp_dock.gd
-├── handlers/
-│   ├── editor_handler.gd
-│   ├── scene_handler.gd
-│   ├── node_handler.gd
-│   ├── script_handler.gd
-│   ├── resource_handler.gd
-│   ├── project_handler.gd
-│   └── batch_handler.gd
+├── plugin.gd                    ## EditorPlugin lifecycle, handler registration
+├── connection.gd                ## WebSocket client + send_deferred_response
+├── dispatcher.gd                ## command routing, frame budget, DEFERRED_RESPONSE sentinel
+├── mcp_dock.gd                  ## editor dock: status, clients, logs, self-update banner, Tools tab
+├── client_configurator.gd       ## thin facade for client config (configure/remove/status)
+├── tool_catalog.gd              ## mirrors src/godot_ai/tools/domains.py; CI-enforced
+├── update_reload_runner.gd      ## self-update extract + plugin re-enable handoff
+├── handlers/                    ## one file per domain; ~30 handlers
+│   ├── editor_handler.gd        ## screenshot, logs, monitors, reload_plugin, quit_editor
+│   ├── scene_handler.gd, node_handler.gd, script_handler.gd
+│   ├── project_handler.gd, resource_handler.gd, filesystem_handler.gd
+│   ├── animation_handler.gd, material_handler.gd, particle_handler.gd
+│   ├── camera_handler.gd, audio_handler.gd, theme_handler.gd, ui_handler.gd
+│   ├── signal_handler.gd, autoload_handler.gd, input_handler.gd
+│   ├── batch_handler.gd, test_handler.gd, client_handler.gd
+│   ├── environment_handler.gd, texture_handler.gd, curve_handler.gd
+│   ├── physics_shape_handler.gd, control_draw_recipe_handler.gd
+│   ├── *_values.gd / *_presets.gd  ## per-domain enum coercion + preset libraries
+│   └── _param_validators.gd, _property_errors.gd  ## shared utilities (Mcp* class_name)
+├── clients/                     ## descriptor + strategy system for 18 IDE configs
+│   ├── _base.gd, _registry.gd
+│   ├── _json_strategy.gd, _toml_strategy.gd, _cli_strategy.gd
+│   ├── _atomic_write.gd, _cli_finder.gd, _cli_exec.gd
+│   ├── _path_template.gd, _manual_command.gd
+│   └── claude_code.gd, claude_desktop.gd, cursor.gd, …  ## one per client
 ├── debugger/
 │   └── mcp_debugger_plugin.gd   ## editor-side debugger-channel bridge
 ├── runtime/
-│   └── game_helper.gd           ## autoload that runs inside the game
-├── state/
-│   ├── session_state.gd
-│   └── log_buffer.gd
+│   ├── game_helper.gd           ## autoload that runs inside the game subprocess
+│   ├── game_logger.gd           ## game-side logger, ferries lines back via debugger
+│   ├── editor_logger.gd         ## editor-process logger for logs_read(source="editor")
+│   └── draw_recipe.gd           ## reusable runtime for control_draw_recipe
+├── testing/
+│   ├── test_runner.gd, test_suite.gd, stub_backtrace.gd
 └── utils/
-    ├── serializer.gd
-    └── node_finder.gd
+    ├── scene_path.gd            ## McpScenePath for clean /Main/Camera3D paths
+    ├── error_codes.gd           ## McpErrorCodes
+    ├── log_buffer.gd, editor_log_buffer.gd, game_log_buffer.gd, structured_log_ring.gd
+    ├── log_backtrace.gd
+    ├── resource_io.gd           ## shared resource load/save logic
+    ├── mcp_spawn_state.gd       ## tracks managed-server PID + version across reloads
+    ├── windows_port_reservation.gd  ## avoids Windows-reserved ephemeral ports
+    └── uv_cache_cleanup.gd      ## prunes stale uvx cache before self-update
 ```
 
 The server-side counterparts live in:
 
-- `src/godot_ai/server.py`
-- `src/godot_ai/transport/websocket.py`
-- `src/godot_ai/sessions/registry.py`
-- `src/godot_ai/godot_client/client.py`
-- `src/godot_ai/handlers/`
-- `src/godot_ai/tools/`
+- `src/godot_ai/server.py` — FastMCP entry point, lifespan, tool/resource registration, `--exclude-domains`
+- `src/godot_ai/asgi.py` — uvicorn factory for `--reload`; ships `StaleMcpSessionDiagnosticMiddleware`
+- `src/godot_ai/transport/websocket.py` — WebSocket server adopting/owning the :9500 socket
+- `src/godot_ai/sessions/registry.py` — multi-session tracking, active resolution, substring matching
+- `src/godot_ai/godot_client/client.py` — typed async client; raises `GodotCommandError`
+- `src/godot_ai/runtime/{interface.py, direct.py}` — `Runtime` protocol + `DirectRuntime` impl that handlers depend on
+- `src/godot_ai/handlers/` — shared sync handlers; `_readiness.py` gates writes; `_target.py` resolves nodes
+- `src/godot_ai/tools/` — MCP tool wrappers per domain + `_meta_tool.py::register_manage_tool` rollup factory + `domains.py` (CI-paired with `tool_catalog.gd`)
+- `src/godot_ai/resources/` — read-only `godot://...` URI handlers
+- `src/godot_ai/middleware/` — `StripClientWrapperKwargs`, `ParseStringifiedParams`, `HintOpTypoOnManage`
+- `src/godot_ai/protocol/` — envelope types and error codes (kept in sync with `utils/error_codes.gd`)
 
 ---
 
@@ -144,9 +173,15 @@ _process(delta)
 
 ### `_exit_tree()`
 
-- disconnect cleanly
-- release plugin-owned resources
-- avoid leaving stale sessions or dangling reconnect attempts
+Outer-to-inner teardown order matters (see #46): the dispatcher's Callables hold handler RefCounteds alive past the point where Godot reloads their `class_name` scripts, so the next post-reload call into a typed-array-holding handler SIGSEGVs against a stale class descriptor. The shipped order is:
+
+1. `_connection.teardown()` first, so `_process` stops enqueuing new commands
+2. `_dispatcher.clear()` next, breaking the Callable→handler ref chain
+3. `_handlers.clear()` runs handler destructors while their `class_name` scripts are still loaded
+4. detach the dock, debugger plugin, and editor logger
+5. `_stop_server()` and reset the spawn-guard so a re-enabled plugin instance can respawn
+
+A symmetric `prepare_for_update_reload()` path runs during self-update so the new plugin version starts (or adopts) the right server.
 
 ---
 
@@ -156,13 +191,14 @@ The session model exists so the server can distinguish live editor instances and
 
 ### Session Metadata
 
-- session id
-- Godot version
+- session id, formatted `<project-slug>@<4hex>` (e.g. `godot-ai@a3f2`) — slug derives from the project directory name so agents can recognise which editor they're targeting; the hex suffix disambiguates same-project twins
+- name (project basename)
+- Godot version, plugin version, server version
 - project path
-- plugin version
-- current scene
-- play state
-- readiness state
+- editor PID
+- current scene, play state, readiness state
+- last_seen heartbeat, used by `session_list` and stale-session diagnostics
+- server launch mode (managed vs. external) reported via `session_list`
 
 ### Readiness States
 
@@ -297,11 +333,15 @@ Plugin to server:
 ```json
 {
   "type": "handshake",
-  "session_id": "uuid",
-  "godot_version": "4.4.1",
+  "session_id": "godot-ai@a3f2",
+  "name": "godot-ai",
+  "godot_version": "4.6.0",
   "project_path": "/path/to/project",
-  "plugin_version": "0.0.1",
-  "protocol_version": 1
+  "editor_pid": 12345,
+  "plugin_version": "2.2.3",
+  "protocol_version": 1,
+  "readiness": "ready",
+  "current_scene": "res://main.tscn"
 }
 ```
 
