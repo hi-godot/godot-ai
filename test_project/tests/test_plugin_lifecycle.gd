@@ -306,6 +306,49 @@ func test_commandline_fingerprint_is_case_insensitive_and_requires_flag() -> voi
 	)
 
 
+func test_commandline_fingerprint_ignores_brand_in_pidfile_path() -> void:
+	## Regression: the pidfile path itself is `<user>/godot_ai_server.pid`,
+	## so a substring brand search would falsely match an unrelated process
+	## that happens to reference a similarly-named pidfile. The brand must
+	## come from somewhere outside the --pid-file value.
+	assert_false(
+		GodotAiPlugin._commandline_is_godot_ai_server(
+			"someprogram --pid-file /var/run/godot_ai_server.pid --transport tcp"
+		),
+		"brand in pidfile path alone must not satisfy ownership proof"
+	)
+	assert_false(
+		GodotAiPlugin._commandline_is_godot_ai_server(
+			"someprogram --pid-file=/var/run/godot_ai_server.pid --transport tcp"
+		),
+		"--pid-file=<value> form must also strip the path before brand search"
+	)
+	assert_true(
+		GodotAiPlugin._commandline_is_godot_ai_server(
+			"/usr/bin/python -m godot_ai --transport streamable-http --pid-file /tmp/godot_ai_server.pid"
+		),
+		"real server invocation has brand outside the pidfile value, must still match"
+	)
+
+
+func test_strip_pidfile_value_handles_space_and_equals_forms() -> void:
+	## Whitespace form: keep the bare flag, drop the value.
+	assert_eq(
+		GodotAiPlugin._strip_pidfile_value("foo --pid-file /tmp/x.pid bar"),
+		"foo --pid-file  bar"
+	)
+	## Equals form: same outcome.
+	assert_eq(
+		GodotAiPlugin._strip_pidfile_value("foo --pid-file=/tmp/x.pid bar"),
+		"foo --pid-file  bar"
+	)
+	## No --pid-file flag: returned unchanged.
+	assert_eq(
+		GodotAiPlugin._strip_pidfile_value("foo --transport tcp"),
+		"foo --transport tcp"
+	)
+
+
 func test_pid_cmdline_rejects_sentinel_pids() -> void:
 	## Init/PID 1 and pid 0 must never be considered candidates for kill.
 	## A stale pidfile that somehow contains 0 or 1 has to bail before any
@@ -314,6 +357,30 @@ func test_pid_cmdline_rejects_sentinel_pids() -> void:
 	assert_false(plugin._pid_cmdline_is_godot_ai(0), "pid 0 must never match")
 	assert_false(plugin._pid_cmdline_is_godot_ai(1), "pid 1 (init) must never match")
 	plugin.free()
+
+
+func test_posix_pid_commandline_reads_procfs_despite_zero_length() -> void:
+	## procfs pseudo-files (/proc/<pid>/cmdline) report length 0 even though
+	## they have content. If we sized the read by `get_length()` we'd get
+	## an empty string back and the legacy pidfile proof would silently
+	## fail on Linux. Verify the chunked-read path actually returns data
+	## for a known-live PID (the editor itself).
+	if not FileAccess.file_exists("/proc/self/cmdline"):
+		skip("/proc not available — Linux-only test")
+		return
+	var plugin := GodotAiPlugin.new()
+	var cmd := plugin._posix_pid_commandline(OS.get_process_id())
+	plugin.free()
+	assert_false(
+		cmd.is_empty(),
+		"chunked read must return non-empty cmdline for the editor's own PID"
+	)
+	## The editor cmdline must contain the Godot binary path; this also
+	## confirms NUL-to-space conversion produced a usable string.
+	assert_true(
+		cmd.to_lower().find("godot") >= 0,
+		"editor cmdline should contain 'godot' substring, got: %s" % cmd
+	)
 
 
 func test_pid_cmdline_rejects_unrelated_local_pid() -> void:

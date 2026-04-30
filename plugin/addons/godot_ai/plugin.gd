@@ -1560,9 +1560,25 @@ static func _commandline_is_godot_ai_server(cmd: String) -> bool:
 	if cmd.is_empty():
 		return false
 	var lower := cmd.to_lower()
-	var has_brand := lower.find("godot-ai") >= 0 or lower.find("godot_ai") >= 0
+	## The server is invoked with `--pid-file <user>/godot_ai_server.pid`,
+	## so the path itself contains "godot_ai". A naive substring brand
+	## search would falsely match an unrelated process whose cmdline
+	## happens to reference a similarly-named pidfile path. Strip the
+	## value (but leave the bare flag for the has_flag check) before
+	## brand matching.
+	var brand_search := _strip_pidfile_value(lower)
+	var has_brand := brand_search.find("godot-ai") >= 0 or brand_search.find("godot_ai") >= 0
 	var has_flag := lower.find("--pid-file") >= 0 or lower.find("--transport") >= 0
 	return has_brand and has_flag
+
+
+static func _strip_pidfile_value(cmd: String) -> String:
+	var rx := RegEx.new()
+	## Match `--pid-file=<token>` and `--pid-file <token>`; keep the bare
+	## flag so the flag-presence check still succeeds for a real server.
+	if rx.compile("--pid-file(?:=|\\s+)\\S+") != OK:
+		return cmd
+	return rx.sub(cmd, "--pid-file ", true)
 
 
 func _windows_pid_commandline(pid: int) -> String:
@@ -1585,7 +1601,7 @@ func _windows_pid_commandline(pid: int) -> String:
 ## POSIX command-line lookup. Linux exposes `/proc/<pid>/cmdline` as
 ## NUL-separated argv — read it directly so we avoid a `ps` fork on Linux
 ## and get the full argv rather than the truncated/quoted form some `ps`
-## builds emit. Falls back to `ps -p <pid> -o args=` on macOS / *BSD,
+## builds emit. Falls back to `ps -ww -p <pid> -o args=` on macOS / *BSD,
 ## which lack a Linux-style `/proc/<pid>/cmdline`. Returns "" on failure
 ## so callers conservatively reject the PID rather than killing it blind.
 func _posix_pid_commandline(pid: int) -> String:
@@ -1593,7 +1609,20 @@ func _posix_pid_commandline(pid: int) -> String:
 	if FileAccess.file_exists(proc_path):
 		var f := FileAccess.open(proc_path, FileAccess.READ)
 		if f != null:
-			var bytes := f.get_buffer(int(f.get_length()))
+			## procfs pseudo-files report length 0 (the kernel generates
+			## content on read). `get_length()` therefore returns 0 and
+			## `get_buffer(0)` reads nothing. Read in chunks until EOF
+			## instead. Cap at ARG_MAX-class bound so a hypothetically
+			## misbehaving file can never stall the editor frame.
+			var bytes := PackedByteArray()
+			var max_bytes := 1 << 20  # 1 MiB
+			while bytes.size() < max_bytes:
+				var chunk := f.get_buffer(4096)
+				if chunk.is_empty():
+					break
+				bytes.append_array(chunk)
+				if f.eof_reached():
+					break
 			f.close()
 			## /proc cmdline is NUL-separated argv; convert NULs to spaces
 			## so the substring fingerprint matches the same way it does on
@@ -1603,8 +1632,12 @@ func _posix_pid_commandline(pid: int) -> String:
 				if bytes[i] == 0:
 					bytes[i] = 0x20
 			return bytes.get_string_from_utf8().strip_edges()
+	## `-ww` removes ps's column-width truncation so trailing flags like
+	## --pid-file / --transport aren't dropped from the args= field.
+	## Both procps (Linux) and BSD ps (macOS / *BSD) accept the
+	## double-w form.
 	var output: Array = []
-	var exit_code := OS.execute("ps", ["-p", str(pid), "-o", "args="], output, true)
+	var exit_code := OS.execute("ps", ["-ww", "-p", str(pid), "-o", "args="], output, true)
 	if exit_code != 0 or output.is_empty():
 		return ""
 	return str(output[0]).strip_edges()
