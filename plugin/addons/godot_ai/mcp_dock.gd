@@ -1046,12 +1046,17 @@ func _refresh_server_version_label() -> void:
 			color = COLOR_AMBER
 		else:
 			text = "godot-ai == %s  (expected %s)" % [server_ver, expected_ver]
-			color = Color.RED if server_status.get("state", "") == McpSpawnState.INCOMPATIBLE_SERVER else COLOR_AMBER
-			show_restart = (
-				server_status.get("state", "") != McpSpawnState.INCOMPATIBLE_SERVER
-				and _plugin != null
+			var is_incompatible: bool = server_status.get("state", "") == McpSpawnState.INCOMPATIBLE_SERVER
+			color = Color.RED if is_incompatible else COLOR_AMBER
+			var has_managed_proof: bool = (
+				_plugin != null
 				and _plugin.has_method("can_restart_managed_server")
 				and _plugin.can_restart_managed_server()
+			)
+			var can_recover: bool = bool(server_status.get("can_recover_incompatible", false))
+			show_restart = (
+				(not is_incompatible and has_managed_proof)
+				or (is_incompatible and can_recover)
 			)
 	if text == _last_rendered_server_text:
 		_setup_server_label.add_theme_color_override("font_color", color)
@@ -1066,7 +1071,17 @@ func _refresh_server_version_label() -> void:
 
 
 func _on_restart_stale_server() -> void:
-	if _plugin != null and _plugin.has_method("force_restart_server"):
+	if _plugin == null:
+		return
+	var status: Dictionary = (
+		_plugin.get_server_status()
+		if _plugin.has_method("get_server_status")
+		else {}
+	)
+	if str(status.get("state", "")) == McpSpawnState.INCOMPATIBLE_SERVER:
+		if _plugin.has_method("recover_incompatible_server"):
+			_plugin.recover_incompatible_server()
+	elif _plugin.has_method("force_restart_server"):
 		_plugin.force_restart_server()
 
 
