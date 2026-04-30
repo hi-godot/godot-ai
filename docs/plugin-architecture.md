@@ -21,12 +21,14 @@ The core shape is:
 AI Client → MCP (streamable-http, SSE, stdio) → Python FastMCP server
                                                  ↓
                                        WebSocket (default :9500,
-                                       configurable via the
-                                       godot_ai/managed_server_ws_port
-                                       project setting)
+                                       overridable via the
+                                       godot_ai/ws_port EditorSetting
+                                       under Editor Settings > Plugins)
                                                  ↓
                                        Godot EditorPlugin
 ```
+
+Internal companion: `godot_ai/managed_server_ws_port` is an EditorSetting the plugin uses to remember the managed server's resolved port across editor restarts and adoption — not a user knob.
 
 The plugin is persistent. It does not spin up per command. That is the foundation for:
 
