@@ -1538,13 +1538,27 @@ static func _build_server_flags(port: int, ws_port: int) -> Array[String]:
 	return flags
 
 
+## Returns true only when we can prove `pid`'s command line carries the
+## `godot-ai` brand AND a server flag (`--pid-file` / `--transport`). Used by
+## automatic kill paths (`_legacy_pidfile_kill_targets`) so a stale pidfile
+## whose PID has been recycled by an unrelated listener can't hand us a
+## kill target. If the OS lookup fails or returns an empty cmdline we
+## conservatively return false — better to surface incompatible-server and
+## let the user click Restart than to kill the wrong process.
 func _pid_cmdline_is_godot_ai(pid: int) -> bool:
-	if OS.get_name() != "Windows":
-		return true
-	return _commandline_is_godot_ai_server(_windows_pid_commandline(pid))
+	if pid <= 1:
+		return false
+	var cmd := ""
+	if OS.get_name() == "Windows":
+		cmd = _windows_pid_commandline(pid)
+	else:
+		cmd = _posix_pid_commandline(pid)
+	return _commandline_is_godot_ai_server(cmd)
 
 
 static func _commandline_is_godot_ai_server(cmd: String) -> bool:
+	if cmd.is_empty():
+		return false
 	var lower := cmd.to_lower()
 	var has_brand := lower.find("godot-ai") >= 0 or lower.find("godot_ai") >= 0
 	var has_flag := lower.find("--pid-file") >= 0 or lower.find("--transport") >= 0
@@ -1566,6 +1580,34 @@ func _windows_pid_commandline(pid: int) -> String:
 	if exit_code != 0 or output.is_empty():
 		return ""
 	return str(output[0])
+
+
+## POSIX command-line lookup. Linux exposes `/proc/<pid>/cmdline` as
+## NUL-separated argv — read it directly so we avoid a `ps` fork on Linux
+## and get the full argv rather than the truncated/quoted form some `ps`
+## builds emit. Falls back to `ps -p <pid> -o args=` on macOS / *BSD,
+## which lack a Linux-style `/proc/<pid>/cmdline`. Returns "" on failure
+## so callers conservatively reject the PID rather than killing it blind.
+func _posix_pid_commandline(pid: int) -> String:
+	var proc_path := "/proc/%d/cmdline" % pid
+	if FileAccess.file_exists(proc_path):
+		var f := FileAccess.open(proc_path, FileAccess.READ)
+		if f != null:
+			var bytes := f.get_buffer(int(f.get_length()))
+			f.close()
+			## /proc cmdline is NUL-separated argv; convert NULs to spaces
+			## so the substring fingerprint matches the same way it does on
+			## the Windows path. Empty (kernel threads, exited processes)
+			## bubbles up as "" via the strip below.
+			for i in range(bytes.size()):
+				if bytes[i] == 0:
+					bytes[i] = 0x20
+			return bytes.get_string_from_utf8().strip_edges()
+	var output: Array = []
+	var exit_code := OS.execute("ps", ["-p", str(pid), "-o", "args="], output, true)
+	if exit_code != 0 or output.is_empty():
+		return ""
+	return str(output[0]).strip_edges()
 
 
 ## True if the given PID corresponds to a live (non-zombie) process.
