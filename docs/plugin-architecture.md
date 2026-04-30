@@ -20,10 +20,15 @@ The core shape is:
 ```text
 AI Client → MCP (streamable-http, SSE, stdio) → Python FastMCP server
                                                  ↓
-                                          WebSocket :9500
+                                       WebSocket (default :9500,
+                                       overridable via the
+                                       godot_ai/ws_port EditorSetting
+                                       under Editor Settings > Plugins)
                                                  ↓
                                        Godot EditorPlugin
 ```
+
+Internal companion: `godot_ai/managed_server_ws_port` is an EditorSetting the plugin uses to remember the managed server's resolved port across editor restarts and adoption — not a user knob.
 
 The plugin is persistent. It does not spin up per command. That is the foundation for:
 
@@ -173,11 +178,11 @@ _process(delta)
 
 ### `_exit_tree()`
 
-Outer-to-inner teardown order matters (see #46): the dispatcher's Callables hold handler RefCounteds alive past the point where Godot reloads their `class_name` scripts, so the next post-reload call into a typed-array-holding handler SIGSEGVs against a stale class descriptor. The shipped order is:
+Outer-to-inner teardown order matters (see #46). Handlers themselves are preloaded scripts without `class_name`, but they hold typed members backed by `Mcp*` utility classes that *do* carry `class_name` (e.g. `McpGameLogBuffer._storage : Array[Dictionary]`). When Godot reloads those `class_name`-bearing scripts during plugin disable/enable, any Callable still pinning a handler past that moment will hit a stale class descriptor on its first post-reload call and SIGSEGV. The shipped order avoids that:
 
 1. `_connection.teardown()` first, so `_process` stops enqueuing new commands
-2. `_dispatcher.clear()` next, breaking the Callable→handler ref chain
-3. `_handlers.clear()` runs handler destructors while their `class_name` scripts are still loaded
+2. `_dispatcher.clear()` next, breaking the Callable→handler ref chain so the array-clear in step 3 actually decrefs the handler RefCounteds to zero
+3. `_handlers.clear()` runs handler destructors while their `Mcp*` utility scripts are still loaded
 4. detach the dock, debugger plugin, and editor logger
 5. `_stop_server()` and reset the spawn-guard so a re-enabled plugin instance can respawn
 
@@ -328,22 +333,28 @@ This should be visible in both the protocol and the user-facing docs.
 
 ### Handshake
 
-Plugin to server:
+Plugin to server (initial handshake — exact field set, see [`connection.gd::_send_handshake`](../plugin/addons/godot_ai/connection.gd)):
 
 ```json
 {
   "type": "handshake",
   "session_id": "godot-ai@a3f2",
-  "name": "godot-ai",
   "godot_version": "4.6.0",
   "project_path": "/path/to/project",
-  "editor_pid": 12345,
   "plugin_version": "2.2.3",
   "protocol_version": 1,
   "readiness": "ready",
-  "current_scene": "res://main.tscn"
+  "editor_pid": 12345,
+  "server_launch_mode": "managed"
 }
 ```
+
+Server-derived fields:
+
+- `name` — derived by the server from `project_path` (the project directory basename); not sent on the wire.
+- `server_version` — sent back to the plugin in a `handshake_ack` reply, not in the handshake itself.
+
+Subsequent runtime state (current scene, play state, readiness transitions) flows as separate `{"type": "event", "event": <name>, "data": …}` messages — `scene_changed`, `readiness_changed`, etc. — not as part of the initial handshake.
 
 ### Command
 
