@@ -28,12 +28,18 @@ class MockGodotPlugin:
         msg = {"request_id": request_id, "status": status, "data": data}
         await self.ws.send(json.dumps(msg))
 
-    async def send_error(self, request_id: str, code: str, message: str) -> None:
+    async def send_error(
+        self,
+        request_id: str,
+        code: str,
+        message: str,
+        data: dict | None = None,
+    ) -> None:
         msg = {
             "request_id": request_id,
             "status": "error",
             "data": {},
-            "error": {"code": code, "message": message},
+            "error": {"code": code, "message": message, "data": data or {}},
         }
         await self.ws.send(json.dumps(msg))
 

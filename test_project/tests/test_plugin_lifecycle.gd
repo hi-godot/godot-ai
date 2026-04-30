@@ -15,6 +15,59 @@ class _RefreshDock extends McpDock:
 		refresh_calls += 1
 
 
+class _ProofPlugin extends GodotAiPlugin:
+	var listener_pids: Array[int] = []
+	var managed_record := {"pid": 0, "version": "", "ws_port": 0}
+	var live_status := {"name": "", "version": "", "ws_port": 0, "status_code": 0}
+	var alive_pids: Array[int] = []
+	var pid_file_pid := 0
+	var branded_pids: Array[int] = []
+	var port_in_use := false
+	var port_in_use_sequence: Array[bool] = []
+	var killed_targets: Array[int] = []
+	var cleared_record_calls := 0
+	var waited_calls := 0
+
+	func _find_all_pids_on_port(_port: int) -> Array[int]:
+		var pids: Array[int] = []
+		pids.assign(listener_pids)
+		return pids
+
+	func _read_managed_server_record() -> Dictionary:
+		return managed_record.duplicate()
+
+	func _read_pid_file_for_proof() -> int:
+		return pid_file_pid
+
+	func _pid_alive_for_proof(pid: int) -> bool:
+		return alive_pids.has(pid)
+
+	func _pid_cmdline_is_godot_ai_for_proof(pid: int) -> bool:
+		return branded_pids.has(pid)
+
+	func _probe_live_server_status_for_port(_port: int) -> Dictionary:
+		return live_status.duplicate()
+
+	func _is_port_in_use(_port: int) -> bool:
+		if not port_in_use_sequence.is_empty():
+			return bool(port_in_use_sequence.pop_front())
+		return port_in_use
+
+	func _kill_processes_and_windows_spawn_children(pids: Array[int]) -> Array[int]:
+		for pid in pids:
+			if not killed_targets.has(pid):
+				killed_targets.append(pid)
+		var killed: Array[int] = []
+		killed.assign(pids)
+		return killed
+
+	func _wait_for_port_free(_port: int, _timeout_s: float) -> void:
+		waited_calls += 1
+
+	func _clear_managed_server_record() -> void:
+		cleared_record_calls += 1
+
+
 ## Test port high enough to almost never collide with real services and
 ## distinct from the plugin's configured http_port() so the stop-finalize tests
 ## don't interact with a developer's running managed server.
@@ -196,9 +249,11 @@ func test_get_server_status_shape_is_stable() -> void:
 	plugin.free()
 	assert_has_key(status, "state")
 	assert_has_key(status, "exit_ms")
+	assert_has_key(status, "actual_name")
 	assert_has_key(status, "actual_version")
 	assert_has_key(status, "expected_version")
 	assert_has_key(status, "message")
+	assert_has_key(status, "can_recover_incompatible")
 	assert_has_key(status, "connection_blocked")
 
 
@@ -226,6 +281,267 @@ func test_managed_record_restart_requires_recorded_version_drift() -> void:
 		GodotAiPlugin._managed_record_has_version_drift("", "2.2.0"),
 		"missing managed record must not authorize restart"
 	)
+
+
+func test_commandline_fingerprint_is_case_insensitive_and_requires_flag() -> void:
+	assert_true(
+		GodotAiPlugin._commandline_is_godot_ai_server(
+			"C:/Python/python.exe -m GODOT_AI --TRANSPORT streamable-http"
+		),
+		"brand and management flag should match case-insensitively"
+	)
+	assert_true(
+		GodotAiPlugin._commandline_is_godot_ai_server(
+			"C:/Python/python.exe -m godot-ai --pid-file C:/tmp/godot_ai_server.pid"
+		),
+		"hyphenated brand plus pid-file flag should identify the server"
+	)
+	assert_false(
+		GodotAiPlugin._commandline_is_godot_ai_server("C:/Python/python.exe -m godot_ai"),
+		"brand alone is not enough ownership proof"
+	)
+	assert_false(
+		GodotAiPlugin._commandline_is_godot_ai_server(""),
+		"empty cmdline (lookup failure) must never be accepted as proof"
+	)
+
+
+func test_commandline_fingerprint_ignores_brand_in_pidfile_path() -> void:
+	## Regression: the pidfile path itself is `<user>/godot_ai_server.pid`,
+	## so a substring brand search would falsely match an unrelated process
+	## that happens to reference a similarly-named pidfile. The brand must
+	## come from somewhere outside the --pid-file value.
+	assert_false(
+		GodotAiPlugin._commandline_is_godot_ai_server(
+			"someprogram --pid-file /var/run/godot_ai_server.pid --transport tcp"
+		),
+		"brand in pidfile path alone must not satisfy ownership proof"
+	)
+	assert_false(
+		GodotAiPlugin._commandline_is_godot_ai_server(
+			"someprogram --pid-file=/var/run/godot_ai_server.pid --transport tcp"
+		),
+		"--pid-file=<value> form must also strip the path before brand search"
+	)
+	assert_true(
+		GodotAiPlugin._commandline_is_godot_ai_server(
+			"/usr/bin/python -m godot_ai --transport streamable-http --pid-file /tmp/godot_ai_server.pid"
+		),
+		"real server invocation has brand outside the pidfile value, must still match"
+	)
+
+
+func test_strip_pidfile_value_handles_space_and_equals_forms() -> void:
+	## Whitespace form: keep the bare flag, drop the value.
+	assert_eq(
+		GodotAiPlugin._strip_pidfile_value("foo --pid-file /tmp/x.pid bar"),
+		"foo --pid-file  bar"
+	)
+	## Equals form: same outcome.
+	assert_eq(
+		GodotAiPlugin._strip_pidfile_value("foo --pid-file=/tmp/x.pid bar"),
+		"foo --pid-file  bar"
+	)
+	## No --pid-file flag: returned unchanged.
+	assert_eq(
+		GodotAiPlugin._strip_pidfile_value("foo --transport tcp"),
+		"foo --transport tcp"
+	)
+
+
+func test_pid_cmdline_rejects_sentinel_pids() -> void:
+	## Init/PID 1 and pid 0 must never be considered candidates for kill.
+	## A stale pidfile that somehow contains 0 or 1 has to bail before any
+	## OS lookup, otherwise we'd risk targeting init on POSIX.
+	var plugin := GodotAiPlugin.new()
+	assert_false(plugin._pid_cmdline_is_godot_ai(0), "pid 0 must never match")
+	assert_false(plugin._pid_cmdline_is_godot_ai(1), "pid 1 (init) must never match")
+	plugin.free()
+
+
+func test_posix_pid_commandline_reads_procfs_despite_zero_length() -> void:
+	## procfs pseudo-files (/proc/<pid>/cmdline) report length 0 even though
+	## they have content. If we sized the read by `get_length()` we'd get
+	## an empty string back and the legacy pidfile proof would silently
+	## fail on Linux. Verify the chunked-read path actually returns data
+	## for a known-live PID (the editor itself).
+	if not FileAccess.file_exists("/proc/self/cmdline"):
+		skip("/proc not available — Linux-only test")
+		return
+	var plugin := GodotAiPlugin.new()
+	var cmd := plugin._posix_pid_commandline(OS.get_process_id())
+	plugin.free()
+	assert_false(
+		cmd.is_empty(),
+		"chunked read must return non-empty cmdline for the editor's own PID"
+	)
+	## The editor cmdline must contain the Godot binary path; this also
+	## confirms NUL-to-space conversion produced a usable string.
+	assert_true(
+		cmd.to_lower().find("godot") >= 0,
+		"editor cmdline should contain 'godot' substring, got: %s" % cmd
+	)
+
+
+func test_pid_cmdline_rejects_unrelated_local_pid() -> void:
+	## Regression for the cross-platform pidfile-proof bug: previously the
+	## non-Windows path returned true unconditionally, so a stale pidfile
+	## whose PID had been recycled by an unrelated listener could be accepted
+	## as a kill target. Now the function must actually inspect the cmdline.
+	## The current Godot editor process is a convenient stand-in for an
+	## "unrelated" PID — its cmdline contains no `--pid-file` / `--transport`
+	## flags, so the brand+flag fingerprint must reject it.
+	if OS.get_name() == "Windows":
+		skip("POSIX-only path: Windows uses PowerShell, exercised elsewhere")
+		return
+	var plugin := GodotAiPlugin.new()
+	var godot_pid := OS.get_process_id()
+	var matches := plugin._pid_cmdline_is_godot_ai(godot_pid)
+	plugin.free()
+	assert_false(
+		matches,
+		"editor PID's cmdline lacks --pid-file/--transport, must not match godot-ai server fingerprint"
+	)
+
+
+class _RealCmdlinePlugin extends GodotAiPlugin:
+	## Exercises the real `_pid_cmdline_is_godot_ai` inside the kill-target
+	## path. Mocks the pidfile / liveness lookups but lets the cmdline
+	## fingerprint flow through to the OS-specific reader (`/proc` on Linux,
+	## `ps` on macOS/*BSD, PowerShell on Windows). Regression coverage for
+	## the bug where the POSIX path returned true unconditionally.
+	var listener_pids: Array[int] = []
+	var pid_file_pid := 0
+	var alive_pids: Array[int] = []
+
+	func _read_pid_file_for_proof() -> int:
+		return pid_file_pid
+
+	func _pid_alive_for_proof(pid: int) -> bool:
+		return alive_pids.has(pid)
+
+
+func test_legacy_pidfile_kill_targets_requires_real_brand_proof() -> void:
+	## Spawn a benign child (`sleep`) so we have an unrelated live PID we
+	## can plant in the pidfile slot. Without the fix, `_legacy_pidfile_kill_targets`
+	## would return [child_pid] on POSIX because the cmdline check returned
+	## true unconditionally. With the fix, the child's cmdline (no
+	## --pid-file / --transport) is rejected and no kill targets are produced.
+	if OS.get_name() == "Windows":
+		skip("POSIX-only regression: Windows path covered by netstat parser tests")
+		return
+	var sleep_path := "/bin/sleep"
+	if not FileAccess.file_exists(sleep_path):
+		sleep_path = "/usr/bin/sleep"
+		if not FileAccess.file_exists(sleep_path):
+			skip("sleep(1) not available on this host")
+			return
+	var child_pid := OS.create_process(sleep_path, ["30"])
+	if child_pid <= 0:
+		skip("OS.create_process unavailable in this test environment")
+		return
+	var plugin := _RealCmdlinePlugin.new()
+	plugin.listener_pids = [child_pid] as Array[int]
+	plugin.pid_file_pid = child_pid
+	plugin.alive_pids = [child_pid] as Array[int]
+
+	var targets := plugin._legacy_pidfile_kill_targets(TEST_PORT, plugin.listener_pids)
+	plugin.free()
+	OS.kill(child_pid)
+
+	assert_true(
+		targets.is_empty(),
+		"unrelated live PID in pidfile must not produce kill targets without brand+flag cmdline proof"
+	)
+
+
+func test_strong_proof_accepts_live_managed_record_pid() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [24680] as Array[int]
+	plugin.managed_record = {"pid": 24680, "version": "2.1.0", "ws_port": 9500}
+	plugin.alive_pids = [24680] as Array[int]
+
+	var proof := plugin._evaluate_strong_port_occupant_proof(TEST_PORT)
+	plugin.free()
+
+	assert_eq(proof.get("proof", ""), "managed_record")
+	var pids: Array[int] = []
+	pids.assign(proof.get("pids", []))
+	assert_eq(pids, [24680] as Array[int])
+
+
+func test_legacy_pidfile_proof_returns_all_branded_listener_pids() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [11111, 22222, 33333] as Array[int]
+	plugin.pid_file_pid = 11111
+	plugin.alive_pids = [11111] as Array[int]
+	plugin.branded_pids = [11111, 22222] as Array[int]
+
+	var targets := plugin._legacy_pidfile_kill_targets(TEST_PORT, plugin.listener_pids)
+	var proof := plugin._evaluate_strong_port_occupant_proof(TEST_PORT)
+	plugin.free()
+
+	assert_eq(targets, [11111, 22222] as Array[int])
+	assert_eq(proof.get("proof", ""), "pidfile_listener")
+	var pids: Array[int] = []
+	pids.assign(proof.get("pids", []))
+	assert_eq(pids, [11111, 22222] as Array[int])
+
+
+func test_strong_proof_accepts_status_matching_managed_record_version() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [13579] as Array[int]
+	plugin.managed_record = {"pid": 0, "version": "2.1.0", "ws_port": 9500}
+	plugin.live_status = {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
+
+	var proof := plugin._evaluate_strong_port_occupant_proof(TEST_PORT)
+	plugin.free()
+
+	assert_eq(proof.get("proof", ""), "status_matches_record")
+	var pids: Array[int] = []
+	pids.assign(proof.get("pids", []))
+	assert_eq(pids, [13579] as Array[int])
+
+
+func test_strong_proof_rejects_status_name_only() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [13579] as Array[int]
+	plugin.managed_record = {"pid": 0, "version": "", "ws_port": 0}
+	plugin.live_status = {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
+
+	var proof := plugin._evaluate_strong_port_occupant_proof(TEST_PORT)
+	plugin.free()
+
+	assert_eq(proof.get("proof", ""), "")
+	var pids: Array[int] = []
+	pids.assign(proof.get("pids", []))
+	assert_true(pids.is_empty())
+
+
+func test_recovery_proof_accepts_status_name_only() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [13579] as Array[int]
+	plugin.live_status = {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
+
+	var proof := plugin._evaluate_recovery_port_occupant_proof(TEST_PORT)
+	plugin.free()
+
+	assert_eq(proof.get("proof", ""), "status_name")
+	var pids: Array[int] = []
+	pids.assign(proof.get("pids", []))
+	assert_eq(pids, [13579] as Array[int])
+
+
+func test_can_recover_incompatible_server_requires_state_and_recovery_proof() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.port_in_use = true
+	plugin.listener_pids = [13579] as Array[int]
+	plugin.live_status = {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
+
+	assert_false(plugin.can_recover_incompatible_server(), "OK state must not expose recovery")
+	plugin._spawn_state = McpSpawnState.INCOMPATIBLE_SERVER
+	assert_true(plugin.can_recover_incompatible_server(), "status-name proof should allow clicked recovery")
+	plugin.free()
 
 
 func test_external_compatible_adoption_clears_stale_managed_record() -> void:
@@ -415,7 +731,7 @@ func test_incompatible_server_message_names_ws_port_mismatch() -> void:
 
 
 func test_incompatible_transition_refreshes_dock_client_statuses() -> void:
-	var plugin := GodotAiPlugin.new()
+	var plugin := _ProofPlugin.new()
 	var dock := _RefreshDock.new()
 	plugin._dock = dock
 	plugin._set_incompatible_server({"version": "1.2.10"}, "2.2.0", 8000)
@@ -424,6 +740,98 @@ func test_incompatible_transition_refreshes_dock_client_statuses() -> void:
 	plugin.free()
 
 	assert_eq(calls, 1, "late incompatible transition must resweep dock client status")
+
+
+func test_incompatible_status_exposes_actual_name_and_recovery_flag() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [24680] as Array[int]
+	plugin.live_status = {"name": "godot-ai", "version": "1.2.10", "ws_port": 9500, "status_code": 200}
+	plugin._set_incompatible_server(plugin.live_status, "2.2.0", TEST_PORT)
+	var status := plugin.get_server_status()
+	plugin.free()
+
+	assert_eq(status.get("actual_name", ""), "godot-ai")
+	assert_true(bool(status.get("can_recover_incompatible", false)))
+
+
+func test_drift_kill_without_strong_targets_sets_incompatible_and_preserves_record() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.port_in_use_sequence = [true] as Array[bool]
+	plugin.listener_pids = [24680] as Array[int]
+	plugin.managed_record = {"pid": 0, "version": "old-managed-for-test", "ws_port": 9500}
+	plugin.live_status = {"name": "other-server", "version": "old-managed-for-test", "ws_port": 9500, "status_code": 200}
+
+	plugin._start_server()
+	var status := plugin.get_server_status()
+	var killed := plugin.killed_targets.duplicate()
+	var clear_calls := plugin.cleared_record_calls
+	var server_pid := plugin._server_pid
+	plugin.free()
+
+	assert_eq(status.get("state", ""), McpSpawnState.INCOMPATIBLE_SERVER)
+	assert_true(killed.is_empty(), "drift branch must not kill without strong proof")
+	assert_eq(clear_calls, 0, "failed drift proof must preserve the managed record")
+	assert_eq(server_pid, -1, "drift branch must not spawn into a port with no strong kill target")
+
+
+func test_drift_kill_preserves_record_and_does_not_spawn_when_port_stays_held() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.port_in_use_sequence = [true, true] as Array[bool]
+	plugin.listener_pids = [24680] as Array[int]
+	plugin.managed_record = {"pid": 24680, "version": "old-managed-for-test", "ws_port": 9500}
+	plugin.alive_pids = [24680] as Array[int]
+	plugin.live_status = {"name": "other-server", "version": "old-managed-for-test", "ws_port": 9500, "status_code": 200}
+
+	plugin._start_server()
+	var status := plugin.get_server_status()
+	var killed := plugin.killed_targets.duplicate()
+	var clear_calls := plugin.cleared_record_calls
+	var server_pid := plugin._server_pid
+	plugin.free()
+
+	assert_eq(status.get("state", ""), McpSpawnState.INCOMPATIBLE_SERVER)
+	assert_eq(killed, [24680] as Array[int])
+	assert_eq(clear_calls, 0, "held port after kill must preserve the managed record")
+	assert_eq(server_pid, -1, "drift branch must not spawn while the port is still held")
+
+
+func test_force_restart_preserves_record_when_port_remains_held() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.port_in_use = true
+	plugin.listener_pids = [24680] as Array[int]
+	plugin.managed_record = {"pid": 24680, "version": "old-managed-for-test", "ws_port": 9500}
+	plugin.live_status = {"name": "other-server", "version": "old-managed-for-test", "ws_port": 9500, "status_code": 200}
+
+	plugin.force_restart_server()
+	var status := plugin.get_server_status()
+	var killed := plugin.killed_targets.duplicate()
+	var clear_calls := plugin.cleared_record_calls
+	plugin.free()
+
+	assert_eq(status.get("state", ""), McpSpawnState.INCOMPATIBLE_SERVER)
+	assert_eq(killed, [24680] as Array[int])
+	assert_eq(clear_calls, 0, "force restart must not clear ownership while the port is still held")
+
+
+func test_recover_incompatible_returns_false_and_leaves_state_when_port_remains_held() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin._spawn_state = McpSpawnState.INCOMPATIBLE_SERVER
+	plugin._connection_blocked = true
+	plugin.port_in_use = true
+	plugin.listener_pids = [24680] as Array[int]
+	plugin.live_status = {"name": "godot-ai", "version": "1.2.10", "ws_port": 9500, "status_code": 200}
+
+	var ok := plugin.recover_incompatible_server()
+	var status := plugin.get_server_status()
+	var killed := plugin.killed_targets.duplicate()
+	var clear_calls := plugin.cleared_record_calls
+	plugin.free()
+
+	assert_false(ok, "recovery click must report failure when the kill did not free the port")
+	assert_eq(status.get("state", ""), McpSpawnState.INCOMPATIBLE_SERVER)
+	assert_true(bool(status.get("connection_blocked", false)))
+	assert_eq(killed, [24680] as Array[int])
+	assert_eq(clear_calls, 0, "failed recovery must preserve record/pid-file state")
 
 
 func test_connection_established_waits_for_version_before_clearing_foreign_port() -> void:

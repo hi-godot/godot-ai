@@ -19,6 +19,7 @@ from godot_ai.godot_client.client import GodotClient
 from godot_ai.middleware import (
     HintOpTypoOnManage,
     ParseStringifiedParams,
+    PreserveGodotCommandErrorData,
     StripClientWrapperKwargs,
 )
 from godot_ai.resources.editor import register_editor_resources
@@ -160,6 +161,10 @@ def create_server(
         ),
         lifespan=_lifespan,
     )
+
+    ## Keep plugin-provided error.data (e.g. candidate paths) visible on MCP
+    ## tool error responses instead of collapsing it into plain text.
+    mcp.add_middleware(PreserveGodotCommandErrorData())
 
     ## Tolerate known client-injected wrapper kwargs (Cline's task_progress,
     ## etc.) so strict pydantic schemas don't reject every call. See #193.

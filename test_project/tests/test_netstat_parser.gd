@@ -170,6 +170,21 @@ func test_parse_pid_lines_ignores_noise_and_deduplicates() -> void:
 	assert_eq(pids[1], 40064)
 
 
+func test_powershell_listener_output_parses_pid_lines() -> void:
+	var pids := GodotAiPlugin._windows_listener_pids_from_execute_result(
+		0,
+		["19088\r\n40064\r\n19088\r\n"]
+	)
+	assert_eq(pids.size(), 2)
+	assert_eq(pids[0], 19088)
+	assert_eq(pids[1], 40064)
+
+
+func test_powershell_listener_output_empty_means_no_listener() -> void:
+	assert_false(GodotAiPlugin._windows_listener_execute_result_in_use(0, [""]))
+	assert_false(GodotAiPlugin._windows_listener_execute_result_in_use(1, ["19088"]))
+
+
 # ----- pid-file round trip -----
 
 func test_read_pid_file_missing_returns_zero() -> void:

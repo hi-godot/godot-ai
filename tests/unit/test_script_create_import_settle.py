@@ -72,7 +72,16 @@ def test_finish_create_script_deferred_polls_resourceloader_with_bounded_loop() 
         "The deferred loop must use a named bounded-frame constant so the "
         "wait can't run forever if the filesystem scan stalls."
     )
+    assert "_IMPORT_SETTLE_MAX_MSEC := 4500" in source, (
+        "The deferred loop must also be capped below the Python client's "
+        "default 5s send timeout. A pure 300-frame cap can exceed 5s on a "
+        "slow editor frame rate."
+    )
     deferred_block = source.split("func _finish_create_script_deferred", 1)[1]
+    assert "var deadline_ms := Time.get_ticks_msec() + _IMPORT_SETTLE_MAX_MSEC" in (
+        deferred_block
+    )
+    assert "Time.get_ticks_msec() < deadline_ms" in deferred_block
     assert "ResourceLoader.exists(path)" in deferred_block, (
         "The deferred loop must poll ResourceLoader.exists(path) — that's "
         "the precise check script_attach uses, so settling on it gives the "

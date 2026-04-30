@@ -194,6 +194,29 @@ class TestErrors:
         assert "/Missing/Node" in exc_info.value.message
         await plugin.close()
 
+    async def test_plugin_error_preserves_structured_data(self, harness):
+        plugin = await harness.connect_plugin()
+        client = GodotClient(harness.server, harness.registry)
+        candidates = ["/Main/VisualA", "/Main/VisualB"]
+
+        async def mock_handler():
+            cmd = await plugin.recv_command()
+            await plugin.send_error(
+                cmd["request_id"],
+                "INVALID_PARAMS",
+                "Multiple visual candidates near /Main/Body/Collision",
+                data={"candidates": candidates},
+            )
+
+        handler_task = asyncio.create_task(mock_handler())
+        with pytest.raises(GodotCommandError) as exc_info:
+            await client.send("physics_shape_autofit")
+        await handler_task
+
+        assert exc_info.value.code == "INVALID_PARAMS"
+        assert exc_info.value.data["candidates"] == candidates
+        await plugin.close()
+
     async def test_send_to_no_active_session_raises(self, harness):
         client = GodotClient(harness.server, harness.registry)
         with pytest.raises(ConnectionError, match="No active Godot session"):
