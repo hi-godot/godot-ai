@@ -1,0 +1,981 @@
+#!/usr/bin/env bash
+# Prepare local fake-server modules and print the manual proof matrix for
+# orphan/foreign MCP server recovery. This is intentionally a manual helper:
+# it does not edit Godot EditorSettings, kill real listeners, or launch Godot.
+
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+
+is_windows_bash() {
+    case "$(uname -s 2>/dev/null || echo unknown)" in
+        MINGW*|MSYS*|CYGWIN*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+default_orphan_root() {
+    if is_windows_bash; then
+        if command -v cygpath >/dev/null 2>&1; then
+            cygpath -u 'C:\tmp\orphan-sim'
+        else
+            printf '%s\n' '/c/tmp/orphan-sim'
+        fi
+    else
+        printf '%s\n' '/tmp/orphan-sim'
+    fi
+}
+
+default_status_root() {
+    if is_windows_bash; then
+        if command -v cygpath >/dev/null 2>&1; then
+            cygpath -u 'C:\tmp\sim-statusonly'
+        else
+            printf '%s\n' '/c/tmp/sim-statusonly'
+        fi
+    else
+        printf '%s\n' '/tmp/sim-statusonly'
+    fi
+}
+
+ORPHAN_ROOT="${ORPHAN_SIM_ROOT:-$(default_orphan_root)}"
+STATUS_ROOT="${STATUS_ONLY_SIM_ROOT:-$(default_status_root)}"
+SANITY_SIM_PID=""
+SANITY_OLD_PYTHONPATH=""
+SANITY_OLD_PYTHONPATH_SET=0
+SANITY_PIDFILE=""
+SANITY_OLD_PIDFILE_CONTENT=""
+SANITY_OLD_PIDFILE_EXISTS=0
+
+to_windows_path() {
+    if command -v cygpath >/dev/null 2>&1; then
+        cygpath -w "$1"
+    else
+        printf '%s' "$1"
+    fi
+}
+
+to_bash_path() {
+    local path="$1"
+    if is_windows_bash && command -v cygpath >/dev/null 2>&1; then
+        cygpath -u "$path"
+    else
+        printf '%s' "$path"
+    fi
+}
+
+pythonpath_for_shell() {
+    local path="$1"
+    if is_windows_bash; then
+        to_windows_path "$path"
+    else
+        printf '%s' "$path"
+    fi
+}
+
+main_worktree_root() {
+    local common_dir
+    common_dir="$(git -C "$repo_root" rev-parse --git-common-dir 2>/dev/null || true)"
+    if [ -z "$common_dir" ]; then
+        return 1
+    fi
+    if [[ "$common_dir" != /* && ! "$common_dir" =~ ^[A-Za-z]:[\\/] ]]; then
+        common_dir="$repo_root/$common_dir"
+    fi
+    common_dir="$(cd "$common_dir" 2>/dev/null && pwd || true)"
+    if [ -z "$common_dir" ]; then
+        return 1
+    fi
+    dirname "$common_dir"
+}
+
+find_python() {
+    if [ -n "${PYTHON:-}" ]; then
+        printf '%s\n' "$PYTHON"
+        return 0
+    fi
+    if [ -x "$repo_root/.venv/Scripts/python.exe" ]; then
+        printf '%s\n' "$repo_root/.venv/Scripts/python.exe"
+        return 0
+    fi
+    if [ -x "$repo_root/.venv/bin/python" ]; then
+        printf '%s\n' "$repo_root/.venv/bin/python"
+        return 0
+    fi
+    local main_root
+    main_root="$(main_worktree_root || true)"
+    if [ -n "$main_root" ] && [ "$main_root" != "$repo_root" ]; then
+        if [ -x "$main_root/.venv/Scripts/python.exe" ]; then
+            printf '%s\n' "$main_root/.venv/Scripts/python.exe"
+            return 0
+        fi
+        if [ -x "$main_root/.venv/bin/python" ]; then
+            printf '%s\n' "$main_root/.venv/bin/python"
+            return 0
+        fi
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        command -v python3
+        return 0
+    fi
+    if command -v python >/dev/null 2>&1; then
+        command -v python
+        return 0
+    fi
+    if command -v py >/dev/null 2>&1; then
+        command -v py
+        return 0
+    fi
+    echo "error: neither python3 nor python was found on PATH" >&2
+    return 1
+}
+
+write_orphan_sim() {
+    mkdir -p "$ORPHAN_ROOT/godot_ai"
+    : > "$ORPHAN_ROOT/godot_ai/__init__.py"
+    cat > "$ORPHAN_ROOT/godot_ai/__main__.py" <<'PY'
+"""Minimal orphan godot-ai server simulator for manual PR verification."""
+import argparse
+import json
+import os
+import signal
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--transport", default="streamable-http")
+ap.add_argument("--port", type=int, default=8000)
+ap.add_argument("--ws-port", type=int, default=9500)
+ap.add_argument("--pid-file", required=True)
+ap.add_argument(
+    "--fake-version",
+    default="2.2.0",
+    help="value returned in /godot-ai/status; use 'none' to drop version",
+)
+ap.add_argument(
+    "--fake-name",
+    default="godot-ai",
+    help="name in /godot-ai/status; 'none' drops the endpoint",
+)
+ap.add_argument(
+    "--ignore-sigterm",
+    action="store_true",
+    help="trap SIGTERM so kill -15 fails (failed-kill scenario)",
+)
+args = ap.parse_args()
+
+if args.pid_file and args.pid_file.lower() != "none":
+    os.makedirs(os.path.dirname(args.pid_file), exist_ok=True)
+    with open(args.pid_file, "w", encoding="utf-8") as f:
+        f.write(str(os.getpid()))
+
+if args.ignore_sigterm:
+    signal.signal(
+        signal.SIGTERM,
+        lambda *a: print("simulator: ignoring SIGTERM", flush=True),
+    )
+
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a, **kw):
+        pass
+
+    def do_GET(self):
+        if self.path == "/godot-ai/status" and args.fake_name.lower() != "none":
+            payload = {
+                "name": args.fake_name,
+                "version": args.fake_version,
+                "ws_port": args.ws_port,
+            }
+            body = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+
+print(f"simulator pid={os.getpid()} listening on :{args.port}", flush=True)
+ThreadingHTTPServer(("127.0.0.1", args.port), H).serve_forever()
+PY
+}
+
+write_status_only_sim() {
+    mkdir -p "$STATUS_ROOT/http_status_only"
+    : > "$STATUS_ROOT/http_status_only/__init__.py"
+    cat > "$STATUS_ROOT/http_status_only/__main__.py" <<'PY'
+import argparse
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--port", type=int, default=8000)
+ap.add_argument("--fake-version", default="2.2.0")
+ap.add_argument("--ws-port", type=int, default=9500)
+args = ap.parse_args()
+
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a, **kw):
+        pass
+
+    def do_GET(self):
+        body = json.dumps(
+            {
+                "name": "godot-ai",
+                "version": args.fake_version,
+                "ws_port": args.ws_port,
+            }
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+ThreadingHTTPServer(("127.0.0.1", args.port), H).serve_forever()
+PY
+}
+
+setup_sims() {
+    write_orphan_sim
+    write_status_only_sim
+    echo "Prepared orphan simulator:"
+    echo "  Bash path:       $ORPHAN_ROOT"
+    echo "  PYTHONPATH:      $(pythonpath_for_shell "$ORPHAN_ROOT")"
+    echo
+    echo "Prepared status-only simulator:"
+    echo "  Bash path:       $STATUS_ROOT"
+    echo "  PYTHONPATH:      $(pythonpath_for_shell "$STATUS_ROOT")"
+    if is_windows_bash; then
+        echo
+        echo "PowerShell paths:"
+        echo "  orphan sim:      $(to_windows_path "$ORPHAN_ROOT")"
+        echo "  status-only sim: $(to_windows_path "$STATUS_ROOT")"
+    fi
+}
+
+editor_settings_candidates() {
+    if is_windows_bash; then
+        local appdata
+        appdata="$(powershell.exe -NoProfile -Command '[Environment]::GetFolderPath("ApplicationData")' 2>/dev/null | tr -d '\r' || true)"
+        if [ -n "$appdata" ]; then
+            printf '%s\n' \
+                "$appdata\\Godot\\editor_settings-4.6.tres" \
+                "$appdata\\Godot\\editor_settings-4.5.tres" \
+                "$appdata\\Godot\\editor_settings-4.tres"
+        else
+            printf '%s\n' \
+                '$env:APPDATA\Godot\editor_settings-4.6.tres' \
+                '$env:APPDATA\Godot\editor_settings-4.5.tres' \
+                '$env:APPDATA\Godot\editor_settings-4.tres'
+        fi
+    else
+        printf '%s\n' \
+            "$HOME/.config/godot/editor_settings-4.6.tres" \
+            "$HOME/.config/godot/editor_settings-4.5.tres" \
+            "$HOME/.config/godot/editor_settings-4.tres" \
+            "$HOME/Library/Application Support/Godot/editor_settings-4.6.tres" \
+            "$HOME/Library/Application Support/Godot/editor_settings-4.5.tres" \
+            "$HOME/Library/Application Support/Godot/editor_settings-4.tres"
+    fi
+}
+
+active_editor_settings() {
+    local candidate bash_path
+    while IFS= read -r candidate; do
+        bash_path="$(to_bash_path "$candidate")"
+        if [ -f "$bash_path" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done < <(editor_settings_candidates)
+    return 1
+}
+
+print_editor_settings_preflight() {
+    echo "EditorSettings candidates:"
+    local candidate bash_path marker
+    while IFS= read -r candidate; do
+        bash_path="$(to_bash_path "$candidate")"
+        marker="missing"
+        if [ -f "$bash_path" ]; then
+            marker="exists"
+        fi
+        echo "  [$marker] $candidate"
+    done < <(editor_settings_candidates)
+
+    local active active_bash
+    if active="$(active_editor_settings)"; then
+        active_bash="$(to_bash_path "$active")"
+        echo
+        echo "Active EditorSettings:"
+        echo "  $active"
+        echo "godot_ai settings:"
+        if ! grep -E 'godot_ai/(http_port|ws_port|managed_server_(pid|version|ws_port))' "$active_bash" 2>/dev/null | sed 's/^/  /'; then
+            echo "  (none found; defaults are http_port=8000 and ws_port=9500)"
+        fi
+    else
+        echo
+        echo "Active EditorSettings: not found"
+        echo "  Start Godot once, then re-run preflight."
+    fi
+}
+
+print_port_8000_preflight() {
+    echo "Port 8000 listener:"
+    if is_windows_bash; then
+        powershell.exe -NoProfile -Command '
+$conn = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($null -eq $conn) {
+  "  none"
+  exit 0
+}
+$pidValue = [int]$conn.OwningProcess
+"  pid=$pidValue"
+$proc = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $pidValue)
+if ($null -ne $proc -and $proc.CommandLine) {
+  "  command=$($proc.CommandLine)"
+} else {
+  "  command=(unavailable)"
+}
+' 2>/dev/null | tr -d '\r' || echo "  unavailable"
+    elif command -v lsof >/dev/null 2>&1; then
+        local pids
+        pids="$(lsof -ti:8000 -sTCP:LISTEN 2>/dev/null || true)"
+        if [ -z "$pids" ]; then
+            echo "  none"
+            return
+        fi
+        local pid
+        while IFS= read -r pid; do
+            [ -z "$pid" ] && continue
+            echo "  pid=$pid"
+            if ps -ww -p "$pid" -o args= >/dev/null 2>&1; then
+                ps -ww -p "$pid" -o args= | sed 's/^/  command=/'
+            else
+                echo "  command=(unavailable)"
+            fi
+        done <<< "$pids"
+    else
+        echo "  lsof unavailable"
+    fi
+}
+
+print_checkout_preflight() {
+    local version git_head
+    version="$(sed -n 's/^version="\([^"]*\)"/\1/p' "$repo_root/plugin/addons/godot_ai/plugin.cfg" | head -n 1)"
+    git_head="$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || true)"
+    echo "Checkout:"
+    echo "  repo:    $repo_root"
+    echo "  git:     ${git_head:-unavailable}"
+    echo "  plugin:  ${version:-unknown}"
+    echo "Proof symbols:"
+    local plugin_gd="$repo_root/plugin/addons/godot_ai/plugin.gd"
+    local sym marker
+    for sym in \
+        'MCP | strong proof:' \
+        'MCP | proof:' \
+        'MCP | killed pids' \
+        'managed_record' \
+        'pidfile_listener' \
+        'status_name'
+    do
+        marker="missing"
+        if grep -Fq "$sym" "$plugin_gd"; then
+            marker="present"
+        fi
+        echo "  [$marker] $sym"
+    done
+}
+
+print_preflight() {
+    echo "# manual-orphan-test preflight"
+    echo
+    print_checkout_preflight
+    echo
+    print_editor_settings_preflight
+    echo
+    print_port_8000_preflight
+    echo
+    echo "Simulator roots:"
+    echo "  orphan sim:      $ORPHAN_ROOT"
+    echo "  status-only sim: $STATUS_ROOT"
+}
+
+print_paths() {
+    cat <<EOF
+Repository:
+  $repo_root
+
+Simulator roots:
+  orphan sim:      $ORPHAN_ROOT
+  status-only sim: $STATUS_ROOT
+
+Python import paths for this shell:
+  orphan sim:      $(pythonpath_for_shell "$ORPHAN_ROOT")
+  status-only sim: $(pythonpath_for_shell "$STATUS_ROOT")
+EOF
+    if is_windows_bash; then
+        cat <<EOF
+
+PowerShell import paths:
+  orphan sim:      $(to_windows_path "$ORPHAN_ROOT")
+  status-only sim: $(to_windows_path "$STATUS_ROOT")
+EOF
+    fi
+}
+
+port_8000_in_use() {
+    if is_windows_bash; then
+        powershell.exe -NoProfile -Command 'if (Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }' >/dev/null 2>&1
+        return $?
+    fi
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -ti:8000 -sTCP:LISTEN >/dev/null 2>&1
+        return $?
+    fi
+    return 1
+}
+
+run_sanity() {
+    setup_sims
+    echo
+    print_preflight
+    echo
+    if port_8000_in_use; then
+        echo "error: port 8000 is already in use; free it before running sanity" >&2
+        return 1
+    fi
+
+    local py
+    py="$(find_python)"
+    local pidfile="$HOME/.local/share/godot/app_userdata/MCP Test Project/godot_ai_server.pid"
+    if is_windows_bash; then
+        local appdata
+        appdata="$(powershell.exe -NoProfile -Command '[Environment]::GetFolderPath("ApplicationData")' 2>/dev/null | tr -d '\r' || true)"
+        if [ -n "$appdata" ]; then
+            pidfile="$(to_bash_path "$appdata\\Godot\\app_userdata\\MCP Test Project\\godot_ai_server.pid")"
+        fi
+    fi
+    mkdir -p "$(dirname "$pidfile")"
+    SANITY_PIDFILE="$pidfile"
+    SANITY_OLD_PIDFILE_CONTENT=""
+    SANITY_OLD_PIDFILE_EXISTS=0
+    if [ -f "$pidfile" ]; then
+        SANITY_OLD_PIDFILE_CONTENT="$(cat "$pidfile" 2>/dev/null || true)"
+        SANITY_OLD_PIDFILE_EXISTS=1
+    fi
+    local sim_pythonpath
+    sim_pythonpath="$(pythonpath_for_shell "$ORPHAN_ROOT")"
+    local old_pythonpath="${PYTHONPATH:-}"
+    SANITY_OLD_PYTHONPATH="$old_pythonpath"
+    if [ -n "${PYTHONPATH+x}" ]; then
+        SANITY_OLD_PYTHONPATH_SET=1
+    else
+        SANITY_OLD_PYTHONPATH_SET=0
+    fi
+    local sep=":"
+    if is_windows_bash; then
+        sep=";"
+    fi
+    if [ -n "$old_pythonpath" ]; then
+        export PYTHONPATH="$sim_pythonpath$sep$old_pythonpath"
+    else
+        export PYTHONPATH="$sim_pythonpath"
+    fi
+
+    cleanup() {
+        if [ -n "${SANITY_SIM_PID:-}" ]; then
+            kill "$SANITY_SIM_PID" >/dev/null 2>&1 || true
+            wait "$SANITY_SIM_PID" >/dev/null 2>&1 || true
+            SANITY_SIM_PID=""
+        fi
+        if [ "${SANITY_PIDFILE:-}" != "" ] && [ "$SANITY_OLD_PIDFILE_EXISTS" = "1" ]; then
+            printf '%s' "$SANITY_OLD_PIDFILE_CONTENT" > "$SANITY_PIDFILE"
+        else
+            rm -f "${SANITY_PIDFILE:-}"
+        fi
+        SANITY_PIDFILE=""
+        SANITY_OLD_PIDFILE_CONTENT=""
+        SANITY_OLD_PIDFILE_EXISTS=0
+        if [ "${SANITY_OLD_PYTHONPATH_SET:-0}" = "1" ]; then
+            export PYTHONPATH="$SANITY_OLD_PYTHONPATH"
+        else
+            unset PYTHONPATH
+        fi
+    }
+    trap cleanup EXIT
+
+    "$py" -m godot_ai \
+        --transport streamable-http \
+        --port 8000 \
+        --ws-port 9500 \
+        --pid-file "$pidfile" \
+        --fake-version 2.2.0 &
+    SANITY_SIM_PID=$!
+    sleep 0.7
+
+    echo
+    echo "Status endpoint:"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS http://127.0.0.1:8000/godot-ai/status | "$py" -m json.tool
+    else
+        "$py" - <<'PY'
+import json
+from urllib.request import urlopen
+
+with urlopen("http://127.0.0.1:8000/godot-ai/status", timeout=2) as r:
+    print(json.dumps(json.loads(r.read()), indent=4))
+PY
+    fi
+
+    echo
+    echo "Simulator command line:"
+    local inspect_pid="$SANITY_SIM_PID"
+    local pid_from_file=""
+    if [ -f "$pidfile" ]; then
+        pid_from_file="$(tr -d '[:space:]' < "$pidfile" || true)"
+        if [[ "$pid_from_file" =~ ^[0-9]+$ ]]; then
+            inspect_pid="$pid_from_file"
+        fi
+    fi
+    if ps -p "$inspect_pid" -o args= >/dev/null 2>&1; then
+        ps -p "$inspect_pid" -o args=
+    elif is_windows_bash && command -v powershell.exe >/dev/null 2>&1; then
+        powershell.exe -NoProfile -Command "\$p = Get-CimInstance Win32_Process -Filter 'ProcessId=$inspect_pid'; if (\$p) { \$p.CommandLine } else { exit 1 }"
+    else
+        echo "ps command-line inspection is unavailable in this shell."
+        echo "Expected fingerprint: godot_ai --transport ... --pid-file ..."
+    fi
+}
+
+print_instructions() {
+    local orphan_pp status_pp orphan_pwsh_pp status_pwsh_pp posix_orphan_pp posix_status_pp
+    local posix_project posix_repo repo_win project_win
+    orphan_pp="$(pythonpath_for_shell "$ORPHAN_ROOT")"
+    status_pp="$(pythonpath_for_shell "$STATUS_ROOT")"
+    if is_windows_bash; then
+        orphan_pwsh_pp="$(to_windows_path "$ORPHAN_ROOT")"
+        status_pwsh_pp="$(to_windows_path "$STATUS_ROOT")"
+        posix_orphan_pp="/tmp/orphan-sim"
+        posix_status_pp="/tmp/sim-statusonly"
+        posix_repo="\$HOME/godot-ai"
+        posix_project="\$HOME/godot-ai/test_project"
+        repo_win="$(to_windows_path "$repo_root")"
+    else
+        orphan_pwsh_pp='C:\tmp\orphan-sim'
+        status_pwsh_pp='C:\tmp\sim-statusonly'
+        posix_orphan_pp="$orphan_pp"
+        posix_status_pp="$status_pp"
+        posix_repo="$repo_root"
+        posix_project="$repo_root/test_project"
+        repo_win='C:\path\to\godot-ai'
+    fi
+    project_win="$repo_win\\test_project"
+
+    cat <<EOF
+# Manual orphan/foreign server proof tests
+
+Run these before the scenarios:
+
+    script/manual-orphan-test setup
+    script/manual-orphan-test preflight
+
+This prepares two fake modules:
+
+    orphan godot_ai module:      $ORPHAN_ROOT
+    status-only occupant module: $STATUS_ROOT
+
+The preflight prints:
+
+- candidate Godot EditorSettings files, including editor_settings-4.6.tres
+- current godot_ai/http_port, godot_ai/ws_port, and managed-server keys
+- current port-8000 listener PID and command line
+- checkout commit, plugin version, and proof-symbol presence
+
+These recipes assume the PR branch emits proof-tier log lines such as:
+
+    MCP | port 8000 in use, evaluating proof...
+    MCP | strong proof: managed_record
+    MCP | strong proof: pidfile_listener
+    MCP | proof: status_name
+    MCP | killed pids [...]
+    MCP | incompatible server detected
+    MCP | spawned managed server pid=...
+
+The helper does not edit EditorSettings. Close Godot before manually editing
+editor_settings-4.6.tres or editor_settings-4.tres.
+
+## Safe reset checklist
+
+Before each scenario, back up EditorSettings and put the ports back to the
+baseline expected by the matrix:
+
+PowerShell:
+
+    \$edCandidates = @(
+      "\$env:APPDATA\\Godot\\editor_settings-4.6.tres",
+      "\$env:APPDATA\\Godot\\editor_settings-4.5.tres",
+      "\$env:APPDATA\\Godot\\editor_settings-4.tres"
+    )
+    \$ed = \$edCandidates | Where-Object { Test-Path -LiteralPath \$_ } | Select-Object -First 1
+    if (-not \$ed) { throw "No Godot editor_settings-4*.tres found under APPDATA\\Godot" }
+    Copy-Item -LiteralPath \$ed -Destination ("\$ed.bak-" + (Get-Date -Format yyyyMMdd-HHmmss))
+    Select-String -LiteralPath \$ed -Pattern 'godot_ai/(http_port|ws_port|managed_server_)'
+
+Then edit \$ed so these lines are present exactly once:
+
+    godot_ai/http_port = 8000
+    godot_ai/ws_port = 9500
+
+For scenarios that require a clean ownership record, remove or zero:
+
+    godot_ai/managed_server_pid
+    godot_ai/managed_server_version
+    godot_ai/managed_server_ws_port
+
+And remove the pidfile when the scenario says "clean record":
+
+    Remove-Item -LiteralPath "\$env:APPDATA\\Godot\\app_userdata\\MCP Test Project\\godot_ai_server.pid" -ErrorAction SilentlyContinue
+
+POSIX:
+
+    EDITOR_SETTINGS="\$HOME/.config/godot/editor_settings-4.6.tres"
+    [ -f "\$EDITOR_SETTINGS" ] || EDITOR_SETTINGS="\$HOME/.config/godot/editor_settings-4.tres"
+    cp "\$EDITOR_SETTINGS" "\$EDITOR_SETTINGS.bak-\$(date +%Y%m%d-%H%M%S)"
+    grep -E 'godot_ai/(http_port|ws_port|managed_server_)' "\$EDITOR_SETTINGS" || true
+
+Launching Godot may dirty test_project/project.godot. After each scenario:
+
+    git -C "$posix_repo" diff --stat
+
+On Windows:
+
+    git -C "$repo_win" diff --stat
+
+## Quick simulator sanity check
+
+Port 8000 must be free:
+
+    PYTHON_BIN="\${PYTHON:-python3}"
+    PYTHONPATH="$orphan_pp" "\$PYTHON_BIN" -m godot_ai \\
+      --transport streamable-http --port 8000 --ws-port 9500 \\
+      --pid-file "\$HOME/.local/share/godot/app_userdata/MCP Test Project/godot_ai_server.pid" \\
+      --fake-version 2.2.0 &
+    SIM_PID=\$!
+    sleep 0.5
+    curl -s http://127.0.0.1:8000/godot-ai/status | "\$PYTHON_BIN" -m json.tool
+    ps -ww -p \$SIM_PID -o args=
+    kill \$SIM_PID
+
+Expected: JSON includes name=godot-ai and version=2.2.0. The command line
+contains "godot_ai --transport ... --pid-file ...".
+
+## Common POSIX paths
+
+    USER_DIR_LINUX="\$HOME/.local/share/godot/app_userdata/MCP Test Project"
+    USER_DIR_MAC="\$HOME/Library/Application Support/Godot/app_userdata/MCP Test Project"
+    USER_DIR="\$USER_DIR_LINUX"
+    PIDFILE="\$USER_DIR/godot_ai_server.pid"
+
+    EDITOR_SETTINGS_LINUX="\$HOME/.config/godot/editor_settings-4.6.tres"
+    EDITOR_SETTINGS_MAC="\$HOME/Library/Application Support/Godot/editor_settings-4.6.tres"
+    EDITOR_SETTINGS="\$EDITOR_SETTINGS_LINUX"
+
+    GODOT="/Applications/Godot_mono.app/Contents/MacOS/Godot"
+    PROJECT="$posix_project"
+
+Launch the editor with console logging:
+
+    "\$GODOT" --editor --path "\$PROJECT" 2>&1 | tee /tmp/mcp-editor.log
+    tail -f /tmp/mcp-editor.log | grep -E 'MCP \\||godot[_-]ai'
+
+## Scenario 1: Windows v2.2.0 orphan recovery
+
+Use PowerShell. This tests the legacy-pidfile proof tier that motivated the PR.
+
+    \$edCandidates = @(
+      "\$env:APPDATA\\Godot\\editor_settings-4.6.tres",
+      "\$env:APPDATA\\Godot\\editor_settings-4.5.tres",
+      "\$env:APPDATA\\Godot\\editor_settings-4.tres"
+    )
+    \$ed = \$edCandidates | Where-Object { Test-Path -LiteralPath \$_ } | Select-Object -First 1
+    Copy-Item -LiteralPath \$ed -Destination ("\$ed.bak-" + (Get-Date -Format yyyyMMdd-HHmmss))
+    # Close Godot, set godot_ai/http_port=8000 and godot_ai/ws_port=9500.
+    # Remove or zero:
+    # godot_ai/managed_server_pid
+    # godot_ai/managed_server_version
+    # godot_ai/managed_server_ws_port
+
+    Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue
+
+    \$repo = "$repo_win"
+    \$python = Join-Path \$repo ".venv\\Scripts\\python.exe"
+    if (!(Test-Path -LiteralPath \$python)) { \$python = "python" }
+    \$pidfile = "\$env:APPDATA\\Godot\\app_userdata\\MCP Test Project\\godot_ai_server.pid"
+    New-Item -Force -ItemType Directory (Split-Path \$pidfile) | Out-Null
+
+    \$psi = [System.Diagnostics.ProcessStartInfo]::new()
+    \$psi.FileName = \$python
+    \$psi.UseShellExecute = \$false
+    \$psi.Environment["PYTHONPATH"] = "$orphan_pwsh_pp"
+    foreach (\$arg in @(
+      "-m","godot_ai",
+      "--transport","streamable-http",
+      "--port","8000",
+      "--ws-port","9500",
+      "--pid-file",\$pidfile,
+      "--fake-version","2.2.0"
+    )) { [void]\$psi.ArgumentList.Add(\$arg) }
+    \$sim = [System.Diagnostics.Process]::Start(\$psi)
+    \$sim.Id
+
+    Get-NetTCPConnection -LocalPort 8000
+    Get-CimInstance Win32_Process -Filter ("ProcessId=" + \$sim.Id) | Select ProcessId,CommandLine
+    & "C:\\path\\to\\Godot.exe" --editor --path "$project_win"
+
+Pass criteria:
+
+- Console shows "MCP | strong proof: pidfile_listener".
+- Console shows "MCP | killed pids [<simulator_pid>]".
+- Port 8000 has a new PID, not the simulator PID.
+- Pidfile contents equal the new server PID.
+- Dock is green with no Restart button.
+- The old simulator process no longer exists.
+
+## Scenario 2: Windows localized shell safety
+
+Use PowerShell and repeat the scenario 1 pidfile-only orphan path after changing
+UI culture:
+
+    \$savedCulture = [System.Threading.Thread]::CurrentThread.CurrentUICulture
+    [System.Threading.Thread]::CurrentThread.CurrentUICulture =
+      [System.Globalization.CultureInfo]::GetCultureInfo("ja-JP")
+    try {
+      # Repeat scenario 1 from the ProcessStartInfo simulator launch onward.
+    } finally {
+      [System.Threading.Thread]::CurrentThread.CurrentUICulture = \$savedCulture
+    }
+
+Pass criteria: same as scenario 1. The PowerShell-first listener lookup must not
+depend on localized netstat text.
+
+Optional netstat fallback check: on a disposable admin machine, temporarily make
+powershell.exe unavailable and repeat. Skip this on a normal workstation; renaming
+system binaries is high risk.
+
+## Scenario 3: Cross-platform managed drift cleanup
+
+This tests the managed_record proof tier.
+
+    PYTHONPATH="$posix_orphan_pp" python3 -m godot_ai \\
+      --transport streamable-http --port 8000 --ws-port 9500 \\
+      --pid-file "\$PIDFILE" --fake-version 2.1.0 &
+    SIM_PID=\$!
+    sleep 0.5
+
+Close Godot and add or replace these lines in \$EDITOR_SETTINGS:
+
+    godot_ai/http_port = 8000
+    godot_ai/ws_port = 9500
+    godot_ai/managed_server_pid = <SIM_PID>
+    godot_ai/managed_server_version = "2.1.0"
+    godot_ai/managed_server_ws_port = 9500
+
+Then launch:
+
+    "\$GODOT" --editor --path "\$PROJECT" 2>&1 | tee /tmp/mcp-editor.log
+
+Pass criteria:
+
+- Console shows "MCP | strong proof: managed_record".
+- Console shows "MCP | killed pids [\$SIM_PID]".
+- Port 8000 now has a different PID.
+- Dock is green with no Restart button.
+
+## Scenario 4: Failed-kill preservation (POSIX only)
+
+Use Linux/macOS for this scenario unless you add a Windows-specific way to make
+taskkill fail. The simulator's --ignore-sigterm only exercises the POSIX
+OS.kill/SIGTERM path.
+
+Use the same managed record as scenario 3, but start the simulator with
+--ignore-sigterm:
+
+    PYTHONPATH="$posix_orphan_pp" python3 -m godot_ai \\
+      --transport streamable-http --port 8000 --ws-port 9500 \\
+      --pid-file "\$PIDFILE" --fake-version 2.1.0 \\
+      --ignore-sigterm &
+    SIM_PID=\$!
+
+Pass criteria:
+
+- Console shows kill failure or "port 8000 still in use".
+- Dock shows the incompatible-server banner.
+- "\$PIDFILE" still contains \$SIM_PID.
+- The managed-server settings still show the old version.
+- No new server spawned; port 8000 is still held by \$SIM_PID.
+
+Cleanup:
+
+    kill -KILL \$SIM_PID
+
+## Scenario 5: Status-name-only occupant safety
+
+This proves auto-kill is not triggered when the only evidence is a status
+endpoint returning name=godot-ai.
+
+    rm -f "\$PIDFILE"
+    # Close Godot, then remove godot_ai/managed_server_* from \$EDITOR_SETTINGS.
+
+    PYTHONPATH="$posix_status_pp" python3 -m http_status_only &
+    SIM_PID=\$!
+    ps -ww -p \$SIM_PID -o args=
+
+    "\$GODOT" --editor --path "\$PROJECT" 2>&1 | tee /tmp/mcp-editor.log
+
+Initial pass criteria:
+
+- Console shows "MCP | proof: status_name".
+- Console shows incompatible server with recoverable=true or equivalent.
+- No "killed pids" line appears.
+- Dock is yellow and includes a Restart button.
+- Port 8000 is still held by \$SIM_PID.
+
+After clicking Restart in the dock:
+
+- Console shows "MCP | killed pids [\$SIM_PID]".
+- Port 8000 has a new listener.
+- Dock turns green.
+
+## Scenario 6: Non-godot occupant safety
+
+    rm -f "\$PIDFILE"
+    # Close Godot, then remove godot_ai/managed_server_* from \$EDITOR_SETTINGS.
+
+    python3 -m http.server 8000 &
+    SIM_PID=\$!
+
+    "\$GODOT" --editor --path "\$PROJECT" 2>&1 | tee /tmp/mcp-editor.log
+
+Pass criteria:
+
+- Console shows proof "(none)" or incompatible_server recoverable=false.
+- Dock shows a warning without a Restart button.
+- No "killed pids" line appears.
+- Port 8000 is still held by the http.server PID.
+
+Cleanup:
+
+    kill \$SIM_PID
+
+## Scenario 7: Compatible adoption sanity
+
+Start the real current-version server outside the editor:
+
+    cd "$posix_repo"
+    script/serve-this-worktree &
+    SERVER_PID=\$!
+    sleep 1
+    curl -s http://127.0.0.1:8000/godot-ai/status
+
+    "\$GODOT" --editor --path "\$PROJECT" 2>&1 | tee /tmp/mcp-editor.log
+
+Windows simulator equivalent for a compatible external current server:
+
+    \$repo = "$repo_win"
+    \$python = Join-Path \$repo ".venv\\Scripts\\python.exe"
+    if (!(Test-Path -LiteralPath \$python)) { \$python = "python" }
+    \$pidfile = "\$env:APPDATA\\Godot\\app_userdata\\MCP Test Project\\godot_ai_server.pid"
+
+    \$psi = [System.Diagnostics.ProcessStartInfo]::new()
+    \$psi.FileName = \$python
+    \$psi.UseShellExecute = \$false
+    \$psi.Environment["PYTHONPATH"] = "$status_pwsh_pp"
+    foreach (\$arg in @("-m","http_status_only","--port","8000","--ws-port","9500","--fake-version","2.2.3")) {
+      [void]\$psi.ArgumentList.Add(\$arg)
+    }
+    \$server = [System.Diagnostics.Process]::Start(\$psi)
+
+Pass criteria:
+
+- Console shows the plugin adopted the existing compatible server.
+- External adoption logs the observed owner PID, while managed ownership remains unset.
+- Dock is green with no banner and no Restart button.
+- Port 8000 is still held by \$SERVER_PID or \$server.Id.
+- Dock status includes actual_name=godot-ai.
+
+## Recommended order
+
+Run 6 and 5 first to prove unrelated processes are not killed. Then run 3, 1,
+4, and finally 2 and 7 as sanity sweeps.
+
+If a scenario fails, capture:
+
+- /tmp/mcp-editor.log
+- contents of \$PIDFILE
+- grep godot_ai/managed_server "\$EDITOR_SETTINGS"
+- script/manual-orphan-test preflight
+- git diff --stat
+EOF
+}
+
+usage() {
+    cat <<'EOF'
+Usage: script/manual-orphan-test [command]
+
+Commands:
+  setup         Write the fake godot_ai and status-only simulator packages.
+  instructions Print the manual scenario matrix.
+  sanity       Run a short orphan simulator status/cmdline check on port 8000.
+  paths        Print the resolved simulator paths.
+  preflight    Print EditorSettings, port-listener, version, and proof checks.
+  help         Show this help.
+
+Default: setup, then print instructions.
+
+Environment:
+  ORPHAN_SIM_ROOT       Override the fake godot_ai package root.
+  STATUS_ONLY_SIM_ROOT  Override the fake status-only package root.
+  PYTHON                Python executable for sanity checks.
+EOF
+}
+
+main() {
+    local cmd="${1:-default}"
+    case "$cmd" in
+        default)
+            setup_sims
+            echo
+            print_instructions
+            ;;
+        setup)
+            setup_sims
+            ;;
+        instructions|print)
+            print_instructions
+            ;;
+        sanity)
+            run_sanity
+            ;;
+        paths)
+            print_paths
+            ;;
+        preflight)
+            print_preflight
+            ;;
+        help|-h|--help)
+            usage
+            ;;
+        *)
+            usage >&2
+            exit 2
+            ;;
+    esac
+}
+
+main "$@"
