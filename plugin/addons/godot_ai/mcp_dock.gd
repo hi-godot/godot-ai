@@ -79,6 +79,7 @@ var _last_rendered_server_text: String = ""
 ## `McpConnection.server_version` drifts from the plugin version. Hidden
 ## in the match case so the UI stays calm.
 var _version_restart_btn: Button
+var _server_restart_in_progress := false
 ## Sorted snapshot of the most recent mismatched-client set. Powers two things:
 ## (a) the Reconfigure button reuses this list instead of re-running
 ## `check_status` per row (saves ~18 filesystem reads per click), and
@@ -129,7 +130,6 @@ var _client_action_generations: Dictionary = {}
 # Dev-mode only
 var _dev_section: VBoxContainer
 var _server_label: Label
-var _reconnect_btn: Button
 var _reload_btn: Button
 var _mode_override_btn: OptionButton
 var _setup_section: VBoxContainer
@@ -149,6 +149,8 @@ var _startup_grace_until_msec: int = 0
 # booleans. See `_crash_body_for_state`.
 var _crash_panel: VBoxContainer
 var _crash_output: RichTextLabel
+var _crash_restart_btn: Button
+var _crash_reload_btn: Button
 ## Port-picker escape hatch — visible inside the panel when the root
 ## cause is port contention (PORT_EXCLUDED or FOREIGN_PORT). Applies a
 ## new `godot_ai/http_port` value and reloads the plugin so the spawn
@@ -381,11 +383,22 @@ func _build_ui() -> void:
 
 	_build_port_picker_section()
 
-	var crash_retry := Button.new()
-	crash_retry.text = "Reload Plugin"
-	crash_retry.tooltip_text = "Re-run the spawn after fixing the underlying issue"
-	crash_retry.pressed.connect(_on_reload_plugin)
-	_crash_panel.add_child(crash_retry)
+	_crash_restart_btn = Button.new()
+	_crash_restart_btn.text = "Restart Server"
+	_crash_restart_btn.tooltip_text = "Stop the old server on this port and start the bundled godot-ai server"
+	_crash_restart_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_crash_restart_btn.add_theme_color_override("font_color", Color.WHITE)
+	_crash_restart_btn.add_theme_color_override("font_hover_color", Color.WHITE)
+	_crash_restart_btn.add_theme_color_override("font_pressed_color", Color.WHITE)
+	_crash_restart_btn.pressed.connect(_on_restart_stale_server)
+	_crash_restart_btn.visible = false
+	_crash_panel.add_child(_crash_restart_btn)
+
+	_crash_reload_btn = Button.new()
+	_crash_reload_btn.text = "Reload Plugin"
+	_crash_reload_btn.tooltip_text = "Re-run the spawn after fixing the underlying issue"
+	_crash_reload_btn.pressed.connect(_on_reload_plugin)
+	_crash_panel.add_child(_crash_reload_btn)
 
 	_crash_panel.add_child(HSeparator.new())
 	add_child(_crash_panel)
@@ -424,7 +437,7 @@ func _build_ui() -> void:
 	add_child(_http_request)
 	_check_for_updates.call_deferred()
 
-	# --- Dev-only connection extras (server label + reconnect/reload buttons) ---
+	# --- Dev-only connection extras (server label + reload button) ---
 	_dev_section = VBoxContainer.new()
 	_dev_section.add_theme_constant_override("separation", 6)
 	add_child(_dev_section)
@@ -437,14 +450,9 @@ func _build_ui() -> void:
 	var btn_row := HBoxContainer.new()
 	btn_row.add_theme_constant_override("separation", 6)
 
-	_reconnect_btn = Button.new()
-	_reconnect_btn.text = "Reconnect"
-	_reconnect_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_reconnect_btn.pressed.connect(_on_reconnect)
-	btn_row.add_child(_reconnect_btn)
-
 	_reload_btn = Button.new()
-	_reload_btn.text = "Reload Plugin"
+	_reload_btn.text = "Dev: Reload Plugin"
+	_reload_btn.tooltip_text = "Developer utility: reload the GDScript plugin. This does not restart or replace the server."
 	_reload_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_reload_btn.pressed.connect(_on_reload_plugin)
 	btn_row.add_child(_reload_btn)
@@ -731,7 +739,10 @@ func _update_status() -> void:
 	## one body string in `_crash_body_for_state`.
 	var status_text: String
 	var status_color: Color
-	if connected:
+	if _server_restart_in_progress:
+		status_text = "Restarting server..."
+		status_color = COLOR_AMBER
+	elif connected:
 		if bool(server_status.get("dev_version_mismatch_allowed", false)):
 			var actual := str(server_status.get("actual_version", ""))
 			status_text = "Connected (dev server v%s)" % actual if not actual.is_empty() else "Connected (dev server)"
@@ -797,6 +808,19 @@ func _update_crash_panel(server_status: Dictionary) -> void:
 	_crash_panel.visible = true
 	_crash_output.clear()
 	_crash_output.add_text(_crash_body_for_state(state, server_status))
+	var show_recovery_restart := (
+		state == McpSpawnState.INCOMPATIBLE_SERVER
+		and bool(server_status.get("can_recover_incompatible", false))
+	)
+	if _crash_restart_btn != null:
+		_crash_restart_btn.visible = show_recovery_restart
+		_crash_restart_btn.disabled = _server_restart_in_progress
+		_crash_restart_btn.text = "Restarting..." if _server_restart_in_progress else "Restart Server"
+	if _crash_reload_btn != null:
+		_crash_reload_btn.visible = (
+			not show_recovery_restart
+			and state != McpSpawnState.INCOMPATIBLE_SERVER
+		)
 
 	var port_picker_visible := (
 		state == McpSpawnState.PORT_EXCLUDED
@@ -821,6 +845,13 @@ static func _crash_body_for_state(state: String, server_status: Dictionary = {})
 			return "Windows (Hyper-V / WSL2 / Docker) reserved port %d. Pick a free port or try `net stop winnat; net start winnat` in an admin shell." % port
 		McpSpawnState.INCOMPATIBLE_SERVER:
 			var message := str(server_status.get("message", ""))
+			if bool(server_status.get("can_recover_incompatible", false)):
+				var expected := str(server_status.get("expected_version", ""))
+				if expected.is_empty():
+					expected = McpClientConfigurator.get_plugin_version()
+				if not message.is_empty():
+					return "%s Click Restart Server below to replace it with godot-ai v%s." % [message, expected]
+				return "Port %d is occupied by an older godot-ai server. Click Restart Server below to replace it with godot-ai v%s." % [port, expected]
 			if not message.is_empty():
 				return message
 			return "Port %d is occupied by an incompatible server. Stop it or change both HTTP and WS ports." % port
@@ -915,7 +946,7 @@ func _update_log() -> void:
 
 func _load_dev_mode() -> bool:
 	# Default OFF for every install (including dev checkouts). Contributors
-	# who want the extra diagnostic UI (Reload Plugin, Reconnect, MCP log
+	# who want the extra diagnostic UI (Reload Plugin, MCP log
 	# panel, Start/Stop Dev Server) can flip the toggle once — editor
 	# settings persist across sessions.
 	var es := EditorInterface.get_editor_settings()
@@ -998,12 +1029,6 @@ func _on_reload_plugin() -> void:
 	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", true)
 
 
-func _on_reconnect() -> void:
-	if _connection:
-		_connection.disconnect_from_server()
-		_connection._attempt_reconnect()
-
-
 ## Setup-section "Server" row: always report the TRUE running server
 ## version (from the handshake_ack) rather than the plugin's expected
 ## version, and highlight the mismatch so self-update drift is visible
@@ -1030,10 +1055,20 @@ func _refresh_server_version_label() -> void:
 	var expected_ver := str(server_status.get("expected_version", ""))
 	if expected_ver.is_empty():
 		expected_ver = plugin_ver
+	var state: String = str(server_status.get("state", McpSpawnState.OK))
+	if _server_restart_in_progress and (
+		server_ver == expected_ver
+		or (state != McpSpawnState.OK and state != McpSpawnState.INCOMPATIBLE_SERVER)
+	):
+		_server_restart_in_progress = false
 	var text: String
 	var color: Color
 	var show_restart := false
-	if server_ver.is_empty():
+	if _server_restart_in_progress:
+		text = "restarting server..."
+		color = COLOR_AMBER
+		show_restart = true
+	elif server_ver.is_empty():
 		text = "checking live version (expected godot-ai == %s)" % expected_ver
 		color = COLOR_MUTED
 	elif server_ver == expected_ver:
@@ -1046,28 +1081,79 @@ func _refresh_server_version_label() -> void:
 			color = COLOR_AMBER
 		else:
 			text = "godot-ai == %s  (expected %s)" % [server_ver, expected_ver]
-			color = Color.RED if server_status.get("state", "") == McpSpawnState.INCOMPATIBLE_SERVER else COLOR_AMBER
-			show_restart = (
-				server_status.get("state", "") != McpSpawnState.INCOMPATIBLE_SERVER
-				and _plugin != null
+			var is_incompatible: bool = state == McpSpawnState.INCOMPATIBLE_SERVER
+			color = Color.RED if is_incompatible else COLOR_AMBER
+			var has_managed_proof: bool = (
+				_plugin != null
 				and _plugin.has_method("can_restart_managed_server")
 				and _plugin.can_restart_managed_server()
 			)
+			var can_recover: bool = bool(server_status.get("can_recover_incompatible", false))
+			show_restart = (
+				(not is_incompatible and has_managed_proof)
+				## Recoverable incompatible servers get the primary action in
+				## the top error panel. Duplicating it in Setup made the UI
+				## look like it had multiple restart paths.
+				or (is_incompatible and can_recover and _crash_restart_btn == null)
+			)
 	if text == _last_rendered_server_text:
 		_setup_server_label.add_theme_color_override("font_color", color)
-		if _version_restart_btn != null and _version_restart_btn.visible != show_restart:
-			_version_restart_btn.visible = show_restart
+		_update_restart_button(show_restart)
 		return
 	_last_rendered_server_text = text
 	_setup_server_label.text = text
 	_setup_server_label.add_theme_color_override("font_color", color)
+	_update_restart_button(show_restart)
+
+
+func _update_restart_button(visible: bool) -> void:
 	if _version_restart_btn != null:
-		_version_restart_btn.visible = show_restart
+		_version_restart_btn.visible = visible
+		_version_restart_btn.disabled = _server_restart_in_progress
+		_version_restart_btn.text = "Restarting..." if _server_restart_in_progress else "Restart"
+	if _crash_restart_btn != null:
+		_crash_restart_btn.disabled = _server_restart_in_progress
+		_crash_restart_btn.text = "Restarting..." if _server_restart_in_progress else "Restart Server"
 
 
 func _on_restart_stale_server() -> void:
-	if _plugin != null and _plugin.has_method("force_restart_server"):
+	if _plugin == null or _server_restart_in_progress:
+		return
+	_server_restart_in_progress = true
+	_last_rendered_server_text = ""
+	_refresh_server_version_label()
+	if not is_inside_tree():
+		_dispatch_stale_server_restart()
+		_server_restart_in_progress = false
+		_last_rendered_server_text = ""
+		_refresh_server_version_label()
+		return
+	call_deferred("_restart_stale_server_after_feedback")
+
+
+func _restart_stale_server_after_feedback() -> void:
+	await get_tree().create_timer(0.15).timeout
+	if not _dispatch_stale_server_restart():
+		_server_restart_in_progress = false
+		_last_rendered_server_text = ""
+		_refresh_server_version_label()
+
+
+func _dispatch_stale_server_restart() -> bool:
+	if _plugin == null:
+		return false
+	var status: Dictionary = (
+		_plugin.get_server_status()
+		if _plugin.has_method("get_server_status")
+		else {}
+	)
+	if str(status.get("state", "")) == McpSpawnState.INCOMPATIBLE_SERVER:
+		if _plugin.has_method("recover_incompatible_server"):
+			return bool(_plugin.recover_incompatible_server())
+	elif _plugin.has_method("force_restart_server"):
 		_plugin.force_restart_server()
+		return true
+	return false
 
 
 func _on_log_toggled(enabled: bool) -> void:

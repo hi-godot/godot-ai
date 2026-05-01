@@ -51,6 +51,42 @@ func test_run_captures_stdout_and_zero_exit_on_quick_command() -> void:
 		"Captured stdout must include the echoed token")
 
 
+func test_run_captures_stderr_by_default() -> void:
+	var fixture := _stderr_fixture_command(7)
+	if fixture.is_empty():
+		skip("No shell available for stderr fixture")
+		return
+	var result := McpCliExec.run(
+		fixture["exe"],
+		fixture["args"],
+		5000
+	)
+	assert_eq(int(result.get("exit_code", 0)), 7)
+	assert_contains(str(result.get("stdout", "")), "stdout-token")
+	assert_contains(str(result.get("stderr", "")), "stderr-token")
+	assert_contains(str(result.get("output", "")), "stderr-token")
+
+
+func test_run_can_skip_stderr_capture_for_status_probe() -> void:
+	var fixture := _stderr_fixture_command(0)
+	if fixture.is_empty():
+		skip("No shell available for stderr fixture")
+		return
+	var result := McpCliExec.run(
+		fixture["exe"],
+		fixture["args"],
+		5000,
+		false
+	)
+	assert_eq(int(result.get("exit_code", -1)), 0)
+	assert_contains(str(result.get("stdout", "")), "stdout-token")
+	assert_eq(str(result.get("stderr", "")), "")
+	assert_false(
+		str(result.get("output", "")).find("stderr-token") >= 0,
+		"status probes skip stderr drain to avoid expected empty-pipe noise"
+	)
+
+
 func test_run_kills_subprocess_when_budget_expires() -> void:
 	## The headline behavior: a hung CLI no longer hangs the editor.
 	## Spawn `sleep 5` with a 200ms budget — McpCliExec should kill it
@@ -75,3 +111,32 @@ func test_run_kills_subprocess_when_budget_expires() -> void:
 		"timed_out runs must report exit_code=-1 — never a real exit code")
 	assert_true(elapsed_msec < 3000,
 		"Timeout kill must return within ~budget+poll, not wait for sleep to finish (elapsed=%dms)" % elapsed_msec)
+
+
+func _stderr_fixture_command(exit_code: int) -> Dictionary:
+	if OS.get_name() == "Windows":
+		return {
+			"exe": "cmd.exe",
+			"args": [
+				"/c",
+				"echo stdout-token & echo stderr-token 1>&2 & exit /b %d" % exit_code
+			]
+		}
+	var shell := _find_posix_shell()
+	if shell.is_empty():
+		return {}
+	return {
+		"exe": shell,
+		"args": [
+			"-c",
+			"printf 'stdout-token'; printf 'stderr-token' >&2; exit %d" % exit_code
+		]
+	}
+
+
+func _find_posix_shell() -> String:
+	if FileAccess.file_exists("/bin/sh"):
+		return "/bin/sh"
+	if FileAccess.file_exists("/usr/bin/sh"):
+		return "/usr/bin/sh"
+	return ""

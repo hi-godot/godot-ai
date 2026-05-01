@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from fastmcp.exceptions import FastMCPError
+
 from godot_ai.protocol.errors import ErrorCode
 from godot_ai.sessions.registry import SessionRegistry
 from godot_ai.transport.websocket import GodotWebSocketServer
@@ -12,7 +14,7 @@ from godot_ai.transport.websocket import GodotWebSocketServer
 logger = logging.getLogger(__name__)
 
 
-class GodotCommandError(Exception):
+class GodotCommandError(FastMCPError):
     """Raised when a Godot plugin command returns an error response."""
 
     def __init__(
@@ -29,6 +31,9 @@ class GodotCommandError(Exception):
             super().__init__(f"{code}: {message}{suffix}")
         else:
             super().__init__(f"{code}: {message}")
+
+    def to_payload(self) -> dict[str, Any]:
+        return {"code": self.code, "message": self.message, "data": self.data}
 
 
 class GodotClient:
@@ -80,6 +85,7 @@ class GodotClient:
             raise GodotCommandError(
                 code=error.code if error else "UNKNOWN",
                 message=error.message if error else "Unknown error",
+                data=error.data if error else {},
             )
 
         return response.data

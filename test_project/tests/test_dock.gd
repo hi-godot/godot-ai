@@ -8,6 +8,26 @@ extends McpTestSuite
 const McpDockScript = preload("res://addons/godot_ai/mcp_dock.gd")
 const GodotAiPlugin := preload("res://addons/godot_ai/plugin.gd")
 
+class _RestartDispatchPlugin extends GodotAiPlugin:
+	var status: Dictionary = {}
+	var can_restart := false
+	var force_restart_calls := 0
+	var recover_calls := 0
+
+	func get_server_status() -> Dictionary:
+		return status.duplicate()
+
+	func can_restart_managed_server() -> bool:
+		return can_restart
+
+	func force_restart_server() -> void:
+		force_restart_calls += 1
+
+	func recover_incompatible_server() -> bool:
+		recover_calls += 1
+		return true
+
+
 var _dock: Node
 
 
@@ -116,8 +136,12 @@ func test_incompatible_server_marks_clients_unhealthy() -> void:
 	## server with an incompatible tool surface. The dock must not show green
 	## client rows while the plugin has blocked server adoption.
 	_dock._build_ui()
-	var plugin := GodotAiPlugin.new()
-	plugin._set_incompatible_server({"version": "1.2.10"}, "2.2.0", 8000)
+	var plugin := _RestartDispatchPlugin.new()
+	plugin.status = {
+		"state": McpSpawnState.INCOMPATIBLE_SERVER,
+		"message": "Port 8000 is occupied by godot-ai server v1.2.10; plugin expects v2.2.0.",
+		"connection_blocked": true,
+	}
 	_dock._plugin = plugin
 
 	var any_id := McpClientConfigurator.client_ids()[0]
@@ -257,6 +281,9 @@ func test_drain_helper_does_not_poison_shutdown_flag() -> void:
 ## or dev checkout (the user-mode Server row is what owns these handles in
 ## production — see `_refresh_setup_status`).
 func _seed_server_row(server_ver: String) -> McpConnection:
+	_dock._plugin = null
+	_dock._server_restart_in_progress = false
+	_dock._crash_restart_btn = null
 	var conn := McpConnection.new()
 	_dock._connection = conn
 	_dock._setup_server_label = Label.new()
@@ -357,6 +384,58 @@ func test_server_version_label_repaints_color_when_state_changes_without_text_ch
 	_dock._plugin = null
 	plugin.free()
 	_cleanup_server_row(conn)
+
+
+func test_server_version_label_shows_restart_for_recoverable_incompatible_server() -> void:
+	var conn := _seed_server_row("1.2.3-stale-for-test")
+	var plugin := _RestartDispatchPlugin.new()
+	plugin.status = {
+		"state": McpSpawnState.INCOMPATIBLE_SERVER,
+		"actual_version": "1.2.3-stale-for-test",
+		"expected_version": "2.2.0",
+		"can_recover_incompatible": true,
+	}
+	_dock._plugin = plugin
+
+	_dock._refresh_server_version_label()
+	assert_true(
+		_dock._version_restart_btn.visible,
+		"recoverable incompatible godot-ai server should offer the user-confirmed restart"
+	)
+
+	_dock._plugin = null
+	plugin.free()
+	_cleanup_server_row(conn)
+
+
+func test_restart_dispatches_incompatible_state_to_recovery() -> void:
+	var plugin := _RestartDispatchPlugin.new()
+	plugin.status = {"state": McpSpawnState.INCOMPATIBLE_SERVER}
+	_dock._plugin = plugin
+
+	_dock._on_restart_stale_server()
+	var recover_calls := plugin.recover_calls
+	var restart_calls := plugin.force_restart_calls
+	_dock._plugin = null
+	plugin.free()
+
+	assert_eq(recover_calls, 1)
+	assert_eq(restart_calls, 0)
+
+
+func test_restart_dispatches_non_incompatible_state_to_force_restart() -> void:
+	var plugin := _RestartDispatchPlugin.new()
+	plugin.status = {"state": McpSpawnState.OK}
+	_dock._plugin = plugin
+
+	_dock._on_restart_stale_server()
+	var recover_calls := plugin.recover_calls
+	var restart_calls := plugin.force_restart_calls
+	_dock._plugin = null
+	plugin.free()
+
+	assert_eq(recover_calls, 0)
+	assert_eq(restart_calls, 1)
 
 
 func test_dev_checkout_tooltip_exposes_symlink_target() -> void:

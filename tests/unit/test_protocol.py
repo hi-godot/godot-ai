@@ -44,10 +44,24 @@ class TestCommandResponse:
         resp = CommandResponse(
             request_id="abc123",
             status="error",
-            error=ErrorDetail(code="NODE_NOT_FOUND", message="Not found"),
+            error=ErrorDetail(
+                code="NODE_NOT_FOUND",
+                message="Not found",
+                data={"path": "/Missing/Node"},
+            ),
         )
         assert resp.status == "error"
         assert resp.error.code == "NODE_NOT_FOUND"
+        assert resp.error.data == {"path": "/Missing/Node"}
+
+    def test_error_response_defaults_data_to_empty_dict(self):
+        resp = CommandResponse(
+            request_id="abc123",
+            status="error",
+            error=ErrorDetail(code="NODE_NOT_FOUND", message="Not found"),
+        )
+        assert resp.error is not None
+        assert resp.error.data == {}
 
     def test_roundtrip_json(self):
         resp = CommandResponse(

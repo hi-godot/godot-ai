@@ -2079,6 +2079,37 @@ class TestPhysicsShapeAutofitTool:
         assert result.data["shape_created"] is True
         assert result.data["size"]["x"] == 2.0
 
+    async def test_ambiguous_visual_candidates_preserved_in_structured_error(
+        self, mcp_stack
+    ):
+        client, plugin = mcp_stack
+        candidates = ["/Main/VisualA", "/Main/VisualB"]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "physics_shape_autofit"
+            await plugin.send_error(
+                cmd["request_id"],
+                "INVALID_PARAMS",
+                "Multiple visual candidates near /Main/Body/Collision",
+                data={"candidates": candidates},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "resource_manage",
+            {
+                "op": "physics_shape_autofit",
+                "params": {"path": "/Main/Body/Collision"},
+            },
+            raise_on_error=False,
+        )
+        await task
+
+        assert result.is_error
+        assert result.structured_content["error"]["code"] == "INVALID_PARAMS"
+        assert result.structured_content["error"]["data"]["candidates"] == candidates
+
 
 # ---------------------------------------------------------------------------
 # filesystem_read_text

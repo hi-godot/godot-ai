@@ -116,8 +116,10 @@ var _refresh_retried: bool = false
 var _adoption_watch_deadline_ms: int = 0
 var _server_expected_version := ""
 var _server_actual_version := ""
+var _server_actual_name := ""
 var _server_status_message := ""
 var _server_dev_version_mismatch_allowed := false
+var _can_recover_incompatible := false
 var _connection_blocked := false
 var _awaiting_server_version := false
 var _server_version_deadline_ms: int = 0
@@ -536,7 +538,7 @@ func _start_server() -> void:
 			_resolve_ws_port()
 		))
 		ws_port = _resolved_ws_port
-		var live := _probe_live_server_status(port)
+		var live := _probe_live_server_status_for_port(port)
 		var live_version := _verified_status_version(live)
 		var live_ws_port := _verified_status_ws_port(live)
 		var compatibility := _server_status_compatibility(
@@ -547,7 +549,9 @@ func _start_server() -> void:
 			McpClientConfigurator.is_dev_checkout()
 		)
 		if compatibility.get("compatible", false):
+			_server_actual_name = "godot-ai"
 			_server_actual_version = live_version
+			_can_recover_incompatible = false
 			_server_dev_version_mismatch_allowed = bool(compatibility.get("dev_mismatch_allowed", false))
 			if _server_dev_version_mismatch_allowed:
 				_server_status_message = (
@@ -561,32 +565,40 @@ func _start_server() -> void:
 			var owner := _find_managed_pid(port)
 			var owner_label := _adopt_compatible_server(record_version, current_version, owner)
 			_server_started_this_session = true
-			print("MCP | adopted %s server (PID %d, live v%s, WS %d, plugin v%s)"
-				% [owner_label, _server_pid, _server_actual_version, live_ws_port, current_version])
+			print(_compatible_adoption_log_message(
+				owner_label,
+				_server_pid,
+				owner,
+				_server_actual_version,
+				live_ws_port,
+				current_version
+			))
 			return
 		if _managed_record_has_version_drift(record_version, current_version):
 			## Version drift — our server but the plugin moved on. Kill
-			## the port owner (not the stale launcher PID) and respawn
-			## to match the current plugin version.
+			## the proved managed occupant and respawn only after the port
+			## is actually free. A stale record by itself is not enough to
+			## kill the process currently holding the port.
 			print("MCP | managed server v%s does not match plugin v%s, restarting"
 				% [record_version, current_version])
-			var owner := _find_managed_pid(port)
-			if owner > 0:
-				OS.kill(owner)
-			_clear_managed_server_record()
-			_clear_pid_file()
-			_wait_for_port_free(port, 3.0)
+			if not _recover_strong_port_occupant(port, 3.0):
+				_server_started_this_session = true
+				_set_incompatible_server(_probe_live_server_status_for_port(port), current_version, port)
+				push_warning(_server_status_message)
+				return
 			## Fall through to spawn.
 		else:
-			## No recorded version drift and the live status probe did not
-			## verify an exact/current-compatible godot-ai server. A stale
-			## matching record alone is not enough ownership proof to kill
-			## the current port owner, and opening the WebSocket could route
-			## clients to an incompatible HTTP/MCP tool surface.
-			_server_started_this_session = true
-			_set_incompatible_server(live, current_version, port)
-			push_warning(_server_status_message)
-			return
+			if not _recover_strong_port_occupant(port, 3.0):
+				## No recorded version drift and the live status probe did not
+				## verify an exact/current-compatible godot-ai server. A stale
+				## matching record alone is not enough ownership proof to kill
+				## the current port owner, and opening the WebSocket could route
+				## clients to an incompatible HTTP/MCP tool surface.
+				_server_started_this_session = true
+				_set_incompatible_server(live, current_version, port)
+				push_warning(_server_status_message)
+				return
+			## Fall through to spawn.
 
 	_set_resolved_ws_port(_resolve_ws_port())
 	ws_port = _resolved_ws_port
@@ -652,9 +664,14 @@ func _set_incompatible_server(live: Dictionary, expected_version: String, port: 
 	_spawn_state = McpSpawnState.INCOMPATIBLE_SERVER
 	_connection_blocked = true
 	_server_expected_version = expected_version
+	_server_actual_name = str(live.get("name", ""))
 	_server_actual_version = _live_version_for_message(live)
 	_server_dev_version_mismatch_allowed = false
 	_server_status_message = _incompatible_server_message(live, expected_version, port, _resolved_ws_port)
+	var proof := _evaluate_recovery_port_occupant_proof(port)
+	var proof_name := str(proof.get("proof", ""))
+	_can_recover_incompatible = not proof_name.is_empty()
+	print("MCP | proof: %s" % (proof_name if _can_recover_incompatible else "(none)"))
 	_refresh_dock_client_statuses()
 
 
@@ -753,7 +770,9 @@ static func _probe_live_server_status(port: int, timeout_ms: int = SERVER_STATUS
 	var body := PackedByteArray()
 	while true:
 		var status := client.get_status()
-		if status == HTTPClient.STATUS_REQUESTING or status == HTTPClient.STATUS_BODY:
+		if status == HTTPClient.STATUS_REQUESTING:
+			client.poll()
+		elif status == HTTPClient.STATUS_BODY:
 			client.poll()
 			var chunk := client.read_response_body_chunk()
 			if chunk.size() > 0:
@@ -783,6 +802,10 @@ static func _probe_live_server_status(port: int, timeout_ms: int = SERVER_STATUS
 	return result
 
 
+func _probe_live_server_status_for_port(port: int) -> Dictionary:
+	return _probe_live_server_status(port)
+
+
 static func _extract_server_version(payload: Dictionary) -> String:
 	var version := str(payload.get("server_version", ""))
 	if version.is_empty():
@@ -790,14 +813,18 @@ static func _extract_server_version(payload: Dictionary) -> String:
 	return version
 
 
+static func _live_status_identifies_godot_ai(live: Dictionary) -> bool:
+	return str(live.get("name", "")) == "godot-ai"
+
+
 static func _verified_status_version(live: Dictionary) -> String:
-	if str(live.get("name", "")) != "godot-ai":
+	if not _live_status_identifies_godot_ai(live):
 		return ""
 	return str(live.get("version", ""))
 
 
 static func _verified_status_ws_port(live: Dictionary) -> int:
-	if str(live.get("name", "")) != "godot-ai":
+	if not _live_status_identifies_godot_ai(live):
 		return 0
 	return int(live.get("ws_port", 0))
 
@@ -890,6 +917,7 @@ func _on_connection_established() -> void:
 func _on_server_version_verified(version: String) -> void:
 	_awaiting_server_version = false
 	_server_version_deadline_ms = 0
+	_server_actual_name = "godot-ai"
 	_server_actual_version = version
 	var expected := _server_expected_version
 	if expected.is_empty():
@@ -901,6 +929,7 @@ func _on_server_version_verified(version: String) -> void:
 		McpClientConfigurator.is_dev_checkout()
 	)
 	if compatibility.get("compatible", false):
+		_can_recover_incompatible = false
 		_server_dev_version_mismatch_allowed = bool(compatibility.get("dev_mismatch_allowed", false))
 		if _server_dev_version_mismatch_allowed:
 			_server_status_message = (
@@ -1068,10 +1097,12 @@ func get_server_status() -> Dictionary:
 	return {
 		"state": _spawn_state,
 		"exit_ms": _server_exit_ms,
+		"actual_name": _server_actual_name,
 		"actual_version": _server_actual_version,
 		"expected_version": _server_expected_version,
 		"message": _server_status_message,
 		"dev_version_mismatch_allowed": _server_dev_version_mismatch_allowed,
+		"can_recover_incompatible": _can_recover_incompatible,
 		"connection_blocked": _connection_blocked,
 	}
 
@@ -1139,6 +1170,8 @@ static func _resolve_ws_port_from_output(
 func _is_port_in_use(port: int) -> bool:
 	var output: Array = []
 	if OS.get_name() == "Windows":
+		if not _find_listener_pids_windows(port).is_empty():
+			return true
 		var exit_code := OS.execute("netstat", ["-ano"], output, true)
 		if exit_code == 0 and output.size() > 0:
 			return _parse_windows_netstat_listening(str(output[0]), port)
@@ -1162,6 +1195,9 @@ func _is_port_in_use(port: int) -> bool:
 func _find_pid_on_port(port: int) -> int:
 	var output: Array = []
 	if OS.get_name() == "Windows":
+		var listener_pids := _find_listener_pids_windows(port)
+		if not listener_pids.is_empty():
+			return listener_pids[0]
 		var exit_code := OS.execute("netstat", ["-ano"], output, true)
 		if exit_code != 0 or output.is_empty():
 			return 0
@@ -1185,6 +1221,9 @@ func _find_pid_on_port(port: int) -> int:
 ## listener rows for the same port, so collect every matching row there too.
 func _find_all_pids_on_port(port: int) -> Array[int]:
 	if OS.get_name() == "Windows":
+		var listener_pids := _find_listener_pids_windows(port)
+		if not listener_pids.is_empty():
+			return listener_pids
 		var output: Array = []
 		var exit_code := OS.execute("netstat", ["-ano"], output, true)
 		if exit_code != 0 or output.is_empty():
@@ -1197,6 +1236,50 @@ func _find_all_pids_on_port(port: int) -> Array[int]:
 		var empty: Array[int] = []
 		return empty
 	return _parse_lsof_pids(str(output[0]))
+
+
+static func _find_listener_pids_windows(port: int) -> Array[int]:
+	var script := (
+		"Get-NetTCPConnection -LocalPort %d -State Listen "
+		+ "-ErrorAction SilentlyContinue | "
+		+ "Select-Object -ExpandProperty OwningProcess"
+	) % port
+	var output: Array = []
+	var exit_code := _execute_windows_powershell(script, output)
+	return _windows_listener_pids_from_execute_result(exit_code, output)
+
+
+static func _execute_windows_powershell(script: String, output: Array) -> int:
+	var args := ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script]
+	for exe in _windows_powershell_candidates():
+		output.clear()
+		var exit_code := OS.execute(exe, args, output, true)
+		if exit_code == 0:
+			return exit_code
+	return -1
+
+
+static func _windows_powershell_candidates() -> Array[String]:
+	var candidates: Array[String] = []
+	var system_root := OS.get_environment("SystemRoot")
+	if system_root.is_empty():
+		system_root = "C:/Windows"
+	system_root = system_root.replace("\\", "/").trim_suffix("/")
+	candidates.append(system_root + "/System32/WindowsPowerShell/v1.0/powershell.exe")
+	candidates.append("powershell.exe")
+	candidates.append("pwsh.exe")
+	return candidates
+
+
+static func _windows_listener_pids_from_execute_result(exit_code: int, output: Array) -> Array[int]:
+	var empty: Array[int] = []
+	if exit_code == 0 and not output.is_empty():
+		return _parse_pid_lines(str(output[0]))
+	return empty
+
+
+static func _windows_listener_execute_result_in_use(exit_code: int, output: Array) -> bool:
+	return not _windows_listener_pids_from_execute_result(exit_code, output).is_empty()
 
 
 ## Pure-parser for the `lsof -ti...` output shape: zero or more newline-
@@ -1235,6 +1318,97 @@ func _find_managed_pid(port: int) -> int:
 	if pid > 0 and _pid_alive(pid):
 		return pid
 	return _find_pid_on_port(port)
+
+
+func _evaluate_strong_port_occupant_proof(port: int) -> Dictionary:
+	var result := {"proof": "", "pids": []}
+	var listener_pids := _find_all_pids_on_port(port)
+	if listener_pids.is_empty():
+		return result
+
+	var record := _read_managed_server_record()
+	var record_pid := int(record.get("pid", 0))
+	var record_version := str(record.get("version", ""))
+
+	if record_pid > 1 and record_pid != OS.get_process_id():
+		if listener_pids.has(record_pid) and _pid_alive_for_proof(record_pid):
+			return {"proof": "managed_record", "pids": [record_pid]}
+
+	var legacy_targets := _legacy_pidfile_kill_targets(port, listener_pids)
+	if not legacy_targets.is_empty():
+		return {"proof": "pidfile_listener", "pids": legacy_targets}
+
+	var live := _probe_live_server_status_for_port(port)
+	if (
+		_live_status_identifies_godot_ai(live)
+		and not record_version.is_empty()
+		and str(live.get("version", "")) == record_version
+	):
+		return {"proof": "status_matches_record", "pids": listener_pids}
+
+	return result
+
+
+func _evaluate_recovery_port_occupant_proof(port: int) -> Dictionary:
+	var proof := _evaluate_strong_port_occupant_proof(port)
+	if not str(proof.get("proof", "")).is_empty():
+		return proof
+
+	var live := _probe_live_server_status_for_port(port)
+	if _live_status_identifies_godot_ai(live):
+		return {"proof": "status_name", "pids": _find_all_pids_on_port(port)}
+
+	return {"proof": "", "pids": []}
+
+
+func _recover_strong_port_occupant(port: int, wait_s: float) -> bool:
+	var proof := _evaluate_strong_port_occupant_proof(port)
+	var targets: Array[int] = []
+	targets.assign(proof.get("pids", []))
+	if targets.is_empty():
+		return false
+
+	print("MCP | strong proof: %s" % str(proof.get("proof", "")))
+	var killed := _kill_processes_and_windows_spawn_children(targets)
+	if not killed.is_empty():
+		print("MCP | killed pids %s on port %d" % [str(killed), port])
+	_wait_for_port_free(port, wait_s)
+	if _is_port_in_use(port):
+		return false
+
+	_clear_managed_server_record()
+	_clear_pid_file()
+	return true
+
+
+func _legacy_pidfile_kill_targets(_port: int, listener_pids: Array[int]) -> Array[int]:
+	var targets: Array[int] = []
+	var pidfile_pid := _read_pid_file_for_proof()
+	var pidfile_alive := _pid_alive_for_proof(pidfile_pid)
+	var pidfile_branded := _pid_cmdline_is_godot_ai_for_proof(pidfile_pid)
+	if pidfile_pid <= 1 or pidfile_pid == OS.get_process_id():
+		return targets
+	if not listener_pids.has(pidfile_pid) or not pidfile_alive:
+		return targets
+	if not pidfile_branded:
+		return targets
+
+	for pid in listener_pids:
+		if pid > 1 and pid != OS.get_process_id() and _pid_cmdline_is_godot_ai_for_proof(pid):
+			targets.append(pid)
+	return targets
+
+
+func _read_pid_file_for_proof() -> int:
+	return _read_pid_file()
+
+
+func _pid_alive_for_proof(pid: int) -> bool:
+	return _pid_alive(pid)
+
+
+func _pid_cmdline_is_godot_ai_for_proof(pid: int) -> bool:
+	return _pid_cmdline_is_godot_ai(pid)
 
 
 ## Parse the LISTENING line for `port` in a Windows `netstat -ano`
@@ -1401,6 +1575,106 @@ static func _build_server_flags(port: int, ws_port: int) -> Array[String]:
 	return flags
 
 
+## Returns true only when we can prove `pid`'s command line carries the
+## `godot-ai` brand AND a server flag (`--pid-file` / `--transport`). Used by
+## automatic kill paths (`_legacy_pidfile_kill_targets`) so a stale pidfile
+## whose PID has been recycled by an unrelated listener can't hand us a
+## kill target. If the OS lookup fails or returns an empty cmdline we
+## conservatively return false — better to surface incompatible-server and
+## let the user click Restart than to kill the wrong process.
+func _pid_cmdline_is_godot_ai(pid: int) -> bool:
+	if pid <= 1:
+		return false
+	var cmd := ""
+	if OS.get_name() == "Windows":
+		cmd = _windows_pid_commandline(pid)
+	else:
+		cmd = _posix_pid_commandline(pid)
+	return _commandline_is_godot_ai_server(cmd)
+
+
+static func _commandline_is_godot_ai_server(cmd: String) -> bool:
+	if cmd.is_empty():
+		return false
+	var lower := cmd.to_lower()
+	## The server is invoked with `--pid-file <user>/godot_ai_server.pid`,
+	## so the path itself contains "godot_ai". A naive substring brand
+	## search would falsely match an unrelated process whose cmdline
+	## happens to reference a similarly-named pidfile path. Strip the
+	## value (but leave the bare flag for the has_flag check) before
+	## brand matching.
+	var brand_search := _strip_pidfile_value(lower)
+	var has_brand := brand_search.find("godot-ai") >= 0 or brand_search.find("godot_ai") >= 0
+	var has_flag := lower.find("--pid-file") >= 0 or lower.find("--transport") >= 0
+	return has_brand and has_flag
+
+
+static func _strip_pidfile_value(cmd: String) -> String:
+	var rx := RegEx.new()
+	## Match `--pid-file=<token>` and `--pid-file <token>`; keep the bare
+	## flag so the flag-presence check still succeeds for a real server.
+	if rx.compile("--pid-file(?:=|\\s+)\\S+") != OK:
+		return cmd
+	return rx.sub(cmd, "--pid-file ", true)
+
+
+func _windows_pid_commandline(pid: int) -> String:
+	var output: Array = []
+	var script := (
+		"Get-CimInstance Win32_Process -Filter 'ProcessId = %d' | "
+		+ "Select-Object -ExpandProperty CommandLine"
+	) % pid
+	var exit_code := _execute_windows_powershell(script, output)
+	if exit_code != 0 or output.is_empty():
+		return ""
+	return str(output[0])
+
+
+## POSIX command-line lookup. Linux exposes `/proc/<pid>/cmdline` as
+## NUL-separated argv — read it directly so we avoid a `ps` fork on Linux
+## and get the full argv rather than the truncated/quoted form some `ps`
+## builds emit. Falls back to `ps -ww -p <pid> -o args=` on macOS / *BSD,
+## which lack a Linux-style `/proc/<pid>/cmdline`. Returns "" on failure
+## so callers conservatively reject the PID rather than killing it blind.
+func _posix_pid_commandline(pid: int) -> String:
+	var proc_path := "/proc/%d/cmdline" % pid
+	if FileAccess.file_exists(proc_path):
+		var f := FileAccess.open(proc_path, FileAccess.READ)
+		if f != null:
+			## procfs pseudo-files report length 0 (the kernel generates
+			## content on read). `get_length()` therefore returns 0 and
+			## `get_buffer(0)` reads nothing. Read in chunks until EOF
+			## instead. Cap at ARG_MAX-class bound so a hypothetically
+			## misbehaving file can never stall the editor frame.
+			var bytes := PackedByteArray()
+			var max_bytes := 1 << 20  # 1 MiB
+			while bytes.size() < max_bytes:
+				var chunk := f.get_buffer(4096)
+				if chunk.is_empty():
+					break
+				bytes.append_array(chunk)
+				if f.eof_reached():
+					break
+			f.close()
+			## /proc cmdline is NUL-separated argv; convert NULs to spaces
+			## so the substring fingerprint matches the same way it does on
+			## the Windows path. Empty (kernel threads, exited processes)
+			## bubbles up as "" via the strip below.
+			for i in range(bytes.size()):
+				if bytes[i] == 0:
+					bytes[i] = 0x20
+			return bytes.get_string_from_utf8().strip_edges()
+	## `-ww` removes ps's column-width truncation so trailing flags like
+	## --pid-file / --transport aren't dropped from the args= field.
+	## Both procps (Linux) and BSD ps (macOS / *BSD) accept the
+	## double-w form.
+	var output: Array = []
+	var exit_code := OS.execute("ps", ["-ww", "-p", str(pid), "-o", "args="], output, true)
+	if exit_code != 0 or output.is_empty():
+		return ""
+	return str(output[0]).strip_edges()
+
+
 ## True if the given PID corresponds to a live (non-zombie) process.
 ## POSIX uses `ps -o stat=` (see inline comment for the zombie rationale);
 ## Windows uses `tasklist`. Called by `_start_server` to distinguish a live
@@ -1495,9 +1769,29 @@ func _clear_managed_server_record() -> void:
 func prepare_for_update_reload() -> void:
 	_stop_server()
 	_server_started_this_session = false
+	if McpClientConfigurator.is_dev_checkout():
+		return
+
+	var port := McpClientConfigurator.http_port()
+	if not _is_port_in_use(port):
+		return
+
+	var proof := _evaluate_strong_port_occupant_proof(port)
+	var targets: Array[int] = []
+	targets.assign(proof.get("pids", []))
+	if targets.is_empty():
+		return
+
+	_kill_processes_and_windows_spawn_children(targets)
+	_wait_for_port_free(port, 3.0)
+	if not _is_port_in_use(port):
+		_clear_managed_server_record()
+		_clear_pid_file()
 
 
 func _adopt_compatible_server(record_version: String, current_version: String, owner: int) -> String:
+	_server_actual_name = "godot-ai"
+	_can_recover_incompatible = false
 	if record_version == current_version and owner > 0:
 		_server_pid = owner
 		_write_managed_server_record(owner, current_version)
@@ -1506,6 +1800,29 @@ func _adopt_compatible_server(record_version: String, current_version: String, o
 	_clear_managed_server_record()
 	_clear_pid_file()
 	return "external"
+
+
+static func _compatible_adoption_log_message(
+	owner_label: String,
+	owned_pid: int,
+	observed_owner_pid: int,
+	live_version: String,
+	live_ws_port: int,
+	current_version: String
+) -> String:
+	if owner_label == "managed":
+		return "MCP | adopted managed server (PID %d, live v%s, WS %d, plugin v%s)" % [
+			owned_pid,
+			live_version,
+			live_ws_port,
+			current_version
+		]
+	return "MCP | adopted external server owner_pid=%d (live v%s, WS %d, plugin v%s)" % [
+		observed_owner_pid,
+		live_version,
+		live_ws_port,
+		current_version
+	]
 
 
 ## Hand the self-update over to a tiny runner that is not owned by this
@@ -1532,6 +1849,63 @@ func install_downloaded_update(zip_path: String, temp_dir: String, source_dock: 
 	runner.start(zip_path, temp_dir, detached_dock)
 
 
+func can_recover_incompatible_server() -> bool:
+	if _spawn_state != McpSpawnState.INCOMPATIBLE_SERVER:
+		return false
+	var port := McpClientConfigurator.http_port()
+	if not _is_port_in_use(port):
+		return false
+	var proof := _evaluate_recovery_port_occupant_proof(port)
+	return not str(proof.get("proof", "")).is_empty()
+
+
+func _resume_connection_after_recovery() -> void:
+	if _connection == null:
+		return
+	if _spawn_state != McpSpawnState.OK or _connection_blocked:
+		return
+	_connection.connect_blocked = false
+	_connection.connect_block_reason = ""
+	_connection.server_version = ""
+	_connection.set_process(true)
+	_arm_server_version_check()
+
+
+func recover_incompatible_server() -> bool:
+	if _spawn_state != McpSpawnState.INCOMPATIBLE_SERVER:
+		return false
+
+	var port := McpClientConfigurator.http_port()
+	var proof := _evaluate_recovery_port_occupant_proof(port)
+	var targets: Array[int] = []
+	targets.assign(proof.get("pids", []))
+	if targets.is_empty():
+		return false
+	print("MCP | proof: %s" % str(proof.get("proof", "")))
+
+	var killed := _kill_processes_and_windows_spawn_children(targets)
+	if not killed.is_empty():
+		print("MCP | killed pids %s on port %d" % [str(killed), port])
+	_wait_for_port_free(port, 5.0)
+	if _is_port_in_use(port):
+		return false
+
+	UvCacheCleanup.purge_stale_builds()
+	_clear_managed_server_record()
+	_clear_pid_file()
+	_spawn_state = McpSpawnState.OK
+	_connection_blocked = false
+	_server_status_message = ""
+	_server_actual_version = ""
+	_server_actual_name = ""
+	_can_recover_incompatible = false
+	_server_started_this_session = false
+	_server_pid = -1
+	_start_server()
+	_resume_connection_after_recovery()
+	return true
+
+
 ## Kill whichever process is holding `http_port()` right now — by resolving
 ## the port-owning PID via pid-file / netstat / lsof, independent of whether
 ## we ever set `_server_pid` — then clear ownership state and respawn via
@@ -1552,15 +1926,22 @@ func force_restart_server() -> void:
 	## if the single-pid parse fell over on multi-line lsof output) leaves
 	## the other holding the port past `_wait_for_port_free`'s window.
 	_kill_processes_and_windows_spawn_children(_find_all_pids_on_port(port))
-	_clear_managed_server_record()
-	_clear_pid_file()
 	_wait_for_port_free(port, 5.0)
+	if _is_port_in_use(port):
+		_set_incompatible_server(
+			_probe_live_server_status_for_port(port),
+			McpClientConfigurator.get_plugin_version(),
+			port
+		)
+		return
 	## Same rationale as `_stop_server`: the server child python just
 	## released its `pydantic_core` mapping, so this is the only window in
 	## which the hard-linked copies under `builds-v0\.tmp*` are deletable.
 	## Sweep before respawning so the upcoming `uvx mcp-proxy` build doesn't
 	## inherit the same cleanup-failure path that triggered the restart.
 	UvCacheCleanup.purge_stale_builds()
+	_clear_managed_server_record()
+	_clear_pid_file()
 	_server_started_this_session = false
 	_server_pid = -1
 	_start_server()
@@ -1675,12 +2056,7 @@ func _find_windows_spawn_children(parent_pids: Array[int]) -> Array[int]:
 			+ "Where-Object { $_.CommandLine -like '*spawn_main(parent_pid=%d*' } | "
 			+ "ForEach-Object { $_.ProcessId }"
 		) % parent_pid
-		var exit_code := OS.execute(
-			"powershell.exe",
-			["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-			output,
-			true
-		)
+		var exit_code := _execute_windows_powershell(script, output)
 		if exit_code != 0 or output.is_empty():
 			continue
 		for pid in _parse_pid_lines(str(output[0])):
