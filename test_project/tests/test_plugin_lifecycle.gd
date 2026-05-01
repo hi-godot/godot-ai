@@ -532,6 +532,63 @@ func test_recovery_proof_accepts_status_name_only() -> void:
 	assert_eq(pids, [13579] as Array[int])
 
 
+func test_strong_recovery_kills_pidfile_listener_when_port_frees() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [11111] as Array[int]
+	plugin.pid_file_pid = 11111
+	plugin.alive_pids = [11111] as Array[int]
+	plugin.branded_pids = [11111] as Array[int]
+	plugin.port_in_use_sequence = [false] as Array[bool]
+
+	var ok := plugin._recover_strong_port_occupant(TEST_PORT, 0.1)
+	var killed := plugin.killed_targets.duplicate()
+	var waited_calls := plugin.waited_calls
+	var clear_calls := plugin.cleared_record_calls
+	plugin.free()
+
+	assert_true(ok, "strong pidfile proof should recover when the port frees")
+	assert_eq(killed, [11111] as Array[int])
+	assert_eq(waited_calls, 1)
+	assert_eq(clear_calls, 1, "successful recovery must clear stale managed state")
+
+
+func test_strong_recovery_preserves_state_when_port_stays_held() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [11111] as Array[int]
+	plugin.pid_file_pid = 11111
+	plugin.alive_pids = [11111] as Array[int]
+	plugin.branded_pids = [11111] as Array[int]
+	plugin.port_in_use_sequence = [true] as Array[bool]
+
+	var ok := plugin._recover_strong_port_occupant(TEST_PORT, 0.1)
+	var killed := plugin.killed_targets.duplicate()
+	var waited_calls := plugin.waited_calls
+	var clear_calls := plugin.cleared_record_calls
+	plugin.free()
+
+	assert_false(ok, "recovery must fail when the port stays held")
+	assert_eq(killed, [11111] as Array[int])
+	assert_eq(waited_calls, 1)
+	assert_eq(clear_calls, 0, "failed recovery must preserve stale ownership state")
+
+
+func test_strong_recovery_rejects_status_name_only() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [13579] as Array[int]
+	plugin.live_status = {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
+
+	var ok := plugin._recover_strong_port_occupant(TEST_PORT, 0.1)
+	var killed := plugin.killed_targets.duplicate()
+	var waited_calls := plugin.waited_calls
+	var clear_calls := plugin.cleared_record_calls
+	plugin.free()
+
+	assert_false(ok, "status_name proof is recoverable by click, not by automatic startup kill")
+	assert_true(killed.is_empty())
+	assert_eq(waited_calls, 0)
+	assert_eq(clear_calls, 0)
+
+
 func test_can_recover_incompatible_server_requires_state_and_recovery_proof() -> void:
 	var plugin := _ProofPlugin.new()
 	plugin.port_in_use = true

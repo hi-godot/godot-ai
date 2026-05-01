@@ -575,34 +575,24 @@ func _start_server() -> void:
 			## kill the process currently holding the port.
 			print("MCP | managed server v%s does not match plugin v%s, restarting"
 				% [record_version, current_version])
-			var proof := _evaluate_strong_port_occupant_proof(port)
-			var targets: Array[int] = []
-			targets.assign(proof.get("pids", []))
-			if targets.is_empty():
-				_server_started_this_session = true
-				_set_incompatible_server(live, current_version, port)
-				push_warning(_server_status_message)
-				return
-			_kill_processes_and_windows_spawn_children(targets)
-			_wait_for_port_free(port, 3.0)
-			if _is_port_in_use(port):
+			if not _recover_strong_port_occupant(port, 3.0):
 				_server_started_this_session = true
 				_set_incompatible_server(_probe_live_server_status_for_port(port), current_version, port)
 				push_warning(_server_status_message)
 				return
-			_clear_managed_server_record()
-			_clear_pid_file()
 			## Fall through to spawn.
 		else:
-			## No recorded version drift and the live status probe did not
-			## verify an exact/current-compatible godot-ai server. A stale
-			## matching record alone is not enough ownership proof to kill
-			## the current port owner, and opening the WebSocket could route
-			## clients to an incompatible HTTP/MCP tool surface.
-			_server_started_this_session = true
-			_set_incompatible_server(live, current_version, port)
-			push_warning(_server_status_message)
-			return
+			if not _recover_strong_port_occupant(port, 3.0):
+				## No recorded version drift and the live status probe did not
+				## verify an exact/current-compatible godot-ai server. A stale
+				## matching record alone is not enough ownership proof to kill
+				## the current port owner, and opening the WebSocket could route
+				## clients to an incompatible HTTP/MCP tool surface.
+				_server_started_this_session = true
+				_set_incompatible_server(live, current_version, port)
+				push_warning(_server_status_message)
+				return
+			## Fall through to spawn.
 
 	_set_resolved_ws_port(_resolve_ws_port())
 	ws_port = _resolved_ws_port
@@ -673,7 +663,9 @@ func _set_incompatible_server(live: Dictionary, expected_version: String, port: 
 	_server_dev_version_mismatch_allowed = false
 	_server_status_message = _incompatible_server_message(live, expected_version, port, _resolved_ws_port)
 	var proof := _evaluate_recovery_port_occupant_proof(port)
-	_can_recover_incompatible = not str(proof.get("proof", "")).is_empty()
+	var proof_name := str(proof.get("proof", ""))
+	_can_recover_incompatible = not proof_name.is_empty()
+	print("MCP | proof: %s" % (proof_name if _can_recover_incompatible else "(none)"))
 	_refresh_dock_client_statuses()
 
 
@@ -1247,13 +1239,30 @@ static func _find_listener_pids_windows(port: int) -> Array[int]:
 		+ "Select-Object -ExpandProperty OwningProcess"
 	) % port
 	var output: Array = []
-	var exit_code := OS.execute(
-		"powershell.exe",
-		["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-		output,
-		true
-	)
+	var exit_code := _execute_windows_powershell(script, output)
 	return _windows_listener_pids_from_execute_result(exit_code, output)
+
+
+static func _execute_windows_powershell(script: String, output: Array) -> int:
+	var args := ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script]
+	for exe in _windows_powershell_candidates():
+		output.clear()
+		var exit_code := OS.execute(exe, args, output, true)
+		if exit_code == 0:
+			return exit_code
+	return -1
+
+
+static func _windows_powershell_candidates() -> Array[String]:
+	var candidates: Array[String] = []
+	var system_root := OS.get_environment("SystemRoot")
+	if system_root.is_empty():
+		system_root = "C:/Windows"
+	system_root = system_root.replace("\\", "/").trim_suffix("/")
+	candidates.append(system_root + "/System32/WindowsPowerShell/v1.0/powershell.exe")
+	candidates.append("powershell.exe")
+	candidates.append("pwsh.exe")
+	return candidates
 
 
 static func _windows_listener_pids_from_execute_result(exit_code: int, output: Array) -> Array[int]:
@@ -1346,14 +1355,36 @@ func _evaluate_recovery_port_occupant_proof(port: int) -> Dictionary:
 	return {"proof": "", "pids": []}
 
 
+func _recover_strong_port_occupant(port: int, wait_s: float) -> bool:
+	var proof := _evaluate_strong_port_occupant_proof(port)
+	var targets: Array[int] = []
+	targets.assign(proof.get("pids", []))
+	if targets.is_empty():
+		return false
+
+	print("MCP | strong proof: %s" % str(proof.get("proof", "")))
+	var killed := _kill_processes_and_windows_spawn_children(targets)
+	if not killed.is_empty():
+		print("MCP | killed pids %s on port %d" % [str(killed), port])
+	_wait_for_port_free(port, wait_s)
+	if _is_port_in_use(port):
+		return false
+
+	_clear_managed_server_record()
+	_clear_pid_file()
+	return true
+
+
 func _legacy_pidfile_kill_targets(_port: int, listener_pids: Array[int]) -> Array[int]:
 	var targets: Array[int] = []
 	var pidfile_pid := _read_pid_file_for_proof()
+	var pidfile_alive := _pid_alive_for_proof(pidfile_pid)
+	var pidfile_branded := _pid_cmdline_is_godot_ai_for_proof(pidfile_pid)
 	if pidfile_pid <= 1 or pidfile_pid == OS.get_process_id():
 		return targets
-	if not listener_pids.has(pidfile_pid) or not _pid_alive_for_proof(pidfile_pid):
+	if not listener_pids.has(pidfile_pid) or not pidfile_alive:
 		return targets
-	if not _pid_cmdline_is_godot_ai_for_proof(pidfile_pid):
+	if not pidfile_branded:
 		return targets
 
 	for pid in listener_pids:
@@ -1584,15 +1615,10 @@ static func _strip_pidfile_value(cmd: String) -> String:
 func _windows_pid_commandline(pid: int) -> String:
 	var output: Array = []
 	var script := (
-		"Get-CimInstance Win32_Process -Filter \"ProcessId = %d\" | "
+		"Get-CimInstance Win32_Process -Filter 'ProcessId = %d' | "
 		+ "Select-Object -ExpandProperty CommandLine"
 	) % pid
-	var exit_code := OS.execute(
-		"powershell.exe",
-		["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-		output,
-		true
-	)
+	var exit_code := _execute_windows_powershell(script, output)
 	if exit_code != 0 or output.is_empty():
 		return ""
 	return str(output[0])
@@ -1826,8 +1852,11 @@ func recover_incompatible_server() -> bool:
 	targets.assign(proof.get("pids", []))
 	if targets.is_empty():
 		return false
+	print("MCP | proof: %s" % str(proof.get("proof", "")))
 
-	_kill_processes_and_windows_spawn_children(targets)
+	var killed := _kill_processes_and_windows_spawn_children(targets)
+	if not killed.is_empty():
+		print("MCP | killed pids %s on port %d" % [str(killed), port])
 	_wait_for_port_free(port, 5.0)
 	if _is_port_in_use(port):
 		return false
@@ -1998,12 +2027,7 @@ func _find_windows_spawn_children(parent_pids: Array[int]) -> Array[int]:
 			+ "Where-Object { $_.CommandLine -like '*spawn_main(parent_pid=%d*' } | "
 			+ "ForEach-Object { $_.ProcessId }"
 		) % parent_pid
-		var exit_code := OS.execute(
-			"powershell.exe",
-			["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-			output,
-			true
-		)
+		var exit_code := _execute_windows_powershell(script, output)
 		if exit_code != 0 or output.is_empty():
 			continue
 		for pid in _parse_pid_lines(str(output[0])):
