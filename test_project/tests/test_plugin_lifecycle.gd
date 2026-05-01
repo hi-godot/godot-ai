@@ -626,6 +626,34 @@ func test_external_compatible_adoption_clears_stale_managed_record() -> void:
 	assert_false(can_restart, "external adoption must not authorize managed restart")
 
 
+func test_external_compatible_adoption_log_reports_observed_owner() -> void:
+	var message := GodotAiPlugin._compatible_adoption_log_message(
+		"external",
+		-1,
+		22222,
+		"2.2.3",
+		9500,
+		"2.2.3"
+	)
+	assert_contains(message, "adopted external server owner_pid=22222")
+	assert_false(
+		message.find("PID -1") >= 0,
+		"external adoption log must not report the intentionally unowned _server_pid"
+	)
+
+
+func test_managed_compatible_adoption_log_reports_owned_pid() -> void:
+	var message := GodotAiPlugin._compatible_adoption_log_message(
+		"managed",
+		22222,
+		22222,
+		"2.2.3",
+		9500,
+		"2.2.3"
+	)
+	assert_contains(message, "adopted managed server (PID 22222")
+
+
 func test_resolved_ws_port_drops_stale_record_value() -> void:
 	## Regression for the cached-ws-port + stale-ownership interaction.
 	## Setup mirrors the bad shape from the field:

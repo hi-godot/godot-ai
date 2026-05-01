@@ -565,8 +565,14 @@ func _start_server() -> void:
 			var owner := _find_managed_pid(port)
 			var owner_label := _adopt_compatible_server(record_version, current_version, owner)
 			_server_started_this_session = true
-			print("MCP | adopted %s server (PID %d, live v%s, WS %d, plugin v%s)"
-				% [owner_label, _server_pid, _server_actual_version, live_ws_port, current_version])
+			print(_compatible_adoption_log_message(
+				owner_label,
+				_server_pid,
+				owner,
+				_server_actual_version,
+				live_ws_port,
+				current_version
+			))
 			return
 		if _managed_record_has_version_drift(record_version, current_version):
 			## Version drift — our server but the plugin moved on. Kill
@@ -1794,6 +1800,29 @@ func _adopt_compatible_server(record_version: String, current_version: String, o
 	_clear_managed_server_record()
 	_clear_pid_file()
 	return "external"
+
+
+static func _compatible_adoption_log_message(
+	owner_label: String,
+	owned_pid: int,
+	observed_owner_pid: int,
+	live_version: String,
+	live_ws_port: int,
+	current_version: String
+) -> String:
+	if owner_label == "managed":
+		return "MCP | adopted managed server (PID %d, live v%s, WS %d, plugin v%s)" % [
+			owned_pid,
+			live_version,
+			live_ws_port,
+			current_version
+		]
+	return "MCP | adopted external server owner_pid=%d (live v%s, WS %d, plugin v%s)" % [
+		observed_owner_pid,
+		live_version,
+		live_ws_port,
+		current_version
+	]
 
 
 ## Hand the self-update over to a tiny runner that is not owned by this

@@ -22,7 +22,8 @@ extends RefCounted
 ## Returns a Dictionary with:
 ##   exit_code:    process exit code (0 = success). -1 on timeout / spawn failure.
 ##   stdout:       captured stdout text. May be partial on timeout.
-##   stderr:       captured stderr text. May be partial on timeout.
+##   stderr:       captured stderr text. May be partial on timeout. Empty when
+##                 `capture_stderr` is false.
 ##   output:       stdout + (newline + stderr if non-empty). Convenience for
 ##                 the common case of "show whatever the CLI said when it
 ##                 failed" — `claude mcp add` writes its real diagnostics to
@@ -35,7 +36,12 @@ const DEFAULT_TIMEOUT_MS := 8000
 const _POLL_INTERVAL_MS := 50
 
 
-static func run(exe: String, args: Array, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> Dictionary:
+static func run(
+	exe: String,
+	args: Array,
+	timeout_ms: int = DEFAULT_TIMEOUT_MS,
+	capture_stderr: bool = true
+) -> Dictionary:
 	if exe.is_empty():
 		return _spawn_failed_result()
 
@@ -57,7 +63,7 @@ static func run(exe: String, args: Array, timeout_ms: int = DEFAULT_TIMEOUT_MS) 
 			## process — partial output beats blank "timed out" when the
 			## CLI was emitting useful diagnostics on its way to hanging.
 			var partial_stdout := _drain_pipe(stdio)
-			var partial_stderr := _drain_pipe(stderr_pipe)
+			var partial_stderr := _drain_pipe(stderr_pipe) if capture_stderr else ""
 			OS.kill(pid)
 			_close_pipes(stdio, stderr_pipe)
 			return {
@@ -71,7 +77,7 @@ static func run(exe: String, args: Array, timeout_ms: int = DEFAULT_TIMEOUT_MS) 
 		OS.delay_msec(_POLL_INTERVAL_MS)
 
 	var stdout := _drain_pipe(stdio)
-	var stderr_text := _drain_pipe(stderr_pipe)
+	var stderr_text := _drain_pipe(stderr_pipe) if capture_stderr else ""
 	_close_pipes(stdio, stderr_pipe)
 
 	return {

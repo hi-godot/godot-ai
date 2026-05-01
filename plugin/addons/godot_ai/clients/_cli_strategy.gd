@@ -74,7 +74,12 @@ static func check_status_details(client: McpClient, server_name: String, server_
 		return _status_details(McpClient.Status.NOT_CONFIGURED)
 	if client.cli_status_args.is_empty():
 		return _status_details(McpClient.Status.NOT_CONFIGURED)
-	var result := McpCliExec.run(cli, McpClient._array_from_packed(client.cli_status_args), _STATUS_TIMEOUT_MS)
+	var result := McpCliExec.run(
+		cli,
+		McpClient._array_from_packed(client.cli_status_args),
+		_STATUS_TIMEOUT_MS,
+		false
+	)
 	if result.get("timed_out", false):
 		return _status_details(McpClient.Status.ERROR, "probe timed out")
 	if result.get("spawn_failed", false):
