@@ -1122,31 +1122,38 @@ func _on_restart_stale_server() -> void:
 	_server_restart_in_progress = true
 	_last_rendered_server_text = ""
 	_refresh_server_version_label()
+	if not is_inside_tree():
+		_dispatch_stale_server_restart()
+		_server_restart_in_progress = false
+		_last_rendered_server_text = ""
+		_refresh_server_version_label()
+		return
 	call_deferred("_restart_stale_server_after_feedback")
 
 
 func _restart_stale_server_after_feedback() -> void:
 	await get_tree().create_timer(0.15).timeout
-	if _plugin == null:
+	if not _dispatch_stale_server_restart():
 		_server_restart_in_progress = false
+		_last_rendered_server_text = ""
 		_refresh_server_version_label()
-		return
+
+
+func _dispatch_stale_server_restart() -> bool:
+	if _plugin == null:
+		return false
 	var status: Dictionary = (
 		_plugin.get_server_status()
 		if _plugin.has_method("get_server_status")
 		else {}
 	)
-	var started := false
 	if str(status.get("state", "")) == McpSpawnState.INCOMPATIBLE_SERVER:
 		if _plugin.has_method("recover_incompatible_server"):
-			started = bool(_plugin.recover_incompatible_server())
+			return bool(_plugin.recover_incompatible_server())
 	elif _plugin.has_method("force_restart_server"):
 		_plugin.force_restart_server()
-		started = true
-	if not started:
-		_server_restart_in_progress = false
-		_last_rendered_server_text = ""
-		_refresh_server_version_label()
+		return true
+	return false
 
 
 func _on_log_toggled(enabled: bool) -> void:

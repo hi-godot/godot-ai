@@ -281,6 +281,9 @@ func test_drain_helper_does_not_poison_shutdown_flag() -> void:
 ## or dev checkout (the user-mode Server row is what owns these handles in
 ## production — see `_refresh_setup_status`).
 func _seed_server_row(server_ver: String) -> McpConnection:
+	_dock._plugin = null
+	_dock._server_restart_in_progress = false
+	_dock._crash_restart_btn = null
 	var conn := McpConnection.new()
 	_dock._connection = conn
 	_dock._setup_server_label = Label.new()
