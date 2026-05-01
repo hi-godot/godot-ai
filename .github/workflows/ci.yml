@@ -28,6 +28,8 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install dependencies
         run: pip install -e ".[dev]"
@@ -64,6 +66,8 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Build sdist and wheel
         run: |
@@ -110,14 +114,25 @@ jobs:
           name: dist
           path: dist/
 
-  godot-tests-linux:
-    name: Godot tests / Linux
-    runs-on: ubuntu-latest
+  godot-tests:
+    name: Godot tests / ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux
+          - os: macos-latest
+            label: macOS
+          - os: windows-latest
+            label: Windows
 
     steps:
       - uses: actions/checkout@v6
 
-      - name: Build plugin symlink
+      - name: Build plugin link
+        shell: bash
         run: bash script/verify-worktree
 
       - uses: chickensoft-games/setup-godot@v2
@@ -129,47 +144,67 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install dependencies
         run: pip install -e ".[dev]"
 
       - name: Start MCP server
+        shell: bash
         run: bash script/ci-start-server
 
       - name: Import and validate GDScript
+        shell: bash
         timeout-minutes: 3
         run: |
-          godot --headless --path test_project --import > /tmp/godot-import.log 2>&1 || true
-          bash script/ci-check-gdscript /tmp/godot-import.log
+          godot --headless --path test_project --import > godot-import.log 2>&1 || true
+          bash script/ci-check-gdscript godot-import.log
 
       - name: Start Godot editor (headless)
+        shell: bash
         run: GODOT_AI_ALLOW_HEADLESS=1 godot --headless --path test_project --editor &
 
       - name: Run handler tests
+        shell: bash
         timeout-minutes: 3
         run: bash script/ci-godot-tests
 
       - name: Reload smoke test
+        shell: bash
         timeout-minutes: 2
         run: bash script/ci-reload-test
 
       - name: Quit smoke test
+        shell: bash
         timeout-minutes: 2
         run: bash script/ci-quit-test
 
-  # Separate job from godot-tests-*: the capture smoke test needs a real
+  # Separate job from godot-tests: the capture smoke test needs a real
   # rendering driver (null RenderingDevice in --headless produces empty
   # framebuffers) and a display server. Linux uses xvfb-run; macOS and
   # Windows CI runners have a real graphics stack and run the editor
   # windowed. This job verifies editor_screenshot(source="game") round-
   # trips real game pixels — see closes #72.
-  game-capture-smoke-linux:
-    name: Game capture smoke / Linux
-    runs-on: ubuntu-latest
+  game-capture-smoke:
+    name: Game capture smoke / ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux
+          - os: macos-latest
+            label: macOS
+          - os: windows-latest
+            label: Windows
+
     steps:
       - uses: actions/checkout@v6
 
-      - name: Build plugin symlink
+      - name: Build plugin link
+        shell: bash
         run: bash script/verify-worktree
 
       - uses: chickensoft-games/setup-godot@v2
@@ -178,99 +213,39 @@ jobs:
           use-dotnet: false
 
       - name: Install xvfb
+        if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y xvfb
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install dependencies
         run: pip install -e ".[dev]"
 
       - name: Start MCP server
+        shell: bash
         run: bash script/ci-start-server
 
-      - name: Import project
+      - name: Import and validate GDScript
+        shell: bash
         timeout-minutes: 3
-        run: godot --headless --path test_project --import || true
+        run: |
+          godot --headless --path test_project --import > godot-import.log 2>&1 || true
+          bash script/ci-check-gdscript godot-import.log
 
-      - name: Start Godot editor with rendering driver
+      - name: Start Godot editor (Linux / xvfb)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
         run: |
           xvfb-run -a --server-args="-screen 0 1280x720x24" \
             godot --rendering-driver opengl3 --path test_project --editor &
 
-      - name: Run capture smoke test
-        timeout-minutes: 5
-        run: python script/ci-game-capture-smoke
-
-  game-capture-smoke-macos:
-    name: Game capture smoke / macOS
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Build plugin symlink
-        run: bash script/verify-worktree
-
-      - uses: chickensoft-games/setup-godot@v2
-        with:
-          version: 4.6.2
-          use-dotnet: false
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
-
-      - name: Start MCP server
-        run: bash script/ci-start-server
-
-      - name: Import project
-        run: godot --headless --path test_project --import || true
-
-      - name: Start Godot editor
-        run: godot --path test_project --editor &
-
-      - name: Run capture smoke test
-        timeout-minutes: 5
-        run: python script/ci-game-capture-smoke
-
-  game-capture-smoke-windows:
-    name: Game capture smoke / Windows
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Build plugin junction
-        shell: bash
-        run: bash script/verify-worktree
-
-      - uses: chickensoft-games/setup-godot@v2
-        with:
-          version: 4.6.2
-          use-dotnet: false
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
-
-      - name: Start MCP server
-        shell: bash
-        run: bash script/ci-start-server
-
-      - name: Import project
-        shell: bash
-        run: godot --headless --path test_project --import || true
-
-      - name: Start Godot editor
+      - name: Start Godot editor (windowed)
+        if: matrix.os != 'ubuntu-latest'
         shell: bash
         run: godot --path test_project --editor &
 
@@ -278,85 +253,3 @@ jobs:
         timeout-minutes: 5
         shell: bash
         run: python script/ci-game-capture-smoke
-
-  godot-tests-macos:
-    name: Godot tests / macOS
-    runs-on: macos-latest
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Build plugin symlink
-        run: bash script/verify-worktree
-
-      - uses: chickensoft-games/setup-godot@v2
-        with:
-          version: 4.6.2
-          use-dotnet: false
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
-
-      - name: Start MCP server
-        run: bash script/ci-start-server
-
-      - name: Start Godot editor (headless)
-        run: |
-          godot --headless --path test_project --import || true
-          GODOT_AI_ALLOW_HEADLESS=1 godot --headless --path test_project --editor &
-
-      - name: Run handler tests
-        run: bash script/ci-godot-tests
-
-      - name: Reload smoke test
-        run: bash script/ci-reload-test
-
-      - name: Quit smoke test
-        run: bash script/ci-quit-test
-
-  godot-tests-windows:
-    name: Godot tests / Windows
-    runs-on: windows-latest
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Build plugin junction
-        shell: bash
-        run: bash script/verify-worktree
-
-      - uses: chickensoft-games/setup-godot@v2
-        with:
-          version: 4.6.2
-          use-dotnet: false
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
-
-      - name: Start MCP server
-        shell: bash
-        run: bash script/ci-start-server
-
-      - name: Start Godot editor (headless)
-        shell: bash
-        run: |
-          godot --headless --path test_project --import || true
-          GODOT_AI_ALLOW_HEADLESS=1 godot --headless --path test_project --editor &
-
-      - name: Run handler tests
-        shell: bash
-        run: bash script/ci-godot-tests
-
-      - name: Reload smoke test
-        shell: bash
-        run: bash script/ci-reload-test
