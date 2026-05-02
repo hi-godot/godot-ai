@@ -66,8 +66,8 @@ const _NODE_TRANSFORM_KEYS := [
 ]
 
 const _DAMPING_MARGIN_KEYS := ["left", "top", "right", "bottom"]
-const _CURRENT_SETTLE_ATTEMPTS := 3
-const _CURRENT_SETTLE_DELAY_MSEC := 2
+const _CURRENT_SETTLE_ATTEMPTS := 8
+const _CURRENT_SETTLE_DELAY_MSEC := 10
 
 
 var _undo_redo: EditorUndoRedoManager
@@ -93,11 +93,14 @@ static func _is_current(cam: Node) -> bool:
 # Both DO and UNDO route through `_apply_make_current` / `_apply_clear_current`
 # on the handler itself rather than calling Camera.make_current() directly.
 # The helpers do the make_current (or clear_current) call plus bounded sync
-# settling when the viewport hasn't yet reflected the change — macOS headless
+# settling when the viewport hasn't yet reflected the change — headless CI
 # occasionally reports `is_current() == false` immediately after a committed
 # make_current (observed CI run 24682342469) and symmetrically still reports
 # the displaced camera as current immediately after an undo (observed CI runs
 # 24682342469, 24692250322, 24696571517, 25079965242 — tracked in #140).
+# Later #278 runs broadened the same current-camera timing flake across more
+# platforms and assertions, so the settle budget is deliberately above one
+# fast local frame.
 #
 # Because those callables bind to `self` (a RefCounted handler, not a scene
 # node), every action that calls this helper must pin its history via
@@ -139,12 +142,18 @@ func _apply_make_current(cam: Node) -> void:
 	for attempt in range(_CURRENT_SETTLE_ATTEMPTS):
 		cam.make_current()
 		_force_camera_refresh(cam)
-		if _is_current(cam):
-			return
-		_displace_stale_camera_2d(cam)
-		if _is_current(cam):
-			return
-		if attempt < _CURRENT_SETTLE_ATTEMPTS - 1:
+		if not _is_current_settled(cam):
+			_displace_stale_camera_2d(cam)
+		var waited_this_attempt := false
+		if _is_current_settled(cam):
+			if not (cam is Camera2D):
+				return
+			OS.delay_msec(_CURRENT_SETTLE_DELAY_MSEC)
+			waited_this_attempt = true
+			_force_camera_refresh(cam)
+			if _is_current_settled(cam):
+				return
+		if attempt < _CURRENT_SETTLE_ATTEMPTS - 1 and not waited_this_attempt:
 			OS.delay_msec(_CURRENT_SETTLE_DELAY_MSEC)
 
 
@@ -158,6 +167,16 @@ func _verify_current_after_commit(node: Node) -> void:
 func _force_camera_refresh(cam: Node) -> void:
 	if cam is Camera2D:
 		(cam as Camera2D).force_update_scroll()
+
+
+func _is_current_settled(cam: Node) -> bool:
+	if not _is_current(cam):
+		return false
+	if cam is Camera2D:
+		var viewport := cam.get_viewport()
+		if viewport != null and viewport.get_camera_2d() != cam:
+			return false
+	return true
 
 
 func _displace_stale_camera_2d(target: Node) -> void:
@@ -176,6 +195,8 @@ func _displace_stale_camera_2d(target: Node) -> void:
 	_force_camera_refresh(target)
 	if was_enabled:
 		stale.enabled = true
+	target.make_current()
+	_force_camera_refresh(target)
 
 
 # Symmetric counterpart to `_apply_make_current` for the "no previous
@@ -185,8 +206,15 @@ func _displace_stale_camera_2d(target: Node) -> void:
 func _apply_clear_current(cam: Node) -> void:
 	if cam == null or not is_instance_valid(cam) or not cam.is_inside_tree():
 		return
-	if _is_current(cam):
+	for attempt in range(_CURRENT_SETTLE_ATTEMPTS):
+		if not _is_current(cam):
+			return
 		cam.clear_current()
+		_force_camera_refresh(cam)
+		if not _is_current(cam):
+			return
+		if attempt < _CURRENT_SETTLE_ATTEMPTS - 1:
+			OS.delay_msec(_CURRENT_SETTLE_DELAY_MSEC)
 
 
 # ============================================================================
