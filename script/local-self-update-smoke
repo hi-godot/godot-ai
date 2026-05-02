@@ -633,10 +633,12 @@ def subn_once(path: Path, text: str, pattern: str, replacement: str, label: str)
 
 
 def create_plugin_zip(vnext_addon: Path, zip_path: Path) -> None:
-    # Mirror release.yml (`zip -r addons/ LICENSE`): include zero-byte
-    # directory entries so the install path sees the same shape on smoke
-    # and on real releases. The bare `addons/godot_ai/` entry is exactly
-    # what tripped the install safety check in 2.3.0.
+    # Include zero-byte directory entries (the shape `zip -r` produces
+    # without `-D`, also typical of AssetLib uploads and hand-built
+    # archives). Current release.yml strips them via `zip -D`, but the
+    # smoke must still exercise the directory-entry path: that's what
+    # tripped the 2.2.x/2.3.0 install safety check, and the runner has
+    # to keep handling it correctly for older or manually built zips.
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("addons/", "")
         zf.writestr("addons/godot_ai/", "")

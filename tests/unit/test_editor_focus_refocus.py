@@ -412,10 +412,11 @@ def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> Non
         "_is_safe_zip_addon_file(file_path)"
     ), (
         "Skip zero-byte directory entries (rel_path empty or trailing slash) "
-        "BEFORE the _is_safe_zip_addon_file check. `zip -r` (used by "
-        "release.yml) emits a bare `addons/godot_ai/` directory entry; the "
-        "safety guard treats an empty rel_path as unsafe and aborts the "
-        "extract, breaking self-update from any release zip."
+        "BEFORE the _is_safe_zip_addon_file check. Zips without `zip -D` "
+        "(older release artifacts, AssetLib uploads, hand-built archives) "
+        "include a bare `addons/godot_ai/` directory entry; the safety "
+        "guard treats its empty rel_path as unsafe and aborts the extract, "
+        "breaking self-update for any user whose installed runner sees one."
     )
 
     existing_block = runner_source.split("func _install_existing_files_and_scan() -> void:", 1)[

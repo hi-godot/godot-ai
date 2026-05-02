@@ -122,10 +122,13 @@ func _read_update_manifest() -> bool:
 		if not file_path.begins_with(ZIP_ADDON_PREFIX):
 			continue
 		var rel_path := file_path.trim_prefix(ZIP_ADDON_PREFIX)
-		## `zip -r` (used by release.yml) emits zero-byte directory entries
-		## like `addons/godot_ai/`. Skip those before the safety check; the
+		## Many zip builders (`zip -r` without `-D`, AssetLib uploads, hand-
+		## built archives) emit zero-byte directory entries like
+		## `addons/godot_ai/`. Skip those before the safety check; the
 		## empty-segment guard in `_is_safe_zip_addon_file` would otherwise
-		## flag the bare prefix as unsafe and abort the extract.
+		## flag the bare prefix as unsafe and abort the extract. Current
+		## release.yml passes `-D` to strip them, but installed runners must
+		## still tolerate older or manually built zips.
 		if rel_path.is_empty() or file_path.ends_with("/"):
 			continue
 		if not _is_safe_zip_addon_file(file_path):
