@@ -27,6 +27,7 @@ class _ProofPlugin extends GodotAiPlugin:
 	var killed_targets: Array[int] = []
 	var cleared_record_calls := 0
 	var waited_calls := 0
+	var probe_calls := 0
 
 	func _find_all_pids_on_port(_port: int) -> Array[int]:
 		var pids: Array[int] = []
@@ -46,6 +47,7 @@ class _ProofPlugin extends GodotAiPlugin:
 		return branded_pids.has(pid)
 
 	func _probe_live_server_status_for_port(_port: int) -> Dictionary:
+		probe_calls += 1
 		return live_status.duplicate()
 
 	func _is_port_in_use(_port: int) -> bool:
@@ -1132,6 +1134,98 @@ func test_parse_lsof_pids_ignores_non_numeric_lines() -> void:
 	var pids := GodotAiPlugin._parse_lsof_pids("lsof: WARNING\n32696\n")
 	assert_eq(pids.size(), 1)
 	assert_eq(pids[0], 32696)
+
+
+## --- Live-status threading ------------------------------------------
+##
+## `_start_server` probes once at the top of the spawn body and threads
+## that snapshot through `_recover_strong_port_occupant`,
+## `_evaluate_*_port_occupant_proof`, and `_set_incompatible_server` so
+## downstream decision points reuse the result instead of re-probing.
+## Each probe costs a ~500 ms localhost HTTPClient poll loop, so a user-
+## reported occupied-port trace measured five back-to-back probes
+## dominating the dock's first-paint window.
+
+func test_strong_proof_uses_provided_live_without_probing() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [13579] as Array[int]
+	plugin.managed_record = {"pid": 0, "version": "2.1.0", "ws_port": 9500}
+	var caller_live := {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
+
+	var proof := plugin._evaluate_strong_port_occupant_proof(TEST_PORT, caller_live)
+	var probe_calls := plugin.probe_calls
+	plugin.free()
+
+	assert_eq(str(proof.get("proof", "")), "status_matches_record")
+	assert_eq(probe_calls, 0, "passing live must skip the internal probe")
+
+
+func test_strong_proof_probes_when_live_omitted() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [13579] as Array[int]
+	plugin.managed_record = {"pid": 0, "version": "2.1.0", "ws_port": 9500}
+	plugin.live_status = {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
+
+	var proof := plugin._evaluate_strong_port_occupant_proof(TEST_PORT)
+	var probe_calls := plugin.probe_calls
+	plugin.free()
+
+	assert_eq(str(proof.get("proof", "")), "status_matches_record")
+	assert_eq(probe_calls, 1, "omitting live must trigger the internal probe (preserves historical behavior)")
+
+
+func test_recovery_proof_threads_live_through_strong_call() -> void:
+	## `_evaluate_recovery_port_occupant_proof` first delegates to
+	## `_evaluate_strong_port_occupant_proof` (one probe site) and on
+	## empty proof probes again itself (second probe site). Passing
+	## `live` must skip both.
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [13579] as Array[int]
+	plugin.managed_record = {"pid": 0, "version": "", "ws_port": 0}
+	var caller_live := {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
+
+	var proof := plugin._evaluate_recovery_port_occupant_proof(TEST_PORT, caller_live)
+	var probe_calls := plugin.probe_calls
+	plugin.free()
+
+	assert_eq(str(proof.get("proof", "")), "status_name", "fall-through path uses status name proof")
+	assert_eq(probe_calls, 0, "threading live must skip both internal probes")
+
+
+func test_recover_strong_port_occupant_threads_live_to_proof() -> void:
+	## `_recover_strong_port_occupant` uses `pre_kill_live` for the
+	## ownership-proof determination only. Anything after the kill must
+	## re-probe at the caller; the function itself never reuses
+	## `pre_kill_live` past `_kill_processes_and_windows_spawn_children`.
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [13579] as Array[int]
+	plugin.managed_record = {"pid": 13579, "version": "2.1.0", "ws_port": 9500}
+	plugin.alive_pids = [13579] as Array[int]
+	plugin.port_in_use_sequence = [false] as Array[bool]
+	var caller_live := {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
+
+	var ok := plugin._recover_strong_port_occupant(TEST_PORT, 0.1, caller_live)
+	var probe_calls := plugin.probe_calls
+	plugin.free()
+
+	assert_true(ok, "managed-record proof should recover when the port frees")
+	assert_eq(probe_calls, 0, "_recover_strong_port_occupant must thread live to its proof helper")
+
+
+func test_set_incompatible_server_threads_live_to_recovery_proof() -> void:
+	## `_set_incompatible_server` already accepts `live`; with the
+	## refactor it forwards that snapshot to its internal recovery-proof
+	## call so the proof helper doesn't re-probe.
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [13579] as Array[int]
+	plugin.managed_record = {"pid": 0, "version": "", "ws_port": 0}
+	var caller_live := {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
+
+	plugin._set_incompatible_server(caller_live, "2.3.1", TEST_PORT)
+	var probe_calls := plugin.probe_calls
+	plugin.free()
+
+	assert_eq(probe_calls, 0, "_set_incompatible_server must reuse the caller's live for its proof determination")
 
 
 func _seed_managed_record(pid: int, version: String) -> void:
