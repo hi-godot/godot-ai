@@ -633,12 +633,23 @@ def subn_once(path: Path, text: str, pattern: str, replacement: str, label: str)
 
 
 def create_plugin_zip(vnext_addon: Path, zip_path: Path) -> None:
+    ## Mirror release.yml (`zip -r addons/ LICENSE`): include zero-byte
+    ## directory entries so the install path sees the same shape on smoke
+    ## and on real releases. The bare `addons/godot_ai/` entry is exactly
+    ## what tripped the install safety check in 2.3.0.
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("addons/", "")
+        zf.writestr("addons/godot_ai/", "")
+        seen_dirs: set[Path] = set()
         for path in sorted(vnext_addon.rglob("*")):
-            if path.is_dir():
-                continue
             rel = path.relative_to(vnext_addon)
-            zf.write(path, Path("addons") / "godot_ai" / rel)
+            if path.is_dir():
+                dir_arcname = Path("addons") / "godot_ai" / rel
+                if dir_arcname not in seen_dirs:
+                    zf.writestr(dir_arcname.as_posix() + "/", "")
+                    seen_dirs.add(dir_arcname)
+                continue
+            zf.write(path, (Path("addons") / "godot_ai" / rel).as_posix())
 
 
 def diagnostic_reports_snapshot() -> set[Path]:
