@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.unit._gdscript_text import get_func_block
+
 PLUGIN_ROOT = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godot_ai"
 
 
@@ -58,8 +60,7 @@ def test_cli_exec_helper_uses_pipe_spawn_and_poll_kill() -> None:
     # Sanity-check the return shape so callers can rely on the four keys.
     for key in ("exit_code", "stdout", "timed_out", "spawn_failed"):
         assert f'"{key}"' in helper_source, (
-            f"Helper must populate the '{key}' key — callers in "
-            "_cli_strategy.gd dispatch on it."
+            f"Helper must populate the '{key}' key — callers in _cli_strategy.gd dispatch on it."
         )
 
 
@@ -90,17 +91,15 @@ def test_dock_dispatches_configure_and_remove_to_worker_thread() -> None:
     assert "Thread.new()" in dock_source
     # The deferred apply lives on main; the worker only does the
     # blocking call and a call_deferred handoff.
-    assert "call_deferred(\"_apply_client_action_result\"" in dock_source
+    assert 'call_deferred("_apply_client_action_result"' in dock_source
     assert "func _run_client_action_worker(" in dock_source
     # The two button handlers should NOT call McpClientConfigurator
     # directly — that would re-introduce the main-thread block. They
     # forward to the dispatcher.
-    on_configure = dock_source.split(
-        "func _on_configure_client(client_id: String) -> void:", 1
-    )[1].split("\n\nfunc ", 1)[0]
-    on_remove = dock_source.split(
-        "func _on_remove_client(client_id: String) -> void:", 1
-    )[1].split("\n\nfunc ", 1)[0]
+    on_configure = get_func_block(
+        dock_source, "func _on_configure_client(client_id: String) -> void:"
+    )
+    on_remove = get_func_block(dock_source, "func _on_remove_client(client_id: String) -> void:")
     assert "_dispatch_client_action(" in on_configure
     assert "_dispatch_client_action(" in on_remove
     assert "McpClientConfigurator.configure(" not in on_configure, (
@@ -108,8 +107,7 @@ def test_dock_dispatches_configure_and_remove_to_worker_thread() -> None:
         "configurator inline (issue #239)."
     )
     assert "McpClientConfigurator.remove(" not in on_remove, (
-        "Remove handler must dispatch to a worker, not call the "
-        "configurator inline (issue #239)."
+        "Remove handler must dispatch to a worker, not call the configurator inline (issue #239)."
     )
 
 
@@ -121,12 +119,8 @@ def test_dock_drains_action_workers_during_install_update_and_exit_tree() -> Non
     # Both `_exit_tree` and `_install_update` must drain or we hit
     # `~Thread … destroyed without its completion having been realized`
     # → VM corruption, same as #232.
-    exit_block = dock_source.split("func _exit_tree() -> void:", 1)[1].split(
-        "\n\nfunc ", 1
-    )[0]
-    install_block = dock_source.split("func _install_update() -> void:", 1)[1].split(
-        "\n\nfunc ", 1
-    )[0]
+    exit_block = get_func_block(dock_source, "func _exit_tree() -> void:")
+    install_block = get_func_block(dock_source, "func _install_update() -> void:")
     assert "_drain_client_action_workers()" in exit_block
     assert "_drain_client_action_workers()" in install_block
 
@@ -135,9 +129,7 @@ def test_dock_action_dispatch_gates_on_self_update_in_progress() -> None:
     """The same gate the refresh worker honors must protect Configure / Remove."""
 
     dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
-    block = dock_source.split("func _dispatch_client_action(", 1)[1].split(
-        "\n\nfunc ", 1
-    )[0]
+    block = get_func_block(dock_source, "func _dispatch_client_action(")
     assert "_self_update_in_progress" in block, (
         "Configure / Remove dispatch must short-circuit during the "
         "install-update window — a worker mid-call into a half-overwritten "
@@ -150,9 +142,7 @@ def test_status_refresh_apply_skips_rows_with_in_flight_action() -> None:
     """A concurrent refresh result must not stomp the 'Configuring…' badge."""
 
     dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
-    apply_block = dock_source.split(
-        "func _apply_client_status_refresh_results(", 1
-    )[1].split("\n\nfunc ", 1)[0]
+    apply_block = get_func_block(dock_source, "func _apply_client_status_refresh_results(")
     assert "_client_action_threads.has(" in apply_block, (
         "Refresh-result apply must skip rows whose action worker is "
         "still running — otherwise focus-in lands a stale snapshot on "

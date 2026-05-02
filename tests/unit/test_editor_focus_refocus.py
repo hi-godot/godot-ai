@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests.unit._gdscript_text import get_func_block
+
 PLUGIN_ROOT = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godot_ai"
 
 
@@ -45,7 +47,7 @@ def test_clients_window_open_requests_nonblocking_refresh() -> None:
     """Opening Clients & Tools should not schedule a deferred synchronous sweep."""
 
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
-    block = source.split("func _on_open_clients_window() -> void:", 1)[1].split("\nfunc ", 1)[0]
+    block = get_func_block(source, "func _on_open_clients_window() -> void:")
 
     assert "_request_client_status_refresh(" in block
     assert "_refresh_all_client_statuses.call_deferred" not in block
@@ -87,14 +89,12 @@ def test_initial_paint_warms_worker_call_graph_before_threading() -> None:
     """
 
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
-    build_block = source.split("func _build_ui() -> void:", 1)[1].split("\n\nfunc ", 1)[0]
+    build_block = get_func_block(source, "func _build_ui() -> void:")
     assert "_perform_initial_client_status_refresh()" in build_block, (
         "_build_ui must call the initial-refresh helper"
     )
 
-    helper_block = source.split("func _perform_initial_client_status_refresh() -> void:", 1)[
-        1
-    ].split("\n\nfunc ", 1)[0]
+    helper_block = get_func_block(source, "func _perform_initial_client_status_refresh() -> void:")
     assert "_warm_strategy_bytecode()" in helper_block, (
         "Helper must call _warm_strategy_bytecode() before spawning the "
         "worker — that's the single explicit dereference of every strategy "
@@ -132,9 +132,7 @@ def test_initial_paint_warms_worker_call_graph_before_threading() -> None:
         "from #234 that #235 replaces)."
     )
 
-    warm_block = source.split("func _warm_strategy_bytecode() -> void:", 1)[1].split(
-        "\n\nfunc ", 1
-    )[0]
+    warm_block = get_func_block(source, "func _warm_strategy_bytecode() -> void:")
     assert "McpJsonStrategy." in warm_block, (
         "_warm_strategy_bytecode must dereference McpJsonStrategy so the "
         "worker can't race the JSON strategy's lazy bytecode swap."
@@ -168,31 +166,27 @@ def test_client_status_refresh_defers_while_editor_filesystem_is_busy() -> None:
     assert "var _client_status_refresh_deferred_force := false" in source
     assert "var _client_status_refresh_deferred_initial := false" in source
 
-    process_block = source.split("func _process(_delta: float) -> void:", 1)[
-        1
-    ].split("\n\nfunc ", 1)[0]
+    process_block = get_func_block(source, "func _process(_delta: float) -> void:")
     assert "_retry_deferred_client_status_refresh()" in process_block
 
-    init_block = source.split(
-        "func _perform_initial_client_status_refresh() -> void:", 1
-    )[1].split("\n\nfunc ", 1)[0]
-    request_block = source.split(
-        "func _request_client_status_refresh(force: bool = false) -> bool:", 1
-    )[1].split("\n\nfunc ", 1)[0]
+    init_block = get_func_block(source, "func _perform_initial_client_status_refresh() -> void:")
+    request_block = get_func_block(
+        source, "func _request_client_status_refresh(force: bool = false) -> bool:"
+    )
     assert "_is_editor_filesystem_busy()" in init_block
     assert "_defer_initial_client_status_refresh_until_filesystem_ready()" in init_block
 
     assert "_is_editor_filesystem_busy()" in request_block
-    busy_request_block = request_block.split("if _is_editor_filesystem_busy():", 1)[
-        1
-    ].split("\n\n", 1)[0]
+    busy_request_block = request_block.split("if _is_editor_filesystem_busy():", 1)[1].split(
+        "\n\n", 1
+    )[0]
     assert "if force:" in busy_request_block
     assert "_defer_client_status_refresh_until_filesystem_ready(force)" in busy_request_block
     assert busy_request_block.index("if force:") < busy_request_block.index("return false")
 
-    initial_defer_block = source.split(
-        "func _defer_initial_client_status_refresh_until_filesystem_ready() -> void:", 1
-    )[1].split("\n\nfunc ", 1)[0]
+    initial_defer_block = get_func_block(
+        source, "func _defer_initial_client_status_refresh_until_filesystem_ready() -> void:"
+    )
     assert "_client_status_refresh_deferred_until_filesystem_ready = true" in initial_defer_block
     assert "_client_status_refresh_deferred_initial = true" in initial_defer_block
 
@@ -202,12 +196,12 @@ def test_focus_refresh_is_opportunistic_while_editor_filesystem_is_busy() -> Non
 
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
     focus_block = _focus_in_block(source)
-    request_block = source.split(
-        "func _request_client_status_refresh(force: bool = false) -> bool:", 1
-    )[1].split("\n\nfunc ", 1)[0]
-    busy_request_block = request_block.split("if _is_editor_filesystem_busy():", 1)[
-        1
-    ].split("\n\n", 1)[0]
+    request_block = get_func_block(
+        source, "func _request_client_status_refresh(force: bool = false) -> bool:"
+    )
+    busy_request_block = request_block.split("if _is_editor_filesystem_busy():", 1)[1].split(
+        "\n\n", 1
+    )[0]
 
     assert "_request_client_status_refresh(false)" in focus_block
     assert "_defer_client_status_refresh_until_filesystem_ready(force)" in busy_request_block
@@ -221,9 +215,7 @@ def test_deferred_manual_refresh_replays_through_async_request_path_only() -> No
     """Queued manual refreshes should not reintroduce PR #228's sync sweep."""
 
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
-    retry_block = source.split("func _retry_deferred_client_status_refresh() -> void:", 1)[
-        1
-    ].split("\n\nfunc ", 1)[0]
+    retry_block = get_func_block(source, "func _retry_deferred_client_status_refresh() -> void:")
 
     for block in (retry_block,):
         assert "_is_editor_filesystem_busy()" in block
@@ -236,9 +228,7 @@ def test_deferred_manual_refresh_replays_through_async_request_path_only() -> No
     assert "else:" in retry_block
     assert "_request_client_status_refresh(force)" in retry_block
 
-    busy_block = source.split("func _is_editor_filesystem_busy() -> bool:", 1)[
-        1
-    ].split("\n\nfunc ", 1)[0]
+    busy_block = get_func_block(source, "func _is_editor_filesystem_busy() -> bool:")
     assert "EditorInterface.get_resource_filesystem()" in busy_block
     assert "fs.is_scanning()" in busy_block
 
@@ -247,9 +237,7 @@ def test_deferred_initial_refresh_replays_warmup_path() -> None:
     """Scan-delayed initial paint must preserve #235's main-thread warm-up."""
 
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
-    retry_block = source.split("func _retry_deferred_client_status_refresh() -> void:", 1)[
-        1
-    ].split("\n\nfunc ", 1)[0]
+    retry_block = get_func_block(source, "func _retry_deferred_client_status_refresh() -> void:")
 
     assert "var initial := _client_status_refresh_deferred_initial" in retry_block
     assert "if initial:" in retry_block
@@ -286,9 +274,7 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
     """
 
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
-    install_block = source.split("func _install_update() -> void:", 1)[1].split(
-        "\n\nfunc ", 1
-    )[0]
+    install_block = get_func_block(source, "func _install_update() -> void:")
 
     flag_set_idx = install_block.find("_self_update_in_progress = true")
     drain_idx = install_block.find("_drain_client_status_refresh_workers()")
@@ -310,9 +296,7 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
         "Test fixture broken: could not locate the extract-write site "
         "(`f.store_buffer(content)`) inside `_install_update`'s legacy path."
     )
-    assert symlink_return_idx > 0, (
-        "Test fixture broken: could not locate the symlink-safety check."
-    )
+    assert symlink_return_idx > 0, "Test fixture broken: could not locate the symlink-safety check."
 
     assert symlink_return_idx < flag_set_idx < first_write_idx, (
         "Order: symlink-safety check → set self_update_in_progress flag → "
@@ -331,18 +315,16 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
         "instances do not hot-reload in place."
     )
 
-    request_block = source.split(
-        "func _request_client_status_refresh(force: bool = false) -> bool:", 1
-    )[1].split("\n\nfunc ", 1)[0]
+    request_block = get_func_block(
+        source, "func _request_client_status_refresh(force: bool = false) -> bool:"
+    )
     assert "if _self_update_in_progress:" in request_block, (
         "_request_client_status_refresh must short-circuit when self-update "
         "is in progress. This is the funnel for focus-in, manual-button, "
         "and cooldown-timer spawn paths — gating here covers every caller."
     )
 
-    init_block = source.split(
-        "func _perform_initial_client_status_refresh() -> void:", 1
-    )[1].split("\n\nfunc ", 1)[0]
+    init_block = get_func_block(source, "func _perform_initial_client_status_refresh() -> void:")
     assert "if _self_update_in_progress:" in init_block, (
         "_perform_initial_client_status_refresh must also short-circuit on "
         "the self-update flag — defensive even though the new dock instance "
@@ -357,9 +339,7 @@ def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> Non
     runner_source = (PLUGIN_ROOT / "update_reload_runner.gd").read_text()
 
     assert "UPDATE_RELOAD_RUNNER_SCRIPT" in plugin_source
-    handoff_block = plugin_source.split(
-        "func install_downloaded_update(", 1
-    )[1].split("\n\nfunc ", 1)[0]
+    handoff_block = get_func_block(plugin_source, "func install_downloaded_update(")
     assert "prepare_for_update_reload()" in handoff_block
     assert "remove_control_from_docks(_dock)" in handoff_block
     assert "remove_control_from_docks(source_dock)" in handoff_block
@@ -368,15 +348,11 @@ def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> Non
 
     assert '_wait_frames(PRE_DISABLE_DRAIN_FRAMES, "_disable_old_plugin")' in runner_source
 
-    disable_block = runner_source.split("func _disable_old_plugin() -> void:", 1)[
-        1
-    ].split("\n\nfunc ", 1)[0]
-    assert 'set_plugin_enabled(PLUGIN_CFG_PATH, false)' in disable_block
+    disable_block = get_func_block(runner_source, "func _disable_old_plugin() -> void:")
+    assert "set_plugin_enabled(PLUGIN_CFG_PATH, false)" in disable_block
     assert '_wait_frames(POST_DISABLE_DRAIN_FRAMES, "_extract_and_scan")' in disable_block
 
-    extract_block = runner_source.split("func _extract_and_scan() -> void:", 1)[
-        1
-    ].split("\n\nfunc ", 1)[0]
+    extract_block = get_func_block(runner_source, "func _extract_and_scan() -> void:")
     assert "_read_update_manifest()" in extract_block
     assert "_install_zip_paths(_new_file_paths)" in extract_block
     assert '_start_filesystem_scan("_install_existing_files_and_scan")' in extract_block
@@ -388,9 +364,7 @@ def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> Non
     assert "STAGING_DIR_NAME" not in runner_source
     assert "rename_absolute(live_path, backup_path)" not in runner_source
 
-    scan_block = runner_source.split("func _start_filesystem_scan", 1)[
-        1
-    ].split("\n\nfunc ", 1)[0]
+    scan_block = get_func_block(runner_source, "func _start_filesystem_scan")
     assert (
         'var deferred_step := next_step if not next_step.is_empty() else "_enable_new_plugin"'
         in scan_block
@@ -400,36 +374,26 @@ def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> Non
     assert "fs.scan()" in scan_block
     assert "FILESYSTEM_SCAN_TIMEOUT" not in runner_source
     assert "_scan_timeout" not in runner_source
-    process_block = runner_source.split("func _process(_delta: float) -> void:", 1)[
-        1
-    ].split("\n\nfunc ", 1)[0]
+    process_block = get_func_block(runner_source, "func _process(_delta: float) -> void:")
     assert "_finish_scan_wait()" not in process_block, (
         "Do not treat a frame-count timeout as filesystem-scan completion. "
         "Re-enabling before `filesystem_changed` can parse plugin.gd before "
         "Godot has registered newly extracted class_name scripts."
     )
 
-    finish_block = runner_source.split("func _finish_scan_wait() -> void:", 1)[
-        1
-    ].split("\n\nfunc ", 1)[0]
+    finish_block = get_func_block(runner_source, "func _finish_scan_wait() -> void:")
     assert 'next_step = "_enable_new_plugin"' in finish_block
     assert "call_deferred(next_step)" in finish_block
 
-    enable_block = runner_source.split("func _enable_new_plugin() -> void:", 1)[
-        1
-    ].split("\n\nfunc ", 1)[0]
-    assert 'set_plugin_enabled(PLUGIN_CFG_PATH, true)' in enable_block
+    enable_block = get_func_block(runner_source, "func _enable_new_plugin() -> void:")
+    assert "set_plugin_enabled(PLUGIN_CFG_PATH, true)" in enable_block
     assert '_wait_frames(POST_ENABLE_FREE_FRAMES, "_cleanup_and_finish")' in enable_block
 
-    cleanup_block = runner_source.split("func _cleanup_and_finish() -> void:", 1)[
-        1
-    ].split("\n\nfunc ", 1)[0]
+    cleanup_block = get_func_block(runner_source, "func _cleanup_and_finish() -> void:")
     assert "_cleanup_detached_dock()" in cleanup_block
     assert "queue_free()" in cleanup_block
 
-    manifest_block = runner_source.split("func _read_update_manifest() -> bool:", 1)[
-        1
-    ].split("\n\nfunc ", 1)[0]
+    manifest_block = get_func_block(runner_source, "func _read_update_manifest() -> bool:")
     assert "_is_safe_zip_addon_file(file_path)" in manifest_block
     assert "unsafe zip path" in manifest_block
     assert "_new_file_paths.clear()" in manifest_block
@@ -452,24 +416,20 @@ def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> Non
         "breaking self-update for any user whose installed runner sees one."
     )
 
-    existing_block = runner_source.split("func _install_existing_files_and_scan() -> void:", 1)[
-        1
-    ].split("\n\nfunc ", 1)[0]
+    existing_block = get_func_block(
+        runner_source, "func _install_existing_files_and_scan() -> void:"
+    )
     assert "_install_zip_paths(_existing_file_paths)" in existing_block
     assert "_cleanup_update_temp()" in existing_block
     assert '_start_filesystem_scan("_enable_new_plugin")' in existing_block
 
-    safe_path_block = runner_source.split("func _is_safe_zip_addon_file(", 1)[
-        1
-    ].split("\n\nfunc ", 1)[0]
+    safe_path_block = get_func_block(runner_source, "func _is_safe_zip_addon_file(")
     assert "file_path.is_absolute_path()" in safe_path_block
     assert 'file_path.contains("\\\\")' in safe_path_block
     assert 'segment == ".."' in safe_path_block
     assert "segment.is_empty()" in safe_path_block
 
-    install_file_block = runner_source.split("func _install_zip_file(", 1)[1].split(
-        "\n\nfunc ", 1
-    )[0]
+    install_file_block = get_func_block(runner_source, "func _install_zip_file(")
     assert "var temp_path := target_path + TEMP_FILE_SUFFIX" in install_file_block
     assert "FileAccess.open(temp_path, FileAccess.WRITE)" in install_file_block
     assert "DirAccess.rename_absolute(temp_path, target_path)" in install_file_block
@@ -504,9 +464,7 @@ def test_worker_uses_main_thread_probe_snapshot_for_cli_paths() -> None:
     dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
     configurator_source = (PLUGIN_ROOT / "client_configurator.gd").read_text()
     cli_source = (PLUGIN_ROOT / "clients" / "_cli_strategy.gd").read_text()
-    worker_block = dock_source.split("func _run_client_status_refresh_worker", 1)[1].split(
-        "\n\nfunc ", 1
-    )[0]
+    worker_block = get_func_block(dock_source, "func _run_client_status_refresh_worker")
 
     assert "client_status_probe_snapshot" in dock_source
     # Worker uses the details variant so probe timeouts (issue #238) can
@@ -558,9 +516,7 @@ def test_check_uv_version_caches_for_session() -> None:
         "'asked, uv not installed') without it."
     )
 
-    helper_block = source.split("static func check_uv_version() -> String:", 1)[1].split(
-        "\n\n", 1
-    )[0]
+    helper_block = get_func_block(source, "static func check_uv_version() -> String:")
     assert "if _uv_version_searched:" in helper_block, (
         "First line of check_uv_version must short-circuit on the cached "
         "result. Otherwise the cache is doing nothing."
@@ -580,9 +536,7 @@ def test_check_uv_version_caches_for_session() -> None:
         "install."
     )
 
-    invalidator_block = source.split(
-        "static func invalidate_uv_version_cache() -> void:", 1
-    )[1].split("\n\n", 1)[0]
+    invalidator_block = get_func_block(source, "static func invalidate_uv_version_cache() -> void:")
     assert "_uv_version_searched = false" in invalidator_block, (
         "Invalidator must reset _uv_version_searched, otherwise the next "
         "call short-circuits on the stale cached value."
@@ -594,13 +548,11 @@ def test_check_uv_version_caches_for_session() -> None:
     )
 
     dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
-    install_block = dock_source.split("func _on_install_uv() -> void:", 1)[1].split(
-        "\n\nfunc ", 1
-    )[0]
+    install_block = get_func_block(dock_source, "func _on_install_uv() -> void:")
     assert "McpClientConfigurator.invalidate_uvx_cli_cache()" in install_block, (
         "_on_install_uv must invalidate the CLI-path cache via the "
         "configurator helper (which knows the OS-specific binary name). "
-        "A direct `McpCliFinder.invalidate(\"uvx\")` would leave the "
+        'A direct `McpCliFinder.invalidate("uvx")` would leave the '
         "Windows cache stale — Windows caches under `uvx.exe`."
     )
     assert "McpClientConfigurator.invalidate_uv_version_cache()" in install_block, (
@@ -609,9 +561,9 @@ def test_check_uv_version_caches_for_session() -> None:
         "after a successful install."
     )
 
-    cli_invalidator_block = source.split(
-        "static func invalidate_uvx_cli_cache() -> void:", 1
-    )[1].split("\n\n", 1)[0]
+    cli_invalidator_block = get_func_block(
+        source, "static func invalidate_uvx_cli_cache() -> void:"
+    )
     assert "_uvx_cli_names()" in cli_invalidator_block, (
         "invalidate_uvx_cli_cache must route through the same "
         "_uvx_cli_names() helper that find_uvx() uses, so the OS-"
@@ -624,7 +576,7 @@ def test_configure_all_uses_cached_status_not_dot_color() -> None:
     """Configure-all must not make correctness decisions from stale UI colors."""
 
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
-    block = source.split("func _on_configure_all_clients() -> void:", 1)[1].split("\n\nfunc ", 1)[0]
+    block = get_func_block(source, "func _on_configure_all_clients() -> void:")
 
     assert 'get("status", McpClient.Status.NOT_CONFIGURED)' in block
     assert "dot.color" not in block
