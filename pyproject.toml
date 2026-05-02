@@ -1,6 +1,6 @@
 [project]
 name = "godot-ai"
-version = "2.3.1"
+version = "2.3.2"
 description = "Production-grade MCP server and AI tools for the Godot engine"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
