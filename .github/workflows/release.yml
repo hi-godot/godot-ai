@@ -118,6 +118,17 @@ jobs:
             echo "ERROR: LICENSE not present at zip root" >&2
             exit 1
           fi
+          # Hard-fail if the zip contains zero-byte directory entries (paths
+          # ending in `/`). The 2.2.x/2.3.0 self-update runner has an over-
+          # strict `_is_safe_zip_addon_file` guard that rejects any path
+          # ending in `/`, so any release zip emitted without `zip -D` will
+          # abort the extract on those installs and strand them. This guard
+          # is the rescue mechanism's CI invariant — see PR #281, issue #283.
+          if unzip -Z1 godot-ai-plugin.zip | grep -qE '/$'; then
+            echo "ERROR: zip contains directory entries (forgot \`zip -D\`?):" >&2
+            unzip -Z1 godot-ai-plugin.zip | grep -E '/$' >&2
+            exit 1
+          fi
           # Guard against macOS iCloud-sync duplicates (filenames like `foo 2.gd`)
           # sneaking in via a contaminated checkout. CI should never hit this
           # on a fresh actions/checkout, but a manual build from a synced
