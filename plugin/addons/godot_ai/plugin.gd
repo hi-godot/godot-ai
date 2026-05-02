@@ -84,19 +84,35 @@ const STARTUP_TRACE_COUNTER_NAMES := [
 	"server_command_discovery",
 ]
 
-var _connection: McpConnection
-var _dispatcher: McpDispatcher
-var _log_buffer: McpLogBuffer
-var _game_log_buffer: McpGameLogBuffer
-var _editor_log_buffer: McpEditorLogBuffer
-## Untyped — script extends Godot 4.5+'s Logger class, loaded via load() so
-## the plugin still parses on 4.4. Null on Godot < 4.5 or before
-## `_attach_editor_logger` runs; "attached" state IS exactly "non-null".
+## Untyped on purpose — see policy below. Type fences move to handler `_init`
+## sites that take typed parameters.
+##
+## Self-update parse-hazard policy: `plugin.gd` MUST NOT type-bind to any
+## plugin-defined `class_name` (`Mcp*`). During an in-place self-update,
+## `EditorInterface.set_plugin_enabled(false)` re-parses `plugin.gd` against
+## the freshly-extracted addon tree before Godot's class_name registry has
+## scanned the new files; a typed-var against a class whose inheritance or
+## class_name siblings changed in the new release fails to resolve, the
+## plugin enters a degraded state, and the follow-up `_exit_tree` cascade
+## crashes (see #242, #244). Untyped + `preload(...).new()` resolves at
+## script-load without consulting the global registry, so the parse stays
+## clean across releases. `tests/unit/test_plugin_self_update_safety.py`
+## locks this in.
+##
+## `_editor_logger` was already untyped because its script extends Godot
+## 4.5+'s Logger class and is loaded via `load()` so the plugin still parses
+## on 4.4. Null on Godot < 4.5 or before `_attach_editor_logger` runs;
+## "attached" state IS exactly "non-null".
+var _connection
+var _dispatcher
+var _log_buffer
+var _game_log_buffer
+var _editor_log_buffer
 var _editor_logger
-var _dock: McpDock
+var _dock
 var _server_pid := -1
 var _handlers: Array = []  # prevent GC of RefCounted handlers
-var _debugger_plugin: McpDebuggerPlugin
+var _debugger_plugin
 static var _server_started_this_session := false  # guard against re-entrant spawns
 static var _resolved_ws_port := McpClientConfigurator.DEFAULT_WS_PORT
 
