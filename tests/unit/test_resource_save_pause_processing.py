@@ -22,28 +22,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.unit._gdscript_text import get_func_block
+
 PLUGIN_ROOT = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godot_ai"
-
-
-def _func_block(source: str, marker: str) -> str:
-    """Slice everything from `marker` until the next top-level `func` /
-    `static func` declaration. Tolerates blank lines inside the body that
-    a naive `split("\n\n")` would cut on.
-    """
-    rest = source.split(marker, 1)[1]
-    cuts = []
-    for needle in ("\nfunc ", "\nstatic func "):
-        idx = rest.find(needle)
-        if idx >= 0:
-            cuts.append(idx)
-    if not cuts:
-        return rest
-    return rest[: min(cuts)]
 
 
 def test_save_to_disk_takes_pause_target() -> None:
     source = (PLUGIN_ROOT / "utils" / "resource_io.gd").read_text()
-    block = _func_block(source, "static func save_to_disk(")
+    block = get_func_block(source, "static func save_to_disk(")
     assert "pause_target: McpConnection" in block, (
         "save_to_disk must accept a McpConnection so the WebSocket pump "
         "can be paused while ResourceSaver.save() runs. Without this, a "
@@ -75,14 +61,13 @@ def test_save_to_disk_takes_pause_target() -> None:
 def test_resource_handler_threads_connection_to_save() -> None:
     source = (PLUGIN_ROOT / "handlers" / "resource_handler.gd").read_text()
     assert "var _connection: McpConnection" in source, (
-        "ResourceHandler must hold a McpConnection ref to thread into "
-        "save_to_disk. See #288."
+        "ResourceHandler must hold a McpConnection ref to thread into save_to_disk. See #288."
     )
     assert "_init(undo_redo: EditorUndoRedoManager, connection: McpConnection" in source, (
         "ResourceHandler._init must accept a McpConnection — the existing "
         "pattern from SceneHandler / ProjectHandler. plugin.gd passes it."
     )
-    save_block = _func_block(source, "func _save_created_resource")
+    save_block = get_func_block(source, "func _save_created_resource")
     assert "_connection)" in save_block or "_connection," in save_block, (
         "_save_created_resource must pass _connection to "
         "McpResourceIO.save_to_disk. Otherwise the pause guard is a no-op "
@@ -94,7 +79,7 @@ def test_curve_handler_threads_connection_to_save() -> None:
     source = (PLUGIN_ROOT / "handlers" / "curve_handler.gd").read_text()
     assert "var _connection: McpConnection" in source
     assert "_init(undo_redo: EditorUndoRedoManager, connection: McpConnection" in source
-    set_points_block = _func_block(source, "func set_points")
+    set_points_block = get_func_block(source, "func set_points")
     assert "save_to_disk(" in set_points_block
     # Slice from save_to_disk( through the next return / line break out of
     # the call. _connection must appear in that range.
@@ -109,7 +94,7 @@ def test_environment_handler_threads_connection_to_save() -> None:
     source = (PLUGIN_ROOT / "handlers" / "environment_handler.gd").read_text()
     assert "var _connection: McpConnection" in source
     assert "_init(undo_redo: EditorUndoRedoManager, connection: McpConnection" in source
-    save_block = _func_block(source, "func _save_environment")
+    save_block = get_func_block(source, "func _save_environment")
     assert "_connection)" in save_block or "_connection," in save_block, (
         "_save_environment must thread _connection to save_to_disk. See #288."
     )

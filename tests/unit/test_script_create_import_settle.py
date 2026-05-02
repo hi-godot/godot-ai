@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.unit._gdscript_text import get_func_block
+
 PLUGIN_ROOT = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godot_ai"
 SCRIPT_HANDLER = PLUGIN_ROOT / "handlers" / "script_handler.gd"
 PLUGIN_GD = PLUGIN_ROOT / "plugin.gd"
@@ -34,10 +36,7 @@ def test_script_handler_holds_connection_for_deferred_replies() -> None:
     )
     # _init must accept the connection. Default null keeps batch_execute and
     # unit-test contexts working on the synchronous fallback path.
-    expected_init = (
-        "func _init(undo_redo: EditorUndoRedoManager, "
-        "connection: McpConnection = null)"
-    )
+    expected_init = "func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null)"
     assert expected_init in source, (
         "ScriptHandler._init must accept the connection as an optional "
         "second parameter so test contexts can keep using the sync fallback."
@@ -77,10 +76,8 @@ def test_finish_create_script_deferred_polls_resourceloader_with_bounded_loop() 
         "default 5s send timeout. A pure 300-frame cap can exceed 5s on a "
         "slow editor frame rate."
     )
-    deferred_block = source.split("func _finish_create_script_deferred", 1)[1]
-    assert "var deadline_ms := Time.get_ticks_msec() + _IMPORT_SETTLE_MAX_MSEC" in (
-        deferred_block
-    )
+    deferred_block = get_func_block(source, "func _finish_create_script_deferred")
+    assert "var deadline_ms := Time.get_ticks_msec() + _IMPORT_SETTLE_MAX_MSEC" in deferred_block
     assert "Time.get_ticks_msec() < deadline_ms" in deferred_block
     assert "ResourceLoader.exists(path)" in deferred_block, (
         "The deferred loop must poll ResourceLoader.exists(path) — that's "
