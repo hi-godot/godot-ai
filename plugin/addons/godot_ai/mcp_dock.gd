@@ -1321,7 +1321,11 @@ func _on_install_uv() -> void:
 	## Drop the cached uvx path AND the cached `uvx --version` so the
 	## next `_refresh_setup_status` finds and reads the freshly-installed
 	## binary instead of returning the pre-install "not found" result.
-	McpCliFinder.invalidate("uvx")
+	## Routing through the configurator here matters on Windows, where
+	## the CLI-finder cache key is `uvx.exe` — invalidating just `"uvx"`
+	## would leave the cache stale and the dock would keep showing
+	## "uv: not found" for the rest of the session.
+	McpClientConfigurator.invalidate_uvx_cli_cache()
 	McpClientConfigurator.invalidate_uv_version_cache()
 	_refresh_setup_status.call_deferred()
 

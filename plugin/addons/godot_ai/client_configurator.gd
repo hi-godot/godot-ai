@@ -460,9 +460,25 @@ static func get_server_launch_mode() -> String:
 
 
 static func find_uvx() -> String:
+	return McpCliFinder.find(_uvx_cli_names())
+
+
+static func _uvx_cli_names() -> Array[String]:
 	var names: Array[String] = []
 	names.append("uvx.exe" if OS.get_name() == "Windows" else "uvx")
-	return McpCliFinder.find(names)
+	return names
+
+
+## Drop the `McpCliFinder` cache for the platform-specific uvx binary
+## name. Pairs with `invalidate_uv_version_cache()` so the dock's
+## `_on_install_uv` can refresh both caches with one call each. The
+## OS-specific name matters: Windows caches under `uvx.exe`, every
+## other platform under `uvx`; hard-coding `"uvx"` here would leave
+## the CLI-path cache stale on Windows after a fresh install and the
+## dock would keep showing "uv: not found" for the rest of the session.
+static func invalidate_uvx_cli_cache() -> void:
+	for name in _uvx_cli_names():
+		McpCliFinder.invalidate(name)
 
 
 static var _uv_version_cache: String = ""

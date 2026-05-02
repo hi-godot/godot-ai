@@ -597,15 +597,26 @@ def test_check_uv_version_caches_for_session() -> None:
     install_block = dock_source.split("func _on_install_uv() -> void:", 1)[1].split(
         "\n\nfunc ", 1
     )[0]
-    assert 'McpCliFinder.invalidate("uvx")' in install_block, (
-        "_on_install_uv must invalidate the CLI path cache after running "
-        "the installer, otherwise find_uvx() returns the pre-install "
-        "'not found' value forever."
+    assert "McpClientConfigurator.invalidate_uvx_cli_cache()" in install_block, (
+        "_on_install_uv must invalidate the CLI-path cache via the "
+        "configurator helper (which knows the OS-specific binary name). "
+        "A direct `McpCliFinder.invalidate(\"uvx\")` would leave the "
+        "Windows cache stale — Windows caches under `uvx.exe`."
     )
     assert "McpClientConfigurator.invalidate_uv_version_cache()" in install_block, (
         "_on_install_uv must invalidate the version cache too — without "
         "this, the dock's setup status keeps showing 'uv: not found' "
         "after a successful install."
+    )
+
+    cli_invalidator_block = source.split(
+        "static func invalidate_uvx_cli_cache() -> void:", 1
+    )[1].split("\n\n", 1)[0]
+    assert "_uvx_cli_names()" in cli_invalidator_block, (
+        "invalidate_uvx_cli_cache must route through the same "
+        "_uvx_cli_names() helper that find_uvx() uses, so the OS-"
+        "specific binary name (uvx vs uvx.exe) stays in lockstep "
+        "between the populator and the invalidator."
     )
 
 
