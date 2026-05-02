@@ -251,7 +251,7 @@ func add_property_track(params: Dictionary) -> Dictionary:
 			"transition": kf.get("transition", "linear"),
 		})
 
-	_undo_redo.create_action("MCP: Add property track %s to %s" % [track_path, anim_name])
+	_create_scene_pinned_action("MCP: Add property track %s to %s" % [track_path, anim_name])
 	_undo_redo.add_do_method(self, "_do_add_property_track", anim, track_path, interp_str, coerced_keyframes)
 	# Undo locates the track by (path, type) at undo time rather than caching
 	# an index captured at do time. Cached indices go stale if any other track
@@ -337,7 +337,7 @@ func add_method_track(params: Dictionary) -> Dictionary:
 		return anim_resolved
 	var anim: Animation = anim_resolved.animation
 
-	_undo_redo.create_action("MCP: Add method track %s to %s" % [target_path, anim_name])
+	_create_scene_pinned_action("MCP: Add method track %s to %s" % [target_path, anim_name])
 	_undo_redo.add_do_method(self, "_do_add_method_track", anim, target_path, keyframes)
 	# Undo locates the track by (path, type) at undo time — see add_property_track.
 	_undo_redo.add_undo_method(self, "_undo_remove_track_by_path", anim, target_path, Animation.TYPE_METHOD)
@@ -1261,6 +1261,20 @@ func _commit_animation_add(
 		_undo_redo.add_undo_method(library, "remove_animation", anim_name)
 	_undo_redo.add_do_reference(anim)
 	_undo_redo.commit_action()
+
+
+## Open a `create_action` pinned to the edited scene's history.
+##
+## Without an explicit context, `add_do_method(self, ...)` against a
+## RefCounted handler lands in GLOBAL_HISTORY while sibling actions whose
+## first do-target is a Resource (e.g. AnimationLibrary) land in the scene's
+## history. Mismatched histories make the test-side `editor_undo` helper
+## (walks scene first) undo the wrong action, and break batch_handler's
+## rollback. Mirrors `camera_handler.gd`'s identical pinning rationale.
+func _create_scene_pinned_action(action_label: String) -> void:
+	_undo_redo.create_action(
+		action_label, UndoRedo.MERGE_DISABLE, EditorInterface.get_edited_scene_root(),
+	)
 
 
 # ============================================================================
