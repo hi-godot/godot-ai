@@ -83,6 +83,36 @@ func test_parse_empty_input_returns_false() -> void:
 	assert_false(McpWindowsPortReservation.parse_excluded("\n\n", 8000))
 
 
+func test_cache_returns_hit_inside_ttl() -> void:
+	McpWindowsPortReservation._clear_cache_for_tests()
+	McpWindowsPortReservation._store_excluded_output(SAMPLE_NETSH_OUTPUT, 1000)
+	var cached := McpWindowsPortReservation._get_cached_excluded_output(
+		1000 + McpWindowsPortReservation.NETSH_CACHE_TTL_MS
+	)
+	assert_true(bool(cached.get("hit", false)), "cached netsh output should be reused inside the TTL")
+	assert_eq(str(cached.get("text", "")), SAMPLE_NETSH_OUTPUT)
+	McpWindowsPortReservation._clear_cache_for_tests()
+
+
+func test_cache_expires_after_ttl() -> void:
+	McpWindowsPortReservation._clear_cache_for_tests()
+	McpWindowsPortReservation._store_excluded_output(SAMPLE_NETSH_OUTPUT, 1000)
+	var cached := McpWindowsPortReservation._get_cached_excluded_output(
+		1001 + McpWindowsPortReservation.NETSH_CACHE_TTL_MS
+	)
+	assert_false(bool(cached.get("hit", false)), "cached netsh output should expire after the TTL")
+	assert_eq(str(cached.get("text", "")), "")
+	McpWindowsPortReservation._clear_cache_for_tests()
+
+
+func test_cache_clear_removes_stored_output() -> void:
+	McpWindowsPortReservation._store_excluded_output(SAMPLE_NETSH_OUTPUT, 1000)
+	McpWindowsPortReservation._clear_cache_for_tests()
+	var cached := McpWindowsPortReservation._get_cached_excluded_output(1000)
+	assert_false(bool(cached.get("hit", false)), "clearing the cache should remove stored output")
+	assert_eq(str(cached.get("text", "")), "")
+
+
 func test_parse_excluded_ranges_extracts_ranges() -> void:
 	var ranges := McpWindowsPortReservation.parse_excluded_ranges(SAMPLE_NETSH_OUTPUT)
 	assert_true(ranges.has(Vector2i(80, 80)), "single-port range should be preserved")
