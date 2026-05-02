@@ -24,7 +24,15 @@ func suite_setup(ctx: Dictionary) -> void:
 	_handler = CameraHandler.new(_undo_redo)
 
 
+func teardown() -> void:
+	_cleanup_created()
+
+
 func suite_teardown() -> void:
+	_cleanup_created()
+
+
+func _cleanup_created() -> void:
 	for path in _created_paths:
 		_remove_by_path(path)
 	_created_paths.clear()
@@ -41,6 +49,8 @@ func _remove_by_path(path: String) -> void:
 		return
 	var node := McpScenePath.resolve(path, scene_root)
 	if node != null and node.get_parent() != null:
+		if node.has_method("is_current") and node.has_method("clear_current") and node.is_current():
+			node.clear_current()
 		node.get_parent().remove_child(node)
 		node.queue_free()
 
