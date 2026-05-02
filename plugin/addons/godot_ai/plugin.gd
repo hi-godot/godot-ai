@@ -25,6 +25,21 @@ const UPDATE_RELOAD_RUNNER_SCRIPT := preload("res://addons/godot_ai/update_reloa
 ## to the server-stop hot path.
 const UvCacheCleanup := preload("res://addons/godot_ai/utils/uv_cache_cleanup.gd")
 
+## Plugin-class scripts — preloaded so `plugin.gd`'s parse and instantiation
+## sites resolve via the script path, not via the global `class_name`
+## registry. See the self-update parse-hazard policy near the field
+## declarations below for why every `Mcp*` plugin-class reference in this
+## file goes through one of these consts. Naming follows the existing
+## `UvCacheCleanup := preload(...)` convention (script-local const aliasing
+## a class whose registered `class_name` is `Mcp*`).
+const Connection := preload("res://addons/godot_ai/connection.gd")
+const Dispatcher := preload("res://addons/godot_ai/dispatcher.gd")
+const LogBuffer := preload("res://addons/godot_ai/utils/log_buffer.gd")
+const GameLogBuffer := preload("res://addons/godot_ai/utils/game_log_buffer.gd")
+const EditorLogBuffer := preload("res://addons/godot_ai/utils/editor_log_buffer.gd")
+const Dock := preload("res://addons/godot_ai/mcp_dock.gd")
+const DebuggerPlugin := preload("res://addons/godot_ai/debugger/mcp_debugger_plugin.gd")
+
 ## Handlers — preloaded as consts instead of registered via `class_name` so
 ## they don't pollute the project-wide global scope. A user project that
 ## happens to define its own `InputHandler`, `SceneHandler`, etc. would
@@ -87,17 +102,27 @@ const STARTUP_TRACE_COUNTER_NAMES := [
 ## Untyped on purpose — see policy below. Type fences move to handler `_init`
 ## sites that take typed parameters.
 ##
-## Self-update parse-hazard policy: `plugin.gd` MUST NOT type-bind to any
-## plugin-defined `class_name` (`Mcp*`). During an in-place self-update,
-## `EditorInterface.set_plugin_enabled(false)` re-parses `plugin.gd` against
-## the freshly-extracted addon tree before Godot's class_name registry has
-## scanned the new files; a typed-var against a class whose inheritance or
-## class_name siblings changed in the new release fails to resolve, the
-## plugin enters a degraded state, and the follow-up `_exit_tree` cascade
-## crashes (see #242, #244). Untyped + `preload(...).new()` resolves at
-## script-load without consulting the global registry, so the parse stays
-## clean across releases. `tests/unit/test_plugin_self_update_safety.py`
-## locks this in.
+## Self-update parse-hazard policy: `plugin.gd` MUST NOT reference any
+## plugin-defined `class_name` (`Mcp*`) by name — neither as a type
+## annotation (`var x: McpFoo`) nor as a constructor (`McpFoo.new()`).
+## Both forms resolve through Godot's global class_name registry at parse
+## time. During an in-place self-update, `set_plugin_enabled(false)` re-
+## parses `plugin.gd` against the freshly-extracted addon tree before the
+## registry has scanned the new files; a reference to a class whose
+## inheritance or class_name siblings changed in the new release fails to
+## resolve, the plugin enters a degraded state, and the follow-up
+## `_exit_tree` cascade crashes (see #242, #244).
+##
+## The mitigation is two-part:
+##   (1) Field declarations are untyped (this block).
+##   (2) Constructor sites use script-local `const X := preload("res://...")`
+##       aliases declared at the top of the file (e.g. `Connection`,
+##       `Dispatcher`, `LogBuffer`, …). `preload(...)` resolves the script
+##       by path at script-load, never consulting the global registry, so
+##       the parse stays clean across releases regardless of how the
+##       referenced class's `extends` chain or sibling class_names change.
+##
+## `tests/unit/test_plugin_self_update_safety.py` locks both halves in.
 ##
 ## `_editor_logger` was already untyped because its script extends Godot
 ## 4.5+'s Logger class and is loaded via `load()` so the plugin still parses
@@ -175,17 +200,17 @@ func _enter_tree() -> void:
 	McpClientConfigurator.ensure_settings_registered()
 	_startup_trace_phase("settings_registered")
 
-	_log_buffer = McpLogBuffer.new()
+	_log_buffer = LogBuffer.new()
 	_start_server()
 	_startup_trace_phase("server_start")
 
-	_game_log_buffer = McpGameLogBuffer.new()
-	_editor_log_buffer = McpEditorLogBuffer.new()
+	_game_log_buffer = GameLogBuffer.new()
+	_editor_log_buffer = EditorLogBuffer.new()
 	_attach_editor_logger()
-	_dispatcher = McpDispatcher.new(_log_buffer)
+	_dispatcher = Dispatcher.new(_log_buffer)
 	_startup_trace_phase("core_objects")
 
-	_connection = McpConnection.new()
+	_connection = Connection.new()
 	_connection.log_buffer = _log_buffer
 	_connection.ws_port = _resolved_ws_port
 	_connection.connect_blocked = _connection_blocked
@@ -193,7 +218,7 @@ func _enter_tree() -> void:
 	if not _connection_blocked and _spawn_state == McpSpawnState.OK:
 		_arm_server_version_check()
 
-	_debugger_plugin = McpDebuggerPlugin.new(_log_buffer, _game_log_buffer)
+	_debugger_plugin = DebuggerPlugin.new(_log_buffer, _game_log_buffer)
 	add_debugger_plugin(_debugger_plugin)
 	_ensure_game_helper_autoload()
 
@@ -355,7 +380,7 @@ func _enter_tree() -> void:
 	_startup_trace_phase("handlers_registered")
 
 	# Dock panel
-	_dock = McpDock.new()
+	_dock = Dock.new()
 	_dock.name = "Godot AI"
 	_dock.setup(_connection, _log_buffer, self)
 	add_control_to_dock(DOCK_SLOT_RIGHT_BL, _dock)

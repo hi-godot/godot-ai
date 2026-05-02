@@ -8,23 +8,30 @@ path the parser hits the typed-var BEFORE the new class_name has been
 registered in the global table → `plugin.gd` parse fails → plugin enters
 a degraded state → the follow-up `_exit_tree` cascade crashes.
 
-Issue #244 is the defense-in-depth follow-up: any field in `plugin.gd`
-that type-binds to a plugin-defined `Mcp*` class is the same latent
-hazard. Even if today's inheritance is stable, a future refactor that
-changes one class's `extends` chain or adds a sibling class_name file
-re-trips the bug — and review won't catch it because the typed
-declaration *looks* idiomatic.
+Issue #244 is the defense-in-depth follow-up: any name reference from
+`plugin.gd` to a plugin-defined `Mcp*` class is the same latent hazard,
+in either form — `var x: McpFoo` (typed-var) or `McpFoo.new()` (named
+constructor). Both resolve through the global class_name registry at
+parse time. Even if today's inheritance is stable, a future refactor
+that changes one class's `extends` chain or adds a sibling class_name
+file re-trips the bug — and review won't catch it because the named
+references *look* idiomatic.
 
-The structurally correct answer is "`plugin.gd` does NOT type-bind to
-plugin classes". Field types fall through to the runtime parameter
-checks at handler `_init` sites that take typed parameters (see e.g.
-`McpEditorHandler._init`'s typed `editor_log_buffer: McpEditorLogBuffer`
-parameter — the type fence still fires, just at the call site at runtime,
-not at `plugin.gd`'s parse).
+The structurally correct answer is "`plugin.gd` does NOT name plugin
+classes — neither for types nor for instantiation." Field types fall
+through to the runtime parameter checks at handler `_init` sites that
+take typed parameters (see e.g. `McpEditorHandler._init`'s typed
+`editor_log_buffer: McpEditorLogBuffer` parameter — the type fence still
+fires, just at the call site at runtime, not at `plugin.gd`'s parse).
+Constructors go through script-local `const X := preload("res://...")`
+aliases declared at the top of `plugin.gd` (e.g. `Connection`,
+`Dispatcher`, `LogBuffer`); `preload(...)` resolves the script by path
+at script-load and never consults the registry.
 
-This test enforces that policy. Adding `var _foo: McpAnything` to
-`plugin.gd` will fail here with a paste-over-ready diff so the next
-contributor doesn't silently re-introduce the hazard.
+This test enforces both halves of the policy. Adding either
+`var _foo: McpAnything` or a literal `McpAnything.new()` call to
+`plugin.gd` will fail here with a paste-over-ready offender list so the
+next contributor doesn't silently re-introduce the hazard.
 """
 
 from __future__ import annotations
@@ -44,6 +51,21 @@ def _registered_mcp_class_names() -> set[str]:
     for gd_file in PLUGIN_ROOT.rglob("*.gd"):
         found.update(pattern.findall(gd_file.read_text()))
     return found
+
+
+def _strip_gdscript_comments(source: str) -> str:
+    """Remove `## ...` doc comments and `# ...` line comments.
+
+    The parse hazard only fires for executable references; comments that
+    happen to mention `McpConnection` or include `class_name McpFoo` in
+    explanatory prose are not parsed as identifiers and must not trip the
+    lint. Anchored on `#` start so we don't break legitimate code that
+    happens to contain a `#` inside a string literal — `plugin.gd` has
+    none today, and adding one would already be a code-smell worth
+    flagging.
+    """
+
+    return re.sub(r"#.*$", "", source, flags=re.MULTILINE)
 
 
 def test_plugin_gd_has_no_typed_field_against_plugin_class_names() -> None:
@@ -78,12 +100,41 @@ def test_plugin_gd_has_no_typed_field_against_plugin_class_names() -> None:
     )
 
 
+def test_plugin_gd_does_not_construct_via_class_name() -> None:
+    """`plugin.gd` must not call `McpFoo.new(...)` on any plugin class.
+
+    Constructor references resolve through the global class_name
+    registry at parse time, so they participate in the same self-update
+    parse hazard as typed-var declarations (#242 / #244). Use a script-
+    local `const Foo := preload("res://addons/godot_ai/...")` alias
+    declared at the top of `plugin.gd` and call `Foo.new(...)` instead.
+    """
+
+    source = _strip_gdscript_comments(PLUGIN_GD.read_text())
+    mcp_classes = _registered_mcp_class_names()
+
+    constructor = re.compile(r"\b(Mcp\w+)\.new\s*\(")
+    offenders: list[str] = []
+    for match in constructor.finditer(source):
+        type_name = match.group(1)
+        if type_name in mcp_classes:
+            offenders.append(type_name)
+
+    assert not offenders, (
+        "plugin.gd must not invoke plugin-class constructors by class_name "
+        "(self-update parse hazard, issues #242 / #244). Add a script-local "
+        '`const Foo := preload("res://addons/godot_ai/...")` alias at the '
+        "top of plugin.gd and call `Foo.new(...)` instead. Offending "
+        f"references: {sorted(set(offenders))}"
+    )
+
+
 def test_plugin_gd_documents_the_untyped_policy() -> None:
     """The policy comment must stay near the field declarations.
 
-    A future contributor must understand WHY the fields are untyped or
-    they will "fix" the apparent oversight by re-typing them and re-
-    introduce the hazard.
+    A future contributor must understand WHY the fields are untyped (and
+    why constructors go through preload-aliased consts) or they will
+    "fix" the apparent oversight and re-introduce the hazard.
     """
 
     source = PLUGIN_GD.read_text()
@@ -96,4 +147,10 @@ def test_plugin_gd_documents_the_untyped_policy() -> None:
     assert "#242" in source and "#244" in source, (
         "The policy comment must reference issues #242 and #244 so "
         "future readers can find the full context."
+    )
+    assert "preload" in source.lower(), (
+        "The policy comment must explain that constructors go through "
+        "preload-aliased consts — without that half, a future contributor "
+        "may untype a field but still write `McpFoo.new()`, leaving the "
+        "parse-time class_name lookup in place."
     )
