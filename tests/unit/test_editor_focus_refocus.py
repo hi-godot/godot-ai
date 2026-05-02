@@ -52,11 +52,12 @@ def test_clients_window_open_requests_nonblocking_refresh() -> None:
 
 
 def test_initial_paint_warms_worker_call_graph_before_threading() -> None:
-    """Cold editor open pre-warms strategy bytecode on main, then defers CLI to worker (#235).
+    """Cold editor open pre-warms strategy bytecode on main, then hands every probe to the worker.
 
-    Deterministic replacement for the prior 1.5s settle timer (#234), with the
-    cold-start hitch minimized so #228's responsiveness win for focus-in /
-    refocus paths is not regressed.
+    Deterministic replacement for the prior 1.5s settle timer (#234), with
+    every per-client status probe (JSON / TOML / CLI alike) routed through
+    the existing worker so cold-start dock paint isn't blocked behind ~16
+    sync `FileAccess.open` + `JSON.parse_string` calls.
 
     The race: Godot's lazy GDScript hot-reload of overwritten plugin files
     swaps bytecode on first dereference. A worker spawned from a fresh
@@ -67,19 +68,22 @@ def test_initial_paint_warms_worker_call_graph_before_threading() -> None:
     thread *before* the worker starts. After this helper, bytecode is
     stable everywhere the worker reaches → no race possible.
 
-      • `client_status_probe_snapshot` (called per client on main) warms
-        `_cli_strategy.gd` / `_cli_finder.gd` for CLI clients via
-        `resolve_cli_path`.
-      • Sync `check_status_for_url_with_cli_path` on JSON/TOML clients
-        (file-read + parse, ~5–20ms each) warms `_json_strategy.gd` /
-        `_toml_strategy.gd` and the configurator dispatch.
-      • CLI clients are bundled into a deferred batch and probed by the
-        worker — slow `OS.execute` calls stay off-thread, preserving #228.
+      • A single explicit `_warm_strategy_bytecode()` call invokes a
+        pure-memory helper (no disk, no `OS.execute`) on each strategy
+        script — `_json_strategy.gd`, `_toml_strategy.gd`, `_cli_strategy.gd`
+        — plus `client_configurator.gd` via `client_ids()` / `get_by_id`.
+      • `client_status_probe_snapshot` (called per client on main) builds
+        the per-row probe envelope with the `installed` flag and (for CLI
+        clients) the cached CLI path.
+      • Every probe — JSON, TOML and CLI — is then handed to the same
+        worker thread that already handles CLI probes. Disk reads + JSON
+        parses for the ~17 non-CLI clients now happen off the main thread.
 
-    The structural assertions below lock in this hybrid: a future "make
-    startup snappier" refactor can't drop the warming step (re-introducing
-    the race), and a future "be more conservative" refactor can't move the
-    CLI probes back on-thread (regressing #228's responsiveness fix).
+    The structural assertions below lock in this contract: a future "make
+    startup snappier" refactor can't drop the explicit warming step
+    (re-introducing #233's race), and a future "be more conservative"
+    refactor can't move the per-client status reads back on-thread
+    (regressing #228's responsiveness fix and re-blocking the cold paint).
     """
 
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
@@ -91,22 +95,32 @@ def test_initial_paint_warms_worker_call_graph_before_threading() -> None:
     helper_block = source.split("func _perform_initial_client_status_refresh() -> void:", 1)[
         1
     ].split("\n\nfunc ", 1)[0]
+    assert "_warm_strategy_bytecode()" in helper_block, (
+        "Helper must call _warm_strategy_bytecode() before spawning the "
+        "worker — that's the single explicit dereference of every strategy "
+        "script the worker will reach into. Removing it re-introduces #233's "
+        "lazy hot-reload SIGABRT race."
+    )
     assert "client_status_probe_snapshot(" in helper_block, (
-        "Helper must call client_status_probe_snapshot per client on main — "
-        "this is what dereferences `_cli_strategy.gd` / `_cli_finder.gd` for "
-        "CLI clients before the worker spawns. See #235."
+        "Helper must call client_status_probe_snapshot per client on main "
+        "to build each row's probe envelope (installed flag + cached CLI "
+        "path). See #235."
     )
-    assert "check_status_for_url_with_cli_path(" in helper_block, (
-        "Helper must run a sync check_status_for_url_with_cli_path for "
-        "JSON/TOML clients on main — that warms `_json_strategy.gd` / "
-        "`_toml_strategy.gd` so the worker (if it spawns) can't race the "
-        "lazy hot-reload bytecode swap. See #235."
+    assert "check_status_for_url_with_cli_path(" not in helper_block, (
+        "Helper must not run sync per-client status probes on main — that "
+        "blocks the dock's cold paint behind ~16 FileAccess + JSON.parse "
+        "calls. The worker handles JSON/TOML/CLI alike via "
+        "_run_client_status_refresh_worker."
     )
-    assert "deferred_cli_probes" in helper_block, (
-        "Helper must batch CLI probes for the deferred (worker) phase. "
-        "Without this split, the cold-start path either (a) runs CLI probes "
-        "on main and re-introduces #228's per-focus editor freezes, or "
-        "(b) skips warming and races GDScript hot-reload (#233)."
+    assert "all_probes" in helper_block, (
+        "Helper must batch every probe (JSON + TOML + CLI) into one list "
+        "for the worker thread. Splitting them would partially regress the "
+        "cold-paint win or re-introduce the SIGABRT race for the moved-"
+        "back-on-main clients."
+    )
+    assert "deferred_cli_probes" not in helper_block, (
+        "The CLI-only batch is gone — the worker now handles every config "
+        "type, so a CLI-specific staging list is dead code."
     )
     assert "await " not in helper_block, (
         "Helper must be a single straight-line block — no timer awaits, no "
@@ -116,6 +130,25 @@ def test_initial_paint_warms_worker_call_graph_before_threading() -> None:
     assert "create_timer" not in helper_block, (
         "Helper must not gate on a wall-clock timer (the heuristic stopgap "
         "from #234 that #235 replaces)."
+    )
+
+    warm_block = source.split("func _warm_strategy_bytecode() -> void:", 1)[1].split(
+        "\n\nfunc ", 1
+    )[0]
+    assert "McpJsonStrategy." in warm_block, (
+        "_warm_strategy_bytecode must dereference McpJsonStrategy so the "
+        "worker can't race the JSON strategy's lazy bytecode swap."
+    )
+    assert "McpTomlStrategy." in warm_block, (
+        "_warm_strategy_bytecode must dereference McpTomlStrategy."
+    )
+    assert "McpCliStrategy." in warm_block, (
+        "_warm_strategy_bytecode must dereference McpCliStrategy."
+    )
+    assert "FileAccess" not in warm_block and "OS.execute" not in warm_block, (
+        "_warm_strategy_bytecode must stay pure-memory — no disk, no "
+        "subprocess. The point is to dereference scripts cheaply, not to "
+        "re-introduce the per-client disk reads we just moved to the worker."
     )
 
     constants_block = source.split("class_name McpDock", 1)[1].split("\nvar ", 1)[0]
@@ -494,6 +527,86 @@ def test_refresh_timeout_can_abandon_stale_worker_results() -> None:
     assert "_client_status_refresh_generation" in source
     assert "_abandon_client_status_refresh_thread" in source
     assert "generation != _client_status_refresh_generation" in source
+
+
+def test_check_uv_version_caches_for_session() -> None:
+    """`uvx --version` must run at most once per editor session.
+
+    The dock's `_refresh_setup_status` calls `McpClientConfigurator.check_uv_version()`
+    on the main thread (via `call_deferred` from `_build_ui`) in user mode.
+    Each cold call costs an `OS.execute("uvx", ["--version"])` round-trip
+    (~80 ms on Linux, more on Windows) — multiplied by every focus-in
+    refresh and every manual Refresh click that's a real cost on the
+    dock's first paint and on every responsiveness gate after.
+
+    Cache it the same way `_cached_venv_python` already works
+    (`_venv_python_cache` + `_venv_python_searched` pair). Invalidate
+    only when the user installs / reinstalls uv via the dock — the
+    `McpCliFinder.invalidate("uvx")` site is the natural sibling, so
+    a single explicit `invalidate_uv_version_cache()` call clears both.
+    """
+
+    source = (PLUGIN_ROOT / "client_configurator.gd").read_text()
+
+    assert "static var _uv_version_cache: String" in source, (
+        "Cached `uvx --version` string must be a class-level static so it "
+        "survives across plugin reloads and dock rebuilds."
+    )
+    assert "static var _uv_version_searched: bool" in source, (
+        "Companion 'have we searched yet?' flag must be a class-level "
+        "static — empty cache is ambiguous (means both 'never asked' and "
+        "'asked, uv not installed') without it."
+    )
+
+    helper_block = source.split("static func check_uv_version() -> String:", 1)[1].split(
+        "\n\n", 1
+    )[0]
+    assert "if _uv_version_searched:" in helper_block, (
+        "First line of check_uv_version must short-circuit on the cached "
+        "result. Otherwise the cache is doing nothing."
+    )
+    assert "return _uv_version_cache" in helper_block, (
+        "The short-circuit must return the cached string, not re-derive it."
+    )
+    assert "_uv_version_searched = true" in helper_block, (
+        "Every code path that calls OS.execute or short-circuits 'uv not "
+        "found' must set _uv_version_searched = true. Otherwise the next "
+        "call re-runs OS.execute, defeating the cache."
+    )
+
+    assert "static func invalidate_uv_version_cache() -> void:" in source, (
+        "An explicit invalidator must exist so the dock's _on_install_uv "
+        "can drop the cached 'uv not found' result after a successful "
+        "install."
+    )
+
+    invalidator_block = source.split(
+        "static func invalidate_uv_version_cache() -> void:", 1
+    )[1].split("\n\n", 1)[0]
+    assert "_uv_version_searched = false" in invalidator_block, (
+        "Invalidator must reset _uv_version_searched, otherwise the next "
+        "call short-circuits on the stale cached value."
+    )
+    assert "_uv_version_cache = " in invalidator_block, (
+        "Invalidator must clear the cached string too — leaving stale data "
+        "would surface in any path that reads the cache without going "
+        "through check_uv_version (e.g. future inspectors / debug helpers)."
+    )
+
+    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    install_block = dock_source.split("func _on_install_uv() -> void:", 1)[1].split(
+        "\n\nfunc ", 1
+    )[0]
+    assert 'McpCliFinder.invalidate("uvx")' in install_block, (
+        "_on_install_uv must invalidate the CLI path cache after running "
+        "the installer, otherwise find_uvx() returns the pre-install "
+        "'not found' value forever."
+    )
+    assert "McpClientConfigurator.invalidate_uv_version_cache()" in install_block, (
+        "_on_install_uv must invalidate the version cache too — without "
+        "this, the dock's setup status keeps showing 'uv: not found' "
+        "after a successful install."
+    )
 
 
 def test_configure_all_uses_cached_status_not_dot_color() -> None:

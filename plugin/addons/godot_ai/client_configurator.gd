@@ -465,14 +465,42 @@ static func find_uvx() -> String:
 	return McpCliFinder.find(names)
 
 
+static var _uv_version_cache: String = ""
+static var _uv_version_searched: bool = false
+
+
+## Cached for the editor session. The dock's `_refresh_setup_status`
+## (called via `call_deferred` from `_build_ui`) calls this on the
+## main thread in user mode, so a single cold `OS.execute(uvx,
+## ["--version"])` adds ~80 ms to the dock's first paint on Linux and
+## more on Windows. Subsequent calls (focus-in refresh, manual Refresh
+## clicks) reuse the cached string.
+##
+## Invalidate via `invalidate_uv_version_cache()` when the user
+## installs / reinstalls uv via the dock so the next refresh reflects
+## the new install. The dock's `_on_install_uv` calls this alongside
+## `McpCliFinder.invalidate("uvx")` to clear both the path cache and
+## the version cache in one place.
 static func check_uv_version() -> String:
+	if _uv_version_searched:
+		return _uv_version_cache
 	var uvx := find_uvx()
 	if uvx.is_empty():
+		_uv_version_searched = true
+		_uv_version_cache = ""
 		return ""
 	var output: Array = []
 	if OS.execute(uvx, ["--version"], output, true) == 0 and output.size() > 0:
-		return output[0].strip_edges()
-	return ""
+		_uv_version_cache = output[0].strip_edges()
+	else:
+		_uv_version_cache = ""
+	_uv_version_searched = true
+	return _uv_version_cache
+
+
+static func invalidate_uv_version_cache() -> void:
+	_uv_version_searched = false
+	_uv_version_cache = ""
 
 
 static var _venv_python_cache: String = ""

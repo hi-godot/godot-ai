@@ -1318,6 +1318,11 @@ func _on_install_uv() -> void:
 			OS.execute("powershell", ["-ExecutionPolicy", "ByPass", "-c", "irm https://astral.sh/uv/install.ps1 | iex"], [], false)
 		_:
 			OS.execute("bash", ["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"], [], false)
+	## Drop the cached uvx path AND the cached `uvx --version` so the
+	## next `_refresh_setup_status` finds and reads the freshly-installed
+	## binary instead of returning the pre-install "not found" result.
+	McpCliFinder.invalidate("uvx")
+	McpClientConfigurator.invalidate_uv_version_cache()
 	_refresh_setup_status.call_deferred()
 
 
@@ -1852,7 +1857,8 @@ func _prune_orphaned_client_status_refresh_threads() -> void:
 
 
 func _perform_initial_client_status_refresh() -> void:
-	## Pre-warm strategy bytecode on main, defer CLI probes to the worker.
+	## Pre-warm strategy bytecode on main, then hand every client probe
+	## (JSON / TOML / CLI alike) to the worker.
 	##
 	## Godot's GDScript hot-reload of overwritten plugin files is lazy: the
 	## bytecode swap happens on first dereference, not at `set_plugin_enabled`
@@ -1865,10 +1871,19 @@ func _perform_initial_client_status_refresh() -> void:
 	## in-place plugin reload because the editor stays focused — so neither
 	## works as a gate. See #233 / #235.
 	##
-	## Phase 1 (sync, on main): for each client, snapshot warms the CLI call
-	## graph via `resolve_cli_path`; for non-CLI clients, sync `check_status`
-	## warms `_json_strategy.gd` / `_toml_strategy.gd`. Phase 2 (worker): CLI
-	## probes only, race-safe because Phase 1 dereferenced their call graph.
+	## Phase 1 (sync, on main): a single explicit `_warm_strategy_bytecode`
+	## call invokes a pure-memory helper on each strategy script —
+	## `_json_strategy.gd`, `_toml_strategy.gd`, `_cli_strategy.gd`, plus
+	## `client_configurator.gd` via `client_ids()` / `get_by_id`. No disk,
+	## no `OS.execute`, no JSON parse on main. `client_status_probe_snapshot`
+	## per client adds the `installed` flag and (for CLI clients) a cached
+	## CLI path to each probe.
+	##
+	## Phase 2 (worker): every probe — JSON, TOML, CLI — runs through the
+	## same `_run_client_status_refresh_worker` pipeline. Disk reads + JSON
+	## parses for the ~17 non-CLI clients now happen off the main thread,
+	## so the dock paints immediately on cold open instead of stalling
+	## behind ~16 sync `FileAccess.open` + `JSON.parse_string` calls.
 	##
 	## No-op outside the tree — GDScript tests instantiate via `new()`.
 	if not is_inside_tree():
@@ -1891,36 +1906,27 @@ func _perform_initial_client_status_refresh() -> void:
 		_refresh_clients_summary()
 		return
 
+	_warm_strategy_bytecode()
+
 	var generation := _begin_client_status_refresh_run()
 	var server_url := McpClientConfigurator.http_url()
-	var deferred_cli_probes: Array[Dictionary] = []
+	var all_probes: Array[Dictionary] = []
 
 	for client_id in _client_rows:
-		var client := McpClientRegistry.get_by_id(String(client_id))
-		if client == null:
-			continue
 		var probe := McpClientConfigurator.client_status_probe_snapshot(String(client_id))
 		if probe.is_empty():
 			continue
-		if client.config_type == "cli":
-			deferred_cli_probes.append(probe)
-			continue
-		var status := McpClientConfigurator.check_status_for_url_with_cli_path(
-			String(client_id), server_url, ""
-		)
-		_apply_row_status(
-			String(client_id), status, "", bool(probe.get("installed", false))
-		)
+		all_probes.append(probe)
 	_refresh_clients_summary()
 
-	if deferred_cli_probes.is_empty():
+	if all_probes.is_empty():
 		_finalize_completed_refresh()
 		return
 
 	_client_status_refresh_thread = Thread.new()
 	var err := _client_status_refresh_thread.start(
 		Callable(self, "_run_client_status_refresh_worker").bind(
-			deferred_cli_probes, server_url, generation
+			all_probes, server_url, generation
 		)
 	)
 	if err != OK:
@@ -1928,6 +1934,22 @@ func _perform_initial_client_status_refresh() -> void:
 		_client_status_refresh_timed_out = false
 		_client_status_refresh_thread = null
 		_refresh_clients_summary()
+
+
+## Force GDScript's lazy bytecode swap to complete for every script the
+## worker thread will reach into. Each call is pure-memory — no disk, no
+## network, no `OS.execute` — so it only costs the bytecode dereference
+## itself. See `_perform_initial_client_status_refresh` for context and
+## #233 / #235 for the SIGABRT this exists to prevent.
+func _warm_strategy_bytecode() -> void:
+	var ids := McpClientConfigurator.client_ids()
+	if ids.is_empty():
+		return
+	var any_client := McpClientRegistry.get_by_id(String(ids[0]))
+	if any_client != null:
+		McpJsonStrategy.verify_entry(any_client, {}, "")
+	McpTomlStrategy.format_body(PackedStringArray(), "")
+	McpCliStrategy.format_args(PackedStringArray(), "", "")
 
 
 func _begin_client_status_refresh_run() -> int:
