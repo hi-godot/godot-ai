@@ -543,9 +543,11 @@ PY
 
 print_instructions() {
     local orphan_pp status_pp orphan_pwsh_pp status_pwsh_pp posix_orphan_pp posix_status_pp
-    local posix_project posix_repo repo_win project_win
+    local posix_project posix_repo repo_win project_win plugin_version
     orphan_pp="$(pythonpath_for_shell "$ORPHAN_ROOT")"
     status_pp="$(pythonpath_for_shell "$STATUS_ROOT")"
+    plugin_version="$(sed -n 's/^version="\([^"]*\)"/\1/p' "$repo_root/plugin/addons/godot_ai/plugin.cfg" | head -n 1)"
+    plugin_version="${plugin_version:-unknown}"
     if is_windows_bash; then
         orphan_pwsh_pp="$(to_windows_path "$ORPHAN_ROOT")"
         status_pwsh_pp="$(to_windows_path "$STATUS_ROOT")"
@@ -684,27 +686,44 @@ Launch the editor with console logging:
 
 ## Dev checkout: force user mode for version-mismatch scenarios
 
-Scenarios 3 and 5 deliberately pin the simulator to a version that does NOT
-match the plugin (e.g. v2.1.0 vs the current plugin), and expect the plugin
-to treat the occupant as incompatible. In a dev checkout (a clone next to a
-\`.venv\`) \`McpClientConfigurator.is_dev_checkout()\` returns true, and
+Scenarios 1, 2, 3, and 5 deliberately pin the simulator to a version that
+does NOT match the plugin, and expect the plugin to treat the occupant as
+incompatible. In a dev checkout (a clone next to a \`.venv\`)
+\`McpClientConfigurator.is_dev_checkout()\` returns true, and
 \`_server_version_compatibility\` then returns \`{compatible: true,
 dev_mismatch_allowed: true}\` regardless of version — so the plugin happily
-adopts the simulator and the proof log lines never fire.
+adopts the simulator and the proof log lines never fire. The heuristic
+checks \`.venv/bin/python\` on POSIX and \`.venv/Scripts/python.exe\` on
+Windows (\`client_configurator.gd::_find_venv_python\`), so a Windows
+source checkout is also affected.
 
-Before launching Godot for scenarios 3 and 5 from a dev checkout, force user
+Before launching Godot for these scenarios from a dev checkout, force user
 mode in one of two ways:
 
-- Set the env var on the launch line:
+- Set the env var on the launch line. POSIX:
 
       GODOT_AI_MODE=user "\$GODOT" --editor --path "\$PROJECT" 2>&1 | tee /tmp/mcp-editor.log
+
+  PowerShell (set in the same shell before \`&\`-launching Godot):
+
+      \$env:GODOT_AI_MODE = "user"
+      & "C:\\path\\to\\Godot.exe" --editor --path "$project_win"
 
 - Or open the dock's "Mode override" dropdown (visible when Developer mode
   is on) and pick "Force user".
 
-Scenarios 1, 2, 6, and 7 don't need this — they either run on Windows
-(unaffected by the POSIX-only \`.venv\` heuristic) or already exercise paths
-that bypass the dev-mode bypass.
+The dock dropdown persists as the EditorSetting \`godot_ai/mode_override\`
+and **wins over the env var** — \`mode_override()\` reads the EditorSetting
+first, and only falls back to \`GODOT_AI_MODE\` when the dropdown is
+"Auto"/unset. If you previously left the dropdown on "Force dev" or
+"Force user", the env var on the launch line will silently do nothing.
+Either set the dropdown back to "Auto" via the dock UI before relaunching,
+or close Godot and remove the \`godot_ai/mode_override = "..."\` line from
+\$EDITOR_SETTINGS (POSIX) / editor_settings-4.6.tres (Windows).
+
+Scenarios 6 and 7 don't need user mode forced — scenario 6's occupant is
+not godot-ai (no version is even returned), and scenario 7 deliberately
+exercises the compatible-adoption path so dev-mode is harmless there.
 
 ## Scenario 1: Windows v2.2.0 orphan recovery
 
@@ -748,6 +767,9 @@ Use PowerShell. This tests the legacy-pidfile proof tier that motivated the PR.
 
     Get-NetTCPConnection -LocalPort 8000
     Get-CimInstance Win32_Process -Filter ("ProcessId=" + \$sim.Id) | Select ProcessId,CommandLine
+    # Dev checkout: force user mode (see "Dev checkout" section above).
+    # Skip the next line on a non-dev install.
+    \$env:GODOT_AI_MODE = "user"
     & "C:\\path\\to\\Godot.exe" --editor --path "$project_win"
 
 Pass criteria:
@@ -901,10 +923,14 @@ Windows simulator equivalent for a compatible external current server:
     \$psi.FileName = \$python
     \$psi.UseShellExecute = \$false
     \$psi.Environment["PYTHONPATH"] = "$status_pwsh_pp"
-    foreach (\$arg in @("-m","http_status_only","--port","8000","--ws-port","9500","--fake-version","2.2.3")) {
+    foreach (\$arg in @("-m","http_status_only","--port","8000","--ws-port","9500","--fake-version","$plugin_version")) {
       [void]\$psi.ArgumentList.Add(\$arg)
     }
     \$server = [System.Diagnostics.Process]::Start(\$psi)
+
+The \`--fake-version\` value is read from \`plugin/addons/godot_ai/plugin.cfg\`
+on each \`script/manual-orphan-test instructions\` run so this scenario
+genuinely exercises compatible adoption against the current plugin.
 
 Pass criteria:
 
