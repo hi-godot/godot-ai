@@ -655,26 +655,25 @@ func _start_server() -> void:
 			## kill the process currently holding the port.
 			print("MCP | managed server v%s does not match plugin v%s, restarting"
 				% [record_version, current_version])
-			if not _recover_strong_port_occupant(port, 3.0):
-				_server_started_this_session = true
-				_set_incompatible_server(_probe_live_server_status_for_port(port), current_version, port)
-				_startup_path = "incompatible"
-				push_warning(_server_status_message)
-				return
-			## Fall through to spawn.
-		else:
-			if not _recover_strong_port_occupant(port, 3.0):
-				## No recorded version drift and the live status probe did not
-				## verify an exact/current-compatible godot-ai server. A stale
-				## matching record alone is not enough ownership proof to kill
-				## the current port owner, and opening the WebSocket could route
-				## clients to an incompatible HTTP/MCP tool surface.
-				_server_started_this_session = true
-				_set_incompatible_server(live, current_version, port)
-				_startup_path = "incompatible"
-				push_warning(_server_status_message)
-				return
-			## Fall through to spawn.
+		## No recorded drift case: a stale matching record alone is not
+		## enough ownership proof to kill the current port owner, and
+		## opening the WebSocket could route clients to an incompatible
+		## HTTP/MCP tool surface — `_recover_strong_port_occupant` only
+		## acts on strong proof (managed_record / pidfile_listener /
+		## status_matches_record) so this branch is structurally safe.
+		##
+		## `live` is forwarded so the recovery path's proof helpers reuse
+		## the snapshot we already paid for. The kill itself invalidates
+		## that snapshot, so the failure-mode arm below re-probes before
+		## handing data to `_set_incompatible_server`.
+		if not _recover_strong_port_occupant(port, 3.0, live):
+			_server_started_this_session = true
+			var post_recovery_live := _probe_live_server_status_for_port(port)
+			_set_incompatible_server(post_recovery_live, current_version, port)
+			_startup_path = "incompatible"
+			push_warning(_server_status_message)
+			return
+		## Fall through to spawn.
 	else:
 		_startup_path = "free"
 
@@ -751,7 +750,12 @@ func _set_incompatible_server(live: Dictionary, expected_version: String, port: 
 	_server_actual_version = _live_version_for_message(live)
 	_server_dev_version_mismatch_allowed = false
 	_server_status_message = _incompatible_server_message(live, expected_version, port, _resolved_ws_port)
-	var proof := _evaluate_recovery_port_occupant_proof(port)
+	## `live` is the caller's most-current snapshot — pass it through to
+	## the recovery proof helper so it doesn't fire another probe of the
+	## same port. The `_set_incompatible_server` contract is "use exactly
+	## this live", so threading it down keeps the proof determination
+	## consistent with the diagnostic message we just built.
+	var proof := _evaluate_recovery_port_occupant_proof(port, live)
 	var proof_name := str(proof.get("proof", ""))
 	_can_recover_incompatible = not proof_name.is_empty()
 	print("MCP | proof: %s" % (proof_name if _can_recover_incompatible else "(none)"))
@@ -1420,7 +1424,16 @@ func _find_managed_pid(port: int) -> int:
 	return _find_pid_on_port(port)
 
 
-func _evaluate_strong_port_occupant_proof(port: int) -> Dictionary:
+## `live` is the result of a prior `_probe_live_server_status_for_port`
+## call that the caller already has on hand. When non-empty it short-
+## circuits the internal probe at the bottom of this helper, so a single
+## `_start_server` invocation that probes once at the top can thread the
+## same snapshot through compatibility check + recovery without paying
+## for a second ~500 ms localhost HTTPClient poll loop. Default `{}`
+## preserves the historical behavior for callers outside the spawn flow
+## (`can_recover_incompatible_server`, the dock's UI buttons), where a
+## fresh probe is the right thing.
+func _evaluate_strong_port_occupant_proof(port: int, live: Dictionary = {}) -> Dictionary:
 	var result := {"proof": "", "pids": []}
 	var listener_pids := _find_all_pids_on_port(port)
 	if listener_pids.is_empty():
@@ -1438,31 +1451,40 @@ func _evaluate_strong_port_occupant_proof(port: int) -> Dictionary:
 	if not legacy_targets.is_empty():
 		return {"proof": "pidfile_listener", "pids": legacy_targets}
 
-	var live := _probe_live_server_status_for_port(port)
+	var current_live: Dictionary = live if not live.is_empty() else _probe_live_server_status_for_port(port)
 	if (
-		_live_status_identifies_godot_ai(live)
+		_live_status_identifies_godot_ai(current_live)
 		and not record_version.is_empty()
-		and str(live.get("version", "")) == record_version
+		and str(current_live.get("version", "")) == record_version
 	):
 		return {"proof": "status_matches_record", "pids": listener_pids}
 
 	return result
 
 
-func _evaluate_recovery_port_occupant_proof(port: int) -> Dictionary:
-	var proof := _evaluate_strong_port_occupant_proof(port)
+## See `_evaluate_strong_port_occupant_proof` for the `live` contract.
+## Threads `live` through the strong-proof delegate so neither helper
+## probes when the caller already knows the port-owner status.
+func _evaluate_recovery_port_occupant_proof(port: int, live: Dictionary = {}) -> Dictionary:
+	var proof := _evaluate_strong_port_occupant_proof(port, live)
 	if not str(proof.get("proof", "")).is_empty():
 		return proof
 
-	var live := _probe_live_server_status_for_port(port)
-	if _live_status_identifies_godot_ai(live):
+	var current_live: Dictionary = live if not live.is_empty() else _probe_live_server_status_for_port(port)
+	if _live_status_identifies_godot_ai(current_live):
 		return {"proof": "status_name", "pids": _find_all_pids_on_port(port)}
 
 	return {"proof": "", "pids": []}
 
 
-func _recover_strong_port_occupant(port: int, wait_s: float) -> bool:
-	var proof := _evaluate_strong_port_occupant_proof(port)
+## `pre_kill_live` is forwarded to `_evaluate_strong_port_occupant_proof`
+## so the proof helper doesn't re-probe a port the caller already
+## probed. The kill itself invalidates that snapshot — by the time this
+## function returns, the caller must re-probe before consuming any
+## live-status data. Default `{}` lets non-startup callers (none today)
+## still use the historical fresh-probe behavior.
+func _recover_strong_port_occupant(port: int, wait_s: float, pre_kill_live: Dictionary = {}) -> bool:
+	var proof := _evaluate_strong_port_occupant_proof(port, pre_kill_live)
 	var targets: Array[int] = []
 	targets.assign(proof.get("pids", []))
 	if targets.is_empty():
