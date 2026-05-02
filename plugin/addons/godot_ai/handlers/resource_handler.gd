@@ -6,10 +6,12 @@ extends RefCounted
 const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
 
 var _undo_redo: EditorUndoRedoManager
+var _connection: McpConnection
 
 
-func _init(undo_redo: EditorUndoRedoManager) -> void:
+func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null) -> void:
 	_undo_redo = undo_redo
+	_connection = connection
 
 
 func search_resources(params: Dictionary) -> Dictionary:
@@ -340,7 +342,7 @@ func _save_created_resource(res: Resource, type_str: String, resource_path: Stri
 		"type": type_str,
 		"resource_class": res.get_class(),
 		"properties_applied": applied_count,
-	})
+	}, _connection)
 
 
 ## Introspect a Resource class — return its editor-visible properties, parent,

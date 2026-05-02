@@ -187,7 +187,7 @@ func _enter_tree() -> void:
 	var project_handler := ProjectHandler.new(_connection)
 	var client_handler := ClientHandler.new()
 	var script_handler := ScriptHandler.new(get_undo_redo(), _connection)
-	var resource_handler := ResourceHandler.new(get_undo_redo())
+	var resource_handler := ResourceHandler.new(get_undo_redo(), _connection)
 	var filesystem_handler := FilesystemHandler.new()
 	var signal_handler := SignalHandler.new(get_undo_redo())
 	var autoload_handler := AutoloadHandler.new()
@@ -202,9 +202,9 @@ func _enter_tree() -> void:
 	var camera_handler := CameraHandler.new(get_undo_redo())
 	var audio_handler := AudioHandler.new(get_undo_redo())
 	var physics_shape_handler := PhysicsShapeHandler.new(get_undo_redo())
-	var environment_handler := EnvironmentHandler.new(get_undo_redo())
-	var texture_handler := TextureHandler.new(get_undo_redo())
-	var curve_handler := CurveHandler.new(get_undo_redo())
+	var environment_handler := EnvironmentHandler.new(get_undo_redo(), _connection)
+	var texture_handler := TextureHandler.new(get_undo_redo(), _connection)
+	var curve_handler := CurveHandler.new(get_undo_redo(), _connection)
 	var control_draw_recipe_handler := ControlDrawRecipeHandler.new(get_undo_redo())
 	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler, ui_handler, theme_handler, animation_handler, material_handler, particle_handler, camera_handler, audio_handler, physics_shape_handler, environment_handler, texture_handler, curve_handler, control_draw_recipe_handler]
 

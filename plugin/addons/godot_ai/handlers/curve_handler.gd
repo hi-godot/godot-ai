@@ -11,10 +11,12 @@ extends RefCounted
 const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
 
 var _undo_redo: EditorUndoRedoManager
+var _connection: McpConnection
 
 
-func _init(undo_redo: EditorUndoRedoManager) -> void:
+func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null) -> void:
 	_undo_redo = undo_redo
+	_connection = connection
 
 
 func set_points(params: Dictionary) -> Dictionary:
@@ -100,7 +102,7 @@ func set_points(params: Dictionary) -> Dictionary:
 			"curve_class": curve.get_class(),
 			"point_count": new_snapshot.size(),
 			"reason": "File save is persistent; edit the .tres file manually to revert",
-		})
+		}, _connection)
 
 	# Inline (node-attached) path: swap the curve property so the action lands
 	# cleanly in scene history, mirroring the resource-swap pattern used by

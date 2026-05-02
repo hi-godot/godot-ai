@@ -8,10 +8,12 @@ extends RefCounted
 const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
 
 var _undo_redo: EditorUndoRedoManager
+var _connection: McpConnection
 
 
-func _init(undo_redo: EditorUndoRedoManager) -> void:
+func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null) -> void:
 	_undo_redo = undo_redo
+	_connection = connection
 
 
 const _FILL_MODES := {
@@ -145,7 +147,7 @@ func _finalize(tex: Resource, sub_resources: Array, params: Dictionary, label: S
 	var overwrite: bool = params.get("overwrite", false)
 
 	if not resource_path.is_empty():
-		return McpResourceIO.save_to_disk(tex, resource_path, overwrite, label, extra)
+		return McpResourceIO.save_to_disk(tex, resource_path, overwrite, label, extra, _connection)
 	return _assign_texture(tex, sub_resources, node_path, property, label, extra)
 
 
