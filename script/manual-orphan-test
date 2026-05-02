@@ -138,7 +138,6 @@ write_orphan_sim() {
 import argparse
 import json
 import os
-import signal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ap = argparse.ArgumentParser()
@@ -156,23 +155,12 @@ ap.add_argument(
     default="godot-ai",
     help="name in /godot-ai/status; 'none' drops the endpoint",
 )
-ap.add_argument(
-    "--ignore-sigterm",
-    action="store_true",
-    help="trap SIGTERM so kill -15 fails (failed-kill scenario)",
-)
 args = ap.parse_args()
 
 if args.pid_file and args.pid_file.lower() != "none":
     os.makedirs(os.path.dirname(args.pid_file), exist_ok=True)
     with open(args.pid_file, "w", encoding="utf-8") as f:
         f.write(str(os.getpid()))
-
-if args.ignore_sigterm:
-    signal.signal(
-        signal.SIGTERM,
-        lambda *a: print("simulator: ignoring SIGTERM", flush=True),
-    )
 
 
 class H(BaseHTTPRequestHandler):
@@ -694,6 +682,30 @@ Launch the editor with console logging:
     "\$GODOT" --editor --path "\$PROJECT" 2>&1 | tee /tmp/mcp-editor.log
     tail -f /tmp/mcp-editor.log | grep -E 'MCP \\||godot[_-]ai'
 
+## Dev checkout: force user mode for version-mismatch scenarios
+
+Scenarios 3 and 5 deliberately pin the simulator to a version that does NOT
+match the plugin (e.g. v2.1.0 vs the current plugin), and expect the plugin
+to treat the occupant as incompatible. In a dev checkout (a clone next to a
+\`.venv\`) \`McpClientConfigurator.is_dev_checkout()\` returns true, and
+\`_server_version_compatibility\` then returns \`{compatible: true,
+dev_mismatch_allowed: true}\` regardless of version — so the plugin happily
+adopts the simulator and the proof log lines never fire.
+
+Before launching Godot for scenarios 3 and 5 from a dev checkout, force user
+mode in one of two ways:
+
+- Set the env var on the launch line:
+
+      GODOT_AI_MODE=user "\$GODOT" --editor --path "\$PROJECT" 2>&1 | tee /tmp/mcp-editor.log
+
+- Or open the dock's "Mode override" dropdown (visible when Developer mode
+  is on) and pick "Force user".
+
+Scenarios 1, 2, 6, and 7 don't need this — they either run on Windows
+(unaffected by the POSIX-only \`.venv\` heuristic) or already exercise paths
+that bypass the dev-mode bypass.
+
 ## Scenario 1: Windows v2.2.0 orphan recovery
 
 Use PowerShell. This tests the legacy-pidfile proof tier that motivated the PR.
@@ -786,9 +798,9 @@ Close Godot and add or replace these lines in \$EDITOR_SETTINGS:
     godot_ai/managed_server_version = "2.1.0"
     godot_ai/managed_server_ws_port = 9500
 
-Then launch:
+Then launch (dev checkout: force user mode — see "Dev checkout" section above):
 
-    "\$GODOT" --editor --path "\$PROJECT" 2>&1 | tee /tmp/mcp-editor.log
+    GODOT_AI_MODE=user "\$GODOT" --editor --path "\$PROJECT" 2>&1 | tee /tmp/mcp-editor.log
 
 Pass criteria:
 
@@ -797,46 +809,39 @@ Pass criteria:
 - Port 8000 now has a different PID.
 - Dock is green with no Restart button.
 
-## Scenario 4: Failed-kill preservation (POSIX only)
+## Failed-kill preservation: covered by GDScript tests, not the manual matrix
 
-Use Linux/macOS for this scenario unless you add a Windows-specific way to make
-taskkill fail. The simulator's --ignore-sigterm only exercises the POSIX
-OS.kill/SIGTERM path.
+The "kill returns success but the port stays held, so the plugin must preserve
+the managed record and refuse to spawn a replacement" invariant used to live
+here as scenario 4 with a \`--ignore-sigterm\` simulator. That scenario could
+not actually exercise the path on POSIX: Godot's \`OS.kill(pid)\` on POSIX
+sends SIGKILL (\`drivers/unix/os_unix.cpp\`), and a SIGTERM trap is irrelevant
+against SIGKILL — the kill always succeeded and the matrix was lying to
+operators.
 
-Use the same managed record as scenario 3, but start the simulator with
---ignore-sigterm:
-
-    PYTHONPATH="$posix_orphan_pp" python3 -m godot_ai \\
-      --transport streamable-http --port 8000 --ws-port 9500 \\
-      --pid-file "\$PIDFILE" --fake-version 2.1.0 \\
-      --ignore-sigterm &
-    SIM_PID=\$!
-
-Pass criteria:
-
-- Console shows kill failure or "port 8000 still in use".
-- Dock shows the incompatible-server banner.
-- "\$PIDFILE" still contains \$SIM_PID.
-- The managed-server settings still show the old version.
-- No new server spawned; port 8000 is still held by \$SIM_PID.
-
-Cleanup:
-
-    kill -KILL \$SIM_PID
+The invariant is fully covered by
+\`test_project/tests/test_plugin_lifecycle.gd::test_drift_kill_preserves_record_and_does_not_spawn_when_port_stays_held\`,
+which drives the same \`_recover_strong_port_occupant\` branch via in-process
+plugin stubs.
 
 ## Scenario 5: Status-name-only occupant safety
 
 This proves auto-kill is not triggered when the only evidence is a status
-endpoint returning name=godot-ai.
+endpoint returning name=godot-ai. Use a deliberately-mismatched
+\`--fake-version\` so a dev checkout in user mode treats the occupant as
+incompatible (matching versions would be a compatible-adoption test, see
+scenario 7).
 
     rm -f "\$PIDFILE"
     # Close Godot, then remove godot_ai/managed_server_* from \$EDITOR_SETTINGS.
 
-    PYTHONPATH="$posix_status_pp" python3 -m http_status_only &
+    PYTHONPATH="$posix_status_pp" python3 -m http_status_only --fake-version 2.1.0 &
     SIM_PID=\$!
     ps -ww -p \$SIM_PID -o args=
 
-    "\$GODOT" --editor --path "\$PROJECT" 2>&1 | tee /tmp/mcp-editor.log
+Then launch (dev checkout: force user mode — see "Dev checkout" section above):
+
+    GODOT_AI_MODE=user "\$GODOT" --editor --path "\$PROJECT" 2>&1 | tee /tmp/mcp-editor.log
 
 Initial pass criteria:
 
@@ -911,8 +916,8 @@ Pass criteria:
 
 ## Recommended order
 
-Run 6 and 5 first to prove unrelated processes are not killed. Then run 3, 1,
-4, and finally 2 and 7 as sanity sweeps.
+Run 6 and 5 first to prove unrelated processes are not killed. Then run 3 and
+1, and finally 2 and 7 as sanity sweeps.
 
 If a scenario fails, capture:
 
