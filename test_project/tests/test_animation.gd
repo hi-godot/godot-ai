@@ -29,14 +29,21 @@ func suite_teardown() -> void:
 
 ## Add an AnimationPlayer to the scene root and return its path.
 ## Caller is responsible for removing the node in teardown.
+##
+## Adds the node directly (not via `_handler.create_player`) so the fixture
+## doesn't push a setup action onto the undo stack — keeping the test's
+## `editor_undo` calls focused on the one action under test. Mirrors the
+## `_add_mesh_instance` pattern in `test_resource.gd`.
 func _add_player(player_name: String = "TestAnimPlayer") -> String:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		return ""
-	var result := _handler.create_player({"parent_path": "/" + scene_root.name, "name": player_name})
-	if result.has("error"):
-		return ""
-	return result.data.path
+	var player := AnimationPlayer.new()
+	player.name = player_name
+	player.add_animation_library("", AnimationLibrary.new())
+	scene_root.add_child(player)
+	player.set_owner(scene_root)
+	return "/" + scene_root.name + "/" + player_name
 
 
 func _remove_node(path: String) -> void:
@@ -96,7 +103,7 @@ func test_player_create_is_undoable() -> void:
 	})
 	assert_has_key(result, "data")
 	assert_eq(scene_root.get_child_count(), before_count + 1)
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_eq(scene_root.get_child_count(), before_count, "Undo should remove the player")
 
 
@@ -182,9 +189,9 @@ func test_animation_create_is_undoable() -> void:
 
 	_handler.create_animation({"player_path": player_path, "name": "fade", "length": 0.3})
 	assert_true(player.has_animation("fade"), "Animation should exist after create")
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_true(not player.has_animation("fade"), "Undo should remove animation")
-	_undo_redo.redo()
+	assert_true(editor_redo(_undo_redo), "redo should succeed")
 	assert_true(player.has_animation("fade"), "Redo should restore animation")
 	_remove_node(player_path)
 
@@ -258,7 +265,7 @@ func test_add_property_track_is_undoable() -> void:
 		"keyframes": [{"time": 0.0, "value": true}, {"time": 1.0, "value": false}],
 	})
 	assert_eq(anim.get_track_count(), 1)
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_eq(anim.get_track_count(), 0, "Undo should remove the track")
 	_remove_node(player_path)
 
@@ -314,12 +321,12 @@ func test_add_property_track_undo_survives_interleaving() -> void:
 	assert_eq(anim.get_track_count(), 2, "After track B")
 
 	# Undo B — should remove scale, leaving position.
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_eq(anim.get_track_count(), 1, "Undo B leaves one track")
 	assert_eq(anim.track_get_path(0), NodePath(".:position"), "Remaining track is position, not scale")
 
 	# Undo A — should remove position.
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_eq(anim.get_track_count(), 0, "Undo A leaves no tracks")
 
 	_remove_node(player_path)
@@ -843,9 +850,9 @@ func test_create_simple_is_undoable() -> void:
 		],
 	})
 	assert_true(player.has_animation("pulse"))
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_true(not player.has_animation("pulse"), "Undo should remove the composed animation")
-	_undo_redo.redo()
+	assert_true(editor_redo(_undo_redo), "redo should succeed")
 	assert_true(player.has_animation("pulse"), "Redo should restore the composed animation")
 	_remove_node(player_path)
 
@@ -905,13 +912,13 @@ func test_create_animation_auto_attaches_default_library() -> void:
 	assert_true(player.has_animation("idle"))
 
 	# Undo should remove both the animation AND the library.
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_true(not player.has_animation("idle"))
 	assert_true(not player.has_animation_library(""),
 		"undo should also remove the auto-created library")
 
 	# Redo should restore both.
-	_undo_redo.redo()
+	assert_true(editor_redo(_undo_redo), "redo should succeed")
 	assert_true(player.has_animation_library(""))
 	assert_true(player.has_animation("idle"))
 
@@ -939,7 +946,7 @@ func test_create_simple_auto_attaches_default_library() -> void:
 	assert_true(result.data.library_created)
 	assert_true(player.has_animation("slide"))
 
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_true(not player.has_animation_library(""))
 	_remove_node(path)
 
@@ -978,7 +985,7 @@ func test_create_simple_auto_creates_animation_player() -> void:
 	assert_true((created as AnimationPlayer).has_animation("bob"))
 
 	# Single Ctrl-Z rolls back everything.
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_true(McpScenePath.resolve(player_path, scene_root) == null,
 		"undo should remove the auto-created AnimationPlayer from the scene")
 
@@ -1086,12 +1093,12 @@ func test_create_animation_auto_create_is_undoable() -> void:
 	assert_eq(result.data.animation_player_created, true)
 
 	# Undo: player AND animation should both vanish in one action.
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_true(McpScenePath.resolve(player_path, scene_root) == null,
 		"undo should remove the auto-created player")
 
 	# Redo: player and animation come back.
-	_undo_redo.redo()
+	assert_true(editor_redo(_undo_redo), "redo should succeed")
 	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
 	assert_true(player != null, "redo should restore the player")
 	assert_true(player.has_animation("idle"), "redo should restore the animation")
@@ -1343,7 +1350,7 @@ func test_delete_animation_basic() -> void:
 		assert_true(anim.name != "to_delete", "Deleted anim should not appear")
 
 	# Undo should restore it.
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	var list_after := _handler.list_animations({"player_path": player_path})
 	var found := false
 	for anim in list_after.data.animations:
@@ -1380,7 +1387,7 @@ func test_delete_animation_in_non_default_library() -> void:
 	assert_false(player.has_animation("moves/idle"), "Animation removed from non-default library")
 
 	# Undo restores it.
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_true(player.has_animation("moves/idle"), "Undo restored library-qualified animation")
 
 	_remove_node(player_path)

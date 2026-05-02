@@ -266,8 +266,8 @@ func test_attach_script_basic() -> void:
 	assert_true(result.data.undoable)
 
 	# Clean up: undo attach then undo create
-	_undo_redo.undo()
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 
 
 func test_attach_script_missing_path() -> void:
@@ -309,7 +309,7 @@ func test_detach_script_no_script() -> void:
 	assert_false(result.data.had_script)
 
 	# Clean up
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 
 
 func test_detach_script_missing_path() -> void:

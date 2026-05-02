@@ -242,11 +242,11 @@ func test_undo_reverts_clean_node() -> void:
 	assert_true(node.has_meta("_ops"))
 	assert_true(node.get_script() == DRAW_RECIPE_SCRIPT)
 
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_false(node.has_meta("_ops"), "undo should remove _ops meta")
 	assert_true(node.get_script() == null, "undo should remove the script")
 
-	_undo_redo.redo()
+	assert_true(editor_redo(_undo_redo), "redo should succeed")
 	assert_true(node.has_meta("_ops"), "redo re-applies meta")
 	assert_true(node.get_script() == DRAW_RECIPE_SCRIPT, "redo re-attaches script")
 	_remove_control(path)
@@ -271,7 +271,7 @@ func test_undo_preserves_prior_meta() -> void:
 	var after_b: Array = node.get_meta("_ops")
 	assert_eq(after_b[0].radius, 2.0)
 
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	var restored: Array = node.get_meta("_ops")
 	assert_eq(restored[0].radius, 1.0, "undo should restore prior _ops meta")
 	assert_true(node.get_script() == DRAW_RECIPE_SCRIPT, "script still attached")

@@ -195,7 +195,7 @@ func test_set_anchor_preset_is_undoable() -> void:
 	var before_right := ctl.anchor_right
 	_handler.set_anchor_preset({"path": path, "preset": "full_rect"})
 	assert_eq(ctl.anchor_right, 1.0, "Apply should change anchor_right")
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_eq(ctl.anchor_left, before_left, "Undo should restore anchor_left")
 	assert_eq(ctl.anchor_right, before_right, "Undo should restore anchor_right")
 	_remove_control(path)
@@ -329,7 +329,7 @@ func test_set_text_is_undoable() -> void:
 		return
 	_handler.set_text({"path": path, "text": "after"})
 	assert_eq(label.text, "after", "Apply should change text")
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_eq(label.text, "before", "Undo should restore prior text")
 	_remove_control(path)
 
@@ -467,7 +467,7 @@ func test_build_layout_is_undoable() -> void:
 	})
 	assert_has_key(result, "data")
 	assert_eq(scene_root.get_child_count(), before_count + 1)
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_eq(scene_root.get_child_count(), before_count, "Undo should remove the whole built tree")
 
 

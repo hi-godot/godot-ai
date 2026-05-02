@@ -463,7 +463,7 @@ func test_follow_2d_undo_restores_parent() -> void:
 	})
 	assert_eq(cam.get_parent(), target)
 
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_eq(cam.get_parent(), original_parent, "Undo should restore original parent")
 	# Refresh the _created_paths entry since the path changed after reparent/undo.
 	_created_paths = [McpScenePath.from_node(cam, scene_root)]
