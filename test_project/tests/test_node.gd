@@ -131,7 +131,7 @@ func test_create_node_basic() -> void:
 	assert_eq(result.data.type, "Node3D")
 	assert_true(result.data.undoable, "Create should be undoable")
 	## Clean up via undo (reverses the create action)
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 
 
 func test_create_node_invalid_type() -> void:
@@ -159,7 +159,7 @@ func test_create_node_accepts_root_alias_for_parent_path() -> void:
 	})
 	assert_has_key(result, "data")
 	assert_eq(result.data.parent_path, "/Main", "should resolve to scene root")
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 
 
 func test_create_node_parent_not_found_error_names_convention() -> void:
@@ -309,7 +309,7 @@ func test_set_property_float() -> void:
 	assert_eq(result.data.property, "fov")
 	assert_true(result.data.undoable, "Set property should be undoable")
 	## Restore via undo
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 
 
 func test_set_property_missing_property() -> void:
@@ -336,8 +336,8 @@ func test_set_property_vector3_accepts_valid_dict() -> void:
 	assert_true(result.data.undoable)
 	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestV3") as Node3D
 	assert_eq(node.position, Vector3(1, 2, 3))
-	_undo_redo.undo()  # undo set
-	_undo_redo.undo()  # undo create
+	assert_true(editor_undo(_undo_redo), "undo set should succeed")
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
 
 
 func test_set_property_vector3_rejects_color_shaped_dict() -> void:
@@ -358,7 +358,7 @@ func test_set_property_vector3_rejects_color_shaped_dict() -> void:
 	assert_contains(result.error.message, "Vector3")
 
 	assert_eq(node.position, original, "Position must be unchanged after a rejected coerce")
-	_undo_redo.undo()  # undo create
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
 
 
 func test_set_property_vector3_rejects_partial_dict() -> void:
@@ -372,7 +372,7 @@ func test_set_property_vector3_rejects_partial_dict() -> void:
 		"value": {"x": 1},  # missing y, z
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
-	_undo_redo.undo()  # undo create
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
 
 
 func test_set_property_color_rejects_vector3_shaped_dict() -> void:
@@ -405,7 +405,7 @@ func test_set_property_vector3_rejects_array_input() -> void:
 	## Read back the stored Variant — the silent-zero failure mode would
 	## leave the node at (0,0,0) even though the response said "error".
 	assert_eq(node.position, original, "Position must be unchanged after rejected array coerce")
-	_undo_redo.undo()  # undo create
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
 
 
 func test_set_property_vector3_rejects_json_string_input() -> void:
@@ -423,7 +423,7 @@ func test_set_property_vector3_rejects_json_string_input() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	assert_contains(result.error.message, "Vector3")
 	assert_eq(node.position, original, "Position must be unchanged after rejected string coerce")
-	_undo_redo.undo()  # undo create
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
 
 
 func test_set_property_vector2_rejects_array_input() -> void:
@@ -440,7 +440,7 @@ func test_set_property_vector2_rejects_array_input() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	assert_contains(result.error.message, "Vector2")
 	assert_eq(node.position, original, "Position must be unchanged after rejected array coerce")
-	_undo_redo.undo()  # undo create
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
 
 
 func test_set_property_color_rejects_array_input() -> void:
@@ -457,7 +457,7 @@ func test_set_property_color_rejects_array_input() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	assert_contains(result.error.message, "Color")
 	assert_eq(node.modulate, original, "Modulate must be unchanged after rejected array coerce")
-	_undo_redo.undo()  # undo create
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
 
 
 func test_check_coerced_array_vector3_returns_invalid_params() -> void:
@@ -519,8 +519,8 @@ func test_set_property_resource_path() -> void:
 	assert_has_key(result, "data")
 	assert_eq(result.data.value, TEST_MATERIAL_PATH)
 	assert_true(result.data.undoable)
-	_undo_redo.undo()  # undo assign
-	_undo_redo.undo()  # undo create
+	assert_true(editor_undo(_undo_redo), "undo assign should succeed")
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
 
 
 func test_set_property_resource_not_found() -> void:
@@ -550,9 +550,9 @@ func test_set_property_resource_null_clears() -> void:
 	})
 	assert_has_key(result, "data")
 	assert_eq(result.data.value, null)
-	_undo_redo.undo()
-	_undo_redo.undo()
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 
 
 func test_set_property_node_path() -> void:
@@ -568,8 +568,8 @@ func test_set_property_node_path() -> void:
 	})
 	assert_has_key(result, "data")
 	assert_eq(result.data.value, "../Camera3D")
-	_undo_redo.undo()
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 
 
 func test_set_property_nonexistent_property() -> void:
@@ -947,8 +947,8 @@ func test_rename_node_basic() -> void:
 	assert_eq(result.data.name, target_name)
 	assert_eq(result.data.old_name, created_name)
 	assert_true(result.data.undoable)
-	_undo_redo.undo()
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 
 
 func test_rename_node_scene_root_rejected() -> void:
@@ -1027,7 +1027,7 @@ func test_duplicate_node_basic() -> void:
 	assert_eq(result.data.type, "Camera3D")
 	assert_true(result.data.undoable)
 	## Clean up via undo
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 
 
 func test_duplicate_scene_root() -> void:
@@ -1074,7 +1074,7 @@ func test_add_to_group() -> void:
 	assert_eq(result.data.group, "_mcp_test_group")
 	assert_true(result.data.undoable)
 	## Clean up via undo
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 
 
 func test_add_to_group_missing_group() -> void:
@@ -1139,7 +1139,7 @@ func test_add_to_group_accepts_string_name_value() -> void:
 	assert_has_key(result, "data")
 	assert_eq(result.data.group, "_mcp_test_sn_group")
 	assert_true(result.data.undoable)
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 
 
 # ----- set_selection -----
@@ -1256,11 +1256,11 @@ func test_create_node_scene_path_undo_redo() -> void:
 	_handler.create_node({"scene_path": tmp_path, "name": "UndoInstance"})
 	assert_eq(scene_root.get_child_count(), before + 1, "Instance added")
 
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 	assert_eq(scene_root.get_child_count(), before, "Undo removes the instance")
 	assert_true(scene_root.find_child("UndoInstance", false, false) == null, "No node after undo")
 
-	_undo_redo.redo()
+	assert_true(editor_redo(_undo_redo), "redo should succeed")
 	assert_eq(scene_root.get_child_count(), before + 1, "Redo restores the instance")
 	var restored: Node = scene_root.find_child("UndoInstance", false, false)
 	assert_true(restored != null, "Instance back after redo")
@@ -1330,6 +1330,6 @@ func test_create_node_scene_file_matching_active_scene_passes() -> void:
 	})
 	assert_has_key(result, "data")
 	## Undo so we don't leak test state into downstream tests.
-	_undo_redo.undo()
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
 
 
