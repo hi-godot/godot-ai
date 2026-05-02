@@ -11,6 +11,12 @@ extends RefCounted
 ## owns the port, making the failure invisible. See issue #146.
 
 const NETSH_ARGS := ["interface", "ipv4", "show", "excludedportrange", "protocol=tcp"]
+const NETSH_CACHE_TTL_MS := 2000
+
+static var _netsh_cache_text := ""
+static var _netsh_cache_msec := 0
+static var _netsh_cache_valid := false
+static var _netsh_query_count := 0
 
 
 ## Returns true if `port` falls inside a currently-reserved range on this
@@ -18,11 +24,46 @@ const NETSH_ARGS := ["interface", "ipv4", "show", "excludedportrange", "protocol
 static func is_port_excluded(port: int) -> bool:
 	if OS.get_name() != "Windows":
 		return false
+	var now_ms := Time.get_ticks_msec()
+	var cached := _get_cached_excluded_output(now_ms)
+	if bool(cached.get("hit", false)):
+		return parse_excluded(str(cached.get("text", "")), port)
 	var output: Array = []
-	var exit_code := OS.execute("netsh", NETSH_ARGS, output, true)
+	var exit_code := _execute_netsh_excluded_ranges(output)
 	if exit_code != 0 or output.is_empty():
 		return false
-	return parse_excluded(str(output[0]), port)
+	var text := str(output[0])
+	_store_excluded_output(text, now_ms)
+	return parse_excluded(text, port)
+
+
+static func _store_excluded_output(text: String, now_ms: int) -> void:
+	_netsh_cache_text = text
+	_netsh_cache_msec = now_ms
+	_netsh_cache_valid = true
+
+
+static func _get_cached_excluded_output(now_ms: int) -> Dictionary:
+	if not _netsh_cache_valid:
+		return {"hit": false, "text": ""}
+	if now_ms - _netsh_cache_msec > NETSH_CACHE_TTL_MS:
+		return {"hit": false, "text": ""}
+	return {"hit": true, "text": _netsh_cache_text}
+
+
+static func _clear_cache_for_tests() -> void:
+	_netsh_cache_text = ""
+	_netsh_cache_msec = 0
+	_netsh_cache_valid = false
+
+
+static func netsh_query_count() -> int:
+	return _netsh_query_count
+
+
+static func _execute_netsh_excluded_ranges(output: Array) -> int:
+	_netsh_query_count += 1
+	return OS.execute("netsh", NETSH_ARGS, output, true)
 
 
 ## Parse the `netsh` excluded-port-range output and return true if `port`
@@ -74,11 +115,17 @@ static func _ranges_contain(ranges: Array[Vector2i], port: int) -> bool:
 static func suggest_non_excluded_port(start: int, span: int = 2048, max_port: int = 65535) -> int:
 	if OS.get_name() != "Windows":
 		return start
+	var now_ms := Time.get_ticks_msec()
+	var cached := _get_cached_excluded_output(now_ms)
+	if bool(cached.get("hit", false)):
+		return suggest_non_excluded_port_from_output(str(cached.get("text", "")), start, span, max_port)
 	var output: Array = []
-	var exit_code := OS.execute("netsh", NETSH_ARGS, output, true)
+	var exit_code := _execute_netsh_excluded_ranges(output)
 	if exit_code != 0 or output.is_empty():
 		return start
-	return suggest_non_excluded_port_from_output(str(output[0]), start, span, max_port)
+	var text := str(output[0])
+	_store_excluded_output(text, now_ms)
+	return suggest_non_excluded_port_from_output(text, start, span, max_port)
 
 
 ## Pure parser-backed helper for tests and for `suggest_non_excluded_port`.

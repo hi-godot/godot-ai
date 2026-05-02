@@ -75,6 +75,14 @@ const SPAWN_GRACE_MS := 5 * 1000
 const SERVER_STATUS_PATH := "/godot-ai/status"
 const SERVER_STATUS_PROBE_TIMEOUT_MS := 800
 const SERVER_HANDSHAKE_VERSION_TIMEOUT_MS := 5 * 1000
+const STARTUP_TRACE_COUNTER_NAMES := [
+	"powershell",
+	"netstat",
+	"netsh",
+	"lsof",
+	"http_status_probe",
+	"server_command_discovery",
+]
 
 var _connection: McpConnection
 var _dispatcher: McpDispatcher
@@ -124,9 +132,17 @@ var _connection_blocked := false
 var _awaiting_server_version := false
 var _server_version_deadline_ms: int = 0
 var _headless_disabled := false
+var _startup_trace_enabled := false
+var _startup_trace_start_ms := 0
+var _startup_trace_last_ms := 0
+var _startup_trace_counters: Dictionary = {}
+var _startup_trace_netsh_start_count := 0
+var _startup_path := ""
 
 
 func _enter_tree() -> void:
+	_startup_trace_begin()
+
 	## `_process` is only used by the adoption-confirmation watcher; keep
 	## it off until `_watch_for_adoption_confirmation` arms it, so the
 	## plugin has zero per-frame cost in the common case.
@@ -141,14 +157,17 @@ func _enter_tree() -> void:
 	## return the user's configured values (if any) when `_start_server`
 	## builds the CLI args.
 	McpClientConfigurator.ensure_settings_registered()
+	_startup_trace_phase("settings_registered")
 
 	_log_buffer = McpLogBuffer.new()
 	_start_server()
+	_startup_trace_phase("server_start")
 
 	_game_log_buffer = McpGameLogBuffer.new()
 	_editor_log_buffer = McpEditorLogBuffer.new()
 	_attach_editor_logger()
 	_dispatcher = McpDispatcher.new(_log_buffer)
+	_startup_trace_phase("core_objects")
 
 	_connection = McpConnection.new()
 	_connection.log_buffer = _log_buffer
@@ -317,14 +336,17 @@ func _enter_tree() -> void:
 
 	_connection.dispatcher = _dispatcher
 	add_child(_connection)
+	_startup_trace_phase("handlers_registered")
 
 	# Dock panel
 	_dock = McpDock.new()
 	_dock.name = "Godot AI"
 	_dock.setup(_connection, _log_buffer, self)
 	add_control_to_dock(DOCK_SLOT_RIGHT_BL, _dock)
+	_startup_trace_phase("dock_attached")
 
 	_log_buffer.log("plugin loaded")
+	_startup_trace_finish(_startup_path if not _startup_path.is_empty() else "loaded")
 
 
 func _exit_tree() -> void:
@@ -487,6 +509,56 @@ func _ensure_game_helper_autoload() -> void:
 			% [GAME_HELPER_AUTOLOAD_NAME, err])
 
 
+func _startup_trace_begin() -> void:
+	_startup_trace_enabled = McpClientConfigurator.startup_trace_enabled()
+	if not _startup_trace_enabled:
+		return
+	_startup_trace_start_ms = Time.get_ticks_msec()
+	_startup_trace_last_ms = _startup_trace_start_ms
+	_startup_trace_netsh_start_count = McpWindowsPortReservation.netsh_query_count()
+	_startup_trace_counters.clear()
+	for counter in STARTUP_TRACE_COUNTER_NAMES:
+		_startup_trace_counters[counter] = 0
+	print(
+		"MCP startup trace | begin platform=%s http_port=%d ws_port=%d"
+		% [
+			OS.get_name(),
+			McpClientConfigurator.http_port(),
+			McpClientConfigurator.ws_port(),
+		]
+	)
+
+
+func _startup_trace_count(counter: String, amount: int = 1) -> void:
+	if not _startup_trace_enabled:
+		return
+	_startup_trace_counters[counter] = int(_startup_trace_counters.get(counter, 0)) + amount
+
+
+func _startup_trace_phase(name: String) -> void:
+	if not _startup_trace_enabled:
+		return
+	var now := Time.get_ticks_msec()
+	print(
+		"MCP startup trace | phase=%s delta_ms=%d total_ms=%d"
+		% [name, now - _startup_trace_last_ms, now - _startup_trace_start_ms]
+	)
+	_startup_trace_last_ms = now
+
+
+func _startup_trace_finish(path: String) -> void:
+	if not _startup_trace_enabled:
+		return
+	var now := Time.get_ticks_msec()
+	_startup_trace_counters["netsh"] = (
+		McpWindowsPortReservation.netsh_query_count() - _startup_trace_netsh_start_count
+	)
+	print(
+		"MCP startup trace | done path=%s total_ms=%d counters=%s"
+		% [path, now - _startup_trace_start_ms, str(_startup_trace_counters)]
+	)
+
+
 func _start_server() -> void:
 	## Branch on port state + EditorSettings record. The record lets a
 	## later editor session recognize and manage a server it didn't spawn
@@ -506,6 +578,7 @@ func _start_server() -> void:
 		## Guard against re-entrant spawns (e.g. plugin reload during update).
 		## The static flag persists across disable/enable cycles within the
 		## same editor session, preventing cascading server process creation.
+		_startup_path = "guarded"
 		return
 
 	_refresh_retried = false
@@ -565,6 +638,7 @@ func _start_server() -> void:
 			var owner := _find_managed_pid(port)
 			var owner_label := _adopt_compatible_server(record_version, current_version, owner)
 			_server_started_this_session = true
+			_startup_path = "adopted"
 			print(_compatible_adoption_log_message(
 				owner_label,
 				_server_pid,
@@ -584,6 +658,7 @@ func _start_server() -> void:
 			if not _recover_strong_port_occupant(port, 3.0):
 				_server_started_this_session = true
 				_set_incompatible_server(_probe_live_server_status_for_port(port), current_version, port)
+				_startup_path = "incompatible"
 				push_warning(_server_status_message)
 				return
 			## Fall through to spawn.
@@ -596,16 +671,21 @@ func _start_server() -> void:
 				## clients to an incompatible HTTP/MCP tool surface.
 				_server_started_this_session = true
 				_set_incompatible_server(live, current_version, port)
+				_startup_path = "incompatible"
 				push_warning(_server_status_message)
 				return
 			## Fall through to spawn.
+	else:
+		_startup_path = "free"
 
 	_set_resolved_ws_port(_resolve_ws_port())
 	ws_port = _resolved_ws_port
 
+	_startup_trace_count("server_command_discovery")
 	var server_cmd := McpClientConfigurator.get_server_command()
 	if server_cmd.is_empty():
 		_set_spawn_state(McpSpawnState.NO_COMMAND)
+		_startup_path = "no_command"
 		push_warning("MCP | could not find server command")
 		return
 
@@ -627,6 +707,7 @@ func _start_server() -> void:
 	if McpWindowsPortReservation.is_port_excluded(port):
 		_server_started_this_session = true
 		_set_spawn_state(McpSpawnState.PORT_EXCLUDED)
+		_startup_path = "reserved"
 		push_warning("MCP | port %d is reserved by Windows (Hyper-V / WSL2 / Docker)" % port)
 		return
 
@@ -653,10 +734,12 @@ func _start_server() -> void:
 		## editor start, _start_server's adopt branch self-heals the PID
 		## to the actual port owner (uvx's child).
 		_write_managed_server_record(_server_pid, current_version)
+		_startup_path = "spawned"
 		print("MCP | started server (PID %d, v%s): %s %s" % [_server_pid, current_version, cmd, " ".join(args)])
 		_start_server_watch()
 	else:
 		_set_spawn_state(McpSpawnState.CRASHED)
+		_startup_path = "crashed"
 		push_warning("MCP | failed to start server")
 
 
@@ -803,6 +886,7 @@ static func _probe_live_server_status(port: int, timeout_ms: int = SERVER_STATUS
 
 
 func _probe_live_server_status_for_port(port: int) -> Dictionary:
+	_startup_trace_count("http_status_probe")
 	return _probe_live_server_status(port)
 
 
@@ -1056,6 +1140,7 @@ static func _retry_with_refresh_allowed(already_retried: bool, launch_mode: Stri
 ## launcher PID is disposable — what matters is the Python child, which
 ## writes its own pid-file if it gets that far).
 func _respawn_with_refresh() -> void:
+	_startup_trace_count("server_command_discovery")
 	var server_cmd := McpClientConfigurator.get_server_command(true)
 	if server_cmd.is_empty():
 		## Can't happen in practice — we only reach here after a successful
@@ -1167,15 +1252,26 @@ static func _resolve_ws_port_from_output(
 	)
 
 
+static func _can_bind_local_port(port: int) -> bool:
+	var server := TCPServer.new()
+	var err := server.listen(port, "127.0.0.1")
+	if err == OK:
+		server.stop()
+		return true
+	return false
+
+
 func _is_port_in_use(port: int) -> bool:
+	if _can_bind_local_port(port):
+		return false
 	var output: Array = []
 	if OS.get_name() == "Windows":
-		if not _find_listener_pids_windows(port).is_empty():
-			return true
+		_startup_trace_count("netstat")
 		var exit_code := OS.execute("netstat", ["-ano"], output, true)
 		if exit_code == 0 and output.size() > 0:
 			return _parse_windows_netstat_listening(str(output[0]), port)
 	else:
+		_startup_trace_count("lsof")
 		var exit_code := OS.execute("lsof", ["-ti:%d" % port, "-sTCP:LISTEN"], output, true)
 		return exit_code == 0 and output.size() > 0 and not output[0].strip_edges().is_empty()
 	return false
@@ -1195,18 +1291,21 @@ func _is_port_in_use(port: int) -> bool:
 func _find_pid_on_port(port: int) -> int:
 	var output: Array = []
 	if OS.get_name() == "Windows":
-		var listener_pids := _find_listener_pids_windows(port)
-		if not listener_pids.is_empty():
-			return listener_pids[0]
+		_startup_trace_count("netstat")
 		var exit_code := OS.execute("netstat", ["-ano"], output, true)
-		if exit_code != 0 or output.is_empty():
-			return 0
-		return _parse_windows_netstat_pid(str(output[0]), port)
+		if exit_code == 0 and not output.is_empty():
+			var netstat_pid := _parse_windows_netstat_pid(str(output[0]), port)
+			if netstat_pid > 0:
+				return netstat_pid
+		_startup_trace_count("powershell")
+		var listener_pids := _find_listener_pids_windows(port)
+		return listener_pids[0] if not listener_pids.is_empty() else 0
 	## POSIX: `lsof -ti:<port> -sTCP:LISTEN` returns only the PID, but can
 	## emit multiple (newline-separated) — e.g. a `uvicorn --reload` dev
 	## server has both a reloader parent and a worker child bound to the
 	## same port. Return the first valid pid so the kill path at least hits
 	## SOMEONE; `_find_all_pids_on_port` covers the full-sweep kill case.
+	_startup_trace_count("lsof")
 	var exit_code := OS.execute("lsof", ["-ti:%d" % port, "-sTCP:LISTEN"], output, true)
 	if exit_code != 0 or output.is_empty():
 		return 0
@@ -1221,16 +1320,17 @@ func _find_pid_on_port(port: int) -> int:
 ## listener rows for the same port, so collect every matching row there too.
 func _find_all_pids_on_port(port: int) -> Array[int]:
 	if OS.get_name() == "Windows":
-		var listener_pids := _find_listener_pids_windows(port)
-		if not listener_pids.is_empty():
-			return listener_pids
 		var output: Array = []
+		_startup_trace_count("netstat")
 		var exit_code := OS.execute("netstat", ["-ano"], output, true)
-		if exit_code != 0 or output.is_empty():
-			var empty: Array[int] = []
-			return empty
-		return _parse_windows_netstat_pids(str(output[0]), port)
+		if exit_code == 0 and not output.is_empty():
+			var netstat_pids := _parse_windows_netstat_pids(str(output[0]), port)
+			if not netstat_pids.is_empty():
+				return netstat_pids
+		_startup_trace_count("powershell")
+		return _find_listener_pids_windows(port)
 	var output: Array = []
+	_startup_trace_count("lsof")
 	var exit_code := OS.execute("lsof", ["-ti:%d" % port, "-sTCP:LISTEN"], output, true)
 	if exit_code != 0 or output.is_empty():
 		var empty: Array[int] = []
@@ -1624,6 +1724,7 @@ func _windows_pid_commandline(pid: int) -> String:
 		"Get-CimInstance Win32_Process -Filter 'ProcessId = %d' | "
 		+ "Select-Object -ExpandProperty CommandLine"
 	) % pid
+	_startup_trace_count("powershell")
 	var exit_code := _execute_windows_powershell(script, output)
 	if exit_code != 0 or output.is_empty():
 		return ""
@@ -2056,6 +2157,7 @@ func _find_windows_spawn_children(parent_pids: Array[int]) -> Array[int]:
 			+ "Where-Object { $_.CommandLine -like '*spawn_main(parent_pid=%d*' } | "
 			+ "ForEach-Object { $_.ProcessId }"
 		) % parent_pid
+		_startup_trace_count("powershell")
 		var exit_code := _execute_windows_powershell(script, output)
 		if exit_code != 0 or output.is_empty():
 			continue

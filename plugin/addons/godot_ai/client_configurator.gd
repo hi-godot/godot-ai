@@ -27,6 +27,8 @@ const DEFAULT_HTTP_PORT := 8000
 const DEFAULT_WS_PORT := 9500
 const SETTING_HTTP_PORT := "godot_ai/http_port"
 const SETTING_WS_PORT := "godot_ai/ws_port"
+const SETTING_STARTUP_TRACE := "godot_ai/log_startup_timing"
+const STARTUP_TRACE_ENV := "GODOT_AI_STARTUP_TRACE"
 const MIN_PORT := 1024
 const MAX_PORT := 65535
 
@@ -74,6 +76,7 @@ static func ensure_settings_registered() -> void:
 		return
 	_register_port_setting(es, SETTING_HTTP_PORT, DEFAULT_HTTP_PORT)
 	_register_port_setting(es, SETTING_WS_PORT, DEFAULT_WS_PORT)
+	_register_bool_setting(es, SETTING_STARTUP_TRACE, false)
 
 
 static func _register_port_setting(es: EditorSettings, key: String, default_port: int) -> void:
@@ -86,6 +89,27 @@ static func _register_port_setting(es: EditorSettings, key: String, default_port
 		"hint": PROPERTY_HINT_RANGE,
 		"hint_string": "%d,%d,1" % [MIN_PORT, MAX_PORT],
 	})
+
+
+static func _register_bool_setting(es: EditorSettings, key: String, default_value: bool) -> void:
+	if not es.has_setting(key):
+		es.set_setting(key, default_value)
+	es.set_initial_value(key, default_value, false)
+	es.add_property_info({
+		"name": key,
+		"type": TYPE_BOOL,
+	})
+
+
+static func startup_trace_enabled() -> bool:
+	var raw := OS.get_environment(STARTUP_TRACE_ENV).strip_edges().to_lower()
+	if raw == "1" or raw == "true" or raw == "yes" or raw == "on":
+		return true
+	if Engine.is_editor_hint():
+		var es := EditorInterface.get_editor_settings()
+		if es != null and es.has_setting(SETTING_STARTUP_TRACE):
+			return bool(es.get_setting(SETTING_STARTUP_TRACE))
+	return false
 
 
 ## Read the `godot_ai/excluded_domains` EditorSetting as a canonicalized
