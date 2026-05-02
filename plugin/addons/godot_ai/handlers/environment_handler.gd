@@ -8,10 +8,12 @@ extends RefCounted
 const ResourceHandler := preload("res://addons/godot_ai/handlers/resource_handler.gd")
 
 var _undo_redo: EditorUndoRedoManager
+var _connection: McpConnection
 
 
-func _init(undo_redo: EditorUndoRedoManager) -> void:
+func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null) -> void:
 	_undo_redo = undo_redo
+	_connection = connection
 
 
 const _PRESETS := {
@@ -152,4 +154,4 @@ func _assign_environment(env: Environment, sky: Sky, sky_material: ProceduralSky
 func _save_environment(env: Environment, _sky: Sky, _sky_material: ProceduralSkyMaterial, resource_path: String, overwrite: bool, preset: String) -> Dictionary:
 	return McpResourceIO.save_to_disk(env, resource_path, overwrite, "Environment", {
 		"preset": preset,
-	})
+	}, _connection)

@@ -48,9 +48,27 @@ static func validate_home(params: Dictionary, require_property: bool = true) -> 
 ## a `reason` key in `extra_fields` overrides the default — useful for
 ## tools that edit existing files rather than creating fresh ones.
 ##
+## `pause_target` should be the handler's `McpConnection`. When supplied,
+## `pause_processing` is flipped on around `ResourceSaver.save()` so the
+## dispatcher's WebSocket pump can't re-enter while Godot pumps
+## `Main::iteration()` for the resource-save's progress UI / script-class
+## update task. Without this guard a queued command landing during the
+## save can trigger another `save_to_disk` that tries to add the same
+## `update_scripts_classes` editor task — "Task already exists" → null
+## deref → SIGSEGV. Same family of bug as godotengine/godot#118545 and
+## the same mitigation as `SceneHandler`'s `save_scene*` wraps. See
+## issue #288.
+##
 ## Returns either an error dict or a {"data": {...}} success dict — ready
 ## for the handler to return directly.
-static func save_to_disk(res: Resource, resource_path: String, overwrite: bool, label: String, extra_fields: Dictionary = {}) -> Dictionary:
+static func save_to_disk(
+	res: Resource,
+	resource_path: String,
+	overwrite: bool,
+	label: String,
+	extra_fields: Dictionary = {},
+	pause_target: McpConnection = null,
+) -> Dictionary:
 	if not resource_path.begins_with("res://"):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "resource_path must start with res://")
 
@@ -69,7 +87,11 @@ static func save_to_disk(res: Resource, resource_path: String, overwrite: bool, 
 			"Failed to create directory %s: %s" % [dir_path, error_string(mkdir_err)]
 		)
 
+	if pause_target != null:
+		pause_target.pause_processing = true
 	var save_err := ResourceSaver.save(res, resource_path)
+	if pause_target != null:
+		pause_target.pause_processing = false
 	if save_err != OK:
 		return McpErrorCodes.make(
 			McpErrorCodes.INTERNAL_ERROR,
