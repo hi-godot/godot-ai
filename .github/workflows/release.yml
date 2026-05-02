@@ -94,7 +94,12 @@ jobs:
           cp -r plugin/addons/godot_ai staging/addons/
           cp LICENSE staging/
           cd staging
-          zip -r ../godot-ai-plugin.zip addons/ LICENSE
+          # `-D` strips zero-byte directory entries. The 2.2.x/2.3.0 self-
+          # update runner has an over-strict safety check that flags the
+          # bare `addons/godot_ai/` directory entry as unsafe and aborts
+          # the extract. Stripping directory entries lets those installs
+          # successfully self-update to a fixed runner.
+          zip -D -r ../godot-ai-plugin.zip addons/ LICENSE
 
       - name: Verify zip structure
         run: |

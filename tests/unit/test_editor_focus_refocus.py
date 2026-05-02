@@ -406,6 +406,18 @@ def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> Non
     assert "FileAccess.file_exists(target_path)" in manifest_block
     assert "zip is missing plugin.cfg" in manifest_block
     assert "zip is missing plugin.gd" in manifest_block
+    dir_skip = 'rel_path.is_empty() or file_path.ends_with("/")'
+    assert dir_skip in manifest_block
+    assert manifest_block.index(dir_skip) < manifest_block.index(
+        "_is_safe_zip_addon_file(file_path)"
+    ), (
+        "Skip zero-byte directory entries (rel_path empty or trailing slash) "
+        "BEFORE the _is_safe_zip_addon_file check. Zips without `zip -D` "
+        "(older release artifacts, AssetLib uploads, hand-built archives) "
+        "include a bare `addons/godot_ai/` directory entry; the safety "
+        "guard treats its empty rel_path as unsafe and aborts the extract, "
+        "breaking self-update for any user whose installed runner sees one."
+    )
 
     existing_block = runner_source.split("func _install_existing_files_and_scan() -> void:", 1)[
         1

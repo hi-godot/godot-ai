@@ -633,12 +633,22 @@ def subn_once(path: Path, text: str, pattern: str, replacement: str, label: str)
 
 
 def create_plugin_zip(vnext_addon: Path, zip_path: Path) -> None:
+    # Include zero-byte directory entries (the shape `zip -r` produces
+    # without `-D`, also typical of AssetLib uploads and hand-built
+    # archives). Current release.yml strips them via `zip -D`, but the
+    # smoke must still exercise the directory-entry path: that's what
+    # tripped the 2.2.x/2.3.0 install safety check, and the runner has
+    # to keep handling it correctly for older or manually built zips.
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("addons/", "")
+        zf.writestr("addons/godot_ai/", "")
         for path in sorted(vnext_addon.rglob("*")):
-            if path.is_dir():
-                continue
             rel = path.relative_to(vnext_addon)
-            zf.write(path, Path("addons") / "godot_ai" / rel)
+            arcname = (Path("addons") / "godot_ai" / rel).as_posix()
+            if path.is_dir():
+                zf.writestr(arcname + "/", "")
+            else:
+                zf.write(path, arcname)
 
 
 def diagnostic_reports_snapshot() -> set[Path]:

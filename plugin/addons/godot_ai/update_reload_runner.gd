@@ -121,13 +121,20 @@ func _read_update_manifest() -> bool:
 	for file_path in files:
 		if not file_path.begins_with(ZIP_ADDON_PREFIX):
 			continue
+		var rel_path := file_path.trim_prefix(ZIP_ADDON_PREFIX)
+		## Many zip builders (`zip -r` without `-D`, AssetLib uploads, hand-
+		## built archives) emit zero-byte directory entries like
+		## `addons/godot_ai/`. Skip those before the safety check; the
+		## empty-segment guard in `_is_safe_zip_addon_file` would otherwise
+		## flag the bare prefix as unsafe and abort the extract. Current
+		## release.yml passes `-D` to strip them, but installed runners must
+		## still tolerate older or manually built zips.
+		if rel_path.is_empty() or file_path.ends_with("/"):
+			continue
 		if not _is_safe_zip_addon_file(file_path):
 			print("MCP | update extract failed: unsafe zip path %s" % file_path)
 			reader.close()
 			return false
-		var rel_path := file_path.trim_prefix(ZIP_ADDON_PREFIX)
-		if rel_path.is_empty() or file_path.ends_with("/"):
-			continue
 		if rel_path == "plugin.cfg":
 			has_plugin_cfg = true
 		elif rel_path == "plugin.gd":
