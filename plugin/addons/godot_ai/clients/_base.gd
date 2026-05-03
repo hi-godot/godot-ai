@@ -180,3 +180,17 @@ static func resolve_uvx_path() -> String:
 ## Callers splice this into the client-specific command shape.
 static func mcp_proxy_bridge_args(url: String) -> Array:
 	return ["mcp-proxy==" + MCP_PROXY_VERSION, "--transport", "streamablehttp", url]
+
+
+## Environment overrides written alongside every auto-configured uvx-bridge
+## entry. `UV_LINK_MODE=copy` tells uv to copy shared C extensions into each
+## `builds-v0\.tmpXXXXXX\` build venv instead of hard-linking them from
+## `archive-v0\`. On Windows that breaks the lock race documented in
+## `utils/uv_cache_cleanup.gd` and the README — the running godot-ai server
+## holds `_pydantic_core.pyd` mapped, the build venv's hard-linked copy
+## inherits the lock, uv's post-install cleanup fails, and the MCP launcher
+## reports "pywin32 wheel invalid / file in use" with no working transport.
+## Cost on macOS/Linux is a few extra MB in the uvx cache — well worth it
+## to keep one config shape across platforms.
+static func bridge_env_for_uvx() -> Dictionary:
+	return {"UV_LINK_MODE": "copy"}
