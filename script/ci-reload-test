@@ -203,11 +203,15 @@ done
 # cleanup. Running the suite here exercises that exact path on top of
 # all the accumulated reload state.
 #
-# Exclude the Camera2D current/undo timing assertion here only. It remains in
+# Exclude Camera2D current-state timing assertions here only. They remain in
 # the normal handler test pass above; reload smoke is guarding reload churn and
 # cleanup survivability, not synchronous viewport-current timing after undo.
+# Both excluded tests pass green in `Run handler tests` but flake on Windows
+# in the post-reload-churn re-run (refs #278 / PR #296). The comma-separated
+# form is parsed by `McpTestRunner._parse_exclusions` — see
+# `plugin/addons/godot_ai/testing/test_runner.gd`.
 echo "Running GDScript test suite on reloaded plugin..."
-TESTS_RESULT=$(mcp_call_or_die "test_run post-churn" test_run '{"verbose":false,"exclude_test_name":"test_configure_current_sibling_unmark_single_undo"}')
+TESTS_RESULT=$(mcp_call_or_die "test_run post-churn" test_run '{"verbose":false,"exclude_test_name":"test_configure_current_sibling_unmark_single_undo,test_get_returns_current_when_path_empty"}')
 echo "$TESTS_RESULT" | python3 -c "
 import json, sys
 content = json.loads(sys.stdin.read())
