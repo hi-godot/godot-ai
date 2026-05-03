@@ -16,6 +16,16 @@ const POST_ENABLE_FREE_FRAMES := 8
 const INSTALL_BASE_PATH := "res://"
 const ZIP_ADDON_PREFIX := "addons/godot_ai/"
 const TEMP_FILE_SUFFIX := ".godot_ai_update_tmp"
+const INSTALL_BACKUP_SUFFIX := ".update_backup"
+
+## Outcome of `_install_zip_paths`. `OK` means all listed files were replaced.
+## `FAILED_CLEAN` means a write/rename failed mid-batch but every previously
+## written file was rolled back to its vN content (or removed, if the file
+## was new in vN+1). `FAILED_MIXED` means rollback itself failed: the addons
+## tree contains a mix of vN and vN+1 files. The runner MUST NOT re-enable
+## the plugin in the MIXED case — see issue #297 finding #9 for the data-loss
+## scenario this guards against.
+enum InstallStatus { OK, FAILED_CLEAN, FAILED_MIXED }
 
 var _zip_path := ""
 var _temp_dir := ""
@@ -29,6 +39,12 @@ var _scan_next_step := ""
 ## and typed Variant storage is part of the hot-reload crash class.
 var _new_file_paths = []
 var _existing_file_paths = []
+## Per-file install records accumulated across batches so a failure in the
+## second batch can roll back files already replaced in the first batch.
+## Each entry is an untyped Dictionary with target_path / backup_path /
+## had_original keys. Cleared by `_finalize_install_success` on full success
+## and by `_rollback_paths_written` on failure.
+var _paths_written = []
 
 
 func start(zip_path: String, temp_dir: String, detached_dock) -> void:
@@ -75,9 +91,9 @@ func _extract_and_scan() -> void:
 		_wait_frames(POST_ENABLE_FREE_FRAMES, "_cleanup_and_finish")
 		return
 
-	if not _install_zip_paths(_new_file_paths):
-		EditorInterface.set_plugin_enabled(PLUGIN_CFG_PATH, true)
-		_wait_frames(POST_ENABLE_FREE_FRAMES, "_cleanup_and_finish")
+	var status := _install_zip_paths(_new_file_paths)
+	if status != InstallStatus.OK:
+		_handle_install_failure(status)
 		return
 
 	if _new_file_paths.is_empty():
@@ -155,13 +171,40 @@ func _read_update_manifest() -> bool:
 
 
 func _install_existing_files_and_scan() -> void:
-	if not _install_zip_paths(_existing_file_paths):
-		EditorInterface.set_plugin_enabled(PLUGIN_CFG_PATH, true)
-		_wait_frames(POST_ENABLE_FREE_FRAMES, "_cleanup_and_finish")
+	var status := _install_zip_paths(_existing_file_paths)
+	if status != InstallStatus.OK:
+		_handle_install_failure(status)
 		return
 
+	_finalize_install_success()
 	_cleanup_update_temp()
 	_start_filesystem_scan("_enable_new_plugin")
+
+
+func _handle_install_failure(status: int) -> void:
+	if status == InstallStatus.FAILED_MIXED:
+		## Half-installed addon tree on disk: re-enabling the plugin would
+		## load a mix of vN and vN+1 files. Print a load-bearing diagnostic
+		## and bail without re-enabling — user must restore manually. See
+		## issue #297 finding #9 for the data-loss scenario.
+		push_error(
+			"MCP | self-update failed mid-install AND rollback could not"
+			+ " restore the previous addons/godot_ai/ contents. The plugin"
+			+ " is left disabled. Inspect addons/godot_ai/ for"
+			+ " *.update_backup / *.godot_ai_update_tmp files and restore"
+			+ " manually before re-enabling the plugin."
+		)
+		print(
+			"MCP | self-update aborted: addons/godot_ai/ is in a mixed state;"
+			+ " plugin left disabled (manual intervention required)."
+		)
+		_wait_frames(POST_ENABLE_FREE_FRAMES, "_cleanup_and_finish")
+		return
+	## FAILED_CLEAN: rollback restored every previously-written file. Safe
+	## to re-enable the previous plugin version.
+	print("MCP | self-update rolled back; re-enabling previous plugin version")
+	EditorInterface.set_plugin_enabled(PLUGIN_CFG_PATH, true)
+	_wait_frames(POST_ENABLE_FREE_FRAMES, "_cleanup_and_finish")
 
 
 func _is_safe_zip_addon_file(file_path: String) -> bool:
@@ -178,31 +221,37 @@ func _is_safe_zip_addon_file(file_path: String) -> bool:
 	return true
 
 
-func _install_zip_paths(paths: Array) -> bool:
+func _install_zip_paths(paths: Array) -> int:
 	if paths.is_empty():
-		return true
+		return InstallStatus.OK
 
 	var zip_path := ProjectSettings.globalize_path(_zip_path)
 	var reader := ZIPReader.new()
 	if reader.open(zip_path) != OK:
 		print("MCP | update extract failed: could not reopen %s" % zip_path)
-		return false
+		## Nothing in this batch was written, but a previous batch may have
+		## left files on disk; roll those back too.
+		return _rollback_paths_written()
 
-	for file_path in paths:
-		if not _install_zip_file(reader, String(file_path)):
-			reader.close()
-			return false
-	reader.close()
-	return true
-
-
-func _install_zip_file(reader: ZIPReader, file_path: String) -> bool:
 	var install_base := ProjectSettings.globalize_path(INSTALL_BASE_PATH)
+	for file_path in paths:
+		var record := _install_zip_file(reader, String(file_path), install_base)
+		if record.is_empty():
+			reader.close()
+			return _rollback_paths_written()
+		_paths_written.append(record)
+	reader.close()
+	return InstallStatus.OK
+
+
+func _install_zip_file(
+	reader: ZIPReader, file_path: String, install_base: String
+) -> Dictionary:
 	var target_path := install_base.path_join(file_path)
 	var dir := target_path.get_base_dir()
 	if DirAccess.make_dir_recursive_absolute(dir) != OK:
 		print("MCP | update extract failed: could not create %s" % dir)
-		return false
+		return {}
 
 	var temp_path := target_path + TEMP_FILE_SUFFIX
 	DirAccess.remove_absolute(temp_path)
@@ -213,7 +262,7 @@ func _install_zip_file(reader: ZIPReader, file_path: String) -> bool:
 			temp_path,
 			FileAccess.get_open_error(),
 		])
-		return false
+		return {}
 	f.store_buffer(content)
 	var write_error := f.get_error()
 	f.close()
@@ -223,7 +272,20 @@ func _install_zip_file(reader: ZIPReader, file_path: String) -> bool:
 			temp_path,
 		])
 		DirAccess.remove_absolute(temp_path)
-		return false
+		return {}
+
+	## Back up the original via COPY (not rename) so the source of truth
+	## stays in place if a later step fails. Rolled back via
+	## `_rollback_paths_written` if a subsequent file in this batch — or a
+	## later batch — can't be installed.
+	var had_original := FileAccess.file_exists(target_path)
+	var backup_path := target_path + INSTALL_BACKUP_SUFFIX
+	if had_original:
+		DirAccess.remove_absolute(backup_path)
+		if DirAccess.copy_absolute(target_path, backup_path) != OK:
+			DirAccess.remove_absolute(temp_path)
+			print("MCP | update extract failed: could not back up %s" % target_path)
+			return {}
 
 	if DirAccess.rename_absolute(temp_path, target_path) != OK:
 		## POSIX and APFS replace atomically. Some filesystems reject
@@ -232,9 +294,67 @@ func _install_zip_file(reader: ZIPReader, file_path: String) -> bool:
 		DirAccess.remove_absolute(target_path)
 		if DirAccess.rename_absolute(temp_path, target_path) != OK:
 			DirAccess.remove_absolute(temp_path)
+			## Target was removed above; restore from the COPY backup so the
+			## addons dir is left in its vN state before we surface failure.
+			if had_original and FileAccess.file_exists(backup_path):
+				DirAccess.copy_absolute(backup_path, target_path)
+				DirAccess.remove_absolute(backup_path)
 			print("MCP | update extract failed: could not replace %s" % target_path)
-			return false
-	return true
+			return {}
+	return {
+		"target_path": target_path,
+		"backup_path": backup_path,
+		"had_original": had_original,
+	}
+
+
+## Restore (or remove) every file already touched in this update. Safe to
+## call after a partial install — entries are processed in reverse so a
+## given target is restored before the next earlier write of the same path
+## could resurrect a stale value. Returns FAILED_CLEAN if every entry was
+## restored, FAILED_MIXED if any restore step failed (the caller MUST NOT
+## re-enable the plugin in the MIXED case).
+func _rollback_paths_written() -> int:
+	var any_failed := false
+	var i := _paths_written.size() - 1
+	while i >= 0:
+		var record = _paths_written[i]
+		var target := String(record.get("target_path", ""))
+		var backup := String(record.get("backup_path", ""))
+		var had_original := bool(record.get("had_original", false))
+		if had_original:
+			if not FileAccess.file_exists(backup):
+				print("MCP | update rollback failed: backup missing for %s" % target)
+				any_failed = true
+			else:
+				DirAccess.remove_absolute(target)
+				if DirAccess.copy_absolute(backup, target) != OK:
+					print("MCP | update rollback failed: could not restore %s" % target)
+					any_failed = true
+				else:
+					DirAccess.remove_absolute(backup)
+		else:
+			if FileAccess.file_exists(target):
+				if DirAccess.remove_absolute(target) != OK:
+					print(
+						"MCP | update rollback failed: could not delete %s" % target
+					)
+					any_failed = true
+		i -= 1
+	_paths_written.clear()
+	if any_failed:
+		return InstallStatus.FAILED_MIXED
+	return InstallStatus.FAILED_CLEAN
+
+
+## Discard accumulated backups after both install batches succeed. Backups
+## are best-effort: a failure here doesn't compromise the new install, just
+## leaves stray *.update_backup files for the user to clean up.
+func _finalize_install_success() -> void:
+	for record in _paths_written:
+		if record.get("had_original", false):
+			DirAccess.remove_absolute(String(record.get("backup_path", "")))
+	_paths_written.clear()
 
 
 func _cleanup_update_temp() -> void:
