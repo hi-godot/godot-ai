@@ -21,13 +21,6 @@ func suite_name() -> String:
 
 
 func suite_setup(_ctx: Dictionary) -> void:
-	if OS.get_name() == "Windows":
-		## Bisecting a Windows CI failure on PR #299. Source-pin tests in
-		## test_audit_data_loss_safeguards.py lock the rollback contract on
-		## every platform. Re-enable this suite on Windows once the failing
-		## test is identified — see PR #299 discussion.
-		skip_suite("temporarily skipped on Windows pending CI bisect (#299)")
-		return
 	_scratch_dir = OS.get_user_data_dir().path_join("mcp_update_reload_runner_tests")
 	_clean_scratch_dir()
 	DirAccess.make_dir_recursive_absolute(_scratch_dir)
