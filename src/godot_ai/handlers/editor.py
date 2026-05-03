@@ -16,6 +16,8 @@ from godot_ai.tools._pagination import paginate
 
 logger = logging.getLogger(__name__)
 
+SCREENSHOT_TIMEOUT_SEC = 35.0
+
 
 async def editor_state(runtime: Runtime) -> dict:
     """Read live editor state and self-heal the session readiness cache.
@@ -69,7 +71,11 @@ async def editor_screenshot(
     if fov is not None:
         params["fov"] = fov
 
-    result = await runtime.send_command("take_screenshot", params, timeout=15.0)
+    result = await runtime.send_command(
+        "take_screenshot",
+        params,
+        timeout=SCREENSHOT_TIMEOUT_SEC,
+    )
 
     # --- Coverage response: multiple images ---
     if result.get("coverage") and "images" in result:

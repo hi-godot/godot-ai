@@ -2863,6 +2863,14 @@ async def test_editor_screenshot_handler_passes_source():
     assert client.calls[-1]["params"]["source"] == "game"
 
 
+async def test_editor_screenshot_timeout_exceeds_plugin_deferred_timeout():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await editor_handlers.editor_screenshot(runtime, source="game", include_image=False)
+    assert client.calls[-1]["timeout"] == editor_handlers.SCREENSHOT_TIMEOUT_SEC
+    assert client.calls[-1]["timeout"] > 30.0
+
+
 async def test_editor_screenshot_handler_passes_max_resolution():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)

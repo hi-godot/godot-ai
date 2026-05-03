@@ -237,6 +237,33 @@ class TestErrors:
 
         await plugin.close()
 
+    async def test_deferred_timeout_error_reaches_client(self, harness):
+        plugin = await harness.connect_plugin()
+        client = GodotClient(harness.server, harness.registry)
+
+        async def mock_handler():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "deferred_never_replies"
+            await asyncio.sleep(0.05)
+            await plugin.send_error(
+                cmd["request_id"],
+                "DEFERRED_TIMEOUT",
+                "Deferred response for 'deferred_never_replies' timed out after 50ms",
+                data={
+                    "command": "deferred_never_replies",
+                    "timeout_ms": 50,
+                },
+            )
+
+        handler_task = asyncio.create_task(mock_handler())
+        with pytest.raises(GodotCommandError) as exc_info:
+            await client.send("deferred_never_replies", timeout=1.0)
+        await handler_task
+
+        assert exc_info.value.code == "DEFERRED_TIMEOUT"
+        assert exc_info.value.data["command"] == "deferred_never_replies"
+        await plugin.close()
+
 
 # ---------------------------------------------------------------------------
 # Events
