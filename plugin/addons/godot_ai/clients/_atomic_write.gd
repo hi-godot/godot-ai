@@ -51,8 +51,13 @@ static func write(path: String, content: String) -> bool:
 
 	# Copy didn't land cleanly. Restore the destination to its pre-call state.
 	if backup_made:
-		# Restore the snapshot we took before the swap.
-		DirAccess.remove_absolute(path)
+		# Restore the snapshot we took before the swap. `copy_absolute`
+		# overwrites the destination, so we don't pre-remove `path` — the
+		# pre-remove created a window where `path` was gone if the
+		# subsequent copy itself failed. If the restore copy fails now the
+		# user's prior bytes are still in `.backup` for manual recovery
+		# and the false return value tells the caller the swap didn't
+		# complete.
 		DirAccess.copy_absolute(backup_path, path)
 	elif not had_original and FileAccess.file_exists(path):
 		# No prior file existed but copy_absolute landed partial bytes at

@@ -45,6 +45,14 @@ var _existing_file_paths = []
 ## had_original keys. Cleared by `_finalize_install_success` on full success
 ## and by `_rollback_paths_written` on failure.
 var _paths_written = []
+## Set true if `_install_zip_file`'s inner restore-from-backup couldn't
+## complete (backup gone, copy failed). The failed file is NOT recorded in
+## `_paths_written` because the function bails at that point — without this
+## flag, `_rollback_paths_written` would walk only the prior records, all
+## restore cleanly, and report FAILED_CLEAN even though the current target
+## is missing or stale on disk. Surfaces FAILED_MIXED so the runner refuses
+## to re-enable the plugin against a half-installed tree.
+var _restore_failed := false
 
 
 func start(zip_path: String, temp_dir: String, detached_dock) -> void:
@@ -296,9 +304,22 @@ func _install_zip_file(
 			DirAccess.remove_absolute(temp_path)
 			## Target was removed above; restore from the COPY backup so the
 			## addons dir is left in its vN state before we surface failure.
-			if had_original and FileAccess.file_exists(backup_path):
-				DirAccess.copy_absolute(backup_path, target_path)
-				DirAccess.remove_absolute(backup_path)
+			## Only delete the backup if the restore copy actually succeeded
+			## — if it didn't, target_path is missing, and `_restore_failed`
+			## tells `_rollback_paths_written` to surface FAILED_MIXED so the
+			## runner refuses to re-enable the plugin. Leaving the backup on
+			## disk also gives the user a manual recovery path. Without this
+			## guard the failed file isn't tracked anywhere (we return `{}`,
+			## not appended to `_paths_written`) and the caller would
+			## erroneously see FAILED_CLEAN.
+			if had_original:
+				if (
+					FileAccess.file_exists(backup_path)
+					and DirAccess.copy_absolute(backup_path, target_path) == OK
+				):
+					DirAccess.remove_absolute(backup_path)
+				else:
+					_restore_failed = true
 			print("MCP | update extract failed: could not replace %s" % target_path)
 			return {}
 	return {
@@ -312,8 +333,9 @@ func _install_zip_file(
 ## call after a partial install — entries are processed in reverse so a
 ## given target is restored before the next earlier write of the same path
 ## could resurrect a stale value. Returns FAILED_CLEAN if every entry was
-## restored, FAILED_MIXED if any restore step failed (the caller MUST NOT
-## re-enable the plugin in the MIXED case).
+## restored AND no in-flight `_install_zip_file` left a target stranded
+## (`_restore_failed`); FAILED_MIXED otherwise. The caller MUST NOT
+## re-enable the plugin in the MIXED case.
 func _rollback_paths_written() -> int:
 	var any_failed := false
 	var i := _paths_written.size() - 1
@@ -342,7 +364,7 @@ func _rollback_paths_written() -> int:
 					any_failed = true
 		i -= 1
 	_paths_written.clear()
-	if any_failed:
+	if any_failed or _restore_failed:
 		return InstallStatus.FAILED_MIXED
 	return InstallStatus.FAILED_CLEAN
 

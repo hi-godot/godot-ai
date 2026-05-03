@@ -129,6 +129,46 @@ def test_rollback_returns_failed_mixed_when_any_restore_fails() -> None:
     assert "i -= 1" in rollback_block
 
 
+def test_inner_install_restore_failure_surfaces_failed_mixed() -> None:
+    """PR review (#299): when `_install_zip_file`'s inner restore-from-backup
+    can't complete, the failed target is missing on disk and never recorded
+    in `_paths_written`. Without a separate flag, rollback would walk only
+    the prior (cleanly-restored) records and report FAILED_CLEAN — the
+    exact mixed-tree scenario the PR is meant to prevent. Pin the flag,
+    its conditional set in `_install_zip_file`, and its consumption in
+    `_rollback_paths_written`."""
+
+    source = RUNNER_PATH.read_text()
+    # Member declaration with the protective comment.
+    assert "var _restore_failed := false" in source
+
+    # `_install_zip_file` must only delete the backup when the restore
+    # copy actually succeeded. The pattern is: a guarded copy_absolute
+    # call whose return is checked, and an `else: _restore_failed = true`.
+    install_block = get_func_block(source, "func _install_zip_file(")
+    assert (
+        "DirAccess.copy_absolute(backup_path, target_path) == OK" in install_block
+    ), (
+        "Inner restore must check the copy result before treating the "
+        "restore as complete. Without this check, a failed copy followed "
+        "by an unconditional backup delete strands the file and produces "
+        "a FAILED_CLEAN false positive."
+    )
+    assert "_restore_failed = true" in install_block, (
+        "On inner-restore failure the flag must be set so "
+        "`_rollback_paths_written` surfaces FAILED_MIXED instead of "
+        "FAILED_CLEAN."
+    )
+
+    # `_rollback_paths_written` must consult the flag on its way out.
+    rollback_block = get_func_block(source, "func _rollback_paths_written(")
+    assert "_restore_failed" in rollback_block, (
+        "Rollback must consult `_restore_failed` so an inner-restore loss "
+        "surfaces as FAILED_MIXED even when every recorded entry rolls "
+        "back cleanly."
+    )
+
+
 def test_handle_install_failure_refuses_to_reenable_on_mixed_state() -> None:
     source = RUNNER_PATH.read_text()
     handler_block = get_func_block(source, "func _handle_install_failure(")
@@ -223,6 +263,35 @@ def test_atomic_write_restores_from_backup_when_swap_fails() -> None:
         "snapshot. Without this restore step, a partially-written copy can "
         "leave the user's config in a half-state."
     )
+
+
+def test_atomic_write_restore_does_not_remove_path_before_copy() -> None:
+    """PR review (#299): the restore branch used to do
+    `remove_absolute(path)` then `copy_absolute(backup, path)`. If the
+    copy failed, `path` was gone — the user's config was in `.backup`
+    only. `copy_absolute` overwrites by default, so the pre-remove was
+    unnecessary AND introduced a window where `path` could disappear."""
+
+    source = ATOMIC_WRITE_PATH.read_text()
+    write_block = get_func_block(source, "static func write(")
+
+    # Locate the `if backup_made:` branch and assert it does NOT contain
+    # a `remove_absolute(path)` call before `copy_absolute(backup_path, path)`.
+    backup_branch_idx = write_block.find("if backup_made:")
+    assert backup_branch_idx != -1
+    next_elif_idx = write_block.find("elif", backup_branch_idx)
+    backup_branch = write_block[backup_branch_idx:next_elif_idx]
+
+    copy_idx = backup_branch.find("DirAccess.copy_absolute(backup_path, path)")
+    remove_idx = backup_branch.find("DirAccess.remove_absolute(path)")
+    assert copy_idx != -1, "restore copy must remain in the backup_made branch"
+    if remove_idx != -1:
+        assert remove_idx > copy_idx, (
+            "The restore branch must not call `remove_absolute(path)` BEFORE "
+            "`copy_absolute(backup_path, path)`. `copy_absolute` overwrites "
+            "the destination on its own; the pre-remove only opens a window "
+            "where `path` is gone if the copy itself fails."
+        )
 
 
 def test_atomic_write_size_verification_uses_utf8_byte_count() -> None:

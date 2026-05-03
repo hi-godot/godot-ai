@@ -165,6 +165,44 @@ func test_rollback_returns_failed_mixed_when_backup_is_missing() -> void:
 	runner.free()
 
 
+func test_rollback_surfaces_failed_mixed_when_restore_failed_flag_is_set() -> void:
+	## Regression for the audit-stack PR review: `_install_zip_file`'s inner
+	## restore-from-backup may fail (backup gone, copy errored) AFTER the
+	## function has removed the original target. The failed file is NOT
+	## appended to `_paths_written`, so without `_restore_failed` the
+	## rollback would walk only the prior records, all restore cleanly,
+	## and report FAILED_CLEAN — the exact mixed-tree scenario PR 2 is
+	## meant to prevent. Pin that the flag forces FAILED_MIXED even when
+	## every recorded entry rolls back successfully.
+	var runner = _new_runner()
+	# Pre-condition: a record that on its own would rollback cleanly.
+	var target := _scratch_dir.path_join("addons/godot_ai/clean_record.gd")
+	_make_file(target, "vN_clean_record")
+	var backup := target + UpdateReloadRunner.INSTALL_BACKUP_SUFFIX
+	assert_eq(DirAccess.copy_absolute(target, backup), OK)
+	_make_file(target, "vN+1_clean_record")
+	runner._paths_written.append({
+		"target_path": target,
+		"backup_path": backup,
+		"had_original": true,
+	})
+	# Inner-restore failure flag set (mimics _install_zip_file having lost a
+	# different file's restore on its way to returning {}).
+	runner._restore_failed = true
+
+	var status: int = runner._rollback_paths_written()
+
+	assert_eq(
+		status,
+		UpdateReloadRunner.InstallStatus.FAILED_MIXED,
+		"_restore_failed must force FAILED_MIXED even if all records roll back",
+	)
+	# The recorded entry still rolled back to its vN content; the flag is
+	# about the OTHER (unrecorded) file the inner restore lost.
+	assert_eq(_read_file(target), "vN_clean_record")
+	runner.free()
+
+
 func test_rollback_processes_records_in_reverse_order() -> void:
 	## When two records target the same path, processing them in install
 	## order would let an earlier "restore" undo a later "restore." Walk
