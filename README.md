@@ -202,11 +202,12 @@ The shape `client_configure` writes for Claude Desktop is now:
 ```
 
 If you've already hit the lock on an older config, click **Configure**
-on Claude Desktop in the godot-ai dock to rewrite the entry, then quit
-and reopen Claude Desktop. If the lock persists (rare — pre-existing
-orphans the cache sweeper couldn't reach), kill stray `python.exe`
-children whose command line contains `spawn_main(parent_pid=...)` and
-delete `%LOCALAPPDATA%\uv\cache\builds-v0\.tmp*` manually before retrying.
+on the affected uvx-bridge client (Claude Desktop *or* Zed) in the
+godot-ai dock to rewrite the entry with the env pin, then quit and
+reopen that client. If the lock persists (rare — pre-existing orphans
+the cache sweeper couldn't reach), kill stray `python.exe` children
+whose command line contains `spawn_main(parent_pid=...)` and delete
+`%LOCALAPPDATA%\uv\cache\builds-v0\.tmp*` manually before retrying.
 
 </details>
 

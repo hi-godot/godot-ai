@@ -79,7 +79,7 @@ static func build_entry(client: McpClient, server_url: String, existing: Variant
 			return {
 				"command": McpClient.resolve_uvx_path(),
 				"args": McpClient.mcp_proxy_bridge_args(server_url),
-				"env": McpClient.bridge_env_for_uvx(),
+				"env": _merge_bridge_env(existing),
 			}
 		McpClient.UvxBridge.NESTED:
 			return {
@@ -87,7 +87,7 @@ static func build_entry(client: McpClient, server_url: String, existing: Variant
 					"path": McpClient.resolve_uvx_path(),
 					"args": McpClient.mcp_proxy_bridge_args(server_url),
 				},
-				"env": McpClient.bridge_env_for_uvx(),
+				"env": _merge_bridge_env(existing),
 				"settings": {},
 			}
 	var entry: Dictionary = (existing as Dictionary).duplicate() if existing is Dictionary else {}
@@ -115,19 +115,19 @@ static func verify_entry(client: McpClient, entry: Dictionary, server_url: Strin
 			if entry.get(client.entry_url_field, "") == server_url:
 				return true
 			var cmd = entry.get("command", "")
-			if not (cmd is String):
+			if not (cmd is String and _command_is_uvx_like(cmd as String)):
 				return false
-			var uvx_like := (cmd as String).get_file() == "uvx" or (cmd as String).get_file() == "uvx.exe"
-			var args = entry.get("args", [])
-			if not (uvx_like and args is Array and args.has(server_url)):
+			if not _bridge_args_are_valid(entry.get("args", []), server_url):
 				return false
 			return _bridge_env_matches(entry)
 		McpClient.UvxBridge.NESTED:
 			var cmd_obj = entry.get("command", {})
 			if not (cmd_obj is Dictionary):
 				return false
-			var nargs = cmd_obj.get("args", [])
-			if not (nargs is Array and nargs.has(server_url)):
+			var npath = cmd_obj.get("path", "")
+			if not (npath is String and _command_is_uvx_like(npath as String)):
+				return false
+			if not _bridge_args_are_valid(cmd_obj.get("args", []), server_url):
 				return false
 			return _bridge_env_matches(entry)
 	if entry.get(client.entry_url_field, "") != server_url:
@@ -148,9 +148,59 @@ static func _bridge_env_matches(entry: Dictionary) -> bool:
 	var env = entry.get("env", null)
 	if not (env is Dictionary):
 		return false
-	for k in McpClient.bridge_env_for_uvx():
-		if env.get(k) != McpClient.bridge_env_for_uvx()[k]:
+	var pin := McpClient.bridge_env_for_uvx()
+	for k in pin:
+		if env.get(k) != pin[k]:
 			return false
+	return true
+
+
+## Configure rewrites the bridge entry wholesale (the bridge form is
+## identity-defined by command+args+env), but the verifier tolerates extra
+## user-added env keys like `HTTP_PROXY` / `PYTHONUNBUFFERED`. Without
+## merging, a Configure click on a CONFIGURED_MISMATCH entry would silently
+## drop those keys — so layer the UV_LINK_MODE pin over whatever env block
+## already exists on disk. New entries with no prior env get just the pin.
+static func _merge_bridge_env(existing: Variant) -> Dictionary:
+	var pin := McpClient.bridge_env_for_uvx()
+	if not (existing is Dictionary):
+		return pin
+	var existing_env = (existing as Dictionary).get("env", null)
+	if not (existing_env is Dictionary):
+		return pin
+	var merged: Dictionary = (existing_env as Dictionary).duplicate()
+	for k in pin:
+		merged[k] = pin[k]
+	return merged
+
+
+## Basename match for `uvx` / `uvx.exe`, accepting both the bare-name
+## fallback and an absolute path resolved by `McpCliFinder`. Shared by the
+## FLAT and NESTED bridge verifiers — the only place we ever inspect a
+## stored bridge command/path.
+static func _command_is_uvx_like(cmd: String) -> bool:
+	var basename := cmd.get_file()
+	return basename == "uvx" or basename == "uvx.exe"
+
+
+## Strict bridge-argv check: the args array must include the pinned
+## `mcp-proxy` package spec, the `--transport streamablehttp` selector, and
+## the expected URL. Pre-fix `args.has(url)` was lenient — entries with the
+## wrong transport (`--transport sse`) or a different package would still
+## verify CONFIGURED, hiding the broken bridge. Match `mcp-proxy` by prefix
+## so a future MCP_PROXY_VERSION bump doesn't churn the verifier.
+static func _bridge_args_are_valid(args: Variant, server_url: String) -> bool:
+	if not (args is Array):
+		return false
+	var has_mcp_proxy := false
+	for a in args:
+		if a is String and (a as String).begins_with("mcp-proxy"):
+			has_mcp_proxy = true
+			break
+	if not has_mcp_proxy:
+		return false
+	if not (args.has("--transport") and args.has("streamablehttp") and args.has(server_url)):
+		return false
 	return true
 
 

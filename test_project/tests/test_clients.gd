@@ -1153,6 +1153,107 @@ func test_claude_desktop_verify_flags_pre_uv_link_mode_entry_as_drift() -> void:
 	assert_false(McpJsonStrategy.verify_entry(c, legacy_empty_env, "http://x"), "entry with empty env must register as drift")
 
 
+func test_claude_desktop_manual_command_includes_env_pin() -> void:
+	## The dock's "Run this manually" string is rendered by `_format_entry_inline`
+	## on the same `build_entry` output the auto-configure path writes — if it
+	## ever loses the env block, paste-into-config users silently miss the
+	## UV_LINK_MODE=copy pin and hit the Windows pywin32 lock. Pin the
+	## inline-JSON shape so a future change to `_format_value` / `build_entry`
+	## that drops the env key fails CI.
+	var c := McpClientRegistry.get_by_id("claude_desktop")
+	var manual := McpManualCommand.build(c, "godot-ai", "http://x", "/tmp/cd.json")
+	assert_contains(manual, "\"env\":")
+	assert_contains(manual, "\"UV_LINK_MODE\": \"copy\"")
+
+
+func test_claude_desktop_configure_preserves_existing_env_keys() -> void:
+	## Verifier tolerates user-added env keys (HTTP_PROXY, PYTHONUNBUFFERED, etc.)
+	## so the rewriter must too. Without merge, a Configure click on a
+	## CONFIGURED_MISMATCH entry silently drops them — the user reports their
+	## proxy settings disappear after we surface drift on a port change.
+	var path := _scratch_dir.path_join("preserve_env.json")
+	_remove_if_exists(path)
+	var pre_existing := {
+		"mcpServers": {
+			"godot-ai": {
+				"command": "uvx",
+				"args": McpClient.mcp_proxy_bridge_args("http://old"),
+				"env": {
+					"HTTP_PROXY": "http://corp-proxy:3128",
+					"PYTHONUNBUFFERED": "1",
+				},
+			}
+		}
+	}
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	assert_true(f != null, "scratch path must be writable")
+	f.store_string(JSON.stringify(pre_existing))
+	f.close()
+
+	var client := McpClient.new()
+	client.id = "preserve_env_test"
+	client.display_name = "Preserve Env Test"
+	client.config_type = "json"
+	client.path_template = {"darwin": path, "windows": path, "linux": path, "unix": path}
+	client.server_key_path = PackedStringArray(["mcpServers"])
+	client.entry_uvx_bridge = McpClient.UvxBridge.FLAT
+
+	var result := McpJsonStrategy.configure(client, "godot-ai", "http://new")
+	assert_eq(result.get("status"), "ok")
+
+	var rf := FileAccess.open(path, FileAccess.READ)
+	var written = JSON.parse_string(rf.get_as_text())
+	rf.close()
+	var entry = written.get("mcpServers", {}).get("godot-ai", {})
+	var env = entry.get("env", {})
+	assert_eq(env.get("HTTP_PROXY", ""), "http://corp-proxy:3128", "HTTP_PROXY must be preserved across rewrite")
+	assert_eq(env.get("PYTHONUNBUFFERED", ""), "1", "PYTHONUNBUFFERED must be preserved across rewrite")
+	assert_eq(env.get("UV_LINK_MODE", ""), "copy", "UV_LINK_MODE pin must overlay existing env")
+
+
+func test_claude_desktop_verify_flags_wrong_transport_as_drift() -> void:
+	## Pre-PR302 verifier only required `args.has(server_url)` — an entry like
+	## `mcp-proxy --transport sse <url>` (Claude Desktop's old SSE shape) would
+	## report CONFIGURED even though our streamable-http /mcp endpoint returns
+	## HTTP 400 against SSE. Tightened verifier requires the full bridge argv
+	## shape so transport drift surfaces too.
+	var c := McpClientRegistry.get_by_id("claude_desktop")
+	var sse_entry := {
+		"command": "uvx",
+		"args": ["mcp-proxy", "--transport", "sse", "http://x"],
+		"env": McpClient.bridge_env_for_uvx(),
+	}
+	assert_false(McpJsonStrategy.verify_entry(c, sse_entry, "http://x"), "wrong-transport entry must register as drift")
+	var no_proxy_entry := {
+		"command": "uvx",
+		"args": ["some-other-package", "--transport", "streamablehttp", "http://x"],
+		"env": McpClient.bridge_env_for_uvx(),
+	}
+	assert_false(McpJsonStrategy.verify_entry(c, no_proxy_entry, "http://x"), "non-mcp-proxy entry must register as drift")
+	var non_uvx_command := {
+		"command": "python",
+		"args": McpClient.mcp_proxy_bridge_args("http://x"),
+		"env": McpClient.bridge_env_for_uvx(),
+	}
+	assert_false(McpJsonStrategy.verify_entry(c, non_uvx_command, "http://x"), "non-uvx command must register as drift")
+
+
+func test_zed_verify_flags_non_uvx_command_path_as_drift() -> void:
+	## Parallel to claude_desktop's strict-verify: NESTED form must validate
+	## command.path too. A Zed entry pointing at the wrong binary will still
+	## "have the URL in args" but won't actually launch the bridge.
+	var c := McpClientRegistry.get_by_id("zed")
+	var bad_path := {
+		"command": {
+			"path": "/usr/bin/python",
+			"args": McpClient.mcp_proxy_bridge_args("http://x"),
+		},
+		"env": McpClient.bridge_env_for_uvx(),
+		"settings": {},
+	}
+	assert_false(McpJsonStrategy.verify_entry(c, bad_path, "http://x"), "non-uvx command.path must register as drift")
+
+
 func test_claude_desktop_verify_entry_accepts_future_url_form() -> void:
 	## Tolerance preserved from the pre-refactor verifier: a hypothetical
 	## future Claude Desktop that speaks HTTP natively would write a plain
