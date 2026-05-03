@@ -1526,13 +1526,20 @@ func _assert_mcp_proxy_bridge_args(args: Variant, expected_url: String) -> void:
 	## via `uvx mcp-proxy`. The first arg is a pinned version spec like
 	## `mcp-proxy==0.11.0` — match by prefix so this doesn't have to churn
 	## every time MCP_PROXY_VERSION bumps.
-	assert_true(args is Array, "bridge args must be an Array, got: %s" % args)
+	##
+	## NOTE: Pass `args` through `str()` before `%` substitution. GDScript's
+	## `%` operator interprets a bare Array on the right-hand side as a list
+	## of arguments to splice into multiple `%s` slots — `"got: %s" % args`
+	## with a 4-element array errors with "not all arguments converted",
+	## the assertion message becomes garbage, and on stricter runtimes the
+	## SCRIPT ERROR is treated as a test failure.
+	assert_true(args is Array, "bridge args must be an Array, got: %s" % str(args))
 	var has_mcp_proxy := false
 	for a in args:
 		if a is String and (a as String).begins_with("mcp-proxy"):
 			has_mcp_proxy = true
 			break
-	assert_true(has_mcp_proxy, "args must include an mcp-proxy entry, got: %s" % args)
+	assert_true(has_mcp_proxy, "args must include an mcp-proxy entry, got: %s" % str(args))
 	assert_contains(args, "--transport")
 	assert_contains(args, "streamablehttp")
 	assert_contains(args, expected_url)
@@ -1546,9 +1553,9 @@ func _assert_bridge_env_pin(entry: Variant) -> void:
 	## file in use" error in Claude Desktop's MCP launcher with no working
 	## transport. See utils/uv_cache_cleanup.gd and the README troubleshooting
 	## section for the full hard-link explanation.
-	assert_true(entry is Dictionary, "entry must be a Dictionary, got: %s" % entry)
+	assert_true(entry is Dictionary, "entry must be a Dictionary, got: %s" % str(entry))
 	var env = entry.get("env", null)
-	assert_true(env is Dictionary, "bridged entry must include an env dict pinning UV_LINK_MODE=copy, got env=%s" % env)
+	assert_true(env is Dictionary, "bridged entry must include an env dict pinning UV_LINK_MODE=copy, got env=%s" % str(env))
 	assert_eq(env.get("UV_LINK_MODE", ""), "copy", "env must pin UV_LINK_MODE=copy")
 
 
