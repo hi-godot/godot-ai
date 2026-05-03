@@ -49,12 +49,24 @@ static func write(path: String, content: String) -> bool:
 		DirAccess.remove_absolute(tmp_path)
 		return true
 
-	# Copy didn't land cleanly. If it partially clobbered the target, restore
-	# from the snapshot we took above. Either way, leave the user's config in
-	# its prior state — never a truncated half-write.
+	# Copy didn't land cleanly. Restore the destination to its pre-call state.
 	if backup_made:
+		# Restore the snapshot we took before the swap.
 		DirAccess.remove_absolute(path)
 		DirAccess.copy_absolute(backup_path, path)
+	elif not had_original and FileAccess.file_exists(path):
+		# No prior file existed but copy_absolute landed partial bytes at
+		# `path`. Remove them so the failure leaves nothing on disk rather
+		# than a truncated/invalid new file. The `file_exists` guard keeps
+		# us off non-file destinations (a path that points at a directory
+		# yields `had_original=false` too, but we must not try to delete
+		# the directory). Issue #297 PR review.
+		DirAccess.remove_absolute(path)
+	# (If `had_original` is true but the snapshot couldn't be taken, the
+	# original on disk is whatever copy_absolute managed to write before
+	# failing. This is a best-effort path — the false return value tells the
+	# caller the swap didn't complete; recovery beyond that requires a
+	# backup we couldn't take.)
 	DirAccess.remove_absolute(tmp_path)
 	return false
 

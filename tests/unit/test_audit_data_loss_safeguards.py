@@ -237,3 +237,28 @@ def test_atomic_write_size_verification_uses_utf8_byte_count() -> None:
         "slip through verification."
     )
     assert "f.get_length()" in verify_block
+
+
+def test_atomic_write_clears_partial_new_file_when_no_original_existed() -> None:
+    """Copilot review (#299): without this branch, a verify-only failure on a
+    first-time write left half-written bytes at `path`. The contract is now
+    "destination is in its pre-call state on failure" — for a brand-new path
+    that means nothing should be on disk after the function returns false."""
+
+    source = ATOMIC_WRITE_PATH.read_text()
+    write_block = get_func_block(source, "static func write(")
+    assert "elif not had_original and FileAccess.file_exists(path):" in write_block, (
+        "Failure path must clear partial bytes when no original existed. "
+        "The `file_exists` guard keeps the cleanup off non-file destinations "
+        "so a path that points at a directory (had_original is false there "
+        "too) can't be accidentally targeted by remove_absolute."
+    )
+    # The `elif` branch must remove the partial bytes via remove_absolute(path).
+    elif_idx = write_block.find("elif not had_original")
+    return_false_idx = write_block.find("return false", elif_idx)
+    elif_branch = write_block[elif_idx:return_false_idx]
+    assert "DirAccess.remove_absolute(path)" in elif_branch, (
+        "The no-original failure branch must delete the partial file from "
+        "disk, otherwise a verify-only failure leaves a truncated config "
+        "behind on first-time writes."
+    )
