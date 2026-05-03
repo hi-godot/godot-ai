@@ -313,15 +313,6 @@ func test_install_zip_paths_rolls_back_when_mid_loop_write_fails() -> void:
 	## file 2 of 3 must restore file 1 to its vN content (or remove it if
 	## it was a brand-new file) and report FAILED_CLEAN. The addons dir
 	## must NOT be left in a half-vN / half-vN+1 state.
-	if OS.get_name() == "Windows":
-		## We force the mid-loop failure by pointing one zip entry at an
-		## existing non-empty directory. Windows MoveFileExW / CopyFileW
-		## semantics for that path don't reliably reject the swap — the
-		## sibling `_rollback_paths_written` unit tests cover the rollback
-		## contract deterministically on every platform without depending
-		## on directory-as-destination behavior.
-		skip("directory-as-destination failure semantics differ on Windows")
-		return
 	var install_base := _scratch_dir.path_join("install_partial")
 	var rel_existing := "addons/godot_ai/will_revert.gd"
 	var rel_blocked := "addons/godot_ai/blocked"

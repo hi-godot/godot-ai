@@ -1099,18 +1099,8 @@ func test_atomic_write_preserves_destination_when_swap_fails() -> void:
 	## destroyed. The previous remove-then-rename fallback would clobber
 	## the target unconditionally before retrying. We force both
 	## rename_absolute and copy_absolute to reject the swap by pointing at
-	## a non-empty directory destination, which is the most portable way to
-	## reproduce a "neither rename nor copy can land" failure.
-	if OS.get_name() == "Windows":
-		## Windows MoveFileExW / CopyFileW semantics on a directory
-		## destination are not consistent enough to assert against — Godot's
-		## DirAccess.copy is a byte-loop on FileAccess which can partially
-		## land for some sub-cases. The Linux/macOS contract here is the
-		## load-bearing assertion; the Python source-pin tests
-		## (test_audit_data_loss_safeguards.py) lock the structural
-		## invariant on every platform.
-		skip("directory-as-destination failure semantics differ on Windows")
-		return
+	## a non-empty directory destination, which fails on every supported
+	## platform.
 	var collision := _scratch_dir.path_join("collision_dir")
 	DirAccess.make_dir_recursive_absolute(collision)
 	var sentinel := collision.path_join("must_survive.txt")
