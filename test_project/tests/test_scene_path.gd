@@ -63,10 +63,6 @@ func test_from_node_null_scene_root_returns_empty_string() -> void:
 
 
 func test_from_node_orphan_node_returns_empty_string() -> void:
-	## A node not parented anywhere is not an ancestor of scene_root. Without
-	## the is_ancestor_of guard, get_path_to() returns an empty NodePath and
-	## from_node would produce "/Main/" — a plausible-looking string that
-	## resolves to nothing. Issue #297 audit finding #4.
 	var root := _make_tree()
 	var orphan := Node.new()
 	orphan.name = "Orphan"
@@ -76,9 +72,6 @@ func test_from_node_orphan_node_returns_empty_string() -> void:
 
 
 func test_from_node_foreign_tree_returns_empty_string() -> void:
-	## Node lives in a sibling tree to scene_root. Same hazard as the orphan
-	## case but more representative of the real-world bug: handlers passing
-	## nodes from instanced sub-scenes or foreign trees.
 	var root := _make_tree()
 	var other_root := Node.new()
 	other_root.name = "OtherRoot"
@@ -91,8 +84,6 @@ func test_from_node_foreign_tree_returns_empty_string() -> void:
 
 
 func test_from_node_ancestor_of_scene_root_returns_empty_string() -> void:
-	## scene_root's parent is not a descendant of scene_root. is_ancestor_of
-	## must reject upward lookups too, not just sideways/foreign ones.
 	var root := _make_tree()
 	var parent := Node.new()
 	parent.name = "Parent"

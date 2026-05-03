@@ -7,13 +7,9 @@ extends RefCounted
 
 
 ## Return a clean path relative to the scene root (e.g. /Main/Camera3D).
-##
-## Returns "" when `node` is not the scene root and not a descendant of it.
-## Without the ancestry guard, `scene_root.get_path_to(foreign)` returns an
-## empty NodePath (with a Godot warning), which then concatenates into a
-## plausible-looking but invalid string like "/Main/" — every consumer trusts
-## the path and the failure surfaces as a confusing downstream error rather
-## than an "unknown node" signal.
+## Returns "" when `node` is not the scene root or a descendant of it —
+## without the ancestry guard, get_path_to() returns an empty NodePath that
+## concatenates into a plausible-looking but invalid "/Main/".
 static func from_node(node: Node, scene_root: Node) -> String:
 	if scene_root == null or node == null:
 		return ""
