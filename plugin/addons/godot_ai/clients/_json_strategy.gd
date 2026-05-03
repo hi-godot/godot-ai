@@ -79,6 +79,7 @@ static func build_entry(client: McpClient, server_url: String, existing: Variant
 			return {
 				"command": McpClient.resolve_uvx_path(),
 				"args": McpClient.mcp_proxy_bridge_args(server_url),
+				"env": McpClient.bridge_env_for_uvx(),
 			}
 		McpClient.UvxBridge.NESTED:
 			return {
@@ -86,6 +87,7 @@ static func build_entry(client: McpClient, server_url: String, existing: Variant
 					"path": McpClient.resolve_uvx_path(),
 					"args": McpClient.mcp_proxy_bridge_args(server_url),
 				},
+				"env": McpClient.bridge_env_for_uvx(),
 				"settings": {},
 			}
 	var entry: Dictionary = (existing as Dictionary).duplicate() if existing is Dictionary else {}
@@ -117,17 +119,37 @@ static func verify_entry(client: McpClient, entry: Dictionary, server_url: Strin
 				return false
 			var uvx_like := (cmd as String).get_file() == "uvx" or (cmd as String).get_file() == "uvx.exe"
 			var args = entry.get("args", [])
-			return uvx_like and args is Array and args.has(server_url)
+			if not (uvx_like and args is Array and args.has(server_url)):
+				return false
+			return _bridge_env_matches(entry)
 		McpClient.UvxBridge.NESTED:
 			var cmd_obj = entry.get("command", {})
 			if not (cmd_obj is Dictionary):
 				return false
 			var nargs = cmd_obj.get("args", [])
-			return nargs is Array and nargs.has(server_url)
+			if not (nargs is Array and nargs.has(server_url)):
+				return false
+			return _bridge_env_matches(entry)
 	if entry.get(client.entry_url_field, "") != server_url:
 		return false
 	for k in client.entry_extra_fields:
 		if entry.get(k) != client.entry_extra_fields[k]:
+			return false
+	return true
+
+
+## Pre-fix entries lack `env.UV_LINK_MODE=copy` and hit the Windows uvx
+## hard-link race documented in `utils/uv_cache_cleanup.gd`. Flag them as
+## drift so the dock surfaces an amber banner and a Configure-click
+## rewrites the entry with the env pin. Every key in `bridge_env_for_uvx()`
+## must match verbatim — extra user keys are tolerated so a hand-added
+## `PYTHONUNBUFFERED=1` etc. doesn't trigger drift forever.
+static func _bridge_env_matches(entry: Dictionary) -> bool:
+	var env = entry.get("env", null)
+	if not (env is Dictionary):
+		return false
+	for k in McpClient.bridge_env_for_uvx():
+		if env.get(k) != McpClient.bridge_env_for_uvx()[k]:
 			return false
 	return true
 

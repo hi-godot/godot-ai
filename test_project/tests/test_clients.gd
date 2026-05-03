@@ -1115,6 +1115,7 @@ func test_claude_desktop_bridges_via_uvx() -> void:
 	var entry := McpJsonStrategy.build_entry(c, "http://x")
 	_assert_uvx_command(entry.get("command", ""))
 	_assert_mcp_proxy_bridge_args(entry.get("args", []), "http://x")
+	_assert_bridge_env_pin(entry)
 
 
 func test_claude_desktop_verify_entry_accepts_uvx_form() -> void:
@@ -1124,6 +1125,32 @@ func test_claude_desktop_verify_entry_accepts_uvx_form() -> void:
 	var c := McpClientRegistry.get_by_id("claude_desktop")
 	var entry := McpJsonStrategy.build_entry(c, "http://x")
 	assert_true(McpJsonStrategy.verify_entry(c, entry, "http://x"), "uvx entry should verify as a match")
+
+
+func test_claude_desktop_verify_flags_pre_uv_link_mode_entry_as_drift() -> void:
+	## Users who configured Claude Desktop before the UV_LINK_MODE=copy fix
+	## have a uvx bridge entry with no `env` block (or one missing
+	## UV_LINK_MODE). Without this drift, they hit the Windows pywin32 install
+	## failure documented in utils/uv_cache_cleanup.gd and the README. The
+	## verifier must flag those as MISMATCH so the dock prompts a reconfigure.
+	var c := McpClientRegistry.get_by_id("claude_desktop")
+	var legacy_no_env := {
+		"command": "uvx",
+		"args": McpClient.mcp_proxy_bridge_args("http://x"),
+	}
+	assert_false(McpJsonStrategy.verify_entry(c, legacy_no_env, "http://x"), "pre-fix entry without env must register as drift")
+	var legacy_wrong_mode := {
+		"command": "uvx",
+		"args": McpClient.mcp_proxy_bridge_args("http://x"),
+		"env": {"UV_LINK_MODE": "hardlink"},
+	}
+	assert_false(McpJsonStrategy.verify_entry(c, legacy_wrong_mode, "http://x"), "entry with wrong UV_LINK_MODE must register as drift")
+	var legacy_empty_env := {
+		"command": "uvx",
+		"args": McpClient.mcp_proxy_bridge_args("http://x"),
+		"env": {},
+	}
+	assert_false(McpJsonStrategy.verify_entry(c, legacy_empty_env, "http://x"), "entry with empty env must register as drift")
 
 
 func test_claude_desktop_verify_entry_accepts_future_url_form() -> void:
@@ -1144,6 +1171,7 @@ func test_zed_bridges_via_uvx() -> void:
 	assert_true(cmd is Dictionary, "Zed entry.command must be a Dictionary (path+args shape)")
 	_assert_uvx_command(cmd.get("path", ""))
 	_assert_mcp_proxy_bridge_args(cmd.get("args", []), "http://x")
+	_assert_bridge_env_pin(entry)
 
 
 func test_zed_verify_entry_accepts_uvx_form() -> void:
@@ -1152,6 +1180,19 @@ func test_zed_verify_entry_accepts_uvx_form() -> void:
 	var c := McpClientRegistry.get_by_id("zed")
 	var entry := McpJsonStrategy.build_entry(c, "http://x")
 	assert_true(McpJsonStrategy.verify_entry(c, entry, "http://x"), "uvx entry should verify as a match")
+
+
+func test_zed_verify_flags_pre_uv_link_mode_entry_as_drift() -> void:
+	## Same UV_LINK_MODE=copy pin as claude_desktop, in NESTED shape.
+	var c := McpClientRegistry.get_by_id("zed")
+	var legacy_no_env := {
+		"command": {
+			"path": "uvx",
+			"args": McpClient.mcp_proxy_bridge_args("http://x"),
+		},
+		"settings": {},
+	}
+	assert_false(McpJsonStrategy.verify_entry(c, legacy_no_env, "http://x"), "pre-fix Zed entry without env must register as drift")
 
 
 func test_mcp_proxy_bridge_args_pins_version() -> void:
@@ -1394,6 +1435,20 @@ func _assert_mcp_proxy_bridge_args(args: Variant, expected_url: String) -> void:
 	assert_contains(args, "--transport")
 	assert_contains(args, "streamablehttp")
 	assert_contains(args, expected_url)
+
+
+func _assert_bridge_env_pin(entry: Variant) -> void:
+	## Every uvx-bridge entry must carry `env.UV_LINK_MODE=copy`. Without it,
+	## the running godot-ai server's `_pydantic_core.pyd` mapping locks the
+	## hard-linked copy under `builds-v0\.tmpXXXXXX\` on Windows and uvx's
+	## post-install cleanup fails — the symptom is a "pywin32 wheel invalid /
+	## file in use" error in Claude Desktop's MCP launcher with no working
+	## transport. See utils/uv_cache_cleanup.gd and the README troubleshooting
+	## section for the full hard-link explanation.
+	assert_true(entry is Dictionary, "entry must be a Dictionary, got: %s" % entry)
+	var env = entry.get("env", null)
+	assert_true(env is Dictionary, "bridged entry must include an env dict pinning UV_LINK_MODE=copy, got env=%s" % env)
+	assert_eq(env.get("UV_LINK_MODE", ""), "copy", "env must pin UV_LINK_MODE=copy")
 
 
 func _make_test_json_client(path: String) -> McpClient:

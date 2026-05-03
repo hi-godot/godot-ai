@@ -173,32 +173,40 @@ every process unmaps it. uv's post-install cleanup of the build venv then
 dies on a stale lock; the misleading `pywin32` mention is just the last
 package in the resolution order, not the actual lock holder.
 
-**Mitigation in this plugin:** `_stop_server` and `force_restart_server`
-both call `McpUvCacheCleanup.purge_stale_builds()` immediately after
-killing the server children, while the `.pyd` is briefly unmapped. See
-[`plugin/addons/godot_ai/utils/uv_cache_cleanup.gd`](plugin/addons/godot_ai/utils/uv_cache_cleanup.gd).
+**Mitigation in this plugin:**
 
-**Recommended belt-and-braces:** tell uv to copy instead of hard-link by
-setting `UV_LINK_MODE=copy` in the MCP launcher's environment. This also
-removes the reverse race where an MCP client spawns `uvx mcp-proxy`
-*while* a server child is still holding the `.pyd`. Example for Claude
-Desktop's `claude_desktop_config.json`:
+1. `_stop_server` and `force_restart_server` both call
+   `McpUvCacheCleanup.purge_stale_builds()` immediately after killing the
+   server children, while the `.pyd` is briefly unmapped. See
+   [`plugin/addons/godot_ai/utils/uv_cache_cleanup.gd`](plugin/addons/godot_ai/utils/uv_cache_cleanup.gd).
+2. **Auto-configure now writes `UV_LINK_MODE=copy` into the bridged
+   entry's `env` block** for every uvx-bridge client (Claude Desktop, Zed),
+   telling uv to copy shared C extensions instead of hard-linking them.
+   That removes the reverse race where an MCP client spawns `uvx mcp-proxy`
+   *while* a server child still holds the `.pyd`. Existing entries written
+   by older plugin versions surface in the dock as **drift (amber banner)**
+   so a single Configure click rewrites them with the env pin.
+
+The shape `client_configure` writes for Claude Desktop is now:
 
 ```json
 {
   "mcpServers": {
     "godot-ai": {
       "command": "uvx",
-      "args": ["mcp-proxy", "--transport", "streamablehttp", "http://127.0.0.1:8000/mcp"],
+      "args": ["mcp-proxy==0.11.0", "--transport", "streamablehttp", "http://127.0.0.1:8000/mcp"],
       "env": { "UV_LINK_MODE": "copy" }
     }
   }
 }
 ```
 
-If you've already hit the lock, kill stray `python.exe` children whose
-command line contains `spawn_main(parent_pid=...)` and delete
-`%LOCALAPPDATA%\uv\cache\builds-v0\.tmp*` manually before retrying.
+If you've already hit the lock on an older config, click **Configure**
+on Claude Desktop in the godot-ai dock to rewrite the entry, then quit
+and reopen Claude Desktop. If the lock persists (rare — pre-existing
+orphans the cache sweeper couldn't reach), kill stray `python.exe`
+children whose command line contains `spawn_main(parent_pid=...)` and
+delete `%LOCALAPPDATA%\uv\cache\builds-v0\.tmp*` manually before retrying.
 
 </details>
 
