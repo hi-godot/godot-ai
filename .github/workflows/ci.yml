@@ -163,7 +163,7 @@ jobs:
 
       - name: Start Godot editor (headless)
         shell: bash
-        run: GODOT_AI_ALLOW_HEADLESS=1 godot --headless --path test_project --editor &
+        run: GODOT_AI_ALLOW_HEADLESS=1 godot --headless --path test_project --editor > godot-editor.log 2>&1 &
 
       - name: Run handler tests
         shell: bash
@@ -179,6 +179,15 @@ jobs:
         shell: bash
         timeout-minutes: 2
         run: bash script/ci-quit-test
+
+      - name: Dump Godot editor log on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "===== godot-editor.log (last 500 lines) ====="
+          tail -n 500 godot-editor.log || echo "(log not found)"
+          echo "===== godot-import.log (last 200 lines) ====="
+          tail -n 200 godot-import.log || echo "(log not found)"
 
   # Separate job from godot-tests: the capture smoke test needs a real
   # rendering driver (null RenderingDevice in --headless produces empty
