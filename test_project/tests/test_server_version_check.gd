@@ -55,9 +55,9 @@ func test_arm_marks_active_without_transitioning_state() -> void:
 	## its deadline) arrives.
 	var manager := _ManagerStub.new()
 	var conn := _FakeConnection.new()
-	var check = McpServerVersionCheckScript.new(manager, conn)
+	var check = McpServerVersionCheckScript.new(manager)
 
-	check.arm("2.3.0")
+	check.arm(conn, "2.3.0")
 
 	assert_true(check.is_active(), "arm() must mark the check active")
 	assert_eq(manager.transitions.size(), 0,
@@ -67,18 +67,26 @@ func test_arm_marks_active_without_transitioning_state() -> void:
 
 func test_disarm_resets_active_without_transitioning_state() -> void:
 	## Disarm is "I'm done watching, but the manager already moved on";
-	## the seam must not fire a redundant state transition.
+	## the seam must not fire a redundant state transition. It must
+	## also drop the connection reference — the plugin can spend most
+	## of its life with the version check disarmed, and `_connection`
+	## is a Node that may be queue_free'd by `_exit_tree`.
 	var manager := _ManagerStub.new()
 	var conn := _FakeConnection.new()
-	var check = McpServerVersionCheckScript.new(manager, conn)
+	var check = McpServerVersionCheckScript.new(manager)
 
-	check.arm("2.3.0")
+	check.arm(conn, "2.3.0")
 
 	check.disarm()
 
 	assert_false(check.is_active())
 	assert_eq(manager.transitions.size(), 0,
 		"disarm must not transition state — caller already did")
+	## Tick after disarm must not crash on the released connection
+	## reference. With `_connection` nulled, the early-return in
+	## `tick()` keeps the seam dormant until the next arm() reseats it.
+	var fired := check.tick(Time.get_ticks_msec())
+	assert_false(fired, "disarmed seam must stay dormant on tick")
 
 
 func test_tick_noop_until_connection_opens() -> void:
@@ -87,9 +95,9 @@ func test_tick_noop_until_connection_opens() -> void:
 	## the handshake budget.
 	var manager := _ManagerStub.new()
 	var conn := _FakeConnection.new()
-	var check = McpServerVersionCheckScript.new(manager, conn)
+	var check = McpServerVersionCheckScript.new(manager)
 
-	check.arm("2.3.0")
+	check.arm(conn, "2.3.0")
 	var fired := check.tick(Time.get_ticks_msec() + 60 * 1000)
 
 	assert_false(fired, "tick must not fire while connection is closed")
@@ -101,9 +109,9 @@ func test_tick_noop_until_connection_opens() -> void:
 func test_tick_completes_with_version_when_handshake_arrives() -> void:
 	var manager := _ManagerStub.new()
 	var conn := _FakeConnection.new()
-	var check = McpServerVersionCheckScript.new(manager, conn)
+	var check = McpServerVersionCheckScript.new(manager)
 
-	check.arm("2.3.0")
+	check.arm(conn, "2.3.0")
 	conn.is_connected = true
 	conn.server_version = "2.3.0"
 	var fired := check.tick(Time.get_ticks_msec())
@@ -118,9 +126,9 @@ func test_tick_completes_with_version_when_handshake_arrives() -> void:
 func test_tick_fires_unverified_after_deadline() -> void:
 	var manager := _ManagerStub.new()
 	var conn := _FakeConnection.new()
-	var check = McpServerVersionCheckScript.new(manager, conn)
+	var check = McpServerVersionCheckScript.new(manager)
 
-	check.arm("2.3.0")
+	check.arm(conn, "2.3.0")
 	conn.is_connected = true
 	## First tick latches the deadline at now + TIMEOUT_MS.
 	check.tick(0)
@@ -139,9 +147,9 @@ func test_arm_with_mismatched_version_drives_through_manager() -> void:
 	## hand-off direction so a future refactor can't sneak in a bypass.
 	var manager := _ManagerStub.new()
 	var conn := _FakeConnection.new()
-	var check = McpServerVersionCheckScript.new(manager, conn)
+	var check = McpServerVersionCheckScript.new(manager)
 
-	check.arm("2.3.0")
+	check.arm(conn, "2.3.0")
 	conn.is_connected = true
 	conn.server_version = "1.2.10"
 	check.tick(0)

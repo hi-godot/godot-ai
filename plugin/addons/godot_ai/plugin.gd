@@ -775,10 +775,9 @@ func _watch_for_adoption_confirmation() -> void:
 
 
 func _arm_server_version_check() -> void:
-	var expected: String = str(_lifecycle._server_expected_version)
-	if expected.is_empty():
-		expected = McpClientConfigurator.get_plugin_version()
-	_lifecycle.arm_version_check(_connection, expected)
+	## `arm_version_check` resolves an empty expected via the plugin
+	## version, so we can pass the raw field value through.
+	_lifecycle.arm_version_check(_connection, str(_lifecycle._server_expected_version))
 	_update_process_enabled()
 
 
@@ -807,21 +806,20 @@ func _on_connection_established() -> void:
 
 
 ## Test-fixture shim — characterization tests poke the verified path
-## directly. Delegates to the version-check seam.
+## directly. Delegates to the version-check seam; the manager resolves
+## an empty expected version via `_resolve_expected_version`.
 func _on_server_version_verified(version: String) -> void:
-	var expected: String = str(_lifecycle._server_expected_version)
-	if expected.is_empty():
-		expected = McpClientConfigurator.get_plugin_version()
-	_lifecycle.handle_server_version_verified(expected, version)
+	_lifecycle.handle_server_version_verified(
+		str(_lifecycle._server_expected_version), version
+	)
 	_update_process_enabled()
 
 
 ## Test-fixture shim — same shape as `_on_server_version_verified`.
 func _on_server_version_unverified() -> void:
-	var expected: String = str(_lifecycle._server_expected_version)
-	if expected.is_empty():
-		expected = McpClientConfigurator.get_plugin_version()
-	_lifecycle.handle_server_version_unverified(expected)
+	_lifecycle.handle_server_version_unverified(
+		str(_lifecycle._server_expected_version)
+	)
 	_update_process_enabled()
 
 

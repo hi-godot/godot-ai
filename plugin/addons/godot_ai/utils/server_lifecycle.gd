@@ -175,9 +175,10 @@ func tick_adoption_watch(now_msec: int) -> void:
 
 func arm_version_check(connection, expected_version: String) -> void:
 	if _version_check == null:
-		_version_check = McpServerVersionCheckScript.new(self, connection)
-	_server_expected_version = expected_version
-	_version_check.arm(expected_version)
+		_version_check = McpServerVersionCheckScript.new(self)
+	var expected := _resolve_expected_version(expected_version)
+	_server_expected_version = expected
+	_version_check.arm(connection, expected)
 
 
 func disarm_version_check() -> void:
@@ -189,14 +190,23 @@ func get_version_check():
 	return _version_check
 
 
+## Resolves a possibly-empty expected version to the plugin's shipping
+## version. Manager methods that are called via test fixtures may
+## receive an empty string when the test never seeded
+## `_server_expected_version`, so this is the one place that fallback
+## lives.
+func _resolve_expected_version(supplied: String) -> String:
+	if not supplied.is_empty():
+		return supplied
+	return McpClientConfigurator.get_plugin_version()
+
+
 ## Called by McpServerVersionCheck when handshake_ack carries a version
 ## string. Decides compatible vs incompatible and transitions the state.
 func handle_server_version_verified(expected_version: String, version: String) -> void:
 	_server_actual_name = "godot-ai"
 	_server_actual_version = version
-	var expected := expected_version
-	if expected.is_empty():
-		expected = McpClientConfigurator.get_plugin_version()
+	var expected := _resolve_expected_version(expected_version)
 	_server_expected_version = expected
 	var compatibility := McpServerLifecycleManager._server_version_compatibility(
 		version,
@@ -229,9 +239,7 @@ func handle_server_version_verified(expected_version: String, version: String) -
 
 
 func handle_server_version_unverified(expected_version: String) -> void:
-	var expected := expected_version
-	if expected.is_empty():
-		expected = McpClientConfigurator.get_plugin_version()
+	var expected := _resolve_expected_version(expected_version)
 	_server_expected_version = expected
 	var live := {"version": "", "status_code": 0, "error": "missing_handshake_ack"}
 	_set_incompatible_server(live, expected, McpClientConfigurator.http_port())

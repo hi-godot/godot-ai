@@ -791,7 +791,7 @@ func _update_status() -> void:
 		status_color = Color.RED
 
 	_update_crash_panel(server_status)
-	_refresh_server_version_label()
+	_refresh_server_version_label(server_status)
 
 	var changed := connected != _last_connected or status_text != _last_status_text
 	if not changed:
@@ -1055,15 +1055,20 @@ func _on_reload_plugin() -> void:
 ## - dev mismatch: show amber with an explicit dev marker
 ## - release mismatch: show actual vs expected; only surface Restart when the
 ##   plugin has ownership proof for the process
-func _refresh_server_version_label() -> void:
+func _refresh_server_version_label(server_status: Dictionary = {}) -> void:
 	if _setup_server_label == null:
 		return
 	var plugin_ver := McpClientConfigurator.get_plugin_version()
-	var server_status: Dictionary = (
-		_plugin.get_server_status()
-		if _plugin != null and _plugin.has_method("get_server_status")
-		else {}
-	)
+	if server_status.is_empty():
+		## Re-fetch only when called outside `_update_status`'s frame
+		## (e.g. from `_apply_new_port`, `_on_restart_*`). Inside the
+		## per-frame loop, the caller threads its cached snapshot through
+		## so we don't allocate a fresh Dictionary every frame.
+		server_status = (
+			_plugin.get_server_status()
+			if _plugin != null and _plugin.has_method("get_server_status")
+			else {}
+		)
 	var server_ver := _connection.server_version if _connection != null else ""
 	if server_ver.is_empty():
 		server_ver = str(server_status.get("actual_version", ""))

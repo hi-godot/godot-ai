@@ -36,12 +36,12 @@ var _deadline_ms: int = 0
 var _expected_version: String = ""
 
 
-func _init(manager, connection) -> void:
+func _init(manager) -> void:
 	_manager = manager
-	_connection = connection
 
 
-## Arm the version-check. Marks the seam active and starts watching for
+## Arm the version-check. Marks the seam active, (re)attaches the
+## connection it should poll, and starts watching for
 ## `_connection.server_version`. Does NOT transition manager state —
 ## the version check runs concurrently with whatever spawn-state was
 ## latched (e.g. FOREIGN_PORT during adoption confirmation, READY for
@@ -52,18 +52,24 @@ func _init(manager, connection) -> void:
 ## The deadline starts the moment the connection actually opens, not at
 ## arm-time, because uvx cold-starts can take ~30s to bind the
 ## WebSocket and we don't want to count that against the handshake.
-func arm(expected_version: String) -> void:
+func arm(connection, expected_version: String) -> void:
 	_active = true
 	_deadline_ms = 0
 	_expected_version = expected_version
+	_connection = connection
 
 
 ## Disarm without firing a verdict. Used when the manager moves on
-## (e.g. recovery click → STOPPING). Does not touch the manager's
-## state — caller has already transitioned out.
+## (e.g. recovery click → STOPPING). Releases the connection /
+## manager references so the seam doesn't pin them past the active
+## window — the plugin can spend most of its life with the version
+## check disarmed, and `_connection` is a Node that may be queue_free'd
+## by `_exit_tree`. Caller has already transitioned state, so we don't
+## touch the manager.
 func disarm() -> void:
 	_active = false
 	_deadline_ms = 0
+	_connection = null
 
 
 ## True while the version-check needs `_process` ticks. Plugin uses
@@ -96,11 +102,12 @@ func tick(now_msec: int) -> bool:
 
 ## Invoked when `_on_connection_established` notices that we transitioned
 ## out of FOREIGN_PORT — the server may yet prove itself compatible.
-## Re-arming is idempotent (state already AWAITING_VERSION → no-op).
-func rearm_for_foreign_port_recovery() -> void:
+## Re-arming is idempotent: if already active, no-op; otherwise the
+## caller's connection + last-known expected version are reused.
+func rearm_for_foreign_port_recovery(connection) -> void:
 	if _active:
 		return
-	arm(_expected_version)
+	arm(connection, _expected_version)
 
 
 func _complete_with_version(version: String) -> void:
