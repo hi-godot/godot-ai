@@ -100,7 +100,7 @@ var _server_restart_in_progress := false
 var _last_mismatched_ids: Array[String] = []
 var _client_status_refresh_thread: Thread
 ## Single source of truth for the refresh-sweep state machine. See
-## `McpClientRefreshState` for the transition table. Replaces the
+## `ClientRefreshStateScript` for the transition table. Replaces the
 ## previously scattered booleans (`_in_flight`, `_timed_out`,
 ## `_deferred_until_filesystem_ready`, `_shutdown_requested`).
 var _refresh_state: int = ClientRefreshStateScript.IDLE
@@ -764,7 +764,7 @@ func _update_status() -> void:
 		connected = false
 
 	## One `match`/`elif` chain, one source of truth. Adding a new
-	## spawn outcome = one `McpServerState` constant + one arm here +
+	## spawn outcome = one `ServerStateScript` constant + one arm here +
 	## one body string in `_crash_body_for_state`.
 	var status_text: String
 	var status_color: Color
