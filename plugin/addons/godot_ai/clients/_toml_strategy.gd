@@ -152,10 +152,43 @@ static func _primary_header(client: McpClient) -> String:
 
 
 static func _all_headers(client: McpClient) -> Array[String]:
-	var out: Array[String] = [_primary_header(client)]
+	var primary := _primary_header(client)
+	var out: Array[String] = [primary]
+	## TOML accepts bare keys ([A-Za-z0-9_-]+) unquoted in section headers,
+	## so [mcp_servers.godot-ai] is a valid hand-written form of the same
+	## logical key we emit as [mcp_servers."godot-ai"]. Match both during
+	## reconfigure / status / remove or a hand-edited (or older-plugin)
+	## bare-key file gets a duplicate quoted section appended that breaks
+	## the user's TOML parser.
+	var bare := _bare_key_header(client)
+	if not bare.is_empty() and bare != primary:
+		out.append(bare)
 	for legacy in client.toml_legacy_section_aliases:
 		out.append("[%s]" % legacy)
 	return out
+
+
+static func _bare_key_header(client: McpClient) -> String:
+	var parts := client.toml_section_path
+	if parts.is_empty():
+		return ""
+	for p in parts:
+		if not _is_bare_key(String(p)):
+			return ""
+	return "[%s]" % ".".join(parts)
+
+
+static func _is_bare_key(s: String) -> bool:
+	if s.is_empty():
+		return false
+	for i in range(s.length()):
+		var c := s.unicode_at(i)
+		var alpha := (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+		var digit := c >= 48 and c <= 57
+		var dash_or_under := c == 45 or c == 95  # '-' or '_'
+		if not (alpha or digit or dash_or_under):
+			return false
+	return true
 
 
 ## Exact-header match. We cannot use a simple prefix check because

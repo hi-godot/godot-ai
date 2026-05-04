@@ -933,6 +933,63 @@ func test_toml_strategy_preserves_other_sections() -> void:
 	assert_contains(content, "[mcp_servers.\"godot-ai\"]")
 
 
+func test_toml_strategy_detects_bare_key_section_no_duplicate_on_reconfigure() -> void:
+	## Regression for the codex duplicate-key bug. TOML accepts bare keys
+	## [A-Za-z0-9_-]+ unquoted, so a hand-written or older-plugin
+	## [mcp_servers.godot-ai] section refers to the same logical key as
+	## the quoted [mcp_servers."godot-ai"] we emit. Reconfigure must
+	## update the bare-key section in place — appending a duplicate
+	## quoted section makes the file fail to parse.
+	var path := _scratch_dir.path_join("bare_key_codex.toml")
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(
+		"[mcp_servers.godot-ai]\n" +
+		"url = \"http://127.0.0.1:7000/mcp\"\n" +
+		"enabled = true\n" +
+		"\n" +
+		"[mcp_servers.godot-ai.tools.session_list]\n" +
+		"approval_mode = \"approve\"\n"
+	)
+	f.close()
+
+	var client := _make_test_toml_client(path)
+
+	## check_status must recognise the bare-key form (was reporting
+	## NOT_CONFIGURED, masking that an entry already existed).
+	assert_eq(
+		McpTomlStrategy.check_status(client, "godot-ai", "http://127.0.0.1:8000/mcp"),
+		McpClient.Status.CONFIGURED_MISMATCH,
+		"bare-key section must be detected by check_status"
+	)
+
+	## configure must update the bare-key section in place. After the
+	## write there must be exactly one godot-ai section header (counting
+	## both bare and quoted forms) — anything else is the duplicate that
+	## breaks the user's TOML parser.
+	var result := McpTomlStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	assert_eq(result.get("status"), "ok")
+
+	var content := FileAccess.open(path, FileAccess.READ).get_as_text()
+	var bare_count := content.count("[mcp_servers.godot-ai]\n")
+	var quoted_count := content.count("[mcp_servers.\"godot-ai\"]\n")
+	assert_eq(bare_count + quoted_count, 1,
+		"exactly one godot-ai section must exist after reconfigure (bare=%d quoted=%d):\n%s" % [bare_count, quoted_count, content])
+
+	## The user's nested subtable customisation must survive — the
+	## strategy only owns the matched section, not its children.
+	assert_contains(content, "[mcp_servers.godot-ai.tools.session_list]")
+	assert_contains(content, "approval_mode = \"approve\"")
+
+	## remove must also clean the bare-key form (was a silent no-op).
+	var removed := McpTomlStrategy.remove(client, "godot-ai")
+	assert_eq(removed.get("status"), "ok")
+	var after_remove := FileAccess.open(path, FileAccess.READ).get_as_text()
+	assert_eq(after_remove.count("[mcp_servers.godot-ai]\n"), 0,
+		"remove must clean the bare-key section:\n%s" % after_remove)
+	assert_eq(after_remove.count("[mcp_servers.\"godot-ai\"]\n"), 0,
+		"remove must clean the quoted-key section:\n%s" % after_remove)
+
+
 # ----- configure/remove verify-after-write (#201) -----
 #
 # A strategy returning `status: ok` is necessary but not sufficient — a write
