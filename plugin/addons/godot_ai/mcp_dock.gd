@@ -7,11 +7,18 @@ extends VBoxContainer
 const ServerStateScript := preload("res://addons/godot_ai/utils/mcp_server_state.gd")
 const ClientRefreshStateScript := preload("res://addons/godot_ai/utils/mcp_client_refresh_state.gd")
 const UpdateManagerScript := preload("res://addons/godot_ai/utils/update_manager.gd")
+const Client := preload("res://addons/godot_ai/clients/_base.gd")
+const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")
+const ClientRegistry := preload("res://addons/godot_ai/clients/_registry.gd")
+const JsonStrategy := preload("res://addons/godot_ai/clients/_json_strategy.gd")
+const TomlStrategy := preload("res://addons/godot_ai/clients/_toml_strategy.gd")
+const CliStrategy := preload("res://addons/godot_ai/clients/_cli_strategy.gd")
+const ToolCatalog := preload("res://addons/godot_ai/tool_catalog.gd")
 
 const DEV_MODE_SETTING := "godot_ai/dev_mode"
 ## Index ↔ persisted-value mapping for the mode-override dropdown. The array
 ## index is the OptionButton item id; the string is what's written to the
-## EditorSetting and read by `McpClientConfigurator.mode_override()`.
+## EditorSetting and read by `ClientConfigurator.mode_override()`.
 const MODE_OVERRIDE_VALUES := ["", "user", "dev"]
 const MODE_OVERRIDE_LABELS := ["Auto", "Force user", "Force dev"]
 const CLIENT_STATUS_REFRESH_COOLDOWN_MSEC := 15 * 1000
@@ -24,8 +31,8 @@ static var COLOR_HEADER := Color(0.95, 0.95, 0.95)
 ## doesn't have to find every literal.
 static var COLOR_AMBER := Color(1.0, 0.75, 0.25)
 
-var _connection: McpConnection
-var _log_buffer: McpLogBuffer
+var _connection
+var _log_buffer
 var _plugin: EditorPlugin
 
 # Always visible
@@ -93,7 +100,7 @@ var _server_restart_in_progress := false
 var _last_mismatched_ids: Array[String] = []
 var _client_status_refresh_thread: Thread
 ## Single source of truth for the refresh-sweep state machine. See
-## `McpClientRefreshState` for the transition table. Replaces the
+## `ClientRefreshStateScript` for the transition table. Replaces the
 ## previously scattered booleans (`_in_flight`, `_timed_out`,
 ## `_deferred_until_filesystem_ready`, `_shutdown_requested`).
 var _refresh_state: int = ClientRefreshStateScript.IDLE
@@ -291,7 +298,7 @@ func _drain_client_action_workers() -> void:
 		if not row.is_empty():
 			_apply_row_status(
 				String(client_id),
-				row.get("status", McpClient.Status.NOT_CONFIGURED),
+				row.get("status", Client.Status.NOT_CONFIGURED),
 				""
 			)
 	_client_action_threads.clear()
@@ -601,7 +608,7 @@ func _build_ui() -> void:
 	_client_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	clients_scroll.add_child(_client_grid)
 
-	for client_id in McpClientConfigurator.client_ids():
+	for client_id in ClientConfigurator.client_ids():
 		_build_client_row(client_id)
 
 	_build_tools_tab(tabs)
@@ -676,7 +683,7 @@ func _build_client_row(client_id: String) -> void:
 	row.add_child(dot_center)
 
 	var name_label := Label.new()
-	name_label.text = McpClientConfigurator.client_display_name(client_id)
+	name_label.text = ClientConfigurator.client_display_name(client_id)
 	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	## Long error messages from `_verify_post_state` (e.g. "reported remove ok
 	## but verification still reads configured…") used to push the Retry /
@@ -726,7 +733,7 @@ func _build_client_row(client_id: String) -> void:
 
 	_client_rows[client_id] = {
 		"dot": dot,
-		"status": McpClient.Status.NOT_CONFIGURED,
+		"status": Client.Status.NOT_CONFIGURED,
 		"name_label": name_label,
 		"configure_btn": configure_btn,
 		"remove_btn": remove_btn,
@@ -738,7 +745,7 @@ func _build_client_row(client_id: String) -> void:
 # --- Status updates ---
 
 func _update_status() -> void:
-	var connected := _connection.is_connected
+	var connected: bool = _connection.is_connected
 	## During plugin self-update there's a brief window where this dock
 	## script is already the new version (Godot hot-reloads scripts on
 	## file change) but `_plugin` is still the old `EditorPlugin` instance
@@ -757,7 +764,7 @@ func _update_status() -> void:
 		connected = false
 
 	## One `match`/`elif` chain, one source of truth. Adding a new
-	## spawn outcome = one `McpServerState` constant + one arm here +
+	## spawn outcome = one `ServerStateScript` constant + one arm here +
 	## one body string in `_crash_body_for_state`.
 	var status_text: String
 	var status_color: Color
@@ -777,13 +784,13 @@ func _update_status() -> void:
 		status_text = "Server exited after %.1fs" % (exit_ms / 1000.0)
 		status_color = Color.RED
 	elif state == ServerStateScript.PORT_EXCLUDED:
-		status_text = "Port %d reserved by Windows" % McpClientConfigurator.http_port()
+		status_text = "Port %d reserved by Windows" % ClientConfigurator.http_port()
 		status_color = Color.RED
 	elif state == ServerStateScript.INCOMPATIBLE:
-		status_text = "Incompatible server on port %d" % McpClientConfigurator.http_port()
+		status_text = "Incompatible server on port %d" % ClientConfigurator.http_port()
 		status_color = Color.RED
 	elif state == ServerStateScript.FOREIGN_PORT:
-		status_text = "Port %d held by another process" % McpClientConfigurator.http_port()
+		status_text = "Port %d held by another process" % ClientConfigurator.http_port()
 		status_color = Color.RED
 	elif state == ServerStateScript.NO_COMMAND:
 		status_text = "No server command found"
@@ -800,7 +807,7 @@ func _update_status() -> void:
 	_update_crash_panel(server_status)
 	_refresh_server_version_label(server_status)
 
-	var changed := connected != _last_connected or status_text != _last_status_text
+	var changed: bool = connected != _last_connected or status_text != _last_status_text
 	if not changed:
 		return
 	_last_connected = connected
@@ -853,15 +860,15 @@ func _update_crash_panel(server_status: Dictionary) -> void:
 		## Seed the SpinBox with a suggested non-reserved port each time
 		## the panel surfaces. Idempotent when the user already has a
 		## good candidate queued up.
-		_port_picker_spinbox.value = McpClientConfigurator.suggest_free_port(
-			McpClientConfigurator.http_port() + 1
+		_port_picker_spinbox.value = ClientConfigurator.suggest_free_port(
+			ClientConfigurator.http_port() + 1
 		)
 
 
 static func _crash_body_for_state(state: int, server_status: Dictionary = {}) -> String:
 	## Single sentence per state. The top status label already names the
 	## problem; don't repeat it here. This copy answers "what do I do?".
-	var port := McpClientConfigurator.http_port()
+	var port := ClientConfigurator.http_port()
 	match state:
 		ServerStateScript.PORT_EXCLUDED:
 			return "Windows (Hyper-V / WSL2 / Docker) reserved port %d. Pick a free port or try `net stop winnat; net start winnat` in an admin shell." % port
@@ -870,7 +877,7 @@ static func _crash_body_for_state(state: int, server_status: Dictionary = {}) ->
 			if bool(server_status.get("can_recover_incompatible", false)):
 				var expected := str(server_status.get("expected_version", ""))
 				if expected.is_empty():
-					expected = McpClientConfigurator.get_plugin_version()
+					expected = ClientConfigurator.get_plugin_version()
 				if not message.is_empty():
 					return "%s Click Restart Server below to replace it with godot-ai v%s." % [message, expected]
 				return "Port %d is occupied by an older godot-ai server. Click Restart Server below to replace it with godot-ai v%s." % [port, expected]
@@ -884,8 +891,8 @@ static func _crash_body_for_state(state: int, server_status: Dictionary = {}) ->
 			## means PyPI hasn't propagated this version yet (~10 min after
 			## publish). `_start_server` already tried `--refresh` once, so
 			## the next realistic move is to wait and reload.
-			if McpClientConfigurator.get_server_launch_mode() == "uvx":
-				var version := McpClientConfigurator.get_plugin_version()
+			if ClientConfigurator.get_server_launch_mode() == "uvx":
+				var version := ClientConfigurator.get_plugin_version()
 				return "The server exited before the WebSocket handshake, even after a `uvx --refresh` retry. If this is a brand-new release, PyPI's index may still be propagating (~10 min). Wait a moment and click Reload Plugin to retry, or check Godot's output log for Python's traceback. Target: godot-ai==%s." % version
 			return "The server exited before the WebSocket handshake. Check Godot's output log (bottom panel) for Python's traceback."
 		ServerStateScript.NO_COMMAND:
@@ -903,10 +910,10 @@ func _build_port_picker_section() -> void:
 	picker_row.add_theme_constant_override("separation", 6)
 
 	_port_picker_spinbox = SpinBox.new()
-	_port_picker_spinbox.min_value = McpClientConfigurator.MIN_PORT
-	_port_picker_spinbox.max_value = McpClientConfigurator.MAX_PORT
+	_port_picker_spinbox.min_value = ClientConfigurator.MIN_PORT
+	_port_picker_spinbox.max_value = ClientConfigurator.MAX_PORT
 	_port_picker_spinbox.step = 1
-	_port_picker_spinbox.value = McpClientConfigurator.http_port()
+	_port_picker_spinbox.value = ClientConfigurator.http_port()
 	_port_picker_spinbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	picker_row.add_child(_port_picker_spinbox)
 
@@ -925,11 +932,11 @@ func _build_port_picker_section() -> void:
 
 func _on_apply_new_port() -> void:
 	var new_port: int = int(_port_picker_spinbox.value)
-	if new_port < McpClientConfigurator.MIN_PORT or new_port > McpClientConfigurator.MAX_PORT:
+	if new_port < ClientConfigurator.MIN_PORT or new_port > ClientConfigurator.MAX_PORT:
 		return
 	var es := EditorInterface.get_editor_settings()
 	if es != null:
-		es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, new_port)
+		es.set_setting(ClientConfigurator.SETTING_HTTP_PORT, new_port)
 	## Every saved client config now points at the old port. Re-sweep so the
 	## drift banner appears in the same frame the user committed the change —
 	## the plugin reload below will run a second sweep on its own first paint,
@@ -944,21 +951,21 @@ func _on_apply_new_port() -> void:
 func _refresh_server_label() -> void:
 	if _server_label == null:
 		return
-	var ws_port := McpClientConfigurator.ws_port()
+	var ws_port := ClientConfigurator.ws_port()
 	if _plugin != null and _plugin.has_method("get_resolved_ws_port"):
 		ws_port = int(_plugin.get_resolved_ws_port())
-	_server_label.text = "WS: %d  HTTP: %d" % [ws_port, McpClientConfigurator.http_port()]
+	_server_label.text = "WS: %d  HTTP: %d" % [ws_port, ClientConfigurator.http_port()]
 
 
 func _update_log() -> void:
 	if _log_buffer == null:
 		return
-	var count := _log_buffer.total_count()
+	var count: int = _log_buffer.total_count()
 	if count == _last_log_count:
 		return
 
 	# Append only new lines
-	var new_lines := _log_buffer.get_recent(count - _last_log_count)
+	var new_lines: Array[String] = _log_buffer.get_recent(count - _last_log_count)
 	for line in new_lines:
 		_log_display.add_text(line + "\n")
 	_last_log_count = count
@@ -995,16 +1002,16 @@ func _apply_dev_mode_visibility() -> void:
 
 	# Setup section: visible in dev mode, OR in user mode when uv is missing
 	# (so users can install uv from the dock).
-	var is_dev := McpClientConfigurator.is_dev_checkout()
-	var uv_missing := not is_dev and McpClientConfigurator.check_uv_version().is_empty()
+	var is_dev := ClientConfigurator.is_dev_checkout()
+	var uv_missing := not is_dev and ClientConfigurator.check_uv_version().is_empty()
 	_setup_section.visible = dev or uv_missing
 
 
 func _mode_override_index_from_setting() -> int:
 	var es := EditorInterface.get_editor_settings()
-	if es == null or not es.has_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING):
+	if es == null or not es.has_setting(ClientConfigurator.MODE_OVERRIDE_SETTING):
 		return 0
-	var v := str(es.get_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING)).strip_edges().to_lower()
+	var v := str(es.get_setting(ClientConfigurator.MODE_OVERRIDE_SETTING)).strip_edges().to_lower()
 	return maxi(MODE_OVERRIDE_VALUES.find(v), 0)
 
 
@@ -1032,7 +1039,7 @@ func _on_mode_override_selected(index: int) -> void:
 	var value: String = MODE_OVERRIDE_VALUES[index] if index >= 0 and index < MODE_OVERRIDE_VALUES.size() else ""
 	var es := EditorInterface.get_editor_settings()
 	if es != null:
-		es.set_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING, value)
+		es.set_setting(ClientConfigurator.MODE_OVERRIDE_SETTING, value)
 	_refresh_install_mode_ui()
 	## Cancel any in-flight startup check before firing a new one, otherwise
 	## the next `request()` returns ERR_BUSY and the dropdown flip silently
@@ -1066,7 +1073,7 @@ func _on_reload_plugin() -> void:
 func _refresh_server_version_label(server_status: Dictionary = {}) -> void:
 	if _setup_server_label == null:
 		return
-	var plugin_ver := McpClientConfigurator.get_plugin_version()
+	var plugin_ver := ClientConfigurator.get_plugin_version()
 	if server_status.is_empty():
 		## Re-fetch only when called outside `_update_status`'s frame
 		## (e.g. from `_apply_new_port`, `_on_restart_*`). Inside the
@@ -1077,7 +1084,7 @@ func _refresh_server_version_label(server_status: Dictionary = {}) -> void:
 			if _plugin != null and _plugin.has_method("get_server_status")
 			else {}
 		)
-	var server_ver := _connection.server_version if _connection != null else ""
+	var server_ver: String = _connection.server_version if _connection != null else ""
 	if server_ver.is_empty():
 		server_ver = str(server_status.get("actual_version", ""))
 	var expected_ver := str(server_status.get("expected_version", ""))
@@ -1202,7 +1209,7 @@ func _refresh_setup_status() -> void:
 		child.queue_free()
 	_dev_server_btn = null
 
-	var is_dev := McpClientConfigurator.is_dev_checkout()
+	var is_dev := ClientConfigurator.is_dev_checkout()
 	if is_dev:
 		_setup_container.add_child(_make_status_row("Mode", "Dev (venv)", Color.CYAN))
 		_dev_server_btn = Button.new()
@@ -1213,7 +1220,7 @@ func _refresh_setup_status() -> void:
 		return
 
 	# User mode — check for uv
-	var uv_version := McpClientConfigurator.check_uv_version()
+	var uv_version := ClientConfigurator.check_uv_version()
 	if not uv_version.is_empty():
 		_setup_container.add_child(_make_status_row("uv", uv_version, Color.GREEN))
 		## Build the Server row with a placeholder label we can update every
@@ -1233,7 +1240,7 @@ func _refresh_setup_status() -> void:
 		server_row.add_child(_setup_server_label)
 		_version_restart_btn = Button.new()
 		_version_restart_btn.text = "Restart"
-		_version_restart_btn.tooltip_text = "Kill the server on port %d and respawn with the plugin's bundled version" % McpClientConfigurator.http_port()
+		_version_restart_btn.tooltip_text = "Kill the server on port %d and respawn with the plugin's bundled version" % ClientConfigurator.http_port()
 		_version_restart_btn.pressed.connect(_on_restart_stale_server)
 		_version_restart_btn.visible = false
 		server_row.add_child(_version_restart_btn)
@@ -1249,13 +1256,13 @@ func _refresh_setup_status() -> void:
 
 
 func _install_mode_text() -> String:
-	if McpClientConfigurator.is_dev_checkout():
+	if ClientConfigurator.is_dev_checkout():
 		return "Install: dev checkout — update via git pull"
-	return "Install: v%s" % McpClientConfigurator.get_plugin_version()
+	return "Install: v%s" % ClientConfigurator.get_plugin_version()
 
 
 func _install_mode_tooltip() -> String:
-	if not McpClientConfigurator.is_dev_checkout():
+	if not ClientConfigurator.is_dev_checkout():
 		return "Plugin installed from a release ZIP, Asset Library, or source copy. Update button in this dock downloads the latest GitHub release."
 	var target := _resolve_plugin_symlink_target()
 	if target.is_empty():
@@ -1298,7 +1305,7 @@ func _make_status_row(label_text: String, value_text: String, value_color: Color
 ## label and tooltip. Factored out so tests can cover all three states without
 ## spinning up a real server or plugin.
 static func _dev_server_btn_state(has_managed: bool, dev_running: bool) -> Dictionary:
-	var port := McpClientConfigurator.http_port()
+	var port := ClientConfigurator.http_port()
 	if has_managed:
 		return {
 			"text": "Switch to dev mode (--reload)",
@@ -1356,8 +1363,8 @@ func _on_install_uv() -> void:
 	## the CLI-finder cache key is `uvx.exe` — invalidating just `"uvx"`
 	## would leave the cache stale and the dock would keep showing
 	## "uv: not found" for the rest of the session.
-	McpClientConfigurator.invalidate_uvx_cli_cache()
-	McpClientConfigurator.invalidate_uv_version_cache()
+	ClientConfigurator.invalidate_uvx_cli_cache()
+	ClientConfigurator.invalidate_uv_version_cache()
 	_refresh_setup_status.call_deferred()
 
 
@@ -1365,7 +1372,7 @@ func _on_install_uv() -> void:
 
 func _on_configure_client(client_id: String) -> void:
 	if _server_blocks_client_health():
-		_apply_row_status(client_id, McpClient.Status.ERROR, _server_blocked_client_message())
+		_apply_row_status(client_id, Client.Status.ERROR, _server_blocked_client_message())
 		_refresh_clients_summary()
 		return
 	_dispatch_client_action(client_id, "configure")
@@ -1377,8 +1384,8 @@ func _on_remove_client(client_id: String) -> void:
 
 ## Spawn a worker thread for Configure / Remove so a hung CLI can't lock
 ## the editor (issue #239). The action verbs are: "configure" → calls
-## `McpClientConfigurator.configure`; "remove" → calls
-## `McpClientConfigurator.remove`. Both routes shell out to the per-client
+## `ClientConfigurator.configure`; "remove" → calls
+## `ClientConfigurator.remove`. Both routes shell out to the per-client
 ## CLI via `McpCliExec.run`, which is wall-clock-bounded.
 ##
 ## Per-row in-flight rules:
@@ -1406,7 +1413,7 @@ func _dispatch_client_action(client_id: String, action: String) -> void:
 	## The status-refresh worker uses the same pattern — see
 	## `_perform_initial_client_status_refresh` and
 	## `_request_client_status_refresh`.
-	var server_url := McpClientConfigurator.http_url()
+	var server_url := ClientConfigurator.http_url()
 	var generation := int(_client_action_generations.get(client_id, 0)) + 1
 	_client_action_generations[client_id] = generation
 	var thread := Thread.new()
@@ -1417,16 +1424,16 @@ func _dispatch_client_action(client_id: String, action: String) -> void:
 	if err != OK:
 		_client_action_threads.erase(client_id)
 		_finalize_action_buttons(client_id)
-		_apply_row_status(client_id, McpClient.Status.ERROR, "couldn't start worker thread")
+		_apply_row_status(client_id, Client.Status.ERROR, "couldn't start worker thread")
 		_refresh_clients_summary()
 
 
 func _run_client_action_worker(client_id: String, action: String, server_url: String, generation: int) -> void:
 	var result: Dictionary
 	if action == "remove":
-		result = McpClientConfigurator.remove(client_id, server_url)
+		result = ClientConfigurator.remove(client_id, server_url)
 	else:
-		result = McpClientConfigurator.configure(client_id, server_url)
+		result = ClientConfigurator.configure(client_id, server_url)
 	if _refresh_state != ClientRefreshStateScript.SHUTTING_DOWN:
 		call_deferred("_apply_client_action_result", client_id, action, result, generation)
 
@@ -1443,18 +1450,18 @@ func _apply_client_action_result(client_id: String, action: String, result: Dict
 		_client_action_threads.erase(client_id)
 	_finalize_action_buttons(client_id)
 	if _server_blocks_client_health():
-		_apply_row_status(client_id, McpClient.Status.ERROR, _server_blocked_client_message())
+		_apply_row_status(client_id, Client.Status.ERROR, _server_blocked_client_message())
 		_refresh_clients_summary()
 		return
 
-	var success_status := McpClient.Status.NOT_CONFIGURED if action == "remove" else McpClient.Status.CONFIGURED
+	var success_status := Client.Status.NOT_CONFIGURED if action == "remove" else Client.Status.CONFIGURED
 	if result.get("status") == "ok":
 		_apply_row_status(client_id, success_status)
 		var row: Dictionary = _client_rows.get(client_id, {})
 		if not row.is_empty():
 			(row["manual_panel"] as VBoxContainer).visible = false
 	else:
-		_apply_row_status(client_id, McpClient.Status.ERROR, str(result.get("message", "failed")))
+		_apply_row_status(client_id, Client.Status.ERROR, str(result.get("message", "failed")))
 		if action == "configure":
 			_show_manual_command_for(client_id)
 	_refresh_clients_summary()
@@ -1505,14 +1512,14 @@ func _on_refresh_clients_pressed() -> void:
 func _on_configure_all_clients() -> void:
 	if _server_blocks_client_health():
 		for client_id in _client_rows:
-			_apply_row_status(String(client_id), McpClient.Status.ERROR, _server_blocked_client_message())
+			_apply_row_status(String(client_id), Client.Status.ERROR, _server_blocked_client_message())
 		_refresh_clients_summary()
 		return
 	if ClientRefreshStateScript.has_worker_alive(_refresh_state):
 		return
 	for client_id in _client_rows:
-		var status: McpClient.Status = _client_rows[client_id].get("status", McpClient.Status.NOT_CONFIGURED)
-		if status == McpClient.Status.CONFIGURED:
+		var status: Client.Status = _client_rows[client_id].get("status", Client.Status.NOT_CONFIGURED)
+		if status == Client.Status.CONFIGURED:
 			continue
 		_on_configure_client(String(client_id))
 	_refresh_clients_summary()
@@ -1619,16 +1626,16 @@ func _build_tools_tab(tabs: TabContainer) -> void:
 	core_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	core_row.add_child(core_label)
 	var core_count := Label.new()
-	core_count.text = "%d tools" % McpToolCatalog.CORE_TOOLS.size()
+	core_count.text = "%d tools" % ToolCatalog.CORE_TOOLS.size()
 	core_count.add_theme_color_override("font_color", COLOR_MUTED)
 	core_row.add_child(core_count)
-	core_row.tooltip_text = ", ".join(McpToolCatalog.CORE_TOOLS)
+	core_row.tooltip_text = ", ".join(ToolCatalog.CORE_TOOLS)
 	grid.add_child(core_row)
 
 	grid.add_child(HSeparator.new())
 
 	_tools_domain_checkboxes.clear()
-	for entry in McpToolCatalog.DOMAINS:
+	for entry in ToolCatalog.DOMAINS:
 		_build_tools_domain_row(grid, entry)
 
 	tools_tab.add_child(HSeparator.new())
@@ -1701,7 +1708,7 @@ func _reset_tools_pending_from_setting() -> void:
 	## Unknown domain names in the setting (e.g. from an older plugin
 	## version) are silently dropped — matches the Python side's
 	## warn-and-continue behavior when it sees an unknown name.
-	var saved_raw := McpClientConfigurator.excluded_domains()
+	var saved_raw := ClientConfigurator.excluded_domains()
 	var saved := PackedStringArray()
 	if not saved_raw.is_empty():
 		for part in saved_raw.split(","):
@@ -1733,8 +1740,8 @@ func _on_tools_domain_toggled(pressed: bool, domain_id: String) -> void:
 func _refresh_tools_ui_state() -> void:
 	if _tools_count_label == null:
 		return
-	var enabled := McpToolCatalog.enabled_tool_count(_tools_pending_excluded)
-	var total := McpToolCatalog.total_tool_count()
+	var enabled := ToolCatalog.enabled_tool_count(_tools_pending_excluded)
+	var total := ToolCatalog.total_tool_count()
 	_tools_count_label.text = "%d / %d" % [enabled, total]
 	var dirty := _tools_pending_excluded != _tools_saved_excluded
 	_tools_dirty_warning.visible = dirty
@@ -1749,10 +1756,10 @@ func _refresh_tools_ui_state() -> void:
 
 
 func _on_tools_apply() -> void:
-	var canonical_excluded := McpToolCatalog.canonical(_tools_pending_excluded)
+	var canonical_excluded := ToolCatalog.canonical(_tools_pending_excluded)
 	var es := EditorInterface.get_editor_settings()
 	if es != null:
-		es.set_setting(McpClientConfigurator.SETTING_EXCLUDED_DOMAINS, canonical_excluded)
+		es.set_setting(ClientConfigurator.SETTING_EXCLUDED_DOMAINS, canonical_excluded)
 	_tools_saved_excluded = _tools_pending_excluded.duplicate()
 	_refresh_tools_ui_state()
 	## Plugin reload respawns the server with the new `--exclude-domains`
@@ -1794,10 +1801,10 @@ func _refresh_clients_summary() -> void:
 	var configured := 0
 	var mismatched_ids: Array[String] = []
 	for client_id in _client_rows:
-		var status: McpClient.Status = _client_rows[client_id].get("status", McpClient.Status.NOT_CONFIGURED)
-		if status == McpClient.Status.CONFIGURED:
+		var status: Client.Status = _client_rows[client_id].get("status", Client.Status.NOT_CONFIGURED)
+		if status == Client.Status.CONFIGURED:
 			configured += 1
-		elif status == McpClient.Status.CONFIGURED_MISMATCH:
+		elif status == Client.Status.CONFIGURED_MISMATCH:
 			mismatched_ids.append(client_id)
 	var text := "%d / %d configured" % [configured, _client_rows.size()]
 	if mismatched_ids.size() > 0:
@@ -1818,7 +1825,7 @@ func _show_manual_command_for(client_id: String) -> void:
 	var row: Dictionary = _client_rows.get(client_id, {})
 	if row.is_empty():
 		return
-	var cmd := McpClientConfigurator.manual_command(client_id)
+	var cmd := ClientConfigurator.manual_command(client_id)
 	if cmd.is_empty():
 		row["manual_panel"].visible = false
 		return
@@ -1839,7 +1846,7 @@ func _refresh_all_client_statuses() -> void:
 	## main thread.
 	if _server_blocks_client_health():
 		for client_id in _client_rows:
-			_apply_row_status(String(client_id), McpClient.Status.ERROR, _server_blocked_client_message())
+			_apply_row_status(String(client_id), Client.Status.ERROR, _server_blocked_client_message())
 		_refresh_clients_summary()
 		return
 	_request_client_status_refresh(true)
@@ -1950,18 +1957,18 @@ func _perform_initial_client_status_refresh() -> void:
 
 	if _server_blocks_client_health():
 		for client_id in _client_rows:
-			_apply_row_status(String(client_id), McpClient.Status.ERROR, _server_blocked_client_message())
+			_apply_row_status(String(client_id), Client.Status.ERROR, _server_blocked_client_message())
 		_refresh_clients_summary()
 		return
 
 	_warm_strategy_bytecode()
 
 	var generation := _begin_client_status_refresh_run()
-	var server_url := McpClientConfigurator.http_url()
+	var server_url := ClientConfigurator.http_url()
 	var all_probes: Array[Dictionary] = []
 
 	for client_id in _client_rows:
-		var probe := McpClientConfigurator.client_status_probe_snapshot(String(client_id))
+		var probe := ClientConfigurator.client_status_probe_snapshot(String(client_id))
 		if probe.is_empty():
 			continue
 		all_probes.append(probe)
@@ -1989,14 +1996,14 @@ func _perform_initial_client_status_refresh() -> void:
 ## itself. See `_perform_initial_client_status_refresh` for context and
 ## #233 / #235 for the SIGABRT this exists to prevent.
 func _warm_strategy_bytecode() -> void:
-	var ids := McpClientConfigurator.client_ids()
+	var ids := ClientConfigurator.client_ids()
 	if ids.is_empty():
 		return
-	var any_client := McpClientRegistry.get_by_id(String(ids[0]))
+	var any_client := ClientRegistry.get_by_id(String(ids[0]))
 	if any_client != null:
-		McpJsonStrategy.verify_entry(any_client, {}, "")
-	McpTomlStrategy.format_body(PackedStringArray(), "")
-	McpCliStrategy.format_args(PackedStringArray(), "", "")
+		JsonStrategy.verify_entry(any_client, {}, "")
+	TomlStrategy.format_body(PackedStringArray(), "")
+	CliStrategy.format_args(PackedStringArray(), "", "")
 
 
 func _begin_client_status_refresh_run() -> int:
@@ -2029,7 +2036,7 @@ func _request_client_status_refresh(force: bool = false) -> bool:
 	## background worker's result is applied on the main thread.
 	if _server_blocks_client_health():
 		for client_id in _client_rows:
-			_apply_row_status(String(client_id), McpClient.Status.ERROR, _server_blocked_client_message())
+			_apply_row_status(String(client_id), Client.Status.ERROR, _server_blocked_client_message())
 		_refresh_clients_summary()
 		return false
 	if _is_self_update_in_progress():
@@ -2071,8 +2078,8 @@ func _request_client_status_refresh(force: bool = false) -> bool:
 
 	var client_probes: Array[Dictionary] = []
 	for client_id in _client_rows:
-		client_probes.append(McpClientConfigurator.client_status_probe_snapshot(String(client_id)))
-	var server_url := McpClientConfigurator.http_url()
+		client_probes.append(ClientConfigurator.client_status_probe_snapshot(String(client_id)))
+	var server_url := ClientConfigurator.http_url()
 
 	var generation := _begin_client_status_refresh_run()
 	_client_status_refresh_thread = Thread.new()
@@ -2138,14 +2145,14 @@ func _run_client_status_refresh_worker(client_probes: Array[Dictionary], server_
 		var client_id := String(probe.get("id", ""))
 		if client_id.is_empty():
 			continue
-		var details := McpClientConfigurator.check_status_details_for_url_with_cli_path(
+		var details := ClientConfigurator.check_status_details_for_url_with_cli_path(
 			client_id,
 			server_url,
 			String(probe.get("cli_path", ""))
 		)
 		var installed := bool(probe.get("installed", false))
 		results[client_id] = {
-			"status": details.get("status", McpClient.Status.NOT_CONFIGURED),
+			"status": details.get("status", Client.Status.NOT_CONFIGURED),
 			"installed": installed,
 			"error_msg": details.get("error_msg", ""),
 		}
@@ -2161,7 +2168,7 @@ func _apply_client_status_refresh_results(results: Dictionary, generation: int) 
 		_client_status_refresh_thread = null
 	if _server_blocks_client_health():
 		for client_id in _client_rows:
-			_apply_row_status(String(client_id), McpClient.Status.ERROR, _server_blocked_client_message())
+			_apply_row_status(String(client_id), Client.Status.ERROR, _server_blocked_client_message())
 		_finalize_completed_refresh()
 		return
 
@@ -2175,7 +2182,7 @@ func _apply_client_status_refresh_results(results: Dictionary, generation: int) 
 		var result: Dictionary = results[client_id]
 		_apply_row_status(
 			String(client_id),
-			result.get("status", McpClient.Status.NOT_CONFIGURED),
+			result.get("status", Client.Status.NOT_CONFIGURED),
 			str(result.get("error_msg", "")),
 			result.get("installed", false)
 		)
@@ -2221,7 +2228,7 @@ func _refresh_drift_banner(mismatched_ids: Array[String]) -> void:
 		return
 	var names: Array[String] = []
 	for id in mismatched_ids:
-		names.append(McpClientConfigurator.client_display_name(id))
+		names.append(ClientConfigurator.client_display_name(id))
 	## Active server URL is already shown on the WS:/HTTP: line above the
 	## Clients section, so it doesn't need to repeat here. Lead with the
 	## client names — that's the only thing the user can act on.
@@ -2245,7 +2252,7 @@ func _on_reconfigure_mismatched() -> void:
 
 func _apply_row_status(
 	client_id: String,
-	status: McpClient.Status,
+	status: Client.Status,
 	error_msg: String = "",
 	installed_override: Variant = null,
 ) -> void:
@@ -2257,20 +2264,20 @@ func _apply_row_status(
 	var configure_btn: Button = row["configure_btn"]
 	var remove_btn: Button = row["remove_btn"]
 	var name_label: Label = row["name_label"]
-	var base_name := McpClientConfigurator.client_display_name(client_id)
+	var base_name := ClientConfigurator.client_display_name(client_id)
 	match status:
-		McpClient.Status.CONFIGURED:
+		Client.Status.CONFIGURED:
 			dot.color = Color.GREEN
 			configure_btn.text = "Reconfigure"
 			remove_btn.visible = true
 			name_label.text = base_name
-		McpClient.Status.NOT_CONFIGURED:
+		Client.Status.NOT_CONFIGURED:
 			dot.color = COLOR_MUTED
 			configure_btn.text = "Configure"
 			remove_btn.visible = false
-			var installed: bool = installed_override if installed_override != null else McpClientConfigurator.is_installed(client_id)
+			var installed: bool = installed_override if installed_override != null else ClientConfigurator.is_installed(client_id)
 			name_label.text = base_name if installed else "%s  (not detected)" % base_name
-		McpClient.Status.CONFIGURED_MISMATCH:
+		Client.Status.CONFIGURED_MISMATCH:
 			## Amber matches the dock-level drift banner so a glance at the
 			## row + the banner read as the same condition.
 			dot.color = COLOR_AMBER

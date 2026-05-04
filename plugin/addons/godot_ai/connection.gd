@@ -14,12 +14,14 @@ const RECONNECT_LOG_EVERY_N_ATTEMPTS := 10
 ## responses get a compact structured error when that can still be sent;
 ## state events report failure so their callers can retry on a later tick.
 const OUTBOUND_BUFFER_LIMIT_BYTES := 4 * 1024 * 1024
+const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 var _peer := WebSocketPeer.new()
 ## Set by plugin.gd after resolving the configured WebSocket port once for the
 ## server spawn. Reconnects reuse this cached value so they keep dialing the
 ## same port the Python server was asked to bind.
-var ws_port := McpClientConfigurator.DEFAULT_WS_PORT
+var ws_port := ClientConfigurator.DEFAULT_WS_PORT
 var _url := ""
 var _connected := false
 var _reconnect_attempt := 0
@@ -31,8 +33,8 @@ var _session_id := ""
 ## must treat empty as "unknown, don't raise a false alarm".
 var server_version := ""
 
-var dispatcher: McpDispatcher
-var log_buffer: McpLogBuffer
+var dispatcher
+var log_buffer
 ## Set by plugin.gd when the HTTP port is occupied by an incompatible or
 ## unverified server. Keeping the Connection node alive lets handlers and the
 ## dock share one object, but no WebSocket is opened to the wrong server.
@@ -205,11 +207,11 @@ func _send_handshake() -> void:
 		"session_id": _session_id,
 		"godot_version": Engine.get_version_info().get("string", "unknown"),
 		"project_path": ProjectSettings.globalize_path("res://"),
-		"plugin_version": McpClientConfigurator.get_plugin_version(),
+		"plugin_version": ClientConfigurator.get_plugin_version(),
 		"protocol_version": 1,
 		"readiness": _last_readiness,
 		"editor_pid": OS.get_process_id(),
-		"server_launch_mode": McpClientConfigurator.get_server_launch_mode(),
+		"server_launch_mode": ClientConfigurator.get_server_launch_mode(),
 	})
 
 
@@ -373,7 +375,7 @@ static func _make_backpressure_error(
 		"status": "error",
 		"data": {},
 		"error": {
-			"code": McpErrorCodes.INTERNAL_ERROR,
+			"code": ErrorCodes.INTERNAL_ERROR,
 			"message": (
 				"Outbound WebSocket buffer is full; dropped response before queueing "
 				+ "more data. Retry with a smaller payload (for screenshots, lower "

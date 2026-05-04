@@ -18,5 +18,6 @@ def test_deferred_timeout_error_code_registered_on_both_sides() -> None:
 def test_dispatcher_tracks_deferred_ids_and_emits_timeout_error() -> None:
     source = (PLUGIN_ROOT / "dispatcher.gd").read_text()
     assert "_pending_deferred" in source
-    assert "McpErrorCodes.DEFERRED_TIMEOUT" in source
+    assert 'const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")' in source
+    assert "ErrorCodes.DEFERRED_TIMEOUT" in source
     assert "complete_deferred_response" in source

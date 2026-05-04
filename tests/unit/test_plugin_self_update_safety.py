@@ -55,14 +55,18 @@ PLUGIN_ROOT = REPO_ROOT / "plugin" / "addons" / "godot_ai"
 PLUGIN_GD = PLUGIN_ROOT / "plugin.gd"
 
 # Beta #297 moved plugin-owned startup/update work into these scripts.
-# This is intentionally the targeted PR #309 adaptation surface, not a
-# broad cleanup of every direct/transitive preload such as the dock,
-# handlers, connection, or client strategy scripts.
+# This is intentionally the targeted PR #309 adaptation surface plus the
+# PR 9 depth-1 infrastructure follow-up, not a broad cleanup of every
+# direct/transitive preload such as handlers or client strategy scripts.
 TARGETED_LOAD_SURFACE_FILES = (
     PLUGIN_GD,
     PLUGIN_ROOT / "utils" / "server_lifecycle.gd",
     PLUGIN_ROOT / "utils" / "port_resolver.gd",
     PLUGIN_ROOT / "utils" / "update_manager.gd",
+    PLUGIN_ROOT / "connection.gd",
+    PLUGIN_ROOT / "dispatcher.gd",
+    PLUGIN_ROOT / "mcp_dock.gd",
+    PLUGIN_ROOT / "client_configurator.gd",
 )
 
 
@@ -91,14 +95,13 @@ def _strip_gdscript_comments(source: str) -> str:
     return re.sub(r"#.*$", "", source, flags=re.MULTILINE)
 
 
-def test_plugin_gd_has_no_typed_field_against_plugin_class_names() -> None:
-    """`plugin.gd` field declarations must not type-bind to any `Mcp*` class.
+def test_targeted_load_scripts_have_no_typed_fields_against_plugin_class_names() -> None:
+    """Targeted load-path field declarations must not type-bind to `Mcp*`.
 
     See module docstring for the parse-hazard mechanism. Untype the field;
     keep the type fence on handler `_init` parameters.
     """
 
-    source = PLUGIN_GD.read_text()
     mcp_classes = _registered_mcp_class_names()
     assert mcp_classes, (
         "Sanity check: expected to find Mcp* class_name declarations in the addon tree"
@@ -109,14 +112,20 @@ def test_plugin_gd_has_no_typed_field_against_plugin_class_names() -> None:
     # vars inside functions, which the parser resolves lazily and which
     # are not part of the parse-time hazard.
     typed_field = re.compile(r"^var\s+(\w+)\s*:\s*(Mcp\w+)\b", re.MULTILINE)
-    offenders: list[tuple[str, str]] = []
-    for match in typed_field.finditer(source):
-        field_name, type_name = match.group(1), match.group(2)
-        if type_name in mcp_classes:
-            offenders.append((field_name, type_name))
+    offenders: list[str] = []
+
+    for gd_file in TARGETED_LOAD_SURFACE_FILES:
+        source = _strip_gdscript_comments(gd_file.read_text())
+        for match in typed_field.finditer(source):
+            field_name, type_name = match.group(1), match.group(2)
+            if type_name not in mcp_classes:
+                continue
+            line_no = source.count("\n", 0, match.start()) + 1
+            rel_path = gd_file.relative_to(REPO_ROOT)
+            offenders.append(f"{rel_path}:{line_no}: var {field_name}: {type_name}")
 
     assert not offenders, (
-        "plugin.gd must not declare typed fields against plugin class_names "
+        "Targeted load-path scripts must not declare typed fields against plugin class_names "
         "(self-update parse hazard, issues #242 / #244). Untype the field "
         "and rely on the typed handler `_init` parameters for the type "
         f"fence. Offending declarations: {offenders}"
