@@ -40,7 +40,7 @@ static func expand(template: String) -> String:
 			if value.is_empty() and var_name == "LOCALAPPDATA":
 				value = _home().path_join("AppData/Local")
 			if value.is_empty() and var_name == "HOME":
-				value = OS.get_environment("USERPROFILE")
+				value = _home()
 			out = out.replace(token, value)
 	return out
 
