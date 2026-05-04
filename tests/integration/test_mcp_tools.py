@@ -3336,6 +3336,49 @@ class TestPerCallSessionRouting:
         finally:
             await plugin_b.close()
 
+    async def test_concurrent_read_and_write_route_to_target_sessions(self, mcp_stack):
+        client, plugin_a = mcp_stack
+        plugin_b = await self._connect_second_plugin("proj-b@0002")
+        try:
+            async def respond_a():
+                cmd = await plugin_a.recv_command()
+                assert cmd["command"] == "get_open_scenes"
+                await plugin_a.send_response(
+                    cmd["request_id"],
+                    {"scenes": ["res://from_a.tscn"], "current": "res://from_a.tscn"},
+                )
+
+            async def respond_b():
+                cmd = await plugin_b.recv_command()
+                assert cmd["command"] == "create_node"
+                assert cmd["params"] == {"type": "Node3D", "name": "FromB", "parent_path": ""}
+                await plugin_b.send_response(
+                    cmd["request_id"],
+                    {"path": "/Main/FromB", "type": "Node3D", "undoable": True},
+                )
+
+            responders = [asyncio.create_task(respond_a()), asyncio.create_task(respond_b())]
+            read_result, write_result = await asyncio.gather(
+                client.call_tool(
+                    "scene_manage",
+                    {"op": "get_roots", "params": {}, "session_id": "mcp-test"},
+                ),
+                client.call_tool(
+                    "node_create",
+                    {
+                        "type": "Node3D",
+                        "name": "FromB",
+                        "session_id": "proj-b@0002",
+                    },
+                ),
+            )
+            await asyncio.gather(*responders)
+
+            assert read_result.data["current"] == "res://from_a.tscn"
+            assert write_result.data["path"] == "/Main/FromB"
+        finally:
+            await plugin_b.close()
+
     async def test_session_id_respects_target_readiness(self, mcp_stack):
         client, plugin_a = mcp_stack
         ## Active session (plugin_a/mcp-test) is ready; plugin_b is playing.

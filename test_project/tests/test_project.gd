@@ -140,6 +140,18 @@ func test_run_project_invalid_mode() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
+func test_run_project_invalid_mode_restores_connection_pause() -> void:
+	var conn := McpConnection.new()
+	var handler := ProjectHandler.new(conn)
+	assert_false(conn.pause_processing, "precondition: connection processing starts unpaused")
+
+	var result := handler.run_project({"mode": "invalid_mode"})
+
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_false(conn.pause_processing, "validation errors must not leave processing paused")
+	conn.free()
+
+
 func test_run_project_custom_missing_scene() -> void:
 	var result := _handler.run_project({"mode": "custom"})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)

@@ -264,6 +264,65 @@ func test_pause_processing_property_preserves_nested_pause_semantics() -> void:
 	conn.free()
 
 
+# ----- pause depth across disconnect/reconnect -----
+#
+# Issue #297 PR 4 checklist: "Connection lifecycle round-trip — disconnect
+# -> reconnect -> handshake -> first command, with pause/resume interleaved."
+# `_clear_on_disconnect` is the choke point that runs once per drop. It
+# resets per-server state (server_version, pending deferred responses) but
+# MUST NOT touch `_pause_depth`: pauses are owned by handlers (e.g.
+# ResourceSaver mid-save in `utils/resource_io.gd`, scene save in
+# `scene_handler.gd`). Clearing them on a socket drop would let the next
+# `_process` tick resume polling while the editor is still in a re-entrant
+# save window — the exact hazard #289 fixed.
+
+
+func test_clear_on_disconnect_preserves_pause_depth() -> void:
+	var conn := McpConnection.new()
+	conn.pause()
+	conn.pause()
+	assert_eq(conn.pause_depth(), 2, "precondition: nested pause depth=2")
+
+	conn._clear_on_disconnect()
+
+	assert_eq(
+		conn.pause_depth(), 2,
+		"disconnect must leave handler-held pauses intact",
+	)
+	assert_true(
+		conn.pause_processing,
+		"_process must keep skipping the WebSocket poll while a save still owns the pause",
+	)
+	conn.resume()
+	conn.resume()
+	assert_eq(conn.pause_depth(), 0, "balanced resume drains depth to zero after a disconnect")
+	conn.free()
+
+
+func test_pause_resume_balances_across_repeated_reconnect_cycles() -> void:
+	## Disconnect/reconnect cycles call `_clear_on_disconnect` once per
+	## drop. Multiple cycles plus pause/resume calls interleaved between
+	## them must still balance — depth is the source of truth and only
+	## explicit resumes drain it.
+	var conn := McpConnection.new()
+
+	conn.pause()  # handler A acquires pause before any drop
+	conn._clear_on_disconnect()  # cycle 1: server drops underneath A
+	conn.pause()  # handler B starts mid-disconnect (e.g. queued save)
+	conn._clear_on_disconnect()  # cycle 2: a second drop while B is mid-save
+	assert_eq(
+		conn.pause_depth(), 2,
+		"both handler-held pauses must survive back-to-back drops",
+	)
+
+	conn.resume()  # handler B finishes
+	assert_true(conn.pause_processing, "A's pause still gates polling")
+	conn.resume()  # handler A finishes
+	assert_eq(conn.pause_depth(), 0)
+	assert_false(conn.pause_processing, "polling resumes only after every paired resume")
+	conn.free()
+
+
 # ----- outbound backpressure -----
 
 

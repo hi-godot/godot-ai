@@ -170,6 +170,45 @@ class TestCommandRoundTrip:
         assert r2 == {"cmd": "second"}
         await plugin.close()
 
+    async def test_concurrent_commands_route_to_explicit_sessions(self, harness):
+        """A read and a write in flight at the same time stay on their target sessions."""
+        plugin_a = await harness.connect_plugin(session_id="route-a")
+        plugin_b = await harness.connect_plugin(session_id="route-b")
+        client = GodotClient(harness.server, harness.registry)
+
+        async def respond_a():
+            cmd = await plugin_a.recv_command()
+            assert cmd["command"] == "get_open_scenes"
+            await plugin_a.send_response(
+                cmd["request_id"],
+                {"scenes": ["res://from_a.tscn"], "current": "res://from_a.tscn"},
+            )
+
+        async def respond_b():
+            cmd = await plugin_b.recv_command()
+            assert cmd["command"] == "create_node"
+            assert cmd["params"] == {"type": "Node3D", "name": "FromB"}
+            await plugin_b.send_response(
+                cmd["request_id"],
+                {"path": "/Main/FromB", "type": "Node3D", "undoable": True},
+            )
+
+        handler_tasks = [asyncio.create_task(respond_a()), asyncio.create_task(respond_b())]
+        read_result, write_result = await asyncio.gather(
+            client.send("get_open_scenes", session_id="route-a"),
+            client.send(
+                "create_node",
+                params={"type": "Node3D", "name": "FromB"},
+                session_id="route-b",
+            ),
+        )
+        await asyncio.gather(*handler_tasks)
+
+        assert read_result["current"] == "res://from_a.tscn"
+        assert write_result["path"] == "/Main/FromB"
+        await plugin_a.close()
+        await plugin_b.close()
+
 
 # ---------------------------------------------------------------------------
 # Error handling
@@ -264,6 +303,22 @@ class TestErrors:
         assert exc_info.value.data["command"] == "deferred_never_replies"
         await plugin.close()
 
+    async def test_timeout_removes_pending_request_and_ignores_late_reply(self, harness):
+        plugin = await harness.connect_plugin()
+        client = GodotClient(harness.server, harness.registry)
+
+        with pytest.raises(TimeoutError):
+            await client.send("slow_command", timeout=0.05)
+
+        assert harness.server._pending == {}
+
+        cmd = await plugin.recv_command()
+        await plugin.send_response(cmd["request_id"], {"arrived": "late"})
+        await asyncio.sleep(0.05)
+
+        assert harness.server._pending == {}
+        await plugin.close()
+
 
 # ---------------------------------------------------------------------------
 # Events
@@ -340,6 +395,37 @@ class TestMultipleSessions:
         assert harness.registry.get("keep-a") is None
         assert harness.registry.get("keep-b") is not None
         await plugin_b.close()
+
+    async def test_disconnect_reconnect_handshake_then_first_command(self, harness):
+        plugin_old = await harness.connect_plugin(session_id="reconnect-old")
+        assert harness.registry.active_session_id == "reconnect-old"
+
+        await plugin_old.close()
+        for _ in range(20):
+            if harness.registry.get("reconnect-old") is None:
+                break
+            await asyncio.sleep(0.05)
+        assert harness.registry.get("reconnect-old") is None
+        assert harness.registry.active_session_id is None
+
+        plugin_new = await harness.connect_plugin(session_id="reconnect-new")
+        assert harness.registry.active_session_id == "reconnect-new"
+        client = GodotClient(harness.server, harness.registry)
+
+        async def respond_new():
+            cmd = await plugin_new.recv_command()
+            assert cmd["command"] == "get_editor_state"
+            await plugin_new.send_response(
+                cmd["request_id"],
+                {"project_name": "AfterReconnect", "godot_version": "4.4.1"},
+            )
+
+        handler_task = asyncio.create_task(respond_new())
+        result = await client.send("get_editor_state")
+        await handler_task
+
+        assert result["project_name"] == "AfterReconnect"
+        await plugin_new.close()
 
 
 # --- Issue #262: editor_state self-heals a stale "playing" cache ---
