@@ -635,6 +635,112 @@ func test_list_enumerates_2d_and_3d() -> void:
 
 
 # ============================================================================
+# logical-current determinism (#301)
+# ============================================================================
+
+# After configure({current: true}) followed by undo, the MCP read layer
+# must report the original current camera deterministically — even if
+# the viewport slot is still racing under us. This is the read-path
+# guarantee #305 was after.
+func test_configure_current_undo_mcp_reads_are_deterministic() -> void:
+	var first := _create("DetFirst", "2d", true)
+	if first.is_empty():
+		assert_true(false, "No scene open")
+		return
+	var second := _create("DetSecond", "2d", false)
+
+	var result := _handler.configure({
+		"camera_path": second.data.path,
+		"properties": {"current": true},
+	})
+	assert_has_key(result, "data")
+
+	# After flipping current to second, MCP reads must agree on second.
+	var got_second := _handler.get_camera({"camera_path": ""})
+	assert_eq(got_second.data.path, second.data.path,
+		"camera_get('') should resolve to second after configure(current=true)")
+	assert_eq(got_second.data.current, true)
+
+	assert_true(editor_undo(_undo_redo), "editor_undo returned false")
+
+	# Logical marker is authoritative — only first reports current.
+	var got_first := _handler.get_camera({"camera_path": ""})
+	assert_eq(got_first.data.path, first.data.path,
+		"camera_get('') should resolve to first after undo")
+	assert_eq(got_first.data.current, true)
+
+	var listed := _handler.list_cameras({})
+	var current_paths: Array = []
+	for entry in listed.data.cameras:
+		if bool(entry.current):
+			current_paths.append(entry.path)
+	assert_eq(current_paths.size(), 1,
+		"Exactly one Camera2D should report current after undo, got %s" % [current_paths])
+	assert_eq(current_paths[0], first.data.path,
+		"list_cameras should report first as current after undo, got %s" % [current_paths])
+
+	# Per-path get_camera must agree with the list view — not OR-stack
+	# logical with a still-laggy viewport for second.
+	var second_view := _handler.get_camera({"camera_path": second.data.path})
+	assert_eq(second_view.data.current, false,
+		"camera_get(second) must report current=false after undo")
+
+
+# Logical-current state must live on the handler, NOT as Node metadata
+# on the scene root, because set_meta() persists into .tscn on save.
+# Regression guard: walk the scene root's metadata after a make_current
+# round-trip and assert no godot_ai/* keys leaked there.
+func test_logical_current_does_not_pollute_scene_root_metadata() -> void:
+	var first := _create("MetaProbeFirst", "2d", true)
+	if first.is_empty():
+		assert_true(false, "No scene open")
+		return
+	var second := _create("MetaProbeSecond", "2d", false)
+	var _r := _handler.configure({
+		"camera_path": second.data.path,
+		"properties": {"current": true},
+	})
+	assert_true(editor_undo(_undo_redo))
+
+	var scene_root := EditorInterface.get_edited_scene_root()
+	for meta_key in scene_root.get_meta_list():
+		assert_false(String(meta_key).begins_with("godot_ai/"),
+			"Scene root metadata polluted with MCP key '%s' — would persist into .tscn on save"
+				% [meta_key])
+
+
+# Two cameras must never both report current=true for the same class,
+# even during the headless-CI race window where the viewport lags.
+# Construct the scenario, then verify list_cameras invariant directly.
+func test_list_cameras_never_reports_two_current_per_class() -> void:
+	var first := _create("InvFirst", "2d", true)
+	if first.is_empty():
+		assert_true(false, "No scene open")
+		return
+	var second := _create("InvSecond", "2d", false)
+	var _r := _handler.configure({
+		"camera_path": second.data.path,
+		"properties": {"current": true},
+	})
+	assert_true(editor_undo(_undo_redo))
+
+	var listed := _handler.list_cameras({})
+	var twod_currents := 0
+	var threed_currents := 0
+	for entry in listed.data.cameras:
+		if not bool(entry.current):
+			continue
+		if String(entry.type) == "2d":
+			twod_currents += 1
+		elif String(entry.type) == "3d":
+			threed_currents += 1
+	assert_true(twod_currents <= 1,
+		"At most one Camera2D may be current; got %d" % twod_currents)
+	assert_true(threed_currents <= 1,
+		"At most one Camera3D may be current; got %d" % threed_currents)
+
+
+# ============================================================================
 # camera_apply_preset
 # ============================================================================
 

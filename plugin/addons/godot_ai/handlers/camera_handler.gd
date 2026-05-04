@@ -72,6 +72,16 @@ const _CURRENT_SETTLE_DELAY_MSEC := 10
 
 var _undo_redo: EditorUndoRedoManager
 
+# Per-scene logical-current bookkeeping. Keys are scene-root InstanceIDs;
+# values are { "2d": NodePath-as-String, "3d": NodePath-as-String } with
+# missing keys meaning "no logical current for that class."
+#
+# Stored on the handler instance (NOT as Node metadata on the scene root)
+# because set_meta() persists into the .tscn on save, contaminating user
+# scene files with MCP-internal sidecar state that lingers across reloads
+# and travels in commits.
+var _logical_current: Dictionary = {}
+
 
 func _init(undo_redo: EditorUndoRedoManager) -> void:
 	_undo_redo = undo_redo
@@ -111,6 +121,124 @@ static func _is_effective_current(cam: Node) -> bool:
 		var viewport_3d := cam.get_viewport()
 		return viewport_3d != null and viewport_3d.get_camera_3d() == cam
 	return false
+
+
+# Logical-current bookkeeping. Updated from inside _apply_make_current /
+# _apply_clear_current so DO and UNDO callables stamp the same logical
+# slot they touch in the viewport. Reads consult the logical slot first
+# and treat it as authoritative when set — the viewport read is the
+# fallback for "MCP never touched this scene's cameras."
+
+func _set_logical_current(cam: Node) -> void:
+	if cam == null or not is_instance_valid(cam) or not cam.is_inside_tree():
+		return
+	var type_str := _camera_type_str(cam)
+	if type_str.is_empty():
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null or not scene_root.is_ancestor_of(cam):
+		return
+	var slot: Dictionary = _logical_current.get(scene_root.get_instance_id(), {})
+	slot[type_str] = McpScenePath.from_node(cam, scene_root)
+	_logical_current[scene_root.get_instance_id()] = slot
+
+
+func _clear_logical_current(cam: Node) -> void:
+	if cam == null:
+		return
+	var type_str := _camera_type_str(cam)
+	if type_str.is_empty():
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return
+	var key := scene_root.get_instance_id()
+	if not _logical_current.has(key):
+		return
+	var slot: Dictionary = _logical_current[key]
+	if not slot.has(type_str):
+		return
+	# Only clear if the logical slot still points at this camera; otherwise
+	# a later make_current already took the slot and we'd stomp it.
+	var current_path := ""
+	if is_instance_valid(cam) and cam.is_inside_tree() and scene_root.is_ancestor_of(cam):
+		current_path = McpScenePath.from_node(cam, scene_root)
+	if String(slot[type_str]) == current_path:
+		slot.erase(type_str)
+		if slot.is_empty():
+			_logical_current.erase(key)
+		else:
+			_logical_current[key] = slot
+
+
+func _logical_current_camera(scene_root: Node, type_str: String = "") -> Node:
+	if scene_root == null:
+		return null
+	var key := scene_root.get_instance_id()
+	if not _logical_current.has(key):
+		return null
+	var slot: Dictionary = _logical_current[key]
+	var types: Array[String] = []
+	if type_str == "2d" or type_str == "3d":
+		types = [type_str]
+	else:
+		types = ["2d", "3d"]
+	for t in types:
+		if not slot.has(t):
+			continue
+		var path := String(slot[t])
+		if path.is_empty():
+			slot.erase(t)
+			continue
+		var node := McpScenePath.resolve(path, scene_root)
+		if node == null or not _is_camera(node) or _camera_type_str(node) != t:
+			slot.erase(t)
+			continue
+		return node
+	if slot.is_empty():
+		_logical_current.erase(key)
+	else:
+		_logical_current[key] = slot
+	return null
+
+
+func _is_logical_current(scene_root: Node, cam: Node) -> bool:
+	if scene_root == null or cam == null:
+		return false
+	var logical := _logical_current_camera(scene_root, _camera_type_str(cam))
+	return logical != null and logical == cam
+
+
+# Authoritative answer for "is `cam` the current camera of its class?"
+#
+# When a logical marker exists for the camera's class, it is the single
+# source of truth — only the marker's referenced camera reports current,
+# every other camera of that class reports false even if the viewport
+# slot still points at one of them (the headless-CI lag in #140 / #278 /
+# #301). Without a logical marker, fall through to the viewport read so
+# scenes MCP never touched still answer correctly.
+func _resolve_current(scene_root: Node, cam: Node) -> bool:
+	if scene_root == null or cam == null:
+		return false
+	var logical := _logical_current_camera(scene_root, _camera_type_str(cam))
+	if logical != null:
+		return logical == cam
+	return _is_effective_current(cam)
+
+
+# list_cameras pre-fetches the per-class logical pointers once; this
+# variant takes those pointers to avoid an O(n²) walk over the meta
+# bookkeeping for each camera in the scene.
+func _resolve_current_with_logicals(cam: Node, logical_2d: Node, logical_3d: Node) -> bool:
+	if cam == null:
+		return false
+	if cam is Camera2D:
+		if logical_2d != null:
+			return logical_2d == cam
+	elif cam is Camera3D:
+		if logical_3d != null:
+			return logical_3d == cam
+	return _is_effective_current(cam)
 
 
 # Register a current=true switch on `node` in the open undo action,
@@ -166,11 +294,20 @@ func _add_make_current_to_action(node: Node, type_str: String, scene_root: Node)
 func _apply_make_current(cam: Node) -> void:
 	if cam == null or not is_instance_valid(cam) or not cam.is_inside_tree():
 		return
+	_set_logical_current(cam)
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var type_str := _camera_type_str(cam)
 	for attempt in range(_CURRENT_SETTLE_ATTEMPTS):
 		cam.make_current()
 		_force_camera_refresh(cam)
+		# Godot's make_current is supposed to atomically displace siblings,
+		# but on macOS headless the displaced camera occasionally still
+		# answers is_current() == true after this returns (#140 / #278 / #301).
+		# Sweep same-class siblings and clear any that lag.
+		_force_clear_other_currents(cam, type_str, scene_root)
 		if not _is_current_settled(cam):
 			_displace_stale_camera_2d(cam)
+			_force_clear_other_currents(cam, type_str, scene_root)
 		var waited_this_attempt := false
 		if _is_current_settled(cam):
 			if not (cam is Camera2D):
@@ -178,10 +315,38 @@ func _apply_make_current(cam: Node) -> void:
 			OS.delay_msec(_CURRENT_SETTLE_DELAY_MSEC)
 			waited_this_attempt = true
 			_force_camera_refresh(cam)
+			_force_clear_other_currents(cam, type_str, scene_root)
 			if _is_current_settled(cam):
 				return
 		if attempt < _CURRENT_SETTLE_ATTEMPTS - 1 and not waited_this_attempt:
 			OS.delay_msec(_CURRENT_SETTLE_DELAY_MSEC)
+
+
+# Walk same-class siblings and force-clear any that still report is_current().
+# Best-effort: clear_current errors when called on a non-current camera, so
+# guard. Camera2D's clear_current path also flushes the viewport slot, which
+# is the one we actually care about settling for #301.
+func _force_clear_other_currents(target: Node, type_str: String, scene_root: Node) -> void:
+	if scene_root == null or type_str.is_empty():
+		return
+	for sibling in _list_cameras_in_scene(scene_root, type_str):
+		if sibling == target:
+			continue
+		if not is_instance_valid(sibling) or not sibling.is_inside_tree():
+			continue
+		if not _is_current(sibling):
+			# Even if is_current() reports false, the viewport slot can
+			# still point at this sibling on macOS — re-make target to
+			# take it back. Cheap (idempotent) when the slot is fine.
+			if sibling is Camera2D:
+				var vp_other: Viewport = (sibling as Camera2D).get_viewport()
+				if vp_other != null and vp_other.get_camera_2d() == sibling:
+					target.make_current()
+					_force_camera_refresh(target)
+			continue
+		sibling.clear_current()
+		if sibling is Camera2D:
+			(sibling as Camera2D).force_update_scroll()
 
 
 # Call after commit_action() whenever the action registered a make_current DO.
@@ -247,15 +412,41 @@ func _nudge_camera_2d_current(target: Node) -> void:
 func _apply_clear_current(cam: Node) -> void:
 	if cam == null or not is_instance_valid(cam) or not cam.is_inside_tree():
 		return
+	_clear_logical_current(cam)
 	for attempt in range(_CURRENT_SETTLE_ATTEMPTS):
-		if not _is_current(cam):
+		if _is_clear_settled(cam):
 			return
-		cam.clear_current()
-		_force_camera_refresh(cam)
-		if not _is_current(cam):
+		if _is_current(cam):
+			cam.clear_current()
+			_force_camera_refresh(cam)
+		# Camera2D-only: is_current() may answer false while the viewport
+		# slot still points at cam. Toggle enabled to force the viewport
+		# to release, then restore.
+		if cam is Camera2D:
+			var vp := cam.get_viewport()
+			if vp != null and vp.get_camera_2d() == cam:
+				var was_enabled := (cam as Camera2D).enabled
+				if was_enabled:
+					(cam as Camera2D).enabled = false
+				_force_camera_refresh(cam)
+				if was_enabled:
+					(cam as Camera2D).enabled = true
+		if _is_clear_settled(cam):
 			return
 		if attempt < _CURRENT_SETTLE_ATTEMPTS - 1:
 			OS.delay_msec(_CURRENT_SETTLE_DELAY_MSEC)
+
+
+func _is_clear_settled(cam: Node) -> bool:
+	if cam == null:
+		return true
+	if _is_current(cam):
+		return false
+	if cam is Camera2D:
+		var vp := cam.get_viewport()
+		if vp != null and vp.get_camera_2d() == cam:
+			return false
+	return true
 
 
 # ============================================================================
@@ -679,8 +870,12 @@ func get_camera(params: Dictionary) -> Dictionary:
 		# viewport slot has switched; falling through to "first" during that
 		# window makes camera_get("") nondeterministic.
 		var all_cams := _list_cameras_in_scene(scene_root, "")
+		var logical_current := _logical_current_camera(scene_root)
+		if logical_current != null and all_cams.has(logical_current):
+			node = logical_current
+			resolved_via = "current"
 		var viewport_current := _viewport_current_camera(scene_root)
-		if viewport_current != null and all_cams.has(viewport_current):
+		if node == null and viewport_current != null and all_cams.has(viewport_current):
 			node = viewport_current
 			resolved_via = "current"
 		for cam in all_cams:
@@ -720,9 +915,10 @@ func get_camera(params: Dictionary) -> Dictionary:
 	var keys: Array = _KEYS_2D if type_str == "2d" else _KEYS_3D
 	var prop_types := _property_type_map(node)
 	var props: Dictionary = {}
+	var is_current_effective := _resolve_current(scene_root, node)
 	for key in keys:
 		if key == "current":
-			props[key] = _is_effective_current(node)
+			props[key] = is_current_effective
 			continue
 		if prop_types.has(key):
 			props[key] = CameraValues.serialize(node.get(key))
@@ -732,7 +928,7 @@ func get_camera(params: Dictionary) -> Dictionary:
 			"path": McpScenePath.from_node(node, scene_root),
 			"type": type_str,
 			"class": node.get_class(),
-			"current": _is_effective_current(node),
+			"current": is_current_effective,
 			"properties": props,
 			"resolved_via": resolved_via,
 		}
@@ -750,12 +946,14 @@ func list_cameras(_params: Dictionary) -> Dictionary:
 
 	var cams := _list_cameras_in_scene(scene_root, "")
 	var out: Array[Dictionary] = []
+	var logical_2d := _logical_current_camera(scene_root, "2d")
+	var logical_3d := _logical_current_camera(scene_root, "3d")
 	for cam in cams:
 		out.append({
 			"path": McpScenePath.from_node(cam, scene_root),
 			"class": cam.get_class(),
 			"type": _camera_type_str(cam),
-			"current": _is_current(cam),
+			"current": _resolve_current_with_logicals(cam, logical_2d, logical_3d),
 		})
 	return {"data": {"cameras": out}}
 
