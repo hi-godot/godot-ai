@@ -20,10 +20,12 @@ domain registrations stay free of identity-lambda boilerplate.
 from __future__ import annotations
 
 import difflib
+import functools
 import inspect
 import json
-from collections.abc import Awaitable, Callable
-from typing import Any, Literal
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping, MutableSequence, Sequence
+from types import UnionType
+from typing import Annotated, Any, Literal, Union, get_args, get_origin, get_type_hints
 
 from fastmcp import Context, FastMCP
 
@@ -102,41 +104,155 @@ def register_manage_tool(
     mcp.tool(meta=DEFER_META)(manage)
 
 
-def _coerce_stringified_json_values(params: dict[str, Any]) -> dict[str, Any]:
-    """JSON-decode string values that look like ``[...]`` / ``{...}``.
+def _is_json_shaped(value: str) -> bool:
+    return value.lstrip()[:1] in ("[", "{")
 
-    Narrower scope than ``godot_ai.tools.JsonCoerced``: that pydantic
-    validator runs on every typed param regardless of shape, while this
-    function gates on the value's first non-whitespace char. The narrowing
-    is intentional — at the meta-tool layer ``params`` values are untyped,
-    and naive JSON-decoding of every string would mangle plain-string
-    args like a class name (``"BoxMesh"``) into something else.
 
-    Some MCP clients (Claude Code as of 2026-04) stringify complex-typed
-    arguments before sending; without this coercion a list-typed handler
-    arg arrives as ``str`` and the handler errors.
+def _json_container_kinds(annotation: Any) -> set[str]:
+    """Return container kinds accepted by a handler annotation.
 
-    Returns ``params`` unchanged when nothing needs coercion (the common
-    case) so the dispatcher avoids a needless dict copy.
+    An empty set means "do not coerce" — including unannotated, ``Any``, and
+    ``object`` params. This is intentional: pre-PR behavior eagerly decoded
+    every JSON-shaped string, which mangled legitimate values; post-PR we
+    only decode when the handler explicitly declares list/dict shape.
     """
-    needs_coercion = False
-    for val in params.values():
-        if isinstance(val, str) and val[:1] in ("[", "{"):
-            needs_coercion = True
-            break
-    if not needs_coercion:
+    if annotation in (inspect.Parameter.empty, Any, object):
+        return set()
+
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+    if origin is Annotated:
+        return _json_container_kinds(args[0]) if args else set()
+    if origin in (Union, UnionType):
+        kinds: set[str] = set()
+        for arg in args:
+            if arg is type(None):
+                continue
+            kinds.update(_json_container_kinds(arg))
+        return kinds
+
+    target = origin or annotation
+    if target in (dict, Mapping, MutableMapping):
+        return {"dict"}
+    if target in (list, Sequence, MutableSequence):
+        return {"list"}
+    return set()
+
+
+@functools.cache
+def _handler_meta(handler: OpHandler) -> tuple[inspect.Signature | None, dict[str, Any]]:
+    """Resolve and cache ``(signature, type_hints)`` for a registered handler.
+
+    Handlers are registered once at startup and live for the lifetime of the
+    process, so an unbounded cache is safe. ``get_type_hints`` walks module
+    globals to resolve forward references — not free — and ``inspect.signature``
+    introspects defaults; both ran on every dispatch before this cache.
+    """
+    try:
+        signature = inspect.signature(handler)
+    except (TypeError, ValueError):
+        signature = None
+    try:
+        type_hints = get_type_hints(handler)
+    except (NameError, TypeError, ValueError):
+        type_hints = {}
+    return (signature, type_hints)
+
+
+def _expected_json_label(kinds: set[str]) -> str:
+    if kinds == {"list"}:
+        return "JSON array"
+    if kinds == {"dict"}:
+        return "JSON object"
+    return "JSON array or object"
+
+
+def _json_kind(value: Any) -> str:
+    if isinstance(value, list):
+        return "list"
+    if isinstance(value, dict):
+        return "dict"
+    return type(value).__name__
+
+
+def _coerce_stringified_json_values(
+    params: dict[str, Any],
+    *,
+    handler: OpHandler,
+    tool_name: str,
+    op: str,
+) -> dict[str, Any]:
+    """JSON-decode nested params only when the handler annotation expects it.
+
+    Some MCP clients stringify complex nested arguments before sending them
+    inside a manage tool's ``params`` object. Decode those compatibility
+    strings for list/dict-like handler params, but keep JSON-shaped strings
+    intact for string-typed params and leave missing/extra-argument errors to
+    the handler call below.
+
+    Returns ``params`` unchanged when nothing needs coercion (the common case).
+    """
+    signature, type_hints = _handler_meta(handler)
+    if signature is None:
         return params
 
-    coerced: dict[str, Any] = {}
+    coerced: dict[str, Any] | None = None
+
     for key, val in params.items():
-        if isinstance(val, str) and val[:1] in ("[", "{"):
-            try:
-                coerced[key] = json.loads(val)
-                continue
-            except json.JSONDecodeError:
-                pass
-        coerced[key] = val
-    return coerced
+        if not isinstance(val, str) or not _is_json_shaped(val):
+            continue
+
+        parameter = signature.parameters.get(key)
+        if parameter is None:
+            continue
+
+        annotation = type_hints.get(key, parameter.annotation)
+        expected_kinds = _json_container_kinds(annotation)
+        if not expected_kinds:
+            continue
+
+        try:
+            decoded = json.loads(val)
+        except json.JSONDecodeError as exc:
+            expected = _expected_json_label(expected_kinds)
+            raise GodotCommandError(
+                code=ErrorCode.INVALID_PARAMS,
+                message=(
+                    f"{tool_name}.{op}: param {key!r} expects {expected}; "
+                    "received malformed JSON string"
+                ),
+                data={
+                    "tool": tool_name,
+                    "op": op,
+                    "param": key,
+                    "expected": expected,
+                    "json_error": exc.msg,
+                },
+            ) from exc
+
+        actual_kind = _json_kind(decoded)
+        if actual_kind not in expected_kinds:
+            expected = _expected_json_label(expected_kinds)
+            raise GodotCommandError(
+                code=ErrorCode.INVALID_PARAMS,
+                message=(
+                    f"{tool_name}.{op}: param {key!r} expects {expected}; "
+                    f"received JSON {actual_kind}"
+                ),
+                data={
+                    "tool": tool_name,
+                    "op": op,
+                    "param": key,
+                    "expected": expected,
+                    "actual": actual_kind,
+                },
+            )
+
+        if coerced is None:
+            coerced = dict(params)
+        coerced[key] = decoded
+
+    return params if coerced is None else coerced
 
 
 async def dispatch_manage_op(
@@ -181,7 +297,12 @@ async def dispatch_manage_op(
             data={"tool": tool_name, "op": op, "type": type(call_params).__name__},
         )
 
-    call_params = _coerce_stringified_json_values(call_params)
+    call_params = _coerce_stringified_json_values(
+        call_params,
+        handler=handler,
+        tool_name=tool_name,
+        op=op,
+    )
 
     try:
         result = handler(runtime, **call_params)
