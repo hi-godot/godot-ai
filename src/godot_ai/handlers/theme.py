@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from godot_ai.handlers._readiness import require_writable
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 
 async def theme_create(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     path: str,
     overwrite: bool = False,
 ) -> dict:
@@ -21,7 +21,7 @@ async def theme_create(
 
 
 async def theme_set_color(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     theme_path: str,
     class_name: str,
     name: str,
@@ -40,7 +40,7 @@ async def theme_set_color(
 
 
 async def theme_set_constant(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     theme_path: str,
     class_name: str,
     name: str,
@@ -59,7 +59,7 @@ async def theme_set_constant(
 
 
 async def theme_set_font_size(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     theme_path: str,
     class_name: str,
     name: str,
@@ -78,7 +78,7 @@ async def theme_set_font_size(
 
 
 async def theme_set_stylebox_flat(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     theme_path: str,
     class_name: str,
     name: str,
@@ -114,7 +114,7 @@ async def theme_set_stylebox_flat(
 
 
 async def theme_apply(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     node_path: str,
     theme_path: str = "",
 ) -> dict:

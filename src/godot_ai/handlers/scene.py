@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from godot_ai.handlers._readiness import require_writable
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.tools._pagination import paginate
 
 
 async def scene_get_hierarchy(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     depth: int = 10,
     offset: int = 0,
     limit: int = 100,
@@ -18,12 +18,12 @@ async def scene_get_hierarchy(
     return {"root": result.get("root", ""), **paginate(nodes, offset, limit, key="nodes")}
 
 
-async def scene_get_roots(runtime: Runtime) -> dict:
+async def scene_get_roots(runtime: DirectRuntime) -> dict:
     return await runtime.send_command("get_open_scenes")
 
 
 async def scene_create(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     path: str,
     root_type: str = "Node3D",
     root_name: str = "",
@@ -35,22 +35,22 @@ async def scene_create(
     return await runtime.send_command("create_scene", params)
 
 
-async def scene_open(runtime: Runtime, path: str) -> dict:
+async def scene_open(runtime: DirectRuntime, path: str) -> dict:
     require_writable(runtime)
     return await runtime.send_command("open_scene", {"path": path})
 
 
-async def scene_save(runtime: Runtime) -> dict:
+async def scene_save(runtime: DirectRuntime) -> dict:
     require_writable(runtime)
     return await runtime.send_command("save_scene")
 
 
-async def scene_save_as(runtime: Runtime, path: str) -> dict:
+async def scene_save_as(runtime: DirectRuntime, path: str) -> dict:
     require_writable(runtime)
     return await runtime.send_command("save_scene_as", {"path": path})
 
 
-async def current_scene_resource_data(runtime: Runtime) -> dict:
+async def current_scene_resource_data(runtime: DirectRuntime) -> dict:
     state = await runtime.send_command("get_editor_state")
     return {
         "current_scene": state.get("current_scene", ""),
@@ -59,5 +59,5 @@ async def current_scene_resource_data(runtime: Runtime) -> dict:
     }
 
 
-async def scene_hierarchy_resource_data(runtime: Runtime) -> dict:
+async def scene_hierarchy_resource_data(runtime: DirectRuntime) -> dict:
     return await runtime.send_command("get_scene_tree", {"depth": 10})

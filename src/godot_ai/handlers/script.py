@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from godot_ai.handlers._readiness import require_writable
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 
-async def script_create(runtime: Runtime, path: str, content: str = "") -> dict:
+async def script_create(runtime: DirectRuntime, path: str, content: str = "") -> dict:
     require_writable(runtime)
     return await runtime.send_command(
         "create_script",
@@ -15,7 +15,7 @@ async def script_create(runtime: Runtime, path: str, content: str = "") -> dict:
 
 
 async def script_patch(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     path: str,
     old_text: str,
     new_text: str,
@@ -33,11 +33,11 @@ async def script_patch(
     )
 
 
-async def script_read(runtime: Runtime, path: str) -> dict:
+async def script_read(runtime: DirectRuntime, path: str) -> dict:
     return await runtime.send_command("read_script", {"path": path})
 
 
-async def script_attach(runtime: Runtime, path: str, script_path: str) -> dict:
+async def script_attach(runtime: DirectRuntime, path: str, script_path: str) -> dict:
     require_writable(runtime)
     return await runtime.send_command(
         "attach_script",
@@ -45,10 +45,10 @@ async def script_attach(runtime: Runtime, path: str, script_path: str) -> dict:
     )
 
 
-async def script_detach(runtime: Runtime, path: str) -> dict:
+async def script_detach(runtime: DirectRuntime, path: str) -> dict:
     require_writable(runtime)
     return await runtime.send_command("detach_script", {"path": path})
 
 
-async def script_find_symbols(runtime: Runtime, path: str) -> dict:
+async def script_find_symbols(runtime: DirectRuntime, path: str) -> dict:
     return await runtime.send_command("find_symbols", {"path": path})

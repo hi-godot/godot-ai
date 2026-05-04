@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from godot_ai.godot_client.client import GodotCommandError
 from godot_ai.protocol.errors import ErrorCode
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 # (message, retryable). Retryable means the condition clears on its own
 # (Godot finishes reimporting); non-retryable requires the caller to change
@@ -22,7 +22,7 @@ _READINESS_INFO: dict[str, tuple[str, bool]] = {
 KNOWN_READINESS: frozenset[str] = frozenset(_READINESS_INFO) | {"ready", "no_scene"}
 
 
-def sync_readiness_from_snapshot(runtime: Runtime, value: object) -> bool:
+def sync_readiness_from_snapshot(runtime: DirectRuntime, value: object) -> bool:
     """Copy an authoritative readiness snapshot onto the active session.
 
     Used by handlers that receive a live readiness from the plugin
@@ -38,7 +38,7 @@ def sync_readiness_from_snapshot(runtime: Runtime, value: object) -> bool:
     return True
 
 
-def require_writable(runtime: Runtime) -> None:
+def require_writable(runtime: DirectRuntime) -> None:
     """Check that the active session is in a writable state.
 
     Raises GodotCommandError with EDITOR_NOT_READY if the editor is

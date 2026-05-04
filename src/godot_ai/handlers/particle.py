@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from godot_ai.handlers._readiness import require_writable
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 
 async def particle_create(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     parent_path: str,
     name: str = "Particles",
     type: str = "gpu_3d",
@@ -22,7 +22,7 @@ async def particle_create(
 
 
 async def particle_set_main(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     node_path: str,
     properties: dict[str, Any],
 ) -> dict:
@@ -34,7 +34,7 @@ async def particle_set_main(
 
 
 async def particle_set_process(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     node_path: str,
     properties: dict[str, Any],
 ) -> dict:
@@ -46,7 +46,7 @@ async def particle_set_process(
 
 
 async def particle_set_draw_pass(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     node_path: str,
     pass_: int = 1,
     mesh: str = "",
@@ -64,16 +64,16 @@ async def particle_set_draw_pass(
     return await runtime.send_command("particle_set_draw_pass", params)
 
 
-async def particle_restart(runtime: Runtime, node_path: str) -> dict:
+async def particle_restart(runtime: DirectRuntime, node_path: str) -> dict:
     return await runtime.send_command("particle_restart", {"node_path": node_path})
 
 
-async def particle_get(runtime: Runtime, node_path: str) -> dict:
+async def particle_get(runtime: DirectRuntime, node_path: str) -> dict:
     return await runtime.send_command("particle_get", {"node_path": node_path})
 
 
 async def particle_apply_preset(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     parent_path: str,
     name: str,
     preset: str,

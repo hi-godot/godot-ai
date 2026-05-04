@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from godot_ai.handlers._readiness import require_writable
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 
 async def audio_player_create(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     parent_path: str,
     name: str = "AudioStreamPlayer",
     type: str = "1d",
@@ -22,7 +22,7 @@ async def audio_player_create(
 
 
 async def audio_player_set_stream(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     player_path: str,
     stream_path: str,
 ) -> dict:
@@ -34,7 +34,7 @@ async def audio_player_set_stream(
 
 
 async def audio_player_set_playback(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     player_path: str,
     volume_db: float | None = None,
     pitch_scale: float | None = None,
@@ -55,7 +55,7 @@ async def audio_player_set_playback(
 
 
 async def audio_play(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     player_path: str,
     from_position: float = 0.0,
 ) -> dict:
@@ -65,12 +65,12 @@ async def audio_play(
     )
 
 
-async def audio_stop(runtime: Runtime, player_path: str) -> dict:
+async def audio_stop(runtime: DirectRuntime, player_path: str) -> dict:
     return await runtime.send_command("audio_stop", {"player_path": player_path})
 
 
 async def audio_list(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     root: str = "res://",
     include_duration: bool = True,
 ) -> dict:

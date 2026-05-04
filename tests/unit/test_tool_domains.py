@@ -27,11 +27,50 @@ _CATALOG_GD = (
     / "godot_ai"
     / "tool_catalog.gd"
 )
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_SRC_ROOT = _REPO_ROOT / "src" / "godot_ai"
+_RUNTIME_BOUNDARY_DOCS = [
+    _REPO_ROOT / "CLAUDE.md",
+    _REPO_ROOT / "docs" / "plugin-architecture.md",
+    _REPO_ROOT / ".claude" / "skills" / "godot-ai" / "skill.md",
+]
 
 
 def _list_tools(server) -> list[str]:
     tools = asyncio.run(server.list_tools())
     return [t.name for t in tools]
+
+
+# --- runtime boundary ---
+
+
+def test_runtime_protocol_is_not_reintroduced_without_injection_seam():
+    """Path B: handlers are typed against DirectRuntime until a real seam exists."""
+    runtime_interface = _SRC_ROOT / "runtime" / "interface.py"
+    assert not runtime_interface.exists(), (
+        "Runtime Protocol was deleted because tools/resources construct DirectRuntime "
+        "directly. Reintroduce it only with a production runtime-injection seam."
+    )
+
+    source_files = [
+        path
+        for path in _SRC_ROOT.rglob("*.py")
+        if "__pycache__" not in path.parts
+    ]
+    offenders = [
+        str(path.relative_to(_REPO_ROOT))
+        for path in source_files
+        if "godot_ai.runtime.interface" in path.read_text()
+        or "class Runtime(Protocol)" in path.read_text()
+    ]
+    assert offenders == []
+
+    stale_docs = [
+        str(path.relative_to(_REPO_ROOT))
+        for path in _RUNTIME_BOUNDARY_DOCS
+        if "runtime/interface.py" in path.read_text() or "`Runtime` protocol" in path.read_text()
+    ]
+    assert stale_docs == []
 
 
 # --- domains.parse_exclude_list ---

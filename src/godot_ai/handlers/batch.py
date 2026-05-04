@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from godot_ai.handlers._readiness import require_writable
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 
 async def batch_execute(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     commands: list[dict],
     undo: bool = True,
 ) -> dict:

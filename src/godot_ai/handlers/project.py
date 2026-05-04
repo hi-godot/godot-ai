@@ -6,7 +6,7 @@ import asyncio
 from typing import Any
 
 from godot_ai.handlers._readiness import require_writable, sync_readiness_from_snapshot
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 COMMON_SETTINGS = [
     "application/config/name",
@@ -20,12 +20,12 @@ COMMON_SETTINGS = [
 ]
 
 
-async def project_settings_get(runtime: Runtime, key: str) -> dict:
+async def project_settings_get(runtime: DirectRuntime, key: str) -> dict:
     return await runtime.send_command("get_project_setting", {"key": key})
 
 
 async def project_run(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     mode: str = "main",
     scene: str = "",
     autosave: bool = True,
@@ -38,7 +38,7 @@ async def project_run(
     return await runtime.send_command("run_project", params)
 
 
-async def project_stop(runtime: Runtime) -> dict:
+async def project_stop(runtime: DirectRuntime) -> dict:
     """Stop the running game and reflect authoritative readiness in the session.
 
     New plugins (issue #29) defer the stop response until after
@@ -69,12 +69,12 @@ async def project_stop(runtime: Runtime) -> dict:
     return result
 
 
-async def project_settings_set(runtime: Runtime, key: str, value: Any) -> dict:
+async def project_settings_set(runtime: DirectRuntime, key: str, value: Any) -> dict:
     require_writable(runtime)
     return await runtime.send_command("set_project_setting", {"key": key, "value": value})
 
 
-def project_info_resource_data(runtime: Runtime) -> dict:
+def project_info_resource_data(runtime: DirectRuntime) -> dict:
     session = runtime.get_active_session()
     if session is None:
         return {"error": "No active Godot session", "connected": False}
@@ -84,7 +84,7 @@ def project_info_resource_data(runtime: Runtime) -> dict:
     return info
 
 
-async def project_settings_resource_data(runtime: Runtime) -> dict:
+async def project_settings_resource_data(runtime: DirectRuntime) -> dict:
     async def _fetch(key: str) -> tuple[str, object | None, str | None]:
         try:
             result = await runtime.send_command("get_project_setting", {"key": key})

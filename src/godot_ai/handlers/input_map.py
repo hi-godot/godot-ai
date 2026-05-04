@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from godot_ai.handlers._readiness import require_writable
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 
-async def input_map_list(runtime: Runtime, include_builtin: bool = False) -> dict:
+async def input_map_list(runtime: DirectRuntime, include_builtin: bool = False) -> dict:
     params: dict[str, Any] = {}
     if include_builtin:
         params["include_builtin"] = True
@@ -16,7 +16,7 @@ async def input_map_list(runtime: Runtime, include_builtin: bool = False) -> dic
 
 
 async def input_map_add_action(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     action: str,
     deadzone: float = 0.5,
 ) -> dict:
@@ -27,13 +27,13 @@ async def input_map_add_action(
     )
 
 
-async def input_map_remove_action(runtime: Runtime, action: str) -> dict:
+async def input_map_remove_action(runtime: DirectRuntime, action: str) -> dict:
     require_writable(runtime)
     return await runtime.send_command("remove_action", {"action": action})
 
 
 async def input_map_bind_event(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     action: str,
     event_type: str,
     **kwargs: Any,

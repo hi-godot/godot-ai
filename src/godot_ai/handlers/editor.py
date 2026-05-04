@@ -10,7 +10,7 @@ from fastmcp.tools.base import Image as McpImage
 from mcp.types import TextContent
 
 from godot_ai.handlers._readiness import require_writable, sync_readiness_from_snapshot
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.tools._pagination import paginate
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ SCREENSHOT_TIMEOUT_SEC = 15.0
 GAME_SCREENSHOT_TIMEOUT_SEC = 35.0
 
 
-async def editor_state(runtime: Runtime) -> dict:
+async def editor_state(runtime: DirectRuntime) -> dict:
     """Read live editor state and self-heal the session readiness cache.
 
     The plugin emits ``readiness_changed`` events when ``_check_state_changes``
@@ -42,12 +42,12 @@ async def editor_state(runtime: Runtime) -> dict:
     return result
 
 
-async def editor_selection_get(runtime: Runtime) -> dict:
+async def editor_selection_get(runtime: DirectRuntime) -> dict:
     return await runtime.send_command("get_selection")
 
 
 async def editor_screenshot(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     source: str = "viewport",
     max_resolution: int = 640,
     include_image: bool = True,
@@ -157,14 +157,16 @@ async def editor_screenshot(
     ]
 
 
-async def performance_monitors_get(runtime: Runtime, monitors: list[str] | None = None) -> dict:
+async def performance_monitors_get(
+    runtime: DirectRuntime, monitors: list[str] | None = None
+) -> dict:
     params: dict = {}
     if monitors:
         params["monitors"] = monitors
     return await runtime.send_command("get_performance_monitors", params)
 
 
-async def logs_clear(runtime: Runtime) -> dict:
+async def logs_clear(runtime: DirectRuntime) -> dict:
     return await runtime.send_command("clear_logs")
 
 
@@ -172,7 +174,7 @@ _VALID_LOG_SOURCES = ("plugin", "game", "editor", "all")
 
 
 async def logs_read(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     count: int = 50,
     offset: int = 0,
     source: str = "plugin",
@@ -241,7 +243,7 @@ async def logs_read(
     }
 
 
-async def editor_reload_plugin(runtime: Runtime) -> dict:
+async def editor_reload_plugin(runtime: DirectRuntime) -> dict:
     active = runtime.get_active_session()
     if active is None:
         raise ConnectionError("No active Godot session")
@@ -270,18 +272,18 @@ async def editor_reload_plugin(runtime: Runtime) -> dict:
     }
 
 
-async def editor_quit(runtime: Runtime) -> dict:
+async def editor_quit(runtime: DirectRuntime) -> dict:
     return await runtime.send_command("quit_editor")
 
 
-async def editor_selection_set(runtime: Runtime, paths: list[str]) -> dict:
+async def editor_selection_set(runtime: DirectRuntime, paths: list[str]) -> dict:
     require_writable(runtime)
     return await runtime.send_command("set_selection", {"paths": paths})
 
 
-async def selection_resource_data(runtime: Runtime) -> dict:
+async def selection_resource_data(runtime: DirectRuntime) -> dict:
     return await editor_selection_get(runtime)
 
 
-async def logs_resource_data(runtime: Runtime) -> dict:
+async def logs_resource_data(runtime: DirectRuntime) -> dict:
     return await runtime.send_command("get_logs", {"count": 100})

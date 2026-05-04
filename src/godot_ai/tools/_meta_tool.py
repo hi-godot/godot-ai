@@ -30,7 +30,6 @@ from fastmcp import Context, FastMCP
 from godot_ai.godot_client.client import GodotCommandError
 from godot_ai.protocol.errors import ErrorCode
 from godot_ai.runtime.direct import DirectRuntime
-from godot_ai.runtime.interface import Runtime
 from godot_ai.tools import DEFER_META
 
 ## Op handlers may be async (the common case) or sync (e.g. session_*).
@@ -144,7 +143,7 @@ async def dispatch_manage_op(
     *,
     ops: dict[str, OpHandler],
     tool_name: str,
-    runtime: Runtime,
+    runtime: DirectRuntime,
     op: str,
     params: dict[str, Any] | None,
 ) -> dict:

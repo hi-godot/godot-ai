@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from godot_ai.handlers._readiness import require_writable
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 
 async def ui_set_anchor_preset(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     path: str,
     preset: str,
     resize_mode: str = "minsize",
@@ -28,7 +28,7 @@ async def ui_set_anchor_preset(
 
 
 async def ui_set_text(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     path: str,
     text: str,
 ) -> dict:
@@ -40,7 +40,7 @@ async def ui_set_text(
 
 
 async def ui_build_layout(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     tree: dict[str, Any],
     parent_path: str = "",
 ) -> dict:
