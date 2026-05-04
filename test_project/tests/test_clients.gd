@@ -1520,14 +1520,22 @@ func test_path_template_expand_home_falls_back_to_userprofile() -> void:
 	var saved_userprofile := OS.get_environment("USERPROFILE")
 	var fake_userprofile := "/tmp/godot-ai-test-userprofile"
 
-	OS.set_environment("HOME", "")
+	OS.unset_environment("HOME")
 	OS.set_environment("USERPROFILE", fake_userprofile)
 	var via_dollar := McpPathTemplate.expand("$HOME/foo")
 	var via_tilde := McpPathTemplate.expand("~/foo")
-	# Restore before asserting so a failure can't leak a poisoned HOME
-	# into the rest of the test run.
-	OS.set_environment("HOME", saved_home)
-	OS.set_environment("USERPROFILE", saved_userprofile)
+	# Restore before asserting so a failure can't leak into later tests.
+	# Mirror the unset-when-saved-was-empty pattern used by the
+	# GODOT_AI_MODE tests above — `set_environment(var, "")` would
+	# define a new empty-valued env var rather than leave it unset.
+	if saved_home.is_empty():
+		OS.unset_environment("HOME")
+	else:
+		OS.set_environment("HOME", saved_home)
+	if saved_userprofile.is_empty():
+		OS.unset_environment("USERPROFILE")
+	else:
+		OS.set_environment("USERPROFILE", saved_userprofile)
 
 	assert_eq(via_dollar, fake_userprofile.path_join("foo"),
 		"$HOME must fall back to USERPROFILE when HOME is unset")
