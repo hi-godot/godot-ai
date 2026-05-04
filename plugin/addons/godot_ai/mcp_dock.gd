@@ -1871,8 +1871,17 @@ func _abandon_client_status_refresh_thread() -> void:
 		_client_status_refresh_thread = null
 	if _refresh_state != ClientRefreshStateScript.SHUTTING_DOWN:
 		_refresh_state = ClientRefreshStateScript.IDLE
+	## Reset the full pending-request triplet, not just the
+	## focus-in / cooldown half. A timed-out worker has already
+	## warmed bytecode, so any stale `_pending_initial` from an
+	## earlier deferred-during-busy startup is no longer load-bearing
+	## — leaving it set would cause `_retry_deferred_*` to dispatch
+	## `_perform_initial_*` a second time after this abandon
+	## (which would then no-op because no fresh worker is needed
+	## but still re-warm bytecode and walk the row set redundantly).
 	_client_status_refresh_pending = false
 	_client_status_refresh_pending_force = false
+	_client_status_refresh_pending_initial = false
 	_client_status_refresh_started_msec = 0
 	_refresh_clients_summary()
 
@@ -2042,6 +2051,15 @@ func _request_client_status_refresh(force: bool = false) -> bool:
 			_defer_client_status_refresh_until_filesystem_ready(force)
 		return false
 
+	## Force the bytecode swap on the same scripts the worker will reach
+	## into — same #233/#235 guard `_perform_initial_*` already had.
+	## Without this, a manual refresh dispatched before the initial sweep
+	## has run (e.g. user clicks Refresh during the deferred-initial
+	## window after `_defer_client_status_refresh_until_filesystem_ready`
+	## cleared `_pending_initial`) walks into mid-swap bytecode and
+	## SIGABRTs.
+	_warm_strategy_bytecode()
+
 	var client_probes: Array[Dictionary] = []
 	for client_id in _client_rows:
 		client_probes.append(McpClientConfigurator.client_status_probe_snapshot(String(client_id)))
@@ -2075,8 +2093,15 @@ func _defer_client_status_refresh_until_filesystem_ready(force: bool) -> void:
 	## filesystem is busy. Do not spawn a worker into that window: the worker
 	## can call plugin GDScript while the main thread is reloading it, which
 	## crashes in `GDScriptFunction::call`.
+	##
+	## A manual refresh request is more recent intent than any earlier
+	## deferred-initial sweep, so we clear `_pending_initial` here.
+	## `_request_client_status_refresh` warms strategy bytecode itself
+	## now (see #233/#235), so the safety net the initial path provided
+	## still applies to the replayed manual refresh.
 	_refresh_state = ClientRefreshStateScript.DEFERRED_FOR_FILESYSTEM
 	_client_status_refresh_pending_force = _client_status_refresh_pending_force or force
+	_client_status_refresh_pending_initial = false
 
 
 func _retry_deferred_client_status_refresh() -> void:

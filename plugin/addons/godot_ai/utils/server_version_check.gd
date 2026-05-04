@@ -2,22 +2,31 @@
 class_name McpServerVersionCheck
 extends RefCounted
 
-## Standalone state machine for the post-connection server-version
+## Standalone polling seam for the post-connection server-version
 ## handshake gate. Extracted from `plugin.gd` so the lifecycle manager
 ## stays focused on spawn/adopt/stop and the version-verify dance has
-## its own seam.
+## its own home.
 ##
-## Drives the AWAITING_VERSION → READY / INCOMPATIBLE transitions in
-## `McpServerState`. Owns the deadline timer (`_deadline_ms`) and
-## requires the manager to feed it `tick(now_msec)` from the plugin's
-## `_process` while `is_active()` is true.
+## The seam itself does NOT transition `McpServerState` on arm/disarm —
+## the version check runs concurrently with whatever spawn-state the
+## caller had latched (typically FOREIGN_PORT during adoption
+## confirmation, or no-op directly to READY for a fresh spawn). Result
+## transitions land on the manager via `handle_server_version_verified`
+## (READY / INCOMPATIBLE) or `handle_server_version_unverified`
+## (INCOMPATIBLE on deadline expiry); arm() leaves the state alone so a
+## FOREIGN_PORT diagnosis isn't accidentally cleared before the
+## handshake actually arrives.
 ##
-## Decoupled from the connection's signal surface for the same parse-
-## hazard reason `plugin.gd` polls instead of subscribing: a self-update
-## that adds a new signal to McpConnection would crash the re-enabled
-## plugin's `_enter_tree` until restart.
-
-const McpServerStateScript := preload("res://addons/godot_ai/utils/mcp_server_state.gd")
+## Owns the deadline timer (`_deadline_ms`) and requires the manager to
+## feed it `tick(now_msec)` from the plugin's `_process` while
+## `is_active()` is true.
+##
+## Decoupled from the connection's signal surface — `tick()` polls
+## `_connection.is_connected` and `_connection.server_version` directly
+## — for the same parse-hazard reason `plugin.gd` polls instead of
+## subscribing: a self-update that adds a new signal to McpConnection
+## would crash the re-enabled plugin's `_enter_tree` until restart. We
+## still null-check `_connection` because `disarm()` releases it.
 
 ## How long to wait after the WebSocket opens before declaring the
 ## handshake_ack overdue. Mirrors `plugin.gd::SERVER_HANDSHAKE_VERSION_TIMEOUT_MS`
@@ -25,10 +34,13 @@ const McpServerStateScript := preload("res://addons/godot_ai/utils/mcp_server_st
 const TIMEOUT_MS := 5 * 1000
 
 ## Untyped on purpose for the same self-update parse-hazard reason
-## plugin.gd's fields are untyped. Connection is the live `McpConnection`;
-## the manager is `McpServerLifecycleManager`. Methods access them
-## defensively (null-check + duck-type) so a future signal/property
-## change can't break this re-parse.
+## plugin.gd's fields are untyped. `_connection` is the live
+## `McpConnection`; `_manager` is `McpServerLifecycleManager`.
+## `_connection` is null between disarm() and the next arm() — the
+## seam can spend most of the plugin's life dormant and we don't want
+## to pin a Node that may be queue_freed in `_exit_tree`. `_manager` is
+## set once at construction and held for the seam's lifetime (the
+## manager owns this instance, so the cycle is short).
 var _connection
 var _manager
 var _active: bool = false

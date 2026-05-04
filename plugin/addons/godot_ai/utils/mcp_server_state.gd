@@ -52,9 +52,13 @@ const NO_COMMAND := 6
 const PORT_EXCLUDED := 7
 ## HTTP port held by a process we didn't spawn (no matching managed
 ## record). Plugin armed an adoption-confirmation watcher; if the foreign
-## occupant turns out to be a compatible godot-ai server, we transition
-## back through AWAITING_VERSION to READY. Otherwise the watcher times
-## out and we fall to INCOMPATIBLE.
+## occupant turns out to be a compatible godot-ai server,
+## `handle_server_version_verified` transitions to READY. If the
+## adoption deadline expires without a connection, the watcher self-
+## disarms but the state stays at FOREIGN_PORT — the dock keeps showing
+## "port held by another process" until the user reloads. The version-
+## check seam (separate from the adoption deadline) is what fires
+## INCOMPATIBLE on a positive-but-mismatched handshake or timeout.
 const FOREIGN_PORT := 8
 ## Static re-entrancy guard fired (`_server_started_this_session` was
 ## already true). The plugin is being re-enabled within the same editor
