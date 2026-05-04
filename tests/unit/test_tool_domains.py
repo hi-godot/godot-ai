@@ -17,18 +17,12 @@ from godot_ai.tools.domains import (
     parse_exclude_list,
 )
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_SRC_ROOT = _REPO_ROOT / "src" / "godot_ai"
 ## Path to the GDScript catalog the dock UI reads. Parity test below parses
 ## it and verifies it matches live registration — if this file moves, update
 ## here and in the dock.
-_CATALOG_GD = (
-    Path(__file__).resolve().parent.parent.parent
-    / "plugin"
-    / "addons"
-    / "godot_ai"
-    / "tool_catalog.gd"
-)
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-_SRC_ROOT = _REPO_ROOT / "src" / "godot_ai"
+_CATALOG_GD = _REPO_ROOT / "plugin" / "addons" / "godot_ai" / "tool_catalog.gd"
 _RUNTIME_BOUNDARY_DOCS = [
     _REPO_ROOT / "CLAUDE.md",
     _REPO_ROOT / "docs" / "plugin-architecture.md",
@@ -45,32 +39,28 @@ def _list_tools(server) -> list[str]:
 
 
 def test_runtime_protocol_is_not_reintroduced_without_injection_seam():
-    """Path B: handlers are typed against DirectRuntime until a real seam exists."""
+    """Handlers depend on the concrete DirectRuntime until a real injection seam exists."""
     runtime_interface = _SRC_ROOT / "runtime" / "interface.py"
     assert not runtime_interface.exists(), (
         "Runtime Protocol was deleted because tools/resources construct DirectRuntime "
         "directly. Reintroduce it only with a production runtime-injection seam."
     )
 
-    source_files = [
-        path
-        for path in _SRC_ROOT.rglob("*.py")
-        if "__pycache__" not in path.parts
-    ]
-    offenders = [
-        str(path.relative_to(_REPO_ROOT))
-        for path in source_files
-        if "godot_ai.runtime.interface" in path.read_text()
-        or "class Runtime(Protocol)" in path.read_text()
-    ]
-    assert offenders == []
+    offenders = []
+    for path in _SRC_ROOT.rglob("*.py"):
+        if "__pycache__" in path.parts:
+            continue
+        text = path.read_text()
+        if "godot_ai.runtime.interface" in text or "class Runtime(Protocol)" in text:
+            offenders.append(str(path.relative_to(_REPO_ROOT)))
+    assert offenders == [], f"Runtime Protocol references reintroduced in: {offenders}"
 
-    stale_docs = [
-        str(path.relative_to(_REPO_ROOT))
-        for path in _RUNTIME_BOUNDARY_DOCS
-        if "runtime/interface.py" in path.read_text() or "`Runtime` protocol" in path.read_text()
-    ]
-    assert stale_docs == []
+    stale_docs = []
+    for path in _RUNTIME_BOUNDARY_DOCS:
+        text = path.read_text()
+        if "runtime/interface.py" in text or "`Runtime` protocol" in text:
+            stale_docs.append(str(path.relative_to(_REPO_ROOT)))
+    assert stale_docs == [], f"Stale Runtime Protocol references in docs: {stale_docs}"
 
 
 # --- domains.parse_exclude_list ---
