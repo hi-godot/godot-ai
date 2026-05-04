@@ -12,6 +12,7 @@ extends McpTestSuite
 ## to re-enable the plugin against.
 
 const UpdateReloadRunner := preload("res://addons/godot_ai/update_reload_runner.gd")
+const PROBE_PREFIX := "__update_runner_probe_"
 
 var _scratch_dir: String
 
@@ -24,9 +25,15 @@ func suite_setup(_ctx: Dictionary) -> void:
 	_scratch_dir = OS.get_user_data_dir().path_join("mcp_update_reload_runner_tests")
 	_clean_scratch_dir()
 	DirAccess.make_dir_recursive_absolute(_scratch_dir)
+	_cleanup_probe_files()
+
+
+func teardown() -> void:
+	_cleanup_probe_files()
 
 
 func suite_teardown() -> void:
+	_cleanup_probe_files()
 	_clean_scratch_dir()
 
 
@@ -69,6 +76,15 @@ func _new_runner():
 	# Runner extends Node; we don't add it to the tree because the rollback
 	# code path doesn't need _process(). free() in teardown.
 	return UpdateReloadRunner.new()
+
+
+func _cleanup_probe_files() -> void:
+	var addon_dir := ProjectSettings.globalize_path("res://addons/godot_ai")
+	if not DirAccess.dir_exists_absolute(addon_dir):
+		return
+	for f in DirAccess.get_files_at(addon_dir):
+		if String(f).begins_with(PROBE_PREFIX):
+			DirAccess.remove_absolute(addon_dir.path_join(f))
 
 
 # ----- _rollback_paths_written -----
@@ -282,6 +298,42 @@ func _stage_release_zip(zip_path: String, files: Dictionary) -> void:
 		assert_eq(packer.write_file(String(files[rel_path]).to_utf8_buffer()), OK)
 		assert_eq(packer.close_file(), OK)
 	assert_eq(packer.close(), OK)
+
+
+func test_manifest_accepts_release_zip_and_installs_new_files() -> void:
+	## Lower-level non-interactive self-update success path: a valid release
+	## zip is accepted, existing addon files are classified separately, and
+	## the first-stage new-file install writes the expected content.
+	var probe_name := "%s%d.txt" % [PROBE_PREFIX, Time.get_ticks_usec()]
+	var probe_entry := "addons/godot_ai/%s" % probe_name
+	var zip_path := _scratch_dir.path_join("update_success.zip")
+	_stage_release_zip(
+		zip_path,
+		{
+			"addons/godot_ai/plugin.cfg": "[plugin]\nname=\"Godot AI\"\n",
+			"addons/godot_ai/plugin.gd": "extends EditorPlugin\n",
+			probe_entry: "probe content\n",
+		},
+	)
+
+	var runner = _new_runner()
+	runner._zip_path = zip_path
+	assert_true(
+		runner._read_update_manifest(),
+		"release zip with plugin.cfg and plugin.gd must be accepted",
+	)
+	assert_contains(runner._existing_file_paths, "addons/godot_ai/plugin.cfg")
+	assert_contains(runner._existing_file_paths, "addons/godot_ai/plugin.gd")
+	assert_contains(runner._new_file_paths, probe_entry)
+
+	assert_eq(
+		runner._install_zip_paths(runner._new_file_paths),
+		UpdateReloadRunner.InstallStatus.OK,
+		"new files should install from zip",
+	)
+	var target_path := ProjectSettings.globalize_path("res://addons/godot_ai/%s" % probe_name)
+	assert_eq(_read_file(target_path), "probe content\n")
+	runner.free()
 
 
 func test_install_zip_file_creates_backup_for_existing_target() -> void:

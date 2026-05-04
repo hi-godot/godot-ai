@@ -205,3 +205,28 @@ func test_deferred_completion_removes_pending_entry() -> void:
 		d.complete_deferred_response("req-ok"),
 		"late duplicate deferred responses should be rejected",
 	)
+
+
+# ----- deferred response path -----
+
+func test_tick_suppresses_deferred_response_and_threads_request_id() -> void:
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	var seen := {}
+	d.register("deferred_command", func(p):
+		seen["request_id"] = p.get("_request_id", "")
+		return McpDispatcher.DEFERRED_RESPONSE
+	)
+
+	var params := {"value": 42}
+	d.enqueue({
+		"request_id": "req-deferred-1",
+		"command": "deferred_command",
+		"params": params,
+	})
+
+	var responses := d.tick()
+	assert_eq(responses.size(), 0, "Deferred handlers must not get an immediate auto-response")
+	assert_eq(seen.get("request_id", ""), "req-deferred-1")
+	assert_false(params.has("_request_id"), "Dispatcher internals must not mutate queued params")
+	assert_eq(d.tick().size(), 0, "Deferred command should be drained from the queue")
