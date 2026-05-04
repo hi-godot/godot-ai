@@ -142,6 +142,39 @@ func test_disconnect_clears_server_version() -> void:
 	conn.free()
 
 
+func test_disconnect_clears_pending_deferred_responses() -> void:
+	var conn := McpConnection.new()
+	var dispatcher := McpDispatcher.new(McpLogBuffer.new())
+	dispatcher.mcp_logging = false
+	dispatcher.register("later", func(_p): return McpDispatcher.DEFERRED_RESPONSE)
+	dispatcher.enqueue({
+		"request_id": "req-old-socket",
+		"command": "later",
+		"params": {},
+	})
+	dispatcher.tick(100.0)
+	assert_eq(dispatcher.pending_deferred_count(), 1, "precondition: deferred request is tracked")
+
+	conn.dispatcher = dispatcher
+	conn._clear_on_disconnect()
+
+	assert_eq(
+		dispatcher.pending_deferred_count(),
+		0,
+		"reconnect must not inherit pending responses from the previous socket",
+	)
+	conn.free()
+
+
+func test_send_event_reports_unsent_when_disconnected() -> void:
+	var conn := McpConnection.new()
+	assert_false(
+		conn.send_event("readiness_changed", {"readiness": "ready"}),
+		"state-change callers need a false return so they can retry later",
+	)
+	conn.free()
+
+
 # ----- reconnect backoff and logging -----
 
 

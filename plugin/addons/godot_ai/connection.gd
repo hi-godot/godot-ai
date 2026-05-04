@@ -12,7 +12,7 @@ const RECONNECT_LOG_EVERY_N_ATTEMPTS := 10
 ## Backpressure policy: do not queue responses once the WebSocket's current
 ## outbound buffer plus the next payload would exceed this cap. Command
 ## responses get a compact structured error when that can still be sent;
-## events are dropped and logged because they have no request_id to answer.
+## state events report failure so their callers can retry on a later tick.
 const OUTBOUND_BUFFER_LIMIT_BYTES := 4 * 1024 * 1024
 
 var _peer := WebSocketPeer.new()
@@ -121,6 +121,8 @@ func disconnect_from_server() -> void:
 ## Also fires on plain reconnect-loop drops — correct either way.
 func _clear_on_disconnect() -> void:
 	server_version = ""
+	if dispatcher:
+		dispatcher.clear_deferred_responses()
 
 
 ## Full pre-free cleanup for plugin unload: stop _process, close the
@@ -227,8 +229,8 @@ func _handle_message(raw: String) -> void:
 
 
 ## Send a state event to the server (not a command response).
-func send_event(event_name: String, data: Dictionary = {}) -> void:
-	_send_json({"type": "event", "event": event_name, "data": data})
+func send_event(event_name: String, data: Dictionary = {}) -> bool:
+	return _send_json({"type": "event", "event": event_name, "data": data})
 
 
 ## Push a command response for a request_id whose handler deferred its reply
@@ -275,25 +277,25 @@ static func get_readiness() -> String:
 func _check_state_changes() -> void:
 	var scene_path := _get_current_scene_path()
 	if scene_path != _last_scene_path:
-		_last_scene_path = scene_path
-		send_event("scene_changed", {"current_scene": scene_path})
-		if log_buffer:
-			log_buffer.log("[event] scene_changed -> %s" % scene_path)
+		if send_event("scene_changed", {"current_scene": scene_path}):
+			_last_scene_path = scene_path
+			if log_buffer:
+				log_buffer.log("[event] scene_changed -> %s" % scene_path)
 
 	var playing := EditorInterface.is_playing_scene()
 	if playing != _last_play_state:
-		_last_play_state = playing
 		var state := "playing" if playing else "stopped"
-		send_event("play_state_changed", {"play_state": state})
-		if log_buffer:
-			log_buffer.log("[event] play_state_changed -> %s" % state)
+		if send_event("play_state_changed", {"play_state": state}):
+			_last_play_state = playing
+			if log_buffer:
+				log_buffer.log("[event] play_state_changed -> %s" % state)
 
 	var readiness := get_readiness()
 	if readiness != _last_readiness:
-		_last_readiness = readiness
-		send_event("readiness_changed", {"readiness": readiness})
-		if log_buffer:
-			log_buffer.log("[event] readiness -> %s" % readiness)
+		if send_event("readiness_changed", {"readiness": readiness}):
+			_last_readiness = readiness
+			if log_buffer:
+				log_buffer.log("[event] readiness -> %s" % readiness)
 
 
 func _get_current_scene_path() -> String:
@@ -330,7 +332,7 @@ func _handle_outbound_backpressure(
 	if request_id.is_empty():
 		if log_buffer:
 			log_buffer.log(
-				"[send] dropped event due to websocket backpressure "
+				"[send] requestless payload blocked by websocket backpressure "
 				+ "(buffered=%d, message=%d, limit=%d)"
 				% [buffered_bytes, message_bytes, OUTBOUND_BUFFER_LIMIT_BYTES]
 			)

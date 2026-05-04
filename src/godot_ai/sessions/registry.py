@@ -80,7 +80,9 @@ class SessionRegistry:
     def __init__(self):
         self._sessions: dict[str, Session] = {}
         self._active_session_id: str | None = None
-        self._session_waiters: list[tuple[asyncio.Future, str | None]] = []
+        self._session_waiters: list[
+            tuple[asyncio.Future[Session], str | None, frozenset[str], str | None]
+        ] = []
         self._lock = RLock()
 
     def register(self, session: Session) -> None:
@@ -91,11 +93,16 @@ class SessionRegistry:
                 self._active_session_id = session.session_id
             # Notify any waiters blocked on wait_for_session()
             remaining = []
-            for future, exclude_id in self._session_waiters:
+            for future, exclude_id, known_ids, project_path in self._session_waiters:
                 if future.done():
                     continue
-                if exclude_id is not None and session.session_id == exclude_id:
-                    remaining.append((future, exclude_id))
+                if not self._matches_wait_criteria(
+                    session,
+                    exclude_id=exclude_id,
+                    known_ids=known_ids,
+                    project_path=project_path,
+                ):
+                    remaining.append((future, exclude_id, known_ids, project_path))
                     continue
                 to_notify.append(future)
             self._session_waiters = remaining
@@ -149,15 +156,33 @@ class SessionRegistry:
             return self._active_session_id
 
     async def wait_for_session(
-        self, exclude_id: str | None = None, timeout: float = 15.0
+        self,
+        exclude_id: str | None = None,
+        timeout: float = 15.0,
+        *,
+        known_ids: set[str] | frozenset[str] | None = None,
+        project_path: str | None = None,
     ) -> Session:
         """Block until a new session registers (optionally excluding one ID).
 
+        If ``known_ids`` is provided, sessions registered after that snapshot but
+        before this waiter is installed are returned under the same registry lock.
         Raises TimeoutError if no matching session appears within timeout.
         """
-        future: asyncio.Future[Session] = asyncio.get_running_loop().create_future()
-        entry = (future, exclude_id)
+        loop = asyncio.get_running_loop()
         with self._lock:
+            known_ids_frozen = (
+                frozenset(self._sessions) if known_ids is None else frozenset(known_ids)
+            )
+            existing = self._find_matching_session_locked(
+                exclude_id=exclude_id,
+                known_ids=known_ids_frozen,
+                project_path=project_path,
+            )
+            if existing is not None:
+                return existing
+            future: asyncio.Future[Session] = loop.create_future()
+            entry = (future, exclude_id, known_ids_frozen, project_path)
             self._session_waiters.append(entry)
         try:
             return await asyncio.wait_for(future, timeout=timeout)
@@ -168,6 +193,39 @@ class SessionRegistry:
                 self._session_waiters = [w for w in self._session_waiters if w is not entry]
             if not future.done():
                 future.cancel()
+
+    def _find_matching_session_locked(
+        self,
+        *,
+        exclude_id: str | None,
+        known_ids: frozenset[str],
+        project_path: str | None,
+    ) -> Session | None:
+        for session in self._sessions.values():
+            if self._matches_wait_criteria(
+                session,
+                exclude_id=exclude_id,
+                known_ids=known_ids,
+                project_path=project_path,
+            ):
+                return session
+        return None
+
+    @staticmethod
+    def _matches_wait_criteria(
+        session: Session,
+        *,
+        exclude_id: str | None,
+        known_ids: frozenset[str],
+        project_path: str | None,
+    ) -> bool:
+        if exclude_id is not None and session.session_id == exclude_id:
+            return False
+        if session.session_id in known_ids:
+            return False
+        if project_path is not None and session.project_path != project_path:
+            return False
+        return True
 
     def __len__(self) -> int:
         with self._lock:

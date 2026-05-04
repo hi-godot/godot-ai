@@ -29,5 +29,10 @@ class Runtime(Protocol):
     def set_active_session(self, session_id: str) -> None: ...
 
     async def wait_for_session(
-        self, exclude_id: str | None = None, timeout: float = 15.0
+        self,
+        exclude_id: str | None = None,
+        timeout: float = 15.0,
+        *,
+        known_ids: set[str] | frozenset[str] | None = None,
+        project_path: str | None = None,
     ) -> Session: ...

@@ -81,6 +81,10 @@ func pending_deferred_count() -> int:
 	return _pending_deferred.size()
 
 
+func clear_deferred_responses() -> void:
+	_pending_deferred.clear()
+
+
 func has_pending_deferred_response(request_id: String) -> bool:
 	return request_id.is_empty() or _pending_deferred.has(request_id)
 

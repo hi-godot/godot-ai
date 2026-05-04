@@ -11,12 +11,12 @@ from mcp.types import TextContent
 
 from godot_ai.handlers._readiness import require_writable, sync_readiness_from_snapshot
 from godot_ai.runtime.interface import Runtime
-from godot_ai.sessions.registry import Session
 from godot_ai.tools._pagination import paginate
 
 logger = logging.getLogger(__name__)
 
-SCREENSHOT_TIMEOUT_SEC = 35.0
+SCREENSHOT_TIMEOUT_SEC = 15.0
+GAME_SCREENSHOT_TIMEOUT_SEC = 35.0
 
 
 async def editor_state(runtime: Runtime) -> dict:
@@ -71,10 +71,11 @@ async def editor_screenshot(
     if fov is not None:
         params["fov"] = fov
 
+    timeout = GAME_SCREENSHOT_TIMEOUT_SEC if source == "game" else SCREENSHOT_TIMEOUT_SEC
     result = await runtime.send_command(
         "take_screenshot",
         params,
-        timeout=SCREENSHOT_TIMEOUT_SEC,
+        timeout=timeout,
     )
 
     # --- Coverage response: multiple images ---
@@ -240,20 +241,6 @@ async def logs_read(
     }
 
 
-def _find_replacement_session(
-    sessions: list[Session],
-    known_ids: set[str],
-    project_path: str,
-) -> Session | None:
-    for session in sessions:
-        if session.session_id in known_ids:
-            continue
-        if session.project_path != project_path:
-            continue
-        return session
-    return None
-
-
 async def editor_reload_plugin(runtime: Runtime) -> dict:
     active = runtime.get_active_session()
     if active is None:
@@ -268,15 +255,12 @@ async def editor_reload_plugin(runtime: Runtime) -> dict:
     except (ConnectionError, TimeoutError) as exc:
         logger.debug("Expected disconnect during reload: %s", exc)
 
-    # Check if a replacement session already appeared during the reload command
-    # (handles the race where the new session registers before we start waiting)
-    new_session = _find_replacement_session(
-        list(runtime.list_sessions()),
+    new_session = await runtime.wait_for_session(
+        exclude_id=old_id,
+        timeout=15.0,
         known_ids=known_ids,
         project_path=active.project_path,
     )
-    if new_session is None:
-        new_session = await runtime.wait_for_session(exclude_id=old_id, timeout=15.0)
 
     runtime.set_active_session(new_session.session_id)
     return {
