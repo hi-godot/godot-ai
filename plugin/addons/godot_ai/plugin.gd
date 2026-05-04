@@ -39,6 +39,9 @@ const GameLogBuffer := preload("res://addons/godot_ai/utils/game_log_buffer.gd")
 const EditorLogBuffer := preload("res://addons/godot_ai/utils/editor_log_buffer.gd")
 const Dock := preload("res://addons/godot_ai/mcp_dock.gd")
 const DebuggerPlugin := preload("res://addons/godot_ai/debugger/mcp_debugger_plugin.gd")
+const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")
+const SpawnState := preload("res://addons/godot_ai/utils/mcp_spawn_state.gd")
+const WindowsPortReservation := preload("res://addons/godot_ai/utils/windows_port_reservation.gd")
 
 ## Handlers — preloaded as consts instead of registered via `class_name` so
 ## they don't pollute the project-wide global scope. A user project that
@@ -104,25 +107,36 @@ const STARTUP_TRACE_COUNTER_NAMES := [
 ##
 ## Self-update parse-hazard policy: `plugin.gd` MUST NOT reference any
 ## plugin-defined `class_name` (`Mcp*`) by name — neither as a type
-## annotation (`var x: McpFoo`) nor as a constructor (`McpFoo.new()`).
-## Both forms resolve through Godot's global class_name registry at parse
-## time. During an in-place self-update, `set_plugin_enabled(false)` re-
-## parses `plugin.gd` against the freshly-extracted addon tree before the
-## registry has scanned the new files; a reference to a class whose
-## inheritance or class_name siblings changed in the new release fails to
-## resolve, the plugin enters a degraded state, and the follow-up
-## `_exit_tree` cascade crashes (see #242, #244).
+## annotation (`var x: McpFoo`), nor as a constructor (`McpFoo.new()`),
+## nor as any other identifier (`McpFoo.CONST`, `McpFoo.static_method()`,
+## `var s: String = McpFoo.OK`). Every form resolves through Godot's
+## global class_name registry at parse time. During an in-place self-
+## update, `set_plugin_enabled(false)` re-parses `plugin.gd` against the
+## freshly-extracted addon tree before the registry has scanned the new
+## files; a reference to a class whose inheritance or class_name siblings
+## changed in the new release fails to resolve, the plugin enters a
+## degraded state, and the follow-up `_exit_tree` cascade crashes
+## (see #242, #244). Static-var initializers are the most dangerous form
+## because they execute at script-load: e.g. an initializer like
+## `static var _x := McpFoo.BAR` aborts the parse before `_enter_tree`
+## even runs, surfacing as a Godot warning "Unable to load addon script
+## from path: 'res://addons/godot_ai/plugin.gd'" and an auto-disable
+## of the addon.
 ##
 ## The mitigation is two-part:
 ##   (1) Field declarations are untyped (this block).
-##   (2) Constructor sites use script-local `const X := preload("res://...")`
-##       aliases declared at the top of the file (e.g. `Connection`,
-##       `Dispatcher`, `LogBuffer`, …). `preload(...)` resolves the script
-##       by path at script-load, never consulting the global registry, so
-##       the parse stays clean across releases regardless of how the
-##       referenced class's `extends` chain or sibling class_names change.
+##   (2) Every other reference site goes through a script-local
+##       `const X := preload("res://...")` alias declared at the top of
+##       the file (e.g. `Connection`, `Dispatcher`, `LogBuffer`,
+##       `ClientConfigurator`, `SpawnState`, …) — for constructors
+##       (`Connection.new()`), constants (`ClientConfigurator.DEFAULT_WS_PORT`),
+##       and static methods (`ClientConfigurator.http_port()`).
+##       `preload(...)` resolves the script by path at script-load, never
+##       consulting the global registry, so the parse stays clean across
+##       releases regardless of how the referenced class's `extends`
+##       chain or sibling class_names change.
 ##
-## `tests/unit/test_plugin_self_update_safety.py` locks both halves in.
+## `tests/unit/test_plugin_self_update_safety.py` locks all three halves in.
 ##
 ## `_editor_logger` was already untyped because its script extends Godot
 ## 4.5+'s Logger class and is loaded via `load()` so the plugin still parses
@@ -139,7 +153,7 @@ var _server_pid := -1
 var _handlers: Array = []  # prevent GC of RefCounted handlers
 var _debugger_plugin
 static var _server_started_this_session := false  # guard against re-entrant spawns
-static var _resolved_ws_port := McpClientConfigurator.DEFAULT_WS_PORT
+static var _resolved_ws_port := ClientConfigurator.DEFAULT_WS_PORT
 
 ## Captured state for server-spawn supervision (see _start_server_watch).
 ## Populated only when WE spawn the process — adopt / foreign-server
@@ -153,7 +167,7 @@ var _server_watch_timer: Timer = null
 ## happy paths (spawned fresh / adopted existing). Failure states are
 ## set at the exact point of failure and never cleared during the
 ## plugin session — reload the plugin to retry.
-var _spawn_state: String = McpSpawnState.OK
+var _spawn_state: String = SpawnState.OK
 ## One-shot guard for the stale-uvx-index recovery (see
 ## `_should_retry_with_refresh`). Reset at the top of `_start_server` so
 ## each fresh spawn attempt gets its own refresh budget; set to true the
@@ -197,7 +211,7 @@ func _enter_tree() -> void:
 	## Register port overrides before spawn so `http_port()` / `ws_port()`
 	## return the user's configured values (if any) when `_start_server`
 	## builds the CLI args.
-	McpClientConfigurator.ensure_settings_registered()
+	ClientConfigurator.ensure_settings_registered()
 	_startup_trace_phase("settings_registered")
 
 	_log_buffer = LogBuffer.new()
@@ -215,7 +229,7 @@ func _enter_tree() -> void:
 	_connection.ws_port = _resolved_ws_port
 	_connection.connect_blocked = _connection_blocked
 	_connection.connect_block_reason = _server_status_message
-	if not _connection_blocked and _spawn_state == McpSpawnState.OK:
+	if not _connection_blocked and _spawn_state == SpawnState.OK:
 		_arm_server_version_check()
 
 	_debugger_plugin = DebuggerPlugin.new(_log_buffer, _game_log_buffer)
@@ -551,12 +565,12 @@ func _ensure_game_helper_autoload() -> void:
 
 
 func _startup_trace_begin() -> void:
-	_startup_trace_enabled = McpClientConfigurator.startup_trace_enabled()
+	_startup_trace_enabled = ClientConfigurator.startup_trace_enabled()
 	if not _startup_trace_enabled:
 		return
 	_startup_trace_start_ms = Time.get_ticks_msec()
 	_startup_trace_last_ms = _startup_trace_start_ms
-	_startup_trace_netsh_start_count = McpWindowsPortReservation.netsh_query_count()
+	_startup_trace_netsh_start_count = WindowsPortReservation.netsh_query_count()
 	_startup_trace_counters.clear()
 	for counter in STARTUP_TRACE_COUNTER_NAMES:
 		_startup_trace_counters[counter] = 0
@@ -564,8 +578,8 @@ func _startup_trace_begin() -> void:
 		"MCP startup trace | begin platform=%s http_port=%d ws_port=%d"
 		% [
 			OS.get_name(),
-			McpClientConfigurator.http_port(),
-			McpClientConfigurator.ws_port(),
+			ClientConfigurator.http_port(),
+			ClientConfigurator.ws_port(),
 		]
 	)
 
@@ -592,7 +606,7 @@ func _startup_trace_finish(path: String) -> void:
 		return
 	var now := Time.get_ticks_msec()
 	_startup_trace_counters["netsh"] = (
-		McpWindowsPortReservation.netsh_query_count() - _startup_trace_netsh_start_count
+		WindowsPortReservation.netsh_query_count() - _startup_trace_netsh_start_count
 	)
 	print(
 		"MCP startup trace | done path=%s total_ms=%d counters=%s"
@@ -624,9 +638,9 @@ func _start_server() -> void:
 
 	_refresh_retried = false
 
-	var port := McpClientConfigurator.http_port()
-	var ws_port := McpClientConfigurator.ws_port()
-	var current_version := McpClientConfigurator.get_plugin_version()
+	var port := ClientConfigurator.http_port()
+	var ws_port := ClientConfigurator.ws_port()
+	var current_version := ClientConfigurator.get_plugin_version()
 	_server_expected_version = current_version
 
 	if _is_port_in_use(port):
@@ -660,7 +674,7 @@ func _start_server() -> void:
 			current_version,
 			live_ws_port,
 			ws_port,
-			McpClientConfigurator.is_dev_checkout()
+			ClientConfigurator.is_dev_checkout()
 		)
 		if compatibility.get("compatible", false):
 			_server_actual_name = "godot-ai"
@@ -722,9 +736,9 @@ func _start_server() -> void:
 	ws_port = _resolved_ws_port
 
 	_startup_trace_count("server_command_discovery")
-	var server_cmd := McpClientConfigurator.get_server_command()
+	var server_cmd := ClientConfigurator.get_server_command()
 	if server_cmd.is_empty():
-		_set_spawn_state(McpSpawnState.NO_COMMAND)
+		_set_spawn_state(SpawnState.NO_COMMAND)
 		_startup_path = "no_command"
 		push_warning("MCP | could not find server command")
 		return
@@ -744,9 +758,9 @@ func _start_server() -> void:
 	## netstat shows nothing and the dock's reconnect spinner climbs
 	## forever. Catch it before we even try and skip the spawn entirely —
 	## the port picker is the only useful next step. See issue #146.
-	if McpWindowsPortReservation.is_port_excluded(port):
+	if WindowsPortReservation.is_port_excluded(port):
 		_server_started_this_session = true
-		_set_spawn_state(McpSpawnState.PORT_EXCLUDED)
+		_set_spawn_state(SpawnState.PORT_EXCLUDED)
 		_startup_path = "reserved"
 		push_warning("MCP | port %d is reserved by Windows (Hyper-V / WSL2 / Docker)" % port)
 		return
@@ -778,13 +792,13 @@ func _start_server() -> void:
 		print("MCP | started server (PID %d, v%s): %s %s" % [_server_pid, current_version, cmd, " ".join(args)])
 		_start_server_watch()
 	else:
-		_set_spawn_state(McpSpawnState.CRASHED)
+		_set_spawn_state(SpawnState.CRASHED)
 		_startup_path = "crashed"
 		push_warning("MCP | failed to start server")
 
 
 func _set_incompatible_server(live: Dictionary, expected_version: String, port: int) -> void:
-	_spawn_state = McpSpawnState.INCOMPATIBLE_SERVER
+	_spawn_state = SpawnState.INCOMPATIBLE_SERVER
 	_connection_blocked = true
 	_server_expected_version = expected_version
 	_server_actual_name = str(live.get("name", ""))
@@ -984,7 +998,7 @@ func _refresh_dock_client_statuses() -> bool:
 ## later fallback paths (e.g. CRASHED from the watch loop) don't
 ## overwrite the more actionable state.
 func _set_spawn_state(state: String) -> void:
-	if _spawn_state != McpSpawnState.OK:
+	if _spawn_state != SpawnState.OK:
 		return
 	_spawn_state = state
 
@@ -1039,7 +1053,7 @@ func _process(_delta: float) -> void:
 ## protocol to accept a session. Compatibility is decided by the server
 ## version in `handshake_ack`, so this only arms that check.
 func _on_connection_established() -> void:
-	if _spawn_state == McpSpawnState.FOREIGN_PORT:
+	if _spawn_state == SpawnState.FOREIGN_PORT:
 		_arm_server_version_check()
 
 
@@ -1050,12 +1064,12 @@ func _on_server_version_verified(version: String) -> void:
 	_server_actual_version = version
 	var expected := _server_expected_version
 	if expected.is_empty():
-		expected = McpClientConfigurator.get_plugin_version()
+		expected = ClientConfigurator.get_plugin_version()
 		_server_expected_version = expected
 	var compatibility := _server_version_compatibility(
 		version,
 		expected,
-		McpClientConfigurator.is_dev_checkout()
+		ClientConfigurator.is_dev_checkout()
 	)
 	if compatibility.get("compatible", false):
 		_can_recover_incompatible = false
@@ -1065,12 +1079,12 @@ func _on_server_version_verified(version: String) -> void:
 				"Using dev server v%s with plugin v%s (dev checkout version mismatch allowed)."
 				% [version, expected]
 			)
-		if _spawn_state == McpSpawnState.FOREIGN_PORT:
-			_spawn_state = McpSpawnState.OK
+		if _spawn_state == SpawnState.FOREIGN_PORT:
+			_spawn_state = SpawnState.OK
 		_update_process_enabled()
 		return
 	var live := {"version": version, "status_code": 200, "name": "godot-ai"}
-	_set_incompatible_server(live, expected, McpClientConfigurator.http_port())
+	_set_incompatible_server(live, expected, ClientConfigurator.http_port())
 	if _connection != null:
 		_connection.connect_blocked = true
 		_connection.connect_block_reason = _server_status_message
@@ -1083,10 +1097,10 @@ func _on_server_version_unverified() -> void:
 	_server_version_deadline_ms = 0
 	var expected := _server_expected_version
 	if expected.is_empty():
-		expected = McpClientConfigurator.get_plugin_version()
+		expected = ClientConfigurator.get_plugin_version()
 		_server_expected_version = expected
 	var live := {"version": "", "status_code": 0, "error": "missing_handshake_ack"}
-	_set_incompatible_server(live, expected, McpClientConfigurator.http_port())
+	_set_incompatible_server(live, expected, ClientConfigurator.http_port())
 	if _connection != null:
 		_connection.connect_blocked = true
 		_connection.connect_block_reason = _server_status_message
@@ -1131,13 +1145,13 @@ func _check_server_health() -> void:
 	if real_pid > 0 and real_pid != _server_pid and _pid_alive(real_pid):
 		_server_pid = real_pid
 	elif not _pid_alive(_server_pid):
-		if elapsed >= SPAWN_GRACE_MS and _spawn_state == McpSpawnState.OK:
+		if elapsed >= SPAWN_GRACE_MS and _spawn_state == SpawnState.OK:
 			if _should_retry_with_refresh():
 				_refresh_retried = true
 				_respawn_with_refresh()
 				return
 			_server_exit_ms = elapsed
-			_set_spawn_state(McpSpawnState.CRASHED)
+			_set_spawn_state(SpawnState.CRASHED)
 			_awaiting_server_version = false
 			_server_version_deadline_ms = 0
 			_update_process_enabled()
@@ -1162,7 +1176,7 @@ func _check_server_health() -> void:
 func _should_retry_with_refresh() -> bool:
 	return _retry_with_refresh_allowed(
 		_refresh_retried,
-		McpClientConfigurator.get_server_launch_mode(),
+		ClientConfigurator.get_server_launch_mode(),
 		_read_pid_file(),
 	)
 
@@ -1186,7 +1200,7 @@ static func _retry_with_refresh_allowed(already_retried: bool, launch_mode: Stri
 ## writes its own pid-file if it gets that far).
 func _respawn_with_refresh() -> void:
 	_startup_trace_count("server_command_discovery")
-	var server_cmd := McpClientConfigurator.get_server_command(true)
+	var server_cmd := ClientConfigurator.get_server_command(true)
 	if server_cmd.is_empty():
 		## Can't happen in practice — we only reach here after a successful
 		## first resolve of `get_server_command()` at the top of `_start_server`
@@ -1196,21 +1210,21 @@ func _respawn_with_refresh() -> void:
 	var cmd: String = server_cmd[0]
 	var args: Array[String] = []
 	args.assign(server_cmd.slice(1))
-	args.append_array(_build_server_flags(McpClientConfigurator.http_port(), _resolved_ws_port))
+	args.append_array(_build_server_flags(ClientConfigurator.http_port(), _resolved_ws_port))
 	_clear_pid_file()
 	_log_buffer.log("retrying with --refresh (PyPI index may be stale)")
 	_server_pid = OS.create_process(cmd, args)
 	if _server_pid > 0:
 		_server_spawn_ms = Time.get_ticks_msec()
 		_server_exit_ms = 0
-		var current_version := McpClientConfigurator.get_plugin_version()
+		var current_version := ClientConfigurator.get_plugin_version()
 		_write_managed_server_record(_server_pid, current_version)
 		print("MCP | retried server (PID %d, v%s): %s %s" % [_server_pid, current_version, cmd, " ".join(args)])
 	else:
 		## OS.create_process returned -1 on the retry — can't distinguish this
 		## from a real crash, so surface CRASHED immediately rather than
 		## looping. `_refresh_retried` is already true so we won't try again.
-		_set_spawn_state(McpSpawnState.CRASHED)
+		_set_spawn_state(SpawnState.CRASHED)
 		_awaiting_server_version = false
 		_server_version_deadline_ms = 0
 		_update_process_enabled()
@@ -1248,11 +1262,11 @@ func _set_resolved_ws_port(port: int) -> void:
 
 
 func _resolve_ws_port() -> int:
-	var configured := McpClientConfigurator.ws_port()
-	var resolved := McpWindowsPortReservation.suggest_non_excluded_port(
+	var configured := ClientConfigurator.ws_port()
+	var resolved := WindowsPortReservation.suggest_non_excluded_port(
 		configured,
 		2048,
-		McpClientConfigurator.MAX_PORT
+		ClientConfigurator.MAX_PORT
 	)
 	if resolved != configured:
 		var message := "WebSocket port %d is reserved by Windows; using %d" % [configured, resolved]
@@ -1289,11 +1303,11 @@ static func _resolve_ws_port_from_output(
 	netsh_output: String,
 	span: int = 2048
 ) -> int:
-	return McpWindowsPortReservation.suggest_non_excluded_port_from_output(
+	return WindowsPortReservation.suggest_non_excluded_port_from_output(
 		netsh_output,
 		configured_port,
 		span,
-		McpClientConfigurator.MAX_PORT
+		ClientConfigurator.MAX_PORT
 	)
 
 
@@ -1673,7 +1687,7 @@ func _stop_server() -> void:
 	## Python child survives and port 8000 stays held. `_find_managed_pid`
 	## reads the pid-file the server wrote at startup (deterministic),
 	## falling back to netstat/lsof if the file is missing.
-	var port := McpClientConfigurator.http_port()
+	var port := ClientConfigurator.http_port()
 	var killed: Array[int] = []
 	var candidates: Array[int] = [_server_pid]
 	var real_pid := _find_managed_pid(port)
@@ -1731,7 +1745,7 @@ static func _build_server_flags(port: int, ws_port: int) -> Array[String]:
 	## least one domain to drop. Skipping the empty case keeps spawns
 	## compatible with older (pre-1.4.2) servers that don't know the flag —
 	## relevant during staggered plugin/server upgrades in user-mode installs.
-	var excluded := McpClientConfigurator.excluded_domains()
+	var excluded := ClientConfigurator.excluded_domains()
 	if not excluded.is_empty():
 		flags.append("--exclude-domains")
 		flags.append(excluded)
@@ -1933,10 +1947,10 @@ func _clear_managed_server_record() -> void:
 func prepare_for_update_reload() -> void:
 	_stop_server()
 	_server_started_this_session = false
-	if McpClientConfigurator.is_dev_checkout():
+	if ClientConfigurator.is_dev_checkout():
 		return
 
-	var port := McpClientConfigurator.http_port()
+	var port := ClientConfigurator.http_port()
 	if not _is_port_in_use(port):
 		return
 
@@ -2014,9 +2028,9 @@ func install_downloaded_update(zip_path: String, temp_dir: String, source_dock: 
 
 
 func can_recover_incompatible_server() -> bool:
-	if _spawn_state != McpSpawnState.INCOMPATIBLE_SERVER:
+	if _spawn_state != SpawnState.INCOMPATIBLE_SERVER:
 		return false
-	var port := McpClientConfigurator.http_port()
+	var port := ClientConfigurator.http_port()
 	if not _is_port_in_use(port):
 		return false
 	var proof := _evaluate_recovery_port_occupant_proof(port)
@@ -2026,7 +2040,7 @@ func can_recover_incompatible_server() -> bool:
 func _resume_connection_after_recovery() -> void:
 	if _connection == null:
 		return
-	if _spawn_state != McpSpawnState.OK or _connection_blocked:
+	if _spawn_state != SpawnState.OK or _connection_blocked:
 		return
 	_connection.connect_blocked = false
 	_connection.connect_block_reason = ""
@@ -2036,10 +2050,10 @@ func _resume_connection_after_recovery() -> void:
 
 
 func recover_incompatible_server() -> bool:
-	if _spawn_state != McpSpawnState.INCOMPATIBLE_SERVER:
+	if _spawn_state != SpawnState.INCOMPATIBLE_SERVER:
 		return false
 
-	var port := McpClientConfigurator.http_port()
+	var port := ClientConfigurator.http_port()
 	var proof := _evaluate_recovery_port_occupant_proof(port)
 	var targets: Array[int] = []
 	targets.assign(proof.get("pids", []))
@@ -2057,7 +2071,7 @@ func recover_incompatible_server() -> bool:
 	UvCacheCleanup.purge_stale_builds()
 	_clear_managed_server_record()
 	_clear_pid_file()
-	_spawn_state = McpSpawnState.OK
+	_spawn_state = SpawnState.OK
 	_connection_blocked = false
 	_server_status_message = ""
 	_server_actual_version = ""
@@ -2081,9 +2095,9 @@ func recover_incompatible_server() -> bool:
 func force_restart_server() -> void:
 	if not can_restart_managed_server():
 		push_warning("MCP | refusing to kill server on port %d without managed-server ownership proof"
-			% McpClientConfigurator.http_port())
+			% ClientConfigurator.http_port())
 		return
-	var port := McpClientConfigurator.http_port()
+	var port := ClientConfigurator.http_port()
 	## Kill every LISTENER on the port, not just the first one. A dev
 	## server run via `uvicorn --reload` owns port 8000 through both a
 	## reloader parent AND a worker child — killing only one (or zero,
@@ -2094,7 +2108,7 @@ func force_restart_server() -> void:
 	if _is_port_in_use(port):
 		_set_incompatible_server(
 			_probe_live_server_status_for_port(port),
-			McpClientConfigurator.get_plugin_version(),
+			ClientConfigurator.get_plugin_version(),
 			port
 		)
 		return
@@ -2124,7 +2138,7 @@ func start_dev_server() -> void:
 	## worktree's Python. See #84.
 	_stop_server()
 	get_tree().create_timer(0.5).timeout.connect(func():
-		var server_cmd := McpClientConfigurator.get_server_command()
+		var server_cmd := ClientConfigurator.get_server_command()
 		if server_cmd.is_empty():
 			push_warning("MCP | could not find server command for dev server")
 			return
@@ -2135,12 +2149,12 @@ func start_dev_server() -> void:
 		inner_args.assign(server_cmd.slice(1))
 		inner_args.append_array([
 			"--transport", "streamable-http",
-			"--port", str(McpClientConfigurator.http_port()),
+			"--port", str(ClientConfigurator.http_port()),
 			"--ws-port", str(_resolved_ws_port),
 			"--reload",
 		])
 
-		var worktree_src := McpClientConfigurator.find_worktree_src_dir(ProjectSettings.globalize_path("res://"))
+		var worktree_src := ClientConfigurator.find_worktree_src_dir(ProjectSettings.globalize_path("res://"))
 		var prev_pythonpath := OS.get_environment("PYTHONPATH")
 		if not worktree_src.is_empty():
 			var sep := ";" if OS.get_name() == "Windows" else ":"
@@ -2175,7 +2189,7 @@ func stop_dev_server() -> void:
 		_stop_server()
 		return
 	var output: Array = []
-	var port := McpClientConfigurator.http_port()
+	var port := ClientConfigurator.http_port()
 	if OS.get_name() == "Windows":
 		var killed := _kill_processes_and_windows_spawn_children(_find_all_pids_on_port(port))
 		if not killed.is_empty():
@@ -2232,7 +2246,7 @@ func _find_windows_spawn_children(parent_pids: Array[int]) -> Array[int]:
 
 func is_dev_server_running() -> bool:
 	## Returns true if a server is running on the HTTP port that we didn't start as managed.
-	return _server_pid <= 0 and _is_port_in_use(McpClientConfigurator.http_port())
+	return _server_pid <= 0 and _is_port_in_use(ClientConfigurator.http_port())
 
 
 func has_managed_server() -> bool:

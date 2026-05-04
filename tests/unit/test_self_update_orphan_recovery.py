@@ -20,7 +20,9 @@ def test_recover_incompatible_success_unblocks_existing_connection() -> None:
         "_resume_connection_after_recovery()"
     )
 
-    assert "_spawn_state != McpSpawnState.OK or _connection_blocked" in resume_block
+    # `SpawnState` is the script-local preload alias for `McpSpawnState`
+    # (self-update parse-hazard policy in `plugin.gd`; see #244 / #294).
+    assert "_spawn_state != SpawnState.OK or _connection_blocked" in resume_block
     assert "_connection.connect_blocked = false" in resume_block
     assert '_connection.connect_block_reason = ""' in resume_block
     assert '_connection.server_version = ""' in resume_block
