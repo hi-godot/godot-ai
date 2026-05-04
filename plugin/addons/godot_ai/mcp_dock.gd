@@ -6,6 +6,7 @@ extends VBoxContainer
 
 const ServerStateScript := preload("res://addons/godot_ai/utils/mcp_server_state.gd")
 const ClientRefreshStateScript := preload("res://addons/godot_ai/utils/mcp_client_refresh_state.gd")
+const UpdateManagerScript := preload("res://addons/godot_ai/utils/update_manager.gd")
 
 const DEV_MODE_SETTING := "godot_ai/dev_mode"
 ## Index ↔ persisted-value mapping for the mode-override dropdown. The array
@@ -109,12 +110,10 @@ var _client_status_refresh_pending_initial: bool = false
 var _last_client_status_refresh_completed_msec: int = 0
 var _client_status_refresh_started_msec: int = 0
 var _client_status_refresh_generation: int = 0
-## Set for the duration of `_install_update` — extract-overwrite of plugin
-## scripts on disk would crash any worker mid-`GDScriptFunction::call`
-## (confirmed via SIGABRT in `VBoxContainer(McpDock)::_run_client_status_refresh_worker`).
-## Gates every spawn path (focus-in, manual button, deferred initial refresh)
-## while `true`; the in-flight worker is drained at start of install.
-var _self_update_in_progress := false
+## Owns the self-update slice: GitHub Releases poll, ZIP download, install
+## orchestration, and the install-in-flight gate. Dock keeps banner UI
+## only and consults the gate via `_is_self_update_in_progress()`.
+var _update_manager
 static var _orphaned_client_status_refresh_threads: Array[Thread] = []
 
 ## Per-row worker state for Configure / Remove. Issue #239: shelling out
@@ -130,10 +129,10 @@ static var _orphaned_client_status_refresh_threads: Array[Thread] = []
 ##
 ## No orphan-thread list (unlike the refresh worker): action threads
 ## never get abandoned mid-flight. McpCliExec's wall-clock budget caps
-## the worst case at ~10s, so the `_exit_tree` / `_install_update` drain
-## blocks briefly and finishes — there's no path that "gives up" on an
-## action thread the way `_abandon_client_status_refresh_thread` does
-## for the refresh worker.
+## the worst case at ~10s, so the `_exit_tree` / `McpUpdateManager`
+## install-time drain blocks briefly and finishes — there's no path that
+## "gives up" on an action thread the way `_abandon_client_status_refresh_thread`
+## does for the refresh worker.
 var _client_action_threads: Dictionary = {}
 var _client_action_generations: Dictionary = {}
 
@@ -178,17 +177,11 @@ var _last_server_status: Dictionary = {}
 # back to the normal disconnect UI.
 const STARTUP_GRACE_MSEC := 60 * 1000
 
-# Update check
+# Update banner — visible UI only. Releases polling, ZIP download, and
+# the install pipeline live on `_update_manager`.
 var _update_banner: VBoxContainer
-var _http_request: HTTPRequest
-var _download_request: HTTPRequest
 var _update_label: Label
 var _update_btn: Button
-var _latest_download_url := ""
-const RELEASES_URL := "https://api.github.com/repos/hi-godot/godot-ai/releases/latest"
-const RELEASES_PAGE := "https://github.com/hi-godot/godot-ai/releases/latest"
-const UPDATE_TEMP_DIR := "user://godot_ai_update/"
-const UPDATE_TEMP_ZIP := "user://godot_ai_update/update.zip"
 
 
 func setup(connection: McpConnection, log_buffer: McpLogBuffer, plugin: EditorPlugin) -> void:
@@ -234,12 +227,22 @@ func _exit_tree() -> void:
 	_drain_client_action_workers()
 
 
+## Public drain entry consulted by `McpUpdateManager._install_zip` before
+## any disk write. Pairs both worker pools so the manager doesn't reach
+## into private dock methods. `_exit_tree` still calls the two underlying
+## drains directly because it has additional state-machine work
+## (SHUTTING_DOWN sticky-set) that the install-time path must NOT inherit.
+func prepare_for_self_update_drain() -> void:
+	_drain_client_status_refresh_workers()
+	_drain_client_action_workers()
+
+
 func _drain_client_status_refresh_workers() -> void:
 	## Block until any in-flight refresh worker (and any orphaned workers from
 	## a prior timeout) finish, then clear refresh state. Same blocking
 	## semantics as the `_exit_tree` drain — see #232. Used by `_exit_tree`
-	## (dock teardown) and `_install_update` (before extract overwrites
-	## plugin scripts on disk).
+	## (dock teardown) and `McpUpdateManager._install_zip` (before extract
+	## overwrites plugin scripts on disk).
 	_client_status_refresh_generation += 1
 	if _client_status_refresh_thread != null:
 		_client_status_refresh_thread.wait_to_finish()
@@ -249,8 +252,9 @@ func _drain_client_status_refresh_workers() -> void:
 			thread.wait_to_finish()
 	_orphaned_client_status_refresh_threads.clear()
 	## Don't transition out of SHUTTING_DOWN — the drain is called from
-	## `_exit_tree` (sticky shutdown) and from `_install_update`'s post-
-	## drain reset, which writes the state explicitly.
+	## `_exit_tree` (sticky shutdown) and from
+	## `McpUpdateManager._install_zip`'s post-drain reset, which writes
+	## the state explicitly.
 	if _refresh_state != ClientRefreshStateScript.SHUTTING_DOWN:
 		_refresh_state = ClientRefreshStateScript.IDLE
 	_client_status_refresh_pending = false
@@ -275,8 +279,8 @@ func _drain_client_action_workers() -> void:
 	## `_client_action_threads.clear()` would leave the dock stuck showing
 	## "Configuring…" / "Removing…" with disabled buttons forever — a
 	## user-visible failure mode for the install-update bail-out branch
-	## (zip extract failure clears `_self_update_in_progress` and the dock
-	## stays alive).
+	## (zip extract failure on the manager clears `_install_in_flight` and
+	## the dock stays alive).
 	for client_id in _client_action_threads.keys():
 		var t: Thread = _client_action_threads[client_id]
 		if t != null:
@@ -439,7 +443,7 @@ func _build_ui() -> void:
 
 	var release_link := Button.new()
 	release_link.text = "Release notes"
-	release_link.pressed.connect(func(): OS.shell_open(RELEASES_PAGE))
+	release_link.pressed.connect(func(): OS.shell_open(UpdateManagerScript.RELEASES_PAGE))
 	update_btn_row.add_child(release_link)
 
 	_update_banner.add_child(update_btn_row)
@@ -447,10 +451,13 @@ func _build_ui() -> void:
 
 	add_child(_update_banner)
 
-	_http_request = HTTPRequest.new()
-	_http_request.request_completed.connect(_on_update_check_completed)
-	add_child(_http_request)
-	_check_for_updates.call_deferred()
+	if _update_manager == null:
+		_update_manager = UpdateManagerScript.new()
+		_update_manager.setup(_plugin, self)
+		_update_manager.update_check_completed.connect(_on_update_check_result)
+		_update_manager.install_state_changed.connect(_on_install_state_changed)
+		add_child(_update_manager)
+	_update_manager.check_for_updates.call_deferred()
 
 	# --- Dev-only connection extras (server label + reload button) ---
 	_dev_section = VBoxContainer.new()
@@ -737,9 +744,9 @@ func _update_status() -> void:
 	## file change) but `_plugin` is still the old `EditorPlugin` instance
 	## (only `set_plugin_enabled(false, true)` re-instantiates that). When
 	## the new dock calls a method the old plugin doesn't have, `_process`
-	## errors every frame until the deferred `_reload_after_update` lands.
-	## Guard every `_plugin.<new_method>()` call with `has_method` so that
-	## window stays silent. See #168.
+	## errors every frame until `McpUpdateManager._reload_after_update`
+	## lands. Guard every `_plugin.<new_method>()` call with `has_method`
+	## so that window stays silent. See #168.
 	var server_status: Dictionary = (
 		_plugin.get_server_status()
 		if _plugin != null and _plugin.has_method("get_server_status")
@@ -1004,17 +1011,18 @@ func _mode_override_index_from_setting() -> int:
 ## Called whenever `is_dev_checkout()`'s answer could have changed — repaints
 ## the install label/tooltip, rebuilds the setup container (Mode row, Dev
 ## Server button vs uv status), and clears any stale update banner so a
-## fresh `_check_for_updates()` paints over a clean slate. The Update
-## button state is reset too: a prior install attempt may have left it
-## disabled with text like "Dev checkout — update via git" or "Extract
-## failed"; without this reset, flipping the dropdown and re-checking
-## would re-open the banner with the stale button text.
+## fresh check paints over a clean slate. The Update button state is reset
+## too: a prior install attempt may have left it disabled with text like
+## "Dev checkout — update via git" or "Extract failed"; without this reset,
+## flipping the dropdown and re-checking would re-open the banner with the
+## stale button text.
 func _refresh_install_mode_ui() -> void:
 	_install_label.text = _install_mode_text()
 	_install_label.tooltip_text = _install_mode_tooltip()
 	_refresh_setup_status()
 	_update_banner.visible = false
-	_latest_download_url = ""
+	if _update_manager != null:
+		_update_manager.clear_pending_download()
 	if _update_btn != null:
 		_update_btn.text = "Update"
 		_update_btn.disabled = false
@@ -1027,12 +1035,12 @@ func _on_mode_override_selected(index: int) -> void:
 		es.set_setting(McpClientConfigurator.MODE_OVERRIDE_SETTING, value)
 	_refresh_install_mode_ui()
 	## Cancel any in-flight startup check before firing a new one, otherwise
-	## `_http_request.request()` can return ERR_BUSY and the dropdown flip
-	## silently fails to re-check. `call_deferred` lets the cancel settle
-	## before the new request goes out.
-	if _http_request != null:
-		_http_request.cancel_request()
-	_check_for_updates.call_deferred()
+	## the next `request()` returns ERR_BUSY and the dropdown flip silently
+	## fails to re-check. `call_deferred` lets the cancel settle before the
+	## new request goes out.
+	if _update_manager != null:
+		_update_manager.cancel_check()
+		_update_manager.check_for_updates.call_deferred()
 	print("MCP | mode override -> %s" % (value if value else "auto"))
 
 
@@ -1381,10 +1389,10 @@ func _on_remove_client(client_id: String) -> void:
 ##   - The dot turns amber and the row label gets a "Configuring…" /
 ##     "Removing…" suffix so the user can see the click was registered.
 func _dispatch_client_action(client_id: String, action: String) -> void:
-	if _self_update_in_progress:
+	if _is_self_update_in_progress():
 		## Same gate as the refresh worker — the install window overwrites
 		## plugin scripts on disk, and a worker mid-call into them would
-		## SIGABRT in `GDScriptFunction::call`. See `_install_update`.
+		## SIGABRT in `GDScriptFunction::call`. See `_update_manager`.
 		return
 	if _client_action_threads.has(client_id):
 		return
@@ -1932,7 +1940,7 @@ func _perform_initial_client_status_refresh() -> void:
 		return
 	if _refresh_state == ClientRefreshStateScript.SHUTTING_DOWN:
 		return
-	if _self_update_in_progress:
+	if _is_self_update_in_progress():
 		return
 	if _is_editor_filesystem_busy():
 		_defer_initial_client_status_refresh_until_filesystem_ready()
@@ -2024,13 +2032,14 @@ func _request_client_status_refresh(force: bool = false) -> bool:
 			_apply_row_status(String(client_id), McpClient.Status.ERROR, _server_blocked_client_message())
 		_refresh_clients_summary()
 		return false
-	if _self_update_in_progress:
+	if _is_self_update_in_progress():
 		## Self-update is overwriting plugin scripts on disk; spawning a worker
 		## now would crash it inside `GDScriptFunction::call` once the bytecode
 		## swap reaches a script the worker is mid-call into. Focus-in /
 		## manual button / cooldown timer all funnel through here, so one
 		## gate covers every spawn path during the install window. The flag
-		## dies with the dock instance during `set_plugin_enabled(false)`.
+		## lives on `_update_manager` and dies with the dock instance during
+		## `set_plugin_enabled(false)`.
 		return false
 	if ClientRefreshStateScript.has_worker_alive(_refresh_state):
 		if force and _has_client_status_refresh_timed_out():
@@ -2107,7 +2116,7 @@ func _defer_client_status_refresh_until_filesystem_ready(force: bool) -> void:
 func _retry_deferred_client_status_refresh() -> void:
 	if _refresh_state != ClientRefreshStateScript.DEFERRED_FOR_FILESYSTEM:
 		return
-	if _self_update_in_progress:
+	if _is_self_update_in_progress():
 		return
 	if _is_editor_filesystem_busy():
 		return
@@ -2277,223 +2286,35 @@ func _apply_row_status(
 
 # --- Update check & self-update ---
 
-func _check_for_updates() -> void:
-	## In a dev checkout `addons/godot_ai/` is a symlink into the canonical
-	## `plugin/` tree, so `FileAccess.open(..., WRITE)` during self-update
-	## follows the symlink and overwrites the user's source files in place.
-	## Devs update via `git pull`, not the dock — skip the GitHub check
-	## entirely to avoid even offering the destructive path. See #116.
-	##
-	## `is_dev_checkout()` honours the mode override (dock dropdown first,
-	## then `GODOT_AI_MODE` env var), so testers can force `user` mode to
-	## exercise the AssetLib update flow from inside a dev tree.
-	## `_install_update` still gates on the physical symlink check, so a
-	## forced-user mode can never clobber source.
-	if McpClientConfigurator.is_dev_checkout():
-		return
-	_http_request.request(RELEASES_URL, ["Accept: application/vnd.github+json"])
-
-
-func _on_update_check_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
-	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
-		return
-	var json := JSON.parse_string(body.get_string_from_utf8())
-	if json == null or not json is Dictionary:
-		return
-	var tag: String = json.get("tag_name", "")
-	if tag.is_empty():
-		return
-	var remote_version := tag.trim_prefix("v")
-	var local_version := McpClientConfigurator.get_plugin_version()
-	if not _is_newer(remote_version, local_version):
-		return
-
-	# Find the plugin ZIP asset URL
-	var assets: Array = json.get("assets", [])
-	for asset in assets:
-		var name: String = asset.get("name", "")
-		if name == "godot-ai-plugin.zip":
-			_latest_download_url = asset.get("browser_download_url", "")
-			break
-
-	var label_text := "Update available: v%s" % remote_version
-	if McpClientConfigurator.mode_override() == "user":
-		## Visible hint so testers notice the banner is only showing because
-		## of a forced-user override (dock dropdown or GODOT_AI_MODE env
-		## var). Clicking Update in a symlinked dev tree safely bails in
-		## `_install_update` via the addons_dir_is_symlink guard.
-		label_text += " (forced)"
-	_update_label.text = label_text
-	_update_banner.visible = true
+## Tolerates a null manager so test fixtures that build the dock without
+## `_build_ui()` don't false-positive on the worker-spawn gate.
+func _is_self_update_in_progress() -> bool:
+	return _update_manager != null and bool(_update_manager.is_install_in_flight())
 
 
 func _on_update_pressed() -> void:
-	if _latest_download_url.is_empty():
-		OS.shell_open(RELEASES_PAGE)
-		return
-
-	var btn := _update_btn
-	btn.text = "Downloading..."
-	btn.disabled = true
-
-	# Create a separate HTTPRequest for the ZIP download
-	if _download_request != null:
-		_download_request.queue_free()
-	_download_request = HTTPRequest.new()
-	var global_zip := ProjectSettings.globalize_path(UPDATE_TEMP_ZIP)
-	var global_dir := ProjectSettings.globalize_path(UPDATE_TEMP_DIR)
-	DirAccess.make_dir_recursive_absolute(global_dir)
-	_download_request.download_file = global_zip
-	_download_request.max_redirects = 10
-	_download_request.request_completed.connect(_on_download_completed)
-	add_child(_download_request)
-	var err := _download_request.request(_latest_download_url)
-	if err != OK:
-		btn.text = "Request failed"
-		btn.disabled = false
+	if _update_manager != null:
+		_update_manager.start_install()
 
 
-func _on_download_completed(result: int, response_code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
-	if _download_request != null:
-		_download_request.queue_free()
-		_download_request = null
-
-	var btn := _update_btn
-	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
-		print("MCP | update download failed: result=%d code=%d" % [result, response_code])
-		btn.text = "Download failed (%d)" % response_code
-		btn.disabled = false
-		return
-
-	btn.text = "Installing..."
-	# Extract and install on next frame to avoid mid-callback issues
-	_install_update.call_deferred()
+func _on_update_check_result(result: Dictionary) -> void:
+	_update_label.text = String(result.get("label_text", ""))
+	_update_banner.visible = true
 
 
-func _install_update() -> void:
-	## Belt-and-suspenders data-safety check. `_check_for_updates` is gated
-	## on `is_dev_checkout()` (a UX heuristic the user can override via
-	## GODOT_AI_MODE=user), but the actual hazard we can never tolerate is
-	## writing release-zip files into a symlinked addons dir — that
-	## clobbers the canonical `plugin/` source tree. Symlink detection is
-	## independent of the mode override: even a forced-user mode aborts
-	## here if the target is a symlink. See #116.
-	if McpClientConfigurator.addons_dir_is_symlink():
-		_update_btn.text = "Dev checkout — update via git"
-		_update_btn.disabled = true
-		_update_banner.visible = false
-		return
-
-	## Block worker spawning + drain in-flight worker BEFORE we start
-	## overwriting plugin scripts on disk. Without this, focus-in landing
-	## anywhere in the extract→reload window spawns a worker that walks
-	## into a partially-overwritten script and SIGABRTs inside
-	## `GDScriptFunction::call`. The flag is also checked by
-	## `_request_client_status_refresh` and `_perform_initial_client_status_refresh`,
-	## so every spawn path is gated.
-	_self_update_in_progress = true
-	_drain_client_status_refresh_workers()
-	_drain_client_action_workers()
-
-	var version := Engine.get_version_info()
-	if version.get("minor", 0) >= 4 and _plugin != null and _plugin.has_method("install_downloaded_update"):
-		_update_btn.text = "Reloading..."
-		_plugin.install_downloaded_update(UPDATE_TEMP_ZIP, UPDATE_TEMP_DIR, self)
-		return
-
-	var zip_path := ProjectSettings.globalize_path(UPDATE_TEMP_ZIP)
-	var install_base := ProjectSettings.globalize_path("res://")
-
-	var reader := ZIPReader.new()
-	if reader.open(zip_path) != OK:
-		_self_update_in_progress = false
-		_update_btn.text = "Extract failed"
-		_update_btn.disabled = false
-		return
-
-	var files := reader.get_files()
-	for file_path in files:
-		if not file_path.begins_with("addons/godot_ai/"):
-			continue
-		if file_path.ends_with("/"):
-			DirAccess.make_dir_recursive_absolute(install_base.path_join(file_path))
-		else:
-			var dir := file_path.get_base_dir()
-			DirAccess.make_dir_recursive_absolute(install_base.path_join(dir))
-			var content := reader.read_file(file_path)
-			var f := FileAccess.open(install_base.path_join(file_path), FileAccess.WRITE)
-			if f != null:
-				f.store_buffer(content)
-				f.close()
-
-	reader.close()
-
-	# Clean up temp files
-	DirAccess.remove_absolute(zip_path)
-	DirAccess.remove_absolute(ProjectSettings.globalize_path(UPDATE_TEMP_DIR))
-
-	## Kill the old server before the reload so the re-enabled plugin spawns
-	## a fresh one against the new plugin version. Without this, the running
-	## Python process on port 8000 outlives the reload, `_start_server`
-	## short-circuits on "port already in use," and session_list reports
-	## `plugin_version != server_version` until the user restarts the
-	## editor. See issue #132.
-	##
-	## Stale-PyPI-index recovery (#171/#172): the new `_start_server` self-heals
-	## by retrying once with `uvx --refresh` when the first spawn dies without
-	## writing the pid-file on the uvx tier. Every spawn path benefits — this
-	## removes the need for a dock-side precheck before the reload.
-	if _plugin != null and _plugin.has_method("prepare_for_update_reload"):
-		_plugin.prepare_for_update_reload()
-
-	# Godot 4.4+ handles plugin reload safely. On 4.3 and older, toggling
-	# the plugin off/on can cause re-entrant server spawns, so we ask the
-	# user to restart the editor instead.
-	if version.get("minor", 0) >= 4:
-		_update_btn.text = "Scanning..."
-		## Before reloading the plugin we MUST wait for Godot's filesystem
-		## scanner to see the newly-extracted files. Otherwise plugin.gd
-		## re-parses and its `class_name` references (McpGameLogBuffer,
-		## McpDebuggerPlugin, …) resolve against a ClassDB that hasn't
-		## picked up the new files yet — parse errors, dock tears down,
-		## plugin reports "enabled" with no UI. See issue #127.
-		var fs := EditorInterface.get_resource_filesystem()
-		if fs != null:
-			fs.filesystem_changed.connect(_on_filesystem_scanned_for_update, CONNECT_ONE_SHOT)
-			fs.scan()
-		else:
-			## Fallback: no filesystem accessor — defer and hope (matches
-			## the pre-#127 behaviour).
-			_reload_after_update.call_deferred()
-	else:
-		## Pre-4.4 Godot: no plugin reload, dock stays alive on the new files.
-		## Clear the install flag so refreshes resume on the OLD dock instance
-		## until the user restarts the editor.
-		_self_update_in_progress = false
-		_update_btn.text = "Restart editor to apply"
-		_update_btn.disabled = true
-		_update_label.text = "Updated! Restart the editor."
+## Apply only the keys present so the manager can ship partial updates
+## (e.g. button-text-only during the download phase) without clobbering
+## banner state.
+func _on_install_state_changed(state: Dictionary) -> void:
+	if state.has("button_text") and _update_btn != null:
+		_update_btn.text = String(state["button_text"])
+	if state.has("button_disabled") and _update_btn != null:
+		_update_btn.disabled = bool(state["button_disabled"])
+	if state.has("label_text") and _update_label != null:
+		_update_label.text = String(state["label_text"])
+	if state.has("banner_visible") and _update_banner != null:
+		_update_banner.visible = bool(state["banner_visible"])
+	if String(state.get("outcome", "")) == "success" and _update_label != null:
+		## Visual confirmation for the pre-4.4 "Updated! Restart the editor."
+		## terminal state — the only outcome the manager paints green for.
 		_update_label.add_theme_color_override("font_color", Color.GREEN)
-
-
-func _on_filesystem_scanned_for_update() -> void:
-	_update_btn.text = "Reloading..."
-	_reload_after_update.call_deferred()
-
-
-func _reload_after_update() -> void:
-	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", false)
-	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", true)
-
-
-static func _is_newer(remote: String, local: String) -> bool:
-	var r := remote.split(".")
-	var l := local.split(".")
-	for i in range(max(r.size(), l.size())):
-		var rv := int(r[i]) if i < r.size() else 0
-		var lv := int(l[i]) if i < l.size() else 0
-		if rv > lv:
-			return true
-		if rv < lv:
-			return false
-	return false

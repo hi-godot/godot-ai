@@ -308,7 +308,11 @@ def patch_fixture_plugin(
     patch_managed_record_isolation(addon_dir / "plugin.gd")
     patch_expected_server_version(addon_dir / "plugin.gd", server_version)
     if force_local_update:
-        patch_local_update_banner(addon_dir / "mcp_dock.gd", next_version)
+        # Update flow lives on McpUpdateManager; the dock keeps only
+        # the visible banner UI.
+        patch_local_update_banner(
+            addon_dir / "utils" / "update_manager.gd", next_version
+        )
 
 
 def patch_plugin_cfg(path: Path, version: str) -> None:
@@ -439,6 +443,18 @@ def patch_expected_server_version(path: Path, server_version: str) -> None:
 
 
 def patch_local_update_banner(path: Path, next_version: str) -> None:
+    """Override the McpUpdateManager update flow to use a local zip fixture.
+
+    Patches `addons/godot_ai/utils/update_manager.gd`:
+
+      - Inject smoke constants alongside `UPDATE_TEMP_ZIP`.
+      - Replace `check_for_updates()` so it skips the GitHub HTTP fetch
+        and directly emits `update_check_completed` with the smoke
+        payload (the dock listens to that signal and paints the banner).
+      - Replace `start_install()` with the smoke branch — copies the
+        fixture zip into `UPDATE_TEMP_ZIP` and calls `_install_zip`,
+        bypassing the real download.
+    """
     text = path.read_text(encoding="utf-8")
     text = replace_once(
         path,
@@ -454,72 +470,95 @@ def patch_local_update_banner(path: Path, next_version: str) -> None:
     )
     text = replace_function(
         text,
-        "func _check_for_updates() -> void:",
-        """func _check_for_updates() -> void:
+        "func check_for_updates() -> void:",
+        """func check_for_updates() -> void:
 \t_latest_download_url = SELF_UPDATE_SMOKE_DOWNLOAD_URL
-\t_update_label.text = "Smoke update available: v%s" % SELF_UPDATE_SMOKE_NEXT_VERSION
-\t_update_banner.visible = true
 \tvar smoke_zip_path := ProjectSettings.globalize_path(SELF_UPDATE_SMOKE_ZIP)
-\tprint("MCP | self-update smoke: using local zip %s" % smoke_zip_path)""",
+\tprint("MCP | self-update smoke: using local zip %s" % smoke_zip_path)
+\tupdate_check_completed.emit({
+\t\t"has_update": true,
+\t\t"version": SELF_UPDATE_SMOKE_NEXT_VERSION,
+\t\t"forced": false,
+\t\t"label_text": "Smoke update available: v%s" % SELF_UPDATE_SMOKE_NEXT_VERSION,
+\t\t"download_url": SELF_UPDATE_SMOKE_DOWNLOAD_URL,
+\t})""",
     )
-    marker = "func _on_update_pressed() -> void:\n"
-    if marker not in text:
-        raise HarnessError(f"Could not find _on_update_pressed in {path}")
-    smoke_branch = """func _on_update_pressed() -> void:
-\tif _latest_download_url == SELF_UPDATE_SMOKE_DOWNLOAD_URL:
-\t\tvar btn := _update_btn
-\t\tbtn.text = "Installing smoke update..."
-\t\tbtn.disabled = true
-\t\tvar src := ProjectSettings.globalize_path(SELF_UPDATE_SMOKE_ZIP)
-\t\tvar dst_dir := ProjectSettings.globalize_path(UPDATE_TEMP_DIR)
-\t\tvar dst := ProjectSettings.globalize_path(UPDATE_TEMP_ZIP)
-\t\tvar path_record_path := ProjectSettings.globalize_path(
-\t\t\t"res://.godot-ai-self-update-smoke/user-update-path.txt"
-\t\t)
-\t\tvar path_record := FileAccess.open(path_record_path, FileAccess.WRITE)
-\t\tif path_record != null:
-\t\t\tpath_record.store_string(dst_dir)
-\t\t\tpath_record.close()
-\t\tDirAccess.make_dir_recursive_absolute(dst_dir)
-\t\tvar bytes := FileAccess.get_file_as_bytes(src)
-\t\tif bytes.is_empty() and FileAccess.get_open_error() != OK:
-\t\t\tvar read_error := FileAccess.get_open_error()
-\t\t\tprint("MCP | self-update smoke: failed to read local zip %s (error %d)" % [
-\t\t\t\tsrc,
-\t\t\t\tread_error,
-\t\t\t])
-\t\t\tbtn.text = "Smoke zip missing"
-\t\t\tbtn.disabled = false
-\t\t\treturn
-\t\tvar f := FileAccess.open(dst, FileAccess.WRITE)
-\t\tif f == null:
-\t\t\tvar open_error := FileAccess.get_open_error()
-\t\t\tprint("MCP | self-update smoke: failed to stage zip %s (error %d)" % [
-\t\t\t\tdst,
-\t\t\t\topen_error,
-\t\t\t])
-\t\t\tbtn.text = "Stage failed"
-\t\t\tbtn.disabled = false
-\t\t\treturn
-\t\tf.store_buffer(bytes)
-\t\tvar write_error := f.get_error()
-\t\tf.close()
-\t\tif write_error != OK:
-\t\t\tprint("MCP | self-update smoke: write error %d for %s" % [write_error, dst])
-\t\t\tbtn.text = "Stage failed"
-\t\t\tbtn.disabled = false
-\t\t\treturn
-\t\tprint("MCP | self-update smoke: staged local zip %s" % dst)
-\t\t_install_update.call_deferred()
+    text = replace_function(
+        text,
+        "func start_install() -> void:",
+        """func start_install() -> void:
+\tif _latest_download_url != SELF_UPDATE_SMOKE_DOWNLOAD_URL:
+\t\tOS.shell_open(RELEASES_PAGE)
 \t\treturn
-"""
-    text = text.replace(marker, smoke_branch, 1)
+\tinstall_state_changed.emit({
+\t\t"phase": "smoke_installing",
+\t\t"button_text": "Installing smoke update...",
+\t\t"button_disabled": true,
+\t})
+\tvar src := ProjectSettings.globalize_path(SELF_UPDATE_SMOKE_ZIP)
+\tvar dst_dir := ProjectSettings.globalize_path(UPDATE_TEMP_DIR)
+\tvar dst := ProjectSettings.globalize_path(UPDATE_TEMP_ZIP)
+\tvar path_record_path := ProjectSettings.globalize_path(
+\t\t"res://.godot-ai-self-update-smoke/user-update-path.txt"
+\t)
+\tvar path_record := FileAccess.open(path_record_path, FileAccess.WRITE)
+\tif path_record != null:
+\t\tpath_record.store_string(dst_dir)
+\t\tpath_record.close()
+\tDirAccess.make_dir_recursive_absolute(dst_dir)
+\tvar bytes := FileAccess.get_file_as_bytes(src)
+\tif bytes.is_empty() and FileAccess.get_open_error() != OK:
+\t\tvar read_error := FileAccess.get_open_error()
+\t\tprint("MCP | self-update smoke: failed to read local zip %s (error %d)" % [
+\t\t\tsrc,
+\t\t\tread_error,
+\t\t])
+\t\tinstall_state_changed.emit({
+\t\t\t"phase": "smoke_zip_missing",
+\t\t\t"button_text": "Smoke zip missing",
+\t\t\t"button_disabled": false,
+\t\t})
+\t\treturn
+\tvar f := FileAccess.open(dst, FileAccess.WRITE)
+\tif f == null:
+\t\tvar open_error := FileAccess.get_open_error()
+\t\tprint("MCP | self-update smoke: failed to stage zip %s (error %d)" % [
+\t\t\tdst,
+\t\t\topen_error,
+\t\t])
+\t\tinstall_state_changed.emit({
+\t\t\t"phase": "smoke_stage_failed",
+\t\t\t"button_text": "Stage failed",
+\t\t\t"button_disabled": false,
+\t\t})
+\t\treturn
+\tf.store_buffer(bytes)
+\tvar write_error := f.get_error()
+\tf.close()
+\tif write_error != OK:
+\t\tprint("MCP | self-update smoke: write error %d for %s" % [write_error, dst])
+\t\tinstall_state_changed.emit({
+\t\t\t"phase": "smoke_stage_failed",
+\t\t\t"button_text": "Stage failed",
+\t\t\t"button_disabled": false,
+\t\t})
+\t\treturn
+\tprint("MCP | self-update smoke: staged local zip %s" % dst)
+\t_install_zip.call_deferred()""",
+    )
     path.write_text(text, encoding="utf-8")
 
 
 def patch_vnext_hot_reload_trigger(path: Path) -> None:
+    """Inject a typed Dict + Array onto McpDock so the vNext hot-reload
+    actually exercises the field-storage crash class (issue #245).
+
+    Anchored to a stable plain field (`_last_log_count`) — anchoring to
+    a recently-moved field would silently miss the regression rather
+    than failing loudly.
+    """
     text = path.read_text(encoding="utf-8")
-    field_marker = "var _self_update_in_progress := false\n"
+    field_marker = "var _last_log_count := 0\n"
     if field_marker not in text:
         raise HarnessError(f"Could not find self-update field marker in {path}")
     text = text.replace(
@@ -572,9 +611,15 @@ func marker() -> String:
         encoding="utf-8",
     )
 
+    # Anchor the topology-change preload onto a stable line in the dock —
+    # `UpdateManagerScript`'s `const … := preload(...)` is one of the
+    # first lines and survives unrelated dock refactors.
     dock_path = addon_dir / "mcp_dock.gd"
     text = dock_path.read_text(encoding="utf-8")
-    marker = 'const UPDATE_TEMP_ZIP := "user://godot_ai_update/update.zip"\n'
+    marker = (
+        'const UpdateManagerScript := preload('
+        '"res://addons/godot_ai/utils/update_manager.gd")\n'
+    )
     text = replace_once(
         dock_path,
         text,

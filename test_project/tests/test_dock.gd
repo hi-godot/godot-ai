@@ -8,6 +8,16 @@ extends McpTestSuite
 const McpDockScript = preload("res://addons/godot_ai/mcp_dock.gd")
 const GodotAiPlugin := preload("res://addons/godot_ai/plugin.gd")
 
+## Stub for the dock's `_update_manager` slot. Tests that want to fake
+## "self-update mid-install" inject one of these so the dock's
+## `_is_self_update_in_progress()` gate sees an in-flight manager,
+## mirroring how production code consults the seam.
+class _StubInstallGate extends Node:
+	var in_flight: bool = false
+
+	func is_install_in_flight() -> bool:
+		return in_flight
+
 class _RestartDispatchPlugin extends GodotAiPlugin:
 	var status: Dictionary = {}
 	var can_restart := false
@@ -245,34 +255,39 @@ func test_exit_tree_drains_orphaned_refresh_threads() -> void:
 
 
 func test_self_update_in_progress_blocks_request_refresh() -> void:
-	## Race B regression: while `_install_update` is overwriting plugin scripts
-	## on disk, every refresh-spawn path (focus-in, manual button, cooldown
-	## timer, deferred initial refresh) must short-circuit. Spawning a worker
-	## that walks into a half-overwritten script crashes inside
-	## `GDScriptFunction::call` (confirmed by SIGABRT in
+	## Race B regression: while `McpUpdateManager._install_zip` is overwriting
+	## plugin scripts on disk, every refresh-spawn path (focus-in, manual
+	## button, cooldown timer, deferred initial refresh) must short-circuit.
+	## Spawning a worker that walks into a half-overwritten script crashes
+	## inside `GDScriptFunction::call` (confirmed by SIGABRT in
 	## `VBoxContainer(McpDock)::_run_client_status_refresh_worker`).
 	##
 	## `_request_client_status_refresh` is the funnel for every spawn path,
 	## so gating here covers focus-in (`_notification` → handler) without
-	## needing a separate gate at each call site.
-	_dock._self_update_in_progress = true
+	## needing a separate gate at each call site. The seam is
+	## `_dock._update_manager.is_install_in_flight()`; inject a stub
+	## manager so `_is_self_update_in_progress()` resolves to true.
+	var stub := _StubInstallGate.new()
+	stub.in_flight = true
+	_dock._update_manager = stub
 	var ok: bool = _dock._request_client_status_refresh(false)
 	assert_false(ok, "Refresh must not spawn a worker while self-update is in progress")
 	assert_eq(_dock._client_status_refresh_thread, null, "No worker thread should have been started while self-update is in progress")
-	assert_false(_dock._client_status_refresh_in_flight, "In-flight flag should not flip on while self-update is in progress")
-	_dock._self_update_in_progress = false
+	stub.in_flight = false
+	_dock._update_manager = null
+	stub.free()
 
 
 func test_drain_helper_does_not_poison_shutdown_flag() -> void:
-	## `_install_update` calls `_drain_client_status_refresh_workers` to clear
-	## any in-flight refresh worker before extracting plugin scripts. The
-	## install can fail (e.g. zip open error) — when it does, the dock stays
-	## alive and refreshes must resume on the OLD instance. So unlike
-	## `_exit_tree`'s drain, the install-time drain must NOT advance
-	## `_refresh_state` to SHUTTING_DOWN (which is sticky and permanently
-	## disables refreshes for the dock instance). The drain leaves
-	## SHUTTING_DOWN intact when `_exit_tree` already set it, but otherwise
-	## resets to IDLE.
+	## `McpUpdateManager._install_zip` calls `_drain_client_status_refresh_workers`
+	## (via `_drain_dock_workers`) to clear any in-flight refresh worker
+	## before extracting plugin scripts. The install can fail (e.g. zip
+	## open error) — when it does, the dock stays alive and refreshes must
+	## resume on the OLD instance. So unlike `_exit_tree`'s drain, the
+	## install-time drain must NOT advance `_refresh_state` to SHUTTING_DOWN
+	## (which is sticky and permanently disables refreshes for the dock
+	## instance). The drain leaves SHUTTING_DOWN intact when `_exit_tree`
+	## already set it, but otherwise resets to IDLE.
 	_dock._drain_client_status_refresh_workers()
 	assert_eq(
 		_dock._refresh_state,
@@ -543,19 +558,27 @@ func test_finalize_action_buttons_reenables_after_in_flight() -> void:
 
 
 func test_dispatch_client_action_short_circuits_during_self_update() -> void:
-	## Same gate the refresh worker honors: while `_install_update` is
-	## overwriting plugin scripts on disk, spawning a worker that walks
-	## into `_cli_strategy.gd` mid-bytecode-swap SIGABRTs the editor.
+	## Same gate the refresh worker honors: while
+	## `McpUpdateManager._install_zip` is overwriting plugin scripts on
+	## disk, spawning a worker that walks into `_cli_strategy.gd` mid-
+	## bytecode-swap SIGABRTs the editor. The flag lives on the manager;
+	## `_is_self_update_in_progress()` consults it.
 	_dock._build_ui()
 	var any_id := _first_client_id()
 	if any_id.is_empty():
 		skip("No clients registered")
 		return
-	_dock._self_update_in_progress = true
+	## `_build_ui` already set up a real manager. Swap it out for the
+	## test stub so we can flip the gate without driving a real download.
+	var prior_manager = _dock._update_manager
+	var stub := _StubInstallGate.new()
+	stub.in_flight = true
+	_dock._update_manager = stub
 	_dock._dispatch_client_action(any_id, "configure")
 	assert_false(_dock._client_action_threads.has(any_id),
 		"No worker thread must be created while self-update is in progress")
-	_dock._self_update_in_progress = false
+	_dock._update_manager = prior_manager
+	stub.free()
 
 
 func test_dispatch_client_action_noop_when_slot_already_in_flight() -> void:
@@ -609,10 +632,11 @@ func test_apply_status_refresh_results_skips_rows_with_in_flight_action() -> voi
 
 
 func test_drain_client_action_workers_clears_threads_and_bumps_generation() -> void:
-	## `_install_update` calls this drain before extracting the release
-	## zip, same reason as the refresh worker drain — a worker mid-call
-	## into a half-overwritten script SIGABRTs the editor. The drain
-	## bumps generation per-row so any pending `call_deferred(
+	## `McpUpdateManager._install_zip` calls this drain (via
+	## `_drain_dock_workers`) before extracting the release zip, same
+	## reason as the refresh worker drain — a worker mid-call into a
+	## half-overwritten script SIGABRTs the editor. The drain bumps
+	## generation per-row so any pending `call_deferred(
 	## "_apply_client_action_result")` from a worker that finished after
 	## the drain detects the mismatch and short-circuits before touching
 	## restored UI state.
@@ -626,12 +650,12 @@ func test_drain_client_action_workers_clears_threads_and_bumps_generation() -> v
 
 
 func test_drain_client_action_workers_restores_in_flight_row_buttons() -> void:
-	## Issue #239 follow-up: `_install_update` has a bail-out branch (zip
-	## extract failure) that clears `_self_update_in_progress` and leaves
-	## the dock alive. Without restoring the row UI in the drain, an
-	## in-flight Configure / Remove would leave the buttons disabled and
-	## the active button stuck on "Configuring…" / "Removing…" forever
-	## because `_apply_client_action_result` never runs after we erase
+	## Issue #239 follow-up: `McpUpdateManager._install_zip` has a bail-out
+	## branch (zip extract failure) that clears `_install_in_flight` on the
+	## manager and leaves the dock alive. Without restoring the row UI in
+	## the drain, an in-flight Configure / Remove would leave the buttons
+	## disabled and the active button stuck on "Configuring…" / "Removing…"
+	## forever because `_apply_client_action_result` never runs after we erase
 	## the thread slot.
 	_dock._build_ui()
 	var any_id := _first_client_id()

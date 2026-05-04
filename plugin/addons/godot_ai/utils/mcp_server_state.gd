@@ -24,13 +24,12 @@ extends RefCounted
 ## Fresh plugin instance, `_start_server` has not run yet. Default state.
 const UNINITIALIZED := 0
 ## Process spawned via OS.create_process; watch loop is observing the
-## SPAWN_GRACE_MS window. Transitions to AWAITING_VERSION (handshake) or
-## CRASHED (process died early).
+## SPAWN_GRACE_MS window. Transitions directly to READY (handshake_ack
+## verifies a compatible version), CRASHED (process died early), or
+## INCOMPATIBLE (handshake reported a mismatch).
 const SPAWNING := 1
-## WebSocket open, waiting for server `handshake_ack` to verify the live
-## server version is compatible with the plugin. Transitions to READY
-## (compatible) or INCOMPATIBLE (mismatch / timeout).
-const AWAITING_VERSION := 2
+## (slot 2 reserved — keep wire-compat for clients pattern-matching
+## numeric `editor_state.state` values; do not reuse.)
 ## Server is healthy and version-verified. Happy path. Includes both
 ## "spawned fresh" and "adopted compatible existing server" flavors —
 ## adoption flavor is recorded separately via `McpAdoptionLabel`.
@@ -58,7 +57,7 @@ const PORT_EXCLUDED := 7
 ## disarms but the state stays at FOREIGN_PORT — the dock keeps showing
 ## "port held by another process" until the user reloads. The version-
 ## check seam (separate from the adoption deadline) is what fires
-## INCOMPATIBLE on a positive-but-mismatched handshake or timeout.
+## INCOMPATIBLE on a positive-but-mismatched handshake.
 const FOREIGN_PORT := 8
 ## Static re-entrancy guard fired (`_server_started_this_session` was
 ## already true). The plugin is being re-enabled within the same editor
@@ -76,7 +75,6 @@ const STOPPED := 11
 const _NAMES := {
 	UNINITIALIZED: "uninitialized",
 	SPAWNING: "spawning",
-	AWAITING_VERSION: "awaiting_version",
 	READY: "ready",
 	INCOMPATIBLE: "incompatible",
 	CRASHED: "crashed",
@@ -108,9 +106,9 @@ static func is_terminal_diagnosis(state: int) -> bool:
 	)
 
 
-## True only for READY. Other "ok-ish" states (SPAWNING, AWAITING_VERSION)
-## are still in flight; READY is the only state where the plugin can
-## treat the server as fully healthy.
+## True only for READY. Other "ok-ish" states (SPAWNING) are still in
+## flight; READY is the only state where the plugin can treat the server
+## as fully healthy.
 static func is_healthy(state: int) -> bool:
 	return state == READY
 
@@ -169,33 +167,23 @@ static func can_transition(from: int, to: int) -> bool:
 	match from:
 		SPAWNING:
 			return (
-				to == AWAITING_VERSION
-				or to == READY
+				to == READY
 				or to == CRASHED
 				or to == FOREIGN_PORT
 				or to == INCOMPATIBLE
 			)
-		AWAITING_VERSION:
-			return (
-				to == READY
-				or to == INCOMPATIBLE
-				## Adoption-confirm watcher may revert to FOREIGN_PORT
-				## if a deferred handshake never lands.
-				or to == FOREIGN_PORT
-			)
 		FOREIGN_PORT:
-			return (
-				to == AWAITING_VERSION
-				or to == READY
-				or to == INCOMPATIBLE
-			)
+			return to == READY or to == INCOMPATIBLE
 		READY:
 			## Late incompatibility detection (e.g. version verifier
 			## re-arms after a foreign-port reconnect that turns out
 			## to be incompatible after all).
-			return (
-				to == AWAITING_VERSION
-				or to == INCOMPATIBLE
-				or to == CRASHED
-			)
+			return to == INCOMPATIBLE or to == CRASHED
+		STOPPING:
+			## Recovery rollback: kill-then-respawn paths that fail to
+			## free the port re-latch INCOMPATIBLE (so the dock keeps
+			## the diagnostic UI) or fall back to UNINITIALIZED (clean
+			## baseline for a follow-up `_set_incompatible_server`).
+			## STOPPING -> STOPPED is handled by the early checks above.
+			return to == INCOMPATIBLE or to == UNINITIALIZED
 	return false

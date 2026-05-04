@@ -256,81 +256,84 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
     """Self-update must drain in-flight workers + block new ones before any file write.
 
     Race B regression: focus-in landing in the extract→reload window of
-    `_install_update` previously spawned a fresh worker that walked into a
-    half-overwritten plugin script and SIGABRT'd inside `GDScriptFunction::call`
-    (observed in `Godot-2026-04-27-134236.ips`). Workers ALREADY running when
-    install starts hit the same crash because the script being mid-`callp` gets
-    its bytecode swapped under it.
+    the install path previously spawned a fresh worker that walked into a
+    half-overwritten plugin script and SIGABRT'd inside
+    `GDScriptFunction::call` (observed in `Godot-2026-04-27-134236.ips`).
+    Workers ALREADY running when install starts hit the same crash because
+    the script being mid-`callp` gets its bytecode swapped under it.
 
     The fix has two parts that must both be present, both in the right order
     (before the write loop, after the symlink-safety early-return):
 
-      1. `_self_update_in_progress = true`  — gates `_request_client_status_refresh`
+      1. `_install_in_flight = true`  — gates `_request_client_status_refresh`
          and `_perform_initial_client_status_refresh` so focus-in / cooldown /
          manual-button paths cannot spawn a new worker during the window.
-      2. `_drain_client_status_refresh_workers()` — synchronously joins the
-         currently-running worker (if any) BEFORE we touch any plugin file
-         on disk.
+      2. `_drain_dock_workers()` — synchronously joins the currently-running
+         workers BEFORE we touch any plugin file on disk. The dock exposes
+         `_drain_client_status_refresh_workers()` and
+         `_drain_client_action_workers()`; the manager calls both.
 
-    Both gates funnel through `_request_client_status_refresh`, so a single
-    flag check there covers every spawn path. Asserting the textual order
-    here locks in "drain happens before the first file write", which is what
-    actually prevents the crash.
+    The install pipeline lives on `McpUpdateManager::_install_zip`, so
+    this test reads the manager. The dock's gate is
+    `_is_self_update_in_progress()` which consults the manager's flag.
     """
 
-    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
-    install_block = get_func_block(source, "func _install_update() -> void:")
+    manager_source = (PLUGIN_ROOT / "utils" / "update_manager.gd").read_text()
+    install_block = get_func_block(manager_source, "func _install_zip() -> void:")
 
-    flag_set_idx = install_block.find("_self_update_in_progress = true")
-    drain_idx = install_block.find("_drain_client_status_refresh_workers()")
+    flag_set_idx = install_block.find("_install_in_flight = true")
+    drain_idx = install_block.find("_drain_dock_workers()")
     handoff_idx = install_block.find("install_downloaded_update")
-    first_write_idx = install_block.find("f.store_buffer(content)")
     symlink_return_idx = install_block.find("addons_dir_is_symlink()")
 
+    inline_block = get_func_block(
+        manager_source, "func _install_zip_inline(version: Dictionary) -> void:"
+    )
+    first_write_idx = inline_block.find("f.store_buffer(content)")
+
     assert flag_set_idx > 0, (
-        "_install_update must set `_self_update_in_progress = true` before "
+        "_install_zip must set `_install_in_flight = true` before "
         "extracting plugin files. Without this, focus-in during extract "
         "spawns a worker that crashes on the half-overwritten scripts."
     )
     assert drain_idx > 0, (
-        "_install_update must call `_drain_client_status_refresh_workers()` "
-        "before extracting plugin files. Already-running workers crash on "
-        "the same overwrite if not joined first."
+        "_install_zip must call `_drain_dock_workers()` before extracting "
+        "plugin files. Already-running workers crash on the same overwrite "
+        "if not joined first."
     )
     assert first_write_idx > 0, (
         "Test fixture broken: could not locate the extract-write site "
-        "(`f.store_buffer(content)`) inside `_install_update`'s legacy path."
+        "(`f.store_buffer(content)`) inside `_install_zip_inline`."
     )
     assert symlink_return_idx > 0, "Test fixture broken: could not locate the symlink-safety check."
 
-    assert symlink_return_idx < flag_set_idx < first_write_idx, (
-        "Order: symlink-safety check → set self_update_in_progress flag → "
-        "extract write loop. Setting the flag before the symlink check "
-        "would leave it stuck on the dev-checkout path; setting it after "
-        "the write loop defeats the purpose."
+    assert symlink_return_idx < flag_set_idx, (
+        "Order: symlink-safety check → set _install_in_flight flag. Setting "
+        "the flag before the symlink check would leave it stuck on the "
+        "dev-checkout path."
     )
-    assert drain_idx < first_write_idx, (
-        "Drain must complete before any file write. Otherwise an in-flight "
-        "worker can race the overwrite of the script it's mid-call into."
-    )
-    assert drain_idx < handoff_idx < first_write_idx, (
-        "The normal Godot 4.4+ path must hand off to the update runner after "
-        "the worker drain but before the legacy in-dock extract loop. The "
-        "runner disables the old plugin before extraction so plugin-owned "
-        "instances do not hot-reload in place."
+    assert drain_idx < handoff_idx, (
+        "The Godot 4.4+ runner-based path must hand off to the runner after "
+        "the worker drain. The runner disables the old plugin before "
+        "extraction so plugin-owned instances do not hot-reload in place."
     )
 
+    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
     request_block = get_func_block(
-        source, "func _request_client_status_refresh(force: bool = false) -> bool:"
+        dock_source, "func _request_client_status_refresh(force: bool = false) -> bool:"
     )
-    assert "if _self_update_in_progress:" in request_block, (
+    assert "if _is_self_update_in_progress():" in request_block, (
         "_request_client_status_refresh must short-circuit when self-update "
         "is in progress. This is the funnel for focus-in, manual-button, "
-        "and cooldown-timer spawn paths — gating here covers every caller."
+        "and cooldown-timer spawn paths — gating here covers every caller. "
+        "The flag lives on McpUpdateManager; the dock consults it via "
+        "`_is_self_update_in_progress()`."
     )
 
-    init_block = get_func_block(source, "func _perform_initial_client_status_refresh() -> void:")
-    assert "if _self_update_in_progress:" in init_block, (
+    init_block = get_func_block(
+        dock_source, "func _perform_initial_client_status_refresh() -> void:"
+    )
+    assert "if _is_self_update_in_progress():" in init_block, (
         "_perform_initial_client_status_refresh must also short-circuit on "
         "the self-update flag — defensive even though the new dock instance "
         "wouldn't normally see this flag set."

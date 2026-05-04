@@ -223,8 +223,8 @@ func handle_server_version_verified(expected_version: String, version: String) -
 				"Using dev server v%s with plugin v%s "
 				+ "(dev checkout version mismatch allowed)."
 			) % [version, expected]
-		## Foreign-port and AWAITING_VERSION both clear to READY on
-		## a successful handshake. Late re-arms from READY also land
+		## Foreign-port and post-spawn handshakes both clear to READY
+		## on a successful handshake. Late re-arms from READY also land
 		## here and self-confirm.
 		transition_state(McpServerStateScript.READY)
 		_host._update_process_enabled()
@@ -707,11 +707,9 @@ func recover_incompatible_server() -> bool:
 		print("MCP | killed pids %s on port %d" % [str(killed), port])
 	_host._wait_for_port_free(port, 5.0)
 	if _host._is_port_in_use(port):
-		## Port still held — recovery failed. Re-latch INCOMPATIBLE so
-		## the dock keeps the diagnostic UI. Skip transition validation
-		## (STOPPING -> INCOMPATIBLE is not a forward-legal move) by
-		## resetting via the field.
-		_server_state = McpServerStateScript.INCOMPATIBLE
+		## Kill failed; re-latch INCOMPATIBLE so the dock keeps the
+		## diagnostic UI.
+		transition_state(McpServerStateScript.INCOMPATIBLE)
 		return false
 
 	UvCacheCleanup.purge_stale_builds()
@@ -751,7 +749,7 @@ func reset_for_force_restart() -> void:
 	_host._clear_pid_file()
 	_host._server_started_this_session = false
 	_server_pid = -1
-	_server_state = McpServerStateScript.UNINITIALIZED
+	transition_state(McpServerStateScript.UNINITIALIZED)
 
 
 ## Ownership-checked kill of the port occupant + respawn. Driven from
@@ -772,7 +770,9 @@ func force_restart_server() -> void:
 	_host._kill_processes_and_windows_spawn_children(_host._find_all_pids_on_port(port))
 	_host._wait_for_port_free(port, 5.0)
 	if _host._is_port_in_use(port):
-		_server_state = McpServerStateScript.UNINITIALIZED
+		## Kill failed; clean baseline for the follow-up
+		## `_set_incompatible_server`.
+		transition_state(McpServerStateScript.UNINITIALIZED)
 		_set_incompatible_server(
 			_host._probe_live_server_status_for_port(port),
 			McpClientConfigurator.get_plugin_version(),
