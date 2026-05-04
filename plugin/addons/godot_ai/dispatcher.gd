@@ -8,7 +8,7 @@ extends RefCounted
 var _command_queue: Array[Dictionary] = []
 var _handlers: Dictionary = {}  # command_name -> Callable
 var _pending_deferred: Dictionary = {}  # request_id -> {command, started_ms, timeout_ms}
-var _log_buffer: McpLogBuffer
+var _log_buffer
 var mcp_logging := true
 var deferred_timeout_overrides_ms: Dictionary = {}
 
@@ -18,6 +18,7 @@ const DEFERRED_TIMEOUT_MS_BY_COMMAND := {
 	"stop_project": 4500,
 	"take_screenshot": 30000,
 }
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 
 func _init(log_buffer: McpLogBuffer) -> void:
@@ -44,7 +45,7 @@ func clear() -> void:
 ## error dict if the command is not registered. Used by batch_execute.
 func dispatch_direct(command: String, params: Dictionary) -> Dictionary:
 	if not _handlers.has(command):
-		return McpErrorCodes.make(McpErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
+		return ErrorCodes.make(ErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
 	return _call_handler(command, params)
 
 
@@ -147,7 +148,7 @@ func _dispatch(cmd: Dictionary) -> Dictionary:
 	if _handlers.has(command):
 		result = _call_handler(command, params)
 	else:
-		result = McpErrorCodes.make(McpErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
+		result = ErrorCodes.make(ErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
 
 	if result.get("_deferred", false):
 		_register_deferred(request_id, command)
@@ -201,7 +202,7 @@ func _call_handler(command: String, params: Dictionary) -> Dictionary:
 				"[error] %s -> malformed result; args=%s; backtrace=%s"
 				% [command, args_json, compact_backtrace]
 			)
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, msg)
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, msg)
 	return result
 
 
@@ -234,8 +235,8 @@ func _collect_deferred_timeouts() -> Array[Dictionary]:
 			continue
 		_pending_deferred.erase(request_id)
 		var command: String = entry.get("command", "")
-		var response := McpErrorCodes.make(
-			McpErrorCodes.DEFERRED_TIMEOUT,
+		var response := ErrorCodes.make(
+			ErrorCodes.DEFERRED_TIMEOUT,
 			"Deferred response for '%s' timed out after %dms" % [command, timeout_ms]
 		)
 		response["request_id"] = request_id

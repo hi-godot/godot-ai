@@ -28,7 +28,7 @@ def test_client_status_refresh_runs_on_background_thread_and_applies_deferred() 
 
     assert "var _client_status_refresh_thread: Thread" in source
     assert "_client_status_refresh_thread.start" in source
-    assert "McpClientConfigurator.check_status" in source
+    assert "ClientConfigurator.check_status" in source
     assert 'call_deferred("_apply_client_status_refresh_results' in source
 
 
@@ -133,15 +133,15 @@ def test_initial_paint_warms_worker_call_graph_before_threading() -> None:
     )
 
     warm_block = get_func_block(source, "func _warm_strategy_bytecode() -> void:")
-    assert "McpJsonStrategy." in warm_block, (
-        "_warm_strategy_bytecode must dereference McpJsonStrategy so the "
+    assert "JsonStrategy." in warm_block, (
+        "_warm_strategy_bytecode must dereference JsonStrategy so the "
         "worker can't race the JSON strategy's lazy bytecode swap."
     )
-    assert "McpTomlStrategy." in warm_block, (
-        "_warm_strategy_bytecode must dereference McpTomlStrategy."
+    assert "TomlStrategy." in warm_block, (
+        "_warm_strategy_bytecode must dereference TomlStrategy."
     )
-    assert "McpCliStrategy." in warm_block, (
-        "_warm_strategy_bytecode must dereference McpCliStrategy."
+    assert "CliStrategy." in warm_block, (
+        "_warm_strategy_bytecode must dereference CliStrategy."
     )
     assert "FileAccess" not in warm_block and "OS.execute" not in warm_block, (
         "_warm_strategy_bytecode must stay pure-memory — no disk, no "
@@ -557,13 +557,13 @@ def test_check_uv_version_caches_for_session() -> None:
 
     dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
     install_block = get_func_block(dock_source, "func _on_install_uv() -> void:")
-    assert "McpClientConfigurator.invalidate_uvx_cli_cache()" in install_block, (
+    assert "ClientConfigurator.invalidate_uvx_cli_cache()" in install_block, (
         "_on_install_uv must invalidate the CLI-path cache via the "
         "configurator helper (which knows the OS-specific binary name). "
-        'A direct `McpCliFinder.invalidate("uvx")` would leave the '
+        'A direct `CliFinder.invalidate("uvx")` would leave the '
         "Windows cache stale — Windows caches under `uvx.exe`."
     )
-    assert "McpClientConfigurator.invalidate_uv_version_cache()" in install_block, (
+    assert "ClientConfigurator.invalidate_uv_version_cache()" in install_block, (
         "_on_install_uv must invalidate the version cache too — without "
         "this, the dock's setup status keeps showing 'uv: not found' "
         "after a successful install."
@@ -586,7 +586,7 @@ def test_configure_all_uses_cached_status_not_dot_color() -> None:
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
     block = get_func_block(source, "func _on_configure_all_clients() -> void:")
 
-    assert 'get("status", McpClient.Status.NOT_CONFIGURED)' in block
+    assert 'get("status", Client.Status.NOT_CONFIGURED)' in block
     assert "dot.color" not in block
 
 
