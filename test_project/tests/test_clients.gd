@@ -1509,6 +1509,42 @@ func test_opencode_client_uses_home_config_on_windows() -> void:
 	assert_eq(resolved, home.path_join(".config/opencode/opencode.json"))
 
 
+func test_path_template_expand_home_falls_back_to_userprofile() -> void:
+	## Defensive coverage for the Windows fallback: when HOME is unset (a
+	## stock Windows install), $HOME and ~ must both resolve via _home()'s
+	## USERPROFILE fallback. The existing OpenCode descriptor test never
+	## hits this branch on GitHub Actions Windows runners because GHA
+	## injects HOME — explicitly mock the env so the fallback path is
+	## exercised on every CI platform.
+	var saved_home := OS.get_environment("HOME")
+	var saved_userprofile := OS.get_environment("USERPROFILE")
+	var fake_userprofile := "/tmp/godot-ai-test-userprofile"
+
+	OS.unset_environment("HOME")
+	OS.set_environment("USERPROFILE", fake_userprofile)
+	var via_dollar := McpPathTemplate.expand("$HOME/foo")
+	var via_tilde := McpPathTemplate.expand("~/foo")
+	# Restore before asserting so a failure can't leak into later tests.
+	# Mirror the unset-when-saved-was-empty pattern used by the
+	# GODOT_AI_MODE tests above — `set_environment(var, "")` would
+	# define a new empty-valued env var rather than leave it unset.
+	if saved_home.is_empty():
+		OS.unset_environment("HOME")
+	else:
+		OS.set_environment("HOME", saved_home)
+	if saved_userprofile.is_empty():
+		OS.unset_environment("USERPROFILE")
+	else:
+		OS.set_environment("USERPROFILE", saved_userprofile)
+
+	assert_eq(via_dollar, fake_userprofile.path_join("foo"),
+		"$HOME must fall back to USERPROFILE when HOME is unset")
+	assert_eq(via_tilde, fake_userprofile.path_join("foo"),
+		"~ must fall back to USERPROFILE when HOME is unset")
+	assert_eq(via_dollar, via_tilde,
+		"$HOME and ~ must resolve identically — both go through _home()")
+
+
 # ----- helpers -----
 
 func _assert_uvx_command(cmd: Variant) -> void:
