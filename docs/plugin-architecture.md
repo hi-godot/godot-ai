@@ -1,6 +1,6 @@
 # Godot AI — Plugin Architecture
 
-*Updated 2026-04-29 (refresh file-structure tree, server-side modules, session metadata, and handshake JSON to match shipped code; add `<domain>_manage` rollups + resources + middleware to server responsibilities)*
+*Updated 2026-05-04 (add `PreserveGodotCommandErrorData` to the middleware list and note registration-order is load-bearing; previous: refresh file-structure tree, server-side modules, session metadata, and handshake JSON to match shipped code; add `<domain>_manage` rollups + resources + middleware to server responsibilities)*
 
 This document is the architecture reference for the Godot-side plugin and the server-to-plugin interaction model.
 
@@ -49,7 +49,7 @@ That includes:
 - the rolled-up tool surface — ~15 named verbs plus per-domain `<domain>_manage` tools wired by `tools/_meta_tool.py::register_manage_tool`, which builds a dynamic `Literal[...]` op enum so schema-aware clients see every op
 - read-only `godot://...` MCP resources (sessions, editor state, scenes, nodes, scripts, project, materials, performance, test results) that mirror the cheap reads and don't count against tool-cap budgets
 - per-call session routing — every Godot-talking tool accepts an optional `session_id`, bound at the `DirectRuntime` boundary so `require_writable` and downstream handlers see the pinned session, not the active one
-- middleware that smooths over client quirks: `StripClientWrapperKwargs` (Cline's `task_progress`), `ParseStringifiedParams` (clients that auto-stringify nested params for `_manage` calls), `HintOpTypoOnManage` (rewrites Pydantic `literal_error` with a `difflib`-derived "Did you mean" hint)
+- middleware that smooths over client quirks and shapes error responses: `PreserveGodotCommandErrorData` (outermost — packages `GodotCommandError` with structured `error.data` so candidate-path / suggestion payloads survive), `StripClientWrapperKwargs` (Cline's `task_progress`), `ParseStringifiedParams` (clients that auto-stringify nested params for `_manage` calls), `HintOpTypoOnManage` (innermost — rewrites Pydantic `literal_error` with a `difflib`-derived "Did you mean" hint). Order is load-bearing and locked by `tests/unit/test_server_middleware_order.py`; rationale lives in the docstring above the `mcp.add_middleware(...)` calls in `server.py`.
 - session registry and active-session resolution, with `<project-slug>@<4hex>` IDs and substring/path matching in `session_activate`
 - request validation and structured error mapping (`protocol/errors.py`)
 - job tracking for long-running operations and the deferred-response pattern for replies that flow back over a different channel (game capture)
@@ -121,7 +121,7 @@ The server-side counterparts live in:
 - `src/godot_ai/handlers/` — shared sync handlers; `_readiness.py` gates writes; `_target.py` resolves nodes
 - `src/godot_ai/tools/` — MCP tool wrappers per domain + `_meta_tool.py::register_manage_tool` rollup factory + `domains.py` (CI-paired with `tool_catalog.gd`)
 - `src/godot_ai/resources/` — read-only `godot://...` URI handlers
-- `src/godot_ai/middleware/` — `StripClientWrapperKwargs`, `ParseStringifiedParams`, `HintOpTypoOnManage`
+- `src/godot_ai/middleware/` — `PreserveGodotCommandErrorData`, `StripClientWrapperKwargs`, `ParseStringifiedParams`, `HintOpTypoOnManage` (registration order is load-bearing — see `server.py` docstring + `tests/unit/test_server_middleware_order.py`)
 - `src/godot_ai/protocol/` — envelope types and error codes (kept in sync with `utils/error_codes.gd`)
 
 ---
