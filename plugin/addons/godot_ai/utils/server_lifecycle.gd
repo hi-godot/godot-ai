@@ -707,9 +707,8 @@ func recover_incompatible_server() -> bool:
 		print("MCP | killed pids %s on port %d" % [str(killed), port])
 	_host._wait_for_port_free(port, 5.0)
 	if _host._is_port_in_use(port):
-		## Port still held — recovery failed. Re-latch INCOMPATIBLE so
-		## the dock keeps the diagnostic UI. STOPPING -> INCOMPATIBLE is
-		## a recovery-rollback transition added by PR 7 (#297).
+		## Kill failed; re-latch INCOMPATIBLE so the dock keeps the
+		## diagnostic UI.
 		transition_state(McpServerStateScript.INCOMPATIBLE)
 		return false
 
@@ -744,11 +743,7 @@ func has_managed_server() -> bool:
 
 ## Reset state for a force-restart. Drops the managed record, clears
 ## the pid-file, and resets the spawn guard so the follow-up
-## `start_server()` walks the spawn arm. STOPPED -> UNINITIALIZED is
-## already in the transition table; UNINITIALIZED -> UNINITIALIZED is
-## a self-transition and always legal, so the call is safe across both
-## entry points (`force_restart_server` after STOPPED, fresh callers
-## from UNINITIALIZED).
+## `start_server()` walks the spawn arm.
 func reset_for_force_restart() -> void:
 	_host._clear_managed_server_record()
 	_host._clear_pid_file()
@@ -775,10 +770,8 @@ func force_restart_server() -> void:
 	_host._kill_processes_and_windows_spawn_children(_host._find_all_pids_on_port(port))
 	_host._wait_for_port_free(port, 5.0)
 	if _host._is_port_in_use(port):
-		## Port still held after the kill — fall back to UNINITIALIZED
-		## so the follow-up `_set_incompatible_server` can latch the
-		## diagnosis from a clean baseline. STOPPING -> UNINITIALIZED is
-		## a recovery-rollback transition added by PR 7 (#297).
+		## Kill failed; clean baseline for the follow-up
+		## `_set_incompatible_server`.
 		transition_state(McpServerStateScript.UNINITIALIZED)
 		_set_incompatible_server(
 			_host._probe_live_server_status_for_port(port),

@@ -308,9 +308,8 @@ def patch_fixture_plugin(
     patch_managed_record_isolation(addon_dir / "plugin.gd")
     patch_expected_server_version(addon_dir / "plugin.gd", server_version)
     if force_local_update:
-        # PR 7 (#297) extracted the update flow off mcp_dock.gd onto the
-        # new McpUpdateManager — patch the manager file. The dock keeps
-        # only the visible banner UI.
+        # Update flow lives on McpUpdateManager; the dock keeps only
+        # the visible banner UI.
         patch_local_update_banner(
             addon_dir / "utils" / "update_manager.gd", next_version
         )
@@ -446,9 +445,7 @@ def patch_expected_server_version(path: Path, server_version: str) -> None:
 def patch_local_update_banner(path: Path, next_version: str) -> None:
     """Override the McpUpdateManager update flow to use a local zip fixture.
 
-    PR 7 (#297) moved this code off `mcp_dock.gd` onto
-    `addons/godot_ai/utils/update_manager.gd`. The harness now patches
-    the manager:
+    Patches `addons/godot_ai/utils/update_manager.gd`:
 
       - Inject smoke constants alongside `UPDATE_TEMP_ZIP`.
       - Replace `check_for_updates()` so it skips the GitHub HTTP fetch
@@ -556,11 +553,9 @@ def patch_vnext_hot_reload_trigger(path: Path) -> None:
     """Inject a typed Dict + Array onto McpDock so the vNext hot-reload
     actually exercises the field-storage crash class (issue #245).
 
-    PR 7 (#297) moved `_self_update_in_progress` off the dock and onto
-    `McpUpdateManager`. The hot-reload crash class (#245) still applies to
-    the dock script itself — anchor the patch to a stable unrelated field
-    (`_last_log_count`) instead of the moved flag. Anchoring to a moved
-    field would silently miss the regression rather than failing loudly.
+    Anchored to a stable plain field (`_last_log_count`) — anchoring to
+    a recently-moved field would silently miss the regression rather
+    than failing loudly.
     """
     text = path.read_text(encoding="utf-8")
     field_marker = "var _last_log_count := 0\n"
@@ -616,11 +611,9 @@ func marker() -> String:
         encoding="utf-8",
     )
 
-    # Anchor the topology-change preload onto a stable line in the dock.
-    # PR 7 (#297) moved `UPDATE_TEMP_ZIP` off `mcp_dock.gd` onto
-    # `utils/update_manager.gd`, so use the manager's
-    # `UpdateManagerScript` preload instead — a stable `const … :=
-    # preload(...)` line near the top of the dock.
+    # Anchor the topology-change preload onto a stable line in the dock —
+    # `UpdateManagerScript`'s `const … := preload(...)` is one of the
+    # first lines and survives unrelated dock refactors.
     dock_path = addon_dir / "mcp_dock.gd"
     text = dock_path.read_text(encoding="utf-8")
     marker = (

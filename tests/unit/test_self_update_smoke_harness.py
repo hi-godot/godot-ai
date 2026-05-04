@@ -49,8 +49,8 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
     base_cfg = (project / "addons" / "godot_ai" / "plugin.cfg").read_text()
     assert 'version="2.2.0"' in base_cfg
 
-    # PR 7 (#297) extracted the update flow off mcp_dock.gd onto
-    # McpUpdateManager — the smoke patches now land on the manager file.
+    # The smoke patches land on the manager file; the dock keeps only
+    # the visible banner UI.
     base_manager = (
         project / "addons" / "godot_ai" / "utils" / "update_manager.gd"
     ).read_text()

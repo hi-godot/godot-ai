@@ -110,13 +110,9 @@ var _client_status_refresh_pending_initial: bool = false
 var _last_client_status_refresh_completed_msec: int = 0
 var _client_status_refresh_started_msec: int = 0
 var _client_status_refresh_generation: int = 0
-## Owns the self-update slice extracted from this dock (#297 PR 7):
-## GitHub Releases poll, ZIP download, install orchestration, and the
-## install-in-flight gate. The dock keeps the visible banner UI + button
-## label rendering and forwards button clicks; the manager makes the
-## decisions. Refresh / action spawn paths consult
-## `_update_manager.is_install_in_flight()` instead of a private flag on
-## the dock.
+## Owns the self-update slice: GitHub Releases poll, ZIP download, install
+## orchestration, and the install-in-flight gate. Dock keeps banner UI
+## only and consults the gate via `_is_self_update_in_progress()`.
 var _update_manager
 static var _orphaned_client_status_refresh_threads: Array[Thread] = []
 
@@ -227,6 +223,16 @@ func _exit_tree() -> void:
 	## GC-mid-execution crash this fix exists to prevent. Blocking the editor
 	## briefly on plugin-reload is strictly better than the SIGSEGV.
 	_refresh_state = ClientRefreshStateScript.SHUTTING_DOWN
+	_drain_client_status_refresh_workers()
+	_drain_client_action_workers()
+
+
+## Public drain entry consulted by `McpUpdateManager._install_zip` before
+## any disk write. Pairs both worker pools so the manager doesn't reach
+## into private dock methods. `_exit_tree` still calls the two underlying
+## drains directly because it has additional state-machine work
+## (SHUTTING_DOWN sticky-set) that the install-time path must NOT inherit.
+func prepare_for_self_update_drain() -> void:
 	_drain_client_status_refresh_workers()
 	_drain_client_action_workers()
 
@@ -437,7 +443,7 @@ func _build_ui() -> void:
 
 	var release_link := Button.new()
 	release_link.text = "Release notes"
-	release_link.pressed.connect(_on_release_notes_pressed)
+	release_link.pressed.connect(func(): OS.shell_open(UpdateManagerScript.RELEASES_PAGE))
 	update_btn_row.add_child(release_link)
 
 	_update_banner.add_child(update_btn_row)
@@ -2280,43 +2286,25 @@ func _apply_row_status(
 
 # --- Update check & self-update ---
 
-## Returns true while `McpUpdateManager` is mid-install. Dock spawn paths
-## (`_dispatch_client_action`, `_request_client_status_refresh`, the deferred
-## initial refresh, the deferred-for-filesystem retry) consult this gate so
-## a worker mid-call into a half-overwritten plugin script can't SIGABRT
-## inside `GDScriptFunction::call`. Tolerates a null manager so test fixtures
-## that build the dock without `_build_ui()` don't false-positive on the
-## gate.
+## Tolerates a null manager so test fixtures that build the dock without
+## `_build_ui()` don't false-positive on the worker-spawn gate.
 func _is_self_update_in_progress() -> bool:
 	return _update_manager != null and bool(_update_manager.is_install_in_flight())
 
 
-## Update banner button — forwards the click to the manager. The manager
-## decides whether to open the release page (no asset URL) or kick off
-## the download → extract → reload pipeline.
 func _on_update_pressed() -> void:
 	if _update_manager != null:
 		_update_manager.start_install()
 
 
-func _on_release_notes_pressed() -> void:
-	var url := UpdateManagerScript.RELEASES_PAGE
-	if _update_manager != null:
-		url = _update_manager.get_releases_page_url()
-	OS.shell_open(url)
-
-
-## Manager fired the update-check result. Render the banner UI from the
-## payload — the manager already evaluated `_is_newer` and the forced-mode
-## hint, so the dock's only job is paint.
 func _on_update_check_result(result: Dictionary) -> void:
 	_update_label.text = String(result.get("label_text", ""))
 	_update_banner.visible = true
 
 
-## Manager fired an install-pipeline UI update. Apply only the keys
-## present so the manager can ship partial updates (e.g. button-text-only
-## during the download phase) without clobbering banner state.
+## Apply only the keys present so the manager can ship partial updates
+## (e.g. button-text-only during the download phase) without clobbering
+## banner state.
 func _on_install_state_changed(state: Dictionary) -> void:
 	if state.has("button_text") and _update_btn != null:
 		_update_btn.text = String(state["button_text"])
@@ -2324,7 +2312,9 @@ func _on_install_state_changed(state: Dictionary) -> void:
 		_update_btn.disabled = bool(state["button_disabled"])
 	if state.has("label_text") and _update_label != null:
 		_update_label.text = String(state["label_text"])
-	if state.has("label_color") and _update_label != null:
-		_update_label.add_theme_color_override("font_color", state["label_color"])
 	if state.has("banner_visible") and _update_banner != null:
 		_update_banner.visible = bool(state["banner_visible"])
+	if String(state.get("outcome", "")) == "success" and _update_label != null:
+		## Visual confirmation for the pre-4.4 "Updated! Restart the editor."
+		## terminal state — the only outcome the manager paints green for.
+		_update_label.add_theme_color_override("font_color", Color.GREEN)

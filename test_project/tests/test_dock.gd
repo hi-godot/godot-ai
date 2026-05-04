@@ -8,12 +8,10 @@ extends McpTestSuite
 const McpDockScript = preload("res://addons/godot_ai/mcp_dock.gd")
 const GodotAiPlugin := preload("res://addons/godot_ai/plugin.gd")
 
-## Stub for the dock's `_update_manager` slot — seam-level test fixture
-## introduced when PR 7 (#297) moved the install-in-flight gate off the
-## dock and behind `McpUpdateManager.is_install_in_flight()`. Tests that
-## want to fake "self-update mid-install" inject one of these instead of
-## flipping a private dock flag, mirroring how production code consults
-## the manager seam.
+## Stub for the dock's `_update_manager` slot. Tests that want to fake
+## "self-update mid-install" inject one of these so the dock's
+## `_is_self_update_in_progress()` gate sees an in-flight manager,
+## mirroring how production code consults the seam.
 class _StubInstallGate extends Node:
 	var in_flight: bool = false
 
@@ -266,11 +264,9 @@ func test_self_update_in_progress_blocks_request_refresh() -> void:
 	##
 	## `_request_client_status_refresh` is the funnel for every spawn path,
 	## so gating here covers focus-in (`_notification` → handler) without
-	## needing a separate gate at each call site. PR 7 (#297) moved the
-	## flag itself off the dock — the seam shape is now
-	## `_dock._update_manager.is_install_in_flight()`. We inject a stub
-	## manager so the dock's `_is_self_update_in_progress()` helper sees a
-	## non-null `_update_manager`.
+	## needing a separate gate at each call site. The seam is
+	## `_dock._update_manager.is_install_in_flight()`; inject a stub
+	## manager so `_is_self_update_in_progress()` resolves to true.
 	var stub := _StubInstallGate.new()
 	stub.in_flight = true
 	_dock._update_manager = stub
@@ -565,9 +561,8 @@ func test_dispatch_client_action_short_circuits_during_self_update() -> void:
 	## Same gate the refresh worker honors: while
 	## `McpUpdateManager._install_zip` is overwriting plugin scripts on
 	## disk, spawning a worker that walks into `_cli_strategy.gd` mid-
-	## bytecode-swap SIGABRTs the editor. PR 7 (#297) moved the install-
-	## in-flight flag onto the manager; the dock's gate is
-	## `_is_self_update_in_progress()` which consults it.
+	## bytecode-swap SIGABRTs the editor. The flag lives on the manager;
+	## `_is_self_update_in_progress()` consults it.
 	_dock._build_ui()
 	var any_id := _first_client_id()
 	if any_id.is_empty():

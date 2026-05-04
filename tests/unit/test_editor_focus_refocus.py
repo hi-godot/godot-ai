@@ -273,10 +273,9 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
          `_drain_client_status_refresh_workers()` and
          `_drain_client_action_workers()`; the manager calls both.
 
-    PR 7 (#297) moved the install pipeline off `mcp_dock.gd::_install_update`
-    onto `McpUpdateManager::_install_zip`, so this test now reads the
-    extracted manager. The dock's gate is `_is_self_update_in_progress()`
-    which consults the manager's flag.
+    The install pipeline lives on `McpUpdateManager::_install_zip`, so
+    this test reads the manager. The dock's gate is
+    `_is_self_update_in_progress()` which consults the manager's flag.
     """
 
     manager_source = (PLUGIN_ROOT / "utils" / "update_manager.gd").read_text()
@@ -327,8 +326,8 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
         "_request_client_status_refresh must short-circuit when self-update "
         "is in progress. This is the funnel for focus-in, manual-button, "
         "and cooldown-timer spawn paths — gating here covers every caller. "
-        "The flag itself lives on McpUpdateManager (PR 7, #297); the dock "
-        "consults it via `_is_self_update_in_progress()`."
+        "The flag lives on McpUpdateManager; the dock consults it via "
+        "`_is_self_update_in_progress()`."
     )
 
     init_block = get_func_block(

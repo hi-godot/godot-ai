@@ -133,10 +133,9 @@ func test_terminal_diagnoses_allow_stop_transitions() -> void:
 
 
 func test_spawning_progresses_to_ready_or_crashed() -> void:
-	## Post-#297-PR-7 the version-check seam doesn't transition into a
-	## separate AWAITING_VERSION state — handle_server_version_verified
-	## moves directly from SPAWNING (or FOREIGN_PORT) to READY when the
-	## handshake clears.
+	## handle_server_version_verified moves SPAWNING (or FOREIGN_PORT)
+	## directly to READY when the handshake clears — there is no separate
+	## post-handshake state.
 	assert_true(McpServerState.can_transition(
 		McpServerState.SPAWNING, McpServerState.READY))
 	assert_true(McpServerState.can_transition(
@@ -155,15 +154,14 @@ func test_foreign_port_clears_to_ready_after_handshake() -> void:
 
 
 func test_stopping_recovery_rollback_transitions() -> void:
-	## PR 7 (#297) added two recovery-rollback transitions out of STOPPING
-	## so `recover_incompatible_server` and `force_restart_server` can stop
-	## bypassing `transition_state` when their kill-then-respawn fails:
-	##   - STOPPING -> INCOMPATIBLE: recover_incompatible_server failed to
-	##     free the port; re-latch the diagnosis so the dock keeps showing
-	##     the incompatible-server panel.
-	##   - STOPPING -> UNINITIALIZED: force_restart_server failed to free
-	##     the port; fall back so the follow-up `_set_incompatible_server`
-	##     can write the diagnosis from a clean baseline.
+	## Two recovery-rollback transitions out of STOPPING so
+	## `recover_incompatible_server` and `force_restart_server` don't
+	## bypass `transition_state` when their kill-then-respawn fails:
+	##   - STOPPING -> INCOMPATIBLE: kill failed; re-latch the diagnosis
+	##     so the dock keeps showing the incompatible-server panel.
+	##   - STOPPING -> UNINITIALIZED: kill failed in the force-restart
+	##     path; fall back so the follow-up `_set_incompatible_server`
+	##     writes the diagnosis from a clean baseline.
 	## STOPPING -> STOPPED is the happy path and was already legal.
 	assert_true(McpServerState.can_transition(
 		McpServerState.STOPPING, McpServerState.INCOMPATIBLE),

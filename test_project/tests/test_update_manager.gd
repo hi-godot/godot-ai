@@ -1,12 +1,7 @@
 @tool
 extends McpTestSuite
 
-## Tests for McpUpdateManager — the self-update slice extracted from
-## mcp_dock.gd in PR 7 (#297). The extraction goal is to move the
-## install-in-flight gate, releases-API parse, mode-override forced-label
-## hint, and worker-drain handoff out of the dock and behind a manager
-## seam. Tests pin all four:
-##
+## Tests for McpUpdateManager. Pins four contracts:
 ##   1. parse_releases_response fixture-in / status-out
 ##   2. forced-mode (mode_override == "user") label hint
 ##   3. install-in-flight gate (cleared on success / failure paths)
@@ -324,10 +319,12 @@ func test_install_zip_aborts_on_symlinked_addons_dir() -> void:
 	assert_eq(captured_states.size(), 1,
 		"Manager must emit exactly one install_state_changed event on the symlink-bail path")
 	var captured_state: Dictionary = captured_states[0]
-	assert_eq(String(captured_state.get("phase", "")), "symlink_blocked",
-		"Manager must emit phase=symlink_blocked so the dock paints the dev-checkout fallback button text")
 	assert_eq(bool(captured_state.get("banner_visible", true)), false,
 		"Symlink bail must hide the banner — the user can't act on it from a dev tree")
+	assert_eq(String(captured_state.get("button_text", "")), "Dev checkout — update via git",
+		"Symlink bail must paint the dev-checkout fallback button text")
+	assert_eq(bool(captured_state.get("button_disabled", false)), true,
+		"Symlink bail must disable the Update button so the user can't retry")
 
 
 func test_clear_pending_download_resets_to_no_url_state() -> void:
@@ -337,10 +334,10 @@ func test_clear_pending_download_resets_to_no_url_state() -> void:
 	## a stale download URL armed.
 	var manager = McpUpdateManagerScript.new()
 	manager._latest_download_url = TEST_ASSET_URL
-	assert_true(manager.has_pending_download_url(),
-		"Seed: manager must report a pending URL")
+	assert_eq(manager._latest_download_url, TEST_ASSET_URL,
+		"Seed: manager must hold the download URL we just set")
 	manager.clear_pending_download()
-	assert_false(manager.has_pending_download_url(),
+	assert_eq(manager._latest_download_url, "",
 		"clear_pending_download must drop the cached URL")
 	manager.free()
 

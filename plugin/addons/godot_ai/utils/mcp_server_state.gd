@@ -28,15 +28,8 @@ const UNINITIALIZED := 0
 ## verifies a compatible version), CRASHED (process died early), or
 ## INCOMPATIBLE (handshake reported a mismatch).
 const SPAWNING := 1
-## (reserved — the integer value 2 is intentionally skipped.)
-##
-## A previous draft modeled a separate "post-handshake, pre-version-verify"
-## state (`AWAITING_VERSION`) but the version-check seam never transitioned
-## into it — it would have clobbered FOREIGN_PORT during adoption-
-## confirmation. The state was unreachable, so PR 7 (#297) deleted the
-## constant and its transition table rows. The integer slot is left empty
-## so live wire values for READY/INCOMPATIBLE/etc. don't shift; clients
-## that pattern-match `editor_state.state` keep working.
+## (slot 2 reserved — keep wire-compat for clients pattern-matching
+## numeric `editor_state.state` values; do not reuse.)
 ## Server is healthy and version-verified. Happy path. Includes both
 ## "spawned fresh" and "adopted compatible existing server" flavors —
 ## adoption flavor is recorded separately via `McpAdoptionLabel`.
@@ -187,13 +180,10 @@ static func can_transition(from: int, to: int) -> bool:
 			## to be incompatible after all).
 			return to == INCOMPATIBLE or to == CRASHED
 		STOPPING:
-			## Recovery rollback: kill-then-respawn paths that move
-			## STOPPING -> STOPPED on success need to surface a
-			## diagnosis on failure (`recover_incompatible_server`
-			## leaves us back at INCOMPATIBLE when the port is still
-			## held; `force_restart_server` falls back to
-			## UNINITIALIZED before its `_set_incompatible_server`
-			## diagnoses the live occupant). STOPPING -> STOPPED is
-			## handled by the early checks above.
+			## Recovery rollback: kill-then-respawn paths that fail to
+			## free the port re-latch INCOMPATIBLE (so the dock keeps
+			## the diagnostic UI) or fall back to UNINITIALIZED (clean
+			## baseline for a follow-up `_set_incompatible_server`).
+			## STOPPING -> STOPPED is handled by the early checks above.
 			return to == INCOMPATIBLE or to == UNINITIALIZED
 	return false
