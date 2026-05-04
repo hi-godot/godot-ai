@@ -182,6 +182,13 @@ static func _logical_current_camera(scene_root: Node, type_str: String = "") -> 
 
 
 
+static func _is_logical_current(scene_root: Node, cam: Node) -> bool:
+	if scene_root == null or cam == null:
+		return false
+	var logical := _logical_current_camera(scene_root, _camera_type_str(cam))
+	return logical != null and logical == cam
+
+
 # Register a current=true switch on `node` in the open undo action,
 # unmarking previously-current siblings of the same class so a single
 # Ctrl-Z reverts the whole switch.
@@ -795,9 +802,10 @@ func get_camera(params: Dictionary) -> Dictionary:
 	var keys: Array = _KEYS_2D if type_str == "2d" else _KEYS_3D
 	var prop_types := _property_type_map(node)
 	var props: Dictionary = {}
+	var is_current_effective := _is_effective_current(node) or _is_logical_current(scene_root, node)
 	for key in keys:
 		if key == "current":
-			props[key] = _is_effective_current(node)
+			props[key] = is_current_effective
 			continue
 		if prop_types.has(key):
 			props[key] = CameraValues.serialize(node.get(key))
@@ -807,7 +815,7 @@ func get_camera(params: Dictionary) -> Dictionary:
 			"path": McpScenePath.from_node(node, scene_root),
 			"type": type_str,
 			"class": node.get_class(),
-			"current": _is_effective_current(node),
+			"current": is_current_effective,
 			"properties": props,
 			"resolved_via": resolved_via,
 		}
@@ -825,12 +833,15 @@ func list_cameras(_params: Dictionary) -> Dictionary:
 
 	var cams := _list_cameras_in_scene(scene_root, "")
 	var out: Array[Dictionary] = []
+	var logical_2d := _logical_current_camera(scene_root, "2d")
+	var logical_3d := _logical_current_camera(scene_root, "3d")
 	for cam in cams:
+		var logical_current := logical_2d if cam is Camera2D else logical_3d if cam is Camera3D else null
 		out.append({
 			"path": McpScenePath.from_node(cam, scene_root),
 			"class": cam.get_class(),
 			"type": _camera_type_str(cam),
-			"current": _is_effective_current(cam) or _logical_current_camera(scene_root, _camera_type_str(cam)) == cam,
+			"current": _is_effective_current(cam) or (logical_current != null and logical_current == cam),
 		})
 	return {"data": {"cameras": out}}
 
