@@ -624,7 +624,7 @@ func test_external_compatible_adoption_clears_stale_managed_record() -> void:
 
 	var owner_label := plugin._adopt_compatible_server("2.1.0", "2.2.0", 22222)
 	var can_restart := plugin.can_restart_managed_server()
-	var server_pid := plugin._lifecycle._server_pid
+	var server_pid: int = int(plugin._lifecycle._server_pid)
 	plugin.free()
 
 	assert_eq(owner_label, "external")
@@ -759,7 +759,7 @@ func test_stale_ws_port_does_not_authorize_killing_external_server() -> void:
 	## locked in for PID + version, now extended to ws_port.
 	var plugin := GodotAiPlugin.new()
 	var owner_label := plugin._adopt_compatible_server(STALE, CURRENT, 22222)
-	var server_pid := plugin._lifecycle._server_pid
+	var server_pid: int = int(plugin._lifecycle._server_pid)
 	var can_restart := plugin.can_restart_managed_server()
 	plugin.free()
 
@@ -775,7 +775,7 @@ func test_matching_compatible_adoption_keeps_managed_ownership() -> void:
 
 	var owner_label := plugin._adopt_compatible_server("2.2.0", "2.2.0", 22222)
 	var can_restart := plugin.can_restart_managed_server()
-	var server_pid := plugin._lifecycle._server_pid
+	var server_pid: int = int(plugin._lifecycle._server_pid)
 	plugin.free()
 
 	assert_eq(owner_label, "managed")
@@ -861,7 +861,7 @@ func test_drift_kill_without_strong_targets_sets_incompatible_and_preserves_reco
 	var status := plugin.get_server_status()
 	var killed := plugin.killed_targets.duplicate()
 	var clear_calls := plugin.cleared_record_calls
-	var server_pid := plugin._lifecycle._server_pid
+	var server_pid: int = int(plugin._lifecycle._server_pid)
 	plugin.free()
 
 	assert_eq(int(status.get("state", -1)), McpServerState.INCOMPATIBLE)
@@ -882,7 +882,7 @@ func test_drift_kill_preserves_record_and_does_not_spawn_when_port_stays_held() 
 	var status := plugin.get_server_status()
 	var killed := plugin.killed_targets.duplicate()
 	var clear_calls := plugin.cleared_record_calls
-	var server_pid := plugin._lifecycle._server_pid
+	var server_pid: int = int(plugin._lifecycle._server_pid)
 	plugin.free()
 
 	assert_eq(int(status.get("state", -1)), McpServerState.INCOMPATIBLE)
@@ -946,7 +946,7 @@ func test_connection_established_waits_for_version_before_clearing_foreign_port(
 
 	plugin._on_connection_established()
 	var state: int = int(plugin.get_server_status().get("state", -1))
-	var awaiting := plugin._lifecycle.is_awaiting_server_version()
+	var awaiting: bool = bool(plugin._lifecycle.is_awaiting_server_version())
 	plugin.free()
 
 	assert_eq(
@@ -1019,7 +1019,7 @@ func test_connection_established_preserves_crashed_state() -> void:
 	var plugin := GodotAiPlugin.new()
 	plugin._set_spawn_state(McpServerState.CRASHED)
 	plugin._on_connection_established()
-	var state: String = plugin.get_server_status().get("state", "")
+	var state: int = int(plugin.get_server_status().get("state", -1))
 	plugin.free()
 	assert_eq(
 		state,
@@ -1040,7 +1040,7 @@ func test_watch_for_adoption_confirmation_arms_bounded_deadline() -> void:
 	assert_eq(plugin._lifecycle._adoption_watch_deadline_ms, 0, "precondition: deadline disarmed")
 	var before_ms := Time.get_ticks_msec()
 	plugin._watch_for_adoption_confirmation()
-	var deadline := plugin._lifecycle._adoption_watch_deadline_ms
+	var deadline: int = int(plugin._lifecycle._adoption_watch_deadline_ms)
 	plugin.free()
 	assert_true(deadline >= before_ms, "deadline must be set into the future")
 	## Lower bound: SPAWN_GRACE_MS minus a generous 100ms slack for any
@@ -1069,7 +1069,7 @@ func test_process_clears_foreign_port_after_matching_version_ack() -> void:
 	conn.server_version = plugin._lifecycle._server_expected_version
 	plugin._process(0.0)
 	var state: int = int(plugin.get_server_status().get("state", -1))
-	var deadline := plugin._lifecycle._adoption_watch_deadline_ms
+	var deadline: int = int(plugin._lifecycle._adoption_watch_deadline_ms)
 	conn.free()
 	plugin.free()
 
@@ -1090,7 +1090,7 @@ func test_process_self_disarms_after_deadline_without_connect() -> void:
 	plugin.set_process(true)
 	plugin._process(0.0)
 	var state: int = int(plugin.get_server_status().get("state", -1))
-	var deadline := plugin._lifecycle._adoption_watch_deadline_ms
+	var deadline: int = int(plugin._lifecycle._adoption_watch_deadline_ms)
 	conn.free()
 	plugin.free()
 

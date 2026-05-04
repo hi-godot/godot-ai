@@ -41,17 +41,21 @@ func _init(manager, connection) -> void:
 	_connection = connection
 
 
-## Arm the version-check. Sets the AWAITING_VERSION state on the
-## manager and starts watching for `_connection.server_version`. The
-## deadline starts the moment the connection actually opens, not at
+## Arm the version-check. Marks the seam active and starts watching for
+## `_connection.server_version`. Does NOT transition manager state —
+## the version check runs concurrently with whatever spawn-state was
+## latched (e.g. FOREIGN_PORT during adoption confirmation, READY for
+## a fresh spawn). Result transitions land on the manager via
+## `handle_server_version_verified` / `_unverified` once the handshake
+## (or its deadline) lands.
+##
+## The deadline starts the moment the connection actually opens, not at
 ## arm-time, because uvx cold-starts can take ~30s to bind the
 ## WebSocket and we don't want to count that against the handshake.
 func arm(expected_version: String) -> void:
 	_active = true
 	_deadline_ms = 0
 	_expected_version = expected_version
-	if _manager != null:
-		_manager.transition_state(McpServerStateScript.AWAITING_VERSION)
 
 
 ## Disarm without firing a verdict. Used when the manager moves on

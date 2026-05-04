@@ -268,11 +268,17 @@ func test_drain_helper_does_not_poison_shutdown_flag() -> void:
 	## any in-flight refresh worker before extracting plugin scripts. The
 	## install can fail (e.g. zip open error) — when it does, the dock stays
 	## alive and refreshes must resume on the OLD instance. So unlike
-	## `_exit_tree`'s drain, the install-time drain must NOT set
-	## `_client_status_refresh_shutdown_requested` (which is one-way and
-	## permanently disables refreshes for the dock instance).
+	## `_exit_tree`'s drain, the install-time drain must NOT advance
+	## `_refresh_state` to SHUTTING_DOWN (which is sticky and permanently
+	## disables refreshes for the dock instance). The drain leaves
+	## SHUTTING_DOWN intact when `_exit_tree` already set it, but otherwise
+	## resets to IDLE.
 	_dock._drain_client_status_refresh_workers()
-	assert_false(_dock._client_status_refresh_shutdown_requested, "drain must not set shutdown_requested — only _exit_tree does")
+	assert_eq(
+		_dock._refresh_state,
+		McpClientRefreshState.IDLE,
+		"drain must collapse to IDLE when not already shutting down — only _exit_tree sets SHUTTING_DOWN"
+	)
 
 
 ## Shared fixture for the three version-label tests. Inject a Label + Button

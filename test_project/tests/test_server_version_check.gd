@@ -47,9 +47,12 @@ func suite_name() -> String:
 	return "server_version_check"
 
 
-func test_arm_marks_active_and_transitions_state() -> void:
-	## Arming must drive the manager into AWAITING_VERSION so the dock
-	## stops painting "Disconnected" while the handshake is still in flight.
+func test_arm_marks_active_without_transitioning_state() -> void:
+	## Arming must NOT change the manager's state — the version check runs
+	## concurrently with whatever spawn-state was latched (e.g. FOREIGN_PORT
+	## during adoption confirmation). Result transitions land on
+	## handle_server_version_verified / _unverified once the handshake (or
+	## its deadline) arrives.
 	var manager := _ManagerStub.new()
 	var conn := _FakeConnection.new()
 	var check = McpServerVersionCheckScript.new(manager, conn)
@@ -57,8 +60,9 @@ func test_arm_marks_active_and_transitions_state() -> void:
 	check.arm("2.3.0")
 
 	assert_true(check.is_active(), "arm() must mark the check active")
-	assert_eq(manager.transitions.size(), 1)
-	assert_eq(manager.transitions[0], McpServerState.AWAITING_VERSION)
+	assert_eq(manager.transitions.size(), 0,
+		"arm() must not transition manager state — that would clobber "
+		+ "FOREIGN_PORT during adoption-confirmation")
 
 
 func test_disarm_resets_active_without_transitioning_state() -> void:
@@ -69,7 +73,6 @@ func test_disarm_resets_active_without_transitioning_state() -> void:
 	var check = McpServerVersionCheckScript.new(manager, conn)
 
 	check.arm("2.3.0")
-	manager.transitions.clear()
 
 	check.disarm()
 
@@ -152,6 +155,8 @@ func test_arm_with_mismatched_version_drives_through_manager() -> void:
 func test_lifecycle_manager_arm_version_check_attaches_seam() -> void:
 	## End-to-end seam wiring on the real manager: arming via the manager
 	## must construct the version check lazily and register it for tick().
+	## The manager's spawn-state stays at whatever the caller had — arming
+	## doesn't transition state, only the result handlers do.
 	var host = _make_minimal_host()
 	var manager = McpServerLifecycleManagerScript.new(host)
 	var conn := _FakeConnection.new()
@@ -165,7 +170,9 @@ func test_lifecycle_manager_arm_version_check_attaches_seam() -> void:
 		"arm_version_check must construct the seam")
 	assert_true(manager.is_awaiting_server_version(),
 		"manager must report awaiting after arm")
-	assert_eq(manager.get_state(), McpServerState.AWAITING_VERSION)
+	assert_eq(manager.get_state(), McpServerState.UNINITIALIZED,
+		"arm must not change the spawn-state — concurrent with whatever "
+		+ "the caller had latched")
 	host.free()
 
 
