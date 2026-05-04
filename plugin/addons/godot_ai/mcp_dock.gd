@@ -4,6 +4,9 @@ extends VBoxContainer
 
 ## Editor dock panel showing MCP connection status, client config, and command log.
 
+const ServerStateScript := preload("res://addons/godot_ai/utils/mcp_server_state.gd")
+const ClientRefreshStateScript := preload("res://addons/godot_ai/utils/mcp_client_refresh_state.gd")
+
 const DEV_MODE_SETTING := "godot_ai/dev_mode"
 ## Index ↔ persisted-value mapping for the mode-override dropdown. The array
 ## index is the OptionButton item id; the string is what's written to the
@@ -88,17 +91,24 @@ var _server_restart_in_progress := false
 ## `_last_server_status` pattern used by the crash panel.
 var _last_mismatched_ids: Array[String] = []
 var _client_status_refresh_thread: Thread
-var _client_status_refresh_in_flight := false
-var _client_status_refresh_pending := false
-var _client_status_refresh_pending_force := false
+## Single source of truth for the refresh-sweep state machine. See
+## `McpClientRefreshState` for the transition table. Replaces the
+## previously scattered booleans (`_in_flight`, `_timed_out`,
+## `_deferred_until_filesystem_ready`, `_shutdown_requested`).
+var _refresh_state: int = ClientRefreshStateScript.IDLE
+## Pending-request flags. Kept separate from `_refresh_state` because
+## they're "what should the next refresh look like" — not state of
+## any current refresh. A pending request is queued when a refresh
+## arrives during RUNNING / RUNNING_TIMED_OUT and consumed by
+## `_apply_client_status_refresh_results` once the in-flight worker
+## drains. `_pending_force` also captures forced retries deferred via
+## DEFERRED_FOR_FILESYSTEM so a pending user click survives the wait.
+var _client_status_refresh_pending: bool = false
+var _client_status_refresh_pending_force: bool = false
+var _client_status_refresh_pending_initial: bool = false
 var _last_client_status_refresh_completed_msec: int = 0
 var _client_status_refresh_started_msec: int = 0
 var _client_status_refresh_generation: int = 0
-var _client_status_refresh_shutdown_requested := false
-var _client_status_refresh_timed_out := false
-var _client_status_refresh_deferred_until_filesystem_ready := false
-var _client_status_refresh_deferred_force := false
-var _client_status_refresh_deferred_initial := false
 ## Set for the duration of `_install_update` — extract-overwrite of plugin
 ## scripts on disk would crash any worker mid-`GDScriptFunction::call`
 ## (confirmed via SIGABRT in `VBoxContainer(McpDock)::_run_client_status_refresh_worker`).
@@ -219,7 +229,7 @@ func _exit_tree() -> void:
 	## timeout, and a polling/abandon fallback would just re-introduce the
 	## GC-mid-execution crash this fix exists to prevent. Blocking the editor
 	## briefly on plugin-reload is strictly better than the SIGSEGV.
-	_client_status_refresh_shutdown_requested = true
+	_refresh_state = ClientRefreshStateScript.SHUTTING_DOWN
 	_drain_client_status_refresh_workers()
 	_drain_client_action_workers()
 
@@ -238,9 +248,14 @@ func _drain_client_status_refresh_workers() -> void:
 		if thread != null:
 			thread.wait_to_finish()
 	_orphaned_client_status_refresh_threads.clear()
-	_client_status_refresh_in_flight = false
+	## Don't transition out of SHUTTING_DOWN — the drain is called from
+	## `_exit_tree` (sticky shutdown) and from `_install_update`'s post-
+	## drain reset, which writes the state explicitly.
+	if _refresh_state != ClientRefreshStateScript.SHUTTING_DOWN:
+		_refresh_state = ClientRefreshStateScript.IDLE
 	_client_status_refresh_pending = false
 	_client_status_refresh_pending_force = false
+	_client_status_refresh_pending_initial = false
 
 
 func _drain_client_action_workers() -> void:
@@ -730,12 +745,12 @@ func _update_status() -> void:
 		if _plugin != null and _plugin.has_method("get_server_status")
 		else {}
 	)
-	var state: String = server_status.get("state", McpSpawnState.OK)
-	if state == McpSpawnState.INCOMPATIBLE_SERVER:
+	var state: int = int(server_status.get("state", ServerStateScript.UNINITIALIZED))
+	if ServerStateScript.blocks_client_health(state):
 		connected = false
 
 	## One `match`/`elif` chain, one source of truth. Adding a new
-	## spawn outcome = one `McpSpawnState` constant + one arm here +
+	## spawn outcome = one `McpServerState` constant + one arm here +
 	## one body string in `_crash_body_for_state`.
 	var status_text: String
 	var status_color: Color
@@ -750,20 +765,20 @@ func _update_status() -> void:
 		else:
 			status_text = "Connected"
 			status_color = Color.GREEN
-	elif state == McpSpawnState.CRASHED:
+	elif state == ServerStateScript.CRASHED:
 		var exit_ms: int = server_status.get("exit_ms", 0)
 		status_text = "Server exited after %.1fs" % (exit_ms / 1000.0)
 		status_color = Color.RED
-	elif state == McpSpawnState.PORT_EXCLUDED:
+	elif state == ServerStateScript.PORT_EXCLUDED:
 		status_text = "Port %d reserved by Windows" % McpClientConfigurator.http_port()
 		status_color = Color.RED
-	elif state == McpSpawnState.INCOMPATIBLE_SERVER:
+	elif state == ServerStateScript.INCOMPATIBLE:
 		status_text = "Incompatible server on port %d" % McpClientConfigurator.http_port()
 		status_color = Color.RED
-	elif state == McpSpawnState.FOREIGN_PORT:
+	elif state == ServerStateScript.FOREIGN_PORT:
 		status_text = "Port %d held by another process" % McpClientConfigurator.http_port()
 		status_color = Color.RED
-	elif state == McpSpawnState.NO_COMMAND:
+	elif state == ServerStateScript.NO_COMMAND:
 		status_text = "No server command found"
 		status_color = Color.RED
 	elif Time.get_ticks_msec() < _startup_grace_until_msec:
@@ -796,8 +811,8 @@ func _update_status() -> void:
 ## hold both HTTP and WS ports, so their message points to Editor Settings
 ## instead of offering the HTTP-only quick picker.
 func _update_crash_panel(server_status: Dictionary) -> void:
-	var state: String = server_status.get("state", McpSpawnState.OK)
-	if state == McpSpawnState.OK:
+	var state: int = int(server_status.get("state", ServerStateScript.UNINITIALIZED))
+	if not ServerStateScript.is_terminal_diagnosis(state):
 		if _crash_panel.visible:
 			_crash_panel.visible = false
 			_last_server_status = {}
@@ -809,7 +824,7 @@ func _update_crash_panel(server_status: Dictionary) -> void:
 	_crash_output.clear()
 	_crash_output.add_text(_crash_body_for_state(state, server_status))
 	var show_recovery_restart := (
-		state == McpSpawnState.INCOMPATIBLE_SERVER
+		state == ServerStateScript.INCOMPATIBLE
 		and bool(server_status.get("can_recover_incompatible", false))
 	)
 	if _crash_restart_btn != null:
@@ -819,12 +834,12 @@ func _update_crash_panel(server_status: Dictionary) -> void:
 	if _crash_reload_btn != null:
 		_crash_reload_btn.visible = (
 			not show_recovery_restart
-			and state != McpSpawnState.INCOMPATIBLE_SERVER
+			and state != ServerStateScript.INCOMPATIBLE
 		)
 
 	var port_picker_visible := (
-		state == McpSpawnState.PORT_EXCLUDED
-		or state == McpSpawnState.FOREIGN_PORT
+		state == ServerStateScript.PORT_EXCLUDED
+		or state == ServerStateScript.FOREIGN_PORT
 	)
 	_port_picker_section.visible = port_picker_visible
 	if port_picker_visible:
@@ -836,14 +851,14 @@ func _update_crash_panel(server_status: Dictionary) -> void:
 		)
 
 
-static func _crash_body_for_state(state: String, server_status: Dictionary = {}) -> String:
+static func _crash_body_for_state(state: int, server_status: Dictionary = {}) -> String:
 	## Single sentence per state. The top status label already names the
 	## problem; don't repeat it here. This copy answers "what do I do?".
 	var port := McpClientConfigurator.http_port()
 	match state:
-		McpSpawnState.PORT_EXCLUDED:
+		ServerStateScript.PORT_EXCLUDED:
 			return "Windows (Hyper-V / WSL2 / Docker) reserved port %d. Pick a free port or try `net stop winnat; net start winnat` in an admin shell." % port
-		McpSpawnState.INCOMPATIBLE_SERVER:
+		ServerStateScript.INCOMPATIBLE:
 			var message := str(server_status.get("message", ""))
 			if bool(server_status.get("can_recover_incompatible", false)):
 				var expected := str(server_status.get("expected_version", ""))
@@ -855,9 +870,9 @@ static func _crash_body_for_state(state: String, server_status: Dictionary = {})
 			if not message.is_empty():
 				return message
 			return "Port %d is occupied by an incompatible server. Stop it or change both HTTP and WS ports." % port
-		McpSpawnState.FOREIGN_PORT:
+		ServerStateScript.FOREIGN_PORT:
 			return "Another process is already bound to port %d. Pick a free port or stop the other process." % port
-		McpSpawnState.CRASHED:
+		ServerStateScript.CRASHED:
 			## Both spawn attempts failed on the uvx tier — almost always
 			## means PyPI hasn't propagated this version yet (~10 min after
 			## publish). `_start_server` already tried `--refresh` once, so
@@ -866,7 +881,7 @@ static func _crash_body_for_state(state: String, server_status: Dictionary = {})
 				var version := McpClientConfigurator.get_plugin_version()
 				return "The server exited before the WebSocket handshake, even after a `uvx --refresh` retry. If this is a brand-new release, PyPI's index may still be propagating (~10 min). Wait a moment and click Reload Plugin to retry, or check Godot's output log for Python's traceback. Target: godot-ai==%s." % version
 			return "The server exited before the WebSocket handshake. Check Godot's output log (bottom panel) for Python's traceback."
-		McpSpawnState.NO_COMMAND:
+		ServerStateScript.NO_COMMAND:
 			return "No godot-ai server found. Install `uv` via the Setup panel above, or run `pip install godot-ai`."
 		_:
 			return ""
@@ -1055,10 +1070,13 @@ func _refresh_server_version_label() -> void:
 	var expected_ver := str(server_status.get("expected_version", ""))
 	if expected_ver.is_empty():
 		expected_ver = plugin_ver
-	var state: String = str(server_status.get("state", McpSpawnState.OK))
+	var state: int = int(server_status.get("state", ServerStateScript.UNINITIALIZED))
 	if _server_restart_in_progress and (
 		server_ver == expected_ver
-		or (state != McpSpawnState.OK and state != McpSpawnState.INCOMPATIBLE_SERVER)
+		or (
+			ServerStateScript.is_terminal_diagnosis(state)
+			and state != ServerStateScript.INCOMPATIBLE
+		)
 	):
 		_server_restart_in_progress = false
 	var text: String
@@ -1081,7 +1099,7 @@ func _refresh_server_version_label() -> void:
 			color = COLOR_AMBER
 		else:
 			text = "godot-ai == %s  (expected %s)" % [server_ver, expected_ver]
-			var is_incompatible: bool = state == McpSpawnState.INCOMPATIBLE_SERVER
+			var is_incompatible: bool = state == ServerStateScript.INCOMPATIBLE
 			color = Color.RED if is_incompatible else COLOR_AMBER
 			var has_managed_proof: bool = (
 				_plugin != null
@@ -1147,7 +1165,7 @@ func _dispatch_stale_server_restart() -> bool:
 		if _plugin.has_method("get_server_status")
 		else {}
 	)
-	if str(status.get("state", "")) == McpSpawnState.INCOMPATIBLE_SERVER:
+	if int(status.get("state", ServerStateScript.UNINITIALIZED)) == ServerStateScript.INCOMPATIBLE:
 		if _plugin.has_method("recover_incompatible_server"):
 			return bool(_plugin.recover_incompatible_server())
 	elif _plugin.has_method("force_restart_server"):
@@ -1396,14 +1414,14 @@ func _run_client_action_worker(client_id: String, action: String, server_url: St
 		result = McpClientConfigurator.remove(client_id, server_url)
 	else:
 		result = McpClientConfigurator.configure(client_id, server_url)
-	if not _client_status_refresh_shutdown_requested:
+	if _refresh_state != ClientRefreshStateScript.SHUTTING_DOWN:
 		call_deferred("_apply_client_action_result", client_id, action, result, generation)
 
 
 func _apply_client_action_result(client_id: String, action: String, result: Dictionary, generation: int) -> void:
 	if int(_client_action_generations.get(client_id, 0)) != generation:
 		return
-	if _client_status_refresh_shutdown_requested:
+	if _refresh_state == ClientRefreshStateScript.SHUTTING_DOWN:
 		return
 	if _client_action_threads.has(client_id):
 		var t: Thread = _client_action_threads[client_id]
@@ -1477,7 +1495,7 @@ func _on_configure_all_clients() -> void:
 			_apply_row_status(String(client_id), McpClient.Status.ERROR, _server_blocked_client_message())
 		_refresh_clients_summary()
 		return
-	if _client_status_refresh_in_flight:
+	if ClientRefreshStateScript.has_worker_alive(_refresh_state):
 		return
 	for client_id in _client_rows:
 		var status: McpClient.Status = _client_rows[client_id].get("status", McpClient.Status.NOT_CONFIGURED)
@@ -1771,11 +1789,15 @@ func _refresh_clients_summary() -> void:
 	var text := "%d / %d configured" % [configured, _client_rows.size()]
 	if mismatched_ids.size() > 0:
 		text += " (%d stale)" % mismatched_ids.size()
-	if _client_status_refresh_in_flight:
-		text += " (checking...)" if not _client_status_refresh_timed_out else " (client probe still running)"
+	if ClientRefreshStateScript.should_show_checking_badge(_refresh_state):
+		text += (
+			" (checking...)"
+			if _refresh_state != ClientRefreshStateScript.RUNNING_TIMED_OUT
+			else " (client probe still running)"
+		)
 	_clients_summary_label.text = text
 	if _client_configure_all_btn != null:
-		_client_configure_all_btn.disabled = _client_status_refresh_in_flight
+		_client_configure_all_btn.disabled = ClientRefreshStateScript.has_worker_alive(_refresh_state)
 	_refresh_drift_banner(mismatched_ids)
 
 
@@ -1817,7 +1839,7 @@ func _is_client_status_refresh_in_cooldown() -> bool:
 
 
 func _has_client_status_refresh_timed_out() -> bool:
-	if not _client_status_refresh_in_flight:
+	if not ClientRefreshStateScript.has_worker_alive(_refresh_state):
 		return false
 	if _client_status_refresh_started_msec <= 0:
 		return false
@@ -1827,9 +1849,9 @@ func _has_client_status_refresh_timed_out() -> bool:
 func _check_client_status_refresh_timeout() -> void:
 	if not _has_client_status_refresh_timed_out():
 		return
-	if _client_status_refresh_timed_out:
+	if _refresh_state == ClientRefreshStateScript.RUNNING_TIMED_OUT:
 		return
-	_client_status_refresh_timed_out = true
+	_refresh_state = ClientRefreshStateScript.RUNNING_TIMED_OUT
 	_refresh_clients_summary()
 
 
@@ -1842,10 +1864,10 @@ func _abandon_client_status_refresh_thread() -> void:
 	if _client_status_refresh_thread != null:
 		_orphaned_client_status_refresh_threads.append(_client_status_refresh_thread)
 		_client_status_refresh_thread = null
-	_client_status_refresh_in_flight = false
+	if _refresh_state != ClientRefreshStateScript.SHUTTING_DOWN:
+		_refresh_state = ClientRefreshStateScript.IDLE
 	_client_status_refresh_pending = false
 	_client_status_refresh_pending_force = false
-	_client_status_refresh_timed_out = false
 	_client_status_refresh_started_msec = 0
 	_refresh_clients_summary()
 
@@ -1894,14 +1916,14 @@ func _perform_initial_client_status_refresh() -> void:
 		return
 	if _client_rows.is_empty():
 		return
-	if _client_status_refresh_shutdown_requested:
+	if _refresh_state == ClientRefreshStateScript.SHUTTING_DOWN:
 		return
 	if _self_update_in_progress:
 		return
 	if _is_editor_filesystem_busy():
 		_defer_initial_client_status_refresh_until_filesystem_ready()
 		return
-	if _client_status_refresh_in_flight:
+	if ClientRefreshStateScript.has_worker_alive(_refresh_state):
 		return
 
 	if _server_blocks_client_health():
@@ -1934,8 +1956,7 @@ func _perform_initial_client_status_refresh() -> void:
 		)
 	)
 	if err != OK:
-		_client_status_refresh_in_flight = false
-		_client_status_refresh_timed_out = false
+		_refresh_state = ClientRefreshStateScript.IDLE
 		_client_status_refresh_thread = null
 		_refresh_clients_summary()
 
@@ -1961,10 +1982,9 @@ func _begin_client_status_refresh_run() -> int:
 	## Generation is bumped here (not at completion) so that a worker callback
 	## arriving after `_abandon_client_status_refresh_thread` or `_exit_tree`
 	## fires can be detected as stale via generation mismatch.
-	_client_status_refresh_in_flight = true
+	_refresh_state = ClientRefreshStateScript.RUNNING
 	_client_status_refresh_pending = false
 	_client_status_refresh_pending_force = false
-	_client_status_refresh_timed_out = false
 	_client_status_refresh_started_msec = Time.get_ticks_msec()
 	_client_status_refresh_generation += 1
 	_refresh_clients_summary()
@@ -1976,8 +1996,8 @@ func _finalize_completed_refresh() -> void:
 	## refresh that successfully applied results — the worker callback path
 	## and the no-CLI fast path in `_perform_initial_client_status_refresh`.
 	_last_client_status_refresh_completed_msec = Time.get_ticks_msec()
-	_client_status_refresh_in_flight = false
-	_client_status_refresh_timed_out = false
+	if _refresh_state != ClientRefreshStateScript.SHUTTING_DOWN:
+		_refresh_state = ClientRefreshStateScript.IDLE
 	_refresh_clients_summary()
 
 
@@ -1998,7 +2018,7 @@ func _request_client_status_refresh(force: bool = false) -> bool:
 		## gate covers every spawn path during the install window. The flag
 		## dies with the dock instance during `set_plugin_enabled(false)`.
 		return false
-	if _client_status_refresh_in_flight:
+	if ClientRefreshStateScript.has_worker_alive(_refresh_state):
 		if force and _has_client_status_refresh_timed_out():
 			_abandon_client_status_refresh_thread()
 		else:
@@ -2006,7 +2026,7 @@ func _request_client_status_refresh(force: bool = false) -> bool:
 			_client_status_refresh_pending_force = _client_status_refresh_pending_force or force
 			_refresh_clients_summary()
 			return false
-	if _client_status_refresh_shutdown_requested:
+	if _refresh_state == ClientRefreshStateScript.SHUTTING_DOWN:
 		return false
 	if not force and _is_client_status_refresh_in_cooldown():
 		return false
@@ -2028,8 +2048,7 @@ func _request_client_status_refresh(force: bool = false) -> bool:
 		Callable(self, "_run_client_status_refresh_worker").bind(client_probes, server_url, generation)
 	)
 	if err != OK:
-		_client_status_refresh_in_flight = false
-		_client_status_refresh_timed_out = false
+		_refresh_state = ClientRefreshStateScript.IDLE
 		_client_status_refresh_thread = null
 		_refresh_clients_summary()
 		return false
@@ -2042,8 +2061,8 @@ func _is_editor_filesystem_busy() -> bool:
 
 
 func _defer_initial_client_status_refresh_until_filesystem_ready() -> void:
-	_client_status_refresh_deferred_until_filesystem_ready = true
-	_client_status_refresh_deferred_initial = true
+	_refresh_state = ClientRefreshStateScript.DEFERRED_FOR_FILESYSTEM
+	_client_status_refresh_pending_initial = true
 
 
 func _defer_client_status_refresh_until_filesystem_ready(force: bool) -> void:
@@ -2051,25 +2070,23 @@ func _defer_client_status_refresh_until_filesystem_ready(force: bool) -> void:
 	## filesystem is busy. Do not spawn a worker into that window: the worker
 	## can call plugin GDScript while the main thread is reloading it, which
 	## crashes in `GDScriptFunction::call`.
-	_client_status_refresh_deferred_until_filesystem_ready = true
-	_client_status_refresh_deferred_force = _client_status_refresh_deferred_force or force
+	_refresh_state = ClientRefreshStateScript.DEFERRED_FOR_FILESYSTEM
+	_client_status_refresh_pending_force = _client_status_refresh_pending_force or force
 
 
 func _retry_deferred_client_status_refresh() -> void:
-	if not _client_status_refresh_deferred_until_filesystem_ready:
+	if _refresh_state != ClientRefreshStateScript.DEFERRED_FOR_FILESYSTEM:
 		return
-	if _self_update_in_progress or _client_status_refresh_shutdown_requested:
-		return
-	if _client_status_refresh_in_flight:
+	if _self_update_in_progress:
 		return
 	if _is_editor_filesystem_busy():
 		return
 
-	var initial := _client_status_refresh_deferred_initial
-	var force := _client_status_refresh_deferred_force
-	_client_status_refresh_deferred_until_filesystem_ready = false
-	_client_status_refresh_deferred_force = false
-	_client_status_refresh_deferred_initial = false
+	var initial := _client_status_refresh_pending_initial
+	var force := _client_status_refresh_pending_force
+	_refresh_state = ClientRefreshStateScript.IDLE
+	_client_status_refresh_pending_force = false
+	_client_status_refresh_pending_initial = false
 	if initial:
 		_perform_initial_client_status_refresh()
 	else:
@@ -2093,12 +2110,12 @@ func _run_client_status_refresh_worker(client_probes: Array[Dictionary], server_
 			"installed": installed,
 			"error_msg": details.get("error_msg", ""),
 		}
-	if not _client_status_refresh_shutdown_requested:
+	if _refresh_state != ClientRefreshStateScript.SHUTTING_DOWN:
 		call_deferred("_apply_client_status_refresh_results", results, generation)
 
 
 func _apply_client_status_refresh_results(results: Dictionary, generation: int) -> void:
-	if generation != _client_status_refresh_generation or _client_status_refresh_shutdown_requested:
+	if generation != _client_status_refresh_generation or _refresh_state == ClientRefreshStateScript.SHUTTING_DOWN:
 		return
 	if _client_status_refresh_thread != null:
 		_client_status_refresh_thread.wait_to_finish()
@@ -2136,7 +2153,9 @@ func _server_blocks_client_health() -> bool:
 	if _plugin == null or not _plugin.has_method("get_server_status"):
 		return false
 	var status: Dictionary = _plugin.get_server_status()
-	return status.get("state", McpSpawnState.OK) == McpSpawnState.INCOMPATIBLE_SERVER
+	return ServerStateScript.blocks_client_health(
+		int(status.get("state", ServerStateScript.UNINITIALIZED))
+	)
 
 
 func _server_blocked_client_message() -> String:

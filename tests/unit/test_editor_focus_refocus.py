@@ -37,7 +37,7 @@ def test_client_status_refresh_coalesces_and_manual_refresh_bypasses_cooldown() 
 
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
 
-    assert "if _client_status_refresh_in_flight:" in source
+    assert "if ClientRefreshStateScript.has_worker_alive(_refresh_state):" in source
     assert "_client_status_refresh_pending = true" in source
     assert "if not force and _is_client_status_refresh_in_cooldown()" in source
     assert "_request_client_status_refresh(true)" in source
@@ -162,9 +162,13 @@ def test_client_status_refresh_defers_while_editor_filesystem_is_busy() -> None:
 
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
 
-    assert "var _client_status_refresh_deferred_until_filesystem_ready := false" in source
-    assert "var _client_status_refresh_deferred_force := false" in source
-    assert "var _client_status_refresh_deferred_initial := false" in source
+    # PR 6 (#297) collapsed the deferred-* boolean cluster into the
+    # McpClientRefreshState enum's DEFERRED_FOR_FILESYSTEM value, plus
+    # a pair of pending request flags (force / initial) that survive
+    # the wait window.
+    assert "var _refresh_state: int = ClientRefreshStateScript.IDLE" in source
+    assert "var _client_status_refresh_pending_force: bool = false" in source
+    assert "var _client_status_refresh_pending_initial: bool = false" in source
 
     process_block = get_func_block(source, "func _process(_delta: float) -> void:")
     assert "_retry_deferred_client_status_refresh()" in process_block
@@ -187,8 +191,9 @@ def test_client_status_refresh_defers_while_editor_filesystem_is_busy() -> None:
     initial_defer_block = get_func_block(
         source, "func _defer_initial_client_status_refresh_until_filesystem_ready() -> void:"
     )
-    assert "_client_status_refresh_deferred_until_filesystem_ready = true" in initial_defer_block
-    assert "_client_status_refresh_deferred_initial = true" in initial_defer_block
+    deferred_marker = "_refresh_state = ClientRefreshStateScript.DEFERRED_FOR_FILESYSTEM"
+    assert deferred_marker in initial_defer_block
+    assert "_client_status_refresh_pending_initial = true" in initial_defer_block
 
 
 def test_focus_refresh_is_opportunistic_while_editor_filesystem_is_busy() -> None:
@@ -224,7 +229,7 @@ def test_deferred_manual_refresh_replays_through_async_request_path_only() -> No
         assert "client_status_probe_snapshot(" not in block
         assert "check_status" not in block
 
-    assert "_client_status_refresh_deferred_initial = false" in retry_block
+    assert "_client_status_refresh_pending_initial = false" in retry_block
     assert "else:" in retry_block
     assert "_request_client_status_refresh(force)" in retry_block
 
@@ -239,7 +244,7 @@ def test_deferred_initial_refresh_replays_warmup_path() -> None:
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
     retry_block = get_func_block(source, "func _retry_deferred_client_status_refresh() -> void:")
 
-    assert "var initial := _client_status_refresh_deferred_initial" in retry_block
+    assert "var initial := _client_status_refresh_pending_initial" in retry_block
     assert "if initial:" in retry_block
     assert "_perform_initial_client_status_refresh()" in retry_block
     assert retry_block.index("if initial:") < retry_block.index(

@@ -26,10 +26,14 @@ const UPDATE_RELOAD_RUNNER_SCRIPT := preload("res://addons/godot_ai/update_reloa
 const UvCacheCleanup := preload("res://addons/godot_ai/utils/uv_cache_cleanup.gd")
 
 ## Server lifecycle + port discovery extracted from this file (#297 PR 5).
-## Plugin.gd keeps thin shims so the dock and characterization tests
-## see an unchanged surface.
+## State enums + version-check seam extracted in PR 6 (#297). Plugin.gd
+## keeps thin shims so the dock and characterization tests see an
+## unchanged public surface; spawn-machinery state now lives in the
+## lifecycle manager.
 const ServerLifecycleManager := preload("res://addons/godot_ai/utils/server_lifecycle.gd")
 const PortResolver := preload("res://addons/godot_ai/utils/port_resolver.gd")
+const ServerStateScript := preload("res://addons/godot_ai/utils/mcp_server_state.gd")
+const StartupPathScript := preload("res://addons/godot_ai/utils/mcp_startup_path.gd")
 
 ## Plugin-class scripts — preloaded so `plugin.gd`'s parse and instantiation
 ## sites resolve via the script path, not via the global `class_name`
@@ -143,53 +147,26 @@ var _game_log_buffer
 var _editor_log_buffer
 var _editor_logger
 var _dock
-var _server_pid := -1
 var _handlers: Array = []  # prevent GC of RefCounted handlers
 var _debugger_plugin
-## Spawn / stop / adopt orchestration; allocated in `_init` so test
-## fixtures (which never enter the tree) can drive `_start_server`.
+## Spawn / stop / adopt orchestration plus state machine; allocated in
+## `_init` so test fixtures (which never enter the tree) can drive
+## `_start_server`. Owns `_server_pid`, `_server_state`, the version-
+## check seam, and the adoption-confirmation deadline — see
+## `utils/server_lifecycle.gd`.
 var _lifecycle
 static var _server_started_this_session := false  # guard against re-entrant spawns
 static var _resolved_ws_port := McpClientConfigurator.DEFAULT_WS_PORT
 
-## Captured state for server-spawn supervision (see _start_server_watch).
-## Populated only when WE spawn the process — adopt / foreign-server
-## branches leave these at their defaults.
-var _server_spawn_ms: int = 0
-var _server_exit_ms: int = 0
+## Server-watch timer lives on the plugin because it's a Node — the
+## manager is RefCounted and can't host children.
 var _server_watch_timer: Timer = null
-## Outcome of the most recent `_start_server` attempt. One of the
-## `McpSpawnState.*` string constants; the dock switches on this to
-## decide which diagnostic panel to render. Default `OK` covers both
-## happy paths (spawned fresh / adopted existing). Failure states are
-## set at the exact point of failure and never cleared during the
-## plugin session — reload the plugin to retry.
-var _spawn_state: String = McpSpawnState.OK
-## One-shot guard for the stale-uvx-index recovery (see
-## `_should_retry_with_refresh`). Reset at the top of `_start_server` so
-## each fresh spawn attempt gets its own refresh budget; set to true the
-## moment we respawn with `--refresh` so a second failure falls through
-## to CRASHED instead of looping.
-var _refresh_retried: bool = false
-## Bounded deadline for `_watch_for_adoption_confirmation`. Zero when
-## disarmed. See that function's docstring.
-var _adoption_watch_deadline_ms: int = 0
-var _server_expected_version := ""
-var _server_actual_version := ""
-var _server_actual_name := ""
-var _server_status_message := ""
-var _server_dev_version_mismatch_allowed := false
-var _can_recover_incompatible := false
-var _connection_blocked := false
-var _awaiting_server_version := false
-var _server_version_deadline_ms: int = 0
 var _headless_disabled := false
 var _startup_trace_enabled := false
 var _startup_trace_start_ms := 0
 var _startup_trace_last_ms := 0
 var _startup_trace_counters: Dictionary = {}
 var _startup_trace_netsh_start_count := 0
-var _startup_path := ""
 
 
 func _init() -> void:
@@ -228,9 +205,12 @@ func _enter_tree() -> void:
 	_connection = Connection.new()
 	_connection.log_buffer = _log_buffer
 	_connection.ws_port = _resolved_ws_port
-	_connection.connect_blocked = _connection_blocked
-	_connection.connect_block_reason = _server_status_message
-	if not _connection_blocked and _spawn_state == McpSpawnState.OK:
+	_connection.connect_blocked = _lifecycle.is_connection_blocked()
+	_connection.connect_block_reason = _lifecycle.get_status_dict().get("message", "")
+	if (
+		not _lifecycle.is_connection_blocked()
+		and not ServerStateScript.is_terminal_diagnosis(_lifecycle.get_state())
+	):
 		_arm_server_version_check()
 
 	_debugger_plugin = DebuggerPlugin.new(_log_buffer, _game_log_buffer)
@@ -402,7 +382,8 @@ func _enter_tree() -> void:
 	_startup_trace_phase("dock_attached")
 
 	_log_buffer.log("plugin loaded")
-	_startup_trace_finish(_startup_path if not _startup_path.is_empty() else "loaded")
+	var startup_path: String = str(_lifecycle.get_startup_path())
+	_startup_trace_finish(startup_path if not startup_path.is_empty() else "loaded")
 
 
 func _exit_tree() -> void:
@@ -619,65 +600,33 @@ func _start_server() -> void:
 	_lifecycle.start_server()
 
 
+## Test-fixture shim — characterization tests in test_plugin_lifecycle
+## reach for this instance method directly. Delegates to the manager's
+## state-owning copy.
 func _set_incompatible_server(live: Dictionary, expected_version: String, port: int) -> void:
-	_spawn_state = McpSpawnState.INCOMPATIBLE_SERVER
-	_connection_blocked = true
-	_server_expected_version = expected_version
-	_server_actual_name = str(live.get("name", ""))
-	_server_actual_version = _live_version_for_message(live)
-	_server_dev_version_mismatch_allowed = false
-	_server_status_message = _incompatible_server_message(live, expected_version, port, _resolved_ws_port)
-	## `live` is the caller's most-current snapshot — pass it through to
-	## the recovery proof helper so it doesn't fire another probe of the
-	## same port. The `_set_incompatible_server` contract is "use exactly
-	## this live", so threading it down keeps the proof determination
-	## consistent with the diagnostic message we just built.
-	var proof := _evaluate_recovery_port_occupant_proof(port, live)
-	var proof_name := str(proof.get("proof", ""))
-	_can_recover_incompatible = not proof_name.is_empty()
-	print("MCP | proof: %s" % (proof_name if _can_recover_incompatible else "(none)"))
-	_refresh_dock_client_statuses()
+	_lifecycle._set_incompatible_server(live, expected_version, port)
 
 
+## Static shim — kept on the plugin class because the characterization
+## tests assert against `GodotAiPlugin._incompatible_server_message`.
+## Implementation moved to ServerLifecycleManager.
 static func _incompatible_server_message(
 	live: Dictionary,
 	expected_version: String,
 	port: int,
 	expected_ws_port: int
 ) -> String:
-	var version := _live_version_for_message(live)
-	var actual_ws_port := _live_ws_port_for_message(live)
-	if not version.is_empty():
-		if actual_ws_port > 0 and actual_ws_port != expected_ws_port:
-			return (
-				"Port %d is occupied by godot-ai server v%s using WS port %d; "
-				+ "plugin expects v%s with WS port %d. Stop the old server or "
-				+ "change both HTTP and WS ports."
-			) % [port, version, actual_ws_port, expected_version, expected_ws_port]
-		return (
-			"Port %d is occupied by godot-ai server v%s; plugin expects v%s. "
-			+ "Stop the old server or change both HTTP and WS ports."
-		) % [port, version, expected_version]
-	var status_code := int(live.get("status_code", 0))
-	if status_code > 0:
-		return (
-			"Port %d is occupied by an unverified server (status endpoint returned HTTP %d); "
-			+ "plugin expects godot-ai v%s. Stop the other server or change both HTTP and WS ports."
-		) % [port, status_code, expected_version]
-	return (
-		"Port %d is occupied by another process; plugin expects godot-ai v%s. "
-		+ "Stop the other process or change both HTTP and WS ports."
-	) % [port, expected_version]
+	return ServerLifecycleManager._incompatible_server_message(
+		live, expected_version, port, expected_ws_port
+	)
 
 
-static func _server_version_compatibility(actual_version: String, expected_version: String, is_dev_checkout: bool) -> Dictionary:
-	if actual_version.is_empty():
-		return {"compatible": false, "reason": "unknown", "dev_mismatch_allowed": false}
-	if actual_version == expected_version:
-		return {"compatible": true, "reason": "exact", "dev_mismatch_allowed": false}
-	if is_dev_checkout:
-		return {"compatible": true, "reason": "dev_mismatch", "dev_mismatch_allowed": true}
-	return {"compatible": false, "reason": "version_mismatch", "dev_mismatch_allowed": false}
+static func _server_version_compatibility(
+	actual_version: String, expected_version: String, is_dev_checkout: bool
+) -> Dictionary:
+	return ServerLifecycleManager._server_version_compatibility(
+		actual_version, expected_version, is_dev_checkout
+	)
 
 
 static func _server_status_compatibility(
@@ -687,20 +636,13 @@ static func _server_status_compatibility(
 	expected_ws_port: int,
 	is_dev_checkout: bool,
 ) -> Dictionary:
-	var version_result := _server_version_compatibility(
-		actual_version,
-		expected_version,
-		is_dev_checkout
+	return ServerLifecycleManager._server_status_compatibility(
+		actual_version, expected_version, actual_ws_port, expected_ws_port, is_dev_checkout
 	)
-	if not bool(version_result.get("compatible", false)):
-		return version_result
-	if actual_ws_port != expected_ws_port:
-		return {"compatible": false, "reason": "ws_port_mismatch", "dev_mismatch_allowed": false}
-	return version_result
 
 
 static func _managed_record_has_version_drift(record_version: String, current_version: String) -> bool:
-	return not record_version.is_empty() and record_version != current_version
+	return ServerLifecycleManager._managed_record_has_version_drift(record_version, current_version)
 
 
 static func _probe_live_server_status(port: int, timeout_ms: int = SERVER_STATUS_PROBE_TIMEOUT_MS) -> Dictionary:
@@ -779,29 +721,17 @@ static func _extract_server_version(payload: Dictionary) -> String:
 
 
 static func _live_status_identifies_godot_ai(live: Dictionary) -> bool:
-	return str(live.get("name", "")) == "godot-ai"
+	return ServerLifecycleManager._live_status_identifies_godot_ai(live)
 
 
-static func _verified_status_version(live: Dictionary) -> String:
-	if not _live_status_identifies_godot_ai(live):
+func _verified_status_version(live: Dictionary) -> String:
+	if not ServerLifecycleManager._live_status_identifies_godot_ai(live):
 		return ""
 	return str(live.get("version", ""))
 
 
-static func _verified_status_ws_port(live: Dictionary) -> int:
-	if not _live_status_identifies_godot_ai(live):
-		return 0
-	return int(live.get("ws_port", 0))
-
-
-static func _live_version_for_message(live: Dictionary) -> String:
-	if live.has("name") and str(live.get("name", "")) != "godot-ai":
-		return ""
-	return str(live.get("version", ""))
-
-
-static func _live_ws_port_for_message(live: Dictionary) -> int:
-	if live.has("name") and str(live.get("name", "")) != "godot-ai":
+func _verified_status_ws_port(live: Dictionary) -> int:
+	if not ServerLifecycleManager._live_status_identifies_godot_ai(live):
 		return 0
 	return int(live.get("ws_port", 0))
 
@@ -815,14 +745,12 @@ func _refresh_dock_client_statuses() -> bool:
 	return true
 
 
-## Record a non-OK spawn outcome. First writer wins: once a specific
-## diagnosis lands (e.g. PORT_EXCLUDED during the proactive check),
-## later fallback paths (e.g. CRASHED from the watch loop) don't
-## overwrite the more actionable state.
-func _set_spawn_state(state: String) -> void:
-	if _spawn_state != McpSpawnState.OK:
-		return
-	_spawn_state = state
+## Test-fixture shim — characterization tests in test_plugin_lifecycle
+## still drive the first-writer-wins terminal-diagnosis behaviour through
+## this method. Delegates to the manager's `set_terminal_diagnosis`
+## (which preserves the same first-writer-wins contract).
+func _set_spawn_state(state: int) -> void:
+	_lifecycle.set_terminal_diagnosis(state)
 
 
 ## Arm the one-shot connection watcher. Called from `_start_server`'s
@@ -842,32 +770,31 @@ func _set_spawn_state(state: String) -> void:
 ## The watch self-disarms after SPAWN_GRACE_MS so per-frame cost drops
 ## back to zero if it is ever armed by a legacy adoption path.
 func _watch_for_adoption_confirmation() -> void:
-	_adoption_watch_deadline_ms = Time.get_ticks_msec() + SPAWN_GRACE_MS
+	_lifecycle.arm_adoption_watch()
 	_update_process_enabled()
 
 
 func _arm_server_version_check() -> void:
-	_awaiting_server_version = true
-	_server_version_deadline_ms = 0
+	var expected: String = str(_lifecycle._server_expected_version)
+	if expected.is_empty():
+		expected = McpClientConfigurator.get_plugin_version()
+	_lifecycle.arm_version_check(_connection, expected)
 	_update_process_enabled()
 
 
 func _update_process_enabled() -> void:
-	set_process(_adoption_watch_deadline_ms > 0 or _awaiting_server_version)
+	set_process(
+		_lifecycle.get_adoption_watch_deadline_ms() > 0
+		or _lifecycle.is_awaiting_server_version()
+	)
 
 
 func _process(_delta: float) -> void:
 	var now := Time.get_ticks_msec()
-	if _awaiting_server_version:
-		if _connection != null and _connection.is_connected:
-			if _server_version_deadline_ms == 0:
-				_server_version_deadline_ms = now + SERVER_HANDSHAKE_VERSION_TIMEOUT_MS
-			if not _connection.server_version.is_empty():
-				_on_server_version_verified(_connection.server_version)
-			elif now >= _server_version_deadline_ms:
-				_on_server_version_unverified()
-	if _adoption_watch_deadline_ms > 0 and now >= _adoption_watch_deadline_ms:
-		_adoption_watch_deadline_ms = 0
+	var version_check = _lifecycle.get_version_check()
+	if version_check != null:
+		version_check.tick(now)
+	_lifecycle.tick_adoption_watch(now)
 	_update_process_enabled()
 
 
@@ -875,58 +802,26 @@ func _process(_delta: float) -> void:
 ## protocol to accept a session. Compatibility is decided by the server
 ## version in `handshake_ack`, so this only arms that check.
 func _on_connection_established() -> void:
-	if _spawn_state == McpSpawnState.FOREIGN_PORT:
+	if _lifecycle.get_state() == ServerStateScript.FOREIGN_PORT:
 		_arm_server_version_check()
 
 
+## Test-fixture shim — characterization tests poke the verified path
+## directly. Delegates to the version-check seam.
 func _on_server_version_verified(version: String) -> void:
-	_awaiting_server_version = false
-	_server_version_deadline_ms = 0
-	_server_actual_name = "godot-ai"
-	_server_actual_version = version
-	var expected := _server_expected_version
+	var expected: String = str(_lifecycle._server_expected_version)
 	if expected.is_empty():
 		expected = McpClientConfigurator.get_plugin_version()
-		_server_expected_version = expected
-	var compatibility := _server_version_compatibility(
-		version,
-		expected,
-		McpClientConfigurator.is_dev_checkout()
-	)
-	if compatibility.get("compatible", false):
-		_can_recover_incompatible = false
-		_server_dev_version_mismatch_allowed = bool(compatibility.get("dev_mismatch_allowed", false))
-		if _server_dev_version_mismatch_allowed:
-			_server_status_message = (
-				"Using dev server v%s with plugin v%s (dev checkout version mismatch allowed)."
-				% [version, expected]
-			)
-		if _spawn_state == McpSpawnState.FOREIGN_PORT:
-			_spawn_state = McpSpawnState.OK
-		_update_process_enabled()
-		return
-	var live := {"version": version, "status_code": 200, "name": "godot-ai"}
-	_set_incompatible_server(live, expected, McpClientConfigurator.http_port())
-	if _connection != null:
-		_connection.connect_blocked = true
-		_connection.connect_block_reason = _server_status_message
-		_connection.disconnect_from_server()
+	_lifecycle.handle_server_version_verified(expected, version)
 	_update_process_enabled()
 
 
+## Test-fixture shim — same shape as `_on_server_version_verified`.
 func _on_server_version_unverified() -> void:
-	_awaiting_server_version = false
-	_server_version_deadline_ms = 0
-	var expected := _server_expected_version
+	var expected: String = str(_lifecycle._server_expected_version)
 	if expected.is_empty():
 		expected = McpClientConfigurator.get_plugin_version()
-		_server_expected_version = expected
-	var live := {"version": "", "status_code": 0, "error": "missing_handshake_ack"}
-	_set_incompatible_server(live, expected, McpClientConfigurator.http_port())
-	if _connection != null:
-		_connection.connect_blocked = true
-		_connection.connect_block_reason = _server_status_message
-		_connection.disconnect_from_server()
+	_lifecycle.handle_server_version_unverified(expected)
 	_update_process_enabled()
 
 
@@ -967,7 +862,7 @@ func _check_server_health() -> void:
 ## restart, crash recovery) — unlike the older Update-only precheck.
 func _should_retry_with_refresh() -> bool:
 	return _retry_with_refresh_allowed(
-		_refresh_retried,
+		_lifecycle._refresh_retried,
 		McpClientConfigurator.get_server_launch_mode(),
 		_read_pid_file(),
 	)
@@ -990,21 +885,11 @@ func _respawn_with_refresh() -> void:
 
 ## Snapshot of the server-spawn outcome for the dock.
 ##
-## `state` is one of the `McpSpawnState.*` constants; the dock owns the
-## UI copy per state via its own `_crash_body_for_state`. `exit_ms` is
-## only meaningful for `CRASHED`.
+## `state` is one of the `McpServerState.*` int constants; the dock owns
+## the UI copy per state via its own `_crash_body_for_state`. `exit_ms`
+## is only meaningful for `CRASHED`.
 func get_server_status() -> Dictionary:
-	return {
-		"state": _spawn_state,
-		"exit_ms": _server_exit_ms,
-		"actual_name": _server_actual_name,
-		"actual_version": _server_actual_version,
-		"expected_version": _server_expected_version,
-		"message": _server_status_message,
-		"dev_version_mismatch_allowed": _server_dev_version_mismatch_allowed,
-		"can_recover_incompatible": _can_recover_incompatible,
-		"connection_blocked": _connection_blocked,
-	}
+	return _lifecycle.get_status_dict()
 
 
 func get_resolved_ws_port() -> int:
@@ -1476,19 +1361,13 @@ func install_downloaded_update(zip_path: String, temp_dir: String, source_dock: 
 
 
 func can_recover_incompatible_server() -> bool:
-	if _spawn_state != McpSpawnState.INCOMPATIBLE_SERVER:
-		return false
-	var port := McpClientConfigurator.http_port()
-	if not _is_port_in_use(port):
-		return false
-	var proof := _evaluate_recovery_port_occupant_proof(port)
-	return not str(proof.get("proof", "")).is_empty()
+	return _lifecycle.can_recover_incompatible_server()
 
 
 func _resume_connection_after_recovery() -> void:
 	if _connection == null:
 		return
-	if _spawn_state != McpSpawnState.OK or _connection_blocked:
+	if not ServerStateScript.is_healthy(_lifecycle.get_state()) or _lifecycle.is_connection_blocked():
 		return
 	_connection.connect_blocked = false
 	_connection.connect_block_reason = ""
@@ -1498,79 +1377,20 @@ func _resume_connection_after_recovery() -> void:
 
 
 func recover_incompatible_server() -> bool:
-	if _spawn_state != McpSpawnState.INCOMPATIBLE_SERVER:
+	if not _lifecycle.recover_incompatible_server():
 		return false
-
-	var port := McpClientConfigurator.http_port()
-	var proof := _evaluate_recovery_port_occupant_proof(port)
-	var targets: Array[int] = []
-	targets.assign(proof.get("pids", []))
-	if targets.is_empty():
-		return false
-	print("MCP | proof: %s" % str(proof.get("proof", "")))
-
-	var killed := _kill_processes_and_windows_spawn_children(targets)
-	if not killed.is_empty():
-		print("MCP | killed pids %s on port %d" % [str(killed), port])
-	_wait_for_port_free(port, 5.0)
-	if _is_port_in_use(port):
-		return false
-
-	UvCacheCleanup.purge_stale_builds()
-	_clear_managed_server_record()
-	_clear_pid_file()
-	_spawn_state = McpSpawnState.OK
-	_connection_blocked = false
-	_server_status_message = ""
-	_server_actual_version = ""
-	_server_actual_name = ""
-	_can_recover_incompatible = false
-	_server_started_this_session = false
-	_server_pid = -1
-	_start_server()
 	_resume_connection_after_recovery()
 	return true
 
 
 ## Kill whichever process is holding `http_port()` right now — by resolving
 ## the port-owning PID via pid-file / netstat / lsof, independent of whether
-## we ever set `_server_pid` — then clear ownership state and respawn via
-## `_start_server`. The dock's version-mismatch banner wires here when the
-## plugin adopted a foreign server (no managed record, `_server_pid == -1`)
-## whose `server_version` drifts from the current plugin version. Without
-## this, `_stop_server` early-returns on `_server_pid <= 0` and the old
-## server outlives every plugin reload.
+## we ever set the manager's `_server_pid` — then clear ownership state
+## and respawn via the lifecycle manager. The dock's version-mismatch
+## banner wires here when the plugin adopted a foreign server whose
+## `server_version` drifts from the current plugin version.
 func force_restart_server() -> void:
-	if not can_restart_managed_server():
-		push_warning("MCP | refusing to kill server on port %d without managed-server ownership proof"
-			% McpClientConfigurator.http_port())
-		return
-	var port := McpClientConfigurator.http_port()
-	## Kill every LISTENER on the port, not just the first one. A dev
-	## server run via `uvicorn --reload` owns port 8000 through both a
-	## reloader parent AND a worker child — killing only one (or zero,
-	## if the single-pid parse fell over on multi-line lsof output) leaves
-	## the other holding the port past `_wait_for_port_free`'s window.
-	_kill_processes_and_windows_spawn_children(_find_all_pids_on_port(port))
-	_wait_for_port_free(port, 5.0)
-	if _is_port_in_use(port):
-		_set_incompatible_server(
-			_probe_live_server_status_for_port(port),
-			McpClientConfigurator.get_plugin_version(),
-			port
-		)
-		return
-	## Same rationale as `_stop_server`: the server child python just
-	## released its `pydantic_core` mapping, so this is the only window in
-	## which the hard-linked copies under `builds-v0\.tmp*` are deletable.
-	## Sweep before respawning so the upcoming `uvx mcp-proxy` build doesn't
-	## inherit the same cleanup-failure path that triggered the restart.
-	UvCacheCleanup.purge_stale_builds()
-	_clear_managed_server_record()
-	_clear_pid_file()
-	_server_started_this_session = false
-	_server_pid = -1
-	_start_server()
+	_lifecycle.force_restart_server()
 
 
 func start_dev_server() -> void:
@@ -1632,7 +1452,7 @@ func start_dev_server() -> void:
 func stop_dev_server() -> void:
 	## Stop any server running on the HTTP port (by port, not PID).
 	## Used for dev servers whose PID we don't track across reloads.
-	if _server_pid > 0:
+	if _lifecycle.get_server_pid() > 0:
 		# We have a managed server — use normal stop
 		_stop_server()
 		return
@@ -1694,19 +1514,16 @@ func _find_windows_spawn_children(parent_pids: Array[int]) -> Array[int]:
 
 func is_dev_server_running() -> bool:
 	## Returns true if a server is running on the HTTP port that we didn't start as managed.
-	return _server_pid <= 0 and _is_port_in_use(McpClientConfigurator.http_port())
+	return _lifecycle.get_server_pid() <= 0 and _is_port_in_use(McpClientConfigurator.http_port())
 
 
 func has_managed_server() -> bool:
 	## Returns true if the plugin is currently managing a server process it spawned.
-	return _server_pid > 0
+	return _lifecycle.has_managed_server()
 
 
 func can_restart_managed_server() -> bool:
 	## Restart is allowed only when we have ownership proof. A live PID
 	## means this plugin spawned/adopted a managed server; a non-empty
 	## managed record is the cross-session proof used by the drift branch.
-	if _server_pid > 0:
-		return true
-	var record := _read_managed_server_record()
-	return not str(record.get("version", "")).is_empty()
+	return _lifecycle.can_restart_managed_server()
