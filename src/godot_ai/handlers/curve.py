@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from godot_ai.handlers._readiness import require_writable
 from godot_ai.handlers._target import target_params
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 
 async def curve_set_points(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     points: list,
     path: str = "",
     property: str = "",

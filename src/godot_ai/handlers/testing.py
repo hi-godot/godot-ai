@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 
 async def test_run(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     suite: str = "",
     test_name: str = "",
     exclude_test_name: str = "",
@@ -26,7 +26,7 @@ async def test_run(
     return await runtime.send_command("run_tests", params, timeout=30.0)
 
 
-async def test_results_get(runtime: Runtime, verbose: bool = False) -> dict:
+async def test_results_get(runtime: DirectRuntime, verbose: bool = False) -> dict:
     params: dict[str, Any] = {}
     if verbose:
         params["verbose"] = True

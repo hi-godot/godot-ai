@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from godot_ai.handlers._readiness import require_writable
 from godot_ai.handlers._target import target_params
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 
 async def gradient_texture_create(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     stops: list,
     width: int = 256,
     height: int = 1,
@@ -25,7 +25,7 @@ async def gradient_texture_create(
 
 
 async def noise_texture_create(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     noise_type: str = "simplex_smooth",
     width: int = 512,
     height: int = 512,

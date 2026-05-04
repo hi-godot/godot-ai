@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from godot_ai.handlers._readiness import require_writable
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 
 async def physics_shape_autofit(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     path: str,
     source_path: str = "",
     shape_type: str = "",

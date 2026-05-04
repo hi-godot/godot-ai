@@ -117,7 +117,7 @@ The server-side counterparts live in:
 - `src/godot_ai/transport/websocket.py` — WebSocket server adopting/owning the :9500 socket
 - `src/godot_ai/sessions/registry.py` — multi-session tracking, active resolution, substring matching
 - `src/godot_ai/godot_client/client.py` — typed async client; raises `GodotCommandError`
-- `src/godot_ai/runtime/{interface.py, direct.py}` — `Runtime` protocol + `DirectRuntime` impl that handlers depend on
+- `src/godot_ai/runtime/direct.py` — `DirectRuntime`, the in-process runtime adapter that handlers depend on
 - `src/godot_ai/handlers/` — shared sync handlers; `_readiness.py` gates writes; `_target.py` resolves nodes
 - `src/godot_ai/tools/` — MCP tool wrappers per domain + `_meta_tool.py::register_manage_tool` rollup factory + `domains.py` (CI-paired with `tool_catalog.gd`)
 - `src/godot_ai/resources/` — read-only `godot://...` URI handlers

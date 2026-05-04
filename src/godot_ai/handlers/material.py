@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from godot_ai.handlers._readiness import require_writable
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 
 async def material_create(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     path: str,
     type: str = "standard",
     shader_path: str = "",
@@ -23,7 +23,7 @@ async def material_create(
 
 
 async def material_set_param(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     path: str,
     param: str,
     value: Any,
@@ -36,7 +36,7 @@ async def material_set_param(
 
 
 async def material_set_shader_param(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     path: str,
     param: str,
     value: Any,
@@ -48,12 +48,12 @@ async def material_set_shader_param(
     )
 
 
-async def material_get(runtime: Runtime, path: str) -> dict:
+async def material_get(runtime: DirectRuntime, path: str) -> dict:
     return await runtime.send_command("material_get", {"path": path})
 
 
 async def material_list(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     root: str = "res://",
     type: str = "",
 ) -> dict:
@@ -64,7 +64,7 @@ async def material_list(
 
 
 async def material_assign(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     node_path: str,
     resource_path: str = "",
     slot: str = "override",
@@ -84,7 +84,7 @@ async def material_assign(
 
 
 async def material_apply_to_node(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     node_path: str,
     type: str = "standard",
     params: dict[str, Any] | None = None,
@@ -104,7 +104,7 @@ async def material_apply_to_node(
 
 
 async def material_apply_preset(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     preset: str,
     path: str = "",
     node_path: str = "",

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 
-def session_list(runtime: Runtime) -> dict:
+def session_list(runtime: DirectRuntime) -> dict:
     sessions = runtime.list_sessions()
     active_id = runtime.active_session_id
     return {
@@ -14,7 +14,7 @@ def session_list(runtime: Runtime) -> dict:
     }
 
 
-def session_activate(runtime: Runtime, session_id: str) -> dict:
+def session_activate(runtime: DirectRuntime, session_id: str) -> dict:
     """Activate a session by exact id or a substring hint.
 
     The `session_id` argument accepts three forms, in priority order:
@@ -86,5 +86,5 @@ def session_activate(runtime: Runtime, session_id: str) -> dict:
     }
 
 
-def session_resource_data(runtime: Runtime) -> dict:
+def session_resource_data(runtime: DirectRuntime) -> dict:
     return session_list(runtime)

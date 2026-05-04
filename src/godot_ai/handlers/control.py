@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from godot_ai.handlers._readiness import require_writable
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 
 async def control_draw_recipe(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     path: str,
     ops: list[dict],
     clear_existing: bool = True,
