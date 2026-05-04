@@ -161,6 +161,16 @@ func start_install() -> void:
 	add_child(_download_request)
 	var err := _download_request.request(_latest_download_url)
 	if err != OK:
+		## `request_completed` will never fire when `request()` itself
+		## errors (busy, malformed URL, etc.), so the queue_free + null
+		## happens here. Without this the HTTPRequest stays parented
+		## under the manager until the next click, which makes
+		## disable/reload accounting harder to reason about. Also drop
+		## any partially-staged zip so a retry walks the fresh-download
+		## path. (Copilot review on PR #310.)
+		_download_request.queue_free()
+		_download_request = null
+		DirAccess.remove_absolute(global_zip)
 		install_state_changed.emit({
 			"phase": "request_failed",
 			"button_text": "Request failed",
