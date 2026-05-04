@@ -39,6 +39,8 @@ static func expand(template: String) -> String:
 				value = _home().path_join("AppData/Roaming")
 			if value.is_empty() and var_name == "LOCALAPPDATA":
 				value = _home().path_join("AppData/Local")
+			if value.is_empty() and var_name == "HOME":
+				value = OS.get_environment("USERPROFILE")
 			out = out.replace(token, value)
 	return out
 
