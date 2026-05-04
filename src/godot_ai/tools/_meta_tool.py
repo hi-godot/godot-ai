@@ -20,6 +20,7 @@ domain registrations stay free of identity-lambda boilerplate.
 from __future__ import annotations
 
 import difflib
+import functools
 import inspect
 import json
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping, MutableSequence, Sequence
@@ -103,14 +104,18 @@ def register_manage_tool(
     mcp.tool(meta=DEFER_META)(manage)
 
 
-def _json_container_prefix(value: str) -> str:
-    stripped = value.lstrip()
-    prefix = stripped[:1]
-    return prefix if prefix in ("[", "{") else ""
+def _is_json_shaped(value: str) -> bool:
+    return value.lstrip()[:1] in ("[", "{")
 
 
 def _json_container_kinds(annotation: Any) -> set[str]:
-    """Return container kinds accepted by a handler annotation."""
+    """Return container kinds accepted by a handler annotation.
+
+    An empty set means "do not coerce" — including unannotated, ``Any``, and
+    ``object`` params. This is intentional: pre-PR behavior eagerly decoded
+    every JSON-shaped string, which mangled legitimate values; post-PR we
+    only decode when the handler explicitly declares list/dict shape.
+    """
     if annotation in (inspect.Parameter.empty, Any, object):
         return set()
 
@@ -129,16 +134,29 @@ def _json_container_kinds(annotation: Any) -> set[str]:
     target = origin or annotation
     if target in (dict, Mapping, MutableMapping):
         return {"dict"}
-    if target in (list, tuple, Sequence, MutableSequence):
+    if target in (list, Sequence, MutableSequence):
         return {"list"}
     return set()
 
 
-def _handler_type_hints(handler: OpHandler) -> dict[str, Any]:
+@functools.cache
+def _handler_meta(handler: OpHandler) -> tuple[inspect.Signature | None, dict[str, Any]]:
+    """Resolve and cache ``(signature, type_hints)`` for a registered handler.
+
+    Handlers are registered once at startup and live for the lifetime of the
+    process, so an unbounded cache is safe. ``get_type_hints`` walks module
+    globals to resolve forward references — not free — and ``inspect.signature``
+    introspects defaults; both ran on every dispatch before this cache.
+    """
     try:
-        return get_type_hints(handler)
+        signature = inspect.signature(handler)
+    except (TypeError, ValueError):
+        signature = None
+    try:
+        type_hints = get_type_hints(handler)
     except (NameError, TypeError, ValueError):
-        return {}
+        type_hints = {}
+    return (signature, type_hints)
 
 
 def _expected_json_label(kinds: set[str]) -> str:
@@ -174,16 +192,14 @@ def _coerce_stringified_json_values(
 
     Returns ``params`` unchanged when nothing needs coercion (the common case).
     """
-    try:
-        signature = inspect.signature(handler)
-    except (TypeError, ValueError):
+    signature, type_hints = _handler_meta(handler)
+    if signature is None:
         return params
 
-    type_hints = _handler_type_hints(handler)
     coerced: dict[str, Any] | None = None
 
     for key, val in params.items():
-        if not isinstance(val, str) or not _json_container_prefix(val):
+        if not isinstance(val, str) or not _is_json_shaped(val):
             continue
 
         parameter = signature.parameters.get(key)

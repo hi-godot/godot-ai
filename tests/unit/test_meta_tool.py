@@ -281,6 +281,28 @@ async def test_dispatch_coerces_stringified_dict_for_dict_annotated_param():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_coerces_stringified_list_for_optional_list_annotated_param():
+    ## Optional[list[str]] is the most common shape for "may be omitted" list
+    ## params. The Union/UnionType branch in `_json_container_kinds` must strip
+    ## NoneType and still surface "list" so the JSON-string gets decoded.
+    captured: dict[str, Any] = {}
+
+    async def handler(rt, paths: list[str] | None = None):
+        del rt
+        captured["paths"] = paths
+        return {}
+
+    await dispatch_manage_op(
+        ops={"go": handler},
+        tool_name="x_manage",
+        runtime=None,
+        op="go",
+        params={"paths": '["one", "two"]'},
+    )
+    assert captured["paths"] == ["one", "two"]
+
+
+@pytest.mark.asyncio
 async def test_dispatch_leaves_json_shaped_string_for_str_annotated_param():
     captured: dict[str, Any] = {}
 
