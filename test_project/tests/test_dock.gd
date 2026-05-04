@@ -138,7 +138,7 @@ func test_incompatible_server_marks_clients_unhealthy() -> void:
 	_dock._build_ui()
 	var plugin := _RestartDispatchPlugin.new()
 	plugin.status = {
-		"state": McpSpawnState.INCOMPATIBLE_SERVER,
+		"state": McpServerState.INCOMPATIBLE,
 		"message": "Port 8000 is occupied by godot-ai server v1.2.10; plugin expects v2.2.0.",
 		"connection_blocked": true,
 	}
@@ -268,11 +268,17 @@ func test_drain_helper_does_not_poison_shutdown_flag() -> void:
 	## any in-flight refresh worker before extracting plugin scripts. The
 	## install can fail (e.g. zip open error) — when it does, the dock stays
 	## alive and refreshes must resume on the OLD instance. So unlike
-	## `_exit_tree`'s drain, the install-time drain must NOT set
-	## `_client_status_refresh_shutdown_requested` (which is one-way and
-	## permanently disables refreshes for the dock instance).
+	## `_exit_tree`'s drain, the install-time drain must NOT advance
+	## `_refresh_state` to SHUTTING_DOWN (which is sticky and permanently
+	## disables refreshes for the dock instance). The drain leaves
+	## SHUTTING_DOWN intact when `_exit_tree` already set it, but otherwise
+	## resets to IDLE.
 	_dock._drain_client_status_refresh_workers()
-	assert_false(_dock._client_status_refresh_shutdown_requested, "drain must not set shutdown_requested — only _exit_tree does")
+	assert_eq(
+		_dock._refresh_state,
+		McpClientRefreshState.IDLE,
+		"drain must collapse to IDLE when not already shutting down — only _exit_tree sets SHUTTING_DOWN"
+	)
 
 
 ## Shared fixture for the three version-label tests. Inject a Label + Button
@@ -360,9 +366,9 @@ func test_server_version_label_repaints_color_when_state_changes_without_text_ch
 	## repaint from amber to red so the blocked state is visible.
 	var conn := _seed_server_row("1.2.3-stale-for-test")
 	var plugin := GodotAiPlugin.new()
-	plugin._server_actual_version = "1.2.3-stale-for-test"
-	plugin._server_expected_version = "2.2.0"
-	plugin._spawn_state = McpSpawnState.OK
+	plugin._lifecycle._server_actual_version = "1.2.3-stale-for-test"
+	plugin._lifecycle._server_expected_version = "2.2.0"
+	plugin._lifecycle._server_state = McpServerState.READY
 	_dock._plugin = plugin
 
 	_dock._refresh_server_version_label()
@@ -372,7 +378,7 @@ func test_server_version_label_repaints_color_when_state_changes_without_text_ch
 		"precondition: mismatch starts amber while not blocked"
 	)
 
-	plugin._spawn_state = McpSpawnState.INCOMPATIBLE_SERVER
+	plugin._lifecycle._server_state = McpServerState.INCOMPATIBLE
 	_dock._refresh_server_version_label()
 	assert_eq(
 		_dock._setup_server_label.get_theme_color("font_color"),
@@ -390,7 +396,7 @@ func test_server_version_label_shows_restart_for_recoverable_incompatible_server
 	var conn := _seed_server_row("1.2.3-stale-for-test")
 	var plugin := _RestartDispatchPlugin.new()
 	plugin.status = {
-		"state": McpSpawnState.INCOMPATIBLE_SERVER,
+		"state": McpServerState.INCOMPATIBLE,
 		"actual_version": "1.2.3-stale-for-test",
 		"expected_version": "2.2.0",
 		"can_recover_incompatible": true,
@@ -410,7 +416,7 @@ func test_server_version_label_shows_restart_for_recoverable_incompatible_server
 
 func test_restart_dispatches_incompatible_state_to_recovery() -> void:
 	var plugin := _RestartDispatchPlugin.new()
-	plugin.status = {"state": McpSpawnState.INCOMPATIBLE_SERVER}
+	plugin.status = {"state": McpServerState.INCOMPATIBLE}
 	_dock._plugin = plugin
 
 	_dock._on_restart_stale_server()
@@ -425,7 +431,7 @@ func test_restart_dispatches_incompatible_state_to_recovery() -> void:
 
 func test_restart_dispatches_non_incompatible_state_to_force_restart() -> void:
 	var plugin := _RestartDispatchPlugin.new()
-	plugin.status = {"state": McpSpawnState.OK}
+	plugin.status = {"state": McpServerState.READY}
 	_dock._plugin = plugin
 
 	_dock._on_restart_stale_server()
@@ -460,7 +466,7 @@ func test_crashed_body_mentions_pypi_propagation_on_uvx_tier() -> void:
 	## explain that PyPI propagation is the likely cause — so the user
 	## doesn't assume their install is corrupt. Non-uvx tiers keep the
 	## original traceback hint. See #172.
-	var body := McpDockScript._crash_body_for_state(McpSpawnState.CRASHED)
+	var body := McpDockScript._crash_body_for_state(McpServerState.CRASHED)
 	assert_false(body.is_empty(), "CRASHED body must not be empty")
 	if McpClientConfigurator.get_server_launch_mode() == "uvx":
 		assert_contains(body, "PyPI", "uvx-tier body should name PyPI as the likely cause")
@@ -646,7 +652,7 @@ func test_drain_client_action_workers_restores_in_flight_row_buttons() -> void:
 
 func test_incompatible_server_body_uses_actionable_message() -> void:
 	var body := McpDockScript._crash_body_for_state(
-		McpSpawnState.INCOMPATIBLE_SERVER,
+		McpServerState.INCOMPATIBLE,
 		{"message": "Port 8000 is occupied by godot-ai server v1.2.10; plugin expects v2.2.0. Stop the old server or change both HTTP and WS ports."},
 	)
 	assert_contains(body, "godot-ai server v1.2.10")
@@ -660,7 +666,7 @@ func test_incompatible_server_hides_http_only_port_picker() -> void:
 	## partial recovery path that can leave the editor disconnected.
 	_dock._build_ui()
 	_dock._update_crash_panel({
-		"state": McpSpawnState.INCOMPATIBLE_SERVER,
+		"state": McpServerState.INCOMPATIBLE,
 		"message": "Port 8000 is occupied by godot-ai server v1.2.10",
 	})
 	assert_true(_dock._crash_panel.visible, "diagnostic panel still shows")

@@ -13,7 +13,10 @@ const McpServerLifecycleManagerScript := preload(
 
 
 ## Mirrors `_ProofPlugin` from test_plugin_lifecycle.gd, scoped to the
-## hooks the manager actually touches.
+## hooks the manager actually touches. Note: state fields like
+## `_server_pid` and `_server_state` live on the manager (PR 6, #297) —
+## tests seed them via `manager._server_pid = ...` after construction
+## rather than poking the host.
 class _ManagerHostStub extends GodotAiPlugin:
 	var listener_pids: Array[int] = []
 	var managed_record := {"pid": 0, "version": "", "ws_port": 0}
@@ -145,10 +148,10 @@ func test_adopt_managed_when_versions_match() -> void:
 	var manager := McpServerLifecycleManagerScript.new(host)
 
 	var label := manager.adopt_compatible_server("2.2.0", "2.2.0", 12121)
-	var server_pid := int(host._server_pid)
+	var server_pid := int(manager._server_pid)
 	host.free()
 
-	assert_eq(label, "managed")
+	assert_eq(label, McpAdoptionLabel.MANAGED)
 	assert_eq(server_pid, 12121)
 
 
@@ -160,7 +163,7 @@ func test_adopt_external_when_record_drifts() -> void:
 	var cleared := host.cleared_record_calls
 	host.free()
 
-	assert_eq(label, "external")
+	assert_eq(label, McpAdoptionLabel.EXTERNAL)
 	assert_eq(cleared, 1)
 
 
@@ -168,8 +171,8 @@ func test_adopt_external_when_record_drifts() -> void:
 
 func test_stop_short_circuits_when_no_pid() -> void:
 	var host := _ManagerHostStub.new()
-	host._server_pid = -1
 	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = -1
 
 	manager.stop_server()
 	var killed := host.killed_targets.duplicate()
@@ -182,10 +185,10 @@ func test_stop_aggregates_launcher_pidfile_and_listener_pids() -> void:
 	## uvx leaks the launcher early on Windows; the real Python child
 	## must still get killed. Coverage for Copilot review #5.
 	var host := _ManagerHostStub.new()
-	host._server_pid = 11111
 	host.managed_pid_lookup = 22222
 	host.listener_pids = [33333] as Array[int]
 	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 11111
 
 	manager.stop_server()
 	var killed := host.killed_targets.duplicate()
@@ -201,8 +204,8 @@ func test_stop_invokes_finalize_for_record_cleanup() -> void:
 	## Preserves the "preserve record on failed kill" contract — the
 	## finalize handoff must survive the extraction.
 	var host := _ManagerHostStub.new()
-	host._server_pid = 44444
 	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 44444
 
 	manager.stop_server()
 	var finalize_calls := host.finalize_calls
@@ -215,8 +218,8 @@ func test_stop_invokes_finalize_for_record_cleanup() -> void:
 
 func test_check_server_health_short_circuits_when_pid_zero() -> void:
 	var host := _ManagerHostStub.new()
-	host._server_pid = 0
 	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 0
 
 	manager.check_server_health()
 	var stops := host.stop_watch_calls
@@ -233,20 +236,22 @@ func test_start_server_short_circuits_on_static_guard() -> void:
 	var manager := McpServerLifecycleManagerScript.new(host)
 
 	manager.start_server()
-	var path := str(host._startup_path)
+	var path := manager.get_startup_path()
 	var killed := host.killed_targets.duplicate()
+	var state := manager.get_state()
 	host.free()
 	GodotAiPlugin._server_started_this_session = false
 
-	assert_eq(path, "guarded")
+	assert_eq(path, McpStartupPath.GUARDED)
+	assert_eq(state, McpServerState.GUARDED)
 	assert_true(killed.is_empty())
 
 
 func test_prepare_for_update_reload_clears_spawn_guard() -> void:
 	GodotAiPlugin._server_started_this_session = true
 	var host := _ManagerHostStub.new()
-	host._server_pid = -1
 	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = -1
 
 	manager.prepare_for_update_reload()
 	var guard_after := GodotAiPlugin._server_started_this_session

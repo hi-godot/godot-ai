@@ -209,24 +209,29 @@ func test_finalize_stop_preserves_state_when_port_still_in_use() -> void:
 #
 # `get_server_status()` is the dock's single source of truth for what
 # went wrong during startup. These tests pin down the contract: default
-# state OK, `_set_spawn_state` records the first specific diagnosis and
-# refuses later overwrites (so a PORT_EXCLUDED proactive hit can't be
-# clobbered by a follow-up CRASHED signal from the watch loop).
+# state UNINITIALIZED, `_set_spawn_state` records the first specific
+# terminal diagnosis and refuses later overwrites (so a PORT_EXCLUDED
+# proactive hit can't be clobbered by a follow-up CRASHED signal from
+# the watch loop).
 
 
-func test_spawn_state_defaults_to_ok() -> void:
+func test_spawn_state_defaults_to_uninitialized() -> void:
 	var plugin := GodotAiPlugin.new()
 	var status := plugin.get_server_status()
 	plugin.free()
-	assert_eq(status.get("state", ""), McpSpawnState.OK, "fresh plugin must report OK")
+	assert_eq(
+		int(status.get("state", -1)),
+		McpServerState.UNINITIALIZED,
+		"fresh plugin must report UNINITIALIZED"
+	)
 
 
 func test_set_spawn_state_records_first_diagnosis() -> void:
 	var plugin := GodotAiPlugin.new()
-	plugin._set_spawn_state(McpSpawnState.FOREIGN_PORT)
+	plugin._set_spawn_state(McpServerState.FOREIGN_PORT)
 	var status := plugin.get_server_status()
 	plugin.free()
-	assert_eq(status.get("state", ""), McpSpawnState.FOREIGN_PORT)
+	assert_eq(int(status.get("state", -1)), McpServerState.FOREIGN_PORT)
 
 
 func test_set_spawn_state_does_not_overwrite_specific_diagnosis() -> void:
@@ -236,11 +241,15 @@ func test_set_spawn_state_does_not_overwrite_specific_diagnosis() -> void:
 	## would overwrite it with a less actionable state. `_set_spawn_state`
 	## is first-writer-wins so the dock keeps showing the pointed message.
 	var plugin := GodotAiPlugin.new()
-	plugin._set_spawn_state(McpSpawnState.PORT_EXCLUDED)
-	plugin._set_spawn_state(McpSpawnState.CRASHED)
+	plugin._set_spawn_state(McpServerState.PORT_EXCLUDED)
+	plugin._set_spawn_state(McpServerState.CRASHED)
 	var status := plugin.get_server_status()
 	plugin.free()
-	assert_eq(status.get("state", ""), McpSpawnState.PORT_EXCLUDED, "first diagnosis must win")
+	assert_eq(
+		int(status.get("state", -1)),
+		McpServerState.PORT_EXCLUDED,
+		"first diagnosis must win"
+	)
 
 
 func test_get_server_status_shape_is_stable() -> void:
@@ -598,7 +607,7 @@ func test_can_recover_incompatible_server_requires_state_and_recovery_proof() ->
 	plugin.live_status = {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
 
 	assert_false(plugin.can_recover_incompatible_server(), "OK state must not expose recovery")
-	plugin._spawn_state = McpSpawnState.INCOMPATIBLE_SERVER
+	plugin._lifecycle._server_state = McpServerState.INCOMPATIBLE
 	assert_true(plugin.can_recover_incompatible_server(), "status-name proof should allow clicked recovery")
 	plugin.free()
 
@@ -615,7 +624,7 @@ func test_external_compatible_adoption_clears_stale_managed_record() -> void:
 
 	var owner_label := plugin._adopt_compatible_server("2.1.0", "2.2.0", 22222)
 	var can_restart := plugin.can_restart_managed_server()
-	var server_pid := plugin._server_pid
+	var server_pid: int = int(plugin._lifecycle._server_pid)
 	plugin.free()
 
 	assert_eq(owner_label, "external")
@@ -750,7 +759,7 @@ func test_stale_ws_port_does_not_authorize_killing_external_server() -> void:
 	## locked in for PID + version, now extended to ws_port.
 	var plugin := GodotAiPlugin.new()
 	var owner_label := plugin._adopt_compatible_server(STALE, CURRENT, 22222)
-	var server_pid := plugin._server_pid
+	var server_pid: int = int(plugin._lifecycle._server_pid)
 	var can_restart := plugin.can_restart_managed_server()
 	plugin.free()
 
@@ -766,7 +775,7 @@ func test_matching_compatible_adoption_keeps_managed_ownership() -> void:
 
 	var owner_label := plugin._adopt_compatible_server("2.2.0", "2.2.0", 22222)
 	var can_restart := plugin.can_restart_managed_server()
-	var server_pid := plugin._server_pid
+	var server_pid: int = int(plugin._lifecycle._server_pid)
 	plugin.free()
 
 	assert_eq(owner_label, "managed")
@@ -852,10 +861,10 @@ func test_drift_kill_without_strong_targets_sets_incompatible_and_preserves_reco
 	var status := plugin.get_server_status()
 	var killed := plugin.killed_targets.duplicate()
 	var clear_calls := plugin.cleared_record_calls
-	var server_pid := plugin._server_pid
+	var server_pid: int = int(plugin._lifecycle._server_pid)
 	plugin.free()
 
-	assert_eq(status.get("state", ""), McpSpawnState.INCOMPATIBLE_SERVER)
+	assert_eq(int(status.get("state", -1)), McpServerState.INCOMPATIBLE)
 	assert_true(killed.is_empty(), "drift branch must not kill without strong proof")
 	assert_eq(clear_calls, 0, "failed drift proof must preserve the managed record")
 	assert_eq(server_pid, -1, "drift branch must not spawn into a port with no strong kill target")
@@ -873,10 +882,10 @@ func test_drift_kill_preserves_record_and_does_not_spawn_when_port_stays_held() 
 	var status := plugin.get_server_status()
 	var killed := plugin.killed_targets.duplicate()
 	var clear_calls := plugin.cleared_record_calls
-	var server_pid := plugin._server_pid
+	var server_pid: int = int(plugin._lifecycle._server_pid)
 	plugin.free()
 
-	assert_eq(status.get("state", ""), McpSpawnState.INCOMPATIBLE_SERVER)
+	assert_eq(int(status.get("state", -1)), McpServerState.INCOMPATIBLE)
 	assert_eq(killed, [24680] as Array[int])
 	assert_eq(clear_calls, 0, "held port after kill must preserve the managed record")
 	assert_eq(server_pid, -1, "drift branch must not spawn while the port is still held")
@@ -895,15 +904,15 @@ func test_force_restart_preserves_record_when_port_remains_held() -> void:
 	var clear_calls := plugin.cleared_record_calls
 	plugin.free()
 
-	assert_eq(status.get("state", ""), McpSpawnState.INCOMPATIBLE_SERVER)
+	assert_eq(int(status.get("state", -1)), McpServerState.INCOMPATIBLE)
 	assert_eq(killed, [24680] as Array[int])
 	assert_eq(clear_calls, 0, "force restart must not clear ownership while the port is still held")
 
 
 func test_recover_incompatible_returns_false_and_leaves_state_when_port_remains_held() -> void:
 	var plugin := _ProofPlugin.new()
-	plugin._spawn_state = McpSpawnState.INCOMPATIBLE_SERVER
-	plugin._connection_blocked = true
+	plugin._lifecycle._server_state = McpServerState.INCOMPATIBLE
+	plugin._lifecycle._connection_blocked = true
 	plugin.port_in_use = true
 	plugin.listener_pids = [24680] as Array[int]
 	plugin.live_status = {"name": "godot-ai", "version": "1.2.10", "ws_port": 9500, "status_code": 200}
@@ -915,7 +924,7 @@ func test_recover_incompatible_returns_false_and_leaves_state_when_port_remains_
 	plugin.free()
 
 	assert_false(ok, "recovery click must report failure when the kill did not free the port")
-	assert_eq(status.get("state", ""), McpSpawnState.INCOMPATIBLE_SERVER)
+	assert_eq(int(status.get("state", -1)), McpServerState.INCOMPATIBLE)
 	assert_true(bool(status.get("connection_blocked", false)))
 	assert_eq(killed, [24680] as Array[int])
 	assert_eq(clear_calls, 0, "failed recovery must preserve record/pid-file state")
@@ -928,21 +937,21 @@ func test_connection_established_waits_for_version_before_clearing_foreign_port(
 	## version is verified.
 	_seed_managed_record(99999, "other-version")
 	var plugin := GodotAiPlugin.new()
-	plugin._set_spawn_state(McpSpawnState.FOREIGN_PORT)
+	plugin._set_spawn_state(McpServerState.FOREIGN_PORT)
 	assert_eq(
 		plugin.get_server_status().get("state", ""),
-		McpSpawnState.FOREIGN_PORT,
+		McpServerState.FOREIGN_PORT,
 		"precondition: FOREIGN_PORT must be set before adoption-confirmation fires"
 	)
 
 	plugin._on_connection_established()
-	var state: String = plugin.get_server_status().get("state", "")
-	var awaiting := plugin._awaiting_server_version
+	var state: int = int(plugin.get_server_status().get("state", -1))
+	var awaiting: bool = bool(plugin._lifecycle.is_awaiting_server_version())
 	plugin.free()
 
 	assert_eq(
 		state,
-		McpSpawnState.FOREIGN_PORT,
+		McpServerState.FOREIGN_PORT,
 		"opening the WebSocket must not clear FOREIGN_PORT before version verification"
 	)
 	assert_true(awaiting, "connection establishment must arm the server-version check")
@@ -951,13 +960,13 @@ func test_connection_established_waits_for_version_before_clearing_foreign_port(
 func test_verified_matching_server_clears_foreign_port() -> void:
 	var plugin := GodotAiPlugin.new()
 	var plugin_ver := McpClientConfigurator.get_plugin_version()
-	plugin._server_expected_version = plugin_ver
-	plugin._set_spawn_state(McpSpawnState.FOREIGN_PORT)
+	plugin._lifecycle._server_expected_version = plugin_ver
+	plugin._set_spawn_state(McpServerState.FOREIGN_PORT)
 	plugin._on_server_version_verified(plugin_ver)
 	var status := plugin.get_server_status()
 	plugin.free()
 
-	assert_eq(status.get("state", ""), McpSpawnState.OK)
+	assert_eq(int(status.get("state", -1)), McpServerState.READY)
 	assert_eq(status.get("actual_version", ""), plugin_ver)
 	assert_false(bool(status.get("connection_blocked", true)))
 
@@ -978,7 +987,7 @@ func test_verified_old_server_becomes_incompatible_and_blocks_connection() -> vo
 	OS.set_environment("GODOT_AI_MODE", "user")
 
 	var plugin := GodotAiPlugin.new()
-	plugin._server_expected_version = "2.2.0"
+	plugin._lifecycle._server_expected_version = "2.2.0"
 	plugin._on_server_version_verified("1.2.10")
 	var status := plugin.get_server_status()
 	plugin.free()
@@ -990,7 +999,7 @@ func test_verified_old_server_becomes_incompatible_and_blocks_connection() -> vo
 	else:
 		OS.set_environment("GODOT_AI_MODE", prior_env)
 
-	assert_eq(status.get("state", ""), McpSpawnState.INCOMPATIBLE_SERVER)
+	assert_eq(int(status.get("state", -1)), McpServerState.INCOMPATIBLE)
 	assert_eq(status.get("actual_version", ""), "1.2.10")
 	assert_true(bool(status.get("connection_blocked", false)))
 	assert_contains(
@@ -1008,13 +1017,13 @@ func test_connection_established_preserves_crashed_state() -> void:
 	## fire in those states in the real flow. But if it ever does, don't
 	## paper over a real failure.
 	var plugin := GodotAiPlugin.new()
-	plugin._set_spawn_state(McpSpawnState.CRASHED)
+	plugin._set_spawn_state(McpServerState.CRASHED)
 	plugin._on_connection_established()
-	var state: String = plugin.get_server_status().get("state", "")
+	var state: int = int(plugin.get_server_status().get("state", -1))
 	plugin.free()
 	assert_eq(
 		state,
-		McpSpawnState.CRASHED,
+		McpServerState.CRASHED,
 		"_on_connection_established must only clear FOREIGN_PORT, not other diagnoses"
 	)
 
@@ -1028,10 +1037,10 @@ func test_watch_for_adoption_confirmation_arms_bounded_deadline() -> void:
 	## first successful connect OR on deadline expiry, whichever comes
 	## first. This test just pins the deadline-arming half of the contract.
 	var plugin := GodotAiPlugin.new()
-	assert_eq(plugin._adoption_watch_deadline_ms, 0, "precondition: deadline disarmed")
+	assert_eq(plugin._lifecycle._adoption_watch_deadline_ms, 0, "precondition: deadline disarmed")
 	var before_ms := Time.get_ticks_msec()
 	plugin._watch_for_adoption_confirmation()
-	var deadline := plugin._adoption_watch_deadline_ms
+	var deadline: int = int(plugin._lifecycle._adoption_watch_deadline_ms)
 	plugin.free()
 	assert_true(deadline >= before_ms, "deadline must be set into the future")
 	## Lower bound: SPAWN_GRACE_MS minus a generous 100ms slack for any
@@ -1050,21 +1059,21 @@ func test_process_clears_foreign_port_after_matching_version_ack() -> void:
 	var plugin := GodotAiPlugin.new()
 	var conn := McpConnection.new()
 	plugin._connection = conn
-	plugin._server_expected_version = McpClientConfigurator.get_plugin_version()
-	plugin._set_spawn_state(McpSpawnState.FOREIGN_PORT)
+	plugin._lifecycle._server_expected_version = McpClientConfigurator.get_plugin_version()
+	plugin._set_spawn_state(McpServerState.FOREIGN_PORT)
 	plugin._watch_for_adoption_confirmation()
 	plugin._arm_server_version_check()
-	assert_true(plugin._adoption_watch_deadline_ms > 0, "precondition: watcher armed")
+	assert_true(plugin._lifecycle._adoption_watch_deadline_ms > 0, "precondition: watcher armed")
 
 	conn._connected = true  # simulate WebSocket STATE_OPEN transition
-	conn.server_version = plugin._server_expected_version
+	conn.server_version = plugin._lifecycle._server_expected_version
 	plugin._process(0.0)
-	var state: String = plugin.get_server_status().get("state", "")
-	var deadline := plugin._adoption_watch_deadline_ms
+	var state: int = int(plugin.get_server_status().get("state", -1))
+	var deadline: int = int(plugin._lifecycle._adoption_watch_deadline_ms)
 	conn.free()
 	plugin.free()
 
-	assert_eq(state, McpSpawnState.OK, "_process must clear FOREIGN_PORT after version match")
+	assert_eq(state, McpServerState.READY, "_process must clear FOREIGN_PORT after version match")
 	assert_true(deadline > 0, "adoption deadline is independent of version verification")
 
 
@@ -1076,16 +1085,16 @@ func test_process_self_disarms_after_deadline_without_connect() -> void:
 	var plugin := GodotAiPlugin.new()
 	var conn := McpConnection.new()
 	plugin._connection = conn
-	plugin._set_spawn_state(McpSpawnState.FOREIGN_PORT)
-	plugin._adoption_watch_deadline_ms = Time.get_ticks_msec() - 1  # already expired
+	plugin._set_spawn_state(McpServerState.FOREIGN_PORT)
+	plugin._lifecycle._adoption_watch_deadline_ms = Time.get_ticks_msec() - 1  # already expired
 	plugin.set_process(true)
 	plugin._process(0.0)
-	var state: String = plugin.get_server_status().get("state", "")
-	var deadline := plugin._adoption_watch_deadline_ms
+	var state: int = int(plugin.get_server_status().get("state", -1))
+	var deadline: int = int(plugin._lifecycle._adoption_watch_deadline_ms)
 	conn.free()
 	plugin.free()
 
-	assert_eq(state, McpSpawnState.FOREIGN_PORT, "deadline expiry must leave FOREIGN_PORT set")
+	assert_eq(state, McpServerState.FOREIGN_PORT, "deadline expiry must leave FOREIGN_PORT set")
 	assert_eq(deadline, 0, "_process must zero the deadline on timeout")
 
 
