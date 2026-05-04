@@ -276,7 +276,7 @@ func _add_make_current_to_action(node: Node, type_str: String, scene_root: Node)
 	for cam in _list_cameras_in_scene(scene_root, type_str):
 		if cam == node:
 			continue
-		if _is_current(cam):
+		if _resolve_current(scene_root, cam):
 			prev_current = cam
 			break
 	_undo_redo.add_do_method(self, "_apply_make_current", node)
@@ -571,7 +571,7 @@ func configure(params: Dictionary) -> Dictionary:
 	var verify_current_after := false
 	if current_request != null:
 		var want_on: bool = bool(current_request)
-		var was_on: bool = _is_current(node)
+		var was_on: bool = _resolve_current(scene_root, node)
 		if want_on and not was_on:
 			_add_make_current_to_action(node, type_str, scene_root)
 			verify_current_after = true
