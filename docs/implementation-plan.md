@@ -1,6 +1,6 @@
 # Godot AI — Working Plan
 
-*Updated 2026-04-29 (audio_*, ui_set_text, animation_preset_*, resource_create, control_draw_recipe shipped; tool surface collapsed to ~39 via `<domain>_manage` rollups)*
+*Updated 2026-05-04 (audit cleanup PRs #298–#315 + PR 11 landed on `beta`: scene-path ancestry guard, update/config data-loss safeguards, lifecycle reliability, characterization tests, plugin.gd extraction, state-model cleanup, UpdateManager extraction, Runtime Protocol deletion, narrowed meta-tool JSON coercion, self-update preload-alias hardening, locked FastMCP middleware order)*
 
 This is the current working plan for Godot AI. It focuses on active and upcoming work only.
 
@@ -75,7 +75,7 @@ Adjacent reference docs:
 - [x] batch execution is shipped with a clear contract
 - [x] multi-instance routing works in practice
 - [x] `script.patch` decision is made (shipped: anchor-based replace)
-- [x] test coverage and smoke coverage increase where the new runtime loop needs it (686 Python + 991 GDScript = 1677 total)
+- [x] test coverage and smoke coverage increase where the new runtime loop needs it (757 Python + 991+ GDScript)
 
 ---
 
