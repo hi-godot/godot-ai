@@ -25,10 +25,9 @@ const UPDATE_RELOAD_RUNNER_SCRIPT := preload("res://addons/godot_ai/update_reloa
 ## to the server-stop hot path.
 const UvCacheCleanup := preload("res://addons/godot_ai/utils/uv_cache_cleanup.gd")
 
-## Server lifecycle + port discovery — extracted to dedicated classes in
-## #297 / PR 5. plugin.gd keeps thin shims so the public surface (the
-## dock + characterization tests) is unchanged. See server_lifecycle.gd's
-## `_host` rationale comment for why the manager talks back to the plugin.
+## Server lifecycle + port discovery extracted from this file (#297 PR 5).
+## Plugin.gd keeps thin shims so the dock and characterization tests
+## see an unchanged surface.
 const ServerLifecycleManager := preload("res://addons/godot_ai/utils/server_lifecycle.gd")
 const PortResolver := preload("res://addons/godot_ai/utils/port_resolver.gd")
 
@@ -83,7 +82,9 @@ const ControlDrawRecipeHandler := preload("res://addons/godot_ai/handlers/contro
 ## Windows where `OS.kill` on the uvx launcher doesn't take the Python
 ## child with it, and the scrape was the only path to the real PID.
 ## See issue for #154-era Windows update friction.
-const SERVER_PID_FILE := "user://godot_ai_server.pid"
+## Re-export of McpPortResolver.SERVER_PID_FILE so the spawn flags, the
+## resolver, and characterization tests share one source of truth.
+const SERVER_PID_FILE := PortResolver.SERVER_PID_FILE
 
 ## How long we watch the spawned server for early exit. If the process is
 ## still alive when this expires, we stop watching. Mid-session crashes
@@ -145,10 +146,8 @@ var _dock
 var _server_pid := -1
 var _handlers: Array = []  # prevent GC of RefCounted handlers
 var _debugger_plugin
-## ServerLifecycleManager instance — owns the spawn / stop / respawn /
-## adopt orchestration. Untyped to honor the parse-hazard policy above.
-## Allocated in `_init` so `_ProofPlugin extends GodotAiPlugin` test
-## fixtures (which never enter the tree) can still drive `_start_server`.
+## Spawn / stop / adopt orchestration; allocated in `_init` so test
+## fixtures (which never enter the tree) can drive `_start_server`.
 var _lifecycle
 static var _server_started_this_session := false  # guard against re-entrant spawns
 static var _resolved_ws_port := McpClientConfigurator.DEFAULT_WS_PORT
@@ -194,10 +193,6 @@ var _startup_path := ""
 
 
 func _init() -> void:
-	## RefCounted bag holding the lifecycle methods. Instantiated here so
-	## test fixtures that construct GodotAiPlugin without entering the
-	## tree (`_ProofPlugin.new()` in test_plugin_lifecycle.gd) still get a
-	## live manager when they call `_start_server`. No editor side-effects.
 	_lifecycle = ServerLifecycleManager.new(self)
 
 
@@ -620,8 +615,6 @@ func _startup_trace_finish(path: String) -> void:
 	)
 
 
-## Spawn the managed server, or adopt / recover whatever is on the port.
-## Implementation in McpServerLifecycleManager.start_server (#297 PR 5).
 func _start_server() -> void:
 	_lifecycle.start_server()
 
@@ -959,7 +952,6 @@ func _stop_server_watch() -> void:
 		_server_watch_timer = null
 
 
-## Watch-loop callback. Implementation in McpServerLifecycleManager.
 func _check_server_health() -> void:
 	_lifecycle.check_server_health()
 
@@ -992,8 +984,6 @@ static func _retry_with_refresh_allowed(already_retried: bool, launch_mode: Stri
 	)
 
 
-## Retry the spawn with `--refresh` (uvx PyPI-index workaround).
-## Implementation in McpServerLifecycleManager.respawn_with_refresh.
 func _respawn_with_refresh() -> void:
 	_lifecycle.respawn_with_refresh()
 
@@ -1035,9 +1025,7 @@ func _resolve_ws_port() -> int:
 	)
 
 
-## Forwarding shim — McpPortResolver owns the implementation. Kept on
-## the plugin so existing characterization tests calling
-## `GodotAiPlugin._resolved_ws_port_for_existing_server(...)` keep working.
+## Test-compat shim — characterization tests call this static directly.
 static func _resolved_ws_port_for_existing_server(
 	record_ws_port: int,
 	record_version: String,
@@ -1065,14 +1053,8 @@ static func _resolve_ws_port_from_output(
 	)
 
 
-static func _can_bind_local_port(port: int) -> bool:
-	return PortResolver.can_bind_local_port(port)
-
-
-## Instance shim — McpPortResolver owns the OS scraping. The wrapper
-## stays on the plugin so the cold-start trace counter still increments
-## for each scrape, and so `_ProofPlugin extends GodotAiPlugin` test
-## fixtures can override port queries by overriding this method.
+## Plugin-level shim around the resolver — keeps the startup-trace
+## counter increment and the `_ProofPlugin` override hook on the plugin.
 func _is_port_in_use(port: int) -> bool:
 	if PortResolver.can_bind_local_port(port):
 		return false
@@ -1083,36 +1065,19 @@ func _is_port_in_use(port: int) -> bool:
 	return PortResolver.is_port_in_use_via_scrape(port)
 
 
-## Forwarding shim — McpPortResolver owns the implementation. See
-## `_is_port_in_use` for the trace-counter / test-override rationale.
+## Pass `_startup_trace_count` so the resolver bumps the right counter
+## per scraper that actually ran (Windows can fall through netstat →
+## PowerShell — counting both unconditionally would over-report).
 func _find_pid_on_port(port: int) -> int:
-	if OS.get_name() == "Windows":
-		_startup_trace_count("netstat")
-		_startup_trace_count("powershell")
-	else:
-		_startup_trace_count("lsof")
-	return PortResolver.find_pid_on_port(port)
+	return PortResolver.find_pid_on_port(port, _startup_trace_count)
 
 
 func _find_all_pids_on_port(port: int) -> Array[int]:
-	if OS.get_name() == "Windows":
-		_startup_trace_count("netstat")
-		_startup_trace_count("powershell")
-	else:
-		_startup_trace_count("lsof")
-	return PortResolver.find_all_pids_on_port(port)
-
-
-static func _find_listener_pids_windows(port: int) -> Array[int]:
-	return PortResolver.find_listener_pids_windows(port)
+	return PortResolver.find_all_pids_on_port(port, _startup_trace_count)
 
 
 static func _execute_windows_powershell(script: String, output: Array) -> int:
 	return PortResolver.execute_windows_powershell(script, output)
-
-
-static func _windows_powershell_candidates() -> Array[String]:
-	return PortResolver.windows_powershell_candidates()
 
 
 static func _windows_listener_pids_from_execute_result(exit_code: int, output: Array) -> Array[int]:
@@ -1199,7 +1164,6 @@ func _evaluate_recovery_port_occupant_proof(port: int, live: Dictionary = {}) ->
 	return {"proof": "", "pids": []}
 
 
-## See McpServerLifecycleManager.recover_strong_port_occupant.
 func _recover_strong_port_occupant(port: int, wait_s: float, pre_kill_live: Dictionary = {}) -> bool:
 	return _lifecycle.recover_strong_port_occupant(port, wait_s, pre_kill_live)
 
@@ -1258,7 +1222,6 @@ static func _clear_pid_file() -> void:
 	PortResolver.clear_pid_file()
 
 
-## Stop the managed server. Implementation in McpServerLifecycleManager.
 func _stop_server() -> void:
 	_lifecycle.stop_server()
 
@@ -1409,10 +1372,8 @@ static func _pid_alive(pid: int) -> bool:
 	return PortResolver.pid_alive(pid)
 
 
-## Instance shim — delegates to `_is_port_in_use` so test fixtures that
-## override port queries still drive the wait loop. McpPortResolver has
-## an equivalent static helper, but it talks to `is_port_in_use` directly
-## and would bypass the override.
+## Calls `_is_port_in_use` (not `PortResolver.wait_for_port_free`) so
+## `_ProofPlugin` overrides keep driving the loop.
 func _wait_for_port_free(port: int, timeout_s: float) -> void:
 	var deadline := Time.get_ticks_msec() + int(timeout_s * 1000.0)
 	while _is_port_in_use(port):
@@ -1459,13 +1420,10 @@ func _clear_managed_server_record() -> void:
 		es.set_setting(MANAGED_SERVER_WS_PORT_SETTING, 0)
 
 
-## Public entry point for the self-update reload handoff.
-## Implementation in McpServerLifecycleManager.prepare_for_update_reload.
 func prepare_for_update_reload() -> void:
 	_lifecycle.prepare_for_update_reload()
 
 
-## See McpServerLifecycleManager.adopt_compatible_server.
 func _adopt_compatible_server(record_version: String, current_version: String, owner: int) -> String:
 	return _lifecycle.adopt_compatible_server(record_version, current_version, owner)
 
