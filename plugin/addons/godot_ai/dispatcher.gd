@@ -7,8 +7,17 @@ extends RefCounted
 
 var _command_queue: Array[Dictionary] = []
 var _handlers: Dictionary = {}  # command_name -> Callable
+var _pending_deferred: Dictionary = {}  # request_id -> {command, started_ms, timeout_ms}
 var _log_buffer: McpLogBuffer
 var mcp_logging := true
+var deferred_timeout_overrides_ms: Dictionary = {}
+
+const DEFAULT_DEFERRED_TIMEOUT_MS := 4500
+const DEFERRED_TIMEOUT_MS_BY_COMMAND := {
+	"create_script": 4500,
+	"stop_project": 4500,
+	"take_screenshot": 30000,
+}
 
 
 func _init(log_buffer: McpLogBuffer) -> void:
@@ -26,6 +35,7 @@ func register(command_name: String, handler: Callable) -> void:
 func clear() -> void:
 	_handlers.clear()
 	_command_queue.clear()
+	_pending_deferred.clear()
 	_log_buffer = null
 
 
@@ -67,18 +77,41 @@ func enqueue(cmd: Dictionary) -> void:
 	_command_queue.append(cmd)
 
 
+func pending_deferred_count() -> int:
+	return _pending_deferred.size()
+
+
+func clear_deferred_responses() -> void:
+	_pending_deferred.clear()
+
+
+func has_pending_deferred_response(request_id: String) -> bool:
+	return request_id.is_empty() or _pending_deferred.has(request_id)
+
+
+func complete_deferred_response(request_id: String) -> bool:
+	if request_id.is_empty():
+		return true
+	if not _pending_deferred.has(request_id):
+		return false
+	_pending_deferred.erase(request_id)
+	return true
+
+
 ## Handlers whose response flows out-of-band (e.g. debugger-channel capture)
 ## return this marker so tick() skips auto-sending a response. The handler is
 ## responsible for pushing the final response via McpConnection._send_json when
-## the async operation completes. The request_id is threaded through params
-## under the "_request_id" key so the handler can correlate the response.
+## the async operation completes. The dispatcher tracks the request_id and emits
+## DEFERRED_TIMEOUT if the out-of-band response never arrives. The request_id is
+## threaded through params under the "_request_id" key so the handler can
+## correlate the response.
 const DEFERRED_RESPONSE := {"_deferred": true}
 
 
 ## Process queued commands within a frame budget (milliseconds).
 ## Returns an array of response dictionaries to send back.
 func tick(budget_ms: float = 4.0) -> Array[Dictionary]:
-	var responses: Array[Dictionary] = []
+	var responses: Array[Dictionary] = _collect_deferred_timeouts()
 	var start := Time.get_ticks_msec()
 	var idx := 0
 
@@ -117,6 +150,7 @@ func _dispatch(cmd: Dictionary) -> Dictionary:
 		result = McpErrorCodes.make(McpErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
 
 	if result.get("_deferred", false):
+		_register_deferred(request_id, command)
 		if mcp_logging:
 			_log_buffer.log("[defer] %s (request %s)" % [command, request_id])
 		return result
@@ -154,12 +188,95 @@ func _call_handler(command: String, params: Dictionary) -> Dictionary:
 		var args_json := JSON.stringify(safe_params)
 		if args_json.length() > _MALFORMED_ARGS_MAX:
 			args_json = args_json.substr(0, _MALFORMED_ARGS_MAX) + "..."
+		var backtrace := _capture_compact_backtrace()
 		var msg := (
 			"Handler '%s' returned malformed result — likely a runtime error in the handler "
-			+ "(e.g. param type mismatch). Check the Godot console for the GDScript backtrace. "
-			+ "Args received: %s"
+			+ "(e.g. param type mismatch). Args received: %s"
 		) % [command, args_json]
+		if not backtrace.is_empty():
+			msg += "\nBacktrace:\n%s" % backtrace
 		if mcp_logging and _log_buffer != null:
-			_log_buffer.log("[error] %s -> malformed result; args=%s" % [command, args_json])
+			var compact_backtrace := backtrace.replace("\n", " | ")
+			_log_buffer.log(
+				"[error] %s -> malformed result; args=%s; backtrace=%s"
+				% [command, args_json, compact_backtrace]
+			)
 		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, msg)
 	return result
+
+
+func _register_deferred(request_id: String, command: String) -> void:
+	if request_id.is_empty():
+		return
+	_pending_deferred[request_id] = {
+		"command": command,
+		"started_ms": Time.get_ticks_msec(),
+		"timeout_ms": _deferred_timeout_ms_for_command(command),
+	}
+
+
+func _deferred_timeout_ms_for_command(command: String) -> int:
+	if deferred_timeout_overrides_ms.has(command):
+		return int(deferred_timeout_overrides_ms[command])
+	return int(DEFERRED_TIMEOUT_MS_BY_COMMAND.get(command, DEFAULT_DEFERRED_TIMEOUT_MS))
+
+
+func _collect_deferred_timeouts() -> Array[Dictionary]:
+	var responses: Array[Dictionary] = []
+	if _pending_deferred.is_empty():
+		return responses
+	var now := Time.get_ticks_msec()
+	for request_id in _pending_deferred.keys():
+		var entry: Dictionary = _pending_deferred[request_id]
+		var timeout_ms: int = entry.get("timeout_ms", DEFAULT_DEFERRED_TIMEOUT_MS)
+		var elapsed_ms := now - int(entry.get("started_ms", now))
+		if elapsed_ms < timeout_ms:
+			continue
+		_pending_deferred.erase(request_id)
+		var command: String = entry.get("command", "")
+		var response := McpErrorCodes.make(
+			McpErrorCodes.DEFERRED_TIMEOUT,
+			"Deferred response for '%s' timed out after %dms" % [command, timeout_ms]
+		)
+		response["request_id"] = request_id
+		response["error"]["data"] = {
+			"command": command,
+			"elapsed_ms": elapsed_ms,
+			"timeout_ms": timeout_ms,
+		}
+		responses.append(response)
+		if mcp_logging and _log_buffer != null:
+			_log_buffer.log("[defer] %s (request %s) -> timeout" % [command, request_id])
+	return responses
+
+
+static func _capture_compact_backtrace(max_frames: int = 8) -> String:
+	if Engine.has_method("capture_script_backtraces"):
+		var traces: Array = Engine.capture_script_backtraces(false)
+		for bt in traces:
+			if bt != null and not bt.is_empty():
+				return _trim_backtrace_string(bt.format(0, 2), max_frames)
+	return _format_stack_frames(get_stack(), max_frames)
+
+
+static func _trim_backtrace_string(text: String, max_frames: int) -> String:
+	var lines := text.strip_edges().split("\n")
+	var kept: Array[String] = []
+	for i in range(min(lines.size(), max_frames)):
+		kept.append(lines[i].strip_edges())
+	return "\n".join(kept)
+
+
+static func _format_stack_frames(frames: Array, max_frames: int) -> String:
+	var lines: Array[String] = []
+	for i in range(min(frames.size(), max_frames)):
+		var frame: Dictionary = frames[i]
+		lines.append(
+			"%s:%s in %s"
+			% [
+				frame.get("source", "?"),
+				frame.get("line", 0),
+				frame.get("function", "?"),
+			]
+		)
+	return "\n".join(lines)

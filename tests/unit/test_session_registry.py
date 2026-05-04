@@ -202,3 +202,51 @@ class TestWaitForSession:
         asyncio.create_task(register_both())
         result = await reg.wait_for_session(exclude_id="old-1", timeout=2.0)
         assert result.session_id == "new-1"
+
+    async def test_rechecks_registered_replacement_before_installing_waiter(self):
+        reg = SessionRegistry()
+        reg.register(_make_session("old-1", project_path="/tmp/test_project"))
+        reg.register(_make_session("other-project", project_path="/tmp/other_project"))
+        known_ids = {session.session_id for session in reg.list_all()}
+        replacement = _make_session("new-1", project_path="/tmp/test_project")
+        reg.register(replacement)
+
+        result = await reg.wait_for_session(
+            exclude_id="old-1",
+            timeout=0.01,
+            known_ids=known_ids,
+            project_path="/tmp/test_project",
+        )
+
+        assert result is replacement
+        assert reg._session_waiters == []
+
+    async def test_concurrent_registers_and_activate_keep_registry_consistent(self):
+        reg = SessionRegistry()
+        waiter_task = asyncio.create_task(reg.wait_for_session(exclude_id="a", timeout=1.0))
+        await asyncio.sleep(0)
+
+        async def register_a():
+            await asyncio.sleep(0)
+            reg.register(_make_session("a"))
+
+        async def register_b():
+            await asyncio.sleep(0.001)
+            reg.register(_make_session("b"))
+
+        async def activate_b():
+            for _ in range(100):
+                if reg.get("b") is not None:
+                    reg.set_active("b")
+                    return
+                await asyncio.sleep(0.001)
+            raise AssertionError("session b was never registered")
+
+        await asyncio.gather(register_a(), register_b(), activate_b())
+        waited = await waiter_task
+
+        assert waited.session_id == "b"
+        assert reg.active_session_id == "b"
+        assert {session.session_id for session in reg.list_all()} == {"a", "b"}
+        assert len(reg) == 2
+        assert reg._session_waiters == []

@@ -9,6 +9,11 @@ extends Node
 const RECONNECT_DELAYS: Array[float] = [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 60.0]
 const RECONNECT_VERBOSE_ATTEMPTS := 5
 const RECONNECT_LOG_EVERY_N_ATTEMPTS := 10
+## Backpressure policy: do not queue responses once the WebSocket's current
+## outbound buffer plus the next payload would exceed this cap. Command
+## responses get a compact structured error when that can still be sent;
+## state events report failure so their callers can retry on a later tick.
+const OUTBOUND_BUFFER_LIMIT_BYTES := 4 * 1024 * 1024
 
 var _peer := WebSocketPeer.new()
 ## Set by plugin.gd after resolving the configured WebSocket port once for the
@@ -34,16 +39,24 @@ var log_buffer: McpLogBuffer
 var connect_blocked := false
 var connect_block_reason := ""
 var _blocked_notice_logged := false
-## Set to true to skip _process() during operations like save_scene
-## that may trigger re-entrant frame processing.
-var pause_processing := false
+## Compatibility property used by existing handlers. Setting true increments
+## the pause depth; setting false decrements it. Processing stays paused until
+## every nested pause has resumed.
+var pause_processing: bool:
+	get: return _pause_depth > 0
+	set(value):
+		if value:
+			pause()
+		else:
+			resume()
+var _pause_depth := 0
 
 
 func _ready() -> void:
 	_session_id = _make_session_id(ProjectSettings.globalize_path("res://"))
 	## Increase outbound buffer for large messages (e.g. screenshot base64).
 	## Default is 64 KB; screenshots can be several MB.
-	_peer.outbound_buffer_size = 4 * 1024 * 1024  # 4 MB
+	_peer.outbound_buffer_size = OUTBOUND_BUFFER_LIMIT_BYTES
 	if connect_blocked:
 		_log_blocked_notice_once()
 		set_process(false)
@@ -108,6 +121,8 @@ func disconnect_from_server() -> void:
 ## Also fires on plain reconnect-loop drops — correct either way.
 func _clear_on_disconnect() -> void:
 	server_version = ""
+	if dispatcher:
+		dispatcher.clear_deferred_responses()
 
 
 ## Full pre-free cleanup for plugin unload: stop _process, close the
@@ -145,8 +160,20 @@ func _attempt_reconnect() -> void:
 	## reached STATE_CLOSED is terminal; reusing it can leave the editor stuck in
 	## a quiet reconnect loop after the Python server restarts.
 	_peer = WebSocketPeer.new()
-	_peer.outbound_buffer_size = 4 * 1024 * 1024  # 4 MB
+	_peer.outbound_buffer_size = OUTBOUND_BUFFER_LIMIT_BYTES
 	_connect_to_server()
+
+
+func pause() -> void:
+	_pause_depth += 1
+
+
+func resume() -> void:
+	_pause_depth = maxi(0, _pause_depth - 1)
+
+
+func pause_depth() -> int:
+	return _pause_depth
 
 
 static func _reconnect_delay_for_attempt(attempt_index: int) -> float:
@@ -202,19 +229,24 @@ func _handle_message(raw: String) -> void:
 
 
 ## Send a state event to the server (not a command response).
-func send_event(event_name: String, data: Dictionary = {}) -> void:
-	_send_json({"type": "event", "event": event_name, "data": data})
+func send_event(event_name: String, data: Dictionary = {}) -> bool:
+	return _send_json({"type": "event", "event": event_name, "data": data})
 
 
 ## Push a command response for a request_id whose handler deferred its reply
 ## (see McpDispatcher.DEFERRED_RESPONSE). `payload` must carry either a `data`
 ## or `error` field in the same shape handlers normally return.
 func send_deferred_response(request_id: String, payload: Dictionary) -> void:
+	if dispatcher != null and not dispatcher.has_pending_deferred_response(request_id):
+		if log_buffer:
+			log_buffer.log("[defer] dropped late response for expired request %s" % request_id)
+		return
 	var response := payload.duplicate()
 	response["request_id"] = request_id
 	if not response.has("status"):
 		response["status"] = "ok" if payload.has("data") else "error"
-	_send_json(response)
+	if _send_json(response) and dispatcher != null:
+		dispatcher.complete_deferred_response(request_id)
 
 
 func _hook_editor_signals() -> void:
@@ -245,25 +277,25 @@ static func get_readiness() -> String:
 func _check_state_changes() -> void:
 	var scene_path := _get_current_scene_path()
 	if scene_path != _last_scene_path:
-		_last_scene_path = scene_path
-		send_event("scene_changed", {"current_scene": scene_path})
-		if log_buffer:
-			log_buffer.log("[event] scene_changed -> %s" % scene_path)
+		if send_event("scene_changed", {"current_scene": scene_path}):
+			_last_scene_path = scene_path
+			if log_buffer:
+				log_buffer.log("[event] scene_changed -> %s" % scene_path)
 
 	var playing := EditorInterface.is_playing_scene()
 	if playing != _last_play_state:
-		_last_play_state = playing
 		var state := "playing" if playing else "stopped"
-		send_event("play_state_changed", {"play_state": state})
-		if log_buffer:
-			log_buffer.log("[event] play_state_changed -> %s" % state)
+		if send_event("play_state_changed", {"play_state": state}):
+			_last_play_state = playing
+			if log_buffer:
+				log_buffer.log("[event] play_state_changed -> %s" % state)
 
 	var readiness := get_readiness()
 	if readiness != _last_readiness:
-		_last_readiness = readiness
-		send_event("readiness_changed", {"readiness": readiness})
-		if log_buffer:
-			log_buffer.log("[event] readiness -> %s" % readiness)
+		if send_event("readiness_changed", {"readiness": readiness}):
+			_last_readiness = readiness
+			if log_buffer:
+				log_buffer.log("[event] readiness -> %s" % readiness)
 
 
 func _get_current_scene_path() -> String:
@@ -271,9 +303,89 @@ func _get_current_scene_path() -> String:
 	return scene_root.scene_file_path if scene_root else ""
 
 
-func _send_json(data: Dictionary) -> void:
-	if _connected:
-		_peer.send_text(JSON.stringify(data))
+func _send_json(data: Dictionary) -> bool:
+	if not _connected:
+		return false
+	var text := JSON.stringify(data)
+	var message_bytes := text.to_utf8_buffer().size()
+	var buffered_bytes := _peer.get_current_outbound_buffered_amount()
+	if _would_exceed_outbound_backpressure(buffered_bytes, message_bytes):
+		return _handle_outbound_backpressure(data, buffered_bytes, message_bytes)
+	var err := _peer.send_text(text)
+	if err != OK:
+		if log_buffer:
+			log_buffer.log("[send] websocket send_text failed: %s" % error_string(err))
+		return false
+	return true
+
+
+static func _would_exceed_outbound_backpressure(buffered_bytes: int, message_bytes: int) -> bool:
+	return buffered_bytes + message_bytes > OUTBOUND_BUFFER_LIMIT_BYTES
+
+
+func _handle_outbound_backpressure(
+	data: Dictionary,
+	buffered_bytes: int,
+	message_bytes: int,
+) -> bool:
+	var request_id: String = data.get("request_id", "")
+	if request_id.is_empty():
+		if log_buffer:
+			log_buffer.log(
+				"[send] requestless payload blocked by websocket backpressure "
+				+ "(buffered=%d, message=%d, limit=%d)"
+				% [buffered_bytes, message_bytes, OUTBOUND_BUFFER_LIMIT_BYTES]
+			)
+		return false
+
+	var err_response := _make_backpressure_error(request_id, buffered_bytes, message_bytes)
+	var err_text := JSON.stringify(err_response)
+	var err_bytes := err_text.to_utf8_buffer().size()
+	if _would_exceed_outbound_backpressure(buffered_bytes, err_bytes):
+		if log_buffer:
+			log_buffer.log(
+				"[send] dropped response for request %s due to websocket backpressure "
+				+ "(buffered=%d, message=%d, limit=%d)"
+				% [request_id, buffered_bytes, message_bytes, OUTBOUND_BUFFER_LIMIT_BYTES]
+			)
+		return false
+
+	var send_err := _peer.send_text(err_text)
+	if send_err != OK:
+		if log_buffer:
+			log_buffer.log("[send] websocket backpressure error send failed: %s" % error_string(send_err))
+		return false
+	if log_buffer:
+		log_buffer.log(
+			"[send] %s -> error: outbound websocket backpressure"
+			% data.get("command", "response")
+		)
+	return true
+
+
+static func _make_backpressure_error(
+	request_id: String,
+	buffered_bytes: int,
+	message_bytes: int,
+) -> Dictionary:
+	return {
+		"request_id": request_id,
+		"status": "error",
+		"data": {},
+		"error": {
+			"code": McpErrorCodes.INTERNAL_ERROR,
+			"message": (
+				"Outbound WebSocket buffer is full; dropped response before queueing "
+				+ "more data. Retry with a smaller payload (for screenshots, lower "
+				+ "max_resolution or set include_image=false)."
+			),
+			"data": {
+				"buffered_bytes": buffered_bytes,
+				"message_bytes": message_bytes,
+				"limit_bytes": OUTBOUND_BUFFER_LIMIT_BYTES,
+			},
+		},
+	}
 
 
 ## Build a human-readable session ID of form "<slug>@<4hex>" from the project path.

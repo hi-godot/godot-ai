@@ -71,6 +71,16 @@ class DirectRuntime:
         self._registry.set_active(session_id)
 
     async def wait_for_session(
-        self, exclude_id: str | None = None, timeout: float = 15.0
+        self,
+        exclude_id: str | None = None,
+        timeout: float = 15.0,
+        *,
+        known_ids: set[str] | frozenset[str] | None = None,
+        project_path: str | None = None,
     ) -> Session:
-        return await self._registry.wait_for_session(exclude_id=exclude_id, timeout=timeout)
+        return await self._registry.wait_for_session(
+            exclude_id=exclude_id,
+            timeout=timeout,
+            known_ids=known_ids,
+            project_path=project_path,
+        )

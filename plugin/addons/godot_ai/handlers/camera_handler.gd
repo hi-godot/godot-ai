@@ -86,6 +86,33 @@ static func _is_current(cam: Node) -> bool:
 	return bool(cam.is_current())
 
 
+static func _viewport_current_camera(scene_root: Node) -> Node:
+	if scene_root == null:
+		return null
+	var viewport := scene_root.get_viewport()
+	if viewport == null:
+		return null
+	var current_2d := viewport.get_camera_2d()
+	if current_2d != null and scene_root.is_ancestor_of(current_2d):
+		return current_2d
+	var current_3d := viewport.get_camera_3d()
+	if current_3d != null and scene_root.is_ancestor_of(current_3d):
+		return current_3d
+	return null
+
+
+static func _is_effective_current(cam: Node) -> bool:
+	if _is_current(cam):
+		return true
+	if cam is Camera2D:
+		var viewport_2d := cam.get_viewport()
+		return viewport_2d != null and viewport_2d.get_camera_2d() == cam
+	if cam is Camera3D:
+		var viewport_3d := cam.get_viewport()
+		return viewport_3d != null and viewport_3d.get_camera_3d() == cam
+	return false
+
+
 # Register a current=true switch on `node` in the open undo action,
 # unmarking previously-current siblings of the same class so a single
 # Ctrl-Z reverts the whole switch.
@@ -187,6 +214,7 @@ func _displace_stale_camera_2d(target: Node) -> void:
 		return
 	var stale := viewport.get_camera_2d()
 	if stale == null or stale == target or not is_instance_valid(stale):
+		_nudge_camera_2d_current(target)
 		return
 	var was_enabled := stale.enabled
 	if was_enabled:
@@ -197,6 +225,19 @@ func _displace_stale_camera_2d(target: Node) -> void:
 		stale.enabled = true
 	target.make_current()
 	_force_camera_refresh(target)
+
+
+func _nudge_camera_2d_current(target: Node) -> void:
+	if not (target is Camera2D):
+		return
+	var cam := target as Camera2D
+	if not cam.enabled:
+		return
+	cam.enabled = false
+	_force_camera_refresh(cam)
+	cam.enabled = true
+	cam.make_current()
+	_force_camera_refresh(cam)
 
 
 # Symmetric counterpart to `_apply_make_current` for the "no previous
@@ -633,9 +674,18 @@ func get_camera(params: Dictionary) -> Dictionary:
 	var node: Node = null
 	var resolved_via: String = ""
 	if camera_path.is_empty():
-		# Empty: prefer current camera (2D or 3D, either is fine), else first found.
+		# Empty: prefer the viewport's active camera. In headless editor CI,
+		# Camera2D.is_current() can lag make_current() briefly even after the
+		# viewport slot has switched; falling through to "first" during that
+		# window makes camera_get("") nondeterministic.
 		var all_cams := _list_cameras_in_scene(scene_root, "")
+		var viewport_current := _viewport_current_camera(scene_root)
+		if viewport_current != null and all_cams.has(viewport_current):
+			node = viewport_current
+			resolved_via = "current"
 		for cam in all_cams:
+			if node != null:
+				break
 			if _is_current(cam):
 				node = cam
 				resolved_via = "current"
@@ -672,7 +722,7 @@ func get_camera(params: Dictionary) -> Dictionary:
 	var props: Dictionary = {}
 	for key in keys:
 		if key == "current":
-			props[key] = _is_current(node)
+			props[key] = _is_effective_current(node)
 			continue
 		if prop_types.has(key):
 			props[key] = CameraValues.serialize(node.get(key))
@@ -682,7 +732,7 @@ func get_camera(params: Dictionary) -> Dictionary:
 			"path": McpScenePath.from_node(node, scene_root),
 			"type": type_str,
 			"class": node.get_class(),
-			"current": _is_current(node),
+			"current": _is_effective_current(node),
 			"properties": props,
 			"resolved_via": resolved_via,
 		}

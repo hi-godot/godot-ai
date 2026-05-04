@@ -142,6 +142,39 @@ func test_disconnect_clears_server_version() -> void:
 	conn.free()
 
 
+func test_disconnect_clears_pending_deferred_responses() -> void:
+	var conn := McpConnection.new()
+	var dispatcher := McpDispatcher.new(McpLogBuffer.new())
+	dispatcher.mcp_logging = false
+	dispatcher.register("later", func(_p): return McpDispatcher.DEFERRED_RESPONSE)
+	dispatcher.enqueue({
+		"request_id": "req-old-socket",
+		"command": "later",
+		"params": {},
+	})
+	dispatcher.tick(100.0)
+	assert_eq(dispatcher.pending_deferred_count(), 1, "precondition: deferred request is tracked")
+
+	conn.dispatcher = dispatcher
+	conn._clear_on_disconnect()
+
+	assert_eq(
+		dispatcher.pending_deferred_count(),
+		0,
+		"reconnect must not inherit pending responses from the previous socket",
+	)
+	conn.free()
+
+
+func test_send_event_reports_unsent_when_disconnected() -> void:
+	var conn := McpConnection.new()
+	assert_false(
+		conn.send_event("readiness_changed", {"readiness": "ready"}),
+		"state-change callers need a false return so they can retry later",
+	)
+	conn.free()
+
+
 # ----- reconnect backoff and logging -----
 
 
@@ -193,3 +226,68 @@ func test_blocked_connection_logs_once_and_stops_reconnect_loop() -> void:
 	assert_eq(buffer.get_recent(1)[0], "MCP | blocked for test")
 	assert_false(conn.is_processing(), "blocked reconnect must stop Connection processing")
 	conn.free()
+
+
+# ----- pause depth -----
+
+
+func test_nested_pause_resume_uses_depth_counter() -> void:
+	var conn := McpConnection.new()
+	assert_false(conn.pause_processing, "new connection should not start paused")
+	assert_eq(conn.pause_depth(), 0)
+
+	conn.pause()
+	conn.pause()
+	assert_true(conn.pause_processing, "connection should be paused while depth > 0")
+	assert_eq(conn.pause_depth(), 2)
+
+	conn.resume()
+	assert_true(conn.pause_processing, "first resume must not clear a nested pause")
+	assert_eq(conn.pause_depth(), 1)
+
+	conn.resume()
+	assert_false(conn.pause_processing, "processing resumes only when depth returns to zero")
+	assert_eq(conn.pause_depth(), 0)
+	conn.free()
+
+
+func test_pause_processing_property_preserves_nested_pause_semantics() -> void:
+	var conn := McpConnection.new()
+	conn.pause_processing = true
+	conn.pause_processing = true
+	conn.pause_processing = false
+	assert_true(conn.pause_processing, "legacy bool setter should decrement one level at a time")
+	assert_eq(conn.pause_depth(), 1)
+	conn.pause_processing = false
+	assert_false(conn.pause_processing)
+	assert_eq(conn.pause_depth(), 0)
+	conn.free()
+
+
+# ----- outbound backpressure -----
+
+
+func test_outbound_backpressure_limit_rejects_payload_that_would_overflow() -> void:
+	assert_false(McpConnection._would_exceed_outbound_backpressure(0, 1024))
+	assert_false(
+		McpConnection._would_exceed_outbound_backpressure(
+			McpConnection.OUTBOUND_BUFFER_LIMIT_BYTES - 10,
+			10,
+		)
+	)
+	assert_true(
+		McpConnection._would_exceed_outbound_backpressure(
+			McpConnection.OUTBOUND_BUFFER_LIMIT_BYTES - 10,
+			11,
+		)
+	)
+
+
+func test_backpressure_error_is_structured_and_actionable() -> void:
+	var err := McpConnection._make_backpressure_error("rid-1", 100, 200)
+	assert_eq(err.request_id, "rid-1")
+	assert_is_error(err, McpErrorCodes.INTERNAL_ERROR)
+	assert_has_key(err.error, "data")
+	assert_eq(err.error.data.buffered_bytes, 100)
+	assert_eq(err.error.data.message_bytes, 200)
+	assert_contains(err.error.message, "max_resolution")
