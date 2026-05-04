@@ -9,6 +9,7 @@ extends RefCounted
 ## Canonical pid-file path. plugin.gd::SERVER_PID_FILE re-exports this so
 ## external readers and tests can use either name.
 const SERVER_PID_FILE := "user://godot_ai_server.pid"
+const WindowsPortReservation := preload("res://addons/godot_ai/utils/windows_port_reservation.gd")
 
 
 static func can_bind_local_port(port: int) -> bool:
@@ -264,7 +265,7 @@ static func wait_for_port_free(port: int, timeout_s: float) -> void:
 ## `log_buffer` is a duck-typed sink (`log(String)`) that gets the
 ## remap notice so users see why the port shifted.
 static func resolve_ws_port(configured: int, max_port: int, log_buffer = null) -> int:
-	var resolved := McpWindowsPortReservation.suggest_non_excluded_port(
+	var resolved := WindowsPortReservation.suggest_non_excluded_port(
 		configured,
 		2048,
 		max_port
@@ -301,7 +302,7 @@ static func resolve_ws_port_from_output(
 	max_port: int,
 	span: int = 2048
 ) -> int:
-	return McpWindowsPortReservation.suggest_non_excluded_port_from_output(
+	return WindowsPortReservation.suggest_non_excluded_port_from_output(
 		netsh_output,
 		configured_port,
 		span,
