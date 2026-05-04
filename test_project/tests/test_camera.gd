@@ -38,6 +38,7 @@ func _cleanup_created() -> void:
 	_created_paths.clear()
 	for node in _created_nodes:
 		if is_instance_valid(node) and node.get_parent() != null:
+			_clear_camera_current_for_removal(node)
 			node.get_parent().remove_child(node)
 			node.queue_free()
 	_created_nodes.clear()
@@ -49,8 +50,7 @@ func _remove_by_path(path: String) -> void:
 		return
 	var node := McpScenePath.resolve(path, scene_root)
 	if node != null and node.get_parent() != null:
-		if node.has_method("is_current") and node.has_method("clear_current") and node.is_current():
-			node.clear_current()
+		_clear_camera_current_for_removal(node)
 		node.get_parent().remove_child(node)
 		node.queue_free()
 
@@ -72,6 +72,47 @@ func _create(node_name: String, type_str: String = "2d", make_current: bool = fa
 
 func _track_node(node: Node) -> void:
 	_created_nodes.append(node)
+
+
+func _clear_camera_current_for_removal(node: Node) -> void:
+	if node == null or not is_instance_valid(node) or not node.has_method("clear_current"):
+		return
+	var viewport_matches := false
+	if node is Camera2D:
+		var viewport_2d := node.get_viewport()
+		viewport_matches = viewport_2d != null and viewport_2d.get_camera_2d() == node
+	elif node is Camera3D:
+		var viewport_3d := node.get_viewport()
+		viewport_matches = viewport_3d != null and viewport_3d.get_camera_3d() == node
+	if node.has_method("is_current") and (bool(node.is_current()) or viewport_matches):
+		node.clear_current()
+	if node is Camera2D:
+		(node as Camera2D).force_update_scroll()
+
+
+func _camera_current_settled(cam: Node, expected: bool) -> bool:
+	if cam == null or not is_instance_valid(cam):
+		return not expected
+	if not cam.has_method("is_current"):
+		return false
+	var viewport_matches := false
+	if cam is Camera2D:
+		var viewport_2d := cam.get_viewport()
+		viewport_matches = viewport_2d != null and viewport_2d.get_camera_2d() == cam
+	elif cam is Camera3D:
+		var viewport_3d := cam.get_viewport()
+		viewport_matches = viewport_3d != null and viewport_3d.get_camera_3d() == cam
+	if expected:
+		return bool(cam.is_current()) and viewport_matches
+	return not bool(cam.is_current()) and not viewport_matches
+
+
+func _wait_for_camera_current(cam: Node, expected: bool) -> bool:
+	for _i in range(20):
+		if _camera_current_settled(cam, expected):
+			return true
+		OS.delay_msec(10)
+	return _camera_current_settled(cam, expected)
 
 
 # ============================================================================
@@ -123,6 +164,8 @@ func test_create_with_make_current_unmarks_sibling() -> void:
 	var second_node := McpScenePath.resolve(second.data.path, scene_root) as Camera2D
 	assert_true(first_node != null)
 	assert_true(second_node != null)
+	assert_true(_wait_for_camera_current(second_node, true))
+	assert_true(_wait_for_camera_current(first_node, false))
 	assert_eq(second_node.is_current(), true)
 	assert_eq(first_node.is_current(), false, "Previously-current camera should have been unmarked")
 
@@ -136,6 +179,8 @@ func test_make_current_does_not_cross_classes() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var n2 := McpScenePath.resolve(cam2d.data.path, scene_root) as Camera2D
 	var n3 := McpScenePath.resolve(cam3d.data.path, scene_root) as Camera3D
+	assert_true(_wait_for_camera_current(n2, true))
+	assert_true(_wait_for_camera_current(n3, true))
 	assert_eq(n2.is_current(), true, "Camera2D current should not be touched when Camera3D becomes current")
 	assert_eq(n3.is_current(), true)
 
@@ -235,6 +280,8 @@ func test_configure_current_sibling_unmark_single_undo() -> void:
 		"properties": {"current": true},
 	})
 	assert_has_key(result, "data")
+	assert_true(_wait_for_camera_current(second_node, true))
+	assert_true(_wait_for_camera_current(first_node, false))
 	assert_eq(second_node.is_current(), true)
 	assert_eq(first_node.is_current(), false)
 
@@ -250,6 +297,8 @@ func test_configure_current_sibling_unmark_single_undo() -> void:
 	var diag := "viewport_cam=%s first_in_tree=%s second_in_tree=%s" % [
 		viewport_cam, first_node.is_inside_tree(), second_node.is_inside_tree()
 	]
+	assert_true(_wait_for_camera_current(second_node, false), "Second current state should settle after undo. %s" % diag)
+	assert_true(_wait_for_camera_current(first_node, true), "First current state should settle after undo. %s" % diag)
 	assert_eq(second_node.is_current(), false, "After undo second should not be current. %s" % diag)
 	assert_eq(first_node.is_current(), true, "Single undo should restore original current camera. %s" % diag)
 
@@ -509,7 +558,17 @@ func test_get_returns_current_when_path_empty() -> void:
 	if r.is_empty():
 		assert_true(false, "No scene open")
 		return
-	var result := _handler.get_camera({"camera_path": ""})
+	var result := {}
+	for _i in range(20):
+		result = _handler.get_camera({"camera_path": ""})
+		if (
+			result.has("data")
+			and result.data.get("resolved_via", "") == "current"
+			and result.data.get("path", "") == r.data.path
+			and bool(result.data.get("current", false))
+		):
+			break
+		OS.delay_msec(10)
 	assert_has_key(result, "data")
 	assert_eq(result.data.resolved_via, "current")
 	assert_eq(result.data.path, r.data.path)
