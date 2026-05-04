@@ -49,6 +49,8 @@ const GameLogBuffer := preload("res://addons/godot_ai/utils/game_log_buffer.gd")
 const EditorLogBuffer := preload("res://addons/godot_ai/utils/editor_log_buffer.gd")
 const Dock := preload("res://addons/godot_ai/mcp_dock.gd")
 const DebuggerPlugin := preload("res://addons/godot_ai/debugger/mcp_debugger_plugin.gd")
+const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")
+const WindowsPortReservation := preload("res://addons/godot_ai/utils/windows_port_reservation.gd")
 
 ## Handlers — preloaded as consts instead of registered via `class_name` so
 ## they don't pollute the project-wide global scope. A user project that
@@ -86,7 +88,7 @@ const ControlDrawRecipeHandler := preload("res://addons/godot_ai/handlers/contro
 ## Windows where `OS.kill` on the uvx launcher doesn't take the Python
 ## child with it, and the scrape was the only path to the real PID.
 ## See issue for #154-era Windows update friction.
-## Re-export of McpPortResolver.SERVER_PID_FILE so the spawn flags, the
+## Re-export of PortResolver.SERVER_PID_FILE so the spawn flags, the
 ## resolver, and characterization tests share one source of truth.
 const SERVER_PID_FILE := PortResolver.SERVER_PID_FILE
 
@@ -114,27 +116,34 @@ const STARTUP_TRACE_COUNTER_NAMES := [
 ## Untyped on purpose — see policy below. Type fences move to handler `_init`
 ## sites that take typed parameters.
 ##
-## Self-update parse-hazard policy: `plugin.gd` MUST NOT reference any
-## plugin-defined `class_name` (`Mcp*`) by name — neither as a type
-## annotation (`var x: McpFoo`) nor as a constructor (`McpFoo.new()`).
-## Both forms resolve through Godot's global class_name registry at parse
-## time. During an in-place self-update, `set_plugin_enabled(false)` re-
-## parses `plugin.gd` against the freshly-extracted addon tree before the
-## registry has scanned the new files; a reference to a class whose
-## inheritance or class_name siblings changed in the new release fails to
-## resolve, the plugin enters a degraded state, and the follow-up
-## `_exit_tree` cascade crashes (see #242, #244).
+## Self-update parse-hazard policy: plugin entry-load code MUST NOT
+## reference any plugin-defined `class_name` (`Mcp*`) by name — neither
+## as a type annotation (`var x: McpFoo`), nor as a constructor
+## (`McpFoo.new()`), nor as any other member access (`McpFoo.CONST`,
+## `McpFoo.static_method()`). Every form resolves through Godot's global
+## class_name registry at parse time. During an in-place self-update,
+## `set_plugin_enabled(false)` re-parses `plugin.gd` against the freshly-
+## extracted addon tree before the registry has scanned the new files; a
+## reference to a class whose inheritance or class_name siblings changed
+## in the new release fails to resolve, the plugin enters a degraded
+## state, and the follow-up `_exit_tree` cascade crashes (see #242,
+## #244). Static-var initializers are the most dangerous form because
+## they execute at script-load: `static var _x := McpFoo.BAR` aborts the
+## parse before `_enter_tree` runs.
 ##
 ## The mitigation is two-part:
 ##   (1) Field declarations are untyped (this block).
-##   (2) Constructor sites use script-local `const X := preload("res://...")`
-##       aliases declared at the top of the file (e.g. `Connection`,
-##       `Dispatcher`, `LogBuffer`, …). `preload(...)` resolves the script
-##       by path at script-load, never consulting the global registry, so
-##       the parse stays clean across releases regardless of how the
-##       referenced class's `extends` chain or sibling class_names change.
+##   (2) Every other reference site uses script-local
+##       `const X := preload("res://...")` aliases declared at the top of
+##       the file (e.g. `Connection`, `Dispatcher`, `LogBuffer`,
+##       `ClientConfigurator`, `WindowsPortReservation`, …) — for
+##       constructors, constants, and static methods alike. `preload(...)`
+##       resolves the script by path at script-load, never consulting the
+##       global registry, so the parse stays clean across releases
+##       regardless of how the referenced class's `extends` chain or
+##       sibling class_names change.
 ##
-## `tests/unit/test_plugin_self_update_safety.py` locks both halves in.
+## `tests/unit/test_plugin_self_update_safety.py` locks these forms in.
 ##
 ## `_editor_logger` was already untyped because its script extends Godot
 ## 4.5+'s Logger class and is loaded via `load()` so the plugin still parses
@@ -156,7 +165,7 @@ var _debugger_plugin
 ## `utils/server_lifecycle.gd`.
 var _lifecycle
 static var _server_started_this_session := false  # guard against re-entrant spawns
-static var _resolved_ws_port := McpClientConfigurator.DEFAULT_WS_PORT
+static var _resolved_ws_port := ClientConfigurator.DEFAULT_WS_PORT
 
 ## Server-watch timer lives on the plugin because it's a Node — the
 ## manager is RefCounted and can't host children.
@@ -189,7 +198,7 @@ func _enter_tree() -> void:
 	## Register port overrides before spawn so `http_port()` / `ws_port()`
 	## return the user's configured values (if any) when `_start_server`
 	## builds the CLI args.
-	McpClientConfigurator.ensure_settings_registered()
+	ClientConfigurator.ensure_settings_registered()
 	_startup_trace_phase("settings_registered")
 
 	_log_buffer = LogBuffer.new()
@@ -547,12 +556,12 @@ func _ensure_game_helper_autoload() -> void:
 
 
 func _startup_trace_begin() -> void:
-	_startup_trace_enabled = McpClientConfigurator.startup_trace_enabled()
+	_startup_trace_enabled = ClientConfigurator.startup_trace_enabled()
 	if not _startup_trace_enabled:
 		return
 	_startup_trace_start_ms = Time.get_ticks_msec()
 	_startup_trace_last_ms = _startup_trace_start_ms
-	_startup_trace_netsh_start_count = McpWindowsPortReservation.netsh_query_count()
+	_startup_trace_netsh_start_count = WindowsPortReservation.netsh_query_count()
 	_startup_trace_counters.clear()
 	for counter in STARTUP_TRACE_COUNTER_NAMES:
 		_startup_trace_counters[counter] = 0
@@ -560,8 +569,8 @@ func _startup_trace_begin() -> void:
 		"MCP startup trace | begin platform=%s http_port=%d ws_port=%d"
 		% [
 			OS.get_name(),
-			McpClientConfigurator.http_port(),
-			McpClientConfigurator.ws_port(),
+			ClientConfigurator.http_port(),
+			ClientConfigurator.ws_port(),
 		]
 	)
 
@@ -588,7 +597,7 @@ func _startup_trace_finish(path: String) -> void:
 		return
 	var now := Time.get_ticks_msec()
 	_startup_trace_counters["netsh"] = (
-		McpWindowsPortReservation.netsh_query_count() - _startup_trace_netsh_start_count
+		WindowsPortReservation.netsh_query_count() - _startup_trace_netsh_start_count
 	)
 	print(
 		"MCP startup trace | done path=%s total_ms=%d counters=%s"
@@ -861,7 +870,7 @@ func _check_server_health() -> void:
 func _should_retry_with_refresh() -> bool:
 	return _retry_with_refresh_allowed(
 		_lifecycle._refresh_retried,
-		McpClientConfigurator.get_server_launch_mode(),
+		ClientConfigurator.get_server_launch_mode(),
 		_read_pid_file(),
 	)
 
@@ -902,8 +911,8 @@ func _set_resolved_ws_port(port: int) -> void:
 
 func _resolve_ws_port() -> int:
 	return PortResolver.resolve_ws_port(
-		McpClientConfigurator.ws_port(),
-		McpClientConfigurator.MAX_PORT,
+		ClientConfigurator.ws_port(),
+		ClientConfigurator.MAX_PORT,
 		_log_buffer,
 	)
 
@@ -931,7 +940,7 @@ static func _resolve_ws_port_from_output(
 	return PortResolver.resolve_ws_port_from_output(
 		configured_port,
 		netsh_output,
-		McpClientConfigurator.MAX_PORT,
+		ClientConfigurator.MAX_PORT,
 		span,
 	)
 
@@ -1138,7 +1147,7 @@ static func _build_server_flags(port: int, ws_port: int) -> Array[String]:
 	## least one domain to drop. Skipping the empty case keeps spawns
 	## compatible with older (pre-1.4.2) servers that don't know the flag —
 	## relevant during staggered plugin/server upgrades in user-mode installs.
-	var excluded := McpClientConfigurator.excluded_domains()
+	var excluded := ClientConfigurator.excluded_domains()
 	if not excluded.is_empty():
 		flags.append("--exclude-domains")
 		flags.append(excluded)
@@ -1404,7 +1413,7 @@ func start_dev_server() -> void:
 	## worktree's Python. See #84.
 	_stop_server()
 	get_tree().create_timer(0.5).timeout.connect(func():
-		var server_cmd := McpClientConfigurator.get_server_command()
+		var server_cmd := ClientConfigurator.get_server_command()
 		if server_cmd.is_empty():
 			push_warning("MCP | could not find server command for dev server")
 			return
@@ -1415,12 +1424,12 @@ func start_dev_server() -> void:
 		inner_args.assign(server_cmd.slice(1))
 		inner_args.append_array([
 			"--transport", "streamable-http",
-			"--port", str(McpClientConfigurator.http_port()),
+			"--port", str(ClientConfigurator.http_port()),
 			"--ws-port", str(_resolved_ws_port),
 			"--reload",
 		])
 
-		var worktree_src := McpClientConfigurator.find_worktree_src_dir(ProjectSettings.globalize_path("res://"))
+		var worktree_src := ClientConfigurator.find_worktree_src_dir(ProjectSettings.globalize_path("res://"))
 		var prev_pythonpath := OS.get_environment("PYTHONPATH")
 		if not worktree_src.is_empty():
 			var sep := ";" if OS.get_name() == "Windows" else ":"
@@ -1455,7 +1464,7 @@ func stop_dev_server() -> void:
 		_stop_server()
 		return
 	var output: Array = []
-	var port := McpClientConfigurator.http_port()
+	var port := ClientConfigurator.http_port()
 	if OS.get_name() == "Windows":
 		var killed := _kill_processes_and_windows_spawn_children(_find_all_pids_on_port(port))
 		if not killed.is_empty():
@@ -1512,7 +1521,7 @@ func _find_windows_spawn_children(parent_pids: Array[int]) -> Array[int]:
 
 func is_dev_server_running() -> bool:
 	## Returns true if a server is running on the HTTP port that we didn't start as managed.
-	return _lifecycle.get_server_pid() <= 0 and _is_port_in_use(McpClientConfigurator.http_port())
+	return _lifecycle.get_server_pid() <= 0 and _is_port_in_use(ClientConfigurator.http_port())
 
 
 func has_managed_server() -> bool:

@@ -22,6 +22,7 @@ const RELEASES_URL := (
 const RELEASES_PAGE := "https://github.com/hi-godot/godot-ai/releases/latest"
 const UPDATE_TEMP_DIR := "user://godot_ai_update/"
 const UPDATE_TEMP_ZIP := "user://godot_ai_update/update.zip"
+const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")
 
 ## Emitted after `check_for_updates()` resolves a newer remote version.
 ## Payload mirrors the Dictionary returned by `parse_releases_response`:
@@ -69,7 +70,7 @@ func setup(plugin, dock) -> void:
 ## `_install_zip` still gates on the physical symlink check so a forced-
 ## user mode can never clobber source.
 func check_for_updates() -> void:
-	if McpClientConfigurator.is_dev_checkout():
+	if ClientConfigurator.is_dev_checkout():
 		return
 	if _http_request == null:
 		_http_request = HTTPRequest.new()
@@ -169,7 +170,7 @@ static func parse_releases_response(
 	if tag.is_empty():
 		return out
 	var remote_version := tag.trim_prefix("v")
-	var local_version := McpClientConfigurator.get_plugin_version()
+	var local_version := ClientConfigurator.get_plugin_version()
 	if not _is_newer(remote_version, local_version):
 		return out
 
@@ -181,7 +182,7 @@ static func parse_releases_response(
 			url = String(asset_dict.get("browser_download_url", ""))
 			break
 
-	var forced := McpClientConfigurator.mode_override() == "user"
+	var forced := ClientConfigurator.mode_override() == "user"
 	var label_text := "Update available: v%s" % remote_version
 	if forced:
 		## Forced-user mode (dropdown or env) is the only way the banner
@@ -253,7 +254,7 @@ func _install_zip() -> void:
 	## Symlinked addons dir means an extract would clobber canonical
 	## `plugin/` source through the link. Symlink detection is independent
 	## of the mode override: even forced-user aborts here. See #116.
-	if McpClientConfigurator.addons_dir_is_symlink():
+	if ClientConfigurator.addons_dir_is_symlink():
 		install_state_changed.emit({
 			"button_text": "Dev checkout — update via git",
 			"button_disabled": true,
