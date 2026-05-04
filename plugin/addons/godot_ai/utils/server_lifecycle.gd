@@ -223,8 +223,8 @@ func handle_server_version_verified(expected_version: String, version: String) -
 				"Using dev server v%s with plugin v%s "
 				+ "(dev checkout version mismatch allowed)."
 			) % [version, expected]
-		## Foreign-port and AWAITING_VERSION both clear to READY on
-		## a successful handshake. Late re-arms from READY also land
+		## Foreign-port and post-spawn handshakes both clear to READY
+		## on a successful handshake. Late re-arms from READY also land
 		## here and self-confirm.
 		transition_state(McpServerStateScript.READY)
 		_host._update_process_enabled()
@@ -708,10 +708,9 @@ func recover_incompatible_server() -> bool:
 	_host._wait_for_port_free(port, 5.0)
 	if _host._is_port_in_use(port):
 		## Port still held — recovery failed. Re-latch INCOMPATIBLE so
-		## the dock keeps the diagnostic UI. Skip transition validation
-		## (STOPPING -> INCOMPATIBLE is not a forward-legal move) by
-		## resetting via the field.
-		_server_state = McpServerStateScript.INCOMPATIBLE
+		## the dock keeps the diagnostic UI. STOPPING -> INCOMPATIBLE is
+		## a recovery-rollback transition added by PR 7 (#297).
+		transition_state(McpServerStateScript.INCOMPATIBLE)
 		return false
 
 	UvCacheCleanup.purge_stale_builds()
@@ -745,13 +744,17 @@ func has_managed_server() -> bool:
 
 ## Reset state for a force-restart. Drops the managed record, clears
 ## the pid-file, and resets the spawn guard so the follow-up
-## `start_server()` walks the spawn arm.
+## `start_server()` walks the spawn arm. STOPPED -> UNINITIALIZED is
+## already in the transition table; UNINITIALIZED -> UNINITIALIZED is
+## a self-transition and always legal, so the call is safe across both
+## entry points (`force_restart_server` after STOPPED, fresh callers
+## from UNINITIALIZED).
 func reset_for_force_restart() -> void:
 	_host._clear_managed_server_record()
 	_host._clear_pid_file()
 	_host._server_started_this_session = false
 	_server_pid = -1
-	_server_state = McpServerStateScript.UNINITIALIZED
+	transition_state(McpServerStateScript.UNINITIALIZED)
 
 
 ## Ownership-checked kill of the port occupant + respawn. Driven from
@@ -772,7 +775,11 @@ func force_restart_server() -> void:
 	_host._kill_processes_and_windows_spawn_children(_host._find_all_pids_on_port(port))
 	_host._wait_for_port_free(port, 5.0)
 	if _host._is_port_in_use(port):
-		_server_state = McpServerStateScript.UNINITIALIZED
+		## Port still held after the kill — fall back to UNINITIALIZED
+		## so the follow-up `_set_incompatible_server` can latch the
+		## diagnosis from a clean baseline. STOPPING -> UNINITIALIZED is
+		## a recovery-rollback transition added by PR 7 (#297).
+		transition_state(McpServerStateScript.UNINITIALIZED)
 		_set_incompatible_server(
 			_host._probe_live_server_status_for_port(port),
 			McpClientConfigurator.get_plugin_version(),

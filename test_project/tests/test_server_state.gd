@@ -42,7 +42,6 @@ func test_is_terminal_diagnosis_excludes_non_diagnostic_states() -> void:
 	for non_terminal in [
 		McpServerState.UNINITIALIZED,
 		McpServerState.SPAWNING,
-		McpServerState.AWAITING_VERSION,
 		McpServerState.READY,
 		McpServerState.GUARDED,
 		McpServerState.STOPPING,
@@ -54,7 +53,6 @@ func test_is_terminal_diagnosis_excludes_non_diagnostic_states() -> void:
 
 func test_is_healthy_only_for_ready() -> void:
 	assert_true(McpServerState.is_healthy(McpServerState.READY))
-	assert_false(McpServerState.is_healthy(McpServerState.AWAITING_VERSION))
 	assert_false(McpServerState.is_healthy(McpServerState.SPAWNING))
 	assert_false(McpServerState.is_healthy(McpServerState.UNINITIALIZED))
 
@@ -90,6 +88,7 @@ func test_uninitialized_can_transition_to_any_diagnostic_state() -> void:
 		McpServerState.CRASHED,
 		McpServerState.NO_COMMAND,
 		McpServerState.PORT_EXCLUDED,
+		McpServerState.FOREIGN_PORT,
 		McpServerState.GUARDED,
 		McpServerState.INCOMPATIBLE,
 	]:
@@ -111,7 +110,7 @@ func test_terminal_diagnoses_freeze_forward_transitions() -> void:
 		for target in [
 			McpServerState.READY,
 			McpServerState.SPAWNING,
-			McpServerState.AWAITING_VERSION,
+			McpServerState.FOREIGN_PORT,
 		]:
 			assert_false(McpServerState.can_transition(stuck, target),
 				"%s -> %s must be rejected (first-writer-wins)" % [
@@ -133,29 +132,59 @@ func test_terminal_diagnoses_allow_stop_transitions() -> void:
 			"%s -> STOPPING must be legal" % McpServerState.name_of(stuck))
 
 
-func test_spawning_progresses_to_awaiting_or_crashed() -> void:
-	assert_true(McpServerState.can_transition(
-		McpServerState.SPAWNING, McpServerState.AWAITING_VERSION))
+func test_spawning_progresses_to_ready_or_crashed() -> void:
+	## Post-#297-PR-7 the version-check seam doesn't transition into a
+	## separate AWAITING_VERSION state — handle_server_version_verified
+	## moves directly from SPAWNING (or FOREIGN_PORT) to READY when the
+	## handshake clears.
 	assert_true(McpServerState.can_transition(
 		McpServerState.SPAWNING, McpServerState.READY))
 	assert_true(McpServerState.can_transition(
 		McpServerState.SPAWNING, McpServerState.CRASHED))
-
-
-func test_awaiting_version_resolves_to_ready_or_incompatible() -> void:
 	assert_true(McpServerState.can_transition(
-		McpServerState.AWAITING_VERSION, McpServerState.READY))
+		McpServerState.SPAWNING, McpServerState.FOREIGN_PORT))
 	assert_true(McpServerState.can_transition(
-		McpServerState.AWAITING_VERSION, McpServerState.INCOMPATIBLE))
+		McpServerState.SPAWNING, McpServerState.INCOMPATIBLE))
 
 
 func test_foreign_port_clears_to_ready_after_handshake() -> void:
 	assert_true(McpServerState.can_transition(
-		McpServerState.FOREIGN_PORT, McpServerState.AWAITING_VERSION))
-	assert_true(McpServerState.can_transition(
 		McpServerState.FOREIGN_PORT, McpServerState.READY))
 	assert_true(McpServerState.can_transition(
 		McpServerState.FOREIGN_PORT, McpServerState.INCOMPATIBLE))
+
+
+func test_stopping_recovery_rollback_transitions() -> void:
+	## PR 7 (#297) added two recovery-rollback transitions out of STOPPING
+	## so `recover_incompatible_server` and `force_restart_server` can stop
+	## bypassing `transition_state` when their kill-then-respawn fails:
+	##   - STOPPING -> INCOMPATIBLE: recover_incompatible_server failed to
+	##     free the port; re-latch the diagnosis so the dock keeps showing
+	##     the incompatible-server panel.
+	##   - STOPPING -> UNINITIALIZED: force_restart_server failed to free
+	##     the port; fall back so the follow-up `_set_incompatible_server`
+	##     can write the diagnosis from a clean baseline.
+	## STOPPING -> STOPPED is the happy path and was already legal.
+	assert_true(McpServerState.can_transition(
+		McpServerState.STOPPING, McpServerState.INCOMPATIBLE),
+		"STOPPING -> INCOMPATIBLE must be legal for the recovery rollback")
+	assert_true(McpServerState.can_transition(
+		McpServerState.STOPPING, McpServerState.UNINITIALIZED),
+		"STOPPING -> UNINITIALIZED must be legal for the force-restart rollback")
+	assert_true(McpServerState.can_transition(
+		McpServerState.STOPPING, McpServerState.STOPPED),
+		"STOPPING -> STOPPED must remain the happy-path transition")
+	## SPAWNING / READY / FOREIGN_PORT must NOT be re-reachable from
+	## STOPPING — those are the in-flight forward states and re-armed
+	## from STOPPED via a fresh start_server walk.
+	for forbidden in [
+		McpServerState.SPAWNING,
+		McpServerState.READY,
+		McpServerState.FOREIGN_PORT,
+	]:
+		assert_false(McpServerState.can_transition(
+			McpServerState.STOPPING, forbidden),
+			"STOPPING -> %s must stay rejected" % McpServerState.name_of(forbidden))
 
 
 func test_guarded_is_sticky_until_stop() -> void:
