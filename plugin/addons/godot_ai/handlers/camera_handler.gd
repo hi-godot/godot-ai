@@ -68,6 +68,8 @@ const _NODE_TRANSFORM_KEYS := [
 const _DAMPING_MARGIN_KEYS := ["left", "top", "right", "bottom"]
 const _CURRENT_SETTLE_ATTEMPTS := 8
 const _CURRENT_SETTLE_DELAY_MSEC := 10
+const _LOGICAL_CURRENT_2D_META := "godot_ai/logical_current_2d"
+const _LOGICAL_CURRENT_3D_META := "godot_ai/logical_current_3d"
 
 
 var _undo_redo: EditorUndoRedoManager
@@ -111,6 +113,73 @@ static func _is_effective_current(cam: Node) -> bool:
 		var viewport_3d := cam.get_viewport()
 		return viewport_3d != null and viewport_3d.get_camera_3d() == cam
 	return false
+
+static func _logical_meta_key_for(cam: Node) -> String:
+	if cam is Camera2D:
+		return _LOGICAL_CURRENT_2D_META
+	if cam is Camera3D:
+		return _LOGICAL_CURRENT_3D_META
+	return ""
+
+
+static func _set_logical_current(cam: Node) -> void:
+	if cam == null or not is_instance_valid(cam) or not cam.is_inside_tree():
+		return
+	var key := _logical_meta_key_for(cam)
+	if key.is_empty():
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return
+	if not scene_root.is_ancestor_of(cam):
+		return
+	scene_root.set_meta(key, McpScenePath.from_node(cam, scene_root))
+
+
+static func _clear_logical_current(cam: Node) -> void:
+	if cam == null:
+		return
+	var key := _logical_meta_key_for(cam)
+	if key.is_empty():
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null or not scene_root.has_meta(key):
+		return
+	var existing_path := String(scene_root.get_meta(key, ""))
+	var current_path := ""
+	if is_instance_valid(cam) and cam.is_inside_tree() and scene_root.is_ancestor_of(cam):
+		current_path = McpScenePath.from_node(cam, scene_root)
+	if existing_path == current_path:
+		scene_root.remove_meta(key)
+
+
+static func _logical_current_camera(scene_root: Node, type_str: String = "") -> Node:
+	if scene_root == null:
+		return null
+	var keys: Array[String] = []
+	if type_str == "2d":
+		keys = [_LOGICAL_CURRENT_2D_META]
+	elif type_str == "3d":
+		keys = [_LOGICAL_CURRENT_3D_META]
+	else:
+		keys = [_LOGICAL_CURRENT_2D_META, _LOGICAL_CURRENT_3D_META]
+	for key in keys:
+		if not scene_root.has_meta(key):
+			continue
+		var path := String(scene_root.get_meta(key, ""))
+		if path.is_empty():
+			continue
+		var node := McpScenePath.resolve(path, scene_root)
+		if node == null:
+			scene_root.remove_meta(key)
+			continue
+		if not _is_camera(node):
+			scene_root.remove_meta(key)
+			continue
+		if type_str.is_empty() or _camera_type_str(node) == type_str:
+			return node
+	return null
+
 
 
 # Register a current=true switch on `node` in the open undo action,
@@ -166,6 +235,7 @@ func _add_make_current_to_action(node: Node, type_str: String, scene_root: Node)
 func _apply_make_current(cam: Node) -> void:
 	if cam == null or not is_instance_valid(cam) or not cam.is_inside_tree():
 		return
+	_set_logical_current(cam)
 	for attempt in range(_CURRENT_SETTLE_ATTEMPTS):
 		cam.make_current()
 		_force_camera_refresh(cam)
@@ -247,6 +317,7 @@ func _nudge_camera_2d_current(target: Node) -> void:
 func _apply_clear_current(cam: Node) -> void:
 	if cam == null or not is_instance_valid(cam) or not cam.is_inside_tree():
 		return
+	_clear_logical_current(cam)
 	for attempt in range(_CURRENT_SETTLE_ATTEMPTS):
 		if not _is_current(cam):
 			return
@@ -679,8 +750,12 @@ func get_camera(params: Dictionary) -> Dictionary:
 		# viewport slot has switched; falling through to "first" during that
 		# window makes camera_get("") nondeterministic.
 		var all_cams := _list_cameras_in_scene(scene_root, "")
+		var logical_current := _logical_current_camera(scene_root)
+		if logical_current != null and all_cams.has(logical_current):
+			node = logical_current
+			resolved_via = "current"
 		var viewport_current := _viewport_current_camera(scene_root)
-		if viewport_current != null and all_cams.has(viewport_current):
+		if node == null and viewport_current != null and all_cams.has(viewport_current):
 			node = viewport_current
 			resolved_via = "current"
 		for cam in all_cams:
@@ -755,7 +830,7 @@ func list_cameras(_params: Dictionary) -> Dictionary:
 			"path": McpScenePath.from_node(cam, scene_root),
 			"class": cam.get_class(),
 			"type": _camera_type_str(cam),
-			"current": _is_current(cam),
+			"current": _is_effective_current(cam) or _logical_current_camera(scene_root, _camera_type_str(cam)) == cam,
 		})
 	return {"data": {"cameras": out}}
 
