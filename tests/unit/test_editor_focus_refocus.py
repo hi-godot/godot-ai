@@ -616,6 +616,62 @@ def test_force_refresh_invalidates_cli_finder_cache() -> None:
     )
 
 
+def test_cli_finder_cache_is_mutex_guarded() -> None:
+    """`CliFinder.find()` runs on action-worker threads
+    (`_run_client_action_worker` in `mcp_dock.gd`) and `invalidate()` runs on
+    the main thread (force-refresh path). Godot `Dictionary` is not safe for
+    concurrent mutation, so `_cache` / `_searched` access must be guarded by
+    a `Mutex`. The mutex must NOT be held across `_resolve()` (which forks
+    `bash -lc` / `which` and can take 100ms-1s) — otherwise a main-thread
+    `invalidate()` blocks the editor on a worker's subprocess, defeating
+    the off-main-thread CLI-lookup design.
+    """
+
+    source = (PLUGIN_ROOT / "clients" / "_cli_finder.gd").read_text()
+
+    assert re.search(r"static var _mutex: Mutex = Mutex\.new\(\)", source), (
+        "CliFinder must declare `static var _mutex: Mutex = Mutex.new()` so "
+        "concurrent find()/invalidate() calls don't race the shared "
+        "_cache / _searched dictionaries."
+    )
+
+    invalidate_block = get_func_block(
+        source, "static func invalidate(exe_name: String = \"\") -> void:"
+    )
+    assert "_mutex.lock()" in invalidate_block and "_mutex.unlock()" in invalidate_block, (
+        "invalidate() must hold _mutex around the dict clear/erase so it "
+        "can race safely against worker-thread find() calls."
+    )
+
+    find_one_block = get_func_block(source, "static func _find_one(exe_name: String) -> String:")
+    # Lock + unlock pattern must appear at least twice: once around the
+    # cache read, once around the cache writeback. _resolve() must run
+    # outside any lock — the lock/unlock count therefore tells us the
+    # critical sections aren't accidentally fused into a single span that
+    # encloses the subprocess fork.
+    assert find_one_block.count("_mutex.lock()") >= 2, (
+        "_find_one() must lock _mutex separately around the read and the "
+        "writeback so _resolve() (which forks bash) runs unlocked."
+    )
+    assert find_one_block.count("_mutex.unlock()") >= 2, (
+        "_find_one() must release _mutex before calling _resolve(), "
+        "otherwise a main-thread invalidate() blocks on the subprocess."
+    )
+    # Hard guarantee: no `_resolve(` call sandwiched between a lock and the
+    # next unlock. Search for the resolve call and check the surrounding
+    # context.
+    resolve_idx = find_one_block.index("_resolve(")
+    preceding = find_one_block[:resolve_idx]
+    last_lock = preceding.rfind("_mutex.lock()")
+    last_unlock = preceding.rfind("_mutex.unlock()")
+    assert last_unlock > last_lock, (
+        "_resolve() must be called with _mutex unlocked. Holding the lock "
+        "across the subprocess fork would let invalidate() freeze the main "
+        "thread for the duration of `bash -lc` / `which` — exactly the "
+        "main-thread blocking the off-thread design exists to avoid."
+    )
+
+
 def test_configure_all_uses_cached_status_not_dot_color() -> None:
     """Configure-all must not make correctness decisions from stale UI colors."""
 

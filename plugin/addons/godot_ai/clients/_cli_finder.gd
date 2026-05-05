@@ -8,8 +8,19 @@ extends RefCounted
 ##   2. Login shell lookup (`bash -lc 'command -v <exe>'`) — picks up .zshrc / .bashrc
 ##   3. Plain `which` / `where` against the inherited PATH
 ## Caches per-exe so repeated dock refreshes don't fork a shell every frame.
+##
+## Thread safety: `find()` runs on action-worker threads
+## (`_run_client_action_worker` in `mcp_dock.gd`), and `invalidate()` runs on
+## the main thread (manual Refresh path). Godot `Dictionary` is not safe for
+## concurrent mutation, so `_cache` / `_searched` access is guarded by
+## `_mutex`. The mutex is held only across dictionary read/write — the slow
+## `_resolve()` path (FileAccess + `OS.execute`) runs unlocked, so a
+## main-thread `invalidate()` can never block on a worker's subprocess.
+## Two workers racing the same exe both call `_resolve()` and both write
+## back the same answer; that's wasted work, not corruption.
 
 
+static var _mutex: Mutex = Mutex.new()
 static var _cache: Dictionary = {}  # exe_name -> resolved path (or "")
 static var _searched: Dictionary = {}
 
@@ -26,20 +37,33 @@ static func find(exe_names: Array[String]) -> String:
 
 ## Drop cache for one exe (call after the user installs / reinstalls).
 static func invalidate(exe_name: String = "") -> void:
+	_mutex.lock()
 	if exe_name.is_empty():
 		_cache.clear()
 		_searched.clear()
 	else:
 		_cache.erase(exe_name)
 		_searched.erase(exe_name)
+	_mutex.unlock()
 
 
 static func _find_one(exe_name: String) -> String:
-	if _searched.get(exe_name, false):
-		return _cache.get(exe_name, "")
+	_mutex.lock()
+	var already_searched: bool = _searched.get(exe_name, false)
+	var cached: String = _cache.get(exe_name, "")
+	_mutex.unlock()
+	if already_searched:
+		return cached
+	# `_resolve()` does FileAccess + `OS.execute` (forks `bash -lc` /
+	# `which`), which can take 100ms-1s. Holding the mutex across that
+	# would let a concurrent `invalidate()` on the main thread freeze the
+	# editor for the duration of the subprocess — which defeats the whole
+	# point of running CLI lookup off the main thread.
 	var hit := _resolve(exe_name)
+	_mutex.lock()
 	_cache[exe_name] = hit
 	_searched[exe_name] = true
+	_mutex.unlock()
 	return hit
 
 
