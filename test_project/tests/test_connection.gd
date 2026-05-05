@@ -392,11 +392,11 @@ func test_drain_caps_at_PACKET_DRAIN_CAP_PER_TICK() -> void:
 	var result := conn._drain_inbound_packets(peer)
 
 	assert_eq(
-		result.drained,
+		result["drained"],
 		McpConnection.PACKET_DRAIN_CAP_PER_TICK,
 		"drained exactly the per-tick cap",
 	)
-	assert_eq(result.spilled, 5, "spilled = queue_size - cap")
+	assert_eq(result["spilled"], 5, "spilled = queue_size - cap")
 	assert_eq(peer.get_available_packet_count(), 5, "5 packets remain on the peer for next tick")
 	assert_eq(conn._packet_spillover_total, 5, "spill counter incremented by spillover")
 	conn.free()
@@ -412,8 +412,8 @@ func test_drain_below_cap_does_not_increment_spillover() -> void:
 
 	var result := conn._drain_inbound_packets(peer)
 
-	assert_eq(result.drained, 5)
-	assert_eq(result.spilled, 0, "no spillover under the cap")
+	assert_eq(result["drained"], 5)
+	assert_eq(result["spilled"], 0, "no spillover under the cap")
 	assert_eq(peer.get_available_packet_count(), 0, "queue fully drained")
 	assert_eq(conn._packet_spillover_total, 0, "counter stays at 0 when no spillover")
 	conn.free()
@@ -430,8 +430,8 @@ func test_drain_at_exactly_cap_does_not_log_or_count_spillover() -> void:
 
 	var result := conn._drain_inbound_packets(peer)
 
-	assert_eq(result.drained, McpConnection.PACKET_DRAIN_CAP_PER_TICK)
-	assert_eq(result.spilled, 0, "exactly cap == nothing left to spill")
+	assert_eq(result["drained"], McpConnection.PACKET_DRAIN_CAP_PER_TICK)
+	assert_eq(result["spilled"], 0, "exactly cap == nothing left to spill")
 	assert_eq(conn._packet_spillover_total, 0, "boundary case must not flag spillover")
 	conn.free()
 
