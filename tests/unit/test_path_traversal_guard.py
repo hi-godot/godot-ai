@@ -36,21 +36,29 @@ def test_path_validator_declares_class_name() -> None:
 
 
 def test_path_validator_implements_layered_checks() -> None:
-    """The validator must implement all four layers from issue #347's fix shape:
-    non-empty, res:// prefix, no `..` substring, and globalize-simplify boundary check.
+    """The validator must implement every layer from issue #347's fix shape:
+    non-empty, res:// prefix, no `..` substring, globalize-simplify
+    normalisation, and boundary verification against the project root.
 
     Each layer catches a different escape vector — losing any of them silently
     weakens the security boundary without a single test failing on a single bad input.
     """
     source = PATH_VALIDATOR.read_text()
-    # 1) prefix check
+    # 1) non-empty guard — without this, an empty path silently passes the
+    # prefix check (since "".begins_with("res://") is false, the prefix
+    # error fires, but the message would name the wrong layer).
+    assert "is_empty()" in source, (
+        "validator must reject empty paths explicitly so the error message "
+        "names the missing-param layer rather than the prefix layer."
+    )
+    # 2) prefix check
     assert 'begins_with("res://")' in source, "validator must check res:// prefix"
-    # 2) literal `..` substring rejection — the cheap defence-in-depth layer
+    # 3) literal `..` substring rejection — the cheap defence-in-depth layer
     assert '".." in path' in source, "validator must reject any path containing '..'"
-    # 3) globalize → simplify normalisation
+    # 4) globalize → simplify normalisation
     assert "ProjectSettings.globalize_path" in source
     assert "simplify_path()" in source
-    # 4) boundary verification against the project root
+    # 5) boundary verification against the project root
     assert "res_root" in source, (
         "validator must compare the simplified globalised path against the "
         "simplified project root — a missing boundary check lets encoded "

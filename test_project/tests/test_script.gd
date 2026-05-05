@@ -108,14 +108,18 @@ func test_create_script_wrong_extension() -> void:
 
 func test_create_script_rejects_traversal_path() -> void:
 	## Issue #347: `res://../etc/passwd.gd` previously passed the prefix check.
+	## Use a synthetic target so a host with a pre-existing
+	## `<project_parent>/etc/passwd.gd` couldn't false-positive the disk
+	## assertion. The synthetic name never exists in a clean tree.
+	var traversal_path := "res://../__mcp_traversal_test_target__.gd"
 	var result := _handler.create_script({
-		"path": "res://../etc/passwd.gd",
+		"path": traversal_path,
 		"content": "extends Node\n",
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	assert_contains(result.error.message, "..")
 	## Defence: confirm the file was NOT written outside the project.
-	assert_false(FileAccess.file_exists("res://../etc/passwd.gd"), "traversal must not write to disk")
+	assert_false(FileAccess.file_exists(traversal_path), "traversal must not write to disk")
 
 
 # ----- patch_script -----

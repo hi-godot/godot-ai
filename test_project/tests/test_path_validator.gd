@@ -79,13 +79,18 @@ func test_rejects_dotdot_in_filename() -> void:
 	assert_false(err.is_empty(), "literal '..' anywhere in path must be rejected")
 
 
-# ----- defence in depth (boundary check beyond the substring guard) -----
+# ----- boundary check (defence in depth past the substring guard) -----
 
-func test_rejects_path_resolving_outside_root() -> void:
-	## Direct traversal is caught by the substring guard. This test exercises
-	## the globalize_path → simplify_path → boundary verification — if a
-	## future encoding bypass slips past the substring check, this layer
-	## still rejects.
-	## Sanity: validate_resource_path on something we know simplifies safely.
+func test_well_formed_nested_path_passes_boundary_check() -> void:
+	## Sanity: a path with no `..` substring still has to clear the
+	## globalize_path → simplify_path → boundary check. This pins the safe
+	## path so a regression in the boundary comparison (e.g. trailing-slash
+	## handling) couldn't silently reject legitimate paths.
+	##
+	## Direct traversal payloads can't reach the boundary check — they're
+	## caught by the `..` substring rejection above — so there's no
+	## non-`..` traversal payload to assert rejection on. The boundary
+	## check exists as defence-in-depth for any future encoding-bypass
+	## that smuggles a `..` past the substring guard.
 	var safe := McpPathValidator.validate_resource_path("res://addons/godot_ai")
 	assert_eq(safe, "", "well-formed nested path must validate")

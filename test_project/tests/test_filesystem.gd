@@ -114,13 +114,19 @@ func test_write_file_invalid_prefix() -> void:
 
 func test_write_file_rejects_traversal_path() -> void:
 	## Issue #347: the actual arbitrary-disk-write primitive.
+	## Use a synthetic target so a Unix host's pre-existing /etc/* doesn't
+	## false-positive the disk-state assertion below. If a regression let
+	## the write through, the file would land one dir above the project at
+	## `<project_parent>/__mcp_traversal_test_target__`, which never
+	## exists in a clean tree.
+	var traversal_path := "res://../__mcp_traversal_test_target__.txt"
 	var result := _handler.write_file({
-		"path": "res://../etc/passwd",
+		"path": traversal_path,
 		"content": "owned\n",
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	assert_contains(result.error.message, "..")
-	assert_false(FileAccess.file_exists("res://../etc/passwd"), "traversal must not write to disk")
+	assert_false(FileAccess.file_exists(traversal_path), "traversal must not write to disk")
 
 
 # ----- reimport -----
