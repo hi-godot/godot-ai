@@ -50,10 +50,8 @@ MANAGE_TOOL_OPS: dict[str, tuple[str, ...]] = {}
 
 @functools.cache
 def _op_literal_for(op_names: frozenset[str]) -> Any:
-    ## Sorting yields a deterministic Literal arg order so the cache key
-    ## (a frozenset, order-independent) maps to a stable type — and any
-    ## error message Pydantic emits ("must be one of …") stays consistent
-    ## across registrations of the same op set.
+    ## Sort because the cache key is a frozenset (orderless); a stable arg
+    ## order keeps Pydantic's "Input should be …" error message consistent.
     return Literal[tuple(sorted(op_names))]  # type: ignore[valid-type]
 
 
