@@ -460,12 +460,14 @@ func test_set_property_color_rejects_array_input() -> void:
 	assert_true(editor_undo(_undo_redo), "undo create should succeed")
 
 
-func test_check_coerced_array_vector3_returns_invalid_params() -> void:
+func test_check_coerced_array_vector3_returns_wrong_type() -> void:
 	## Direct unit check on the helper — no scene needed. Pins the
 	## error shape so the message format change in #191 stays bisect-friendly.
+	## Code is WRONG_TYPE post-audit-v2 #21 (#365): a value that fails to
+	## coerce to a typed Variant slot is a type mismatch.
 	var coerce_err: Variant = NodeHandler._check_coerced([1, 2, 3], TYPE_VECTOR3)
 	assert_true(coerce_err is Dictionary, "Non-coerced Array input must produce an error dict")
-	assert_eq(coerce_err.error.code, McpErrorCodes.INVALID_PARAMS)
+	assert_eq(coerce_err.error.code, McpErrorCodes.WRONG_TYPE)
 	assert_contains(coerce_err.error.message, "Vector3")
 	assert_contains(coerce_err.error.message, "Array")  # names the received type
 
