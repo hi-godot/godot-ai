@@ -58,6 +58,9 @@ func test_create_script_basic() -> void:
 	assert_has_key(result, "data")
 	assert_eq(result.data.path, path)
 	assert_eq(result.data.size, content.length())
+	assert_eq(result.data.committed, true)
+	assert_eq(result.data.import_settled, false)
+	assert_eq(result.data.import_settle, "not_waited")
 	assert_false(result.data.undoable, "File write should not be undoable")
 	# Verify file was actually written
 	assert_true(FileAccess.file_exists(path), "Script file should exist")
@@ -81,6 +84,9 @@ func test_create_script_overwrite_omits_cleanup_hint() -> void:
 	first.close()
 	var result := _handler.create_script({"path": path, "content": "extends Node\n# v2\n"})
 	assert_has_key(result, "data")
+	assert_eq(result.data.committed, true)
+	assert_eq(result.data.import_settled, true)
+	assert_eq(result.data.import_settle, "already_known")
 	assert_false(result.data.has("cleanup"), "Overwrite must not emit a cleanup hint")
 	DirAccess.remove_absolute(path)
 
