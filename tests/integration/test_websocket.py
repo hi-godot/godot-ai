@@ -428,6 +428,90 @@ class TestMultipleSessions:
         await plugin_new.close()
 
 
+# ---------------------------------------------------------------------------
+# DNS-rebinding guard — audit-v2 #1 (#345)
+# ---------------------------------------------------------------------------
+
+
+class TestDnsRebindingGuard:
+    """The WS server's loopback Host/Origin guard runs before the upgrade.
+
+    Browsers attacking via DNS rebinding send a non-loopback Host (the
+    rebound name they typed in the URL bar) and a non-loopback Origin
+    (the attacker's page). Native plugin clients send a loopback Host
+    and no Origin, so they pass through.
+    """
+
+    async def test_loopback_host_no_origin_succeeds(self, harness):
+        # The default native shape: ``websockets`` client sends
+        # ``Host: 127.0.0.1:<port>`` and no ``Origin``.
+        plugin = await harness.connect_plugin(session_id="loopback-default")
+        assert harness.registry.get("loopback-default") is not None
+        await plugin.close()
+
+    async def test_non_loopback_host_rejected_at_upgrade(self, harness):
+        ## A DNS-rebinding browser request lands on 127.0.0.1 but carries
+        ## ``Host: attacker.example.com:<port>``. The guard fires before
+        ## the upgrade — InvalidStatus surfaces the synthesized 403.
+        with pytest.raises(websockets.exceptions.InvalidStatus) as exc_info:
+            await websockets.connect(
+                f"ws://127.0.0.1:{harness.port}",
+                additional_headers={"Host": "attacker.example.com"},
+            )
+        assert exc_info.value.response.status_code == 403
+
+    async def test_browser_origin_rejected_at_upgrade(self, harness):
+        ## A loopback Host is not enough — a browser-driven Origin gives
+        ## the rebinding away even when the Host header looks fine.
+        with pytest.raises(websockets.exceptions.InvalidStatus) as exc_info:
+            await websockets.connect(
+                f"ws://127.0.0.1:{harness.port}",
+                origin="https://attacker.example.com",
+            )
+        assert exc_info.value.response.status_code == 403
+
+    async def test_loopback_origin_accepted(self, harness):
+        ## A localhost-shaped explicit Origin is permitted (use case:
+        ## an MCP-aware tool fronting our server from a loopback browser
+        ## context, e.g. a local docs viewer).
+        ws = await websockets.connect(
+            f"ws://127.0.0.1:{harness.port}",
+            origin="http://localhost:9500",
+        )
+        handshake = {
+            "type": "handshake",
+            "session_id": "origin-loopback",
+            "godot_version": "4.4.1",
+            "project_path": "/tmp",
+            "plugin_version": "0.0.1",
+            "protocol_version": 1,
+            "readiness": "ready",
+            "editor_pid": 0,
+        }
+        await ws.send(json.dumps(handshake))
+        await asyncio.sleep(0.05)
+        ## Drain the ack so it doesn't pollute later asserts.
+        try:
+            await asyncio.wait_for(ws.recv(), timeout=0.5)
+        except asyncio.TimeoutError:
+            pass
+        assert harness.registry.get("origin-loopback") is not None
+        await ws.close()
+
+    async def test_rejected_request_does_not_register_session(self, harness):
+        before = len(harness.registry)
+        with pytest.raises(websockets.exceptions.InvalidStatus):
+            await websockets.connect(
+                f"ws://127.0.0.1:{harness.port}",
+                origin="https://attacker.example.com",
+            )
+        await asyncio.sleep(0.05)
+        ## No Session must have been added — the guard refuses before
+        ## ``_handle_connection`` runs, so neither the registry nor the
+        ## ``_connections`` map sees the rebound peer.
+        assert len(harness.registry) == before
+
+
 # --- Issue #262: editor_state self-heals a stale "playing" cache ---
 
 
