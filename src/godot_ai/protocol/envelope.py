@@ -50,3 +50,22 @@ class HandshakeMessage(BaseModel):
     ## server — distinguishable from a live detection that returned
     ## "unknown" only by plugin_version.
     server_launch_mode: str = "unknown"
+
+
+## State events emitted by the plugin's _check_state_changes() poller. Each
+## carries one typed string field. Validating them on receive prevents a
+## malformed event (or a hijacked WS) from setting non-string values on the
+## Session, which then ship to MCP clients verbatim via Session.to_dict().
+## See audit-v2 finding #7 (issue #351).
+
+
+class SceneChangedEvent(BaseModel):
+    current_scene: str = ""
+
+
+class PlayStateChangedEvent(BaseModel):
+    play_state: str = "stopped"
+
+
+class ReadinessChangedEvent(BaseModel):
+    readiness: str = "ready"
