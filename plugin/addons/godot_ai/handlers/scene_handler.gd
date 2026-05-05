@@ -4,6 +4,8 @@ extends RefCounted
 ## Handles scene tree reading and node search.
 
 var _connection: McpConnection
+var _save_scene_callable: Callable = Callable()
+var _save_scene_as_callable: Callable = Callable()
 
 
 func _init(connection: McpConnection = null) -> void:
@@ -165,9 +167,16 @@ func save_scene(_params: Dictionary) -> Dictionary:
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 
+	var path := scene_root.scene_file_path
+	if path.is_empty():
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"Current scene has never been saved; call scene_save_as or scene_manage(op='save_as') with a res://...tscn path."
+		)
+
 	if _connection:
 		_connection.pause_processing = true
-	var err := EditorInterface.save_scene()
+	var err := _save_current_scene()
 	if _connection:
 		_connection.pause_processing = false
 
@@ -176,7 +185,7 @@ func save_scene(_params: Dictionary) -> Dictionary:
 
 	return {
 		"data": {
-			"path": scene_root.scene_file_path,
+			"path": path,
 			"undoable": false,
 			"reason": "File save cannot be undone via editor undo",
 		}
@@ -208,7 +217,7 @@ func save_scene_as(params: Dictionary) -> Dictionary:
 
 	if _connection:
 		_connection.pause_processing = true
-	EditorInterface.save_scene_as(path)
+	_save_current_scene_as(path)
 	if _connection:
 		_connection.pause_processing = false
 
@@ -219,6 +228,19 @@ func save_scene_as(params: Dictionary) -> Dictionary:
 			"reason": "File save cannot be undone via editor undo",
 		}
 	}
+
+
+func _save_current_scene() -> int:
+	if _save_scene_callable.is_valid():
+		return int(_save_scene_callable.call())
+	return EditorInterface.save_scene()
+
+
+func _save_current_scene_as(path: String) -> void:
+	if _save_scene_as_callable.is_valid():
+		_save_scene_as_callable.call(path)
+		return
+	EditorInterface.save_scene_as(path)
 
 
 func _walk_tree(node: Node, out: Array[Dictionary], depth: int, max_depth: int, scene_root: Node) -> void:
