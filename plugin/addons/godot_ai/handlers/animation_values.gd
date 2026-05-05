@@ -183,7 +183,11 @@ func validate_animation(params: Dictionary) -> Dictionary:
 
 	for i in anim.get_track_count():
 		var track_path_str := str(anim.track_get_path(i))
-		var colon := track_path_str.rfind(":")
+		# Split on the FIRST colon (node↔property boundary). Subpath tracks
+		# like "Target:modulate:a" or "Target:position:y" — the shape every
+		# preset_* produces — would otherwise glue the property+subpath into
+		# the node part via rfind, falsely flagging healthy tracks as broken.
+		var colon := track_path_str.find(":")
 		var node_part: String
 		if colon >= 0:
 			node_part = track_path_str.substr(0, colon)

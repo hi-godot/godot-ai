@@ -1494,6 +1494,43 @@ func test_validate_animation_not_found() -> void:
 	_remove_node(player_path)
 
 
+## Regression: validate_animation must split track paths on the FIRST colon
+## (node↔property boundary), not the last. A track like "Target:modulate:a"
+## (the shape every preset_* produces, plus any `position:y` etc. subpath
+## track) must resolve to the node "Target", not "Target:modulate", so the
+## validator reports the track as healthy when the target node exists.
+func test_validate_animation_handles_subpath_track_paths() -> void:
+	var player_path := _add_player("TestValidateSubpath")
+	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
+		return
+	var sibling := _add_sibling(Sprite2D.new(), "TestValidateSubpathTarget")
+	if sibling == null:
+		skip("Scene not ready — _add_sibling returned null")
+		return
+	_handler.create_animation({"player_path": player_path, "name": "fade", "length": 0.5})
+	_handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "fade",
+		"track_path": "TestValidateSubpathTarget:modulate:a",
+		"keyframes": [
+			{"time": 0.0, "value": 0.0},
+			{"time": 0.5, "value": 1.0},
+		],
+	})
+	var result := _handler.validate_animation({
+		"player_path": player_path, "animation_name": "fade",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.valid, true,
+		"Subpath track 'Target:modulate:a' should validate as healthy when target exists")
+	assert_eq(result.data.broken_count, 0)
+	assert_eq(result.data.valid_count, 1)
+	sibling.get_parent().remove_child(sibling)
+	sibling.queue_free()
+	_remove_node(player_path)
+
+
 # ─── animation_preset_* — shared helpers ─────────────────────────────────────
 
 ## Add a sibling node to the scene_root. The preset tools resolve target_path
