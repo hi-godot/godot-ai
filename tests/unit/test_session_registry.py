@@ -125,7 +125,7 @@ class TestSessionRegistry:
 
 
 class TestSessionRegistryNoThreadingLock:
-    """Guard against reintroducing a threading lock; this registry is asyncio-only."""
+    """Guard against reintroducing a threading lock on the registry."""
 
     def test_registry_has_no_lock_attribute(self):
         reg = SessionRegistry()

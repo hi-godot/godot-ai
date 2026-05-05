@@ -77,8 +77,7 @@ class SessionRegistry:
     """Tracks all connected Godot editor sessions.
 
     Callers run on the single asyncio event loop driving the WS transport,
-    so state is mutated without locking. If a thread crossing is ever
-    introduced, use ``asyncio.Lock`` — this code is async-first.
+    so state is mutated without locking.
     """
 
     def __init__(self):
