@@ -950,27 +950,37 @@ func _build_mixed_state_banner() -> void:
 		"Scan addons/godot_ai/ for *.update_backup files again."
 		+ " Click after restoring the addon manually to dismiss this banner."
 	)
-	_mixed_state_rescan_btn.pressed.connect(_refresh_mixed_state_banner)
+	_mixed_state_rescan_btn.pressed.connect(func(): _refresh_mixed_state_banner(true))
 	_mixed_state_banner.add_child(_mixed_state_rescan_btn)
 
 	_mixed_state_banner.add_child(HSeparator.new())
 	add_child(_mixed_state_banner)
 
 
-func _refresh_mixed_state_banner() -> void:
+func _refresh_mixed_state_banner(force: bool = false) -> void:
+	## Re-scan button passes `force=true` to bypass the scanner's TTL
+	## cache so a manual fix is reflected immediately.
+	_apply_mixed_state_banner_diagnostic(UpdateMixedStateScript.diagnose(
+		UpdateMixedStateScript.ADDON_DIR, force
+	))
+
+
+## Render seam exposed for testing — the GDScript test suite drives this
+## directly with synthetic diagnostics so dock banner contracts can be
+## pinned without polluting the real `addons/godot_ai/` tree with backup
+## files. Callers from production go through `_refresh_mixed_state_banner`.
+func _apply_mixed_state_banner_diagnostic(diag: Dictionary) -> void:
 	if _mixed_state_banner == null:
 		return
-	var diag := UpdateMixedStateScript.diagnose()
 	if diag.is_empty():
 		_mixed_state_banner.visible = false
 		return
 	_mixed_state_banner.visible = true
 	_mixed_state_label.clear()
-	_mixed_state_label.add_text(String(diag.get("message", "")))
+	_mixed_state_label.add_text(diag.get("message", ""))
 	_mixed_state_files.clear()
-	var backup_files: Array = diag.get("backup_files", [])
-	for path in backup_files:
-		_mixed_state_files.add_text(String(path))
+	for path in diag.get("backup_files", []):
+		_mixed_state_files.add_text(path)
 		_mixed_state_files.newline()
 	if bool(diag.get("truncated", false)):
 		_mixed_state_files.add_text(

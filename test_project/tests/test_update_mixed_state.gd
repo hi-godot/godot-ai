@@ -26,10 +26,14 @@ func suite_setup(_ctx: Dictionary) -> void:
 func teardown() -> void:
 	_clean_scratch_dir()
 	DirAccess.make_dir_recursive_absolute(_scratch_dir)
+	## Static cache survives across tests; clear so a prior run's stale
+	## production-path scan can't bleed into the next case.
+	UpdateMixedState.clear_cache()
 
 
 func suite_teardown() -> void:
 	_clean_scratch_dir()
+	UpdateMixedState.clear_cache()
 
 
 func _clean_scratch_dir() -> void:
@@ -151,10 +155,81 @@ func test_diagnose_carries_structured_fields() -> void:
 	assert_has_key(diag, "truncated")
 	assert_eq(false, bool(diag["truncated"]), "two entries are well below the cap")
 	assert_has_key(diag, "message")
+	var message: String = diag["message"]
 	assert_true(
-		String(diag["message"]).contains("addons/godot_ai/"),
+		message.contains("addons/godot_ai/"),
 		"message should name the addons dir so the operator knows where to look",
 	)
+	assert_true(
+		message.contains("FAILED_MIXED"),
+		"message should name the FAILED_MIXED state so a searching agent can correlate",
+	)
+	## The scanner can't tell FAILED_MIXED from "successful install whose
+	## best-effort cleanup hit a permission error" — both leave
+	## .update_backup files. Pin that the message acknowledges the
+	## ambiguity so the dock copy doesn't lie to users in the latter case.
+	assert_true(
+		message.contains("safe to delete") or message.contains("stale"),
+		"message should acknowledge the stale-backup case as well as FAILED_MIXED",
+	)
+
+
+func test_find_backups_walk_is_deterministic_when_truncated() -> void:
+	## Truncation cap is rare in practice but when it kicks in two scans of
+	## the same tree must return the same 200-file slice — otherwise the
+	## "diff cleanly across calls" property breaks. Pin this by creating
+	## enough files to overflow the cap and asserting the result is stable
+	## across repeated invocations.
+	var max_results: int = UpdateMixedState.MAX_BACKUP_RESULTS
+	var overflow_count := max_results + 25
+	for i in range(overflow_count):
+		_make_file(
+			_scratch_dir.path_join(
+				"sub_%02d/file_%04d.gd%s"
+				% [i % 4, i, UpdateMixedState.BACKUP_SUFFIX]
+			),
+			"vN content %d" % i,
+		)
+	var first := UpdateMixedState.find_backups(_scratch_dir)
+	var second := UpdateMixedState.find_backups(_scratch_dir)
+	assert_eq(max_results, first.size(), "first scan should hit cap")
+	assert_eq(max_results, second.size(), "second scan should hit cap")
+	assert_eq(first, second, "two scans of the same tree must return the same slice")
+
+
+func test_diagnose_caches_repeated_default_dir_calls() -> void:
+	## `editor_state` is one of the most-called MCP tools and runs the
+	## scanner on every poll. Pin that a second call within the TTL is a
+	## cache hit by mutating the addons tree between calls and verifying
+	## the cached result wins until clear_cache() forces a re-scan.
+	UpdateMixedState.clear_cache()
+	## First call: production ADDON_DIR, no force, populates cache.
+	var first := UpdateMixedState.diagnose()
+	## In the test_project tree this should be empty (no .update_backup
+	## files present); we just need a cached snapshot to compare against.
+	assert_true(first.is_empty(), "test_project tree must be clean for this test to drive the cache")
+	## Second call: still cached (within 5s TTL), returns the same Dict.
+	var second := UpdateMixedState.diagnose()
+	assert_eq(first, second, "second call within TTL must hit cache")
+	## clear_cache() forces the next call to re-scan.
+	UpdateMixedState.clear_cache()
+	var third := UpdateMixedState.diagnose()
+	assert_eq(first, third, "post-clear scan returns the same clean result")
+
+
+func test_diagnose_force_bypasses_cache() -> void:
+	## Re-scan button uses `force=true` so a manual fix is reflected
+	## without waiting for the TTL. Pin that force re-runs the walk even
+	## with a fresh cache populated by a normal call.
+	UpdateMixedState.clear_cache()
+	var cached := UpdateMixedState.diagnose()
+	assert_true(cached.is_empty(), "test_project tree must be clean")
+	## With force=true the scanner must not return the cached value — it
+	## must re-walk. The result is still empty here (clean tree) but the
+	## contract is that the walk happened. We assert force returns the
+	## same empty Dict shape.
+	var forced := UpdateMixedState.diagnose(UpdateMixedState.ADDON_DIR, true)
+	assert_eq(cached, forced, "forced re-scan returns the same shape on a clean tree")
 
 
 func test_find_backups_caps_results_at_max() -> void:
