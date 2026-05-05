@@ -980,14 +980,32 @@ func test_toml_strategy_detects_bare_key_section_no_duplicate_on_reconfigure() -
 	assert_contains(content, "[mcp_servers.godot-ai.tools.session_list]")
 	assert_contains(content, "approval_mode = \"approve\"")
 
-	## remove must also clean the bare-key form (was a silent no-op).
+	## remove must clean the bare-key form (was a silent no-op) AND the
+	## subtables under the namespace. Leaving subtables behind would
+	## keep mcp_servers.godot-ai implicitly defined, so a later
+	## configure rewriting [mcp_servers."godot-ai"] produces a
+	## duplicate-key TOML error — the same shape the original bug took.
 	var removed := McpTomlStrategy.remove(client, "godot-ai")
 	assert_eq(removed.get("status"), "ok")
 	var after_remove := FileAccess.open(path, FileAccess.READ).get_as_text()
 	assert_eq(after_remove.count("[mcp_servers.godot-ai]\n"), 0,
-		"remove must clean the bare-key section:\n%s" % after_remove)
+		"remove must clean the bare-key parent section:\n%s" % after_remove)
 	assert_eq(after_remove.count("[mcp_servers.\"godot-ai\"]\n"), 0,
-		"remove must clean the quoted-key section:\n%s" % after_remove)
+		"remove must clean the quoted-key parent section:\n%s" % after_remove)
+	assert_eq(after_remove.count("[mcp_servers.godot-ai.tools.session_list]"), 0,
+		"remove must clean subtables in the namespace:\n%s" % after_remove)
+	assert_eq(after_remove.count("approval_mode"), 0,
+		"subtable bodies must be removed too:\n%s" % after_remove)
+
+	## Round-trip: configure-after-remove must produce a clean,
+	## parseable file with exactly one godot-ai section.
+	var reconfigure := McpTomlStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	assert_eq(reconfigure.get("status"), "ok")
+	var final_content := FileAccess.open(path, FileAccess.READ).get_as_text()
+	var final_bare := final_content.count("[mcp_servers.godot-ai]\n")
+	var final_quoted := final_content.count("[mcp_servers.\"godot-ai\"]\n")
+	assert_eq(final_bare + final_quoted, 1,
+		"configure-after-remove must produce exactly one godot-ai section (bare=%d quoted=%d):\n%s" % [final_bare, final_quoted, final_content])
 
 
 # ----- configure/remove verify-after-write (#201) -----
