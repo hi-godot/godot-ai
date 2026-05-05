@@ -81,11 +81,17 @@ static func remove(client: McpClient, _server_name: String) -> Dictionary:
 		return {"status": "error", "message": "Refusing to rewrite %s: %s." % [path, read["error"]]}
 	var lines: Array[String] = _split_lines(String(read["data"]))
 	var headers := _all_headers(client)
+	## Subtables in the namespace (e.g. [mcp_servers.godot-ai.tools.session_list]
+	## that codex users add to set per-tool approval_mode) must be removed
+	## too. Leaving them behind keeps `mcp_servers.godot-ai` implicitly
+	## defined, so a later configure that writes [mcp_servers."godot-ai"]
+	## produces a duplicate-key TOML error.
+	var subtable_prefixes := _subtable_prefixes(headers)
 
 	var output: Array[String] = []
 	var i := 0
 	while i < lines.size():
-		if _matches_any_header(lines[i], headers):
+		if _matches_any_header(lines[i], headers) or _matches_subtable_prefix(lines[i], subtable_prefixes):
 			i += 1
 			while i < lines.size():
 				var nt := lines[i].strip_edges()
@@ -152,10 +158,73 @@ static func _primary_header(client: McpClient) -> String:
 
 
 static func _all_headers(client: McpClient) -> Array[String]:
-	var out: Array[String] = [_primary_header(client)]
+	var primary := _primary_header(client)
+	var out: Array[String] = [primary]
+	## TOML accepts bare keys ([A-Za-z0-9_-]+) unquoted in section headers,
+	## so [mcp_servers.godot-ai] is a valid hand-written form of the same
+	## logical key we emit as [mcp_servers."godot-ai"]. Match both during
+	## reconfigure / status / remove or a hand-edited (or older-plugin)
+	## bare-key file gets a duplicate quoted section appended that breaks
+	## the user's TOML parser.
+	var bare := _bare_key_header(client)
+	if not bare.is_empty() and bare != primary:
+		out.append(bare)
 	for legacy in client.toml_legacy_section_aliases:
 		out.append("[%s]" % legacy)
 	return out
+
+
+static func _bare_key_header(client: McpClient) -> String:
+	var parts := client.toml_section_path
+	if parts.is_empty():
+		return ""
+	for p in parts:
+		if not _is_bare_key(String(p)):
+			return ""
+	return "[%s]" % ".".join(parts)
+
+
+static func _is_bare_key(s: String) -> bool:
+	if s.is_empty():
+		return false
+	for i in range(s.length()):
+		var c := s.unicode_at(i)
+		var alpha := (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+		var digit := c >= 48 and c <= 57
+		var dash_or_under := c == 45 or c == 95  # '-' or '_'
+		if not (alpha or digit or dash_or_under):
+			return false
+	return true
+
+
+## Subtable prefixes derived from each header in `headers`. Strips the
+## closing `]` and appends `.` so a header `[a.b]` becomes the prefix
+## `[a.b.` — matching subtables `[a.b.<rest>]` but NOT siblings like
+## `[a.b-other]` (next char must be a dot, not anything bare-key-valid).
+static func _subtable_prefixes(headers: Array[String]) -> Array[String]:
+	var out: Array[String] = []
+	for h in headers:
+		if h.length() > 2 and h.ends_with("]"):
+			out.append(h.substr(0, h.length() - 1) + ".")
+	return out
+
+
+## Mirror of `_matches_any_header` for subtable prefixes — line must
+## start with `[a.b.` and have a closing `]` followed only by whitespace
+## or a comment.
+static func _matches_subtable_prefix(line: String, prefixes: Array[String]) -> bool:
+	var trimmed := line.strip_edges()
+	for p in prefixes:
+		if not trimmed.begins_with(p):
+			continue
+		var rest := trimmed.substr(p.length())
+		var bracket := rest.find("]")
+		if bracket < 0:
+			continue
+		var remainder := rest.substr(bracket + 1).strip_edges()
+		if remainder.is_empty() or remainder.begins_with("#"):
+			return true
+	return false
 
 
 ## Exact-header match. We cannot use a simple prefix check because
