@@ -125,6 +125,96 @@ func test_drift_banner_no_op_when_mismatched_set_unchanged() -> void:
 	assert_true(_dock._drift_label.text != first_text, "Different set must produce different text")
 
 
+func test_mixed_state_banner_hidden_in_clean_addons_tree() -> void:
+	## The dock builds the mixed-state banner during `_build_ui` and seeds
+	## it from `UpdateMixedState.diagnose()`. In test_project's tree the
+	## addons dir has no `.update_backup` files, so the banner must default
+	## to hidden. Without this guard a future regression that always shows
+	## the banner would only surface when a real FAILED_MIXED state landed.
+	_dock._build_ui()
+	assert_true(_dock._mixed_state_banner != null, "Banner must be constructed by _build_ui")
+	assert_false(
+		_dock._mixed_state_banner.visible,
+		"Clean addons tree must keep the mixed-state banner hidden",
+	)
+
+
+func test_mixed_state_banner_renders_synthetic_diagnostic() -> void:
+	## Drive the render seam with a fake diagnostic so the banner contract
+	## (visibility + label text + file list) is pinned without polluting
+	## the real `addons/godot_ai/` tree with `.update_backup` files. This
+	## covers Copilot's "dock banner is untested" finding on PR #382.
+	_dock._build_ui()
+	var fake_diag := {
+		"addon_dir": "res://addons/godot_ai/",
+		"backup_files": [
+			"res://addons/godot_ai/handlers/scene_handler.gd.update_backup",
+			"res://addons/godot_ai/plugin.gd.update_backup",
+		],
+		"backup_count": 2,
+		"truncated": false,
+		"message": "Fake diagnostic for test_mixed_state_banner_renders_synthetic_diagnostic",
+	}
+	_dock._apply_mixed_state_banner_diagnostic(fake_diag)
+	assert_true(_dock._mixed_state_banner.visible, "Non-empty diagnostic must show banner")
+	assert_contains(
+		_dock._mixed_state_label.text,
+		"Fake diagnostic for test_mixed_state_banner_renders_synthetic_diagnostic",
+		"Banner must surface the diagnostic message verbatim",
+	)
+	## RichTextLabel.text reflects the BBCode source, not the rendered
+	## content added via `add_text()` — assert via `get_parsed_text()`
+	## which returns the visible text concatenation.
+	assert_contains(
+		_dock._mixed_state_files.get_parsed_text(),
+		"plugin.gd.update_backup",
+		"Banner must list each backup file path so the operator can act on them",
+	)
+
+
+func test_mixed_state_banner_re_hides_when_diagnostic_empties() -> void:
+	## The Re-scan button calls `_refresh_mixed_state_banner(true)` which
+	## eventually feeds the apply seam an empty Dict when the addons tree
+	## has been restored. Pin that the banner correctly hides when applied
+	## with `{}` so the button delivers the dismissal it advertises.
+	_dock._build_ui()
+	_dock._apply_mixed_state_banner_diagnostic({
+		"addon_dir": "res://addons/godot_ai/",
+		"backup_files": ["res://addons/godot_ai/foo.gd.update_backup"],
+		"backup_count": 1,
+		"truncated": false,
+		"message": "show me",
+	})
+	assert_true(_dock._mixed_state_banner.visible, "Precondition: banner must be visible")
+	_dock._apply_mixed_state_banner_diagnostic({})
+	assert_false(
+		_dock._mixed_state_banner.visible,
+		"Empty diagnostic must hide the banner — the Re-scan dismissal path",
+	)
+
+
+func test_mixed_state_banner_renders_truncated_hint() -> void:
+	## When the scanner caps results, the dock must surface that the list
+	## isn't exhaustive — otherwise a power user with a runaway tree thinks
+	## they only have N backups when there might be more. The truncation
+	## hint references the canonical MAX_BACKUP_RESULTS so the message
+	## stays accurate if the cap moves.
+	_dock._build_ui()
+	_dock._apply_mixed_state_banner_diagnostic({
+		"addon_dir": "res://addons/godot_ai/",
+		"backup_files": ["res://addons/godot_ai/x.gd.update_backup"],
+		"backup_count": 200,
+		"truncated": true,
+		"message": "lots of backups",
+	})
+	assert_true(_dock._mixed_state_banner.visible)
+	assert_contains(
+		_dock._mixed_state_files.get_parsed_text(),
+		"truncated",
+		"truncated=true must produce the cap-hit hint in the file list",
+	)
+
+
 func test_apply_row_status_renders_mismatch_as_amber_with_url_hint() -> void:
 	## The row UI is the per-client mirror of the dock-level banner —
 	## amber dot + "URL out of date" suffix on the name label so a
