@@ -36,8 +36,6 @@ from godot_ai.tools._meta_tool import (
 
 @pytest.fixture(scope="module")
 def mcp():
-    ## Triggers all tool + resource registrations, populating the manage-tool
-    ## registries this lint walks.
     return create_server(ws_port=0)
 
 
@@ -124,7 +122,7 @@ async def test_meta_tool_read_ops_declare_resource_form(mcp):
             if handler is None:
                 continue
             if _handler_calls_require_writable(handler):
-                continue  ## write op — exempt
+                continue
             if op_name not in forms:
                 source_module = getattr(handler, "__module__", "<unknown>")
                 source_name = getattr(handler, "__qualname__", repr(handler))
