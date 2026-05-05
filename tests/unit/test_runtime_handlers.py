@@ -1450,9 +1450,25 @@ async def test_reload_plugin_pins_target_session_when_multiple_connected():
     assert runtime.active_session_id == "session-b-new"
 
 
-def test_unregister_active_session_clears_active_not_promotes_first():
-    """Disconnect of the active session must not silently promote another
-    session — that's the 'first-registered wins' routing footgun."""
+def test_unregister_active_with_multiple_survivors_clears_active():
+    """Disconnect of the active session with ≥2 survivors must not silently
+    promote another — that's the 'first-registered wins' routing footgun."""
+    registry = SessionRegistry()
+    registry.register(_make_session("session-a"))
+    registry.register(_make_session("session-b"))
+    registry.register(_make_session("session-c"))
+    registry.set_active("session-b")
+
+    registry.unregister("session-b")
+
+    assert registry.active_session_id is None
+    assert registry.get_active() is None
+
+
+def test_unregister_active_with_one_survivor_promotes_it():
+    """audit-v2 #8: at n=1-survivor the order ambiguity disappears, so
+    promote the survivor — solo-user agents would otherwise see opaque
+    'no active session' errors after a crash."""
     registry = SessionRegistry()
     registry.register(_make_session("session-a"))
     registry.register(_make_session("session-b"))
@@ -1460,8 +1476,8 @@ def test_unregister_active_session_clears_active_not_promotes_first():
 
     registry.unregister("session-b")
 
-    assert registry.active_session_id is None
-    assert registry.get_active() is None
+    assert registry.active_session_id == "session-a"
+    assert registry.get_active().session_id == "session-a"
 
 
 def test_unregister_non_active_session_leaves_active_unchanged():

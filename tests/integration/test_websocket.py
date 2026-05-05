@@ -481,6 +481,32 @@ class TestMultipleSessions:
         assert harness.registry.get("keep-b") is not None
         await plugin_b.close()
 
+    async def test_active_disconnect_with_one_survivor_auto_promotes(self, harness):
+        ## audit-v2 #8: solo-user case. Two editors are connected with A
+        ## active; A's editor crashes, leaving B as sole survivor. Pre-fix,
+        ## every subsequent tool call would fail with "no active session"
+        ## until the agent guessed to call session_activate. Now B is
+        ## auto-promoted on A's disconnect.
+        plugin_a = await harness.connect_plugin(session_id="failover-a")
+        plugin_b = await harness.connect_plugin(session_id="failover-b")
+        ## A connected first → A is active. Pin A explicitly so the test's
+        ## preconditions don't depend on registration order
+        ## (registration-order semantics are tested elsewhere).
+        harness.registry.set_active("failover-a")
+        assert harness.registry.active_session_id == "failover-a"
+
+        await plugin_a.close()
+        for _ in range(20):
+            if harness.registry.get("failover-a") is None:
+                break
+            await asyncio.sleep(0.05)
+        assert harness.registry.get("failover-a") is None
+
+        ## B is the only survivor — must be auto-promoted.
+        assert harness.registry.active_session_id == "failover-b"
+        assert harness.registry.get_active().session_id == "failover-b"
+        await plugin_b.close()
+
     async def test_disconnect_reconnect_handshake_then_first_command(self, harness):
         plugin_old = await harness.connect_plugin(session_id="reconnect-old")
         assert harness.registry.active_session_id == "reconnect-old"

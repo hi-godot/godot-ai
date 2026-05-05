@@ -41,17 +41,36 @@ class TestSessionRegistry:
 
         assert reg.active_session_id == "a"
 
-    def test_unregister_active_clears_active(self):
-        ## Disconnect of the active session must NOT silently promote another
-        ## session to active — that would route commands to whichever session
-        ## was registered first, which is the 'multi-instance routing' bug.
+    def test_unregister_active_with_multiple_survivors_clears_active(self, caplog):
+        ## With ≥2 survivors after unregister, picking one by insertion order
+        ## would route commands to whichever editor connected first — the
+        ## 'routing by registration order' footgun. Stay cleared until the
+        ## caller picks via session_activate.
         reg = SessionRegistry()
         reg.register(_make_session("a"))
         reg.register(_make_session("b"))
-        reg.unregister("a")
+        reg.register(_make_session("c"))
+        with caplog.at_level("INFO", logger="godot_ai.sessions.registry"):
+            reg.unregister("a")
 
         assert reg.active_session_id is None
+        assert len(reg) == 2
+        assert any("no active session until next register/activate" in m for m in caplog.messages)
+
+    def test_unregister_active_with_one_survivor_promotes_it(self, caplog):
+        ## audit-v2 #8: the n=1-survivor case is unambiguous — one editor
+        ## left, no ordering footgun. Auto-promote so a solo-user agent
+        ## doesn't see opaque "no active session" errors after a crash.
+        reg = SessionRegistry()
+        reg.register(_make_session("a"))
+        reg.register(_make_session("b"))
+        with caplog.at_level("WARNING", logger="godot_ai.sessions.registry"):
+            reg.unregister("a")
+
+        assert reg.active_session_id == "b"
+        assert reg.get_active().session_id == "b"
         assert len(reg) == 1
+        assert any("auto-promoting sole survivor" in m for m in caplog.messages)
 
     def test_unregister_non_active_leaves_active(self):
         reg = SessionRegistry()
