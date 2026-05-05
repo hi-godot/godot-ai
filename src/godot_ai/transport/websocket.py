@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import logging
 from typing import Any
@@ -39,7 +40,7 @@ class GodotWebSocketServer:
             ):
                 await asyncio.Future()  # run forever
         except OSError as e:
-            if e.errno == 48:  # Address already in use
+            if e.errno == errno.EADDRINUSE:
                 logger.warning(
                     "WebSocket port %d already in use — another server instance may be running. "
                     "MCP tools will work but the Godot plugin won't connect to this instance.",
