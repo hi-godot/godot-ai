@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import logging
 from typing import Any
@@ -17,6 +18,11 @@ from godot_ai.sessions.registry import Session, SessionRegistry
 logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = 9500
+
+## RFC 6455 reserves 4000-4999 for application-defined close codes; we use
+## 4001 to flag a handshake rejected for duplicate session_id so a debugging
+## peer can distinguish it from a normal close.
+_CLOSE_CODE_DUPLICATE_SESSION = 4001
 
 
 class GodotWebSocketServer:
@@ -39,7 +45,10 @@ class GodotWebSocketServer:
             ):
                 await asyncio.Future()  # run forever
         except OSError as e:
-            if e.errno == 48:  # Address already in use
+            ## EADDRINUSE differs by platform (macOS 48, Linux 98, Windows
+            ## 10048) — let the stdlib name resolve it so the friendly
+            ## branch fires everywhere.
+            if e.errno == errno.EADDRINUSE:
                 logger.warning(
                     "WebSocket port %d already in use — another server instance may be running. "
                     "MCP tools will work but the Godot plugin won't connect to this instance.",
@@ -55,6 +64,23 @@ class GodotWebSocketServer:
             raw = await asyncio.wait_for(ws.recv(), timeout=10.0)
             data = json.loads(raw)
             handshake = HandshakeMessage.model_validate(data)
+
+            ## Reject duplicate session_id while the first peer is live —
+            ## otherwise the second handshake silently overwrites the
+            ## routing map (duplicate-ID hijack).
+            existing = self.registry.get(handshake.session_id)
+            if existing is not None:
+                logger.warning(
+                    "Rejecting duplicate handshake for session %s (existing pid=%s, project=%s)",
+                    handshake.session_id,
+                    existing.editor_pid,
+                    existing.project_path,
+                )
+                await ws.close(
+                    code=_CLOSE_CODE_DUPLICATE_SESSION,
+                    reason="session id already registered",
+                )
+                return
 
             session_id = handshake.session_id
             session = Session(
@@ -153,12 +179,16 @@ class GodotWebSocketServer:
         future: asyncio.Future[CommandResponse] = asyncio.get_running_loop().create_future()
         self._pending[request.request_id] = future
 
-        await ws.send(request.model_dump_json())
-
+        ## Always pop on exit — the response receiver in _handle_connection
+        ## pops on the happy path, so this is a no-op there; on `ws.send`
+        ## raise / TimeoutError / cancellation it prevents Futures leaking
+        ## into _pending forever.
         try:
+            await ws.send(request.model_dump_json())
             return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
-            self._pending.pop(request.request_id, None)
             raise TimeoutError(
                 f"Command {command} timed out after {timeout}s on session {session_id}"
             )
+        finally:
+            self._pending.pop(request.request_id, None)
