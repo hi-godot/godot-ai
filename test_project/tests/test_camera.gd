@@ -237,6 +237,71 @@ func _camera_current_diag(cam: Node, expected: bool, attempts: int, elapsed_msec
 	]
 
 
+# Issue #316 gate. After 12+ fix attempts, the Camera2D `make_current` →
+# `Viewport.camera_2d` slot propagation still occasionally lags on macOS
+# headless (the test polls 200ms, observed up to ~600ms in the wild). The
+# handler-side logical bookkeeping (#311) stays correct in that race — only
+# the engine-side viewport slot doesn't catch up. Per the issue's acceptance
+# criterion #2, the macOS-only failure is gated when the handler view agrees
+# with the expectation: skip with the full diagnostic so the next investigator
+# still sees the state divergence, but don't fail the build for a known
+# upstream race we can't close at the plugin level.
+#
+# This deliberately does NOT skip on Linux/Windows or when the handler view
+# also disagrees — those would represent real regressions and must fail.
+func _is_macos_headless() -> bool:
+	return OS.has_feature("macos") and DisplayServer.get_name() == "headless"
+
+
+func _handler_logical_current_matches(cam: Node, expected: bool) -> bool:
+	# Query the handler's logical bookkeeping directly via peek_logical_current
+	# rather than camera_get(path), which falls back to engine state through
+	# _resolve_current and would let the gate return "matches" when the handler
+	# has no marker at all (PR #372 review). The gate must only fire when the
+	# handler has *explicitly* recorded the expected state — for expected=true
+	# the marker points at this camera, for expected=false the marker exists
+	# (some camera of this class is logical-current) and is not this camera.
+	if cam == null or not is_instance_valid(cam):
+		return false
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null or not scene_root.is_ancestor_of(cam):
+		return false
+	var type_str := "2d" if cam is Camera2D else ("3d" if cam is Camera3D else "")
+	if type_str.is_empty():
+		return false
+	var marker: Node = _handler.peek_logical_current(scene_root, type_str)
+	if marker == null:
+		# No logical marker — handler hasn't recorded *anything* for this type.
+		# Refuse to skip in either direction; failure here is a real handler
+		# regression, not the documented engine-state lag.
+		return false
+	if expected:
+		return marker == cam
+	# expected=false: marker exists for the type and points elsewhere.
+	return marker != cam
+
+
+# Returns true and calls skip() when the test should bail out on a macOS-
+# headless engine-state lag the handler already agrees was settled correctly.
+# Returns false when the caller should proceed to its direct assertions —
+# either the wait succeeded, we're not on macOS headless, or the handler
+# also disagrees (real regression).
+func _skip_if_macos_engine_lag(cam: Node, expected: bool, report: Dictionary, label: String) -> bool:
+	if report.settled:
+		return false
+	if not _is_macos_headless():
+		return false
+	if not _handler_logical_current_matches(cam, expected):
+		return false
+	var msg := (
+		"Engine-state lag on macOS headless (#316): handler logical state "
+		+ "matches expected current=%s but Viewport.camera_2d slot didn't "
+		+ "propagate within the wait budget. %s — %s"
+	) % [expected, label, report.message]
+	skip(msg)
+	return true
+
+
 # ============================================================================
 # camera_create
 # ============================================================================
@@ -287,8 +352,12 @@ func test_create_with_make_current_unmarks_sibling() -> void:
 	assert_true(first_node != null, "First camera should resolve from %s" % first.data.path)
 	assert_true(second_node != null, "Second camera should resolve from %s" % second.data.path)
 	var second_current := _wait_for_camera_current_report(second_node, true)
+	if _skip_if_macos_engine_lag(second_node, true, second_current, "second after create"):
+		return
 	assert_true(second_current.settled, second_current.message)
 	var first_not_current := _wait_for_camera_current_report(first_node, false)
+	if _skip_if_macos_engine_lag(first_node, false, first_not_current, "first unmarked after sibling create"):
+		return
 	assert_true(first_not_current.settled, first_not_current.message)
 	assert_eq(second_node.is_current(), true, "Direct is_current mismatch after wait succeeded. %s" % _camera_current_diag(second_node, true, second_current.attempts, second_current.elapsed_msec))
 	assert_eq(first_node.is_current(), false, "Previously-current camera should have been unmarked. Direct is_current mismatch after wait succeeded. %s" % _camera_current_diag(first_node, false, first_not_current.attempts, first_not_current.elapsed_msec))
@@ -405,8 +474,12 @@ func test_configure_current_sibling_unmark_single_undo() -> void:
 	})
 	assert_has_key(result, "data")
 	var forward_second_current := _wait_for_camera_current_report(second_node, true)
+	if _skip_if_macos_engine_lag(second_node, true, forward_second_current, "forward configure: second"):
+		return
 	assert_true(forward_second_current.settled, forward_second_current.message)
 	var forward_first_not_current := _wait_for_camera_current_report(first_node, false)
+	if _skip_if_macos_engine_lag(first_node, false, forward_first_not_current, "forward configure: first unmarked"):
+		return
 	assert_true(forward_first_not_current.settled, forward_first_not_current.message)
 	assert_eq(second_node.is_current(), true, "Direct is_current mismatch after forward configure wait succeeded. %s" % _camera_current_diag(second_node, true, forward_second_current.attempts, forward_second_current.elapsed_msec))
 	assert_eq(first_node.is_current(), false, "Direct is_current mismatch after forward configure wait succeeded. %s" % _camera_current_diag(first_node, false, forward_first_not_current.attempts, forward_first_not_current.elapsed_msec))
@@ -419,8 +492,12 @@ func test_configure_current_sibling_unmark_single_undo() -> void:
 	# Diagnostic detail if this ever regresses (#316): report viewport state,
 	# direct Camera current state, handler/logical current reads, and wait budget.
 	var undo_second_not_current := _wait_for_camera_current_report(second_node, false)
+	if _skip_if_macos_engine_lag(second_node, false, undo_second_not_current, "post-undo: second unmarked"):
+		return
 	assert_true(undo_second_not_current.settled, undo_second_not_current.message)
 	var undo_first_current := _wait_for_camera_current_report(first_node, true)
+	if _skip_if_macos_engine_lag(first_node, true, undo_first_current, "post-undo: first restored"):
+		return
 	assert_true(undo_first_current.settled, undo_first_current.message)
 	assert_eq(second_node.is_current(), false, "After undo second should not be current. %s" % _camera_current_diag(second_node, false, undo_second_not_current.attempts, undo_second_not_current.elapsed_msec))
 	assert_eq(first_node.is_current(), true, "Single undo should restore original current camera. %s" % _camera_current_diag(first_node, true, undo_first_current.attempts, undo_first_current.elapsed_msec))
