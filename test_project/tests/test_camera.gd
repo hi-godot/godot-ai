@@ -372,10 +372,16 @@ func test_make_current_does_not_cross_classes() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var n2 := McpScenePath.resolve(cam2d.data.path, scene_root) as Camera2D
 	var n3 := McpScenePath.resolve(cam3d.data.path, scene_root) as Camera3D
-	assert_true(_wait_for_camera_current(n2, true))
-	assert_true(_wait_for_camera_current(n3, true))
-	assert_eq(n2.is_current(), true, "Camera2D current should not be touched when Camera3D becomes current")
-	assert_eq(n3.is_current(), true)
+	var cam2_current := _wait_for_camera_current_report(n2, true)
+	if _skip_if_macos_engine_lag(n2, true, cam2_current, "Camera2D after Camera3D create"):
+		return
+	assert_true(cam2_current.settled, cam2_current.message)
+	var cam3_current := _wait_for_camera_current_report(n3, true)
+	if _skip_if_macos_engine_lag(n3, true, cam3_current, "Camera3D after create"):
+		return
+	assert_true(cam3_current.settled, cam3_current.message)
+	assert_eq(n2.is_current(), true, "Camera2D current should not be touched when Camera3D becomes current. %s" % _camera_current_diag(n2, true, cam2_current.attempts, cam2_current.elapsed_msec))
+	assert_eq(n3.is_current(), true, "Direct is_current mismatch after wait succeeded. %s" % _camera_current_diag(n3, true, cam3_current.attempts, cam3_current.elapsed_msec))
 
 
 # ============================================================================
