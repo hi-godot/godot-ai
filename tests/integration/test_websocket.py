@@ -360,6 +360,91 @@ class TestEvents:
 
 
 # ---------------------------------------------------------------------------
+# Event payload validation (audit-v2 #7 / issue #351)
+# ---------------------------------------------------------------------------
+
+
+class TestEventValidation:
+    ## Pre-fix, _handle_event blindly assigned event_data.get(...) to typed
+    ## Session fields, so a malformed plugin event (or hijacked WS) shipped
+    ## non-string values verbatim to MCP clients via Session.to_dict(). Now
+    ## the payloads are Pydantic-validated and dropped on ValidationError.
+
+    async def test_scene_changed_with_non_string_payload_is_dropped(self, harness, caplog):
+        plugin = await harness.connect_plugin(session_id="evt-bad-scene")
+        session = harness.registry.get("evt-bad-scene")
+        baseline_scene = session.current_scene
+
+        with caplog.at_level("WARNING", logger="godot_ai.transport.websocket"):
+            await plugin.send_event("scene_changed", {"current_scene": 12345})
+            await asyncio.sleep(0.05)
+
+        assert session.current_scene == baseline_scene, (
+            "current_scene must not be overwritten with a non-string"
+        )
+        assert any("Dropping malformed scene_changed" in m for m in caplog.messages), (
+            "expected warning log naming the dropped event"
+        )
+        await plugin.close()
+
+    async def test_play_state_changed_with_non_string_payload_is_dropped(self, harness, caplog):
+        plugin = await harness.connect_plugin(session_id="evt-bad-play")
+        session = harness.registry.get("evt-bad-play")
+        baseline_play = session.play_state
+
+        with caplog.at_level("WARNING", logger="godot_ai.transport.websocket"):
+            await plugin.send_event("play_state_changed", {"play_state": ["running"]})
+            await asyncio.sleep(0.05)
+
+        assert session.play_state == baseline_play
+        assert any("Dropping malformed play_state_changed" in m for m in caplog.messages)
+        await plugin.close()
+
+    async def test_readiness_changed_with_non_string_payload_is_dropped(self, harness, caplog):
+        plugin = await harness.connect_plugin(session_id="evt-bad-ready")
+        session = harness.registry.get("evt-bad-ready")
+        baseline_ready = session.readiness
+
+        with caplog.at_level("WARNING", logger="godot_ai.transport.websocket"):
+            await plugin.send_event("readiness_changed", {"readiness": {"nested": "obj"}})
+            await asyncio.sleep(0.05)
+
+        assert session.readiness == baseline_ready
+        assert any("Dropping malformed readiness_changed" in m for m in caplog.messages)
+        await plugin.close()
+
+    async def test_unknown_event_type_is_silently_ignored(self, harness):
+        ## Forward-compat: a future plugin might emit an event type the
+        ## current server doesn't know yet. The handler should ignore it
+        ## without raising or mutating session state.
+        plugin = await harness.connect_plugin(session_id="evt-unknown")
+        session = harness.registry.get("evt-unknown")
+        before = (session.current_scene, session.play_state, session.readiness)
+
+        await plugin.send_event("future_event", {"foo": "bar"})
+        await asyncio.sleep(0.05)
+
+        assert (session.current_scene, session.play_state, session.readiness) == before
+        await plugin.close()
+
+    async def test_valid_event_after_malformed_one_still_applies(self, harness, caplog):
+        ## Regression guard: dropping a malformed payload must not poison
+        ## the connection — the next valid event for the same session
+        ## should still update the typed field.
+        plugin = await harness.connect_plugin(session_id="evt-recover")
+        session = harness.registry.get("evt-recover")
+
+        with caplog.at_level("WARNING", logger="godot_ai.transport.websocket"):
+            await plugin.send_event("readiness_changed", {"readiness": 42})
+            await asyncio.sleep(0.05)
+
+        await plugin.send_event("readiness_changed", {"readiness": "importing"})
+        await asyncio.sleep(0.05)
+        assert session.readiness == "importing"
+        await plugin.close()
+
+
+# ---------------------------------------------------------------------------
 # Multiple sessions
 # ---------------------------------------------------------------------------
 

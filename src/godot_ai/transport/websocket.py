@@ -9,10 +9,18 @@ import logging
 from typing import Any
 
 import websockets
+from pydantic import ValidationError
 from websockets.asyncio.server import ServerConnection
 
 from godot_ai import __version__ as _SERVER_VERSION
-from godot_ai.protocol.envelope import CommandRequest, CommandResponse, HandshakeMessage
+from godot_ai.protocol.envelope import (
+    CommandRequest,
+    CommandResponse,
+    HandshakeMessage,
+    PlayStateChangedEvent,
+    ReadinessChangedEvent,
+    SceneChangedEvent,
+)
 from godot_ai.sessions.registry import Session, SessionRegistry
 from godot_ai.transport.origin_guard import make_websocket_request_guard
 
@@ -156,15 +164,33 @@ class GodotWebSocketServer:
         if session is None:
             return
 
-        if event == "scene_changed":
-            session.current_scene = event_data.get("current_scene", "")
-            logger.info("Session %s: scene changed to %s", session_id[:8], session.current_scene)
-        elif event == "play_state_changed":
-            session.play_state = event_data.get("play_state", "stopped")
-            logger.info("Session %s: play state -> %s", session_id[:8], session.play_state)
-        elif event == "readiness_changed":
-            session.readiness = event_data.get("readiness", "ready")
-            logger.info("Session %s: readiness -> %s", session_id[:8], session.readiness)
+        ## Validate the payload before assigning to typed Session fields —
+        ## a malformed plugin event (or hijacked WS) used to ship non-string
+        ## values straight through to MCP clients via Session.to_dict()
+        ## (audit-v2 #7). On ValidationError we drop the event with a
+        ## warning rather than corrupt the cached session state.
+        try:
+            if event == "scene_changed":
+                payload = SceneChangedEvent.model_validate(event_data)
+                session.current_scene = payload.current_scene
+                logger.info(
+                    "Session %s: scene changed to %s", session_id[:8], session.current_scene
+                )
+            elif event == "play_state_changed":
+                payload = PlayStateChangedEvent.model_validate(event_data)
+                session.play_state = payload.play_state
+                logger.info("Session %s: play state -> %s", session_id[:8], session.play_state)
+            elif event == "readiness_changed":
+                payload = ReadinessChangedEvent.model_validate(event_data)
+                session.readiness = payload.readiness
+                logger.info("Session %s: readiness -> %s", session_id[:8], session.readiness)
+        except ValidationError as exc:
+            logger.warning(
+                "Dropping malformed %s event from session %s: %s",
+                event,
+                session_id[:8],
+                exc.errors(include_url=False, include_context=False, include_input=False),
+            )
 
     async def send_command(
         self,
