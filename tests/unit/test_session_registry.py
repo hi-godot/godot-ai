@@ -235,6 +235,22 @@ class TestWaitForSession:
         assert result is replacement
         assert reg._session_waiters == []
 
+    async def test_register_skips_waiters_whose_futures_are_already_done(self):
+        ## A waiter whose future was resolved or cancelled out-of-band must
+        ## not be re-resolved on the next register(); its entry stays in
+        ## _session_waiters until its own finally-block evicts it. The
+        ## register loop's `if future.done(): continue` path covers this.
+        reg = SessionRegistry()
+        loop = asyncio.get_running_loop()
+        cancelled_future: asyncio.Future[Session] = loop.create_future()
+        cancelled_future.cancel()
+        reg._session_waiters.append((cancelled_future, None, frozenset(), None))
+
+        reg.register(_make_session("a"))
+
+        assert cancelled_future.cancelled()
+        assert len(reg) == 1
+
     async def test_concurrent_registers_and_activate_keep_registry_consistent(self):
         reg = SessionRegistry()
         waiter_task = asyncio.create_task(reg.wait_for_session(exclude_id="a", timeout=1.0))
