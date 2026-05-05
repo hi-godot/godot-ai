@@ -43,6 +43,7 @@ FORBIDDEN_BODY = (
     b"forbidden: non-loopback Host or Origin (DNS rebinding guard)\n"
     b"see https://github.com/hi-godot/godot-ai issue #345 for details\n"
 )
+FORBIDDEN_BODY_TEXT = FORBIDDEN_BODY.decode("utf-8")
 
 
 def _strip_port(host: str) -> str:
@@ -83,7 +84,9 @@ def is_allowed_origin(origin_header: str | None) -> bool:
     if not value or value.lower() == "null":
         return True
     parsed = urlsplit(value)
-    if parsed.scheme.lower() not in LOOPBACK_ORIGIN_SCHEMES:
+    ## ``urlsplit`` already lowercases the scheme per RFC 3986, so no
+    ## extra normalization is needed before the set lookup.
+    if parsed.scheme not in LOOPBACK_ORIGIN_SCHEMES:
         return False
     if not parsed.hostname:
         return False
@@ -91,6 +94,22 @@ def is_allowed_origin(origin_header: str | None) -> bool:
     # urlsplit strips IPv6 brackets — re-add for the bracketed-form lookup.
     bracketed = f"[{hostname}]" if ":" in hostname else hostname
     return hostname in LOOPBACK_HOSTNAMES or bracketed in LOOPBACK_HOSTNAMES
+
+
+def evaluate_loopback(hosts: list[str], origins: list[str]) -> bool:
+    """Return True iff the request's Host/Origin headers pass the allowlist.
+
+    Both transports (ASGI middleware + WebSocket ``process_request``)
+    funnel their per-request header extraction through this helper so
+    the duplicate-header smuggling rule and the value-allowlist rule
+    are evaluated identically. A divergence between the two transports
+    would be a security regression — this helper exists to prevent it.
+    """
+    if len(hosts) > 1 or len(origins) > 1:
+        return False
+    host = hosts[0] if hosts else None
+    origin = origins[0] if origins else None
+    return is_allowed_host(host) and is_allowed_origin(origin)
 
 
 class LocalhostOnlyHTTPMiddleware:
@@ -114,31 +133,18 @@ class LocalhostOnlyHTTPMiddleware:
             await self.app(scope, receive, send)
             return
 
-        host_count = 0
-        origin_count = 0
-        host: str | None = None
-        origin: str | None = None
+        hosts: list[str] = []
+        origins: list[str] = []
         for raw_key, raw_value in scope.get("headers", []):
             key = raw_key.lower()
             if key == b"host":
-                host_count += 1
-                host = raw_value.decode("latin-1")
+                hosts.append(raw_value.decode("latin-1"))
             elif key == b"origin":
-                origin_count += 1
-                origin = raw_value.decode("latin-1")
+                origins.append(raw_value.decode("latin-1"))
 
-        ## Duplicate Host or Origin headers fail closed: a single request
-        ## carrying both a loopback and a non-loopback value is ambiguous,
-        ## a classic HTTP smuggling shape, and never legitimate for our
-        ## clients.
-        if host_count > 1 or origin_count > 1:
-            await _send_forbidden(send)
-            return
-
-        if is_allowed_host(host) and is_allowed_origin(origin):
+        if evaluate_loopback(hosts, origins):
             await self.app(scope, receive, send)
             return
-
         await _send_forbidden(send)
 
 
@@ -170,20 +176,10 @@ def make_websocket_request_guard():
         ## Use ``get_all`` so a smuggled duplicate (two ``Host:`` lines)
         ## fails closed rather than tripping ``MultipleValuesError`` at
         ## ``request.headers.get(...)`` and surfacing as an opaque 500.
-        hosts = request.headers.get_all("Host")
-        origins = request.headers.get_all("Origin")
-        if len(hosts) > 1 or len(origins) > 1:
-            return connection.respond(
-                HTTPStatus.FORBIDDEN,
-                FORBIDDEN_BODY.decode("utf-8"),
-            )
-        host = hosts[0] if hosts else None
-        origin = origins[0] if origins else None
-        if is_allowed_host(host) and is_allowed_origin(origin):
+        hosts = list(request.headers.get_all("Host"))
+        origins = list(request.headers.get_all("Origin"))
+        if evaluate_loopback(hosts, origins):
             return None
-        return connection.respond(
-            HTTPStatus.FORBIDDEN,
-            FORBIDDEN_BODY.decode("utf-8"),
-        )
+        return connection.respond(HTTPStatus.FORBIDDEN, FORBIDDEN_BODY_TEXT)
 
     return guard
