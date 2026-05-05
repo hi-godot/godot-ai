@@ -40,9 +40,6 @@ class GodotWebSocketServer:
             ):
                 await asyncio.Future()  # run forever
         except OSError as e:
-            ## errno.EADDRINUSE is 48 on macOS, 98 on Linux, 10048 on Windows.
-            ## Hardcoding 48 broke the friendly branch on Linux/Windows and
-            ## leaked a generic traceback through the WS lifespan. See #348.
             if e.errno == errno.EADDRINUSE:
                 logger.warning(
                     "WebSocket port %d already in use — another server instance may be running. "
