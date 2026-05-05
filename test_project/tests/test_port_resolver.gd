@@ -53,6 +53,45 @@ func test_can_bind_local_port_returns_false_when_held() -> void:
 	assert_false(got_bind)
 
 
+func test_is_port_in_use_checks_os_listeners_after_bind_probe_on_posix() -> void:
+	if OS.get_name() == "Windows":
+		skip("POSIX-only lsof confirmation")
+		return
+	var python_check: Array = []
+	if OS.execute("python3", ["--version"], python_check, true) != 0:
+		skip("python3 is unavailable for live listener smoke")
+		return
+
+	var port := 51249
+	var probe := TCPServer.new()
+	if probe.listen(port, "127.0.0.1") != OK:
+		skip("port %d is already held on this host" % port)
+		return
+	probe.stop()
+
+	var pid := OS.create_process("python3", ["-m", "http.server", str(port)])
+	if pid <= 0:
+		skip("could not start python http.server")
+		return
+
+	var listener_seen := false
+	for _i in range(20):
+		OS.delay_msec(100)
+		if not McpPortResolver.find_all_pids_on_port(port).is_empty():
+			listener_seen = true
+			break
+	if not listener_seen:
+		OS.kill(pid)
+		skip("python http.server did not bind test port")
+		return
+
+	var detected := McpPortResolver.is_port_in_use(port)
+	OS.kill(pid)
+	McpPortResolver.wait_for_port_free(port, 2.0)
+
+	assert_true(detected)
+
+
 func test_pid_alive_rejects_sentinel_pids() -> void:
 	assert_false(McpPortResolver.pid_alive(0))
 	assert_false(McpPortResolver.pid_alive(-1))

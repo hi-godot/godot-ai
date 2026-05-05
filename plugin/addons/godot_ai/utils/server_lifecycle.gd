@@ -201,6 +201,10 @@ func get_version_check():
 func _resolve_expected_version(supplied: String) -> String:
 	if not supplied.is_empty():
 		return supplied
+	return _expected_server_version()
+
+
+func _expected_server_version() -> String:
 	return ClientConfigurator.get_plugin_version()
 
 
@@ -382,7 +386,7 @@ func start_server() -> void:
 
 	var port := ClientConfigurator.http_port()
 	var ws_port := ClientConfigurator.ws_port()
-	var current_version := ClientConfigurator.get_plugin_version()
+	var current_version := _expected_server_version()
 	_server_expected_version = current_version
 
 	if bool(_host._is_port_in_use(port)):
@@ -543,7 +547,7 @@ func respawn_with_refresh() -> void:
 	if spawn_pid > 0:
 		_server_spawn_ms = Time.get_ticks_msec()
 		_server_exit_ms = 0
-		var current_version := ClientConfigurator.get_plugin_version()
+		var current_version := _expected_server_version()
 		_host._write_managed_server_record(spawn_pid, current_version)
 		print("MCP | retried server (PID %d, v%s): %s %s" % [spawn_pid, current_version, cmd, " ".join(args)])
 	else:
@@ -633,7 +637,11 @@ func stop_server() -> void:
 		candidates.append(real_pid)
 	var listener_pids: Array = _host._find_all_pids_on_port(port)
 	for pid in listener_pids:
-		candidates.append(int(pid))
+		var listener_pid := int(pid)
+		if candidates.has(listener_pid):
+			candidates.append(listener_pid)
+		elif _host._pid_cmdline_is_godot_ai_for_proof(listener_pid):
+			candidates.append(listener_pid)
 	killed = _host._kill_processes_and_windows_spawn_children(candidates)
 	if not killed.is_empty():
 		print("MCP | stopped server (PID %s)" % str(killed))
@@ -778,7 +786,7 @@ func force_restart_server() -> void:
 		transition_state(McpServerStateScript.UNINITIALIZED)
 		_set_incompatible_server(
 			_host._probe_live_server_status_for_port(port),
-			ClientConfigurator.get_plugin_version(),
+			_expected_server_version(),
 			port
 		)
 		return

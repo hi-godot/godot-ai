@@ -77,8 +77,13 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
 
     base_plugin = (project / "addons" / "godot_ai" / "plugin.gd").read_text()
     assert "godot_ai_self_update_smoke/managed_server_pid" in base_plugin
-    assert 'const SELF_UPDATE_SMOKE_EXPECTED_SERVER_VERSION := "2.2.0"' in base_plugin
-    assert "McpClientConfigurator.get_plugin_version()" not in base_plugin
+
+    base_lifecycle = (
+        project / "addons" / "godot_ai" / "utils" / "server_lifecycle.gd"
+    ).read_text()
+    assert 'const SELF_UPDATE_SMOKE_EXPECTED_SERVER_VERSION := "2.2.0"' in base_lifecycle
+    assert "func _expected_server_version() -> String:" in base_lifecycle
+    assert "return SELF_UPDATE_SMOKE_EXPECTED_SERVER_VERSION" in base_lifecycle
 
     zip_path = project / "self_update_smoke" / "godot-ai-plugin-vnext.zip"
     assert zip_path.exists()
@@ -94,6 +99,7 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
         vnext_manager = zf.read("addons/godot_ai/utils/update_manager.gd").decode()
         vnext_configurator = zf.read("addons/godot_ai/client_configurator.gd").decode()
         vnext_plugin = zf.read("addons/godot_ai/plugin.gd").decode()
+        vnext_lifecycle = zf.read("addons/godot_ai/utils/server_lifecycle.gd").decode()
         vnext_base = zf.read("addons/godot_ai/utils/self_update_smoke_base.gd").decode()
         vnext_child = zf.read("addons/godot_ai/utils/self_update_smoke_child.gd").decode()
 
@@ -118,8 +124,9 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
     assert "static func ensure_settings_registered() -> void:" in vnext_configurator
     assert "static func _register_port_setting(" in vnext_configurator
     assert "godot_ai_self_update_smoke/managed_server_pid" in vnext_plugin
-    assert 'const SELF_UPDATE_SMOKE_EXPECTED_SERVER_VERSION := "2.2.0"' in vnext_plugin
-    assert "McpClientConfigurator.get_plugin_version()" not in vnext_plugin
+    assert 'const SELF_UPDATE_SMOKE_EXPECTED_SERVER_VERSION := "2.2.0"' in vnext_lifecycle
+    assert "func _expected_server_version() -> String:" in vnext_lifecycle
+    assert "return SELF_UPDATE_SMOKE_EXPECTED_SERVER_VERSION" in vnext_lifecycle
 
 
 def test_self_update_smoke_log_verifier_rejects_external_adoption() -> None:
@@ -147,6 +154,37 @@ def test_self_update_smoke_log_verifier_requires_managed_stop_after_staging() ->
     assert smoke.smoke_started_own_server_before_update(lines)
     assert not smoke.smoke_adopted_existing_server_before_update(lines)
     assert not smoke.smoke_stopped_server_during_update(lines)
+
+
+def test_self_update_smoke_log_verifier_rejects_version_mismatch() -> None:
+    smoke = load_smoke_script()
+    lines = [
+        "MCP | started server (PID 123, v2.2.0): godot-ai",
+        "MCP | self-update smoke: staged local zip /tmp/update.zip",
+        "MCP | stopped server (PID [123])",
+        "MCP | update runner enabling new plugin",
+        "MCP | plugin loaded",
+        (
+            "MCP | Port 18000 is occupied by godot-ai server v2.2.0; "
+            "plugin expects v2.2.1. Stop the old server or change both HTTP and WS ports."
+        ),
+    ]
+
+    assert smoke.smoke_reported_server_version_mismatch(lines)
+
+
+def test_self_update_smoke_log_verifier_accepts_matching_versions() -> None:
+    smoke = load_smoke_script()
+    lines = [
+        "MCP | started server (PID 123, v2.2.0): godot-ai",
+        "MCP | self-update smoke: staged local zip /tmp/update.zip",
+        "MCP | stopped server (PID [123])",
+        "MCP | update runner enabling new plugin",
+        "MCP | started server (PID 456, v2.2.0): godot-ai",
+        "MCP | plugin loaded",
+    ]
+
+    assert not smoke.smoke_reported_server_version_mismatch(lines)
 
 
 def test_self_update_smoke_harness_refuses_unmarked_existing_dir(tmp_path: Path) -> None:

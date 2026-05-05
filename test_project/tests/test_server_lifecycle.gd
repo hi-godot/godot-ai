@@ -22,6 +22,7 @@ class _ManagerHostStub extends GodotAiPlugin:
 	var managed_record := {"pid": 0, "version": "", "ws_port": 0}
 	var live_status := {"name": "", "version": "", "ws_port": 0, "status_code": 0}
 	var alive_pids: Array[int] = []
+	var branded_pids: Array[int] = []
 	var pid_file_pid := 0
 	var managed_pid_lookup := 0
 	var port_in_use := false
@@ -44,6 +45,9 @@ class _ManagerHostStub extends GodotAiPlugin:
 
 	func _pid_alive_for_proof(pid: int) -> bool:
 		return alive_pids.has(pid)
+
+	func _pid_cmdline_is_godot_ai_for_proof(pid: int) -> bool:
+		return branded_pids.has(pid)
 
 	func _probe_live_server_status_for_port(_port: int) -> Dictionary:
 		return live_status.duplicate()
@@ -181,12 +185,13 @@ func test_stop_short_circuits_when_no_pid() -> void:
 	assert_true(killed.is_empty())
 
 
-func test_stop_aggregates_launcher_pidfile_and_listener_pids() -> void:
+func test_stop_aggregates_launcher_pidfile_and_branded_listener_pids() -> void:
 	## uvx leaks the launcher early on Windows; the real Python child
 	## must still get killed. Coverage for Copilot review #5.
 	var host := _ManagerHostStub.new()
 	host.managed_pid_lookup = 22222
 	host.listener_pids = [33333] as Array[int]
+	host.branded_pids = [33333] as Array[int]
 	var manager := McpServerLifecycleManagerScript.new(host)
 	manager._server_pid = 11111
 
@@ -198,6 +203,24 @@ func test_stop_aggregates_launcher_pidfile_and_listener_pids() -> void:
 	assert_true(killed.has(11111))
 	assert_true(killed.has(22222))
 	assert_true(killed.has(33333))
+
+
+func test_stop_does_not_kill_unbranded_port_listeners() -> void:
+	## A POSIX IPv6 wildcard listener can show up in the same lsof query
+	## as our managed IPv4 server. Stop must never sweep unrelated PIDs
+	## just because they share the configured HTTP port.
+	var host := _ManagerHostStub.new()
+	host.listener_pids = [33333] as Array[int]
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 11111
+
+	manager.stop_server()
+	var killed := host.killed_targets.duplicate()
+	host.free()
+
+	assert_eq(killed.size(), 1)
+	assert_true(killed.has(11111))
+	assert_false(killed.has(33333))
 
 
 func test_stop_invokes_finalize_for_record_cleanup() -> void:
