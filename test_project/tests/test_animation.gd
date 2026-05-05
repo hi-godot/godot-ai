@@ -1495,25 +1495,23 @@ func test_validate_animation_not_found() -> void:
 
 
 ## Regression: validate_animation must split track paths on the FIRST colon
-## (node↔property boundary), not the last. A track like "Target:modulate:a"
-## (the shape preset_fade produces, plus any hand-authored "position:y" /
-## "modulate:a" subpath track) must resolve to the node "Target", not
-## "Target:modulate", so the validator reports the track as healthy when
-## the target node exists.
-func test_validate_animation_handles_subpath_track_paths() -> void:
-	var player_path := _add_player("TestValidateSubpath")
+## (node↔property boundary), not the last. For broken subpath tracks
+## (target node missing), the broken_tracks[i].node_path field must be the
+## bare node name — not "MissingTarget:modulate" with the property colons
+## preserved — otherwise the diagnostic misleads agents debugging missing
+## targets. Note: Godot's get_node_or_null strips the ":property" tail
+## natively, so the rfind/find difference is only user-visible in this
+## broken_tracks payload, not in the valid/broken classification itself.
+func test_validate_animation_broken_subpath_reports_clean_node_path() -> void:
+	var player_path := _add_player("TestValidateBrokenSubpath")
 	if player_path.is_empty():
 		skip("Scene not ready — _add_player returned empty path")
-		return
-	var sibling := _add_sibling(Sprite2D.new(), "TestValidateSubpathTarget")
-	if sibling == null:
-		skip("Scene not ready — _add_sibling returned null")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "fade", "length": 0.5})
 	_handler.add_property_track({
 		"player_path": player_path,
 		"animation_name": "fade",
-		"track_path": "TestValidateSubpathTarget:modulate:a",
+		"track_path": "MissingFadeTarget:modulate:a",
 		"keyframes": [
 			{"time": 0.0, "value": 0.0},
 			{"time": 0.5, "value": 1.0},
@@ -1523,12 +1521,9 @@ func test_validate_animation_handles_subpath_track_paths() -> void:
 		"player_path": player_path, "animation_name": "fade",
 	})
 	assert_has_key(result, "data")
-	assert_eq(result.data.valid, true,
-		"Subpath track 'Target:modulate:a' should validate as healthy when target exists")
-	assert_eq(result.data.broken_count, 0)
-	assert_eq(result.data.valid_count, 1)
-	sibling.get_parent().remove_child(sibling)
-	sibling.queue_free()
+	assert_eq(result.data.broken_count, 1)
+	assert_eq(result.data.broken_tracks[0].node_path, "MissingFadeTarget",
+		"broken node_path must be the bare node name — not 'MissingFadeTarget:modulate'")
 	_remove_node(player_path)
 
 

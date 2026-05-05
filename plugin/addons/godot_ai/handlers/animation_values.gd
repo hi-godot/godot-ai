@@ -183,11 +183,13 @@ func validate_animation(params: Dictionary) -> Dictionary:
 
 	for i in anim.get_track_count():
 		var track_path_str := str(anim.track_get_path(i))
-		# Split on the FIRST colon (node↔property boundary). Subpath tracks
-		# like "Target:modulate:a" (the shape preset_fade produces) or any
-		# hand-authored `position:y` / `modulate:a` track would otherwise
-		# glue the property+subpath into the node part via rfind, falsely
-		# flagging healthy tracks as broken.
+		# Split on the FIRST colon (node↔property boundary), not the last.
+		# Godot's get_node_or_null strips the ":property" tail natively, so
+		# the valid/broken classification is the same either way — but for
+		# BROKEN tracks the broken_tracks[].node_path field is what callers
+		# read to diagnose the missing node, and rfind would surface
+		# "MissingTarget:modulate" instead of "MissingTarget" for subpath
+		# tracks like the "Target:modulate:a" shape preset_fade emits.
 		var colon := track_path_str.find(":")
 		var node_part: String
 		if colon >= 0:
