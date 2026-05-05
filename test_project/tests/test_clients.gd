@@ -173,6 +173,18 @@ func test_manual_command_escapes_backslashes_in_paths() -> void:
 # ----- server launch mode -----
 
 
+func test_invalidate_cli_cache_clears_all_entries() -> void:
+	McpCliFinder.invalidate()
+	var miss := McpCliFinder.find(["mcp_test_definitely_no_such_cli_xyz"])
+	assert_eq(miss, "")
+	assert_true(McpCliFinder._searched.size() > 0)
+
+	McpClientConfigurator.invalidate_cli_cache()
+
+	assert_eq(McpCliFinder._cache.size(), 0)
+	assert_eq(McpCliFinder._searched.size(), 0, "Without dropping _searched, the next find() short-circuits on the stale negative")
+
+
 func test_server_launch_mode_returns_known_string() -> void:
 	## get_server_launch_mode() powers the handshake field agents read to
 	## detect plugin/server version drift. Always returns one of four

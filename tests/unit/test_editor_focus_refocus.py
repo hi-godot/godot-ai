@@ -580,6 +580,42 @@ def test_check_uv_version_caches_for_session() -> None:
     )
 
 
+def test_force_refresh_invalidates_cli_finder_cache() -> None:
+    """Force-refresh (manual button, popup open, any explicit-user callsite)
+    flushes CliFinder so a freshly-installed CLI is re-detected without an
+    editor restart. Focus-in (`force=false`) keeps the cache.
+    """
+
+    configurator_source = (PLUGIN_ROOT / "client_configurator.gd").read_text()
+    invalidator_block = get_func_block(
+        configurator_source, "static func invalidate_cli_cache() -> void:"
+    )
+    assert "CliFinder.invalidate()" in invalidator_block, (
+        "Facade must call no-arg CliFinder.invalidate() to drop every "
+        "cached entry (positive and negative)."
+    )
+
+    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    request_block = get_func_block(
+        dock_source,
+        "func _request_client_status_refresh(force: bool = false) -> bool:",
+    )
+    assert re.search(
+        r"if force:\s+ClientConfigurator\.invalidate_cli_cache\(\)",
+        request_block,
+    ), (
+        "_request_client_status_refresh must flush CliFinder when "
+        "force=true so manual refresh, popup-open, and every other "
+        "explicit-user-action callsite re-detects newly-installed CLIs."
+    )
+
+    focus_in_block = _focus_in_block(dock_source)
+    assert "invalidate_cli_cache" not in focus_in_block, (
+        "Focus-in must NOT flush — focus fires dozens of times per "
+        "session and would re-fork `which` / `bash -lc` every time."
+    )
+
+
 def test_configure_all_uses_cached_status_not_dot_color() -> None:
     """Configure-all must not make correctness decisions from stale UI colors."""
 

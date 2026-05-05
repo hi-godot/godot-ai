@@ -490,6 +490,16 @@ static func invalidate_uvx_cli_cache() -> void:
 		CliFinder.invalidate(name)
 
 
+## Drop the entire `CliFinder` cache. Called by the dock's manual Refresh
+## button so a freshly-installed CLI (claude, codex, gemini, …) gets
+## detected without an editor restart. Per-CLI invalidation
+## (`invalidate_uvx_cli_cache`) is preferred when the dock knows which
+## binary changed; this catch-all fits the user-clicked-Refresh case
+## where any CLI may have been installed since the last sweep.
+static func invalidate_cli_cache() -> void:
+	CliFinder.invalidate()
+
+
 static var _uv_version_cache: String = ""
 static var _uv_version_searched: bool = false
 

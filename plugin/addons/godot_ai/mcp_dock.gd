@@ -2067,6 +2067,16 @@ func _request_client_status_refresh(force: bool = false) -> bool:
 			_defer_client_status_refresh_until_filesystem_ready(force)
 		return false
 
+	## Manual refresh (any `force=true` path: button click, popup open,
+	## external API caller) implies "may have installed a CLI since the
+	## last sweep" — flush CliFinder so freshly-installed binaries get
+	## re-detected. Focus-in (`force=false`) stays cached so the cheap
+	## case stays cheap. Per-CLI invalidation
+	## (`invalidate_uvx_cli_cache`) still pairs with specific events
+	## like `_on_install_uv` where the binary name is known.
+	if force:
+		ClientConfigurator.invalidate_cli_cache()
+
 	## Force the bytecode swap on the same scripts the worker will reach
 	## into — same #233/#235 guard `_perform_initial_*` already had.
 	## Without this, a manual refresh dispatched before the initial sweep
