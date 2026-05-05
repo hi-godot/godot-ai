@@ -158,6 +158,20 @@ func _camera_current_diag(cam: Node, expected: bool, attempts: int, elapsed_msec
 	var viewport_matches := false
 	var handler_current: Variant = "<unavailable>"
 	var handler_empty_path := "<unavailable>"
+	## Viewport identity captured so a post-reload-churn failure can prove
+	## whether `cam.get_viewport()` still points at the live edited-scene
+	## viewport or at a stale one from a previous editor lifecycle. If
+	## `cam_viewport_id` differs from `scene_root_viewport_id`, every
+	## `make_current()` lands on a viewport the engine's current-camera
+	## tracking has already moved past — see #316 comment thread for the
+	## reload-related theory this field exists to confirm.
+	var cam_viewport_id: Variant = "<unavailable>"
+	var scene_root_viewport_id: Variant = "<unavailable>"
+	var cam_viewport_matches_scene: Variant = "<unavailable>"
+	if scene_root != null:
+		var scene_viewport := scene_root.get_viewport()
+		if scene_viewport != null:
+			scene_root_viewport_id = scene_viewport.get_instance_id()
 	if cam != null and is_instance_valid(cam):
 		cam_name = String(cam.name)
 		cam_class = cam.get_class()
@@ -166,24 +180,29 @@ func _camera_current_diag(cam: Node, expected: bool, attempts: int, elapsed_msec
 			cam_path = McpScenePath.from_node(cam, scene_root)
 		if cam.has_method("is_current"):
 			node_is_current = bool(cam.is_current())
+		var cam_viewport: Viewport = null
 		if cam is Camera2D:
-			var viewport_2d := cam.get_viewport()
-			if viewport_2d != null:
-				var viewport_cam_2d := viewport_2d.get_camera_2d()
+			cam_viewport = cam.get_viewport()
+			if cam_viewport != null:
+				var viewport_cam_2d := cam_viewport.get_camera_2d()
 				viewport_matches = viewport_cam_2d == cam
 				if viewport_cam_2d != null and scene_root != null and scene_root.is_ancestor_of(viewport_cam_2d):
 					viewport_cam_path = McpScenePath.from_node(viewport_cam_2d, scene_root)
 				elif viewport_cam_2d != null:
 					viewport_cam_path = str(viewport_cam_2d)
 		elif cam is Camera3D:
-			var viewport_3d := cam.get_viewport()
-			if viewport_3d != null:
-				var viewport_cam_3d := viewport_3d.get_camera_3d()
+			cam_viewport = cam.get_viewport()
+			if cam_viewport != null:
+				var viewport_cam_3d := cam_viewport.get_camera_3d()
 				viewport_matches = viewport_cam_3d == cam
 				if viewport_cam_3d != null and scene_root != null and scene_root.is_ancestor_of(viewport_cam_3d):
 					viewport_cam_path = McpScenePath.from_node(viewport_cam_3d, scene_root)
 				elif viewport_cam_3d != null:
 					viewport_cam_path = str(viewport_cam_3d)
+		if cam_viewport != null:
+			cam_viewport_id = cam_viewport.get_instance_id()
+			if scene_root_viewport_id is int:
+				cam_viewport_matches_scene = (cam_viewport_id == scene_root_viewport_id)
 		if cam_path != "<null>":
 			var per_path := _handler.get_camera({"camera_path": cam_path})
 			if per_path.has("data"):
@@ -197,7 +216,8 @@ func _camera_current_diag(cam: Node, expected: bool, attempts: int, elapsed_msec
 	return (
 		"camera_state expected_current=%s attempts=%d elapsed_msec=%d "
 		+ "camera=%s path=%s class=%s in_tree=%s node_is_current=%s "
-		+ "viewport_camera=%s viewport_matches=%s handler_current=%s handler_empty_path=%s"
+		+ "viewport_camera=%s viewport_matches=%s handler_current=%s handler_empty_path=%s "
+		+ "cam_viewport_id=%s scene_root_viewport_id=%s cam_viewport_matches_scene=%s"
 	) % [
 		expected,
 		attempts,
@@ -211,6 +231,9 @@ func _camera_current_diag(cam: Node, expected: bool, attempts: int, elapsed_msec
 		viewport_matches,
 		handler_current,
 		handler_empty_path,
+		cam_viewport_id,
+		scene_root_viewport_id,
+		cam_viewport_matches_scene,
 	]
 
 
