@@ -132,7 +132,7 @@ func test_create_invalid_type() -> void:
 		"name": "BadType",
 		"type": "gpu_3d",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 func test_create_missing_parent() -> void:
@@ -179,7 +179,7 @@ func test_set_stream_missing_resource() -> void:
 		"player_path": r.data.path,
 		"stream_path": "res://does_not_exist.ogg",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.RESOURCE_NOT_FOUND)
 
 
 func test_set_stream_wrong_type() -> void:
@@ -192,7 +192,7 @@ func test_set_stream_wrong_type() -> void:
 		"player_path": r.data.path,
 		"stream_path": "res://tests/test_audio.gd",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.WRONG_TYPE)
 
 
 func test_set_stream_empty_path() -> void:
@@ -337,12 +337,12 @@ func test_play_and_stop_roundtrip() -> void:
 
 func test_play_missing_player_path() -> void:
 	var result := _handler.play({})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_stop_missing_player_path() -> void:
 	var result := _handler.stop({})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 # ============================================================================

@@ -174,7 +174,7 @@ func test_animation_create_rejects_invalid_loop_mode() -> void:
 		"length": 1.0,
 		"loop_mode": "bogus",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 	assert_contains(result.error.message, "loop_mode")
 	_remove_node(player_path)
 
@@ -284,7 +284,7 @@ func test_add_property_track_rejects_missing_property() -> void:
 		"track_path": ".:modulate",
 		"keyframes": [{"time": 0.0, "value": {"r": 1.0, "g": 0.0, "b": 0.0}}],
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	assert_contains(result.error.message, "not found")
 	_remove_node(player_path)
 
@@ -1010,7 +1010,7 @@ func test_create_simple_rejects_wrong_type_even_when_auto_create_enabled() -> vo
 			 "from": {"x": 0}, "to": {"x": 1}, "duration": 1.0},
 		],
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.WRONG_TYPE)
 	assert_contains(result.error.message, "not an AnimationPlayer")
 	_remove_node("/" + scene_root.name + "/Decoy86")
 
@@ -1656,7 +1656,7 @@ func test_preset_fade_invalid_mode() -> void:
 		"target_path": "FadeBadMode",
 		"mode": "wobble",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 	_remove_node(player_path)
 	_remove_node("/" + scene_root.name + "/FadeBadMode")
 
@@ -1957,7 +1957,7 @@ func test_preset_fade_missing_target() -> void:
 		"target_path": "NoSuchNode",
 		"mode": "in",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	# Error must teach both supported path conventions so callers can pick the
 	# right one without spelunking docs (issue #328).
 	var msg := String(result.error.message)

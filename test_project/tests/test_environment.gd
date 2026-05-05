@@ -57,7 +57,7 @@ func test_create_invalid_preset() -> void:
 		"path": "/Main/World",
 		"preset": "zapruder",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 func test_create_target_not_world_environment() -> void:

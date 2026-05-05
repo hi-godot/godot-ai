@@ -340,7 +340,7 @@ func test_create_invalid_type() -> void:
 		"name": "BadType",
 		"type": "nonsense",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 func test_create_with_make_current_unmarks_sibling() -> void:
@@ -624,7 +624,7 @@ func test_set_damping_2d_margin_out_of_range() -> void:
 		"camera_path": r.data.path,
 		"drag_margins": {"left": 1.5},
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
 func test_set_damping_2d_errors_on_3d() -> void:

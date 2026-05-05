@@ -118,7 +118,7 @@ func test_clear_logs_empties_buffer() -> void:
 
 func test_screenshot_invalid_source() -> void:
 	var result := _handler.take_screenshot({"source": "invalid"})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 func test_screenshot_game_not_playing() -> void:
@@ -171,7 +171,7 @@ func test_debugger_plugin_clear_pending_disconnects_timer() -> void:
 
 func test_screenshot_view_target_not_found() -> void:
 	var result := _handler.take_screenshot({"source": "viewport", "view_target": "/Main/NonExistent"})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
 
 
 func test_screenshot_view_target_all_invalid_comma() -> void:

@@ -94,7 +94,7 @@ func test_create_canvas_item() -> void:
 
 func test_create_invalid_type() -> void:
 	var result := _handler.create_material({"path": TEST_MATERIAL_PATH, "type": "nonsense"})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 func test_create_requires_res_path() -> void:
@@ -220,7 +220,7 @@ func test_set_param_unknown_property() -> void:
 		"param": "does_not_exist",
 		"value": 1.0,
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.PROPERTY_NOT_ON_CLASS)
 
 
 func test_set_param_material_not_found() -> void:
@@ -238,7 +238,7 @@ func test_set_param_missing_value() -> void:
 		"path": TEST_MATERIAL_PATH,
 		"param": "metallic",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 # ============================================================================
@@ -393,7 +393,7 @@ func test_assign_surface_index_out_of_range() -> void:
 		"resource_path": TEST_MATERIAL_PATH,
 		"slot": "surface_99",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	_remove_node(node)
 
 
@@ -403,7 +403,7 @@ func test_assign_node_not_found() -> void:
 		"node_path": "/DoesNotExist",
 		"resource_path": TEST_MATERIAL_PATH,
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
 
 
 # ============================================================================
@@ -443,7 +443,7 @@ func test_apply_to_node_invalid_type() -> void:
 		"type": "garbage",
 		"params": {},
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 	_remove_node(node)
 
 

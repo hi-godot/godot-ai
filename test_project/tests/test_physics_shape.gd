@@ -119,12 +119,12 @@ func _add_nested_body_3d(container_name: String, visuals: Array) -> Dictionary:
 
 func test_autofit_missing_path() -> void:
 	var result := _handler.autofit({})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_autofit_node_not_found() -> void:
 	var result := _handler.autofit({"path": "/Main/NopeNotHere"})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
 
 
 func test_autofit_node_is_not_collision_shape() -> void:
@@ -142,7 +142,7 @@ func test_autofit_invalid_shape_type_for_3d() -> void:
 		"path": parts.collision.get_path(),
 		"shape_type": "rectangle",  # 2D-only type used in 3D context
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 	_remove_node(parts.body)
 
 

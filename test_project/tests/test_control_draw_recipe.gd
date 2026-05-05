@@ -283,17 +283,17 @@ func test_undo_preserves_prior_meta() -> void:
 
 func test_missing_path_errors() -> void:
 	var result := _handler.control_draw_recipe({"ops": []})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_non_array_ops_errors() -> void:
 	var result := _handler.control_draw_recipe({"path": "/Main", "ops": "nope"})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.WRONG_TYPE)
 
 
 func test_node_not_found_errors() -> void:
 	var result := _handler.control_draw_recipe({"path": "/Bogus/Path", "ops": []})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
 
 
 func test_non_control_rejected() -> void:
@@ -323,7 +323,7 @@ func test_missing_required_op_field_errors() -> void:
 	var result := _handler.control_draw_recipe(
 		{"path": path, "ops": [{"draw": "line", "from": [0, 0], "color": "red"}]}
 	)
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	assert_contains(result.error.message, "'to'")
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var node := McpScenePath.resolve(path, scene_root)

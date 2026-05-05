@@ -80,7 +80,7 @@ func test_gradient_stop_missing_keys() -> void:
 		"path": "/Main/Line",
 		"property": "texture",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
 func test_gradient_stop_wrong_shape_color_reports_keys() -> void:
@@ -116,7 +116,7 @@ func test_gradient_stop_non_dict_non_string_color_is_rejected() -> void:
 		"path": "/Main/Line",
 		"property": "texture",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.WRONG_TYPE)
 	assert_contains(result.error.message, "stops[0].color")
 
 
@@ -184,7 +184,7 @@ func test_noise_invalid_type() -> void:
 		"path": "/Main/Foo",
 		"property": "texture",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 func test_noise_assigns_typed_chain() -> void:

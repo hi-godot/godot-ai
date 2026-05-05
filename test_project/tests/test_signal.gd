@@ -35,7 +35,7 @@ func test_list_signals_returns_signals() -> void:
 
 func test_list_signals_missing_path() -> void:
 	var result := _handler.list_signals({})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_list_signals_unknown_node() -> void:
@@ -211,16 +211,16 @@ func test_format_target_path_uses_absolute_for_non_descendants() -> void:
 
 func test_connect_signal_missing_params() -> void:
 	var result := _handler.connect_signal({})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 	result = _handler.connect_signal({"path": "/Main"})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 	result = _handler.connect_signal({"path": "/Main", "signal": "ready"})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 	result = _handler.connect_signal({"path": "/Main", "signal": "ready", "target": "/Main"})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_connect_signal_unknown_source() -> void:
@@ -237,7 +237,7 @@ func test_connect_signal_unknown_source() -> void:
 
 func test_disconnect_signal_missing_params() -> void:
 	var result := _handler.disconnect_signal({})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_disconnect_signal_not_connected() -> void:

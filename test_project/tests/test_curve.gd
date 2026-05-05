@@ -72,7 +72,7 @@ func test_set_points_missing_property() -> void:
 		"points": [],
 		"path": "/Main/Path3D",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
 func test_set_points_wrong_resource_type() -> void:

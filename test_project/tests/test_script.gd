@@ -93,7 +93,7 @@ func test_create_script_overwrite_omits_cleanup_hint() -> void:
 
 func test_create_script_missing_path() -> void:
 	var result := _handler.create_script({"content": "extends Node\n"})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
 func test_create_script_invalid_prefix() -> void:
@@ -200,7 +200,7 @@ func test_patch_script_missing_old_text() -> void:
 		"path": TEST_SCRIPT_PATH,
 		"new_text": "x",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_patch_script_non_gd_extension_rejected() -> void:
@@ -226,7 +226,7 @@ func test_patch_script_file_not_found() -> void:
 		"old_text": "x",
 		"new_text": "y",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.RESOURCE_NOT_FOUND)
 
 
 func test_patch_script_invalid_prefix() -> void:
@@ -263,7 +263,7 @@ func test_read_script_basic() -> void:
 
 func test_read_script_missing_path() -> void:
 	var result := _handler.read_script({})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
 func test_read_script_invalid_prefix() -> void:
@@ -313,12 +313,12 @@ func test_attach_script_basic() -> void:
 
 func test_attach_script_missing_path() -> void:
 	var result := _handler.attach_script({"script_path": TEST_SCRIPT_PATH})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_attach_script_missing_script_path() -> void:
 	var result := _handler.attach_script({"path": "/Main/Camera3D"})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_attach_script_node_not_found() -> void:
@@ -326,7 +326,7 @@ func test_attach_script_node_not_found() -> void:
 		"path": "/Main/DoesNotExist",
 		"script_path": TEST_SCRIPT_PATH,
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
 
 
 func test_attach_script_not_found() -> void:
@@ -355,12 +355,12 @@ func test_detach_script_no_script() -> void:
 
 func test_detach_script_missing_path() -> void:
 	var result := _handler.detach_script({})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_detach_script_node_not_found() -> void:
 	var result := _handler.detach_script({"path": "/Main/DoesNotExist"})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
 
 
 # ----- find_symbols -----
@@ -402,7 +402,7 @@ func test_find_symbols_exports() -> void:
 
 func test_find_symbols_missing_path() -> void:
 	var result := _handler.find_symbols({})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
 func test_find_symbols_invalid_prefix() -> void:

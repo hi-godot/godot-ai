@@ -107,7 +107,7 @@ func test_create_invalid_type() -> void:
 		"name": "BadType",
 		"type": "nonsense",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 func test_create_attaches_process_material_to_gpu() -> void:
@@ -158,7 +158,7 @@ func test_set_main_unknown_property() -> void:
 		"node_path": r.data.path,
 		"properties": {"nonsense_prop": 1},
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
 func test_set_main_empty_dict() -> void:
@@ -297,7 +297,7 @@ func test_set_process_invalid_color_ramp() -> void:
 		"node_path": r.data.path,
 		"properties": {"color_ramp": {"no_stops_key": []}},
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
 # ============================================================================
@@ -549,4 +549,4 @@ func test_apply_preset_invalid_type() -> void:
 		"preset": "fire",
 		"type": "gpu_5d",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)

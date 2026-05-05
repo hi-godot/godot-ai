@@ -113,7 +113,7 @@ func test_theme_set_color_missing_theme_path() -> void:
 		"name": "font_color",
 		"value": "#ff0000",
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_theme_set_color_missing_class_name() -> void:
@@ -359,7 +359,7 @@ func test_create_theme_overwritten_flag_tracks_pre_save_state() -> void:
 func test_create_theme_missing_path_names_param_correctly() -> void:
 	# Error message should name `path`, not `theme_path`, for theme_create.
 	var result := _handler.create_theme({})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 	assert_contains(result.error.message, "path")
 	# Make sure it's NOT using the default "theme_path" label.
 	assert_true(result.error.message.find("theme_path") == -1, "Error should say 'path', not 'theme_path'")

@@ -151,7 +151,7 @@ func test_find_nonexistent_type_returns_empty() -> void:
 
 func test_create_scene_missing_path() -> void:
 	var result := _handler.create_scene({})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_create_scene_invalid_root_type() -> void:
@@ -166,14 +166,14 @@ func test_create_scene_non_node_root_type() -> void:
 
 func test_create_scene_invalid_path_prefix() -> void:
 	var result := _handler.create_scene({"path": "/tmp/scene.tscn"})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 # ----- open_scene (validation only — opening scenes triggers UI that blocks test runner) -----
 
 func test_open_scene_missing_path() -> void:
 	var result := _handler.open_scene({})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_open_scene_nonexistent() -> void:
@@ -257,9 +257,9 @@ func test_save_scene_as_supports_never_saved_scene() -> void:
 
 func test_save_scene_as_missing_path() -> void:
 	var result := _handler.save_scene_as({})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_save_scene_as_invalid_path_prefix() -> void:
 	var result := _handler.save_scene_as({"path": "/tmp/bad.tscn"})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)

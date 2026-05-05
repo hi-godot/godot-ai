@@ -104,7 +104,7 @@ func test_set_anchor_preset_keep_size_mode() -> void:
 
 func test_set_anchor_preset_missing_path() -> void:
 	var result := _handler.set_anchor_preset({"preset": "full_rect"})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_set_anchor_preset_missing_preset() -> void:
@@ -113,7 +113,7 @@ func test_set_anchor_preset_missing_preset() -> void:
 		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_anchor_preset({"path": path})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 	_remove_control(path)
 
 
@@ -265,7 +265,7 @@ func test_set_text_replaces_existing_text() -> void:
 
 func test_set_text_missing_path() -> void:
 	var result := _handler.set_text({"text": "hi"})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_set_text_missing_text() -> void:
@@ -285,7 +285,7 @@ func test_set_text_rejects_non_string_value() -> void:
 		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_text({"path": path, "text": 42})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.WRONG_TYPE)
 	_remove_control(path)
 
 
@@ -369,7 +369,7 @@ func test_build_layout_creates_simple_tree() -> void:
 
 func test_build_layout_rejects_unknown_type() -> void:
 	var result := _handler.build_layout({"tree": {"type": "NotARealClass"}})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 func test_build_layout_rejects_non_node_type() -> void:
@@ -380,7 +380,7 @@ func test_build_layout_rejects_non_node_type() -> void:
 
 func test_build_layout_rejects_missing_type() -> void:
 	var result := _handler.build_layout({"tree": {"name": "NoType"}})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_build_layout_rejects_unknown_property() -> void:
@@ -388,7 +388,7 @@ func test_build_layout_rejects_unknown_property() -> void:
 	var result := _handler.build_layout({
 		"tree": {"type": "Label", "properties": {"bogus_prop": 1}}
 	})
-	assert_is_error(result)
+	assert_is_error(result, McpErrorCodes.PROPERTY_NOT_ON_CLASS)
 
 
 func test_build_layout_rejects_bad_parent_path() -> void:
