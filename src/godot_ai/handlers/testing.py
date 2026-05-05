@@ -6,6 +6,8 @@ from typing import Any
 
 from godot_ai.runtime.direct import DirectRuntime
 
+TEST_RUN_TIMEOUT_SEC = 120.0
+
 
 async def test_run(
     runtime: DirectRuntime,
@@ -23,7 +25,7 @@ async def test_run(
         params["exclude_test_name"] = exclude_test_name
     if verbose:
         params["verbose"] = True
-    return await runtime.send_command("run_tests", params, timeout=30.0)
+    return await runtime.send_command("run_tests", params, timeout=TEST_RUN_TIMEOUT_SEC)
 
 
 async def test_results_get(runtime: DirectRuntime, verbose: bool = False) -> dict:

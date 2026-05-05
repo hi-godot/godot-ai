@@ -1834,6 +1834,14 @@ async def test_run_tests_handler_with_no_params():
     assert client.calls[-1]["params"] == {}
 
 
+async def test_run_tests_handler_uses_full_suite_timeout():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await testing_handlers.test_run(runtime)
+    assert client.calls[-1]["timeout"] == testing_handlers.TEST_RUN_TIMEOUT_SEC
+    assert client.calls[-1]["timeout"] > 30.0
+
+
 async def test_run_tests_handler_with_suite_and_test_name():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
