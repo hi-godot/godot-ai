@@ -14,6 +14,21 @@ const SceneHandler := preload("res://addons/godot_ai/handlers/scene_handler.gd")
 
 var _handler: SceneHandler
 
+class SaveSpy:
+	extends RefCounted
+
+	var save_called := false
+	var save_as_called := false
+	var save_as_path := ""
+
+	func save_scene() -> int:
+		save_called = true
+		return OK
+
+	func save_scene_as(path: String) -> void:
+		save_as_called = true
+		save_as_path = path
+
 
 func suite_name() -> String:
 	return "scene"
@@ -167,6 +182,78 @@ func test_open_scene_nonexistent() -> void:
 
 
 # ----- save_scene / save_scene_as (validation only — save triggers modal dialog) -----
+
+func test_save_scene_never_saved_returns_actionable_validation_error() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene open")
+		return
+
+	var original_path := scene_root.scene_file_path
+	var spy := SaveSpy.new()
+	_handler._save_scene_callable = spy.save_scene
+	scene_root.scene_file_path = ""
+
+	var result := _handler.save_scene({})
+
+	scene_root.scene_file_path = original_path
+	_handler._save_scene_callable = Callable()
+
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_false(spy.save_called, "scene_save must not call EditorInterface.save_scene() without a scene path")
+	# Recovery hint must point at the published MCP tool surface
+	# (scene_manage(op='save_as')), not a non-existent `scene_save_as`
+	# top-level tool. Hint must also acknowledge both supported scene
+	# extensions (.tscn and .scn) since save_scene_as accepts either.
+	assert_contains(result.error.message, "scene_manage(op='save_as')")
+	assert_contains(result.error.message, "res://")
+	assert_contains(result.error.message, ".tscn")
+	assert_contains(result.error.message, ".scn")
+
+
+func test_save_scene_succeeds_for_saved_scene() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene open")
+		return
+	if scene_root.scene_file_path.is_empty():
+		skip("Current scene has no path")
+		return
+
+	var spy := SaveSpy.new()
+	_handler._save_scene_callable = spy.save_scene
+
+	var result := _handler.save_scene({})
+
+	_handler._save_scene_callable = Callable()
+
+	assert_has_key(result, "data")
+	assert_true(spy.save_called, "scene_save should save when the scene already has a path")
+	assert_eq(result.data.path, scene_root.scene_file_path)
+
+
+func test_save_scene_as_supports_never_saved_scene() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene open")
+		return
+
+	var original_path := scene_root.scene_file_path
+	var spy := SaveSpy.new()
+	var path := "res://tmp/mcp_scene_save_as_from_unsaved.tscn"
+	_handler._save_scene_as_callable = spy.save_scene_as
+	scene_root.scene_file_path = ""
+
+	var result := _handler.save_scene_as({"path": path})
+
+	scene_root.scene_file_path = original_path
+	_handler._save_scene_as_callable = Callable()
+
+	assert_has_key(result, "data")
+	assert_true(spy.save_as_called, "scene_save_as should remain available for scenes without a path")
+	assert_eq(spy.save_as_path, path)
+	assert_eq(result.data.path, path)
+
 
 func test_save_scene_as_missing_path() -> void:
 	var result := _handler.save_scene_as({})
