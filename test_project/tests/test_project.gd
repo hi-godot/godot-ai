@@ -152,6 +152,16 @@ func test_run_project_invalid_mode_restores_connection_pause() -> void:
 	conn.free()
 
 
+func test_run_project_validation_error_does_not_rotate_capture_run() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	var handler := ProjectHandler.new(null, plugin)
+
+	var result := handler.run_project({"mode": "invalid_mode"})
+
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_eq(plugin._game_run_token, 0, "invalid runs must not clear or advance game capture readiness")
+
+
 func test_run_project_custom_missing_scene() -> void:
 	var result := _handler.run_project({"mode": "custom"})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)

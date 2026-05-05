@@ -6,10 +6,12 @@ extends RefCounted
 const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
 
 var _connection: McpConnection
+var _debugger_plugin
 
 
-func _init(connection: McpConnection = null) -> void:
+func _init(connection: McpConnection = null, debugger_plugin = null) -> void:
 	_connection = connection
+	_debugger_plugin = debugger_plugin
 
 
 func get_project_setting(params: Dictionary) -> Dictionary:
@@ -74,6 +76,16 @@ func run_project(params: Dictionary) -> Dictionary:
 	if EditorInterface.is_playing_scene():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Project is already running")
 
+	var validation_error: Variant = null
+	if mode == "custom":
+		var custom_scene: String = params.get("scene", "")
+		if custom_scene.is_empty():
+			validation_error = McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: scene (required when mode='custom')")
+	elif mode != "main" and mode != "current":
+		validation_error = McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid mode '%s' — use 'main', 'current', or 'custom'" % mode)
+	if validation_error != null:
+		return validation_error
+
 	# play_*_scene internally triggers try_autosave() → _save_scene_with_preview()
 	# which renders a preview thumbnail and calls frame processing. If our
 	# WebSocket connection's _process() re-enters during that render, the
@@ -96,7 +108,9 @@ func run_project(params: Dictionary) -> Dictionary:
 		editor_settings.set_setting(autosave_key, false)
 		restore_setting = true
 
-	var validation_error: Variant = null
+	if _debugger_plugin != null:
+		_debugger_plugin.begin_game_run()
+
 	match mode:
 		"main":
 			EditorInterface.play_main_scene()
@@ -104,21 +118,13 @@ func run_project(params: Dictionary) -> Dictionary:
 			EditorInterface.play_current_scene()
 		"custom":
 			var scene_path: String = params.get("scene", "")
-			if scene_path.is_empty():
-				validation_error = McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: scene (required when mode='custom')")
-			else:
-				EditorInterface.play_custom_scene(scene_path)
-		_:
-			validation_error = McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid mode '%s' — use 'main', 'current', or 'custom'" % mode)
+			EditorInterface.play_custom_scene(scene_path)
 
 	if restore_setting:
 		editor_settings.set_setting(autosave_key, prior_autosave)
 
 	if _connection:
 		_connection.pause_processing = false
-
-	if validation_error != null:
-		return validation_error
 
 	return {
 		"data": {
@@ -135,6 +141,8 @@ func stop_project(params: Dictionary) -> Dictionary:
 	if not EditorInterface.is_playing_scene():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Project is not running")
 
+	if _debugger_plugin != null:
+		_debugger_plugin.end_game_run()
 	EditorInterface.stop_playing_scene()
 
 	# stop_playing_scene() is async — is_playing_scene() only flips to false on
