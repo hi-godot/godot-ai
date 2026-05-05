@@ -2016,7 +2016,7 @@ func test_preset_slide_accepts_scene_absolute_target() -> void:
 		"direction": "left",
 	})
 	assert_has_key(result, "data")
-	var anim := _fetch_anim(player_path, "slide_in")
+	var anim := _fetch_anim(player_path, "slide_in_left")
 	assert_true(anim != null, "animation should exist")
 	var track_path := String(anim.track_get_path(0))
 	assert_eq(track_path, "AbsSlider:position",
@@ -2055,7 +2055,7 @@ func test_preset_slide_accepts_target_outside_root_node() -> void:
 		"direction": "left",
 	})
 	assert_has_key(result, "data")
-	var anim := player.get_animation("slide_in")
+	var anim := player.get_animation("slide_in_left")
 	assert_true(anim != null, "animation should exist")
 	var track_path := String(anim.track_get_path(0))
 	# get_path_to walks up out of SubAnimRoot and back down to ForeignTarget.
