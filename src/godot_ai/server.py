@@ -51,6 +51,7 @@ from godot_ai.tools.signal import register_signal_tools
 from godot_ai.tools.testing import register_testing_tools
 from godot_ai.tools.theme import register_theme_tools
 from godot_ai.tools.ui import register_ui_tools
+from godot_ai.transport.origin_guard import LocalhostOnlyHTTPMiddleware
 from godot_ai.transport.websocket import GodotWebSocketServer
 
 logger = logging.getLogger(__name__)
@@ -70,8 +71,12 @@ class GodotAIFastMCP(FastMCP):
         app = super().http_app(*args, **kwargs)
         transport = kwargs.get("transport", "http")
         if transport in ("http", "streamable-http"):
-            return StaleMcpSessionDiagnosticMiddleware(app)
-        return app
+            app = StaleMcpSessionDiagnosticMiddleware(app)
+        ## Outermost wrap: refuse non-loopback Host/Origin (DNS-rebinding
+        ## guard, audit-v2 finding #1). Applied to every HTTP transport
+        ## including ``sse`` so ``/godot-ai/status`` and the FastMCP
+        ## endpoints are guarded uniformly.
+        return LocalhostOnlyHTTPMiddleware(app)
 
 
 def create_server(

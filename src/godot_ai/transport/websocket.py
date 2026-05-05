@@ -14,6 +14,7 @@ from websockets.asyncio.server import ServerConnection
 from godot_ai import __version__ as _SERVER_VERSION
 from godot_ai.protocol.envelope import CommandRequest, CommandResponse, HandshakeMessage
 from godot_ai.sessions.registry import Session, SessionRegistry
+from godot_ai.transport.origin_guard import make_websocket_request_guard
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,10 @@ class GodotWebSocketServer:
                 "127.0.0.1",
                 self.port,
                 max_size=4 * 1024 * 1024,  # 4 MB for screenshot base64
+                # Reject DNS-rebinding attempts before the upgrade — see
+                # godot_ai.transport.origin_guard. Native plugin clients
+                # carry a loopback Host and no Origin, so they pass through.
+                process_request=make_websocket_request_guard(),
             ):
                 await asyncio.Future()  # run forever
         except OSError as e:
