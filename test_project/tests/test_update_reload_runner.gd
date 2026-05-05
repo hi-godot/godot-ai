@@ -483,6 +483,29 @@ func test_install_zip_paths_rolls_back_when_mid_loop_write_fails() -> void:
 # ----- _arm_scan_watchdog / _on_scan_watchdog_timeout (audit-v2 #9) -----
 
 
+func _scene_root() -> Node:
+	# `Timer.start()` requires the timer (and thus its parent) to be
+	# inside a SceneTree. `McpTestSuite` extends `RefCounted` so it can't
+	# act as a parent itself — parent the runner under the editor's
+	# SceneTree root for the duration of the test, then remove + free.
+	var tree := Engine.get_main_loop() as SceneTree
+	return tree.root if tree != null else null
+
+
+func _new_runner_in_tree():
+	var runner = _new_runner()
+	var root := _scene_root()
+	assert_true(root != null, "test setup: SceneTree root must exist")
+	root.add_child(runner)
+	return runner
+
+
+func _free_runner(runner) -> void:
+	if runner.get_parent() != null:
+		runner.get_parent().remove_child(runner)
+	runner.free()
+
+
 func _arm_scan_state(runner) -> void:
 	# Mirror what `_start_filesystem_scan` would do, minus the actual
 	# `EditorInterface.get_resource_filesystem().scan()` call. We can't
@@ -498,11 +521,7 @@ func test_watchdog_timeout_proceeds_when_signal_never_fires() -> void:
 	## `_waiting_for_scan = true` forever. The watchdog must clear that
 	## flag and dispatch `_scan_next_step` so the rest of the update
 	## sequence can finish.
-	## Test fires `_on_scan_watchdog_timeout` directly — the runner does
-	## not need to be in a SceneTree because we don't depend on the Timer
-	## actually counting down. (`McpTestSuite` extends `RefCounted`, so
-	## `add_child(runner)` is not available here.)
-	var runner = _new_runner()
+	var runner = _new_runner_in_tree()
 	_arm_scan_state(runner)
 	assert_true(runner._waiting_for_scan, "scan wait armed by precondition")
 	assert_true(runner._scan_watchdog_timer != null, "watchdog timer node exists once armed")
@@ -511,33 +530,39 @@ func test_watchdog_timeout_proceeds_when_signal_never_fires() -> void:
 
 	assert_false(runner._waiting_for_scan, "watchdog cleared the wait flag")
 	assert_eq(runner._scan_next_step, "", "next-step token consumed by _finish_scan_wait")
-	runner.free()
+	assert_true(runner._scan_timed_out, "watchdog must set the sticky bypass flag")
+	_free_runner(runner)
 
 
 func test_watchdog_no_op_when_signal_already_settled() -> void:
 	## Race: signal fires, `_finish_scan_wait` cleans up, then the watchdog
 	## Timer fires anyway (Godot's Timer can have queued timeout). Calling
 	## `_on_scan_watchdog_timeout` after a settled scan must be a no-op —
-	## otherwise it would double-dispatch `_scan_next_step`.
-	var runner = _new_runner()
+	## otherwise it would double-dispatch `_scan_next_step` AND it must
+	## NOT poison subsequent scans by setting `_scan_timed_out = true`.
+	var runner = _new_runner_in_tree()
 	_arm_scan_state(runner)
 
 	# Simulate the happy path: signal arrived, _finish_scan_wait ran.
 	runner._finish_scan_wait()
 	assert_false(runner._waiting_for_scan, "wait already cleared by signal handler")
 
-	# Now the late watchdog timeout fires. It must not crash, must not
-	# re-dispatch, must not flip _waiting_for_scan back to true.
+	# Now the late watchdog timeout fires. Must not flip _waiting_for_scan
+	# back to true, must not set _scan_timed_out (the scan succeeded).
 	runner._on_scan_watchdog_timeout()
 	assert_false(runner._waiting_for_scan, "watchdog stays no-op after settled wait")
-	runner.free()
+	assert_false(
+		runner._scan_timed_out,
+		"watchdog no-op must not poison _scan_timed_out — the scan actually succeeded",
+	)
+	_free_runner(runner)
 
 
 func test_finish_scan_wait_stops_armed_watchdog() -> void:
 	## Happy path: filesystem_changed signal arrives; `_finish_scan_wait`
 	## must stop the still-running Timer so it doesn't fire later and
 	## attempt a second cleanup. Verify by inspecting the Timer state.
-	var runner = _new_runner()
+	var runner = _new_runner_in_tree()
 	_arm_scan_state(runner)
 	assert_false(runner._scan_watchdog_timer.is_stopped(), "timer running after arm")
 
@@ -547,7 +572,7 @@ func test_finish_scan_wait_stops_armed_watchdog() -> void:
 		runner._scan_watchdog_timer.is_stopped(),
 		"finish_scan_wait must stop the watchdog so it can't fire later",
 	)
-	runner.free()
+	_free_runner(runner)
 
 
 func test_watchdog_timer_reused_across_arms() -> void:
@@ -555,7 +580,7 @@ func test_watchdog_timer_reused_across_arms() -> void:
 	## it on subsequent arms. The runner makes two filesystem scans during
 	## a single update (new files, then existing files), so the second arm
 	## must not leak a second Timer child.
-	var runner = _new_runner()
+	var runner = _new_runner_in_tree()
 	_arm_scan_state(runner)
 	var first_timer = runner._scan_watchdog_timer
 	runner._finish_scan_wait()
@@ -565,4 +590,44 @@ func test_watchdog_timer_reused_across_arms() -> void:
 
 	assert_true(first_timer == second_timer, "timer reused, not recreated")
 	runner._finish_scan_wait()
-	runner.free()
+	_free_runner(runner)
+
+
+func test_subsequent_scan_after_watchdog_bypasses_listener_arm() -> void:
+	## Cross-scan race regression (PR #381 review): if scan #1 watchdog'd,
+	## scan #2 must NOT arm a fresh `filesystem_changed` listener.
+	##
+	## Why: a delayed `filesystem_changed` emission from scan #1 fires on
+	## any listener currently connected to the shared signal — Godot can't
+	## tag emissions with their source scan. So if scan #2 has armed a
+	## fresh listener by the time scan #1's emission finally arrives, that
+	## listener fires and falsely settles scan #2 before its actual
+	## filesystem scan completed — re-enabling the plugin against a
+	## potentially-incomplete on-disk install.
+	##
+	## Fix: the watchdog sets the sticky `_scan_timed_out` flag, and
+	## `_start_filesystem_scan` checks it at the top and bypasses the
+	## connect+scan path entirely. The pending plugin re-enable still
+	## happens via `call_deferred(next_step)` — Godot's normal background
+	## scan catches up after the plugin re-enables.
+	var runner = _new_runner_in_tree()
+
+	# Scan #1: arm + watchdog timeout.
+	_arm_scan_state(runner)
+	runner._on_scan_watchdog_timeout()
+	assert_true(runner._scan_timed_out, "watchdog set the sticky flag")
+	assert_false(runner._waiting_for_scan, "watchdog cleared the wait")
+
+	# Scan #2 attempts to start. Pre-fix, this re-armed the listener. Now,
+	# the bypass path must short-circuit before _waiting_for_scan flips to
+	# true. We pass a benign deferred step (`set_process`) so the
+	# `call_deferred` in the bypass branch doesn't re-enable the plugin
+	# in the test environment.
+	runner._start_filesystem_scan("set_process")
+	assert_false(
+		runner._waiting_for_scan,
+		"post-watchdog _start_filesystem_scan must NOT arm a new listener — "
+		+ "no listener means no false-settle from a delayed scan-#1 emission",
+	)
+
+	_free_runner(runner)

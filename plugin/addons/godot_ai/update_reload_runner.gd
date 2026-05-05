@@ -45,6 +45,13 @@ var _scan_next_step := ""
 ## defensive pattern for state that survives `fs.scan()` during update.
 const SCAN_WATCHDOG_SECS := 30.0
 var _scan_watchdog_timer = null
+## Sticky flag set by `_on_scan_watchdog_timeout`. Subsequent
+## `_start_filesystem_scan` calls in the same update bypass connect+scan
+## so a delayed `filesystem_changed` emission from the timed-out scan
+## can't fire on a freshly-armed listener for the next scan and falsely
+## settle it before that scan actually completed. See PR #381 review for
+## the cross-scan race this guards against.
+var _scan_timed_out := false
 ## Keep Array fields untyped: this runner survives fs.scan() during update,
 ## and typed Variant storage is part of the hot-reload crash class.
 var _new_file_paths = []
@@ -131,6 +138,21 @@ func _start_filesystem_scan(next_step: String = "_enable_new_plugin") -> void:
 		call_deferred(deferred_step)
 		return
 
+	## Bypass: a previous scan in this update already watchdog'd, so the
+	## editor's filesystem is unresponsive. Re-arming a `filesystem_changed`
+	## listener now would race with a delayed emission from the timed-out
+	## scan: that single emission would fire whichever listener is currently
+	## connected to the shared signal, falsely settling this scan before it
+	## actually completed. Skip the wait; Godot's normal background scan
+	## catches up after the plugin re-enables. See PR #381 review.
+	if _scan_timed_out:
+		push_warning(
+			"MCP | skipping filesystem_changed wait after previous timeout (next_step=%s)"
+			% deferred_step
+		)
+		call_deferred(deferred_step)
+		return
+
 	_waiting_for_scan = true
 	_scan_next_step = deferred_step
 	if not fs.filesystem_changed.is_connected(_on_filesystem_changed):
@@ -156,15 +178,22 @@ func _stop_scan_watchdog() -> void:
 func _on_scan_watchdog_timeout() -> void:
 	## Signal didn't fire within SCAN_WATCHDOG_SECS — most likely the
 	## filesystem scan is blocked behind a slow disk / NFS / AV scanner
-	## still reading the just-extracted addon files. Drop the listener so
-	## a delayed signal can't double-call `_finish_scan_wait`, then proceed.
-	## `_finish_scan_wait` is idempotent on `_waiting_for_scan == false`.
+	## still reading the just-extracted addon files.
+	## Set the sticky `_scan_timed_out` flag so any subsequent
+	## `_start_filesystem_scan` in this update skips its connect+scan
+	## (otherwise a delayed emission from this scan would falsely settle
+	## the next scan's listener — see PR #381 review).
+	## Disconnect the current listener too, so this scan's listener can't
+	## double-call `_finish_scan_wait` if the signal arrives quickly after
+	## the timeout fires. `_finish_scan_wait` is idempotent on
+	## `_waiting_for_scan == false`.
 	if not _waiting_for_scan:
 		return
 	push_warning(
 		"MCP | filesystem_changed didn't fire within %ds; proceeding without scan confirmation"
 		% int(SCAN_WATCHDOG_SECS)
 	)
+	_scan_timed_out = true
 	var fs := EditorInterface.get_resource_filesystem()
 	if fs != null and fs.filesystem_changed.is_connected(_on_filesystem_changed):
 		fs.filesystem_changed.disconnect(_on_filesystem_changed)
