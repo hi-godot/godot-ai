@@ -99,4 +99,10 @@ def register_scene_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None
             "save_as": scene_handlers.scene_save_as,
             "get_roots": scene_handlers.scene_get_roots,
         },
+        read_resource_forms={
+            ## get_roots lists root nodes of every open scene; the
+            ## `godot://scene/current` resource only exposes the active scene
+            ## tree, so it isn't a substitute. No aggregate resource fits.
+            "get_roots": None,
+        },
     )

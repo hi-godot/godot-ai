@@ -66,4 +66,7 @@ def register_testing_tools(mcp: FastMCP) -> None:
         ops={
             "results_get": testing_handlers.test_results_get,
         },
+        read_resource_forms={
+            "results_get": "godot://test/results",
+        },
     )

@@ -35,4 +35,12 @@ def register_client_tools(mcp: FastMCP) -> None:
             "configure": client_handlers.client_configure,
             "remove": client_handlers.client_remove,
         },
+        read_resource_forms={
+            ## Client ops touch local MCP-client config files (Claude Desktop,
+            ## Cursor, etc.) — they're plumbing, not Godot scene reads, and
+            ## have no `godot://` analogue.
+            "status": None,
+            "configure": None,
+            "remove": None,
+        },
     )

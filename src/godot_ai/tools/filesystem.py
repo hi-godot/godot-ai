@@ -38,4 +38,10 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
             "reimport": filesystem_handlers.filesystem_reimport,
             "search": filesystem_handlers.filesystem_search,
         },
+        read_resource_forms={
+            ## File reads/searches are per-call queries with arbitrary path
+            ## or query inputs; no fixed-URI resource shape fits.
+            "read_text": None,
+            "search": None,
+        },
     )

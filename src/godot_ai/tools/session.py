@@ -56,4 +56,7 @@ def register_session_tools(mcp: FastMCP, *, include_non_core: bool = True) -> No
         ops={
             "list": session_handlers.session_list,
         },
+        read_resource_forms={
+            "list": "godot://sessions",
+        },
     )

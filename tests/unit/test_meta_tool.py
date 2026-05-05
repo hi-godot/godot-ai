@@ -11,10 +11,38 @@ from fastmcp import FastMCP
 from godot_ai.godot_client.client import GodotCommandError
 from godot_ai.protocol.errors import ErrorCode
 from godot_ai.tools._meta_tool import (
+    MANAGE_TOOL_HANDLERS,
+    MANAGE_TOOL_OPS,
+    MANAGE_TOOL_RESOURCE_FORMS,
     _op_literal_for,
     dispatch_manage_op,
     register_manage_tool,
 )
+
+
+@pytest.fixture(autouse=True)
+def _restore_registries():
+    """Snapshot/restore the manage-tool registries.
+
+    Several tests below register synthetic tools (``x_manage``, ``domain_manage``,
+    etc.) directly via ``register_manage_tool`` rather than through
+    ``create_server``. Without restoration those entries leak into the
+    process-global registries and then trip ``test_resource_form_lint``,
+    which sees handlers from ``unittest.mock`` and demands declarations.
+    """
+    saved_ops = dict(MANAGE_TOOL_OPS)
+    saved_handlers = {k: dict(v) for k, v in MANAGE_TOOL_HANDLERS.items()}
+    saved_forms = {k: dict(v) for k, v in MANAGE_TOOL_RESOURCE_FORMS.items()}
+    try:
+        yield
+    finally:
+        MANAGE_TOOL_OPS.clear()
+        MANAGE_TOOL_OPS.update(saved_ops)
+        MANAGE_TOOL_HANDLERS.clear()
+        MANAGE_TOOL_HANDLERS.update(saved_handlers)
+        MANAGE_TOOL_RESOURCE_FORMS.clear()
+        MANAGE_TOOL_RESOURCE_FORMS.update(saved_forms)
+
 
 # ---------------------------------------------------------------------------
 # Schema construction
@@ -63,6 +91,57 @@ def test_register_rejects_empty_ops():
     mcp = FastMCP("test")
     with pytest.raises(ValueError, match="ops cannot be empty"):
         register_manage_tool(mcp, tool_name="x_manage", description="x", ops={})
+
+
+def test_register_rejects_resource_form_for_unknown_op():
+    mcp = FastMCP("test")
+    with pytest.raises(ValueError, match="not in ops"):
+        register_manage_tool(
+            mcp,
+            tool_name="x_manage",
+            description="x",
+            ops={"a": AsyncMock()},
+            read_resource_forms={"b": "godot://x"},  # 'b' not in ops
+        )
+
+
+def test_register_rejects_non_godot_uri_in_resource_form():
+    mcp = FastMCP("test")
+    with pytest.raises(ValueError, match="must start with 'godot://'"):
+        register_manage_tool(
+            mcp,
+            tool_name="x_manage",
+            description="x",
+            ops={"a": AsyncMock()},
+            read_resource_forms={"a": "https://example.com"},
+        )
+
+
+def test_register_rejects_non_string_non_none_value_in_resource_form():
+    mcp = FastMCP("test")
+    with pytest.raises(ValueError, match="must be a 'godot://' URI string or None"):
+        register_manage_tool(
+            mcp,
+            tool_name="x_manage",
+            description="x",
+            ops={"a": AsyncMock()},
+            read_resource_forms={"a": 42},  # type: ignore[dict-item]
+        )
+
+
+def test_register_accepts_resource_form_with_uri_and_waiver():
+    mcp = FastMCP("test")
+    handler_a = AsyncMock(return_value={})
+    handler_b = AsyncMock(return_value={})
+    register_manage_tool(
+        mcp,
+        tool_name="acceptance_manage",
+        description="x",
+        ops={"a": handler_a, "b": handler_b},
+        read_resource_forms={"a": "godot://thing", "b": None},
+    )
+    assert MANAGE_TOOL_RESOURCE_FORMS["acceptance_manage"] == {"a": "godot://thing", "b": None}
+    assert MANAGE_TOOL_HANDLERS["acceptance_manage"]["a"] is handler_a
 
 
 # ---------------------------------------------------------------------------

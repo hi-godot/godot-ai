@@ -67,4 +67,9 @@ def register_project_tools(mcp: FastMCP) -> None:
             "settings_get": project_handlers.project_settings_get,
             "settings_set": project_handlers.project_settings_set,
         },
+        read_resource_forms={
+            ## stop ends a play session; not a read in the URI sense.
+            "stop": None,
+            "settings_get": "godot://project/settings",
+        },
     )

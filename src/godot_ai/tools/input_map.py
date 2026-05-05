@@ -44,4 +44,7 @@ def register_input_map_tools(mcp: FastMCP) -> None:
             "remove_action": input_map_handlers.input_map_remove_action,
             "bind_event": input_map_handlers.input_map_bind_event,
         },
+        read_resource_forms={
+            "list": "godot://input_map",
+        },
     )
