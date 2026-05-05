@@ -114,4 +114,8 @@ def register_script_tools(mcp: FastMCP) -> None:
             "detach": script_handlers.script_detach,
             "find_symbols": script_handlers.script_find_symbols,
         },
+        read_resource_forms={
+            "read": "godot://script/{path*}",
+            "find_symbols": None,  ## Per-script symbol lookup; no resource form.
+        },
     )

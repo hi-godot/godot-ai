@@ -53,4 +53,10 @@ def register_audio_tools(mcp: FastMCP) -> None:
             "stop": audio_handlers.audio_stop,
             "list": audio_handlers.audio_list,
         },
+        read_resource_forms={
+            ## Audio reads are stateful and per-player; no aggregate resource.
+            "play": None,
+            "stop": None,
+            "list": None,
+        },
     )

@@ -82,4 +82,11 @@ def register_resource_tools(mcp: FastMCP) -> None:
             "gradient_texture_create": texture_handlers.gradient_texture_create,
             "noise_texture_create": texture_handlers.noise_texture_create,
         },
+        read_resource_forms={
+            ## search/load/get_info take per-call queries or paths; no aggregate
+            ## resource fits the URI shape.
+            "search": None,
+            "load": None,
+            "get_info": None,
+        },
     )

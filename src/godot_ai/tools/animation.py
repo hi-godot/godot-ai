@@ -17,8 +17,6 @@ from godot_ai.tools._meta_tool import register_manage_tool
 _DESCRIPTION = """\
 AnimationPlayer authoring (player, tracks, autoplay, presets, playback).
 
-Resource form: ``godot://animations`` — prefer for active-session reads.
-
 Ops:
   • player_create(parent_path, name="AnimationPlayer")
         Create an AnimationPlayer with empty default library.
@@ -128,5 +126,15 @@ def register_animation_tools(mcp: FastMCP) -> None:
             "preset_slide": animation_handlers.animation_preset_slide,
             "preset_shake": animation_handlers.animation_preset_shake,
             "preset_pulse": animation_handlers.animation_preset_pulse,
+        },
+        read_resource_forms={
+            ## No `godot://animations` resource exists. Animation reads are
+            ## stateful (per-player, per-clip) and don't fit the single-URL
+            ## resource shape; agents fetch via the rollup ops.
+            "validate": None,
+            "play": None,
+            "stop": None,
+            "list": None,
+            "get": None,
         },
     )

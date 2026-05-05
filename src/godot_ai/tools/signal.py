@@ -35,4 +35,7 @@ def register_signal_tools(mcp: FastMCP) -> None:
             "connect": signal_handlers.signal_connect,
             "disconnect": signal_handlers.signal_disconnect,
         },
+        read_resource_forms={
+            "list": None,  ## Per-node signal listing; no aggregate resource.
+        },
     )

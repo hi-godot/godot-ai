@@ -59,4 +59,8 @@ def register_material_tools(mcp: FastMCP) -> None:
             "apply_to_node": material_handlers.material_apply_to_node,
             "apply_preset": material_handlers.material_apply_preset,
         },
+        read_resource_forms={
+            "get": None,  ## Per-material read; no per-resource URI shape.
+            "list": "godot://materials",
+        },
     )

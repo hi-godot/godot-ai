@@ -47,6 +47,17 @@ OpHandler = Callable[..., Awaitable[dict] | dict]
 ## reverse-engineering Pydantic's human-readable error string.
 MANAGE_TOOL_OPS: dict[str, tuple[str, ...]] = {}
 
+## (tool_name -> op_name -> handler) so the resource-form lint at test time
+## can introspect each handler's source to classify it as read vs write.
+MANAGE_TOOL_HANDLERS: dict[str, dict[str, OpHandler]] = {}
+
+## (tool_name -> op_name -> URI string | None). Per-op resource declaration
+## for read ops: a URI string declares the matching ``godot://...`` resource
+## form, ``None`` is an explicit waiver acknowledging there is no resource
+## counterpart. Write ops (handlers that call ``require_writable``) are
+## exempt from this declaration; the lint enforces only read-op coverage.
+MANAGE_TOOL_RESOURCE_FORMS: dict[str, dict[str, str | None]] = {}
+
 
 @functools.cache
 def _op_literal_for(op_names: frozenset[str]) -> Any:
@@ -61,6 +72,7 @@ def register_manage_tool(
     tool_name: str,
     description: str,
     ops: dict[str, OpHandler],
+    read_resource_forms: Mapping[str, str | None] | None = None,
 ) -> None:
     """Register a `<domain>_manage` tool that dispatches by op name.
 
@@ -74,6 +86,15 @@ def register_manage_tool(
             ``runtime`` as its first arg and accepts the same keyword args
             as the underlying shared handler in ``handlers/<domain>.py``.
             The dispatcher unpacks ``params`` via ``**`` before calling.
+        read_resource_forms: Per-op declaration of the matching
+            ``godot://...`` resource URI for read ops, or ``None`` as an
+            explicit waiver when no resource counterpart exists. Keys must
+            be a subset of ``ops``. Read-vs-write classification is done
+            by ``tests/unit/test_resource_form_lint.py`` at test time
+            (handlers calling ``require_writable`` are write ops and are
+            exempt from declaration). The lint fails if a read op has
+            no entry here, or if the declared URI isn't actually
+            registered — catching both new-op drift and phantom-URI typos.
 
     Unknown ops raise ``GodotCommandError`` with ``INVALID_PARAMS`` and
     ``data.suggestions`` populated by ``difflib.get_close_matches``.
@@ -81,7 +102,31 @@ def register_manage_tool(
     if not ops:
         raise ValueError(f"register_manage_tool: ops cannot be empty (tool {tool_name!r})")
 
+    if read_resource_forms is not None:
+        unknown = set(read_resource_forms) - set(ops)
+        if unknown:
+            raise ValueError(
+                f"register_manage_tool: read_resource_forms keys "
+                f"{sorted(unknown)!r} are not in ops for {tool_name!r}"
+            )
+        for op_name, form in read_resource_forms.items():
+            if form is not None and not isinstance(form, str):
+                raise ValueError(
+                    f"register_manage_tool: read_resource_forms[{op_name!r}] "
+                    f"must be a 'godot://' URI string or None waiver "
+                    f"(got {type(form).__name__})"
+                )
+            if isinstance(form, str) and not form.startswith("godot://"):
+                raise ValueError(
+                    f"register_manage_tool: read_resource_forms[{op_name!r}] "
+                    f"URI must start with 'godot://' (got {form!r})"
+                )
+
     MANAGE_TOOL_OPS[tool_name] = tuple(ops.keys())
+    MANAGE_TOOL_HANDLERS[tool_name] = dict(ops)
+    MANAGE_TOOL_RESOURCE_FORMS[tool_name] = (
+        dict(read_resource_forms) if read_resource_forms is not None else {}
+    )
     op_literal = _op_literal_for(frozenset(ops.keys()))
 
     async def manage(ctx: Context, op, params=None, session_id="") -> dict:
