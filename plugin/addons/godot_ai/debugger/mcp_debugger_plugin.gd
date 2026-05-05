@@ -36,10 +36,14 @@ var _game_log_buffer: McpGameLogBuffer
 var _pending: Dictionary = {}
 
 ## Flipped true when the game-side autoload sends its "mcp:hello" boot
-## beacon on _ready. Reset when the debugger session drops (game stop).
-## Guards request_game_screenshot so we never send into a debugger
-## channel whose receiving capture hasn't been registered yet.
+## beacon for the current project_run. Reset as soon as a new run is
+## requested, before Godot has attached the fresh debugger session, so
+## editor_state cannot leak readiness from the previous game process.
 var _game_ready := false
+var _game_run_token := 0
+var _ready_run_token := -1
+var _game_session_id := -1
+var _game_run_active := false
 signal game_ready
 
 
@@ -61,8 +65,31 @@ func _has_capture(prefix: String) -> bool:
 ## Do NOT log here: add_debugger_plugin() triggers this virtual before
 ## plugin.gd's _enter_tree logs "plugin loaded", and ci-reload-test
 ## asserts "plugin loaded" is the first line after a plugin reload.
-func _setup_session(_session_id: int) -> void:
+func _setup_session(session_id: int) -> void:
 	_game_ready = false
+	_ready_run_token = -1
+	_game_session_id = session_id
+
+
+func begin_game_run() -> void:
+	_game_run_token += 1
+	_game_run_active = true
+	_game_ready = false
+	_ready_run_token = -1
+	_game_session_id = -1
+	if _log_buffer:
+		_log_buffer.log("[debug] game capture pending run token %d" % _game_run_token)
+
+
+func end_game_run() -> void:
+	_game_run_active = false
+	_game_ready = false
+	_ready_run_token = -1
+	_game_session_id = -1
+
+
+func is_game_capture_ready() -> bool:
+	return _game_run_active and _game_ready and _ready_run_token == _game_run_token
 
 
 func _capture(message: String, data: Array, _session_id: int) -> bool:
@@ -78,6 +105,14 @@ func _capture(message: String, data: Array, _session_id: int) -> bool:
 			_on_log_batch(data)
 			return true
 		"mcp:hello":
+			if not _game_run_active:
+				if _log_buffer:
+					_log_buffer.log("[debug] ignored mcp:hello with no active game run")
+				return true
+			if _game_session_id != -1 and _session_id != _game_session_id:
+				if _log_buffer:
+					_log_buffer.log("[debug] ignored stale mcp:hello from debugger session %d (current %d)" % [_session_id, _game_session_id])
+				return true
 			## Boot beacon from the game-side autoload. Tells us the
 			## game has registered its "mcp" capture and is safe to send
 			## take_screenshot to — before this, Godot's debugger would
@@ -85,6 +120,7 @@ func _capture(message: String, data: Array, _session_id: int) -> bool:
 			## cycle: rotate the game-log buffer so each run starts
 			## clean and gets a new run_id.
 			_game_ready = true
+			_ready_run_token = _game_run_token
 			game_ready.emit()
 			if _game_log_buffer:
 				var run_id := _game_log_buffer.clear_for_new_run()
@@ -132,7 +168,7 @@ func request_game_screenshot(
 			"Editor main loop is not a SceneTree — cannot schedule capture")
 		return
 
-	if _game_ready:
+	if is_game_capture_ready():
 		_send_take_screenshot(tree, request_id, max_resolution, connection, timeout_sec)
 		return
 
@@ -156,9 +192,9 @@ func _wait_then_send(
 	timeout_sec: float,
 ) -> void:
 	var deadline := Time.get_ticks_msec() + int(GAME_READY_WAIT_SEC * 1000.0)
-	while not _game_ready and Time.get_ticks_msec() < deadline:
+	while not is_game_capture_ready() and Time.get_ticks_msec() < deadline:
 		await tree.process_frame
-	if not _game_ready:
+	if not is_game_capture_ready():
 		_send_error(connection, request_id, McpErrorCodes.INTERNAL_ERROR,
 			"Game-side autoload never registered its debugger capture within %ds. Is the game actually running? Check Project Settings → Autoload for _mcp_game_helper." % int(GAME_READY_WAIT_SEC))
 		return

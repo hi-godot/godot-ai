@@ -30,7 +30,7 @@ func get_editor_state(_params: Dictionary) -> Dictionary:
 			## True once the game subprocess autoload has beaconed mcp:hello;
 			## false between Play→Stop cycles. Lets capture-source=game callers
 			## poll for a real ready signal instead of guessing with sleep().
-			"game_capture_ready": _debugger_plugin != null and _debugger_plugin._game_ready,
+			"game_capture_ready": _debugger_plugin != null and _debugger_plugin.is_game_capture_ready(),
 		}
 	}
 
