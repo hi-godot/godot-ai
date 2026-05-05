@@ -2067,9 +2067,7 @@ class TestPhysicsShapeAutofitTool:
         assert result.data["shape_created"] is True
         assert result.data["size"]["x"] == 2.0
 
-    async def test_ambiguous_visual_candidates_preserved_in_structured_error(
-        self, mcp_stack
-    ):
+    async def test_ambiguous_visual_candidates_preserved_in_structured_error(self, mcp_stack):
         client, plugin = mcp_stack
         candidates = ["/Main/VisualA", "/Main/VisualB"]
 
@@ -3328,6 +3326,7 @@ class TestPerCallSessionRouting:
         client, plugin_a = mcp_stack
         plugin_b = await self._connect_second_plugin("proj-b@0002")
         try:
+
             async def respond_a():
                 cmd = await plugin_a.recv_command()
                 assert cmd["command"] == "get_open_scenes"

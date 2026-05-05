@@ -151,11 +151,7 @@ def test_no_python_style_adjacent_string_concat_in_gdscript() -> None:
 
 def test_detector_flags_canonical_multiline_bug_pattern() -> None:
     """The exact shape from PR #236 must be detected."""
-    src = (
-        "assert_false(cond,\n"
-        '    "first half - "\n'
-        '    "second half")\n'
-    )
+    src = 'assert_false(cond,\n    "first half - "\n    "second half")\n'
     hits = _find_adjacent_string_pairs(src)
     assert len(hits) == 1, f"expected 1 hit, got {hits}"
     (prev_line, _), (cur_line, _) = hits[0]

@@ -561,6 +561,127 @@ class TestDnsRebindingGuard:
         assert len(harness.registry) == before
 
 
+# ---------------------------------------------------------------------------
+# Duplicate-ID handshake hardening (#343 finding #2)
+# ---------------------------------------------------------------------------
+
+
+class TestDuplicateHandshake:
+    async def test_duplicate_session_id_handshake_is_rejected(self, harness):
+        ## Without rejection, a second handshake with the same session_id
+        ## silently overwrites both `_connections[session_id]` and the
+        ## registry entry — routing every subsequent command to the
+        ## attacker. session_id is `<slug>@<4hex>` so 16 bits of suffix is
+        ## locally guessable. Reject keeps the first peer authoritative.
+        first = await harness.connect_plugin(session_id="dup-target")
+        original_session = harness.registry.get("dup-target")
+        assert original_session is not None
+        original_pid = original_session.editor_pid
+
+        ## Hand-roll the second handshake so we observe the close on the
+        ## wire — `connect_plugin()` would assert on the missing ack.
+        ws2 = await websockets.connect(f"ws://127.0.0.1:{harness.port}")
+        await ws2.send(
+            json.dumps(
+                {
+                    "type": "handshake",
+                    "session_id": "dup-target",
+                    "godot_version": "4.4.1",
+                    "project_path": "/tmp/attacker",
+                    "plugin_version": "0.0.1",
+                    "protocol_version": 1,
+                    "readiness": "ready",
+                    "editor_pid": 9999,
+                }
+            )
+        )
+
+        ## Server should close us before sending an ack. Drain until the WS
+        ## reports closed; recv() will raise ConnectionClosed.
+        with pytest.raises(websockets.ConnectionClosed):
+            await asyncio.wait_for(ws2.recv(), timeout=2.0)
+
+        ## Original session must still be live and unaffected.
+        live = harness.registry.get("dup-target")
+        assert live is original_session, "registry entry was overwritten by duplicate"
+        assert live.editor_pid == original_pid
+        assert live.project_path != "/tmp/attacker"
+
+        ## Round-trip a command through the original to prove its WS is
+        ## still wired to the routing map (regression: silent overwrite
+        ## also hijacks `_connections[session_id]`).
+        client = GodotClient(harness.server, harness.registry)
+
+        async def mock_handler():
+            cmd = await first.recv_command()
+            await first.send_response(cmd["request_id"], {"alive": True})
+
+        handler = asyncio.create_task(mock_handler())
+        result = await client.send("ping", session_id="dup-target")
+        await handler
+        assert result == {"alive": True}
+
+        await first.close()
+
+    async def test_reconnect_after_clean_disconnect_succeeds(self, harness):
+        ## The reject must not break the legitimate plugin reconnect path
+        ## (e.g. after `editor_reload_plugin`): close → unregister →
+        ## fresh connect with the same session_id should succeed because
+        ## the registry entry has already been removed.
+        first = await harness.connect_plugin(session_id="reconnect-1")
+        await first.close()
+        await asyncio.sleep(0.1)  # let server process disconnect
+        assert harness.registry.get("reconnect-1") is None
+
+        second = await harness.connect_plugin(session_id="reconnect-1")
+        assert harness.registry.get("reconnect-1") is not None
+        await second.close()
+
+
+# ---------------------------------------------------------------------------
+# send_command pending-Future leak (#343 finding #5)
+# ---------------------------------------------------------------------------
+
+
+class TestPendingFutureCleanup:
+    async def test_timeout_pops_pending_entry(self, harness):
+        ## TimeoutError path always cleared the pending dict; this test
+        ## pins that behavior so a future refactor doesn't regress it.
+        plugin = await harness.connect_plugin(session_id="leak-timeout")
+        client = GodotClient(harness.server, harness.registry)
+
+        with pytest.raises(TimeoutError):
+            await client.send("never_responded", timeout=0.1)
+
+        assert harness.server._pending == {}, "TimeoutError should not leave entries in _pending"
+        await plugin.close()
+
+    async def test_send_failure_pops_pending_entry(self, harness):
+        ## If `ws.send` raises (e.g. ConnectionClosed mid-send), the
+        ## pending Future was previously leaked into `_pending` forever.
+        ## Force the failure by replacing the connection's send with one
+        ## that raises after the pending entry has been registered.
+        plugin = await harness.connect_plugin(session_id="leak-send")
+
+        ws = harness.server._connections["leak-send"]
+        boom = ConnectionError("simulated mid-send transport error")
+
+        async def raising_send(_payload: str) -> None:
+            raise boom
+
+        ws.send = raising_send  # type: ignore[assignment]
+
+        with pytest.raises(ConnectionError):
+            await harness.server.send_command(
+                session_id="leak-send",
+                command="will_fail",
+                timeout=1.0,
+            )
+
+        assert harness.server._pending == {}, "send-time exception must not leak _pending entries"
+        await plugin.close()
+
+
 # --- Issue #262: editor_state self-heals a stale "playing" cache ---
 
 
