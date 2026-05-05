@@ -2079,9 +2079,7 @@ class TestPhysicsShapeAutofitTool:
         assert result.data["shape_created"] is True
         assert result.data["size"]["x"] == 2.0
 
-    async def test_ambiguous_visual_candidates_preserved_in_structured_error(
-        self, mcp_stack
-    ):
+    async def test_ambiguous_visual_candidates_preserved_in_structured_error(self, mcp_stack):
         client, plugin = mcp_stack
         candidates = ["/Main/VisualA", "/Main/VisualB"]
 
