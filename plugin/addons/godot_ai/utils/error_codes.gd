@@ -10,6 +10,14 @@ const EDITOR_NOT_READY := "EDITOR_NOT_READY"
 const UNKNOWN_COMMAND := "UNKNOWN_COMMAND"
 const INTERNAL_ERROR := "INTERNAL_ERROR"
 const DEFERRED_TIMEOUT := "DEFERRED_TIMEOUT"
+## audit-v2 #21 (issue #365): finer-grained codes carved out of the 471
+## INVALID_PARAMS sites so agents can distinguish recoverable input
+## errors from structural ones. INVALID_PARAMS stays for genuinely
+## catch-all input errors that don't fit any of the four buckets.
+const NODE_NOT_FOUND := "NODE_NOT_FOUND"
+const PROPERTY_NOT_ON_CLASS := "PROPERTY_NOT_ON_CLASS"
+const VALUE_OUT_OF_RANGE := "VALUE_OUT_OF_RANGE"
+const MISSING_REQUIRED_PARAM := "MISSING_REQUIRED_PARAM"
 
 
 ## Build a standard error response dictionary.

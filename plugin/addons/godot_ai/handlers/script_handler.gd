@@ -148,9 +148,9 @@ func patch_script(params: Dictionary) -> Dictionary:
 	if not path_err.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, path_err)
 	if not "old_text" in params:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: old_text")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: old_text")
 	if not "new_text" in params:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: new_text")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: new_text")
 	if not path.ends_with(".gd"):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must end with .gd (use filesystem_write_text for other text files)")
 	if old_text.is_empty():
@@ -206,10 +206,10 @@ func attach_script(params: Dictionary) -> Dictionary:
 	var script_path: String = params.get("script_path", "")
 
 	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	if script_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: script_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: script_path")
 
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
@@ -217,7 +217,7 @@ func attach_script(params: Dictionary) -> Dictionary:
 
 	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
 
 	if not ResourceLoader.exists(script_path):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Script not found: %s" % script_path)
@@ -247,7 +247,7 @@ func detach_script(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("path", "")
 
 	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
@@ -255,7 +255,7 @@ func detach_script(params: Dictionary) -> Dictionary:
 
 	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
 
 	var old_script: Script = node.get_script()
 	if old_script == null:

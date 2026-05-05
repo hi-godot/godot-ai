@@ -32,7 +32,7 @@ const _SHAPE_2D_CLASSES := {
 func autofit(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("path", "")
 	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
@@ -40,7 +40,7 @@ func autofit(params: Dictionary) -> Dictionary:
 
 	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
 
 	var is_3d := node is CollisionShape3D
 	var is_2d := node is CollisionShape2D
@@ -60,7 +60,7 @@ func autofit(params: Dictionary) -> Dictionary:
 	else:
 		source = McpScenePath.resolve(source_path, scene_root)
 		if source == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Source node not found: %s" % source_path)
+			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, "Source node not found: %s" % source_path)
 
 	var shape_type: String = params.get("shape_type", "box" if is_3d else "rectangle")
 	var type_map := _SHAPE_3D_CLASSES if is_3d else _SHAPE_2D_CLASSES

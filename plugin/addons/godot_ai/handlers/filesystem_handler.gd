@@ -72,7 +72,7 @@ func reimport(params: Dictionary) -> Dictionary:
 	var paths: Array = params.get("paths", [])
 
 	if paths.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: paths (non-empty array)")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: paths (non-empty array)")
 
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs == null:

@@ -43,14 +43,14 @@ func preset_fade(params: Dictionary) -> Dictionary:
 	var overwrite: bool = params.get("overwrite", false)
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: player_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if target_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: target_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
 	if mode != "in" and mode != "out":
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid mode '%s'. Valid: 'in', 'out'" % mode)
 	if duration <= 0.0:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "'duration' must be > 0")
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "'duration' must be > 0")
 
 	var handler = _h()
 	if handler == null:
@@ -138,17 +138,17 @@ func preset_slide(params: Dictionary) -> Dictionary:
 	var overwrite: bool = params.get("overwrite", false)
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: player_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if target_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: target_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
 	if not ["left", "right", "up", "down"].has(direction):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid direction '%s'. Valid: 'left', 'right', 'up', 'down'" % direction)
 	if mode != "in" and mode != "out":
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid mode '%s'. Valid: 'in', 'out'" % mode)
 	if duration <= 0.0:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "'duration' must be > 0")
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "'duration' must be > 0")
 
 	var handler = _h()
 	if handler == null:
@@ -174,7 +174,7 @@ func preset_slide(params: Dictionary) -> Dictionary:
 	var default_distance: float = 1.0 if kind == "3d" else 100.0
 	var distance: float = float(params.get("distance", default_distance))
 	if distance == 0.0:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "'distance' must be non-zero")
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "'distance' must be non-zero")
 
 	var offset: Variant = _direction_offset(kind, direction, distance)
 	var current_pos: Variant = target.position
@@ -242,13 +242,13 @@ func preset_shake(params: Dictionary) -> Dictionary:
 	var overwrite: bool = params.get("overwrite", false)
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: player_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if target_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: target_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
 	if duration <= 0.0:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "'duration' must be > 0")
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "'duration' must be > 0")
 	if frequency <= 0.0:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "'frequency' must be > 0")
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "'frequency' must be > 0")
 
 	var handler = _h()
 	if handler == null:
@@ -273,7 +273,7 @@ func preset_shake(params: Dictionary) -> Dictionary:
 	var default_intensity: float = 0.1 if kind == "3d" else 10.0
 	var intensity: float = float(params.get("intensity", default_intensity))
 	if intensity <= 0.0:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "'intensity' must be > 0")
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "'intensity' must be > 0")
 
 	if anim_name.is_empty():
 		anim_name = "shake"
@@ -354,15 +354,15 @@ func preset_pulse(params: Dictionary) -> Dictionary:
 	var overwrite: bool = params.get("overwrite", false)
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: player_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if target_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: target_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
 	if duration <= 0.0:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "'duration' must be > 0")
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "'duration' must be > 0")
 	if from_scale <= 0.0:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "'from_scale' must be > 0")
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "'from_scale' must be > 0")
 	if to_scale <= 0.0:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "'to_scale' must be > 0")
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "'to_scale' must be > 0")
 
 	var handler = _h()
 	if handler == null:

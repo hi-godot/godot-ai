@@ -23,7 +23,7 @@ func control_draw_recipe(params: Dictionary) -> Dictionary:
 	var clear_existing: bool = bool(params.get("clear_existing", true))
 
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 	if typeof(ops_raw) != TYPE_ARRAY:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "ops must be an Array")
 
@@ -33,7 +33,7 @@ func control_draw_recipe(params: Dictionary) -> Dictionary:
 
 	var node := McpScenePath.resolve(path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(path, scene_root))
 	if not node is Control:
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
@@ -111,7 +111,7 @@ func _coerce_single_op(op: Dictionary, idx: int) -> Dictionary:
 	var draw_type: String = op.get("draw", "")
 	if draw_type.is_empty():
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS, "ops[%d]: missing 'draw' field" % idx
+			McpErrorCodes.MISSING_REQUIRED_PARAM, "ops[%d]: missing 'draw' field" % idx
 		)
 	match draw_type:
 		"line":
@@ -129,7 +129,7 @@ func _coerce_single_op(op: Dictionary, idx: int) -> Dictionary:
 		"string":
 			return _coerce_string(op, idx)
 	return McpErrorCodes.make(
-		McpErrorCodes.INVALID_PARAMS,
+		McpErrorCodes.VALUE_OUT_OF_RANGE,
 		"ops[%d]: unknown draw type '%s'" % [idx, draw_type]
 	)
 
@@ -245,7 +245,7 @@ func _coerce_circle(op: Dictionary, idx: int) -> Dictionary:
 func _coerce_polyline_or_polygon(op: Dictionary, idx: int, kind: String) -> Dictionary:
 	if not op.has("points"):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS, "ops[%d] (%s): missing 'points'" % [idx, kind]
+			McpErrorCodes.MISSING_REQUIRED_PARAM, "ops[%d] (%s): missing 'points'" % [idx, kind]
 		)
 	if typeof(op.points) != TYPE_ARRAY:
 		return McpErrorCodes.make(

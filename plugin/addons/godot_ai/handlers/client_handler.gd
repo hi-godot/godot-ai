@@ -8,7 +8,7 @@ func configure_client(params: Dictionary) -> Dictionary:
 	var client_id: String = params.get("client", "")
 	if not McpClientConfigurator.has_client(client_id):
 		var valid := ", ".join(McpClientConfigurator.client_ids())
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown client: %s. Use one of: %s" % [client_id, valid])
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Unknown client: %s. Use one of: %s" % [client_id, valid])
 	var result := McpClientConfigurator.configure(client_id)
 	if result.get("status") == "error":
 		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR,
@@ -20,7 +20,7 @@ func remove_client(params: Dictionary) -> Dictionary:
 	var client_id: String = params.get("client", "")
 	if not McpClientConfigurator.has_client(client_id):
 		var valid := ", ".join(McpClientConfigurator.client_ids())
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown client: %s. Use one of: %s" % [client_id, valid])
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Unknown client: %s. Use one of: %s" % [client_id, valid])
 	var result := McpClientConfigurator.remove(client_id)
 	if result.get("status") == "error":
 		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR,

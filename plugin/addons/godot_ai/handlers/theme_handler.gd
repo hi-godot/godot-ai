@@ -120,14 +120,14 @@ func _set_scalar(
 
 	var class_name_param: String = params.get("class_name", "")
 	if class_name_param.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: class_name")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: class_name")
 
 	var name: String = params.get("name", "")
 	if name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: name")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
 
 	if not "value" in params:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: value")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: value")
 
 	var raw_value = params.get("value")
 	if raw_value == null:
@@ -208,11 +208,11 @@ func set_stylebox_flat(params: Dictionary) -> Dictionary:
 
 	var class_name_param: String = params.get("class_name", "")
 	if class_name_param.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: class_name")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: class_name")
 
 	var name: String = params.get("name", "")
 	if name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: name")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
 
 	var sb := StyleBoxFlat.new()
 	if params.has("bg_color"):
@@ -374,7 +374,7 @@ func _clear_stylebox(theme_path: String, name: String, class_name_param: String)
 func apply_theme(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("node_path", "")
 	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: node_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: node_path")
 
 	var theme_path: String = params.get("theme_path", "")
 	var theme: Theme = null
@@ -394,7 +394,7 @@ func apply_theme(params: Dictionary) -> Dictionary:
 
 	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
 	if not node is Control and not node is Window:
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
@@ -436,7 +436,7 @@ func _load_theme_from_params(params: Dictionary) -> Dictionary:
 
 static func _validate_res_path(path: String, required_suffix: String, param_name: String = "theme_path") -> Variant:
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: %s" % param_name)
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: %s" % param_name)
 	if not path.begins_with("res://"):
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,

@@ -59,10 +59,10 @@ func set_points(params: Dictionary) -> Dictionary:
 			return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 		node = McpScenePath.resolve(node_path, scene_root)
 		if node == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
 		if not (property in node):
 			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+				McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 				"Property '%s' not found on %s" % [property, node.get_class()]
 			)
 		curve = node.get(property)

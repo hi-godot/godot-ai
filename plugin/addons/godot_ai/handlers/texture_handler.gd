@@ -49,7 +49,7 @@ func create_gradient_texture(params: Dictionary) -> Dictionary:
 		)
 	if not _FILL_MODES.has(fill):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid fill '%s'. Valid: %s" % [fill, ", ".join(_FILL_MODES.keys())]
 		)
 
@@ -109,7 +109,7 @@ func create_noise_texture(params: Dictionary) -> Dictionary:
 
 	if not _NOISE_TYPES.has(noise_type):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid noise_type '%s'. Valid: %s" % [noise_type, ", ".join(_NOISE_TYPES.keys())]
 		)
 
@@ -157,7 +157,7 @@ func _assign_texture(tex: Resource, sub_resources: Array, node_path: String, pro
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
 
 	var found := false
 	var prop_type: int = TYPE_NIL
@@ -168,7 +168,7 @@ func _assign_texture(tex: Resource, sub_resources: Array, node_path: String, pro
 			break
 	if not found:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Property '%s' not found on %s" % [property, node.get_class()]
 		)
 	if prop_type != TYPE_NIL and prop_type != TYPE_OBJECT:

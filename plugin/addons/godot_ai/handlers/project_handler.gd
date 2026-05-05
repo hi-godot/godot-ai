@@ -17,7 +17,7 @@ func _init(connection: McpConnection = null, debugger_plugin = null) -> void:
 func get_project_setting(params: Dictionary) -> Dictionary:
 	var key: String = params.get("key", "")
 	if key.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: key")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: key")
 
 	if not ProjectSettings.has_setting(key):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Setting not found: %s" % key)
@@ -35,10 +35,10 @@ func get_project_setting(params: Dictionary) -> Dictionary:
 func set_project_setting(params: Dictionary) -> Dictionary:
 	var key: String = params.get("key", "")
 	if key.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: key")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: key")
 
 	if not params.has("value"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: value")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: value")
 
 	var value = params.get("value")
 	var had_setting := ProjectSettings.has_setting(key)
@@ -80,9 +80,9 @@ func run_project(params: Dictionary) -> Dictionary:
 	if mode == "custom":
 		var custom_scene: String = params.get("scene", "")
 		if custom_scene.is_empty():
-			validation_error = McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: scene (required when mode='custom')")
+			validation_error = McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: scene (required when mode='custom')")
 	elif mode != "main" and mode != "current":
-		validation_error = McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid mode '%s' — use 'main', 'current', or 'custom'" % mode)
+		validation_error = McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Invalid mode '%s' — use 'main', 'current', or 'custom'" % mode)
 	if validation_error != null:
 		return validation_error
 

@@ -56,16 +56,16 @@ func _init(undo_redo: EditorUndoRedoManager) -> void:
 func set_anchor_preset(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("path", "")
 	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	var preset_name: String = str(params.get("preset", "")).to_lower()
 	if preset_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: preset")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: preset")
 	if not _PRESETS.has(preset_name):
 		var names := _PRESETS.keys()
 		names.sort()
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Unknown preset '%s'. Valid: %s" % [preset_name, ", ".join(names)]
 		)
 
@@ -74,7 +74,7 @@ func set_anchor_preset(params: Dictionary) -> Dictionary:
 		var names := _RESIZE_MODES.keys()
 		names.sort()
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Unknown resize_mode '%s'. Valid: %s" % [resize_mode_name, ", ".join(names)]
 		)
 
@@ -86,7 +86,7 @@ func set_anchor_preset(params: Dictionary) -> Dictionary:
 
 	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
 	if not node is Control:
 		var got_class: String = node.get_class()
 		return McpErrorCodes.make(
@@ -145,10 +145,10 @@ func set_anchor_preset(params: Dictionary) -> Dictionary:
 func set_text(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("path", "")
 	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	if not params.has("text"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: text")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: text")
 	var text_value: Variant = params["text"]
 	if typeof(text_value) != TYPE_STRING:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "text must be a string")
@@ -159,7 +159,7 @@ func set_text(params: Dictionary) -> Dictionary:
 
 	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
 	var node_type := node.get_class()
 	if not node is Control:
 		return McpErrorCodes.make(
@@ -224,7 +224,7 @@ func set_text(params: Dictionary) -> Dictionary:
 func build_layout(params: Dictionary) -> Dictionary:
 	var tree = params.get("tree")
 	if typeof(tree) != TYPE_DICTIONARY:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: tree (must be a dictionary)")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: tree (must be a dictionary)")
 
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
@@ -235,7 +235,7 @@ func build_layout(params: Dictionary) -> Dictionary:
 	if not parent_path.is_empty() and parent_path != "/":
 		parent = McpScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_parent_error(parent_path, scene_root))
+			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
 
 	# Validate + build in memory first; if anything fails, free and bail.
 	var built := _build_subtree(tree)
@@ -267,9 +267,9 @@ func build_layout(params: Dictionary) -> Dictionary:
 func _build_subtree(spec: Dictionary) -> Dictionary:
 	var node_type: String = spec.get("type", "")
 	if node_type.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Every layout node requires a 'type'")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Every layout node requires a 'type'")
 	if not ClassDB.class_exists(node_type):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown type: %s" % node_type)
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Unknown type: %s" % node_type)
 	if not ClassDB.is_parent_class(node_type, "Node"):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "%s is not a Node type" % node_type)
 
@@ -323,7 +323,7 @@ func _build_subtree(spec: Dictionary) -> Dictionary:
 		var preset_name: String = str(spec.get("anchor_preset", "")).to_lower()
 		if not _PRESETS.has(preset_name):
 			node.free()
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown anchor_preset: %s" % preset_name)
+			return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Unknown anchor_preset: %s" % preset_name)
 		if not node is Control:
 			node.free()
 			return McpErrorCodes.make(
@@ -431,7 +431,7 @@ func _apply_property(node: Node, prop: String, value: Variant) -> Variant:
 			break
 	if not found:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 			McpPropertyErrors.build_message(node, prop)
 		)
 

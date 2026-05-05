@@ -31,7 +31,7 @@ func batch_execute(params: Dictionary) -> Dictionary:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "commands[%d] must be a dict" % idx)
 		var cmd_name: String = item.get("command", "")
 		if cmd_name.is_empty():
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "commands[%d] missing 'command' field" % idx)
+			return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "commands[%d] missing 'command' field" % idx)
 		if cmd_name in FORBIDDEN_SUBCOMMANDS:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "commands[%d]: '%s' is not allowed as a sub-command" % [idx, cmd_name])
 		if not _dispatcher.has_command(cmd_name):

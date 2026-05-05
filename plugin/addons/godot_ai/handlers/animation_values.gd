@@ -58,7 +58,7 @@ func list_animations(params: Dictionary) -> Dictionary:
 	var player_path: String = params.get("player_path", "")
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: player_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 
 	var handler = _h()
 	if handler == null:
@@ -99,9 +99,9 @@ func get_animation(params: Dictionary) -> Dictionary:
 	var anim_name: String = params.get("animation_name", "")
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: player_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if anim_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: animation_name")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: animation_name")
 
 	var handler = _h()
 	if handler == null:
@@ -158,9 +158,9 @@ func validate_animation(params: Dictionary) -> Dictionary:
 	var anim_name: String = params.get("animation_name", "")
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: player_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if anim_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: animation_name")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: animation_name")
 
 	var handler = _h()
 	if handler == null:
@@ -171,7 +171,7 @@ func validate_animation(params: Dictionary) -> Dictionary:
 	var player: AnimationPlayer = resolved.player
 
 	if not player.has_animation(anim_name):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+		return McpErrorCodes.make(McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Animation '%s' not found on player at %s" % [anim_name, player_path])
 
 	var anim: Animation = player.get_animation(anim_name)

@@ -60,7 +60,7 @@ func load_resource(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	if not path.begins_with("res://"):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res://")
@@ -102,13 +102,13 @@ func assign_resource(params: Dictionary) -> Dictionary:
 	var resource_path: String = params.get("resource_path", "")
 
 	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	if property.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: property")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: property")
 
 	if resource_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: resource_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: resource_path")
 
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
@@ -116,7 +116,7 @@ func assign_resource(params: Dictionary) -> Dictionary:
 
 	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
 
 	# Verify property exists
 	var found := false
@@ -125,7 +125,7 @@ func assign_resource(params: Dictionary) -> Dictionary:
 			found = true
 			break
 	if not found:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpPropertyErrors.build_message(node, property))
+		return McpErrorCodes.make(McpErrorCodes.PROPERTY_NOT_ON_CLASS, McpPropertyErrors.build_message(node, property))
 
 	if not ResourceLoader.exists(resource_path):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource not found: %s" % resource_path)
@@ -159,7 +159,7 @@ func assign_resource(params: Dictionary) -> Dictionary:
 func create_resource(params: Dictionary) -> Dictionary:
 	var type_str: String = params.get("type", "")
 	if type_str.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: type")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: type")
 
 	var properties: Dictionary = params.get("properties", {})
 	var node_path: String = params.get("path", "")
@@ -200,7 +200,7 @@ func create_resource(params: Dictionary) -> Dictionary:
 ## instantiate. Returns an error dict on failure, or null on success.
 static func _validate_resource_class(type_str: String) -> Variant:
 	if not ClassDB.class_exists(type_str):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown resource type: %s" % type_str)
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Unknown resource type: %s" % type_str)
 	if ClassDB.is_parent_class(type_str, "Node"):
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
@@ -235,7 +235,7 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary) ->
 					valid.append(prop.name)
 			valid.sort()
 			var err := McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+				McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 				"Property '%s' not found on %s. Call resource_get_info('%s') to list available properties." % [key, res.get_class(), res.get_class()]
 			)
 			err["error"]["data"] = {"valid_properties": valid}
@@ -297,7 +297,7 @@ func _assign_created_resource(res: Resource, type_str: String, node_path: String
 
 	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
 
 	var found := false
 	var prop_type: int = TYPE_NIL
@@ -308,7 +308,7 @@ func _assign_created_resource(res: Resource, type_str: String, node_path: String
 			break
 	if not found:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Property '%s' not found on %s" % [property, node.get_class()]
 		)
 	if prop_type != TYPE_NIL and prop_type != TYPE_OBJECT:
@@ -351,10 +351,10 @@ func _save_created_resource(res: Resource, type_str: String, resource_path: Stri
 func get_resource_info(params: Dictionary) -> Dictionary:
 	var type_str: String = params.get("type", "")
 	if type_str.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: type")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: type")
 
 	if not ClassDB.class_exists(type_str):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown resource type: %s" % type_str)
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Unknown resource type: %s" % type_str)
 	if ClassDB.is_parent_class(type_str, "Node"):
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,

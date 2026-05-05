@@ -295,7 +295,7 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 		"cinematic":
 			return _take_cinematic_screenshot(max_resolution)
 		_:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid source '%s' — use 'viewport', 'cinematic', or 'game'" % source)
+			return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Invalid source '%s' — use 'viewport', 'cinematic', or 'game'" % source)
 
 	## Handle view_target: temporarily reposition the editor's own camera to
 	## frame one or more target nodes, force a render, capture, then restore.

@@ -85,7 +85,7 @@ func create_scene(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	if not path.begins_with("res://"):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res://")
@@ -94,7 +94,7 @@ func create_scene(params: Dictionary) -> Dictionary:
 		path += ".tscn"
 
 	if not ClassDB.class_exists(root_type):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown node type: %s" % root_type)
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Unknown node type: %s" % root_type)
 	if not ClassDB.is_parent_class(root_type, "Node"):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "%s is not a Node type" % root_type)
 
@@ -143,7 +143,7 @@ func create_scene(params: Dictionary) -> Dictionary:
 func open_scene(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	if not ResourceLoader.exists(path):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Scene not found: %s" % path)
@@ -196,7 +196,7 @@ func save_scene(_params: Dictionary) -> Dictionary:
 func save_scene_as(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	if not path.begins_with("res://"):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res://")

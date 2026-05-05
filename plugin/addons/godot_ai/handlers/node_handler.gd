@@ -27,7 +27,7 @@ func create_node(params: Dictionary) -> Dictionary:
 	if not parent_path.is_empty():
 		parent = McpScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_parent_error(parent_path, scene_root))
+			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
 
 	var new_node: Node
 
@@ -50,9 +50,9 @@ func create_node(params: Dictionary) -> Dictionary:
 	else:
 		# ClassDB path — create by type.
 		if node_type.is_empty():
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: type (or provide scene_path)")
+			return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: type (or provide scene_path)")
 		if not ClassDB.class_exists(node_type):
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown node type: %s" % node_type)
+			return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Unknown node type: %s" % node_type)
 		if not ClassDB.is_parent_class(node_type, "Node"):
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "%s is not a Node type" % node_type)
 		new_node = ClassDB.instantiate(node_type)
@@ -122,11 +122,11 @@ func reparent_node(params: Dictionary) -> Dictionary:
 
 	var new_parent_path: String = params.get("new_parent", "")
 	if new_parent_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: new_parent")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: new_parent")
 
 	var new_parent := McpScenePath.resolve(new_parent_path, scene_root)
 	if new_parent == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_parent_error(new_parent_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(new_parent_path, scene_root))
 
 	var root_err := _reject_if_scene_root(node, scene_root, "reparent")
 	if root_err != null:
@@ -180,10 +180,10 @@ func set_property(params: Dictionary) -> Dictionary:
 
 	var property: String = params.get("property", "")
 	if property.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: property")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: property")
 
 	if not "value" in params:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: value")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: value")
 
 	var value = params.get("value")
 
@@ -195,7 +195,7 @@ func set_property(params: Dictionary) -> Dictionary:
 			prop_type = prop.get("type", TYPE_NIL)
 			break
 	if not found:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpPropertyErrors.build_message(node, property))
+		return McpErrorCodes.make(McpErrorCodes.PROPERTY_NOT_ON_CLASS, McpPropertyErrors.build_message(node, property))
 
 	var old_value = node.get(property)
 	# Prefer declared property type; fall back to runtime type for dynamic props
@@ -287,7 +287,7 @@ func rename_node(params: Dictionary) -> Dictionary:
 
 	var new_name: String = params.get("new_name", "")
 	if new_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: new_name")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: new_name")
 
 	## The scene root's name is baked into the .tscn serialization and is
 	## referenced by every NodePath that starts with `/<root>` (AnimationPlayer
@@ -390,7 +390,7 @@ func move_node(params: Dictionary) -> Dictionary:
 		return root_err
 
 	if not "index" in params:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: index")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: index")
 
 	var new_index: int = params.get("index", 0)
 	var parent := node.get_parent()
@@ -398,7 +398,7 @@ func move_node(params: Dictionary) -> Dictionary:
 	var sibling_count := parent.get_child_count()
 
 	if new_index < 0 or new_index >= sibling_count:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Index %d out of range (0..%d)" % [new_index, sibling_count - 1])
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Index %d out of range (0..%d)" % [new_index, sibling_count - 1])
 
 	_undo_redo.create_action("MCP: Move %s to index %d" % [node.name, new_index])
 	_undo_redo.add_do_method(parent, "move_child", node, new_index)
@@ -428,7 +428,7 @@ func add_to_group(params: Dictionary) -> Dictionary:
 		return type_err
 	var group := String(group_value)
 	if group.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: group")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: group")
 
 	if node.is_in_group(group):
 		return {"data": {"path": node_path, "group": group, "already_member": true, "undoable": false, "reason": "No change made"}}
@@ -460,7 +460,7 @@ func remove_from_group(params: Dictionary) -> Dictionary:
 		return type_err
 	var group := String(group_value)
 	if group.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: group")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: group")
 
 	if not node.is_in_group(group):
 		return {"data": {"path": node_path, "group": group, "not_member": true, "undoable": false, "reason": "Node not in group"}}
@@ -740,14 +740,14 @@ func get_groups(params: Dictionary) -> Dictionary:
 func _resolve_node(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("path", "")
 	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 	var scene_check := McpScenePath.require_edited_scene(params.get("scene_file", ""))
 	if scene_check.has("error"):
 		return scene_check
 	var scene_root: Node = scene_check.node
 	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
 	return {"node": node, "path": node_path, "scene_root": scene_root}
 
 
