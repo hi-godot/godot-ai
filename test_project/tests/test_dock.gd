@@ -162,8 +162,11 @@ func test_mixed_state_banner_renders_synthetic_diagnostic() -> void:
 		"Fake diagnostic for test_mixed_state_banner_renders_synthetic_diagnostic",
 		"Banner must surface the diagnostic message verbatim",
 	)
+	## RichTextLabel.text reflects the BBCode source, not the rendered
+	## content added via `add_text()` — assert via `get_parsed_text()`
+	## which returns the visible text concatenation.
 	assert_contains(
-		_dock._mixed_state_files.text,
+		_dock._mixed_state_files.get_parsed_text(),
 		"plugin.gd.update_backup",
 		"Banner must list each backup file path so the operator can act on them",
 	)
@@ -206,7 +209,7 @@ func test_mixed_state_banner_renders_truncated_hint() -> void:
 	})
 	assert_true(_dock._mixed_state_banner.visible)
 	assert_contains(
-		_dock._mixed_state_files.text,
+		_dock._mixed_state_files.get_parsed_text(),
 		"truncated",
 		"truncated=true must produce the cap-hit hint in the file list",
 	)

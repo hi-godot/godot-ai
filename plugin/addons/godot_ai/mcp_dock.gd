@@ -197,7 +197,7 @@ var _update_btn: Button
 # the user sees "plugin won't start" with no actionable context, re-runs
 # the update, and compounds the mismatch (issue #354 / audit-v2 #10).
 var _mixed_state_banner: VBoxContainer
-var _mixed_state_label: RichTextLabel
+var _mixed_state_label: Label
 var _mixed_state_files: RichTextLabel
 var _mixed_state_rescan_btn: Button
 
@@ -925,13 +925,10 @@ func _build_mixed_state_banner() -> void:
 	_mixed_state_banner.add_theme_constant_override("separation", 4)
 	_mixed_state_banner.visible = false
 
-	_mixed_state_label = RichTextLabel.new()
-	_mixed_state_label.bbcode_enabled = false
-	_mixed_state_label.fit_content = true
+	_mixed_state_label = Label.new()
 	_mixed_state_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_mixed_state_label.selection_enabled = true
-	_mixed_state_label.scroll_active = false
-	_mixed_state_label.add_theme_color_override("default_color", Color.RED)
+	_mixed_state_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_mixed_state_label.add_theme_color_override("font_color", Color.RED)
 	_mixed_state_banner.add_child(_mixed_state_label)
 
 	_mixed_state_files = RichTextLabel.new()
@@ -976,11 +973,13 @@ func _apply_mixed_state_banner_diagnostic(diag: Dictionary) -> void:
 		_mixed_state_banner.visible = false
 		return
 	_mixed_state_banner.visible = true
-	_mixed_state_label.clear()
-	_mixed_state_label.add_text(diag.get("message", ""))
+	## `Dictionary.get(...)` returns Variant; Label.text is typed String.
+	## Explicit cast keeps the type contract honest and dodges some Godot
+	## 4.x point-release quirks around Variant→typed-property assignment.
+	_mixed_state_label.text = String(diag.get("message", ""))
 	_mixed_state_files.clear()
 	for path in diag.get("backup_files", []):
-		_mixed_state_files.add_text(path)
+		_mixed_state_files.add_text(String(path))
 		_mixed_state_files.newline()
 	if bool(diag.get("truncated", false)):
 		_mixed_state_files.add_text(
