@@ -209,6 +209,18 @@ func _is_logical_current(scene_root: Node, cam: Node) -> bool:
 	return logical != null and logical == cam
 
 
+# Public introspection for tests that need to distinguish "handler has a
+# logical marker" from "handler is falling back to engine state". `get_camera`
+# / `list_cameras` both use `_resolve_current` which falls through to
+# `_is_effective_current` when no marker is set — that's correct for callers
+# but masks the marker presence from anyone trying to gate on
+# "did the handler actually record this state?". Returns the logical-current
+# Camera2D / Camera3D for the given type ("2d" / "3d" / "" for either), or
+# null when no marker is set. See #316 PR #372 review feedback.
+func peek_logical_current(scene_root: Node, type_str: String = "") -> Node:
+	return _logical_current_camera(scene_root, type_str)
+
+
 # Authoritative answer for "is `cam` the current camera of its class?"
 #
 # When a logical marker exists for the camera's class, it is the single

@@ -254,16 +254,31 @@ func _is_macos_headless() -> bool:
 
 
 func _handler_logical_current_matches(cam: Node, expected: bool) -> bool:
+	# Query the handler's logical bookkeeping directly via peek_logical_current
+	# rather than camera_get(path), which falls back to engine state through
+	# _resolve_current and would let the gate return "matches" when the handler
+	# has no marker at all (PR #372 review). The gate must only fire when the
+	# handler has *explicitly* recorded the expected state — for expected=true
+	# the marker points at this camera, for expected=false the marker exists
+	# (some camera of this class is logical-current) and is not this camera.
 	if cam == null or not is_instance_valid(cam):
 		return false
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null or not scene_root.is_ancestor_of(cam):
 		return false
-	var cam_path := McpScenePath.from_node(cam, scene_root)
-	var handler_view := _handler.get_camera({"camera_path": cam_path})
-	if not handler_view.has("data"):
+	var type_str := "2d" if cam is Camera2D else ("3d" if cam is Camera3D else "")
+	if type_str.is_empty():
 		return false
-	return bool(handler_view.data.get("current", false)) == expected
+	var marker: Node = _handler.peek_logical_current(scene_root, type_str)
+	if marker == null:
+		# No logical marker — handler hasn't recorded *anything* for this type.
+		# Refuse to skip in either direction; failure here is a real handler
+		# regression, not the documented engine-state lag.
+		return false
+	if expected:
+		return marker == cam
+	# expected=false: marker exists for the type and points elsewhere.
+	return marker != cam
 
 
 # Returns true and calls skip() when the test should bail out on a macOS-
