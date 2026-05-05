@@ -949,6 +949,12 @@ static func _resolve_ws_port_from_output(
 ## counter increment and the `_ProofPlugin` override hook on the plugin.
 func _is_port_in_use(port: int) -> bool:
 	if PortResolver.can_bind_local_port(port):
+		## POSIX can still have an IPv6 wildcard listener on this port
+		## even when an IPv4 loopback bind succeeds. Confirm through
+		## lsof so startup and kill-path discovery agree.
+		if OS.get_name() != "Windows":
+			_startup_trace_count("lsof")
+			return PortResolver.is_port_in_use_via_scrape(port)
 		return false
 	if OS.get_name() == "Windows":
 		_startup_trace_count("netstat")
@@ -1374,7 +1380,14 @@ func can_recover_incompatible_server() -> bool:
 func _resume_connection_after_recovery() -> void:
 	if _connection == null:
 		return
-	if not ServerStateScript.is_healthy(_lifecycle.get_state()) or _lifecycle.is_connection_blocked():
+	var state: int = _lifecycle.get_state()
+	if (
+		_lifecycle.is_connection_blocked()
+		or (
+			state != ServerStateScript.SPAWNING
+			and state != ServerStateScript.READY
+		)
+	):
 		return
 	_connection.connect_blocked = false
 	_connection.connect_block_reason = ""
@@ -1463,16 +1476,15 @@ func stop_dev_server() -> void:
 		# We have a managed server — use normal stop
 		_stop_server()
 		return
-	var output: Array = []
 	var port := ClientConfigurator.http_port()
-	if OS.get_name() == "Windows":
-		var killed := _kill_processes_and_windows_spawn_children(_find_all_pids_on_port(port))
-		if not killed.is_empty():
-			print("MCP | stopped dev server on port %d" % port)
-	else:
-		var exit_code := OS.execute("bash", ["-c", "lsof -ti:%d -sTCP:LISTEN | xargs kill 2>/dev/null" % port], output, true)
-		if exit_code == 0:
-			print("MCP | stopped dev server on port %d" % port)
+	var candidates: Array[int] = []
+	for pid in _find_all_pids_on_port(port):
+		var candidate := int(pid)
+		if _pid_cmdline_is_godot_ai(candidate):
+			candidates.append(candidate)
+	var killed := _kill_processes_and_windows_spawn_children(candidates)
+	if not killed.is_empty():
+		print("MCP | stopped dev server on port %d" % port)
 
 
 func _kill_processes_and_windows_spawn_children(pids: Array[int]) -> Array[int]:
@@ -1520,8 +1532,14 @@ func _find_windows_spawn_children(parent_pids: Array[int]) -> Array[int]:
 
 
 func is_dev_server_running() -> bool:
-	## Returns true if a server is running on the HTTP port that we didn't start as managed.
-	return _lifecycle.get_server_pid() <= 0 and _is_port_in_use(ClientConfigurator.http_port())
+	## Returns true if a branded dev server is running on the HTTP port
+	## that we didn't start as managed.
+	if _lifecycle.get_server_pid() > 0:
+		return false
+	for pid in _find_all_pids_on_port(ClientConfigurator.http_port()):
+		if _pid_cmdline_is_godot_ai(int(pid)):
+			return true
+	return false
 
 
 func has_managed_server() -> bool:

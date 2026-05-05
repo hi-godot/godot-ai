@@ -306,7 +306,9 @@ def patch_fixture_plugin(
     patch_port_isolation(addon_dir / "client_configurator.gd", http_port, ws_port)
     patch_server_package_pin(addon_dir / "client_configurator.gd", server_version)
     patch_managed_record_isolation(addon_dir / "plugin.gd")
-    patch_expected_server_version(addon_dir / "plugin.gd", server_version)
+    patch_lifecycle_expected_server_version(
+        addon_dir / "utils" / "server_lifecycle.gd", server_version
+    )
     if force_local_update:
         # Update flow lives on McpUpdateManager; the dock keeps only
         # the visible banner UI.
@@ -421,23 +423,32 @@ def patch_managed_record_isolation(path: Path) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def patch_expected_server_version(path: Path, server_version: str) -> None:
+def patch_lifecycle_expected_server_version(path: Path, server_version: str) -> None:
     text = path.read_text(encoding="utf-8")
-    marker = "const MANAGED_SERVER_VERSION_SETTING := "
+    marker = 'const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")'
     line_start = text.find(marker)
     if line_start < 0:
-        raise HarnessError(f"Could not find MANAGED_SERVER_VERSION_SETTING in {path}")
+        raise HarnessError(f"Could not find ClientConfigurator preload in {path}")
     line_end = text.find("\n", line_start)
     if line_end < 0:
-        raise HarnessError(f"Could not find MANAGED_SERVER_VERSION_SETTING line end in {path}")
+        raise HarnessError(f"Could not find ClientConfigurator preload line end in {path}")
     text = (
         text[: line_end + 1]
         + f'const SELF_UPDATE_SMOKE_EXPECTED_SERVER_VERSION := "{server_version}"\n'
         + text[line_end + 1 :]
     )
-    text = text.replace(
-        "McpClientConfigurator.get_plugin_version()",
-        "SELF_UPDATE_SMOKE_EXPECTED_SERVER_VERSION",
+    text = replace_once(
+        path,
+        text,
+        (
+            "func _expected_server_version() -> String:\n"
+            "\treturn ClientConfigurator.get_plugin_version()"
+        ),
+        (
+            "func _expected_server_version() -> String:\n"
+            "\treturn SELF_UPDATE_SMOKE_EXPECTED_SERVER_VERSION"
+        ),
+        "_expected_server_version",
     )
     path.write_text(text, encoding="utf-8")
 
@@ -818,7 +829,10 @@ def verify_post_run(
         print("PASS: vNext _exit_tree trigger did not run during the update window")
 
     if smoke_adopted_existing_server_before_update(lines):
-        print("FAIL: smoke fixture adopted an existing server before update; clear the smoke ports first")
+        print(
+            "FAIL: smoke fixture adopted an existing server before update; "
+            "clear the smoke ports first"
+        )
         ok = False
     elif smoke_started_own_server_before_update(lines):
         print("PASS: smoke fixture started its own server before update")
@@ -831,6 +845,12 @@ def verify_post_run(
     else:
         print("FAIL: self-update did not stop a managed smoke server")
         ok = False
+
+    if smoke_reported_server_version_mismatch(lines):
+        print("FAIL: smoke fixture reported a server/plugin version mismatch")
+        ok = False
+    else:
+        print("PASS: no server/plugin version mismatch reported")
 
     new_reports = new_diagnostic_reports(baseline, started)
     if new_reports:
@@ -893,6 +913,13 @@ def smoke_stopped_server_during_update(lines: list[str]) -> bool:
         if "MCP | stopped server" in line:
             return True
     return False
+
+
+def smoke_reported_server_version_mismatch(lines: list[str]) -> bool:
+    return any(
+        "is occupied by godot-ai server v" in line and "plugin expects v" in line
+        for line in lines
+    )
 
 
 def smoke_lines_before_update(lines: list[str]) -> list[str]:

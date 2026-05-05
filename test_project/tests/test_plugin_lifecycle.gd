@@ -46,6 +46,9 @@ class _ProofPlugin extends GodotAiPlugin:
 	func _pid_cmdline_is_godot_ai_for_proof(pid: int) -> bool:
 		return branded_pids.has(pid)
 
+	func _pid_cmdline_is_godot_ai(pid: int) -> bool:
+		return branded_pids.has(pid)
+
 	func _probe_live_server_status_for_port(_port: int) -> Dictionary:
 		probe_calls += 1
 		return live_status.duplicate()
@@ -203,6 +206,23 @@ func test_finalize_stop_preserves_state_when_port_still_in_use() -> void:
 		FileAccess.file_exists(GodotAiPlugin.SERVER_PID_FILE),
 		"pid-file must be preserved so next _find_managed_pid has the deterministic hint"
 	)
+
+
+func test_stop_dev_server_only_kills_godot_ai_listeners() -> void:
+	## `stop_dev_server` used to shell out to `lsof | xargs kill`, which
+	## swept unrelated listeners that happened to share the configured HTTP
+	## port. It must filter by the same godot-ai command-line proof used by
+	## the managed lifecycle stop path.
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [11111, 22222] as Array[int]
+	plugin.branded_pids = [22222] as Array[int]
+
+	plugin.stop_dev_server()
+	var killed := plugin.killed_targets.duplicate()
+	plugin.free()
+
+	assert_eq(killed.size(), 1)
+	assert_eq(killed[0], 22222)
 
 
 # ----- spawn state machine -----
@@ -930,6 +950,34 @@ func test_recover_incompatible_returns_false_and_leaves_state_when_port_remains_
 	assert_eq(clear_calls, 0, "failed recovery must preserve record/pid-file state")
 
 
+func test_recovery_resume_unblocks_connection_while_spawn_is_in_flight() -> void:
+	## Recovery click kills the incompatible occupant and starts a fresh
+	## server, leaving lifecycle state at SPAWNING until the WebSocket
+	## handshake verifies the version. The connection must be unblocked
+	## during SPAWNING, otherwise the dock sits forever at "Restarting".
+	var plugin := GodotAiPlugin.new()
+	var conn := McpConnection.new()
+	conn.connect_blocked = true
+	conn.connect_block_reason = "incompatible"
+	conn.server_version = "1.2.10"
+	plugin._connection = conn
+	plugin._lifecycle._server_state = McpServerState.SPAWNING
+	plugin._lifecycle._connection_blocked = false
+
+	plugin._resume_connection_after_recovery()
+	var blocked := conn.connect_blocked
+	var reason := conn.connect_block_reason
+	var version := conn.server_version
+	var awaiting: bool = plugin._lifecycle.is_awaiting_server_version()
+	conn.free()
+	plugin.free()
+
+	assert_false(blocked)
+	assert_eq(reason, "")
+	assert_eq(version, "")
+	assert_true(awaiting)
+
+
 func test_connection_established_waits_for_version_before_clearing_foreign_port() -> void:
 	## A WebSocket opening is not enough proof anymore: old pre-rollup
 	## servers accept the plugin session while still exposing an incompatible
@@ -1143,6 +1191,29 @@ func test_parse_lsof_pids_ignores_non_numeric_lines() -> void:
 	var pids := GodotAiPlugin._parse_lsof_pids("lsof: WARNING\n32696\n")
 	assert_eq(pids.size(), 1)
 	assert_eq(pids[0], 32696)
+
+
+func test_dev_server_detection_ignores_unbranded_port_listener() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [24680] as Array[int]
+	plugin.port_in_use = true
+
+	var detected := plugin.is_dev_server_running()
+	plugin.free()
+
+	assert_false(detected)
+
+
+func test_dev_server_detection_accepts_branded_port_listener() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [24680] as Array[int]
+	plugin.branded_pids = [24680] as Array[int]
+	plugin.port_in_use = true
+
+	var detected := plugin.is_dev_server_running()
+	plugin.free()
+
+	assert_true(detected)
 
 
 ## --- Live-status threading ------------------------------------------

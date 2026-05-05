@@ -27,6 +27,11 @@ static func can_bind_local_port(port: int) -> bool:
 ## after their own `can_bind_local_port` probe.
 static func is_port_in_use(port: int) -> bool:
 	if can_bind_local_port(port):
+		## On POSIX, an IPv6 wildcard listener can coexist with a
+		## successful 127.0.0.1 bind probe. Confirm with lsof so startup
+		## sees the same listener set that shutdown/recovery would see.
+		if OS.get_name() != "Windows":
+			return is_port_in_use_via_scrape(port)
 		return false
 	return is_port_in_use_via_scrape(port)
 
