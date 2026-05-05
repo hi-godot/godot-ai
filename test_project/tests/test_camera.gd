@@ -115,6 +115,105 @@ func _wait_for_camera_current(cam: Node, expected: bool) -> bool:
 	return _camera_current_settled(cam, expected)
 
 
+func _wait_for_camera_current_report(cam: Node, expected: bool) -> Dictionary:
+	var start := Time.get_ticks_msec()
+	var attempts := 0
+	for i in range(20):
+		attempts = i + 1
+		if _camera_current_settled(cam, expected):
+			return {
+				"settled": true,
+				"attempts": attempts,
+				"elapsed_msec": Time.get_ticks_msec() - start,
+				"message": _camera_current_wait_timeout_message(cam, expected, attempts, Time.get_ticks_msec() - start),
+			}
+		OS.delay_msec(10)
+	var settled := _camera_current_settled(cam, expected)
+	var elapsed := Time.get_ticks_msec() - start
+	return {
+		"settled": settled,
+		"attempts": attempts,
+		"elapsed_msec": elapsed,
+		"message": _camera_current_wait_timeout_message(cam, expected, attempts, elapsed),
+	}
+
+
+func _camera_current_wait_timeout_message(cam: Node, expected: bool, attempts: int, elapsed_msec: int) -> String:
+	return "Timed out waiting for camera current=%s after %d attempts/%dms. %s" % [
+		expected,
+		attempts,
+		elapsed_msec,
+		_camera_current_diag(cam, expected, attempts, elapsed_msec),
+	]
+
+
+func _camera_current_diag(cam: Node, expected: bool, attempts: int, elapsed_msec: int) -> String:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var cam_path := "<null>"
+	var cam_name := "<null>"
+	var cam_class := "<null>"
+	var inside_tree := false
+	var node_is_current: Variant = "<missing>"
+	var viewport_cam_path := "<none>"
+	var viewport_matches := false
+	var handler_current: Variant = "<unavailable>"
+	var handler_empty_path := "<unavailable>"
+	if cam != null and is_instance_valid(cam):
+		cam_name = String(cam.name)
+		cam_class = cam.get_class()
+		inside_tree = cam.is_inside_tree()
+		if scene_root != null and scene_root.is_ancestor_of(cam):
+			cam_path = McpScenePath.from_node(cam, scene_root)
+		if cam.has_method("is_current"):
+			node_is_current = bool(cam.is_current())
+		if cam is Camera2D:
+			var viewport_2d := cam.get_viewport()
+			if viewport_2d != null:
+				var viewport_cam_2d := viewport_2d.get_camera_2d()
+				viewport_matches = viewport_cam_2d == cam
+				if viewport_cam_2d != null and scene_root != null and scene_root.is_ancestor_of(viewport_cam_2d):
+					viewport_cam_path = McpScenePath.from_node(viewport_cam_2d, scene_root)
+				elif viewport_cam_2d != null:
+					viewport_cam_path = str(viewport_cam_2d)
+		elif cam is Camera3D:
+			var viewport_3d := cam.get_viewport()
+			if viewport_3d != null:
+				var viewport_cam_3d := viewport_3d.get_camera_3d()
+				viewport_matches = viewport_cam_3d == cam
+				if viewport_cam_3d != null and scene_root != null and scene_root.is_ancestor_of(viewport_cam_3d):
+					viewport_cam_path = McpScenePath.from_node(viewport_cam_3d, scene_root)
+				elif viewport_cam_3d != null:
+					viewport_cam_path = str(viewport_cam_3d)
+		if cam_path != "<null>":
+			var per_path := _handler.get_camera({"camera_path": cam_path})
+			if per_path.has("data"):
+				handler_current = bool(per_path.data.get("current", false))
+			var empty_path := _handler.get_camera({"camera_path": ""})
+			if empty_path.has("data"):
+				handler_empty_path = "%s current=%s" % [
+					empty_path.data.get("path", "<missing>"),
+					empty_path.data.get("current", "<missing>"),
+				]
+	return (
+		"camera_state expected_current=%s attempts=%d elapsed_msec=%d "
+		+ "camera=%s path=%s class=%s in_tree=%s node_is_current=%s "
+		+ "viewport_camera=%s viewport_matches=%s handler_current=%s handler_empty_path=%s"
+	) % [
+		expected,
+		attempts,
+		elapsed_msec,
+		cam_name,
+		cam_path,
+		cam_class,
+		inside_tree,
+		node_is_current,
+		viewport_cam_path,
+		viewport_matches,
+		handler_current,
+		handler_empty_path,
+	]
+
+
 # ============================================================================
 # camera_create
 # ============================================================================
@@ -162,12 +261,14 @@ func test_create_with_make_current_unmarks_sibling() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var first_node := McpScenePath.resolve(first.data.path, scene_root) as Camera2D
 	var second_node := McpScenePath.resolve(second.data.path, scene_root) as Camera2D
-	assert_true(first_node != null)
-	assert_true(second_node != null)
-	assert_true(_wait_for_camera_current(second_node, true))
-	assert_true(_wait_for_camera_current(first_node, false))
-	assert_eq(second_node.is_current(), true)
-	assert_eq(first_node.is_current(), false, "Previously-current camera should have been unmarked")
+	assert_true(first_node != null, "First camera should resolve from %s" % first.data.path)
+	assert_true(second_node != null, "Second camera should resolve from %s" % second.data.path)
+	var second_current := _wait_for_camera_current_report(second_node, true)
+	assert_true(second_current.settled, second_current.message)
+	var first_not_current := _wait_for_camera_current_report(first_node, false)
+	assert_true(first_not_current.settled, first_not_current.message)
+	assert_eq(second_node.is_current(), true, "Direct is_current mismatch after wait succeeded. %s" % _camera_current_diag(second_node, true, second_current.attempts, second_current.elapsed_msec))
+	assert_eq(first_node.is_current(), false, "Previously-current camera should have been unmarked. Direct is_current mismatch after wait succeeded. %s" % _camera_current_diag(first_node, false, first_not_current.attempts, first_not_current.elapsed_msec))
 
 
 func test_make_current_does_not_cross_classes() -> void:
@@ -280,27 +381,26 @@ func test_configure_current_sibling_unmark_single_undo() -> void:
 		"properties": {"current": true},
 	})
 	assert_has_key(result, "data")
-	assert_true(_wait_for_camera_current(second_node, true))
-	assert_true(_wait_for_camera_current(first_node, false))
-	assert_eq(second_node.is_current(), true)
-	assert_eq(first_node.is_current(), false)
+	var forward_second_current := _wait_for_camera_current_report(second_node, true)
+	assert_true(forward_second_current.settled, forward_second_current.message)
+	var forward_first_not_current := _wait_for_camera_current_report(first_node, false)
+	assert_true(forward_first_not_current.settled, forward_first_not_current.message)
+	assert_eq(second_node.is_current(), true, "Direct is_current mismatch after forward configure wait succeeded. %s" % _camera_current_diag(second_node, true, forward_second_current.attempts, forward_second_current.elapsed_msec))
+	assert_eq(first_node.is_current(), false, "Direct is_current mismatch after forward configure wait succeeded. %s" % _camera_current_diag(first_node, false, forward_first_not_current.attempts, forward_first_not_current.elapsed_msec))
 
 	# One undo reverts both. Use editor_undo() so we explicitly target the
 	# scene's UndoRedo — EditorUndoRedoManager.undo() picks "newest" across
 	# histories by timestamp, which ties on fast runs.
 	var did_undo := editor_undo(_undo_redo)
 	assert_true(did_undo, "editor_undo returned false — no action was undone")
-	# Diagnostic detail if this ever regresses: report viewport state and
-	# tree membership so we can tell a handler bug from a test-harness bug.
-	var viewport := scene_root.get_viewport()
-	var viewport_cam: Variant = viewport.get_camera_2d() if viewport != null else null
-	var diag := "viewport_cam=%s first_in_tree=%s second_in_tree=%s" % [
-		viewport_cam, first_node.is_inside_tree(), second_node.is_inside_tree()
-	]
-	assert_true(_wait_for_camera_current(second_node, false), "Second current state should settle after undo. %s" % diag)
-	assert_true(_wait_for_camera_current(first_node, true), "First current state should settle after undo. %s" % diag)
-	assert_eq(second_node.is_current(), false, "After undo second should not be current. %s" % diag)
-	assert_eq(first_node.is_current(), true, "Single undo should restore original current camera. %s" % diag)
+	# Diagnostic detail if this ever regresses (#316): report viewport state,
+	# direct Camera current state, handler/logical current reads, and wait budget.
+	var undo_second_not_current := _wait_for_camera_current_report(second_node, false)
+	assert_true(undo_second_not_current.settled, undo_second_not_current.message)
+	var undo_first_current := _wait_for_camera_current_report(first_node, true)
+	assert_true(undo_first_current.settled, undo_first_current.message)
+	assert_eq(second_node.is_current(), false, "After undo second should not be current. %s" % _camera_current_diag(second_node, false, undo_second_not_current.attempts, undo_second_not_current.elapsed_msec))
+	assert_eq(first_node.is_current(), true, "Single undo should restore original current camera. %s" % _camera_current_diag(first_node, true, undo_first_current.attempts, undo_first_current.elapsed_msec))
 
 
 # ============================================================================
