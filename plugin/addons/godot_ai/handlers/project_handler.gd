@@ -20,7 +20,7 @@ func get_project_setting(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: key")
 
 	if not ProjectSettings.has_setting(key):
-		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Setting not found: %s" % key)
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Setting not found: %s" % key)
 
 	var value = ProjectSettings.get_setting(key)
 	return {

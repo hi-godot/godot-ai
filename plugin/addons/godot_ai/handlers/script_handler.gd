@@ -164,7 +164,7 @@ func patch_script(params: Dictionary) -> Dictionary:
 
 	var match_count := content.count(old_text)
 	if match_count == 0:
-		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "old_text not found in %s" % path)
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "old_text not found in %s" % path)
 	if match_count > 1 and not replace_all:
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,

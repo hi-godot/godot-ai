@@ -85,7 +85,7 @@ func remove_action(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: action")
 
 	if not InputMap.has_action(action):
-		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Action '%s' not found" % action)
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Action '%s' not found" % action)
 
 	var key := "input/%s" % action
 	var old_setting = ProjectSettings.get_setting(key) if ProjectSettings.has_setting(key) else null
@@ -125,7 +125,7 @@ func bind_event(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: event_type")
 
 	if not InputMap.has_action(action):
-		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Action '%s' not found" % action)
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Action '%s' not found" % action)
 
 	var event: InputEvent = _create_event(event_type, params)
 	if event == null:

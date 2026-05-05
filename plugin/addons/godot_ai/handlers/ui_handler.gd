@@ -223,8 +223,10 @@ func set_text(params: Dictionary) -> Dictionary:
 ## invalid, no node is created.
 func build_layout(params: Dictionary) -> Dictionary:
 	var tree = params.get("tree")
+	if not params.has("tree"):
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: tree")
 	if typeof(tree) != TYPE_DICTIONARY:
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: tree (must be a dictionary)")
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "tree must be a dictionary")
 
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
@@ -438,7 +440,7 @@ func _apply_property(node: Node, prop: String, value: Variant) -> Variant:
 	var coercion := _coerce_for_type(value, prop_type)
 	if not coercion.ok:
 		return McpErrorCodes.make(
-			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
+			McpErrorCodes.WRONG_TYPE,
 			"Property '%s' on %s expects type %s (cannot coerce %s)" % [
 				prop, node.get_class(), type_string(prop_type), value
 			]

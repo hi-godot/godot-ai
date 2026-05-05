@@ -149,7 +149,7 @@ func connect_signal(params: Dictionary) -> Dictionary:
 
 	var callable := Callable(target, method)
 	if source.is_connected(signal_name, callable):
-		return McpErrorCodes.make(McpErrorCodes.PROPERTY_NOT_ON_CLASS, "Signal '%s' already connected to %s.%s" % [signal_name, params.target, method])
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Signal '%s' already connected to %s.%s" % [signal_name, params.target, method])
 
 	_undo_redo.create_action("MCP: Connect signal %s" % signal_name)
 	_undo_redo.add_do_method(source, "connect", signal_name, callable)
@@ -172,7 +172,7 @@ func disconnect_signal(params: Dictionary) -> Dictionary:
 
 	var callable := Callable(target, method)
 	if not source.is_connected(signal_name, callable):
-		return McpErrorCodes.make(McpErrorCodes.PROPERTY_NOT_ON_CLASS, "Signal '%s' is not connected to %s.%s" % [signal_name, params.target, method])
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Signal '%s' is not connected to %s.%s" % [signal_name, params.target, method])
 
 	_undo_redo.create_action("MCP: Disconnect signal %s" % signal_name)
 	_undo_redo.add_do_method(source, "disconnect", signal_name, callable)
