@@ -46,7 +46,27 @@ func create_environment(params: Dictionary) -> Dictionary:
 		)
 
 	var preset_config: Dictionary = _PRESETS[preset]
-	var want_sky: bool = sky_param if sky_param != null else preset_config.sky
+	var want_sky: bool = preset_config.sky
+	var sky_properties: Dictionary = {}
+	if sky_param != null:
+		if sky_param is bool:
+			want_sky = sky_param
+		elif sky_param is Dictionary:
+			var sky_config: Dictionary = (sky_param as Dictionary).duplicate()
+			var material_type: String = String(sky_config.get("sky_material", "procedural")).to_lower()
+			if material_type != "procedural":
+				return McpErrorCodes.make(
+					McpErrorCodes.INVALID_PARAMS,
+					"sky.sky_material must be 'procedural' when sky is a dictionary"
+				)
+			sky_config.erase("sky_material")
+			sky_properties = sky_config
+			want_sky = true
+		else:
+			return McpErrorCodes.make(
+				McpErrorCodes.INVALID_PARAMS,
+				"sky must be a bool, null, or dictionary of ProceduralSkyMaterial properties"
+			)
 
 	var env := Environment.new()
 	var sky: Sky = null
@@ -61,6 +81,10 @@ func create_environment(params: Dictionary) -> Dictionary:
 		env.background_mode = Environment.BG_CLEAR_COLOR
 
 	_apply_preset(env, sky_material, preset)
+	if not sky_properties.is_empty():
+		var sky_apply_err := ResourceHandler._apply_resource_properties(sky_material, sky_properties)
+		if sky_apply_err != null:
+			return sky_apply_err
 	if preset_config.fog:
 		env.volumetric_fog_enabled = true
 		env.volumetric_fog_density = 0.03

@@ -2473,6 +2473,30 @@ async def test_environment_create_save_handler():
     }
 
 
+async def test_environment_create_forwards_rich_sky_dict():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    sky = {
+        "sky_material": "procedural",
+        "sky_top_color": "#0f172a",
+        "sky_horizon_color": "#334155",
+    }
+    result = await environment_handlers.environment_create(
+        runtime,
+        path="/Main/World",
+        preset="night",
+        properties={"ambient_light_energy": 0.35},
+        sky=sky,
+    )
+    assert result["undoable"] is True
+    assert client.calls[-1]["params"] == {
+        "preset": "night",
+        "path": "/Main/World",
+        "properties": {"ambient_light_energy": 0.35},
+        "sky": sky,
+    }
+
+
 async def test_environment_create_requires_writable():
     from godot_ai.godot_client.client import GodotCommandError
     from godot_ai.sessions.registry import Session
