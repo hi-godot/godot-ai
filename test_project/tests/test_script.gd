@@ -106,6 +106,22 @@ func test_create_script_wrong_extension() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
+func test_create_script_rejects_traversal_path() -> void:
+	## Issue #347: `res://../etc/passwd.gd` previously passed the prefix check.
+	## Use a synthetic target so a host with a pre-existing
+	## `<project_parent>/etc/passwd.gd` couldn't false-positive the disk
+	## assertion. The synthetic name never exists in a clean tree.
+	var traversal_path := "res://../__mcp_traversal_test_target__.gd"
+	var result := _handler.create_script({
+		"path": traversal_path,
+		"content": "extends Node\n",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "..")
+	## Defence: confirm the file was NOT written outside the project.
+	assert_false(FileAccess.file_exists(traversal_path), "traversal must not write to disk")
+
+
 # ----- patch_script -----
 
 func test_patch_script_basic() -> void:
@@ -222,6 +238,18 @@ func test_patch_script_invalid_prefix() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
+func test_patch_script_rejects_traversal_path() -> void:
+	## Issue #347 regression: traversal must be caught before the file is
+	## opened for read or write.
+	var result := _handler.patch_script({
+		"path": "res://../etc/passwd.gd",
+		"old_text": "x",
+		"new_text": "y",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "..")
+
+
 # ----- read_script -----
 
 func test_read_script_basic() -> void:
@@ -246,6 +274,13 @@ func test_read_script_invalid_prefix() -> void:
 func test_read_script_not_found() -> void:
 	var result := _handler.read_script({"path": "res://nonexistent_script.gd"})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_read_script_rejects_traversal_path() -> void:
+	## Issue #347: read_script must not become a file-disclosure primitive.
+	var result := _handler.read_script({"path": "res://../etc/passwd.gd"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "..")
 
 
 # ----- attach_script -----
@@ -378,3 +413,10 @@ func test_find_symbols_invalid_prefix() -> void:
 func test_find_symbols_not_found() -> void:
 	var result := _handler.find_symbols({"path": "res://nonexistent_script.gd"})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+
+
+func test_find_symbols_rejects_traversal_path() -> void:
+	## Issue #347: find_symbols also reads file content; same disclosure surface.
+	var result := _handler.find_symbols({"path": "res://../etc/passwd.gd"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "..")
