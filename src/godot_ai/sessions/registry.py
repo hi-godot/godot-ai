@@ -76,11 +76,9 @@ class Session:
 class SessionRegistry:
     """Tracks all connected Godot editor sessions.
 
-    All callers run inside the single asyncio event loop driving the WS
-    transport; no thread crossings, so registry state is mutated without
-    locking. If a future caller ever runs from another thread, switch to
-    ``asyncio.Lock`` (this code is async-first) — not ``threading.RLock``,
-    which provided no asyncio-level mutual exclusion in the first place.
+    Callers run on the single asyncio event loop driving the WS transport,
+    so state is mutated without locking. If a thread crossing is ever
+    introduced, use ``asyncio.Lock`` — this code is async-first.
     """
 
     def __init__(self):
@@ -95,7 +93,6 @@ class SessionRegistry:
         self._sessions[session.session_id] = session
         if self._active_session_id is None:
             self._active_session_id = session.session_id
-        # Notify any waiters blocked on wait_for_session()
         remaining = []
         for future, exclude_id, known_ids, project_path in self._session_waiters:
             if future.done():

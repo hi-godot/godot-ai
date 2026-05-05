@@ -125,14 +125,7 @@ class TestSessionRegistry:
 
 
 class TestSessionRegistryNoThreadingLock:
-    """Pin the asyncio-only invariant: no threading lock on the hot path.
-
-    The previous ``threading.RLock`` provided no asyncio-level mutual exclusion
-    (it wasn't awaited) and the only callers run inside the single asyncio WS
-    handler. Reintroducing a ``threading.RLock`` would mislead readers into
-    assuming thread-safety the registry doesn't deliver. If a thread crossing
-    is genuinely needed later, switch to ``asyncio.Lock`` instead.
-    """
+    """Guard against reintroducing a threading lock; this registry is asyncio-only."""
 
     def test_registry_has_no_lock_attribute(self):
         reg = SessionRegistry()
