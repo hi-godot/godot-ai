@@ -171,7 +171,7 @@ func save_scene(_params: Dictionary) -> Dictionary:
 	if path.is_empty():
 		return McpErrorCodes.make(
 			McpErrorCodes.INVALID_PARAMS,
-			"Current scene has never been saved; call scene_save_as or scene_manage(op='save_as') with a res://...tscn path."
+			"Current scene has never been saved; call scene_manage(op='save_as') with a res://... path ending in .tscn or .scn."
 		)
 
 	if _connection:

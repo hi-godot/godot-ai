@@ -201,9 +201,14 @@ func test_save_scene_never_saved_returns_actionable_validation_error() -> void:
 
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 	assert_false(spy.save_called, "scene_save must not call EditorInterface.save_scene() without a scene path")
-	assert_contains(result.error.message, "scene_save_as")
+	# Recovery hint must point at the published MCP tool surface
+	# (scene_manage(op='save_as')), not a non-existent `scene_save_as`
+	# top-level tool. Hint must also acknowledge both supported scene
+	# extensions (.tscn and .scn) since save_scene_as accepts either.
 	assert_contains(result.error.message, "scene_manage(op='save_as')")
-	assert_contains(result.error.message, "res://...tscn")
+	assert_contains(result.error.message, "res://")
+	assert_contains(result.error.message, ".tscn")
+	assert_contains(result.error.message, ".scn")
 
 
 func test_save_scene_succeeds_for_saved_scene() -> void:
