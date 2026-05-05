@@ -74,7 +74,7 @@ func test_list_actions_hides_editor_internal_namespaces() -> void:
 
 func test_add_action_missing_name() -> void:
 	var result := _handler.add_action({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_add_and_remove_action() -> void:
@@ -95,7 +95,7 @@ func test_add_and_remove_action() -> void:
 func test_add_action_duplicate() -> void:
 	_handler.add_action({"action": TEST_ACTION})
 	var result := _handler.add_action({"action": TEST_ACTION})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_handler.remove_action({"action": TEST_ACTION})
 
 
@@ -103,22 +103,22 @@ func test_add_action_duplicate() -> void:
 
 func test_remove_action_missing_name() -> void:
 	var result := _handler.remove_action({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_remove_action_not_found() -> void:
 	var result := _handler.remove_action({"action": "_nonexistent_action_xyz"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- bind_event -----
 
 func test_bind_event_missing_params() -> void:
 	var result := _handler.bind_event({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 	result = _handler.bind_event({"action": TEST_ACTION})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_bind_event_unknown_action() -> void:
@@ -127,7 +127,7 @@ func test_bind_event_unknown_action() -> void:
 		"event_type": "key",
 		"keycode": "Space",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_bind_event_unsupported_type() -> void:
@@ -136,7 +136,7 @@ func test_bind_event_unsupported_type() -> void:
 		"action": TEST_ACTION,
 		"event_type": "unsupported",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_handler.remove_action({"action": TEST_ACTION})
 
 

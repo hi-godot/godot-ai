@@ -90,7 +90,7 @@ func set_anchor_preset(params: Dictionary) -> Dictionary:
 	if not node is Control:
 		var got_class: String = node.get_class()
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Node %s is not a Control (got %s)%s" % [
 				node_path, got_class, _canvas_layer_overlay_hint(got_class)
 			]
@@ -151,7 +151,7 @@ func set_text(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: text")
 	var text_value: Variant = params["text"]
 	if typeof(text_value) != TYPE_STRING:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "text must be a string")
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "text must be a string")
 
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
@@ -163,7 +163,7 @@ func set_text(params: Dictionary) -> Dictionary:
 	var node_type := node.get_class()
 	if not node is Control:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Node %s is not a Control (got %s)" % [node_path, node_type]
 		)
 	# Scan get_property_list() (matches set_property / _apply_property in this
@@ -179,12 +179,12 @@ func set_text(params: Dictionary) -> Dictionary:
 			break
 	if not has_text:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Control %s has no 'text' property (got %s)" % [node_path, node_type]
 		)
 	if text_prop_type != TYPE_STRING:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Control %s has a non-string 'text' property (got %s)" % [node_path, node_type]
 		)
 
@@ -271,7 +271,7 @@ func _build_subtree(spec: Dictionary) -> Dictionary:
 	if not ClassDB.class_exists(node_type):
 		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Unknown type: %s" % node_type)
 	if not ClassDB.is_parent_class(node_type, "Node"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "%s is not a Node type" % node_type)
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "%s is not a Node type" % node_type)
 
 	var node: Node = ClassDB.instantiate(node_type)
 	if node == null:
@@ -286,7 +286,7 @@ func _build_subtree(spec: Dictionary) -> Dictionary:
 		var props = spec.get("properties")
 		if typeof(props) != TYPE_DICTIONARY:
 			node.free()
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "properties must be a dictionary")
+			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "properties must be a dictionary")
 		for key in props:
 			var value = props[key]
 			var apply_err := _apply_property(node, str(key), value)
@@ -300,14 +300,14 @@ func _build_subtree(spec: Dictionary) -> Dictionary:
 		if not theme_path.is_empty():
 			if not theme_path.begins_with("res://"):
 				node.free()
-				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "theme must be a res:// path")
+				return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "theme must be a res:// path")
 			if not ResourceLoader.exists(theme_path):
 				node.free()
-				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Theme not found: %s" % theme_path)
+				return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Theme not found: %s" % theme_path)
 			var theme_res: Resource = ResourceLoader.load(theme_path)
 			if theme_res == null or not theme_res is Theme:
 				node.free()
-				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "theme path must point to a Theme resource: %s" % theme_path)
+				return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "theme path must point to a Theme resource: %s" % theme_path)
 			if not node is Control and not node is Window:
 				node.free()
 				return McpErrorCodes.make(
@@ -341,11 +341,11 @@ func _build_subtree(spec: Dictionary) -> Dictionary:
 		var children = spec.get("children")
 		if typeof(children) != TYPE_ARRAY:
 			node.free()
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "children must be an array")
+			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "children must be an array")
 		for child_spec in children:
 			if typeof(child_spec) != TYPE_DICTIONARY:
 				node.free()
-				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "each child must be a dictionary")
+				return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "each child must be a dictionary")
 			var child_result := _build_subtree(child_spec)
 			if child_result.has("error"):
 				node.free()
@@ -416,7 +416,7 @@ func _apply_property(node: Node, prop: String, value: Variant) -> Variant:
 				var coercion := _coerce_for_type(value, coerce_type)
 				if not coercion.ok:
 					return McpErrorCodes.make(
-						McpErrorCodes.INVALID_PARAMS,
+						McpErrorCodes.WRONG_TYPE,
 						"Cannot coerce '%s' for %s" % [value, prop]
 					)
 				node.call(info.add, override_name, coercion.value)
@@ -438,7 +438,7 @@ func _apply_property(node: Node, prop: String, value: Variant) -> Variant:
 	var coercion := _coerce_for_type(value, prop_type)
 	if not coercion.ok:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Property '%s' on %s expects type %s (cannot coerce %s)" % [
 				prop, node.get_class(), type_string(prop_type), value
 			]

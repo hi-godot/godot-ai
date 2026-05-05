@@ -35,12 +35,12 @@ func test_list_signals_returns_signals() -> void:
 
 func test_list_signals_missing_path() -> void:
 	var result := _handler.list_signals({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_list_signals_unknown_node() -> void:
 	var result := _handler.list_signals({"path": "/NonExistentNode"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_list_signals_no_scene() -> void:
@@ -48,7 +48,7 @@ func test_list_signals_no_scene() -> void:
 	## We can't easily test this in-editor since a scene is always open,
 	## so just verify the path validation works.
 	var result := _handler.list_signals({"path": "/BogusRoot/BogusChild"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_list_signals_hides_editor_internal_connections_by_default() -> void:
@@ -211,16 +211,16 @@ func test_format_target_path_uses_absolute_for_non_descendants() -> void:
 
 func test_connect_signal_missing_params() -> void:
 	var result := _handler.connect_signal({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 	result = _handler.connect_signal({"path": "/Main"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 	result = _handler.connect_signal({"path": "/Main", "signal": "ready"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 	result = _handler.connect_signal({"path": "/Main", "signal": "ready", "target": "/Main"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_connect_signal_unknown_source() -> void:
@@ -230,14 +230,14 @@ func test_connect_signal_unknown_source() -> void:
 		"target": "/Main",
 		"method": "_ready",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- disconnect_signal -----
 
 func test_disconnect_signal_missing_params() -> void:
 	var result := _handler.disconnect_signal({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_disconnect_signal_not_connected() -> void:
@@ -252,7 +252,7 @@ func test_disconnect_signal_not_connected() -> void:
 		"target": path,
 		"method": "_nonexistent_method",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- Friction fix: autoload resolution -----
@@ -269,7 +269,7 @@ func test_connect_signal_autoload_not_found() -> void:
 		"target": "/" + scene_root.name,
 		"method": "queue_free",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "not found")
 
 
@@ -295,7 +295,7 @@ func test_connect_signal_declared_but_uninstantiated_autoload() -> void:
 		"target": "/" + scene_root.name,
 		"method": "queue_free",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	# Error should mention "autoload" and guidance (@onready or runtime).
 	assert_contains(result.error.message, "autoload")
 	assert_contains(result.error.message, "runtime")

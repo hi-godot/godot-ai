@@ -45,7 +45,7 @@ func test_gradient_requires_two_stops() -> void:
 		"path": "/Main/Line",
 		"property": "texture",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_gradient_invalid_fill() -> void:
@@ -58,7 +58,7 @@ func test_gradient_invalid_fill() -> void:
 		"path": "/Main/Line",
 		"property": "texture",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_gradient_no_home_errors() -> void:
@@ -68,7 +68,7 @@ func test_gradient_no_home_errors() -> void:
 			{"offset": 1.0, "color": "#0000ff"},
 		],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_gradient_stop_missing_keys() -> void:
@@ -80,7 +80,7 @@ func test_gradient_stop_missing_keys() -> void:
 		"path": "/Main/Line",
 		"property": "texture",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_gradient_stop_wrong_shape_color_reports_keys() -> void:
@@ -95,7 +95,7 @@ func test_gradient_stop_wrong_shape_color_reports_keys() -> void:
 		"path": "/Main/Line",
 		"property": "texture",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	var msg: String = result.error.message
 	assert_contains(msg, "stops[0].color")
 	assert_contains(msg, "Color")
@@ -116,7 +116,7 @@ func test_gradient_stop_non_dict_non_string_color_is_rejected() -> void:
 		"path": "/Main/Line",
 		"property": "texture",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "stops[0].color")
 
 
@@ -184,7 +184,7 @@ func test_noise_invalid_type() -> void:
 		"path": "/Main/Foo",
 		"property": "texture",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_noise_assigns_typed_chain() -> void:

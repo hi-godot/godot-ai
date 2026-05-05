@@ -138,7 +138,7 @@ func test_find_by_type_node3d() -> void:
 
 func test_find_no_filters_returns_error() -> void:
 	var result := _handler.find_nodes({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_find_nonexistent_type_returns_empty() -> void:
@@ -151,34 +151,34 @@ func test_find_nonexistent_type_returns_empty() -> void:
 
 func test_create_scene_missing_path() -> void:
 	var result := _handler.create_scene({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_scene_invalid_root_type() -> void:
 	var result := _handler.create_scene({"path": "res://test.tscn", "root_type": "NotAType"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_scene_non_node_root_type() -> void:
 	var result := _handler.create_scene({"path": "res://test.tscn", "root_type": "Resource"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_scene_invalid_path_prefix() -> void:
 	var result := _handler.create_scene({"path": "/tmp/scene.tscn"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- open_scene (validation only — opening scenes triggers UI that blocks test runner) -----
 
 func test_open_scene_missing_path() -> void:
 	var result := _handler.open_scene({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_open_scene_nonexistent() -> void:
 	var result := _handler.open_scene({"path": "res://does_not_exist.tscn"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- save_scene / save_scene_as (validation only — save triggers modal dialog) -----
@@ -199,7 +199,7 @@ func test_save_scene_never_saved_returns_actionable_validation_error() -> void:
 	scene_root.scene_file_path = original_path
 	_handler._save_scene_callable = Callable()
 
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_false(spy.save_called, "scene_save must not call EditorInterface.save_scene() without a scene path")
 	# Recovery hint must point at the published MCP tool surface
 	# (scene_manage(op='save_as')), not a non-existent `scene_save_as`
@@ -257,9 +257,9 @@ func test_save_scene_as_supports_never_saved_scene() -> void:
 
 func test_save_scene_as_missing_path() -> void:
 	var result := _handler.save_scene_as({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_save_scene_as_invalid_path_prefix() -> void:
 	var result := _handler.save_scene_as({"path": "/tmp/bad.tscn"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)

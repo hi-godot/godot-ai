@@ -537,7 +537,7 @@ func configure(params: Dictionary) -> Dictionary:
 
 	var properties: Dictionary = params.get("properties", {})
 	if properties.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "properties dict is empty")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "properties dict is empty")
 
 	var valid_keys: Array = _KEYS_2D if type_str == "2d" else _KEYS_3D
 	var prop_types := _property_type_map(node)
@@ -629,7 +629,7 @@ func set_limits_2d(params: Dictionary) -> Dictionary:
 
 	if type_str != "2d":
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"camera_set_limits_2d requires a Camera2D (got %s)" % node.get_class()
 		)
 
@@ -655,7 +655,7 @@ func set_limits_2d(params: Dictionary) -> Dictionary:
 
 	if applied.is_empty():
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.MISSING_REQUIRED_PARAM,
 			"No limits specified; provide at least one of left, right, top, bottom, smoothed"
 		)
 
@@ -693,7 +693,7 @@ func set_damping_2d(params: Dictionary) -> Dictionary:
 
 	if type_str != "2d":
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"camera_set_damping_2d requires a Camera2D (got %s)" % node.get_class()
 		)
 
@@ -733,7 +733,7 @@ func set_damping_2d(params: Dictionary) -> Dictionary:
 	if margins_v != null:
 		if not (margins_v is Dictionary):
 			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+				McpErrorCodes.WRONG_TYPE,
 				"drag_margins must be a dict with optional keys left/top/right/bottom"
 			)
 		var margins: Dictionary = margins_v
@@ -753,7 +753,7 @@ func set_damping_2d(params: Dictionary) -> Dictionary:
 
 	if applied.is_empty():
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.MISSING_REQUIRED_PARAM,
 			"No damping params specified; provide at least one of position_speed, rotation_speed, drag_margins, drag_horizontal_enabled, drag_vertical_enabled"
 		)
 
@@ -788,7 +788,7 @@ func follow_2d(params: Dictionary) -> Dictionary:
 
 	if type_str != "2d":
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"camera_follow_2d requires a Camera2D (got %s)" % node.get_class()
 		)
 
@@ -800,7 +800,7 @@ func follow_2d(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, "Target not found: %s" % target_path)
 	if not (target is Node2D) and target != scene_root:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Follow target must be a Node2D (got %s)" % target.get_class()
 		)
 	if target == node:
@@ -906,7 +906,7 @@ func get_camera(params: Dictionary) -> Dictionary:
 			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(camera_path, scene_root))
 		if not _is_camera(node):
 			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+				McpErrorCodes.WRONG_TYPE,
 				"Node %s is not a camera (got %s)" % [camera_path, node.get_class()]
 			)
 		resolved_via = "path"
@@ -1099,7 +1099,7 @@ func _resolve_camera(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
 	if not _is_camera(node):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Node %s is not a camera (got %s)" % [node_path, node.get_class()]
 		)
 	return {

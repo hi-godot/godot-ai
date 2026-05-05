@@ -78,7 +78,7 @@ func preset_fade(params: Dictionary) -> Dictionary:
 			has_modulate = true
 			break
 	if not has_modulate:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE,
 			"Target '%s' (class %s) has no 'modulate' property — fade requires a CanvasItem, Control, Node2D, or Sprite3D"
 			% [target_path, target.get_class()])
 
@@ -501,7 +501,7 @@ func _resolve_preset_target(player: AnimationPlayer, target_path: String) -> Dic
 	elif target is Node3D:
 		kind = "3d"
 	else:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE,
 			"Target '%s' must be a Control, Node2D, or Node3D (got %s)" % [target_path, target.get_class()])
 	return {"node": target, "kind": kind, "track_path_root": track_path_root}
 

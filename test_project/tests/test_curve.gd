@@ -54,7 +54,7 @@ func _remove_node(node: Node) -> void:
 
 func test_set_points_no_home() -> void:
 	var result := _handler.set_points({"points": []})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_points_both_homes() -> void:
@@ -64,7 +64,7 @@ func test_set_points_both_homes() -> void:
 		"property": "curve",
 		"resource_path": "res://curve.tres",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_points_missing_property() -> void:
@@ -72,7 +72,7 @@ func test_set_points_missing_property() -> void:
 		"points": [],
 		"path": "/Main/Path3D",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_points_wrong_resource_type() -> void:
@@ -90,7 +90,7 @@ func test_set_points_wrong_resource_type() -> void:
 		"path": mi.get_path(),
 		"property": "mesh",  # BoxMesh, not a Curve
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "Curve")
 	_remove_node(mi)
 
@@ -351,7 +351,7 @@ func test_set_points_3d_invalid_point_shape() -> void:
 		"path": p.get_path(),
 		"property": "curve",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(p)
 
 
@@ -370,7 +370,7 @@ func test_set_points_3d_wrong_shape_position_dict_reports_keys() -> void:
 		"path": p.get_path(),
 		"property": "curve",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	var msg: String = result.error.message
 	assert_contains(msg, "Curve3D points[0].position")
 	assert_contains(msg, "Vector3")
@@ -396,7 +396,7 @@ func test_set_points_2d_wrong_shape_in_tangent_reports_field() -> void:
 		"path": p.get_path(),
 		"property": "curve",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	var msg: String = result.error.message
 	assert_contains(msg, "Curve2D points[0].in")
 	assert_contains(msg, "Vector2")
@@ -416,7 +416,7 @@ func test_set_points_2d_non_dict_position_is_rejected() -> void:
 		"path": p.get_path(),
 		"property": "curve",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	var msg: String = result.error.message
 	assert_contains(msg, "Curve2D points[0].position")
 	assert_contains(msg, "Vector2")

@@ -44,7 +44,7 @@ func create_gradient_texture(params: Dictionary) -> Dictionary:
 
 	if stops.size() < 2:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"gradient_texture_create requires at least 2 stops, got %d" % stops.size()
 		)
 	if not _FILL_MODES.has(fill):
@@ -64,7 +64,7 @@ func create_gradient_texture(params: Dictionary) -> Dictionary:
 		var stop = stops[i]
 		if not stop is Dictionary:
 			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+				McpErrorCodes.WRONG_TYPE,
 				"stops[%d] must be a dict with 'offset' and 'color' keys" % i
 			)
 		if not stop.has("offset") or not stop.has("color"):
@@ -173,7 +173,7 @@ func _assign_texture(tex: Resource, sub_resources: Array, node_path: String, pro
 		)
 	if prop_type != TYPE_NIL and prop_type != TYPE_OBJECT:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Property '%s' on %s is not an Object slot" % [property, node.get_class()]
 		)
 

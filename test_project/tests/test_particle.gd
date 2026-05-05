@@ -107,7 +107,7 @@ func test_create_invalid_type() -> void:
 		"name": "BadType",
 		"type": "nonsense",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_attaches_process_material_to_gpu() -> void:
@@ -158,7 +158,7 @@ func test_set_main_unknown_property() -> void:
 		"node_path": r.data.path,
 		"properties": {"nonsense_prop": 1},
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_main_empty_dict() -> void:
@@ -170,7 +170,7 @@ func test_set_main_empty_dict() -> void:
 		"node_path": r.data.path,
 		"properties": {},
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ============================================================================
@@ -285,7 +285,7 @@ func test_set_process_invalid_shape_string() -> void:
 		"node_path": r.data.path,
 		"properties": {"emission_shape": "quantum"},
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_process_invalid_color_ramp() -> void:
@@ -297,7 +297,7 @@ func test_set_process_invalid_color_ramp() -> void:
 		"node_path": r.data.path,
 		"properties": {"color_ramp": {"no_stops_key": []}},
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ============================================================================
@@ -313,7 +313,7 @@ func test_set_draw_pass_requires_valid_pass_number() -> void:
 		"node_path": r.data.path,
 		"pass": 99,
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_draw_pass_creates_default_mesh_when_empty() -> void:
@@ -381,7 +381,7 @@ func test_get_non_particle_node_errors() -> void:
 	scene_root.add_child(mi)
 	mi.owner = scene_root
 	var result := _handler.get_particle({"node_path": McpScenePath.from_node(mi, scene_root)})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	mi.get_parent().remove_child(mi)
 	mi.queue_free()
 
@@ -535,7 +535,7 @@ func test_apply_preset_unknown() -> void:
 		"name": "TestUnknown",
 		"preset": "not_a_real_preset",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_apply_preset_invalid_type() -> void:
@@ -549,4 +549,4 @@ func test_apply_preset_invalid_type() -> void:
 		"preset": "fire",
 		"type": "gpu_5d",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)

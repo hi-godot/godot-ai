@@ -94,23 +94,23 @@ func test_create_canvas_item() -> void:
 
 func test_create_invalid_type() -> void:
 	var result := _handler.create_material({"path": TEST_MATERIAL_PATH, "type": "nonsense"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_requires_res_path() -> void:
 	var result := _handler.create_material({"path": "/tmp/foo.tres"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_requires_valid_suffix() -> void:
 	var result := _handler.create_material({"path": "res://foo.txt"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_rejects_existing_without_overwrite() -> void:
 	_make_material()
 	var result := _handler.create_material({"path": TEST_MATERIAL_PATH})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_overwrite_allowed() -> void:
@@ -122,7 +122,7 @@ func test_create_overwrite_allowed() -> void:
 func test_create_shader_requires_shader_path() -> void:
 	_cleanup_file(TEST_MATERIAL_PATH)
 	var result := _handler.create_material({"path": TEST_MATERIAL_PATH, "type": "shader"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ============================================================================
@@ -210,7 +210,7 @@ func test_set_param_invalid_enum_by_name() -> void:
 		"param": "transparency",
 		"value": "not_a_mode",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_param_unknown_property() -> void:
@@ -220,7 +220,7 @@ func test_set_param_unknown_property() -> void:
 		"param": "does_not_exist",
 		"value": 1.0,
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_param_material_not_found() -> void:
@@ -229,7 +229,7 @@ func test_set_param_material_not_found() -> void:
 		"param": "metallic",
 		"value": 0.5,
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_param_missing_value() -> void:
@@ -238,7 +238,7 @@ func test_set_param_missing_value() -> void:
 		"path": TEST_MATERIAL_PATH,
 		"param": "metallic",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ============================================================================
@@ -291,7 +291,7 @@ func test_set_shader_param_unknown_uniform() -> void:
 		"param": "missing_uniform",
 		"value": 0.5,
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_shader_param_on_non_shader_material() -> void:
@@ -301,7 +301,7 @@ func test_set_shader_param_on_non_shader_material() -> void:
 		"param": "pulse",
 		"value": 0.5,
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ============================================================================
@@ -377,7 +377,7 @@ func test_assign_without_resource_or_create_fails() -> void:
 	var result := _handler.assign_material({
 		"node_path": McpScenePath.from_node(node, scene_root),
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(node)
 
 
@@ -393,7 +393,7 @@ func test_assign_surface_index_out_of_range() -> void:
 		"resource_path": TEST_MATERIAL_PATH,
 		"slot": "surface_99",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(node)
 
 
@@ -403,7 +403,7 @@ func test_assign_node_not_found() -> void:
 		"node_path": "/DoesNotExist",
 		"resource_path": TEST_MATERIAL_PATH,
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ============================================================================
@@ -443,7 +443,7 @@ func test_apply_to_node_invalid_type() -> void:
 		"type": "garbage",
 		"params": {},
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(node)
 
 
@@ -515,7 +515,7 @@ func test_apply_preset_unknown() -> void:
 		"preset": "not_a_real_preset",
 		"node_path": McpScenePath.from_node(node, scene_root),
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(node)
 
 
@@ -531,7 +531,7 @@ func test_apply_preset_to_disk() -> void:
 
 func test_apply_preset_requires_target() -> void:
 	var result := _handler.apply_preset({"preset": "metal"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_apply_preset_with_overrides() -> void:

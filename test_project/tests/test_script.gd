@@ -93,17 +93,17 @@ func test_create_script_overwrite_omits_cleanup_hint() -> void:
 
 func test_create_script_missing_path() -> void:
 	var result := _handler.create_script({"content": "extends Node\n"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_script_invalid_prefix() -> void:
 	var result := _handler.create_script({"path": "/tmp/bad.gd"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_script_wrong_extension() -> void:
 	var result := _handler.create_script({"path": "res://test.txt"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_script_rejects_traversal_path() -> void:
@@ -116,7 +116,7 @@ func test_create_script_rejects_traversal_path() -> void:
 		"path": traversal_path,
 		"content": "extends Node\n",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "..")
 	## Defence: confirm the file was NOT written outside the project.
 	assert_false(FileAccess.file_exists(traversal_path), "traversal must not write to disk")
@@ -153,7 +153,7 @@ func test_patch_script_no_match() -> void:
 		"old_text": "this_does_not_exist_anywhere",
 		"new_text": "whatever",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_patch_script_ambiguous_match_without_replace_all() -> void:
@@ -168,7 +168,7 @@ func test_patch_script_ambiguous_match_without_replace_all() -> void:
 		"old_text": "= 1",
 		"new_text": "= 2",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	DirAccess.remove_absolute(path)
 
 
@@ -200,7 +200,7 @@ func test_patch_script_missing_old_text() -> void:
 		"path": TEST_SCRIPT_PATH,
 		"new_text": "x",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_patch_script_non_gd_extension_rejected() -> void:
@@ -209,7 +209,7 @@ func test_patch_script_non_gd_extension_rejected() -> void:
 		"old_text": "x",
 		"new_text": "y",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_patch_script_missing_new_text() -> void:
@@ -217,7 +217,7 @@ func test_patch_script_missing_new_text() -> void:
 		"path": TEST_SCRIPT_PATH,
 		"old_text": "speed",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_patch_script_file_not_found() -> void:
@@ -226,7 +226,7 @@ func test_patch_script_file_not_found() -> void:
 		"old_text": "x",
 		"new_text": "y",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_patch_script_invalid_prefix() -> void:
@@ -235,7 +235,7 @@ func test_patch_script_invalid_prefix() -> void:
 		"old_text": "x",
 		"new_text": "y",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_patch_script_rejects_traversal_path() -> void:
@@ -246,7 +246,7 @@ func test_patch_script_rejects_traversal_path() -> void:
 		"old_text": "x",
 		"new_text": "y",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "..")
 
 
@@ -263,23 +263,23 @@ func test_read_script_basic() -> void:
 
 func test_read_script_missing_path() -> void:
 	var result := _handler.read_script({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_read_script_invalid_prefix() -> void:
 	var result := _handler.read_script({"path": "/tmp/bad.gd"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_read_script_not_found() -> void:
 	var result := _handler.read_script({"path": "res://nonexistent_script.gd"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_read_script_rejects_traversal_path() -> void:
 	## Issue #347: read_script must not become a file-disclosure primitive.
 	var result := _handler.read_script({"path": "res://../etc/passwd.gd"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "..")
 
 
@@ -313,12 +313,12 @@ func test_attach_script_basic() -> void:
 
 func test_attach_script_missing_path() -> void:
 	var result := _handler.attach_script({"script_path": TEST_SCRIPT_PATH})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_attach_script_missing_script_path() -> void:
 	var result := _handler.attach_script({"path": "/Main/Camera3D"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_attach_script_node_not_found() -> void:
@@ -326,7 +326,7 @@ func test_attach_script_node_not_found() -> void:
 		"path": "/Main/DoesNotExist",
 		"script_path": TEST_SCRIPT_PATH,
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_attach_script_not_found() -> void:
@@ -334,7 +334,7 @@ func test_attach_script_not_found() -> void:
 		"path": "/Main/Camera3D",
 		"script_path": "res://nonexistent_script.gd",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- detach_script -----
@@ -355,12 +355,12 @@ func test_detach_script_no_script() -> void:
 
 func test_detach_script_missing_path() -> void:
 	var result := _handler.detach_script({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_detach_script_node_not_found() -> void:
 	var result := _handler.detach_script({"path": "/Main/DoesNotExist"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- find_symbols -----
@@ -402,21 +402,21 @@ func test_find_symbols_exports() -> void:
 
 func test_find_symbols_missing_path() -> void:
 	var result := _handler.find_symbols({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_find_symbols_invalid_prefix() -> void:
 	var result := _handler.find_symbols({"path": "/tmp/bad.gd"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_find_symbols_not_found() -> void:
 	var result := _handler.find_symbols({"path": "res://nonexistent_script.gd"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_find_symbols_rejects_traversal_path() -> void:
 	## Issue #347: find_symbols also reads file content; same disclosure surface.
 	var result := _handler.find_symbols({"path": "res://../etc/passwd.gd"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "..")

@@ -132,12 +132,12 @@ func _set_scalar(
 	var raw_value = params.get("value")
 	if raw_value == null:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid %s value: null (pass a concrete value; use the appropriate clear command to remove a slot)" % kind
 		)
 	var parsed = parser.call(raw_value)
 	if parsed == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid %s value: %s (%s)" % [kind, raw_value, _COLOR_HINT])
 
 	var had_before: bool = has_fn.call(theme, name, class_name_param)
@@ -218,12 +218,12 @@ func set_stylebox_flat(params: Dictionary) -> Dictionary:
 	if params.has("bg_color"):
 		var bg := _parse_color(params.bg_color)
 		if bg == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid bg_color: %s (%s)" % [str(params.bg_color), _COLOR_HINT])
+			return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Invalid bg_color: %s (%s)" % [str(params.bg_color), _COLOR_HINT])
 		sb.bg_color = bg
 	if params.has("border_color"):
 		var bc := _parse_color(params.border_color)
 		if bc == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid border_color: %s (%s)" % [str(params.border_color), _COLOR_HINT])
+			return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Invalid border_color: %s (%s)" % [str(params.border_color), _COLOR_HINT])
 		sb.border_color = bc
 
 	# border: {all, top, bottom, left, right} — int widths
@@ -383,10 +383,10 @@ func apply_theme(params: Dictionary) -> Dictionary:
 		if path_err != null:
 			return path_err
 		if not ResourceLoader.exists(theme_path):
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Theme not found: %s" % theme_path)
+			return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Theme not found: %s" % theme_path)
 		theme = ResourceLoader.load(theme_path)
 		if theme == null or not theme is Theme:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource at %s is not a Theme" % theme_path)
+			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Resource at %s is not a Theme" % theme_path)
 
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
@@ -397,7 +397,7 @@ func apply_theme(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
 	if not node is Control and not node is Window:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Node %s is not a Control or Window (got %s)" % [node_path, node.get_class()]
 		)
 
@@ -427,10 +427,10 @@ func _load_theme_from_params(params: Dictionary) -> Dictionary:
 	if err != null:
 		return err
 	if not ResourceLoader.exists(theme_path):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Theme not found: %s" % theme_path)
+		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Theme not found: %s" % theme_path)
 	var theme: Theme = ResourceLoader.load(theme_path)
 	if theme == null or not theme is Theme:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource at %s is not a Theme" % theme_path)
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Resource at %s is not a Theme" % theme_path)
 	return {"theme": theme, "path": theme_path}
 
 
@@ -439,12 +439,12 @@ static func _validate_res_path(path: String, required_suffix: String, param_name
 		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: %s" % param_name)
 	if not path.begins_with("res://"):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"%s must start with res:// (got %s)" % [param_name, path]
 		)
 	if not path.ends_with(required_suffix):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"%s must end with %s (got %s)" % [param_name, required_suffix, path]
 		)
 	return null

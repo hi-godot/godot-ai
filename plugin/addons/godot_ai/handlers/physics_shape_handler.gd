@@ -46,7 +46,7 @@ func autofit(params: Dictionary) -> Dictionary:
 	var is_2d := node is CollisionShape2D
 	if not (is_3d or is_2d):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Node at %s is %s — must be CollisionShape3D or CollisionShape2D" % [node_path, node.get_class()]
 		)
 
@@ -66,7 +66,7 @@ func autofit(params: Dictionary) -> Dictionary:
 	var type_map := _SHAPE_3D_CLASSES if is_3d else _SHAPE_2D_CLASSES
 	if not type_map.has(shape_type):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid shape_type '%s' for %s. Valid: %s" % [shape_type, node.get_class(), ", ".join(type_map.keys())]
 		)
 	var shape_class: String = type_map[shape_type]
@@ -214,7 +214,7 @@ static func _measure_bounds(source: Node, is_3d: bool) -> Dictionary:
 			aabb.size = aabb.size * scale_3d
 			return {"aabb": aabb}
 		return {"error": McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Source %s has no measurable 3D bounds (must be VisualInstance3D subclass)" % source.get_class()
 		)}
 	# 2D
@@ -242,7 +242,7 @@ static func _measure_bounds(source: Node, is_3d: bool) -> Dictionary:
 				)}
 		return {"rect": Rect2(Vector2.ZERO, tr_size)}
 	return {"error": McpErrorCodes.make(
-		McpErrorCodes.INVALID_PARAMS,
+		McpErrorCodes.WRONG_TYPE,
 		"Source %s has no measurable 2D bounds (must be Sprite2D or TextureRect)" % source.get_class()
 	)}
 

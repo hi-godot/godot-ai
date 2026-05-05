@@ -30,14 +30,14 @@ func set_points(params: Dictionary) -> Dictionary:
 		return home_err
 	var has_file_target := not resource_path.is_empty()
 	if not (new_points is Array):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "points must be an array")
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "points must be an array")
 
 	var curve: Resource
 	var node: Node = null
 	var curve_created := false
 	if has_file_target:
 		if not ResourceLoader.exists(resource_path):
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource not found: %s" % resource_path)
+			return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Resource not found: %s" % resource_path)
 		# ResourceLoader.load() returns Godot's cached Resource. Duplicate
 		# before mutating so: (a) open scenes holding a reference to this
 		# .tres don't silently see the new points outside any undo action,
@@ -84,7 +84,7 @@ func set_points(params: Dictionary) -> Dictionary:
 
 	if not (curve is Curve or curve is Curve2D or curve is Curve3D):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Resource is %s — must be Curve, Curve2D, or Curve3D" % curve.get_class()
 		)
 

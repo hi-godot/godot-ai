@@ -66,10 +66,10 @@ func create_material(params: Dictionary) -> Dictionary:
 				"ShaderMaterial requires shader_path (res:// path to a .gdshader)"
 			)
 		if not ResourceLoader.exists(shader_path):
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Shader not found: %s" % shader_path)
+			return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Shader not found: %s" % shader_path)
 		var shader_res := ResourceLoader.load(shader_path)
 		if not (shader_res is Shader):
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource at %s is not a Shader" % shader_path)
+			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Resource at %s is not a Shader" % shader_path)
 		(mat as ShaderMaterial).shader = shader_res
 
 	var dir_path := path.get_base_dir()
@@ -175,13 +175,13 @@ func set_shader_param(params: Dictionary) -> Dictionary:
 
 	if not (mat is ShaderMaterial):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Material at %s is %s, not ShaderMaterial" % [mat_path, mat.get_class()]
 		)
 	var shader_mat := mat as ShaderMaterial
 	if shader_mat.shader == null:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"ShaderMaterial at %s has no shader assigned" % mat_path
 		)
 
@@ -296,7 +296,7 @@ func list_materials(params: Dictionary) -> Dictionary:
 	var type_filter: String = params.get("type", "")
 
 	if not root.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "root must start with res://")
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "root must start with res://")
 
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs == null:
@@ -372,17 +372,17 @@ func assign_material(params: Dictionary) -> Dictionary:
 				# use material_create first or omit resource_path to get an
 				# inline material.
 				return McpErrorCodes.make(
-					McpErrorCodes.INVALID_PARAMS,
+					McpErrorCodes.RESOURCE_NOT_FOUND,
 					"Resource not found: %s. Create it first with material_create or omit resource_path for an inline material." % resource_path
 				)
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource not found: %s" % resource_path)
+			return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Resource not found: %s" % resource_path)
 		var loaded := ResourceLoader.load(resource_path)
 		if not (loaded is Material):
 			var loaded_class := "null"
 			if loaded != null:
 				loaded_class = loaded.get_class()
 			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+				McpErrorCodes.WRONG_TYPE,
 				"Resource at %s is not a Material (got %s)" % [resource_path, loaded_class]
 			)
 		mat = loaded
@@ -529,7 +529,7 @@ func apply_preset(params: Dictionary) -> Dictionary:
 
 	if path.is_empty() and node_path.is_empty():
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.MISSING_REQUIRED_PARAM,
 			"Pass at least one of: path (save to disk), node_path (assign to node)"
 		)
 
@@ -675,7 +675,7 @@ static func _validate_material_path(path: String, param_name: String) -> Variant
 			break
 	if not has_suffix:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"%s must end with one of %s (got %s)" % [param_name, ", ".join(_SUPPORTED_SUFFIXES), path]
 		)
 	return null
@@ -686,10 +686,10 @@ func _load_material_from_path(path: String) -> Dictionary:
 	if err != null:
 		return err
 	if not ResourceLoader.exists(path):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Material not found: %s" % path)
+		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Material not found: %s" % path)
 	var res := ResourceLoader.load(path)
 	if res == null or not (res is Material):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource at %s is not a Material" % path)
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Resource at %s is not a Material" % path)
 	return {"material": res, "path": path}
 
 
@@ -711,20 +711,20 @@ func _resolve_slot_property(node: Node, slot: String) -> Dictionary:
 		if node is CanvasItem:
 			return {"property": "material"}
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Slot 'canvas' requires a CanvasItem (got %s)" % node.get_class()
 		)
 	if slot == "process":
 		if node is GPUParticles3D or node is GPUParticles2D:
 			return {"property": "process_material"}
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Slot 'process' requires a GPUParticles2D/3D (got %s)" % node.get_class()
 		)
 	if slot.begins_with("surface_"):
 		if not (node is MeshInstance3D):
 			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+				McpErrorCodes.WRONG_TYPE,
 				"Slot '%s' requires a MeshInstance3D (got %s)" % [slot, node.get_class()]
 			)
 		var idx_str := slot.substr(len("surface_"))

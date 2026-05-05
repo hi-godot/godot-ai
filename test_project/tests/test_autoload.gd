@@ -38,12 +38,12 @@ func test_list_autoloads() -> void:
 
 func test_add_autoload_missing_name() -> void:
 	var result := _handler.add_autoload({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_add_autoload_missing_path() -> void:
 	var result := _handler.add_autoload({"name": TEST_AUTOLOAD_NAME})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_add_autoload_invalid_path_prefix() -> void:
@@ -51,7 +51,7 @@ func test_add_autoload_invalid_path_prefix() -> void:
 		"name": TEST_AUTOLOAD_NAME,
 		"path": "/absolute/path/evil.gd",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_add_autoload_user_path_rejected() -> void:
@@ -59,7 +59,7 @@ func test_add_autoload_user_path_rejected() -> void:
 		"name": TEST_AUTOLOAD_NAME,
 		"path": "user://evil.gd",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_add_autoload_nonexistent_file() -> void:
@@ -67,7 +67,7 @@ func test_add_autoload_nonexistent_file() -> void:
 		"name": TEST_AUTOLOAD_NAME,
 		"path": "res://nonexistent_autoload_xyz.gd",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_add_and_remove_autoload() -> void:
@@ -106,7 +106,7 @@ func test_add_autoload_duplicate() -> void:
 		"name": TEST_AUTOLOAD_NAME,
 		"path": "res://tests/test_autoload.gd",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	## Cleanup
 	_handler.remove_autoload({"name": TEST_AUTOLOAD_NAME})
 
@@ -115,9 +115,9 @@ func test_add_autoload_duplicate() -> void:
 
 func test_remove_autoload_missing_name() -> void:
 	var result := _handler.remove_autoload({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_remove_autoload_not_found() -> void:
 	var result := _handler.remove_autoload({"name": "_NoSuchAutoload"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)

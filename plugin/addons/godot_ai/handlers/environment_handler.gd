@@ -64,7 +64,7 @@ func create_environment(params: Dictionary) -> Dictionary:
 			want_sky = true
 		else:
 			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+				McpErrorCodes.WRONG_TYPE,
 				"sky must be a bool, null, or dictionary of ProceduralSkyMaterial properties"
 			)
 
@@ -148,7 +148,7 @@ func _assign_environment(env: Environment, sky: Sky, sky_material: ProceduralSky
 		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
 	if not (node is WorldEnvironment):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Node at %s is %s — must be WorldEnvironment" % [node_path, node.get_class()]
 		)
 

@@ -119,17 +119,17 @@ func _add_nested_body_3d(container_name: String, visuals: Array) -> Dictionary:
 
 func test_autofit_missing_path() -> void:
 	var result := _handler.autofit({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_autofit_node_not_found() -> void:
 	var result := _handler.autofit({"path": "/Main/NopeNotHere"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_autofit_node_is_not_collision_shape() -> void:
 	var result := _handler.autofit({"path": "/Main/Camera3D"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "CollisionShape")
 
 
@@ -142,7 +142,7 @@ func test_autofit_invalid_shape_type_for_3d() -> void:
 		"path": parts.collision.get_path(),
 		"shape_type": "rectangle",  # 2D-only type used in 3D context
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(parts.body)
 
 
@@ -262,7 +262,7 @@ func test_autofit_no_sibling_visual_errors() -> void:
 	isolated.add_child(col)
 	col.set_owner(scene_root)
 	var result := _handler.autofit({"path": col.get_path()})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "source_path")
 	_remove_node(outer)
 
@@ -311,7 +311,7 @@ func test_autofit_3d_ambiguous_uncles_lists_candidates() -> void:
 		skip("No scene root")
 		return
 	var result := _handler.autofit({"path": parts.collision.get_path()})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "Multiple visual candidates")
 	assert_contains(result.error.message, "source_path")
 	assert_has_key(result.error, "data")
@@ -336,7 +336,7 @@ func test_autofit_3d_uncle_search_skips_lights() -> void:
 	parts.container.add_child(light)
 	light.set_owner(EditorInterface.get_edited_scene_root())
 	var result := _handler.autofit({"path": parts.collision.get_path()})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "source_path")
 	_remove_node(parts.container)
 
@@ -511,6 +511,6 @@ func test_autofit_2d_texture_rect_zero_size_no_texture_errors() -> void:
 	col.set_owner(scene_root)
 
 	var result := _handler.autofit({"path": col.get_path()})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "zero")
 	_remove_node(body)

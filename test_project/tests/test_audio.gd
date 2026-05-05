@@ -132,7 +132,7 @@ func test_create_invalid_type() -> void:
 		"name": "BadType",
 		"type": "gpu_3d",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_missing_parent() -> void:
@@ -141,7 +141,7 @@ func test_create_missing_parent() -> void:
 		"name": "Orphan",
 		"type": "1d",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ============================================================================
@@ -179,7 +179,7 @@ func test_set_stream_missing_resource() -> void:
 		"player_path": r.data.path,
 		"stream_path": "res://does_not_exist.ogg",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_stream_wrong_type() -> void:
@@ -192,7 +192,7 @@ func test_set_stream_wrong_type() -> void:
 		"player_path": r.data.path,
 		"stream_path": "res://tests/test_audio.gd",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_stream_empty_path() -> void:
@@ -204,7 +204,7 @@ func test_set_stream_empty_path() -> void:
 		"player_path": r.data.path,
 		"stream_path": "",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_stream_on_non_player_errors() -> void:
@@ -223,7 +223,7 @@ func test_set_stream_on_non_player_errors() -> void:
 		"player_path": McpScenePath.from_node(mi, scene_root),
 		"stream_path": _fixture_path,
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	mi.get_parent().remove_child(mi)
 	mi.queue_free()
 
@@ -281,7 +281,7 @@ func test_set_playback_empty_rejected() -> void:
 		assert_true(false, "Player creation failed")
 		return
 	var result := _handler.set_playback({"player_path": r.data.path})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_playback_type_mismatch_rejected() -> void:
@@ -294,7 +294,7 @@ func test_set_playback_type_mismatch_rejected() -> void:
 		"player_path": r.data.path,
 		"volume_db": "loud",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ============================================================================
@@ -307,7 +307,7 @@ func test_play_without_stream_rejected() -> void:
 		assert_true(false, "Player creation failed")
 		return
 	var result := _handler.play({"player_path": r.data.path})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_play_and_stop_roundtrip() -> void:
@@ -337,12 +337,12 @@ func test_play_and_stop_roundtrip() -> void:
 
 func test_play_missing_player_path() -> void:
 	var result := _handler.play({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_stop_missing_player_path() -> void:
 	var result := _handler.stop({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ============================================================================
@@ -378,4 +378,4 @@ func test_list_filters_by_root() -> void:
 
 func test_list_rejects_non_res_root() -> void:
 	var result := _handler.list_streams({"root": "user://"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)

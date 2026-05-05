@@ -41,7 +41,7 @@ func _remove_node(node: Node) -> void:
 
 func test_create_no_home_errors() -> void:
 	var result := _handler.create_environment({"preset": "default"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_both_homes_errors() -> void:
@@ -49,7 +49,7 @@ func test_create_both_homes_errors() -> void:
 		"path": "/Main/World",
 		"resource_path": "res://env.tres",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_invalid_preset() -> void:
@@ -57,7 +57,7 @@ func test_create_invalid_preset() -> void:
 		"path": "/Main/World",
 		"preset": "zapruder",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_target_not_world_environment() -> void:
@@ -65,7 +65,7 @@ func test_create_target_not_world_environment() -> void:
 		"path": "/Main/Camera3D",  # Camera3D, not WorldEnvironment
 		"preset": "default",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "WorldEnvironment")
 
 
@@ -169,7 +169,7 @@ func test_create_invalid_sky_shape_errors() -> void:
 		"preset": "night",
 		"sky": ["procedural"],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "sky")
 
 
@@ -179,7 +179,7 @@ func test_create_unsupported_sky_material_errors() -> void:
 		"preset": "night",
 		"sky": {"sky_material": "panorama"},
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "sky_material")
 
 

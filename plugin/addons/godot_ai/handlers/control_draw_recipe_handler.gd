@@ -25,7 +25,7 @@ func control_draw_recipe(params: Dictionary) -> Dictionary:
 	if path.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 	if typeof(ops_raw) != TYPE_ARRAY:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "ops must be an Array")
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "ops must be an Array")
 
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
@@ -36,7 +36,7 @@ func control_draw_recipe(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(path, scene_root))
 	if not node is Control:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"control_draw_recipe requires a Control node, got %s" % node.get_class()
 		)
 
@@ -98,7 +98,7 @@ func _coerce_ops(ops: Array) -> Dictionary:
 		var op: Variant = ops[i]
 		if typeof(op) != TYPE_DICTIONARY:
 			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS, "ops[%d] must be a dictionary" % i
+				McpErrorCodes.WRONG_TYPE, "ops[%d] must be a dictionary" % i
 			)
 		var coerced := _coerce_single_op(op, i)
 		if coerced.has("error"):
@@ -149,7 +149,7 @@ func _coerce_typed(value: Variant, prop_type: int, idx: int, kind: String, field
 	if r.ok:
 		return {"ok": true, "value": r.value}
 	return McpErrorCodes.make(
-		McpErrorCodes.INVALID_PARAMS, "ops[%d] (%s): invalid '%s'" % [idx, kind, field]
+		McpErrorCodes.VALUE_OUT_OF_RANGE, "ops[%d] (%s): invalid '%s'" % [idx, kind, field]
 	)
 
 
@@ -249,7 +249,7 @@ func _coerce_polyline_or_polygon(op: Dictionary, idx: int, kind: String) -> Dict
 		)
 	if typeof(op.points) != TYPE_ARRAY:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"ops[%d] (%s): 'points' must be an Array" % [idx, kind]
 		)
 	var points := PackedVector2Array()
@@ -284,12 +284,12 @@ func _coerce_polyline_or_polygon(op: Dictionary, idx: int, kind: String) -> Dict
 		var c := UiHandler._coerce_for_type(op.color, TYPE_COLOR)
 		if not c.ok:
 			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS, "ops[%d] (%s): invalid 'color'" % [idx, kind]
+				McpErrorCodes.VALUE_OUT_OF_RANGE, "ops[%d] (%s): invalid 'color'" % [idx, kind]
 			)
 		out["color"] = c.value
 	else:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.MISSING_REQUIRED_PARAM,
 			"ops[%d] (%s): missing 'color' or 'colors'" % [idx, kind]
 		)
 

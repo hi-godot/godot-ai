@@ -38,12 +38,12 @@ func create_node(params: Dictionary) -> Dictionary:
 		# an exploded subtree). Descendants remain owned by their sub-scene;
 		# setting their owner to our scene_root would break the instance link.
 		if not scene_path.begins_with("res://"):
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "scene_path must start with res://")
+			return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "scene_path must start with res://")
 		if not ResourceLoader.exists(scene_path):
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Scene not found: %s" % scene_path)
+			return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Scene not found: %s" % scene_path)
 		var packed_scene = ResourceLoader.load(scene_path)
 		if packed_scene == null or not packed_scene is PackedScene:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource at %s is not a PackedScene" % scene_path)
+			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Resource at %s is not a PackedScene" % scene_path)
 		new_node = packed_scene.instantiate(PackedScene.GEN_EDIT_STATE_INSTANCE)
 		if new_node == null:
 			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to instantiate scene: %s" % scene_path)
@@ -54,7 +54,7 @@ func create_node(params: Dictionary) -> Dictionary:
 		if not ClassDB.class_exists(node_type):
 			return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Unknown node type: %s" % node_type)
 		if not ClassDB.is_parent_class(node_type, "Node"):
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "%s is not a Node type" % node_type)
+			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "%s is not a Node type" % node_type)
 		new_node = ClassDB.instantiate(node_type)
 		if new_node == null:
 			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s" % node_type)
@@ -221,10 +221,10 @@ func set_property(params: Dictionary) -> Dictionary:
 			value = null
 		else:
 			if not ResourceLoader.exists(value):
-				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource not found: %s" % value)
+				return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Resource not found: %s" % value)
 			var loaded := ResourceLoader.load(value)
 			if loaded == null:
-				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource not found: %s" % value)
+				return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Resource not found: %s" % value)
 			value = loaded
 	elif target_type == TYPE_OBJECT and value is Dictionary and value.has("__class__"):
 		# Shortcut: {"__class__": "BoxMesh", "size": {...}} instantiates a
@@ -298,7 +298,7 @@ func rename_node(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Cannot rename the scene root")
 
 	if new_name.validate_node_name() != new_name:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid characters in name: %s" % new_name)
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Invalid characters in name: %s" % new_name)
 
 	var old_name := String(node.name)
 	if old_name == new_name:
@@ -552,7 +552,7 @@ static func _check_coerced(value: Variant, target_type: int, prefix: String = ""
 	if dict_err != null:
 		return McpErrorCodes.prefix_message(dict_err, prefix)
 	var err := McpErrorCodes.make(
-		McpErrorCodes.INVALID_PARAMS,
+		McpErrorCodes.WRONG_TYPE,
 		"Cannot coerce %s to %s; expected a dict like %s" % [
 			type_string(typeof(value)), type_string(target_type), _shape_hint(target_type),
 		],
@@ -598,7 +598,7 @@ static func _check_dict_coerce_failed(value: Variant, target_type: int) -> Varia
 			return null
 	var got_keys: Array = (value as Dictionary).keys()
 	return McpErrorCodes.make(
-		McpErrorCodes.INVALID_PARAMS,
+		McpErrorCodes.WRONG_TYPE,
 		"Cannot coerce dict to %s: expected keys %s; got %s" % [type_name, str(expected), str(got_keys)]
 	)
 

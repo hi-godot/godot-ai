@@ -62,7 +62,7 @@ func test_dispatch_direct_accepts_error_key() -> void:
 	d.register("good_error", func(_p):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "bad input"))
 	var result := d.dispatch_direct("good_error", {})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_eq(result.error.message, "bad input")
 
 

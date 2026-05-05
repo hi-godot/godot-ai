@@ -214,7 +214,7 @@ func add_property_track(params: Dictionary) -> Dictionary:
 	if anim_name.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: animation_name")
 	if track_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM,
 			"Missing required param: track_path (format: 'NodeName:property', e.g. 'Panel:modulate')")
 	if not track_path.contains(":"):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
@@ -223,7 +223,7 @@ func add_property_track(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid interpolation '%s'. Valid: %s" % [interp_str, ", ".join(_INTERP_MODES.keys())])
 	if typeof(keyframes) != TYPE_ARRAY or keyframes.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "keyframes must be a non-empty array")
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "keyframes must be a non-empty array")
 
 	var resolved := _resolve_player(player_path)
 	if resolved.has("error"):
@@ -245,7 +245,7 @@ func add_property_track(params: Dictionary) -> Dictionary:
 	var coerced_keyframes: Array = []
 	for kf in keyframes:
 		if typeof(kf) != TYPE_DICTIONARY:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Each keyframe must be a dictionary")
+			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Each keyframe must be a dictionary")
 		if not "time" in kf:
 			return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Each keyframe must have a 'time' field")
 		if not "value" in kf:
@@ -319,11 +319,11 @@ func add_method_track(params: Dictionary) -> Dictionary:
 			"target_node_path is a bare NodePath without ':property' (got '%s'). " % target_path +
 			"Method name goes in each keyframe's 'method' field, not the path.")
 	if typeof(keyframes) != TYPE_ARRAY or keyframes.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "keyframes must be a non-empty array")
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "keyframes must be a non-empty array")
 
 	for kf in keyframes:
 		if typeof(kf) != TYPE_DICTIONARY:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Each keyframe must be a dictionary")
+			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Each keyframe must be a dictionary")
 		if not "time" in kf:
 			return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Each keyframe must have a 'time' field")
 		if not "method" in kf:
@@ -494,7 +494,7 @@ func create_simple(params: Dictionary) -> Dictionary:
 	if anim_name.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
 	if typeof(tweens) != TYPE_ARRAY or tweens.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "tweens must be a non-empty array")
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "tweens must be a non-empty array")
 	if not _LOOP_MODES.has(loop_mode_str):
 		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid loop_mode '%s'. Valid: %s" % [loop_mode_str, ", ".join(_LOOP_MODES.keys())])
@@ -503,7 +503,7 @@ func create_simple(params: Dictionary) -> Dictionary:
 	var seen_paths := {}
 	for spec in tweens:
 		if typeof(spec) != TYPE_DICTIONARY:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Each tween spec must be a dictionary")
+			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Each tween spec must be a dictionary")
 		for field in ["target", "property", "from", "to", "duration"]:
 			if not field in spec:
 				return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM,
@@ -735,7 +735,7 @@ func _resolve_player(player_path: String, create_if_missing: bool = false) -> Di
 			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(player_path, scene_root))
 		return _instantiate_player(player_path, scene_root)
 	if not node is AnimationPlayer:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE,
 			"Node at %s is not an AnimationPlayer (got %s)" % [player_path, node.get_class()])
 	var player := node as AnimationPlayer
 	var lib: AnimationLibrary = null
@@ -806,7 +806,7 @@ func _resolve_or_create_player(player_path: String) -> Dictionary:
 	var parent_path := player_path.get_base_dir()
 	var new_name := player_path.get_file()
 	if new_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid player_path (no node name): %s" % player_path)
 	var parent: Node
 	if parent_path.is_empty() or parent_path == "/":
@@ -836,7 +836,7 @@ func _resolve_player_read(player_path: String) -> Dictionary:
 	if node == null:
 		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(player_path, scene_root))
 	if not node is AnimationPlayer:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE,
 			"Node at %s is not an AnimationPlayer (got %s)" % [player_path, node.get_class()])
 	return {"player": node as AnimationPlayer}
 

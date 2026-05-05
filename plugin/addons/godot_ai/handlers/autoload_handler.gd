@@ -32,9 +32,9 @@ func add_autoload(params: Dictionary) -> Dictionary:
 	if path.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 	if not path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res:// (got: %s)" % path)
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Path must start with res:// (got: %s)" % path)
 	if not FileAccess.file_exists(path):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "File not found: %s" % path)
+		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "File not found: %s" % path)
 
 	var key := "autoload/%s" % name
 	if ProjectSettings.has_setting(key):

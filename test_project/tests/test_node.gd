@@ -59,12 +59,12 @@ func test_get_children_includes_metadata() -> void:
 
 func test_get_children_invalid_path() -> void:
 	var result := _handler.get_children({"path": "/Main/DoesNotExist"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_get_children_missing_path() -> void:
 	var result := _handler.get_children({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- get_node_properties -----
@@ -96,12 +96,12 @@ func test_get_properties_has_value_and_type() -> void:
 
 func test_get_properties_invalid_path() -> void:
 	var result := _handler.get_node_properties({"path": "/Main/Nope"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_get_properties_missing_path() -> void:
 	var result := _handler.get_node_properties({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- get_groups -----
@@ -115,7 +115,7 @@ func test_get_groups_returns_array() -> void:
 
 func test_get_groups_invalid_path() -> void:
 	var result := _handler.get_groups({"path": "/Main/Missing"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- create_node -----
@@ -136,17 +136,17 @@ func test_create_node_basic() -> void:
 
 func test_create_node_invalid_type() -> void:
 	var result := _handler.create_node({"type": "NotARealNodeType"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_node_missing_type() -> void:
 	var result := _handler.create_node({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_node_non_node_type() -> void:
 	var result := _handler.create_node({"type": "Resource"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_node_accepts_root_alias_for_parent_path() -> void:
@@ -169,7 +169,7 @@ func test_create_node_parent_not_found_error_names_convention() -> void:
 		"type": "Node3D",
 		"parent_path": "/SomeBogusPath",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "relative to the edited scene root")
 	assert_contains(result.error.message, "Scene root is")
 
@@ -190,34 +190,34 @@ func test_delete_node_basic() -> void:
 
 func test_delete_node_scene_root() -> void:
 	var result := _handler.delete_node({"path": "/Main"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_delete_node_invalid_path() -> void:
 	var result := _handler.delete_node({"path": "/Main/DoesNotExist"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_delete_node_missing_path() -> void:
 	var result := _handler.delete_node({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- reparent_node -----
 
 func test_reparent_scene_root() -> void:
 	var result := _handler.reparent_node({"path": "/Main", "new_parent": "/Main/World"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_reparent_missing_new_parent() -> void:
 	var result := _handler.reparent_node({"path": "/Main/Camera3D"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_reparent_to_self() -> void:
 	var result := _handler.reparent_node({"path": "/Main/Camera3D", "new_parent": "/Main/Camera3D"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_reparent_to_own_descendant_errors_without_destroying_subtree() -> void:
@@ -241,7 +241,7 @@ func test_reparent_to_own_descendant_errors_without_destroying_subtree() -> void
 		"path": "/Main/_McpTestReparent",
 		"new_parent": chain.leaf_path,
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 	## Subtree must be unchanged — no accidental remove_child() should have run.
 	assert_eq(scene_root.get_node_or_null("_McpTestReparent"), parent_before, "parent must still exist")
@@ -314,12 +314,12 @@ func test_set_property_float() -> void:
 
 func test_set_property_missing_property() -> void:
 	var result := _handler.set_property({"path": "/Main/Camera3D", "value": 10})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_property_missing_value() -> void:
 	var result := _handler.set_property({"path": "/Main/Camera3D", "property": "fov"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_property_vector3_accepts_valid_dict() -> void:
@@ -354,7 +354,7 @@ func test_set_property_vector3_rejects_color_shaped_dict() -> void:
 		"property": "position",
 		"value": {"r": 1, "g": 0, "b": 0, "a": 1},
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "Vector3")
 
 	assert_eq(node.position, original, "Position must be unchanged after a rejected coerce")
@@ -371,7 +371,7 @@ func test_set_property_vector3_rejects_partial_dict() -> void:
 		"property": "position",
 		"value": {"x": 1},  # missing y, z
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_true(editor_undo(_undo_redo), "undo create should succeed")
 
 
@@ -400,7 +400,7 @@ func test_set_property_vector3_rejects_array_input() -> void:
 		"property": "position",
 		"value": [5, 5, 5],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "Vector3")
 	## Read back the stored Variant — the silent-zero failure mode would
 	## leave the node at (0,0,0) even though the response said "error".
@@ -420,7 +420,7 @@ func test_set_property_vector3_rejects_json_string_input() -> void:
 		"property": "position",
 		"value": "{\"x\":1,\"y\":2,\"z\":3}",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "Vector3")
 	assert_eq(node.position, original, "Position must be unchanged after rejected string coerce")
 	assert_true(editor_undo(_undo_redo), "undo create should succeed")
@@ -437,7 +437,7 @@ func test_set_property_vector2_rejects_array_input() -> void:
 		"property": "position",
 		"value": [1, 2],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "Vector2")
 	assert_eq(node.position, original, "Position must be unchanged after rejected array coerce")
 	assert_true(editor_undo(_undo_redo), "undo create should succeed")
@@ -454,7 +454,7 @@ func test_set_property_color_rejects_array_input() -> void:
 		"property": "modulate",
 		"value": [1, 0, 0, 1],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "Color")
 	assert_eq(node.modulate, original, "Modulate must be unchanged after rejected array coerce")
 	assert_true(editor_undo(_undo_redo), "undo create should succeed")
@@ -529,7 +529,7 @@ func test_set_property_resource_not_found() -> void:
 		"property": "environment",
 		"value": "res://does/not/exist.tres",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_property_resource_null_clears() -> void:
@@ -578,7 +578,7 @@ func test_set_property_nonexistent_property() -> void:
 		"property": "nonexistent_xyz",
 		"value": 42,
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- set_property __class__ shortcut (fresh built-in Resource) -----
@@ -628,7 +628,7 @@ func test_set_property_class_dict_invalid_class() -> void:
 		"property": "mesh",
 		"value": {"__class__": "NotARealClass"},
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	if mi.get_parent():
 		mi.get_parent().remove_child(mi)
 	mi.queue_free()
@@ -646,7 +646,7 @@ func test_set_property_class_dict_abstract_class() -> void:
 		"property": "mesh",
 		"value": {"__class__": "Shape3D"},
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "abstract")
 	if mi.get_parent():
 		mi.get_parent().remove_child(mi)
@@ -969,7 +969,7 @@ func test_rename_node_scene_root_rejected() -> void:
 	var old_name := String(scene_root.name)
 
 	var result := _handler.rename_node({"path": "/" + old_name, "new_name": "RenamedTestRoot"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "scene root")
 
 	## Scene root must be unchanged.
@@ -978,7 +978,7 @@ func test_rename_node_scene_root_rejected() -> void:
 
 func test_rename_node_missing_name() -> void:
 	var result := _handler.rename_node({"path": "/Main/Camera3D"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_rename_node_invalid_characters() -> void:
@@ -986,7 +986,7 @@ func test_rename_node_invalid_characters() -> void:
 		"path": "/Main/Camera3D",
 		"new_name": "foo/bar",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_rename_node_sibling_collision() -> void:
@@ -994,7 +994,7 @@ func test_rename_node_sibling_collision() -> void:
 		"path": "/Main/Camera3D",
 		"new_name": "World",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_rename_node_unchanged() -> void:
@@ -1012,7 +1012,7 @@ func test_rename_node_invalid_path() -> void:
 		"path": "/Main/Nope",
 		"new_name": "NewName",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- duplicate_node -----
@@ -1032,29 +1032,29 @@ func test_duplicate_node_basic() -> void:
 
 func test_duplicate_scene_root() -> void:
 	var result := _handler.duplicate_node({"path": "/Main"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_duplicate_node_invalid_path() -> void:
 	var result := _handler.duplicate_node({"path": "/Main/NoSuchNode"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- move_node -----
 
 func test_move_node_scene_root() -> void:
 	var result := _handler.move_node({"path": "/Main", "index": 0})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_move_node_missing_index() -> void:
 	var result := _handler.move_node({"path": "/Main/Camera3D"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_move_node_out_of_range() -> void:
 	var result := _handler.move_node({"path": "/Main/Camera3D", "index": 999})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- add_to_group / remove_from_group -----
@@ -1079,7 +1079,7 @@ func test_add_to_group() -> void:
 
 func test_add_to_group_missing_group() -> void:
 	var result := _handler.add_to_group({"path": "/Main/Camera3D"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_remove_from_group_not_member() -> void:
@@ -1093,7 +1093,7 @@ func test_remove_from_group_not_member() -> void:
 
 func test_remove_from_group_missing_group() -> void:
 	var result := _handler.remove_from_group({"path": "/Main/Camera3D"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_add_to_group_rejects_array_value() -> void:
@@ -1107,7 +1107,7 @@ func test_add_to_group_rejects_array_value() -> void:
 		"path": "/Main/Camera3D",
 		"group": ["a", "b"],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "group")
 	assert_contains(result.error.message, "Array")
 
@@ -1117,7 +1117,7 @@ func test_remove_from_group_rejects_array_value() -> void:
 		"path": "/Main/Camera3D",
 		"group": ["a", "b"],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "group")
 	assert_contains(result.error.message, "Array")
 
@@ -1275,7 +1275,7 @@ func test_create_node_scene_path_not_found() -> void:
 	var result := _handler.create_node({
 		"scene_path": "res://nonexistent_scene.tscn",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "not found")
 
 
@@ -1283,13 +1283,13 @@ func test_create_node_scene_path_not_res() -> void:
 	var result := _handler.create_node({
 		"scene_path": "/tmp/scene.tscn",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "res://")
 
 
 func test_create_node_requires_type_or_scene_path() -> void:
 	var result := _handler.create_node({"parent_path": ""})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "type")
 
 

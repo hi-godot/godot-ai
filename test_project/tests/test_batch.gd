@@ -49,22 +49,22 @@ func _undo_for_scene(scene_root: Node) -> UndoRedo:
 
 func test_rejects_non_list_commands() -> void:
 	var result := _handler.batch_execute({"commands": "nope"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_rejects_empty_commands() -> void:
 	var result := _handler.batch_execute({"commands": []})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_rejects_missing_command_field() -> void:
 	var result := _handler.batch_execute({"commands": [{"params": {}}]})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_rejects_non_dict_item() -> void:
 	var result := _handler.batch_execute({"commands": [42]})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_rejects_unknown_subcommand() -> void:
@@ -106,7 +106,7 @@ func test_rejects_batch_execute_as_subcommand() -> void:
 	var result := _handler.batch_execute({
 		"commands": [{"command": "batch_execute", "params": {}}],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- Success path -----

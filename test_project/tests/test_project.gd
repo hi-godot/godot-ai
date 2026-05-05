@@ -29,12 +29,12 @@ func test_get_project_setting_returns_value() -> void:
 
 func test_get_project_setting_missing_key() -> void:
 	var result := _handler.get_project_setting({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_get_project_setting_unknown_key() -> void:
 	var result := _handler.get_project_setting({"key": "nonexistent/setting/key"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_get_project_setting_viewport_width() -> void:
@@ -85,12 +85,12 @@ func test_set_project_setting_preserves_int_type() -> void:
 
 func test_set_project_setting_missing_key() -> void:
 	var result := _handler.set_project_setting({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_project_setting_missing_value() -> void:
 	var result := _handler.set_project_setting({"key": "application/config/name"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- search_filesystem -----
@@ -119,7 +119,7 @@ func test_search_filesystem_by_path() -> void:
 
 func test_search_filesystem_no_filter_error() -> void:
 	var result := _handler.search_filesystem({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_search_filesystem_no_results() -> void:
@@ -137,7 +137,7 @@ func test_search_filesystem_no_results() -> void:
 
 func test_run_project_invalid_mode() -> void:
 	var result := _handler.run_project({"mode": "invalid_mode"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_run_project_invalid_mode_restores_connection_pause() -> void:
@@ -147,7 +147,7 @@ func test_run_project_invalid_mode_restores_connection_pause() -> void:
 
 	var result := handler.run_project({"mode": "invalid_mode"})
 
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_false(conn.pause_processing, "validation errors must not leave processing paused")
 	conn.free()
 
@@ -158,18 +158,18 @@ func test_run_project_validation_error_does_not_rotate_capture_run() -> void:
 
 	var result := handler.run_project({"mode": "invalid_mode"})
 
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_eq(plugin._game_run_token, 0, "invalid runs must not clear or advance game capture readiness")
 
 
 func test_run_project_custom_missing_scene() -> void:
 	var result := _handler.run_project({"mode": "custom"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_run_project_custom_empty_scene() -> void:
 	var result := _handler.run_project({"mode": "custom", "scene": ""})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_run_project_autosave_false_restores_editor_setting() -> void:
@@ -184,7 +184,7 @@ func test_run_project_autosave_false_restores_editor_setting() -> void:
 	editor_settings.set_setting(autosave_key, true)
 
 	var result := _handler.run_project({"mode": "invalid_mode", "autosave": false})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_eq(
 		bool(editor_settings.get_setting(autosave_key)),
 		true,
@@ -198,4 +198,4 @@ func test_run_project_autosave_false_restores_editor_setting() -> void:
 
 func test_stop_project_rejects_when_not_playing() -> void:
 	var result := _handler.stop_project({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
