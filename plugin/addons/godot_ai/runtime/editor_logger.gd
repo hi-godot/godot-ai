@@ -53,17 +53,26 @@ func _log_error(
 	if _buffer == null:
 		return
 	## Cheap reject for the firehose: when `file` is already non-user (the
-	## bulk of editor-internal C++ chatter) and there's no backtrace to
-	## remap from, the resolved path can only stay non-user — drop without
-	## paying for resolve_error's call frame + dict allocation.
-	if not _is_user_script(file) and script_backtraces.is_empty():
+	## bulk of editor-internal C++ chatter), there's no backtrace to remap
+	## from, and the message doesn't name a project resource, the resolved
+	## path can only stay non-user — drop without paying for resolve_error's
+	## call frame + dict allocation.
+	var message := rationale if not rationale.is_empty() else code
+	var message_res_path := _extract_user_res_path(message)
+	if not _is_user_script(file) and script_backtraces.is_empty() and message_res_path.is_empty():
 		return
 	var resolved := McpLogBacktrace.resolve_error(
 		function, file, line, code, rationale, error_type, script_backtraces,
 	)
 	if not _is_user_script(resolved.path):
-		return
+		if message_res_path.is_empty():
+			return
+		resolved.path = message_res_path
+		resolved.line = 0
+		resolved.function = function
 	if _is_in_godot_ai_addon(resolved.path):
+		return
+	if not message_res_path.is_empty() and _is_in_godot_ai_addon(message_res_path):
 		return
 	_buffer.append(resolved.level, resolved.message, resolved.path, resolved.line, resolved.function)
 
@@ -87,3 +96,30 @@ static func _is_in_godot_ai_addon(path: String) -> bool:
 	if path.begins_with("res://addons/godot_ai/"):
 		return true
 	return path.find(ADDON_PATH_MARKER) >= 0
+
+
+## Some engine-origin errors have no ScriptBacktrace even though they are
+## project-relevant, notably ResourceLoader failures:
+## `Failed loading resource: res://does/not/exist.tres.`. Capture these by
+## extracting a named `res://` path from the message while keeping editor
+## internals and this addon's own resources filtered.
+static func _extract_user_res_path(message: String) -> String:
+	var start := message.find("res://")
+	if start < 0:
+		return ""
+	var end := message.length()
+	var quote_end := message.find("'", start)
+	if quote_end >= 0:
+		end = mini(end, quote_end)
+	quote_end = message.find("\"", start)
+	if quote_end >= 0:
+		end = mini(end, quote_end)
+	quote_end = message.find("`", start)
+	if quote_end >= 0:
+		end = mini(end, quote_end)
+	var path := message.substr(start, end - start).strip_edges()
+	while not path.is_empty() and path.substr(path.length() - 1, 1) in [".", ",", ";", ":", ")"]:
+		path = path.substr(0, path.length() - 1)
+	if path.is_empty() or _is_in_godot_ai_addon(path):
+		return ""
+	return path
