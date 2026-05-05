@@ -7,11 +7,9 @@ extends RefCounted
 func read_file(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 
-	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
-
-	if not path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res://")
+	var path_err := McpPathValidator.validate_resource_path(path)
+	if not path_err.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, path_err)
 
 	if not FileAccess.file_exists(path):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "File not found: %s" % path)
@@ -37,11 +35,9 @@ func write_file(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 	var content: String = params.get("content", "")
 
-	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
-
-	if not path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res://")
+	var path_err := McpPathValidator.validate_resource_path(path)
+	if not path_err.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, path_err)
 
 	# Ensure parent directory exists
 	var dir_path := path.get_base_dir()
@@ -87,8 +83,9 @@ func reimport(params: Dictionary) -> Dictionary:
 
 	for path_variant in paths:
 		var path: String = str(path_variant)
-		if not path.begins_with("res://"):
-			not_found.append("%s (must start with res://)" % path)
+		var path_err := McpPathValidator.validate_resource_path(path)
+		if not path_err.is_empty():
+			not_found.append("%s (%s)" % [path, path_err])
 			continue
 		if not FileAccess.file_exists(path):
 			not_found.append("%s (file does not exist)" % path)

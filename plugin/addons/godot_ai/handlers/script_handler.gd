@@ -25,11 +25,9 @@ func create_script(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 	var content: String = params.get("content", "")
 
-	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
-
-	if not path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res://")
+	var path_err := McpPathValidator.validate_resource_path(path)
+	if not path_err.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, path_err)
 
 	if not path.ends_with(".gd"):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must end with .gd")
@@ -116,11 +114,9 @@ func _finish_create_script_deferred(request_id: String, path: String, data: Dict
 func read_script(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 
-	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
-
-	if not path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res://")
+	var path_err := McpPathValidator.validate_resource_path(path)
+	if not path_err.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, path_err)
 
 	if not FileAccess.file_exists(path):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "File not found: %s" % path)
@@ -148,14 +144,13 @@ func patch_script(params: Dictionary) -> Dictionary:
 	var new_text: String = params.get("new_text", "")
 	var replace_all: bool = params.get("replace_all", false)
 
-	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+	var path_err := McpPathValidator.validate_resource_path(path)
+	if not path_err.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, path_err)
 	if not "old_text" in params:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: old_text")
 	if not "new_text" in params:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: new_text")
-	if not path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res://")
 	if not path.ends_with(".gd"):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must end with .gd (use filesystem_write_text for other text files)")
 	if old_text.is_empty():
@@ -283,11 +278,9 @@ func detach_script(params: Dictionary) -> Dictionary:
 func find_symbols(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 
-	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
-
-	if not path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res://")
+	var path_err := McpPathValidator.validate_resource_path(path)
+	if not path_err.is_empty():
+		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, path_err)
 
 	if not FileAccess.file_exists(path):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "File not found: %s" % path)

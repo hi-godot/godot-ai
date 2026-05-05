@@ -59,6 +59,13 @@ func test_read_file_not_found() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
+func test_read_file_rejects_traversal_path() -> void:
+	## Issue #347: traversal in read_file is the file-disclosure primitive.
+	var result := _handler.read_file({"path": "res://../etc/passwd"})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "..")
+
+
 # ----- write_file -----
 
 func test_write_file_basic() -> void:
@@ -105,6 +112,17 @@ func test_write_file_invalid_prefix() -> void:
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
 
 
+func test_write_file_rejects_traversal_path() -> void:
+	## Issue #347: the actual arbitrary-disk-write primitive.
+	var result := _handler.write_file({
+		"path": "res://../etc/passwd",
+		"content": "owned\n",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "..")
+	assert_false(FileAccess.file_exists("res://../etc/passwd"), "traversal must not write to disk")
+
+
 # ----- reimport -----
 
 func test_reimport_missing_paths() -> void:
@@ -139,3 +157,12 @@ func test_reimport_invalid_prefix() -> void:
 	assert_has_key(result, "data")
 	assert_eq(result.data.reimported_count, 0)
 	assert_eq(result.data.not_found_count, 1)
+
+
+func test_reimport_rejects_traversal_path() -> void:
+	## Issue #347: per-path validation in the loop must catch traversal too.
+	var result := _handler.reimport({"paths": ["res://../etc/passwd"]})
+	assert_has_key(result, "data")
+	assert_eq(result.data.reimported_count, 0)
+	assert_eq(result.data.not_found_count, 1)
+	assert_contains(result.data.not_found[0], "..")
