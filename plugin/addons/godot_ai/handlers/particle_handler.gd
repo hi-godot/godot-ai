@@ -533,7 +533,8 @@ func get_particle(params: Dictionary) -> Dictionary:
 
 	var draw_passes: Array[Dictionary] = []
 	if node is GPUParticles3D:
-		for i in range(1, 5):
+		var active_draw_pass_count: int = min(int(node.draw_passes), 4)
+		for i in range(1, active_draw_pass_count + 1):
 			var prop_name := "draw_pass_%d" % i
 			var m: Mesh = node.get(prop_name) as Mesh
 			draw_passes.append({

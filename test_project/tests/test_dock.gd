@@ -83,7 +83,7 @@ func test_drift_banner_hidden_when_no_mismatched_clients() -> void:
 	## and become noise. See #166.
 	_dock._build_ui()
 	assert_false(_dock._drift_banner.visible, "Banner must default to hidden")
-	_dock._refresh_drift_banner([])
+	_dock._refresh_drift_banner([] as Array[String])
 	assert_false(_dock._drift_banner.visible, "Empty mismatched list must keep banner hidden")
 
 
@@ -345,7 +345,8 @@ func test_server_version_label_green_when_server_matches_plugin() -> void:
 	_dock._refresh_server_version_label()
 	assert_eq(_dock._setup_server_label.text, "godot-ai == %s" % plugin_ver,
 		"Match: label omits the '(plugin X)' suffix since there's no drift to flag")
-	var color: Color = _dock._setup_server_label.get_theme_color_override("font_color")
+	assert_true(_dock._setup_server_label.has_theme_color_override("font_color"))
+	var color: Color = _dock._setup_server_label.get_theme_color("font_color")
 	assert_true(color == Color.GREEN,
 		"Matched version must render green, got %s" % str(color))
 	assert_false(_dock._version_restart_btn.visible,
@@ -366,8 +367,9 @@ func test_server_version_label_amber_without_restart_when_ownership_unproven() -
 		"Mismatch must show the actual server version, not the plugin's")
 	assert_contains(_dock._setup_server_label.text, plugin_ver,
 		"Mismatch must show the plugin version alongside so the drift is visible at a glance")
+	assert_true(_dock._setup_server_label.has_theme_color_override("font_color"))
 	assert_eq(
-		_dock._setup_server_label.get_theme_color_override("font_color"),
+		_dock._setup_server_label.get_theme_color("font_color"),
 		McpDockScript.COLOR_AMBER,
 		"Mismatch must render amber, matching the drift banner's color"
 	)
