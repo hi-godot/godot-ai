@@ -293,11 +293,14 @@ func _skip_if_macos_engine_lag(cam: Node, expected: bool, report: Dictionary, la
 		return false
 	if not _handler_logical_current_matches(cam, expected):
 		return false
+	# The relevant viewport slot depends on camera class — `_handler_logical_current_matches`
+	# already validated cam is a Camera2D or Camera3D in tree.
+	var slot_name := "Viewport.camera_3d" if cam is Camera3D else "Viewport.camera_2d"
 	var msg := (
 		"Engine-state lag on macOS headless (#316): handler logical state "
-		+ "matches expected current=%s but Viewport.camera_2d slot didn't "
+		+ "matches expected current=%s but %s slot didn't "
 		+ "propagate within the wait budget. %s — %s"
-	) % [expected, label, report.message]
+	) % [expected, slot_name, label, report.message]
 	skip(msg)
 	return true
 
