@@ -474,13 +474,17 @@ func test_drain_logs_spillover_line_when_cap_hit_and_packets_remain() -> void:
 
 	conn._drain_inbound_packets(peer)
 
-	var lines := conn.log_buffer.get_recent(50)
+	# `conn.log_buffer` is declared as untyped on McpConnection (the field's
+	# initial value is null), so the inferred return type of `.get_recent`
+	# is Variant. Annotate explicitly — `:=` raises a parse error otherwise.
+	var lines: Array = conn.log_buffer.get_recent(50)
 	var matched := false
 	for line in lines:
-		if line.find("[backpressure] inbound drain capped") >= 0:
-			assert_contains(line, "%d/tick" % McpConnection.PACKET_DRAIN_CAP_PER_TICK)
-			assert_contains(line, "7 packets spilled")
-			assert_contains(line, "cumulative 7")
+		var s := str(line)
+		if s.find("[backpressure] inbound drain capped") >= 0:
+			assert_contains(s, "%d/tick" % McpConnection.PACKET_DRAIN_CAP_PER_TICK)
+			assert_contains(s, "7 packets spilled")
+			assert_contains(s, "cumulative 7")
 			matched = true
 			break
 	assert_true(matched, "expected a [backpressure] log line carrying the spillover counts")
@@ -502,9 +506,10 @@ func test_drain_does_not_log_when_below_cap() -> void:
 	# Use a single boolean + outer assertion so an empty buffer still
 	# fires one assertion (otherwise McpTestSuite's zero-assertion guard
 	# would flag this as a skipped test).
+	var lines: Array = conn.log_buffer.get_recent(50)
 	var saw_backpressure := false
-	for line in conn.log_buffer.get_recent(50):
-		if line.find("[backpressure]") >= 0:
+	for line in lines:
+		if str(line).find("[backpressure]") >= 0:
 			saw_backpressure = true
 			break
 	assert_false(
@@ -526,9 +531,10 @@ func test_drain_does_not_log_at_exact_cap_with_empty_queue() -> void:
 
 	conn._drain_inbound_packets(peer)
 
+	var lines: Array = conn.log_buffer.get_recent(50)
 	var saw_backpressure := false
-	for line in conn.log_buffer.get_recent(50):
-		if line.find("[backpressure]") >= 0:
+	for line in lines:
+		if str(line).find("[backpressure]") >= 0:
 			saw_backpressure = true
 			break
 	assert_false(
