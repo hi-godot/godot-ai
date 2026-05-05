@@ -933,6 +933,114 @@ func test_toml_strategy_preserves_other_sections() -> void:
 	assert_contains(content, "[mcp_servers.\"godot-ai\"]")
 
 
+func test_toml_strategy_remove_tolerates_inline_comment_on_next_header() -> void:
+	## TOML allows a trailing comment after the closing `]` of a section
+	## header (e.g. `[other] # note`). The pre-fix section-end check
+	## required `ends_with("]")` and would walk past such a header, so
+	## remove() would clobber unrelated sections that came after the
+	## one being removed. _is_any_section_header now finds the `]` and
+	## permits whitespace/`#` after it.
+	var path := _scratch_dir.path_join("remove_inline_comment.toml")
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(
+		"[mcp_servers.\"godot-ai\"]\n" +
+		"url = \"http://127.0.0.1:8000/mcp\"\n" +
+		"enabled = true\n" +
+		"\n" +
+		"[other_section] # user's hand-written comment\n" +
+		"key = \"value\"\n"
+	)
+	f.close()
+
+	var client := _make_test_toml_client(path)
+	var removed := McpTomlStrategy.remove(client, "godot-ai")
+	assert_eq(removed.get("status"), "ok")
+
+	var after_remove_file := FileAccess.open(path, FileAccess.READ)
+	var after_remove := after_remove_file.get_as_text()
+	after_remove_file.close()
+
+	assert_eq(after_remove.count("[mcp_servers.\"godot-ai\"]"), 0,
+		"godot-ai section must be removed:\n%s" % after_remove)
+	assert_contains(after_remove, "[other_section]")
+	assert_contains(after_remove, "key = \"value\"")
+
+
+func test_toml_strategy_detects_bare_key_section_no_duplicate_on_reconfigure() -> void:
+	## Regression for the codex duplicate-key bug. TOML accepts bare keys
+	## [A-Za-z0-9_-]+ unquoted, so a hand-written or older-plugin
+	## [mcp_servers.godot-ai] section refers to the same logical key as
+	## the quoted [mcp_servers."godot-ai"] we emit. Reconfigure must
+	## update the bare-key section in place — appending a duplicate
+	## quoted section makes the file fail to parse.
+	var path := _scratch_dir.path_join("bare_key_codex.toml")
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(
+		"[mcp_servers.godot-ai]\n" +
+		"url = \"http://127.0.0.1:7000/mcp\"\n" +
+		"enabled = true\n" +
+		"\n" +
+		"[mcp_servers.godot-ai.tools.session_list]\n" +
+		"approval_mode = \"approve\"\n"
+	)
+	f.close()
+
+	var client := _make_test_toml_client(path)
+
+	## check_status must recognise the bare-key form (was reporting
+	## NOT_CONFIGURED, masking that an entry already existed).
+	assert_eq(
+		McpTomlStrategy.check_status(client, "godot-ai", "http://127.0.0.1:8000/mcp"),
+		McpClient.Status.CONFIGURED_MISMATCH,
+		"bare-key section must be detected by check_status"
+	)
+
+	## configure must update the bare-key section in place. After the
+	## write there must be exactly one godot-ai section header (counting
+	## both bare and quoted forms) — anything else is the duplicate that
+	## breaks the user's TOML parser.
+	var result := McpTomlStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	assert_eq(result.get("status"), "ok")
+
+	var content := FileAccess.open(path, FileAccess.READ).get_as_text()
+	var bare_count := content.count("[mcp_servers.godot-ai]\n")
+	var quoted_count := content.count("[mcp_servers.\"godot-ai\"]\n")
+	assert_eq(bare_count + quoted_count, 1,
+		"exactly one godot-ai section must exist after reconfigure (bare=%d quoted=%d):\n%s" % [bare_count, quoted_count, content])
+
+	## The user's nested subtable customisation must survive — the
+	## strategy only owns the matched section, not its children.
+	assert_contains(content, "[mcp_servers.godot-ai.tools.session_list]")
+	assert_contains(content, "approval_mode = \"approve\"")
+
+	## remove must clean the bare-key form (was a silent no-op) AND the
+	## subtables under the namespace. Leaving subtables behind would
+	## keep mcp_servers.godot-ai implicitly defined, so a later
+	## configure rewriting [mcp_servers."godot-ai"] produces a
+	## duplicate-key TOML error — the same shape the original bug took.
+	var removed := McpTomlStrategy.remove(client, "godot-ai")
+	assert_eq(removed.get("status"), "ok")
+	var after_remove := FileAccess.open(path, FileAccess.READ).get_as_text()
+	assert_eq(after_remove.count("[mcp_servers.godot-ai]\n"), 0,
+		"remove must clean the bare-key parent section:\n%s" % after_remove)
+	assert_eq(after_remove.count("[mcp_servers.\"godot-ai\"]\n"), 0,
+		"remove must clean the quoted-key parent section:\n%s" % after_remove)
+	assert_eq(after_remove.count("[mcp_servers.godot-ai.tools.session_list]"), 0,
+		"remove must clean subtables in the namespace:\n%s" % after_remove)
+	assert_eq(after_remove.count("approval_mode"), 0,
+		"subtable bodies must be removed too:\n%s" % after_remove)
+
+	## Round-trip: configure-after-remove must produce a clean,
+	## parseable file with exactly one godot-ai section.
+	var reconfigure := McpTomlStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	assert_eq(reconfigure.get("status"), "ok")
+	var final_content := FileAccess.open(path, FileAccess.READ).get_as_text()
+	var final_bare := final_content.count("[mcp_servers.godot-ai]\n")
+	var final_quoted := final_content.count("[mcp_servers.\"godot-ai\"]\n")
+	assert_eq(final_bare + final_quoted, 1,
+		"configure-after-remove must produce exactly one godot-ai section (bare=%d quoted=%d):\n%s" % [final_bare, final_quoted, final_content])
+
+
 # ----- configure/remove verify-after-write (#201) -----
 #
 # A strategy returning `status: ok` is necessary but not sufficient — a write
@@ -1223,6 +1331,7 @@ func test_claude_desktop_bridges_via_uvx() -> void:
 	var entry := McpJsonStrategy.build_entry(c, "http://x")
 	_assert_uvx_command(entry.get("command", ""))
 	_assert_mcp_proxy_bridge_args(entry.get("args", []), "http://x")
+	_assert_bridge_env_pin(entry)
 
 
 func test_claude_desktop_verify_entry_accepts_uvx_form() -> void:
@@ -1232,6 +1341,133 @@ func test_claude_desktop_verify_entry_accepts_uvx_form() -> void:
 	var c := McpClientRegistry.get_by_id("claude_desktop")
 	var entry := McpJsonStrategy.build_entry(c, "http://x")
 	assert_true(McpJsonStrategy.verify_entry(c, entry, "http://x"), "uvx entry should verify as a match")
+
+
+func test_claude_desktop_verify_flags_pre_uv_link_mode_entry_as_drift() -> void:
+	## Users who configured Claude Desktop before the UV_LINK_MODE=copy fix
+	## have a uvx bridge entry with no `env` block (or one missing
+	## UV_LINK_MODE). Without this drift, they hit the Windows pywin32 install
+	## failure documented in utils/uv_cache_cleanup.gd and the README. The
+	## verifier must flag those as MISMATCH so the dock prompts a reconfigure.
+	var c := McpClientRegistry.get_by_id("claude_desktop")
+	var legacy_no_env := {
+		"command": "uvx",
+		"args": McpClient.mcp_proxy_bridge_args("http://x"),
+	}
+	assert_false(McpJsonStrategy.verify_entry(c, legacy_no_env, "http://x"), "pre-fix entry without env must register as drift")
+	var legacy_wrong_mode := {
+		"command": "uvx",
+		"args": McpClient.mcp_proxy_bridge_args("http://x"),
+		"env": {"UV_LINK_MODE": "hardlink"},
+	}
+	assert_false(McpJsonStrategy.verify_entry(c, legacy_wrong_mode, "http://x"), "entry with wrong UV_LINK_MODE must register as drift")
+	var legacy_empty_env := {
+		"command": "uvx",
+		"args": McpClient.mcp_proxy_bridge_args("http://x"),
+		"env": {},
+	}
+	assert_false(McpJsonStrategy.verify_entry(c, legacy_empty_env, "http://x"), "entry with empty env must register as drift")
+
+
+func test_claude_desktop_manual_command_includes_env_pin() -> void:
+	## The dock's "Run this manually" string is rendered by `_format_entry_inline`
+	## on the same `build_entry` output the auto-configure path writes — if it
+	## ever loses the env block, paste-into-config users silently miss the
+	## UV_LINK_MODE=copy pin and hit the Windows pywin32 lock. Pin the
+	## inline-JSON shape so a future change to `_format_value` / `build_entry`
+	## that drops the env key fails CI.
+	var c := McpClientRegistry.get_by_id("claude_desktop")
+	var manual := McpManualCommand.build(c, "godot-ai", "http://x", "/tmp/cd.json")
+	assert_contains(manual, "\"env\":")
+	assert_contains(manual, "\"UV_LINK_MODE\": \"copy\"")
+
+
+func test_claude_desktop_configure_preserves_existing_env_keys() -> void:
+	## Verifier tolerates user-added env keys (HTTP_PROXY, PYTHONUNBUFFERED, etc.)
+	## so the rewriter must too. Without merge, a Configure click on a
+	## CONFIGURED_MISMATCH entry silently drops them — the user reports their
+	## proxy settings disappear after we surface drift on a port change.
+	var path := _scratch_dir.path_join("preserve_env.json")
+	_remove_if_exists(path)
+	var pre_existing := {
+		"mcpServers": {
+			"godot-ai": {
+				"command": "uvx",
+				"args": McpClient.mcp_proxy_bridge_args("http://old"),
+				"env": {
+					"HTTP_PROXY": "http://corp-proxy:3128",
+					"PYTHONUNBUFFERED": "1",
+				},
+			}
+		}
+	}
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	assert_true(f != null, "scratch path must be writable")
+	f.store_string(JSON.stringify(pre_existing))
+	f.close()
+
+	var client := McpClient.new()
+	client.id = "preserve_env_test"
+	client.display_name = "Preserve Env Test"
+	client.config_type = "json"
+	client.path_template = {"darwin": path, "windows": path, "linux": path, "unix": path}
+	client.server_key_path = PackedStringArray(["mcpServers"])
+	client.entry_uvx_bridge = McpClient.UvxBridge.FLAT
+
+	var result := McpJsonStrategy.configure(client, "godot-ai", "http://new")
+	assert_eq(result.get("status"), "ok")
+
+	var rf := FileAccess.open(path, FileAccess.READ)
+	var written = JSON.parse_string(rf.get_as_text())
+	rf.close()
+	var entry = written.get("mcpServers", {}).get("godot-ai", {})
+	var env = entry.get("env", {})
+	assert_eq(env.get("HTTP_PROXY", ""), "http://corp-proxy:3128", "HTTP_PROXY must be preserved across rewrite")
+	assert_eq(env.get("PYTHONUNBUFFERED", ""), "1", "PYTHONUNBUFFERED must be preserved across rewrite")
+	assert_eq(env.get("UV_LINK_MODE", ""), "copy", "UV_LINK_MODE pin must overlay existing env")
+
+
+func test_claude_desktop_verify_flags_wrong_transport_as_drift() -> void:
+	## Pre-PR302 verifier only required `args.has(server_url)` — an entry like
+	## `mcp-proxy --transport sse <url>` (Claude Desktop's old SSE shape) would
+	## report CONFIGURED even though our streamable-http /mcp endpoint returns
+	## HTTP 400 against SSE. Tightened verifier requires the full bridge argv
+	## shape so transport drift surfaces too.
+	var c := McpClientRegistry.get_by_id("claude_desktop")
+	var sse_entry := {
+		"command": "uvx",
+		"args": ["mcp-proxy", "--transport", "sse", "http://x"],
+		"env": McpClient.bridge_env_for_uvx(),
+	}
+	assert_false(McpJsonStrategy.verify_entry(c, sse_entry, "http://x"), "wrong-transport entry must register as drift")
+	var no_proxy_entry := {
+		"command": "uvx",
+		"args": ["some-other-package", "--transport", "streamablehttp", "http://x"],
+		"env": McpClient.bridge_env_for_uvx(),
+	}
+	assert_false(McpJsonStrategy.verify_entry(c, no_proxy_entry, "http://x"), "non-mcp-proxy entry must register as drift")
+	var non_uvx_command := {
+		"command": "python",
+		"args": McpClient.mcp_proxy_bridge_args("http://x"),
+		"env": McpClient.bridge_env_for_uvx(),
+	}
+	assert_false(McpJsonStrategy.verify_entry(c, non_uvx_command, "http://x"), "non-uvx command must register as drift")
+
+
+func test_zed_verify_flags_non_uvx_command_path_as_drift() -> void:
+	## Parallel to claude_desktop's strict-verify: NESTED form must validate
+	## command.path too. A Zed entry pointing at the wrong binary will still
+	## "have the URL in args" but won't actually launch the bridge.
+	var c := McpClientRegistry.get_by_id("zed")
+	var bad_path := {
+		"command": {
+			"path": "/usr/bin/python",
+			"args": McpClient.mcp_proxy_bridge_args("http://x"),
+		},
+		"env": McpClient.bridge_env_for_uvx(),
+		"settings": {},
+	}
+	assert_false(McpJsonStrategy.verify_entry(c, bad_path, "http://x"), "non-uvx command.path must register as drift")
 
 
 func test_claude_desktop_verify_entry_accepts_future_url_form() -> void:
@@ -1252,6 +1488,7 @@ func test_zed_bridges_via_uvx() -> void:
 	assert_true(cmd is Dictionary, "Zed entry.command must be a Dictionary (path+args shape)")
 	_assert_uvx_command(cmd.get("path", ""))
 	_assert_mcp_proxy_bridge_args(cmd.get("args", []), "http://x")
+	_assert_bridge_env_pin(entry)
 
 
 func test_zed_verify_entry_accepts_uvx_form() -> void:
@@ -1260,6 +1497,19 @@ func test_zed_verify_entry_accepts_uvx_form() -> void:
 	var c := McpClientRegistry.get_by_id("zed")
 	var entry := McpJsonStrategy.build_entry(c, "http://x")
 	assert_true(McpJsonStrategy.verify_entry(c, entry, "http://x"), "uvx entry should verify as a match")
+
+
+func test_zed_verify_flags_pre_uv_link_mode_entry_as_drift() -> void:
+	## Same UV_LINK_MODE=copy pin as claude_desktop, in NESTED shape.
+	var c := McpClientRegistry.get_by_id("zed")
+	var legacy_no_env := {
+		"command": {
+			"path": "uvx",
+			"args": McpClient.mcp_proxy_bridge_args("http://x"),
+		},
+		"settings": {},
+	}
+	assert_false(McpJsonStrategy.verify_entry(c, legacy_no_env, "http://x"), "pre-fix Zed entry without env must register as drift")
 
 
 func test_mcp_proxy_bridge_args_pins_version() -> void:
@@ -1475,6 +1725,42 @@ func test_opencode_client_uses_home_config_on_windows() -> void:
 	assert_eq(resolved, home.path_join(".config/opencode/opencode.json"))
 
 
+func test_path_template_expand_home_falls_back_to_userprofile() -> void:
+	## Defensive coverage for the Windows fallback: when HOME is unset (a
+	## stock Windows install), $HOME and ~ must both resolve via _home()'s
+	## USERPROFILE fallback. The existing OpenCode descriptor test never
+	## hits this branch on GitHub Actions Windows runners because GHA
+	## injects HOME — explicitly mock the env so the fallback path is
+	## exercised on every CI platform.
+	var saved_home := OS.get_environment("HOME")
+	var saved_userprofile := OS.get_environment("USERPROFILE")
+	var fake_userprofile := "/tmp/godot-ai-test-userprofile"
+
+	OS.unset_environment("HOME")
+	OS.set_environment("USERPROFILE", fake_userprofile)
+	var via_dollar := McpPathTemplate.expand("$HOME/foo")
+	var via_tilde := McpPathTemplate.expand("~/foo")
+	# Restore before asserting so a failure can't leak into later tests.
+	# Mirror the unset-when-saved-was-empty pattern used by the
+	# GODOT_AI_MODE tests above — `set_environment(var, "")` would
+	# define a new empty-valued env var rather than leave it unset.
+	if saved_home.is_empty():
+		OS.unset_environment("HOME")
+	else:
+		OS.set_environment("HOME", saved_home)
+	if saved_userprofile.is_empty():
+		OS.unset_environment("USERPROFILE")
+	else:
+		OS.set_environment("USERPROFILE", saved_userprofile)
+
+	assert_eq(via_dollar, fake_userprofile.path_join("foo"),
+		"$HOME must fall back to USERPROFILE when HOME is unset")
+	assert_eq(via_tilde, fake_userprofile.path_join("foo"),
+		"~ must fall back to USERPROFILE when HOME is unset")
+	assert_eq(via_dollar, via_tilde,
+		"$HOME and ~ must resolve identically — both go through _home()")
+
+
 # ----- helpers -----
 
 func _assert_uvx_command(cmd: Variant) -> void:
@@ -1492,16 +1778,37 @@ func _assert_mcp_proxy_bridge_args(args: Variant, expected_url: String) -> void:
 	## via `uvx mcp-proxy`. The first arg is a pinned version spec like
 	## `mcp-proxy==0.11.0` — match by prefix so this doesn't have to churn
 	## every time MCP_PROXY_VERSION bumps.
-	assert_true(args is Array, "bridge args must be an Array, got: %s" % args)
+	##
+	## NOTE: Pass `args` through `str()` before `%` substitution. GDScript's
+	## `%` operator interprets a bare Array on the right-hand side as a list
+	## of arguments to splice into multiple `%s` slots — `"got: %s" % args`
+	## with a 4-element array errors with "not all arguments converted",
+	## the assertion message becomes garbage, and on stricter runtimes the
+	## SCRIPT ERROR is treated as a test failure.
+	assert_true(args is Array, "bridge args must be an Array, got: %s" % str(args))
 	var has_mcp_proxy := false
 	for a in args:
 		if a is String and (a as String).begins_with("mcp-proxy"):
 			has_mcp_proxy = true
 			break
-	assert_true(has_mcp_proxy, "args must include an mcp-proxy entry, got: %s" % args)
+	assert_true(has_mcp_proxy, "args must include an mcp-proxy entry, got: %s" % str(args))
 	assert_contains(args, "--transport")
 	assert_contains(args, "streamablehttp")
 	assert_contains(args, expected_url)
+
+
+func _assert_bridge_env_pin(entry: Variant) -> void:
+	## Every uvx-bridge entry must carry `env.UV_LINK_MODE=copy`. Without it,
+	## the running godot-ai server's `_pydantic_core.pyd` mapping locks the
+	## hard-linked copy under `builds-v0\.tmpXXXXXX\` on Windows and uvx's
+	## post-install cleanup fails — the symptom is a "pywin32 wheel invalid /
+	## file in use" error in Claude Desktop's MCP launcher with no working
+	## transport. See utils/uv_cache_cleanup.gd and the README troubleshooting
+	## section for the full hard-link explanation.
+	assert_true(entry is Dictionary, "entry must be a Dictionary, got: %s" % str(entry))
+	var env = entry.get("env", null)
+	assert_true(env is Dictionary, "bridged entry must include an env dict pinning UV_LINK_MODE=copy, got env=%s" % str(env))
+	assert_eq(env.get("UV_LINK_MODE", ""), "copy", "env must pin UV_LINK_MODE=copy")
 
 
 func _make_test_json_client(path: String) -> McpClient:
