@@ -1994,10 +1994,43 @@ func test_preset_pulse_accepts_scene_absolute_target() -> void:
 	_remove_node(abs_target)
 
 
-func test_preset_slide_rejects_target_outside_root_node() -> void:
-	# A scene-absolute path that resolves to a node outside the player's
-	# root_node subtree must be rejected — the derived track wouldn't
-	# resolve at playback.
+func test_preset_slide_accepts_scene_absolute_target() -> void:
+	# Slide-specific positive coverage for the scene-absolute path shape —
+	# the other presets (fade/shake/pulse) all assert the converted track
+	# path explicitly; without this, a slide regression in absolute-path
+	# handling would slip through.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	_add_sibling(Node2D.new(), "AbsSlider")
+	var player_path := _add_player("TestPresetSlideAbs")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/AbsSlider")
+		skip("Scene not ready")
+		return
+	var abs_target := "/" + scene_root.name + "/AbsSlider"
+	var result := _handler.preset_slide({
+		"player_path": player_path,
+		"target_path": abs_target,
+		"direction": "left",
+	})
+	assert_has_key(result, "data")
+	var anim := _fetch_anim(player_path, "slide_in")
+	assert_true(anim != null, "animation should exist")
+	var track_path := String(anim.track_get_path(0))
+	assert_eq(track_path, "AbsSlider:position",
+		"absolute target_path must convert to root_node-relative track path, got '%s'" % track_path)
+	_remove_node(player_path)
+	_remove_node(abs_target)
+
+
+func test_preset_slide_accepts_target_outside_root_node() -> void:
+	# Scene-absolute paths that resolve to a node outside the player's
+	# root_node subtree are permitted: get_path_to yields a `..`-prefixed
+	# track path, which Godot's animation engine resolves the same way the
+	# relative `../Foreign` form already does. Asymmetry between the
+	# absolute and relative path shapes would surprise callers.
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		skip("No scene root")
@@ -2021,10 +2054,13 @@ func test_preset_slide_rejects_target_outside_root_node() -> void:
 		"target_path": "/" + scene_root.name + "/ForeignTarget",
 		"direction": "left",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
-	var msg := String(result.error.message)
-	assert_true(msg.contains("root_node") or msg.contains("outside"),
-		"error should explain the root_node containment requirement: %s" % msg)
+	assert_has_key(result, "data")
+	var anim := player.get_animation("slide_in")
+	assert_true(anim != null, "animation should exist")
+	var track_path := String(anim.track_get_path(0))
+	# get_path_to walks up out of SubAnimRoot and back down to ForeignTarget.
+	assert_eq(track_path, "../ForeignTarget:position",
+		"abs target outside root_node must produce a `..`-prefixed track path, got '%s'" % track_path)
 
 	_remove_node("/" + scene_root.name + "/SubAnimRoot")
 	_remove_node("/" + scene_root.name + "/ForeignTarget")

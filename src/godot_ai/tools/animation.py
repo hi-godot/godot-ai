@@ -59,11 +59,12 @@ Ops:
                   duration=0.4, animation_name="", overwrite=False)
         One-call pulse / hover-bounce (3-keyframe scale ping-pong).
 
-Preset target_path: accepts either a scene-absolute path ("/Main/World/Cube",
+Preset target_path: accepts either a scene-absolute path (e.g. "/Main/World/Cube",
 matching every other scene tool) or a path relative to the AnimationPlayer's
-root_node ("World/Cube", matching how Animation tracks store node paths).
-Scene-absolute targets that fall outside the player's root_node subtree are
-rejected — the derived track must resolve from root_node at playback.
+root_node (e.g. "World/Cube", matching how Animation tracks store node paths).
+Scene-absolute targets outside the player's root_node subtree are converted to
+a `..`-prefixed track path via root_node.get_path_to(target), the same shape
+the relative form already accepts.
 """
 
 

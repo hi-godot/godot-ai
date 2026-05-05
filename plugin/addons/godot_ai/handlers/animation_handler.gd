@@ -1183,9 +1183,10 @@ static func _player_root_node(player: AnimationPlayer) -> Node:
 ##
 ## Accepts two `target_path` shapes:
 ##   * Scene-absolute (starts with "/") — resolved through `McpScenePath.resolve`,
-##     matching the convention used by every other scene-mutating tool. The
-##     resolved node must be the player's `root_node` itself or a descendant,
-##     so the derived track path can resolve at playback.
+##     matching the convention used by every other scene-mutating tool. Targets
+##     outside the player's `root_node` subtree are converted to `..`-prefixed
+##     paths via `root_node.get_path_to(target)`, mirroring what the relative
+##     form accepts and how Godot stores track paths.
 ##   * Relative — used as-is against the player's `root_node`, matching how
 ##     animation tracks themselves are stored.
 ##
@@ -1213,10 +1214,11 @@ func _resolve_preset_target(player: AnimationPlayer, target_path: String) -> Dic
 		if target == null:
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
 				McpScenePath.format_node_error(target_path, scene_root))
-		if target != root_node and not root_node.is_ancestor_of(target):
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
-				"Target '%s' is outside the AnimationPlayer's root_node ('%s'). " % [target_path, McpScenePath.from_node(root_node, scene_root)] +
-				"Animation tracks resolve relative to the player's root_node, so target must be root_node itself or a descendant.")
+		# Convert to a root_node-relative path. For targets outside the
+		# subtree this yields a `..`-prefixed path, matching what the
+		# relative form already accepts (root_node.get_node_or_null
+		# resolves `..` segments) and what Godot's animation engine
+		# stores natively.
 		track_path_root = str(root_node.get_path_to(target))
 	else:
 		target = root_node.get_node_or_null(target_path)
@@ -1226,10 +1228,11 @@ func _resolve_preset_target(player: AnimationPlayer, target_path: String) -> Dic
 			# actionable.
 			var scene_root := EditorInterface.get_edited_scene_root()
 			var root_hint := McpScenePath.from_node(root_node, scene_root) if scene_root != null else str(root_node.name)
+			var abs_example := "/%s/path/to/target" % scene_root.name if scene_root != null else "/SceneRoot/path/to/target"
 			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
 				("Target node not found at '%s' (resolved relative to AnimationPlayer's root_node '%s'). "
-				+ "Pass a path relative to root_node (e.g. \"World/Cube\") or a scene-absolute path (e.g. \"/Main/World/Cube\").")
-				% [target_path, root_hint])
+				+ "Pass a path relative to root_node (e.g. \"path/to/target\") or a scene-absolute path (e.g. \"%s\").")
+				% [target_path, root_hint, abs_example])
 
 	var kind: String
 	if target is Control:
