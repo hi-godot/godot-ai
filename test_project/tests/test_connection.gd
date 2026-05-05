@@ -462,6 +462,71 @@ func test_drain_spillover_accumulates_across_ticks() -> void:
 	conn.free()
 
 
+func test_drain_logs_spillover_line_when_cap_hit_and_packets_remain() -> void:
+	## The issue's "Fix shape" calls out observability: flood patterns
+	## must surface in `logs_read`. Pin the log emission so a future
+	## refactor can't silently drop it.
+	var conn := McpConnection.new()
+	conn.log_buffer = McpLogBuffer.new()
+	var peer := _FakeWebSocketPeer.new()
+	for i in range(McpConnection.PACKET_DRAIN_CAP_PER_TICK + 7):
+		peer.queue_message(_DRAIN_TEST_MSG)
+
+	conn._drain_inbound_packets(peer)
+
+	var lines := conn.log_buffer.get_recent(50)
+	var matched := false
+	for line in lines:
+		if line.find("[backpressure] inbound drain capped") >= 0:
+			assert_contains(line, "%d/tick" % McpConnection.PACKET_DRAIN_CAP_PER_TICK)
+			assert_contains(line, "7 packets spilled")
+			assert_contains(line, "cumulative 7")
+			matched = true
+			break
+	assert_true(matched, "expected a [backpressure] log line carrying the spillover counts")
+	conn.free()
+
+
+func test_drain_does_not_log_when_below_cap() -> void:
+	## Counterpart guard: normal traffic must NOT emit the backpressure
+	## line. A noisy false-positive would train operators to ignore the
+	## one signal that actually means flood.
+	var conn := McpConnection.new()
+	conn.log_buffer = McpLogBuffer.new()
+	var peer := _FakeWebSocketPeer.new()
+	for i in range(5):
+		peer.queue_message(_DRAIN_TEST_MSG)
+
+	conn._drain_inbound_packets(peer)
+
+	for line in conn.log_buffer.get_recent(50):
+		assert_false(
+			line.find("[backpressure]") >= 0,
+			"normal-traffic frame must not emit a backpressure log line",
+		)
+	conn.free()
+
+
+func test_drain_does_not_log_at_exact_cap_with_empty_queue() -> void:
+	## Boundary: drained == cap and the peer is empty. The drain *hit*
+	## the cap but nothing remains to spill — this isn't a flood signal
+	## and must not produce a log line.
+	var conn := McpConnection.new()
+	conn.log_buffer = McpLogBuffer.new()
+	var peer := _FakeWebSocketPeer.new()
+	for i in range(McpConnection.PACKET_DRAIN_CAP_PER_TICK):
+		peer.queue_message(_DRAIN_TEST_MSG)
+
+	conn._drain_inbound_packets(peer)
+
+	for line in conn.log_buffer.get_recent(50):
+		assert_false(
+			line.find("[backpressure]") >= 0,
+			"drain hitting cap exactly with empty queue is not a flood signal",
+		)
+	conn.free()
+
+
 func test_clear_on_disconnect_resets_spillover_counter() -> void:
 	## A new connection starts with a clean spillover history — the
 	## previous connection's flood shouldn't pollute the new baseline.
