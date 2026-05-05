@@ -933,6 +933,39 @@ func test_toml_strategy_preserves_other_sections() -> void:
 	assert_contains(content, "[mcp_servers.\"godot-ai\"]")
 
 
+func test_toml_strategy_remove_tolerates_inline_comment_on_next_header() -> void:
+	## TOML allows a trailing comment after the closing `]` of a section
+	## header (e.g. `[other] # note`). The pre-fix section-end check
+	## required `ends_with("]")` and would walk past such a header, so
+	## remove() would clobber unrelated sections that came after the
+	## one being removed. _is_any_section_header now finds the `]` and
+	## permits whitespace/`#` after it.
+	var path := _scratch_dir.path_join("remove_inline_comment.toml")
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(
+		"[mcp_servers.\"godot-ai\"]\n" +
+		"url = \"http://127.0.0.1:8000/mcp\"\n" +
+		"enabled = true\n" +
+		"\n" +
+		"[other_section] # user's hand-written comment\n" +
+		"key = \"value\"\n"
+	)
+	f.close()
+
+	var client := _make_test_toml_client(path)
+	var removed := McpTomlStrategy.remove(client, "godot-ai")
+	assert_eq(removed.get("status"), "ok")
+
+	var after_remove_file := FileAccess.open(path, FileAccess.READ)
+	var after_remove := after_remove_file.get_as_text()
+	after_remove_file.close()
+
+	assert_eq(after_remove.count("[mcp_servers.\"godot-ai\"]"), 0,
+		"godot-ai section must be removed:\n%s" % after_remove)
+	assert_contains(after_remove, "[other_section]")
+	assert_contains(after_remove, "key = \"value\"")
+
+
 func test_toml_strategy_detects_bare_key_section_no_duplicate_on_reconfigure() -> void:
 	## Regression for the codex duplicate-key bug. TOML accepts bare keys
 	## [A-Za-z0-9_-]+ unquoted, so a hand-written or older-plugin
