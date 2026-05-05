@@ -14,6 +14,12 @@ const RECONNECT_LOG_EVERY_N_ATTEMPTS := 10
 ## responses get a compact structured error when that can still be sent;
 ## state events report failure so their callers can retry on a later tick.
 const OUTBOUND_BUFFER_LIMIT_BYTES := 4 * 1024 * 1024
+## Cap the inbound packet drain per `_process` tick. A flooding peer or a
+## fast batch could otherwise saturate `_handle_message` in one frame and
+## blow the documented 4ms budget. Packets beyond this cap spill to the
+## next frame; the cumulative spill counter is logged so flood patterns
+## are observable in `logs_read`. See audit-v2 finding #12 (issue #356).
+const PACKET_DRAIN_CAP_PER_TICK := 32
 const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
@@ -52,6 +58,11 @@ var pause_processing: bool:
 		else:
 			resume()
 var _pause_depth := 0
+## Cumulative count of inbound packets that didn't fit in their tick's drain
+## budget and got deferred to a subsequent tick. Reset on disconnect so each
+## connection starts with a clean spillover history. Logged whenever new
+## spillover occurs so flood patterns surface in `logs_read`.
+var _packet_spillover_total := 0
 
 
 func _ready() -> void:
@@ -80,9 +91,7 @@ func _process(delta: float) -> void:
 				log_buffer.log("connected to server")
 				_send_handshake()
 
-			while _peer.get_available_packet_count() > 0:
-				var raw := _peer.get_packet().get_string_from_utf8()
-				_handle_message(raw)
+			_drain_inbound_packets(_peer)
 
 			_check_state_changes()
 
@@ -106,6 +115,39 @@ func _process(delta: float) -> void:
 			pass
 
 
+## Drain up to PACKET_DRAIN_CAP_PER_TICK inbound packets and dispatch each
+## via `_handle_message`. Anything past the cap stays in the peer's queue
+## and gets picked up next tick. The cumulative spillover count is logged
+## (via `log_buffer`) only when the cap was actually hit AND packets remain
+## — sustained flood thus emits one log line per tick with the running
+## total, while a normal-traffic frame stays silent.
+##
+## `peer` is untyped (Variant) so tests can inject a duck-typed fake with
+## `get_available_packet_count()` + `get_packet()`. Production passes the
+## real `_peer: WebSocketPeer`.
+func _drain_inbound_packets(peer) -> Dictionary:
+	var drained := 0
+	while peer.get_available_packet_count() > 0 and drained < PACKET_DRAIN_CAP_PER_TICK:
+		var raw: String = peer.get_packet().get_string_from_utf8()
+		_handle_message(raw)
+		drained += 1
+
+	var spilled := 0
+	if drained >= PACKET_DRAIN_CAP_PER_TICK and peer.get_available_packet_count() > 0:
+		spilled = peer.get_available_packet_count()
+		_packet_spillover_total += spilled
+		if log_buffer:
+			log_buffer.log(
+				(
+					"[backpressure] inbound drain capped at %d/tick;"
+					+ " %d packets spilled to next frame (cumulative %d)"
+				)
+				% [PACKET_DRAIN_CAP_PER_TICK, spilled, _packet_spillover_total]
+			)
+
+	return {"drained": drained, "spilled": spilled}
+
+
 var is_connected: bool:
 	get: return _connected
 
@@ -123,6 +165,9 @@ func disconnect_from_server() -> void:
 ## Also fires on plain reconnect-loop drops — correct either way.
 func _clear_on_disconnect() -> void:
 	server_version = ""
+	## Reset the spillover counter so a flood pattern from the previous
+	## connection doesn't pollute the next one's `logs_read` baseline.
+	_packet_spillover_total = 0
 	if dispatcher:
 		dispatcher.clear_deferred_responses()
 
