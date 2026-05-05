@@ -499,11 +499,18 @@ func test_drain_does_not_log_when_below_cap() -> void:
 
 	conn._drain_inbound_packets(peer)
 
+	# Use a single boolean + outer assertion so an empty buffer still
+	# fires one assertion (otherwise McpTestSuite's zero-assertion guard
+	# would flag this as a skipped test).
+	var saw_backpressure := false
 	for line in conn.log_buffer.get_recent(50):
-		assert_false(
-			line.find("[backpressure]") >= 0,
-			"normal-traffic frame must not emit a backpressure log line",
-		)
+		if line.find("[backpressure]") >= 0:
+			saw_backpressure = true
+			break
+	assert_false(
+		saw_backpressure,
+		"normal-traffic frame must not emit a backpressure log line",
+	)
 	conn.free()
 
 
@@ -519,11 +526,15 @@ func test_drain_does_not_log_at_exact_cap_with_empty_queue() -> void:
 
 	conn._drain_inbound_packets(peer)
 
+	var saw_backpressure := false
 	for line in conn.log_buffer.get_recent(50):
-		assert_false(
-			line.find("[backpressure]") >= 0,
-			"drain hitting cap exactly with empty queue is not a flood signal",
-		)
+		if line.find("[backpressure]") >= 0:
+			saw_backpressure = true
+			break
+	assert_false(
+		saw_backpressure,
+		"drain hitting cap exactly with empty queue is not a flood signal",
+	)
 	conn.free()
 
 
