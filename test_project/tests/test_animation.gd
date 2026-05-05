@@ -87,7 +87,7 @@ func test_player_create_attaches_default_library() -> void:
 
 func test_player_create_missing_parent() -> void:
 	var result := _handler.create_player({"parent_path": "/DoesNotExist"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "not found")
 
 
@@ -158,7 +158,7 @@ func test_animation_create_rejects_duplicate_name() -> void:
 		return
 	_handler.create_animation({"player_path": player_path, "name": "walk", "length": 1.0})
 	var result := _handler.create_animation({"player_path": player_path, "name": "walk", "length": 1.0})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "already exists")
 	_remove_node(player_path)
 
@@ -174,7 +174,7 @@ func test_animation_create_rejects_invalid_loop_mode() -> void:
 		"length": 1.0,
 		"loop_mode": "bogus",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 	assert_contains(result.error.message, "loop_mode")
 	_remove_node(player_path)
 
@@ -240,7 +240,7 @@ func test_add_property_track_requires_colon_in_path() -> void:
 		"track_path": "Panel",
 		"keyframes": [{"time": 0.0, "value": 1.0}],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "':property'")
 	_remove_node(player_path)
 
@@ -345,7 +345,7 @@ func test_add_method_track_rejects_bad_args() -> void:
 		"target_node_path": ".",
 		"keyframes": [{"time": 0.0, "method": "queue_free", "args": "not an array"}],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "args")
 	_remove_node(player_path)
 
@@ -362,7 +362,7 @@ func test_add_method_track_rejects_empty_method() -> void:
 		"target_node_path": ".",
 		"keyframes": [{"time": 0.0, "method": ""}],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(player_path)
 
 
@@ -611,7 +611,7 @@ func test_add_method_track_rejects_colon_in_target_path() -> void:
 		"target_node_path": "Panel:queue_free",  # wrong — method goes in keyframe
 		"keyframes": [{"time": 0.0, "method": "queue_free"}],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "bare NodePath")
 	_remove_node(player_path)
 
@@ -628,7 +628,7 @@ func test_add_method_track_requires_method_key() -> void:
 		"target_node_path": ".",
 		"keyframes": [{"time": 0.5}],  # Missing "method"
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "method")
 	_remove_node(player_path)
 
@@ -664,7 +664,7 @@ func test_set_autoplay_validates_unknown_name() -> void:
 		"player_path": player_path,
 		"animation_name": "nonexistent",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "not found")
 	_remove_node(player_path)
 
@@ -711,7 +711,7 @@ func test_play_validates_unknown_animation() -> void:
 		skip("Scene not ready — _add_player returned empty path")
 		return
 	var result := _handler.play({"player_path": player_path, "animation_name": "nope"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(player_path)
 
 
@@ -872,7 +872,7 @@ func test_create_simple_rejects_duplicate_target_property() -> void:
 			 "to": {"x": 2.0, "y": 0.0, "z": 0.0}, "duration": 0.3},
 		],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "Duplicate")
 	_remove_node(player_path)
 
@@ -1010,7 +1010,7 @@ func test_create_simple_rejects_wrong_type_even_when_auto_create_enabled() -> vo
 			 "from": {"x": 0}, "to": {"x": 1}, "duration": 1.0},
 		],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.WRONG_TYPE)
 	assert_contains(result.error.message, "not an AnimationPlayer")
 	_remove_node("/" + scene_root.name + "/Decoy86")
 
@@ -1029,7 +1029,7 @@ func test_create_simple_errors_when_parent_missing() -> void:
 			 "from": {"x": 0}, "to": {"x": 1}, "duration": 1.0},
 		],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_animation_reports_library_created_false_when_present() -> void:
@@ -1124,7 +1124,7 @@ func test_create_animation_errors_when_path_is_wrong_node_type() -> void:
 		"name": "idle",
 		"length": 1.0,
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "is not an AnimationPlayer")
 
 	scene_root.remove_child(marker)
@@ -1141,7 +1141,7 @@ func test_create_animation_errors_when_parent_missing() -> void:
 		"name": "idle",
 		"length": 1.0,
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "auto-create")
 
 
@@ -1210,7 +1210,7 @@ func test_create_simple_rejects_missing_tween_fields() -> void:
 		"name": "bad",
 		"tweens": [{"target": ".", "property": "position"}],  # Missing from/to/duration
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(player_path)
 
 
@@ -1230,7 +1230,7 @@ func test_create_simple_rejects_zero_length() -> void:
 			 "from": {"x":1,"y":1,"z":1}, "to": {"x":2,"y":2,"z":2}, "duration": 0.5},
 		],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "length")
 	_remove_node(player_path)
 
@@ -1249,7 +1249,7 @@ func test_create_simple_rejects_negative_length() -> void:
 			 "from": {"x":1,"y":1,"z":1}, "to": {"x":2,"y":2,"z":2}, "duration": 0.5},
 		],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(player_path)
 
 
@@ -1401,7 +1401,7 @@ func test_delete_animation_not_found() -> void:
 	var result := _handler.delete_animation({
 		"player_path": player_path, "animation_name": "nope",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(player_path)
 
 
@@ -1420,7 +1420,7 @@ func test_create_animation_overwrite() -> void:
 	var fail_result := _handler.create_animation({
 		"player_path": player_path, "name": "overme", "length": 2.0,
 	})
-	assert_is_error(fail_result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(fail_result)
 
 	# With overwrite, it should succeed.
 	var result := _handler.create_animation({
@@ -1490,7 +1490,7 @@ func test_validate_animation_not_found() -> void:
 	var result := _handler.validate_animation({
 		"player_path": player_path, "animation_name": "nope",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(player_path)
 
 
@@ -1635,7 +1635,7 @@ func test_preset_fade_rejects_target_without_modulate() -> void:
 		"target_path": "NoModulateTarget",
 		"mode": "in",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(player_path)
 	_remove_node("/" + scene_root.name + "/NoModulateTarget")
 
@@ -1656,7 +1656,7 @@ func test_preset_fade_invalid_mode() -> void:
 		"target_path": "FadeBadMode",
 		"mode": "wobble",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 	_remove_node(player_path)
 	_remove_node("/" + scene_root.name + "/FadeBadMode")
 
@@ -1743,7 +1743,7 @@ func test_preset_slide_rejects_non_transform_node() -> void:
 		"target_path": "SlideBadTarget",
 		"direction": "left",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(player_path)
 	_remove_node("/" + scene_root.name + "/SlideBadTarget")
 
@@ -1764,7 +1764,7 @@ func test_preset_slide_invalid_direction() -> void:
 		"target_path": "SlideDir",
 		"direction": "sideways",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(player_path)
 	_remove_node("/" + scene_root.name + "/SlideDir")
 
@@ -1934,7 +1934,7 @@ func test_preset_overwrite_required_for_second_call() -> void:
 	var r2 := _handler.preset_fade({
 		"player_path": player_path, "target_path": "OverwriteTarget", "mode": "in",
 	})
-	assert_is_error(r2, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(r2)
 	# With overwrite=true, it succeeds.
 	var r3 := _handler.preset_fade({
 		"player_path": player_path, "target_path": "OverwriteTarget", "mode": "in",

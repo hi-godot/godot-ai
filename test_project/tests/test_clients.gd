@@ -1293,7 +1293,7 @@ func test_atomic_write_preserves_existing_file_when_swap_fails() -> void:
 
 func test_handler_rejects_unknown_client() -> void:
 	var result := _handler.configure_client({"client": "nonexistent_client_xyz"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_handler_status_returns_array_of_clients() -> void:

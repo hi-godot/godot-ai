@@ -46,7 +46,7 @@ func create_player(params: Dictionary) -> Dictionary:
 
 	if not _VALID_TYPES.has(type_str):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid audio player type '%s'. Valid: %s" % [type_str, ", ".join(_VALID_TYPES.keys())]
 		)
 
@@ -58,7 +58,7 @@ func create_player(params: Dictionary) -> Dictionary:
 	if not parent_path.is_empty():
 		parent = McpScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_parent_error(parent_path, scene_root))
+			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
 
 	var node := _instantiate_player(type_str)
 	if node == null:
@@ -94,9 +94,9 @@ func set_stream(params: Dictionary) -> Dictionary:
 	var stream_path: String = params.get("stream_path", "")
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: player_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if stream_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: stream_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: stream_path")
 
 	var resolved := _resolve_player(player_path)
 	if resolved.has("error"):
@@ -104,13 +104,13 @@ func set_stream(params: Dictionary) -> Dictionary:
 	var player: Node = resolved.player
 
 	if not ResourceLoader.exists(stream_path):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "AudioStream not found: %s" % stream_path)
+		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "AudioStream not found: %s" % stream_path)
 	var loaded := ResourceLoader.load(stream_path)
 	if loaded == null:
 		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to load AudioStream: %s" % stream_path)
 	if not (loaded is AudioStream):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Resource at %s is not an AudioStream (got %s)" % [stream_path, loaded.get_class()]
 		)
 
@@ -139,7 +139,7 @@ func set_stream(params: Dictionary) -> Dictionary:
 func set_playback(params: Dictionary) -> Dictionary:
 	var player_path: String = params.get("player_path", "")
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: player_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 
 	var resolved := _resolve_player(player_path)
 	if resolved.has("error"):
@@ -163,7 +163,7 @@ func set_playback(params: Dictionary) -> Dictionary:
 
 	if updates.is_empty():
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.MISSING_REQUIRED_PARAM,
 			"At least one of %s is required" % ", ".join(_PLAYBACK_KEYS.keys())
 		)
 
@@ -196,7 +196,7 @@ func play(params: Dictionary) -> Dictionary:
 	var from_position: float = float(params.get("from_position", 0.0))
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: player_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 
 	var resolved := _resolve_player(player_path)
 	if resolved.has("error"):
@@ -205,7 +205,7 @@ func play(params: Dictionary) -> Dictionary:
 
 	if player.stream == null:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.MISSING_REQUIRED_PARAM,
 			"Player has no stream assigned — call audio_player_set_stream first"
 		)
 
@@ -229,7 +229,7 @@ func play(params: Dictionary) -> Dictionary:
 func stop(params: Dictionary) -> Dictionary:
 	var player_path: String = params.get("player_path", "")
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: player_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 
 	var resolved := _resolve_player(player_path)
 	if resolved.has("error"):
@@ -257,7 +257,7 @@ func list_streams(params: Dictionary) -> Dictionary:
 	var include_duration: bool = bool(params.get("include_duration", true))
 
 	if not root.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "root must start with res://")
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "root must start with res://")
 
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs == null:
@@ -324,13 +324,13 @@ func _resolve_player(player_path: String) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 	var node := McpScenePath.resolve(player_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(player_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(player_path, scene_root))
 	var is_player := node is AudioStreamPlayer \
 		or node is AudioStreamPlayer2D \
 		or node is AudioStreamPlayer3D
 	if not is_player:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Node at %s is not an AudioStreamPlayer/2D/3D (got %s)" % [player_path, node.get_class()]
 		)
 	return {"player": node}

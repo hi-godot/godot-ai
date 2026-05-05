@@ -12,7 +12,7 @@ func read_file(params: Dictionary) -> Dictionary:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, path_err)
 
 	if not FileAccess.file_exists(path):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "File not found: %s" % path)
+		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "File not found: %s" % path)
 
 	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null:
@@ -72,7 +72,7 @@ func reimport(params: Dictionary) -> Dictionary:
 	var paths: Array = params.get("paths", [])
 
 	if paths.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: paths (non-empty array)")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: paths (non-empty array)")
 
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs == null:

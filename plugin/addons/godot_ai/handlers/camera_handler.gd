@@ -473,7 +473,7 @@ func create_camera(params: Dictionary) -> Dictionary:
 
 	if not _VALID_TYPES.has(type_str):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid camera type '%s'. Valid: %s" % [type_str, ", ".join(_VALID_TYPES.keys())]
 		)
 
@@ -485,7 +485,7 @@ func create_camera(params: Dictionary) -> Dictionary:
 	if not parent_path.is_empty():
 		parent = McpScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_parent_error(parent_path, scene_root))
+			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
 
 	var node := _instantiate_camera(type_str)
 	if node == null:
@@ -537,7 +537,7 @@ func configure(params: Dictionary) -> Dictionary:
 
 	var properties: Dictionary = params.get("properties", {})
 	if properties.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "properties dict is empty")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "properties dict is empty")
 
 	var valid_keys: Array = _KEYS_2D if type_str == "2d" else _KEYS_3D
 	var prop_types := _property_type_map(node)
@@ -564,7 +564,7 @@ func configure(params: Dictionary) -> Dictionary:
 		var prop_type: int = prop_types.get(prop_name, TYPE_NIL)
 		if prop_type == TYPE_NIL:
 			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+				McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 				"Property '%s' not present on %s" % [prop_name, node.get_class()]
 			)
 		var coerce_result := CameraValues.coerce(prop_name, properties[prop_name], prop_type)
@@ -629,7 +629,7 @@ func set_limits_2d(params: Dictionary) -> Dictionary:
 
 	if type_str != "2d":
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"camera_set_limits_2d requires a Camera2D (got %s)" % node.get_class()
 		)
 
@@ -655,7 +655,7 @@ func set_limits_2d(params: Dictionary) -> Dictionary:
 
 	if applied.is_empty():
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.MISSING_REQUIRED_PARAM,
 			"No limits specified; provide at least one of left, right, top, bottom, smoothed"
 		)
 
@@ -693,7 +693,7 @@ func set_damping_2d(params: Dictionary) -> Dictionary:
 
 	if type_str != "2d":
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"camera_set_damping_2d requires a Camera2D (got %s)" % node.get_class()
 		)
 
@@ -733,7 +733,7 @@ func set_damping_2d(params: Dictionary) -> Dictionary:
 	if margins_v != null:
 		if not (margins_v is Dictionary):
 			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+				McpErrorCodes.WRONG_TYPE,
 				"drag_margins must be a dict with optional keys left/top/right/bottom"
 			)
 		var margins: Dictionary = margins_v
@@ -753,7 +753,7 @@ func set_damping_2d(params: Dictionary) -> Dictionary:
 
 	if applied.is_empty():
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.MISSING_REQUIRED_PARAM,
 			"No damping params specified; provide at least one of position_speed, rotation_speed, drag_margins, drag_horizontal_enabled, drag_vertical_enabled"
 		)
 
@@ -788,19 +788,19 @@ func follow_2d(params: Dictionary) -> Dictionary:
 
 	if type_str != "2d":
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"camera_follow_2d requires a Camera2D (got %s)" % node.get_class()
 		)
 
 	var target_path: String = params.get("target_path", "")
 	if target_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: target_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
 	var target := McpScenePath.resolve(target_path, scene_root)
 	if target == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Target not found: %s" % target_path)
+		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, "Target not found: %s" % target_path)
 	if not (target is Node2D) and target != scene_root:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Follow target must be a Node2D (got %s)" % target.get_class()
 		)
 	if target == node:
@@ -903,10 +903,10 @@ func get_camera(params: Dictionary) -> Dictionary:
 	else:
 		node = McpScenePath.resolve(camera_path, scene_root)
 		if node == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(camera_path, scene_root))
+			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(camera_path, scene_root))
 		if not _is_camera(node):
 			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+				McpErrorCodes.WRONG_TYPE,
 				"Node %s is not a camera (got %s)" % [camera_path, node.get_class()]
 			)
 		resolved_via = "path"
@@ -977,13 +977,13 @@ func list_cameras(_params: Dictionary) -> Dictionary:
 func apply_preset(params: Dictionary) -> Dictionary:
 	var preset_name: String = params.get("preset", "")
 	if preset_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: preset")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: preset")
 
 	var overrides: Dictionary = params.get("overrides", {})
 	var blueprint = CameraPresets.build(preset_name, overrides)
 	if blueprint == null:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Unknown preset '%s'. Valid: %s" % [preset_name, ", ".join(CameraPresets.list_presets())]
 		)
 
@@ -995,7 +995,7 @@ func apply_preset(params: Dictionary) -> Dictionary:
 		node_name = preset_name.capitalize()
 	if not _VALID_TYPES.has(type_str):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid camera type '%s'. Valid: %s" % [type_str, ", ".join(_VALID_TYPES.keys())]
 		)
 
@@ -1007,7 +1007,7 @@ func apply_preset(params: Dictionary) -> Dictionary:
 	if not parent_path.is_empty():
 		parent = McpScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_parent_error(parent_path, scene_root))
+			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
 
 	var node := _instantiate_camera(type_str)
 	node.name = node_name
@@ -1090,16 +1090,16 @@ static func _camera_type_str(node: Node) -> String:
 func _resolve_camera(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("camera_path", "")
 	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: camera_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: camera_path")
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
 	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
 	if not _is_camera(node):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Node %s is not a camera (got %s)" % [node_path, node.get_class()]
 		)
 	return {

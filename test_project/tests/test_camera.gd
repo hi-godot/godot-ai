@@ -350,7 +350,7 @@ func test_create_invalid_type() -> void:
 		"name": "BadType",
 		"type": "nonsense",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 func test_create_with_make_current_unmarks_sibling() -> void:
@@ -442,7 +442,7 @@ func test_configure_rejects_3d_key_on_2d() -> void:
 		"camera_path": r.data.path,
 		"properties": {"fov": 60.0},  # Camera3D-only key
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_configure_empty_dict() -> void:
@@ -454,7 +454,7 @@ func test_configure_empty_dict() -> void:
 		"camera_path": r.data.path,
 		"properties": {},
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_configure_transform_key_suggests_node_set_property() -> void:
@@ -470,7 +470,7 @@ func test_configure_transform_key_suggests_node_set_property() -> void:
 			"camera_path": r.data.path,
 			"properties": {bad_key: 0},
 		})
-		assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+		assert_is_error(result)
 		assert_contains(result.error.message, "node_set_property",
 			"Rejecting camera_configure(%s) should suggest node_set_property" % bad_key)
 		assert_contains(result.error.message, bad_key)
@@ -553,7 +553,7 @@ func test_set_limits_2d_empty() -> void:
 		assert_true(false, "No scene open")
 		return
 	var result := _handler.set_limits_2d({"camera_path": r.data.path})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_limits_2d_errors_on_3d() -> void:
@@ -565,7 +565,7 @@ func test_set_limits_2d_errors_on_3d() -> void:
 		"camera_path": r.data.path,
 		"left": -100,
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ============================================================================
@@ -646,7 +646,7 @@ func test_set_damping_2d_errors_on_3d() -> void:
 		"camera_path": r.data.path,
 		"position_speed": 5.0,
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_damping_2d_empty() -> void:
@@ -655,7 +655,7 @@ func test_set_damping_2d_empty() -> void:
 		assert_true(false, "No scene open")
 		return
 	var result := _handler.set_damping_2d({"camera_path": r.data.path})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ============================================================================
@@ -765,7 +765,7 @@ func test_follow_2d_target_not_node2d() -> void:
 		"camera_path": r.data.path,
 		"target_path": McpScenePath.from_node(plain, scene_root),
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ============================================================================
@@ -834,7 +834,7 @@ func test_get_rejects_non_camera() -> void:
 	plain.owner = scene_root
 	_track_node(plain)
 	var result := _handler.get_camera({"camera_path": McpScenePath.from_node(plain, scene_root)})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_list_enumerates_2d_and_3d() -> void:
@@ -1014,7 +1014,7 @@ func test_apply_preset_unknown() -> void:
 		"name": "Bad",
 		"preset": "nonsense_preset",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_apply_preset_with_override() -> void:

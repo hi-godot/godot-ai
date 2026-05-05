@@ -41,7 +41,7 @@ func create_environment(params: Dictionary) -> Dictionary:
 
 	if not _PRESETS.has(preset):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid preset '%s'. Valid: %s" % [preset, ", ".join(_PRESETS.keys())]
 		)
 
@@ -64,7 +64,7 @@ func create_environment(params: Dictionary) -> Dictionary:
 			want_sky = true
 		else:
 			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+				McpErrorCodes.WRONG_TYPE,
 				"sky must be a bool, null, or dictionary of ProceduralSkyMaterial properties"
 			)
 
@@ -145,10 +145,10 @@ func _assign_environment(env: Environment, sky: Sky, sky_material: ProceduralSky
 
 	var node := McpScenePath.resolve(node_path, scene_root)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
 	if not (node is WorldEnvironment):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Node at %s is %s — must be WorldEnvironment" % [node_path, node.get_class()]
 		)
 

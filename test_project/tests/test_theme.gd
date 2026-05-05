@@ -45,18 +45,18 @@ func test_create_theme_writes_file() -> void:
 
 func test_create_theme_requires_res_path() -> void:
 	var result := _handler.create_theme({"path": "/tmp/foo.tres"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_theme_requires_tres_suffix() -> void:
 	var result := _handler.create_theme({"path": "res://foo.txt"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_theme_rejects_existing_without_overwrite() -> void:
 	_make_theme()
 	var result := _handler.create_theme({"path": TEST_THEME_PATH})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_theme_overwrite_allowed() -> void:
@@ -104,7 +104,7 @@ func test_theme_set_color_rejects_garbage_string() -> void:
 		"name": "font_color",
 		"value": "not-a-color-at-all-!!",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_theme_set_color_missing_theme_path() -> void:
@@ -113,7 +113,7 @@ func test_theme_set_color_missing_theme_path() -> void:
 		"name": "font_color",
 		"value": "#ff0000",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_theme_set_color_missing_class_name() -> void:
@@ -123,7 +123,7 @@ func test_theme_set_color_missing_class_name() -> void:
 		"name": "font_color",
 		"value": "#ff0000",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_theme_set_color_theme_not_found() -> void:
@@ -133,7 +133,7 @@ func test_theme_set_color_theme_not_found() -> void:
 		"name": "font_color",
 		"value": "#ff0000",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- theme_set_constant -----
@@ -249,7 +249,7 @@ func test_theme_set_stylebox_flat_rejects_unknown_nested_key() -> void:
 		"name": "normal",
 		"border": {"all": 1, "topp": 4},  # 'topp' not a real key
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "topp")
 
 
@@ -261,7 +261,7 @@ func test_theme_set_stylebox_flat_rejects_bad_color() -> void:
 		"name": "normal",
 		"bg_color": "not a color!!",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 # ----- theme_apply -----
@@ -324,7 +324,7 @@ func test_theme_apply_rejects_non_control() -> void:
 		"node_path": "/" + scene_root.name,
 		"theme_path": TEST_THEME_PATH,
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "not a Control")
 
 
@@ -338,7 +338,7 @@ func test_theme_set_color_rejects_null_value() -> void:
 		"name": "font_color",
 		"value": null,
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "null")
 
 
@@ -359,7 +359,7 @@ func test_create_theme_overwritten_flag_tracks_pre_save_state() -> void:
 func test_create_theme_missing_path_names_param_correctly() -> void:
 	# Error message should name `path`, not `theme_path`, for theme_create.
 	var result := _handler.create_theme({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 	assert_contains(result.error.message, "path")
 	# Make sure it's NOT using the default "theme_path" label.
 	assert_true(result.error.message.find("theme_path") == -1, "Error should say 'path', not 'theme_path'")

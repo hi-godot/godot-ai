@@ -50,7 +50,7 @@ func add_action(params: Dictionary) -> Dictionary:
 	var deadzone: float = params.get("deadzone", 0.5)
 
 	if action.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: action")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: action")
 
 	if InputMap.has_action(action):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Action '%s' already exists" % action)
@@ -82,10 +82,10 @@ func add_action(params: Dictionary) -> Dictionary:
 func remove_action(params: Dictionary) -> Dictionary:
 	var action: String = params.get("action", "")
 	if action.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: action")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: action")
 
 	if not InputMap.has_action(action):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Action '%s' not found" % action)
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Action '%s' not found" % action)
 
 	var key := "input/%s" % action
 	var old_setting = ProjectSettings.get_setting(key) if ProjectSettings.has_setting(key) else null
@@ -120,16 +120,16 @@ func bind_event(params: Dictionary) -> Dictionary:
 	var event_type: String = params.get("event_type", "")
 
 	if action.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: action")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: action")
 	if event_type.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: event_type")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: event_type")
 
 	if not InputMap.has_action(action):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Action '%s' not found" % action)
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Action '%s' not found" % action)
 
 	var event: InputEvent = _create_event(event_type, params)
 	if event == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unsupported event_type: %s (use key, mouse_button, or joy_button)" % event_type)
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Unsupported event_type: %s (use key, mouse_button, or joy_button)" % event_type)
 
 	InputMap.action_add_event(action, event)
 

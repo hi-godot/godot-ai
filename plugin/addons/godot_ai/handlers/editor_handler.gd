@@ -65,7 +65,7 @@ func get_logs(params: Dictionary) -> Dictionary:
 	var source: String = str(params.get("source", "plugin"))
 	if not source in VALID_LOG_SOURCES:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid source '%s' — use 'plugin', 'game', 'editor', or 'all'" % source,
 		)
 
@@ -295,7 +295,7 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 		"cinematic":
 			return _take_cinematic_screenshot(max_resolution)
 		_:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid source '%s' — use 'viewport', 'cinematic', or 'game'" % source)
+			return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Invalid source '%s' — use 'viewport', 'cinematic', or 'game'" % source)
 
 	## Handle view_target: temporarily reposition the editor's own camera to
 	## frame one or more target nodes, force a render, capture, then restore.
@@ -327,7 +327,7 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 				targets.append(node as Node3D)
 
 		if targets.is_empty():
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "No valid Node3D targets found: %s" % ", ".join(not_found))
+			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, "No valid Node3D targets found: %s" % ", ".join(not_found))
 
 		var cam := viewport.get_camera_3d()
 		if cam == null:
@@ -458,7 +458,7 @@ func _take_cinematic_screenshot(max_resolution: int) -> Dictionary:
 	var scene_camera := _find_current_camera_3d(scene_root)
 	if scene_camera == null:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.NODE_NOT_FOUND,
 			"No current Camera3D in scene — mark a Camera3D as `current` or add one to the scene",
 		)
 

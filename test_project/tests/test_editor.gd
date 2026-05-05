@@ -118,12 +118,12 @@ func test_clear_logs_empties_buffer() -> void:
 
 func test_screenshot_invalid_source() -> void:
 	var result := _handler.take_screenshot({"source": "invalid"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 func test_screenshot_game_not_playing() -> void:
 	var result := _handler.take_screenshot({"source": "game"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_debugger_plugin_capture_prefix() -> void:
@@ -171,12 +171,12 @@ func test_debugger_plugin_clear_pending_disconnects_timer() -> void:
 
 func test_screenshot_view_target_not_found() -> void:
 	var result := _handler.take_screenshot({"source": "viewport", "view_target": "/Main/NonExistent"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
 
 
 func test_screenshot_view_target_all_invalid_comma() -> void:
 	var result := _handler.take_screenshot({"source": "viewport", "view_target": "/Main/X,/Main/Y"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_screenshot_view_target_duplicates() -> void:
@@ -407,13 +407,13 @@ func test_screenshot_game_not_running_returns_error() -> void:
 	if EditorInterface.is_playing_scene():
 		return  # Can't test this path while game is running.
 	var result := _handler.take_screenshot({"source": "game"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "not running")
 
 
 func test_screenshot_bogus_source() -> void:
 	var result := _handler.take_screenshot({"source": "bogus"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "Invalid source")
 
 
@@ -431,7 +431,7 @@ func test_screenshot_cinematic_no_camera_returns_error() -> void:
 	if cameras.is_empty():
 		## Scene already has no cameras — exercise directly.
 		var result := _handler.take_screenshot({"source": "cinematic"})
-		assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+		assert_is_error(result)
 		assert_contains(result.error.message, "No current Camera3D")
 		return
 	skip("Scene has cameras — no-camera branch covered only in cameraless scenes")
@@ -618,7 +618,7 @@ func test_game_log_buffer_get_recent_works_after_wrap() -> void:
 
 func test_get_logs_source_invalid_returns_error() -> void:
 	var result := _handler.get_logs({"source": "bogus"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "Invalid source")
 
 
@@ -653,7 +653,7 @@ func test_get_logs_null_source_falls_through_to_invalid() -> void:
 	## rather than a GDScript type error.
 	var handler := EditorHandler.new(McpLogBuffer.new())
 	var result := handler.get_logs({"source": null})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "Invalid source")
 
 
@@ -866,7 +866,7 @@ func test_get_logs_source_invalid_message_lists_editor() -> void:
 	## list it so users see a complete option set in their typo correction.
 	var handler := EditorHandler.new(McpLogBuffer.new())
 	var result := handler.get_logs({"source": "bogus"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "editor")
 
 

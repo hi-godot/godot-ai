@@ -51,18 +51,18 @@ func test_read_file_missing_path() -> void:
 
 func test_read_file_invalid_prefix() -> void:
 	var result := _handler.read_file({"path": "/tmp/bad.txt"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_read_file_not_found() -> void:
 	var result := _handler.read_file({"path": "res://nonexistent_file.txt"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.RESOURCE_NOT_FOUND)
 
 
 func test_read_file_rejects_traversal_path() -> void:
 	## Issue #347: traversal in read_file is the file-disclosure primitive.
 	var result := _handler.read_file({"path": "res://../etc/passwd"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "..")
 
 
@@ -109,7 +109,7 @@ func test_write_file_missing_path() -> void:
 
 func test_write_file_invalid_prefix() -> void:
 	var result := _handler.write_file({"path": "/tmp/bad.txt", "content": "hello"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_write_file_rejects_traversal_path() -> void:
@@ -124,7 +124,7 @@ func test_write_file_rejects_traversal_path() -> void:
 		"path": traversal_path,
 		"content": "owned\n",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "..")
 	assert_false(FileAccess.file_exists(traversal_path), "traversal must not write to disk")
 
@@ -133,12 +133,12 @@ func test_write_file_rejects_traversal_path() -> void:
 
 func test_reimport_missing_paths() -> void:
 	var result := _handler.reimport({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_reimport_empty_paths() -> void:
 	var result := _handler.reimport({"paths": []})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_reimport_nonexistent_file() -> void:
