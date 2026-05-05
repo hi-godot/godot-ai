@@ -140,6 +140,30 @@ func test_debugger_plugin_screenshot_error_unknown_request() -> void:
 	assert_true(true, "No crash when replying to unknown request_id")
 
 
+func test_debugger_plugin_clear_pending_disconnects_timer() -> void:
+	## Audit blind spot from #297: on screenshot success, _clear_pending used
+	## to only erase the dict entry, leaving the SceneTreeTimer + bound
+	## timeout lambda alive until the timer naturally fired (up to 8s).
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		skip("No SceneTree available")
+		return
+	var plugin := McpDebuggerPlugin.new()
+	var rid := "rid-clear-pending"
+	var cb := func() -> void: pass
+	var timer := tree.create_timer(60.0)
+	timer.timeout.connect(cb)
+	plugin._pending[rid] = {
+		"connection": null,
+		"timer": timer,
+		"timeout_callable": cb,
+	}
+	assert_true(timer.timeout.is_connected(cb), "precondition: timer connected before clear")
+	plugin._clear_pending(rid)
+	assert_false(plugin._pending.has(rid), "_clear_pending should erase the request entry")
+	assert_false(timer.timeout.is_connected(cb), "_clear_pending should disconnect timeout signal")
+
+
 func test_screenshot_view_target_not_found() -> void:
 	var result := _handler.take_screenshot({"source": "viewport", "view_target": "/Main/NonExistent"})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)

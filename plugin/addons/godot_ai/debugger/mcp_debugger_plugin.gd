@@ -32,7 +32,10 @@ const GAME_READY_WAIT_SEC := 20.0
 var _log_buffer: McpLogBuffer
 var _game_log_buffer: McpGameLogBuffer
 
-## Pending request_id -> {connection, deadline_ts, timer}
+## Pending request_id -> {connection, timer, timeout_callable}.
+## We retain the bound timeout lambda so `_clear_pending` can disconnect
+## it on success/error; otherwise the SceneTreeTimer pins the captured
+## request_id until `timeout_sec` elapses (8s default).
 var _pending: Dictionary = {}
 
 ## Flipped true when the game-side autoload sends its "mcp:hello" boot
@@ -180,10 +183,14 @@ func _send_take_screenshot(
 			"No active debugger session — is the game actually running and started from this editor?")
 		return
 
-	_pending[request_id] = {"connection": connection}
 	var timer: SceneTreeTimer = tree.create_timer(timeout_sec)
-	timer.timeout.connect(func() -> void: _on_timeout(request_id))
-	_pending[request_id]["timer"] = timer
+	var timeout_callable := func() -> void: _on_timeout(request_id)
+	timer.timeout.connect(timeout_callable)
+	_pending[request_id] = {
+		"connection": connection,
+		"timer": timer,
+		"timeout_callable": timeout_callable,
+	}
 
 	session.send_message("mcp:take_screenshot", [request_id, max_resolution])
 	if _log_buffer:
@@ -264,4 +271,9 @@ func _send_error(connection: McpConnection, request_id: String, code: String, me
 
 
 func _clear_pending(request_id: String) -> void:
+	var pending: Dictionary = _pending.get(request_id, {})
+	var timer: SceneTreeTimer = pending.get("timer")
+	var cb: Callable = pending.get("timeout_callable", Callable())
+	if timer != null and timer.timeout.is_connected(cb):
+		timer.timeout.disconnect(cb)
 	_pending.erase(request_id)
