@@ -498,14 +498,15 @@ func test_watchdog_timeout_proceeds_when_signal_never_fires() -> void:
 	## `_waiting_for_scan = true` forever. The watchdog must clear that
 	## flag and dispatch `_scan_next_step` so the rest of the update
 	## sequence can finish.
+	## Test fires `_on_scan_watchdog_timeout` directly — the runner does
+	## not need to be in a SceneTree because we don't depend on the Timer
+	## actually counting down. (`McpTestSuite` extends `RefCounted`, so
+	## `add_child(runner)` is not available here.)
 	var runner = _new_runner()
-	add_child(runner)  # Timer needs a tree to count, but we fire timeout manually
 	_arm_scan_state(runner)
 	assert_true(runner._waiting_for_scan, "scan wait armed by precondition")
 	assert_true(runner._scan_watchdog_timer != null, "watchdog timer node exists once armed")
 
-	# Fire the timeout handler directly — equivalent to the Timer's timeout
-	# signal arriving after 30s of no filesystem_changed.
 	runner._on_scan_watchdog_timeout()
 
 	assert_false(runner._waiting_for_scan, "watchdog cleared the wait flag")
@@ -519,7 +520,6 @@ func test_watchdog_no_op_when_signal_already_settled() -> void:
 	## `_on_scan_watchdog_timeout` after a settled scan must be a no-op —
 	## otherwise it would double-dispatch `_scan_next_step`.
 	var runner = _new_runner()
-	add_child(runner)
 	_arm_scan_state(runner)
 
 	# Simulate the happy path: signal arrived, _finish_scan_wait ran.
@@ -538,7 +538,6 @@ func test_finish_scan_wait_stops_armed_watchdog() -> void:
 	## must stop the still-running Timer so it doesn't fire later and
 	## attempt a second cleanup. Verify by inspecting the Timer state.
 	var runner = _new_runner()
-	add_child(runner)
 	_arm_scan_state(runner)
 	assert_false(runner._scan_watchdog_timer.is_stopped(), "timer running after arm")
 
@@ -557,7 +556,6 @@ func test_watchdog_timer_reused_across_arms() -> void:
 	## a single update (new files, then existing files), so the second arm
 	## must not leak a second Timer child.
 	var runner = _new_runner()
-	add_child(runner)
 	_arm_scan_state(runner)
 	var first_timer = runner._scan_watchdog_timer
 	runner._finish_scan_wait()
