@@ -1496,9 +1496,10 @@ func test_validate_animation_not_found() -> void:
 
 ## Regression: validate_animation must split track paths on the FIRST colon
 ## (node↔property boundary), not the last. A track like "Target:modulate:a"
-## (the shape every preset_* produces, plus any `position:y` etc. subpath
-## track) must resolve to the node "Target", not "Target:modulate", so the
-## validator reports the track as healthy when the target node exists.
+## (the shape preset_fade produces, plus any hand-authored "position:y" /
+## "modulate:a" subpath track) must resolve to the node "Target", not
+## "Target:modulate", so the validator reports the track as healthy when
+## the target node exists.
 func test_validate_animation_handles_subpath_track_paths() -> void:
 	var player_path := _add_player("TestValidateSubpath")
 	if player_path.is_empty():
