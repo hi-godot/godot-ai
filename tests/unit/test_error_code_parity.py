@@ -1,7 +1,7 @@
 """Contract test: every code GDScript emits must exist in Python's ErrorCode.
 
 Plugin handlers send `{"error": {"code": "<NAME>", ...}}` over the wire;
-`godot_client.client.GodotCommandError` forwards `error.code` verbatim. If a
+`godot_ai.godot_client.client.GodotCommandError` forwards `error.code` verbatim. If a
 GDScript handler ever emits a code Python's `ErrorCode` enum doesn't know, the
 forwarded string still works at runtime but agents and tests that match on
 `ErrorCode.X` silently miss it. Tracked as #297 audit finding #12.
