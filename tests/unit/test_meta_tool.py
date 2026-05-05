@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, get_args
 from unittest.mock import AsyncMock
 
 import pytest
@@ -11,6 +11,7 @@ from fastmcp import FastMCP
 from godot_ai.godot_client.client import GodotCommandError
 from godot_ai.protocol.errors import ErrorCode
 from godot_ai.tools._meta_tool import (
+    _op_literal_for,
     dispatch_manage_op,
     register_manage_tool,
 )
@@ -62,6 +63,31 @@ def test_register_rejects_empty_ops():
     mcp = FastMCP("test")
     with pytest.raises(ValueError, match="ops cannot be empty"):
         register_manage_tool(mcp, tool_name="x_manage", description="x", ops={})
+
+
+# ---------------------------------------------------------------------------
+# Op-literal memoization (Audit v2 #18 / #362)
+# ---------------------------------------------------------------------------
+
+
+def test_op_literal_for_returns_same_object_for_equal_op_sets():
+    ## Two registrations with the same op names — even in different insertion
+    ## orders — must share one Literal so Pydantic doesn't rebuild equivalent
+    ## schema fragments per domain.
+    a = _op_literal_for(frozenset({"create", "delete", "rename"}))
+    b = _op_literal_for(frozenset({"rename", "create", "delete"}))
+    assert a is b
+
+
+def test_op_literal_for_returns_distinct_object_for_different_op_sets():
+    a = _op_literal_for(frozenset({"create", "delete"}))
+    b = _op_literal_for(frozenset({"create", "delete", "rename"}))
+    assert a is not b
+
+
+def test_op_literal_for_args_are_sorted_for_determinism():
+    literal = _op_literal_for(frozenset({"zeta", "alpha", "mu"}))
+    assert get_args(literal) == ("alpha", "mu", "zeta")
 
 
 # ---------------------------------------------------------------------------

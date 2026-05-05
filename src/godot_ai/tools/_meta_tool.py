@@ -48,6 +48,15 @@ OpHandler = Callable[..., Awaitable[dict] | dict]
 MANAGE_TOOL_OPS: dict[str, tuple[str, ...]] = {}
 
 
+@functools.cache
+def _op_literal_for(op_names: frozenset[str]) -> Any:
+    ## Sorting yields a deterministic Literal arg order so the cache key
+    ## (a frozenset, order-independent) maps to a stable type — and any
+    ## error message Pydantic emits ("must be one of …") stays consistent
+    ## across registrations of the same op set.
+    return Literal[tuple(sorted(op_names))]  # type: ignore[valid-type]
+
+
 def register_manage_tool(
     mcp: FastMCP,
     *,
@@ -75,7 +84,7 @@ def register_manage_tool(
         raise ValueError(f"register_manage_tool: ops cannot be empty (tool {tool_name!r})")
 
     MANAGE_TOOL_OPS[tool_name] = tuple(ops.keys())
-    op_literal = Literal[tuple(ops.keys())]  # type: ignore[valid-type]
+    op_literal = _op_literal_for(frozenset(ops.keys()))
 
     async def manage(ctx: Context, op, params=None, session_id="") -> dict:
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
