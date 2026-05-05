@@ -191,7 +191,7 @@ func test_stop_aggregates_launcher_pidfile_and_branded_listener_pids() -> void:
 	var host := _ManagerHostStub.new()
 	host.managed_pid_lookup = 22222
 	host.listener_pids = [33333] as Array[int]
-	host.branded_pids = [33333] as Array[int]
+	host.branded_pids = [22222, 33333] as Array[int]
 	var manager := McpServerLifecycleManagerScript.new(host)
 	manager._server_pid = 11111
 
@@ -203,6 +203,24 @@ func test_stop_aggregates_launcher_pidfile_and_branded_listener_pids() -> void:
 	assert_true(killed.has(11111))
 	assert_true(killed.has(22222))
 	assert_true(killed.has(33333))
+
+
+func test_stop_does_not_trust_unbranded_managed_pid_fallback() -> void:
+	## `_find_managed_pid` falls back to a port scrape when the pid-file is
+	## stale or missing. That fallback is only proof when the PID is branded.
+	var host := _ManagerHostStub.new()
+	host.managed_pid_lookup = 22222
+	host.listener_pids = [22222] as Array[int]
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 11111
+
+	manager.stop_server()
+	var killed := host.killed_targets.duplicate()
+	host.free()
+
+	assert_eq(killed.size(), 1)
+	assert_true(killed.has(11111))
+	assert_false(killed.has(22222))
 
 
 func test_stop_does_not_kill_unbranded_port_listeners() -> void:

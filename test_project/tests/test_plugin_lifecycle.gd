@@ -1193,6 +1193,29 @@ func test_parse_lsof_pids_ignores_non_numeric_lines() -> void:
 	assert_eq(pids[0], 32696)
 
 
+func test_dev_server_detection_ignores_unbranded_port_listener() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [24680] as Array[int]
+	plugin.port_in_use = true
+
+	var detected := plugin.is_dev_server_running()
+	plugin.free()
+
+	assert_false(detected)
+
+
+func test_dev_server_detection_accepts_branded_port_listener() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [24680] as Array[int]
+	plugin.branded_pids = [24680] as Array[int]
+	plugin.port_in_use = true
+
+	var detected := plugin.is_dev_server_running()
+	plugin.free()
+
+	assert_true(detected)
+
+
 ## --- Live-status threading ------------------------------------------
 ##
 ## `_start_server` probes once at the top of the spawn body and threads

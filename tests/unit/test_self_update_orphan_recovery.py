@@ -43,7 +43,8 @@ def test_recover_incompatible_success_unblocks_existing_connection() -> None:
     # Manager-side: respawn happens here, after the kill drains.
     assert "start_server()" in lifecycle_recover_block
 
-    assert "ServerStateScript.is_healthy(_lifecycle.get_state())" in resume_block
+    assert "state != ServerStateScript.SPAWNING" in resume_block
+    assert "state != ServerStateScript.READY" in resume_block
     assert "_lifecycle.is_connection_blocked()" in resume_block
     assert "_connection.connect_blocked = false" in resume_block
     assert '_connection.connect_block_reason = ""' in resume_block

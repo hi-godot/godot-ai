@@ -633,7 +633,10 @@ func stop_server() -> void:
 	var killed: Array = []
 	var candidates: Array[int] = [int(_server_pid)]
 	var real_pid := int(_host._find_managed_pid(port))
-	if real_pid > 0:
+	if real_pid > 0 and (
+		candidates.has(real_pid)
+		or _host._pid_cmdline_is_godot_ai_for_proof(real_pid)
+	):
 		candidates.append(real_pid)
 	var listener_pids: Array = _host._find_all_pids_on_port(port)
 	for pid in listener_pids:

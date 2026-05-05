@@ -1532,8 +1532,14 @@ func _find_windows_spawn_children(parent_pids: Array[int]) -> Array[int]:
 
 
 func is_dev_server_running() -> bool:
-	## Returns true if a server is running on the HTTP port that we didn't start as managed.
-	return _lifecycle.get_server_pid() <= 0 and _is_port_in_use(ClientConfigurator.http_port())
+	## Returns true if a branded dev server is running on the HTTP port
+	## that we didn't start as managed.
+	if _lifecycle.get_server_pid() > 0:
+		return false
+	for pid in _find_all_pids_on_port(ClientConfigurator.http_port()):
+		if _pid_cmdline_is_godot_ai(int(pid)):
+			return true
+	return false
 
 
 func has_managed_server() -> bool:

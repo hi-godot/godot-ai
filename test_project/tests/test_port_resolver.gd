@@ -85,6 +85,13 @@ func test_is_port_in_use_checks_os_listeners_after_bind_probe_on_posix() -> void
 		skip("python http.server did not bind test port")
 		return
 
+	var bind_still_succeeds := McpPortResolver.can_bind_local_port(port)
+	if not bind_still_succeeds:
+		OS.kill(pid)
+		McpPortResolver.wait_for_port_free(port, 2.0)
+		skip("python http.server also held IPv4 loopback; POSIX fallback precondition unavailable")
+		return
+
 	var detected := McpPortResolver.is_port_in_use(port)
 	OS.kill(pid)
 	McpPortResolver.wait_for_port_free(port, 2.0)
