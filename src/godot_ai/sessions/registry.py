@@ -112,18 +112,29 @@ class SessionRegistry:
                 future.set_result(session)
 
     def unregister(self, session_id: str) -> None:
-        ## Do NOT silently promote another session to active when the active
-        ## one disconnects. Promoting by insertion order means a crash or
-        ## editor_quit on the user's working editor would route subsequent
-        ## commands to whichever editor happened to connect first — the
-        ## "routing by registration order" bug. Clear active instead; the
-        ## next register() or an explicit session_activate will set it.
-        should_log = False
+        ## Active-session promotion policy on disconnect:
+        ## - n>=2 survivors: do NOT auto-promote — picking by insertion order
+        ##   would route the user's commands to whichever editor happened to
+        ##   connect first ("routing by registration order" bug). Caller must
+        ##   session_activate explicitly.
+        ## - n=1 survivor (audit-v2 #8): the only safe single-editor path —
+        ##   promote it with a warning so an agent on the solo-user setup
+        ##   doesn't see opaque "no active session" errors after an editor
+        ##   crash. Ambiguity-by-order can't apply with one survivor.
+        ## - n=0: keep cleared; nothing to promote.
         self._sessions.pop(session_id, None)
-        if self._active_session_id == session_id:
-            self._active_session_id = None
-            should_log = True
-        if should_log:
+        if self._active_session_id != session_id:
+            return
+        self._active_session_id = None
+        if len(self._sessions) == 1:
+            survivor_id = next(iter(self._sessions))
+            self._active_session_id = survivor_id
+            logger.warning(
+                "Active session %s disconnected; auto-promoting sole survivor %s",
+                session_id[:8],
+                survivor_id[:8],
+            )
+        else:
             logger.info(
                 "Active session %s disconnected; no active session until next register/activate",
                 session_id[:8],
