@@ -349,6 +349,7 @@ func test_backpressure_error_is_structured_and_actionable() -> void:
 	assert_has_key(err.error, "data")
 	assert_eq(err.error.data.buffered_bytes, 100)
 	assert_eq(err.error.data.message_bytes, 200)
+	assert_contains(err.error.message, "max_resolution")
 
 
 # ----- inbound packet drain cap (audit-v2 #12 / issue #356) -----
@@ -475,4 +476,3 @@ func test_clear_on_disconnect_resets_spillover_counter() -> void:
 
 	assert_eq(conn._packet_spillover_total, 0, "disconnect must reset the spillover counter")
 	conn.free()
-	assert_contains(err.error.message, "max_resolution")
