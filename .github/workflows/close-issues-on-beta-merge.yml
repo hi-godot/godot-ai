@@ -11,10 +11,18 @@ name: Close issues on beta merge
 # with `state_reason: completed`, posts a one-line back-reference
 # comment, and strips the `status/in-review` label if present.
 #
-# Idempotent — re-running on an already-closed issue is a no-op.
+# Idempotent — re-running on an already-closed issue logs and skips
+# without re-posting the back-reference comment.
 
+# pull_request_target (vs pull_request) so the workflow runs with the
+# base-repo `GITHUB_TOKEN` rather than the fork-safe read-only token.
+# Without this, a merged PR from a fork hits "Resource not accessible
+# by integration" on every issues.* write call. We never check out PR
+# code here — only read `context.payload.pull_request.body` as a
+# string and parse it with regex — so the usual `pull_request_target`
+# code-injection caveat doesn't apply.
 on:
-  pull_request:
+  pull_request_target:
     types: [closed]
     branches: [beta]
 
@@ -35,42 +43,69 @@ jobs:
             // Match GitHub's official closing-keyword set, case-insensitive.
             // close/closes/closed | fix/fixes/fixed | resolve/resolves/resolved
             const re = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi;
-            const issues = new Set([...body.matchAll(re)].map(m => Number(m[1])));
+            const numbers = new Set([...body.matchAll(re)].map(m => Number(m[1])));
 
-            if (issues.size === 0) {
+            if (numbers.size === 0) {
               core.info('No closing keywords found in PR body; nothing to do.');
               return;
             }
 
             const prNum = context.payload.pull_request.number;
-            for (const num of issues) {
-              core.info(`Closing #${num} (referenced by #${prNum})...`);
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
 
-              await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: num,
-                state: 'closed',
-                state_reason: 'completed',
-              });
-
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: num,
-                body: `Closed by #${prNum} (merged to \`beta\`).`,
-              });
-
-              // Strip status/in-review if present. The label may not exist
-              // on this issue or in the repo at all; both cases are fine.
+            // Process each ref in its own try/catch so one bad reference
+            // (deleted issue, typo'd number, transient API error) doesn't
+            // strand later valid references.
+            for (const num of numbers) {
               try {
-                await github.rest.issues.removeLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: num,
-                  name: 'status/in-review',
+                // Fetch first so we can: (a) skip PRs (issue+PR share a
+                // number space; GitHub's native auto-closer ignores PRs),
+                // (b) skip already-closed issues so reruns don't post
+                // duplicate back-reference comments or misattribute issues
+                // closed earlier for another reason.
+                const { data: issue } = await github.rest.issues.get({
+                  owner, repo, issue_number: num,
                 });
+
+                if (issue.pull_request) {
+                  core.info(`Skipping #${num}: it's a pull request, not an issue.`);
+                  continue;
+                }
+                if (issue.state === 'closed') {
+                  core.info(`Skipping #${num}: already closed.`);
+                  continue;
+                }
+
+                core.info(`Closing #${num} (referenced by #${prNum})...`);
+                await github.rest.issues.update({
+                  owner, repo, issue_number: num,
+                  state: 'closed',
+                  state_reason: 'completed',
+                });
+
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: num,
+                  body: `Closed by #${prNum} (merged to \`beta\`).`,
+                });
+
+                // Strip status/in-review if present. 404 = label not on
+                // this issue or not defined in repo; both fine.
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner, repo, issue_number: num,
+                    name: 'status/in-review',
+                  });
+                } catch (e) {
+                  if (e.status !== 404) throw e;
+                }
               } catch (e) {
-                if (e.status !== 404) throw e;
+                // Log but don't rethrow — one bad ref shouldn't strand
+                // the rest. core.warning surfaces in the Actions UI
+                // without failing the job.
+                core.warning(
+                  `Failed to process #${num}: ${e.message || e} ` +
+                  `(status=${e.status ?? 'n/a'})`
+                );
               }
             }
