@@ -15,13 +15,11 @@ func list_signals(params: Dictionary) -> Dictionary:
 	if path.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-
-	var node := McpScenePath.resolve(path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(path, scene_root))
+	var _resolved := McpNodeValidator.resolve_or_error(path, "path")
+	if _resolved.has("error"):
+		return _resolved
+	var node: Node = _resolved.node
+	var scene_root: Node = _resolved.scene_root
 
 	## Default: hide editor-internal connections (SceneTreeEditor observers
 	## live on every scene node and would otherwise dominate the response).
@@ -187,9 +185,10 @@ func _resolve_signal_params(params: Dictionary) -> Dictionary:
 		if params.get(key, "").is_empty():
 			return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: %s" % key)
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	var source_result := _resolve_node_or_autoload(params.path, scene_root, "Source")
 	if source_result.has("error"):

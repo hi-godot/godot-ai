@@ -50,9 +50,10 @@ func create_player(params: Dictionary) -> Dictionary:
 			"Invalid audio player type '%s'. Valid: %s" % [type_str, ", ".join(_VALID_TYPES.keys())]
 		)
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	var parent: Node = scene_root
 	if not parent_path.is_empty():
@@ -319,12 +320,10 @@ static func _instantiate_player(type_str: String) -> Node:
 
 
 func _resolve_player(player_path: String) -> Dictionary:
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-	var node := McpScenePath.resolve(player_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(player_path, scene_root))
+	var resolved := McpNodeValidator.resolve_or_error(player_path, "player_path")
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
 	var is_player := node is AudioStreamPlayer \
 		or node is AudioStreamPlayer2D \
 		or node is AudioStreamPlayer3D

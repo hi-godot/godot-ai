@@ -481,9 +481,10 @@ func remove_from_group(params: Dictionary) -> Dictionary:
 
 func set_selection(params: Dictionary) -> Dictionary:
 	var paths: Array = params.get("paths", [])
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	var selection := EditorInterface.get_selection()
 	selection.clear()
@@ -736,19 +737,12 @@ func get_groups(params: Dictionary) -> Dictionary:
 
 
 ## Validate path param, resolve to node. Returns dict with node/path/scene_root
-## on success, or an error dict (has "error" key) on failure.
+## on success, or an error dict (has "error" key) on failure. Thin wrapper
+## around the shared `McpNodeValidator.resolve_or_error` helper (audit-v2 #20).
 func _resolve_node(params: Dictionary) -> Dictionary:
-	var node_path: String = params.get("path", "")
-	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
-	var scene_check := McpScenePath.require_edited_scene(params.get("scene_file", ""))
-	if scene_check.has("error"):
-		return scene_check
-	var scene_root: Node = scene_check.node
-	var node := McpScenePath.resolve(node_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
-	return {"node": node, "path": node_path, "scene_root": scene_root}
+	return McpNodeValidator.resolve_or_error(
+		params.get("path", ""), "path", params.get("scene_file", ""),
+	)
 
 
 ## Reject operations targeting the scene root. Returns an INVALID_PARAMS error

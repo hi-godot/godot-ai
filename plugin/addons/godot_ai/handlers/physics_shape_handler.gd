@@ -34,13 +34,11 @@ func autofit(params: Dictionary) -> Dictionary:
 	if node_path.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-
-	var node := McpScenePath.resolve(node_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	if _resolved.has("error"):
+		return _resolved
+	var node: Node = _resolved.node
+	var scene_root: Node = _resolved.scene_root
 
 	var is_3d := node is CollisionShape3D
 	var is_2d := node is CollisionShape2D

@@ -300,9 +300,10 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 	## Handle view_target: temporarily reposition the editor's own camera to
 	## frame one or more target nodes, force a render, capture, then restore.
 	if not view_target.is_empty() and source == "viewport":
-		var scene_root := EditorInterface.get_edited_scene_root()
-		if scene_root == null:
-			return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+		var _scene_check := McpNodeValidator.require_scene_or_error()
+		if _scene_check.has("error"):
+			return _scene_check
+		var scene_root: Node = _scene_check.scene_root
 
 		## Parse comma-separated paths, deduplicate
 		var raw_paths := view_target.split(",")
@@ -451,9 +452,10 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 ## throwaway SubViewport, so the output has no editor gizmos, selection
 ## outlines, or grid lines.
 func _take_cinematic_screenshot(max_resolution: int) -> Dictionary:
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	var scene_camera := _find_current_camera_3d(scene_root)
 	if scene_camera == null:

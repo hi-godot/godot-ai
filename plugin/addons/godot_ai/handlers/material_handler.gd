@@ -344,13 +344,11 @@ func assign_material(params: Dictionary) -> Dictionary:
 	if node_path.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: node_path")
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-
-	var node := McpScenePath.resolve(node_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	if _resolved.has("error"):
+		return _resolved
+	var node: Node = _resolved.node
+	var scene_root: Node = _resolved.scene_root
 
 	var slot: String = params.get("slot", "override")
 	var resource_path: String = params.get("resource_path", "")
@@ -438,13 +436,11 @@ func apply_to_node(params: Dictionary) -> Dictionary:
 			"Invalid material type '%s'. Valid: %s" % [type_str, ", ".join(_TYPE_TO_CLASS.keys())]
 		)
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-
-	var node := McpScenePath.resolve(node_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	if _resolved.has("error"):
+		return _resolved
+	var node: Node = _resolved.node
+	var scene_root: Node = _resolved.scene_root
 
 	var slot: String = params.get("slot", "override")
 	var slot_result := _resolve_slot_property(node, slot)
@@ -586,12 +582,11 @@ func apply_preset(params: Dictionary) -> Dictionary:
 
 	var assigned := false
 	if not node_path.is_empty():
-		var scene_root := EditorInterface.get_edited_scene_root()
-		if scene_root == null:
-			return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-		var node := McpScenePath.resolve(node_path, scene_root)
-		if node == null:
-			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
+		var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+		if _resolved.has("error"):
+			return _resolved
+		var node: Node = _resolved.node
+		var scene_root: Node = _resolved.scene_root
 		var slot_result := _resolve_slot_property(node, params.get("slot", "override"))
 		if slot_result.has("error"):
 			return slot_result

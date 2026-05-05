@@ -477,9 +477,10 @@ func create_camera(params: Dictionary) -> Dictionary:
 			"Invalid camera type '%s'. Valid: %s" % [type_str, ", ".join(_VALID_TYPES.keys())]
 		)
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	var parent: Node = scene_root
 	if not parent_path.is_empty():
@@ -869,9 +870,10 @@ func follow_2d(params: Dictionary) -> Dictionary:
 # ============================================================================
 
 func get_camera(params: Dictionary) -> Dictionary:
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	var camera_path: String = params.get("camera_path", "")
 	var node: Node = null
@@ -952,9 +954,10 @@ func get_camera(params: Dictionary) -> Dictionary:
 # ============================================================================
 
 func list_cameras(_params: Dictionary) -> Dictionary:
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	var cams := _list_cameras_in_scene(scene_root, "")
 	var out: Array[Dictionary] = []
@@ -999,9 +1002,10 @@ func apply_preset(params: Dictionary) -> Dictionary:
 			"Invalid camera type '%s'. Valid: %s" % [type_str, ", ".join(_VALID_TYPES.keys())]
 		)
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	var parent: Node = scene_root
 	if not parent_path.is_empty():
@@ -1088,15 +1092,14 @@ static func _camera_type_str(node: Node) -> String:
 
 
 func _resolve_camera(params: Dictionary) -> Dictionary:
-	var node_path: String = params.get("camera_path", "")
-	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: camera_path")
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-	var node := McpScenePath.resolve(node_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
+	var resolved := McpNodeValidator.resolve_or_error(
+		params.get("camera_path", ""), "camera_path",
+	)
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	var node_path: String = resolved.path
+	var scene_root: Node = resolved.scene_root
 	if not _is_camera(node):
 		return McpErrorCodes.make(
 			McpErrorCodes.WRONG_TYPE,
