@@ -12,7 +12,7 @@ async def environment_create(
     path: str = "",
     preset: str = "default",
     properties: dict | None = None,
-    sky: bool | None = None,
+    sky: bool | dict | None = None,
     resource_path: str = "",
     overwrite: bool = False,
 ) -> dict:

@@ -43,7 +43,9 @@ Ops:
   • environment_create(path="", preset="default", properties=None,
                         sky=None, resource_path="", overwrite=False)
         Build Environment + Sky chain. Presets: default | clear | sunset
-        | night | fog. Either assign to a WorldEnvironment node or save .tres.
+        | night | fog. sky may be bool or a procedural sky dict such as
+        {"sky_material": "procedural", "sky_top_color": "#0f172a"}.
+        Either assign to a WorldEnvironment node or save .tres.
   • physics_shape_autofit(path, source_path="", shape_type="")
         Size a CollisionShape2D/3D to a nearby visual's bounds. Searches
         direct siblings then parent-siblings (handles nested

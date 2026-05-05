@@ -139,6 +139,50 @@ func test_create_sky_false_skips_sky_chain() -> void:
 	_remove_node(we)
 
 
+func test_create_rich_sky_payload_applies_procedural_material_properties() -> void:
+	var we := _add_world_env("TestEnvRichSky")
+	if we == null:
+		skip("No scene root")
+		return
+	var result := _handler.create_environment({
+		"path": we.get_path(),
+		"preset": "night",
+		"properties": {"ambient_light_energy": 0.35},
+		"sky": {
+			"sky_material": "procedural",
+			"sky_top_color": "#0f172a",
+			"sky_horizon_color": "#334155",
+		},
+	})
+	assert_has_key(result, "data")
+	assert_true(result.data.sky_created)
+	assert_true(is_equal_approx(we.environment.ambient_light_energy, 0.35))
+	var mat: ProceduralSkyMaterial = we.environment.sky.sky_material
+	assert_true(mat.sky_top_color.is_equal_approx(Color.from_string("#0f172a", Color.MAGENTA)))
+	assert_true(mat.sky_horizon_color.is_equal_approx(Color.from_string("#334155", Color.MAGENTA)))
+	_remove_node(we)
+
+
+func test_create_invalid_sky_shape_errors() -> void:
+	var result := _handler.create_environment({
+		"path": "/Main/World",
+		"preset": "night",
+		"sky": ["procedural"],
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "sky")
+
+
+func test_create_unsupported_sky_material_errors() -> void:
+	var result := _handler.create_environment({
+		"path": "/Main/World",
+		"preset": "night",
+		"sky": {"sky_material": "panorama"},
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "sky_material")
+
+
 func test_create_properties_override_preset() -> void:
 	var we := _add_world_env("TestEnvOverride")
 	if we == null:
