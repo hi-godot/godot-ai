@@ -124,6 +124,27 @@ class TestSessionRegistry:
         assert s.to_dict()["server_launch_mode"] == "dev_venv"
 
 
+class TestSessionRegistryNoThreadingLock:
+    """Pin the asyncio-only invariant: no threading lock on the hot path.
+
+    The previous ``threading.RLock`` provided no asyncio-level mutual exclusion
+    (it wasn't awaited) and the only callers run inside the single asyncio WS
+    handler. Reintroducing a ``threading.RLock`` would mislead readers into
+    assuming thread-safety the registry doesn't deliver. If a thread crossing
+    is genuinely needed later, switch to ``asyncio.Lock`` instead.
+    """
+
+    def test_registry_has_no_lock_attribute(self):
+        reg = SessionRegistry()
+        assert not hasattr(reg, "_lock")
+
+    def test_registry_module_does_not_import_threading(self):
+        import godot_ai.sessions.registry as registry_module
+
+        assert "threading" not in vars(registry_module)
+        assert "RLock" not in vars(registry_module)
+
+
 class TestSessionMetadata:
     def test_name_derived_from_project_path(self):
         s = _make_session(project_path="/Users/me/projects/my_game/")
