@@ -1925,4 +1925,173 @@ func test_preset_fade_missing_target() -> void:
 		"mode": "in",
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	# Error must teach both supported path conventions so callers can pick the
+	# right one without spelunking docs (issue #328).
+	var msg := String(result.error.message)
+	assert_true(msg.contains("root_node"), "missing root_node hint: %s" % msg)
+	assert_true(msg.contains("scene-absolute") or msg.contains("/Main"),
+		"missing scene-absolute path hint: %s" % msg)
 	_remove_node(player_path)
+
+
+# Issue #328 — preset target_path accepts scene-absolute paths and converts
+# them to player-root-relative track paths. Mirrors how every other scene
+# tool takes /Main/Foo paths so callers don't need to remember an animation-
+# specific convention.
+
+func test_preset_fade_accepts_scene_absolute_target() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	_add_sibling(Sprite2D.new(), "AbsFadeTarget")
+	var player_path := _add_player("TestPresetFadeAbs")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/AbsFadeTarget")
+		skip("Scene not ready")
+		return
+	var abs_target := "/" + scene_root.name + "/AbsFadeTarget"
+	var result := _handler.preset_fade({
+		"player_path": player_path,
+		"target_path": abs_target,
+		"mode": "in",
+	})
+	assert_has_key(result, "data")
+	# Track path must end up relative to the player's root_node — bare sibling
+	# name "AbsFadeTarget", NOT the absolute "/Main/AbsFadeTarget" that would
+	# never resolve at playback.
+	var anim := _fetch_anim(player_path, "fade_in")
+	assert_true(anim != null, "animation should exist")
+	var track_path := String(anim.track_get_path(0))
+	assert_eq(track_path, "AbsFadeTarget:modulate:a",
+		"absolute target_path must convert to root_node-relative track path, got '%s'" % track_path)
+	_remove_node(player_path)
+	_remove_node(abs_target)
+
+
+func test_preset_pulse_accepts_scene_absolute_target() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	_add_sibling(Node2D.new(), "AbsPulser")
+	var player_path := _add_player("TestPresetPulseAbs")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/AbsPulser")
+		skip("Scene not ready")
+		return
+	var abs_target := "/" + scene_root.name + "/AbsPulser"
+	var result := _handler.preset_pulse({
+		"player_path": player_path,
+		"target_path": abs_target,
+	})
+	assert_has_key(result, "data")
+	var anim := _fetch_anim(player_path, "pulse")
+	var track_path := String(anim.track_get_path(0))
+	assert_eq(track_path, "AbsPulser:scale",
+		"absolute target_path must convert to root_node-relative track path, got '%s'" % track_path)
+	_remove_node(player_path)
+	_remove_node(abs_target)
+
+
+func test_preset_slide_rejects_target_outside_root_node() -> void:
+	# A scene-absolute path that resolves to a node outside the player's
+	# root_node subtree must be rejected — the derived track wouldn't
+	# resolve at playback.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	# Build a sibling subtree whose AnimationPlayer's root_node only sees
+	# its own children. Player at /Main/SubAnimRoot/Player; foreign target
+	# at /Main/Foreign — outside SubAnimRoot.
+	var sub_root := Node2D.new()
+	sub_root.name = "SubAnimRoot"
+	scene_root.add_child(sub_root)
+	sub_root.owner = scene_root
+	var player := AnimationPlayer.new()
+	player.name = "PlayerAbs"
+	player.add_animation_library("", AnimationLibrary.new())
+	sub_root.add_child(player)
+	player.set_owner(scene_root)
+	_add_sibling(Node2D.new(), "ForeignTarget")
+
+	var result := _handler.preset_slide({
+		"player_path": "/" + scene_root.name + "/SubAnimRoot/PlayerAbs",
+		"target_path": "/" + scene_root.name + "/ForeignTarget",
+		"direction": "left",
+	})
+	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	var msg := String(result.error.message)
+	assert_true(msg.contains("root_node") or msg.contains("outside"),
+		"error should explain the root_node containment requirement: %s" % msg)
+
+	_remove_node("/" + scene_root.name + "/SubAnimRoot")
+	_remove_node("/" + scene_root.name + "/ForeignTarget")
+
+
+func test_preset_fade_accepts_target_equal_to_root_node() -> void:
+	# Edge case: target_path resolves to the player's root_node itself.
+	# Animation tracks resolve "." against root_node, so the derived track
+	# path must be ".:modulate:a" — anything else (empty, leading slash) is
+	# silently broken at playback.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	# Player's default root_node is its parent — the scene root. The scene
+	# root in this project is a Node3D, which has no `modulate`, so use a
+	# Sprite2D parented under a CanvasItem to give the player a modulate-
+	# carrying root_node.
+	var holder := CanvasGroup.new()
+	holder.name = "FadeRootHolder"
+	scene_root.add_child(holder)
+	holder.owner = scene_root
+	var player := AnimationPlayer.new()
+	player.name = "PlayerForRoot"
+	player.add_animation_library("", AnimationLibrary.new())
+	holder.add_child(player)
+	player.set_owner(scene_root)
+
+	var abs_target := "/" + scene_root.name + "/FadeRootHolder"
+	var result := _handler.preset_fade({
+		"player_path": "/" + scene_root.name + "/FadeRootHolder/PlayerForRoot",
+		"target_path": abs_target,
+		"mode": "in",
+	})
+	assert_has_key(result, "data")
+	var anim := player.get_animation("fade_in")
+	assert_true(anim != null, "animation should exist")
+	var track_path := String(anim.track_get_path(0))
+	assert_eq(track_path, ".:modulate:a",
+		"target equal to root_node must yield '.' track path, got '%s'" % track_path)
+
+	_remove_node("/" + scene_root.name + "/FadeRootHolder")
+
+
+func test_preset_shake_accepts_scene_absolute_target() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	_add_sibling(Node2D.new(), "AbsShaker")
+	var player_path := _add_player("TestPresetShakeAbs")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/AbsShaker")
+		skip("Scene not ready")
+		return
+	var abs_target := "/" + scene_root.name + "/AbsShaker"
+	var result := _handler.preset_shake({
+		"player_path": player_path,
+		"target_path": abs_target,
+		"duration": 0.2,
+		"frequency": 20.0,
+		"seed": 1,
+	})
+	assert_has_key(result, "data")
+	var anim := _fetch_anim(player_path, "shake")
+	var track_path := String(anim.track_get_path(0))
+	assert_eq(track_path, "AbsShaker:position",
+		"absolute target_path must convert to root_node-relative track path, got '%s'" % track_path)
+	_remove_node(player_path)
+	_remove_node(abs_target)

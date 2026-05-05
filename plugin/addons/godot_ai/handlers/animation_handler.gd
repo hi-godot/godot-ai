@@ -588,13 +588,7 @@ func validate_animation(params: Dictionary) -> Dictionary:
 
 	var anim: Animation = player.get_animation(anim_name)
 
-	var root_node: Node = null
-	if player.is_inside_tree():
-		var rn := player.root_node
-		if rn != NodePath():
-			root_node = player.get_node_or_null(rn)
-		if root_node == null:
-			root_node = player.get_parent()
+	var root_node := _player_root_node(player)
 
 	var broken_tracks: Array[Dictionary] = []
 	var valid_count := 0
@@ -810,6 +804,7 @@ func preset_fade(params: Dictionary) -> Dictionary:
 	if target_resolved.has("error"):
 		return target_resolved
 	var target: Node = target_resolved.node
+	var track_target: String = target_resolved.track_path_root
 
 	# Fade requires a `modulate` property (CanvasItem/Control/Node2D/Sprite3D/etc).
 	var has_modulate := false
@@ -839,7 +834,7 @@ func preset_fade(params: Dictionary) -> Dictionary:
 	anim.length = duration
 	anim.loop_mode = Animation.LOOP_NONE
 
-	var track_path := "%s:modulate:a" % target_path
+	var track_path := "%s:modulate:a" % track_target
 	_do_add_property_track(anim, track_path, "linear", [
 		{"time": 0.0, "value": start_a, "transition": "linear"},
 		{"time": duration, "value": end_a, "transition": "linear"},
@@ -905,6 +900,7 @@ func preset_slide(params: Dictionary) -> Dictionary:
 		return target_resolved
 	var target = target_resolved.node
 	var kind: String = target_resolved.kind
+	var track_target: String = target_resolved.track_path_root
 
 	# Default distance picks 3D units vs screen pixels based on target kind.
 	var default_distance: float = 1.0 if kind == "3d" else 100.0
@@ -937,7 +933,7 @@ func preset_slide(params: Dictionary) -> Dictionary:
 	anim.length = duration
 	anim.loop_mode = Animation.LOOP_NONE
 
-	var track_path := "%s:position" % target_path
+	var track_path := "%s:position" % track_target
 	_do_add_property_track(anim, track_path, "linear", [
 		{"time": 0.0, "value": start_pos, "transition": "linear"},
 		{"time": duration, "value": end_pos, "transition": "linear"},
@@ -1001,6 +997,7 @@ func preset_shake(params: Dictionary) -> Dictionary:
 		return target_resolved
 	var target = target_resolved.node
 	var kind: String = target_resolved.kind
+	var track_target: String = target_resolved.track_path_root
 
 	var default_intensity: float = 0.1 if kind == "3d" else 10.0
 	var intensity: float = float(params.get("intensity", default_intensity))
@@ -1048,7 +1045,7 @@ func preset_shake(params: Dictionary) -> Dictionary:
 	anim.length = duration
 	anim.loop_mode = Animation.LOOP_NONE
 
-	var track_path := "%s:position" % target_path
+	var track_path := "%s:position" % track_target
 	_do_add_property_track(anim, track_path, "linear", kfs)
 
 	_commit_animation_add(
@@ -1110,6 +1107,7 @@ func preset_pulse(params: Dictionary) -> Dictionary:
 	if target_resolved.has("error"):
 		return target_resolved
 	var kind: String = target_resolved.kind
+	var track_target: String = target_resolved.track_path_root
 
 	if anim_name.is_empty():
 		anim_name = "pulse"
@@ -1134,7 +1132,7 @@ func preset_pulse(params: Dictionary) -> Dictionary:
 	anim.length = duration
 	anim.loop_mode = Animation.LOOP_NONE
 
-	var track_path := "%s:scale" % target_path
+	var track_path := "%s:scale" % track_target
 	_do_add_property_track(anim, track_path, "linear", [
 		{"time": 0.0, "value": from_vec, "transition": "linear"},
 		{"time": duration * 0.5, "value": to_vec, "transition": "linear"},
@@ -1165,26 +1163,74 @@ func preset_pulse(params: Dictionary) -> Dictionary:
 # Helpers — preset resolution
 # ============================================================================
 
-## Resolve a preset target node relative to the player's animation root and
-## classify its transform kind. Mirrors the same root-node fallback that
-## `_resolve_track_prop_context` uses so tool inputs match how the track path
-## will resolve at playback.
-## Returns {node, kind} where kind ∈ {"control", "2d", "3d"}, or an error dict.
+## Resolve the AnimationPlayer's effective `root_node` — the node animation
+## tracks resolve their paths against at playback. Honors a non-default
+## `root_node` NodePath, then falls back to `player.get_parent()` (Godot's
+## documented default behavior for `root_node = ".."`). Returns null if the
+## player isn't in the tree and has no resolvable parent.
+static func _player_root_node(player: AnimationPlayer) -> Node:
+	if not player.is_inside_tree():
+		return null
+	var rn := player.root_node
+	if rn != NodePath():
+		var resolved := player.get_node_or_null(rn)
+		if resolved != null:
+			return resolved
+	return player.get_parent()
+
+
+## Resolve a preset target node and classify its transform kind.
+##
+## Accepts two `target_path` shapes:
+##   * Scene-absolute (starts with "/") — resolved through `McpScenePath.resolve`,
+##     matching the convention used by every other scene-mutating tool. The
+##     resolved node must be the player's `root_node` itself or a descendant,
+##     so the derived track path can resolve at playback.
+##   * Relative — used as-is against the player's `root_node`, matching how
+##     animation tracks themselves are stored.
+##
+## Returns `{node, kind, track_path_root}` where `track_path_root` is the path
+## (relative to `root_node`) that callers should embed in the track path. For
+## scene-absolute inputs this is the converted relative path; for relative
+## inputs it equals the input. `kind` ∈ {"control", "2d", "3d"}.
+##
+## Mirrors the same root-node fallback that `_resolve_track_prop_context` uses
+## so tool inputs match how the track path will resolve at playback.
 func _resolve_preset_target(player: AnimationPlayer, target_path: String) -> Dictionary:
-	var root_node: Node = null
-	if player.is_inside_tree():
-		var rn := player.root_node
-		if rn != NodePath():
-			root_node = player.get_node_or_null(rn)
-		if root_node == null:
-			root_node = player.get_parent()
+	var root_node := _player_root_node(player)
 	if root_node == null:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
 			"AnimationPlayer at %s has no resolvable root_node (is the scene open?)" % str(player.get_path()))
-	var target: Node = root_node.get_node_or_null(target_path)
-	if target == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
-			"Target node not found at '%s' (resolved against player's root_node)" % target_path)
+
+	var target: Node = null
+	var track_path_root: String = target_path
+	if target_path.begins_with("/"):
+		var scene_root := EditorInterface.get_edited_scene_root()
+		if scene_root == null:
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+				"Cannot resolve scene-absolute target_path '%s': no scene open" % target_path)
+		target = McpScenePath.resolve(target_path, scene_root)
+		if target == null:
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+				McpScenePath.format_node_error(target_path, scene_root))
+		if target != root_node and not root_node.is_ancestor_of(target):
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+				"Target '%s' is outside the AnimationPlayer's root_node ('%s'). " % [target_path, McpScenePath.from_node(root_node, scene_root)] +
+				"Animation tracks resolve relative to the player's root_node, so target must be root_node itself or a descendant.")
+		track_path_root = str(root_node.get_path_to(target))
+	else:
+		target = root_node.get_node_or_null(target_path)
+		if target == null:
+			# root_node.get_path() leaks the editor's SubViewport-wrapped
+			# path; use the clean scene-relative form so the hint is
+			# actionable.
+			var scene_root := EditorInterface.get_edited_scene_root()
+			var root_hint := McpScenePath.from_node(root_node, scene_root) if scene_root != null else str(root_node.name)
+			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+				("Target node not found at '%s' (resolved relative to AnimationPlayer's root_node '%s'). "
+				+ "Pass a path relative to root_node (e.g. \"World/Cube\") or a scene-absolute path (e.g. \"/Main/World/Cube\").")
+				% [target_path, root_hint])
+
 	var kind: String
 	if target is Control:
 		kind = "control"
@@ -1195,7 +1241,7 @@ func _resolve_preset_target(player: AnimationPlayer, target_path: String) -> Dic
 	else:
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
 			"Target '%s' must be a Control, Node2D, or Node3D (got %s)" % [target_path, target.get_class()])
-	return {"node": target, "kind": kind}
+	return {"node": target, "kind": kind, "track_path_root": track_path_root}
 
 
 ## Build a directional offset for slide presets.
@@ -1481,13 +1527,7 @@ static func _resolve_track_prop_context(track_path: String, player: AnimationPla
 	var prop_base := prop_full if sub_colon < 0 else prop_full.substr(0, sub_colon)
 	var prop_sub := "" if sub_colon < 0 else prop_full.substr(sub_colon + 1)
 
-	var root_node: Node = override_root_node
-	if root_node == null and player.is_inside_tree():
-		var rn := player.root_node
-		if rn != NodePath():
-			root_node = player.get_node_or_null(rn)
-		if root_node == null:
-			root_node = player.get_parent()
+	var root_node: Node = override_root_node if override_root_node != null else _player_root_node(player)
 	if root_node == null:
 		return {"pass_through": true}
 

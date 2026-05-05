@@ -58,6 +58,12 @@ Ops:
   • preset_pulse(player_path, target_path, from_scale=1.0, to_scale=1.1,
                   duration=0.4, animation_name="", overwrite=False)
         One-call pulse / hover-bounce (3-keyframe scale ping-pong).
+
+Preset target_path: accepts either a scene-absolute path ("/Main/World/Cube",
+matching every other scene tool) or a path relative to the AnimationPlayer's
+root_node ("World/Cube", matching how Animation tracks store node paths).
+Scene-absolute targets that fall outside the player's root_node subtree are
+rejected — the derived track must resolve from root_node at playback.
 """
 
 
@@ -76,6 +82,10 @@ def register_animation_tools(mcp: FastMCP) -> None:
 
         After creating the clip, add tracks via ``animation_manage`` ops
         ``add_property_track`` / ``add_method_track`` / ``create_simple``.
+        Track node paths are stored relative to the AnimationPlayer's
+        ``root_node`` (default: its parent), not to the scene root — see
+        ``animation_manage`` preset ops for a forgiving target_path that
+        accepts either form.
         If ``player_path`` doesn't resolve, an AnimationPlayer is auto-created
         at that path (parent must exist).
 
