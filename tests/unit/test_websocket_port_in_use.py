@@ -22,16 +22,34 @@ def _serve_raising(errno_value: int):
     @asynccontextmanager
     async def _cm(*_args, **_kwargs):
         raise OSError(errno_value, "fake bind failure")
-        yield  # pragma: no cover - unreachable
+        yield  # pragma: no cover
 
     return _cm
 
 
-async def test_start_swallows_address_in_use(caplog: pytest.LogCaptureFixture) -> None:
+## Python tests run on Ubuntu only in CI, so a host-native check would let
+## a re-hardcoded `errno == <single platform value>` regression escape on
+## the other two OSes. Patching the production-side EADDRINUSE alongside
+## the simulated OSError exercises every platform from one runner — any
+## single-value hardcode fails ≥2 of these rows.
+@pytest.mark.parametrize(
+    "platform_errno",
+    [
+        pytest.param(48, id="macOS"),
+        pytest.param(98, id="Linux"),
+        pytest.param(10048, id="Windows"),
+    ],
+)
+async def test_start_swallows_address_in_use_per_platform(
+    platform_errno: int, caplog: pytest.LogCaptureFixture
+) -> None:
     caplog.set_level(logging.WARNING)
-    with patch(
-        "godot_ai.transport.websocket.websockets.serve",
-        _serve_raising(errno.EADDRINUSE),
+    with (
+        patch("godot_ai.transport.websocket.errno.EADDRINUSE", platform_errno),
+        patch(
+            "godot_ai.transport.websocket.websockets.serve",
+            _serve_raising(platform_errno),
+        ),
     ):
         await asyncio.wait_for(_make_server().start(), timeout=1.0)
 
