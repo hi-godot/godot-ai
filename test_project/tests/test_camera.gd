@@ -237,17 +237,18 @@ func _camera_current_diag(cam: Node, expected: bool, attempts: int, elapsed_msec
 	]
 
 
-# Issue #316 gate. After 12+ fix attempts, the Camera2D `make_current` →
-# `Viewport.camera_2d` slot propagation still occasionally lags in headless
-# mode (originally observed on macOS, then on Windows after PR #380's
-# diagnostic landed — same handler-agrees / engine-disagrees signature, same
-# `viewport_camera=<none>` end state). The handler-side logical bookkeeping
-# (#311) stays correct in that race — only the engine-side viewport slot
-# doesn't catch up. Per the issue's acceptance criterion #2, the headless
-# failure is gated when the handler view agrees with the expectation: skip
-# with the full diagnostic so the next investigator still sees the state
-# divergence, but don't fail the build for a known upstream race we can't
-# close at the plugin level.
+# Issue #316 gate. After 12+ fix attempts, `Camera2D.make_current()` →
+# `Viewport.camera_2d` (and the same dispatch for Camera3D →
+# `Viewport.camera_3d`, exercised by `test_make_current_does_not_cross_classes`)
+# still occasionally lags in headless mode (originally observed on macOS,
+# then on Windows after PR #380's diagnostic landed — same handler-agrees /
+# engine-disagrees signature, same `viewport_camera=<none>` end state). The
+# handler-side logical bookkeeping (#311) stays correct in that race — only
+# the engine-side viewport slot doesn't catch up. Per the issue's acceptance
+# criterion #2, the headless failure is gated when the handler view agrees
+# with the expectation: skip with the full diagnostic so the next
+# investigator still sees the state divergence, but don't fail the build for
+# a known upstream race we can't close at the plugin level.
 #
 # Deliberately scoped to headless DisplayServer only — Linux CI runs under
 # xvfb with a real display server, and a developer running the suite in a
@@ -256,7 +257,10 @@ func _camera_current_diag(cam: Node, expected: bool, attempts: int, elapsed_msec
 # `_handler_logical_current_matches` guard further ensures we only skip when
 # the handler explicitly agrees — a handler-level regression still fails.
 func _is_headless() -> bool:
-	return DisplayServer.get_name() == "headless"
+	# Lowercased to match `plugin.gd::_mcp_disabled_for_headless` convention —
+	# Godot 4.x reports "headless" lowercase but normalize defensively in case
+	# a future build returns "Headless".
+	return DisplayServer.get_name().to_lower() == "headless"
 
 
 func _handler_logical_current_matches(cam: Node, expected: bool) -> bool:
@@ -272,7 +276,7 @@ func _handler_logical_current_matches(cam: Node, expected: bool) -> bool:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null or not scene_root.is_ancestor_of(cam):
 		return false
-	var type_str := "2d" if cam is Camera2D else ("3d" if cam is Camera3D else "")
+	var type_str := CameraHandler._camera_type_str(cam)
 	if type_str.is_empty():
 		return false
 	var marker: Node = _handler.peek_logical_current(scene_root, type_str)
@@ -299,9 +303,9 @@ func _skip_if_headless_engine_lag(cam: Node, expected: bool, report: Dictionary,
 		return false
 	if not _handler_logical_current_matches(cam, expected):
 		return false
-	# The relevant viewport slot depends on camera class — `_handler_logical_current_matches`
-	# already validated cam is a Camera2D or Camera3D in tree.
-	var slot_name := "Viewport.camera_3d" if cam is Camera3D else "Viewport.camera_2d"
+	# `_handler_logical_current_matches` already validated cam is a Camera2D or
+	# Camera3D in tree, so `_camera_type_str` returns "2d"/"3d" non-empty here.
+	var slot_name := "Viewport.camera_%s" % CameraHandler._camera_type_str(cam)
 	var msg := (
 		"Engine-state lag on headless DisplayServer (#316): handler logical "
 		+ "state matches expected current=%s but %s slot didn't propagate "
