@@ -498,6 +498,55 @@ class TestDnsRebindingGuard:
         assert harness.registry.get("origin-loopback") is not None
         await ws.close()
 
+    async def test_origin_null_rejected_at_upgrade(self, harness):
+        ## A sandboxed iframe or downloaded file:// page emits
+        ## ``Origin: null`` — same effective bypass as a foreign Origin.
+        with pytest.raises(websockets.exceptions.InvalidStatus) as exc_info:
+            await websockets.connect(
+                f"ws://127.0.0.1:{harness.port}",
+                additional_headers={"Origin": "null"},
+            )
+        assert exc_info.value.response.status_code == 403
+
+    async def test_browser_cross_origin_subresource_rejected(self, harness):
+        ## Browsers stamp every HTTP request with Sec-Fetch-Site. A
+        ## cross-origin no-cors load (the ``<img>`` liveness-oracle
+        ## shape) arrives with a loopback Host and *no* Origin but the
+        ## fetch metadata gives the rebinding away.
+        with pytest.raises(websockets.exceptions.InvalidStatus) as exc_info:
+            await websockets.connect(
+                f"ws://127.0.0.1:{harness.port}",
+                additional_headers={"Sec-Fetch-Site": "cross-site"},
+            )
+        assert exc_info.value.response.status_code == 403
+
+    async def test_bracketed_ipv6_loopback_origin_accepted(self, harness):
+        ## Symmetry with the unit-level ``http://[::1]`` accept — pin
+        ## the WebSocket guard end-to-end against the bracketed-IPv6
+        ## spelling so the WS path doesn't drift from the helper.
+        ws = await websockets.connect(
+            f"ws://127.0.0.1:{harness.port}",
+            origin="http://[::1]:9500",
+        )
+        handshake = {
+            "type": "handshake",
+            "session_id": "ipv6-loopback",
+            "godot_version": "4.4.1",
+            "project_path": "/tmp",
+            "plugin_version": "0.0.1",
+            "protocol_version": 1,
+            "readiness": "ready",
+            "editor_pid": 0,
+        }
+        await ws.send(json.dumps(handshake))
+        await asyncio.sleep(0.05)
+        try:
+            await asyncio.wait_for(ws.recv(), timeout=0.5)
+        except asyncio.TimeoutError:
+            pass
+        assert harness.registry.get("ipv6-loopback") is not None
+        await ws.close()
+
     async def test_rejected_request_does_not_register_session(self, harness):
         before = len(harness.registry)
         with pytest.raises(websockets.exceptions.InvalidStatus):

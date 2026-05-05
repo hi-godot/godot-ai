@@ -13,8 +13,10 @@ import pytest
 
 from godot_ai.transport.origin_guard import (
     LocalhostOnlyHTTPMiddleware,
+    evaluate_loopback,
     is_allowed_host,
     is_allowed_origin,
+    is_allowed_sec_fetch_site,
 )
 
 # ---------------------------------------------------------------------------
@@ -32,6 +34,11 @@ from godot_ai.transport.origin_guard import (
         "LOCALHOST",  # case-insensitive
         "[::1]",
         "[::1]:9500",
+        # RFC-1034-valid trailing-dot FQDN syntax — browsers and curl can
+        # preserve it through to the Host header. Friction trap if rejected.
+        "localhost.",
+        "localhost.:8000",
+        "127.0.0.1.",
     ],
 )
 def test_loopback_hosts_pass(host: str) -> None:
@@ -82,9 +89,6 @@ def test_non_loopback_hosts_rejected(host) -> None:
         None,
         "",
         "   ",
-        # Sandboxed and file:// contexts emit ``Origin: null``.
-        "null",
-        "NULL",
         # Loopback origins are allowed for tooling that explicitly opts in.
         "http://127.0.0.1",
         "http://127.0.0.1:9500",
@@ -95,10 +99,22 @@ def test_non_loopback_hosts_rejected(host) -> None:
         "wss://localhost:8443",
         "http://[::1]",
         "http://[::1]:9500",
+        # Trailing-dot FQDN form — accepted alongside the canonical name.
+        "http://localhost.",
+        "http://localhost.:8000",
     ],
 )
 def test_loopback_origins_pass(origin) -> None:
     assert is_allowed_origin(origin) is True
+
+
+@pytest.mark.parametrize("null_origin", ["null", "NULL", " null ", "Null"])
+def test_origin_null_rejected(null_origin: str) -> None:
+    """``Origin: null`` is the bypass shape — sandboxed iframes and
+    downloaded ``file://`` pages emit it and would otherwise let an
+    attacker bridge a foreign origin onto the loopback socket. Native
+    clients never produce ``null`` (they omit Origin entirely)."""
+    assert is_allowed_origin(null_origin) is False
 
 
 @pytest.mark.parametrize(
@@ -123,6 +139,96 @@ def test_loopback_origins_pass(origin) -> None:
 )
 def test_non_loopback_origins_rejected(origin: str) -> None:
     assert is_allowed_origin(origin) is False
+
+
+# ---------------------------------------------------------------------------
+# is_allowed_sec_fetch_site — block browser cross-origin probes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # Native non-browser clients never send Sec-Fetch-Site.
+        None,
+        # Top-level navigation (user typed URL / clicked bookmark).
+        "none",
+        # Same-origin fetch (e.g. our own /godot-ai/status from a loopback
+        # browser context).
+        "same-origin",
+        # Case insensitivity per spec.
+        "None",
+        "Same-Origin",
+        # Whitespace tolerance.
+        " none ",
+    ],
+)
+def test_sec_fetch_site_friendly_values_pass(value) -> None:
+    assert is_allowed_sec_fetch_site(value) is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # Cross-origin subresource load (`<img src="http://127.0.0.1...">`
+        # from a foreign page) — reject.
+        "cross-site",
+        "CROSS-SITE",
+        # Same-site cross-origin — also reject; the request is still
+        # browser-driven from a different origin (different port/scheme).
+        "same-site",
+    ],
+)
+def test_sec_fetch_site_foreign_values_rejected(value: str) -> None:
+    assert is_allowed_sec_fetch_site(value) is False
+
+
+# ---------------------------------------------------------------------------
+# evaluate_loopback — combined gate
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_loopback_native_client() -> None:
+    """No Origin, no Sec-Fetch-Site, loopback Host — native client path."""
+    assert evaluate_loopback(["127.0.0.1:9500"], [], []) is True
+
+
+def test_evaluate_loopback_loopback_browser_passes() -> None:
+    """Browser pointed at our own loopback origin still passes."""
+    assert (
+        evaluate_loopback(
+            ["127.0.0.1:9500"],
+            ["http://127.0.0.1:9500"],
+            ["same-origin"],
+        )
+        is True
+    )
+
+
+def test_evaluate_loopback_cross_site_subresource_rejected() -> None:
+    """The Copilot-flagged liveness oracle: cross-origin <img> hits our
+    /godot-ai/status with a loopback Host and *no* Origin (no-cors mode).
+    Sec-Fetch-Site is the giveaway."""
+    assert (
+        evaluate_loopback(
+            ["127.0.0.1:9500"],
+            [],
+            ["cross-site"],
+        )
+        is False
+    )
+
+
+def test_evaluate_loopback_origin_null_rejected() -> None:
+    """Sandboxed iframe / file:// page emit ``Origin: null`` — reject."""
+    assert (
+        evaluate_loopback(
+            ["127.0.0.1:9500"],
+            ["null"],
+            ["cross-site"],
+        )
+        is False
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +367,52 @@ async def test_middleware_rejects_duplicate_host_smuggle() -> None:
     )
     assert inner_called is False
     assert sent[0]["status"] == 403
+
+
+async def test_middleware_rejects_origin_null() -> None:
+    """A sandboxed iframe / file:// page hitting our loopback socket
+    sends ``Origin: null`` — must be rejected even though the Host
+    looks loopback."""
+    middleware = LocalhostOnlyHTTPMiddleware(app=None)  # type: ignore[arg-type]
+    sent, inner_called = await _call_middleware(
+        middleware,
+        headers=[
+            (b"host", b"127.0.0.1:8000"),
+            (b"origin", b"null"),
+        ],
+    )
+    assert inner_called is False
+    assert sent[0]["status"] == 403
+
+
+async def test_middleware_rejects_cross_origin_subresource() -> None:
+    """The /godot-ai/status liveness-oracle shape Copilot flagged: a
+    cross-origin <img> / <script> load arrives with a loopback Host
+    and *no* Origin (no-cors mode) — but Sec-Fetch-Site reveals it."""
+    middleware = LocalhostOnlyHTTPMiddleware(app=None)  # type: ignore[arg-type]
+    sent, inner_called = await _call_middleware(
+        middleware,
+        headers=[
+            (b"host", b"127.0.0.1:8000"),
+            (b"sec-fetch-site", b"cross-site"),
+        ],
+    )
+    assert inner_called is False
+    assert sent[0]["status"] == 403
+
+
+async def test_middleware_passes_top_level_navigation() -> None:
+    """User typed URL / clicked bookmark — Sec-Fetch-Site: none."""
+    middleware = LocalhostOnlyHTTPMiddleware(app=None)  # type: ignore[arg-type]
+    sent, inner_called = await _call_middleware(
+        middleware,
+        headers=[
+            (b"host", b"127.0.0.1:8000"),
+            (b"sec-fetch-site", b"none"),
+        ],
+    )
+    assert inner_called is True
+    assert sent[0]["status"] == 200
 
 
 async def test_middleware_rejects_duplicate_origin_smuggle() -> None:

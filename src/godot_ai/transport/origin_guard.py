@@ -16,14 +16,24 @@ requests *before* the WebSocket upgrade runs or any HTTP route fires:
   form for IPv6 in HTTP/1.1 Host headers, so a bare ``::1`` is not
   accepted (would be a malformed request).
 - ``Origin`` is validated only when present (native non-browser clients
-  omit it). A present Origin must be empty, the literal ``null`` (file://
-  / sandboxed contexts), or a URL whose hostname matches the loopback
-  allowlist.
+  omit it). A present Origin must be empty or a URL whose hostname
+  matches the loopback allowlist. ``Origin: null`` is **rejected** —
+  browsers emit it from sandboxed iframes and downloaded ``file://``
+  pages, which is exactly the rebinding-bypass shape. Native clients
+  do not produce ``null`` (they omit Origin entirely).
+- ``Sec-Fetch-Site`` is also checked when present: any value other than
+  ``same-origin`` / ``none`` (i.e. browser-issued cross-origin
+  subresources or navigations from a foreign page) is refused. This
+  catches `<img src=...>` / `<link>` / `<script>` liveness oracles
+  against ``/godot-ai/status``, where browsers send a loopback ``Host``
+  and *no* ``Origin`` for "no-cors" subresource loads. Native clients
+  never send ``Sec-Fetch-*`` (it's a Fetch-Metadata header set only by
+  browsers), so missing means "allow".
 
 Native clients (the Godot plugin, the FastMCP CLI client, ``curl`` with
-no ``-H Origin``) keep working unchanged. Browser-driven traffic from any
-non-loopback origin is refused with HTTP 403 long before reaching FastMCP
-or our session registry.
+no ``-H Origin``) keep working unchanged. Browser-driven traffic — even
+``no-cors`` subresources that wouldn't carry an Origin — is refused with
+HTTP 403 long before reaching FastMCP or our session registry.
 
 See umbrella #343, finding #1 (audit-v2).
 """
@@ -46,17 +56,33 @@ FORBIDDEN_BODY = (
 FORBIDDEN_BODY_TEXT = FORBIDDEN_BODY.decode("utf-8")
 
 
-def _strip_port(host: str) -> str:
-    """Return ``host`` with a trailing ``:port`` stripped.
+## Sec-Fetch-Site values that indicate the request is browser-driven and
+## NOT a top-level navigation or same-origin operation. Modern browsers
+## always send Sec-Fetch-Site on HTTP requests (including ``no-cors``
+## subresources like ``<img>`` / ``<script>`` / ``<link>`` that carry
+## *no* Origin); native non-browser clients never send it.
+SEC_FETCH_SITE_FOREIGN: frozenset[str] = frozenset({"cross-site", "same-site"})
 
-    Handles bracketed IPv6 (``[::1]:9500`` → ``[::1]``) and bare-name
-    forms (``localhost:8000`` → ``localhost``).
+
+def _normalise_host(host: str) -> str:
+    """Return ``host`` with a trailing ``:port`` stripped, lowercased,
+    and with any single trailing DNS root dot removed.
+
+    Handles bracketed IPv6 (``[::1]:9500`` → ``[::1]``), bare-name forms
+    (``LOCALHOST:8000`` → ``localhost``), and the rare-but-valid trailing
+    dot (``localhost.`` → ``localhost``) so the allowlist lookup is
+    independent of caller punctuation.
     """
     if not host:
         return host
     if host.startswith("[") and "]" in host:
-        return host[: host.index("]") + 1]
-    return host.split(":", 1)[0]
+        without_port = host[: host.index("]") + 1]
+    else:
+        without_port = host.split(":", 1)[0]
+    normalised = without_port.lower()
+    if normalised.endswith(".") and not normalised.endswith(".]"):
+        normalised = normalised.rstrip(".")
+    return normalised
 
 
 def is_allowed_host(host_header: str | None) -> bool:
@@ -68,21 +94,25 @@ def is_allowed_host(host_header: str | None) -> bool:
     """
     if not host_header:
         return False
-    return _strip_port(host_header.strip()).lower() in LOOPBACK_HOSTNAMES
+    return _normalise_host(host_header.strip()) in LOOPBACK_HOSTNAMES
 
 
 def is_allowed_origin(origin_header: str | None) -> bool:
     """Whether ``origin_header`` is absent or names a loopback URL.
 
-    Native clients do not send Origin. Browsers always do, and sandboxed
-    or file:// contexts send ``Origin: null``. Both are accepted; any
-    other origin must parse to a URL whose hostname is loopback.
+    Native clients do not send Origin. Browsers always do, and the
+    request is rejected unless the Origin parses to a loopback URL.
+    ``Origin: null`` is rejected — sandboxed iframes and downloaded
+    ``file://`` pages emit it, which is the exact bypass an attacker
+    would use to bridge a foreign origin onto our loopback socket.
     """
     if origin_header is None:
         return True
     value = origin_header.strip()
-    if not value or value.lower() == "null":
+    if not value:
         return True
+    if value.lower() == "null":
+        return False
     parsed = urlsplit(value)
     ## ``urlsplit`` already lowercases the scheme per RFC 3986, so no
     ## extra normalization is needed before the set lookup.
@@ -90,26 +120,54 @@ def is_allowed_origin(origin_header: str | None) -> bool:
         return False
     if not parsed.hostname:
         return False
-    hostname = parsed.hostname.lower()
+    hostname = parsed.hostname.lower().rstrip(".")
     # urlsplit strips IPv6 brackets — re-add for the bracketed-form lookup.
     bracketed = f"[{hostname}]" if ":" in hostname else hostname
     return hostname in LOOPBACK_HOSTNAMES or bracketed in LOOPBACK_HOSTNAMES
 
 
-def evaluate_loopback(hosts: list[str], origins: list[str]) -> bool:
-    """Return True iff the request's Host/Origin headers pass the allowlist.
+def is_allowed_sec_fetch_site(value: str | None) -> bool:
+    """Whether the ``Sec-Fetch-Site`` header indicates a non-foreign request.
+
+    Modern browsers stamp every HTTP request with one of ``cross-site``,
+    ``same-site``, ``same-origin`` or ``none`` (top-level navigation /
+    bookmark). Native clients never send it. Treat missing as "allow"
+    (native client) and the foreign values as "reject" — the rest of the
+    allowlist still has to pass, this is just an early-out for the
+    `<img src=...>` / `<script src=...>` cross-origin probe shape that
+    would otherwise slip past a loopback Host / missing Origin.
+    """
+    if value is None:
+        return True
+    return value.strip().lower() not in SEC_FETCH_SITE_FOREIGN
+
+
+def evaluate_loopback(
+    hosts: list[str],
+    origins: list[str],
+    sec_fetch_sites: list[str] | None = None,
+) -> bool:
+    """Return True iff the request's headers pass the allowlist.
 
     Both transports (ASGI middleware + WebSocket ``process_request``)
     funnel their per-request header extraction through this helper so
-    the duplicate-header smuggling rule and the value-allowlist rule
-    are evaluated identically. A divergence between the two transports
-    would be a security regression — this helper exists to prevent it.
+    the duplicate-header smuggling rule, the value-allowlist rule, and
+    the Sec-Fetch-Site cross-origin reject rule are evaluated identically.
+    A divergence between the two transports would be a security
+    regression — this helper exists to prevent it.
     """
     if len(hosts) > 1 or len(origins) > 1:
         return False
+    if sec_fetch_sites and len(sec_fetch_sites) > 1:
+        return False
     host = hosts[0] if hosts else None
     origin = origins[0] if origins else None
-    return is_allowed_host(host) and is_allowed_origin(origin)
+    sec_fetch_site = sec_fetch_sites[0] if sec_fetch_sites else None
+    return (
+        is_allowed_host(host)
+        and is_allowed_origin(origin)
+        and is_allowed_sec_fetch_site(sec_fetch_site)
+    )
 
 
 class LocalhostOnlyHTTPMiddleware:
@@ -135,14 +193,17 @@ class LocalhostOnlyHTTPMiddleware:
 
         hosts: list[str] = []
         origins: list[str] = []
+        sec_fetch_sites: list[str] = []
         for raw_key, raw_value in scope.get("headers", []):
             key = raw_key.lower()
             if key == b"host":
                 hosts.append(raw_value.decode("latin-1"))
             elif key == b"origin":
                 origins.append(raw_value.decode("latin-1"))
+            elif key == b"sec-fetch-site":
+                sec_fetch_sites.append(raw_value.decode("latin-1"))
 
-        if evaluate_loopback(hosts, origins):
+        if evaluate_loopback(hosts, origins, sec_fetch_sites):
             await self.app(scope, receive, send)
             return
         await _send_forbidden(send)
@@ -178,7 +239,8 @@ def make_websocket_request_guard():
         ## ``request.headers.get(...)`` and surfacing as an opaque 500.
         hosts = list(request.headers.get_all("Host"))
         origins = list(request.headers.get_all("Origin"))
-        if evaluate_loopback(hosts, origins):
+        sec_fetch_sites = list(request.headers.get_all("Sec-Fetch-Site"))
+        if evaluate_loopback(hosts, origins, sec_fetch_sites):
             return None
         return connection.respond(HTTPStatus.FORBIDDEN, FORBIDDEN_BODY_TEXT)
 
