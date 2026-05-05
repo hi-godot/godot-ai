@@ -44,9 +44,10 @@ func find_nodes(params: Dictionary) -> Dictionary:
 	if name_filter.is_empty() and type_filter.is_empty() and group_filter.is_empty():
 		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "At least one filter (name, type, group) is required")
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	var results: Array[Dictionary] = []
 	_find_recursive(scene_root, scene_root, name_filter, type_filter, group_filter, results)
@@ -163,9 +164,10 @@ func open_scene(params: Dictionary) -> Dictionary:
 ## Pauses WebSocket processing during save to prevent re-entrant _process()
 ## calls during EditorNode::_save_scene_with_preview's thumbnail render.
 func save_scene(_params: Dictionary) -> Dictionary:
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	var path := scene_root.scene_file_path
 	if path.is_empty():
@@ -204,9 +206,10 @@ func save_scene_as(params: Dictionary) -> Dictionary:
 	if not path.ends_with(".tscn") and not path.ends_with(".scn"):
 		path += ".tscn"
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	# Ensure parent directory exists
 	var dir_path := path.get_base_dir()

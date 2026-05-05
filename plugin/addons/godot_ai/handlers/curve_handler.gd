@@ -54,9 +54,10 @@ func set_points(params: Dictionary) -> Dictionary:
 			)
 		curve = loaded_curve.duplicate()
 	else:
-		var scene_root := EditorInterface.get_edited_scene_root()
-		if scene_root == null:
-			return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+		var _scene_check := McpNodeValidator.require_scene_or_error()
+		if _scene_check.has("error"):
+			return _scene_check
+		var scene_root: Node = _scene_check.scene_root
 		node = McpScenePath.resolve(node_path, scene_root)
 		if node == null:
 			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))

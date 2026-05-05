@@ -80,13 +80,11 @@ func set_anchor_preset(params: Dictionary) -> Dictionary:
 
 	var margin: int = int(params.get("margin", 0))
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-
-	var node := McpScenePath.resolve(node_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	if _resolved.has("error"):
+		return _resolved
+	var node: Node = _resolved.node
+	var scene_root: Node = _resolved.scene_root
 	if not node is Control:
 		var got_class: String = node.get_class()
 		return McpErrorCodes.make(
@@ -153,13 +151,11 @@ func set_text(params: Dictionary) -> Dictionary:
 	if typeof(text_value) != TYPE_STRING:
 		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "text must be a string")
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-
-	var node := McpScenePath.resolve(node_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	if _resolved.has("error"):
+		return _resolved
+	var node: Node = _resolved.node
+	var scene_root: Node = _resolved.scene_root
 	var node_type := node.get_class()
 	if not node is Control:
 		return McpErrorCodes.make(
@@ -228,9 +224,10 @@ func build_layout(params: Dictionary) -> Dictionary:
 	if typeof(tree) != TYPE_DICTIONARY:
 		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "tree must be a dictionary")
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	var parent_path: String = params.get("parent_path", "")
 	var parent: Node = scene_root

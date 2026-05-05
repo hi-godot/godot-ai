@@ -50,9 +50,10 @@ func create_player(params: Dictionary) -> Dictionary:
 	var parent_path: String = params.get("parent_path", "")
 	var node_name: String = params.get("name", "AnimationPlayer")
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	var parent: Node = scene_root
 	if not parent_path.is_empty():
@@ -726,9 +727,10 @@ func _create_scene_pinned_action(action_label: String) -> void:
 ## If the resolved node exists but isn't an AnimationPlayer, that's still an
 ## error — we don't clobber an existing node of a different type.
 func _resolve_player(player_path: String, create_if_missing: bool = false) -> Dictionary:
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 	var node := McpScenePath.resolve(player_path, scene_root)
 	if node == null:
 		if not create_if_missing:
@@ -790,9 +792,10 @@ func _instantiate_player(player_path: String, scene_root: Node) -> Dictionary:
 ## staged. If the node exists but isn't an AnimationPlayer, errors exactly
 ## like `_resolve_player` — that's a genuine type mismatch, not a missing node.
 func _resolve_or_create_player(player_path: String) -> Dictionary:
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 	if McpScenePath.resolve(player_path, scene_root) != null:
 		# Node exists — delegate so the type-mismatch error stays identical
 		# to _resolve_player's.
@@ -829,12 +832,10 @@ func _resolve_or_create_player(player_path: String) -> Dictionary:
 
 ## Resolve for read operations (no library requirement).
 func _resolve_player_read(player_path: String) -> Dictionary:
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-	var node := McpScenePath.resolve(player_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(player_path, scene_root))
+	var resolved := McpNodeValidator.resolve_or_error(player_path, "player_path")
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
 	if not node is AnimationPlayer:
 		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE,
 			"Node at %s is not an AnimationPlayer (got %s)" % [player_path, node.get_class()])

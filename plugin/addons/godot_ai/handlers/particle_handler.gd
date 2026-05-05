@@ -54,9 +54,10 @@ func create_particle(params: Dictionary) -> Dictionary:
 			"Invalid particle type '%s'. Valid: %s" % [type_str, ", ".join(_VALID_TYPES.keys())]
 		)
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	var parent: Node = scene_root
 	if not parent_path.is_empty():
@@ -589,9 +590,10 @@ func apply_preset(params: Dictionary) -> Dictionary:
 			"Invalid particle type '%s'. Valid: %s" % [type_str, ", ".join(_VALID_TYPES.keys())]
 		)
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	var parent: Node = scene_root
 	if not parent_path.is_empty():
@@ -706,15 +708,13 @@ static func _instantiate_particle(type_str: String) -> Node:
 
 
 func _resolve_particle(params: Dictionary) -> Dictionary:
-	var node_path: String = params.get("node_path", "")
-	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: node_path")
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-	var node := McpScenePath.resolve(node_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
+	var resolved := McpNodeValidator.resolve_or_error(
+		params.get("node_path", ""), "node_path",
+	)
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	var node_path: String = resolved.path
 	var is_particle := node is GPUParticles3D or node is GPUParticles2D \
 		or node is CPUParticles3D or node is CPUParticles2D
 	if not is_particle:
