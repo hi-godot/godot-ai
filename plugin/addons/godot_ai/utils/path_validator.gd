@@ -20,6 +20,20 @@ extends RefCounted
 ##      that simplify_path collapses but the substring check might miss)
 
 
+# Cached project root. `ProjectSettings.globalize_path("res://")` is stable
+# across the editor's lifetime — caching avoids redundant resolution on every
+# call. Matters most for `reimport`, which loops the validator over each path
+# in a batch. Lazy-init on first call so static-load timing can't see a
+# half-initialised ProjectSettings.
+static var _cached_res_root: String = ""
+
+
+static func _res_root() -> String:
+	if _cached_res_root.is_empty():
+		_cached_res_root = ProjectSettings.globalize_path("res://").simplify_path()
+	return _cached_res_root
+
+
 ## Returns "" when the path is a safe `res://`-rooted reference inside the
 ## project root. Returns a human-readable error message otherwise; callers
 ## wrap it with `McpErrorCodes.make(INVALID_PARAMS, ...)`.
@@ -31,7 +45,7 @@ static func validate_resource_path(path: String) -> String:
 	if ".." in path:
 		return "Path must not contain '..' (path traversal not allowed)"
 	var globalized := ProjectSettings.globalize_path(path).simplify_path()
-	var res_root := ProjectSettings.globalize_path("res://").simplify_path()
+	var res_root := _res_root()
 	# Append a separator so `/proj_evil/...` can't pretend to be inside
 	# `/proj` via prefix match. `globalized == res_root` covers `path == "res://"`.
 	if globalized != res_root and not globalized.begins_with(res_root + "/"):
