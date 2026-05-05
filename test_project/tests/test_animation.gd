@@ -1494,6 +1494,39 @@ func test_validate_animation_not_found() -> void:
 	_remove_node(player_path)
 
 
+## Regression: validate_animation must split track paths on the FIRST colon
+## (node↔property boundary), not the last. For broken subpath tracks
+## (target node missing), the broken_tracks[i].node_path field must be the
+## bare node name — not "MissingTarget:modulate" with the property colons
+## preserved — otherwise the diagnostic misleads agents debugging missing
+## targets. Note: Godot's get_node_or_null strips the ":property" tail
+## natively, so the rfind/find difference is only user-visible in this
+## broken_tracks payload, not in the valid/broken classification itself.
+func test_validate_animation_broken_subpath_reports_clean_node_path() -> void:
+	var player_path := _add_player("TestValidateBrokenSubpath")
+	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
+		return
+	_handler.create_animation({"player_path": player_path, "name": "fade", "length": 0.5})
+	_handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "fade",
+		"track_path": "MissingFadeTarget:modulate:a",
+		"keyframes": [
+			{"time": 0.0, "value": 0.0},
+			{"time": 0.5, "value": 1.0},
+		],
+	})
+	var result := _handler.validate_animation({
+		"player_path": player_path, "animation_name": "fade",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.broken_count, 1)
+	assert_eq(result.data.broken_tracks[0].node_path, "MissingFadeTarget",
+		"broken node_path must be the bare node name — not 'MissingFadeTarget:modulate'")
+	_remove_node(player_path)
+
+
 # ─── animation_preset_* — shared helpers ─────────────────────────────────────
 
 ## Add a sibling node to the scene_root. The preset tools resolve target_path
