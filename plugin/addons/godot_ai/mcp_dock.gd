@@ -7,6 +7,7 @@ extends VBoxContainer
 const ServerStateScript := preload("res://addons/godot_ai/utils/mcp_server_state.gd")
 const ClientRefreshStateScript := preload("res://addons/godot_ai/utils/mcp_client_refresh_state.gd")
 const UpdateManagerScript := preload("res://addons/godot_ai/utils/update_manager.gd")
+const UpdateMixedStateScript := preload("res://addons/godot_ai/utils/update_mixed_state.gd")
 const Client := preload("res://addons/godot_ai/clients/_base.gd")
 const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")
 const ClientRegistry := preload("res://addons/godot_ai/clients/_registry.gd")
@@ -189,6 +190,16 @@ const STARTUP_GRACE_MSEC := 60 * 1000
 var _update_banner: VBoxContainer
 var _update_label: Label
 var _update_btn: Button
+
+# Mixed-state banner — surfaces when `addons/godot_ai/` contains
+# `*.update_backup` files left by a self-update whose rollback failed
+# (`UpdateReloadRunner.InstallStatus.FAILED_MIXED`). Without this banner
+# the user sees "plugin won't start" with no actionable context, re-runs
+# the update, and compounds the mismatch (issue #354 / audit-v2 #10).
+var _mixed_state_banner: VBoxContainer
+var _mixed_state_label: RichTextLabel
+var _mixed_state_files: RichTextLabel
+var _mixed_state_rescan_btn: Button
 
 
 func setup(connection: McpConnection, log_buffer: McpLogBuffer, plugin: EditorPlugin) -> void:
@@ -428,6 +439,9 @@ func _build_ui() -> void:
 
 	_crash_panel.add_child(HSeparator.new())
 	add_child(_crash_panel)
+
+	_build_mixed_state_banner()
+	_refresh_mixed_state_banner()
 
 	# --- Update banner (top of dock, hidden until check finds a newer version) ---
 	_update_banner = VBoxContainer.new()
@@ -899,6 +913,70 @@ static func _crash_body_for_state(state: int, server_status: Dictionary = {}) ->
 			return "No godot-ai server found. Install `uv` via the Setup panel above, or run `pip install godot-ai`."
 		_:
 			return ""
+
+
+## Build the mixed-state banner. Hidden until `_refresh_mixed_state_banner`
+## confirms `*.update_backup` files exist in the addons tree. Mirrors the
+## issue #354 fix shape: structured, agent-readable diagnostic that survives
+## a normal editor restart so the user can act on it instead of re-running
+## the update.
+func _build_mixed_state_banner() -> void:
+	_mixed_state_banner = VBoxContainer.new()
+	_mixed_state_banner.add_theme_constant_override("separation", 4)
+	_mixed_state_banner.visible = false
+
+	_mixed_state_label = RichTextLabel.new()
+	_mixed_state_label.bbcode_enabled = false
+	_mixed_state_label.fit_content = true
+	_mixed_state_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_mixed_state_label.selection_enabled = true
+	_mixed_state_label.scroll_active = false
+	_mixed_state_label.add_theme_color_override("default_color", Color.RED)
+	_mixed_state_banner.add_child(_mixed_state_label)
+
+	_mixed_state_files = RichTextLabel.new()
+	_mixed_state_files.bbcode_enabled = false
+	_mixed_state_files.fit_content = true
+	_mixed_state_files.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_mixed_state_files.selection_enabled = true
+	_mixed_state_files.scroll_active = true
+	_mixed_state_files.custom_minimum_size = Vector2(0, 90)
+	_mixed_state_files.add_theme_color_override("default_color", COLOR_AMBER)
+	_mixed_state_banner.add_child(_mixed_state_files)
+
+	_mixed_state_rescan_btn = Button.new()
+	_mixed_state_rescan_btn.text = "Re-scan"
+	_mixed_state_rescan_btn.tooltip_text = (
+		"Scan addons/godot_ai/ for *.update_backup files again."
+		+ " Click after restoring the addon manually to dismiss this banner."
+	)
+	_mixed_state_rescan_btn.pressed.connect(_refresh_mixed_state_banner)
+	_mixed_state_banner.add_child(_mixed_state_rescan_btn)
+
+	_mixed_state_banner.add_child(HSeparator.new())
+	add_child(_mixed_state_banner)
+
+
+func _refresh_mixed_state_banner() -> void:
+	if _mixed_state_banner == null:
+		return
+	var diag := UpdateMixedStateScript.diagnose()
+	if diag.is_empty():
+		_mixed_state_banner.visible = false
+		return
+	_mixed_state_banner.visible = true
+	_mixed_state_label.clear()
+	_mixed_state_label.add_text(String(diag.get("message", "")))
+	_mixed_state_files.clear()
+	var backup_files: Array = diag.get("backup_files", [])
+	for path in backup_files:
+		_mixed_state_files.add_text(String(path))
+		_mixed_state_files.newline()
+	if bool(diag.get("truncated", false)):
+		_mixed_state_files.add_text(
+			"… (list truncated at %d entries)" % UpdateMixedStateScript.MAX_BACKUP_RESULTS
+		)
+		_mixed_state_files.newline()
 
 
 func _build_port_picker_section() -> void:
