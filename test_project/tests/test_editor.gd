@@ -904,6 +904,53 @@ func test_editor_logger_drops_internal_godot_cpp_noise() -> void:
 	assert_eq(ed_buf.total_count(), 0, "C++-source errors with no script backtrace should be filtered")
 
 
+func test_editor_logger_captures_engine_resource_error_with_res_path() -> void:
+	## ResourceLoader failures can be emitted by engine C++ with no
+	## ScriptBacktrace even when the message names a project resource.
+	## Those red editor/terminal lines should still be visible through
+	## logs_read(source="editor").
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var ed_buf := McpEditorLogBuffer.new()
+	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
+	logger._log_error(
+		"_load",
+		"core/io/resource_loader.cpp",
+		222,
+		"Failed loading resource: res://does/not/exist.tres.",
+		"",
+		false,
+		0,
+		[],
+	)
+	var entries := ed_buf.get_range(0, 10)
+	assert_eq(entries.size(), 1, "Engine resource errors naming res:// paths should be captured")
+	assert_eq(entries[0].path, "res://does/not/exist.tres")
+	assert_eq(entries[0].line, 0, "Engine resource errors have no recoverable script line")
+	assert_eq(entries[0].function, "_load")
+	assert_contains(entries[0].text, "Failed loading resource")
+
+
+func test_editor_logger_drops_engine_resource_error_for_godot_ai_addon() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var ed_buf := McpEditorLogBuffer.new()
+	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
+	logger._log_error(
+		"_load",
+		"core/io/resource_loader.cpp",
+		222,
+		"Failed loading resource: res://addons/godot_ai/missing.tres.",
+		"",
+		false,
+		0,
+		[],
+	)
+	assert_eq(ed_buf.total_count(), 0, "Engine resource errors inside addons/godot_ai/ should be filtered")
+
+
 func test_editor_logger_drops_godot_ai_addon_to_avoid_feedback_loop() -> void:
 	## We push_warning ourselves from plugin.gd. Capturing those would
 	## amplify on every reload and pollute the buffer the dock reads.
@@ -999,6 +1046,23 @@ func test_editor_logger_is_user_script_predicate() -> void:
 	assert_false(script._is_user_script(""))
 	assert_false(script._is_user_script("scene/main/scene_tree.cpp"))
 	assert_false(script._is_user_script("res://image.png"))
+
+
+func test_editor_logger_extract_user_res_path_predicate() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var script = load(_EDITOR_LOGGER_PATH)
+	assert_eq(
+		script._extract_user_res_path("Cannot open file 'res://does/not/exist.tres'."),
+		"res://does/not/exist.tres",
+	)
+	assert_eq(
+		script._extract_user_res_path("Failed loading resource: res://folder/with spaces/file.tres."),
+		"res://folder/with spaces/file.tres",
+	)
+	assert_eq(script._extract_user_res_path("Failed loading resource: res://addons/godot_ai/x.tres."), "")
+	assert_eq(script._extract_user_res_path("scene/main/scene_tree.cpp noise"), "")
 
 
 func test_editor_logger_is_in_godot_ai_addon_predicate() -> void:
