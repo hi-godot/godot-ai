@@ -9,9 +9,11 @@ var _connection: McpConnection
 # Bounded settle window for `ResourceLoader.exists(path)` after `scan()` so
 # that an agent calling create_script -> attach_script back-to-back doesn't
 # race the editor's import pipeline (#261). Polled once per frame, with an
-# elapsed-time cap below the Python client's default 5s command timeout.
+# elapsed-time cap below the dispatcher's create_script deferred timeout. If
+# import is still not visible at the cap, we still return committed=true
+# instead of letting the already-written file surface as DEFERRED_TIMEOUT.
 const _IMPORT_SETTLE_MAX_FRAMES := 300
-const _IMPORT_SETTLE_MAX_MSEC := 4500
+const _IMPORT_SETTLE_MAX_MSEC := 3500
 
 
 func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null) -> void:
@@ -54,6 +56,9 @@ func create_script(params: Dictionary) -> Dictionary:
 	var data := {
 		"path": path,
 		"size": content.length(),
+		"committed": true,
+		"import_settled": existed_before,
+		"import_settle": "already_known" if existed_before else "not_waited",
 		"undoable": false,
 		"reason": "File system operations cannot be undone via editor undo",
 	}
@@ -78,8 +83,16 @@ func create_script(params: Dictionary) -> Dictionary:
 
 func _finish_create_script_deferred(request_id: String, path: String, data: Dictionary) -> void:
 	var tree := _connection.get_tree()
-	var frames := 0
 	var deadline_ms := Time.get_ticks_msec() + _IMPORT_SETTLE_MAX_MSEC
+	# Let _dispatch() return DEFERRED_RESPONSE and register the request before
+	# this coroutine can send a committed result. ResourceLoader.exists(path)
+	# may already be true on fast imports; without this handoff the connection
+	# treats the response as late/unregistered and drops it, then the dispatcher
+	# times out a file that was already written (#324). The deadline starts
+	# before this await so a slow handoff frame is counted against the bounded
+	# settle window.
+	await tree.process_frame
+	var frames := 0
 	while (
 		frames < _IMPORT_SETTLE_MAX_FRAMES
 		and Time.get_ticks_msec() < deadline_ms
@@ -93,7 +106,10 @@ func _finish_create_script_deferred(request_id: String, path: String, data: Dict
 	if not is_instance_valid(_connection):
 		return
 	var payload := data.duplicate()
-	payload["import_settled"] = ResourceLoader.exists(path)
+	var settled := ResourceLoader.exists(path)
+	payload["import_settled"] = settled
+	payload["import_settle"] = "settled" if settled else "timeout"
+	payload["import_pending"] = not settled
 	_connection.send_deferred_response(request_id, {"data": payload})
 
 
