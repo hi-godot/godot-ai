@@ -478,3 +478,93 @@ func test_install_zip_paths_rolls_back_when_mid_loop_write_fails() -> void:
 	# (rare but possible) doesn't re-attempt rollback against stale records.
 	assert_eq(runner._paths_written.size(), 0, "_paths_written cleared after rollback")
 	runner.free()
+
+
+# ----- _arm_scan_watchdog / _on_scan_watchdog_timeout (audit-v2 #9) -----
+
+
+func _arm_scan_state(runner) -> void:
+	# Mirror what `_start_filesystem_scan` would do, minus the actual
+	# `EditorInterface.get_resource_filesystem().scan()` call. We can't
+	# trigger Godot's filesystem_changed signal from a test, so we drive
+	# the state machine directly.
+	runner._waiting_for_scan = true
+	runner._scan_next_step = "_enable_new_plugin"
+	runner._arm_scan_watchdog()
+
+
+func test_watchdog_timeout_proceeds_when_signal_never_fires() -> void:
+	## Pre-fix, if `filesystem_changed` deadlocked the runner sat in
+	## `_waiting_for_scan = true` forever. The watchdog must clear that
+	## flag and dispatch `_scan_next_step` so the rest of the update
+	## sequence can finish.
+	var runner = _new_runner()
+	add_child(runner)  # Timer needs a tree to count, but we fire timeout manually
+	_arm_scan_state(runner)
+	assert_true(runner._waiting_for_scan, "scan wait armed by precondition")
+	assert_true(runner._scan_watchdog_timer != null, "watchdog timer node exists once armed")
+
+	# Fire the timeout handler directly — equivalent to the Timer's timeout
+	# signal arriving after 30s of no filesystem_changed.
+	runner._on_scan_watchdog_timeout()
+
+	assert_false(runner._waiting_for_scan, "watchdog cleared the wait flag")
+	assert_eq(runner._scan_next_step, "", "next-step token consumed by _finish_scan_wait")
+	runner.free()
+
+
+func test_watchdog_no_op_when_signal_already_settled() -> void:
+	## Race: signal fires, `_finish_scan_wait` cleans up, then the watchdog
+	## Timer fires anyway (Godot's Timer can have queued timeout). Calling
+	## `_on_scan_watchdog_timeout` after a settled scan must be a no-op —
+	## otherwise it would double-dispatch `_scan_next_step`.
+	var runner = _new_runner()
+	add_child(runner)
+	_arm_scan_state(runner)
+
+	# Simulate the happy path: signal arrived, _finish_scan_wait ran.
+	runner._finish_scan_wait()
+	assert_false(runner._waiting_for_scan, "wait already cleared by signal handler")
+
+	# Now the late watchdog timeout fires. It must not crash, must not
+	# re-dispatch, must not flip _waiting_for_scan back to true.
+	runner._on_scan_watchdog_timeout()
+	assert_false(runner._waiting_for_scan, "watchdog stays no-op after settled wait")
+	runner.free()
+
+
+func test_finish_scan_wait_stops_armed_watchdog() -> void:
+	## Happy path: filesystem_changed signal arrives; `_finish_scan_wait`
+	## must stop the still-running Timer so it doesn't fire later and
+	## attempt a second cleanup. Verify by inspecting the Timer state.
+	var runner = _new_runner()
+	add_child(runner)
+	_arm_scan_state(runner)
+	assert_false(runner._scan_watchdog_timer.is_stopped(), "timer running after arm")
+
+	runner._finish_scan_wait()
+
+	assert_true(
+		runner._scan_watchdog_timer.is_stopped(),
+		"finish_scan_wait must stop the watchdog so it can't fire later",
+	)
+	runner.free()
+
+
+func test_watchdog_timer_reused_across_arms() -> void:
+	## `_arm_scan_watchdog` lazy-creates the Timer on first use and reuses
+	## it on subsequent arms. The runner makes two filesystem scans during
+	## a single update (new files, then existing files), so the second arm
+	## must not leak a second Timer child.
+	var runner = _new_runner()
+	add_child(runner)
+	_arm_scan_state(runner)
+	var first_timer = runner._scan_watchdog_timer
+	runner._finish_scan_wait()
+
+	_arm_scan_state(runner)
+	var second_timer = runner._scan_watchdog_timer
+
+	assert_true(first_timer == second_timer, "timer reused, not recreated")
+	runner._finish_scan_wait()
+	runner.free()

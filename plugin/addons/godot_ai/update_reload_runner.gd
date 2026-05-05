@@ -35,6 +35,16 @@ var _next_step := ""
 var _frames_remaining := 0
 var _waiting_for_scan := false
 var _scan_next_step := ""
+## Watchdog for `_start_filesystem_scan`: if Godot's `filesystem_changed`
+## signal never fires (slow disk, NFS, AV holding the just-extracted addon
+## files open), the runner used to hang in `_waiting_for_scan = true`
+## forever and the dock stayed disabled. After this timeout we disconnect
+## the signal and proceed anyway — worst case the new files aren't visible
+## on the first frame, but they get picked up on the next scan. See
+## audit-v2 finding #9 (issue #353). Untyped to match the codebase's
+## defensive pattern for state that survives `fs.scan()` during update.
+const SCAN_WATCHDOG_SECS := 30.0
+var _scan_watchdog_timer = null
 ## Keep Array fields untyped: this runner survives fs.scan() during update,
 ## and typed Variant storage is part of the hot-reload crash class.
 var _new_file_paths = []
@@ -125,7 +135,40 @@ func _start_filesystem_scan(next_step: String = "_enable_new_plugin") -> void:
 	_scan_next_step = deferred_step
 	if not fs.filesystem_changed.is_connected(_on_filesystem_changed):
 		fs.filesystem_changed.connect(_on_filesystem_changed, CONNECT_ONE_SHOT)
+	_arm_scan_watchdog()
 	fs.scan()
+
+
+func _arm_scan_watchdog() -> void:
+	if _scan_watchdog_timer == null:
+		_scan_watchdog_timer = Timer.new()
+		_scan_watchdog_timer.one_shot = true
+		_scan_watchdog_timer.timeout.connect(_on_scan_watchdog_timeout)
+		add_child(_scan_watchdog_timer)
+	_scan_watchdog_timer.start(SCAN_WATCHDOG_SECS)
+
+
+func _stop_scan_watchdog() -> void:
+	if _scan_watchdog_timer != null:
+		_scan_watchdog_timer.stop()
+
+
+func _on_scan_watchdog_timeout() -> void:
+	## Signal didn't fire within SCAN_WATCHDOG_SECS — most likely the
+	## filesystem scan is blocked behind a slow disk / NFS / AV scanner
+	## still reading the just-extracted addon files. Drop the listener so
+	## a delayed signal can't double-call `_finish_scan_wait`, then proceed.
+	## `_finish_scan_wait` is idempotent on `_waiting_for_scan == false`.
+	if not _waiting_for_scan:
+		return
+	push_warning(
+		"MCP | filesystem_changed didn't fire within %ds; proceeding without scan confirmation"
+		% int(SCAN_WATCHDOG_SECS)
+	)
+	var fs := EditorInterface.get_resource_filesystem()
+	if fs != null and fs.filesystem_changed.is_connected(_on_filesystem_changed):
+		fs.filesystem_changed.disconnect(_on_filesystem_changed)
+	_finish_scan_wait()
 
 
 func _read_update_manifest() -> bool:
@@ -392,6 +435,7 @@ func _finish_scan_wait() -> void:
 	if not _waiting_for_scan:
 		return
 	_waiting_for_scan = false
+	_stop_scan_watchdog()
 	var next_step := _scan_next_step
 	_scan_next_step = ""
 	set_process(false)
