@@ -124,6 +124,20 @@ class TestSessionRegistry:
         assert s.to_dict()["server_launch_mode"] == "dev_venv"
 
 
+class TestSessionRegistryNoThreadingLock:
+    """Guard against reintroducing a threading lock on the registry."""
+
+    def test_registry_has_no_lock_attribute(self):
+        reg = SessionRegistry()
+        assert not hasattr(reg, "_lock")
+
+    def test_registry_module_does_not_import_threading(self):
+        import godot_ai.sessions.registry as registry_module
+
+        assert "threading" not in vars(registry_module)
+        assert "RLock" not in vars(registry_module)
+
+
 class TestSessionMetadata:
     def test_name_derived_from_project_path(self):
         s = _make_session(project_path="/Users/me/projects/my_game/")
@@ -220,6 +234,22 @@ class TestWaitForSession:
 
         assert result is replacement
         assert reg._session_waiters == []
+
+    async def test_register_skips_waiters_whose_futures_are_already_done(self):
+        ## A waiter whose future was resolved or cancelled out-of-band must
+        ## not be re-resolved on the next register(); its entry stays in
+        ## _session_waiters until its own finally-block evicts it. The
+        ## register loop's `if future.done(): continue` path covers this.
+        reg = SessionRegistry()
+        loop = asyncio.get_running_loop()
+        cancelled_future: asyncio.Future[Session] = loop.create_future()
+        cancelled_future.cancel()
+        reg._session_waiters.append((cancelled_future, None, frozenset(), None))
+
+        reg.register(_make_session("a"))
+
+        assert cancelled_future.cancelled()
+        assert len(reg) == 1
 
     async def test_concurrent_registers_and_activate_keep_registry_consistent(self):
         reg = SessionRegistry()

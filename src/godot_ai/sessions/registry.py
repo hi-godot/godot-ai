@@ -7,7 +7,6 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import cached_property
-from threading import RLock
 
 from godot_ai import __version__ as _SERVER_VERSION
 
@@ -75,7 +74,11 @@ class Session:
 
 
 class SessionRegistry:
-    """Tracks all connected Godot editor sessions."""
+    """Tracks all connected Godot editor sessions.
+
+    Callers run on the single asyncio event loop driving the WS transport,
+    so state is mutated without locking.
+    """
 
     def __init__(self):
         self._sessions: dict[str, Session] = {}
@@ -83,29 +86,26 @@ class SessionRegistry:
         self._session_waiters: list[
             tuple[asyncio.Future[Session], str | None, frozenset[str], str | None]
         ] = []
-        self._lock = RLock()
 
     def register(self, session: Session) -> None:
         to_notify: list[asyncio.Future[Session]] = []
-        with self._lock:
-            self._sessions[session.session_id] = session
-            if self._active_session_id is None:
-                self._active_session_id = session.session_id
-            # Notify any waiters blocked on wait_for_session()
-            remaining = []
-            for future, exclude_id, known_ids, project_path in self._session_waiters:
-                if future.done():
-                    continue
-                if not self._matches_wait_criteria(
-                    session,
-                    exclude_id=exclude_id,
-                    known_ids=known_ids,
-                    project_path=project_path,
-                ):
-                    remaining.append((future, exclude_id, known_ids, project_path))
-                    continue
-                to_notify.append(future)
-            self._session_waiters = remaining
+        self._sessions[session.session_id] = session
+        if self._active_session_id is None:
+            self._active_session_id = session.session_id
+        remaining = []
+        for future, exclude_id, known_ids, project_path in self._session_waiters:
+            if future.done():
+                continue
+            if not self._matches_wait_criteria(
+                session,
+                exclude_id=exclude_id,
+                known_ids=known_ids,
+                project_path=project_path,
+            ):
+                remaining.append((future, exclude_id, known_ids, project_path))
+                continue
+            to_notify.append(future)
+        self._session_waiters = remaining
 
         for future in to_notify:
             if not future.done():
@@ -119,11 +119,10 @@ class SessionRegistry:
         ## "routing by registration order" bug. Clear active instead; the
         ## next register() or an explicit session_activate will set it.
         should_log = False
-        with self._lock:
-            self._sessions.pop(session_id, None)
-            if self._active_session_id == session_id:
-                self._active_session_id = None
-                should_log = True
+        self._sessions.pop(session_id, None)
+        if self._active_session_id == session_id:
+            self._active_session_id = None
+            should_log = True
         if should_log:
             logger.info(
                 "Active session %s disconnected; no active session until next register/activate",
@@ -131,29 +130,24 @@ class SessionRegistry:
             )
 
     def get(self, session_id: str) -> Session | None:
-        with self._lock:
-            return self._sessions.get(session_id)
+        return self._sessions.get(session_id)
 
     def get_active(self) -> Session | None:
-        with self._lock:
-            if self._active_session_id:
-                return self._sessions.get(self._active_session_id)
-            return None
+        if self._active_session_id:
+            return self._sessions.get(self._active_session_id)
+        return None
 
     def set_active(self, session_id: str) -> None:
-        with self._lock:
-            if session_id not in self._sessions:
-                raise KeyError(f"Session {session_id} not found")
-            self._active_session_id = session_id
+        if session_id not in self._sessions:
+            raise KeyError(f"Session {session_id} not found")
+        self._active_session_id = session_id
 
     def list_all(self) -> list[Session]:
-        with self._lock:
-            return list(self._sessions.values())
+        return list(self._sessions.values())
 
     @property
     def active_session_id(self) -> str | None:
-        with self._lock:
-            return self._active_session_id
+        return self._active_session_id
 
     async def wait_for_session(
         self,
@@ -166,35 +160,31 @@ class SessionRegistry:
         """Block until a new session registers (optionally excluding one ID).
 
         If ``known_ids`` is provided, sessions registered after that snapshot but
-        before this waiter is installed are returned under the same registry lock.
+        before this waiter is installed are returned synchronously without yielding.
         Raises TimeoutError if no matching session appears within timeout.
         """
         loop = asyncio.get_running_loop()
-        with self._lock:
-            known_ids_frozen = (
-                frozenset(self._sessions) if known_ids is None else frozenset(known_ids)
-            )
-            existing = self._find_matching_session_locked(
-                exclude_id=exclude_id,
-                known_ids=known_ids_frozen,
-                project_path=project_path,
-            )
-            if existing is not None:
-                return existing
-            future: asyncio.Future[Session] = loop.create_future()
-            entry = (future, exclude_id, known_ids_frozen, project_path)
-            self._session_waiters.append(entry)
+        known_ids_frozen = frozenset(self._sessions) if known_ids is None else frozenset(known_ids)
+        existing = self._find_matching_session(
+            exclude_id=exclude_id,
+            known_ids=known_ids_frozen,
+            project_path=project_path,
+        )
+        if existing is not None:
+            return existing
+        future: asyncio.Future[Session] = loop.create_future()
+        entry = (future, exclude_id, known_ids_frozen, project_path)
+        self._session_waiters.append(entry)
         try:
             return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
             raise TimeoutError("Timed out waiting for new session") from None
         finally:
-            with self._lock:
-                self._session_waiters = [w for w in self._session_waiters if w is not entry]
+            self._session_waiters = [w for w in self._session_waiters if w is not entry]
             if not future.done():
                 future.cancel()
 
-    def _find_matching_session_locked(
+    def _find_matching_session(
         self,
         *,
         exclude_id: str | None,
@@ -228,5 +218,4 @@ class SessionRegistry:
         return True
 
     def __len__(self) -> int:
-        with self._lock:
-            return len(self._sessions)
+        return len(self._sessions)
