@@ -539,12 +539,19 @@ func apply_preset(params: Dictionary) -> Dictionary:
 
 	if not node_path.is_empty() and path.is_empty():
 		# Inline
-		return apply_to_node({
+		var inline_result := apply_to_node({
 			"node_path": node_path,
 			"type": type_str,
 			"params": preset_params,
 			"slot": params.get("slot", "override"),
 		})
+		if inline_result.has("data"):
+			inline_result.data["preset"] = preset_name
+			inline_result.data["assigned"] = true
+			inline_result.data["path"] = ""
+			inline_result.data["saved_to_disk"] = false
+			inline_result.data["reason"] = "Inline material assigned to node"
+		return inline_result
 
 	# Save-to-disk path.
 	var existed_before := FileAccess.file_exists(path)

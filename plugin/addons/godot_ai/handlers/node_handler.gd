@@ -214,10 +214,14 @@ func set_property(params: Dictionary) -> Dictionary:
 		if json.parse(value) == OK and json.data is Dictionary and (json.data as Dictionary).has("__class__"):
 			value = json.data
 
-	if target_type == TYPE_OBJECT and value is String:
+	var nil_resource_string: bool = target_type == TYPE_NIL and (value == "" or (value is String and value.begins_with("res://")))
+	var resource_string_value: bool = value is String and (target_type == TYPE_OBJECT or nil_resource_string)
+	if resource_string_value:
 		if value == "":
 			value = null
 		else:
+			if not ResourceLoader.exists(value):
+				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource not found: %s" % value)
 			var loaded := ResourceLoader.load(value)
 			if loaded == null:
 				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource not found: %s" % value)
