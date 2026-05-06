@@ -55,9 +55,14 @@ func _build_ui() -> void:
 	add_child(picker_row)
 
 
-## Seed the spinbox with a suggested non-reserved port. Idempotent — the dock
-## calls this each time the panel becomes visible so a stale value from a
-## previous spawn-failure doesn't carry over.
+## Re-seed the spinbox with a fresh suggestion every time the panel surfaces,
+## so a stale value from a previous spawn-failure round can't carry over. Note
+## that this OVERWRITES any unsaved user input — fine in practice because the
+## dock's `_update_crash_panel` only calls this on `server_status` transitions
+## (`if server_status == _last_server_status: return` short-circuit), so a
+## user typing into the spinbox between transitions keeps their value. If the
+## state flips while the picker is visible (e.g. `PORT_EXCLUDED` → `FOREIGN_PORT`),
+## the in-flight edit is clobbered — accept that, the suggestion is more current.
 func seed_suggested_port() -> void:
 	if _spinbox == null:
 		return
