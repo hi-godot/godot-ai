@@ -14,7 +14,11 @@ signal logging_enabled_changed(enabled: bool)
 var _log_buffer: McpLogBuffer
 var _log_display: RichTextLabel
 var _log_toggle: CheckButton
-var _last_log_count := 0
+## Last `McpLogBuffer.total_logged()` value painted into the display. Tracking
+## the buffer's monotonic sequence (rather than its bounded `total_count()`)
+## keeps the viewer painting once the ring fills — a size-based cursor would
+## freeze at MAX_LINES on every subsequent append. See PR #392 for the bug.
+var _last_log_seq := 0
 
 
 ## Build the UI synchronously here so callers (and detached-tree tests that
@@ -61,26 +65,24 @@ func _build_ui() -> void:
 func tick() -> void:
 	if _log_buffer == null or _log_display == null:
 		return
-	var count: int = _log_buffer.total_count()
-	if count == _last_log_count:
+	var seq: int = _log_buffer.total_logged()
+	if seq == _last_log_seq:
 		return
-	if count < _last_log_count:
-		## Buffer shrank — almost certainly `McpLogBuffer.clear()` via the
-		## `clear_logs` MCP tool / `logs_clear`. `total_count()` returns the
-		## current `_lines.size()`, not a monotonic ever-produced counter, so
-		## a clear flips the cursor backward. Without this branch the display
-		## keeps showing pre-clear lines forever (the next tick would compute
-		## `get_recent(negative)` and append nothing) — the viewer drifts
-		## permanently out of sync with the buffer. Reset the display + cursor
-		## so the next append paints over a clean slate.
+	if seq < _last_log_seq:
+		## Buffer cleared via `McpLogBuffer.clear()` (the `clear_logs` MCP
+		## tool / `logs_clear` handler). The buffer resets `_total_logged`
+		## to 0, flipping the sequence backward. Without this branch the
+		## display would keep showing pre-clear lines forever — the viewer
+		## drifts permanently out of sync with the buffer. Reset display +
+		## cursor so the next append paints over a clean slate.
 		_log_display.clear()
-		_last_log_count = 0
-		if count == 0:
+		_last_log_seq = 0
+		if seq == 0:
 			return
-	var new_lines: Array[String] = _log_buffer.get_recent(count - _last_log_count)
+	var new_lines: Array[String] = _log_buffer.get_recent(seq - _last_log_seq)
 	for line in new_lines:
 		_log_display.add_text(line + "\n")
-	_last_log_count = count
+	_last_log_seq = seq
 
 
 func _on_log_toggled(enabled: bool) -> void:

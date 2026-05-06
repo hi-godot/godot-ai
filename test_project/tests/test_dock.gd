@@ -866,14 +866,12 @@ func test_log_viewer_emits_logging_enabled_changed_on_toggle() -> void:
 
 
 func test_log_viewer_tick_recovers_from_buffer_clear() -> void:
-	## Regression: McpLogBuffer.total_count() returns _lines.size(), not a
-	## monotonic ever-produced counter. The `clear_logs` MCP tool / `logs_clear`
-	## handler calls McpLogBuffer.clear() which flips the count backward. The
-	## previous tick() implementation assumed monotonic counts and computed
-	## `get_recent(count - _last_log_count)` with a negative argument, leaving
-	## the viewer permanently showing pre-clear lines while the buffer was
-	## empty. tick() must detect the shrink, reset the display + cursor, and
-	## paint over a clean slate as new lines arrive.
+	## Regression: McpLogBuffer.clear() resets the monotonic
+	## `total_logged()` counter to 0, flipping the sequence backward. The
+	## viewer must detect that flip and clear its display — without the
+	## shrink branch, tick() would compute `get_recent(seq - _last_log_seq)`
+	## with a negative argument, append nothing, and the display would stay
+	## stuck on pre-clear lines forever (out of sync with the empty buffer).
 	var buffer := McpLogBuffer.new()
 	buffer.log("before clear 1")
 	buffer.log("before clear 2")
@@ -886,8 +884,8 @@ func test_log_viewer_tick_recovers_from_buffer_clear() -> void:
 	assert_contains(panel._log_display.get_parsed_text(), "before clear 1",
 		"precondition: pre-clear lines must paint into the display")
 	assert_contains(panel._log_display.get_parsed_text(), "before clear 2")
-	assert_eq(panel._last_log_count, 2,
-		"precondition: cursor must track the buffer size after tick()")
+	assert_eq(panel._last_log_seq, 2,
+		"precondition: cursor must track total_logged() after tick()")
 
 	## The bug: buffer is cleared while the panel is still showing the
 	## pre-clear lines. Without the shrink-recovery branch, tick() computes
@@ -895,8 +893,8 @@ func test_log_viewer_tick_recovers_from_buffer_clear() -> void:
 	buffer.clear()
 	panel.tick()
 	assert_eq(panel._log_display.get_parsed_text(), "",
-		"display must clear when total_count drops below _last_log_count")
-	assert_eq(panel._last_log_count, 0,
+		"display must clear when total_logged() drops below _last_log_seq")
+	assert_eq(panel._last_log_seq, 0,
 		"cursor must reset to 0 after a buffer shrink so subsequent ticks paint from a clean slate")
 
 	## After the recovery branch, new lines must paint normally — i.e. the
@@ -909,5 +907,43 @@ func test_log_viewer_tick_recovers_from_buffer_clear() -> void:
 	assert_contains(panel._log_display.get_parsed_text(), "after clear 2")
 	assert_false(panel._log_display.get_parsed_text().contains("before clear"),
 		"pre-clear lines must not reappear after the recovery + re-paint")
-	assert_eq(panel._last_log_count, 2)
+	assert_eq(panel._last_log_seq, 2)
+	panel.free()
+
+
+func test_log_viewer_tick_keeps_painting_after_buffer_caps_at_max_lines() -> void:
+	## Regression: McpLogBuffer caps `_lines` at MAX_LINES (500) by slicing.
+	## Once full, subsequent log() calls keep `_lines.size()` constant. The
+	## previous viewer tracked `total_count()` as its cursor — so once the
+	## buffer hit the cap, `count == _last_log_count` returned early on
+	## every tick and new lines never reached the display. After ~500 MCP
+	## events the dev-mode log just appeared to stop, with no error and no
+	## indication that anything had filled. The fix tracks the buffer's
+	## monotonic `total_logged()` instead, which keeps incrementing past
+	## MAX_LINES.
+	var buffer := McpLogBuffer.new()
+	var cap: int = McpLogBuffer.MAX_LINES
+	for i in range(cap):
+		buffer.log("filler %d" % i)
+	var panel := LogViewerScript.new()
+	panel.setup(buffer)
+	panel.tick()
+	assert_eq(buffer.total_count(), cap,
+		"precondition: buffer must be at capacity after %d logs" % cap)
+	assert_eq(buffer.total_logged(), cap,
+		"precondition: total_logged() should equal cap on first fill")
+	assert_eq(panel._last_log_seq, cap,
+		"precondition: viewer cursor tracks total_logged() after the priming tick")
+
+	## At-cap append: total_count stays pinned at cap, but total_logged advances
+	## to cap+1. Before the fix the viewer's `count == _last_log_count` early-
+	## return swallowed this line silently.
+	buffer.log("at-cap canary")
+	panel.tick()
+	assert_eq(buffer.total_count(), cap, "buffer size stays pinned at cap")
+	assert_eq(buffer.total_logged(), cap + 1, "monotonic counter advances past cap")
+	assert_contains(panel._log_display.get_parsed_text(), "at-cap canary",
+		"new line after the buffer capped must reach the display")
+	assert_eq(panel._last_log_seq, cap + 1,
+		"viewer cursor must advance with the monotonic counter, not the bounded size")
 	panel.free()
