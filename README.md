@@ -74,10 +74,11 @@ covers:
 - **Claude Code**, **Claude Desktop**, **Antigravity**
 
 <details>
-<summary><strong>…and 15+ more clients</strong></summary>
+<summary><strong>…and 16+ more clients</strong></summary>
 
 Codex, Cursor, Windsurf, VS Code, VS Code Insiders, Zed, Gemini CLI, Cline,
-Kilo Code, Roo Code, Kiro, Trae, Cherry Studio, OpenCode, Qwen Code.
+Kilo Code, Roo Code, Kiro, Trae, Cherry Studio, OpenCode, Qwen Code,
+Kimi Code CLI.
 
 </details>
 
