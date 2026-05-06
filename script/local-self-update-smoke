@@ -564,12 +564,13 @@ def patch_vnext_hot_reload_trigger(path: Path) -> None:
     """Inject a typed Dict + Array onto McpDock so the vNext hot-reload
     actually exercises the field-storage crash class (issue #245).
 
-    Anchored to a stable plain field (`_last_log_count`) — anchoring to
+    Anchored to a stable plain field (`_last_connected`) — anchoring to
     a recently-moved field would silently miss the regression rather
-    than failing loudly.
+    than failing loudly. (`_last_log_count` moved into the LogViewer
+    subpanel as part of audit-v2 #360 and is no longer on McpDock.)
     """
     text = path.read_text(encoding="utf-8")
-    field_marker = "var _last_log_count := 0\n"
+    field_marker = "var _last_connected := false\n"
     if field_marker not in text:
         raise HarnessError(f"Could not find self-update field marker in {path}")
     text = text.replace(

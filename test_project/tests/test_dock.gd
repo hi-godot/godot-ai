@@ -786,4 +786,4 @@ func test_incompatible_server_hides_http_only_port_picker() -> void:
 		"message": "Port 8000 is occupied by godot-ai server v1.2.10",
 	})
 	assert_true(_dock._crash_panel.visible, "diagnostic panel still shows")
-	assert_false(_dock._port_picker_section.visible, "HTTP-only picker must stay hidden")
+	assert_false(_dock._port_picker_panel.visible, "HTTP-only picker must stay hidden")
