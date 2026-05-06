@@ -437,6 +437,7 @@ func _build_ui() -> void:
 	_crash_panel.add_child(_crash_output)
 
 	_port_picker_panel = PortPickerPanelScript.new()
+	_port_picker_panel.setup()
 	_port_picker_panel.port_apply_requested.connect(_on_port_apply_requested)
 	_crash_panel.add_child(_port_picker_panel)
 

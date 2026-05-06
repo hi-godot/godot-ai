@@ -16,8 +16,16 @@ signal port_apply_requested(new_port: int)
 var _spinbox: SpinBox
 
 
-func _ready() -> void:
-	_build_ui()
+## Build the UI synchronously here so callers (and detached-tree tests that
+## instantiate the dock with `McpDockScript.new()` and never enter the tree)
+## can interact with the panel's controls right after `setup()`. Mirrors the
+## pre-extraction inline-build behavior that test_dock.gd relies on.
+##
+## Idempotent: `_spinbox == null` covers an unlikely double-`setup()` call
+## without rebuilding (which would orphan the prior controls).
+func setup() -> void:
+	if _spinbox == null:
+		_build_ui()
 
 
 func _build_ui() -> void:

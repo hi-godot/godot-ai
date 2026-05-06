@@ -17,12 +17,17 @@ var _log_toggle: CheckButton
 var _last_log_count := 0
 
 
+## Build the UI synchronously here so callers (and detached-tree tests that
+## instantiate the dock with `McpDockScript.new()` and never enter the tree)
+## can interact with the panel's controls right after `setup()`. Mirrors the
+## pre-extraction inline-build behavior that test_dock.gd relies on.
+##
+## Idempotent: `_log_display == null` covers an unlikely double-`setup()` call
+## without rebuilding (which would orphan the prior controls).
 func setup(log_buffer: McpLogBuffer) -> void:
 	_log_buffer = log_buffer
-
-
-func _ready() -> void:
-	_build_ui()
+	if _log_display == null:
+		_build_ui()
 
 
 func _build_ui() -> void:
