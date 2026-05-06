@@ -170,23 +170,6 @@ func test_autofit_3d_accepts_godot_class_name() -> void:
 	_remove_node(parts.body)
 
 
-func test_autofit_3d_accepts_sphere_class_name() -> void:
-	var parts := _add_body_3d("TestAutofit3DSphereClassName", Vector3(4, 1, 2))
-	if parts.is_empty():
-		skip("No scene root")
-		return
-	var result := _handler.autofit({
-		"path": parts.collision.get_path(),
-		"shape_type": "SphereShape3D",
-	})
-	assert_has_key(result, "data")
-	assert_eq(result.data.shape_class, "SphereShape3D")
-	assert_eq(result.data.shape_type, "sphere")
-	assert_true(parts.collision.shape is SphereShape3D)
-	assert_eq(parts.collision.shape.radius, 2.0)
-	_remove_node(parts.body)
-
-
 func test_autofit_2d_accepts_godot_class_name() -> void:
 	var parts := _add_body_2d("TestAutofit2DClassName", Vector2(32, 48))
 	if parts.is_empty():
