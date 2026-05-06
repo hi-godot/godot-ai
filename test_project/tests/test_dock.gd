@@ -863,3 +863,51 @@ func test_log_viewer_emits_logging_enabled_changed_on_toggle() -> void:
 	assert_eq(spy.captured, [false, true] as Array[bool],
 		"toggle must emit each state change exactly once, in order")
 	panel.free()
+
+
+func test_log_viewer_tick_recovers_from_buffer_clear() -> void:
+	## Regression: McpLogBuffer.total_count() returns _lines.size(), not a
+	## monotonic ever-produced counter. The `clear_logs` MCP tool / `logs_clear`
+	## handler calls McpLogBuffer.clear() which flips the count backward. The
+	## previous tick() implementation assumed monotonic counts and computed
+	## `get_recent(count - _last_log_count)` with a negative argument, leaving
+	## the viewer permanently showing pre-clear lines while the buffer was
+	## empty. tick() must detect the shrink, reset the display + cursor, and
+	## paint over a clean slate as new lines arrive.
+	var buffer := McpLogBuffer.new()
+	buffer.log("before clear 1")
+	buffer.log("before clear 2")
+	var panel := LogViewerScript.new()
+	panel.setup(buffer)
+	panel.tick()
+	## Display contract: at least the two pre-clear lines are visible. Use
+	## get_parsed_text() because RichTextLabel.text reflects BBCode source,
+	## not what add_text() renders.
+	assert_contains(panel._log_display.get_parsed_text(), "before clear 1",
+		"precondition: pre-clear lines must paint into the display")
+	assert_contains(panel._log_display.get_parsed_text(), "before clear 2")
+	assert_eq(panel._last_log_count, 2,
+		"precondition: cursor must track the buffer size after tick()")
+
+	## The bug: buffer is cleared while the panel is still showing the
+	## pre-clear lines. Without the shrink-recovery branch, tick() computes
+	## get_recent(-2), appends nothing, and the display stays stale forever.
+	buffer.clear()
+	panel.tick()
+	assert_eq(panel._log_display.get_parsed_text(), "",
+		"display must clear when total_count drops below _last_log_count")
+	assert_eq(panel._last_log_count, 0,
+		"cursor must reset to 0 after a buffer shrink so subsequent ticks paint from a clean slate")
+
+	## After the recovery branch, new lines must paint normally — i.e. the
+	## next round of appends through the same panel doesn't lose lines or
+	## duplicate them.
+	buffer.log("after clear 1")
+	buffer.log("after clear 2")
+	panel.tick()
+	assert_contains(panel._log_display.get_parsed_text(), "after clear 1")
+	assert_contains(panel._log_display.get_parsed_text(), "after clear 2")
+	assert_false(panel._log_display.get_parsed_text().contains("before clear"),
+		"pre-clear lines must not reappear after the recovery + re-paint")
+	assert_eq(panel._last_log_count, 2)
+	panel.free()

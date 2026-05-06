@@ -64,6 +64,19 @@ func tick() -> void:
 	var count: int = _log_buffer.total_count()
 	if count == _last_log_count:
 		return
+	if count < _last_log_count:
+		## Buffer shrank — almost certainly `McpLogBuffer.clear()` via the
+		## `clear_logs` MCP tool / `logs_clear`. `total_count()` returns the
+		## current `_lines.size()`, not a monotonic ever-produced counter, so
+		## a clear flips the cursor backward. Without this branch the display
+		## keeps showing pre-clear lines forever (the next tick would compute
+		## `get_recent(negative)` and append nothing) — the viewer drifts
+		## permanently out of sync with the buffer. Reset the display + cursor
+		## so the next append paints over a clean slate.
+		_log_display.clear()
+		_last_log_count = 0
+		if count == 0:
+			return
 	var new_lines: Array[String] = _log_buffer.get_recent(count - _last_log_count)
 	for line in new_lines:
 		_log_display.add_text(line + "\n")
