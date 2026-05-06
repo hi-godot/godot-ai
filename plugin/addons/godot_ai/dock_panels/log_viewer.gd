@@ -2,24 +2,23 @@
 extends VBoxContainer
 
 ## Dock subpanel — renders the MCP request/response log buffer. Owns its own
-## UI subtree and the line-count cursor; the dock provides the buffer +
-## connection at setup() time and calls tick() each frame the panel is visible.
+## UI subtree, the line-count cursor, and the display-visibility toggle. Emits
+## `logging_enabled_changed` so the dock can route the flag onto the
+## connection dispatcher without the panel knowing the routing exists.
 ##
 ## Extracted from mcp_dock.gd as part of audit-v2 #360 — see the comment at
 ## the top of mcp_dock.gd for the broader extraction story.
 
-const COLOR_HEADER := Color(0.95, 0.95, 0.95)
+signal logging_enabled_changed(enabled: bool)
 
-var _log_buffer
-var _connection
+var _log_buffer: McpLogBuffer
 var _log_display: RichTextLabel
 var _log_toggle: CheckButton
 var _last_log_count := 0
 
 
-func setup(log_buffer, connection) -> void:
+func setup(log_buffer: McpLogBuffer) -> void:
 	_log_buffer = log_buffer
-	_connection = connection
 
 
 func _ready() -> void:
@@ -31,7 +30,7 @@ func _build_ui() -> void:
 	add_child(HSeparator.new())
 
 	var log_header_row := HBoxContainer.new()
-	var log_header := _make_header("MCP Log")
+	var log_header := McpDock._make_header("MCP Log")
 	log_header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	log_header_row.add_child(log_header)
 
@@ -67,14 +66,5 @@ func tick() -> void:
 
 
 func _on_log_toggled(enabled: bool) -> void:
-	if _connection and _connection.dispatcher:
-		_connection.dispatcher.mcp_logging = enabled
 	_log_display.visible = enabled
-
-
-static func _make_header(text: String) -> Label:
-	var label := Label.new()
-	label.text = text
-	label.add_theme_font_size_override("font_size", 18)
-	label.add_theme_color_override("font_color", COLOR_HEADER)
-	return label
+	logging_enabled_changed.emit(enabled)

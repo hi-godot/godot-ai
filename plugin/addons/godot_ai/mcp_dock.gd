@@ -174,7 +174,7 @@ var _mode_override_btn: OptionButton
 var _setup_section: VBoxContainer
 var _setup_container: VBoxContainer
 var _dev_server_btn: Button
-var _log_viewer  # log_viewer.gd — VBoxContainer subtree, owns log buffer cursor + display
+var _log_viewer: LogViewerScript
 
 var _last_connected := false
 var _last_status_text := ""
@@ -191,7 +191,7 @@ var _crash_reload_btn: Button
 ## cause is port contention (PORT_EXCLUDED or FOREIGN_PORT). The dock writes
 ## the EditorSetting and reloads the plugin in response to the panel's
 ## `port_apply_requested` signal.
-var _port_picker_panel  # port_picker_panel.gd — VBoxContainer subtree
+var _port_picker_panel: PortPickerPanelScript
 ## Last status Dict rendered into the panel — used to skip re-population
 ## when nothing changed, which would otherwise reset the user's scroll
 ## position on every frame. GDScript Dicts compare by value with `==`.
@@ -664,7 +664,8 @@ func _build_ui() -> void:
 
 	# --- Log section (dev-only) ---
 	_log_viewer = LogViewerScript.new()
-	_log_viewer.setup(_log_buffer, _connection)
+	_log_viewer.setup(_log_buffer)
+	_log_viewer.logging_enabled_changed.connect(_on_log_logging_enabled_changed)
 	add_child(_log_viewer)
 
 	# Apply initial dev-mode visibility
@@ -673,7 +674,9 @@ func _build_ui() -> void:
 	_perform_initial_client_status_refresh()
 
 
-func _make_header(text: String) -> Label:
+## Static so `dock_panels/*.gd` subpanels can call it via `McpDock._make_header(...)`
+## without re-declaring identical helpers + COLOR_HEADER constants.
+static func _make_header(text: String) -> Label:
 	var label := Label.new()
 	label.text = text
 	label.add_theme_font_size_override("font_size", 18)
@@ -981,6 +984,13 @@ func _apply_mixed_state_banner_diagnostic(diag: Dictionary) -> void:
 			"… (list truncated at %d entries)" % UpdateMixedStateScript.MAX_BACKUP_RESULTS
 		)
 		_mixed_state_files.newline()
+
+
+## Signal handler for the extracted LogViewer — the panel owns its own
+## display visibility, the dock owns dispatcher logging routing.
+func _on_log_logging_enabled_changed(enabled: bool) -> void:
+	if _connection and _connection.dispatcher:
+		_connection.dispatcher.mcp_logging = enabled
 
 
 ## Signal handler for the extracted PortPickerPanel — the panel range-validates
