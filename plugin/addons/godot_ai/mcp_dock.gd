@@ -3,6 +3,26 @@ class_name McpDock
 extends VBoxContainer
 
 ## Editor dock panel showing MCP connection status, client config, and command log.
+##
+## Audit-v2 #360 partial extraction. Two cohesive subpanels live in
+## res://addons/godot_ai/dock_panels/:
+##   - log_viewer.gd: MCP request/response log (dev-mode only).
+##   - port_picker_panel.gd: spawn-failure escape hatch nested in the crash panel.
+##
+## The audit also called for ServerStatusPanel and ClientRowController
+## extractions; those were *deliberately deferred*. Their UI scatters across
+## the dock layout (status icon at top, crash panel mid, setup section lower;
+## client rows + drift banner + scroll grid spread similarly), so a clean
+## extract-by-panel needs either visible UI reorganization or a coordinator-
+## Node pattern with property-accessor façades on McpDock that re-tangle the
+## very state they claim to move.
+##
+## A future refactor probably wants extract-by-concern instead — e.g.
+## `utils/mcp_async_refresh_state_machine.gd` owning the IDLE → RUNNING →
+## RUNNING_TIMED_OUT → DEFERRED_FOR_FILESYSTEM → SHUTTING_DOWN transitions
+## and pending-flag triplet, `utils/mcp_client_action_dispatcher.gd` owning
+## the per-row Configure/Remove worker pool. The dock would keep UI
+## construction and lose the state-machine ownership. See issue #360.
 
 const ServerStateScript := preload("res://addons/godot_ai/utils/mcp_server_state.gd")
 const ClientRefreshStateScript := preload("res://addons/godot_ai/utils/mcp_client_refresh_state.gd")
@@ -15,6 +35,8 @@ const JsonStrategy := preload("res://addons/godot_ai/clients/_json_strategy.gd")
 const TomlStrategy := preload("res://addons/godot_ai/clients/_toml_strategy.gd")
 const CliStrategy := preload("res://addons/godot_ai/clients/_cli_strategy.gd")
 const ToolCatalog := preload("res://addons/godot_ai/tool_catalog.gd")
+const LogViewerScript := preload("res://addons/godot_ai/dock_panels/log_viewer.gd")
+const PortPickerPanelScript := preload("res://addons/godot_ai/dock_panels/port_picker_panel.gd")
 
 const DEV_MODE_SETTING := "godot_ai/dev_mode"
 ## Index ↔ persisted-value mapping for the mode-override dropdown. The array
@@ -152,11 +174,8 @@ var _mode_override_btn: OptionButton
 var _setup_section: VBoxContainer
 var _setup_container: VBoxContainer
 var _dev_server_btn: Button
-var _log_section: VBoxContainer
-var _log_display: RichTextLabel
-var _log_toggle: CheckButton
+var _log_viewer: LogViewerScript
 
-var _last_log_count := 0
 var _last_connected := false
 var _last_status_text := ""
 var _startup_grace_until_msec: int = 0
@@ -168,12 +187,11 @@ var _crash_panel: VBoxContainer
 var _crash_output: RichTextLabel
 var _crash_restart_btn: Button
 var _crash_reload_btn: Button
-## Port-picker escape hatch — visible inside the panel when the root
-## cause is port contention (PORT_EXCLUDED or FOREIGN_PORT). Applies a
-## new `godot_ai/http_port` value and reloads the plugin so the spawn
-## retries with the new port.
-var _port_picker_section: VBoxContainer
-var _port_picker_spinbox: SpinBox
+## Port-picker escape hatch — visible inside the crash panel when the root
+## cause is port contention (PORT_EXCLUDED or FOREIGN_PORT). The dock writes
+## the EditorSetting and reloads the plugin in response to the panel's
+## `port_apply_requested` signal.
+var _port_picker_panel: PortPickerPanelScript
 ## Last status Dict rendered into the panel — used to skip re-population
 ## when nothing changed, which would otherwise reset the user's scroll
 ## position on every frame. GDScript Dicts compare by value with `==`.
@@ -220,8 +238,8 @@ func _process(_delta: float) -> void:
 	_check_client_status_refresh_timeout()
 	_retry_deferred_client_status_refresh()
 	_update_status()
-	if _log_section.visible:
-		_update_log()
+	if _log_viewer != null and _log_viewer.visible:
+		_log_viewer.tick()
 
 
 func _exit_tree() -> void:
@@ -418,7 +436,10 @@ func _build_ui() -> void:
 	_crash_output.fit_content = true
 	_crash_panel.add_child(_crash_output)
 
-	_build_port_picker_section()
+	_port_picker_panel = PortPickerPanelScript.new()
+	_port_picker_panel.setup()
+	_port_picker_panel.port_apply_requested.connect(_on_port_apply_requested)
+	_crash_panel.add_child(_port_picker_panel)
 
 	_crash_restart_btn = Button.new()
 	_crash_restart_btn.text = "Restart Server"
@@ -643,32 +664,10 @@ func _build_ui() -> void:
 	add_child(dev_toggle_row)
 
 	# --- Log section (dev-only) ---
-	_log_section = VBoxContainer.new()
-	_log_section.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	add_child(_log_section)
-
-	_log_section.add_child(HSeparator.new())
-
-	var log_header_row := HBoxContainer.new()
-	var log_header := _make_header("MCP Log")
-	log_header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	log_header_row.add_child(log_header)
-
-	_log_toggle = CheckButton.new()
-	_log_toggle.text = "Log"
-	_log_toggle.button_pressed = true
-	_log_toggle.toggled.connect(_on_log_toggled)
-	log_header_row.add_child(_log_toggle)
-
-	_log_section.add_child(log_header_row)
-
-	_log_display = RichTextLabel.new()
-	_log_display.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_log_display.custom_minimum_size = Vector2(0, 120)
-	_log_display.scroll_following = true
-	_log_display.bbcode_enabled = false
-	_log_display.selection_enabled = true
-	_log_section.add_child(_log_display)
+	_log_viewer = LogViewerScript.new()
+	_log_viewer.setup(_log_buffer)
+	_log_viewer.logging_enabled_changed.connect(_on_log_logging_enabled_changed)
+	add_child(_log_viewer)
 
 	# Apply initial dev-mode visibility
 	_apply_dev_mode_visibility()
@@ -676,7 +675,9 @@ func _build_ui() -> void:
 	_perform_initial_client_status_refresh()
 
 
-func _make_header(text: String) -> Label:
+## Static so `dock_panels/*.gd` subpanels can call it via `McpDock._make_header(...)`
+## without re-declaring identical helpers + COLOR_HEADER constants.
+static func _make_header(text: String) -> Label:
 	var label := Label.new()
 	label.text = text
 	label.add_theme_font_size_override("font_size", 18)
@@ -869,14 +870,12 @@ func _update_crash_panel(server_status: Dictionary) -> void:
 		state == ServerStateScript.PORT_EXCLUDED
 		or state == ServerStateScript.FOREIGN_PORT
 	)
-	_port_picker_section.visible = port_picker_visible
+	_port_picker_panel.visible = port_picker_visible
 	if port_picker_visible:
-		## Seed the SpinBox with a suggested non-reserved port each time
-		## the panel surfaces. Idempotent when the user already has a
-		## good candidate queued up.
-		_port_picker_spinbox.value = ClientConfigurator.suggest_free_port(
-			ClientConfigurator.http_port() + 1
-		)
+		## Seed the spinbox with a suggested non-reserved port each time the
+		## panel surfaces. Idempotent when the user already has a good
+		## candidate queued up.
+		_port_picker_panel.seed_suggested_port()
 
 
 static func _crash_body_for_state(state: int, server_status: Dictionary = {}) -> String:
@@ -988,39 +987,17 @@ func _apply_mixed_state_banner_diagnostic(diag: Dictionary) -> void:
 		_mixed_state_files.newline()
 
 
-func _build_port_picker_section() -> void:
-	_port_picker_section = VBoxContainer.new()
-	_port_picker_section.add_theme_constant_override("separation", 4)
-	_port_picker_section.visible = false
-
-	var picker_row := HBoxContainer.new()
-	picker_row.add_theme_constant_override("separation", 6)
-
-	_port_picker_spinbox = SpinBox.new()
-	_port_picker_spinbox.min_value = ClientConfigurator.MIN_PORT
-	_port_picker_spinbox.max_value = ClientConfigurator.MAX_PORT
-	_port_picker_spinbox.step = 1
-	_port_picker_spinbox.value = ClientConfigurator.http_port()
-	_port_picker_spinbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	picker_row.add_child(_port_picker_spinbox)
-
-	var apply_btn := Button.new()
-	apply_btn.text = "Apply + Reload"
-	apply_btn.tooltip_text = (
-		"Saves godot_ai/http_port to Editor Settings and reloads the plugin so"
-		+ " the server spawns on the new port."
-	)
-	apply_btn.pressed.connect(_on_apply_new_port)
-	picker_row.add_child(apply_btn)
-
-	_port_picker_section.add_child(picker_row)
-	_crash_panel.add_child(_port_picker_section)
+## Signal handler for the extracted LogViewer — the panel owns its own
+## display visibility, the dock owns dispatcher logging routing.
+func _on_log_logging_enabled_changed(enabled: bool) -> void:
+	if _connection and _connection.dispatcher:
+		_connection.dispatcher.mcp_logging = enabled
 
 
-func _on_apply_new_port() -> void:
-	var new_port: int = int(_port_picker_spinbox.value)
-	if new_port < ClientConfigurator.MIN_PORT or new_port > ClientConfigurator.MAX_PORT:
-		return
+## Signal handler for the extracted PortPickerPanel — the panel range-validates
+## the spinbox value before emitting, so we just write the EditorSetting and
+## reload the plugin here.
+func _on_port_apply_requested(new_port: int) -> void:
 	var es := EditorInterface.get_editor_settings()
 	if es != null:
 		es.set_setting(ClientConfigurator.SETTING_HTTP_PORT, new_port)
@@ -1042,20 +1019,6 @@ func _refresh_server_label() -> void:
 	if _plugin != null and _plugin.has_method("get_resolved_ws_port"):
 		ws_port = int(_plugin.get_resolved_ws_port())
 	_server_label.text = "WS: %d  HTTP: %d" % [ws_port, ClientConfigurator.http_port()]
-
-
-func _update_log() -> void:
-	if _log_buffer == null:
-		return
-	var count: int = _log_buffer.total_count()
-	if count == _last_log_count:
-		return
-
-	# Append only new lines
-	var new_lines: Array[String] = _log_buffer.get_recent(count - _last_log_count)
-	for line in new_lines:
-		_log_display.add_text(line + "\n")
-	_last_log_count = count
 
 
 # --- Dev mode persistence ---
@@ -1085,7 +1048,8 @@ func _on_dev_mode_toggled(enabled: bool) -> void:
 func _apply_dev_mode_visibility() -> void:
 	var dev := _dev_mode_toggle.button_pressed
 	_dev_section.visible = dev
-	_log_section.visible = dev
+	if _log_viewer != null:
+		_log_viewer.visible = dev
 
 	# Setup section: visible in dev mode, OR in user mode when uv is missing
 	# (so users can install uv from the dock).
@@ -1279,12 +1243,6 @@ func _dispatch_stale_server_restart() -> bool:
 		_plugin.force_restart_server()
 		return true
 	return false
-
-
-func _on_log_toggled(enabled: bool) -> void:
-	if _connection and _connection.dispatcher:
-		_connection.dispatcher.mcp_logging = enabled
-	_log_display.visible = enabled
 
 
 # --- Setup section ---

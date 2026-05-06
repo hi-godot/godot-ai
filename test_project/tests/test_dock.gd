@@ -7,6 +7,8 @@ extends McpTestSuite
 
 const McpDockScript = preload("res://addons/godot_ai/mcp_dock.gd")
 const GodotAiPlugin := preload("res://addons/godot_ai/plugin.gd")
+const PortPickerPanelScript = preload("res://addons/godot_ai/dock_panels/port_picker_panel.gd")
+const LogViewerScript = preload("res://addons/godot_ai/dock_panels/log_viewer.gd")
 
 ## Stub for the dock's `_update_manager` slot. Tests that want to fake
 ## "self-update mid-install" inject one of these so the dock's
@@ -786,4 +788,78 @@ func test_incompatible_server_hides_http_only_port_picker() -> void:
 		"message": "Port 8000 is occupied by godot-ai server v1.2.10",
 	})
 	assert_true(_dock._crash_panel.visible, "diagnostic panel still shows")
-	assert_false(_dock._port_picker_section.visible, "HTTP-only picker must stay hidden")
+	assert_false(_dock._port_picker_panel.visible, "HTTP-only picker must stay hidden")
+
+
+# --- Signal-emit contracts on the audit-v2 #360 extracted subpanels ---
+# These pin the new panel boundary: panels emit; dock owns side effects.
+
+## Spies for the two panels' signals. Inner-class pattern matches the
+## `_RestartDispatchPlugin` spy at the top of this file — multi-line
+## lambdas with closure-captured locals don't reliably evaluate the body
+## under the test runner, so a typed receiver is the safe form.
+class _PortApplySpy:
+	var captured: Array[int] = []
+	func on_apply(new_port: int) -> void:
+		captured.append(new_port)
+
+
+class _LogToggleSpy:
+	var captured: Array[bool] = []
+	func on_toggle(enabled: bool) -> void:
+		captured.append(enabled)
+
+
+func test_port_picker_panel_emits_apply_requested_for_in_range_port() -> void:
+	## The panel is the gatekeeper for `EditorInterface.set_setting` — invalid
+	## ports must never reach the dock's handler. In-range values must.
+	## Instantiate the panel in isolation: going through the dock's wiring
+	## would fire the connected `_on_port_apply_requested` handler, which
+	## reloads the plugin (`set_plugin_enabled(false/true)`) and tears down
+	## the test runner mid-suite.
+	var panel := PortPickerPanelScript.new()
+	panel.setup()
+	var spy := _PortApplySpy.new()
+	panel.port_apply_requested.connect(spy.on_apply)
+	panel._spinbox.value = 9000
+	panel._on_apply_pressed()
+	assert_eq(spy.captured.size(), 1, "in-range port must emit exactly once")
+	assert_eq(spy.captured[0], 9000, "emitted port must match the spinbox value")
+	panel.free()
+
+
+func test_port_picker_panel_skips_emit_for_out_of_range_port() -> void:
+	## SpinBox.value is clamped by min_value/max_value at the UI layer,
+	## but the panel re-validates before emitting because programmatic
+	## sets (or future re-bindings) can bypass the clamp. The dock relies
+	## on this guard, so pin it. Same isolation rationale as the test above.
+	var panel := PortPickerPanelScript.new()
+	panel.setup()
+	var spy := _PortApplySpy.new()
+	panel.port_apply_requested.connect(spy.on_apply)
+	## Bypass the SpinBox clamp by writing the raw `value` field after
+	## relaxing min_value — covers a future regression where the panel's
+	## clamp is the only line of defense (e.g. someone replaces SpinBox
+	## with a free-form input).
+	panel._spinbox.min_value = 0
+	panel._spinbox.value = 0
+	panel._on_apply_pressed()
+	assert_eq(spy.captured.size(), 0, "out-of-range port must not emit")
+	panel.free()
+
+
+func test_log_viewer_emits_logging_enabled_changed_on_toggle() -> void:
+	## The dock routes this signal to `_connection.dispatcher.mcp_logging`.
+	## If LogViewer stops emitting, MCP request/response logging silently
+	## stays whatever it was — easy to regress, hard to spot.
+	## Instantiate in isolation to keep the test focused on the panel's
+	## emit contract (and consistent with the port-picker tests above).
+	var panel := LogViewerScript.new()
+	panel.setup(null)  # buffer not exercised — only signal emission is under test
+	var spy := _LogToggleSpy.new()
+	panel.logging_enabled_changed.connect(spy.on_toggle)
+	panel._on_log_toggled(false)
+	panel._on_log_toggled(true)
+	assert_eq(spy.captured, [false, true] as Array[bool],
+		"toggle must emit each state change exactly once, in order")
+	panel.free()
