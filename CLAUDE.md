@@ -184,7 +184,7 @@ The harness creates a disposable project with a physical addon copy, stages a sy
 
 ### Python tests
 ```bash
-pytest -v                    # 757 unit + integration tests
+pytest -v                    # 903 unit + integration tests
 ```
 
 ### Godot-side tests
