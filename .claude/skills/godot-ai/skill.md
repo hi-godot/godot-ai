@@ -14,9 +14,9 @@ globs:
   - `server.py` — entrypoint, lifespan, tool registration, `--exclude-domains` support
   - `tools/` — MCP tool modules (session, editor, scene, node, project, script, resource, filesystem, signal, autoload, input_map, testing, batch, client, ui, theme, animation, material, particle, camera, audio) + `_meta_tool.py` (`register_manage_tool` rollup factory)
   - `resources/` — `godot://...` read-only URIs (sessions, editor, project, nodes, scripts, scenes, library)
-  - `middleware/` — `StripClientWrapperKwargs`, `ParseStringifiedParams`, `HintOpTypoOnManage`
-  - `handlers/` — shared sync handlers behind a `Runtime` protocol; `_readiness.py` gates writes
-  - `runtime/interface.py` + `direct.py` — `Runtime` protocol + `DirectRuntime` impl
+  - `middleware/` — `PreserveGodotCommandErrorData`, `StripClientWrapperKwargs`, `ParseStringifiedParams`, `HintOpTypoOnManage` (registration order is load-bearing — see the docstring above the `mcp.add_middleware(...)` calls in `server.py` and `tests/unit/test_server_middleware_order.py`)
+  - `handlers/` — shared sync handlers using `DirectRuntime`; `_readiness.py` gates writes
+  - `runtime/direct.py` — `DirectRuntime`, the in-process runtime adapter
   - `transport/websocket.py` — WebSocket server for Godot plugin
   - `sessions/registry.py` — multi-session tracking
   - `godot_client/client.py` — typed async client, raises `GodotCommandError` on errors

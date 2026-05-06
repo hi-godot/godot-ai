@@ -17,8 +17,6 @@ from godot_ai.tools._meta_tool import register_manage_tool
 _DESCRIPTION = """\
 AnimationPlayer authoring (player, tracks, autoplay, presets, playback).
 
-Resource form: ``godot://animations`` — prefer for active-session reads.
-
 Ops:
   • player_create(parent_path, name="AnimationPlayer")
         Create an AnimationPlayer with empty default library.
@@ -58,6 +56,13 @@ Ops:
   • preset_pulse(player_path, target_path, from_scale=1.0, to_scale=1.1,
                   duration=0.4, animation_name="", overwrite=False)
         One-call pulse / hover-bounce (3-keyframe scale ping-pong).
+
+Preset target_path: accepts either a scene-absolute path (e.g. "/Main/World/Cube",
+matching every other scene tool) or a path relative to the AnimationPlayer's
+root_node (e.g. "World/Cube", matching how Animation tracks store node paths).
+Scene-absolute targets outside the player's root_node subtree are converted to
+a `..`-prefixed track path via root_node.get_path_to(target), the same shape
+the relative form already accepts.
 """
 
 
@@ -76,6 +81,10 @@ def register_animation_tools(mcp: FastMCP) -> None:
 
         After creating the clip, add tracks via ``animation_manage`` ops
         ``add_property_track`` / ``add_method_track`` / ``create_simple``.
+        Track node paths are stored relative to the AnimationPlayer's
+        ``root_node`` (default: its parent), not to the scene root — see
+        ``animation_manage`` preset ops for a forgiving target_path that
+        accepts either form.
         If ``player_path`` doesn't resolve, an AnimationPlayer is auto-created
         at that path (parent must exist).
 
@@ -117,5 +126,15 @@ def register_animation_tools(mcp: FastMCP) -> None:
             "preset_slide": animation_handlers.animation_preset_slide,
             "preset_shake": animation_handlers.animation_preset_shake,
             "preset_pulse": animation_handlers.animation_preset_pulse,
+        },
+        read_resource_forms={
+            ## No `godot://animations` resource exists. Animation reads are
+            ## stateful (per-player, per-clip) and don't fit the single-URL
+            ## resource shape; agents fetch via the rollup ops.
+            "validate": None,
+            "play": None,
+            "stop": None,
+            "list": None,
+            "get": None,
         },
     )

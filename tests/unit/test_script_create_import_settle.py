@@ -71,10 +71,11 @@ def test_finish_create_script_deferred_polls_resourceloader_with_bounded_loop() 
         "The deferred loop must use a named bounded-frame constant so the "
         "wait can't run forever if the filesystem scan stalls."
     )
-    assert "_IMPORT_SETTLE_MAX_MSEC := 4500" in source, (
-        "The deferred loop must also be capped below the Python client's "
-        "default 5s send timeout. A pure 300-frame cap can exceed 5s on a "
-        "slow editor frame rate."
+    assert "_IMPORT_SETTLE_MAX_MSEC := 3500" in source, (
+        "The deferred loop must be capped well below the dispatcher's "
+        "create_script deferred timeout. If this window reaches the dispatcher "
+        "timeout, a committed file can still surface to callers as "
+        "DEFERRED_TIMEOUT."
     )
     deferred_block = get_func_block(source, "func _finish_create_script_deferred")
     assert "var deadline_ms := Time.get_ticks_msec() + _IMPORT_SETTLE_MAX_MSEC" in deferred_block
@@ -88,16 +89,47 @@ def test_finish_create_script_deferred_polls_resourceloader_with_bounded_loop() 
         "The deferred loop must yield via process_frame between polls so the "
         "editor can actually run the import pipeline between checks."
     )
+    assert (
+        deferred_block.find("var deadline_ms := Time.get_ticks_msec() + _IMPORT_SETTLE_MAX_MSEC")
+        < deferred_block.find("await tree.process_frame")
+    ), (
+        "The deferred coroutine must start its deadline before the registration "
+        "handoff await. Otherwise a slow first frame is outside the bounded "
+        "window and a committed write can still hit the dispatcher timeout (#324)."
+    )
     # The reply must use send_deferred_response with a {"data": ...} payload.
     assert "_connection.send_deferred_response(request_id" in deferred_block, (
         "After settling, the handler must push the response over the "
         "connection's send_deferred_response — the dispatcher won't do it."
     )
+    assert 'payload["import_settle"] = "settled" if settled else "timeout"' in deferred_block
+    assert 'payload["import_pending"] = not settled' in deferred_block
     # Match the project_handler.stop_project pattern: drop the response if
     # the plugin tore down during the await.
     assert "is_instance_valid(_connection)" in deferred_block, (
         "If _exit_tree fires during the await the connection is freed; the "
         "deferred reply must check is_instance_valid and bail silently."
+    )
+
+
+def test_create_script_reports_committed_status_even_when_import_wait_times_out() -> None:
+    """A committed file must not be indistinguishable from a failed mutation."""
+    source = SCRIPT_HANDLER.read_text()
+
+    assert '"committed": true' in source, (
+        "create_script writes the file before waiting for ResourceLoader; the "
+        "response must expose committed=true so callers know retrying is not a "
+        "plain safe retry."
+    )
+    assert '"import_settle": "already_known" if existed_before else "not_waited"' in source
+    deferred_block = get_func_block(source, "func _finish_create_script_deferred")
+    assert 'payload["import_settle"] = "settled" if settled else "timeout"' in deferred_block, (
+        "Deferred completion must distinguish import success from import-settle "
+        "timeout while still returning a success payload for the committed file."
+    )
+    assert 'payload["import_pending"] = not settled' in deferred_block, (
+        "When import settling times out, callers need an explicit import_pending "
+        "flag instead of interpreting a transport timeout as write failure."
     )
 
 

@@ -23,20 +23,18 @@ func control_draw_recipe(params: Dictionary) -> Dictionary:
 	var clear_existing: bool = bool(params.get("clear_existing", true))
 
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 	if typeof(ops_raw) != TYPE_ARRAY:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "ops must be an Array")
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "ops must be an Array")
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-
-	var node := McpScenePath.resolve(path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(path, scene_root))
+	var _resolved := McpNodeValidator.resolve_or_error(path, "path")
+	if _resolved.has("error"):
+		return _resolved
+	var node: Node = _resolved.node
+	var scene_root: Node = _resolved.scene_root
 	if not node is Control:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"control_draw_recipe requires a Control node, got %s" % node.get_class()
 		)
 
@@ -98,7 +96,7 @@ func _coerce_ops(ops: Array) -> Dictionary:
 		var op: Variant = ops[i]
 		if typeof(op) != TYPE_DICTIONARY:
 			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS, "ops[%d] must be a dictionary" % i
+				McpErrorCodes.WRONG_TYPE, "ops[%d] must be a dictionary" % i
 			)
 		var coerced := _coerce_single_op(op, i)
 		if coerced.has("error"):
@@ -111,7 +109,7 @@ func _coerce_single_op(op: Dictionary, idx: int) -> Dictionary:
 	var draw_type: String = op.get("draw", "")
 	if draw_type.is_empty():
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS, "ops[%d]: missing 'draw' field" % idx
+			McpErrorCodes.MISSING_REQUIRED_PARAM, "ops[%d]: missing 'draw' field" % idx
 		)
 	match draw_type:
 		"line":
@@ -129,7 +127,7 @@ func _coerce_single_op(op: Dictionary, idx: int) -> Dictionary:
 		"string":
 			return _coerce_string(op, idx)
 	return McpErrorCodes.make(
-		McpErrorCodes.INVALID_PARAMS,
+		McpErrorCodes.VALUE_OUT_OF_RANGE,
 		"ops[%d]: unknown draw type '%s'" % [idx, draw_type]
 	)
 
@@ -149,7 +147,7 @@ func _coerce_typed(value: Variant, prop_type: int, idx: int, kind: String, field
 	if r.ok:
 		return {"ok": true, "value": r.value}
 	return McpErrorCodes.make(
-		McpErrorCodes.INVALID_PARAMS, "ops[%d] (%s): invalid '%s'" % [idx, kind, field]
+		McpErrorCodes.VALUE_OUT_OF_RANGE, "ops[%d] (%s): invalid '%s'" % [idx, kind, field]
 	)
 
 
@@ -245,11 +243,11 @@ func _coerce_circle(op: Dictionary, idx: int) -> Dictionary:
 func _coerce_polyline_or_polygon(op: Dictionary, idx: int, kind: String) -> Dictionary:
 	if not op.has("points"):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS, "ops[%d] (%s): missing 'points'" % [idx, kind]
+			McpErrorCodes.MISSING_REQUIRED_PARAM, "ops[%d] (%s): missing 'points'" % [idx, kind]
 		)
 	if typeof(op.points) != TYPE_ARRAY:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"ops[%d] (%s): 'points' must be an Array" % [idx, kind]
 		)
 	var points := PackedVector2Array()
@@ -284,12 +282,12 @@ func _coerce_polyline_or_polygon(op: Dictionary, idx: int, kind: String) -> Dict
 		var c := UiHandler._coerce_for_type(op.color, TYPE_COLOR)
 		if not c.ok:
 			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS, "ops[%d] (%s): invalid 'color'" % [idx, kind]
+				McpErrorCodes.VALUE_OUT_OF_RANGE, "ops[%d] (%s): invalid 'color'" % [idx, kind]
 			)
 		out["color"] = c.value
 	else:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.MISSING_REQUIRED_PARAM,
 			"ops[%d] (%s): missing 'color' or 'colors'" % [idx, kind]
 		)
 

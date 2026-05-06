@@ -43,7 +43,9 @@ Ops:
   • environment_create(path="", preset="default", properties=None,
                         sky=None, resource_path="", overwrite=False)
         Build Environment + Sky chain. Presets: default | clear | sunset
-        | night | fog. Either assign to a WorldEnvironment node or save .tres.
+        | night | fog. sky may be bool or a procedural sky dict such as
+        {"sky_material": "procedural", "sky_top_color": "#0f172a"}.
+        Either assign to a WorldEnvironment node or save .tres.
   • physics_shape_autofit(path, source_path="", shape_type="")
         Size a CollisionShape2D/3D to a nearby visual's bounds. Searches
         direct siblings then parent-siblings (handles nested
@@ -79,5 +81,12 @@ def register_resource_tools(mcp: FastMCP) -> None:
             "physics_shape_autofit": physics_shape_handlers.physics_shape_autofit,
             "gradient_texture_create": texture_handlers.gradient_texture_create,
             "noise_texture_create": texture_handlers.noise_texture_create,
+        },
+        read_resource_forms={
+            ## search/load/get_info take per-call queries or paths; no aggregate
+            ## resource fits the URI shape.
+            "search": None,
+            "load": None,
+            "get_info": None,
         },
     )

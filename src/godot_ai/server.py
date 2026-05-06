@@ -51,6 +51,7 @@ from godot_ai.tools.signal import register_signal_tools
 from godot_ai.tools.testing import register_testing_tools
 from godot_ai.tools.theme import register_theme_tools
 from godot_ai.tools.ui import register_ui_tools
+from godot_ai.transport.origin_guard import LocalhostOnlyHTTPMiddleware
 from godot_ai.transport.websocket import GodotWebSocketServer
 
 logger = logging.getLogger(__name__)
@@ -70,8 +71,12 @@ class GodotAIFastMCP(FastMCP):
         app = super().http_app(*args, **kwargs)
         transport = kwargs.get("transport", "http")
         if transport in ("http", "streamable-http"):
-            return StaleMcpSessionDiagnosticMiddleware(app)
-        return app
+            app = StaleMcpSessionDiagnosticMiddleware(app)
+        ## Outermost wrap: refuse non-loopback Host/Origin (DNS-rebinding
+        ## guard, audit-v2 finding #1). Applied to every HTTP transport
+        ## including ``sse`` so ``/godot-ai/status`` and the FastMCP
+        ## endpoints are guarded uniformly.
+        return LocalhostOnlyHTTPMiddleware(app)
 
 
 def create_server(
@@ -162,22 +167,44 @@ def create_server(
         lifespan=_lifespan,
     )
 
-    ## Keep plugin-provided error.data (e.g. candidate paths) visible on MCP
-    ## tool error responses instead of collapsing it into plain text.
+    ## Middleware registration order is load-bearing — do not reorder
+    ## without reading the rationale below. Locked by
+    ## ``tests/unit/test_server_middleware_order.py``.
+    ##
+    ## FastMCP composes the chain by iterating ``reversed(self.middleware)``
+    ## (see ``fastmcp/server/server.py::_run_middleware``), so the
+    ## **first-added** middleware is the **outermost** wrap (runs first on
+    ## request, last on response) and the **last-added** is the **innermost**
+    ## (runs last on request, first on response). Each layer below is placed
+    ## where it is for a specific reason:
+    ##
+    ## 1. ``PreserveGodotCommandErrorData`` — outermost on the response
+    ##    side. Catches ``GodotCommandError`` raised from any inner layer
+    ##    (handlers, plugin client, validation) and packages structured
+    ##    ``error.data`` (e.g. plugin-provided candidate paths) into the
+    ##    MCP tool result. Must be outermost so no inner middleware can
+    ##    collapse the structured payload into plain text before this
+    ##    catches it.
+    ##
+    ## 2. ``StripClientWrapperKwargs`` — early on the request side. Removes
+    ##    known client-injected wrapper kwargs (e.g. Cline's
+    ##    ``task_progress``) before any inner layer or Pydantic strict-mode
+    ##    schema sees them. See #193.
+    ##
+    ## 3. ``ParseStringifiedParams`` — request-side, after wrapper-stripping
+    ##    and before Pydantic. JSON-decodes a stringified ``params`` slot on
+    ##    ``<domain>_manage`` calls so the strict-mode schema sees the dict
+    ##    the client meant to send. Must run before Pydantic (which lives
+    ##    below all middleware in the FastMCP tool layer). See #206.
+    ##
+    ## 4. ``HintOpTypoOnManage`` — innermost on the response side. Catches
+    ##    Pydantic ``ValidationError`` for ``op`` literal_error and rewrites
+    ##    it with a ``difflib``-derived "Did you mean…" hint. Must be
+    ##    innermost on response so it sees Pydantic's raw ``ValidationError``
+    ##    before any outer middleware reshapes or wraps it. See #211.
     mcp.add_middleware(PreserveGodotCommandErrorData())
-
-    ## Tolerate known client-injected wrapper kwargs (Cline's task_progress,
-    ## etc.) so strict pydantic schemas don't reject every call. See #193.
     mcp.add_middleware(StripClientWrapperKwargs())
-
-    ## Decode stringified ``params`` on ``<domain>_manage`` calls before
-    ## strict-mode Pydantic rejects them. Some clients (Cline) auto-serialize
-    ## nested objects. See #206.
     mcp.add_middleware(ParseStringifiedParams())
-
-    ## Rewrite Pydantic literal_error on ``<domain>_manage`` op typos with a
-    ## ``difflib``-derived "Did you mean" hint, since op typos are the most
-    ## common rollup-misuse pattern. See #211.
     mcp.add_middleware(HintOpTypoOnManage())
 
     exclude = set(exclude_domains or ())

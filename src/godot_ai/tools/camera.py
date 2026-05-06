@@ -65,4 +65,8 @@ def register_camera_tools(mcp: FastMCP) -> None:
             "list": camera_handlers.camera_list,
             "apply_preset": camera_handlers.camera_apply_preset,
         },
+        read_resource_forms={
+            "get": None,  ## No per-camera resource.
+            "list": None,  ## No aggregate cameras resource.
+        },
     )

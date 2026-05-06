@@ -94,8 +94,7 @@ static func remove(client: McpClient, _server_name: String) -> Dictionary:
 		if _matches_any_header(lines[i], headers) or _matches_subtable_prefix(lines[i], subtable_prefixes):
 			i += 1
 			while i < lines.size():
-				var nt := lines[i].strip_edges()
-				if nt.begins_with("[") and nt.ends_with("]"):
+				if _is_any_section_header(lines[i]):
 					break
 				i += 1
 			continue
@@ -246,9 +245,25 @@ static func _find_section(lines: Array[String], headers: Array[String]) -> Dicti
 		if _matches_any_header(lines[i], headers):
 			var end := lines.size()
 			for j in range(i + 1, lines.size()):
-				var nt := lines[j].strip_edges()
-				if nt.begins_with("[") and nt.ends_with("]"):
+				if _is_any_section_header(lines[j]):
 					end = j
 					break
 			return {"start": i, "end": end}
 	return {}
+
+
+## Generic "is this line a TOML section header" check that tolerates an
+## inline comment after the closing `]`, e.g. `[next_section] # note`.
+## The pre-fix `nt.begins_with("[") and nt.ends_with("]")` rejected those
+## lines, so a hand-written comment after a header would let the
+## section-deletion / section-end loops walk straight through into the
+## following section and clobber unrelated content.
+static func _is_any_section_header(line: String) -> bool:
+	var trimmed := line.strip_edges()
+	if not trimmed.begins_with("["):
+		return false
+	var bracket := trimmed.find("]")
+	if bracket < 0:
+		return false
+	var remainder := trimmed.substr(bracket + 1).strip_edges()
+	return remainder.is_empty() or remainder.begins_with("#")

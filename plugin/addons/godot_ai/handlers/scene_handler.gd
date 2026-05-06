@@ -4,6 +4,8 @@ extends RefCounted
 ## Handles scene tree reading and node search.
 
 var _connection: McpConnection
+var _save_scene_callable: Callable = Callable()
+var _save_scene_as_callable: Callable = Callable()
 
 
 func _init(connection: McpConnection = null) -> void:
@@ -40,11 +42,12 @@ func find_nodes(params: Dictionary) -> Dictionary:
 	var group_filter: String = params.get("group", "")
 
 	if name_filter.is_empty() and type_filter.is_empty() and group_filter.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "At least one filter (name, type, group) is required")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "At least one filter (name, type, group) is required")
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	var results: Array[Dictionary] = []
 	_find_recursive(scene_root, scene_root, name_filter, type_filter, group_filter, results)
@@ -83,18 +86,18 @@ func create_scene(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	if not path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res://")
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Path must start with res://")
 
 	if not path.ends_with(".tscn") and not path.ends_with(".scn"):
 		path += ".tscn"
 
 	if not ClassDB.class_exists(root_type):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown node type: %s" % root_type)
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Unknown node type: %s" % root_type)
 	if not ClassDB.is_parent_class(root_type, "Node"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "%s is not a Node type" % root_type)
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "%s is not a Node type" % root_type)
 
 	# Ensure parent directory exists
 	var dir_path := path.get_base_dir()
@@ -141,10 +144,10 @@ func create_scene(params: Dictionary) -> Dictionary:
 func open_scene(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	if not ResourceLoader.exists(path):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Scene not found: %s" % path)
+		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Scene not found: %s" % path)
 
 	EditorInterface.open_scene_from_path(path)
 
@@ -161,13 +164,21 @@ func open_scene(params: Dictionary) -> Dictionary:
 ## Pauses WebSocket processing during save to prevent re-entrant _process()
 ## calls during EditorNode::_save_scene_with_preview's thumbnail render.
 func save_scene(_params: Dictionary) -> Dictionary:
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
+
+	var path := scene_root.scene_file_path
+	if path.is_empty():
+		return McpErrorCodes.make(
+			McpErrorCodes.INVALID_PARAMS,
+			"Current scene has never been saved; call scene_manage(op='save_as') with a res://... path ending in .tscn or .scn."
+		)
 
 	if _connection:
 		_connection.pause_processing = true
-	var err := EditorInterface.save_scene()
+	var err := _save_current_scene()
 	if _connection:
 		_connection.pause_processing = false
 
@@ -176,7 +187,7 @@ func save_scene(_params: Dictionary) -> Dictionary:
 
 	return {
 		"data": {
-			"path": scene_root.scene_file_path,
+			"path": path,
 			"undoable": false,
 			"reason": "File save cannot be undone via editor undo",
 		}
@@ -187,17 +198,18 @@ func save_scene(_params: Dictionary) -> Dictionary:
 func save_scene_as(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	if not path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res://")
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Path must start with res://")
 
 	if not path.ends_with(".tscn") and not path.ends_with(".scn"):
 		path += ".tscn"
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	# Ensure parent directory exists
 	var dir_path := path.get_base_dir()
@@ -208,7 +220,7 @@ func save_scene_as(params: Dictionary) -> Dictionary:
 
 	if _connection:
 		_connection.pause_processing = true
-	EditorInterface.save_scene_as(path)
+	_save_current_scene_as(path)
 	if _connection:
 		_connection.pause_processing = false
 
@@ -219,6 +231,19 @@ func save_scene_as(params: Dictionary) -> Dictionary:
 			"reason": "File save cannot be undone via editor undo",
 		}
 	}
+
+
+func _save_current_scene() -> int:
+	if _save_scene_callable.is_valid():
+		return int(_save_scene_callable.call())
+	return EditorInterface.save_scene()
+
+
+func _save_current_scene_as(path: String) -> void:
+	if _save_scene_as_callable.is_valid():
+		_save_scene_as_callable.call(path)
+		return
+	EditorInterface.save_scene_as(path)
 
 
 func _walk_tree(node: Node, out: Array[Dictionary], depth: int, max_depth: int, scene_root: Node) -> void:

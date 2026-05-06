@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, get_args
 from unittest.mock import AsyncMock
 
 import pytest
@@ -11,10 +11,38 @@ from fastmcp import FastMCP
 from godot_ai.godot_client.client import GodotCommandError
 from godot_ai.protocol.errors import ErrorCode
 from godot_ai.tools._meta_tool import (
-    _coerce_stringified_json_values,
+    MANAGE_TOOL_HANDLERS,
+    MANAGE_TOOL_OPS,
+    MANAGE_TOOL_RESOURCE_FORMS,
+    _op_literal_for,
     dispatch_manage_op,
     register_manage_tool,
 )
+
+
+@pytest.fixture(autouse=True)
+def _restore_registries():
+    """Snapshot/restore the manage-tool registries.
+
+    Several tests below register synthetic tools (``x_manage``, ``domain_manage``,
+    etc.) directly via ``register_manage_tool`` rather than through
+    ``create_server``. Without restoration those entries leak into the
+    process-global registries and then trip ``test_resource_form_lint``,
+    which sees handlers from ``unittest.mock`` and demands declarations.
+    """
+    saved_ops = dict(MANAGE_TOOL_OPS)
+    saved_handlers = {k: dict(v) for k, v in MANAGE_TOOL_HANDLERS.items()}
+    saved_forms = {k: dict(v) for k, v in MANAGE_TOOL_RESOURCE_FORMS.items()}
+    try:
+        yield
+    finally:
+        MANAGE_TOOL_OPS.clear()
+        MANAGE_TOOL_OPS.update(saved_ops)
+        MANAGE_TOOL_HANDLERS.clear()
+        MANAGE_TOOL_HANDLERS.update(saved_handlers)
+        MANAGE_TOOL_RESOURCE_FORMS.clear()
+        MANAGE_TOOL_RESOURCE_FORMS.update(saved_forms)
+
 
 # ---------------------------------------------------------------------------
 # Schema construction
@@ -63,6 +91,82 @@ def test_register_rejects_empty_ops():
     mcp = FastMCP("test")
     with pytest.raises(ValueError, match="ops cannot be empty"):
         register_manage_tool(mcp, tool_name="x_manage", description="x", ops={})
+
+
+def test_register_rejects_resource_form_for_unknown_op():
+    mcp = FastMCP("test")
+    with pytest.raises(ValueError, match="not in ops"):
+        register_manage_tool(
+            mcp,
+            tool_name="x_manage",
+            description="x",
+            ops={"a": AsyncMock()},
+            read_resource_forms={"b": "godot://x"},  # 'b' not in ops
+        )
+
+
+def test_register_rejects_non_godot_uri_in_resource_form():
+    mcp = FastMCP("test")
+    with pytest.raises(ValueError, match="must start with 'godot://'"):
+        register_manage_tool(
+            mcp,
+            tool_name="x_manage",
+            description="x",
+            ops={"a": AsyncMock()},
+            read_resource_forms={"a": "https://example.com"},
+        )
+
+
+def test_register_rejects_non_string_non_none_value_in_resource_form():
+    mcp = FastMCP("test")
+    with pytest.raises(ValueError, match="must be a 'godot://' URI string or None"):
+        register_manage_tool(
+            mcp,
+            tool_name="x_manage",
+            description="x",
+            ops={"a": AsyncMock()},
+            read_resource_forms={"a": 42},  # type: ignore[dict-item]
+        )
+
+
+def test_register_accepts_resource_form_with_uri_and_waiver():
+    mcp = FastMCP("test")
+    handler_a = AsyncMock(return_value={})
+    handler_b = AsyncMock(return_value={})
+    register_manage_tool(
+        mcp,
+        tool_name="acceptance_manage",
+        description="x",
+        ops={"a": handler_a, "b": handler_b},
+        read_resource_forms={"a": "godot://thing", "b": None},
+    )
+    assert MANAGE_TOOL_RESOURCE_FORMS["acceptance_manage"] == {"a": "godot://thing", "b": None}
+    assert MANAGE_TOOL_HANDLERS["acceptance_manage"]["a"] is handler_a
+
+
+# ---------------------------------------------------------------------------
+# Op-literal memoization (Audit v2 #18 / #362)
+# ---------------------------------------------------------------------------
+
+
+def test_op_literal_for_returns_same_object_for_equal_op_sets():
+    ## Two registrations with the same op names — even in different insertion
+    ## orders — must share one Literal so Pydantic doesn't rebuild equivalent
+    ## schema fragments per domain.
+    a = _op_literal_for(frozenset({"create", "delete", "rename"}))
+    b = _op_literal_for(frozenset({"rename", "create", "delete"}))
+    assert a is b
+
+
+def test_op_literal_for_returns_distinct_object_for_different_op_sets():
+    a = _op_literal_for(frozenset({"create", "delete"}))
+    b = _op_literal_for(frozenset({"create", "delete", "rename"}))
+    assert a is not b
+
+
+def test_op_literal_for_args_are_sorted_for_determinism():
+    literal = _op_literal_for(frozenset({"zeta", "alpha", "mu"}))
+    assert get_args(literal) == ("alpha", "mu", "zeta")
 
 
 # ---------------------------------------------------------------------------
@@ -196,59 +300,58 @@ async def test_dispatch_unwraps_typeerror_from_handler():
     assert exc.value.data["received"] == ["path"]
 
 
+@pytest.mark.asyncio
+async def test_dispatch_wraps_missing_param_typeerror():
+    async def needs_path(rt, path):
+        del rt, path
+        return {}
+
+    with pytest.raises(GodotCommandError) as exc:
+        await dispatch_manage_op(
+            ops={"go": needs_path},
+            tool_name="x_manage",
+            runtime=None,
+            op="go",
+            params={},
+        )
+
+    assert exc.value.code == ErrorCode.INVALID_PARAMS
+    assert "x_manage.go" in exc.value.message
+    assert "path" in exc.value.message
+    assert exc.value.data["received"] == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_wraps_extra_param_typeerror():
+    async def no_params(rt):
+        del rt
+        return {}
+
+    with pytest.raises(GodotCommandError) as exc:
+        await dispatch_manage_op(
+            ops={"go": no_params},
+            tool_name="x_manage",
+            runtime=None,
+            op="go",
+            params={"extra": "{not-json"},
+        )
+
+    assert exc.value.code == ErrorCode.INVALID_PARAMS
+    assert "x_manage.go" in exc.value.message
+    assert "extra" in exc.value.message
+    assert exc.value.data["received"] == ["extra"]
+
+
 # ---------------------------------------------------------------------------
 # JSON-string coercion
 # ---------------------------------------------------------------------------
 
 
-def test_coerce_array_string_to_list():
-    out = _coerce_stringified_json_values({"paths": '["a", "b"]'})
-    assert out["paths"] == ["a", "b"]
-
-
-def test_coerce_object_string_to_dict():
-    out = _coerce_stringified_json_values({"props": '{"x": 1, "y": 2}'})
-    assert out["props"] == {"x": 1, "y": 2}
-
-
-def test_coerce_leaves_plain_strings_untouched():
-    ## Neither value is JSON list/dict-shaped — both must pass through untouched.
-    out = _coerce_stringified_json_values({"name": "Alice", "label": "draft"})
-    assert out["name"] == "Alice"
-    assert out["label"] == "draft"
-
-
-def test_coerce_leaves_non_json_prefixed_strings_untouched():
-    out = _coerce_stringified_json_values({"q": "not-json", "n": "42"})
-    assert out["q"] == "not-json"
-    assert out["n"] == "42"  # numeric string isn't a list/dict prefix
-
-
-def test_coerce_preserves_native_types():
-    out = _coerce_stringified_json_values({"n": 1, "b": True, "lst": ["already"]})
-    assert out["n"] == 1
-    assert out["b"] is True
-    assert out["lst"] == ["already"]
-
-
-def test_coerce_only_attempts_array_or_object_prefixes():
-    ## "true" is valid JSON but not list/dict-shaped — leave alone.
-    out = _coerce_stringified_json_values({"flag": "true"})
-    assert out["flag"] == "true"
-
-
-def test_coerce_returns_input_unchanged_when_no_coercion_needed():
-    ## Fast path: no string values, no prefix matches → return same dict (not a copy).
-    params = {"n": 1, "b": True, "s": "plain", "lst": [1, 2]}
-    out = _coerce_stringified_json_values(params)
-    assert out is params
-
-
 @pytest.mark.asyncio
-async def test_dispatch_applies_coercion_before_handler():
+async def test_dispatch_coerces_stringified_list_for_list_annotated_param():
     captured: dict[str, Any] = {}
 
-    async def handler(rt, paths):
+    async def handler(rt, paths: list[str]):
         del rt
         captured["paths"] = paths
         return {}
@@ -261,3 +364,158 @@ async def test_dispatch_applies_coercion_before_handler():
         params={"paths": '["one", "two"]'},
     )
     assert captured["paths"] == ["one", "two"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_coerces_stringified_dict_for_dict_annotated_param():
+    captured: dict[str, Any] = {}
+
+    async def handler(rt, props: dict[str, Any]):
+        del rt
+        captured["props"] = props
+        return {}
+
+    await dispatch_manage_op(
+        ops={"go": handler},
+        tool_name="x_manage",
+        runtime=None,
+        op="go",
+        params={"props": '{"x": 1, "y": 2}'},
+    )
+    assert captured["props"] == {"x": 1, "y": 2}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_coerces_stringified_list_for_optional_list_annotated_param():
+    ## Optional[list[str]] is the most common shape for "may be omitted" list
+    ## params. The Union/UnionType branch in `_json_container_kinds` must strip
+    ## NoneType and still surface "list" so the JSON-string gets decoded.
+    captured: dict[str, Any] = {}
+
+    async def handler(rt, paths: list[str] | None = None):
+        del rt
+        captured["paths"] = paths
+        return {}
+
+    await dispatch_manage_op(
+        ops={"go": handler},
+        tool_name="x_manage",
+        runtime=None,
+        op="go",
+        params={"paths": '["one", "two"]'},
+    )
+    assert captured["paths"] == ["one", "two"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_leaves_json_shaped_string_for_str_annotated_param():
+    captured: dict[str, Any] = {}
+
+    async def handler(rt, label: str):
+        del rt
+        captured["label"] = label
+        return {}
+
+    await dispatch_manage_op(
+        ops={"go": handler},
+        tool_name="x_manage",
+        runtime=None,
+        op="go",
+        params={"label": '{"not": "decoded"}'},
+    )
+    assert captured["label"] == '{"not": "decoded"}'
+
+
+@pytest.mark.asyncio
+async def test_dispatch_rejects_malformed_json_for_list_annotated_param():
+    async def handler(rt, paths: list[str]):
+        del rt, paths
+        return {}
+
+    with pytest.raises(GodotCommandError) as exc:
+        await dispatch_manage_op(
+            ops={"go": handler},
+            tool_name="x_manage",
+            runtime=None,
+            op="go",
+            params={"paths": '["unterminated"'},
+        )
+
+    err = exc.value
+    assert err.code == ErrorCode.INVALID_PARAMS
+    assert "malformed JSON" in err.message
+    assert err.data["tool"] == "x_manage"
+    assert err.data["op"] == "go"
+    assert err.data["param"] == "paths"
+    assert err.data["expected"] == "JSON array"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_rejects_malformed_json_for_dict_annotated_param():
+    async def handler(rt, props: dict[str, Any]):
+        del rt, props
+        return {}
+
+    with pytest.raises(GodotCommandError) as exc:
+        await dispatch_manage_op(
+            ops={"go": handler},
+            tool_name="x_manage",
+            runtime=None,
+            op="go",
+            params={"props": '{"unterminated"'},
+        )
+
+    err = exc.value
+    assert err.code == ErrorCode.INVALID_PARAMS
+    assert "malformed JSON" in err.message
+    assert err.data["tool"] == "x_manage"
+    assert err.data["op"] == "go"
+    assert err.data["param"] == "props"
+    assert err.data["expected"] == "JSON object"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_rejects_wrong_json_container_for_dict_annotated_param():
+    async def handler(rt, props: dict[str, Any]):
+        del rt, props
+        return {}
+
+    with pytest.raises(GodotCommandError) as exc:
+        await dispatch_manage_op(
+            ops={"go": handler},
+            tool_name="x_manage",
+            runtime=None,
+            op="go",
+            params={"props": '["not", "an", "object"]'},
+        )
+
+    err = exc.value
+    assert err.code == ErrorCode.INVALID_PARAMS
+    assert err.data["tool"] == "x_manage"
+    assert err.data["op"] == "go"
+    assert err.data["param"] == "props"
+    assert err.data["expected"] == "JSON object"
+    assert err.data["actual"] == "list"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_preserves_native_list_and_dict_params():
+    paths = ["one", "two"]
+    props = {"x": 1}
+    captured: dict[str, Any] = {}
+
+    async def handler(rt, paths: list[str], props: dict[str, Any]):
+        del rt
+        captured["paths"] = paths
+        captured["props"] = props
+        return {}
+
+    await dispatch_manage_op(
+        ops={"go": handler},
+        tool_name="x_manage",
+        runtime=None,
+        op="go",
+        params={"paths": paths, "props": props},
+    )
+    assert captured["paths"] is paths
+    assert captured["props"] is props

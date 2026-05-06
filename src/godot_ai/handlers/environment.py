@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from godot_ai.handlers._readiness import require_writable
 from godot_ai.handlers._target import target_params
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 
 async def environment_create(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     path: str = "",
     preset: str = "default",
     properties: dict | None = None,
-    sky: bool | None = None,
+    sky: bool | dict | None = None,
     resource_path: str = "",
     overwrite: bool = False,
 ) -> dict:

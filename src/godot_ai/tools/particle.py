@@ -52,4 +52,10 @@ def register_particle_tools(mcp: FastMCP) -> None:
             "get": particle_handlers.particle_get,
             "apply_preset": particle_handlers.particle_apply_preset,
         },
+        read_resource_forms={
+            ## restart triggers a re-emit but skips require_writable; get is
+            ## per-emitter introspection. No aggregate particles resource.
+            "restart": None,
+            "get": None,
+        },
     )

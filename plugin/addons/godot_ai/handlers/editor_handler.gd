@@ -3,6 +3,8 @@ extends RefCounted
 
 ## Handles editor state, selection, log, screenshot, and performance commands.
 
+const UpdateMixedState := preload("res://addons/godot_ai/utils/update_mixed_state.gd")
+
 var _log_buffer: McpLogBuffer
 var _connection: McpConnection
 var _debugger_plugin: McpDebuggerPlugin
@@ -20,19 +22,26 @@ func _init(log_buffer: McpLogBuffer, connection: McpConnection = null, debugger_
 
 func get_editor_state(_params: Dictionary) -> Dictionary:
 	var scene_root := EditorInterface.get_edited_scene_root()
-	return {
-		"data": {
-			"godot_version": Engine.get_version_info().get("string", "unknown"),
-			"project_name": ProjectSettings.get_setting("application/config/name", ""),
-			"current_scene": scene_root.scene_file_path if scene_root else "",
-			"is_playing": EditorInterface.is_playing_scene(),
-			"readiness": McpConnection.get_readiness(),
-			## True once the game subprocess autoload has beaconed mcp:hello;
-			## false between Play→Stop cycles. Lets capture-source=game callers
-			## poll for a real ready signal instead of guessing with sleep().
-			"game_capture_ready": _debugger_plugin != null and _debugger_plugin._game_ready,
-		}
+	var data := {
+		"godot_version": Engine.get_version_info().get("string", "unknown"),
+		"project_name": ProjectSettings.get_setting("application/config/name", ""),
+		"current_scene": scene_root.scene_file_path if scene_root else "",
+		"is_playing": EditorInterface.is_playing_scene(),
+		"readiness": McpConnection.get_readiness(),
+		## True once the game subprocess autoload has beaconed mcp:hello;
+		## false between Play→Stop cycles. Lets capture-source=game callers
+		## poll for a real ready signal instead of guessing with sleep().
+		"game_capture_ready": _debugger_plugin != null and _debugger_plugin.is_game_capture_ready(),
 	}
+	## Half-installed addon tree from a failed self-update rollback. When
+	## non-empty, the agent / dock paint the operator-facing recovery copy
+	## from `update_mixed_state.gd::diagnose`. Field omitted when the
+	## addons tree is clean so editor_state's normal payload stays small.
+	## See issue #354 / audit-v2 #10.
+	var mixed_state := UpdateMixedState.diagnose()
+	if not mixed_state.is_empty():
+		data["mixed_state"] = mixed_state
+	return {"data": data}
 
 
 func get_selection(_params: Dictionary) -> Dictionary:
@@ -56,7 +65,7 @@ func get_logs(params: Dictionary) -> Dictionary:
 	var source: String = str(params.get("source", "plugin"))
 	if not source in VALID_LOG_SOURCES:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid source '%s' — use 'plugin', 'game', 'editor', or 'all'" % source,
 		)
 
@@ -286,14 +295,15 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 		"cinematic":
 			return _take_cinematic_screenshot(max_resolution)
 		_:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Invalid source '%s' — use 'viewport', 'cinematic', or 'game'" % source)
+			return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Invalid source '%s' — use 'viewport', 'cinematic', or 'game'" % source)
 
 	## Handle view_target: temporarily reposition the editor's own camera to
 	## frame one or more target nodes, force a render, capture, then restore.
 	if not view_target.is_empty() and source == "viewport":
-		var scene_root := EditorInterface.get_edited_scene_root()
-		if scene_root == null:
-			return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+		var _scene_check := McpNodeValidator.require_scene_or_error()
+		if _scene_check.has("error"):
+			return _scene_check
+		var scene_root: Node = _scene_check.scene_root
 
 		## Parse comma-separated paths, deduplicate
 		var raw_paths := view_target.split(",")
@@ -318,7 +328,7 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 				targets.append(node as Node3D)
 
 		if targets.is_empty():
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "No valid Node3D targets found: %s" % ", ".join(not_found))
+			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, "No valid Node3D targets found: %s" % ", ".join(not_found))
 
 		var cam := viewport.get_camera_3d()
 		if cam == null:
@@ -442,14 +452,15 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 ## throwaway SubViewport, so the output has no editor gizmos, selection
 ## outlines, or grid lines.
 func _take_cinematic_screenshot(max_resolution: int) -> Dictionary:
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	var scene_camera := _find_current_camera_3d(scene_root)
 	if scene_camera == null:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.NODE_NOT_FOUND,
 			"No current Camera3D in scene — mark a Camera3D as `current` or add one to the scene",
 		)
 

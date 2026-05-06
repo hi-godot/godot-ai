@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from godot_ai.handlers._readiness import require_writable
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 
 async def animation_player_create(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     parent_path: str,
     name: str = "AnimationPlayer",
 ) -> dict:
@@ -21,7 +21,7 @@ async def animation_player_create(
 
 
 async def animation_create(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     player_path: str,
     name: str,
     length: float,
@@ -41,7 +41,7 @@ async def animation_create(
 
 
 async def animation_add_property_track(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     player_path: str,
     animation_name: str,
     track_path: str,
@@ -62,7 +62,7 @@ async def animation_add_property_track(
 
 
 async def animation_add_method_track(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     player_path: str,
     animation_name: str,
     target_node_path: str,
@@ -81,7 +81,7 @@ async def animation_add_method_track(
 
 
 async def animation_set_autoplay(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     player_path: str,
     animation_name: str = "",
 ) -> dict:
@@ -93,7 +93,7 @@ async def animation_set_autoplay(
 
 
 async def animation_play(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     player_path: str,
     animation_name: str = "",
 ) -> dict:
@@ -104,7 +104,7 @@ async def animation_play(
 
 
 async def animation_stop(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     player_path: str,
 ) -> dict:
     return await runtime.send_command(
@@ -114,7 +114,7 @@ async def animation_stop(
 
 
 async def animation_list(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     player_path: str,
 ) -> dict:
     return await runtime.send_command(
@@ -124,7 +124,7 @@ async def animation_list(
 
 
 async def animation_get(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     player_path: str,
     animation_name: str,
 ) -> dict:
@@ -135,7 +135,7 @@ async def animation_get(
 
 
 async def animation_delete(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     player_path: str,
     animation_name: str,
 ) -> dict:
@@ -147,7 +147,7 @@ async def animation_delete(
 
 
 async def animation_validate(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     player_path: str,
     animation_name: str,
 ) -> dict:
@@ -159,7 +159,7 @@ async def animation_validate(
 
 
 async def animation_create_simple(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     player_path: str,
     name: str,
     tweens: list[dict[str, Any]],
@@ -182,7 +182,7 @@ async def animation_create_simple(
 
 
 async def animation_preset_fade(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     player_path: str,
     target_path: str,
     mode: str = "in",
@@ -205,7 +205,7 @@ async def animation_preset_fade(
 
 
 async def animation_preset_slide(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     player_path: str,
     target_path: str,
     direction: str = "left",
@@ -233,7 +233,7 @@ async def animation_preset_slide(
 
 
 async def animation_preset_shake(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     player_path: str,
     target_path: str,
     intensity: float | None = None,
@@ -261,7 +261,7 @@ async def animation_preset_shake(
 
 
 async def animation_preset_pulse(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     player_path: str,
     target_path: str,
     from_scale: float = 1.0,

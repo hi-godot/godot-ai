@@ -3,20 +3,35 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import logging
 from typing import Any
 
 import websockets
+from pydantic import ValidationError
 from websockets.asyncio.server import ServerConnection
 
 from godot_ai import __version__ as _SERVER_VERSION
-from godot_ai.protocol.envelope import CommandRequest, CommandResponse, HandshakeMessage
+from godot_ai.protocol.envelope import (
+    CommandRequest,
+    CommandResponse,
+    HandshakeMessage,
+    PlayStateChangedEvent,
+    ReadinessChangedEvent,
+    SceneChangedEvent,
+)
 from godot_ai.sessions.registry import Session, SessionRegistry
+from godot_ai.transport.origin_guard import make_websocket_request_guard
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = 9500
+
+## RFC 6455 reserves 4000-4999 for application-defined close codes; we use
+## 4001 to flag a handshake rejected for duplicate session_id so a debugging
+## peer can distinguish it from a normal close.
+_CLOSE_CODE_DUPLICATE_SESSION = 4001
 
 
 class GodotWebSocketServer:
@@ -36,10 +51,14 @@ class GodotWebSocketServer:
                 "127.0.0.1",
                 self.port,
                 max_size=4 * 1024 * 1024,  # 4 MB for screenshot base64
+                # Reject DNS-rebinding attempts before the upgrade — see
+                # godot_ai.transport.origin_guard. Native plugin clients
+                # carry a loopback Host and no Origin, so they pass through.
+                process_request=make_websocket_request_guard(),
             ):
                 await asyncio.Future()  # run forever
         except OSError as e:
-            if e.errno == 48:  # Address already in use
+            if e.errno == errno.EADDRINUSE:
                 logger.warning(
                     "WebSocket port %d already in use — another server instance may be running. "
                     "MCP tools will work but the Godot plugin won't connect to this instance.",
@@ -55,6 +74,23 @@ class GodotWebSocketServer:
             raw = await asyncio.wait_for(ws.recv(), timeout=10.0)
             data = json.loads(raw)
             handshake = HandshakeMessage.model_validate(data)
+
+            ## Reject duplicate session_id while the first peer is live —
+            ## otherwise the second handshake silently overwrites the
+            ## routing map (duplicate-ID hijack).
+            existing = self.registry.get(handshake.session_id)
+            if existing is not None:
+                logger.warning(
+                    "Rejecting duplicate handshake for session %s (existing pid=%s, project=%s)",
+                    handshake.session_id,
+                    existing.editor_pid,
+                    existing.project_path,
+                )
+                await ws.close(
+                    code=_CLOSE_CODE_DUPLICATE_SESSION,
+                    reason="session id already registered",
+                )
+                return
 
             session_id = handshake.session_id
             session = Session(
@@ -128,15 +164,33 @@ class GodotWebSocketServer:
         if session is None:
             return
 
-        if event == "scene_changed":
-            session.current_scene = event_data.get("current_scene", "")
-            logger.info("Session %s: scene changed to %s", session_id[:8], session.current_scene)
-        elif event == "play_state_changed":
-            session.play_state = event_data.get("play_state", "stopped")
-            logger.info("Session %s: play state -> %s", session_id[:8], session.play_state)
-        elif event == "readiness_changed":
-            session.readiness = event_data.get("readiness", "ready")
-            logger.info("Session %s: readiness -> %s", session_id[:8], session.readiness)
+        ## Validate the payload before assigning to typed Session fields —
+        ## a malformed plugin event (or hijacked WS) used to ship non-string
+        ## values straight through to MCP clients via Session.to_dict()
+        ## (audit-v2 #7). On ValidationError we drop the event with a
+        ## warning rather than corrupt the cached session state.
+        try:
+            if event == "scene_changed":
+                payload = SceneChangedEvent.model_validate(event_data)
+                session.current_scene = payload.current_scene
+                logger.info(
+                    "Session %s: scene changed to %s", session_id[:8], session.current_scene
+                )
+            elif event == "play_state_changed":
+                payload = PlayStateChangedEvent.model_validate(event_data)
+                session.play_state = payload.play_state
+                logger.info("Session %s: play state -> %s", session_id[:8], session.play_state)
+            elif event == "readiness_changed":
+                payload = ReadinessChangedEvent.model_validate(event_data)
+                session.readiness = payload.readiness
+                logger.info("Session %s: readiness -> %s", session_id[:8], session.readiness)
+        except ValidationError as exc:
+            logger.warning(
+                "Dropping malformed %s event from session %s: %s",
+                event,
+                session_id[:8],
+                exc.errors(include_url=False, include_context=False, include_input=False),
+            )
 
     async def send_command(
         self,
@@ -153,12 +207,16 @@ class GodotWebSocketServer:
         future: asyncio.Future[CommandResponse] = asyncio.get_running_loop().create_future()
         self._pending[request.request_id] = future
 
-        await ws.send(request.model_dump_json())
-
+        ## Always pop on exit — the response receiver in _handle_connection
+        ## pops on the happy path, so this is a no-op there; on `ws.send`
+        ## raise / TimeoutError / cancellation it prevents Futures leaking
+        ## into _pending forever.
         try:
+            await ws.send(request.model_dump_json())
             return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
-            self._pending.pop(request.request_id, None)
             raise TimeoutError(
                 f"Command {command} timed out after {timeout}s on session {session_id}"
             )
+        finally:
+            self._pending.pop(request.request_id, None)

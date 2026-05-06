@@ -32,21 +32,19 @@ const _SHAPE_2D_CLASSES := {
 func autofit(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("path", "")
 	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-
-	var node := McpScenePath.resolve(node_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	if _resolved.has("error"):
+		return _resolved
+	var node: Node = _resolved.node
+	var scene_root: Node = _resolved.scene_root
 
 	var is_3d := node is CollisionShape3D
 	var is_2d := node is CollisionShape2D
 	if not (is_3d or is_2d):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Node at %s is %s — must be CollisionShape3D or CollisionShape2D" % [node_path, node.get_class()]
 		)
 
@@ -60,13 +58,13 @@ func autofit(params: Dictionary) -> Dictionary:
 	else:
 		source = McpScenePath.resolve(source_path, scene_root)
 		if source == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Source node not found: %s" % source_path)
+			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, "Source node not found: %s" % source_path)
 
 	var shape_type: String = params.get("shape_type", "box" if is_3d else "rectangle")
 	var type_map := _SHAPE_3D_CLASSES if is_3d else _SHAPE_2D_CLASSES
 	if not type_map.has(shape_type):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid shape_type '%s' for %s. Valid: %s" % [shape_type, node.get_class(), ", ".join(type_map.keys())]
 		)
 	var shape_class: String = type_map[shape_type]
@@ -214,7 +212,7 @@ static func _measure_bounds(source: Node, is_3d: bool) -> Dictionary:
 			aabb.size = aabb.size * scale_3d
 			return {"aabb": aabb}
 		return {"error": McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Source %s has no measurable 3D bounds (must be VisualInstance3D subclass)" % source.get_class()
 		)}
 	# 2D
@@ -242,7 +240,7 @@ static func _measure_bounds(source: Node, is_3d: bool) -> Dictionary:
 				)}
 		return {"rect": Rect2(Vector2.ZERO, tr_size)}
 	return {"error": McpErrorCodes.make(
-		McpErrorCodes.INVALID_PARAMS,
+		McpErrorCodes.WRONG_TYPE,
 		"Source %s has no measurable 2D bounds (must be Sprite2D or TextureRect)" % source.get_class()
 	)}
 

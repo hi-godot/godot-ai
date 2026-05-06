@@ -41,17 +41,36 @@ class TestSessionRegistry:
 
         assert reg.active_session_id == "a"
 
-    def test_unregister_active_clears_active(self):
-        ## Disconnect of the active session must NOT silently promote another
-        ## session to active — that would route commands to whichever session
-        ## was registered first, which is the 'multi-instance routing' bug.
+    def test_unregister_active_with_multiple_survivors_clears_active(self, caplog):
+        ## With ≥2 survivors after unregister, picking one by insertion order
+        ## would route commands to whichever editor connected first — the
+        ## 'routing by registration order' footgun. Stay cleared until the
+        ## caller picks via session_activate.
         reg = SessionRegistry()
         reg.register(_make_session("a"))
         reg.register(_make_session("b"))
-        reg.unregister("a")
+        reg.register(_make_session("c"))
+        with caplog.at_level("INFO", logger="godot_ai.sessions.registry"):
+            reg.unregister("a")
 
         assert reg.active_session_id is None
+        assert len(reg) == 2
+        assert any("no active session until next register/activate" in m for m in caplog.messages)
+
+    def test_unregister_active_with_one_survivor_promotes_it(self, caplog):
+        ## audit-v2 #8: the n=1-survivor case is unambiguous — one editor
+        ## left, no ordering footgun. Auto-promote so a solo-user agent
+        ## doesn't see opaque "no active session" errors after a crash.
+        reg = SessionRegistry()
+        reg.register(_make_session("a"))
+        reg.register(_make_session("b"))
+        with caplog.at_level("WARNING", logger="godot_ai.sessions.registry"):
+            reg.unregister("a")
+
+        assert reg.active_session_id == "b"
+        assert reg.get_active().session_id == "b"
         assert len(reg) == 1
+        assert any("auto-promoting sole survivor" in m for m in caplog.messages)
 
     def test_unregister_non_active_leaves_active(self):
         reg = SessionRegistry()
@@ -122,6 +141,20 @@ class TestSessionRegistry:
     def test_server_launch_mode_round_trips_through_to_dict(self):
         s = _make_session(server_launch_mode="dev_venv")
         assert s.to_dict()["server_launch_mode"] == "dev_venv"
+
+
+class TestSessionRegistryNoThreadingLock:
+    """Guard against reintroducing a threading lock on the registry."""
+
+    def test_registry_has_no_lock_attribute(self):
+        reg = SessionRegistry()
+        assert not hasattr(reg, "_lock")
+
+    def test_registry_module_does_not_import_threading(self):
+        import godot_ai.sessions.registry as registry_module
+
+        assert "threading" not in vars(registry_module)
+        assert "RLock" not in vars(registry_module)
 
 
 class TestSessionMetadata:
@@ -202,3 +235,67 @@ class TestWaitForSession:
         asyncio.create_task(register_both())
         result = await reg.wait_for_session(exclude_id="old-1", timeout=2.0)
         assert result.session_id == "new-1"
+
+    async def test_rechecks_registered_replacement_before_installing_waiter(self):
+        reg = SessionRegistry()
+        reg.register(_make_session("old-1", project_path="/tmp/test_project"))
+        reg.register(_make_session("other-project", project_path="/tmp/other_project"))
+        known_ids = {session.session_id for session in reg.list_all()}
+        replacement = _make_session("new-1", project_path="/tmp/test_project")
+        reg.register(replacement)
+
+        result = await reg.wait_for_session(
+            exclude_id="old-1",
+            timeout=0.01,
+            known_ids=known_ids,
+            project_path="/tmp/test_project",
+        )
+
+        assert result is replacement
+        assert reg._session_waiters == []
+
+    async def test_register_skips_waiters_whose_futures_are_already_done(self):
+        ## A waiter whose future was resolved or cancelled out-of-band must
+        ## not be re-resolved on the next register(); its entry stays in
+        ## _session_waiters until its own finally-block evicts it. The
+        ## register loop's `if future.done(): continue` path covers this.
+        reg = SessionRegistry()
+        loop = asyncio.get_running_loop()
+        cancelled_future: asyncio.Future[Session] = loop.create_future()
+        cancelled_future.cancel()
+        reg._session_waiters.append((cancelled_future, None, frozenset(), None))
+
+        reg.register(_make_session("a"))
+
+        assert cancelled_future.cancelled()
+        assert len(reg) == 1
+
+    async def test_concurrent_registers_and_activate_keep_registry_consistent(self):
+        reg = SessionRegistry()
+        waiter_task = asyncio.create_task(reg.wait_for_session(exclude_id="a", timeout=1.0))
+        await asyncio.sleep(0)
+
+        async def register_a():
+            await asyncio.sleep(0)
+            reg.register(_make_session("a"))
+
+        async def register_b():
+            await asyncio.sleep(0.001)
+            reg.register(_make_session("b"))
+
+        async def activate_b():
+            for _ in range(100):
+                if reg.get("b") is not None:
+                    reg.set_active("b")
+                    return
+                await asyncio.sleep(0.001)
+            raise AssertionError("session b was never registered")
+
+        await asyncio.gather(register_a(), register_b(), activate_b())
+        waited = await waiter_task
+
+        assert waited.session_id == "b"
+        assert reg.active_session_id == "b"
+        assert {session.session_id for session in reg.list_all()} == {"a", "b"}
+        assert len(reg) == 2
+        assert reg._session_waiters == []

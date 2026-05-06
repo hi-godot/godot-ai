@@ -104,7 +104,7 @@ func test_set_anchor_preset_keep_size_mode() -> void:
 
 func test_set_anchor_preset_missing_path() -> void:
 	var result := _handler.set_anchor_preset({"preset": "full_rect"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_set_anchor_preset_missing_preset() -> void:
@@ -113,7 +113,7 @@ func test_set_anchor_preset_missing_preset() -> void:
 		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_anchor_preset({"path": path})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 	_remove_control(path)
 
 
@@ -123,7 +123,7 @@ func test_set_anchor_preset_unknown_preset() -> void:
 		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_anchor_preset({"path": path, "preset": "not_a_preset"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	# Error message should list valid options so the agent can recover.
 	assert_contains(result.error.message, "full_rect")
 	_remove_control(path)
@@ -137,7 +137,7 @@ func test_set_anchor_preset_unknown_resize_mode() -> void:
 	var result := _handler.set_anchor_preset({
 		"path": path, "preset": "center", "resize_mode": "stretch"
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_control(path)
 
 
@@ -145,7 +145,7 @@ func test_set_anchor_preset_unknown_node() -> void:
 	var result := _handler.set_anchor_preset({
 		"path": "/DoesNotExist", "preset": "full_rect"
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_anchor_preset_non_control_node() -> void:
@@ -157,7 +157,7 @@ func test_set_anchor_preset_non_control_node() -> void:
 	var result := _handler.set_anchor_preset({
 		"path": "/" + scene_root.name, "preset": "full_rect"
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "not a Control")
 
 
@@ -175,7 +175,7 @@ func test_set_anchor_preset_canvas_layer_suggests_control_overlay() -> void:
 	layer.owner = scene_root
 	var path := "/" + scene_root.name + "/TestUiCanvasLayer"
 	var result := _handler.set_anchor_preset({"path": path, "preset": "full_rect"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "CanvasLayer")
 	assert_contains(result.error.message, "Control")
 	scene_root.remove_child(layer)
@@ -265,7 +265,7 @@ func test_set_text_replaces_existing_text() -> void:
 
 func test_set_text_missing_path() -> void:
 	var result := _handler.set_text({"text": "hi"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_set_text_missing_text() -> void:
@@ -274,7 +274,7 @@ func test_set_text_missing_text() -> void:
 		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_text({"path": path})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "text")
 	_remove_control(path)
 
@@ -285,13 +285,13 @@ func test_set_text_rejects_non_string_value() -> void:
 		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_text({"path": path, "text": 42})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.WRONG_TYPE)
 	_remove_control(path)
 
 
 func test_set_text_unknown_node() -> void:
 	var result := _handler.set_text({"path": "/DoesNotExist", "text": "x"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_set_text_non_control_node() -> void:
@@ -303,7 +303,7 @@ func test_set_text_non_control_node() -> void:
 	var result := _handler.set_text({
 		"path": "/" + scene_root.name, "text": "x"
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "not a Control")
 
 
@@ -315,7 +315,7 @@ func test_set_text_control_without_text_property() -> void:
 		skip("Scene not ready — _add_control returned empty path")
 		return
 	var result := _handler.set_text({"path": path, "text": "x"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "text")
 	_remove_control(path)
 
@@ -369,18 +369,18 @@ func test_build_layout_creates_simple_tree() -> void:
 
 func test_build_layout_rejects_unknown_type() -> void:
 	var result := _handler.build_layout({"tree": {"type": "NotARealClass"}})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 func test_build_layout_rejects_non_node_type() -> void:
 	# Resource is not a Node.
 	var result := _handler.build_layout({"tree": {"type": "Resource"}})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_build_layout_rejects_missing_type() -> void:
 	var result := _handler.build_layout({"tree": {"name": "NoType"}})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_build_layout_rejects_unknown_property() -> void:
@@ -388,14 +388,14 @@ func test_build_layout_rejects_unknown_property() -> void:
 	var result := _handler.build_layout({
 		"tree": {"type": "Label", "properties": {"bogus_prop": 1}}
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.PROPERTY_NOT_ON_CLASS)
 
 
 func test_build_layout_rejects_bad_parent_path() -> void:
 	var result := _handler.build_layout({
 		"tree": {"type": "Panel"}, "parent_path": "/Nowhere/Nope"
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_build_layout_applies_anchor_preset_and_coerces_color() -> void:
@@ -426,7 +426,7 @@ func test_build_layout_rejects_anchor_preset_on_non_control() -> void:
 	var result := _handler.build_layout({
 		"tree": {"type": "Node", "anchor_preset": "center"}
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_build_layout_anchor_preset_on_canvas_layer_suggests_control_overlay() -> void:
@@ -435,7 +435,7 @@ func test_build_layout_anchor_preset_on_canvas_layer_suggests_control_overlay() 
 	var result := _handler.build_layout({
 		"tree": {"type": "CanvasLayer", "anchor_preset": "full_rect"}
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "CanvasLayer")
 	assert_contains(result.error.message, "Control")
 
@@ -450,7 +450,7 @@ func test_build_layout_theme_on_canvas_layer_suggests_control_overlay() -> void:
 	# Clean up before asserting so a failed assert can't leak the .tres.
 	if FileAccess.file_exists(theme_path):
 		DirAccess.remove_absolute(theme_path)
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "CanvasLayer")
 	assert_contains(result.error.message, "Control")
 
@@ -479,7 +479,7 @@ func test_build_layout_rejects_non_theme_resource() -> void:
 	var result := _handler.build_layout({
 		"tree": {"type": "Panel", "theme": bogus_path}
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "Theme resource")
 	if FileAccess.file_exists(bogus_path):
 		DirAccess.remove_absolute(bogus_path)
@@ -490,7 +490,7 @@ func test_build_layout_rejects_uncoercible_property() -> void:
 	var result := _handler.build_layout({
 		"tree": {"type": "Label", "properties": {"modulate": "not a color!!"}}
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "modulate")
 
 
@@ -517,9 +517,9 @@ func test_build_layout_theme_override_color() -> void:
 	var label: Label = scene_root.find_child("TestOverrideColor", true, false)
 	assert_true(label != null, "Label should exist")
 	assert_true(label.has_theme_color_override("font_color"), "Color override should be set")
-	# Read back via the *_override getter (not the fallback get_theme_color)
-	# so we're asserting on the stored Variant, not on any theme fallback path.
-	var stored: Color = label.get_theme_color_override("font_color")
+	# Godot 4.6 no longer exposes get_theme_*_override. After has_*_override,
+	# the regular getter resolves the stored override.
+	var stored: Color = label.get_theme_color("font_color")
 	assert_eq(stored.r, 1.0)
 	assert_eq(stored.g, 0.0)
 	assert_eq(stored.b, 0.0)
@@ -546,8 +546,7 @@ func test_build_layout_theme_override_constant() -> void:
 	var vbox := scene_root.find_child("TestOverrideConst", true, false) as VBoxContainer
 	assert_true(vbox != null, "VBoxContainer should exist")
 	assert_true(vbox.has_theme_constant_override("separation"), "Constant override should be set")
-	# Read back via *_override getter — asserts the stored int, not a fallback.
-	assert_eq(vbox.get_theme_constant_override("separation"), 20)
+	assert_eq(vbox.get_theme_constant("separation"), 20)
 	vbox.get_parent().remove_child(vbox)
 	vbox.queue_free()
 
@@ -571,8 +570,7 @@ func test_build_layout_theme_override_font_size() -> void:
 	var label := scene_root.find_child("TestOverrideFontSize", true, false) as Label
 	assert_true(label != null, "Label should exist")
 	assert_true(label.has_theme_font_size_override("font_size"), "Font size override should be set")
-	# Read back via *_override getter.
-	assert_eq(label.get_theme_font_size_override("font_size"), 32)
+	assert_eq(label.get_theme_font_size("font_size"), 32)
 	label.get_parent().remove_child(label)
 	label.queue_free()
 
@@ -604,7 +602,7 @@ func test_build_layout_theme_override_stylebox() -> void:
 	var panel := scene_root.find_child("TestOverrideStyle", true, false) as Panel
 	assert_true(panel != null, "Panel should exist")
 	assert_true(panel.has_theme_stylebox_override("panel"), "Stylebox override should be set")
-	var stored: StyleBox = panel.get_theme_stylebox_override("panel")
+	var stored: StyleBox = panel.get_theme_stylebox("panel")
 	assert_true(stored is StyleBoxFlat, "Stored override is a StyleBoxFlat")
 	assert_eq((stored as StyleBoxFlat).bg_color, Color(0.1, 0.2, 0.3, 1.0))
 	# Cleanup.
@@ -620,5 +618,5 @@ func test_build_layout_theme_override_rejects_non_control() -> void:
 			"properties": {"theme_override_colors/font_color": "#ff0000"},
 		},
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "theme_override_")

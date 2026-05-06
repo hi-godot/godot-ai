@@ -19,7 +19,7 @@ func search_resources(params: Dictionary) -> Dictionary:
 	var path_filter: String = params.get("path", "")
 
 	if type_filter.is_empty() and path_filter.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "At least one filter (type, path) is required")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "At least one filter (type, path) is required")
 
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs == null:
@@ -60,13 +60,13 @@ func load_resource(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	if not path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res://")
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Path must start with res://")
 
 	if not ResourceLoader.exists(path):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource not found: %s" % path)
+		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Resource not found: %s" % path)
 
 	var res: Resource = load(path)
 	if res == null:
@@ -102,21 +102,19 @@ func assign_resource(params: Dictionary) -> Dictionary:
 	var resource_path: String = params.get("resource_path", "")
 
 	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	if property.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: property")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: property")
 
 	if resource_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: resource_path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: resource_path")
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-
-	var node := McpScenePath.resolve(node_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	if _resolved.has("error"):
+		return _resolved
+	var node: Node = _resolved.node
+	var scene_root: Node = _resolved.scene_root
 
 	# Verify property exists
 	var found := false
@@ -125,10 +123,10 @@ func assign_resource(params: Dictionary) -> Dictionary:
 			found = true
 			break
 	if not found:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpPropertyErrors.build_message(node, property))
+		return McpErrorCodes.make(McpErrorCodes.PROPERTY_NOT_ON_CLASS, McpPropertyErrors.build_message(node, property))
 
 	if not ResourceLoader.exists(resource_path):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Resource not found: %s" % resource_path)
+		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Resource not found: %s" % resource_path)
 
 	var res: Resource = load(resource_path)
 	if res == null:
@@ -159,7 +157,7 @@ func assign_resource(params: Dictionary) -> Dictionary:
 func create_resource(params: Dictionary) -> Dictionary:
 	var type_str: String = params.get("type", "")
 	if type_str.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: type")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: type")
 
 	var properties: Dictionary = params.get("properties", {})
 	var node_path: String = params.get("path", "")
@@ -200,21 +198,21 @@ func create_resource(params: Dictionary) -> Dictionary:
 ## instantiate. Returns an error dict on failure, or null on success.
 static func _validate_resource_class(type_str: String) -> Variant:
 	if not ClassDB.class_exists(type_str):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown resource type: %s" % type_str)
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Unknown resource type: %s" % type_str)
 	if ClassDB.is_parent_class(type_str, "Node"):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"%s is a Node type, not a Resource — use node_create instead" % type_str
 		)
 	if not ClassDB.is_parent_class(type_str, "Resource"):
 		var parent := ClassDB.get_parent_class(type_str)
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"%s is not a Resource type (extends %s)" % [type_str, parent]
 		)
 	if not ClassDB.can_instantiate(type_str):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"%s is abstract and cannot be instantiated — use a concrete subclass (e.g. BoxMesh, BoxShape3D, StyleBoxFlat)" % type_str
 		)
 	return null
@@ -235,7 +233,7 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary) ->
 					valid.append(prop.name)
 			valid.sort()
 			var err := McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+				McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 				"Property '%s' not found on %s. Call resource_get_info('%s') to list available properties." % [key, res.get_class(), res.get_class()]
 			)
 			err["error"]["data"] = {"valid_properties": valid}
@@ -291,13 +289,11 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary) ->
 
 
 func _assign_created_resource(res: Resource, type_str: String, node_path: String, property: String, applied_count: int) -> Dictionary:
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-
-	var node := McpScenePath.resolve(node_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	if _resolved.has("error"):
+		return _resolved
+	var node: Node = _resolved.node
+	var scene_root: Node = _resolved.scene_root
 
 	var found := false
 	var prop_type: int = TYPE_NIL
@@ -308,12 +304,12 @@ func _assign_created_resource(res: Resource, type_str: String, node_path: String
 			break
 	if not found:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Property '%s' not found on %s" % [property, node.get_class()]
 		)
 	if prop_type != TYPE_NIL and prop_type != TYPE_OBJECT:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Property '%s' on %s is not an Object slot (type %s)" % [property, node.get_class(), type_string(prop_type)]
 		)
 
@@ -351,19 +347,19 @@ func _save_created_resource(res: Resource, type_str: String, resource_path: Stri
 func get_resource_info(params: Dictionary) -> Dictionary:
 	var type_str: String = params.get("type", "")
 	if type_str.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: type")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: type")
 
 	if not ClassDB.class_exists(type_str):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown resource type: %s" % type_str)
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Unknown resource type: %s" % type_str)
 	if ClassDB.is_parent_class(type_str, "Node"):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"%s is a Node type, not a Resource — use node_* tools for node introspection" % type_str
 		)
 	if not ClassDB.is_parent_class(type_str, "Resource") and type_str != "Resource":
 		var parent := ClassDB.get_parent_class(type_str)
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"%s is not a Resource type (extends %s)" % [type_str, parent]
 		)
 

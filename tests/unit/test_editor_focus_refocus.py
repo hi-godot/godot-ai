@@ -28,7 +28,7 @@ def test_client_status_refresh_runs_on_background_thread_and_applies_deferred() 
 
     assert "var _client_status_refresh_thread: Thread" in source
     assert "_client_status_refresh_thread.start" in source
-    assert "McpClientConfigurator.check_status" in source
+    assert "ClientConfigurator.check_status" in source
     assert 'call_deferred("_apply_client_status_refresh_results' in source
 
 
@@ -37,7 +37,7 @@ def test_client_status_refresh_coalesces_and_manual_refresh_bypasses_cooldown() 
 
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
 
-    assert "if _client_status_refresh_in_flight:" in source
+    assert "if ClientRefreshStateScript.has_worker_alive(_refresh_state):" in source
     assert "_client_status_refresh_pending = true" in source
     assert "if not force and _is_client_status_refresh_in_cooldown()" in source
     assert "_request_client_status_refresh(true)" in source
@@ -133,15 +133,15 @@ def test_initial_paint_warms_worker_call_graph_before_threading() -> None:
     )
 
     warm_block = get_func_block(source, "func _warm_strategy_bytecode() -> void:")
-    assert "McpJsonStrategy." in warm_block, (
-        "_warm_strategy_bytecode must dereference McpJsonStrategy so the "
+    assert "JsonStrategy." in warm_block, (
+        "_warm_strategy_bytecode must dereference JsonStrategy so the "
         "worker can't race the JSON strategy's lazy bytecode swap."
     )
-    assert "McpTomlStrategy." in warm_block, (
-        "_warm_strategy_bytecode must dereference McpTomlStrategy."
+    assert "TomlStrategy." in warm_block, (
+        "_warm_strategy_bytecode must dereference TomlStrategy."
     )
-    assert "McpCliStrategy." in warm_block, (
-        "_warm_strategy_bytecode must dereference McpCliStrategy."
+    assert "CliStrategy." in warm_block, (
+        "_warm_strategy_bytecode must dereference CliStrategy."
     )
     assert "FileAccess" not in warm_block and "OS.execute" not in warm_block, (
         "_warm_strategy_bytecode must stay pure-memory — no disk, no "
@@ -162,9 +162,13 @@ def test_client_status_refresh_defers_while_editor_filesystem_is_busy() -> None:
 
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
 
-    assert "var _client_status_refresh_deferred_until_filesystem_ready := false" in source
-    assert "var _client_status_refresh_deferred_force := false" in source
-    assert "var _client_status_refresh_deferred_initial := false" in source
+    # PR 6 (#297) collapsed the deferred-* boolean cluster into the
+    # McpClientRefreshState enum's DEFERRED_FOR_FILESYSTEM value, plus
+    # a pair of pending request flags (force / initial) that survive
+    # the wait window.
+    assert "var _refresh_state: int = ClientRefreshStateScript.IDLE" in source
+    assert "var _client_status_refresh_pending_force: bool = false" in source
+    assert "var _client_status_refresh_pending_initial: bool = false" in source
 
     process_block = get_func_block(source, "func _process(_delta: float) -> void:")
     assert "_retry_deferred_client_status_refresh()" in process_block
@@ -187,8 +191,9 @@ def test_client_status_refresh_defers_while_editor_filesystem_is_busy() -> None:
     initial_defer_block = get_func_block(
         source, "func _defer_initial_client_status_refresh_until_filesystem_ready() -> void:"
     )
-    assert "_client_status_refresh_deferred_until_filesystem_ready = true" in initial_defer_block
-    assert "_client_status_refresh_deferred_initial = true" in initial_defer_block
+    deferred_marker = "_refresh_state = ClientRefreshStateScript.DEFERRED_FOR_FILESYSTEM"
+    assert deferred_marker in initial_defer_block
+    assert "_client_status_refresh_pending_initial = true" in initial_defer_block
 
 
 def test_focus_refresh_is_opportunistic_while_editor_filesystem_is_busy() -> None:
@@ -224,7 +229,7 @@ def test_deferred_manual_refresh_replays_through_async_request_path_only() -> No
         assert "client_status_probe_snapshot(" not in block
         assert "check_status" not in block
 
-    assert "_client_status_refresh_deferred_initial = false" in retry_block
+    assert "_client_status_refresh_pending_initial = false" in retry_block
     assert "else:" in retry_block
     assert "_request_client_status_refresh(force)" in retry_block
 
@@ -239,7 +244,7 @@ def test_deferred_initial_refresh_replays_warmup_path() -> None:
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
     retry_block = get_func_block(source, "func _retry_deferred_client_status_refresh() -> void:")
 
-    assert "var initial := _client_status_refresh_deferred_initial" in retry_block
+    assert "var initial := _client_status_refresh_pending_initial" in retry_block
     assert "if initial:" in retry_block
     assert "_perform_initial_client_status_refresh()" in retry_block
     assert retry_block.index("if initial:") < retry_block.index(
@@ -251,81 +256,84 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
     """Self-update must drain in-flight workers + block new ones before any file write.
 
     Race B regression: focus-in landing in the extract→reload window of
-    `_install_update` previously spawned a fresh worker that walked into a
-    half-overwritten plugin script and SIGABRT'd inside `GDScriptFunction::call`
-    (observed in `Godot-2026-04-27-134236.ips`). Workers ALREADY running when
-    install starts hit the same crash because the script being mid-`callp` gets
-    its bytecode swapped under it.
+    the install path previously spawned a fresh worker that walked into a
+    half-overwritten plugin script and SIGABRT'd inside
+    `GDScriptFunction::call` (observed in `Godot-2026-04-27-134236.ips`).
+    Workers ALREADY running when install starts hit the same crash because
+    the script being mid-`callp` gets its bytecode swapped under it.
 
     The fix has two parts that must both be present, both in the right order
     (before the write loop, after the symlink-safety early-return):
 
-      1. `_self_update_in_progress = true`  — gates `_request_client_status_refresh`
+      1. `_install_in_flight = true`  — gates `_request_client_status_refresh`
          and `_perform_initial_client_status_refresh` so focus-in / cooldown /
          manual-button paths cannot spawn a new worker during the window.
-      2. `_drain_client_status_refresh_workers()` — synchronously joins the
-         currently-running worker (if any) BEFORE we touch any plugin file
-         on disk.
+      2. `_drain_dock_workers()` — synchronously joins the currently-running
+         workers BEFORE we touch any plugin file on disk. The dock exposes
+         `_drain_client_status_refresh_workers()` and
+         `_drain_client_action_workers()`; the manager calls both.
 
-    Both gates funnel through `_request_client_status_refresh`, so a single
-    flag check there covers every spawn path. Asserting the textual order
-    here locks in "drain happens before the first file write", which is what
-    actually prevents the crash.
+    The install pipeline lives on `McpUpdateManager::_install_zip`, so
+    this test reads the manager. The dock's gate is
+    `_is_self_update_in_progress()` which consults the manager's flag.
     """
 
-    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
-    install_block = get_func_block(source, "func _install_update() -> void:")
+    manager_source = (PLUGIN_ROOT / "utils" / "update_manager.gd").read_text()
+    install_block = get_func_block(manager_source, "func _install_zip() -> void:")
 
-    flag_set_idx = install_block.find("_self_update_in_progress = true")
-    drain_idx = install_block.find("_drain_client_status_refresh_workers()")
+    flag_set_idx = install_block.find("_install_in_flight = true")
+    drain_idx = install_block.find("_drain_dock_workers()")
     handoff_idx = install_block.find("install_downloaded_update")
-    first_write_idx = install_block.find("f.store_buffer(content)")
     symlink_return_idx = install_block.find("addons_dir_is_symlink()")
 
+    inline_block = get_func_block(
+        manager_source, "func _install_zip_inline(version: Dictionary) -> void:"
+    )
+    first_write_idx = inline_block.find("f.store_buffer(content)")
+
     assert flag_set_idx > 0, (
-        "_install_update must set `_self_update_in_progress = true` before "
+        "_install_zip must set `_install_in_flight = true` before "
         "extracting plugin files. Without this, focus-in during extract "
         "spawns a worker that crashes on the half-overwritten scripts."
     )
     assert drain_idx > 0, (
-        "_install_update must call `_drain_client_status_refresh_workers()` "
-        "before extracting plugin files. Already-running workers crash on "
-        "the same overwrite if not joined first."
+        "_install_zip must call `_drain_dock_workers()` before extracting "
+        "plugin files. Already-running workers crash on the same overwrite "
+        "if not joined first."
     )
     assert first_write_idx > 0, (
         "Test fixture broken: could not locate the extract-write site "
-        "(`f.store_buffer(content)`) inside `_install_update`'s legacy path."
+        "(`f.store_buffer(content)`) inside `_install_zip_inline`."
     )
     assert symlink_return_idx > 0, "Test fixture broken: could not locate the symlink-safety check."
 
-    assert symlink_return_idx < flag_set_idx < first_write_idx, (
-        "Order: symlink-safety check → set self_update_in_progress flag → "
-        "extract write loop. Setting the flag before the symlink check "
-        "would leave it stuck on the dev-checkout path; setting it after "
-        "the write loop defeats the purpose."
+    assert symlink_return_idx < flag_set_idx, (
+        "Order: symlink-safety check → set _install_in_flight flag. Setting "
+        "the flag before the symlink check would leave it stuck on the "
+        "dev-checkout path."
     )
-    assert drain_idx < first_write_idx, (
-        "Drain must complete before any file write. Otherwise an in-flight "
-        "worker can race the overwrite of the script it's mid-call into."
-    )
-    assert drain_idx < handoff_idx < first_write_idx, (
-        "The normal Godot 4.4+ path must hand off to the update runner after "
-        "the worker drain but before the legacy in-dock extract loop. The "
-        "runner disables the old plugin before extraction so plugin-owned "
-        "instances do not hot-reload in place."
+    assert drain_idx < handoff_idx, (
+        "The Godot 4.4+ runner-based path must hand off to the runner after "
+        "the worker drain. The runner disables the old plugin before "
+        "extraction so plugin-owned instances do not hot-reload in place."
     )
 
+    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
     request_block = get_func_block(
-        source, "func _request_client_status_refresh(force: bool = false) -> bool:"
+        dock_source, "func _request_client_status_refresh(force: bool = false) -> bool:"
     )
-    assert "if _self_update_in_progress:" in request_block, (
+    assert "if _is_self_update_in_progress():" in request_block, (
         "_request_client_status_refresh must short-circuit when self-update "
         "is in progress. This is the funnel for focus-in, manual-button, "
-        "and cooldown-timer spawn paths — gating here covers every caller."
+        "and cooldown-timer spawn paths — gating here covers every caller. "
+        "The flag lives on McpUpdateManager; the dock consults it via "
+        "`_is_self_update_in_progress()`."
     )
 
-    init_block = get_func_block(source, "func _perform_initial_client_status_refresh() -> void:")
-    assert "if _self_update_in_progress:" in init_block, (
+    init_block = get_func_block(
+        dock_source, "func _perform_initial_client_status_refresh() -> void:"
+    )
+    assert "if _is_self_update_in_progress():" in init_block, (
         "_perform_initial_client_status_refresh must also short-circuit on "
         "the self-update flag — defensive even though the new dock instance "
         "wouldn't normally see this flag set."
@@ -549,13 +557,13 @@ def test_check_uv_version_caches_for_session() -> None:
 
     dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
     install_block = get_func_block(dock_source, "func _on_install_uv() -> void:")
-    assert "McpClientConfigurator.invalidate_uvx_cli_cache()" in install_block, (
+    assert "ClientConfigurator.invalidate_uvx_cli_cache()" in install_block, (
         "_on_install_uv must invalidate the CLI-path cache via the "
         "configurator helper (which knows the OS-specific binary name). "
-        'A direct `McpCliFinder.invalidate("uvx")` would leave the '
+        'A direct `CliFinder.invalidate("uvx")` would leave the '
         "Windows cache stale — Windows caches under `uvx.exe`."
     )
-    assert "McpClientConfigurator.invalidate_uv_version_cache()" in install_block, (
+    assert "ClientConfigurator.invalidate_uv_version_cache()" in install_block, (
         "_on_install_uv must invalidate the version cache too — without "
         "this, the dock's setup status keeps showing 'uv: not found' "
         "after a successful install."
@@ -572,13 +580,105 @@ def test_check_uv_version_caches_for_session() -> None:
     )
 
 
+def test_force_refresh_invalidates_cli_finder_cache() -> None:
+    """Force-refresh (manual button, popup open, any explicit-user callsite)
+    flushes CliFinder so a freshly-installed CLI is re-detected without an
+    editor restart. Focus-in (`force=false`) keeps the cache.
+    """
+
+    configurator_source = (PLUGIN_ROOT / "client_configurator.gd").read_text()
+    invalidator_block = get_func_block(
+        configurator_source, "static func invalidate_cli_cache() -> void:"
+    )
+    assert "CliFinder.invalidate()" in invalidator_block, (
+        "Facade must call no-arg CliFinder.invalidate() to drop every "
+        "cached entry (positive and negative)."
+    )
+
+    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    request_block = get_func_block(
+        dock_source,
+        "func _request_client_status_refresh(force: bool = false) -> bool:",
+    )
+    assert re.search(
+        r"if force:\s+ClientConfigurator\.invalidate_cli_cache\(\)",
+        request_block,
+    ), (
+        "_request_client_status_refresh must flush CliFinder when "
+        "force=true so manual refresh, popup-open, and every other "
+        "explicit-user-action callsite re-detects newly-installed CLIs."
+    )
+
+    focus_in_block = _focus_in_block(dock_source)
+    assert "invalidate_cli_cache" not in focus_in_block, (
+        "Focus-in must NOT flush — focus fires dozens of times per "
+        "session and would re-fork `which` / `bash -lc` every time."
+    )
+
+
+def test_cli_finder_cache_is_mutex_guarded() -> None:
+    """`CliFinder.find()` runs on action-worker threads
+    (`_run_client_action_worker` in `mcp_dock.gd`) and `invalidate()` runs on
+    the main thread (force-refresh path). Godot `Dictionary` is not safe for
+    concurrent mutation, so `_cache` / `_searched` access must be guarded by
+    a `Mutex`. The mutex must NOT be held across `_resolve()` (which forks
+    `bash -lc` / `which` and can take 100ms-1s) — otherwise a main-thread
+    `invalidate()` blocks the editor on a worker's subprocess, defeating
+    the off-main-thread CLI-lookup design.
+    """
+
+    source = (PLUGIN_ROOT / "clients" / "_cli_finder.gd").read_text()
+
+    assert re.search(r"static var _mutex: Mutex = Mutex\.new\(\)", source), (
+        "CliFinder must declare `static var _mutex: Mutex = Mutex.new()` so "
+        "concurrent find()/invalidate() calls don't race the shared "
+        "_cache / _searched dictionaries."
+    )
+
+    invalidate_block = get_func_block(
+        source, "static func invalidate(exe_name: String = \"\") -> void:"
+    )
+    assert "_mutex.lock()" in invalidate_block and "_mutex.unlock()" in invalidate_block, (
+        "invalidate() must hold _mutex around the dict clear/erase so it "
+        "can race safely against worker-thread find() calls."
+    )
+
+    find_one_block = get_func_block(source, "static func _find_one(exe_name: String) -> String:")
+    # Lock + unlock pattern must appear at least twice: once around the
+    # cache read, once around the cache writeback. _resolve() must run
+    # outside any lock — the lock/unlock count therefore tells us the
+    # critical sections aren't accidentally fused into a single span that
+    # encloses the subprocess fork.
+    assert find_one_block.count("_mutex.lock()") >= 2, (
+        "_find_one() must lock _mutex separately around the read and the "
+        "writeback so _resolve() (which forks bash) runs unlocked."
+    )
+    assert find_one_block.count("_mutex.unlock()") >= 2, (
+        "_find_one() must release _mutex before calling _resolve(), "
+        "otherwise a main-thread invalidate() blocks on the subprocess."
+    )
+    # Hard guarantee: no `_resolve(` call sandwiched between a lock and the
+    # next unlock. Search for the resolve call and check the surrounding
+    # context.
+    resolve_idx = find_one_block.index("_resolve(")
+    preceding = find_one_block[:resolve_idx]
+    last_lock = preceding.rfind("_mutex.lock()")
+    last_unlock = preceding.rfind("_mutex.unlock()")
+    assert last_unlock > last_lock, (
+        "_resolve() must be called with _mutex unlocked. Holding the lock "
+        "across the subprocess fork would let invalidate() freeze the main "
+        "thread for the duration of `bash -lc` / `which` — exactly the "
+        "main-thread blocking the off-thread design exists to avoid."
+    )
+
+
 def test_configure_all_uses_cached_status_not_dot_color() -> None:
     """Configure-all must not make correctness decisions from stale UI colors."""
 
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
     block = get_func_block(source, "func _on_configure_all_clients() -> void:")
 
-    assert 'get("status", McpClient.Status.NOT_CONFIGURED)' in block
+    assert 'get("status", Client.Status.NOT_CONFIGURED)' in block
     assert "dot.color" not in block
 
 

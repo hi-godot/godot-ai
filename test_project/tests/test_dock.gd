@@ -7,6 +7,18 @@ extends McpTestSuite
 
 const McpDockScript = preload("res://addons/godot_ai/mcp_dock.gd")
 const GodotAiPlugin := preload("res://addons/godot_ai/plugin.gd")
+const PortPickerPanelScript = preload("res://addons/godot_ai/dock_panels/port_picker_panel.gd")
+const LogViewerScript = preload("res://addons/godot_ai/dock_panels/log_viewer.gd")
+
+## Stub for the dock's `_update_manager` slot. Tests that want to fake
+## "self-update mid-install" inject one of these so the dock's
+## `_is_self_update_in_progress()` gate sees an in-flight manager,
+## mirroring how production code consults the seam.
+class _StubInstallGate extends Node:
+	var in_flight: bool = false
+
+	func is_install_in_flight() -> bool:
+		return in_flight
 
 class _RestartDispatchPlugin extends GodotAiPlugin:
 	var status: Dictionary = {}
@@ -73,7 +85,7 @@ func test_drift_banner_hidden_when_no_mismatched_clients() -> void:
 	## and become noise. See #166.
 	_dock._build_ui()
 	assert_false(_dock._drift_banner.visible, "Banner must default to hidden")
-	_dock._refresh_drift_banner([])
+	_dock._refresh_drift_banner([] as Array[String])
 	assert_false(_dock._drift_banner.visible, "Empty mismatched list must keep banner hidden")
 
 
@@ -115,6 +127,96 @@ func test_drift_banner_no_op_when_mismatched_set_unchanged() -> void:
 	assert_true(_dock._drift_label.text != first_text, "Different set must produce different text")
 
 
+func test_mixed_state_banner_hidden_in_clean_addons_tree() -> void:
+	## The dock builds the mixed-state banner during `_build_ui` and seeds
+	## it from `UpdateMixedState.diagnose()`. In test_project's tree the
+	## addons dir has no `.update_backup` files, so the banner must default
+	## to hidden. Without this guard a future regression that always shows
+	## the banner would only surface when a real FAILED_MIXED state landed.
+	_dock._build_ui()
+	assert_true(_dock._mixed_state_banner != null, "Banner must be constructed by _build_ui")
+	assert_false(
+		_dock._mixed_state_banner.visible,
+		"Clean addons tree must keep the mixed-state banner hidden",
+	)
+
+
+func test_mixed_state_banner_renders_synthetic_diagnostic() -> void:
+	## Drive the render seam with a fake diagnostic so the banner contract
+	## (visibility + label text + file list) is pinned without polluting
+	## the real `addons/godot_ai/` tree with `.update_backup` files. This
+	## covers Copilot's "dock banner is untested" finding on PR #382.
+	_dock._build_ui()
+	var fake_diag := {
+		"addon_dir": "res://addons/godot_ai/",
+		"backup_files": [
+			"res://addons/godot_ai/handlers/scene_handler.gd.update_backup",
+			"res://addons/godot_ai/plugin.gd.update_backup",
+		],
+		"backup_count": 2,
+		"truncated": false,
+		"message": "Fake diagnostic for test_mixed_state_banner_renders_synthetic_diagnostic",
+	}
+	_dock._apply_mixed_state_banner_diagnostic(fake_diag)
+	assert_true(_dock._mixed_state_banner.visible, "Non-empty diagnostic must show banner")
+	assert_contains(
+		_dock._mixed_state_label.text,
+		"Fake diagnostic for test_mixed_state_banner_renders_synthetic_diagnostic",
+		"Banner must surface the diagnostic message verbatim",
+	)
+	## RichTextLabel.text reflects the BBCode source, not the rendered
+	## content added via `add_text()` — assert via `get_parsed_text()`
+	## which returns the visible text concatenation.
+	assert_contains(
+		_dock._mixed_state_files.get_parsed_text(),
+		"plugin.gd.update_backup",
+		"Banner must list each backup file path so the operator can act on them",
+	)
+
+
+func test_mixed_state_banner_re_hides_when_diagnostic_empties() -> void:
+	## The Re-scan button calls `_refresh_mixed_state_banner(true)` which
+	## eventually feeds the apply seam an empty Dict when the addons tree
+	## has been restored. Pin that the banner correctly hides when applied
+	## with `{}` so the button delivers the dismissal it advertises.
+	_dock._build_ui()
+	_dock._apply_mixed_state_banner_diagnostic({
+		"addon_dir": "res://addons/godot_ai/",
+		"backup_files": ["res://addons/godot_ai/foo.gd.update_backup"],
+		"backup_count": 1,
+		"truncated": false,
+		"message": "show me",
+	})
+	assert_true(_dock._mixed_state_banner.visible, "Precondition: banner must be visible")
+	_dock._apply_mixed_state_banner_diagnostic({})
+	assert_false(
+		_dock._mixed_state_banner.visible,
+		"Empty diagnostic must hide the banner — the Re-scan dismissal path",
+	)
+
+
+func test_mixed_state_banner_renders_truncated_hint() -> void:
+	## When the scanner caps results, the dock must surface that the list
+	## isn't exhaustive — otherwise a power user with a runaway tree thinks
+	## they only have N backups when there might be more. The truncation
+	## hint references the canonical MAX_BACKUP_RESULTS so the message
+	## stays accurate if the cap moves.
+	_dock._build_ui()
+	_dock._apply_mixed_state_banner_diagnostic({
+		"addon_dir": "res://addons/godot_ai/",
+		"backup_files": ["res://addons/godot_ai/x.gd.update_backup"],
+		"backup_count": 200,
+		"truncated": true,
+		"message": "lots of backups",
+	})
+	assert_true(_dock._mixed_state_banner.visible)
+	assert_contains(
+		_dock._mixed_state_files.get_parsed_text(),
+		"truncated",
+		"truncated=true must produce the cap-hit hint in the file list",
+	)
+
+
 func test_apply_row_status_renders_mismatch_as_amber_with_url_hint() -> void:
 	## The row UI is the per-client mirror of the dock-level banner —
 	## amber dot + "URL out of date" suffix on the name label so a
@@ -138,7 +240,7 @@ func test_incompatible_server_marks_clients_unhealthy() -> void:
 	_dock._build_ui()
 	var plugin := _RestartDispatchPlugin.new()
 	plugin.status = {
-		"state": McpSpawnState.INCOMPATIBLE_SERVER,
+		"state": McpServerState.INCOMPATIBLE,
 		"message": "Port 8000 is occupied by godot-ai server v1.2.10; plugin expects v2.2.0.",
 		"connection_blocked": true,
 	}
@@ -245,34 +347,45 @@ func test_exit_tree_drains_orphaned_refresh_threads() -> void:
 
 
 func test_self_update_in_progress_blocks_request_refresh() -> void:
-	## Race B regression: while `_install_update` is overwriting plugin scripts
-	## on disk, every refresh-spawn path (focus-in, manual button, cooldown
-	## timer, deferred initial refresh) must short-circuit. Spawning a worker
-	## that walks into a half-overwritten script crashes inside
-	## `GDScriptFunction::call` (confirmed by SIGABRT in
+	## Race B regression: while `McpUpdateManager._install_zip` is overwriting
+	## plugin scripts on disk, every refresh-spawn path (focus-in, manual
+	## button, cooldown timer, deferred initial refresh) must short-circuit.
+	## Spawning a worker that walks into a half-overwritten script crashes
+	## inside `GDScriptFunction::call` (confirmed by SIGABRT in
 	## `VBoxContainer(McpDock)::_run_client_status_refresh_worker`).
 	##
 	## `_request_client_status_refresh` is the funnel for every spawn path,
 	## so gating here covers focus-in (`_notification` → handler) without
-	## needing a separate gate at each call site.
-	_dock._self_update_in_progress = true
+	## needing a separate gate at each call site. The seam is
+	## `_dock._update_manager.is_install_in_flight()`; inject a stub
+	## manager so `_is_self_update_in_progress()` resolves to true.
+	var stub := _StubInstallGate.new()
+	stub.in_flight = true
+	_dock._update_manager = stub
 	var ok: bool = _dock._request_client_status_refresh(false)
 	assert_false(ok, "Refresh must not spawn a worker while self-update is in progress")
 	assert_eq(_dock._client_status_refresh_thread, null, "No worker thread should have been started while self-update is in progress")
-	assert_false(_dock._client_status_refresh_in_flight, "In-flight flag should not flip on while self-update is in progress")
-	_dock._self_update_in_progress = false
+	stub.in_flight = false
+	_dock._update_manager = null
+	stub.free()
 
 
 func test_drain_helper_does_not_poison_shutdown_flag() -> void:
-	## `_install_update` calls `_drain_client_status_refresh_workers` to clear
-	## any in-flight refresh worker before extracting plugin scripts. The
-	## install can fail (e.g. zip open error) — when it does, the dock stays
-	## alive and refreshes must resume on the OLD instance. So unlike
-	## `_exit_tree`'s drain, the install-time drain must NOT set
-	## `_client_status_refresh_shutdown_requested` (which is one-way and
-	## permanently disables refreshes for the dock instance).
+	## `McpUpdateManager._install_zip` calls `_drain_client_status_refresh_workers`
+	## (via `_drain_dock_workers`) to clear any in-flight refresh worker
+	## before extracting plugin scripts. The install can fail (e.g. zip
+	## open error) — when it does, the dock stays alive and refreshes must
+	## resume on the OLD instance. So unlike `_exit_tree`'s drain, the
+	## install-time drain must NOT advance `_refresh_state` to SHUTTING_DOWN
+	## (which is sticky and permanently disables refreshes for the dock
+	## instance). The drain leaves SHUTTING_DOWN intact when `_exit_tree`
+	## already set it, but otherwise resets to IDLE.
 	_dock._drain_client_status_refresh_workers()
-	assert_false(_dock._client_status_refresh_shutdown_requested, "drain must not set shutdown_requested — only _exit_tree does")
+	assert_eq(
+		_dock._refresh_state,
+		McpClientRefreshState.IDLE,
+		"drain must collapse to IDLE when not already shutting down — only _exit_tree sets SHUTTING_DOWN"
+	)
 
 
 ## Shared fixture for the three version-label tests. Inject a Label + Button
@@ -324,7 +437,8 @@ func test_server_version_label_green_when_server_matches_plugin() -> void:
 	_dock._refresh_server_version_label()
 	assert_eq(_dock._setup_server_label.text, "godot-ai == %s" % plugin_ver,
 		"Match: label omits the '(plugin X)' suffix since there's no drift to flag")
-	var color: Color = _dock._setup_server_label.get_theme_color_override("font_color")
+	assert_true(_dock._setup_server_label.has_theme_color_override("font_color"))
+	var color: Color = _dock._setup_server_label.get_theme_color("font_color")
 	assert_true(color == Color.GREEN,
 		"Matched version must render green, got %s" % str(color))
 	assert_false(_dock._version_restart_btn.visible,
@@ -345,8 +459,9 @@ func test_server_version_label_amber_without_restart_when_ownership_unproven() -
 		"Mismatch must show the actual server version, not the plugin's")
 	assert_contains(_dock._setup_server_label.text, plugin_ver,
 		"Mismatch must show the plugin version alongside so the drift is visible at a glance")
+	assert_true(_dock._setup_server_label.has_theme_color_override("font_color"))
 	assert_eq(
-		_dock._setup_server_label.get_theme_color_override("font_color"),
+		_dock._setup_server_label.get_theme_color("font_color"),
 		McpDockScript.COLOR_AMBER,
 		"Mismatch must render amber, matching the drift banner's color"
 	)
@@ -360,9 +475,9 @@ func test_server_version_label_repaints_color_when_state_changes_without_text_ch
 	## repaint from amber to red so the blocked state is visible.
 	var conn := _seed_server_row("1.2.3-stale-for-test")
 	var plugin := GodotAiPlugin.new()
-	plugin._server_actual_version = "1.2.3-stale-for-test"
-	plugin._server_expected_version = "2.2.0"
-	plugin._spawn_state = McpSpawnState.OK
+	plugin._lifecycle._server_actual_version = "1.2.3-stale-for-test"
+	plugin._lifecycle._server_expected_version = "2.2.0"
+	plugin._lifecycle._server_state = McpServerState.READY
 	_dock._plugin = plugin
 
 	_dock._refresh_server_version_label()
@@ -372,7 +487,7 @@ func test_server_version_label_repaints_color_when_state_changes_without_text_ch
 		"precondition: mismatch starts amber while not blocked"
 	)
 
-	plugin._spawn_state = McpSpawnState.INCOMPATIBLE_SERVER
+	plugin._lifecycle._server_state = McpServerState.INCOMPATIBLE
 	_dock._refresh_server_version_label()
 	assert_eq(
 		_dock._setup_server_label.get_theme_color("font_color"),
@@ -390,7 +505,7 @@ func test_server_version_label_shows_restart_for_recoverable_incompatible_server
 	var conn := _seed_server_row("1.2.3-stale-for-test")
 	var plugin := _RestartDispatchPlugin.new()
 	plugin.status = {
-		"state": McpSpawnState.INCOMPATIBLE_SERVER,
+		"state": McpServerState.INCOMPATIBLE,
 		"actual_version": "1.2.3-stale-for-test",
 		"expected_version": "2.2.0",
 		"can_recover_incompatible": true,
@@ -410,7 +525,7 @@ func test_server_version_label_shows_restart_for_recoverable_incompatible_server
 
 func test_restart_dispatches_incompatible_state_to_recovery() -> void:
 	var plugin := _RestartDispatchPlugin.new()
-	plugin.status = {"state": McpSpawnState.INCOMPATIBLE_SERVER}
+	plugin.status = {"state": McpServerState.INCOMPATIBLE}
 	_dock._plugin = plugin
 
 	_dock._on_restart_stale_server()
@@ -425,7 +540,7 @@ func test_restart_dispatches_incompatible_state_to_recovery() -> void:
 
 func test_restart_dispatches_non_incompatible_state_to_force_restart() -> void:
 	var plugin := _RestartDispatchPlugin.new()
-	plugin.status = {"state": McpSpawnState.OK}
+	plugin.status = {"state": McpServerState.READY}
 	_dock._plugin = plugin
 
 	_dock._on_restart_stale_server()
@@ -460,7 +575,7 @@ func test_crashed_body_mentions_pypi_propagation_on_uvx_tier() -> void:
 	## explain that PyPI propagation is the likely cause — so the user
 	## doesn't assume their install is corrupt. Non-uvx tiers keep the
 	## original traceback hint. See #172.
-	var body := McpDockScript._crash_body_for_state(McpSpawnState.CRASHED)
+	var body := McpDockScript._crash_body_for_state(McpServerState.CRASHED)
 	assert_false(body.is_empty(), "CRASHED body must not be empty")
 	if McpClientConfigurator.get_server_launch_mode() == "uvx":
 		assert_contains(body, "PyPI", "uvx-tier body should name PyPI as the likely cause")
@@ -537,19 +652,27 @@ func test_finalize_action_buttons_reenables_after_in_flight() -> void:
 
 
 func test_dispatch_client_action_short_circuits_during_self_update() -> void:
-	## Same gate the refresh worker honors: while `_install_update` is
-	## overwriting plugin scripts on disk, spawning a worker that walks
-	## into `_cli_strategy.gd` mid-bytecode-swap SIGABRTs the editor.
+	## Same gate the refresh worker honors: while
+	## `McpUpdateManager._install_zip` is overwriting plugin scripts on
+	## disk, spawning a worker that walks into `_cli_strategy.gd` mid-
+	## bytecode-swap SIGABRTs the editor. The flag lives on the manager;
+	## `_is_self_update_in_progress()` consults it.
 	_dock._build_ui()
 	var any_id := _first_client_id()
 	if any_id.is_empty():
 		skip("No clients registered")
 		return
-	_dock._self_update_in_progress = true
+	## `_build_ui` already set up a real manager. Swap it out for the
+	## test stub so we can flip the gate without driving a real download.
+	var prior_manager = _dock._update_manager
+	var stub := _StubInstallGate.new()
+	stub.in_flight = true
+	_dock._update_manager = stub
 	_dock._dispatch_client_action(any_id, "configure")
 	assert_false(_dock._client_action_threads.has(any_id),
 		"No worker thread must be created while self-update is in progress")
-	_dock._self_update_in_progress = false
+	_dock._update_manager = prior_manager
+	stub.free()
 
 
 func test_dispatch_client_action_noop_when_slot_already_in_flight() -> void:
@@ -603,10 +726,11 @@ func test_apply_status_refresh_results_skips_rows_with_in_flight_action() -> voi
 
 
 func test_drain_client_action_workers_clears_threads_and_bumps_generation() -> void:
-	## `_install_update` calls this drain before extracting the release
-	## zip, same reason as the refresh worker drain — a worker mid-call
-	## into a half-overwritten script SIGABRTs the editor. The drain
-	## bumps generation per-row so any pending `call_deferred(
+	## `McpUpdateManager._install_zip` calls this drain (via
+	## `_drain_dock_workers`) before extracting the release zip, same
+	## reason as the refresh worker drain — a worker mid-call into a
+	## half-overwritten script SIGABRTs the editor. The drain bumps
+	## generation per-row so any pending `call_deferred(
 	## "_apply_client_action_result")` from a worker that finished after
 	## the drain detects the mismatch and short-circuits before touching
 	## restored UI state.
@@ -620,12 +744,12 @@ func test_drain_client_action_workers_clears_threads_and_bumps_generation() -> v
 
 
 func test_drain_client_action_workers_restores_in_flight_row_buttons() -> void:
-	## Issue #239 follow-up: `_install_update` has a bail-out branch (zip
-	## extract failure) that clears `_self_update_in_progress` and leaves
-	## the dock alive. Without restoring the row UI in the drain, an
-	## in-flight Configure / Remove would leave the buttons disabled and
-	## the active button stuck on "Configuring…" / "Removing…" forever
-	## because `_apply_client_action_result` never runs after we erase
+	## Issue #239 follow-up: `McpUpdateManager._install_zip` has a bail-out
+	## branch (zip extract failure) that clears `_install_in_flight` on the
+	## manager and leaves the dock alive. Without restoring the row UI in
+	## the drain, an in-flight Configure / Remove would leave the buttons
+	## disabled and the active button stuck on "Configuring…" / "Removing…"
+	## forever because `_apply_client_action_result` never runs after we erase
 	## the thread slot.
 	_dock._build_ui()
 	var any_id := _first_client_id()
@@ -646,7 +770,7 @@ func test_drain_client_action_workers_restores_in_flight_row_buttons() -> void:
 
 func test_incompatible_server_body_uses_actionable_message() -> void:
 	var body := McpDockScript._crash_body_for_state(
-		McpSpawnState.INCOMPATIBLE_SERVER,
+		McpServerState.INCOMPATIBLE,
 		{"message": "Port 8000 is occupied by godot-ai server v1.2.10; plugin expects v2.2.0. Stop the old server or change both HTTP and WS ports."},
 	)
 	assert_contains(body, "godot-ai server v1.2.10")
@@ -660,8 +784,166 @@ func test_incompatible_server_hides_http_only_port_picker() -> void:
 	## partial recovery path that can leave the editor disconnected.
 	_dock._build_ui()
 	_dock._update_crash_panel({
-		"state": McpSpawnState.INCOMPATIBLE_SERVER,
+		"state": McpServerState.INCOMPATIBLE,
 		"message": "Port 8000 is occupied by godot-ai server v1.2.10",
 	})
 	assert_true(_dock._crash_panel.visible, "diagnostic panel still shows")
-	assert_false(_dock._port_picker_section.visible, "HTTP-only picker must stay hidden")
+	assert_false(_dock._port_picker_panel.visible, "HTTP-only picker must stay hidden")
+
+
+# --- Signal-emit contracts on the audit-v2 #360 extracted subpanels ---
+# These pin the new panel boundary: panels emit; dock owns side effects.
+
+## Spies for the two panels' signals. Inner-class pattern matches the
+## `_RestartDispatchPlugin` spy at the top of this file — multi-line
+## lambdas with closure-captured locals don't reliably evaluate the body
+## under the test runner, so a typed receiver is the safe form.
+class _PortApplySpy:
+	var captured: Array[int] = []
+	func on_apply(new_port: int) -> void:
+		captured.append(new_port)
+
+
+class _LogToggleSpy:
+	var captured: Array[bool] = []
+	func on_toggle(enabled: bool) -> void:
+		captured.append(enabled)
+
+
+func test_port_picker_panel_emits_apply_requested_for_in_range_port() -> void:
+	## The panel is the gatekeeper for `EditorInterface.set_setting` — invalid
+	## ports must never reach the dock's handler. In-range values must.
+	## Instantiate the panel in isolation: going through the dock's wiring
+	## would fire the connected `_on_port_apply_requested` handler, which
+	## reloads the plugin (`set_plugin_enabled(false/true)`) and tears down
+	## the test runner mid-suite.
+	var panel := PortPickerPanelScript.new()
+	panel.setup()
+	var spy := _PortApplySpy.new()
+	panel.port_apply_requested.connect(spy.on_apply)
+	panel._spinbox.value = 9000
+	panel._on_apply_pressed()
+	assert_eq(spy.captured.size(), 1, "in-range port must emit exactly once")
+	assert_eq(spy.captured[0], 9000, "emitted port must match the spinbox value")
+	panel.free()
+
+
+func test_port_picker_panel_skips_emit_for_out_of_range_port() -> void:
+	## SpinBox.value is clamped by min_value/max_value at the UI layer,
+	## but the panel re-validates before emitting because programmatic
+	## sets (or future re-bindings) can bypass the clamp. The dock relies
+	## on this guard, so pin it. Same isolation rationale as the test above.
+	var panel := PortPickerPanelScript.new()
+	panel.setup()
+	var spy := _PortApplySpy.new()
+	panel.port_apply_requested.connect(spy.on_apply)
+	## Bypass the SpinBox clamp by writing the raw `value` field after
+	## relaxing min_value — covers a future regression where the panel's
+	## clamp is the only line of defense (e.g. someone replaces SpinBox
+	## with a free-form input).
+	panel._spinbox.min_value = 0
+	panel._spinbox.value = 0
+	panel._on_apply_pressed()
+	assert_eq(spy.captured.size(), 0, "out-of-range port must not emit")
+	panel.free()
+
+
+func test_log_viewer_emits_logging_enabled_changed_on_toggle() -> void:
+	## The dock routes this signal to `_connection.dispatcher.mcp_logging`.
+	## If LogViewer stops emitting, MCP request/response logging silently
+	## stays whatever it was — easy to regress, hard to spot.
+	## Instantiate in isolation to keep the test focused on the panel's
+	## emit contract (and consistent with the port-picker tests above).
+	var panel := LogViewerScript.new()
+	panel.setup(null)  # buffer not exercised — only signal emission is under test
+	var spy := _LogToggleSpy.new()
+	panel.logging_enabled_changed.connect(spy.on_toggle)
+	panel._on_log_toggled(false)
+	panel._on_log_toggled(true)
+	assert_eq(spy.captured, [false, true] as Array[bool],
+		"toggle must emit each state change exactly once, in order")
+	panel.free()
+
+
+func test_log_viewer_tick_recovers_from_buffer_clear() -> void:
+	## Regression: McpLogBuffer.clear() resets the monotonic
+	## `total_logged()` counter to 0, flipping the sequence backward. The
+	## viewer must detect that flip and clear its display — without the
+	## shrink branch, tick() would compute `get_recent(seq - _last_log_seq)`
+	## with a negative argument, append nothing, and the display would stay
+	## stuck on pre-clear lines forever (out of sync with the empty buffer).
+	var buffer := McpLogBuffer.new()
+	buffer.log("before clear 1")
+	buffer.log("before clear 2")
+	var panel := LogViewerScript.new()
+	panel.setup(buffer)
+	panel.tick()
+	## Display contract: at least the two pre-clear lines are visible. Use
+	## get_parsed_text() because RichTextLabel.text reflects BBCode source,
+	## not what add_text() renders.
+	assert_contains(panel._log_display.get_parsed_text(), "before clear 1",
+		"precondition: pre-clear lines must paint into the display")
+	assert_contains(panel._log_display.get_parsed_text(), "before clear 2")
+	assert_eq(panel._last_log_seq, 2,
+		"precondition: cursor must track total_logged() after tick()")
+
+	## The bug: buffer is cleared while the panel is still showing the
+	## pre-clear lines. Without the shrink-recovery branch, tick() computes
+	## get_recent(-2), appends nothing, and the display stays stale forever.
+	buffer.clear()
+	panel.tick()
+	assert_eq(panel._log_display.get_parsed_text(), "",
+		"display must clear when total_logged() drops below _last_log_seq")
+	assert_eq(panel._last_log_seq, 0,
+		"cursor must reset to 0 after a buffer shrink so subsequent ticks paint from a clean slate")
+
+	## After the recovery branch, new lines must paint normally — i.e. the
+	## next round of appends through the same panel doesn't lose lines or
+	## duplicate them.
+	buffer.log("after clear 1")
+	buffer.log("after clear 2")
+	panel.tick()
+	assert_contains(panel._log_display.get_parsed_text(), "after clear 1")
+	assert_contains(panel._log_display.get_parsed_text(), "after clear 2")
+	assert_false(panel._log_display.get_parsed_text().contains("before clear"),
+		"pre-clear lines must not reappear after the recovery + re-paint")
+	assert_eq(panel._last_log_seq, 2)
+	panel.free()
+
+
+func test_log_viewer_tick_keeps_painting_after_buffer_caps_at_max_lines() -> void:
+	## Regression: McpLogBuffer caps `_lines` at MAX_LINES (500) by slicing.
+	## Once full, subsequent log() calls keep `_lines.size()` constant. The
+	## previous viewer tracked `total_count()` as its cursor — so once the
+	## buffer hit the cap, `count == _last_log_count` returned early on
+	## every tick and new lines never reached the display. After ~500 MCP
+	## events the dev-mode log just appeared to stop, with no error and no
+	## indication that anything had filled. The fix tracks the buffer's
+	## monotonic `total_logged()` instead, which keeps incrementing past
+	## MAX_LINES.
+	var buffer := McpLogBuffer.new()
+	var cap: int = McpLogBuffer.MAX_LINES
+	for i in range(cap):
+		buffer.log("filler %d" % i)
+	var panel := LogViewerScript.new()
+	panel.setup(buffer)
+	panel.tick()
+	assert_eq(buffer.total_count(), cap,
+		"precondition: buffer must be at capacity after %d logs" % cap)
+	assert_eq(buffer.total_logged(), cap,
+		"precondition: total_logged() should equal cap on first fill")
+	assert_eq(panel._last_log_seq, cap,
+		"precondition: viewer cursor tracks total_logged() after the priming tick")
+
+	## At-cap append: total_count stays pinned at cap, but total_logged advances
+	## to cap+1. Before the fix the viewer's `count == _last_log_count` early-
+	## return swallowed this line silently.
+	buffer.log("at-cap canary")
+	panel.tick()
+	assert_eq(buffer.total_count(), cap, "buffer size stays pinned at cap")
+	assert_eq(buffer.total_logged(), cap + 1, "monotonic counter advances past cap")
+	assert_contains(panel._log_display.get_parsed_text(), "at-cap canary",
+		"new line after the buffer capped must reach the display")
+	assert_eq(panel._last_log_seq, cap + 1,
+		"viewer cursor must advance with the monotonic counter, not the bounded size")
+	panel.free()

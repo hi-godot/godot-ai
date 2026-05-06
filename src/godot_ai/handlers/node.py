@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from godot_ai.handlers._readiness import require_writable
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.tools._pagination import paginate
 
 
@@ -20,7 +20,7 @@ def _mutation_params(scene_file: str, **extra) -> dict:
 
 
 async def node_create(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     type: str = "",
     name: str = "",
     parent_path: str = "",
@@ -40,7 +40,7 @@ async def node_create(
 
 
 async def node_find(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     name: str = "",
     type: str = "",
     group: str = "",
@@ -54,19 +54,19 @@ async def node_find(
     return paginate(result.get("nodes", []), offset, limit, key="nodes")
 
 
-async def node_get_properties(runtime: Runtime, path: str) -> dict:
+async def node_get_properties(runtime: DirectRuntime, path: str) -> dict:
     return await runtime.send_command("get_node_properties", {"path": path})
 
 
-async def node_get_children(runtime: Runtime, path: str) -> dict:
+async def node_get_children(runtime: DirectRuntime, path: str) -> dict:
     return await runtime.send_command("get_children", {"path": path})
 
 
-async def node_get_groups(runtime: Runtime, path: str) -> dict:
+async def node_get_groups(runtime: DirectRuntime, path: str) -> dict:
     return await runtime.send_command("get_groups", {"path": path})
 
 
-async def node_delete(runtime: Runtime, path: str, scene_file: str = "") -> dict:
+async def node_delete(runtime: DirectRuntime, path: str, scene_file: str = "") -> dict:
     require_writable(runtime)
     return await runtime.send_command(
         "delete_node",
@@ -74,7 +74,9 @@ async def node_delete(runtime: Runtime, path: str, scene_file: str = "") -> dict
     )
 
 
-async def node_reparent(runtime: Runtime, path: str, new_parent: str, scene_file: str = "") -> dict:
+async def node_reparent(
+    runtime: DirectRuntime, path: str, new_parent: str, scene_file: str = ""
+) -> dict:
     require_writable(runtime)
     return await runtime.send_command(
         "reparent_node",
@@ -83,7 +85,7 @@ async def node_reparent(runtime: Runtime, path: str, new_parent: str, scene_file
 
 
 async def node_set_property(
-    runtime: Runtime, path: str, property: str, value, scene_file: str = ""
+    runtime: DirectRuntime, path: str, property: str, value, scene_file: str = ""
 ) -> dict:
     require_writable(runtime)
     return await runtime.send_command(
@@ -92,7 +94,9 @@ async def node_set_property(
     )
 
 
-async def node_rename(runtime: Runtime, path: str, new_name: str, scene_file: str = "") -> dict:
+async def node_rename(
+    runtime: DirectRuntime, path: str, new_name: str, scene_file: str = ""
+) -> dict:
     require_writable(runtime)
     return await runtime.send_command(
         "rename_node",
@@ -100,7 +104,9 @@ async def node_rename(runtime: Runtime, path: str, new_name: str, scene_file: st
     )
 
 
-async def node_duplicate(runtime: Runtime, path: str, name: str = "", scene_file: str = "") -> dict:
+async def node_duplicate(
+    runtime: DirectRuntime, path: str, name: str = "", scene_file: str = ""
+) -> dict:
     require_writable(runtime)
     return await runtime.send_command(
         "duplicate_node",
@@ -108,7 +114,7 @@ async def node_duplicate(runtime: Runtime, path: str, name: str = "", scene_file
     )
 
 
-async def node_move(runtime: Runtime, path: str, index: int, scene_file: str = "") -> dict:
+async def node_move(runtime: DirectRuntime, path: str, index: int, scene_file: str = "") -> dict:
     require_writable(runtime)
     return await runtime.send_command(
         "move_node",
@@ -116,7 +122,9 @@ async def node_move(runtime: Runtime, path: str, index: int, scene_file: str = "
     )
 
 
-async def node_add_to_group(runtime: Runtime, path: str, group: str, scene_file: str = "") -> dict:
+async def node_add_to_group(
+    runtime: DirectRuntime, path: str, group: str, scene_file: str = ""
+) -> dict:
     require_writable(runtime)
     return await runtime.send_command(
         "add_to_group",
@@ -125,7 +133,7 @@ async def node_add_to_group(runtime: Runtime, path: str, group: str, scene_file:
 
 
 async def node_remove_from_group(
-    runtime: Runtime, path: str, group: str, scene_file: str = ""
+    runtime: DirectRuntime, path: str, group: str, scene_file: str = ""
 ) -> dict:
     require_writable(runtime)
     return await runtime.send_command(

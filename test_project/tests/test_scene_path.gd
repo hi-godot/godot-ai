@@ -28,6 +28,70 @@ func _make_tree() -> Node:
 	return main
 
 
+# ----- from_node: clean path formatting -----
+
+func test_from_node_scene_root_returns_root_prefix() -> void:
+	var root := _make_tree()
+	assert_eq(McpScenePath.from_node(root, root), "/Main")
+	root.queue_free()
+
+
+func test_from_node_direct_child_returns_root_prefixed_path() -> void:
+	var root := _make_tree()
+	var cam := root.get_node("Camera3D")
+	assert_eq(McpScenePath.from_node(cam, root), "/Main/Camera3D")
+	root.queue_free()
+
+
+func test_from_node_nested_descendant_returns_full_path() -> void:
+	var root := _make_tree()
+	var ground := root.get_node("World/Ground")
+	assert_eq(McpScenePath.from_node(ground, root), "/Main/World/Ground")
+	root.queue_free()
+
+
+func test_from_node_null_node_returns_empty_string() -> void:
+	var root := _make_tree()
+	assert_eq(McpScenePath.from_node(null, root), "")
+	root.queue_free()
+
+
+func test_from_node_null_scene_root_returns_empty_string() -> void:
+	var n := Node.new()
+	assert_eq(McpScenePath.from_node(n, null), "")
+	n.free()
+
+
+func test_from_node_orphan_node_returns_empty_string() -> void:
+	var root := _make_tree()
+	var orphan := Node.new()
+	orphan.name = "Orphan"
+	assert_eq(McpScenePath.from_node(orphan, root), "")
+	orphan.free()
+	root.queue_free()
+
+
+func test_from_node_foreign_tree_returns_empty_string() -> void:
+	var root := _make_tree()
+	var other_root := Node.new()
+	other_root.name = "OtherRoot"
+	var foreign := Node.new()
+	foreign.name = "Foreign"
+	other_root.add_child(foreign)
+	assert_eq(McpScenePath.from_node(foreign, root), "")
+	other_root.queue_free()
+	root.queue_free()
+
+
+func test_from_node_ancestor_of_scene_root_returns_empty_string() -> void:
+	var root := _make_tree()
+	var parent := Node.new()
+	parent.name = "Parent"
+	parent.add_child(root)
+	assert_eq(McpScenePath.from_node(parent, root), "")
+	parent.queue_free()
+
+
 # ----- resolve: existing canonical forms -----
 
 func test_resolve_root_prefix_returns_scene_root() -> void:

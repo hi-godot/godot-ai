@@ -22,7 +22,7 @@ func suite_setup(ctx: Dictionary) -> void:
 
 func test_search_resources_missing_filters() -> void:
 	var result := _handler.search_resources({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_search_resources_by_path() -> void:
@@ -46,17 +46,17 @@ func test_search_resources_by_type() -> void:
 
 func test_load_resource_missing_path() -> void:
 	var result := _handler.load_resource({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_load_resource_invalid_prefix() -> void:
 	var result := _handler.load_resource({"path": "/tmp/bad.tres"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_load_resource_not_found() -> void:
 	var result := _handler.load_resource({"path": "res://nonexistent.tres"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.RESOURCE_NOT_FOUND)
 
 
 func test_load_resource_scene() -> void:
@@ -71,17 +71,17 @@ func test_load_resource_scene() -> void:
 
 func test_assign_resource_missing_path() -> void:
 	var result := _handler.assign_resource({"property": "mesh", "resource_path": "res://foo.tres"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_assign_resource_missing_property() -> void:
 	var result := _handler.assign_resource({"path": "/Main/Camera3D", "resource_path": "res://foo.tres"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_assign_resource_missing_resource_path() -> void:
 	var result := _handler.assign_resource({"path": "/Main/Camera3D", "property": "mesh"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_assign_resource_node_not_found() -> void:
@@ -90,7 +90,7 @@ func test_assign_resource_node_not_found() -> void:
 		"property": "mesh",
 		"resource_path": "res://main.tscn",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
 
 
 func test_assign_resource_property_not_found() -> void:
@@ -99,7 +99,7 @@ func test_assign_resource_property_not_found() -> void:
 		"property": "nonexistent_property_xyz",
 		"resource_path": "res://main.tscn",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	# Issue #47: surface available property names + suggestions so the agent
 	# doesn't need a round-trip to discover valid names.
 	var msg: String = result.error.get("message", "")
@@ -141,7 +141,7 @@ func test_assign_resource_resource_not_found() -> void:
 		"property": "environment",
 		"resource_path": "res://nonexistent.tres",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.RESOURCE_NOT_FOUND)
 
 
 # ----- create_resource -----
@@ -167,13 +167,13 @@ func _remove_node(node: Node) -> void:
 
 func test_create_resource_missing_type() -> void:
 	var result := _handler.create_resource({"path": "/Main/Foo", "property": "mesh"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 	assert_contains(result.error.message, "type")
 
 
 func test_create_resource_no_home_errors() -> void:
 	var result := _handler.create_resource({"type": "BoxMesh"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "path")
 
 
@@ -184,7 +184,7 @@ func test_create_resource_both_homes_errors() -> void:
 		"property": "mesh",
 		"resource_path": "res://foo.tres",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "not both")
 
 
@@ -194,7 +194,7 @@ func test_create_resource_unknown_class() -> void:
 		"path": "/Main/Foo",
 		"property": "mesh",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "Unknown")
 
 
@@ -204,7 +204,7 @@ func test_create_resource_node_class_redirects_to_create_node() -> void:
 		"path": "/Main/Foo",
 		"property": "mesh",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "node_create")
 
 
@@ -215,7 +215,7 @@ func test_create_resource_non_resource_class() -> void:
 		"path": "/Main/Foo",
 		"property": "mesh",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "not a Resource")
 
 
@@ -227,7 +227,7 @@ func test_create_resource_abstract_class() -> void:
 		"path": "/Main/Foo",
 		"property": "mesh",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "abstract")
 
 
@@ -285,7 +285,7 @@ func test_create_resource_property_not_on_node() -> void:
 		"path": "/%s/TestBadProp" % mi.get_parent().name,
 		"property": "not_a_real_property",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(mi)
 
 
@@ -300,7 +300,7 @@ func test_create_resource_unknown_property_in_properties_dict() -> void:
 		"property": "mesh",
 		"properties": {"not_a_real_field": 42},
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.PROPERTY_NOT_ON_CLASS)
 	# Error should enrich with valid_properties so the caller can recover without a round-trip.
 	assert_has_key(result.error, "data")
 	assert_has_key(result.error.data, "valid_properties")
@@ -315,25 +315,25 @@ func test_create_resource_unknown_property_in_properties_dict() -> void:
 
 func test_get_resource_info_missing_type() -> void:
 	var result := _handler.get_resource_info({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_get_resource_info_unknown_type() -> void:
 	var result := _handler.get_resource_info({"type": "DefinitelyNotAClass_xyz"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 	assert_contains(result.error.message, "Unknown resource type")
 
 
 func test_get_resource_info_non_resource_type() -> void:
 	# RefCounted is not a Resource — the error should redirect cleanly.
 	var result := _handler.get_resource_info({"type": "RefCounted"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "not a Resource")
 
 
 func test_get_resource_info_node_type_redirects() -> void:
 	var result := _handler.get_resource_info({"type": "Node3D"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "node_")
 
 
@@ -424,7 +424,7 @@ func test_create_resource_save_refuses_overwrite_without_flag() -> void:
 		"type": "BoxShape3D",
 		"resource_path": out_path,
 	})
-	assert_is_error(second, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(second)
 	assert_contains(second.error.message, "overwrite")
 	var third := _handler.create_resource({
 		"type": "BoxShape3D",
@@ -529,5 +529,5 @@ func test_create_resource_nested_class_dict_invalid_class() -> void:
 			"gradient": {"__class__": "NotARealClass"},
 		},
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(tr)

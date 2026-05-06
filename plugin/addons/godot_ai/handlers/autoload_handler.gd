@@ -28,13 +28,13 @@ func add_autoload(params: Dictionary) -> Dictionary:
 	var singleton: bool = params.get("singleton", true)
 
 	if name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: name")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 	if not path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Path must start with res:// (got: %s)" % path)
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Path must start with res:// (got: %s)" % path)
 	if not FileAccess.file_exists(path):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "File not found: %s" % path)
+		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "File not found: %s" % path)
 
 	var key := "autoload/%s" % name
 	if ProjectSettings.has_setting(key):
@@ -64,11 +64,11 @@ func add_autoload(params: Dictionary) -> Dictionary:
 func remove_autoload(params: Dictionary) -> Dictionary:
 	var name: String = params.get("name", "")
 	if name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: name")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
 
 	var key := "autoload/%s" % name
 	if not ProjectSettings.has_setting(key):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Autoload '%s' not found" % name)
+		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, "Autoload '%s' not found" % name)
 
 	var old_value: String = ProjectSettings.get_setting(key, "")
 	ProjectSettings.clear(key)

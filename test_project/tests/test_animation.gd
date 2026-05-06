@@ -87,7 +87,7 @@ func test_player_create_attaches_default_library() -> void:
 
 func test_player_create_missing_parent() -> void:
 	var result := _handler.create_player({"parent_path": "/DoesNotExist"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "not found")
 
 
@@ -158,7 +158,7 @@ func test_animation_create_rejects_duplicate_name() -> void:
 		return
 	_handler.create_animation({"player_path": player_path, "name": "walk", "length": 1.0})
 	var result := _handler.create_animation({"player_path": player_path, "name": "walk", "length": 1.0})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "already exists")
 	_remove_node(player_path)
 
@@ -174,7 +174,7 @@ func test_animation_create_rejects_invalid_loop_mode() -> void:
 		"length": 1.0,
 		"loop_mode": "bogus",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 	assert_contains(result.error.message, "loop_mode")
 	_remove_node(player_path)
 
@@ -240,7 +240,7 @@ func test_add_property_track_requires_colon_in_path() -> void:
 		"track_path": "Panel",
 		"keyframes": [{"time": 0.0, "value": 1.0}],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "':property'")
 	_remove_node(player_path)
 
@@ -345,7 +345,7 @@ func test_add_method_track_rejects_bad_args() -> void:
 		"target_node_path": ".",
 		"keyframes": [{"time": 0.0, "method": "queue_free", "args": "not an array"}],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "args")
 	_remove_node(player_path)
 
@@ -362,7 +362,7 @@ func test_add_method_track_rejects_empty_method() -> void:
 		"target_node_path": ".",
 		"keyframes": [{"time": 0.0, "method": ""}],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(player_path)
 
 
@@ -611,7 +611,7 @@ func test_add_method_track_rejects_colon_in_target_path() -> void:
 		"target_node_path": "Panel:queue_free",  # wrong — method goes in keyframe
 		"keyframes": [{"time": 0.0, "method": "queue_free"}],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "bare NodePath")
 	_remove_node(player_path)
 
@@ -628,7 +628,7 @@ func test_add_method_track_requires_method_key() -> void:
 		"target_node_path": ".",
 		"keyframes": [{"time": 0.5}],  # Missing "method"
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "method")
 	_remove_node(player_path)
 
@@ -664,7 +664,7 @@ func test_set_autoplay_validates_unknown_name() -> void:
 		"player_path": player_path,
 		"animation_name": "nonexistent",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "not found")
 	_remove_node(player_path)
 
@@ -711,7 +711,7 @@ func test_play_validates_unknown_animation() -> void:
 		skip("Scene not ready — _add_player returned empty path")
 		return
 	var result := _handler.play({"player_path": player_path, "animation_name": "nope"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(player_path)
 
 
@@ -872,7 +872,7 @@ func test_create_simple_rejects_duplicate_target_property() -> void:
 			 "to": {"x": 2.0, "y": 0.0, "z": 0.0}, "duration": 0.3},
 		],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "Duplicate")
 	_remove_node(player_path)
 
@@ -1010,7 +1010,7 @@ func test_create_simple_rejects_wrong_type_even_when_auto_create_enabled() -> vo
 			 "from": {"x": 0}, "to": {"x": 1}, "duration": 1.0},
 		],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.WRONG_TYPE)
 	assert_contains(result.error.message, "not an AnimationPlayer")
 	_remove_node("/" + scene_root.name + "/Decoy86")
 
@@ -1029,7 +1029,7 @@ func test_create_simple_errors_when_parent_missing() -> void:
 			 "from": {"x": 0}, "to": {"x": 1}, "duration": 1.0},
 		],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_create_animation_reports_library_created_false_when_present() -> void:
@@ -1124,7 +1124,7 @@ func test_create_animation_errors_when_path_is_wrong_node_type() -> void:
 		"name": "idle",
 		"length": 1.0,
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "is not an AnimationPlayer")
 
 	scene_root.remove_child(marker)
@@ -1141,7 +1141,7 @@ func test_create_animation_errors_when_parent_missing() -> void:
 		"name": "idle",
 		"length": 1.0,
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "auto-create")
 
 
@@ -1210,7 +1210,7 @@ func test_create_simple_rejects_missing_tween_fields() -> void:
 		"name": "bad",
 		"tweens": [{"target": ".", "property": "position"}],  # Missing from/to/duration
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(player_path)
 
 
@@ -1230,7 +1230,7 @@ func test_create_simple_rejects_zero_length() -> void:
 			 "from": {"x":1,"y":1,"z":1}, "to": {"x":2,"y":2,"z":2}, "duration": 0.5},
 		],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "length")
 	_remove_node(player_path)
 
@@ -1249,7 +1249,7 @@ func test_create_simple_rejects_negative_length() -> void:
 			 "from": {"x":1,"y":1,"z":1}, "to": {"x":2,"y":2,"z":2}, "duration": 0.5},
 		],
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(player_path)
 
 
@@ -1401,7 +1401,7 @@ func test_delete_animation_not_found() -> void:
 	var result := _handler.delete_animation({
 		"player_path": player_path, "animation_name": "nope",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(player_path)
 
 
@@ -1420,7 +1420,7 @@ func test_create_animation_overwrite() -> void:
 	var fail_result := _handler.create_animation({
 		"player_path": player_path, "name": "overme", "length": 2.0,
 	})
-	assert_is_error(fail_result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(fail_result)
 
 	# With overwrite, it should succeed.
 	var result := _handler.create_animation({
@@ -1490,7 +1490,40 @@ func test_validate_animation_not_found() -> void:
 	var result := _handler.validate_animation({
 		"player_path": player_path, "animation_name": "nope",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
+	_remove_node(player_path)
+
+
+## Regression: validate_animation must split track paths on the FIRST colon
+## (node↔property boundary), not the last. For broken subpath tracks
+## (target node missing), the broken_tracks[i].node_path field must be the
+## bare node name — not "MissingTarget:modulate" with the property colons
+## preserved — otherwise the diagnostic misleads agents debugging missing
+## targets. Note: Godot's get_node_or_null strips the ":property" tail
+## natively, so the rfind/find difference is only user-visible in this
+## broken_tracks payload, not in the valid/broken classification itself.
+func test_validate_animation_broken_subpath_reports_clean_node_path() -> void:
+	var player_path := _add_player("TestValidateBrokenSubpath")
+	if player_path.is_empty():
+		skip("Scene not ready — _add_player returned empty path")
+		return
+	_handler.create_animation({"player_path": player_path, "name": "fade", "length": 0.5})
+	_handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "fade",
+		"track_path": "MissingFadeTarget:modulate:a",
+		"keyframes": [
+			{"time": 0.0, "value": 0.0},
+			{"time": 0.5, "value": 1.0},
+		],
+	})
+	var result := _handler.validate_animation({
+		"player_path": player_path, "animation_name": "fade",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.broken_count, 1)
+	assert_eq(result.data.broken_tracks[0].node_path, "MissingFadeTarget",
+		"broken node_path must be the bare node name — not 'MissingFadeTarget:modulate'")
 	_remove_node(player_path)
 
 
@@ -1602,7 +1635,7 @@ func test_preset_fade_rejects_target_without_modulate() -> void:
 		"target_path": "NoModulateTarget",
 		"mode": "in",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(player_path)
 	_remove_node("/" + scene_root.name + "/NoModulateTarget")
 
@@ -1623,7 +1656,7 @@ func test_preset_fade_invalid_mode() -> void:
 		"target_path": "FadeBadMode",
 		"mode": "wobble",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 	_remove_node(player_path)
 	_remove_node("/" + scene_root.name + "/FadeBadMode")
 
@@ -1710,7 +1743,7 @@ func test_preset_slide_rejects_non_transform_node() -> void:
 		"target_path": "SlideBadTarget",
 		"direction": "left",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(player_path)
 	_remove_node("/" + scene_root.name + "/SlideBadTarget")
 
@@ -1731,7 +1764,7 @@ func test_preset_slide_invalid_direction() -> void:
 		"target_path": "SlideDir",
 		"direction": "sideways",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	_remove_node(player_path)
 	_remove_node("/" + scene_root.name + "/SlideDir")
 
@@ -1901,7 +1934,7 @@ func test_preset_overwrite_required_for_second_call() -> void:
 	var r2 := _handler.preset_fade({
 		"player_path": player_path, "target_path": "OverwriteTarget", "mode": "in",
 	})
-	assert_is_error(r2, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(r2)
 	# With overwrite=true, it succeeds.
 	var r3 := _handler.preset_fade({
 		"player_path": player_path, "target_path": "OverwriteTarget", "mode": "in",
@@ -1925,4 +1958,209 @@ func test_preset_fade_missing_target() -> void:
 		"mode": "in",
 	})
 	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	# Error must teach both supported path conventions so callers can pick the
+	# right one without spelunking docs (issue #328).
+	var msg := String(result.error.message)
+	assert_true(msg.contains("root_node"), "missing root_node hint: %s" % msg)
+	assert_true(msg.contains("scene-absolute") or msg.contains("/Main"),
+		"missing scene-absolute path hint: %s" % msg)
 	_remove_node(player_path)
+
+
+# Issue #328 — preset target_path accepts scene-absolute paths and converts
+# them to player-root-relative track paths. Mirrors how every other scene
+# tool takes /Main/Foo paths so callers don't need to remember an animation-
+# specific convention.
+
+func test_preset_fade_accepts_scene_absolute_target() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	_add_sibling(Sprite2D.new(), "AbsFadeTarget")
+	var player_path := _add_player("TestPresetFadeAbs")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/AbsFadeTarget")
+		skip("Scene not ready")
+		return
+	var abs_target := "/" + scene_root.name + "/AbsFadeTarget"
+	var result := _handler.preset_fade({
+		"player_path": player_path,
+		"target_path": abs_target,
+		"mode": "in",
+	})
+	assert_has_key(result, "data")
+	# Track path must end up relative to the player's root_node — bare sibling
+	# name "AbsFadeTarget", NOT the absolute "/Main/AbsFadeTarget" that would
+	# never resolve at playback.
+	var anim := _fetch_anim(player_path, "fade_in")
+	assert_true(anim != null, "animation should exist")
+	var track_path := String(anim.track_get_path(0))
+	assert_eq(track_path, "AbsFadeTarget:modulate:a",
+		"absolute target_path must convert to root_node-relative track path, got '%s'" % track_path)
+	_remove_node(player_path)
+	_remove_node(abs_target)
+
+
+func test_preset_pulse_accepts_scene_absolute_target() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	_add_sibling(Node2D.new(), "AbsPulser")
+	var player_path := _add_player("TestPresetPulseAbs")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/AbsPulser")
+		skip("Scene not ready")
+		return
+	var abs_target := "/" + scene_root.name + "/AbsPulser"
+	var result := _handler.preset_pulse({
+		"player_path": player_path,
+		"target_path": abs_target,
+	})
+	assert_has_key(result, "data")
+	var anim := _fetch_anim(player_path, "pulse")
+	var track_path := String(anim.track_get_path(0))
+	assert_eq(track_path, "AbsPulser:scale",
+		"absolute target_path must convert to root_node-relative track path, got '%s'" % track_path)
+	_remove_node(player_path)
+	_remove_node(abs_target)
+
+
+func test_preset_slide_accepts_scene_absolute_target() -> void:
+	# Slide-specific positive coverage for the scene-absolute path shape —
+	# the other presets (fade/shake/pulse) all assert the converted track
+	# path explicitly; without this, a slide regression in absolute-path
+	# handling would slip through.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	_add_sibling(Node2D.new(), "AbsSlider")
+	var player_path := _add_player("TestPresetSlideAbs")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/AbsSlider")
+		skip("Scene not ready")
+		return
+	var abs_target := "/" + scene_root.name + "/AbsSlider"
+	var result := _handler.preset_slide({
+		"player_path": player_path,
+		"target_path": abs_target,
+		"direction": "left",
+	})
+	assert_has_key(result, "data")
+	var anim := _fetch_anim(player_path, "slide_in_left")
+	assert_true(anim != null, "animation should exist")
+	var track_path := String(anim.track_get_path(0))
+	assert_eq(track_path, "AbsSlider:position",
+		"absolute target_path must convert to root_node-relative track path, got '%s'" % track_path)
+	_remove_node(player_path)
+	_remove_node(abs_target)
+
+
+func test_preset_slide_accepts_target_outside_root_node() -> void:
+	# Scene-absolute paths that resolve to a node outside the player's
+	# root_node subtree are permitted: get_path_to yields a `..`-prefixed
+	# track path, which Godot's animation engine resolves the same way the
+	# relative `../Foreign` form already does. Asymmetry between the
+	# absolute and relative path shapes would surprise callers.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	# Build a sibling subtree whose AnimationPlayer's root_node only sees
+	# its own children. Player at /Main/SubAnimRoot/Player; foreign target
+	# at /Main/Foreign — outside SubAnimRoot.
+	var sub_root := Node2D.new()
+	sub_root.name = "SubAnimRoot"
+	scene_root.add_child(sub_root)
+	sub_root.owner = scene_root
+	var player := AnimationPlayer.new()
+	player.name = "PlayerAbs"
+	player.add_animation_library("", AnimationLibrary.new())
+	sub_root.add_child(player)
+	player.set_owner(scene_root)
+	_add_sibling(Node2D.new(), "ForeignTarget")
+
+	var result := _handler.preset_slide({
+		"player_path": "/" + scene_root.name + "/SubAnimRoot/PlayerAbs",
+		"target_path": "/" + scene_root.name + "/ForeignTarget",
+		"direction": "left",
+	})
+	assert_has_key(result, "data")
+	var anim := player.get_animation("slide_in_left")
+	assert_true(anim != null, "animation should exist")
+	var track_path := String(anim.track_get_path(0))
+	# get_path_to walks up out of SubAnimRoot and back down to ForeignTarget.
+	assert_eq(track_path, "../ForeignTarget:position",
+		"abs target outside root_node must produce a `..`-prefixed track path, got '%s'" % track_path)
+
+	_remove_node("/" + scene_root.name + "/SubAnimRoot")
+	_remove_node("/" + scene_root.name + "/ForeignTarget")
+
+
+func test_preset_fade_accepts_target_equal_to_root_node() -> void:
+	# Edge case: target_path resolves to the player's root_node itself.
+	# Animation tracks resolve "." against root_node, so the derived track
+	# path must be ".:modulate:a" — anything else (empty, leading slash) is
+	# silently broken at playback.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	# Player's default root_node is its parent — the scene root. The scene
+	# root in this project is a Node3D, which has no `modulate`, so use a
+	# Sprite2D parented under a CanvasItem to give the player a modulate-
+	# carrying root_node.
+	var holder := CanvasGroup.new()
+	holder.name = "FadeRootHolder"
+	scene_root.add_child(holder)
+	holder.owner = scene_root
+	var player := AnimationPlayer.new()
+	player.name = "PlayerForRoot"
+	player.add_animation_library("", AnimationLibrary.new())
+	holder.add_child(player)
+	player.set_owner(scene_root)
+
+	var abs_target := "/" + scene_root.name + "/FadeRootHolder"
+	var result := _handler.preset_fade({
+		"player_path": "/" + scene_root.name + "/FadeRootHolder/PlayerForRoot",
+		"target_path": abs_target,
+		"mode": "in",
+	})
+	assert_has_key(result, "data")
+	var anim := player.get_animation("fade_in")
+	assert_true(anim != null, "animation should exist")
+	var track_path := String(anim.track_get_path(0))
+	assert_eq(track_path, ".:modulate:a",
+		"target equal to root_node must yield '.' track path, got '%s'" % track_path)
+
+	_remove_node("/" + scene_root.name + "/FadeRootHolder")
+
+
+func test_preset_shake_accepts_scene_absolute_target() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	_add_sibling(Node2D.new(), "AbsShaker")
+	var player_path := _add_player("TestPresetShakeAbs")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/AbsShaker")
+		skip("Scene not ready")
+		return
+	var abs_target := "/" + scene_root.name + "/AbsShaker"
+	var result := _handler.preset_shake({
+		"player_path": player_path,
+		"target_path": abs_target,
+		"duration": 0.2,
+		"frequency": 20.0,
+		"seed": 1,
+	})
+	assert_has_key(result, "data")
+	var anim := _fetch_anim(player_path, "shake")
+	var track_path := String(anim.track_get_path(0))
+	assert_eq(track_path, "AbsShaker:position",
+		"absolute target_path must convert to root_node-relative track path, got '%s'" % track_path)
+	_remove_node(player_path)
+	_remove_node(abs_target)

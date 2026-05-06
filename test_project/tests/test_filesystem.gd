@@ -51,12 +51,19 @@ func test_read_file_missing_path() -> void:
 
 func test_read_file_invalid_prefix() -> void:
 	var result := _handler.read_file({"path": "/tmp/bad.txt"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_read_file_not_found() -> void:
 	var result := _handler.read_file({"path": "res://nonexistent_file.txt"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.RESOURCE_NOT_FOUND)
+
+
+func test_read_file_rejects_traversal_path() -> void:
+	## Issue #347: traversal in read_file is the file-disclosure primitive.
+	var result := _handler.read_file({"path": "res://../etc/passwd"})
+	assert_is_error(result)
+	assert_contains(result.error.message, "..")
 
 
 # ----- write_file -----
@@ -102,19 +109,36 @@ func test_write_file_missing_path() -> void:
 
 func test_write_file_invalid_prefix() -> void:
 	var result := _handler.write_file({"path": "/tmp/bad.txt", "content": "hello"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
+
+
+func test_write_file_rejects_traversal_path() -> void:
+	## Issue #347: the actual arbitrary-disk-write primitive.
+	## Use a synthetic target so a Unix host's pre-existing /etc/* doesn't
+	## false-positive the disk-state assertion below. If a regression let
+	## the write through, the file would land one dir above the project at
+	## `<project_parent>/__mcp_traversal_test_target__`, which never
+	## exists in a clean tree.
+	var traversal_path := "res://../__mcp_traversal_test_target__.txt"
+	var result := _handler.write_file({
+		"path": traversal_path,
+		"content": "owned\n",
+	})
+	assert_is_error(result)
+	assert_contains(result.error.message, "..")
+	assert_false(FileAccess.file_exists(traversal_path), "traversal must not write to disk")
 
 
 # ----- reimport -----
 
 func test_reimport_missing_paths() -> void:
 	var result := _handler.reimport({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_reimport_empty_paths() -> void:
 	var result := _handler.reimport({"paths": []})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_reimport_nonexistent_file() -> void:
@@ -139,3 +163,12 @@ func test_reimport_invalid_prefix() -> void:
 	assert_has_key(result, "data")
 	assert_eq(result.data.reimported_count, 0)
 	assert_eq(result.data.not_found_count, 1)
+
+
+func test_reimport_rejects_traversal_path() -> void:
+	## Issue #347: per-path validation in the loop must catch traversal too.
+	var result := _handler.reimport({"paths": ["res://../etc/passwd"]})
+	assert_has_key(result, "data")
+	assert_eq(result.data.reimported_count, 0)
+	assert_eq(result.data.not_found_count, 1)
+	assert_contains(result.data.not_found[0], "..")

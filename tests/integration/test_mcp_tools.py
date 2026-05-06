@@ -817,28 +817,19 @@ class TestNodeGroupTools:
 
         assert result.data["group"] == "enemies"
 
-    async def test_add_to_group_array_value_returns_invalid_params(self, mcp_stack):
-        ## #210 repro: agent passes `group` as a JSON-string-looking list. The
-        ## meta-tool layer's `_coerce_json_strings` decodes it into an Array
-        ## before the plugin sees it (recv shows `"group":["a","b"]`). Without
-        ## the GDScript-side typeof() guard added in this fix, the typed
-        ## assignment `var group: String = ...` runtime-errored and the
-        ## dispatcher surfaced an opaque INTERNAL_ERROR. With the guard, the
-        ## plugin now sends back a structured INVALID_PARAMS that names the
-        ## bad param. We mock the plugin sending the new error shape and
-        ## confirm the meta-tool surfaces it cleanly to the client.
+    async def test_add_to_group_json_shaped_string_stays_string(self, mcp_stack):
+        ## Issue #297 finding #8: nested meta-tool coercion must not decode a
+        ## JSON-shaped value for a string-typed handler param. A group named
+        ## like an array is unusual, but still a legitimate string value.
         client, plugin = mcp_stack
 
         async def respond():
             cmd = await plugin.recv_command()
             assert cmd["command"] == "add_to_group"
-            ## The coercion middleware decoded the JSON-list string into a
-            ## real array. The plugin now type-checks the value and rejects.
-            assert cmd["params"]["group"] == ["a", "b"]
-            await plugin.send_error(
+            assert cmd["params"]["group"] == '["a","b"]'
+            await plugin.send_response(
                 cmd["request_id"],
-                "INVALID_PARAMS",
-                "Param 'group' must be a String, got Array",
+                {"path": "/Main/Enemy", "group": '["a","b"]', "undoable": True},
             )
 
         task = asyncio.create_task(respond())
@@ -848,12 +839,9 @@ class TestNodeGroupTools:
                 "op": "add_to_group",
                 "params": {"path": "/Main/Enemy", "group": '["a","b"]'},
             },
-            raise_on_error=False,
         )
         await task
-        assert result.is_error
-        assert "must be a String" in str(result.content)
-        assert "group" in str(result.content)
+        assert result.data["group"] == '["a","b"]'
 
 
 # ---------------------------------------------------------------------------
@@ -2079,9 +2067,7 @@ class TestPhysicsShapeAutofitTool:
         assert result.data["shape_created"] is True
         assert result.data["size"]["x"] == 2.0
 
-    async def test_ambiguous_visual_candidates_preserved_in_structured_error(
-        self, mcp_stack
-    ):
+    async def test_ambiguous_visual_candidates_preserved_in_structured_error(self, mcp_stack):
         client, plugin = mcp_stack
         candidates = ["/Main/VisualA", "/Main/VisualB"]
 
@@ -3333,6 +3319,50 @@ class TestPerCallSessionRouting:
             )
             await task
             assert result.data["current"] == "res://from_b.tscn"
+        finally:
+            await plugin_b.close()
+
+    async def test_concurrent_read_and_write_route_to_target_sessions(self, mcp_stack):
+        client, plugin_a = mcp_stack
+        plugin_b = await self._connect_second_plugin("proj-b@0002")
+        try:
+
+            async def respond_a():
+                cmd = await plugin_a.recv_command()
+                assert cmd["command"] == "get_open_scenes"
+                await plugin_a.send_response(
+                    cmd["request_id"],
+                    {"scenes": ["res://from_a.tscn"], "current": "res://from_a.tscn"},
+                )
+
+            async def respond_b():
+                cmd = await plugin_b.recv_command()
+                assert cmd["command"] == "create_node"
+                assert cmd["params"] == {"type": "Node3D", "name": "FromB", "parent_path": ""}
+                await plugin_b.send_response(
+                    cmd["request_id"],
+                    {"path": "/Main/FromB", "type": "Node3D", "undoable": True},
+                )
+
+            responders = [asyncio.create_task(respond_a()), asyncio.create_task(respond_b())]
+            read_result, write_result = await asyncio.gather(
+                client.call_tool(
+                    "scene_manage",
+                    {"op": "get_roots", "params": {}, "session_id": "mcp-test"},
+                ),
+                client.call_tool(
+                    "node_create",
+                    {
+                        "type": "Node3D",
+                        "name": "FromB",
+                        "session_id": "proj-b@0002",
+                    },
+                ),
+            )
+            await asyncio.gather(*responders)
+
+            assert read_result.data["current"] == "res://from_a.tscn"
+            assert write_result.data["path"] == "/Main/FromB"
         finally:
             await plugin_b.close()
 

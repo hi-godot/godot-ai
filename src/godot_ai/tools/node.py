@@ -191,4 +191,8 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
             "add_to_group": node_handlers.node_add_to_group,
             "remove_from_group": node_handlers.node_remove_from_group,
         },
+        read_resource_forms={
+            "get_children": "godot://node/{path*}/children",
+            "get_groups": "godot://node/{path*}/groups",
+        },
     )

@@ -14,7 +14,7 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
 - **GDScript plugin**: `plugin/addons/godot_ai/` — canonical source; symlinked into `test_project/addons/` for testing
 - **Protocol**: JSON over WebSocket. Request/response with `request_id` correlation. Handshake on connect.
 - **Session model**: Multiple Godot editors can connect. Tools route through active session.
-- **Handler/Runtime layer**: Shared handlers in `src/godot_ai/handlers/` contain tool logic. They depend on a `Runtime` protocol (`runtime/interface.py`), implemented by `DirectRuntime` for the in-process server. Tools and resources are thin wrappers that create a runtime and delegate.
+- **Handler/Runtime layer**: Shared handlers in `src/godot_ai/handlers/` contain tool logic. They depend on `DirectRuntime`, the in-process runtime adapter. Tools and resources are thin wrappers that create a runtime and delegate.
 - **Readiness gating**: Write operations check session readiness (`ready`/`importing`/`playing`/`no_scene`) before executing. Plugin sends readiness in handshake and via `readiness_changed` events. Python `require_writable()` in `handlers/_readiness.py` gates all write handlers.
 
 ## Key conventions
@@ -31,6 +31,7 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
 - **`batch_execute` uses plugin command names, not MCP tool names**: The MCP tool `node_create` dispatches the plugin command `create_node`. Inside `batch_execute`'s `commands[].command` field, use the plugin name (`create_node`), not the MCP name (`node_create`). Inside a `<domain>_manage` op, the same rule applies — `node_manage(op="delete", params={...})` delegates to the plugin's `delete_node`, not `node_delete`. The Python handlers in `src/godot_ai/handlers/` are the authoritative map — each handler calls `runtime.send_command("<plugin_cmd>", ...)`. When `batch_execute` receives an unknown plugin command, the GDScript dispatcher returns `INVALID_PARAMS` with fuzzy `data.suggestions`. Inside a `<domain>_manage` rollup, op-name validation happens earlier — at the FastMCP/Pydantic schema boundary, since `op` is typed `Literal[...]` of the registered op names. A misspelling like `theme_manage(op="set_colour")` surfaces as a Pydantic `literal_error` whose message lists the valid alternatives ("Input should be 'create', 'set_color', …"), not a structured `data.suggestions` payload. The meta-tool's own `difflib`-based fallback in `dispatch_manage_op` only fires when the call somehow bypasses Pydantic (e.g. a future internal direct-dispatch caller).
 - **Session IDs**: format is `<project-slug>@<4hex>` (e.g. `godot-ai@a3f2`). The slug is derived from the project directory name so agents can recognize which editor they're targeting; the hex suffix disambiguates same-project twins. Server treats the ID as an opaque key.
 - **Per-call session routing**: every Godot-talking tool accepts an optional `session_id` parameter. Empty (the default) resolves to the global active session. When supplied, that single call targets that session — `require_writable` and every handler inside the call see the pinned session, not the active one. Use this when multiple AI clients share one MCP server. For `<domain>_manage` rollups, `session_id` is a sibling of `op` and `params` (top-level), *not* nested inside `params`. Resources (`godot://...`) still resolve via the active session.
+- **FastMCP middleware order is load-bearing**: `src/godot_ai/server.py` registers, in this order, `PreserveGodotCommandErrorData → StripClientWrapperKwargs → ParseStringifiedParams → HintOpTypoOnManage`. FastMCP composes the chain via `reversed(self.middleware)`, so first-added is **outermost** (sees response last) and last-added is **innermost** (sees response first). The four positions are reasoned out in the docstring above the `mcp.add_middleware(...)` calls in `server.py`; the order is locked by `tests/unit/test_server_middleware_order.py`. Adding new middleware: read that docstring, decide the position, update both the docstring and the test in lockstep.
 
 ## Worktrees
 
@@ -183,7 +184,7 @@ The harness creates a disposable project with a physical addon copy, stages a sy
 
 ### Python tests
 ```bash
-pytest -v                    # 686 unit + integration tests
+pytest -v                    # 903 unit + integration tests
 ```
 
 ### Godot-side tests

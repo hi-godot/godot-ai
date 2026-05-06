@@ -62,7 +62,7 @@ func test_dispatch_direct_accepts_error_key() -> void:
 	d.register("good_error", func(_p):
 		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "bad input"))
 	var result := d.dispatch_direct("good_error", {})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_eq(result.error.message, "bad input")
 
 
@@ -122,6 +122,28 @@ func test_malformed_result_writes_error_line_to_log_buffer() -> void:
 	assert_true(found, "malformed result should log an [error] line")
 
 
+func test_malformed_result_log_includes_non_empty_backtrace() -> void:
+	## Agent-readable logs should carry compact stack context. Runtime
+	## GDScript failures surface to the dispatcher as malformed results, so
+	## this pins the same guard path without making the test runner depend on
+	## engine-version-specific runtime-error continuation semantics.
+	var buf := McpLogBuffer.new()
+	var d := McpDispatcher.new(buf)
+	d.mcp_logging = true
+	d.register("crashy", func(_p): return {})
+	var result := d.dispatch_direct("crashy", {"path": "/Main"})
+	assert_is_error(result, McpErrorCodes.INTERNAL_ERROR)
+	assert_contains(result.error.message, "Backtrace:")
+
+	var lines := buf.get_recent(20)
+	var found := false
+	for line in lines:
+		if line.find("[error]") != -1 and line.find("backtrace=") != -1:
+			found = line.find("dispatcher.gd") != -1 or line.find("test_dispatcher.gd") != -1
+			break
+	assert_true(found, "malformed result log should include a non-empty compact backtrace")
+
+
 func test_malformed_result_truncates_long_args() -> void:
 	## Avoid bloating responses with huge param dumps — a few hundred chars
 	## is usually enough to identify the bad field.
@@ -134,3 +156,77 @@ func test_malformed_result_truncates_long_args() -> void:
 	var result := d.dispatch_direct("crashy", {"blob": big + big + big})
 	assert_is_error(result, McpErrorCodes.INTERNAL_ERROR)
 	assert_contains(result.error.message, "...")
+
+
+# ----- deferred timeout -----
+
+
+func test_deferred_response_times_out_and_cleans_pending_entry() -> void:
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	d.deferred_timeout_overrides_ms["never_replies"] = 1
+	d.register("never_replies", func(_p): return McpDispatcher.DEFERRED_RESPONSE)
+	d.enqueue({
+		"request_id": "req-timeout",
+		"command": "never_replies",
+		"params": {},
+	})
+
+	var first := d.tick(100.0)
+	assert_eq(first.size(), 0, "initial deferred dispatch must not auto-reply")
+	assert_eq(d.pending_deferred_count(), 1)
+
+	var started := Time.get_ticks_msec()
+	var responses: Array[Dictionary] = []
+	while responses.is_empty() and Time.get_ticks_msec() - started < 100:
+		responses = d.tick(100.0)
+
+	assert_eq(responses.size(), 1, "deferred timeout should produce one local error")
+	assert_eq(responses[0].request_id, "req-timeout")
+	assert_is_error(responses[0], McpErrorCodes.DEFERRED_TIMEOUT)
+	assert_eq(d.pending_deferred_count(), 0, "timeout should clean the pending entry")
+
+
+func test_deferred_completion_removes_pending_entry() -> void:
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	d.register("later", func(_p): return McpDispatcher.DEFERRED_RESPONSE)
+	d.enqueue({
+		"request_id": "req-ok",
+		"command": "later",
+		"params": {},
+	})
+
+	d.tick(100.0)
+	assert_eq(d.pending_deferred_count(), 1)
+	assert_true(d.complete_deferred_response("req-ok"))
+	assert_eq(d.pending_deferred_count(), 0)
+	assert_false(
+		d.complete_deferred_response("req-ok"),
+		"late duplicate deferred responses should be rejected",
+	)
+
+
+# ----- deferred response path -----
+
+func test_tick_suppresses_deferred_response_and_threads_request_id() -> void:
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	var seen := {}
+	d.register("deferred_command", func(p):
+		seen["request_id"] = p.get("_request_id", "")
+		return McpDispatcher.DEFERRED_RESPONSE
+	)
+
+	var params := {"value": 42}
+	d.enqueue({
+		"request_id": "req-deferred-1",
+		"command": "deferred_command",
+		"params": params,
+	})
+
+	var responses := d.tick()
+	assert_eq(responses.size(), 0, "Deferred handlers must not get an immediate auto-response")
+	assert_eq(seen.get("request_id", ""), "req-deferred-1")
+	assert_false(params.has("_request_id"), "Dispatcher internals must not mutate queued params")
+	assert_eq(d.tick().size(), 0, "Deferred command should be drained from the queue")

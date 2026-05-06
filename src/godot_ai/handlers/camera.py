@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from godot_ai.handlers._readiness import require_writable
-from godot_ai.runtime.interface import Runtime
+from godot_ai.runtime.direct import DirectRuntime
 
 
 async def camera_create(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     parent_path: str,
     name: str = "Camera",
     type: str = "2d",
@@ -28,7 +28,7 @@ async def camera_create(
 
 
 async def camera_configure(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     camera_path: str,
     properties: dict[str, Any],
 ) -> dict:
@@ -40,7 +40,7 @@ async def camera_configure(
 
 
 async def camera_set_limits_2d(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     camera_path: str,
     left: int | None = None,
     right: int | None = None,
@@ -64,7 +64,7 @@ async def camera_set_limits_2d(
 
 
 async def camera_set_damping_2d(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     camera_path: str,
     position_speed: float | None = None,
     rotation_speed: float | None = None,
@@ -88,7 +88,7 @@ async def camera_set_damping_2d(
 
 
 async def camera_follow_2d(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     camera_path: str,
     target_path: str,
     smoothing_speed: float = 5.0,
@@ -106,16 +106,16 @@ async def camera_follow_2d(
     )
 
 
-async def camera_get(runtime: Runtime, camera_path: str = "") -> dict:
+async def camera_get(runtime: DirectRuntime, camera_path: str = "") -> dict:
     return await runtime.send_command("camera_get", {"camera_path": camera_path})
 
 
-async def camera_list(runtime: Runtime) -> dict:
+async def camera_list(runtime: DirectRuntime) -> dict:
     return await runtime.send_command("camera_list", {})
 
 
 async def camera_apply_preset(
-    runtime: Runtime,
+    runtime: DirectRuntime,
     parent_path: str,
     name: str,
     preset: str,

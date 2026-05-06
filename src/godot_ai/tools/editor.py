@@ -189,4 +189,14 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
             "quit": editor_handlers.editor_quit,
             "logs_clear": editor_handlers.logs_clear,
         },
+        read_resource_forms={
+            "state": "godot://editor/state",
+            "selection_get": "godot://selection/current",
+            "monitors_get": "godot://performance",
+            ## quit is destructive but skips require_writable so a stuck
+            ## editor can still be quit; logs_clear truncates logs. Neither
+            ## has a resource counterpart.
+            "quit": None,
+            "logs_clear": None,
+        },
     )

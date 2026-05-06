@@ -1,6 +1,6 @@
 # Godot AI — Working Plan
 
-*Updated 2026-04-29 (audio_*, ui_set_text, animation_preset_*, resource_create, control_draw_recipe shipped; tool surface collapsed to ~39 via `<domain>_manage` rollups)*
+*Updated 2026-05-06 (audit-v1 PRs #298–#315 + audit-v2 PRs #369–#390 landed on `beta`. Audit-v1: scene-path ancestry guard, update/config data-loss safeguards, lifecycle reliability, characterization tests, plugin.gd extraction, state-model cleanup, UpdateManager extraction, Runtime Protocol deletion, narrowed meta-tool JSON coercion, self-update preload-alias hardening, locked FastMCP middleware order. Audit-v2: origin allowlist (DNS-rebinding guard), path-traversal guards on `script_*` / `filesystem_*` writes, errno.EADDRINUSE portability, `SessionRegistry` RLock removal, Pydantic-validated WS event payloads, sole-survivor auto-failover, 30s filesystem_changed watchdog during update reload, FAILED_MIXED self-update visibility via `mixed_state`, 32/tick packet-drain cap, error-code vocabulary enrichment (NODE_NOT_FOUND / PROPERTY_NOT_ON_CLASS / VALUE_OUT_OF_RANGE / MISSING_REQUIRED_PARAM cut INVALID_PARAMS sites 471 → 97), resolve-or-error helper extraction, resource-form lint for meta-tool reads, LogViewer + PortPickerPanel extraction from `mcp_dock.gd`. Smoke pass on `72b35d7`: 47 GDScript suites + 903 Python tests green.)*
 
 This is the current working plan for Godot AI. It focuses on active and upcoming work only.
 
@@ -75,7 +75,7 @@ Adjacent reference docs:
 - [x] batch execution is shipped with a clear contract
 - [x] multi-instance routing works in practice
 - [x] `script.patch` decision is made (shipped: anchor-based replace)
-- [x] test coverage and smoke coverage increase where the new runtime loop needs it (686 Python + 991 GDScript = 1677 total)
+- [x] test coverage and smoke coverage increase where the new runtime loop needs it (903 Python + 1225 GDScript across 47 suites)
 
 ---
 

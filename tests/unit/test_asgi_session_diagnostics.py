@@ -6,6 +6,7 @@ import pytest
 
 from godot_ai.asgi import STALE_MCP_SESSION_MESSAGE, StaleMcpSessionDiagnosticMiddleware
 from godot_ai.server import create_server
+from godot_ai.transport.origin_guard import LocalhostOnlyHTTPMiddleware
 
 
 async def _single_http_request(app, *, headers=None):
@@ -406,7 +407,11 @@ def test_create_server_wraps_streamable_http_app_with_stale_session_diagnostic()
 
     app = server.http_app(transport="streamable-http")
 
-    assert isinstance(app, StaleMcpSessionDiagnosticMiddleware)
+    ## Outermost wrap is the loopback origin guard (audit-v2 #1, #345);
+    ## ``StaleMcpSessionDiagnosticMiddleware`` sits one layer in for
+    ## streamable-http transports.
+    assert isinstance(app, LocalhostOnlyHTTPMiddleware)
+    assert isinstance(app.app, StaleMcpSessionDiagnosticMiddleware)
 
 
 def test_create_server_does_not_wrap_sse_app_with_stale_session_diagnostic():
@@ -414,7 +419,11 @@ def test_create_server_does_not_wrap_sse_app_with_stale_session_diagnostic():
 
     app = server.http_app(transport="sse")
 
-    assert not isinstance(app, StaleMcpSessionDiagnosticMiddleware)
+    ## ``sse`` skips ``StaleMcpSessionDiagnosticMiddleware`` (the SDK's
+    ## stale-session error is streamable-http only) but the loopback
+    ## origin guard still wraps every HTTP transport uniformly.
+    assert isinstance(app, LocalhostOnlyHTTPMiddleware)
+    assert not isinstance(app.app, StaleMcpSessionDiagnosticMiddleware)
 
 
 def test_stale_mcp_session_diagnostic_preserves_fastmcp_app_state():
@@ -422,4 +431,7 @@ def test_stale_mcp_session_diagnostic_preserves_fastmcp_app_state():
 
     app = server.http_app(transport="streamable-http")
 
-    assert app.state is app.app.state
+    ## Both middleware layers expose ``state`` via ``__getattr__``
+    ## passthrough, so attribute access traverses LocalhostOnlyHTTPMiddleware
+    ## -> StaleMcpSessionDiagnosticMiddleware -> FastMCP app.
+    assert app.state is app.app.app.state

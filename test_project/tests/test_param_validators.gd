@@ -24,26 +24,26 @@ func test_require_string_accepts_string_name() -> void:
 
 func test_require_string_rejects_array() -> void:
 	var err: Dictionary = McpParamValidators.require_string("group", ["a", "b"])
-	assert_is_error(err, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(err)
 	assert_contains(err.error.message, "group")
 	assert_contains(err.error.message, "Array")
 
 
 func test_require_string_rejects_dict() -> void:
 	var err: Dictionary = McpParamValidators.require_string("group", {"key": "val"})
-	assert_is_error(err, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(err)
 	assert_contains(err.error.message, "Dictionary")
 
 
 func test_require_string_rejects_int() -> void:
 	var err: Dictionary = McpParamValidators.require_string("group", 42)
-	assert_is_error(err, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(err)
 	assert_contains(err.error.message, "int")
 
 
 func test_require_string_rejects_null() -> void:
 	var err: Dictionary = McpParamValidators.require_string("group", null)
-	assert_is_error(err, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(err)
 	assert_contains(err.error.message, "Nil")
 
 
@@ -56,13 +56,13 @@ func test_require_int_accepts_int() -> void:
 
 func test_require_int_rejects_float() -> void:
 	var err: Dictionary = McpParamValidators.require_int("count", 1.5)
-	assert_is_error(err, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(err)
 	assert_contains(err.error.message, "float")
 
 
 func test_require_int_rejects_string() -> void:
 	var err: Dictionary = McpParamValidators.require_int("count", "7")
-	assert_is_error(err, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(err)
 	assert_contains(err.error.message, "String")
 
 
@@ -80,5 +80,5 @@ func test_require_bool_rejects_int() -> void:
 	## booleans as booleans — agents passing 1 for a bool slot are confused
 	## and deserve an explicit error rather than silent coercion.
 	var err: Dictionary = McpParamValidators.require_bool("flag", 1)
-	assert_is_error(err, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(err)
 	assert_contains(err.error.message, "int")

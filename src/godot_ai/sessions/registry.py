@@ -74,38 +74,67 @@ class Session:
 
 
 class SessionRegistry:
-    """Tracks all connected Godot editor sessions."""
+    """Tracks all connected Godot editor sessions.
+
+    Callers run on the single asyncio event loop driving the WS transport,
+    so state is mutated without locking.
+    """
 
     def __init__(self):
         self._sessions: dict[str, Session] = {}
         self._active_session_id: str | None = None
-        self._session_waiters: list[tuple[asyncio.Future, str | None]] = []
+        self._session_waiters: list[
+            tuple[asyncio.Future[Session], str | None, frozenset[str], str | None]
+        ] = []
 
     def register(self, session: Session) -> None:
+        to_notify: list[asyncio.Future[Session]] = []
         self._sessions[session.session_id] = session
         if self._active_session_id is None:
             self._active_session_id = session.session_id
-        # Notify any waiters blocked on wait_for_session()
         remaining = []
-        for future, exclude_id in self._session_waiters:
+        for future, exclude_id, known_ids, project_path in self._session_waiters:
             if future.done():
                 continue
-            if exclude_id is not None and session.session_id == exclude_id:
-                remaining.append((future, exclude_id))
+            if not self._matches_wait_criteria(
+                session,
+                exclude_id=exclude_id,
+                known_ids=known_ids,
+                project_path=project_path,
+            ):
+                remaining.append((future, exclude_id, known_ids, project_path))
                 continue
-            future.set_result(session)
+            to_notify.append(future)
         self._session_waiters = remaining
 
+        for future in to_notify:
+            if not future.done():
+                future.set_result(session)
+
     def unregister(self, session_id: str) -> None:
-        ## Do NOT silently promote another session to active when the active
-        ## one disconnects. Promoting by insertion order means a crash or
-        ## editor_quit on the user's working editor would route subsequent
-        ## commands to whichever editor happened to connect first — the
-        ## "routing by registration order" bug. Clear active instead; the
-        ## next register() or an explicit session_activate will set it.
+        ## Active-session promotion policy on disconnect:
+        ## - n>=2 survivors: do NOT auto-promote — picking by insertion order
+        ##   would route the user's commands to whichever editor happened to
+        ##   connect first ("routing by registration order" bug). Caller must
+        ##   session_activate explicitly.
+        ## - n=1 survivor (audit-v2 #8): the only safe single-editor path —
+        ##   promote it with a warning so an agent on the solo-user setup
+        ##   doesn't see opaque "no active session" errors after an editor
+        ##   crash. Ambiguity-by-order can't apply with one survivor.
+        ## - n=0: keep cleared; nothing to promote.
         self._sessions.pop(session_id, None)
-        if self._active_session_id == session_id:
-            self._active_session_id = None
+        if self._active_session_id != session_id:
+            return
+        self._active_session_id = None
+        if len(self._sessions) == 1:
+            survivor_id = next(iter(self._sessions))
+            self._active_session_id = survivor_id
+            logger.warning(
+                "Active session %s disconnected; auto-promoting sole survivor %s",
+                session_id[:8],
+                survivor_id[:8],
+            )
+        else:
             logger.info(
                 "Active session %s disconnected; no active session until next register/activate",
                 session_id[:8],
@@ -132,14 +161,30 @@ class SessionRegistry:
         return self._active_session_id
 
     async def wait_for_session(
-        self, exclude_id: str | None = None, timeout: float = 15.0
+        self,
+        exclude_id: str | None = None,
+        timeout: float = 15.0,
+        *,
+        known_ids: set[str] | frozenset[str] | None = None,
+        project_path: str | None = None,
     ) -> Session:
         """Block until a new session registers (optionally excluding one ID).
 
+        If ``known_ids`` is provided, sessions registered after that snapshot but
+        before this waiter is installed are returned synchronously without yielding.
         Raises TimeoutError if no matching session appears within timeout.
         """
-        future: asyncio.Future[Session] = asyncio.get_running_loop().create_future()
-        entry = (future, exclude_id)
+        loop = asyncio.get_running_loop()
+        known_ids_frozen = frozenset(self._sessions) if known_ids is None else frozenset(known_ids)
+        existing = self._find_matching_session(
+            exclude_id=exclude_id,
+            known_ids=known_ids_frozen,
+            project_path=project_path,
+        )
+        if existing is not None:
+            return existing
+        future: asyncio.Future[Session] = loop.create_future()
+        entry = (future, exclude_id, known_ids_frozen, project_path)
         self._session_waiters.append(entry)
         try:
             return await asyncio.wait_for(future, timeout=timeout)
@@ -149,6 +194,39 @@ class SessionRegistry:
             self._session_waiters = [w for w in self._session_waiters if w is not entry]
             if not future.done():
                 future.cancel()
+
+    def _find_matching_session(
+        self,
+        *,
+        exclude_id: str | None,
+        known_ids: frozenset[str],
+        project_path: str | None,
+    ) -> Session | None:
+        for session in self._sessions.values():
+            if self._matches_wait_criteria(
+                session,
+                exclude_id=exclude_id,
+                known_ids=known_ids,
+                project_path=project_path,
+            ):
+                return session
+        return None
+
+    @staticmethod
+    def _matches_wait_criteria(
+        session: Session,
+        *,
+        exclude_id: str | None,
+        known_ids: frozenset[str],
+        project_path: str | None,
+    ) -> bool:
+        if exclude_id is not None and session.session_id == exclude_id:
+            return False
+        if session.session_id in known_ids:
+            return False
+        if project_path is not None and session.project_path != project_path:
+            return False
+        return True
 
     def __len__(self) -> int:
         return len(self._sessions)

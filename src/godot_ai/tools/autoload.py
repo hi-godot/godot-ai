@@ -32,4 +32,7 @@ def register_autoload_tools(mcp: FastMCP) -> None:
             "add": autoload_handlers.autoload_add,
             "remove": autoload_handlers.autoload_remove,
         },
+        read_resource_forms={
+            "list": None,  ## No aggregate autoload resource yet.
+        },
     )

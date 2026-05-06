@@ -44,12 +44,12 @@ func create_gradient_texture(params: Dictionary) -> Dictionary:
 
 	if stops.size() < 2:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"gradient_texture_create requires at least 2 stops, got %d" % stops.size()
 		)
 	if not _FILL_MODES.has(fill):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid fill '%s'. Valid: %s" % [fill, ", ".join(_FILL_MODES.keys())]
 		)
 
@@ -64,7 +64,7 @@ func create_gradient_texture(params: Dictionary) -> Dictionary:
 		var stop = stops[i]
 		if not stop is Dictionary:
 			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+				McpErrorCodes.WRONG_TYPE,
 				"stops[%d] must be a dict with 'offset' and 'color' keys" % i
 			)
 		if not stop.has("offset") or not stop.has("color"):
@@ -109,7 +109,7 @@ func create_noise_texture(params: Dictionary) -> Dictionary:
 
 	if not _NOISE_TYPES.has(noise_type):
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid noise_type '%s'. Valid: %s" % [noise_type, ", ".join(_NOISE_TYPES.keys())]
 		)
 
@@ -152,12 +152,11 @@ func _finalize(tex: Resource, sub_resources: Array, params: Dictionary, label: S
 
 
 func _assign_texture(tex: Resource, sub_resources: Array, node_path: String, property: String, label: String, extra: Dictionary) -> Dictionary:
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-	var node := McpScenePath.resolve(node_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	if _resolved.has("error"):
+		return _resolved
+	var node: Node = _resolved.node
+	var scene_root: Node = _resolved.scene_root
 
 	var found := false
 	var prop_type: int = TYPE_NIL
@@ -168,12 +167,12 @@ func _assign_texture(tex: Resource, sub_resources: Array, node_path: String, pro
 			break
 	if not found:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Property '%s' not found on %s" % [property, node.get_class()]
 		)
 	if prop_type != TYPE_NIL and prop_type != TYPE_OBJECT:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Property '%s' on %s is not an Object slot" % [property, node.get_class()]
 		)
 

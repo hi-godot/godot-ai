@@ -283,17 +283,17 @@ func test_undo_preserves_prior_meta() -> void:
 
 func test_missing_path_errors() -> void:
 	var result := _handler.control_draw_recipe({"ops": []})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_non_array_ops_errors() -> void:
 	var result := _handler.control_draw_recipe({"path": "/Main", "ops": "nope"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.WRONG_TYPE)
 
 
 func test_node_not_found_errors() -> void:
 	var result := _handler.control_draw_recipe({"path": "/Bogus/Path", "ops": []})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
 
 
 func test_non_control_rejected() -> void:
@@ -308,7 +308,7 @@ func test_non_control_rejected() -> void:
 	var path := "/" + scene_root.name + "/" + n.name
 
 	var result := _handler.control_draw_recipe({"path": path, "ops": []})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "Control")
 
 	scene_root.remove_child(n)
@@ -340,7 +340,7 @@ func test_unknown_draw_type_errors() -> void:
 	var result := _handler.control_draw_recipe(
 		{"path": path, "ops": [{"draw": "triangle", "color": "red"}]}
 	)
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "unknown draw type")
 	_remove_control(path)
 
@@ -362,7 +362,7 @@ func test_existing_user_script_rejected_when_clear_existing_false() -> void:
 	var r1 := _handler.control_draw_recipe(
 		{"path": path, "ops": [], "clear_existing": false}
 	)
-	assert_is_error(r1, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(r1)
 	assert_true(node.get_script() == user_script, "user script preserved on error")
 
 	var r2 := _handler.control_draw_recipe(

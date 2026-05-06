@@ -7,11 +7,16 @@ extends RefCounted
 
 
 ## Return a clean path relative to the scene root (e.g. /Main/Camera3D).
+## Returns "" when `node` is not the scene root or a descendant of it —
+## without the ancestry guard, get_path_to() returns an empty NodePath that
+## concatenates into a plausible-looking but invalid "/Main/".
 static func from_node(node: Node, scene_root: Node) -> String:
 	if scene_root == null or node == null:
 		return ""
 	if node == scene_root:
 		return "/" + scene_root.name
+	if not scene_root.is_ancestor_of(node):
+		return ""
 	var relative := scene_root.get_path_to(node)
 	return "/" + scene_root.name + "/" + str(relative)
 

@@ -1450,9 +1450,25 @@ async def test_reload_plugin_pins_target_session_when_multiple_connected():
     assert runtime.active_session_id == "session-b-new"
 
 
-def test_unregister_active_session_clears_active_not_promotes_first():
-    """Disconnect of the active session must not silently promote another
-    session — that's the 'first-registered wins' routing footgun."""
+def test_unregister_active_with_multiple_survivors_clears_active():
+    """Disconnect of the active session with ≥2 survivors must not silently
+    promote another — that's the 'first-registered wins' routing footgun."""
+    registry = SessionRegistry()
+    registry.register(_make_session("session-a"))
+    registry.register(_make_session("session-b"))
+    registry.register(_make_session("session-c"))
+    registry.set_active("session-b")
+
+    registry.unregister("session-b")
+
+    assert registry.active_session_id is None
+    assert registry.get_active() is None
+
+
+def test_unregister_active_with_one_survivor_promotes_it():
+    """audit-v2 #8: at n=1-survivor the order ambiguity disappears, so
+    promote the survivor — solo-user agents would otherwise see opaque
+    'no active session' errors after a crash."""
     registry = SessionRegistry()
     registry.register(_make_session("session-a"))
     registry.register(_make_session("session-b"))
@@ -1460,8 +1476,8 @@ def test_unregister_active_session_clears_active_not_promotes_first():
 
     registry.unregister("session-b")
 
-    assert registry.active_session_id is None
-    assert registry.get_active() is None
+    assert registry.active_session_id == "session-a"
+    assert registry.get_active().session_id == "session-a"
 
 
 def test_unregister_non_active_session_leaves_active_unchanged():
@@ -1832,6 +1848,14 @@ async def test_run_tests_handler_with_no_params():
     result = await testing_handlers.test_run(runtime)
     assert result["passed"] == 5
     assert client.calls[-1]["params"] == {}
+
+
+async def test_run_tests_handler_uses_full_suite_timeout():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await testing_handlers.test_run(runtime)
+    assert client.calls[-1]["timeout"] == testing_handlers.TEST_RUN_TIMEOUT_SEC
+    assert client.calls[-1]["timeout"] > 30.0
 
 
 async def test_run_tests_handler_with_suite_and_test_name():
@@ -2465,6 +2489,30 @@ async def test_environment_create_save_handler():
     }
 
 
+async def test_environment_create_forwards_rich_sky_dict():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    sky = {
+        "sky_material": "procedural",
+        "sky_top_color": "#0f172a",
+        "sky_horizon_color": "#334155",
+    }
+    result = await environment_handlers.environment_create(
+        runtime,
+        path="/Main/World",
+        preset="night",
+        properties={"ambient_light_energy": 0.35},
+        sky=sky,
+    )
+    assert result["undoable"] is True
+    assert client.calls[-1]["params"] == {
+        "preset": "night",
+        "path": "/Main/World",
+        "properties": {"ambient_light_energy": 0.35},
+        "sky": sky,
+    }
+
+
 async def test_environment_create_requires_writable():
     from godot_ai.godot_client.client import GodotCommandError
     from godot_ai.sessions.registry import Session
@@ -2861,6 +2909,22 @@ async def test_editor_screenshot_handler_passes_source():
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     await editor_handlers.editor_screenshot(runtime, source="game", include_image=False)
     assert client.calls[-1]["params"]["source"] == "game"
+
+
+async def test_editor_screenshot_timeout_exceeds_plugin_deferred_timeout():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await editor_handlers.editor_screenshot(runtime, source="game", include_image=False)
+    assert client.calls[-1]["timeout"] == editor_handlers.GAME_SCREENSHOT_TIMEOUT_SEC
+    assert client.calls[-1]["timeout"] > 30.0
+
+
+async def test_editor_screenshot_viewport_uses_common_case_timeout():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await editor_handlers.editor_screenshot(runtime, source="viewport", include_image=False)
+    assert client.calls[-1]["timeout"] == editor_handlers.SCREENSHOT_TIMEOUT_SEC
+    assert client.calls[-1]["timeout"] == 15.0
 
 
 async def test_editor_screenshot_handler_passes_max_resolution():

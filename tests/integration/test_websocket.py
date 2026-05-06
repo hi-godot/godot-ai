@@ -170,6 +170,45 @@ class TestCommandRoundTrip:
         assert r2 == {"cmd": "second"}
         await plugin.close()
 
+    async def test_concurrent_commands_route_to_explicit_sessions(self, harness):
+        """A read and a write in flight at the same time stay on their target sessions."""
+        plugin_a = await harness.connect_plugin(session_id="route-a")
+        plugin_b = await harness.connect_plugin(session_id="route-b")
+        client = GodotClient(harness.server, harness.registry)
+
+        async def respond_a():
+            cmd = await plugin_a.recv_command()
+            assert cmd["command"] == "get_open_scenes"
+            await plugin_a.send_response(
+                cmd["request_id"],
+                {"scenes": ["res://from_a.tscn"], "current": "res://from_a.tscn"},
+            )
+
+        async def respond_b():
+            cmd = await plugin_b.recv_command()
+            assert cmd["command"] == "create_node"
+            assert cmd["params"] == {"type": "Node3D", "name": "FromB"}
+            await plugin_b.send_response(
+                cmd["request_id"],
+                {"path": "/Main/FromB", "type": "Node3D", "undoable": True},
+            )
+
+        handler_tasks = [asyncio.create_task(respond_a()), asyncio.create_task(respond_b())]
+        read_result, write_result = await asyncio.gather(
+            client.send("get_open_scenes", session_id="route-a"),
+            client.send(
+                "create_node",
+                params={"type": "Node3D", "name": "FromB"},
+                session_id="route-b",
+            ),
+        )
+        await asyncio.gather(*handler_tasks)
+
+        assert read_result["current"] == "res://from_a.tscn"
+        assert write_result["path"] == "/Main/FromB"
+        await plugin_a.close()
+        await plugin_b.close()
+
 
 # ---------------------------------------------------------------------------
 # Error handling
@@ -237,6 +276,49 @@ class TestErrors:
 
         await plugin.close()
 
+    async def test_deferred_timeout_error_reaches_client(self, harness):
+        plugin = await harness.connect_plugin()
+        client = GodotClient(harness.server, harness.registry)
+
+        async def mock_handler():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "deferred_never_replies"
+            await asyncio.sleep(0.05)
+            await plugin.send_error(
+                cmd["request_id"],
+                "DEFERRED_TIMEOUT",
+                "Deferred response for 'deferred_never_replies' timed out after 50ms",
+                data={
+                    "command": "deferred_never_replies",
+                    "timeout_ms": 50,
+                },
+            )
+
+        handler_task = asyncio.create_task(mock_handler())
+        with pytest.raises(GodotCommandError) as exc_info:
+            await client.send("deferred_never_replies", timeout=1.0)
+        await handler_task
+
+        assert exc_info.value.code == "DEFERRED_TIMEOUT"
+        assert exc_info.value.data["command"] == "deferred_never_replies"
+        await plugin.close()
+
+    async def test_timeout_removes_pending_request_and_ignores_late_reply(self, harness):
+        plugin = await harness.connect_plugin()
+        client = GodotClient(harness.server, harness.registry)
+
+        with pytest.raises(TimeoutError):
+            await client.send("slow_command", timeout=0.05)
+
+        assert harness.server._pending == {}
+
+        cmd = await plugin.recv_command()
+        await plugin.send_response(cmd["request_id"], {"arrived": "late"})
+        await asyncio.sleep(0.05)
+
+        assert harness.server._pending == {}
+        await plugin.close()
+
 
 # ---------------------------------------------------------------------------
 # Events
@@ -278,6 +360,91 @@ class TestEvents:
 
 
 # ---------------------------------------------------------------------------
+# Event payload validation (audit-v2 #7 / issue #351)
+# ---------------------------------------------------------------------------
+
+
+class TestEventValidation:
+    ## Pre-fix, _handle_event blindly assigned event_data.get(...) to typed
+    ## Session fields, so a malformed plugin event (or hijacked WS) shipped
+    ## non-string values verbatim to MCP clients via Session.to_dict(). Now
+    ## the payloads are Pydantic-validated and dropped on ValidationError.
+
+    async def test_scene_changed_with_non_string_payload_is_dropped(self, harness, caplog):
+        plugin = await harness.connect_plugin(session_id="evt-bad-scene")
+        session = harness.registry.get("evt-bad-scene")
+        baseline_scene = session.current_scene
+
+        with caplog.at_level("WARNING", logger="godot_ai.transport.websocket"):
+            await plugin.send_event("scene_changed", {"current_scene": 12345})
+            await asyncio.sleep(0.05)
+
+        assert session.current_scene == baseline_scene, (
+            "current_scene must not be overwritten with a non-string"
+        )
+        assert any("Dropping malformed scene_changed" in m for m in caplog.messages), (
+            "expected warning log naming the dropped event"
+        )
+        await plugin.close()
+
+    async def test_play_state_changed_with_non_string_payload_is_dropped(self, harness, caplog):
+        plugin = await harness.connect_plugin(session_id="evt-bad-play")
+        session = harness.registry.get("evt-bad-play")
+        baseline_play = session.play_state
+
+        with caplog.at_level("WARNING", logger="godot_ai.transport.websocket"):
+            await plugin.send_event("play_state_changed", {"play_state": ["running"]})
+            await asyncio.sleep(0.05)
+
+        assert session.play_state == baseline_play
+        assert any("Dropping malformed play_state_changed" in m for m in caplog.messages)
+        await plugin.close()
+
+    async def test_readiness_changed_with_non_string_payload_is_dropped(self, harness, caplog):
+        plugin = await harness.connect_plugin(session_id="evt-bad-ready")
+        session = harness.registry.get("evt-bad-ready")
+        baseline_ready = session.readiness
+
+        with caplog.at_level("WARNING", logger="godot_ai.transport.websocket"):
+            await plugin.send_event("readiness_changed", {"readiness": {"nested": "obj"}})
+            await asyncio.sleep(0.05)
+
+        assert session.readiness == baseline_ready
+        assert any("Dropping malformed readiness_changed" in m for m in caplog.messages)
+        await plugin.close()
+
+    async def test_unknown_event_type_is_silently_ignored(self, harness):
+        ## Forward-compat: a future plugin might emit an event type the
+        ## current server doesn't know yet. The handler should ignore it
+        ## without raising or mutating session state.
+        plugin = await harness.connect_plugin(session_id="evt-unknown")
+        session = harness.registry.get("evt-unknown")
+        before = (session.current_scene, session.play_state, session.readiness)
+
+        await plugin.send_event("future_event", {"foo": "bar"})
+        await asyncio.sleep(0.05)
+
+        assert (session.current_scene, session.play_state, session.readiness) == before
+        await plugin.close()
+
+    async def test_valid_event_after_malformed_one_still_applies(self, harness, caplog):
+        ## Regression guard: dropping a malformed payload must not poison
+        ## the connection — the next valid event for the same session
+        ## should still update the typed field.
+        plugin = await harness.connect_plugin(session_id="evt-recover")
+        session = harness.registry.get("evt-recover")
+
+        with caplog.at_level("WARNING", logger="godot_ai.transport.websocket"):
+            await plugin.send_event("readiness_changed", {"readiness": 42})
+            await asyncio.sleep(0.05)
+
+        await plugin.send_event("readiness_changed", {"readiness": "importing"})
+        await asyncio.sleep(0.05)
+        assert session.readiness == "importing"
+        await plugin.close()
+
+
+# ---------------------------------------------------------------------------
 # Multiple sessions
 # ---------------------------------------------------------------------------
 
@@ -313,6 +480,317 @@ class TestMultipleSessions:
         assert harness.registry.get("keep-a") is None
         assert harness.registry.get("keep-b") is not None
         await plugin_b.close()
+
+    async def test_active_disconnect_with_one_survivor_auto_promotes(self, harness):
+        ## audit-v2 #8: solo-user case. Two editors are connected with A
+        ## active; A's editor crashes, leaving B as sole survivor. Pre-fix,
+        ## every subsequent tool call would fail with "no active session"
+        ## until the agent guessed to call session_activate. Now B is
+        ## auto-promoted on A's disconnect.
+        plugin_a = await harness.connect_plugin(session_id="failover-a")
+        plugin_b = await harness.connect_plugin(session_id="failover-b")
+        ## A connected first → A is active. Pin A explicitly so the test's
+        ## preconditions don't depend on registration order
+        ## (registration-order semantics are tested elsewhere).
+        harness.registry.set_active("failover-a")
+        assert harness.registry.active_session_id == "failover-a"
+
+        await plugin_a.close()
+        for _ in range(20):
+            if harness.registry.get("failover-a") is None:
+                break
+            await asyncio.sleep(0.05)
+        assert harness.registry.get("failover-a") is None
+
+        ## B is the only survivor — must be auto-promoted.
+        assert harness.registry.active_session_id == "failover-b"
+        assert harness.registry.get_active().session_id == "failover-b"
+        await plugin_b.close()
+
+    async def test_disconnect_reconnect_handshake_then_first_command(self, harness):
+        plugin_old = await harness.connect_plugin(session_id="reconnect-old")
+        assert harness.registry.active_session_id == "reconnect-old"
+
+        await plugin_old.close()
+        for _ in range(20):
+            if harness.registry.get("reconnect-old") is None:
+                break
+            await asyncio.sleep(0.05)
+        assert harness.registry.get("reconnect-old") is None
+        assert harness.registry.active_session_id is None
+
+        plugin_new = await harness.connect_plugin(session_id="reconnect-new")
+        assert harness.registry.active_session_id == "reconnect-new"
+        client = GodotClient(harness.server, harness.registry)
+
+        async def respond_new():
+            cmd = await plugin_new.recv_command()
+            assert cmd["command"] == "get_editor_state"
+            await plugin_new.send_response(
+                cmd["request_id"],
+                {"project_name": "AfterReconnect", "godot_version": "4.4.1"},
+            )
+
+        handler_task = asyncio.create_task(respond_new())
+        result = await client.send("get_editor_state")
+        await handler_task
+
+        assert result["project_name"] == "AfterReconnect"
+        await plugin_new.close()
+
+
+# ---------------------------------------------------------------------------
+# DNS-rebinding guard — audit-v2 #1 (#345)
+# ---------------------------------------------------------------------------
+
+
+class TestDnsRebindingGuard:
+    """The WS server's loopback Host/Origin guard runs before the upgrade.
+
+    Browsers attacking via DNS rebinding send a non-loopback Host (the
+    rebound name they typed in the URL bar) and a non-loopback Origin
+    (the attacker's page). Native plugin clients send a loopback Host
+    and no Origin, so they pass through.
+    """
+
+    async def test_loopback_host_no_origin_succeeds(self, harness):
+        # The default native shape: ``websockets`` client sends
+        # ``Host: 127.0.0.1:<port>`` and no ``Origin``.
+        plugin = await harness.connect_plugin(session_id="loopback-default")
+        assert harness.registry.get("loopback-default") is not None
+        await plugin.close()
+
+    async def test_non_loopback_host_rejected_at_upgrade(self, harness):
+        ## A DNS-rebinding browser request lands on 127.0.0.1 but carries
+        ## ``Host: attacker.example.com:<port>``. The guard fires before
+        ## the upgrade — InvalidStatus surfaces the synthesized 403.
+        with pytest.raises(websockets.exceptions.InvalidStatus) as exc_info:
+            await websockets.connect(
+                f"ws://127.0.0.1:{harness.port}",
+                additional_headers={"Host": "attacker.example.com"},
+            )
+        assert exc_info.value.response.status_code == 403
+
+    async def test_browser_origin_rejected_at_upgrade(self, harness):
+        ## A loopback Host is not enough — a browser-driven Origin gives
+        ## the rebinding away even when the Host header looks fine.
+        with pytest.raises(websockets.exceptions.InvalidStatus) as exc_info:
+            await websockets.connect(
+                f"ws://127.0.0.1:{harness.port}",
+                origin="https://attacker.example.com",
+            )
+        assert exc_info.value.response.status_code == 403
+
+    async def test_loopback_origin_accepted(self, harness):
+        ## A localhost-shaped explicit Origin is permitted (use case:
+        ## an MCP-aware tool fronting our server from a loopback browser
+        ## context, e.g. a local docs viewer).
+        ws = await websockets.connect(
+            f"ws://127.0.0.1:{harness.port}",
+            origin="http://localhost:9500",
+        )
+        handshake = {
+            "type": "handshake",
+            "session_id": "origin-loopback",
+            "godot_version": "4.4.1",
+            "project_path": "/tmp",
+            "plugin_version": "0.0.1",
+            "protocol_version": 1,
+            "readiness": "ready",
+            "editor_pid": 0,
+        }
+        await ws.send(json.dumps(handshake))
+        await asyncio.sleep(0.05)
+        ## Drain the ack so it doesn't pollute later asserts.
+        try:
+            await asyncio.wait_for(ws.recv(), timeout=0.5)
+        except asyncio.TimeoutError:
+            pass
+        assert harness.registry.get("origin-loopback") is not None
+        await ws.close()
+
+    async def test_origin_null_rejected_at_upgrade(self, harness):
+        ## A sandboxed iframe or downloaded file:// page emits
+        ## ``Origin: null`` — same effective bypass as a foreign Origin.
+        with pytest.raises(websockets.exceptions.InvalidStatus) as exc_info:
+            await websockets.connect(
+                f"ws://127.0.0.1:{harness.port}",
+                additional_headers={"Origin": "null"},
+            )
+        assert exc_info.value.response.status_code == 403
+
+    async def test_browser_cross_origin_subresource_rejected(self, harness):
+        ## Browsers stamp every HTTP request with Sec-Fetch-Site. A
+        ## cross-origin no-cors load (the ``<img>`` liveness-oracle
+        ## shape) arrives with a loopback Host and *no* Origin but the
+        ## fetch metadata gives the rebinding away.
+        with pytest.raises(websockets.exceptions.InvalidStatus) as exc_info:
+            await websockets.connect(
+                f"ws://127.0.0.1:{harness.port}",
+                additional_headers={"Sec-Fetch-Site": "cross-site"},
+            )
+        assert exc_info.value.response.status_code == 403
+
+    async def test_bracketed_ipv6_loopback_origin_accepted(self, harness):
+        ## Symmetry with the unit-level ``http://[::1]`` accept — pin
+        ## the WebSocket guard end-to-end against the bracketed-IPv6
+        ## spelling so the WS path doesn't drift from the helper.
+        ws = await websockets.connect(
+            f"ws://127.0.0.1:{harness.port}",
+            origin="http://[::1]:9500",
+        )
+        handshake = {
+            "type": "handshake",
+            "session_id": "ipv6-loopback",
+            "godot_version": "4.4.1",
+            "project_path": "/tmp",
+            "plugin_version": "0.0.1",
+            "protocol_version": 1,
+            "readiness": "ready",
+            "editor_pid": 0,
+        }
+        await ws.send(json.dumps(handshake))
+        await asyncio.sleep(0.05)
+        try:
+            await asyncio.wait_for(ws.recv(), timeout=0.5)
+        except asyncio.TimeoutError:
+            pass
+        assert harness.registry.get("ipv6-loopback") is not None
+        await ws.close()
+
+    async def test_rejected_request_does_not_register_session(self, harness):
+        before = len(harness.registry)
+        with pytest.raises(websockets.exceptions.InvalidStatus):
+            await websockets.connect(
+                f"ws://127.0.0.1:{harness.port}",
+                origin="https://attacker.example.com",
+            )
+        await asyncio.sleep(0.05)
+        ## No Session must have been added — the guard refuses before
+        ## ``_handle_connection`` runs, so neither the registry nor the
+        ## ``_connections`` map sees the rebound peer.
+        assert len(harness.registry) == before
+
+
+# ---------------------------------------------------------------------------
+# Duplicate-ID handshake hardening (#343 finding #2)
+# ---------------------------------------------------------------------------
+
+
+class TestDuplicateHandshake:
+    async def test_duplicate_session_id_handshake_is_rejected(self, harness):
+        ## Without rejection, a second handshake with the same session_id
+        ## silently overwrites both `_connections[session_id]` and the
+        ## registry entry — routing every subsequent command to the
+        ## attacker. session_id is `<slug>@<4hex>` so 16 bits of suffix is
+        ## locally guessable. Reject keeps the first peer authoritative.
+        first = await harness.connect_plugin(session_id="dup-target")
+        original_session = harness.registry.get("dup-target")
+        assert original_session is not None
+        original_pid = original_session.editor_pid
+
+        ## Hand-roll the second handshake so we observe the close on the
+        ## wire — `connect_plugin()` would assert on the missing ack.
+        ws2 = await websockets.connect(f"ws://127.0.0.1:{harness.port}")
+        await ws2.send(
+            json.dumps(
+                {
+                    "type": "handshake",
+                    "session_id": "dup-target",
+                    "godot_version": "4.4.1",
+                    "project_path": "/tmp/attacker",
+                    "plugin_version": "0.0.1",
+                    "protocol_version": 1,
+                    "readiness": "ready",
+                    "editor_pid": 9999,
+                }
+            )
+        )
+
+        ## Server should close us before sending an ack. Drain until the WS
+        ## reports closed; recv() will raise ConnectionClosed.
+        with pytest.raises(websockets.ConnectionClosed):
+            await asyncio.wait_for(ws2.recv(), timeout=2.0)
+
+        ## Original session must still be live and unaffected.
+        live = harness.registry.get("dup-target")
+        assert live is original_session, "registry entry was overwritten by duplicate"
+        assert live.editor_pid == original_pid
+        assert live.project_path != "/tmp/attacker"
+
+        ## Round-trip a command through the original to prove its WS is
+        ## still wired to the routing map (regression: silent overwrite
+        ## also hijacks `_connections[session_id]`).
+        client = GodotClient(harness.server, harness.registry)
+
+        async def mock_handler():
+            cmd = await first.recv_command()
+            await first.send_response(cmd["request_id"], {"alive": True})
+
+        handler = asyncio.create_task(mock_handler())
+        result = await client.send("ping", session_id="dup-target")
+        await handler
+        assert result == {"alive": True}
+
+        await first.close()
+
+    async def test_reconnect_after_clean_disconnect_succeeds(self, harness):
+        ## The reject must not break the legitimate plugin reconnect path
+        ## (e.g. after `editor_reload_plugin`): close → unregister →
+        ## fresh connect with the same session_id should succeed because
+        ## the registry entry has already been removed.
+        first = await harness.connect_plugin(session_id="reconnect-1")
+        await first.close()
+        await asyncio.sleep(0.1)  # let server process disconnect
+        assert harness.registry.get("reconnect-1") is None
+
+        second = await harness.connect_plugin(session_id="reconnect-1")
+        assert harness.registry.get("reconnect-1") is not None
+        await second.close()
+
+
+# ---------------------------------------------------------------------------
+# send_command pending-Future leak (#343 finding #5)
+# ---------------------------------------------------------------------------
+
+
+class TestPendingFutureCleanup:
+    async def test_timeout_pops_pending_entry(self, harness):
+        ## TimeoutError path always cleared the pending dict; this test
+        ## pins that behavior so a future refactor doesn't regress it.
+        plugin = await harness.connect_plugin(session_id="leak-timeout")
+        client = GodotClient(harness.server, harness.registry)
+
+        with pytest.raises(TimeoutError):
+            await client.send("never_responded", timeout=0.1)
+
+        assert harness.server._pending == {}, "TimeoutError should not leave entries in _pending"
+        await plugin.close()
+
+    async def test_send_failure_pops_pending_entry(self, harness):
+        ## If `ws.send` raises (e.g. ConnectionClosed mid-send), the
+        ## pending Future was previously leaked into `_pending` forever.
+        ## Force the failure by replacing the connection's send with one
+        ## that raises after the pending entry has been registered.
+        plugin = await harness.connect_plugin(session_id="leak-send")
+
+        ws = harness.server._connections["leak-send"]
+        boom = ConnectionError("simulated mid-send transport error")
+
+        async def raising_send(_payload: str) -> None:
+            raise boom
+
+        ws.send = raising_send  # type: ignore[assignment]
+
+        with pytest.raises(ConnectionError):
+            await harness.server.send_command(
+                session_id="leak-send",
+                command="will_fail",
+                timeout=1.0,
+            )
+
+        assert harness.server._pending == {}, "send-time exception must not leak _pending entries"
+        await plugin.close()
 
 
 # --- Issue #262: editor_state self-heals a stale "playing" cache ---

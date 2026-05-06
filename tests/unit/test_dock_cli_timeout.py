@@ -115,14 +115,27 @@ def test_dock_drains_action_workers_during_install_update_and_exit_tree() -> Non
     """Worker drain must cover both shutdown paths — same reason as the refresh worker."""
 
     dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    manager_source = (PLUGIN_ROOT / "utils" / "update_manager.gd").read_text()
 
-    # Both `_exit_tree` and `_install_update` must drain or we hit
-    # `~Thread … destroyed without its completion having been realized`
-    # → VM corruption, same as #232.
+    # `_exit_tree` (dock teardown) must drain inline; the install-time
+    # drain runs through `McpUpdateManager._drain_dock_workers()` which
+    # calls the dock's public `prepare_for_self_update_drain()`.
+    # Missing either path still hits `~Thread … destroyed without its
+    # completion having been realized` → VM corruption, same as #232.
     exit_block = get_func_block(dock_source, "func _exit_tree() -> void:")
-    install_block = get_func_block(dock_source, "func _install_update() -> void:")
+    drain_block = get_func_block(manager_source, "func _drain_dock_workers() -> void:")
+    public_drain_block = get_func_block(
+        dock_source, "func prepare_for_self_update_drain() -> void:"
+    )
     assert "_drain_client_action_workers()" in exit_block
-    assert "_drain_client_action_workers()" in install_block
+    assert "_drain_client_action_workers()" in public_drain_block, (
+        "Dock's `prepare_for_self_update_drain()` must drain both worker "
+        "pools — refresh AND action — same root cause as #232."
+    )
+    assert "prepare_for_self_update_drain" in drain_block, (
+        "McpUpdateManager._drain_dock_workers must invoke the dock's "
+        "public drain method before the runner extracts."
+    )
 
 
 def test_dock_action_dispatch_gates_on_self_update_in_progress() -> None:
@@ -130,11 +143,12 @@ def test_dock_action_dispatch_gates_on_self_update_in_progress() -> None:
 
     dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
     block = get_func_block(dock_source, "func _dispatch_client_action(")
-    assert "_self_update_in_progress" in block, (
+    assert "_is_self_update_in_progress" in block, (
         "Configure / Remove dispatch must short-circuit during the "
         "install-update window — a worker mid-call into a half-overwritten "
         "_cli_strategy.gd SIGABRTs (same root cause as the refresh-worker "
-        "gate in #235)."
+        "gate in #235). The flag lives on McpUpdateManager; the dock's "
+        "gate consults it via `_is_self_update_in_progress()`."
     )
 
 

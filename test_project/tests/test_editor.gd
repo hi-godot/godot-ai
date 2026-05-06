@@ -58,9 +58,14 @@ func test_editor_state_game_capture_ready_tracks_debugger_plugin_flag() -> void:
 	var handler := EditorHandler.new(McpLogBuffer.new(), null, plugin)
 	var result := handler.get_editor_state({})
 	assert_eq(result.data.game_capture_ready, false, "starts false before mcp:hello")
-	plugin._game_ready = true
+	plugin.begin_game_run()
+	plugin._setup_session(101)
+	plugin._capture("mcp:hello", [], 101)
 	result = handler.get_editor_state({})
 	assert_eq(result.data.game_capture_ready, true, "flips true once beacon arrives")
+	plugin.begin_game_run()
+	result = handler.get_editor_state({})
+	assert_eq(result.data.game_capture_ready, false, "new project_run clears stale readiness immediately")
 
 
 # ----- get_selection -----
@@ -113,12 +118,12 @@ func test_clear_logs_empties_buffer() -> void:
 
 func test_screenshot_invalid_source() -> void:
 	var result := _handler.take_screenshot({"source": "invalid"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 func test_screenshot_game_not_playing() -> void:
 	var result := _handler.take_screenshot({"source": "game"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_debugger_plugin_capture_prefix() -> void:
@@ -140,14 +145,38 @@ func test_debugger_plugin_screenshot_error_unknown_request() -> void:
 	assert_true(true, "No crash when replying to unknown request_id")
 
 
+func test_debugger_plugin_clear_pending_disconnects_timer() -> void:
+	## Audit blind spot from #297: on screenshot success, _clear_pending used
+	## to only erase the dict entry, leaving the SceneTreeTimer + bound
+	## timeout lambda alive until the timer naturally fired (up to 8s).
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		skip("No SceneTree available")
+		return
+	var plugin := McpDebuggerPlugin.new()
+	var rid := "rid-clear-pending"
+	var cb := func() -> void: pass
+	var timer := tree.create_timer(60.0)
+	timer.timeout.connect(cb)
+	plugin._pending[rid] = {
+		"connection": null,
+		"timer": timer,
+		"timeout_callable": cb,
+	}
+	assert_true(timer.timeout.is_connected(cb), "precondition: timer connected before clear")
+	plugin._clear_pending(rid)
+	assert_false(plugin._pending.has(rid), "_clear_pending should erase the request entry")
+	assert_false(timer.timeout.is_connected(cb), "_clear_pending should disconnect timeout signal")
+
+
 func test_screenshot_view_target_not_found() -> void:
 	var result := _handler.take_screenshot({"source": "viewport", "view_target": "/Main/NonExistent"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
 
 
 func test_screenshot_view_target_all_invalid_comma() -> void:
 	var result := _handler.take_screenshot({"source": "viewport", "view_target": "/Main/X,/Main/Y"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_screenshot_view_target_duplicates() -> void:
@@ -378,13 +407,13 @@ func test_screenshot_game_not_running_returns_error() -> void:
 	if EditorInterface.is_playing_scene():
 		return  # Can't test this path while game is running.
 	var result := _handler.take_screenshot({"source": "game"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "not running")
 
 
 func test_screenshot_bogus_source() -> void:
 	var result := _handler.take_screenshot({"source": "bogus"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "Invalid source")
 
 
@@ -402,7 +431,7 @@ func test_screenshot_cinematic_no_camera_returns_error() -> void:
 	if cameras.is_empty():
 		## Scene already has no cameras — exercise directly.
 		var result := _handler.take_screenshot({"source": "cinematic"})
-		assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+		assert_is_error(result)
 		assert_contains(result.error.message, "No current Camera3D")
 		return
 	skip("Scene has cameras — no-camera branch covered only in cameraless scenes")
@@ -589,7 +618,7 @@ func test_game_log_buffer_get_recent_works_after_wrap() -> void:
 
 func test_get_logs_source_invalid_returns_error() -> void:
 	var result := _handler.get_logs({"source": "bogus"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "Invalid source")
 
 
@@ -624,7 +653,7 @@ func test_get_logs_null_source_falls_through_to_invalid() -> void:
 	## rather than a GDScript type error.
 	var handler := EditorHandler.new(McpLogBuffer.new())
 	var result := handler.get_logs({"source": null})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "Invalid source")
 
 
@@ -837,7 +866,7 @@ func test_get_logs_source_invalid_message_lists_editor() -> void:
 	## list it so users see a complete option set in their typo correction.
 	var handler := EditorHandler.new(McpLogBuffer.new())
 	var result := handler.get_logs({"source": "bogus"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 	assert_contains(result.error.message, "editor")
 
 
@@ -897,6 +926,53 @@ func test_editor_logger_drops_internal_godot_cpp_noise() -> void:
 	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
 	logger._log_error("foo", "scene/main/scene_tree.cpp", 1234, "noise", "", false, 0, [])
 	assert_eq(ed_buf.total_count(), 0, "C++-source errors with no script backtrace should be filtered")
+
+
+func test_editor_logger_captures_engine_resource_error_with_res_path() -> void:
+	## ResourceLoader failures can be emitted by engine C++ with no
+	## ScriptBacktrace even when the message names a project resource.
+	## Those red editor/terminal lines should still be visible through
+	## logs_read(source="editor").
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var ed_buf := McpEditorLogBuffer.new()
+	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
+	logger._log_error(
+		"_load",
+		"core/io/resource_loader.cpp",
+		222,
+		"Failed loading resource: res://does/not/exist.tres.",
+		"",
+		false,
+		0,
+		[],
+	)
+	var entries := ed_buf.get_range(0, 10)
+	assert_eq(entries.size(), 1, "Engine resource errors naming res:// paths should be captured")
+	assert_eq(entries[0].path, "res://does/not/exist.tres")
+	assert_eq(entries[0].line, 0, "Engine resource errors have no recoverable script line")
+	assert_eq(entries[0].function, "_load")
+	assert_contains(entries[0].text, "Failed loading resource")
+
+
+func test_editor_logger_drops_engine_resource_error_for_godot_ai_addon() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var ed_buf := McpEditorLogBuffer.new()
+	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
+	logger._log_error(
+		"_load",
+		"core/io/resource_loader.cpp",
+		222,
+		"Failed loading resource: res://addons/godot_ai/missing.tres.",
+		"",
+		false,
+		0,
+		[],
+	)
+	assert_eq(ed_buf.total_count(), 0, "Engine resource errors inside addons/godot_ai/ should be filtered")
 
 
 func test_editor_logger_drops_godot_ai_addon_to_avoid_feedback_loop() -> void:
@@ -996,6 +1072,23 @@ func test_editor_logger_is_user_script_predicate() -> void:
 	assert_false(script._is_user_script("res://image.png"))
 
 
+func test_editor_logger_extract_user_res_path_predicate() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var script = load(_EDITOR_LOGGER_PATH)
+	assert_eq(
+		script._extract_user_res_path("Cannot open file 'res://does/not/exist.tres'."),
+		"res://does/not/exist.tres",
+	)
+	assert_eq(
+		script._extract_user_res_path("Failed loading resource: res://folder/with spaces/file.tres."),
+		"res://folder/with spaces/file.tres",
+	)
+	assert_eq(script._extract_user_res_path("Failed loading resource: res://addons/godot_ai/x.tres."), "")
+	assert_eq(script._extract_user_res_path("scene/main/scene_tree.cpp noise"), "")
+
+
 func test_editor_logger_is_in_godot_ai_addon_predicate() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
@@ -1026,9 +1119,43 @@ func test_debugger_plugin_hello_rotates_run_id() -> void:
 	var game_buf := McpGameLogBuffer.new()
 	game_buf.append("info", "stale from previous run")
 	var plugin := McpDebuggerPlugin.new(null, game_buf)
+	plugin.begin_game_run()
 	plugin._capture("mcp:hello", [], 0)
 	assert_eq(game_buf.total_count(), 0, "hello should clear the game buffer")
 	assert_ne(game_buf.run_id(), "", "hello should set a run_id")
+
+
+func test_debugger_plugin_readiness_is_scoped_to_current_run() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin.begin_game_run()
+	plugin._setup_session(11)
+	plugin._capture("mcp:hello", [], 11)
+	assert_true(plugin.is_game_capture_ready(), "hello for active run should mark capture ready")
+
+	plugin.begin_game_run()
+	assert_false(plugin.is_game_capture_ready(), "starting the next run must clear stale readiness")
+	plugin._game_ready = true
+	assert_false(plugin.is_game_capture_ready(), "raw ready flag without current run token is stale")
+	plugin._capture("mcp:hello", [], -1)
+	assert_true(plugin.is_game_capture_ready(), "hello without a session still readies active direct-test run")
+	plugin.end_game_run()
+	assert_false(plugin.is_game_capture_ready(), "stopping the run clears capture readiness")
+	plugin._capture("mcp:hello", [], -1)
+	assert_false(plugin.is_game_capture_ready(), "late hello after stop must not restore readiness")
+
+
+func test_debugger_plugin_ignores_hello_from_stale_session() -> void:
+	var game_buf := McpGameLogBuffer.new()
+	var plugin := McpDebuggerPlugin.new(null, game_buf)
+	plugin.begin_game_run()
+	plugin._setup_session(22)
+	plugin._capture("mcp:hello", [], 21)
+	assert_false(plugin.is_game_capture_ready(), "hello from an old debugger session must not ready current run")
+	assert_eq(game_buf.run_id(), "", "stale hello must not rotate logs for current run")
+
+	plugin._capture("mcp:hello", [], 22)
+	assert_true(plugin.is_game_capture_ready(), "hello from current session should ready capture")
+	assert_ne(game_buf.run_id(), "", "current hello rotates run logs")
 
 
 func test_debugger_plugin_log_batch_no_buffer_is_safe() -> void:

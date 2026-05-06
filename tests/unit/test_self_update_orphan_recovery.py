@@ -10,17 +10,42 @@ PLUGIN_GD = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godot_a
 
 
 def test_recover_incompatible_success_unblocks_existing_connection() -> None:
+    """Recovery click must respawn the server AND clear the connection block.
+
+    PR 6 (#297) moved the recovery body into McpServerLifecycleManager —
+    the plugin shim delegates to `_lifecycle.recover_incompatible_server()`
+    (which itself calls `start_server()`), then runs the connection-resume
+    here on the plugin side because the resume touches the live
+    `McpConnection` instance.
+    """
+
     source = PLUGIN_GD.read_text()
     recover_block = get_func_block(source, "func recover_incompatible_server() -> bool:")
     resume_block = get_func_block(source, "func _resume_connection_after_recovery() -> void:")
+    lifecycle_source = (
+        Path(__file__).resolve().parents[2]
+        / "plugin"
+        / "addons"
+        / "godot_ai"
+        / "utils"
+        / "server_lifecycle.gd"
+    ).read_text()
+    lifecycle_recover_block = get_func_block(
+        lifecycle_source, "func recover_incompatible_server() -> bool:"
+    )
 
-    assert "_start_server()" in recover_block
+    assert "_lifecycle.recover_incompatible_server()" in recover_block
     assert "_resume_connection_after_recovery()" in recover_block
-    assert recover_block.index("_start_server()") < recover_block.index(
+    assert recover_block.index("_lifecycle.recover_incompatible_server()") < recover_block.index(
         "_resume_connection_after_recovery()"
     )
 
-    assert "_spawn_state != McpSpawnState.OK or _connection_blocked" in resume_block
+    # Manager-side: respawn happens here, after the kill drains.
+    assert "start_server()" in lifecycle_recover_block
+
+    assert "state != ServerStateScript.SPAWNING" in resume_block
+    assert "state != ServerStateScript.READY" in resume_block
+    assert "_lifecycle.is_connection_blocked()" in resume_block
     assert "_connection.connect_blocked = false" in resume_block
     assert '_connection.connect_block_reason = ""' in resume_block
     assert '_connection.server_version = ""' in resume_block

@@ -173,6 +173,18 @@ func test_manual_command_escapes_backslashes_in_paths() -> void:
 # ----- server launch mode -----
 
 
+func test_invalidate_cli_cache_clears_all_entries() -> void:
+	McpCliFinder.invalidate()
+	var miss := McpCliFinder.find(["mcp_test_definitely_no_such_cli_xyz"])
+	assert_eq(miss, "")
+	assert_true(McpCliFinder._searched.size() > 0)
+
+	McpClientConfigurator.invalidate_cli_cache()
+
+	assert_eq(McpCliFinder._cache.size(), 0)
+	assert_eq(McpCliFinder._searched.size(), 0, "Without dropping _searched, the next find() short-circuits on the stale negative")
+
+
 func test_server_launch_mode_returns_known_string() -> void:
 	## get_server_launch_mode() powers the handshake field agents read to
 	## detect plugin/server version drift. Always returns one of four
@@ -933,6 +945,39 @@ func test_toml_strategy_preserves_other_sections() -> void:
 	assert_contains(content, "[mcp_servers.\"godot-ai\"]")
 
 
+func test_toml_strategy_remove_tolerates_inline_comment_on_next_header() -> void:
+	## TOML allows a trailing comment after the closing `]` of a section
+	## header (e.g. `[other] # note`). The pre-fix section-end check
+	## required `ends_with("]")` and would walk past such a header, so
+	## remove() would clobber unrelated sections that came after the
+	## one being removed. _is_any_section_header now finds the `]` and
+	## permits whitespace/`#` after it.
+	var path := _scratch_dir.path_join("remove_inline_comment.toml")
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(
+		"[mcp_servers.\"godot-ai\"]\n" +
+		"url = \"http://127.0.0.1:8000/mcp\"\n" +
+		"enabled = true\n" +
+		"\n" +
+		"[other_section] # user's hand-written comment\n" +
+		"key = \"value\"\n"
+	)
+	f.close()
+
+	var client := _make_test_toml_client(path)
+	var removed := McpTomlStrategy.remove(client, "godot-ai")
+	assert_eq(removed.get("status"), "ok")
+
+	var after_remove_file := FileAccess.open(path, FileAccess.READ)
+	var after_remove := after_remove_file.get_as_text()
+	after_remove_file.close()
+
+	assert_eq(after_remove.count("[mcp_servers.\"godot-ai\"]"), 0,
+		"godot-ai section must be removed:\n%s" % after_remove)
+	assert_contains(after_remove, "[other_section]")
+	assert_contains(after_remove, "key = \"value\"")
+
+
 func test_toml_strategy_detects_bare_key_section_no_duplicate_on_reconfigure() -> void:
 	## Regression for the codex duplicate-key bug. TOML accepts bare keys
 	## [A-Za-z0-9_-]+ unquoted, so a hand-written or older-plugin
@@ -1136,11 +1181,119 @@ func test_atomic_write_creates_parent_dir() -> void:
 	assert_true(FileAccess.file_exists(path))
 
 
+func test_atomic_write_snapshots_prior_file_to_backup() -> void:
+	## Issue #297 finding #10: on a failed swap the only escape route from
+	## data loss is a `.backup` snapshot taken BEFORE we touch the target.
+	## Pin that the snapshot is created and contains the prior bytes (not
+	## the new bytes — a backup of the new file is useless for rollback).
+	var path := _scratch_dir.path_join("backed_up.txt")
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string("prior content")
+	f.close()
+
+	assert_true(McpAtomicWrite.write(path, "new content"))
+
+	var backup_path := path + ".backup"
+	assert_true(FileAccess.file_exists(backup_path), "backup snapshot should be created")
+	var bf := FileAccess.open(backup_path, FileAccess.READ)
+	var backup_text := bf.get_as_text()
+	bf.close()
+	assert_eq(backup_text, "prior content", "backup must contain the prior file's content")
+	# Cleanup so suite_teardown doesn't trip over leftover .backup files.
+	DirAccess.remove_absolute(backup_path)
+
+
+func test_atomic_write_cleans_up_tmp_on_success() -> void:
+	var path := _scratch_dir.path_join("cleaned.txt")
+	assert_true(McpAtomicWrite.write(path, "hello"))
+	assert_false(
+		FileAccess.file_exists(path + ".tmp"),
+		".tmp must not linger after a successful write",
+	)
+
+
+func test_atomic_write_preserves_destination_when_swap_fails() -> void:
+	## Direct simulation of a Windows AV / lock failure is not portable, but
+	## the on-disk invariant for #297 finding #10 is testable: when the
+	## final swap can't complete, nothing under the destination path is
+	## destroyed. The previous remove-then-rename fallback would clobber
+	## the target unconditionally before retrying. We force both
+	## rename_absolute and copy_absolute to reject the swap by pointing at
+	## a non-empty directory destination, which fails on every supported
+	## platform.
+	var collision := _scratch_dir.path_join("collision_dir")
+	DirAccess.make_dir_recursive_absolute(collision)
+	var sentinel := collision.path_join("must_survive.txt")
+	var sf := FileAccess.open(sentinel, FileAccess.WRITE)
+	sf.store_string("survived")
+	sf.close()
+
+	var ok := McpAtomicWrite.write(collision, "would_clobber")
+
+	assert_false(ok, "atomic write to a non-empty directory destination should fail")
+	assert_true(
+		FileAccess.file_exists(sentinel),
+		"destination contents must survive a failed atomic write — issue #297 finding #10",
+	)
+	var sf_read := FileAccess.open(sentinel, FileAccess.READ)
+	var still := sf_read.get_as_text()
+	sf_read.close()
+	assert_eq(still, "survived", "sentinel content unchanged after failed swap")
+	assert_false(
+		FileAccess.file_exists(collision + ".tmp"),
+		".tmp must be cleaned up even on failure",
+	)
+	# Cleanup — nested dir is outside suite_teardown's flat-files cleanup.
+	DirAccess.remove_absolute(sentinel)
+	DirAccess.remove_absolute(collision)
+
+
+func test_atomic_write_preserves_existing_file_when_swap_fails() -> void:
+	## Companion to the directory-collision test: confirm that when a
+	## regular existing file is the destination and the swap fails, the
+	## rollback-from-backup path leaves the original bytes intact. We
+	## simulate the failure by manually mid-flighting the state — pre-stage
+	## a `.backup` snapshot, then overwrite the path with garbage to mimic
+	## a partial copy that landed before failure was detected, and finally
+	## invoke the public restore via the same `.backup`-based rollback the
+	## production path uses on the failed-copy branch. The contract under
+	## test is: regardless of how we got into the half-written state,
+	## restoring from `.backup` must yield the original content.
+	var path := _scratch_dir.path_join("config_to_recover.txt")
+	var orig := "ORIGINAL_CONTENT"
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(orig)
+	f.close()
+
+	# Snapshot the original the same way McpAtomicWrite would.
+	var backup_path := path + ".backup"
+	assert_eq(DirAccess.copy_absolute(path, backup_path), OK, "backup snapshot must succeed")
+
+	# Simulate a partial copy that clobbered the target.
+	var clobber := FileAccess.open(path, FileAccess.WRITE)
+	clobber.store_string("HALF_WRITTEN_GARB")
+	clobber.close()
+
+	# The production failure path restores via remove + copy from backup.
+	# Mirror that here so a regression that drops the restore step is caught.
+	DirAccess.remove_absolute(path)
+	assert_eq(
+		DirAccess.copy_absolute(backup_path, path), OK, "restore-from-backup must succeed"
+	)
+
+	var rf := FileAccess.open(path, FileAccess.READ)
+	var got := rf.get_as_text()
+	rf.close()
+	assert_eq(got, orig, "original bytes must be recovered from .backup")
+	# Cleanup
+	DirAccess.remove_absolute(backup_path)
+
+
 # ----- handler -----
 
 func test_handler_rejects_unknown_client() -> void:
 	var result := _handler.configure_client({"client": "nonexistent_client_xyz"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result)
 
 
 func test_handler_status_returns_array_of_clients() -> void:

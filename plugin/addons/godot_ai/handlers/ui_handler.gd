@@ -56,16 +56,16 @@ func _init(undo_redo: EditorUndoRedoManager) -> void:
 func set_anchor_preset(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("path", "")
 	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	var preset_name: String = str(params.get("preset", "")).to_lower()
 	if preset_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: preset")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: preset")
 	if not _PRESETS.has(preset_name):
 		var names := _PRESETS.keys()
 		names.sort()
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Unknown preset '%s'. Valid: %s" % [preset_name, ", ".join(names)]
 		)
 
@@ -74,23 +74,21 @@ func set_anchor_preset(params: Dictionary) -> Dictionary:
 		var names := _RESIZE_MODES.keys()
 		names.sort()
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.VALUE_OUT_OF_RANGE,
 			"Unknown resize_mode '%s'. Valid: %s" % [resize_mode_name, ", ".join(names)]
 		)
 
 	var margin: int = int(params.get("margin", 0))
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-
-	var node := McpScenePath.resolve(node_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	if _resolved.has("error"):
+		return _resolved
+	var node: Node = _resolved.node
+	var scene_root: Node = _resolved.scene_root
 	if not node is Control:
 		var got_class: String = node.get_class()
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Node %s is not a Control (got %s)%s" % [
 				node_path, got_class, _canvas_layer_overlay_hint(got_class)
 			]
@@ -145,25 +143,23 @@ func set_anchor_preset(params: Dictionary) -> Dictionary:
 func set_text(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("path", "")
 	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: path")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	if not params.has("text"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: text")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: text")
 	var text_value: Variant = params["text"]
 	if typeof(text_value) != TYPE_STRING:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "text must be a string")
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "text must be a string")
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
-
-	var node := McpScenePath.resolve(node_path, scene_root)
-	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_node_error(node_path, scene_root))
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	if _resolved.has("error"):
+		return _resolved
+	var node: Node = _resolved.node
+	var scene_root: Node = _resolved.scene_root
 	var node_type := node.get_class()
 	if not node is Control:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Node %s is not a Control (got %s)" % [node_path, node_type]
 		)
 	# Scan get_property_list() (matches set_property / _apply_property in this
@@ -179,12 +175,12 @@ func set_text(params: Dictionary) -> Dictionary:
 			break
 	if not has_text:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Control %s has no 'text' property (got %s)" % [node_path, node_type]
 		)
 	if text_prop_type != TYPE_STRING:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Control %s has a non-string 'text' property (got %s)" % [node_path, node_type]
 		)
 
@@ -223,19 +219,22 @@ func set_text(params: Dictionary) -> Dictionary:
 ## invalid, no node is created.
 func build_layout(params: Dictionary) -> Dictionary:
 	var tree = params.get("tree")
+	if not params.has("tree"):
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: tree")
 	if typeof(tree) != TYPE_DICTIONARY:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Missing required param: tree (must be a dictionary)")
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "tree must be a dictionary")
 
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+	var _scene_check := McpNodeValidator.require_scene_or_error()
+	if _scene_check.has("error"):
+		return _scene_check
+	var scene_root: Node = _scene_check.scene_root
 
 	var parent_path: String = params.get("parent_path", "")
 	var parent: Node = scene_root
 	if not parent_path.is_empty() and parent_path != "/":
 		parent = McpScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, McpScenePath.format_parent_error(parent_path, scene_root))
+			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
 
 	# Validate + build in memory first; if anything fails, free and bail.
 	var built := _build_subtree(tree)
@@ -267,11 +266,11 @@ func build_layout(params: Dictionary) -> Dictionary:
 func _build_subtree(spec: Dictionary) -> Dictionary:
 	var node_type: String = spec.get("type", "")
 	if node_type.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Every layout node requires a 'type'")
+		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Every layout node requires a 'type'")
 	if not ClassDB.class_exists(node_type):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown type: %s" % node_type)
+		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Unknown type: %s" % node_type)
 	if not ClassDB.is_parent_class(node_type, "Node"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "%s is not a Node type" % node_type)
+		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "%s is not a Node type" % node_type)
 
 	var node: Node = ClassDB.instantiate(node_type)
 	if node == null:
@@ -286,7 +285,7 @@ func _build_subtree(spec: Dictionary) -> Dictionary:
 		var props = spec.get("properties")
 		if typeof(props) != TYPE_DICTIONARY:
 			node.free()
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "properties must be a dictionary")
+			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "properties must be a dictionary")
 		for key in props:
 			var value = props[key]
 			var apply_err := _apply_property(node, str(key), value)
@@ -300,14 +299,14 @@ func _build_subtree(spec: Dictionary) -> Dictionary:
 		if not theme_path.is_empty():
 			if not theme_path.begins_with("res://"):
 				node.free()
-				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "theme must be a res:// path")
+				return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "theme must be a res:// path")
 			if not ResourceLoader.exists(theme_path):
 				node.free()
-				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Theme not found: %s" % theme_path)
+				return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Theme not found: %s" % theme_path)
 			var theme_res: Resource = ResourceLoader.load(theme_path)
 			if theme_res == null or not theme_res is Theme:
 				node.free()
-				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "theme path must point to a Theme resource: %s" % theme_path)
+				return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "theme path must point to a Theme resource: %s" % theme_path)
 			if not node is Control and not node is Window:
 				node.free()
 				return McpErrorCodes.make(
@@ -323,7 +322,7 @@ func _build_subtree(spec: Dictionary) -> Dictionary:
 		var preset_name: String = str(spec.get("anchor_preset", "")).to_lower()
 		if not _PRESETS.has(preset_name):
 			node.free()
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Unknown anchor_preset: %s" % preset_name)
+			return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Unknown anchor_preset: %s" % preset_name)
 		if not node is Control:
 			node.free()
 			return McpErrorCodes.make(
@@ -341,11 +340,11 @@ func _build_subtree(spec: Dictionary) -> Dictionary:
 		var children = spec.get("children")
 		if typeof(children) != TYPE_ARRAY:
 			node.free()
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "children must be an array")
+			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "children must be an array")
 		for child_spec in children:
 			if typeof(child_spec) != TYPE_DICTIONARY:
 				node.free()
-				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "each child must be a dictionary")
+				return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "each child must be a dictionary")
 			var child_result := _build_subtree(child_spec)
 			if child_result.has("error"):
 				node.free()
@@ -416,7 +415,7 @@ func _apply_property(node: Node, prop: String, value: Variant) -> Variant:
 				var coercion := _coerce_for_type(value, coerce_type)
 				if not coercion.ok:
 					return McpErrorCodes.make(
-						McpErrorCodes.INVALID_PARAMS,
+						McpErrorCodes.WRONG_TYPE,
 						"Cannot coerce '%s' for %s" % [value, prop]
 					)
 				node.call(info.add, override_name, coercion.value)
@@ -431,14 +430,14 @@ func _apply_property(node: Node, prop: String, value: Variant) -> Variant:
 			break
 	if not found:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
 			McpPropertyErrors.build_message(node, prop)
 		)
 
 	var coercion := _coerce_for_type(value, prop_type)
 	if not coercion.ok:
 		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+			McpErrorCodes.WRONG_TYPE,
 			"Property '%s' on %s expects type %s (cannot coerce %s)" % [
 				prop, node.get_class(), type_string(prop_type), value
 			]
