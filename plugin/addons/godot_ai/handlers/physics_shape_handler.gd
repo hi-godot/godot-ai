@@ -62,10 +62,21 @@ func autofit(params: Dictionary) -> Dictionary:
 
 	var shape_type: String = params.get("shape_type", "box" if is_3d else "rectangle")
 	var type_map := _SHAPE_3D_CLASSES if is_3d else _SHAPE_2D_CLASSES
+	# Accept either the short form ("box") or the matching Godot class name
+	# ("BoxShape3D") — every other tool in the server takes class names, and
+	# resource_get_info(type="Shape3D") surfaces concrete_subclasses by class.
 	if not type_map.has(shape_type):
+		for short_form in type_map:
+			if type_map[short_form] == shape_type:
+				shape_type = short_form
+				break
+	if not type_map.has(shape_type):
+		var valid_pairs: Array[String] = []
+		for short_form in type_map:
+			valid_pairs.append("%s (%s)" % [short_form, type_map[short_form]])
 		return McpErrorCodes.make(
 			McpErrorCodes.VALUE_OUT_OF_RANGE,
-			"Invalid shape_type '%s' for %s. Valid: %s" % [shape_type, node.get_class(), ", ".join(type_map.keys())]
+			"Invalid shape_type '%s' for %s. Valid: %s" % [shape_type, node.get_class(), ", ".join(valid_pairs)]
 		)
 	var shape_class: String = type_map[shape_type]
 

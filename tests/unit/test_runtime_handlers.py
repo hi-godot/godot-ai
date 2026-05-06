@@ -2559,6 +2559,23 @@ async def test_physics_shape_autofit_minimal_omits_empty():
     assert "shape_type" not in params
 
 
+async def test_physics_shape_autofit_passes_class_name_unchanged():
+    """Issue #395: Python handler must forward class-name forms unchanged.
+
+    Normalization between class names ("BoxShape3D") and short forms
+    ("box") happens on the GDScript side. The Python layer is agnostic
+    and just relays whatever the caller sent.
+    """
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await physics_shape_handlers.physics_shape_autofit(
+        runtime,
+        path="/Main/Body/Collision",
+        shape_type="BoxShape3D",
+    )
+    assert client.calls[-1]["params"]["shape_type"] == "BoxShape3D"
+
+
 async def test_physics_shape_autofit_requires_writable():
     from godot_ai.godot_client.client import GodotCommandError
     from godot_ai.sessions.registry import Session
