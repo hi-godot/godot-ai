@@ -326,3 +326,80 @@ return a distinguishable retryable error (not just a generic
 - Bonus: `editor_screenshot(source="game")` — 1108x623 captured from the
   game process, scaled to 512x287, round-trips visible ColorRect + Label
   content (exercises PR #76's debugger-bridge path)
+
+## 2026-05-04 — MegaSmoke beta native-tool continuation (`beta` 3890bbd)
+
+Continuation of the 2026-05-04 MegaSmoke stress round after handoff to a
+Codex instance with Godot AI MCP tools exposed natively.
+
+Setup observed at 19:40-19:52 PDT:
+
+- Repo: `/Users/davidsarno/godot-ai`
+- Branch/head: `beta` at `3890bbd`
+- Worktree: clean except untracked `.claude/worktrees/`
+- Sessions:
+  - `test-project@8c0a` -> `/Users/davidsarno/godot-ai/test_project/`
+  - `godot-ai-megasmoke-stress-20260504194400@b96b` ->
+    `/private/tmp/godot-ai-megasmoke-stress-20260504194400/`
+- Safety guard used: every destructive/write-capable native tool call was
+  pinned to `godot-ai-megasmoke-stress-20260504194400@b96b`.
+- Status: the intended 30-minute soak did not complete cleanly. The run
+  continued after the initial short native pass, but was interrupted by
+  high-signal failures: full `test_run()` timeout/session loss and a game
+  screenshot readiness race. The soak is counted as failed, not passed.
+
+### Baseline gates
+
+| Gate | Status | Notes |
+| --- | --- | --- |
+| `.venv/bin/python script/ci-game-capture-smoke` | pass | Disposable session active; game capture returned 1920x1080 PNG, red/green/blue/white quadrant samples all OK. |
+| MCP `test_run` with `res://capture_smoke.tscn` open | invalid fail | 59 failures were fixture precondition noise because many suites expect `res://main.tscn` and `/Main/...`. |
+| MCP `test_run` after opening `res://main.tscn` | fail: 1137 passed, 2 failed, 5 skipped | Remaining failures: `clients.test_addons_dir_is_symlink_detects_canonical_layout` because this disposable copy has `addons/godot_ai` as a real directory, and `update_manager.test_install_zip_drains_dock_workers_and_hands_off_to_plugin`. |
+
+### Native MCP scenario
+
+Created and saved:
+
+- `res://mega_smoke/stress_native_20260504194705.tscn`
+- `res://mega_smoke/stress_controller_20260504194705.gd`
+- `res://mega_smoke/stress_theme_20260504194705.tres`
+- `res://mega_smoke/stress_cube_emissive_20260504194705.tres`
+- `res://mega_smoke/stress_noise_20260504194705.tres`
+
+Covered: scene create/save, `batch_execute`, node create/properties, UI
+layout/draw recipe, theme create/apply, material preset, camera preset,
+particle preset/readback, script create/read/attach, signal connect/list,
+input action/binding/list, environment creation, resource creation,
+animation player/preset/validate, audio player configuration, hierarchy,
+cinematic screenshot metadata, viewport coverage screenshot metadata,
+project run/stop, game logs, and game screenshot metadata.
+
+Runtime validation: `project_run(mode="current", autosave=false)` on the
+stress scene started successfully, game logs included
+`native stress controller ready`, and `editor_screenshot(source="game")`
+returned a 1920x1080 framebuffer scaled to 640x360.
+
+### Friction items
+
+Filed seven issues from this continuation — **all resolved by 2026-05-05** (verified
+2026-05-06 against `beta` tip `72b35d7`):
+
+- #322 — Full MCP `test_run` can timeout and drop the disposable editor session
+- #323 — Game capture readiness can be stale across runs
+- #324 — `script_create` can timeout after successfully committing the file
+- #325 — `environment_create` rich sky payload leaks `INTERNAL_ERROR`
+- #326 — Passing focused suites can emit red editor or console errors
+- #327 — `logs_read(source=editor)` misses some console-visible project errors
+- #328 — Animation preset `target_path` convention is easy to misuse
+
+Detailed reproductions live on each closed issue; trimmed from this log
+2026-05-06 after the audit-v2 post-landing smoke.
+
+#### friction — `editor_reload_plugin` doesn't return clean success when the server is plugin-managed
+
+- First observed: 2026-05-04 20:59 PDT (120s timeout with "timed out awaiting tools/call"). Re-smoked 2026-05-06 03:07–03:12 UTC against `beta` tip `72b35d7` (4 runs total).
+- Re-smoke result: tool now returns `MCP server "godot-ai" session expired` instead of timing out. Tool elapsed times: ~23s (warm-up call), ~31s, ~17s, ~17s — settles around 17s for steady-state reloads. The reload mechanic itself works correctly on every run — editor PID stays alive, plugin re-enables, a fresh server spawns, and a new session registers. Verified across 4 sequential reloads with editor PID 65970 stable; server PID rotated 66007 → 43343 → 46404 → 47336 → 48212; session ID rotated `@d5b6 → @5907 → @ff77 → @137f → @148b` (the 4hex suffix is regenerated on every fresh handshake, so a roll proves a real reconnect). The MCP transport session for the calling client gets invalidated because the server it's connected to gets restarted as part of the reload.
+- Expected result: reload should return a structured success once the new session is up, or a precise partial-success response saying the plugin reconnected but the calling transport had to drop. Today the caller sees a generic "session expired" error and must reconnect + check `session_manage(op="list")` to confirm the reload actually succeeded.
+- Severity: low; substantial improvement vs. 2026-05-04 (was 120s wedge, now 17–31s with prompt failure and reproducible behavior). Still surfaces as a tool error rather than a clean success.
+- Workaround: catch `session expired`, immediately retry any MCP call (the transport reconnects on the next call), then verify the new session via `session_manage(op="list")`. The friction is most visible to interactive users; scripts can no-op around it.
+- Note: the tool's docstring warns "Requires the MCP server to be running externally (not started by the plugin)" — but Phase 7 self-update smoke and this manual smoke both reload cleanly with a plugin-managed server. The docstring may be stale.
