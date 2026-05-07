@@ -1015,7 +1015,7 @@ func test_restart_server_btn_dispatches_to_force_restart_preserving_mode() -> vo
 	_dock._dev_restart_btn = Button.new()
 
 	_dock._on_dev_restart_pressed()
-	var calls := plugin.preserve_mode_calls
+	var calls: int = plugin.preserve_mode_calls
 
 	_dock._dev_restart_btn.free()
 	_dock._dev_restart_btn = null
@@ -1037,8 +1037,8 @@ func test_restart_server_btn_disabled_when_nothing_running() -> void:
 	_dock._dev_restart_btn = Button.new()
 
 	_dock._update_dev_restart_btn()
-	var disabled := _dock._dev_restart_btn.disabled
-	var tooltip := _dock._dev_restart_btn.tooltip_text
+	var disabled: bool = _dock._dev_restart_btn.disabled
+	var tooltip: String = _dock._dev_restart_btn.tooltip_text
 
 	_dock._dev_restart_btn.free()
 	_dock._dev_restart_btn = null
@@ -1056,8 +1056,8 @@ func test_restart_server_btn_enabled_when_managed_running() -> void:
 	_dock._dev_restart_btn = Button.new()
 
 	_dock._update_dev_restart_btn()
-	var disabled := _dock._dev_restart_btn.disabled
-	var tooltip := _dock._dev_restart_btn.tooltip_text
+	var disabled: bool = _dock._dev_restart_btn.disabled
+	var tooltip: String = _dock._dev_restart_btn.tooltip_text
 
 	_dock._dev_restart_btn.free()
 	_dock._dev_restart_btn = null
