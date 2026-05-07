@@ -17,9 +17,6 @@ extends RefCounted
 
 
 const AnimationValues := preload("res://addons/godot_ai/handlers/animation_values.gd")
-## Local const names intentionally do NOT match the global `class_name` of the
-## preloaded scripts (`McpErrorCodes`, `McpScenePath`). See `_node_validator.gd`
-## for the full self-update parse-hazard rationale (#398).
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const ScenePath := preload("res://addons/godot_ai/utils/scene_path.gd")
 

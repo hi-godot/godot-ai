@@ -11,15 +11,11 @@ extends VBoxContainer
 
 signal logging_enabled_changed(enabled: bool)
 
-## `Dock` const name intentionally does NOT match `mcp_dock.gd`'s global
-## `class_name` (`McpDock`). See `_node_validator.gd` for the full
-## self-update parse-hazard rationale (#398).
 const Dock := preload("res://addons/godot_ai/mcp_dock.gd")
 
-## `_log_buffer` is intentionally untyped: a `: McpLogBuffer` field
-## annotation resolves through the class_name registry at script-load,
-## tripping the same parse hazard. The type fence stays on the
-## `setup(log_buffer: McpLogBuffer)` parameter, resolved at call time.
+## Untyped: a `: McpLogBuffer` annotation hits the class_name registry at
+## script-load and trips the self-update parse hazard (#398). The type fence
+## stays on the `setup(log_buffer: McpLogBuffer)` parameter.
 var _log_buffer
 var _log_display: RichTextLabel
 var _log_toggle: CheckButton

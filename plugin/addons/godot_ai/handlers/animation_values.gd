@@ -17,9 +17,6 @@ extends RefCounted
 ## error — matches the dispatcher already being torn down at that point.
 
 
-## Local const names intentionally do NOT match the global `class_name` of the
-## preloaded scripts (`McpErrorCodes`, `McpPropertyErrors`). See
-## `_node_validator.gd` for the full self-update parse-hazard rationale (#398).
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const PropertyErrors := preload("res://addons/godot_ai/handlers/_property_errors.gd")
 

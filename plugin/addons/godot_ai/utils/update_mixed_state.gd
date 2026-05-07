@@ -12,16 +12,10 @@ extends RefCounted
 ## MCP agent can see and report the state.
 
 const ADDON_DIR := "res://addons/godot_ai/"
-## Single source of truth for the suffix lives on the producer
-## (`update_reload_runner.gd::INSTALL_BACKUP_SUFFIX`). Inlined as a literal
-## here rather than aliased via `UpdateReloadRunner.INSTALL_BACKUP_SUFFIX`
-## because module-level const initializers run at script-load time, and
-## during the self-update disable→extract→enable window the runner
-## script's cached parsed form may not yet expose new constants — the
-## aliased lookup raises `Cannot find member ...` and refuses to load
-## this whole script. The Python lint
-## `test_update_backup_suffix_stays_in_sync` asserts the two literals
-## match so the anti-drift guarantee holds. See #398.
+## Producer is `update_reload_runner.gd::INSTALL_BACKUP_SUFFIX`. Inlined as a
+## literal — not aliased — because module-level const initializers run at
+## script-load and the alias re-introduces the self-update parse hazard
+## (#398). `test_update_backup_suffix_stays_in_sync` guards against drift.
 const BACKUP_SUFFIX := ".update_backup"
 ## Cap so a runaway addons tree (someone parented the wrong dir, an old
 ## crashed install left thousands of artifacts) can't blow the

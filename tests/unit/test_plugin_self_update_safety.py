@@ -245,15 +245,9 @@ def test_targeted_load_scripts_do_not_access_members_via_class_name() -> None:
 
 
 def test_update_backup_suffix_stays_in_sync() -> None:
-    """`update_mixed_state.gd::BACKUP_SUFFIX` must equal the producer's value.
+    """Build-time anti-drift guard for `update_mixed_state.gd::BACKUP_SUFFIX`.
 
-    `update_mixed_state.gd` previously aliased the suffix from
-    `update_reload_runner.gd::INSTALL_BACKUP_SUFFIX` via a module-level
-    const initializer. That site failed to load during a real self-update
-    when a parse-cache lag left the runner's new constants invisible
-    (issue #398). The fix inlines the literal in `update_mixed_state.gd`
-    so script-load doesn't depend on the runner's cached form. This test
-    replaces the runtime-aliasing anti-drift guard with a build-time one.
+    Replaces the runtime alias removed for #398 — see `update_mixed_state.gd`.
     """
 
     runner = (PLUGIN_ROOT / "update_reload_runner.gd").read_text(encoding="utf-8")
