@@ -13,7 +13,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godot
 def test_focus_in_uses_async_cooled_down_refresh_instead_of_blocking_sweep() -> None:
     """Focus-in should keep automatic refresh without blocking the editor thread."""
 
-    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
 
     assert "NOTIFICATION_APPLICATION_FOCUS_IN" in source
     assert "CLIENT_STATUS_REFRESH_COOLDOWN_MSEC := 15 * 1000" in source
@@ -24,7 +24,7 @@ def test_focus_in_uses_async_cooled_down_refresh_instead_of_blocking_sweep() -> 
 def test_client_status_refresh_runs_on_background_thread_and_applies_deferred() -> None:
     """Blocking client probes should run off-thread; UI updates should apply deferred."""
 
-    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
 
     assert "var _client_status_refresh_thread: Thread" in source
     assert "_client_status_refresh_thread.start" in source
@@ -35,7 +35,7 @@ def test_client_status_refresh_runs_on_background_thread_and_applies_deferred() 
 def test_client_status_refresh_coalesces_and_manual_refresh_bypasses_cooldown() -> None:
     """Duplicate automatic refreshes should coalesce; manual actions stay explicit."""
 
-    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
 
     assert "if ClientRefreshStateScript.has_worker_alive(_refresh_state):" in source
     assert "_client_status_refresh_pending = true" in source
@@ -46,7 +46,7 @@ def test_client_status_refresh_coalesces_and_manual_refresh_bypasses_cooldown() 
 def test_clients_window_open_requests_nonblocking_refresh() -> None:
     """Opening Clients & Tools should not schedule a deferred synchronous sweep."""
 
-    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
     block = get_func_block(source, "func _on_open_clients_window() -> void:")
 
     assert "_request_client_status_refresh(" in block
@@ -88,7 +88,7 @@ def test_initial_paint_warms_worker_call_graph_before_threading() -> None:
     (regressing #228's responsiveness fix and re-blocking the cold paint).
     """
 
-    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
     build_block = get_func_block(source, "func _build_ui() -> void:")
     assert "_perform_initial_client_status_refresh()" in build_block, (
         "_build_ui must call the initial-refresh helper"
@@ -137,12 +137,8 @@ def test_initial_paint_warms_worker_call_graph_before_threading() -> None:
         "_warm_strategy_bytecode must dereference JsonStrategy so the "
         "worker can't race the JSON strategy's lazy bytecode swap."
     )
-    assert "TomlStrategy." in warm_block, (
-        "_warm_strategy_bytecode must dereference TomlStrategy."
-    )
-    assert "CliStrategy." in warm_block, (
-        "_warm_strategy_bytecode must dereference CliStrategy."
-    )
+    assert "TomlStrategy." in warm_block, "_warm_strategy_bytecode must dereference TomlStrategy."
+    assert "CliStrategy." in warm_block, "_warm_strategy_bytecode must dereference CliStrategy."
     assert "FileAccess" not in warm_block and "OS.execute" not in warm_block, (
         "_warm_strategy_bytecode must stay pure-memory — no disk, no "
         "subprocess. The point is to dereference scripts cheaply, not to "
@@ -160,7 +156,7 @@ def test_initial_paint_warms_worker_call_graph_before_threading() -> None:
 def test_client_status_refresh_defers_while_editor_filesystem_is_busy() -> None:
     """Refresh workers must not race Godot's script reload/documentation pass."""
 
-    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
 
     # PR 6 (#297) collapsed the deferred-* boolean cluster into the
     # McpClientRefreshState enum's DEFERRED_FOR_FILESYSTEM value, plus
@@ -199,7 +195,7 @@ def test_client_status_refresh_defers_while_editor_filesystem_is_busy() -> None:
 def test_focus_refresh_is_opportunistic_while_editor_filesystem_is_busy() -> None:
     """Focus-in status refresh should never be treated as important editor work."""
 
-    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
     focus_block = _focus_in_block(source)
     request_block = get_func_block(
         source, "func _request_client_status_refresh(force: bool = false) -> bool:"
@@ -219,7 +215,7 @@ def test_focus_refresh_is_opportunistic_while_editor_filesystem_is_busy() -> Non
 def test_deferred_manual_refresh_replays_through_async_request_path_only() -> None:
     """Queued manual refreshes should not reintroduce PR #228's sync sweep."""
 
-    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
     retry_block = get_func_block(source, "func _retry_deferred_client_status_refresh() -> void:")
 
     for block in (retry_block,):
@@ -241,7 +237,7 @@ def test_deferred_manual_refresh_replays_through_async_request_path_only() -> No
 def test_deferred_initial_refresh_replays_warmup_path() -> None:
     """Scan-delayed initial paint must preserve #235's main-thread warm-up."""
 
-    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
     retry_block = get_func_block(source, "func _retry_deferred_client_status_refresh() -> void:")
 
     assert "var initial := _client_status_refresh_pending_initial" in retry_block
@@ -278,7 +274,7 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
     `_is_self_update_in_progress()` which consults the manager's flag.
     """
 
-    manager_source = (PLUGIN_ROOT / "utils" / "update_manager.gd").read_text()
+    manager_source = (PLUGIN_ROOT / "utils" / "update_manager.gd").read_text(encoding="utf-8")
     install_block = get_func_block(manager_source, "func _install_zip() -> void:")
 
     flag_set_idx = install_block.find("_install_in_flight = true")
@@ -318,7 +314,7 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
         "extraction so plugin-owned instances do not hot-reload in place."
     )
 
-    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
     request_block = get_func_block(
         dock_source, "func _request_client_status_refresh(force: bool = false) -> bool:"
     )
@@ -343,8 +339,8 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
 def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> None:
     """The in-process update path must never expose a half-written addon tree."""
 
-    plugin_source = (PLUGIN_ROOT / "plugin.gd").read_text()
-    runner_source = (PLUGIN_ROOT / "update_reload_runner.gd").read_text()
+    plugin_source = (PLUGIN_ROOT / "plugin.gd").read_text(encoding="utf-8")
+    runner_source = (PLUGIN_ROOT / "update_reload_runner.gd").read_text(encoding="utf-8")
 
     assert "UPDATE_RELOAD_RUNNER_SCRIPT" in plugin_source
     handoff_block = get_func_block(plugin_source, "func install_downloaded_update(")
@@ -456,7 +452,7 @@ def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> Non
 def test_self_update_runner_does_not_introduce_typed_variant_storage_hazards() -> None:
     """The runner is the only plugin-owned script instance expected to survive scan."""
 
-    runner_source = (PLUGIN_ROOT / "update_reload_runner.gd").read_text()
+    runner_source = (PLUGIN_ROOT / "update_reload_runner.gd").read_text(encoding="utf-8")
     risky_field = re.compile(r"^\s*var\s+\w+\s*:\s*(?:Dictionary|Array)(?:\[|[\s=])", re.M)
 
     assert risky_field.search(runner_source) is None, (
@@ -469,9 +465,9 @@ def test_self_update_runner_does_not_introduce_typed_variant_storage_hazards() -
 def test_worker_uses_main_thread_probe_snapshot_for_cli_paths() -> None:
     """CLI path discovery caches should not be mutated from the refresh worker."""
 
-    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
-    configurator_source = (PLUGIN_ROOT / "client_configurator.gd").read_text()
-    cli_source = (PLUGIN_ROOT / "clients" / "_cli_strategy.gd").read_text()
+    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
+    configurator_source = (PLUGIN_ROOT / "client_configurator.gd").read_text(encoding="utf-8")
+    cli_source = (PLUGIN_ROOT / "clients" / "_cli_strategy.gd").read_text(encoding="utf-8")
     worker_block = get_func_block(dock_source, "func _run_client_status_refresh_worker")
 
     assert "client_status_probe_snapshot" in dock_source
@@ -487,7 +483,7 @@ def test_worker_uses_main_thread_probe_snapshot_for_cli_paths() -> None:
 def test_refresh_timeout_can_abandon_stale_worker_results() -> None:
     """A hung CLI probe should not permanently own the refresh slot."""
 
-    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
 
     assert "CLIENT_STATUS_REFRESH_TIMEOUT_MSEC := 30 * 1000" in source
     assert "_client_status_refresh_generation" in source
@@ -512,7 +508,7 @@ def test_check_uv_version_caches_for_session() -> None:
     a single explicit `invalidate_uv_version_cache()` call clears both.
     """
 
-    source = (PLUGIN_ROOT / "client_configurator.gd").read_text()
+    source = (PLUGIN_ROOT / "client_configurator.gd").read_text(encoding="utf-8")
 
     assert "static var _uv_version_cache: String" in source, (
         "Cached `uvx --version` string must be a class-level static so it "
@@ -555,7 +551,7 @@ def test_check_uv_version_caches_for_session() -> None:
         "through check_uv_version (e.g. future inspectors / debug helpers)."
     )
 
-    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
     install_block = get_func_block(dock_source, "func _on_install_uv() -> void:")
     assert "ClientConfigurator.invalidate_uvx_cli_cache()" in install_block, (
         "_on_install_uv must invalidate the CLI-path cache via the "
@@ -586,7 +582,7 @@ def test_force_refresh_invalidates_cli_finder_cache() -> None:
     editor restart. Focus-in (`force=false`) keeps the cache.
     """
 
-    configurator_source = (PLUGIN_ROOT / "client_configurator.gd").read_text()
+    configurator_source = (PLUGIN_ROOT / "client_configurator.gd").read_text(encoding="utf-8")
     invalidator_block = get_func_block(
         configurator_source, "static func invalidate_cli_cache() -> void:"
     )
@@ -595,7 +591,7 @@ def test_force_refresh_invalidates_cli_finder_cache() -> None:
         "cached entry (positive and negative)."
     )
 
-    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
     request_block = get_func_block(
         dock_source,
         "func _request_client_status_refresh(force: bool = false) -> bool:",
@@ -627,7 +623,7 @@ def test_cli_finder_cache_is_mutex_guarded() -> None:
     the off-main-thread CLI-lookup design.
     """
 
-    source = (PLUGIN_ROOT / "clients" / "_cli_finder.gd").read_text()
+    source = (PLUGIN_ROOT / "clients" / "_cli_finder.gd").read_text(encoding="utf-8")
 
     assert re.search(r"static var _mutex: Mutex = Mutex\.new\(\)", source), (
         "CliFinder must declare `static var _mutex: Mutex = Mutex.new()` so "
@@ -636,7 +632,7 @@ def test_cli_finder_cache_is_mutex_guarded() -> None:
     )
 
     invalidate_block = get_func_block(
-        source, "static func invalidate(exe_name: String = \"\") -> void:"
+        source, 'static func invalidate(exe_name: String = "") -> void:'
     )
     assert "_mutex.lock()" in invalidate_block and "_mutex.unlock()" in invalidate_block, (
         "invalidate() must hold _mutex around the dict clear/erase so it "
@@ -675,7 +671,7 @@ def test_cli_finder_cache_is_mutex_guarded() -> None:
 def test_configure_all_uses_cached_status_not_dot_color() -> None:
     """Configure-all must not make correctness decisions from stale UI colors."""
 
-    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
     block = get_func_block(source, "func _on_configure_all_clients() -> void:")
 
     assert 'get("status", Client.Status.NOT_CONFIGURED)' in block

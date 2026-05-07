@@ -50,14 +50,14 @@ def test_runtime_protocol_is_not_reintroduced_without_injection_seam():
     for path in _SRC_ROOT.rglob("*.py"):
         if "__pycache__" in path.parts:
             continue
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         if "godot_ai.runtime.interface" in text or "class Runtime(Protocol)" in text:
             offenders.append(str(path.relative_to(_REPO_ROOT)))
     assert offenders == [], f"Runtime Protocol references reintroduced in: {offenders}"
 
     stale_docs = []
     for path in _RUNTIME_BOUNDARY_DOCS:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         if "runtime/interface.py" in text or "`Runtime` protocol" in text:
             stale_docs.append(str(path.relative_to(_REPO_ROOT)))
     assert stale_docs == [], f"Stale Runtime Protocol references in docs: {stale_docs}"
@@ -149,7 +149,7 @@ def test_create_server_ignores_unknown_domain_names_via_set_input():
 
 def _parse_gd_catalog() -> tuple[list[str], dict[str, list[str]]]:
     """Parse tool_catalog.gd into (core_tools, {domain_id: [tool_names]})."""
-    text = _CATALOG_GD.read_text()
+    text = _CATALOG_GD.read_text(encoding="utf-8")
 
     core_match = re.search(r"const CORE_TOOLS := \[(.*?)\]", text, re.DOTALL)
     assert core_match, "CORE_TOOLS block not found in tool_catalog.gd"

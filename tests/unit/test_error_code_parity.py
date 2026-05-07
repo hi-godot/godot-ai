@@ -33,7 +33,7 @@ _CONST_RE = re.compile(r'^\s*const\s+([A-Z_]+)\s*:=\s*"([A-Z_]+)"\s*$', re.MULTI
 
 @functools.cache
 def _parse_gdscript_codes() -> dict[str, str]:
-    text = ERROR_CODES_GD.read_text()
+    text = ERROR_CODES_GD.read_text(encoding="utf-8")
     return dict(_CONST_RE.findall(text))
 
 

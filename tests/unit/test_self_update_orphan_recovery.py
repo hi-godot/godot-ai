@@ -19,7 +19,7 @@ def test_recover_incompatible_success_unblocks_existing_connection() -> None:
     `McpConnection` instance.
     """
 
-    source = PLUGIN_GD.read_text()
+    source = PLUGIN_GD.read_text(encoding="utf-8")
     recover_block = get_func_block(source, "func recover_incompatible_server() -> bool:")
     resume_block = get_func_block(source, "func _resume_connection_after_recovery() -> void:")
     lifecycle_source = (
@@ -29,7 +29,7 @@ def test_recover_incompatible_success_unblocks_existing_connection() -> None:
         / "godot_ai"
         / "utils"
         / "server_lifecycle.gd"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     lifecycle_recover_block = get_func_block(
         lifecycle_source, "func recover_incompatible_server() -> bool:"
     )
@@ -54,7 +54,7 @@ def test_recover_incompatible_success_unblocks_existing_connection() -> None:
 
 
 def test_status_probe_reads_response_body_only_after_headers() -> None:
-    source = PLUGIN_GD.read_text()
+    source = PLUGIN_GD.read_text(encoding="utf-8")
     probe_block = get_func_block(
         source,
         "static func _probe_live_server_status(port: int, timeout_ms: int = "

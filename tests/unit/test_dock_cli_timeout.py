@@ -28,7 +28,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godot
 def test_cli_strategy_routes_every_shell_out_through_mcpcliexec() -> None:
     """No bare OS.execute survives in _cli_strategy.gd."""
 
-    cli_source = (PLUGIN_ROOT / "clients" / "_cli_strategy.gd").read_text()
+    cli_source = (PLUGIN_ROOT / "clients" / "_cli_strategy.gd").read_text(encoding="utf-8")
 
     # The whole point of the refactor: every CLI invocation must go
     # through the bounded helper. A bare OS.execute slipping back in
@@ -50,7 +50,7 @@ def test_cli_strategy_routes_every_shell_out_through_mcpcliexec() -> None:
 def test_cli_exec_helper_uses_pipe_spawn_and_poll_kill() -> None:
     """The helper must spawn detached and kill on timeout — not a blocking OS.execute."""
 
-    helper_source = (PLUGIN_ROOT / "clients" / "_cli_exec.gd").read_text()
+    helper_source = (PLUGIN_ROOT / "clients" / "_cli_exec.gd").read_text(encoding="utf-8")
 
     # Pipe-based spawn returns a PID we can poll on. A blocking
     # OS.execute(..., true) here would just relocate the original hang.
@@ -67,7 +67,7 @@ def test_cli_exec_helper_uses_pipe_spawn_and_poll_kill() -> None:
 def test_cli_strategy_surfaces_timeout_in_configure_and_remove_messages() -> None:
     """A timeout must produce a user-actionable error, not a cryptic exit code."""
 
-    cli_source = (PLUGIN_ROOT / "clients" / "_cli_strategy.gd").read_text()
+    cli_source = (PLUGIN_ROOT / "clients" / "_cli_strategy.gd").read_text(encoding="utf-8")
 
     # The dock surfaces these strings in its row-error label and "Run
     # this manually" panel. Drift here means the user sees "exit code
@@ -84,7 +84,7 @@ def test_cli_strategy_surfaces_timeout_in_configure_and_remove_messages() -> Non
 def test_dock_dispatches_configure_and_remove_to_worker_thread() -> None:
     """Issue #239: the Configure / Remove buttons must not block main."""
 
-    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
 
     # The dispatch funnel must exist and route the click into a worker.
     assert "func _dispatch_client_action(" in dock_source
@@ -114,8 +114,8 @@ def test_dock_dispatches_configure_and_remove_to_worker_thread() -> None:
 def test_dock_drains_action_workers_during_install_update_and_exit_tree() -> None:
     """Worker drain must cover both shutdown paths — same reason as the refresh worker."""
 
-    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
-    manager_source = (PLUGIN_ROOT / "utils" / "update_manager.gd").read_text()
+    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
+    manager_source = (PLUGIN_ROOT / "utils" / "update_manager.gd").read_text(encoding="utf-8")
 
     # `_exit_tree` (dock teardown) must drain inline; the install-time
     # drain runs through `McpUpdateManager._drain_dock_workers()` which
@@ -141,7 +141,7 @@ def test_dock_drains_action_workers_during_install_update_and_exit_tree() -> Non
 def test_dock_action_dispatch_gates_on_self_update_in_progress() -> None:
     """The same gate the refresh worker honors must protect Configure / Remove."""
 
-    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
     block = get_func_block(dock_source, "func _dispatch_client_action(")
     assert "_is_self_update_in_progress" in block, (
         "Configure / Remove dispatch must short-circuit during the "
@@ -155,7 +155,7 @@ def test_dock_action_dispatch_gates_on_self_update_in_progress() -> None:
 def test_status_refresh_apply_skips_rows_with_in_flight_action() -> None:
     """A concurrent refresh result must not stomp the 'Configuring…' badge."""
 
-    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text()
+    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
     apply_block = get_func_block(dock_source, "func _apply_client_status_refresh_results(")
     assert "_client_action_threads.has(" in apply_block, (
         "Refresh-result apply must skip rows whose action worker is "

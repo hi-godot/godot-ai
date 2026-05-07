@@ -31,7 +31,7 @@ def test_path_validator_file_exists() -> None:
 
 def test_path_validator_declares_class_name() -> None:
     """Project-wide class_name lets handlers reference McpPathValidator without preload."""
-    source = PATH_VALIDATOR.read_text()
+    source = PATH_VALIDATOR.read_text(encoding="utf-8")
     assert "class_name McpPathValidator" in source
 
 
@@ -43,7 +43,7 @@ def test_path_validator_implements_layered_checks() -> None:
     Each layer catches a different escape vector — losing any of them silently
     weakens the security boundary without a single test failing on a single bad input.
     """
-    source = PATH_VALIDATOR.read_text()
+    source = PATH_VALIDATOR.read_text(encoding="utf-8")
     # 1) non-empty guard — without this, an empty path silently passes the
     # prefix check (since "".begins_with("res://") is false, the prefix
     # error fires, but the message would name the wrong layer).
@@ -73,7 +73,7 @@ def test_script_handler_uses_path_validator_at_every_entry_point() -> None:
     bare prefix check, agent input flows back into the file write/read
     primitives without the `..` and boundary guards.
     """
-    source = SCRIPT_HANDLER.read_text()
+    source = SCRIPT_HANDLER.read_text(encoding="utf-8")
     # No bare prefix check remains in this file.
     assert 'begins_with("res://")' not in source, (
         'script_handler.gd must not contain bare `begins_with("res://")` '
@@ -93,7 +93,7 @@ def test_script_handler_uses_path_validator_at_every_entry_point() -> None:
 
 
 def test_filesystem_handler_uses_path_validator_at_every_entry_point() -> None:
-    source = FILESYSTEM_HANDLER.read_text()
+    source = FILESYSTEM_HANDLER.read_text(encoding="utf-8")
     assert 'begins_with("res://")' not in source, (
         'filesystem_handler.gd must not contain bare `begins_with("res://")` '
         "checks — replace with McpPathValidator.validate_resource_path."
