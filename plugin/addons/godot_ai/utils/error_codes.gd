@@ -1,7 +1,21 @@
 @tool
+class_name McpErrorCodes
 extends RefCounted
 
 ## Error code constants shared across handlers. Mirrors protocol/errors.py.
+##
+## NOTE: `class_name` is intentionally retained here even though every
+## consumer uses the preload-alias pattern (`const ErrorCodes := preload(...)`)
+## introduced in #412. Removing the class_name in v2.4.1 caused upgrade
+## installs from any earlier version to fail with "Could not resolve script"
+## across the disable→extract→enable window: Godot's project script-class
+## index (carrying the old `McpErrorCodes` registration) and the new
+## class_name-less file content go through a transient inconsistency the
+## new files' preloads can't survive. Keeping the class_name on this one
+## file holds the registry stable across upgrades. The bare-`Mcp*` lint in
+## `tests/unit/test_plugin_self_update_safety.py` allow-lists this single
+## site; it does not propagate the parse hazard back to the 400+ consumer
+## sites that #412 cleared.
 
 const INVALID_PARAMS := "INVALID_PARAMS"
 const EDITED_SCENE_MISMATCH := "EDITED_SCENE_MISMATCH"
