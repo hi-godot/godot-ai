@@ -17,7 +17,12 @@ TESTS_ROOT = REPO_ROOT / "tests"
 
 
 def _bare_read_text_offenders(source: str) -> list[int]:
-    """Line numbers of `.read_text()` calls in `source` that lack `encoding=`."""
+    """Line numbers of `.read_text()` calls in `source` that lack `encoding=`.
+
+    Matches the keyword form only. A positional `read_text("utf-8")` or
+    `**kwargs` splat is opaque to AST and would be falsely flagged; in this
+    codebase the convention is the keyword form, which keeps the lint exact.
+    """
 
     tree = ast.parse(source)
     offenders: list[int] = []
