@@ -1084,7 +1084,9 @@ class TestReloadPluginTool:
         assert result.data["status"] == "reload_initiated"
         assert result.data["transport_will_drop"] is True
         assert result.data["old_session_id"] == "mcp-test"
-        assert "session_manage" in result.data["guidance"]
+        guidance = result.data["guidance"]
+        assert guidance.startswith("Server is plugin-managed;")
+        assert "session_manage(op='list')" in guidance
         ## A pre-flight ack must NOT carry a new_session_id field — the
         ## new session lives in the next server's registry, which this
         ## process can never observe.

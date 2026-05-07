@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import pathlib
 
 import pytest
 
@@ -1455,16 +1454,16 @@ async def test_reload_plugin_pins_target_session_when_multiple_connected():
 
 
 @pytest.fixture
-def plugin_managed_runtime(monkeypatch):
+def plugin_managed_mode(monkeypatch, tmp_path):
     """Pretend the server was spawned by the plugin (--pid-file present),
     and zero out the post-ack delay so the background reload dispatch
     fires immediately on the next event-loop tick."""
-    monkeypatch.setattr(runtime_info, "_PID_FILE_PATH", pathlib.Path("/tmp/fake.pid"))
+    monkeypatch.setattr(runtime_info, "_PID_FILE_PATH", tmp_path / "fake.pid")
     monkeypatch.setattr(editor_handlers, "PLUGIN_MANAGED_RELOAD_DELAY_SEC", 0)
 
 
 async def test_reload_plugin_returns_preflight_ack_when_plugin_managed(
-    plugin_managed_runtime,
+    plugin_managed_mode,
 ):
     """Issue #393: when our own server was spawned by the plugin, the
     reload kills us before any sync `wait_for_session` could deliver a
@@ -1494,11 +1493,11 @@ async def test_reload_plugin_returns_preflight_ack_when_plugin_managed(
 
 
 async def test_reload_plugin_dispatches_reload_async_when_plugin_managed(
-    plugin_managed_runtime,
+    plugin_managed_mode,
 ):
     """The pre-flight ack returns first; the WS reload command then fires
     from a background task. Verify both halves: the ack returns synchronously
-    and the reload command lands on the wire after one event-loop yield."""
+    and the reload command lands on the wire after the loop runs the task."""
     registry = SessionRegistry()
     registry.register(_make_session("old-session"))
     stub = ReloadStubClient(registry=registry, new_session_id="new-session")
@@ -1507,9 +1506,10 @@ async def test_reload_plugin_dispatches_reload_async_when_plugin_managed(
     result = await editor_handlers.editor_reload_plugin(runtime)
     assert result["status"] == "reload_initiated"
 
-    ## Yield once to drain the background task scheduled by create_task.
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    ## Drain the create_task'd background reload — a single yield with a
+    ## small budget gives it room to schedule and complete its (mocked) WS
+    ## send. The stub returns synchronously, so this is comfortably enough.
+    await asyncio.sleep(0.01)
 
     reload_calls = [c for c in stub.calls if c["command"] == "reload_plugin"]
     assert len(reload_calls) == 1
@@ -1519,7 +1519,7 @@ async def test_reload_plugin_dispatches_reload_async_when_plugin_managed(
 
 
 async def test_reload_plugin_async_dispatch_swallows_disconnect_errors(
-    plugin_managed_runtime,
+    plugin_managed_mode,
 ):
     """The plugin tearing down our server is the *expected* side effect
     of reload_plugin, so a Connection/Timeout error from the WS send in
@@ -1538,8 +1538,7 @@ async def test_reload_plugin_async_dispatch_swallows_disconnect_errors(
 
     ## Drain the background task; if it raised an unhandled exception
     ## this loop tick would surface it.
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
 
 
 async def test_reload_plugin_external_path_unchanged_when_not_plugin_managed():
