@@ -173,11 +173,15 @@ var _reload_btn: Button
 var _mode_override_btn: OptionButton
 var _setup_section: VBoxContainer
 var _setup_container: VBoxContainer
-var _dev_server_btn: Button
-## Same-version Python edits get adopted as compatible, so neither the
-## drift nor the crash Restart button surfaces — this is the unconditional
-## kick contributors need to pick up source changes without a version bump.
-var _dev_restart_btn: Button
+## Primary dev-section button — always (re)starts a `--reload` dev server.
+## Same-version Python edits get adopted as compatible by the lifecycle, so
+## neither the drift nor the crash Restart button surfaces; this is the
+## unconditional kick contributors need to pick up source changes without
+## a version bump.
+var _dev_primary_btn: Button
+## Small "✕" affordance next to the primary — stops the dev server without
+## spawning a replacement. Disabled when no dev server is running.
+var _dev_stop_btn: Button
 var _log_viewer: LogViewerScript
 
 var _last_connected := false
@@ -1256,24 +1260,31 @@ func _refresh_setup_status() -> void:
 		return
 	for child in _setup_container.get_children():
 		child.queue_free()
-	_dev_server_btn = null
-	_dev_restart_btn = null
+	_dev_primary_btn = null
+	_dev_stop_btn = null
 
 	var is_dev := ClientConfigurator.is_dev_checkout()
 	if is_dev:
 		_setup_container.add_child(_make_status_row("Mode", "Dev (venv)", Color.CYAN))
-		_dev_server_btn = Button.new()
-		_dev_server_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_dev_server_btn.pressed.connect(_on_dev_server_pressed)
-		_update_dev_server_btn()
-		_setup_container.add_child(_dev_server_btn)
 
-		_dev_restart_btn = Button.new()
-		_dev_restart_btn.text = "Restart Server"
-		_dev_restart_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_dev_restart_btn.pressed.connect(_on_dev_restart_pressed)
-		_update_dev_restart_btn()
-		_setup_container.add_child(_dev_restart_btn)
+		var btn_row := HBoxContainer.new()
+		btn_row.add_theme_constant_override("separation", 4)
+		btn_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+		_dev_primary_btn = Button.new()
+		_dev_primary_btn.text = "Restart Dev Server"
+		_dev_primary_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_dev_primary_btn.pressed.connect(_on_dev_primary_pressed)
+		btn_row.add_child(_dev_primary_btn)
+
+		_dev_stop_btn = Button.new()
+		_dev_stop_btn.text = "✕"
+		_dev_stop_btn.tooltip_text = "Stop the dev server without spawning a replacement."
+		_dev_stop_btn.pressed.connect(_on_dev_stop_pressed)
+		btn_row.add_child(_dev_stop_btn)
+
+		_setup_container.add_child(btn_row)
+		_update_dev_section_buttons()
 		return
 
 	# User mode — check for uv
@@ -1358,102 +1369,56 @@ func _make_status_row(label_text: String, value_text: String, value_color: Color
 	return row
 
 
-## Pure helper — given the two independent server states, return the button
-## label and tooltip. Factored out so tests can cover all three states without
-## spinning up a real server or plugin.
-static func _dev_server_btn_state(has_managed: bool, dev_running: bool) -> Dictionary:
-	var port := ClientConfigurator.http_port()
-	if has_managed:
-		return {
-			"text": "Switch to dev mode (--reload)",
-			"tooltip": "Stops the plugin's managed server and replaces it with a --reload dev server on port %d. The dev server auto-restarts when you edit Python sources." % port,
-		}
-	if dev_running:
-		return {
-			"text": "Exit dev mode",
-			"tooltip": "Stops the external dev server on port %d so the plugin's managed server can take over on next reload." % port,
-		}
-	return {
-		"text": "Start dev server",
-		"tooltip": "Spawns a --reload dev server on port %d. Auto-restarts when you edit Python sources." % port,
-	}
-
-
-func _update_dev_server_btn() -> void:
-	if _dev_server_btn == null:
-		return
-	if _plugin == null:
-		return
-	## Defensive guard against the self-update mixed-state window — see the
-	## comment in `_update_status` for the full story. Same #168.
-	if not (_plugin.has_method("has_managed_server") and _plugin.has_method("is_dev_server_running")):
-		return
-	var state := _dev_server_btn_state(_plugin.has_managed_server(), _plugin.is_dev_server_running())
-	_dev_server_btn.text = state["text"]
-	_dev_server_btn.tooltip_text = state["tooltip"]
-
-
-func _on_dev_server_pressed() -> void:
-	if _plugin == null:
-		return
-	if _plugin.has_managed_server():
-		# Managed server running — swap it for a --reload dev server.
-		# start_dev_server() calls _stop_server() internally before spawning.
-		_plugin.start_dev_server()
-	elif _plugin.is_dev_server_running():
-		_plugin.stop_dev_server()
-	else:
-		_plugin.start_dev_server()
-	_update_dev_section_buttons.call_deferred()
-
-
-## Pure helper for the Restart Server button — enabled iff something is
-## running on the HTTP port we can kick. Static so `test_dock_dev_server_btn`
-## can cover the truth table without a real plugin.
-static func _restart_server_btn_state(has_managed: bool, dev_running: bool) -> Dictionary:
+## Pure helper for the primary "Restart Dev Server" button. Always enabled
+## (clicking with nothing running just spawns fresh); tooltip adapts to
+## whether a kill+respawn or fresh spawn is what'll happen.
+static func _dev_primary_btn_state(has_managed: bool, dev_running: bool) -> Dictionary:
 	var port := ClientConfigurator.http_port()
 	if has_managed or dev_running:
 		return {
-			"enabled": true,
+			"text": "Restart Dev Server",
 			"tooltip": (
-				"Kill the server on port %d and respawn from current source, "
-				+ "preserving managed vs --reload mode. Use this to pick up "
-				+ "Python server-source changes that don't bump the version."
+				"Kill the server on port %d and start a fresh --reload dev server. "
+				+ "Use this to pick up Python source changes that don't bump the version."
 			) % port,
 		}
 	return {
-		"enabled": false,
-		"tooltip": "No godot-ai server is running on port %d." % port,
+		"text": "Start Dev Server",
+		"tooltip": "Spawn a --reload dev server on port %d. Auto-restarts when you edit Python sources." % port,
 	}
 
 
-func _update_dev_restart_btn() -> void:
-	if _dev_restart_btn == null:
-		return
-	if _plugin == null:
-		return
-	## See _update_dev_server_btn — same #168 self-update mixed-state guard.
-	if not (_plugin.has_method("has_managed_server") and _plugin.has_method("is_dev_server_running")):
-		return
-	var state := _restart_server_btn_state(_plugin.has_managed_server(), _plugin.is_dev_server_running())
-	_dev_restart_btn.disabled = not state["enabled"]
-	_dev_restart_btn.tooltip_text = state["tooltip"]
+## Pure helper for the small "✕" stop button — only enabled when a dev
+## server is actually running. Stops without respawning; intentionally
+## never targets a managed server (that's the lifecycle's responsibility).
+static func _dev_stop_btn_state(dev_running: bool) -> Dictionary:
+	if dev_running:
+		return {"enabled": true, "tooltip": "Stop the dev server without spawning a replacement."}
+	return {"enabled": false, "tooltip": "No --reload dev server to stop."}
 
 
-func _on_dev_restart_pressed() -> void:
+func _on_dev_primary_pressed() -> void:
 	if _plugin == null or _server_restart_in_progress:
 		return
-	if not _plugin.has_method("force_restart_server_preserving_mode"):
+	if not _plugin.has_method("force_restart_or_start_dev_server"):
 		return
 	_server_restart_in_progress = true
 	_update_dev_section_buttons()
 	if not is_inside_tree():
 		## Test path — no scene tree means no timer; run synchronously
 		## so suite assertions see the dispatch without `await`.
-		_plugin.force_restart_server_preserving_mode()
+		_plugin.force_restart_or_start_dev_server()
 		_server_restart_in_progress = false
 		return
 	call_deferred("_perform_dev_restart_after_feedback")
+
+
+func _on_dev_stop_pressed() -> void:
+	if _plugin == null:
+		return
+	if _plugin.has_method("stop_dev_server"):
+		_plugin.stop_dev_server()
+	_update_dev_section_buttons.call_deferred()
 
 
 func _perform_dev_restart_after_feedback() -> void:
@@ -1461,7 +1426,7 @@ func _perform_dev_restart_after_feedback() -> void:
 	## blocking _wait_for_port_free freezes the editor for up to 5s.
 	await get_tree().create_timer(0.15).timeout
 	if _plugin != null:
-		_plugin.force_restart_server_preserving_mode()
+		_plugin.force_restart_or_start_dev_server()
 	## start_dev_server's spawn happens via a 0.5s SceneTree timer; give
 	## it time to land plus a buffer for the WS reconnect before clearing
 	## the busy state. The unconditional clear matches sibling restart
@@ -1484,20 +1449,20 @@ func _update_dev_section_buttons() -> void:
 		return
 	var has_managed: bool = _plugin.has_managed_server()
 	var dev_running: bool = _plugin.is_dev_server_running()
-	if _dev_server_btn != null:
-		var server_state := _dev_server_btn_state(has_managed, dev_running)
-		_dev_server_btn.text = server_state["text"]
-		_dev_server_btn.tooltip_text = server_state["tooltip"]
-	if _dev_restart_btn != null:
+	if _dev_primary_btn != null:
 		if _server_restart_in_progress:
-			_dev_restart_btn.disabled = true
-			_dev_restart_btn.text = "Restarting…"
-			_dev_restart_btn.tooltip_text = "Killing the current server and respawning…"
+			_dev_primary_btn.disabled = true
+			_dev_primary_btn.text = "Restarting…"
+			_dev_primary_btn.tooltip_text = "Killing the current server and respawning…"
 		else:
-			var restart_state := _restart_server_btn_state(has_managed, dev_running)
-			_dev_restart_btn.disabled = not restart_state["enabled"]
-			_dev_restart_btn.text = "Restart Server"
-			_dev_restart_btn.tooltip_text = restart_state["tooltip"]
+			var primary_state := _dev_primary_btn_state(has_managed, dev_running)
+			_dev_primary_btn.disabled = false
+			_dev_primary_btn.text = primary_state["text"]
+			_dev_primary_btn.tooltip_text = primary_state["tooltip"]
+	if _dev_stop_btn != null:
+		var stop_state := _dev_stop_btn_state(dev_running)
+		_dev_stop_btn.disabled = (not stop_state["enabled"]) or _server_restart_in_progress
+		_dev_stop_btn.tooltip_text = stop_state["tooltip"]
 
 
 func _on_install_uv() -> void:
