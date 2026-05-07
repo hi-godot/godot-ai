@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -9,6 +10,7 @@ import logging
 from fastmcp.tools.base import Image as McpImage
 from mcp.types import TextContent
 
+from godot_ai import runtime_info
 from godot_ai.handlers._readiness import require_writable, sync_readiness_from_snapshot
 from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.tools._pagination import paginate
@@ -17,6 +19,13 @@ logger = logging.getLogger(__name__)
 
 SCREENSHOT_TIMEOUT_SEC = 15.0
 GAME_SCREENSHOT_TIMEOUT_SEC = 35.0
+
+## Brief delay between handing the structured pre-flight ack back to
+## FastMCP and firing `reload_plugin` over the WebSocket on the
+## plugin-managed path. Gives the HTTP/SSE response a chance to flush
+## before the plugin tears down our own process. Tests override this
+## to 0 so they don't wait. See `editor_reload_plugin` below.
+PLUGIN_MANAGED_RELOAD_DELAY_SEC = 0.5
 
 
 async def editor_state(runtime: DirectRuntime) -> dict:
@@ -248,6 +257,27 @@ async def editor_reload_plugin(runtime: DirectRuntime) -> dict:
     if active is None:
         raise ConnectionError("No active Godot session")
     old_id = active.session_id
+
+    if runtime_info.is_plugin_managed():
+        ## Plugin-managed server: the reload will kill our own process
+        ## before any sync `wait_for_session` result can reach the
+        ## caller (issue #393). Hand the structured ack back to FastMCP
+        ## now so the HTTP response flushes, then dispatch the reload
+        ## command from a background task. `new_session_id` is dropped
+        ## from this shape because it lives in the *next* server's
+        ## registry, which this process can never see.
+        asyncio.create_task(_dispatch_reload_async(runtime, old_id))
+        return {
+            "status": "reload_initiated",
+            "transport_will_drop": True,
+            "old_session_id": old_id,
+            "guidance": (
+                "Server is plugin-managed; the WebSocket transport will drop "
+                "as part of the reload. Reconnect, then call "
+                "session_manage(op='list') to find the new session_id."
+            ),
+        }
+
     known_ids = {session.session_id for session in runtime.list_sessions()}
 
     try:
@@ -270,6 +300,17 @@ async def editor_reload_plugin(runtime: DirectRuntime) -> dict:
         "old_session_id": old_id,
         "new_session_id": new_session.session_id,
     }
+
+
+async def _dispatch_reload_async(runtime: DirectRuntime, old_id: str) -> None:
+    if PLUGIN_MANAGED_RELOAD_DELAY_SEC > 0:
+        await asyncio.sleep(PLUGIN_MANAGED_RELOAD_DELAY_SEC)
+    try:
+        await runtime.send_command("reload_plugin", session_id=old_id, timeout=2.0)
+    except (ConnectionError, TimeoutError) as exc:
+        logger.debug("Expected disconnect during plugin-managed reload: %s", exc)
+    except Exception:
+        logger.exception("Unexpected error dispatching plugin-managed reload")
 
 
 async def editor_quit(runtime: DirectRuntime) -> dict:

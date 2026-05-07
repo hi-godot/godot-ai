@@ -6,15 +6,20 @@ from pathlib import Path
 
 import pytest
 
-from godot_ai.runtime_info import install_pid_file
+from godot_ai import runtime_info
+from godot_ai.runtime_info import install_pid_file, is_plugin_managed
 
 
 @pytest.fixture
 def _unregister_atexit(monkeypatch):
     """Capture atexit handlers registered during install_pid_file so the
-    test can invoke them explicitly and unregister them cleanly.
+    test can invoke them explicitly and unregister them cleanly. Also
+    snapshots and restores the module-level _PID_FILE_PATH so a test
+    that calls install_pid_file doesn't leak plugin-managed mode into
+    other tests in the suite.
     """
     registered: list = []
+    saved_path = runtime_info._PID_FILE_PATH
 
     real_register = atexit.register
 
@@ -26,6 +31,7 @@ def _unregister_atexit(monkeypatch):
     yield registered
     for fn, _args, _kwargs in registered:
         atexit.unregister(fn)
+    runtime_info._PID_FILE_PATH = saved_path
 
 
 def test_install_pid_file_writes_pid(tmp_path, _unregister_atexit):
@@ -41,6 +47,19 @@ def test_install_pid_file_none_is_noop(_unregister_atexit):
     assert install_pid_file(None) is None
     assert install_pid_file("") is None
     assert _unregister_atexit == []
+
+
+def test_is_plugin_managed_tracks_pid_file_install(tmp_path, _unregister_atexit):
+    """`is_plugin_managed()` is the editor_reload_plugin handler's signal
+    that calling reload will kill its own server process (issue #393).
+    It must flip True only after `install_pid_file` actually wrote a file."""
+    assert is_plugin_managed() is False
+
+    install_pid_file(None)
+    assert is_plugin_managed() is False
+
+    install_pid_file(tmp_path / "server.pid")
+    assert is_plugin_managed() is True
 
 
 def test_install_pid_file_creates_parent_dir(tmp_path, _unregister_atexit):

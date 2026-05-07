@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import pathlib
+
 import pytest
 
+from godot_ai import runtime_info
 from godot_ai.handlers import animation as animation_handlers
 from godot_ai.handlers import audio as audio_handlers
 from godot_ai.handlers import autoload as autoload_handlers
@@ -1448,6 +1452,114 @@ async def test_reload_plugin_pins_target_session_when_multiple_connected():
     assert result["old_session_id"] == "session-b"
     assert result["new_session_id"] == "session-b-new"
     assert runtime.active_session_id == "session-b-new"
+
+
+@pytest.fixture
+def plugin_managed_runtime(monkeypatch):
+    """Pretend the server was spawned by the plugin (--pid-file present),
+    and zero out the post-ack delay so the background reload dispatch
+    fires immediately on the next event-loop tick."""
+    monkeypatch.setattr(runtime_info, "_PID_FILE_PATH", pathlib.Path("/tmp/fake.pid"))
+    monkeypatch.setattr(editor_handlers, "PLUGIN_MANAGED_RELOAD_DELAY_SEC", 0)
+
+
+async def test_reload_plugin_returns_preflight_ack_when_plugin_managed(
+    plugin_managed_runtime,
+):
+    """Issue #393: when our own server was spawned by the plugin, the
+    reload kills us before any sync `wait_for_session` could deliver a
+    payload. Hand back a structured ack immediately and dispatch the
+    actual reload async."""
+    registry = SessionRegistry()
+    registry.register(_make_session("old-session"))
+    stub = ReloadStubClient(registry=registry, new_session_id="new-session")
+    runtime = DirectRuntime(registry=registry, client=stub)
+
+    result = await editor_handlers.editor_reload_plugin(runtime)
+
+    assert result == {
+        "status": "reload_initiated",
+        "transport_will_drop": True,
+        "old_session_id": "old-session",
+        "guidance": (
+            "Server is plugin-managed; the WebSocket transport will drop "
+            "as part of the reload. Reconnect, then call "
+            "session_manage(op='list') to find the new session_id."
+        ),
+    }
+    ## The reload command itself must NOT have left the wire yet — the
+    ## point of the pre-flight ack is that the structured response gets
+    ## back to the caller before the server tears itself down.
+    assert not [c for c in stub.calls if c["command"] == "reload_plugin"]
+
+
+async def test_reload_plugin_dispatches_reload_async_when_plugin_managed(
+    plugin_managed_runtime,
+):
+    """The pre-flight ack returns first; the WS reload command then fires
+    from a background task. Verify both halves: the ack returns synchronously
+    and the reload command lands on the wire after one event-loop yield."""
+    registry = SessionRegistry()
+    registry.register(_make_session("old-session"))
+    stub = ReloadStubClient(registry=registry, new_session_id="new-session")
+    runtime = DirectRuntime(registry=registry, client=stub)
+
+    result = await editor_handlers.editor_reload_plugin(runtime)
+    assert result["status"] == "reload_initiated"
+
+    ## Yield once to drain the background task scheduled by create_task.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    reload_calls = [c for c in stub.calls if c["command"] == "reload_plugin"]
+    assert len(reload_calls) == 1
+    assert reload_calls[0]["session_id"] == "old-session", (
+        "Async reload dispatch must still pin to the original active id"
+    )
+
+
+async def test_reload_plugin_async_dispatch_swallows_disconnect_errors(
+    plugin_managed_runtime,
+):
+    """The plugin tearing down our server is the *expected* side effect
+    of reload_plugin, so a Connection/Timeout error from the WS send in
+    the background task must not surface as an unhandled task exception."""
+    registry = SessionRegistry()
+    registry.register(_make_session("old-session"))
+    stub = ReloadStubClient(
+        registry=registry,
+        new_session_id="new-session",
+        raise_timeout=True,
+    )
+    runtime = DirectRuntime(registry=registry, client=stub)
+
+    result = await editor_handlers.editor_reload_plugin(runtime)
+    assert result["status"] == "reload_initiated"
+
+    ## Drain the background task; if it raised an unhandled exception
+    ## this loop tick would surface it.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+
+async def test_reload_plugin_external_path_unchanged_when_not_plugin_managed():
+    """The pid-file isn't set by default, so external-server callers keep
+    the current sync `wait_for_session` shape that returns new_session_id."""
+    assert not runtime_info.is_plugin_managed()
+    registry = SessionRegistry()
+    registry.register(_make_session("old-session"))
+    runtime = DirectRuntime(
+        registry=registry,
+        client=ReloadStubClient(registry=registry, new_session_id="new-session"),
+    )
+
+    result = await editor_handlers.editor_reload_plugin(runtime)
+
+    assert result == {
+        "status": "reloaded",
+        "old_session_id": "old-session",
+        "new_session_id": "new-session",
+    }
 
 
 def test_unregister_active_with_multiple_survivors_clears_active():
