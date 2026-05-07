@@ -83,7 +83,7 @@ Adjacent reference docs:
 
 See [Packaging & Distribution](packaging-distribution.md) for full detail. The short version:
 
-- [x] clean install docs for Claude Code, Claude Desktop, Codex, and Antigravity (README + dock auto-configure with manual fallback for 19 clients including Cursor, Cline, Roo Code, Kilo, OpenCode, Zed, Windsurf, VS Code/Insiders, Trae, Kiro, Gemini CLI, Cherry Studio, Qwen Code, Kimi Code CLI)
+- [x] clean install docs for Claude Code, Claude Desktop, Codex, and Antigravity (README + dock auto-configure with manual fallback for 19 clients including Cursor, Cline, Roo Code, Kilo, OpenCode, Zed, Windsurf, VS Code/Insiders, Trae, Kiro, Gemini CLI, Cherry Studio, Qwen Code, Kimi Code)
 - [x] PyPI / `uvx` path works reliably — automated via `bump-and-release.yml`; live on PyPI as `godot-ai`; `uvx --from godot-ai~=VERSION godot-ai` is the canonical user-install command. Stdio-only clients (Claude Desktop, Zed) bridge through `uvx mcp-proxy`. Stale-index retries (`--refresh`) and cache priming on self-update prevent flaky first-run failures.
 - [ ] desktop binary path is real, not aspirational
 - [x] plugin is downloadable from the Godot AssetLib — live as [asset/5050](https://godotengine.org/asset-library/asset/5050) and on the new [Godot Asset Store](https://store.godotengine.org/asset/dlight/godot-ai/); release ZIP workflow ships `godot-ai-plugin.zip` via GitHub Releases; dock self-update banner offers one-click upgrades that survive without an editor restart (`update_reload_runner.gd` handoff). Local self-update smoke (`script/local-self-update-smoke`) is the regression gate.
