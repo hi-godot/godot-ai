@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 const FilesystemHandler := preload("res://addons/godot_ai/handlers/filesystem_handler.gd")
 
 ## Tests for FilesystemHandler — file read/write and reimport.
@@ -46,7 +48,7 @@ func test_read_file_basic() -> void:
 
 func test_read_file_missing_path() -> void:
 	var result := _handler.read_file({})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
 
 
 func test_read_file_invalid_prefix() -> void:
@@ -56,7 +58,7 @@ func test_read_file_invalid_prefix() -> void:
 
 func test_read_file_not_found() -> void:
 	var result := _handler.read_file({"path": "res://nonexistent_file.txt"})
-	assert_is_error(result, McpErrorCodes.RESOURCE_NOT_FOUND)
+	assert_is_error(result, ErrorCodes.RESOURCE_NOT_FOUND)
 
 
 func test_read_file_rejects_traversal_path() -> void:
@@ -104,7 +106,7 @@ func test_write_file_overwrite_omits_cleanup_hint() -> void:
 
 func test_write_file_missing_path() -> void:
 	var result := _handler.write_file({"content": "hello"})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
 
 
 func test_write_file_invalid_prefix() -> void:
@@ -133,7 +135,7 @@ func test_write_file_rejects_traversal_path() -> void:
 
 func test_reimport_missing_paths() -> void:
 	var result := _handler.reimport({})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_reimport_empty_paths() -> void:

@@ -1,6 +1,8 @@
 @tool
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Executes a list of sub-commands through the dispatcher with stop-on-first-error
 ## semantics. When undo=true (default), any successful sub-commands are rolled
 ## back via the scene's UndoRedo history if a later sub-command fails.
@@ -19,21 +21,21 @@ func _init(dispatcher: McpDispatcher, undo_redo: EditorUndoRedoManager) -> void:
 func batch_execute(params: Dictionary) -> Dictionary:
 	var commands = params.get("commands", null)
 	if typeof(commands) != TYPE_ARRAY:
-		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "commands must be a list")
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "commands must be a list")
 	if commands.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "commands must not be empty")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "commands must not be empty")
 
 	var undo: bool = params.get("undo", true)
 
 	for idx in range(commands.size()):
 		var item = commands[idx]
 		if typeof(item) != TYPE_DICTIONARY:
-			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "commands[%d] must be a dict" % idx)
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "commands[%d] must be a dict" % idx)
 		var cmd_name: String = item.get("command", "")
 		if cmd_name.is_empty():
-			return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "commands[%d] missing 'command' field" % idx)
+			return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "commands[%d] missing 'command' field" % idx)
 		if cmd_name in FORBIDDEN_SUBCOMMANDS:
-			return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "commands[%d]: '%s' is not allowed as a sub-command" % [idx, cmd_name])
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "commands[%d]: '%s' is not allowed as a sub-command" % [idx, cmd_name])
 		if not _dispatcher.has_command(cmd_name):
 			return _unknown_command_error(idx, cmd_name)
 
@@ -106,7 +108,7 @@ func _unknown_command_error(idx: int, cmd_name: String) -> Dictionary:
 	var msg := "commands[%d]: unknown plugin command '%s'. batch_execute expects plugin command names (e.g. 'create_node'), not MCP tool names (e.g. 'node_create')." % [idx, cmd_name]
 	if not suggestions.is_empty():
 		msg += " Did you mean: %s?" % ", ".join(suggestions)
-	var err := McpErrorCodes.make(McpErrorCodes.UNKNOWN_COMMAND, msg)
+	var err := ErrorCodes.make(ErrorCodes.UNKNOWN_COMMAND, msg)
 	err["error"]["data"] = {"suggestions": suggestions}
 	return err
 

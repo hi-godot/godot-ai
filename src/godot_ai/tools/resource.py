@@ -51,7 +51,10 @@ Ops:
         direct siblings then parent-siblings (handles nested
         Body→Collision layouts). Ambiguous matches return candidate paths
         in error.data.candidates. Auto-creates the concrete Shape subclass
-        if needed.
+        if needed. shape_type accepts either the short form ("box",
+        "sphere", "capsule", "cylinder" for 3D; "rectangle", "circle",
+        "capsule" for 2D) or the matching Godot class name ("BoxShape3D",
+        "RectangleShape2D", etc.).
   • gradient_texture_create(stops, width=256, height=1, fill="linear",
                               path="", property="", resource_path="",
                               overwrite=False)

@@ -1,6 +1,8 @@
 @tool
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Handles Material authoring: creating .tres files, setting BaseMaterial3D
 ## properties / shader uniforms, assigning to nodes, high-level presets.
 ##
@@ -43,47 +45,47 @@ func create_material(params: Dictionary) -> Dictionary:
 		return err
 
 	if not _TYPE_TO_CLASS.has(type_str):
-		return McpErrorCodes.make(
-			McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid material type '%s'. Valid: %s" % [type_str, ", ".join(_TYPE_TO_CLASS.keys())]
 		)
 
 	var existed_before := FileAccess.file_exists(path)
 	if existed_before and not overwrite:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+		return ErrorCodes.make(
+			ErrorCodes.INVALID_PARAMS,
 			"Material already exists at %s (pass overwrite=true to replace)" % path
 		)
 
 	var mat := _instantiate_material(type_str)
 	if mat == null:
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to instantiate material")
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to instantiate material")
 
 	if type_str == "shader":
 		if shader_path.is_empty():
-			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS,
 				"ShaderMaterial requires shader_path (res:// path to a .gdshader)"
 			)
 		if not ResourceLoader.exists(shader_path):
-			return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Shader not found: %s" % shader_path)
+			return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Shader not found: %s" % shader_path)
 		var shader_res := ResourceLoader.load(shader_path)
 		if not (shader_res is Shader):
-			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Resource at %s is not a Shader" % shader_path)
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Resource at %s is not a Shader" % shader_path)
 		(mat as ShaderMaterial).shader = shader_res
 
 	var dir_path := path.get_base_dir()
 	var mkdir_err := DirAccess.make_dir_recursive_absolute(dir_path)
 	if mkdir_err != OK and mkdir_err != ERR_ALREADY_EXISTS:
-		return McpErrorCodes.make(
-			McpErrorCodes.INTERNAL_ERROR,
+		return ErrorCodes.make(
+			ErrorCodes.INTERNAL_ERROR,
 			"Failed to create directory: %s (error %d)" % [dir_path, mkdir_err]
 		)
 
 	var save_err := ResourceSaver.save(mat, path)
 	if save_err != OK:
-		return McpErrorCodes.make(
-			McpErrorCodes.INTERNAL_ERROR,
+		return ErrorCodes.make(
+			ErrorCodes.INTERNAL_ERROR,
 			"Failed to save material to %s (error %d)" % [path, save_err]
 		)
 
@@ -117,10 +119,10 @@ func set_param(params: Dictionary) -> Dictionary:
 
 	var property: String = params.get("param", "")
 	if property.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: param")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: param")
 
 	if not ("value" in params):
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: value")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: value")
 
 	var raw_value = params.get("value")
 
@@ -134,14 +136,14 @@ func set_param(params: Dictionary) -> Dictionary:
 			prop_type = prop.get("type", TYPE_NIL)
 			break
 	if not property_exists:
-		return McpErrorCodes.make(
-			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
+		return ErrorCodes.make(
+			ErrorCodes.PROPERTY_NOT_ON_CLASS,
 			McpPropertyErrors.build_message(mat, property)
 		)
 
 	var coerced := MaterialValues.coerce_material_value(property, raw_value, prop_type)
 	if not coerced.ok:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, String(coerced.error))
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, String(coerced.error))
 	var new_value = coerced.value
 
 	var old_value = mat.get(property)
@@ -174,36 +176,36 @@ func set_shader_param(params: Dictionary) -> Dictionary:
 	var mat_path: String = load_result.path
 
 	if not (mat is ShaderMaterial):
-		return McpErrorCodes.make(
-			McpErrorCodes.WRONG_TYPE,
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
 			"Material at %s is %s, not ShaderMaterial" % [mat_path, mat.get_class()]
 		)
 	var shader_mat := mat as ShaderMaterial
 	if shader_mat.shader == null:
-		return McpErrorCodes.make(
-			McpErrorCodes.WRONG_TYPE,
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
 			"ShaderMaterial at %s has no shader assigned" % mat_path
 		)
 
 	var param_name: String = params.get("param", "")
 	if param_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: param")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: param")
 
 	if not ("value" in params):
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: value")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: value")
 
 	# Verify the uniform exists in the shader.
 	var uniform_type := _shader_uniform_type(shader_mat.shader, param_name)
 	if uniform_type == TYPE_NIL:
-		return McpErrorCodes.make(
-			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
+		return ErrorCodes.make(
+			ErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Shader uniform '%s' not declared on shader at %s" % [param_name, shader_mat.shader.resource_path]
 		)
 
 	var raw_value = params.get("value")
 	var coerced := MaterialValues.coerce_material_value(param_name, raw_value, uniform_type)
 	if not coerced.ok:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, String(coerced.error))
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, String(coerced.error))
 	var new_value = coerced.value
 
 	var old_value = shader_mat.get_shader_parameter(param_name)
@@ -296,11 +298,11 @@ func list_materials(params: Dictionary) -> Dictionary:
 	var type_filter: String = params.get("type", "")
 
 	if not root.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "root must start with res://")
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "root must start with res://")
 
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "EditorFileSystem not available")
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "EditorFileSystem not available")
 
 	var results: Array[Dictionary] = []
 	var start_dir := efs.get_filesystem_path(root)
@@ -342,7 +344,7 @@ func _scan_materials(dir: EditorFileSystemDirectory, type_filter: String, root: 
 func assign_material(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("node_path", "")
 	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: node_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: node_path")
 
 	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
 	if _resolved.has("error"):
@@ -369,30 +371,30 @@ func assign_material(params: Dictionary) -> Dictionary:
 				# We'd need to create a new file here — refuse; callers should
 				# use material_create first or omit resource_path to get an
 				# inline material.
-				return McpErrorCodes.make(
-					McpErrorCodes.RESOURCE_NOT_FOUND,
+				return ErrorCodes.make(
+					ErrorCodes.RESOURCE_NOT_FOUND,
 					"Resource not found: %s. Create it first with material_create or omit resource_path for an inline material." % resource_path
 				)
-			return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Resource not found: %s" % resource_path)
+			return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Resource not found: %s" % resource_path)
 		var loaded := ResourceLoader.load(resource_path)
 		if not (loaded is Material):
 			var loaded_class := "null"
 			if loaded != null:
 				loaded_class = loaded.get_class()
-			return McpErrorCodes.make(
-				McpErrorCodes.WRONG_TYPE,
+			return ErrorCodes.make(
+				ErrorCodes.WRONG_TYPE,
 				"Resource at %s is not a Material (got %s)" % [resource_path, loaded_class]
 			)
 		mat = loaded
 	else:
 		if not create_if_missing:
-			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS,
 				"Missing resource_path (pass create_if_missing=true to create a new inline material)"
 			)
 		if not _TYPE_TO_CLASS.has(type_str):
-			return McpErrorCodes.make(
-				McpErrorCodes.VALUE_OUT_OF_RANGE,
+			return ErrorCodes.make(
+				ErrorCodes.VALUE_OUT_OF_RANGE,
 				"Invalid material type '%s'" % type_str
 			)
 		mat = _instantiate_material(type_str)
@@ -427,12 +429,12 @@ func assign_material(params: Dictionary) -> Dictionary:
 func apply_to_node(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("node_path", "")
 	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: node_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: node_path")
 
 	var type_str: String = params.get("type", "standard")
 	if not _TYPE_TO_CLASS.has(type_str):
-		return McpErrorCodes.make(
-			McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid material type '%s'. Valid: %s" % [type_str, ", ".join(_TYPE_TO_CLASS.keys())]
 		)
 
@@ -467,10 +469,10 @@ func apply_to_node(params: Dictionary) -> Dictionary:
 		var dir_path := save_to.get_base_dir()
 		var mkdir_err := DirAccess.make_dir_recursive_absolute(dir_path)
 		if mkdir_err != OK and mkdir_err != ERR_ALREADY_EXISTS:
-			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
+			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
 		var save_err := ResourceSaver.save(mat, save_to)
 		if save_err != OK:
-			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to save material to %s (error %d)" % [save_to, save_err])
+			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to save material to %s (error %d)" % [save_to, save_err])
 		var efs := EditorInterface.get_resource_filesystem()
 		if efs != null:
 			efs.update_file(save_to)
@@ -507,13 +509,13 @@ func apply_to_node(params: Dictionary) -> Dictionary:
 func apply_preset(params: Dictionary) -> Dictionary:
 	var preset_name: String = params.get("preset", "")
 	if preset_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: preset")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: preset")
 
 	var overrides: Dictionary = params.get("overrides", {})
 	var blueprint = MaterialPresets.build(preset_name, overrides)
 	if blueprint == null:
-		return McpErrorCodes.make(
-			McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Unknown preset '%s'. Valid: %s" % [preset_name, ", ".join(MaterialPresets.list())]
 		)
 
@@ -524,8 +526,8 @@ func apply_preset(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("node_path", "")
 
 	if path.is_empty() and node_path.is_empty():
-		return McpErrorCodes.make(
-			McpErrorCodes.MISSING_REQUIRED_PARAM,
+		return ErrorCodes.make(
+			ErrorCodes.MISSING_REQUIRED_PARAM,
 			"Pass at least one of: path (save to disk), node_path (assign to node)"
 		)
 
@@ -552,8 +554,8 @@ func apply_preset(params: Dictionary) -> Dictionary:
 	# Save-to-disk path.
 	var existed_before := FileAccess.file_exists(path)
 	if existed_before and not params.get("overwrite", false):
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+		return ErrorCodes.make(
+			ErrorCodes.INVALID_PARAMS,
 			"Material already exists at %s (pass overwrite=true to replace)" % path
 		)
 
@@ -570,11 +572,11 @@ func apply_preset(params: Dictionary) -> Dictionary:
 	var dir_path := path.get_base_dir()
 	var mkdir_err := DirAccess.make_dir_recursive_absolute(dir_path)
 	if mkdir_err != OK and mkdir_err != ERR_ALREADY_EXISTS:
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
 
 	var save_err := ResourceSaver.save(mat, path)
 	if save_err != OK:
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to save material: %s" % path)
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to save material: %s" % path)
 
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs != null:
@@ -660,17 +662,17 @@ static func _reverse_type_map() -> Dictionary:
 
 static func _validate_material_path(path: String, param_name: String) -> Variant:
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: %s" % param_name)
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: %s" % param_name)
 	if not path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "%s must start with res:// (got %s)" % [param_name, path])
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "%s must start with res:// (got %s)" % [param_name, path])
 	var has_suffix := false
 	for s in _SUPPORTED_SUFFIXES:
 		if path.ends_with(s):
 			has_suffix = true
 			break
 	if not has_suffix:
-		return McpErrorCodes.make(
-			McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
 			"%s must end with one of %s (got %s)" % [param_name, ", ".join(_SUPPORTED_SUFFIXES), path]
 		)
 	return null
@@ -681,10 +683,10 @@ func _load_material_from_path(path: String) -> Dictionary:
 	if err != null:
 		return err
 	if not ResourceLoader.exists(path):
-		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Material not found: %s" % path)
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Material not found: %s" % path)
 	var res := ResourceLoader.load(path)
 	if res == null or not (res is Material):
-		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Resource at %s is not a Material" % path)
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Resource at %s is not a Material" % path)
 	return {"material": res, "path": path}
 
 
@@ -698,44 +700,44 @@ func _resolve_slot_property(node: Node, slot: String) -> Dictionary:
 			return {"property": "material"}
 		if node is GPUParticles3D or node is GPUParticles2D or node is CPUParticles3D or node is CPUParticles2D:
 			return {"property": "material_override"} if node is GeometryInstance3D else {"property": "material"}
-		return McpErrorCodes.make(
-			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
+		return ErrorCodes.make(
+			ErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Slot 'override' not supported on %s" % node.get_class()
 		)
 	if slot == "canvas":
 		if node is CanvasItem:
 			return {"property": "material"}
-		return McpErrorCodes.make(
-			McpErrorCodes.WRONG_TYPE,
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
 			"Slot 'canvas' requires a CanvasItem (got %s)" % node.get_class()
 		)
 	if slot == "process":
 		if node is GPUParticles3D or node is GPUParticles2D:
 			return {"property": "process_material"}
-		return McpErrorCodes.make(
-			McpErrorCodes.WRONG_TYPE,
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
 			"Slot 'process' requires a GPUParticles2D/3D (got %s)" % node.get_class()
 		)
 	if slot.begins_with("surface_"):
 		if not (node is MeshInstance3D):
-			return McpErrorCodes.make(
-				McpErrorCodes.WRONG_TYPE,
+			return ErrorCodes.make(
+				ErrorCodes.WRONG_TYPE,
 				"Slot '%s' requires a MeshInstance3D (got %s)" % [slot, node.get_class()]
 			)
 		var idx_str := slot.substr(len("surface_"))
 		if not idx_str.is_valid_int():
-			return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Invalid surface slot: %s" % slot)
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Invalid surface slot: %s" % slot)
 		var idx := int(idx_str)
 		var mi := node as MeshInstance3D
 		var surf_count := mi.mesh.get_surface_count() if mi.mesh != null else 0
 		if idx < 0 or idx >= surf_count:
-			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS,
 				"Surface index %d out of range (mesh has %d surfaces)" % [idx, surf_count]
 			)
 		return {"property": "surface_material_override/%d" % idx}
-	return McpErrorCodes.make(
-		McpErrorCodes.VALUE_OUT_OF_RANGE,
+	return ErrorCodes.make(
+		ErrorCodes.VALUE_OUT_OF_RANGE,
 		"Unknown slot '%s'. Valid: override, canvas, process, surface_N" % slot
 	)
 
@@ -751,13 +753,13 @@ func _apply_one_param_on_instance(mat: Material, property: String, raw_value: Va
 			prop_type = prop.get("type", TYPE_NIL)
 			break
 	if not property_exists:
-		return McpErrorCodes.make(
-			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
+		return ErrorCodes.make(
+			ErrorCodes.PROPERTY_NOT_ON_CLASS,
 			McpPropertyErrors.build_message(mat, property)
 		)
 	var coerced := MaterialValues.coerce_material_value(property, raw_value, prop_type)
 	if not coerced.ok:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, String(coerced.error))
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, String(coerced.error))
 	mat.set(property, coerced.value)
 	return null
 

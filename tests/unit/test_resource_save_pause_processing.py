@@ -28,7 +28,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godot
 
 
 def test_save_to_disk_takes_pause_target() -> None:
-    source = (PLUGIN_ROOT / "utils" / "resource_io.gd").read_text()
+    source = (PLUGIN_ROOT / "utils" / "resource_io.gd").read_text(encoding="utf-8")
     block = get_func_block(source, "static func save_to_disk(")
     assert "pause_target: McpConnection" in block, (
         "save_to_disk must accept a McpConnection so the WebSocket pump "
@@ -59,7 +59,7 @@ def test_save_to_disk_takes_pause_target() -> None:
 
 
 def test_resource_handler_threads_connection_to_save() -> None:
-    source = (PLUGIN_ROOT / "handlers" / "resource_handler.gd").read_text()
+    source = (PLUGIN_ROOT / "handlers" / "resource_handler.gd").read_text(encoding="utf-8")
     assert "var _connection: McpConnection" in source, (
         "ResourceHandler must hold a McpConnection ref to thread into save_to_disk. See #288."
     )
@@ -76,7 +76,7 @@ def test_resource_handler_threads_connection_to_save() -> None:
 
 
 def test_curve_handler_threads_connection_to_save() -> None:
-    source = (PLUGIN_ROOT / "handlers" / "curve_handler.gd").read_text()
+    source = (PLUGIN_ROOT / "handlers" / "curve_handler.gd").read_text(encoding="utf-8")
     assert "var _connection: McpConnection" in source
     assert "_init(undo_redo: EditorUndoRedoManager, connection: McpConnection" in source
     set_points_block = get_func_block(source, "func set_points")
@@ -91,7 +91,7 @@ def test_curve_handler_threads_connection_to_save() -> None:
 
 
 def test_environment_handler_threads_connection_to_save() -> None:
-    source = (PLUGIN_ROOT / "handlers" / "environment_handler.gd").read_text()
+    source = (PLUGIN_ROOT / "handlers" / "environment_handler.gd").read_text(encoding="utf-8")
     assert "var _connection: McpConnection" in source
     assert "_init(undo_redo: EditorUndoRedoManager, connection: McpConnection" in source
     save_block = get_func_block(source, "func _save_environment")
@@ -101,7 +101,7 @@ def test_environment_handler_threads_connection_to_save() -> None:
 
 
 def test_texture_handler_threads_connection_to_save() -> None:
-    source = (PLUGIN_ROOT / "handlers" / "texture_handler.gd").read_text()
+    source = (PLUGIN_ROOT / "handlers" / "texture_handler.gd").read_text(encoding="utf-8")
     assert "var _connection: McpConnection" in source
     assert "_init(undo_redo: EditorUndoRedoManager, connection: McpConnection" in source
     # The save call lives inside _save_or_assign_texture in this handler;
@@ -114,7 +114,7 @@ def test_texture_handler_threads_connection_to_save() -> None:
 
 
 def test_plugin_passes_connection_to_resource_handlers() -> None:
-    source = (PLUGIN_ROOT / "plugin.gd").read_text()
+    source = (PLUGIN_ROOT / "plugin.gd").read_text(encoding="utf-8")
     # All four resource-saving handlers must be constructed with _connection,
     # otherwise the pause guard inside save_to_disk silently no-ops.
     for handler in ("ResourceHandler", "EnvironmentHandler", "TextureHandler", "CurveHandler"):
@@ -131,6 +131,6 @@ def test_scene_handler_pause_pattern_still_present_for_reference() -> None:
     If this test ever fails, the resource-save fix is now an orphan
     pattern and the issue #288 fix should be re-evaluated.
     """
-    source = (PLUGIN_ROOT / "handlers" / "scene_handler.gd").read_text()
+    source = (PLUGIN_ROOT / "handlers" / "scene_handler.gd").read_text(encoding="utf-8")
     assert "_connection.pause_processing = true" in source
     assert "_connection.pause_processing = false" in source

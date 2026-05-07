@@ -46,18 +46,15 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
     assert "click Update" in result.stdout
     assert "a new Godot*.ips" in result.stdout
 
-    base_cfg = (project / "addons" / "godot_ai" / "plugin.cfg").read_text()
+    base_cfg = (project / "addons" / "godot_ai" / "plugin.cfg").read_text(encoding="utf-8")
     assert 'version="2.2.0"' in base_cfg
 
     # The smoke patches land on the manager file; the dock keeps only
     # the visible banner UI.
-    base_manager = (
-        project / "addons" / "godot_ai" / "utils" / "update_manager.gd"
-    ).read_text()
-    assert (
-        'const SELF_UPDATE_SMOKE_DOWNLOAD_URL := "smoke://local-prestaged"'
-        in base_manager
+    base_manager = (project / "addons" / "godot_ai" / "utils" / "update_manager.gd").read_text(
+        encoding="utf-8"
     )
+    assert 'const SELF_UPDATE_SMOKE_DOWNLOAD_URL := "smoke://local-prestaged"' in base_manager
     assert (
         'const SELF_UPDATE_SMOKE_ZIP := "res://self_update_smoke/godot-ai-plugin-vnext.zip"'
         in base_manager
@@ -65,7 +62,9 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
     assert "FileAccess.get_file_as_bytes(src)" in base_manager
     assert "user-update-path.txt" in base_manager
 
-    base_configurator = (project / "addons" / "godot_ai" / "client_configurator.gd").read_text()
+    base_configurator = (project / "addons" / "godot_ai" / "client_configurator.gd").read_text(
+        encoding="utf-8"
+    )
     assert "const DEFAULT_HTTP_PORT := 18000" in base_configurator
     assert "const DEFAULT_WS_PORT := 19500" in base_configurator
     assert 'const SELF_UPDATE_SMOKE_SERVER_VERSION := "2.2.0"' in base_configurator
@@ -75,12 +74,12 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
     assert "static func ensure_settings_registered() -> void:" in base_configurator
     assert "static func _register_port_setting(" in base_configurator
 
-    base_plugin = (project / "addons" / "godot_ai" / "plugin.gd").read_text()
+    base_plugin = (project / "addons" / "godot_ai" / "plugin.gd").read_text(encoding="utf-8")
     assert "godot_ai_self_update_smoke/managed_server_pid" in base_plugin
 
-    base_lifecycle = (
-        project / "addons" / "godot_ai" / "utils" / "server_lifecycle.gd"
-    ).read_text()
+    base_lifecycle = (project / "addons" / "godot_ai" / "utils" / "server_lifecycle.gd").read_text(
+        encoding="utf-8"
+    )
     assert 'const SELF_UPDATE_SMOKE_EXPECTED_SERVER_VERSION := "2.2.0"' in base_lifecycle
     assert "func _expected_server_version() -> String:" in base_lifecycle
     assert "return SELF_UPDATE_SMOKE_EXPECTED_SERVER_VERSION" in base_lifecycle

@@ -17,6 +17,10 @@ extends RefCounted
 ## error — matches the dispatcher already being torn down at that point.
 
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const PropertyErrors := preload("res://addons/godot_ai/handlers/_property_errors.gd")
+
+
 const _NAMED_TRANSITIONS := {
 	"linear": 1.0,
 	"ease_in": 2.0,
@@ -58,11 +62,11 @@ func list_animations(params: Dictionary) -> Dictionary:
 	var player_path: String = params.get("player_path", "")
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 
 	var handler = _h()
 	if handler == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
 	var resolved: Dictionary = handler._resolve_player_read(player_path)
 	if resolved.has("error"):
 		return resolved
@@ -99,13 +103,13 @@ func get_animation(params: Dictionary) -> Dictionary:
 	var anim_name: String = params.get("animation_name", "")
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if anim_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: animation_name")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: animation_name")
 
 	var handler = _h()
 	if handler == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
 	var resolved: Dictionary = handler._resolve_player_read(player_path)
 	if resolved.has("error"):
 		return resolved
@@ -158,20 +162,20 @@ func validate_animation(params: Dictionary) -> Dictionary:
 	var anim_name: String = params.get("animation_name", "")
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if anim_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: animation_name")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: animation_name")
 
 	var handler = _h()
 	if handler == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
 	var resolved: Dictionary = handler._resolve_player_read(player_path)
 	if resolved.has("error"):
 		return resolved
 	var player: AnimationPlayer = resolved.player
 
 	if not player.has_animation(anim_name):
-		return McpErrorCodes.make(McpErrorCodes.PROPERTY_NOT_ON_CLASS,
+		return ErrorCodes.make(ErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Animation '%s' not found on player at %s" % [anim_name, player_path])
 
 	var anim: Animation = player.get_animation(anim_name)
@@ -321,7 +325,7 @@ static func resolve_track_prop_context(track_path: String, player: AnimationPlay
 	# the raw value here produces garbage keyframes at playback time.
 	return {"error":
 		"%s (target path: '%s')" %
-		[McpPropertyErrors.build_message(target, prop_base), node_part]}
+		[PropertyErrors.build_message(target, prop_base), node_part]}
 
 
 ## Map a `property:sub` subpath to its scalar component type. Returns

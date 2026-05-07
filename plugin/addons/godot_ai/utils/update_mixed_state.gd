@@ -11,13 +11,12 @@ extends RefCounted
 ## `editor_handler.gd::get_editor_state` includes the same Dictionary so an
 ## MCP agent can see and report the state.
 
-const UpdateReloadRunner := preload("res://addons/godot_ai/update_reload_runner.gd")
-
 const ADDON_DIR := "res://addons/godot_ai/"
-## Single source of truth for the suffix lives on the producer
-## (`UpdateReloadRunner._install_zip_file`); aliasing here so the scanner
-## can never drift from what the runner actually writes.
-const BACKUP_SUFFIX := UpdateReloadRunner.INSTALL_BACKUP_SUFFIX
+## Producer is `update_reload_runner.gd::INSTALL_BACKUP_SUFFIX`. Inlined as a
+## literal — not aliased — because module-level const initializers run at
+## script-load and the alias re-introduces the self-update parse hazard
+## (#398). `test_update_backup_suffix_stays_in_sync` guards against drift.
+const BACKUP_SUFFIX := ".update_backup"
 ## Cap so a runaway addons tree (someone parented the wrong dir, an old
 ## crashed install left thousands of artifacts) can't blow the
 ## `editor_state` payload size or freeze the editor on first paint.

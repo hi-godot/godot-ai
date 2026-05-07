@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Tests for McpNodeValidator (audit-v2 #20 / issue #364) — the shared
 ## resolve-or-error helper that subsumed the 38+ inline EDITOR_NOT_READY +
 ## NODE_NOT_FOUND blocks across handlers.
@@ -17,7 +19,7 @@ func suite_name() -> String:
 
 func test_resolve_or_error_missing_path_emits_missing_required_param() -> void:
 	var result := McpNodeValidator.resolve_or_error("")
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 	assert_contains(result.error.message, "path")
 
 
@@ -26,13 +28,13 @@ func test_resolve_or_error_uses_param_name_in_missing_message() -> void:
 	## error message must echo the caller's name so agents see the same
 	## param name they sent.
 	var result := McpNodeValidator.resolve_or_error("", "player_path")
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 	assert_contains(result.error.message, "player_path")
 
 
 func test_resolve_or_error_unresolvable_path_emits_node_not_found() -> void:
 	var result := McpNodeValidator.resolve_or_error("/Main/__definitely_nonexistent__")
-	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
+	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)
 
 
 # ----- resolve_or_error: success paths -----
@@ -70,10 +72,10 @@ func test_require_scene_or_error_returns_scene_root_when_open() -> void:
 # ----- error dict shape parity -----
 
 
-func test_error_dicts_match_McpErrorCodes_make_shape() -> void:
+func test_error_dicts_match_ErrorCodes_make_shape() -> void:
 	## The handler call sites do `if resolved.has("error"): return resolved`
 	## — that propagation only works if the error dict shape matches what
-	## `McpErrorCodes.make()` produces. Pin the contract here so a refactor
+	## `ErrorCodes.make()` produces. Pin the contract here so a refactor
 	## can't subtly change the error envelope.
 	var missing := McpNodeValidator.resolve_or_error("")
 	assert_has_key(missing, "status")

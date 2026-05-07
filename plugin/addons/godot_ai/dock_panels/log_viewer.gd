@@ -11,7 +11,12 @@ extends VBoxContainer
 
 signal logging_enabled_changed(enabled: bool)
 
-var _log_buffer: McpLogBuffer
+const Dock := preload("res://addons/godot_ai/mcp_dock.gd")
+
+## Untyped: a `: McpLogBuffer` annotation hits the class_name registry at
+## script-load and trips the self-update parse hazard (#398). The type fence
+## stays on the `setup(log_buffer: McpLogBuffer)` parameter.
+var _log_buffer
 var _log_display: RichTextLabel
 var _log_toggle: CheckButton
 ## Last `McpLogBuffer.total_logged()` value painted into the display. Tracking
@@ -39,7 +44,7 @@ func _build_ui() -> void:
 	add_child(HSeparator.new())
 
 	var log_header_row := HBoxContainer.new()
-	var log_header := McpDock._make_header("MCP Log")
+	var log_header := Dock._make_header("MCP Log")
 	log_header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	log_header_row.add_child(log_header)
 

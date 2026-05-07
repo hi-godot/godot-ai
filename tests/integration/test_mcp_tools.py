@@ -1068,6 +1068,48 @@ class TestReloadPluginTool:
         assert result.data["new_session_id"] == "reloaded-session"
         await new_ws.close()
 
+    async def test_plugin_managed_returns_preflight_ack(self, mcp_stack, monkeypatch, tmp_path):
+        """Issue #393: when the server is plugin-managed, the structured
+        ack must come back to the caller AND the WS reload command must
+        only fire afterward, from the background task. Use a small but
+        observable delay so the ordering assertion isn't relying on
+        scheduler luck — peeking the WS immediately after `call_tool()`
+        returns must time out, then the command lands once the delay
+        elapses."""
+        from godot_ai import runtime_info
+        from godot_ai.handlers import editor as editor_handlers
+
+        monkeypatch.setattr(runtime_info, "_PID_FILE_PATH", tmp_path / "fake.pid")
+        monkeypatch.setattr(editor_handlers, "PLUGIN_MANAGED_RELOAD_DELAY_SEC", 0.05)
+
+        client, plugin = mcp_stack
+        result = await client.call_tool("editor_reload_plugin", {})
+
+        assert result.data["status"] == "reload_initiated"
+        assert result.data["transport_will_drop"] is True
+        assert result.data["old_session_id"] == "mcp-test"
+        guidance = result.data["guidance"]
+        assert guidance.startswith("Server is plugin-managed;")
+        assert "session_manage(op='list')" in guidance
+        ## A pre-flight ack must NOT carry a new_session_id field — the
+        ## new session lives in the next server's registry, which this
+        ## process can never observe.
+        assert "new_session_id" not in result.data
+
+        ## Ordering check: the background task is still inside its
+        ## PLUGIN_MANAGED_RELOAD_DELAY_SEC sleep, so no command should be
+        ## visible on the WS yet. A short-timeout peek must error.
+        with pytest.raises(asyncio.TimeoutError):
+            await plugin.recv_command(timeout=0.005)
+
+        ## After the delay elapses, the reload command lands on the WS.
+        cmd = await plugin.recv_command(timeout=2.0)
+        assert cmd["command"] == "reload_plugin"
+        await plugin.send_response(
+            cmd["request_id"],
+            {"status": "reloading", "message": "Plugin reload initiated"},
+        )
+
 
 # ---------------------------------------------------------------------------
 # session_list / session_activate

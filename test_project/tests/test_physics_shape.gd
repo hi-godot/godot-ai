@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 const PhysicsShapeHandler := preload("res://addons/godot_ai/handlers/physics_shape_handler.gd")
 
 ## Tests for PhysicsShapeHandler — autofit CollisionShape* to sibling bounds.
@@ -119,12 +121,12 @@ func _add_nested_body_3d(container_name: String, visuals: Array) -> Dictionary:
 
 func test_autofit_missing_path() -> void:
 	var result := _handler.autofit({})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_autofit_node_not_found() -> void:
 	var result := _handler.autofit({"path": "/Main/NopeNotHere"})
-	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
+	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)
 
 
 func test_autofit_node_is_not_collision_shape() -> void:
@@ -142,7 +144,81 @@ func test_autofit_invalid_shape_type_for_3d() -> void:
 		"path": parts.collision.get_path(),
 		"shape_type": "rectangle",  # 2D-only type used in 3D context
 	})
-	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	_remove_node(parts.body)
+
+
+# ----- regression #395: shape_type accepts Godot class names -----
+
+func test_autofit_3d_accepts_godot_class_name() -> void:
+	# Issue #395: passing the Godot class name (what
+	# resource_get_info(type="Shape3D").concrete_subclasses returns)
+	# must work the same as the short form.
+	var parts := _add_body_3d("TestAutofit3DClassName", Vector3(3, 1, 2))
+	if parts.is_empty():
+		skip("No scene root")
+		return
+	var result := _handler.autofit({
+		"path": parts.collision.get_path(),
+		"shape_type": "BoxShape3D",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.shape_class, "BoxShape3D")
+	# Response normalizes to the short form so callers using either input
+	# get a stable shape_type echoed back.
+	assert_eq(result.data.shape_type, "box")
+	assert_true(parts.collision.shape is BoxShape3D)
+	assert_eq(parts.collision.shape.size.x, 3.0)
+	_remove_node(parts.body)
+
+
+func test_autofit_2d_accepts_godot_class_name() -> void:
+	var parts := _add_body_2d("TestAutofit2DClassName", Vector2(32, 48))
+	if parts.is_empty():
+		skip("No scene root")
+		return
+	var result := _handler.autofit({
+		"path": parts.collision.get_path(),
+		"shape_type": "RectangleShape2D",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.shape_class, "RectangleShape2D")
+	assert_eq(result.data.shape_type, "rectangle")
+	assert_true(parts.collision.shape is RectangleShape2D)
+	assert_eq(parts.collision.shape.size.x, 32.0)
+	assert_eq(parts.collision.shape.size.y, 48.0)
+	_remove_node(parts.body)
+
+
+func test_autofit_3d_rejects_2d_class_name() -> void:
+	# Cross-dim class names must still error: RectangleShape2D for a
+	# CollisionShape3D is invalid even though the class exists.
+	var parts := _add_body_3d("TestAutofit3DCrossDim", Vector3(1, 1, 1))
+	if parts.is_empty():
+		skip("No scene root")
+		return
+	var result := _handler.autofit({
+		"path": parts.collision.get_path(),
+		"shape_type": "RectangleShape2D",
+	})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	# Error message lists both short and class-name forms so the next
+	# attempt can pick a valid one.
+	assert_contains(result.error.message, "BoxShape3D")
+	assert_contains(result.error.message, "box")
+	_remove_node(parts.body)
+
+
+func test_autofit_3d_rejects_unknown_class_name() -> void:
+	var parts := _add_body_3d("TestAutofit3DUnknownClass", Vector3(1, 1, 1))
+	if parts.is_empty():
+		skip("No scene root")
+		return
+	var result := _handler.autofit({
+		"path": parts.collision.get_path(),
+		"shape_type": "TotallyMadeUpShape3D",
+	})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
 	_remove_node(parts.body)
 
 

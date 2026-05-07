@@ -1,6 +1,8 @@
 @tool
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Sizes a CollisionShape2D/CollisionShape3D to match a visual sibling's
 ## bounds. Auto-creates the concrete Shape subclass when the slot is empty
 ## or the requested type differs — bundling creation and sizing in a single
@@ -32,7 +34,7 @@ const _SHAPE_2D_CLASSES := {
 func autofit(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("path", "")
 	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
 	if _resolved.has("error"):
@@ -43,8 +45,8 @@ func autofit(params: Dictionary) -> Dictionary:
 	var is_3d := node is CollisionShape3D
 	var is_2d := node is CollisionShape2D
 	if not (is_3d or is_2d):
-		return McpErrorCodes.make(
-			McpErrorCodes.WRONG_TYPE,
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
 			"Node at %s is %s — must be CollisionShape3D or CollisionShape2D" % [node_path, node.get_class()]
 		)
 
@@ -58,14 +60,25 @@ func autofit(params: Dictionary) -> Dictionary:
 	else:
 		source = McpScenePath.resolve(source_path, scene_root)
 		if source == null:
-			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, "Source node not found: %s" % source_path)
+			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, "Source node not found: %s" % source_path)
 
 	var shape_type: String = params.get("shape_type", "box" if is_3d else "rectangle")
 	var type_map := _SHAPE_3D_CLASSES if is_3d else _SHAPE_2D_CLASSES
+	# Accept either the short form ("box") or the matching Godot class name
+	# ("BoxShape3D") — every other tool in the server takes class names, and
+	# resource_get_info(type="Shape3D") surfaces concrete_subclasses by class.
 	if not type_map.has(shape_type):
-		return McpErrorCodes.make(
-			McpErrorCodes.VALUE_OUT_OF_RANGE,
-			"Invalid shape_type '%s' for %s. Valid: %s" % [shape_type, node.get_class(), ", ".join(type_map.keys())]
+		for short_form in type_map:
+			if type_map[short_form] == shape_type:
+				shape_type = short_form
+				break
+	if not type_map.has(shape_type):
+		var valid_pairs: Array[String] = []
+		for short_form in type_map:
+			valid_pairs.append("%s (%s)" % [short_form, type_map[short_form]])
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"Invalid shape_type '%s' for %s. Valid: %s" % [shape_type, node.get_class(), ", ".join(valid_pairs)]
 		)
 	var shape_class: String = type_map[shape_type]
 
@@ -93,7 +106,7 @@ func autofit(params: Dictionary) -> Dictionary:
 	if needs_new_shape:
 		var instance := ClassDB.instantiate(shape_class)
 		if instance == null:
-			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s" % shape_class)
+			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s" % shape_class)
 		target_shape = instance
 	else:
 		target_shape = existing_shape if is_3d else existing_shape_2d
@@ -162,7 +175,7 @@ static func _find_bounds_visual(collision_node: Node, is_3d: bool, scene_root: N
 			McpScenePath.from_node(collision_node, scene_root),
 			", ".join(paths),
 		]
-		var err := McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, msg)
+		var err := ErrorCodes.make(ErrorCodes.INVALID_PARAMS, msg)
 		err["error"]["data"] = {"candidates": paths}
 		return {"error": err}
 	return {"error": _no_visual_error(is_3d)}
@@ -190,8 +203,8 @@ static func _measurable_visuals(nodes: Array, exclude: Node, is_3d: bool, strict
 
 static func _no_visual_error(is_3d: bool) -> Dictionary:
 	var hint := "MeshInstance3D" if is_3d else "Sprite2D"
-	return McpErrorCodes.make(
-		McpErrorCodes.INVALID_PARAMS,
+	return ErrorCodes.make(
+		ErrorCodes.INVALID_PARAMS,
 		"No visual found near collision shape — searched siblings and parent-siblings. Pass source_path explicitly (e.g. a %s)" % hint,
 	)
 
@@ -211,8 +224,8 @@ static func _measure_bounds(source: Node, is_3d: bool) -> Dictionary:
 			aabb.position = aabb.position * scale_3d
 			aabb.size = aabb.size * scale_3d
 			return {"aabb": aabb}
-		return {"error": McpErrorCodes.make(
-			McpErrorCodes.WRONG_TYPE,
+		return {"error": ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
 			"Source %s has no measurable 3D bounds (must be VisualInstance3D subclass)" % source.get_class()
 		)}
 	# 2D
@@ -234,13 +247,13 @@ static func _measure_bounds(source: Node, is_3d: bool) -> Dictionary:
 			if tr.texture != null:
 				tr_size = tr.texture.get_size() * tr.scale
 			else:
-				return {"error": McpErrorCodes.make(
-					McpErrorCodes.INVALID_PARAMS,
+				return {"error": ErrorCodes.make(
+					ErrorCodes.INVALID_PARAMS,
 					"TextureRect at %s has zero layout size and no texture to fall back to — autofit would produce a zero-sized shape" % source.name
 				)}
 		return {"rect": Rect2(Vector2.ZERO, tr_size)}
-	return {"error": McpErrorCodes.make(
-		McpErrorCodes.WRONG_TYPE,
+	return {"error": ErrorCodes.make(
+		ErrorCodes.WRONG_TYPE,
 		"Source %s has no measurable 2D bounds (must be Sprite2D or TextureRect)" % source.get_class()
 	)}
 

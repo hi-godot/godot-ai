@@ -37,7 +37,7 @@ ATOMIC_WRITE_PATH = PLUGIN_ROOT / "clients" / "_atomic_write.gd"
 
 
 def test_runner_declares_install_status_enum() -> None:
-    source = RUNNER_PATH.read_text()
+    source = RUNNER_PATH.read_text(encoding="utf-8")
     assert "enum InstallStatus { OK, FAILED_CLEAN, FAILED_MIXED }" in source, (
         "Three-state install outcome is the contract callers depend on. "
         "FAILED_CLEAN means rollback restored the prior state; FAILED_MIXED "
@@ -48,7 +48,7 @@ def test_runner_declares_install_status_enum() -> None:
 
 
 def test_runner_tracks_paths_written_for_cross_batch_rollback() -> None:
-    source = RUNNER_PATH.read_text()
+    source = RUNNER_PATH.read_text(encoding="utf-8")
     assert "var _paths_written = []" in source, (
         "Per-file install records must accumulate across both `_new_file_paths` "
         "and `_existing_file_paths` batches so a failure in the second batch "
@@ -60,7 +60,7 @@ def test_runner_tracks_paths_written_for_cross_batch_rollback() -> None:
 
 
 def test_install_zip_paths_returns_install_status_and_drives_rollback() -> None:
-    source = RUNNER_PATH.read_text()
+    source = RUNNER_PATH.read_text(encoding="utf-8")
     paths_block = get_func_block(source, "func _install_zip_paths(")
     assert "-> int:" in source[: source.index(paths_block) + len(paths_block)]
     assert "InstallStatus.OK" in paths_block, (
@@ -78,7 +78,7 @@ def test_install_zip_paths_returns_install_status_and_drives_rollback() -> None:
 
 
 def test_install_zip_file_returns_dictionary_record_with_backup_metadata() -> None:
-    source = RUNNER_PATH.read_text()
+    source = RUNNER_PATH.read_text(encoding="utf-8")
     install_block = get_func_block(source, "func _install_zip_file(")
     assert "-> Dictionary:" in source[: source.index(install_block) + len(install_block)]
     # Backup is taken via COPY (not rename) so the original stays in place
@@ -94,7 +94,7 @@ def test_install_zip_file_returns_dictionary_record_with_backup_metadata() -> No
 
 
 def test_install_zip_file_does_not_remove_target_before_rename_attempt() -> None:
-    source = RUNNER_PATH.read_text()
+    source = RUNNER_PATH.read_text(encoding="utf-8")
     install_block = get_func_block(source, "func _install_zip_file(")
     # The first rename attempt must precede any DirAccess.remove_absolute(target_path).
     # The remove-then-rename pattern only appears INSIDE the
@@ -112,7 +112,7 @@ def test_install_zip_file_does_not_remove_target_before_rename_attempt() -> None
 
 
 def test_rollback_returns_failed_mixed_when_any_restore_fails() -> None:
-    source = RUNNER_PATH.read_text()
+    source = RUNNER_PATH.read_text(encoding="utf-8")
     rollback_block = get_func_block(source, "func _rollback_paths_written(")
     assert "-> int:" in source[: source.index(rollback_block) + len(rollback_block)]
     assert "InstallStatus.FAILED_MIXED" in rollback_block, (
@@ -138,7 +138,7 @@ def test_inner_install_restore_failure_surfaces_failed_mixed() -> None:
     its conditional set in `_install_zip_file`, and its consumption in
     `_rollback_paths_written`."""
 
-    source = RUNNER_PATH.read_text()
+    source = RUNNER_PATH.read_text(encoding="utf-8")
     # Member declaration with the protective comment.
     assert "var _restore_failed := false" in source
 
@@ -146,9 +146,7 @@ def test_inner_install_restore_failure_surfaces_failed_mixed() -> None:
     # copy actually succeeded. The pattern is: a guarded copy_absolute
     # call whose return is checked, and an `else: _restore_failed = true`.
     install_block = get_func_block(source, "func _install_zip_file(")
-    assert (
-        "DirAccess.copy_absolute(backup_path, target_path) == OK" in install_block
-    ), (
+    assert "DirAccess.copy_absolute(backup_path, target_path) == OK" in install_block, (
         "Inner restore must check the copy result before treating the "
         "restore as complete. Without this check, a failed copy followed "
         "by an unconditional backup delete strands the file and produces "
@@ -170,7 +168,7 @@ def test_inner_install_restore_failure_surfaces_failed_mixed() -> None:
 
 
 def test_handle_install_failure_refuses_to_reenable_on_mixed_state() -> None:
-    source = RUNNER_PATH.read_text()
+    source = RUNNER_PATH.read_text(encoding="utf-8")
     handler_block = get_func_block(source, "func _handle_install_failure(")
     assert "InstallStatus.FAILED_MIXED" in handler_block
     # The MIXED branch must NOT call set_plugin_enabled(true). The caller
@@ -189,7 +187,7 @@ def test_handle_install_failure_refuses_to_reenable_on_mixed_state() -> None:
 
 
 def test_extract_and_scan_routes_failure_through_handle_install_failure() -> None:
-    source = RUNNER_PATH.read_text()
+    source = RUNNER_PATH.read_text(encoding="utf-8")
     extract_block = get_func_block(source, "func _extract_and_scan() -> void:")
     assert "_install_zip_paths(_new_file_paths)" in extract_block
     assert "_handle_install_failure(status)" in extract_block, (
@@ -213,7 +211,7 @@ def test_extract_and_scan_routes_failure_through_handle_install_failure() -> Non
 def test_atomic_write_does_not_remove_target_before_swap() -> None:
     """The bug pattern: remove(path) then retry rename. Must not return."""
 
-    source = ATOMIC_WRITE_PATH.read_text()
+    source = ATOMIC_WRITE_PATH.read_text(encoding="utf-8")
     write_block = get_func_block(source, "static func write(")
     # The dangerous sequence was: rename failed -> remove(path) -> rename retry.
     # In the new code, remove(path) only happens AFTER a successful copy
@@ -237,7 +235,7 @@ def test_atomic_write_does_not_remove_target_before_swap() -> None:
 
 
 def test_atomic_write_uses_copy_then_verify_as_rename_fallback() -> None:
-    source = ATOMIC_WRITE_PATH.read_text()
+    source = ATOMIC_WRITE_PATH.read_text(encoding="utf-8")
     write_block = get_func_block(source, "static func write(")
     assert "DirAccess.copy_absolute(tmp_path, path)" in write_block, (
         "Overwrite-copy is the safe fallback when rename-over-existing is "
@@ -252,7 +250,7 @@ def test_atomic_write_uses_copy_then_verify_as_rename_fallback() -> None:
 
 
 def test_atomic_write_restores_from_backup_when_swap_fails() -> None:
-    source = ATOMIC_WRITE_PATH.read_text()
+    source = ATOMIC_WRITE_PATH.read_text(encoding="utf-8")
     write_block = get_func_block(source, "static func write(")
     assert "DirAccess.copy_absolute(path, backup_path)" in write_block, (
         "Snapshot the prior file via copy_absolute BEFORE attempting the "
@@ -272,7 +270,7 @@ def test_atomic_write_restore_does_not_remove_path_before_copy() -> None:
     only. `copy_absolute` overwrites by default, so the pre-remove was
     unnecessary AND introduced a window where `path` could disappear."""
 
-    source = ATOMIC_WRITE_PATH.read_text()
+    source = ATOMIC_WRITE_PATH.read_text(encoding="utf-8")
     write_block = get_func_block(source, "static func write(")
 
     # Locate the `if backup_made:` branch and assert it does NOT contain
@@ -296,7 +294,7 @@ def test_atomic_write_restore_does_not_remove_path_before_copy() -> None:
 
 def test_atomic_write_size_verification_uses_utf8_byte_count() -> None:
     """`store_string` writes UTF-8 bytes — verify against to_utf8_buffer().size()."""
-    source = ATOMIC_WRITE_PATH.read_text()
+    source = ATOMIC_WRITE_PATH.read_text(encoding="utf-8")
     verify_block = get_func_block(source, "static func _written_size_matches(")
     assert "content.to_utf8_buffer().size()" in verify_block, (
         "String.length() returns char count which diverges from the byte "
@@ -314,7 +312,7 @@ def test_atomic_write_clears_partial_new_file_when_no_original_existed() -> None
     "destination is in its pre-call state on failure" — for a brand-new path
     that means nothing should be on disk after the function returns false."""
 
-    source = ATOMIC_WRITE_PATH.read_text()
+    source = ATOMIC_WRITE_PATH.read_text(encoding="utf-8")
     write_block = get_func_block(source, "static func write(")
     assert "elif not had_original and FileAccess.file_exists(path):" in write_block, (
         "Failure path must clear partial bytes when no original existed. "

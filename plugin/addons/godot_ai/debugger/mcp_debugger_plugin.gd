@@ -2,6 +2,8 @@
 class_name McpDebuggerPlugin
 extends EditorDebuggerPlugin
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Editor-side half of the game-process capture bridge.
 ##
 ## The game-side counterpart (`plugin/addons/godot_ai/runtime/game_helper.gd`,
@@ -167,7 +169,7 @@ func request_game_screenshot(
 
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree == null:
-		_send_error(connection, request_id, McpErrorCodes.INTERNAL_ERROR,
+		_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR,
 			"Editor main loop is not a SceneTree — cannot schedule capture")
 		return
 
@@ -198,7 +200,7 @@ func _wait_then_send(
 	while not is_game_capture_ready() and Time.get_ticks_msec() < deadline:
 		await tree.process_frame
 	if not is_game_capture_ready():
-		_send_error(connection, request_id, McpErrorCodes.INTERNAL_ERROR,
+		_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR,
 			"Game-side autoload never registered its debugger capture within %ds. Is the game actually running? Check Project Settings → Autoload for _mcp_game_helper." % int(GAME_READY_WAIT_SEC))
 		return
 	_send_take_screenshot(tree, request_id, max_resolution, connection, timeout_sec)
@@ -215,7 +217,7 @@ func _send_take_screenshot(
 ) -> void:
 	var session: EditorDebuggerSession = _first_active_session()
 	if session == null:
-		_send_error(connection, request_id, McpErrorCodes.INTERNAL_ERROR,
+		_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR,
 			"No active debugger session — is the game actually running and started from this editor?")
 		return
 
@@ -282,7 +284,7 @@ func _on_screenshot_error(data: Array) -> void:
 	var connection: McpConnection = pending.connection
 	if connection == null or not is_instance_valid(connection):
 		return
-	_send_error(connection, request_id, McpErrorCodes.INTERNAL_ERROR, message)
+	_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, message)
 
 
 func _on_timeout(request_id: String) -> void:
@@ -293,7 +295,7 @@ func _on_timeout(request_id: String) -> void:
 	var connection: McpConnection = pending.connection
 	if connection == null or not is_instance_valid(connection):
 		return
-	_send_error(connection, request_id, McpErrorCodes.INTERNAL_ERROR,
+	_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR,
 		"Game screenshot timed out. The running game must include the _mcp_game_helper autoload (added automatically when the plugin is enabled — check Project Settings → Autoload). If the autoload is missing, re-enable the plugin and relaunch the game. For headless or custom-main-loop builds, use source='viewport' instead.")
 	if _log_buffer:
 		_log_buffer.log("[debug] !! screenshot timeout (%s)" % request_id)
@@ -302,7 +304,7 @@ func _on_timeout(request_id: String) -> void:
 func _send_error(connection: McpConnection, request_id: String, code: String, message: String) -> void:
 	if connection == null or not is_instance_valid(connection):
 		return
-	var err := McpErrorCodes.make(code, message)
+	var err := ErrorCodes.make(code, message)
 	connection.send_deferred_response(request_id, err)
 
 

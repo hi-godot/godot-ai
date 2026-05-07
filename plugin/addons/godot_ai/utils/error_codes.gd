@@ -1,5 +1,4 @@
 @tool
-class_name McpErrorCodes
 extends RefCounted
 
 ## Error code constants shared across handlers. Mirrors protocol/errors.py.

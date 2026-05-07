@@ -1,6 +1,8 @@
 @tool
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Creates procedural textures — GradientTexture2D (wrapping a Gradient)
 ## and NoiseTexture2D (wrapping a FastNoiseLite). Assigns to a node slot
 ## (undoable, bundles sub-resources) or saves to a .tres file.
@@ -43,13 +45,13 @@ func create_gradient_texture(params: Dictionary) -> Dictionary:
 	var fill: String = params.get("fill", "linear")
 
 	if stops.size() < 2:
-		return McpErrorCodes.make(
-			McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
 			"gradient_texture_create requires at least 2 stops, got %d" % stops.size()
 		)
 	if not _FILL_MODES.has(fill):
-		return McpErrorCodes.make(
-			McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid fill '%s'. Valid: %s" % [fill, ", ".join(_FILL_MODES.keys())]
 		)
 
@@ -63,13 +65,13 @@ func create_gradient_texture(params: Dictionary) -> Dictionary:
 	for i in range(stops.size()):
 		var stop = stops[i]
 		if not stop is Dictionary:
-			return McpErrorCodes.make(
-				McpErrorCodes.WRONG_TYPE,
+			return ErrorCodes.make(
+				ErrorCodes.WRONG_TYPE,
 				"stops[%d] must be a dict with 'offset' and 'color' keys" % i
 			)
 		if not stop.has("offset") or not stop.has("color"):
-			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS,
 				"stops[%d] missing 'offset' or 'color' key" % i
 			)
 		offsets.append(float(stop["offset"]))
@@ -108,8 +110,8 @@ func create_noise_texture(params: Dictionary) -> Dictionary:
 	var fractal_octaves: int = params.get("fractal_octaves", 0)  # 0 = leave default
 
 	if not _NOISE_TYPES.has(noise_type):
-		return McpErrorCodes.make(
-			McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid noise_type '%s'. Valid: %s" % [noise_type, ", ".join(_NOISE_TYPES.keys())]
 		)
 
@@ -166,13 +168,13 @@ func _assign_texture(tex: Resource, sub_resources: Array, node_path: String, pro
 			prop_type = prop.get("type", TYPE_NIL)
 			break
 	if not found:
-		return McpErrorCodes.make(
-			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
+		return ErrorCodes.make(
+			ErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Property '%s' not found on %s" % [property, node.get_class()]
 		)
 	if prop_type != TYPE_NIL and prop_type != TYPE_OBJECT:
-		return McpErrorCodes.make(
-			McpErrorCodes.PROPERTY_NOT_ON_CLASS,
+		return ErrorCodes.make(
+			ErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Property '%s' on %s is not an Object slot" % [property, node.get_class()]
 		)
 

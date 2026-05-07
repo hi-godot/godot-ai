@@ -1,6 +1,8 @@
 @tool
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Handles project settings and filesystem search commands.
 
 const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
@@ -17,10 +19,10 @@ func _init(connection: McpConnection = null, debugger_plugin = null) -> void:
 func get_project_setting(params: Dictionary) -> Dictionary:
 	var key: String = params.get("key", "")
 	if key.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: key")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: key")
 
 	if not ProjectSettings.has_setting(key):
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Setting not found: %s" % key)
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Setting not found: %s" % key)
 
 	var value = ProjectSettings.get_setting(key)
 	return {
@@ -35,10 +37,10 @@ func get_project_setting(params: Dictionary) -> Dictionary:
 func set_project_setting(params: Dictionary) -> Dictionary:
 	var key: String = params.get("key", "")
 	if key.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: key")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: key")
 
 	if not params.has("value"):
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: value")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: value")
 
 	var value = params.get("value")
 	var had_setting := ProjectSettings.has_setting(key)
@@ -56,7 +58,7 @@ func set_project_setting(params: Dictionary) -> Dictionary:
 			ProjectSettings.set_setting(key, old_value)
 		else:
 			ProjectSettings.clear(key)
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to save project settings (error %d)" % err)
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to save project settings (error %d)" % err)
 
 	return {
 		"data": {
@@ -74,15 +76,15 @@ func run_project(params: Dictionary) -> Dictionary:
 	var mode: String = params.get("mode", "main")
 	var autosave: bool = params.get("autosave", true)
 	if EditorInterface.is_playing_scene():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Project is already running")
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Project is already running")
 
 	var validation_error: Variant = null
 	if mode == "custom":
 		var custom_scene: String = params.get("scene", "")
 		if custom_scene.is_empty():
-			validation_error = McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: scene (required when mode='custom')")
+			validation_error = ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: scene (required when mode='custom')")
 	elif mode != "main" and mode != "current":
-		validation_error = McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Invalid mode '%s' — use 'main', 'current', or 'custom'" % mode)
+		validation_error = ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Invalid mode '%s' — use 'main', 'current', or 'custom'" % mode)
 	if validation_error != null:
 		return validation_error
 
@@ -139,7 +141,7 @@ func run_project(params: Dictionary) -> Dictionary:
 
 func stop_project(params: Dictionary) -> Dictionary:
 	if not EditorInterface.is_playing_scene():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Project is not running")
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Project is not running")
 
 	if _debugger_plugin != null:
 		_debugger_plugin.end_game_run()
@@ -192,11 +194,11 @@ func search_filesystem(params: Dictionary) -> Dictionary:
 	var path_filter: String = params.get("path", "")
 
 	if name_filter.is_empty() and type_filter.is_empty() and path_filter.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "At least one filter (name, type, path) is required")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "At least one filter (name, type, path) is required")
 
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "EditorFileSystem not available")
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "EditorFileSystem not available")
 
 	var results: Array[Dictionary] = []
 	_scan_directory(efs.get_filesystem(), name_filter, type_filter, path_filter, results)

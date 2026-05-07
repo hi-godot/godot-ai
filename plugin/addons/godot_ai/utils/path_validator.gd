@@ -2,6 +2,8 @@
 class_name McpPathValidator
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Validates `res://`-rooted paths against directory-traversal escape.
 ##
 ## Issue #347 (audit-v2 #3): handlers were accepting `res://../etc/passwd.gd`
@@ -36,7 +38,7 @@ static func _res_root() -> String:
 
 ## Returns "" when the path is a safe `res://`-rooted reference inside the
 ## project root. Returns a human-readable error message otherwise; callers
-## wrap it with `McpErrorCodes.make(INVALID_PARAMS, ...)`.
+## wrap it with `ErrorCodes.make(INVALID_PARAMS, ...)`.
 static func validate_resource_path(path: String) -> String:
 	if path.is_empty():
 		return "Missing required param: path"

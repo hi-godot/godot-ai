@@ -26,7 +26,7 @@ PLUGIN_GD = PLUGIN_ROOT / "plugin.gd"
 
 def test_script_handler_holds_connection_for_deferred_replies() -> None:
     """ScriptHandler needs an McpConnection ref to push the deferred response."""
-    source = SCRIPT_HANDLER.read_text()
+    source = SCRIPT_HANDLER.read_text(encoding="utf-8")
 
     assert "var _connection: McpConnection" in source, (
         "ScriptHandler must hold an McpConnection so create_script can defer "
@@ -45,7 +45,7 @@ def test_script_handler_holds_connection_for_deferred_replies() -> None:
 
 def test_create_script_defers_for_freshly_created_files() -> None:
     """The new-file path returns DEFERRED_RESPONSE; existing-file path replies sync."""
-    source = SCRIPT_HANDLER.read_text()
+    source = SCRIPT_HANDLER.read_text(encoding="utf-8")
 
     # The deferred handoff must be guarded by `not existed_before` so that
     # overwriting an already-known resource still returns immediately —
@@ -63,7 +63,7 @@ def test_create_script_defers_for_freshly_created_files() -> None:
 
 def test_finish_create_script_deferred_polls_resourceloader_with_bounded_loop() -> None:
     """The settle loop must be bounded and check ResourceLoader.exists each frame."""
-    source = SCRIPT_HANDLER.read_text()
+    source = SCRIPT_HANDLER.read_text(encoding="utf-8")
 
     # The bounded counter prevents an indefinite hang if the editor's
     # filesystem pipeline never reports the new resource.
@@ -89,10 +89,9 @@ def test_finish_create_script_deferred_polls_resourceloader_with_bounded_loop() 
         "The deferred loop must yield via process_frame between polls so the "
         "editor can actually run the import pipeline between checks."
     )
-    assert (
-        deferred_block.find("var deadline_ms := Time.get_ticks_msec() + _IMPORT_SETTLE_MAX_MSEC")
-        < deferred_block.find("await tree.process_frame")
-    ), (
+    assert deferred_block.find(
+        "var deadline_ms := Time.get_ticks_msec() + _IMPORT_SETTLE_MAX_MSEC"
+    ) < deferred_block.find("await tree.process_frame"), (
         "The deferred coroutine must start its deadline before the registration "
         "handoff await. Otherwise a slow first frame is outside the bounded "
         "window and a committed write can still hit the dispatcher timeout (#324)."
@@ -114,7 +113,7 @@ def test_finish_create_script_deferred_polls_resourceloader_with_bounded_loop() 
 
 def test_create_script_reports_committed_status_even_when_import_wait_times_out() -> None:
     """A committed file must not be indistinguishable from a failed mutation."""
-    source = SCRIPT_HANDLER.read_text()
+    source = SCRIPT_HANDLER.read_text(encoding="utf-8")
 
     assert '"committed": true' in source, (
         "create_script writes the file before waiting for ResourceLoader; the "
@@ -135,7 +134,7 @@ def test_create_script_reports_committed_status_even_when_import_wait_times_out(
 
 def test_plugin_gd_passes_connection_to_script_handler() -> None:
     """plugin.gd must wire _connection into ScriptHandler — the field is null otherwise."""
-    source = PLUGIN_GD.read_text()
+    source = PLUGIN_GD.read_text(encoding="utf-8")
 
     assert "ScriptHandler.new(get_undo_redo(), _connection)" in source, (
         "plugin.gd must construct ScriptHandler with the connection so the "

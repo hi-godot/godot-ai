@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
 
 ## Tests for NodeHandler — node reads and writes.
@@ -59,12 +61,12 @@ func test_get_children_includes_metadata() -> void:
 
 func test_get_children_invalid_path() -> void:
 	var result := _handler.get_children({"path": "/Main/DoesNotExist"})
-	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
+	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)
 
 
 func test_get_children_missing_path() -> void:
 	var result := _handler.get_children({})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 # ----- get_node_properties -----
@@ -96,12 +98,12 @@ func test_get_properties_has_value_and_type() -> void:
 
 func test_get_properties_invalid_path() -> void:
 	var result := _handler.get_node_properties({"path": "/Main/Nope"})
-	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
+	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)
 
 
 func test_get_properties_missing_path() -> void:
 	var result := _handler.get_node_properties({})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 # ----- get_groups -----
@@ -115,7 +117,7 @@ func test_get_groups_returns_array() -> void:
 
 func test_get_groups_invalid_path() -> void:
 	var result := _handler.get_groups({"path": "/Main/Missing"})
-	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
+	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)
 
 
 # ----- create_node -----
@@ -136,12 +138,12 @@ func test_create_node_basic() -> void:
 
 func test_create_node_invalid_type() -> void:
 	var result := _handler.create_node({"type": "NotARealNodeType"})
-	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 func test_create_node_missing_type() -> void:
 	var result := _handler.create_node({})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_create_node_non_node_type() -> void:
@@ -169,7 +171,7 @@ func test_create_node_parent_not_found_error_names_convention() -> void:
 		"type": "Node3D",
 		"parent_path": "/SomeBogusPath",
 	})
-	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
+	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)
 	assert_contains(result.error.message, "relative to the edited scene root")
 	assert_contains(result.error.message, "Scene root is")
 
@@ -195,12 +197,12 @@ func test_delete_node_scene_root() -> void:
 
 func test_delete_node_invalid_path() -> void:
 	var result := _handler.delete_node({"path": "/Main/DoesNotExist"})
-	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
+	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)
 
 
 func test_delete_node_missing_path() -> void:
 	var result := _handler.delete_node({})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 # ----- reparent_node -----
@@ -212,7 +214,7 @@ func test_reparent_scene_root() -> void:
 
 func test_reparent_missing_new_parent() -> void:
 	var result := _handler.reparent_node({"path": "/Main/Camera3D"})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_reparent_to_self() -> void:
@@ -314,12 +316,12 @@ func test_set_property_float() -> void:
 
 func test_set_property_missing_property() -> void:
 	var result := _handler.set_property({"path": "/Main/Camera3D", "value": 10})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_set_property_missing_value() -> void:
 	var result := _handler.set_property({"path": "/Main/Camera3D", "property": "fov"})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_set_property_vector3_accepts_valid_dict() -> void:
@@ -467,7 +469,7 @@ func test_check_coerced_array_vector3_returns_wrong_type() -> void:
 	## coerce to a typed Variant slot is a type mismatch.
 	var coerce_err: Variant = NodeHandler._check_coerced([1, 2, 3], TYPE_VECTOR3)
 	assert_true(coerce_err is Dictionary, "Non-coerced Array input must produce an error dict")
-	assert_eq(coerce_err.error.code, McpErrorCodes.WRONG_TYPE)
+	assert_eq(coerce_err.error.code, ErrorCodes.WRONG_TYPE)
 	assert_contains(coerce_err.error.message, "Vector3")
 	assert_contains(coerce_err.error.message, "Array")  # names the received type
 
@@ -531,7 +533,7 @@ func test_set_property_resource_not_found() -> void:
 		"property": "environment",
 		"value": "res://does/not/exist.tres",
 	})
-	assert_is_error(result, McpErrorCodes.RESOURCE_NOT_FOUND)
+	assert_is_error(result, ErrorCodes.RESOURCE_NOT_FOUND)
 
 
 func test_set_property_resource_null_clears() -> void:
@@ -980,7 +982,7 @@ func test_rename_node_scene_root_rejected() -> void:
 
 func test_rename_node_missing_name() -> void:
 	var result := _handler.rename_node({"path": "/Main/Camera3D"})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_rename_node_invalid_characters() -> void:
@@ -1014,7 +1016,7 @@ func test_rename_node_invalid_path() -> void:
 		"path": "/Main/Nope",
 		"new_name": "NewName",
 	})
-	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
+	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)
 
 
 # ----- duplicate_node -----
@@ -1039,7 +1041,7 @@ func test_duplicate_scene_root() -> void:
 
 func test_duplicate_node_invalid_path() -> void:
 	var result := _handler.duplicate_node({"path": "/Main/NoSuchNode"})
-	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
+	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)
 
 
 # ----- move_node -----
@@ -1051,12 +1053,12 @@ func test_move_node_scene_root() -> void:
 
 func test_move_node_missing_index() -> void:
 	var result := _handler.move_node({"path": "/Main/Camera3D"})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_move_node_out_of_range() -> void:
 	var result := _handler.move_node({"path": "/Main/Camera3D", "index": 999})
-	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 # ----- add_to_group / remove_from_group -----
@@ -1081,7 +1083,7 @@ func test_add_to_group() -> void:
 
 func test_add_to_group_missing_group() -> void:
 	var result := _handler.add_to_group({"path": "/Main/Camera3D"})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_remove_from_group_not_member() -> void:
@@ -1095,7 +1097,7 @@ func test_remove_from_group_not_member() -> void:
 
 func test_remove_from_group_missing_group() -> void:
 	var result := _handler.remove_from_group({"path": "/Main/Camera3D"})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_add_to_group_rejects_array_value() -> void:
@@ -1306,7 +1308,7 @@ func test_create_node_scene_file_mismatch_blocks_mutation() -> void:
 		"type": "Node",
 		"scene_file": "res://does/not/match.tscn",
 	})
-	assert_is_error(result, McpErrorCodes.EDITED_SCENE_MISMATCH)
+	assert_is_error(result, ErrorCodes.EDITED_SCENE_MISMATCH)
 
 
 func test_resolve_node_scene_file_mismatch_blocks_mutation() -> void:
@@ -1317,7 +1319,7 @@ func test_resolve_node_scene_file_mismatch_blocks_mutation() -> void:
 		"new_name": "ShouldNotRename",
 		"scene_file": "res://does/not/match.tscn",
 	})
-	assert_is_error(result, McpErrorCodes.EDITED_SCENE_MISMATCH)
+	assert_is_error(result, ErrorCodes.EDITED_SCENE_MISMATCH)
 	## And it did NOT actually rename — the original node stays put.
 	var cam := EditorInterface.get_edited_scene_root().get_node_or_null("Camera3D")
 	assert_ne(cam, null, "Camera3D must still exist under the original name")

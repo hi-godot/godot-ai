@@ -1,6 +1,8 @@
 @tool
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Creates an Environment (+ optional Sky + ProceduralSkyMaterial) chain and
 ## either assigns it to a WorldEnvironment node or saves it to a .tres file.
 ## Bundles sub-resource creation + assignment in a single undo action.
@@ -40,8 +42,8 @@ func create_environment(params: Dictionary) -> Dictionary:
 		return home_err
 
 	if not _PRESETS.has(preset):
-		return McpErrorCodes.make(
-			McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid preset '%s'. Valid: %s" % [preset, ", ".join(_PRESETS.keys())]
 		)
 
@@ -55,16 +57,16 @@ func create_environment(params: Dictionary) -> Dictionary:
 			var sky_config: Dictionary = (sky_param as Dictionary).duplicate()
 			var material_type: String = String(sky_config.get("sky_material", "procedural")).to_lower()
 			if material_type != "procedural":
-				return McpErrorCodes.make(
-					McpErrorCodes.INVALID_PARAMS,
+				return ErrorCodes.make(
+					ErrorCodes.INVALID_PARAMS,
 					"sky.sky_material must be 'procedural' when sky is a dictionary"
 				)
 			sky_config.erase("sky_material")
 			sky_properties = sky_config
 			want_sky = true
 		else:
-			return McpErrorCodes.make(
-				McpErrorCodes.WRONG_TYPE,
+			return ErrorCodes.make(
+				ErrorCodes.WRONG_TYPE,
 				"sky must be a bool, null, or dictionary of ProceduralSkyMaterial properties"
 			)
 
@@ -145,8 +147,8 @@ func _assign_environment(env: Environment, sky: Sky, sky_material: ProceduralSky
 	var node: Node = _resolved.node
 	var scene_root: Node = _resolved.scene_root
 	if not (node is WorldEnvironment):
-		return McpErrorCodes.make(
-			McpErrorCodes.WRONG_TYPE,
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
 			"Node at %s is %s — must be WorldEnvironment" % [node_path, node.get_class()]
 		)
 

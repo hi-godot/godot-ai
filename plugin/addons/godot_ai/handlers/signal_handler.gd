@@ -1,6 +1,8 @@
 @tool
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Handles signal listing, connecting, and disconnecting on scene nodes.
 
 var _undo_redo: EditorUndoRedoManager
@@ -13,7 +15,7 @@ func _init(undo_redo: EditorUndoRedoManager) -> void:
 func list_signals(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	var _resolved := McpNodeValidator.resolve_or_error(path, "path")
 	if _resolved.has("error"):
@@ -140,14 +142,14 @@ func connect_signal(params: Dictionary) -> Dictionary:
 	var scene_root: Node = resolved.scene_root
 
 	if not source.has_signal(signal_name):
-		return McpErrorCodes.make(McpErrorCodes.PROPERTY_NOT_ON_CLASS, "Signal '%s' not found on %s" % [signal_name, params.path])
+		return ErrorCodes.make(ErrorCodes.PROPERTY_NOT_ON_CLASS, "Signal '%s' not found on %s" % [signal_name, params.path])
 
 	if not target.has_method(method):
-		return McpErrorCodes.make(McpErrorCodes.PROPERTY_NOT_ON_CLASS, "Method '%s' not found on %s" % [method, params.target])
+		return ErrorCodes.make(ErrorCodes.PROPERTY_NOT_ON_CLASS, "Method '%s' not found on %s" % [method, params.target])
 
 	var callable := Callable(target, method)
 	if source.is_connected(signal_name, callable):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Signal '%s' already connected to %s.%s" % [signal_name, params.target, method])
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Signal '%s' already connected to %s.%s" % [signal_name, params.target, method])
 
 	_undo_redo.create_action("MCP: Connect signal %s" % signal_name)
 	_undo_redo.add_do_method(source, "connect", signal_name, callable)
@@ -170,7 +172,7 @@ func disconnect_signal(params: Dictionary) -> Dictionary:
 
 	var callable := Callable(target, method)
 	if not source.is_connected(signal_name, callable):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Signal '%s' is not connected to %s.%s" % [signal_name, params.target, method])
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Signal '%s' is not connected to %s.%s" % [signal_name, params.target, method])
 
 	_undo_redo.create_action("MCP: Disconnect signal %s" % signal_name)
 	_undo_redo.add_do_method(source, "disconnect", signal_name, callable)
@@ -183,7 +185,7 @@ func disconnect_signal(params: Dictionary) -> Dictionary:
 func _resolve_signal_params(params: Dictionary) -> Dictionary:
 	for key in ["path", "signal", "target", "method"]:
 		if params.get(key, "").is_empty():
-			return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: %s" % key)
+			return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: %s" % key)
 
 	var _scene_check := McpNodeValidator.require_scene_or_error()
 	if _scene_check.has("error"):
@@ -229,13 +231,13 @@ func _resolve_node_or_autoload(path: String, scene_root: Node, role: String) -> 
 			var live := (tree as SceneTree).root.get_node_or_null(name)
 			if live != null:
 				return {"node": live}
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 			"%s '%s' is a declared autoload but isn't instantiated in the editor. " % [role, name] +
 			"Most autoloads are runtime-only; edit-time signal connection isn't supported for them. " +
 			"Connect it from a script attached to the scene using @onready + connect(), " +
 			"or enable editor-instancing for this autoload in Project Settings > Autoload.")
 
-	return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND,
+	return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND,
 		"%s node not found: %s (not in scene tree or autoloads)" % [role, path])
 
 

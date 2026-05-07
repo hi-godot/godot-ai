@@ -2,6 +2,8 @@
 class_name McpParamValidators
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Type-check a JSON-decoded param Variant before assigning it into a typed
 ## GDScript local. The dispatcher only catches handler crashes as an opaque
 ## "malformed result" (issue #210), so a typed assignment like
@@ -18,8 +20,8 @@ static func require_string(name: String, value: Variant) -> Variant:
 	var t := typeof(value)
 	if t == TYPE_STRING or t == TYPE_STRING_NAME:
 		return null
-	return McpErrorCodes.make(
-		McpErrorCodes.WRONG_TYPE,
+	return ErrorCodes.make(
+		ErrorCodes.WRONG_TYPE,
 		"Param '%s' must be a String, got %s" % [name, type_string(t)],
 	)
 
@@ -30,8 +32,8 @@ static func require_string(name: String, value: Variant) -> Variant:
 static func require_int(name: String, value: Variant) -> Variant:
 	if typeof(value) == TYPE_INT:
 		return null
-	return McpErrorCodes.make(
-		McpErrorCodes.WRONG_TYPE,
+	return ErrorCodes.make(
+		ErrorCodes.WRONG_TYPE,
 		"Param '%s' must be an int, got %s" % [name, type_string(typeof(value))],
 	)
 
@@ -40,7 +42,7 @@ static func require_int(name: String, value: Variant) -> Variant:
 static func require_bool(name: String, value: Variant) -> Variant:
 	if typeof(value) == TYPE_BOOL:
 		return null
-	return McpErrorCodes.make(
-		McpErrorCodes.WRONG_TYPE,
+	return ErrorCodes.make(
+		ErrorCodes.WRONG_TYPE,
 		"Param '%s' must be a bool, got %s" % [name, type_string(typeof(value))],
 	)
