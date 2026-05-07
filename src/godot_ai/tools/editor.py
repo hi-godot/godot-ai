@@ -162,14 +162,22 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
 
     @mcp.tool(meta=DEFER_META)
     async def editor_reload_plugin(ctx: Context, session_id: str = "") -> dict:
-        """Reload the Godot editor plugin and wait for reconnect.
+        """Reload the Godot editor plugin.
 
-        Disables and re-enables the plugin on the next frame. Waits for the
-        new session to connect before returning.
+        Disables and re-enables the plugin on the next frame. The response
+        shape depends on whether this MCP server was spawned by the plugin
+        or launched externally:
 
-        Requires the MCP server to be running externally (not started by the
-        plugin). Start with: ``python -m godot_ai --transport streamable-http
-        --port 8000 --reload``.
+        - **Plugin-managed (default install)**: returns a pre-flight ack
+          ``{status: "reload_initiated", transport_will_drop: true,
+          old_session_id, guidance}`` immediately. The reload kills this
+          server, so the WebSocket transport drops; reconnect and call
+          ``session_manage(op="list")`` to find the new session_id.
+
+        - **Externally launched** (e.g. ``python -m godot_ai --transport
+          streamable-http --port 8000 --reload``): waits for the new
+          session to register and returns
+          ``{status: "reloaded", old_session_id, new_session_id}``.
 
         Args:
             session_id: Optional Godot session to target. Empty = active session.
