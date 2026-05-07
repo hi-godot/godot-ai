@@ -1355,10 +1355,14 @@ func _on_dev_stop_pressed() -> void:
 
 
 func _perform_dev_restart_after_feedback() -> void:
-	## Brief paint cycle so the user sees "Restarting…" before the
+	## Brief paint cycle so the user sees "Restarting..." before the
 	## blocking _wait_for_port_free freezes the editor for up to 5s.
 	await get_tree().create_timer(0.15).timeout
-	if _plugin != null:
+	## Re-check has_method post-await — a self-update mixed-state window
+	## could swap _plugin's script class while we were sleeping, leaving
+	## the old reference pointing at a class that no longer carries the
+	## new method. Same #168 guard pattern as _update_dev_section_buttons.
+	if _plugin != null and _plugin.has_method("force_restart_or_start_dev_server"):
 		_plugin.force_restart_or_start_dev_server()
 	## start_dev_server's spawn happens via a 0.5s SceneTree timer; give
 	## it time to land plus a buffer for the WS reconnect before clearing
@@ -1385,8 +1389,8 @@ func _update_dev_section_buttons() -> void:
 	if _dev_primary_btn != null:
 		if _server_restart_in_progress:
 			_dev_primary_btn.disabled = true
-			_dev_primary_btn.text = "Restarting…"
-			_dev_primary_btn.tooltip_text = "Killing the current server and respawning…"
+			_dev_primary_btn.text = "Restarting..."
+			_dev_primary_btn.tooltip_text = "Killing the current server and respawning..."
 		else:
 			var primary_state := _dev_primary_btn_state(has_managed, dev_running)
 			_dev_primary_btn.disabled = false
