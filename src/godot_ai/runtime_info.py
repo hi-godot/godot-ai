@@ -27,6 +27,11 @@ def install_pid_file(path: str | os.PathLike[str] | None) -> Path | None:
     """
     global _PID_FILE_PATH
     if not path:
+        ## A subsequent install_pid_file(None) — e.g. a programmatic
+        ## caller dropping plugin-managed mode — must reset the flag,
+        ## otherwise `is_plugin_managed()` would stay True against the
+        ## docstring's "caller did not pass --pid-file" semantics.
+        _PID_FILE_PATH = None
         return None
 
     pid_path = Path(path).expanduser()

@@ -1554,6 +1554,52 @@ async def test_reload_plugin_async_dispatch_swallows_disconnect_errors(
     await asyncio.gather(*editor_handlers._pending_reload_tasks)
 
 
+async def test_dispatch_reload_async_swallows_unexpected_errors(plugin_managed_mode):
+    """The generic `except Exception` fallback must keep an unexpected
+    error from a misbehaving WS send out of the asyncio loop's unhandled
+    task path. Direct-await of `_dispatch_reload_async` — without the
+    catch this `await` would re-raise the RuntimeError."""
+    registry = SessionRegistry()
+    registry.register(_make_session("old-session"))
+
+    class RaisingClient:
+        async def send(self, *args, **kwargs):
+            raise RuntimeError("simulated unexpected failure")
+
+    runtime = DirectRuntime(registry=registry, client=RaisingClient())
+
+    await editor_handlers._dispatch_reload_async(runtime, "old-session")
+
+
+async def test_dispatch_reload_async_honors_delay(monkeypatch):
+    """The `PLUGIN_MANAGED_RELOAD_DELAY_SEC > 0` branch must actually
+    sleep before firing the WS command — that's the whole reason the
+    delay exists (give the HTTP/SSE response time to flush)."""
+    monkeypatch.setattr(editor_handlers, "PLUGIN_MANAGED_RELOAD_DELAY_SEC", 0.05)
+    registry = SessionRegistry()
+    registry.register(_make_session("old-session"))
+    stub = ReloadStubClient(registry=registry, new_session_id="new-session")
+    runtime = DirectRuntime(registry=registry, client=stub)
+
+    sleep_calls: list[float] = []
+    real_sleep = asyncio.sleep
+
+    async def recording_sleep(delay, *args, **kwargs):
+        sleep_calls.append(delay)
+        await real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", recording_sleep)
+
+    await editor_handlers._dispatch_reload_async(runtime, "old-session")
+
+    assert 0.05 in sleep_calls, (
+        "_dispatch_reload_async must sleep for PLUGIN_MANAGED_RELOAD_DELAY_SEC "
+        "before firing the reload command"
+    )
+    reload_calls = [c for c in stub.calls if c["command"] == "reload_plugin"]
+    assert len(reload_calls) == 1
+
+
 async def test_reload_plugin_external_path_unchanged_when_not_plugin_managed():
     """The pid-file isn't set by default, so external-server callers keep
     the current sync `wait_for_session` shape that returns new_session_id."""

@@ -52,7 +52,8 @@ def test_install_pid_file_none_is_noop(_unregister_atexit):
 def test_is_plugin_managed_tracks_pid_file_install(tmp_path, _unregister_atexit):
     """`is_plugin_managed()` is the editor_reload_plugin handler's signal
     that calling reload will kill its own server process (issue #393).
-    It must flip True only after `install_pid_file` actually wrote a file."""
+    It must flip True only after `install_pid_file` actually wrote a file,
+    and flip back when a subsequent install_pid_file(None) drops the path."""
     assert is_plugin_managed() is False
 
     install_pid_file(None)
@@ -60,6 +61,11 @@ def test_is_plugin_managed_tracks_pid_file_install(tmp_path, _unregister_atexit)
 
     install_pid_file(tmp_path / "server.pid")
     assert is_plugin_managed() is True
+
+    ## A later install_pid_file(None) (e.g. a programmatic caller
+    ## leaving plugin-managed mode) must flip the flag back to False.
+    install_pid_file(None)
+    assert is_plugin_managed() is False
 
 
 def test_install_pid_file_creates_parent_dir(tmp_path, _unregister_atexit):
