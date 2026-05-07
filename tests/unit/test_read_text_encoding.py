@@ -1,55 +1,77 @@
-"""Lint that `read_text()` calls in tests/ always pass `encoding=`.
+"""Lint that `Path.read_text()` calls in tests/ pass `encoding="utf-8"`.
 
-`Path.read_text()` with no arguments defaults to
-`locale.getpreferredencoding()`. On Windows that's cp1252, which
-raises `UnicodeDecodeError` on any non-ASCII byte in the file being
-read. Linux/macOS default to UTF-8, so the hazard is silent until a
-developer runs pytest on Windows.
-
-Issue #397 surfaced four failing tests in
-`test_plugin_self_update_safety.py` because it `rglob`-walks the
-plugin tree, and `plugin/addons/godot_ai/utils/uv_cache_cleanup.gd`
-carries a verbatim Korean Windows error message string. Other tests
-in `tests/unit/` walk plugin `.gd` files via `glob`/`rglob` or read
-specific files that could pick up non-ASCII the next time someone
-adds a foreign-language comment elsewhere.
-
-This test enforces the hygiene rule across `tests/`: every bare
-`.read_text()` call (no kwargs) is an offender. CI is Linux-only
-(issue #35) so this is the only line of defense before a Windows
-developer hits the same trap.
+Without it, Python falls back to `locale.getpreferredencoding()` —
+cp1252 on Windows, which raises `UnicodeDecodeError` on any non-ASCII
+byte. CI is Linux-only (#35) so the trap is silent until a developer
+runs pytest on Windows; #397 is the surfacing recurrence.
 """
 
 from __future__ import annotations
 
 import ast
+import textwrap
 from pathlib import Path
 
-TESTS_ROOT = Path(__file__).resolve().parent.parent
-REPO_ROOT = TESTS_ROOT.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
+TESTS_ROOT = REPO_ROOT / "tests"
+
+
+def _bare_read_text_offenders(source: str) -> list[int]:
+    """Line numbers of `.read_text()` calls in `source` that lack `encoding=`."""
+
+    tree = ast.parse(source)
+    offenders: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute) or func.attr != "read_text":
+            continue
+        if any(kw.arg == "encoding" for kw in node.keywords):
+            continue
+        offenders.append(node.lineno)
+    return offenders
 
 
 def test_test_files_pass_encoding_to_read_text() -> None:
     offenders: list[str] = []
-
     for py_file in TESTS_ROOT.rglob("*.py"):
-        tree = ast.parse(py_file.read_text(encoding="utf-8"))
-
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            if not isinstance(func, ast.Attribute) or func.attr != "read_text":
-                continue
-            if any(kw.arg == "encoding" for kw in node.keywords):
-                continue
-            rel = py_file.relative_to(REPO_ROOT)
-            offenders.append(f"{rel}:{node.lineno}")
+        source = py_file.read_text(encoding="utf-8")
+        if "read_text" not in source:
+            continue
+        rel = py_file.relative_to(REPO_ROOT)
+        offenders.extend(f"{rel}:{lineno}" for lineno in _bare_read_text_offenders(source))
 
     assert not offenders, (
-        "Path.read_text() calls in tests/ must pass encoding='utf-8'. "
-        "Without it, Python falls back to locale.getpreferredencoding(), "
-        "which is cp1252 on Windows and raises UnicodeDecodeError on any "
-        "non-ASCII byte in the file (issue #397). Add encoding='utf-8'. "
-        f"Bare calls: {offenders}"
+        f"Pass encoding='utf-8' to Path.read_text() (issue #397). Bare calls: {offenders}"
     )
+
+
+# Detector self-tests — without these, a future refactor can silently turn the
+# lint into a no-op. Mirrors the pattern in `test_no_direct_undo_redo_in_gdscript_tests.py`
+# and `test_gdscript_no_adjacent_string_concat.py`.
+
+
+def test_detector_flags_bare_read_text() -> None:
+    assert _bare_read_text_offenders("Path('x').read_text()") == [1]
+
+
+def test_detector_ignores_read_text_with_encoding() -> None:
+    assert _bare_read_text_offenders('Path("x").read_text(encoding="utf-8")') == []
+
+
+def test_detector_ignores_unrelated_read_text_attr() -> None:
+    # `mcp__github__read_text(...)` and similar non-attribute calls are not
+    # what the lint targets; they're flagged only if invoked as `obj.read_text(...)`.
+    assert _bare_read_text_offenders("filesystem_read_text(path)") == []
+
+
+def test_detector_finds_multiple_in_one_file() -> None:
+    src = textwrap.dedent(
+        """
+        a = p.read_text()
+        b = q.read_text(encoding="utf-8")
+        c = r.read_text()
+        """
+    )
+    assert _bare_read_text_offenders(src) == [2, 4]
