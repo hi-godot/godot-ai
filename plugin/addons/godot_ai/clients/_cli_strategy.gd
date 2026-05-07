@@ -20,7 +20,7 @@ const _STATUS_TIMEOUT_MS := 6000
 static func configure(client: McpClient, server_name: String, server_url: String) -> Dictionary:
 	var cli := _resolve_cli(client)
 	if cli.is_empty():
-		return {"status": "error", "message": "%s CLI not found" % client.display_name}
+		return {"status": "error", "message": "%s not found" % client.display_name}
 
 	# Best-effort prior cleanup so re-configure is idempotent. Bounded to
 	# the same budget — a hung unregister shouldn't block the configure
@@ -41,7 +41,7 @@ static func configure(client: McpClient, server_name: String, server_url: String
 			],
 		}
 	if result.get("spawn_failed", false):
-		return {"status": "error", "message": "Failed to spawn %s CLI" % client.display_name}
+		return {"status": "error", "message": "Failed to spawn %s" % client.display_name}
 	if int(result.get("exit_code", -1)) == 0:
 		return {"status": "ok", "message": "%s configured (HTTP: %s)" % [client.display_name, server_url]}
 	## `claude mcp add` writes its real failure diagnostics to stderr, so
@@ -103,7 +103,7 @@ static func _status_details(status: McpClient.Status, error_msg: String = "") ->
 static func remove(client: McpClient, server_name: String) -> Dictionary:
 	var cli := _resolve_cli(client)
 	if cli.is_empty():
-		return {"status": "error", "message": "%s CLI not found" % client.display_name}
+		return {"status": "error", "message": "%s not found" % client.display_name}
 	if client.cli_unregister_template.is_empty():
 		return {"status": "error", "message": "%s descriptor missing cli_unregister_template" % client.display_name}
 	var args := _format_args(client.cli_unregister_template, server_name, "")
@@ -116,7 +116,7 @@ static func remove(client: McpClient, server_name: String) -> Dictionary:
 			],
 		}
 	if result.get("spawn_failed", false):
-		return {"status": "error", "message": "Failed to spawn %s CLI" % client.display_name}
+		return {"status": "error", "message": "Failed to spawn %s" % client.display_name}
 	if int(result.get("exit_code", -1)) == 0:
 		return {"status": "ok", "message": "%s configuration removed" % client.display_name}
 	## `claude mcp add` writes its real failure diagnostics to stderr, so

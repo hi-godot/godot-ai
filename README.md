@@ -78,7 +78,7 @@ covers:
 
 Codex, Cursor, Windsurf, VS Code, VS Code Insiders, Zed, Gemini CLI, Cline,
 Kilo Code, Roo Code, Kiro, Trae, Cherry Studio, OpenCode, Qwen Code,
-Kimi Code CLI.
+Kimi Code.
 
 </details>
 
