@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 const CurveHandler := preload("res://addons/godot_ai/handlers/curve_handler.gd")
 
 ## Tests for CurveHandler — set points on Curve/Curve2D/Curve3D resources.
@@ -72,7 +74,7 @@ func test_set_points_missing_property() -> void:
 		"points": [],
 		"path": "/Main/Path3D",
 	})
-	assert_is_error(result, McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
 
 
 func test_set_points_wrong_resource_type() -> void:

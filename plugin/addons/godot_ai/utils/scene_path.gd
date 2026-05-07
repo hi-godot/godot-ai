@@ -2,6 +2,8 @@
 class_name McpScenePath
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Utility for converting between Godot internal node paths and clean
 ## scene-relative paths like /Main/Camera3D.
 
@@ -68,15 +70,15 @@ static func resolve(scene_path: String, scene_root: Node) -> Node:
 ## caller can re-open the right scene.
 ##
 ## Shape on success: {"node": <scene_root>}. Shape on error matches
-## `McpErrorCodes.make()` so callers can propagate the result directly.
+## `ErrorCodes.make()` so callers can propagate the result directly.
 static func require_edited_scene(expected_scene_file: String) -> Dictionary:
 	var root := EditorInterface.get_edited_scene_root()
 	if root == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No scene open")
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "No scene open")
 	if not expected_scene_file.is_empty() and root.scene_file_path != expected_scene_file:
 		var actual := root.scene_file_path if not root.scene_file_path.is_empty() else "<unsaved>"
-		return McpErrorCodes.make(
-			McpErrorCodes.EDITED_SCENE_MISMATCH,
+		return ErrorCodes.make(
+			ErrorCodes.EDITED_SCENE_MISMATCH,
 			(
 				"Expected edited scene \"%s\" but \"%s\" is active. "
 				+ "Call scene_open(\"%s\") first, or omit scene_file to target the active scene."

@@ -1,6 +1,8 @@
 @tool
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Handles file read/write operations and reimport within the Godot project.
 
 
@@ -9,14 +11,14 @@ func read_file(params: Dictionary) -> Dictionary:
 
 	var path_err := McpPathValidator.validate_resource_path(path)
 	if not path_err.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, path_err)
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, path_err)
 
 	if not FileAccess.file_exists(path):
-		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "File not found: %s" % path)
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "File not found: %s" % path)
 
 	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null:
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to open file: %s" % path)
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to open file: %s" % path)
 
 	var content := file.get_as_text()
 	file.close()
@@ -37,20 +39,20 @@ func write_file(params: Dictionary) -> Dictionary:
 
 	var path_err := McpPathValidator.validate_resource_path(path)
 	if not path_err.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, path_err)
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, path_err)
 
 	# Ensure parent directory exists
 	var dir_path := path.get_base_dir()
 	if not DirAccess.dir_exists_absolute(dir_path):
 		var err := DirAccess.make_dir_recursive_absolute(dir_path)
 		if err != OK:
-			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
+			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
 
 	var existed_before := FileAccess.file_exists(path)
 
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	if file == null:
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to open file for writing: %s" % path)
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to open file for writing: %s" % path)
 
 	file.store_string(content)
 	file.close()
@@ -72,11 +74,11 @@ func reimport(params: Dictionary) -> Dictionary:
 	var paths: Array = params.get("paths", [])
 
 	if paths.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: paths (non-empty array)")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: paths (non-empty array)")
 
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "EditorFileSystem not available")
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "EditorFileSystem not available")
 
 	var reimported: Array[String] = []
 	var not_found: Array[String] = []

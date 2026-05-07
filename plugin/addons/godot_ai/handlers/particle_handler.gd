@@ -1,6 +1,8 @@
 @tool
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Handles particle emitter authoring (GPU + CPU, 2D + 3D).
 ##
 ## All write operations bundle node creation and sub-resource spawns
@@ -49,8 +51,8 @@ func create_particle(params: Dictionary) -> Dictionary:
 	var type_str: String = params.get("type", "gpu_3d")
 
 	if not _VALID_TYPES.has(type_str):
-		return McpErrorCodes.make(
-			McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid particle type '%s'. Valid: %s" % [type_str, ", ".join(_VALID_TYPES.keys())]
 		)
 
@@ -63,11 +65,11 @@ func create_particle(params: Dictionary) -> Dictionary:
 	if not parent_path.is_empty():
 		parent = McpScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
+			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
 
 	var node := _instantiate_particle(type_str)
 	if node == null:
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to instantiate particle node")
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to instantiate particle node")
 	if not node_name.is_empty():
 		node.name = node_name
 
@@ -135,26 +137,26 @@ func set_main(params: Dictionary) -> Dictionary:
 
 	var properties: Dictionary = params.get("properties", {})
 	if properties.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "properties dict is empty")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "properties dict is empty")
 
 	var coerced: Dictionary = {}
 	var old_values: Dictionary = {}
 	for property in properties:
 		var prop_name: String = String(property)
 		if not (prop_name in _MAIN_KEYS):
-			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS,
 				"Unknown main property '%s'. Valid: %s" % [prop_name, ", ".join(_MAIN_KEYS)]
 			)
 		var prop_type := _node_property_type(node, prop_name)
 		if prop_type == TYPE_NIL:
-			return McpErrorCodes.make(
-				McpErrorCodes.PROPERTY_NOT_ON_CLASS,
+			return ErrorCodes.make(
+				ErrorCodes.PROPERTY_NOT_ON_CLASS,
 				"Property '%s' not present on %s" % [prop_name, node.get_class()]
 			)
 		var coerce_result := ParticleValues.coerce(prop_name, properties[prop_name], prop_type)
 		if not coerce_result.ok:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, String(coerce_result.error))
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, String(coerce_result.error))
 		coerced[prop_name] = coerce_result.value
 		old_values[prop_name] = node.get(prop_name)
 
@@ -193,7 +195,7 @@ func set_process(params: Dictionary) -> Dictionary:
 
 	var properties: Dictionary = params.get("properties", {})
 	if properties.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "properties dict is empty")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "properties dict is empty")
 
 	# GPU: work through process_material; CPU: properties live on node directly.
 	if node is GPUParticles3D or node is GPUParticles2D:
@@ -214,13 +216,13 @@ func _set_process_gpu(node: Node, node_path: String, properties: Dictionary) -> 
 		var prop_name: String = String(property)
 		var prop_type := _object_property_type(mat, prop_name)
 		if prop_type == TYPE_NIL:
-			return McpErrorCodes.make(
-				McpErrorCodes.PROPERTY_NOT_ON_CLASS,
+			return ErrorCodes.make(
+				ErrorCodes.PROPERTY_NOT_ON_CLASS,
 				"Property '%s' not present on ParticleProcessMaterial" % prop_name
 			)
 		var coerce_result := ParticleValues.coerce(prop_name, properties[prop_name], prop_type)
 		if not coerce_result.ok:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, String(coerce_result.error))
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, String(coerce_result.error))
 		coerced[prop_name] = coerce_result.value
 
 	_undo_redo.create_action("MCP: Set particle process on %s" % node.name)
@@ -271,13 +273,13 @@ func _set_process_cpu(node: Node, node_path: String, properties: Dictionary) -> 
 		var prop_name: String = aliases.get(String(property), String(property))
 		var prop_type := _node_property_type(node, prop_name)
 		if prop_type == TYPE_NIL:
-			return McpErrorCodes.make(
-				McpErrorCodes.PROPERTY_NOT_ON_CLASS,
+			return ErrorCodes.make(
+				ErrorCodes.PROPERTY_NOT_ON_CLASS,
 				"Property '%s' not present on %s" % [prop_name, node.get_class()]
 			)
 		var coerce_result := ParticleValues.coerce(prop_name, properties[property], prop_type)
 		if not coerce_result.ok:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, String(coerce_result.error))
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, String(coerce_result.error))
 		coerced[prop_name] = coerce_result.value
 		old_values[prop_name] = node.get(prop_name)
 
@@ -326,12 +328,12 @@ func set_draw_pass(params: Dictionary) -> Dictionary:
 		return _set_draw_pass_cpu_3d(node, node_path, mesh_path, material_path)
 	if node is GPUParticles2D or node is CPUParticles2D:
 		return _set_draw_pass_2d(node, node_path, texture_path)
-	return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Node %s is not a particle node" % node.get_class())
+	return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Node %s is not a particle node" % node.get_class())
 
 
 func _set_draw_pass_gpu_3d(node: GPUParticles3D, node_path: String, pass_idx: int, mesh_path: String, material_path: String) -> Dictionary:
 	if pass_idx < 1 or pass_idx > 4:
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "pass must be 1..4 (got %d)" % pass_idx)
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "pass must be 1..4 (got %d)" % pass_idx)
 
 	var mesh: Mesh = null
 	var mesh_created := false
@@ -343,10 +345,10 @@ func _set_draw_pass_gpu_3d(node: GPUParticles3D, node_path: String, pass_idx: in
 		existing_mesh = node.get(property_name) as Mesh
 	if not mesh_path.is_empty():
 		if not ResourceLoader.exists(mesh_path):
-			return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Mesh not found: %s" % mesh_path)
+			return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Mesh not found: %s" % mesh_path)
 		var loaded := ResourceLoader.load(mesh_path)
 		if not (loaded is Mesh):
-			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Resource at %s is not a Mesh" % mesh_path)
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Resource at %s is not a Mesh" % mesh_path)
 		mesh = loaded
 	else:
 		if existing_mesh == null:
@@ -359,10 +361,10 @@ func _set_draw_pass_gpu_3d(node: GPUParticles3D, node_path: String, pass_idx: in
 	var material: Material = null
 	if not material_path.is_empty():
 		if not ResourceLoader.exists(material_path):
-			return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Material not found: %s" % material_path)
+			return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Material not found: %s" % material_path)
 		var loaded_mat := ResourceLoader.load(material_path)
 		if not (loaded_mat is Material):
-			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Resource at %s is not a Material" % material_path)
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Resource at %s is not a Material" % material_path)
 		material = loaded_mat
 
 	var old_draw_passes: int = int(node.draw_passes)
@@ -403,26 +405,26 @@ func _set_draw_pass_gpu_3d(node: GPUParticles3D, node_path: String, pass_idx: in
 
 func _set_draw_pass_cpu_3d(node: CPUParticles3D, node_path: String, mesh_path: String, material_path: String) -> Dictionary:
 	if mesh_path.is_empty() and material_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "CPUParticles3D requires mesh or material param")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "CPUParticles3D requires mesh or material param")
 
 	var mesh: Mesh = node.mesh
 	var old_mesh: Mesh = mesh
 	if not mesh_path.is_empty():
 		if not ResourceLoader.exists(mesh_path):
-			return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Mesh not found: %s" % mesh_path)
+			return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Mesh not found: %s" % mesh_path)
 		var loaded := ResourceLoader.load(mesh_path)
 		if not (loaded is Mesh):
-			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Resource at %s is not a Mesh" % mesh_path)
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Resource at %s is not a Mesh" % mesh_path)
 		mesh = loaded
 
 	var material: Material = null
 	var old_material: Material = node.material_override
 	if not material_path.is_empty():
 		if not ResourceLoader.exists(material_path):
-			return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Material not found: %s" % material_path)
+			return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Material not found: %s" % material_path)
 		var loaded_mat := ResourceLoader.load(material_path)
 		if not (loaded_mat is Material):
-			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Resource at %s is not a Material" % material_path)
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Resource at %s is not a Material" % material_path)
 		material = loaded_mat
 
 	_undo_redo.create_action("MCP: Set CPU particle draw on %s" % node.name)
@@ -447,12 +449,12 @@ func _set_draw_pass_cpu_3d(node: CPUParticles3D, node_path: String, mesh_path: S
 
 func _set_draw_pass_2d(node: Node, node_path: String, texture_path: String) -> Dictionary:
 	if texture_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "2D particles require texture param")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "2D particles require texture param")
 	if not ResourceLoader.exists(texture_path):
-		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Texture not found: %s" % texture_path)
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Texture not found: %s" % texture_path)
 	var tex := ResourceLoader.load(texture_path)
 	if not (tex is Texture2D):
-		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Resource at %s is not a Texture2D" % texture_path)
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Resource at %s is not a Texture2D" % texture_path)
 
 	var old_texture: Texture2D = node.get("texture")
 
@@ -569,13 +571,13 @@ func get_particle(params: Dictionary) -> Dictionary:
 func apply_preset(params: Dictionary) -> Dictionary:
 	var preset_name: String = params.get("preset", "")
 	if preset_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: preset")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: preset")
 
 	var overrides: Dictionary = params.get("overrides", {})
 	var blueprint = ParticlePresets.build(preset_name, overrides)
 	if blueprint == null:
-		return McpErrorCodes.make(
-			McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Unknown preset '%s'. Valid: %s" % [preset_name, ", ".join(ParticlePresets.list())]
 		)
 
@@ -585,8 +587,8 @@ func apply_preset(params: Dictionary) -> Dictionary:
 	if node_name.is_empty():
 		node_name = preset_name.capitalize()
 	if not _VALID_TYPES.has(type_str):
-		return McpErrorCodes.make(
-			McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid particle type '%s'. Valid: %s" % [type_str, ", ".join(_VALID_TYPES.keys())]
 		)
 
@@ -599,7 +601,7 @@ func apply_preset(params: Dictionary) -> Dictionary:
 	if not parent_path.is_empty():
 		parent = McpScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
+			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
 
 	var node := _instantiate_particle(type_str)
 	node.name = node_name
@@ -639,7 +641,7 @@ func apply_preset(params: Dictionary) -> Dictionary:
 			continue  # Silently skip: not all main keys apply to all types.
 		var coerce_result := ParticleValues.coerce(prop_name, main_values[prop_name], prop_type)
 		if not coerce_result.ok:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, String(coerce_result.error))
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, String(coerce_result.error))
 		node.set(prop_name, coerce_result.value)
 		applied_main.append(prop_name)
 
@@ -652,7 +654,7 @@ func apply_preset(params: Dictionary) -> Dictionary:
 			continue  # Silently skip: preset property doesn't apply to this variant.
 		var coerce_result := ParticleValues.coerce(prop_name, process_values[prop_name], prop_type)
 		if not coerce_result.ok:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, String(coerce_result.error))
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, String(coerce_result.error))
 		process_target.set(prop_name, coerce_result.value)
 		applied_process.append(prop_name)
 
@@ -718,8 +720,8 @@ func _resolve_particle(params: Dictionary) -> Dictionary:
 	var is_particle := node is GPUParticles3D or node is GPUParticles2D \
 		or node is CPUParticles3D or node is CPUParticles2D
 	if not is_particle:
-		return McpErrorCodes.make(
-			McpErrorCodes.WRONG_TYPE,
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
 			"Node %s is not a particle node (got %s)" % [node_path, node.get_class()]
 		)
 	return {"node": node, "path": node_path}

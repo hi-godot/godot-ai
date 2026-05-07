@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Tests for McpScenePath — the path resolver/formatter shared by every
 ## scene-mutating handler. Uses a freestanding Node tree (no dependency
 ## on the edited scene) so behavior is deterministic.
@@ -293,7 +295,7 @@ func test_require_edited_scene_mismatch_returns_structured_error() -> void:
 	## A non-empty expected that doesn't match the active scene must fail with
 	## EDITED_SCENE_MISMATCH, not silently target the wrong scene.
 	var result := McpScenePath.require_edited_scene("res://this/does/not/match.tscn")
-	assert_is_error(result, McpErrorCodes.EDITED_SCENE_MISMATCH)
+	assert_is_error(result, ErrorCodes.EDITED_SCENE_MISMATCH)
 	## Message must name both the expected and the active scene so the caller
 	## can diagnose drift without another call.
 	var active := EditorInterface.get_edited_scene_root().scene_file_path

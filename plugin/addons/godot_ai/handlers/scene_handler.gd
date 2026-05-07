@@ -1,6 +1,8 @@
 @tool
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Handles scene tree reading and node search.
 
 var _connection: McpConnection
@@ -42,7 +44,7 @@ func find_nodes(params: Dictionary) -> Dictionary:
 	var group_filter: String = params.get("group", "")
 
 	if name_filter.is_empty() and type_filter.is_empty() and group_filter.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "At least one filter (name, type, group) is required")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "At least one filter (name, type, group) is required")
 
 	var _scene_check := McpNodeValidator.require_scene_or_error()
 	if _scene_check.has("error"):
@@ -86,29 +88,29 @@ func create_scene(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	if not path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Path must start with res://")
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Path must start with res://")
 
 	if not path.ends_with(".tscn") and not path.ends_with(".scn"):
 		path += ".tscn"
 
 	if not ClassDB.class_exists(root_type):
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Unknown node type: %s" % root_type)
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Unknown node type: %s" % root_type)
 	if not ClassDB.is_parent_class(root_type, "Node"):
-		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "%s is not a Node type" % root_type)
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s is not a Node type" % root_type)
 
 	# Ensure parent directory exists
 	var dir_path := path.get_base_dir()
 	if not DirAccess.dir_exists_absolute(dir_path):
 		var err := DirAccess.make_dir_recursive_absolute(dir_path)
 		if err != OK:
-			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
+			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
 
 	var root: Node = ClassDB.instantiate(root_type)
 	if root == null:
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s" % root_type)
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s" % root_type)
 
 	var root_name: String = params.get("root_name", "")
 	if root_name.is_empty():
@@ -127,7 +129,7 @@ func create_scene(params: Dictionary) -> Dictionary:
 		_connection.pause_processing = false
 
 	if err != OK:
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to save scene: %s" % error_string(err))
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to save scene: %s" % error_string(err))
 
 	return {
 		"data": {
@@ -144,10 +146,10 @@ func create_scene(params: Dictionary) -> Dictionary:
 func open_scene(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	if not ResourceLoader.exists(path):
-		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Scene not found: %s" % path)
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Scene not found: %s" % path)
 
 	EditorInterface.open_scene_from_path(path)
 
@@ -171,8 +173,8 @@ func save_scene(_params: Dictionary) -> Dictionary:
 
 	var path := scene_root.scene_file_path
 	if path.is_empty():
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+		return ErrorCodes.make(
+			ErrorCodes.INVALID_PARAMS,
 			"Current scene has never been saved; call scene_manage(op='save_as') with a res://... path ending in .tscn or .scn."
 		)
 
@@ -183,7 +185,7 @@ func save_scene(_params: Dictionary) -> Dictionary:
 		_connection.pause_processing = false
 
 	if err != OK:
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to save scene: %s" % error_string(err))
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to save scene: %s" % error_string(err))
 
 	return {
 		"data": {
@@ -198,10 +200,10 @@ func save_scene(_params: Dictionary) -> Dictionary:
 func save_scene_as(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
 	if not path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Path must start with res://")
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Path must start with res://")
 
 	if not path.ends_with(".tscn") and not path.ends_with(".scn"):
 		path += ".tscn"
@@ -216,7 +218,7 @@ func save_scene_as(params: Dictionary) -> Dictionary:
 	if not DirAccess.dir_exists_absolute(dir_path):
 		var err := DirAccess.make_dir_recursive_absolute(dir_path)
 		if err != OK:
-			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
+			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
 
 	if _connection:
 		_connection.pause_processing = true

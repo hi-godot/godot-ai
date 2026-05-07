@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 const BatchHandler := preload("res://addons/godot_ai/handlers/batch_handler.gd")
 const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
 
@@ -32,7 +34,7 @@ func suite_setup(ctx: Dictionary) -> void:
 		return {"data": {"undoable": false}})
 	_dispatcher.register("_fail_pure", func(_p: Dictionary) -> Dictionary:
 		_call_log.append("_fail_pure")
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "forced failure"))
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "forced failure"))
 
 	_handler = BatchHandler.new(_dispatcher, _undo_redo)
 
@@ -69,14 +71,14 @@ func test_rejects_non_dict_item() -> void:
 
 func test_rejects_unknown_subcommand() -> void:
 	var result := _handler.batch_execute({"commands": [{"command": "does_not_exist"}]})
-	assert_is_error(result, McpErrorCodes.UNKNOWN_COMMAND)
+	assert_is_error(result, ErrorCodes.UNKNOWN_COMMAND)
 
 
 func test_unknown_command_error_mentions_plugin_names() -> void:
 	# Simulates the common mistake: passing MCP tool name "node_create"
 	# instead of the plugin command "create_node".
 	var result := _handler.batch_execute({"commands": [{"command": "node_create"}]})
-	assert_is_error(result, McpErrorCodes.UNKNOWN_COMMAND)
+	assert_is_error(result, ErrorCodes.UNKNOWN_COMMAND)
 	var msg: String = result.error.message
 	assert_contains(msg, "plugin command names", "error should explain naming convention")
 	assert_contains(msg, "create_node", "error should suggest the correct plugin name")
@@ -84,7 +86,7 @@ func test_unknown_command_error_mentions_plugin_names() -> void:
 
 func test_unknown_command_populates_suggestions_field() -> void:
 	var result := _handler.batch_execute({"commands": [{"command": "node_create"}]})
-	assert_is_error(result, McpErrorCodes.UNKNOWN_COMMAND)
+	assert_is_error(result, ErrorCodes.UNKNOWN_COMMAND)
 	assert_has_key(result.error, "data")
 	assert_has_key(result.error.data, "suggestions")
 	var suggestions: Array = result.error.data.suggestions
@@ -95,7 +97,7 @@ func test_unknown_command_populates_suggestions_field() -> void:
 func test_unknown_command_empty_suggestions_when_no_match() -> void:
 	# Pure gibberish should still error cleanly, with suggestions empty or low-similarity.
 	var result := _handler.batch_execute({"commands": [{"command": "zzzqqqxxx_totally_bogus"}]})
-	assert_is_error(result, McpErrorCodes.UNKNOWN_COMMAND)
+	assert_is_error(result, ErrorCodes.UNKNOWN_COMMAND)
 	assert_has_key(result.error, "data")
 	assert_has_key(result.error.data, "suggestions")
 	# Array may be empty — the contract is just that the key exists and is an Array.

@@ -1,6 +1,8 @@
 @tool
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Replaces all points on a Curve / Curve2D / Curve3D resource. The point
 ## list shape depends on resource type (see `set_points` for the schemas).
 ##
@@ -30,14 +32,14 @@ func set_points(params: Dictionary) -> Dictionary:
 		return home_err
 	var has_file_target := not resource_path.is_empty()
 	if not (new_points is Array):
-		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "points must be an array")
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "points must be an array")
 
 	var curve: Resource
 	var node: Node = null
 	var curve_created := false
 	if has_file_target:
 		if not ResourceLoader.exists(resource_path):
-			return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Resource not found: %s" % resource_path)
+			return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Resource not found: %s" % resource_path)
 		# ResourceLoader.load() returns Godot's cached Resource. Duplicate
 		# before mutating so: (a) open scenes holding a reference to this
 		# .tres don't silently see the new points outside any undo action,
@@ -48,8 +50,8 @@ func set_points(params: Dictionary) -> Dictionary:
 		# on the response line below would crash the plugin.
 		var loaded_curve: Resource = ResourceLoader.load(resource_path)
 		if loaded_curve == null:
-			return McpErrorCodes.make(
-				McpErrorCodes.INTERNAL_ERROR,
+			return ErrorCodes.make(
+				ErrorCodes.INTERNAL_ERROR,
 				"Failed to load curve from %s (file exists but load returned null — may be corrupt)" % resource_path
 			)
 		curve = loaded_curve.duplicate()
@@ -60,10 +62,10 @@ func set_points(params: Dictionary) -> Dictionary:
 		var scene_root: Node = _scene_check.scene_root
 		node = McpScenePath.resolve(node_path, scene_root)
 		if node == null:
-			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
+			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
 		if not (property in node):
-			return McpErrorCodes.make(
-				McpErrorCodes.PROPERTY_NOT_ON_CLASS,
+			return ErrorCodes.make(
+				ErrorCodes.PROPERTY_NOT_ON_CLASS,
 				"Property '%s' not found on %s" % [property, node.get_class()]
 			)
 		curve = node.get(property)
@@ -74,18 +76,18 @@ func set_points(params: Dictionary) -> Dictionary:
 		if curve == null:
 			var inferred := _infer_curve_class(node, property)
 			if inferred.is_empty():
-				return McpErrorCodes.make(
-					McpErrorCodes.INVALID_PARAMS,
+				return ErrorCodes.make(
+					ErrorCodes.INVALID_PARAMS,
 					"Curve slot on %s.%s is null and the Curve class can't be inferred from the property hint — create one first with resource_create (type=Curve3D/Curve2D/Curve)" % [node.get_class(), property]
 				)
 			curve = ClassDB.instantiate(inferred)
 			if curve == null:
-				return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s" % inferred)
+				return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s" % inferred)
 			curve_created = true
 
 	if not (curve is Curve or curve is Curve2D or curve is Curve3D):
-		return McpErrorCodes.make(
-			McpErrorCodes.WRONG_TYPE,
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
 			"Resource is %s — must be Curve, Curve2D, or Curve3D" % curve.get_class()
 		)
 
@@ -161,8 +163,8 @@ static func _coerce_points(curve: Resource, points: Array) -> Dictionary:
 		for i in range(points.size()):
 			var p = points[i]
 			if not (p is Dictionary) or not p.has("offset") or not p.has("value"):
-				return {"error": McpErrorCodes.make(
-					McpErrorCodes.INVALID_PARAMS,
+				return {"error": ErrorCodes.make(
+					ErrorCodes.INVALID_PARAMS,
 					"Curve points[%d] must be {offset, value, [left_tangent, right_tangent]}" % i
 				)}
 			snapshot.append({
@@ -176,8 +178,8 @@ static func _coerce_points(curve: Resource, points: Array) -> Dictionary:
 		for i in range(points.size()):
 			var p2 = points[i]
 			if not (p2 is Dictionary) or not p2.has("position"):
-				return {"error": McpErrorCodes.make(
-					McpErrorCodes.INVALID_PARAMS,
+				return {"error": ErrorCodes.make(
+					ErrorCodes.INVALID_PARAMS,
 					"Curve2D points[%d] must have 'position' (and optional 'in', 'out')" % i
 				)}
 			var axes2 := {
@@ -198,8 +200,8 @@ static func _coerce_points(curve: Resource, points: Array) -> Dictionary:
 		for i in range(points.size()):
 			var p3 = points[i]
 			if not (p3 is Dictionary) or not p3.has("position"):
-				return {"error": McpErrorCodes.make(
-					McpErrorCodes.INVALID_PARAMS,
+				return {"error": ErrorCodes.make(
+					ErrorCodes.INVALID_PARAMS,
 					"Curve3D points[%d] must have 'position' (and optional 'in', 'out', 'tilt')" % i
 				)}
 			var axes3 := {

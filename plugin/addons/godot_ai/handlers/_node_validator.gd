@@ -27,7 +27,7 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 ## error dict.
 ##
 ## Success shape: `{"node": Node, "scene_root": Node, "path": String}`.
-## Error shape: matches `McpErrorCodes.make(...)` so callers can
+## Error shape: matches `ErrorCodes.make(...)` so callers can
 ## `return resolved` to propagate.
 ##
 ## Errors (in order checked):

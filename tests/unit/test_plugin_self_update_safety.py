@@ -88,7 +88,7 @@ OFF_LOAD_SURFACE = frozenset(
 # that a regression slipped through review.
 #
 # End state: 0. Steps 2 and 3 of #399 drive this down.
-BASELINE_VIOLATION_COUNT = 1254
+BASELINE_VIOLATION_COUNT = 306
 
 
 Kind = Literal["typed_field", "typed_annotation", "constructor", "member_access"]

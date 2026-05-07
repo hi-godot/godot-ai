@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 const ProjectHandler := preload("res://addons/godot_ai/handlers/project_handler.gd")
 
 ## Tests for ProjectHandler — project settings and filesystem search.
@@ -29,7 +31,7 @@ func test_get_project_setting_returns_value() -> void:
 
 func test_get_project_setting_missing_key() -> void:
 	var result := _handler.get_project_setting({})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_get_project_setting_unknown_key() -> void:
@@ -85,12 +87,12 @@ func test_set_project_setting_preserves_int_type() -> void:
 
 func test_set_project_setting_missing_key() -> void:
 	var result := _handler.set_project_setting({})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_set_project_setting_missing_value() -> void:
 	var result := _handler.set_project_setting({"key": "application/config/name"})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 # ----- search_filesystem -----
@@ -137,7 +139,7 @@ func test_search_filesystem_no_results() -> void:
 
 func test_run_project_invalid_mode() -> void:
 	var result := _handler.run_project({"mode": "invalid_mode"})
-	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 func test_run_project_invalid_mode_restores_connection_pause() -> void:
@@ -147,7 +149,7 @@ func test_run_project_invalid_mode_restores_connection_pause() -> void:
 
 	var result := handler.run_project({"mode": "invalid_mode"})
 
-	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
 	assert_false(conn.pause_processing, "validation errors must not leave processing paused")
 	conn.free()
 
@@ -164,7 +166,7 @@ func test_run_project_validation_error_does_not_rotate_capture_run() -> void:
 
 func test_run_project_custom_missing_scene() -> void:
 	var result := _handler.run_project({"mode": "custom"})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_run_project_custom_empty_scene() -> void:

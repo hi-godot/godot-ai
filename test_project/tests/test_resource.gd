@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 const ResourceHandler := preload("res://addons/godot_ai/handlers/resource_handler.gd")
 
 ## Tests for ResourceHandler — resource search, load, and assign.
@@ -22,7 +24,7 @@ func suite_setup(ctx: Dictionary) -> void:
 
 func test_search_resources_missing_filters() -> void:
 	var result := _handler.search_resources({})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_search_resources_by_path() -> void:
@@ -46,7 +48,7 @@ func test_search_resources_by_type() -> void:
 
 func test_load_resource_missing_path() -> void:
 	var result := _handler.load_resource({})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_load_resource_invalid_prefix() -> void:
@@ -56,7 +58,7 @@ func test_load_resource_invalid_prefix() -> void:
 
 func test_load_resource_not_found() -> void:
 	var result := _handler.load_resource({"path": "res://nonexistent.tres"})
-	assert_is_error(result, McpErrorCodes.RESOURCE_NOT_FOUND)
+	assert_is_error(result, ErrorCodes.RESOURCE_NOT_FOUND)
 
 
 func test_load_resource_scene() -> void:
@@ -71,17 +73,17 @@ func test_load_resource_scene() -> void:
 
 func test_assign_resource_missing_path() -> void:
 	var result := _handler.assign_resource({"property": "mesh", "resource_path": "res://foo.tres"})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_assign_resource_missing_property() -> void:
 	var result := _handler.assign_resource({"path": "/Main/Camera3D", "resource_path": "res://foo.tres"})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_assign_resource_missing_resource_path() -> void:
 	var result := _handler.assign_resource({"path": "/Main/Camera3D", "property": "mesh"})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_assign_resource_node_not_found() -> void:
@@ -90,7 +92,7 @@ func test_assign_resource_node_not_found() -> void:
 		"property": "mesh",
 		"resource_path": "res://main.tscn",
 	})
-	assert_is_error(result, McpErrorCodes.NODE_NOT_FOUND)
+	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)
 
 
 func test_assign_resource_property_not_found() -> void:
@@ -141,7 +143,7 @@ func test_assign_resource_resource_not_found() -> void:
 		"property": "environment",
 		"resource_path": "res://nonexistent.tres",
 	})
-	assert_is_error(result, McpErrorCodes.RESOURCE_NOT_FOUND)
+	assert_is_error(result, ErrorCodes.RESOURCE_NOT_FOUND)
 
 
 # ----- create_resource -----
@@ -167,7 +169,7 @@ func _remove_node(node: Node) -> void:
 
 func test_create_resource_missing_type() -> void:
 	var result := _handler.create_resource({"path": "/Main/Foo", "property": "mesh"})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 	assert_contains(result.error.message, "type")
 
 
@@ -300,7 +302,7 @@ func test_create_resource_unknown_property_in_properties_dict() -> void:
 		"property": "mesh",
 		"properties": {"not_a_real_field": 42},
 	})
-	assert_is_error(result, McpErrorCodes.PROPERTY_NOT_ON_CLASS)
+	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
 	# Error should enrich with valid_properties so the caller can recover without a round-trip.
 	assert_has_key(result.error, "data")
 	assert_has_key(result.error.data, "valid_properties")
@@ -315,12 +317,12 @@ func test_create_resource_unknown_property_in_properties_dict() -> void:
 
 func test_get_resource_info_missing_type() -> void:
 	var result := _handler.get_resource_info({})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_get_resource_info_unknown_type() -> void:
 	var result := _handler.get_resource_info({"type": "DefinitelyNotAClass_xyz"})
-	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
 	assert_contains(result.error.message, "Unknown resource type")
 
 

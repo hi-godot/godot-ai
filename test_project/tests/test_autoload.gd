@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 const AutoloadHandler := preload("res://addons/godot_ai/handlers/autoload_handler.gd")
 
 ## Tests for AutoloadHandler — autoload listing, adding, and removing.
@@ -38,12 +40,12 @@ func test_list_autoloads() -> void:
 
 func test_add_autoload_missing_name() -> void:
 	var result := _handler.add_autoload({})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_add_autoload_missing_path() -> void:
 	var result := _handler.add_autoload({"name": TEST_AUTOLOAD_NAME})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_add_autoload_invalid_path_prefix() -> void:
@@ -51,7 +53,7 @@ func test_add_autoload_invalid_path_prefix() -> void:
 		"name": TEST_AUTOLOAD_NAME,
 		"path": "/absolute/path/evil.gd",
 	})
-	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 func test_add_autoload_user_path_rejected() -> void:
@@ -115,7 +117,7 @@ func test_add_autoload_duplicate() -> void:
 
 func test_remove_autoload_missing_name() -> void:
 	var result := _handler.remove_autoload({})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_remove_autoload_not_found() -> void:

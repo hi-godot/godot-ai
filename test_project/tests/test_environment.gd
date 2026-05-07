@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 const EnvironmentHandler := preload("res://addons/godot_ai/handlers/environment_handler.gd")
 
 ## Tests for EnvironmentHandler — create Environment + Sky + SkyMaterial.
@@ -57,7 +59,7 @@ func test_create_invalid_preset() -> void:
 		"path": "/Main/World",
 		"preset": "zapruder",
 	})
-	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 func test_create_target_not_world_environment() -> void:
