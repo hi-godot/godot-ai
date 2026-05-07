@@ -25,7 +25,8 @@ class _RestartDispatchPlugin extends GodotAiPlugin:
 	var can_restart := false
 	var force_restart_calls := 0
 	var recover_calls := 0
-	var preserve_mode_calls := 0
+	var primary_calls := 0
+	var stop_calls := 0
 	var has_managed := false
 	var dev_running := false
 
@@ -48,9 +49,13 @@ class _RestartDispatchPlugin extends GodotAiPlugin:
 	func is_dev_server_running() -> bool:
 		return dev_running
 
-	func force_restart_server_preserving_mode() -> bool:
-		preserve_mode_calls += 1
+	func force_restart_or_start_dev_server() -> bool:
+		primary_calls += 1
 		return has_managed or dev_running
+
+	func stop_dev_server() -> void:
+		stop_calls += 1
+		dev_running = false
 
 
 var _dock: Node
@@ -962,28 +967,30 @@ func test_log_viewer_tick_keeps_painting_after_buffer_caps_at_max_lines() -> voi
 	panel.free()
 
 
-# --- Restart Server button (dev-mode) -----------------------------------
+# --- Dev-section primary + stop buttons ---------------------------------
 
-func test_restart_server_btn_rendered_in_dev_checkout() -> void:
-	## The button only makes sense for contributors editing Python source —
-	## live in the Setup section's dev branch alongside `_dev_server_btn`.
-	## In a non-dev checkout (release install) the branch isn't entered and
-	## the button must not appear; we skip rather than fake the env.
+func test_dev_buttons_rendered_in_dev_checkout() -> void:
+	## Dev checkout's Setup section gets the primary "Restart Dev Server"
+	## button + the small "✕" stop affordance side-by-side. In a non-dev
+	## checkout (release install) the branch isn't entered and neither
+	## button appears; we skip rather than fake the env.
 	if not McpClientConfigurator.is_dev_checkout():
 		skip("only meaningful in dev checkout")
 		return
 	_dock._build_ui()
 	_dock._refresh_setup_status()
-	assert_true(_dock._dev_restart_btn != null,
-		"Dev checkout must render the Restart Server button in the Setup section")
-	assert_eq(_dock._dev_restart_btn.text, "Restart Server")
+	assert_true(_dock._dev_primary_btn != null,
+		"Dev checkout must render the primary button in the Setup section")
+	assert_true(_dock._dev_stop_btn != null,
+		"Dev checkout must render the stop button alongside the primary")
+	assert_eq(_dock._dev_stop_btn.text, "✕",
+		"Stop button uses the compact ✕ glyph")
 
 
-func test_restart_server_btn_visibility_follows_dev_mode_toggle() -> void:
-	## The button lives inside `_setup_section`, whose visibility is driven
-	## by `_apply_dev_mode_visibility`. With Developer mode off in a dev
-	## checkout the section hides — taking the button with it — which is the
-	## "ON + dev checkout" gate the task requires.
+func test_dev_buttons_visibility_follows_dev_mode_toggle() -> void:
+	## Buttons live inside `_setup_section`, whose visibility is driven by
+	## `_apply_dev_mode_visibility`. With Developer mode off in a dev
+	## checkout the section hides — taking both buttons with it.
 	if not McpClientConfigurator.is_dev_checkout():
 		skip("only meaningful in dev checkout")
 		return
@@ -993,69 +1000,138 @@ func test_restart_server_btn_visibility_follows_dev_mode_toggle() -> void:
 	_dock._refresh_setup_status()
 	assert_true(_dock._setup_section.visible,
 		"precondition: dev toggle on must show the Setup section")
-	assert_true(_dock._dev_restart_btn != null,
-		"Restart Server button must be in the Setup section when dev toggle is on")
+	assert_true(_dock._dev_primary_btn != null,
+		"Primary button must be in the Setup section when dev toggle is on")
+	assert_true(_dock._dev_stop_btn != null,
+		"Stop button must be in the Setup section when dev toggle is on")
 
 	_dock._dev_mode_toggle.button_pressed = false
 	_dock._apply_dev_mode_visibility()
-	## In dev checkout with toggle off, the section hides but its children
-	## (including the button) remain in the tree — the gate is the section's
-	## visibility, not whether the button was constructed.
 	assert_false(_dock._setup_section.visible,
-		"dev toggle off must hide the Setup section, hiding the Restart Server button")
+		"dev toggle off must hide the Setup section, hiding both dev buttons")
 
 
 ## Mirrors `_seed_server_row` / `_cleanup_server_row`: stand up just enough
-## of the dock for the per-frame restart-button helpers to run without a
-## full `_build_ui` pass.
-func _seed_dev_restart_btn(plugin: _RestartDispatchPlugin) -> void:
+## of the dock for the per-frame button helpers to run without a full
+## `_build_ui` pass.
+func _seed_dev_buttons(plugin: _RestartDispatchPlugin) -> void:
 	_dock._plugin = plugin
-	_dock._dev_restart_btn = Button.new()
+	_dock._dev_primary_btn = Button.new()
+	_dock._dev_stop_btn = Button.new()
 
 
-func _cleanup_dev_restart_btn(plugin: _RestartDispatchPlugin) -> void:
-	_dock._dev_restart_btn.free()
-	_dock._dev_restart_btn = null
+func _cleanup_dev_buttons(plugin: _RestartDispatchPlugin) -> void:
+	_dock._dev_primary_btn.free()
+	_dock._dev_primary_btn = null
+	_dock._dev_stop_btn.free()
+	_dock._dev_stop_btn = null
 	_dock._plugin = null
 	plugin.free()
 
 
-func test_restart_server_btn_dispatches_to_force_restart_preserving_mode() -> void:
+func test_primary_btn_dispatches_to_force_restart_or_start() -> void:
 	var plugin := _RestartDispatchPlugin.new()
 	plugin.has_managed = true
-	_seed_dev_restart_btn(plugin)
+	_seed_dev_buttons(plugin)
 
-	_dock._on_dev_restart_pressed()
-	var calls: int = plugin.preserve_mode_calls
+	_dock._on_dev_primary_pressed()
+	var calls: int = plugin.primary_calls
 
-	_cleanup_dev_restart_btn(plugin)
+	_cleanup_dev_buttons(plugin)
 	assert_eq(calls, 1,
-		"Click must call force_restart_server_preserving_mode exactly once")
+		"Click must call force_restart_or_start_dev_server exactly once")
 
 
-func test_restart_server_btn_disabled_when_nothing_running() -> void:
+func test_stop_btn_dispatches_to_stop_dev_server() -> void:
 	var plugin := _RestartDispatchPlugin.new()
-	_seed_dev_restart_btn(plugin)
+	plugin.dev_running = true
+	_seed_dev_buttons(plugin)
 
-	_dock._update_dev_restart_btn()
-	var disabled: bool = _dock._dev_restart_btn.disabled
-	var tooltip: String = _dock._dev_restart_btn.tooltip_text
+	_dock._on_dev_stop_pressed()
+	var calls: int = plugin.stop_calls
 
-	_cleanup_dev_restart_btn(plugin)
-	assert_true(disabled, "No server running must disable the button")
-	assert_contains(tooltip, "No godot-ai server is running")
+	_cleanup_dev_buttons(plugin)
+	assert_eq(calls, 1, "Stop click must call stop_dev_server exactly once")
 
 
-func test_restart_server_btn_enabled_when_managed_running() -> void:
+func test_primary_btn_label_when_nothing_running() -> void:
+	## Per-frame refresh must reflect the live plugin state. With nothing
+	## running, the primary button is enabled (a click spawns fresh) and
+	## reads "Start Dev Server".
+	var plugin := _RestartDispatchPlugin.new()
+	_seed_dev_buttons(plugin)
+
+	_dock._update_dev_section_buttons()
+	var primary_text: String = _dock._dev_primary_btn.text
+	var primary_disabled: bool = _dock._dev_primary_btn.disabled
+	var stop_disabled: bool = _dock._dev_stop_btn.disabled
+
+	_cleanup_dev_buttons(plugin)
+	assert_eq(primary_text, "Start Dev Server")
+	assert_false(primary_disabled,
+		"Primary stays enabled even with nothing running — click spawns fresh")
+	assert_true(stop_disabled,
+		"Stop has no target when nothing's running — must be disabled")
+
+
+func test_primary_btn_label_when_managed_running() -> void:
 	var plugin := _RestartDispatchPlugin.new()
 	plugin.has_managed = true
-	_seed_dev_restart_btn(plugin)
+	_seed_dev_buttons(plugin)
 
-	_dock._update_dev_restart_btn()
-	var disabled: bool = _dock._dev_restart_btn.disabled
-	var tooltip: String = _dock._dev_restart_btn.tooltip_text
+	_dock._update_dev_section_buttons()
+	var primary_text: String = _dock._dev_primary_btn.text
+	var stop_disabled: bool = _dock._dev_stop_btn.disabled
 
-	_cleanup_dev_restart_btn(plugin)
-	assert_false(disabled, "Managed server running must enable the button")
-	assert_contains(tooltip, "current source",
-		"Tooltip must explain the button picks up source changes")
+	_cleanup_dev_buttons(plugin)
+	assert_eq(primary_text, "Restart Dev Server",
+		"Managed running means click will kill+respawn — label says Restart")
+	assert_true(stop_disabled,
+		"Stop button intentionally never targets the managed server")
+
+
+func test_primary_btn_label_when_dev_running() -> void:
+	var plugin := _RestartDispatchPlugin.new()
+	plugin.dev_running = true
+	_seed_dev_buttons(plugin)
+
+	_dock._update_dev_section_buttons()
+	var primary_text: String = _dock._dev_primary_btn.text
+	var stop_disabled: bool = _dock._dev_stop_btn.disabled
+
+	_cleanup_dev_buttons(plugin)
+	assert_eq(primary_text, "Restart Dev Server")
+	assert_false(stop_disabled,
+		"Dev server running means Stop has a target — must be enabled")
+
+
+func test_primary_btn_shows_restarting_state_during_dispatch() -> void:
+	## Without "Restarting…" feedback, the user sees a 5s editor freeze
+	## (from _wait_for_port_free) with no acknowledgement of their click.
+	## The flag is set before dispatch and cleared after the spawn timer.
+	var plugin := _RestartDispatchPlugin.new()
+	plugin.has_managed = true
+	_seed_dev_buttons(plugin)
+	_dock._dev_primary_btn.text = "Restart Dev Server"
+
+	_dock._server_restart_in_progress = true
+	_dock._update_dev_section_buttons()
+	var mid_text: String = _dock._dev_primary_btn.text
+	var mid_disabled: bool = _dock._dev_primary_btn.disabled
+	var stop_disabled_during: bool = _dock._dev_stop_btn.disabled
+
+	_dock._server_restart_in_progress = false
+	_dock._update_dev_section_buttons()
+	var post_text: String = _dock._dev_primary_btn.text
+	var post_disabled: bool = _dock._dev_primary_btn.disabled
+
+	_cleanup_dev_buttons(plugin)
+	assert_contains(mid_text, "Restarting",
+		"In-flight click must replace label with Restarting…")
+	assert_true(mid_disabled, "In-flight click must disable the primary button")
+	assert_true(stop_disabled_during,
+		"Stop must also disable while a restart is in flight")
+	assert_eq(post_text, "Restart Dev Server",
+		"Once the flag clears, primary label reverts")
+	assert_false(post_disabled,
+		"Cleared flag with managed server still up must re-enable the primary")

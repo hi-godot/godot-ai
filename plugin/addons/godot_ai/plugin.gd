@@ -1168,14 +1168,42 @@ static func _build_server_flags(port: int, ws_port: int) -> Array[String]:
 ## conservatively return false — better to surface incompatible-server and
 ## let the user click Restart than to kill the wrong process.
 func _pid_cmdline_is_godot_ai(pid: int) -> bool:
+	## Walks up the parent chain so a uvicorn `--reload` worker whose
+	## cmdline is just `multiprocessing.spawn` still matches when its
+	## parent reloader carries the godot_ai brand. Bound the walk so a
+	## hypothetical loop or runaway PPID can't stall the editor.
+	var current := pid
+	for _i in range(5):
+		if current <= 1:
+			return false
+		var cmd := ""
+		if OS.get_name() == "Windows":
+			cmd = _windows_pid_commandline(current)
+		else:
+			cmd = _posix_pid_commandline(current)
+		if _commandline_is_godot_ai_server(cmd):
+			return true
+		current = _pid_parent(current)
+	return false
+
+
+func _pid_parent(pid: int) -> int:
 	if pid <= 1:
-		return false
-	var cmd := ""
+		return 0
 	if OS.get_name() == "Windows":
-		cmd = _windows_pid_commandline(pid)
-	else:
-		cmd = _posix_pid_commandline(pid)
-	return _commandline_is_godot_ai_server(cmd)
+		var output: Array = []
+		var script := (
+			"Get-CimInstance Win32_Process -Filter 'ProcessId = %d' | "
+			+ "Select-Object -ExpandProperty ParentProcessId"
+		) % pid
+		_startup_trace_count("powershell")
+		if _execute_windows_powershell(script, output) != 0 or output.is_empty():
+			return 0
+		return int(str(output[0]).strip_edges())
+	var output_posix: Array = []
+	if OS.execute("ps", ["-o", "ppid=", "-p", str(pid)], output_posix, true) != 0 or output_posix.is_empty():
+		return 0
+	return int(str(output_posix[0]).strip_edges())
 
 
 static func _commandline_is_godot_ai_server(cmd: String) -> bool:
@@ -1413,26 +1441,29 @@ func force_restart_server() -> void:
 	_lifecycle.force_restart_server()
 
 
-## Same-version Python edits get adopted as compatible by the lifecycle's
-## start_server arm, so reloading or relaunching just re-adopts the stale
-## process. This is the "kill whatever's there and respawn from current
-## source" path the dock's Restart Server button hits, preserving managed
-## vs --reload mode.
-func force_restart_server_preserving_mode() -> bool:
+## Single entry point for the dock's primary "Restart Dev Server" button.
+## The user clicking Restart is explicit consent to take over the HTTP port,
+## so this is aggressive: any PID holding the port gets killed (managed,
+## branded-dev, or orphan multiprocessing.spawn workers whose parent died
+## so brand detection misses them). After the port frees we spawn a fresh
+## --reload dev server. Returns true if a kill happened, false if the port
+## was already free and we just spawned.
+func force_restart_or_start_dev_server() -> bool:
+	var port := ClientConfigurator.http_port()
+	var killed := false
 	if has_managed_server():
-		_lifecycle.force_restart_server()
-		return true
-	if is_dev_server_running():
-		stop_dev_server()
-		## OS.kill returns synchronously but the listener can take longer
-		## to release the port — without this wait, start_dev_server's
-		## fixed 500ms timer races the old uvicorn shutdown and the new
-		## --reload spawn fails to bind. Mirrors the managed path's wait
-		## inside _lifecycle.force_restart_server.
-		_wait_for_port_free(ClientConfigurator.http_port(), 5.0)
-		start_dev_server()
-		return true
-	return false
+		_lifecycle.reset_for_force_restart()
+	if _is_port_in_use(port):
+		_kill_processes_and_windows_spawn_children(_find_all_pids_on_port(port))
+		killed = true
+	if killed:
+		## OS.kill returns synchronously but uvicorn's listener can take
+		## longer to release the port. Without this wait, start_dev_server's
+		## fixed 500ms timer races the old shutdown and the new --reload
+		## spawn fails to bind.
+		_wait_for_port_free(port, 5.0)
+	start_dev_server()
+	return killed
 
 
 func start_dev_server() -> void:
