@@ -1,6 +1,8 @@
 @tool
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Handles Theme resource authoring: creating, modifying color/constant/font-size/
 ## stylebox slots, and applying a theme to a Control subtree.
 ##
@@ -34,8 +36,8 @@ func create_theme(params: Dictionary) -> Dictionary:
 	# report `overwritten` accurately (after save the file always exists).
 	var existed_before := FileAccess.file_exists(path)
 	if existed_before and not overwrite:
-		return McpErrorCodes.make(
-			McpErrorCodes.INVALID_PARAMS,
+		return ErrorCodes.make(
+			ErrorCodes.INVALID_PARAMS,
 			"Theme already exists at %s (pass overwrite=true to replace)" % path
 		)
 
@@ -44,16 +46,16 @@ func create_theme(params: Dictionary) -> Dictionary:
 	var dir_path := path.get_base_dir()
 	var mkdir_err := DirAccess.make_dir_recursive_absolute(dir_path)
 	if mkdir_err != OK and mkdir_err != ERR_ALREADY_EXISTS:
-		return McpErrorCodes.make(
-			McpErrorCodes.INTERNAL_ERROR,
+		return ErrorCodes.make(
+			ErrorCodes.INTERNAL_ERROR,
 			"Failed to create directory: %s (error %d)" % [dir_path, mkdir_err]
 		)
 
 	var theme := Theme.new()
 	var save_err := ResourceSaver.save(theme, path)
 	if save_err != OK:
-		return McpErrorCodes.make(
-			McpErrorCodes.INTERNAL_ERROR,
+		return ErrorCodes.make(
+			ErrorCodes.INTERNAL_ERROR,
 			"Failed to save theme to %s: %s (error %d)" % [path, error_string(save_err), save_err]
 		)
 
@@ -120,24 +122,24 @@ func _set_scalar(
 
 	var class_name_param: String = params.get("class_name", "")
 	if class_name_param.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: class_name")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: class_name")
 
 	var name: String = params.get("name", "")
 	if name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
 
 	if not "value" in params:
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: value")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: value")
 
 	var raw_value = params.get("value")
 	if raw_value == null:
-		return McpErrorCodes.make(
-			McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid %s value: null (pass a concrete value; use the appropriate clear command to remove a slot)" % kind
 		)
 	var parsed = parser.call(raw_value)
 	if parsed == null:
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid %s value: %s (%s)" % [kind, raw_value, _COLOR_HINT])
 
 	var had_before: bool = has_fn.call(theme, name, class_name_param)
@@ -208,22 +210,22 @@ func set_stylebox_flat(params: Dictionary) -> Dictionary:
 
 	var class_name_param: String = params.get("class_name", "")
 	if class_name_param.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: class_name")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: class_name")
 
 	var name: String = params.get("name", "")
 	if name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
 
 	var sb := StyleBoxFlat.new()
 	if params.has("bg_color"):
 		var bg := _parse_color(params.bg_color)
 		if bg == null:
-			return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Invalid bg_color: %s (%s)" % [str(params.bg_color), _COLOR_HINT])
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Invalid bg_color: %s (%s)" % [str(params.bg_color), _COLOR_HINT])
 		sb.bg_color = bg
 	if params.has("border_color"):
 		var bc := _parse_color(params.border_color)
 		if bc == null:
-			return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Invalid border_color: %s (%s)" % [str(params.border_color), _COLOR_HINT])
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Invalid border_color: %s (%s)" % [str(params.border_color), _COLOR_HINT])
 		sb.border_color = bc
 
 	# border: {all, top, bottom, left, right} — int widths
@@ -233,7 +235,7 @@ func set_stylebox_flat(params: Dictionary) -> Dictionary:
 			"border_width_",
 			TYPE_INT)
 		if err != "":
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, err)
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, err)
 
 	# corners: {all, top_left, top_right, bottom_left, bottom_right} — int radii
 	if params.has("corners"):
@@ -242,7 +244,7 @@ func set_stylebox_flat(params: Dictionary) -> Dictionary:
 			"corner_radius_",
 			TYPE_INT)
 		if err2 != "":
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, err2)
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, err2)
 
 	# margins: {all, top, bottom, left, right} — float padding
 	if params.has("margins"):
@@ -251,22 +253,22 @@ func set_stylebox_flat(params: Dictionary) -> Dictionary:
 			"content_margin_",
 			TYPE_FLOAT)
 		if err3 != "":
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, err3)
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, err3)
 
 	# shadow: {color, size, offset_x, offset_y}
 	if params.has("shadow"):
 		if typeof(params.shadow) != TYPE_DICTIONARY:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "'shadow' must be a dict with color/size/offset_x/offset_y")
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "'shadow' must be a dict with color/size/offset_x/offset_y")
 		var shadow: Dictionary = params.shadow
 		var allowed_shadow_keys := {"color": true, "size": true, "offset_x": true, "offset_y": true}
 		for k in shadow.keys():
 			if not allowed_shadow_keys.has(k):
-				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+				return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 					"Unknown key in 'shadow': %s (valid: color, size, offset_x, offset_y)" % k)
 		if shadow.has("color"):
 			var sc := _parse_color(shadow.color)
 			if sc == null:
-				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+				return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 					"Invalid shadow.color: %s (%s)" % [str(shadow.color), _COLOR_HINT])
 			sb.shadow_color = sc
 		if shadow.has("size"):
@@ -374,7 +376,7 @@ func _clear_stylebox(theme_path: String, name: String, class_name_param: String)
 func apply_theme(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("node_path", "")
 	if node_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: node_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: node_path")
 
 	var theme_path: String = params.get("theme_path", "")
 	var theme: Theme = null
@@ -383,10 +385,10 @@ func apply_theme(params: Dictionary) -> Dictionary:
 		if path_err != null:
 			return path_err
 		if not ResourceLoader.exists(theme_path):
-			return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Theme not found: %s" % theme_path)
+			return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Theme not found: %s" % theme_path)
 		theme = ResourceLoader.load(theme_path)
 		if theme == null or not theme is Theme:
-			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Resource at %s is not a Theme" % theme_path)
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Resource at %s is not a Theme" % theme_path)
 
 	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
 	if _resolved.has("error"):
@@ -394,8 +396,8 @@ func apply_theme(params: Dictionary) -> Dictionary:
 	var node: Node = _resolved.node
 	var scene_root: Node = _resolved.scene_root
 	if not node is Control and not node is Window:
-		return McpErrorCodes.make(
-			McpErrorCodes.WRONG_TYPE,
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
 			"Node %s is not a Control or Window (got %s)" % [node_path, node.get_class()]
 		)
 
@@ -425,24 +427,24 @@ func _load_theme_from_params(params: Dictionary) -> Dictionary:
 	if err != null:
 		return err
 	if not ResourceLoader.exists(theme_path):
-		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "Theme not found: %s" % theme_path)
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Theme not found: %s" % theme_path)
 	var theme: Theme = ResourceLoader.load(theme_path)
 	if theme == null or not theme is Theme:
-		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Resource at %s is not a Theme" % theme_path)
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Resource at %s is not a Theme" % theme_path)
 	return {"theme": theme, "path": theme_path}
 
 
 static func _validate_res_path(path: String, required_suffix: String, param_name: String = "theme_path") -> Variant:
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: %s" % param_name)
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: %s" % param_name)
 	if not path.begins_with("res://"):
-		return McpErrorCodes.make(
-			McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
 			"%s must start with res:// (got %s)" % [param_name, path]
 		)
 	if not path.ends_with(required_suffix):
-		return McpErrorCodes.make(
-			McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
 			"%s must end with %s (got %s)" % [param_name, required_suffix, path]
 		)
 	return null

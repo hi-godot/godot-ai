@@ -1,6 +1,8 @@
 @tool
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Handles autoload listing, adding, and removing via ProjectSettings.
 
 
@@ -28,17 +30,17 @@ func add_autoload(params: Dictionary) -> Dictionary:
 	var singleton: bool = params.get("singleton", true)
 
 	if name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 	if not path.begins_with("res://"):
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Path must start with res:// (got: %s)" % path)
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Path must start with res:// (got: %s)" % path)
 	if not FileAccess.file_exists(path):
-		return McpErrorCodes.make(McpErrorCodes.RESOURCE_NOT_FOUND, "File not found: %s" % path)
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "File not found: %s" % path)
 
 	var key := "autoload/%s" % name
 	if ProjectSettings.has_setting(key):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Autoload '%s' already exists" % name)
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Autoload '%s' already exists" % name)
 
 	var value := ("*" if singleton else "") + path
 	ProjectSettings.set_setting(key, value)
@@ -47,7 +49,7 @@ func add_autoload(params: Dictionary) -> Dictionary:
 	var err := ProjectSettings.save()
 	if err != OK:
 		ProjectSettings.clear(key)
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR,
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
 			"Failed to save project settings while adding autoload '%s': %s (error %d)" % [name, error_string(err), err])
 
 	return {
@@ -64,18 +66,18 @@ func add_autoload(params: Dictionary) -> Dictionary:
 func remove_autoload(params: Dictionary) -> Dictionary:
 	var name: String = params.get("name", "")
 	if name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
 
 	var key := "autoload/%s" % name
 	if not ProjectSettings.has_setting(key):
-		return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, "Autoload '%s' not found" % name)
+		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, "Autoload '%s' not found" % name)
 
 	var old_value: String = ProjectSettings.get_setting(key, "")
 	ProjectSettings.clear(key)
 	var err := ProjectSettings.save()
 	if err != OK:
 		ProjectSettings.set_setting(key, old_value)
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR,
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
 			"Failed to save project settings while removing autoload '%s': %s (error %d)" % [name, error_string(err), err])
 
 	return {

@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 const AudioHandler := preload("res://addons/godot_ai/handlers/audio_handler.gd")
 
 ## Tests for AudioHandler — AudioStreamPlayer / 2D / 3D node authoring,
@@ -132,7 +134,7 @@ func test_create_invalid_type() -> void:
 		"name": "BadType",
 		"type": "gpu_3d",
 	})
-	assert_is_error(result, McpErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
 
 
 func test_create_missing_parent() -> void:
@@ -179,7 +181,7 @@ func test_set_stream_missing_resource() -> void:
 		"player_path": r.data.path,
 		"stream_path": "res://does_not_exist.ogg",
 	})
-	assert_is_error(result, McpErrorCodes.RESOURCE_NOT_FOUND)
+	assert_is_error(result, ErrorCodes.RESOURCE_NOT_FOUND)
 
 
 func test_set_stream_wrong_type() -> void:
@@ -192,7 +194,7 @@ func test_set_stream_wrong_type() -> void:
 		"player_path": r.data.path,
 		"stream_path": "res://tests/test_audio.gd",
 	})
-	assert_is_error(result, McpErrorCodes.WRONG_TYPE)
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
 
 
 func test_set_stream_empty_path() -> void:
@@ -337,12 +339,12 @@ func test_play_and_stop_roundtrip() -> void:
 
 func test_play_missing_player_path() -> void:
 	var result := _handler.play({})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_stop_missing_player_path() -> void:
 	var result := _handler.stop({})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 # ============================================================================

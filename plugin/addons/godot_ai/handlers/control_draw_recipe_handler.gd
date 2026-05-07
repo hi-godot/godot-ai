@@ -1,6 +1,8 @@
 @tool
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Handles the control_draw_recipe MCP command. Attaches a shared DrawRecipe
 ## script to a Control and stores the caller's ordered draw ops in node
 ## metadata under "_ops". The DrawRecipe script dispatches each op to a
@@ -23,9 +25,9 @@ func control_draw_recipe(params: Dictionary) -> Dictionary:
 	var clear_existing: bool = bool(params.get("clear_existing", true))
 
 	if path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 	if typeof(ops_raw) != TYPE_ARRAY:
-		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "ops must be an Array")
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "ops must be an Array")
 
 	var _resolved := McpNodeValidator.resolve_or_error(path, "path")
 	if _resolved.has("error"):
@@ -33,8 +35,8 @@ func control_draw_recipe(params: Dictionary) -> Dictionary:
 	var node: Node = _resolved.node
 	var scene_root: Node = _resolved.scene_root
 	if not node is Control:
-		return McpErrorCodes.make(
-			McpErrorCodes.WRONG_TYPE,
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
 			"control_draw_recipe requires a Control node, got %s" % node.get_class()
 		)
 
@@ -46,8 +48,8 @@ func control_draw_recipe(params: Dictionary) -> Dictionary:
 	var old_script: Variant = node.get_script()
 	if old_script != null and old_script != DRAW_RECIPE_SCRIPT:
 		if not clear_existing:
-			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS,
 				(
 					"Node %s already has a script. Pass clear_existing=true to replace."
 					% path
@@ -95,8 +97,8 @@ func _coerce_ops(ops: Array) -> Dictionary:
 	for i in ops.size():
 		var op: Variant = ops[i]
 		if typeof(op) != TYPE_DICTIONARY:
-			return McpErrorCodes.make(
-				McpErrorCodes.WRONG_TYPE, "ops[%d] must be a dictionary" % i
+			return ErrorCodes.make(
+				ErrorCodes.WRONG_TYPE, "ops[%d] must be a dictionary" % i
 			)
 		var coerced := _coerce_single_op(op, i)
 		if coerced.has("error"):
@@ -108,8 +110,8 @@ func _coerce_ops(ops: Array) -> Dictionary:
 func _coerce_single_op(op: Dictionary, idx: int) -> Dictionary:
 	var draw_type: String = op.get("draw", "")
 	if draw_type.is_empty():
-		return McpErrorCodes.make(
-			McpErrorCodes.MISSING_REQUIRED_PARAM, "ops[%d]: missing 'draw' field" % idx
+		return ErrorCodes.make(
+			ErrorCodes.MISSING_REQUIRED_PARAM, "ops[%d]: missing 'draw' field" % idx
 		)
 	match draw_type:
 		"line":
@@ -126,8 +128,8 @@ func _coerce_single_op(op: Dictionary, idx: int) -> Dictionary:
 			return _coerce_polyline_or_polygon(op, idx, "polygon")
 		"string":
 			return _coerce_string(op, idx)
-	return McpErrorCodes.make(
-		McpErrorCodes.VALUE_OUT_OF_RANGE,
+	return ErrorCodes.make(
+		ErrorCodes.VALUE_OUT_OF_RANGE,
 		"ops[%d]: unknown draw type '%s'" % [idx, draw_type]
 	)
 
@@ -135,8 +137,8 @@ func _coerce_single_op(op: Dictionary, idx: int) -> Dictionary:
 func _require_fields(op: Dictionary, idx: int, kind: String, fields: Array) -> Dictionary:
 	for f in fields:
 		if not op.has(f):
-			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS,
 				"ops[%d] (%s): missing '%s'" % [idx, kind, f]
 			)
 	return {}
@@ -146,8 +148,8 @@ func _coerce_typed(value: Variant, prop_type: int, idx: int, kind: String, field
 	var r := UiHandler._coerce_for_type(value, prop_type)
 	if r.ok:
 		return {"ok": true, "value": r.value}
-	return McpErrorCodes.make(
-		McpErrorCodes.VALUE_OUT_OF_RANGE, "ops[%d] (%s): invalid '%s'" % [idx, kind, field]
+	return ErrorCodes.make(
+		ErrorCodes.VALUE_OUT_OF_RANGE, "ops[%d] (%s): invalid '%s'" % [idx, kind, field]
 	)
 
 
@@ -242,20 +244,20 @@ func _coerce_circle(op: Dictionary, idx: int) -> Dictionary:
 
 func _coerce_polyline_or_polygon(op: Dictionary, idx: int, kind: String) -> Dictionary:
 	if not op.has("points"):
-		return McpErrorCodes.make(
-			McpErrorCodes.MISSING_REQUIRED_PARAM, "ops[%d] (%s): missing 'points'" % [idx, kind]
+		return ErrorCodes.make(
+			ErrorCodes.MISSING_REQUIRED_PARAM, "ops[%d] (%s): missing 'points'" % [idx, kind]
 		)
 	if typeof(op.points) != TYPE_ARRAY:
-		return McpErrorCodes.make(
-			McpErrorCodes.WRONG_TYPE,
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
 			"ops[%d] (%s): 'points' must be an Array" % [idx, kind]
 		)
 	var points := PackedVector2Array()
 	for j in op.points.size():
 		var p := UiHandler._coerce_for_type(op.points[j], TYPE_VECTOR2)
 		if not p.ok:
-			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS,
 				"ops[%d] (%s): points[%d] invalid" % [idx, kind, j]
 			)
 		points.append(p.value)
@@ -264,16 +266,16 @@ func _coerce_polyline_or_polygon(op: Dictionary, idx: int, kind: String) -> Dict
 
 	if op.has("colors"):
 		if typeof(op.colors) != TYPE_ARRAY:
-			return McpErrorCodes.make(
-				McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS,
 				"ops[%d] (%s): 'colors' must be an Array" % [idx, kind]
 			)
 		var colors := PackedColorArray()
 		for k in op.colors.size():
 			var ck := UiHandler._coerce_for_type(op.colors[k], TYPE_COLOR)
 			if not ck.ok:
-				return McpErrorCodes.make(
-					McpErrorCodes.INVALID_PARAMS,
+				return ErrorCodes.make(
+					ErrorCodes.INVALID_PARAMS,
 					"ops[%d] (%s): colors[%d] invalid" % [idx, kind, k]
 				)
 			colors.append(ck.value)
@@ -281,13 +283,13 @@ func _coerce_polyline_or_polygon(op: Dictionary, idx: int, kind: String) -> Dict
 	elif op.has("color"):
 		var c := UiHandler._coerce_for_type(op.color, TYPE_COLOR)
 		if not c.ok:
-			return McpErrorCodes.make(
-				McpErrorCodes.VALUE_OUT_OF_RANGE, "ops[%d] (%s): invalid 'color'" % [idx, kind]
+			return ErrorCodes.make(
+				ErrorCodes.VALUE_OUT_OF_RANGE, "ops[%d] (%s): invalid 'color'" % [idx, kind]
 			)
 		out["color"] = c.value
 	else:
-		return McpErrorCodes.make(
-			McpErrorCodes.MISSING_REQUIRED_PARAM,
+		return ErrorCodes.make(
+			ErrorCodes.MISSING_REQUIRED_PARAM,
 			"ops[%d] (%s): missing 'color' or 'colors'" % [idx, kind]
 		)
 

@@ -1,6 +1,8 @@
 @tool
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Handles AnimationPlayer authoring: creating players, animations, tracks,
 ## keyframes, autoplay, and dev-ergonomics playback.
 ##
@@ -59,7 +61,7 @@ func create_player(params: Dictionary) -> Dictionary:
 	if not parent_path.is_empty():
 		parent = McpScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
+			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
 
 	var player := AnimationPlayer.new()
 	if not node_name.is_empty():
@@ -98,14 +100,14 @@ func create_animation(params: Dictionary) -> Dictionary:
 	var loop_mode_str: String = params.get("loop_mode", "none")
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if anim_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
 	if length <= 0.0:
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "length must be > 0 (got %s)" % length)
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "length must be > 0 (got %s)" % length)
 
 	if not _LOOP_MODES.has(loop_mode_str):
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid loop_mode '%s'. Valid: %s" % [loop_mode_str, ", ".join(_LOOP_MODES.keys())])
 
 	var resolved := _resolve_player(player_path, true)
@@ -124,7 +126,7 @@ func create_animation(params: Dictionary) -> Dictionary:
 	var old_anim: Animation = null
 	if library.has_animation(anim_name):
 		if not overwrite:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 				"Animation '%s' already exists. Pass overwrite=true or delete it first." % anim_name)
 		old_anim = library.get_animation(anim_name)
 
@@ -159,9 +161,9 @@ func delete_animation(params: Dictionary) -> Dictionary:
 	var anim_name: String = params.get("animation_name", "")
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if anim_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: animation_name")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: animation_name")
 
 	var resolved := _resolve_player(player_path)
 	if resolved.has("error"):
@@ -211,20 +213,20 @@ func add_property_track(params: Dictionary) -> Dictionary:
 	var interp_str: String = params.get("interpolation", "linear")
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if anim_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: animation_name")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: animation_name")
 	if track_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM,
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM,
 			"Missing required param: track_path (format: 'NodeName:property', e.g. 'Panel:modulate')")
 	if not track_path.contains(":"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 			"track_path must include ':property' suffix (e.g. 'Panel:modulate', '.:position')")
 	if not _INTERP_MODES.has(interp_str):
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid interpolation '%s'. Valid: %s" % [interp_str, ", ".join(_INTERP_MODES.keys())])
 	if typeof(keyframes) != TYPE_ARRAY or keyframes.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "keyframes must be a non-empty array")
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "keyframes must be a non-empty array")
 
 	var resolved := _resolve_player(player_path)
 	if resolved.has("error"):
@@ -242,18 +244,18 @@ func add_property_track(params: Dictionary) -> Dictionary:
 	# get_property_list() per keyframe.
 	var ctx := AnimationValues.resolve_track_prop_context(track_path, player)
 	if ctx.has("error"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, ctx.error)
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, ctx.error)
 	var coerced_keyframes: Array = []
 	for kf in keyframes:
 		if typeof(kf) != TYPE_DICTIONARY:
-			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Each keyframe must be a dictionary")
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Each keyframe must be a dictionary")
 		if not "time" in kf:
-			return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Each keyframe must have a 'time' field")
+			return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Each keyframe must have a 'time' field")
 		if not "value" in kf:
-			return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Each keyframe must have a 'value' field")
+			return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Each keyframe must have a 'value' field")
 		var coerce_result := AnimationValues.coerce_with_context(kf.get("value"), ctx)
 		if coerce_result.has("error"):
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, coerce_result.error)
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, coerce_result.error)
 		coerced_keyframes.append({
 			"time": kf.get("time"),
 			"value": coerce_result.ok,
@@ -310,30 +312,30 @@ func add_method_track(params: Dictionary) -> Dictionary:
 	var keyframes = params.get("keyframes", [])
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if anim_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: animation_name")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: animation_name")
 	if target_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_node_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_node_path")
 	if target_path.contains(":"):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 			"target_node_path is a bare NodePath without ':property' (got '%s'). " % target_path +
 			"Method name goes in each keyframe's 'method' field, not the path.")
 	if typeof(keyframes) != TYPE_ARRAY or keyframes.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "keyframes must be a non-empty array")
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "keyframes must be a non-empty array")
 
 	for kf in keyframes:
 		if typeof(kf) != TYPE_DICTIONARY:
-			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Each keyframe must be a dictionary")
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Each keyframe must be a dictionary")
 		if not "time" in kf:
-			return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Each keyframe must have a 'time' field")
+			return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Each keyframe must have a 'time' field")
 		if not "method" in kf:
-			return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Each keyframe must have a 'method' field")
+			return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Each keyframe must have a 'method' field")
 		var method_field = kf.get("method")
 		if typeof(method_field) != TYPE_STRING or (method_field as String).is_empty():
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "'method' must be a non-empty string")
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "'method' must be a non-empty string")
 		if kf.has("args") and typeof(kf.get("args")) != TYPE_ARRAY:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 				"'args' must be an array if provided (got %s)" % type_string(typeof(kf.get("args"))))
 
 	var resolved := _resolve_player(player_path)
@@ -392,7 +394,7 @@ func set_autoplay(params: Dictionary) -> Dictionary:
 	var anim_name: String = params.get("animation_name", "")
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 
 	var resolved := _resolve_player(player_path)
 	if resolved.has("error"):
@@ -401,7 +403,7 @@ func set_autoplay(params: Dictionary) -> Dictionary:
 
 	# Allow empty string to clear autoplay; otherwise validate the name exists.
 	if not anim_name.is_empty() and not player.has_animation(anim_name):
-		return McpErrorCodes.make(McpErrorCodes.PROPERTY_NOT_ON_CLASS,
+		return ErrorCodes.make(ErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Animation '%s' not found on player at %s" % [anim_name, player_path])
 
 	var old_autoplay: String = player.autoplay
@@ -431,7 +433,7 @@ func play(params: Dictionary) -> Dictionary:
 	var anim_name: String = params.get("animation_name", "")
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 
 	var resolved := _resolve_player(player_path)
 	if resolved.has("error"):
@@ -439,7 +441,7 @@ func play(params: Dictionary) -> Dictionary:
 	var player: AnimationPlayer = resolved.player
 
 	if not anim_name.is_empty() and not player.has_animation(anim_name):
-		return McpErrorCodes.make(McpErrorCodes.PROPERTY_NOT_ON_CLASS,
+		return ErrorCodes.make(ErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Animation '%s' not found on player at %s" % [anim_name, player_path])
 
 	player.play(anim_name)
@@ -462,7 +464,7 @@ func stop(params: Dictionary) -> Dictionary:
 	var player_path: String = params.get("player_path", "")
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 
 	var resolved := _resolve_player(player_path)
 	if resolved.has("error"):
@@ -491,30 +493,30 @@ func create_simple(params: Dictionary) -> Dictionary:
 	var loop_mode_str: String = params.get("loop_mode", "none")
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if anim_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
 	if typeof(tweens) != TYPE_ARRAY or tweens.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "tweens must be a non-empty array")
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "tweens must be a non-empty array")
 	if not _LOOP_MODES.has(loop_mode_str):
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid loop_mode '%s'. Valid: %s" % [loop_mode_str, ", ".join(_LOOP_MODES.keys())])
 
 	# Validate all tween specs before touching the scene.
 	var seen_paths := {}
 	for spec in tweens:
 		if typeof(spec) != TYPE_DICTIONARY:
-			return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE, "Each tween spec must be a dictionary")
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Each tween spec must be a dictionary")
 		for field in ["target", "property", "from", "to", "duration"]:
 			if not field in spec:
-				return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM,
+				return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM,
 					"Each tween spec must have '%s'" % field)
 		if float(spec.get("duration", 0.0)) <= 0.0:
-			return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE,
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
 				"tween 'duration' must be > 0")
 		var dup_key: String = str(spec.target) + ":" + str(spec.property)
 		if seen_paths.has(dup_key):
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 				"Duplicate tween target '%s' — merge keyframes into a single track " % dup_key +
 				"via animation_add_property_track instead of two separate tweens.")
 		seen_paths[dup_key] = true
@@ -526,7 +528,7 @@ func create_simple(params: Dictionary) -> Dictionary:
 	if has_length:
 		computed_length = float(params.get("length"))
 		if computed_length <= 0.0:
-			return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE,
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
 				"'length' must be > 0 when provided (got %s)" % str(params.get("length")))
 	else:
 		for spec in tweens:
@@ -554,7 +556,7 @@ func create_simple(params: Dictionary) -> Dictionary:
 		if not overwrite:
 			if created_player:
 				player.queue_free()
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 				"Animation '%s' already exists. Pass overwrite=true or delete it first." % anim_name)
 		old_anim = library.get_animation(anim_name)
 
@@ -575,12 +577,12 @@ func create_simple(params: Dictionary) -> Dictionary:
 		if from_result.has("error"):
 			if created_player:
 				player.queue_free()
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "tween '%s': %s" % [track_path, from_result.error])
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "tween '%s': %s" % [track_path, from_result.error])
 		var to_result := AnimationValues.coerce_value_for_track(spec.get("to"), track_path, player, coerce_root)
 		if to_result.has("error"):
 			if created_player:
 				player.queue_free()
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "tween '%s': %s" % [track_path, to_result.error])
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "tween '%s': %s" % [track_path, to_result.error])
 		per_track_keyframes.append({
 			"track_path": track_path,
 			"keyframes": [
@@ -734,10 +736,10 @@ func _resolve_player(player_path: String, create_if_missing: bool = false) -> Di
 	var node := McpScenePath.resolve(player_path, scene_root)
 	if node == null:
 		if not create_if_missing:
-			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(player_path, scene_root))
+			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(player_path, scene_root))
 		return _instantiate_player(player_path, scene_root)
 	if not node is AnimationPlayer:
-		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE,
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
 			"Node at %s is not an AnimationPlayer (got %s)" % [player_path, node.get_class()])
 	var player := node as AnimationPlayer
 	var lib: AnimationLibrary = null
@@ -760,7 +762,7 @@ func _instantiate_player(player_path: String, scene_root: Node) -> Dictionary:
 		parent_path = player_path.substr(0, slash)
 		player_name = player_path.substr(slash + 1)
 	if player_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 			"Cannot auto-create AnimationPlayer: player_path '%s' has no leaf name" % player_path)
 	var parent: Node
 	if parent_path.is_empty():
@@ -768,7 +770,7 @@ func _instantiate_player(player_path: String, scene_root: Node) -> Dictionary:
 	else:
 		parent = McpScenePath.resolve(parent_path, scene_root)
 	if parent == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 			"Cannot auto-create AnimationPlayer at %s: %s" % [
 				player_path, McpScenePath.format_parent_error(parent_path, scene_root)])
 	var new_player := AnimationPlayer.new()
@@ -809,7 +811,7 @@ func _resolve_or_create_player(player_path: String) -> Dictionary:
 	var parent_path := player_path.get_base_dir()
 	var new_name := player_path.get_file()
 	if new_name.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid player_path (no node name): %s" % player_path)
 	var parent: Node
 	if parent_path.is_empty() or parent_path == "/":
@@ -817,7 +819,7 @@ func _resolve_or_create_player(player_path: String) -> Dictionary:
 	else:
 		parent = McpScenePath.resolve(parent_path, scene_root)
 		if parent == null:
-			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND,
+			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND,
 				"Node not found: %s (and its parent %s also does not exist — create the parent first)" %
 				[player_path, parent_path])
 	var new_player := AnimationPlayer.new()
@@ -837,7 +839,7 @@ func _resolve_player_read(player_path: String) -> Dictionary:
 		return resolved
 	var node: Node = resolved.node
 	if not node is AnimationPlayer:
-		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE,
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
 			"Node at %s is not an AnimationPlayer (got %s)" % [player_path, node.get_class()])
 	return {"player": node as AnimationPlayer}
 
@@ -847,7 +849,7 @@ func _resolve_player_read(player_path: String) -> Dictionary:
 ## as returned by `list_animations` for non-default libraries.
 func _resolve_animation(player: AnimationPlayer, anim_name: String) -> Dictionary:
 	if not player.has_animation(anim_name):
-		return McpErrorCodes.make(McpErrorCodes.PROPERTY_NOT_ON_CLASS,
+		return ErrorCodes.make(ErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Animation '%s' not found on player. Available: %s" % [
 				anim_name,
 				", ".join(Array(player.get_animation_list()))
@@ -867,4 +869,4 @@ func _resolve_animation(player: AnimationPlayer, anim_name: String) -> Dictionar
 		if lib2.has_animation(anim_name):
 			return {"animation": lib2.get_animation(anim_name), "library": lib2, "library_key": lib_name}
 	# Fallback — shouldn't happen if has_animation returned true.
-	return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Animation found by player but not in any library")
+	return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Animation found by player but not in any library")

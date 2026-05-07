@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 const InputHandler := preload("res://addons/godot_ai/handlers/input_handler.gd")
 
 ## Tests for InputHandler — input action listing, adding, removing, binding.
@@ -74,7 +76,7 @@ func test_list_actions_hides_editor_internal_namespaces() -> void:
 
 func test_add_action_missing_name() -> void:
 	var result := _handler.add_action({})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_add_and_remove_action() -> void:
@@ -103,7 +105,7 @@ func test_add_action_duplicate() -> void:
 
 func test_remove_action_missing_name() -> void:
 	var result := _handler.remove_action({})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_remove_action_not_found() -> void:
@@ -115,10 +117,10 @@ func test_remove_action_not_found() -> void:
 
 func test_bind_event_missing_params() -> void:
 	var result := _handler.bind_event({})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 	result = _handler.bind_event({"action": TEST_ACTION})
-	assert_is_error(result, McpErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_bind_event_unknown_action() -> void:

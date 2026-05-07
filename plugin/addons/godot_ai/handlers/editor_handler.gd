@@ -1,6 +1,8 @@
 @tool
 extends RefCounted
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Handles editor state, selection, log, screenshot, and performance commands.
 
 const UpdateMixedState := preload("res://addons/godot_ai/utils/update_mixed_state.gd")
@@ -64,8 +66,8 @@ func get_logs(params: Dictionary) -> Dictionary:
 	var offset: int = maxi(0, int(params.get("offset", 0)))
 	var source: String = str(params.get("source", "plugin"))
 	if not source in VALID_LOG_SOURCES:
-		return McpErrorCodes.make(
-			McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid source '%s' — use 'plugin', 'game', 'editor', or 'all'" % source,
 		)
 
@@ -78,7 +80,7 @@ func get_logs(params: Dictionary) -> Dictionary:
 			return _get_editor_logs(count, offset)
 		"all":
 			return _get_all_logs(count, offset)
-	return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Unreachable")
+	return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Unreachable")
 
 
 func _get_plugin_logs(count: int, offset: int) -> Dictionary:
@@ -275,10 +277,10 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 		"viewport":
 			viewport = EditorInterface.get_editor_viewport_3d()
 			if viewport == null:
-				return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No 3D viewport available")
+				return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "No 3D viewport available")
 		"game":
 			if not EditorInterface.is_playing_scene():
-				return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "Game is not running — use source='viewport' or start the project first")
+				return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Game is not running — use source='viewport' or start the project first")
 			## The game is always a separate OS process (embedded mode just
 			## reparents its window into the editor). Reach the framebuffer
 			## via the debugger channel: the `_mcp_game_helper` autoload
@@ -286,16 +288,16 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 			## McpDebuggerPlugin pushes the response back through our
 			## WebSocket with the same request_id via McpConnection.send_deferred_response.
 			if _debugger_plugin == null or _connection == null:
-				return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable — plugin may not be fully initialised")
+				return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable — plugin may not be fully initialised")
 			var request_id: String = params.get("_request_id", "")
 			if request_id.is_empty():
-				return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Missing request_id — cannot correlate deferred response")
+				return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id — cannot correlate deferred response")
 			_debugger_plugin.request_game_screenshot(request_id, max_resolution, _connection)
 			return McpDispatcher.DEFERRED_RESPONSE
 		"cinematic":
 			return _take_cinematic_screenshot(max_resolution)
 		_:
-			return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "Invalid source '%s' — use 'viewport', 'cinematic', or 'game'" % source)
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Invalid source '%s' — use 'viewport', 'cinematic', or 'game'" % source)
 
 	## Handle view_target: temporarily reposition the editor's own camera to
 	## frame one or more target nodes, force a render, capture, then restore.
@@ -328,11 +330,11 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 				targets.append(node as Node3D)
 
 		if targets.is_empty():
-			return McpErrorCodes.make(McpErrorCodes.NODE_NOT_FOUND, "No valid Node3D targets found: %s" % ", ".join(not_found))
+			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, "No valid Node3D targets found: %s" % ", ".join(not_found))
 
 		var cam := viewport.get_camera_3d()
 		if cam == null:
-			return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "No camera in 3D viewport")
+			return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "No camera in 3D viewport")
 
 		## Merge AABBs from all targets
 		var combined_aabb := _get_visual_aabb(targets[0])
@@ -382,7 +384,7 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 			## Consistent with single-shot path: error if no frames rendered
 			## (e.g. headless mode where force_draw produces no output).
 			if images.is_empty():
-				return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Coverage sweep rendered no images")
+				return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Coverage sweep rendered no images")
 
 			var aabb_center := combined_aabb.get_center()
 			var aabb_size := combined_aabb.size
@@ -420,7 +422,7 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 		RenderingServer.camera_set_transform(cam_rid, saved_xform)
 
 		if image == null or image.is_empty():
-			return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Framed viewport rendered an empty image")
+			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Framed viewport rendered an empty image")
 
 		var result := _finalize_image(image, "viewport", max_resolution)
 		result.data["view_target"] = view_target
@@ -442,7 +444,7 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 	var image: Image = viewport.get_texture().get_image()
 
 	if image == null or image.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Failed to capture image from %s" % source)
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to capture image from %s" % source)
 
 	return _finalize_image(image, source, max_resolution)
 
@@ -459,8 +461,8 @@ func _take_cinematic_screenshot(max_resolution: int) -> Dictionary:
 
 	var scene_camera := _find_current_camera_3d(scene_root)
 	if scene_camera == null:
-		return McpErrorCodes.make(
-			McpErrorCodes.NODE_NOT_FOUND,
+		return ErrorCodes.make(
+			ErrorCodes.NODE_NOT_FOUND,
 			"No current Camera3D in scene — mark a Camera3D as `current` or add one to the scene",
 		)
 
@@ -504,7 +506,7 @@ func _take_cinematic_screenshot(max_resolution: int) -> Dictionary:
 	sub_vp.queue_free()
 
 	if image == null or image.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.INTERNAL_ERROR, "Cinematic render produced an empty image")
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Cinematic render produced an empty image")
 
 	var result := _finalize_image(image, "cinematic", max_resolution)
 	result.data["camera_path"] = McpScenePath.from_node(scene_camera, scene_root)

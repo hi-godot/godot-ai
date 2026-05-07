@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Tests for McpConnection._make_session_id / _slugify — session ID format.
 
 
@@ -345,7 +347,7 @@ func test_outbound_backpressure_limit_rejects_payload_that_would_overflow() -> v
 func test_backpressure_error_is_structured_and_actionable() -> void:
 	var err := McpConnection._make_backpressure_error("rid-1", 100, 200)
 	assert_eq(err.request_id, "rid-1")
-	assert_is_error(err, McpErrorCodes.INTERNAL_ERROR)
+	assert_is_error(err, ErrorCodes.INTERNAL_ERROR)
 	assert_has_key(err.error, "data")
 	assert_eq(err.error.data.buffered_bytes, 100)
 	assert_eq(err.error.data.message_bytes, 200)

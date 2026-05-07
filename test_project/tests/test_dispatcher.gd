@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
 ## Tests for McpDispatcher — specifically the crash-detection guardrail
 ## that catches handlers returning malformed results (null, empty dict,
 ## or dicts missing both "data" and "error" keys).
@@ -21,7 +23,7 @@ func test_dispatch_direct_converts_empty_dict_to_internal_error() -> void:
 	d.mcp_logging = false
 	d.register("returns_empty", func(_p): return {})
 	var result := d.dispatch_direct("returns_empty", {})
-	assert_is_error(result, McpErrorCodes.INTERNAL_ERROR)
+	assert_is_error(result, ErrorCodes.INTERNAL_ERROR)
 	assert_contains(result.error.message, "returns_empty")
 	assert_contains(result.error.message, "malformed result")
 
@@ -33,7 +35,7 @@ func test_dispatch_direct_converts_null_result_to_internal_error() -> void:
 	## this ends up looking the same as the empty-dict case — still flagged.
 	d.register("returns_null", func(_p): return {})
 	var result := d.dispatch_direct("returns_null", {})
-	assert_is_error(result, McpErrorCodes.INTERNAL_ERROR)
+	assert_is_error(result, ErrorCodes.INTERNAL_ERROR)
 
 
 func test_dispatch_direct_rejects_dict_missing_data_and_error_keys() -> void:
@@ -43,7 +45,7 @@ func test_dispatch_direct_rejects_dict_missing_data_and_error_keys() -> void:
 	d.mcp_logging = false
 	d.register("malformed", func(_p): return {"foo": "bar", "baz": 42})
 	var result := d.dispatch_direct("malformed", {})
-	assert_is_error(result, McpErrorCodes.INTERNAL_ERROR)
+	assert_is_error(result, ErrorCodes.INTERNAL_ERROR)
 	assert_contains(result.error.message, "malformed")
 
 
@@ -60,7 +62,7 @@ func test_dispatch_direct_accepts_error_key() -> void:
 	var d := _make_dispatcher()
 	d.mcp_logging = false
 	d.register("good_error", func(_p):
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS, "bad input"))
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "bad input"))
 	var result := d.dispatch_direct("good_error", {})
 	assert_is_error(result)
 	assert_eq(result.error.message, "bad input")
@@ -70,7 +72,7 @@ func test_dispatch_direct_unknown_command_unchanged() -> void:
 	var d := _make_dispatcher()
 	d.mcp_logging = false
 	var result := d.dispatch_direct("never_registered", {})
-	assert_is_error(result, McpErrorCodes.UNKNOWN_COMMAND)
+	assert_is_error(result, ErrorCodes.UNKNOWN_COMMAND)
 
 
 # ----- malformed-result error surfaces args + writes to log buffer (#210) -----
@@ -84,7 +86,7 @@ func test_malformed_result_message_includes_received_args() -> void:
 	d.mcp_logging = false
 	d.register("crashy", func(_p): return {})
 	var result := d.dispatch_direct("crashy", {"path": "/Main", "group": ["a", "b"]})
-	assert_is_error(result, McpErrorCodes.INTERNAL_ERROR)
+	assert_is_error(result, ErrorCodes.INTERNAL_ERROR)
 	assert_contains(result.error.message, "crashy")
 	assert_contains(result.error.message, "/Main")
 	assert_contains(result.error.message, "group")
@@ -98,7 +100,7 @@ func test_malformed_result_message_strips_internal_request_id() -> void:
 	d.mcp_logging = false
 	d.register("crashy", func(_p): return {})
 	var result := d.dispatch_direct("crashy", {"_request_id": "secret-rid-123"})
-	assert_is_error(result, McpErrorCodes.INTERNAL_ERROR)
+	assert_is_error(result, ErrorCodes.INTERNAL_ERROR)
 	assert_true(
 		result.error.message.find("secret-rid-123") == -1,
 		"_request_id must not appear in the user-facing error message",
@@ -132,7 +134,7 @@ func test_malformed_result_log_includes_non_empty_backtrace() -> void:
 	d.mcp_logging = true
 	d.register("crashy", func(_p): return {})
 	var result := d.dispatch_direct("crashy", {"path": "/Main"})
-	assert_is_error(result, McpErrorCodes.INTERNAL_ERROR)
+	assert_is_error(result, ErrorCodes.INTERNAL_ERROR)
 	assert_contains(result.error.message, "Backtrace:")
 
 	var lines := buf.get_recent(20)
@@ -154,7 +156,7 @@ func test_malformed_result_truncates_long_args() -> void:
 	for i in range(200):
 		big += "x"
 	var result := d.dispatch_direct("crashy", {"blob": big + big + big})
-	assert_is_error(result, McpErrorCodes.INTERNAL_ERROR)
+	assert_is_error(result, ErrorCodes.INTERNAL_ERROR)
 	assert_contains(result.error.message, "...")
 
 
@@ -183,7 +185,7 @@ func test_deferred_response_times_out_and_cleans_pending_entry() -> void:
 
 	assert_eq(responses.size(), 1, "deferred timeout should produce one local error")
 	assert_eq(responses[0].request_id, "req-timeout")
-	assert_is_error(responses[0], McpErrorCodes.DEFERRED_TIMEOUT)
+	assert_is_error(responses[0], ErrorCodes.DEFERRED_TIMEOUT)
 	assert_eq(d.pending_deferred_count(), 0, "timeout should clean the pending entry")
 
 
