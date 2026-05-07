@@ -1460,6 +1460,9 @@ def plugin_managed_mode(monkeypatch, tmp_path):
     fires immediately on the next event-loop tick."""
     monkeypatch.setattr(runtime_info, "_PID_FILE_PATH", tmp_path / "fake.pid")
     monkeypatch.setattr(editor_handlers, "PLUGIN_MANAGED_RELOAD_DELAY_SEC", 0)
+    ## A leftover task from a prior test would make the retention assertions
+    ## here ambiguous; clear the set so we're measuring this test's task only.
+    editor_handlers._pending_reload_tasks.clear()
 
 
 async def test_reload_plugin_returns_preflight_ack_when_plugin_managed(
@@ -1490,6 +1493,12 @@ async def test_reload_plugin_returns_preflight_ack_when_plugin_managed(
     ## point of the pre-flight ack is that the structured response gets
     ## back to the caller before the server tears itself down.
     assert not [c for c in stub.calls if c["command"] == "reload_plugin"]
+    ## A strong reference to the background task must be retained — the
+    ## event loop only weakrefs tasks, so without this the GC could collect
+    ## the task during the post-ack delay and silently skip the reload.
+    assert len(editor_handlers._pending_reload_tasks) == 1
+    ## Drain so the task doesn't leak into the next test.
+    await asyncio.gather(*editor_handlers._pending_reload_tasks)
 
 
 async def test_reload_plugin_dispatches_reload_async_when_plugin_managed(
@@ -1506,10 +1515,13 @@ async def test_reload_plugin_dispatches_reload_async_when_plugin_managed(
     result = await editor_handlers.editor_reload_plugin(runtime)
     assert result["status"] == "reload_initiated"
 
-    ## Drain the create_task'd background reload — a single yield with a
-    ## small budget gives it room to schedule and complete its (mocked) WS
-    ## send. The stub returns synchronously, so this is comfortably enough.
-    await asyncio.sleep(0.01)
+    ## Await the task by reference rather than `sleep(N)` — synchronizes
+    ## on actual completion, not a timing budget that could miss on a
+    ## loaded CI runner.
+    await asyncio.gather(*editor_handlers._pending_reload_tasks)
+    ## And the done-callback must have removed it from the retention set
+    ## so successive reloads don't pile up.
+    assert editor_handlers._pending_reload_tasks == set()
 
     reload_calls = [c for c in stub.calls if c["command"] == "reload_plugin"]
     assert len(reload_calls) == 1
@@ -1536,9 +1548,10 @@ async def test_reload_plugin_async_dispatch_swallows_disconnect_errors(
     result = await editor_handlers.editor_reload_plugin(runtime)
     assert result["status"] == "reload_initiated"
 
-    ## Drain the background task; if it raised an unhandled exception
-    ## this loop tick would surface it.
-    await asyncio.sleep(0.01)
+    ## Drain the background task by reference; if it raised an unhandled
+    ## exception (TimeoutError counted as expected) `gather` would surface
+    ## it here.
+    await asyncio.gather(*editor_handlers._pending_reload_tasks)
 
 
 async def test_reload_plugin_external_path_unchanged_when_not_plugin_managed():

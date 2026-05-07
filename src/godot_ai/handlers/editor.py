@@ -27,6 +27,14 @@ GAME_SCREENSHOT_TIMEOUT_SEC = 35.0
 ## to 0 so they don't wait. See `editor_reload_plugin` below.
 PLUGIN_MANAGED_RELOAD_DELAY_SEC = 0.5
 
+## Strong references to in-flight `_dispatch_reload_async` tasks. The
+## event loop only holds weak references to tasks created via
+## `create_task`, so without this set a GC cycle landing during the
+## post-ack delay could collect the task and silently skip the WS
+## reload command — leaving the caller with a "reload_initiated" ack
+## but no actual reload. A done-callback removes the task on exit.
+_pending_reload_tasks: set[asyncio.Task] = set()
+
 
 async def editor_state(runtime: DirectRuntime) -> dict:
     """Read live editor state and self-heal the session readiness cache.
@@ -266,7 +274,9 @@ async def editor_reload_plugin(runtime: DirectRuntime) -> dict:
         ## command from a background task. `new_session_id` is dropped
         ## from this shape because it lives in the *next* server's
         ## registry, which this process can never see.
-        asyncio.create_task(_dispatch_reload_async(runtime, old_id))
+        task = asyncio.create_task(_dispatch_reload_async(runtime, old_id))
+        _pending_reload_tasks.add(task)
+        task.add_done_callback(_pending_reload_tasks.discard)
         return {
             "status": "reload_initiated",
             "transport_will_drop": True,
