@@ -36,33 +36,20 @@ Constructors, constants, and static methods go through script-local
 `Dispatcher`, `LogBuffer`); `preload(...)` resolves the script by path at
 script-load and never consults the registry.
 
-## Layered enforcement
+## Enforcement (#399)
 
-Issue #399 inverted the original targeted-allowlist approach to
-deny-by-default. The audit data (`script/audit-self-update-load-surface`,
-since absorbed here) showed that 97 of 102 `.gd` files in the addon tree
-are reachable from `plugin.gd`'s preload + `class_name` graph; only 5 are
-genuinely off the load surface (game-side or test-only). A targeted
-allowlist for the other 92 was tracking ~13% of the actual hazard surface.
-
-This module therefore enforces the policy as a single deny-by-default
-scan over the entire addon tree (minus the 5 off-surface files). The
-violation count is ratcheted via `BASELINE_VIOLATION_COUNT`: the test
-fails when the count climbs above the baseline (regression) AND when it
-drops below (developer must lower the baseline so the fix is locked in).
-The end state is `BASELINE_VIOLATION_COUNT == 0`, achieved across the
-remaining steps of #399.
-
-The original targeted-allowlist tests are removed -- the deny-by-default
-scan strictly subsumes them. `plugin.gd` and the previously-allowlisted
-files are still scanned, just as part of the full closure rather than a
-hand-maintained subset.
+A single deny-by-default scan over every `.gd` under the addon tree
+minus `OFF_LOAD_SURFACE`. The violation count is ratcheted via
+`BASELINE_VIOLATION_COUNT`: regressions raise it (test fails with
+offender list); fixes lower it (test fails until the constant is
+updated, so improvements lock in). End state is 0.
 """
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Literal
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PLUGIN_ROOT = REPO_ROOT / "plugin" / "addons" / "godot_ai"
@@ -104,97 +91,93 @@ OFF_LOAD_SURFACE = frozenset(
 BASELINE_VIOLATION_COUNT = 1258
 
 
+Kind = Literal["typed_field", "typed_annotation", "constructor", "member_access"]
+
 _CLASS_NAME_RE = re.compile(r"^class_name\s+(Mcp\w+)\s*$", re.MULTILINE)
 # Top-level typed-var fields. Anchored to start-of-line; locals inside
 # functions are resolved lazily and don't participate in the parse-time
 # hazard.
 _TYPED_FIELD_RE = re.compile(r"^\s*(?:static\s+)?var\s+\w+\s*:\s*(Mcp\w+)\b", re.MULTILINE)
-# Any `name: McpFoo` typed annotation (parameters, locals with type, etc.).
-# Note this overlaps with TYPED_FIELD_RE for top-level vars -- both
-# patterns count, mirroring the audit script's accounting so the baseline
-# is a stable reproducible number.
-_TYPED_PARAM_RE = re.compile(r"\b\w+\s*:\s*(Mcp\w+)\b")
+# Any `name: McpFoo` annotation (params, top-level fields, typed locals).
+# Intentionally overlaps `_TYPED_FIELD_RE` for top-level vars: a single
+# typed field counts in both buckets, matching the original audit's
+# accounting so the baseline is a stable reproducible number rather
+# than a deduplicated one.
+_TYPED_ANNOTATION_RE = re.compile(r"\b\w+\s*:\s*(Mcp\w+)\b")
 _CONSTRUCTOR_RE = re.compile(r"\b(Mcp\w+)\s*\.\s*new\s*\(")
-# Member access: any identifier after `Mcp*.`, not just uppercase consts.
-# The earlier audit only matched `[A-Z_]+` and missed method calls -- a
-# `Mcp*.method()` invocation has the exact same parse-time class_name
-# lookup as `Mcp*.CONST`. Constructors are excluded (they have their own
-# bucket above) so a single site doesn't double-count.
+# Any identifier after `Mcp*.`. `Mcp*.method()` hits the same
+# parse-time class_name lookup as `Mcp*.CONST`. `.new` matches the
+# constructor pattern above and is filtered out so single sites
+# don't double-count.
 _MEMBER_ACCESS_RE = re.compile(r"\b(Mcp\w+)\s*\.\s*(\w+)\b")
 
-
-def _registered_mcp_class_names() -> set[str]:
-    """Every `class_name McpFoo` declared anywhere in the addon tree."""
-    found: set[str] = set()
-    for gd_file in PLUGIN_ROOT.rglob("*.gd"):
-        found.update(_CLASS_NAME_RE.findall(gd_file.read_text(encoding="utf-8")))
-    return found
+_PASSES: tuple[tuple[re.Pattern[str], Kind], ...] = (
+    (_TYPED_FIELD_RE, "typed_field"),
+    (_TYPED_ANNOTATION_RE, "typed_annotation"),
+    (_CONSTRUCTOR_RE, "constructor"),
+    (_MEMBER_ACCESS_RE, "member_access"),
+)
 
 
 def _strip_gdscript_comments(source: str) -> str:
     """Remove `## ...` doc comments and `# ...` line comments.
 
-    The parse hazard only fires for executable references; comments that
-    happen to mention `McpConnection` or include `class_name McpFoo` in
-    explanatory prose are not parsed as identifiers and must not trip
-    the lint.
+    The parse hazard only fires for executable references; mentions of
+    `McpConnection` or `class_name McpFoo` in explanatory prose must
+    not trip the lint.
     """
     return re.sub(r"#.*$", "", source, flags=re.MULTILINE)
 
 
-def _scan_file(gd_file: Path, registered: set[str]) -> list[tuple[int, str, str]]:
-    """Return `(line_no, kind, identifier)` tuples for offending sites.
+def _format_ident(kind: Kind, match: re.Match[str]) -> str | None:
+    """Render an offender's identifier, or None to skip the match."""
+    name = match.group(1)
+    if kind == "typed_field":
+        return f"var: {name}"
+    if kind == "typed_annotation":
+        return f": {name}"
+    if kind == "constructor":
+        return f"{name}.new"
+    member = match.group(2)
+    if member == "new":
+        return None  # owned by the constructor pass
+    return f"{name}.{member}"
 
-    A file's own declared `class_name` is excluded from `registered`
-    locally, since a class can safely reference its own constants and
-    static methods (they resolve through `self`'s script, not the global
-    registry).
+
+def _scan_load_surface() -> tuple[set[str], list[tuple[Path, int, Kind, str]]]:
+    """Walk the load surface in one pass.
+
+    Returns the set of `Mcp*` class names declared anywhere in the addon
+    tree (for sanity-check assertions) and the list of offending sites
+    across the load surface. A file's own `class_name` is excluded from
+    in-scope lookups, since a class can safely reference its own
+    constants and static methods.
     """
-    raw = gd_file.read_text(encoding="utf-8")
-    src = _strip_gdscript_comments(raw)
-    own = set(_CLASS_NAME_RE.findall(src))
-    in_scope = registered - own
+    registered: set[str] = set()
+    surface_sources: list[tuple[Path, str, set[str]]] = []
 
-    offenders: list[tuple[int, str, str]] = []
-
-    def _add(match: re.Match[str], kind: str, ident: str) -> None:
-        line_no = src.count("\n", 0, match.start()) + 1
-        offenders.append((line_no, kind, ident))
-
-    for match in _TYPED_FIELD_RE.finditer(src):
-        name = match.group(1)
-        if name in in_scope:
-            _add(match, "typed_field", f"var: {name}")
-
-    for match in _TYPED_PARAM_RE.finditer(src):
-        name = match.group(1)
-        if name in in_scope:
-            _add(match, "typed_param", f": {name}")
-
-    for match in _CONSTRUCTOR_RE.finditer(src):
-        name = match.group(1)
-        if name in in_scope:
-            _add(match, "constructor", f"{name}.new")
-
-    for match in _MEMBER_ACCESS_RE.finditer(src):
-        name, member = match.group(1), match.group(2)
-        if member == "new":
-            continue  # owned by constructor bucket above
-        if name in in_scope:
-            _add(match, "member_access", f"{name}.{member}")
-
-    return offenders
-
-
-def _load_surface_files() -> list[Path]:
-    """All `.gd` under the addon tree, minus the off-surface opt-outs."""
-    files: list[Path] = []
-    for gd in PLUGIN_ROOT.rglob("*.gd"):
-        rel = gd.relative_to(PLUGIN_ROOT).as_posix()
-        if rel in OFF_LOAD_SURFACE:
+    for gd in sorted(PLUGIN_ROOT.rglob("*.gd")):
+        raw = gd.read_text(encoding="utf-8")
+        own = set(_CLASS_NAME_RE.findall(raw))
+        registered |= own
+        if gd.relative_to(PLUGIN_ROOT).as_posix() in OFF_LOAD_SURFACE:
             continue
-        files.append(gd)
-    return sorted(files)
+        surface_sources.append((gd, _strip_gdscript_comments(raw), own))
+
+    offenders: list[tuple[Path, int, Kind, str]] = []
+    for path, src, own in surface_sources:
+        in_scope = registered - own
+        for pattern, kind in _PASSES:
+            for match in pattern.finditer(src):
+                if match.group(1) not in in_scope:
+                    continue
+                ident = _format_ident(kind, match)
+                if ident is None:
+                    continue
+                line_no = src.count("\n", 0, match.start()) + 1
+                offenders.append((path, line_no, kind, ident))
+
+    return registered, offenders
 
 
 def test_self_update_parse_hazard_baseline_ratchet() -> None:
@@ -215,15 +198,10 @@ def test_self_update_parse_hazard_baseline_ratchet() -> None:
 
     End state: `BASELINE_VIOLATION_COUNT == 0`.
     """
-    registered = _registered_mcp_class_names()
+    registered, all_offenders = _scan_load_surface()
     assert registered, (
         "Sanity check: expected to find Mcp* class_name declarations in the addon tree"
     )
-
-    all_offenders: list[tuple[Path, int, str, str]] = []
-    for gd_file in _load_surface_files():
-        for line_no, kind, ident in _scan_file(gd_file, registered):
-            all_offenders.append((gd_file, line_no, kind, ident))
 
     total = len(all_offenders)
 
