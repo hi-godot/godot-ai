@@ -834,8 +834,7 @@ func _update_status() -> void:
 	_status_icon.color = status_color
 	_status_label.text = status_text
 
-	_update_dev_server_btn()
-	_update_dev_restart_btn()
+	_update_dev_section_buttons()
 
 
 ## Render the diagnostic panel body for a given spawn state. The top
@@ -1405,8 +1404,7 @@ func _on_dev_server_pressed() -> void:
 		_plugin.stop_dev_server()
 	else:
 		_plugin.start_dev_server()
-	_update_dev_server_btn.call_deferred()
-	_update_dev_restart_btn.call_deferred()
+	_update_dev_section_buttons.call_deferred()
 
 
 ## Pure helper for the Restart Server button — enabled iff something is
@@ -1447,8 +1445,29 @@ func _on_dev_restart_pressed() -> void:
 		return
 	if _plugin.has_method("force_restart_server_preserving_mode"):
 		_plugin.force_restart_server_preserving_mode()
-	_update_dev_server_btn.call_deferred()
-	_update_dev_restart_btn.call_deferred()
+	_update_dev_section_buttons.call_deferred()
+
+
+## Single-scan refresh of every dev-section button state. Both buttons
+## key off the same `has_managed_server` / `is_dev_server_running` pair,
+## and the latter scrapes lsof/ps — so doing the discovery once and
+## applying to both avoids the duplicate subprocess fork on every
+## connection-state transition.
+func _update_dev_section_buttons() -> void:
+	if _plugin == null:
+		return
+	if not (_plugin.has_method("has_managed_server") and _plugin.has_method("is_dev_server_running")):
+		return
+	var has_managed: bool = _plugin.has_managed_server()
+	var dev_running: bool = _plugin.is_dev_server_running()
+	if _dev_server_btn != null:
+		var server_state := _dev_server_btn_state(has_managed, dev_running)
+		_dev_server_btn.text = server_state["text"]
+		_dev_server_btn.tooltip_text = server_state["tooltip"]
+	if _dev_restart_btn != null:
+		var restart_state := _restart_server_btn_state(has_managed, dev_running)
+		_dev_restart_btn.disabled = not restart_state["enabled"]
+		_dev_restart_btn.tooltip_text = restart_state["tooltip"]
 
 
 func _on_install_uv() -> void:
