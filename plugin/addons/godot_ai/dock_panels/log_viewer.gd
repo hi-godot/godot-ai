@@ -11,17 +11,15 @@ extends VBoxContainer
 
 signal logging_enabled_changed(enabled: bool)
 
-## Self-update parse-hazard policy: this script is on the plugin's load
-## surface (preloaded as a const from `mcp_dock.gd`). Field declarations
-## must NOT type-bind to plugin `class_name` types like `McpLogBuffer` —
-## the parser resolves those through the global class_name registry at
-## script-load time, which during the disable→extract→enable window holds
-## the cached pre-update class object. The type fence stays on the
-## `setup(log_buffer: McpLogBuffer)` parameter, which is resolved at call
-## time. The `Dock` const aliases `mcp_dock.gd` under a non-`Mcp*` name
-## for the same reason — see `_node_validator.gd` and #398.
+## `Dock` const name intentionally does NOT match `mcp_dock.gd`'s global
+## `class_name` (`McpDock`). See `_node_validator.gd` for the full
+## self-update parse-hazard rationale (#398).
 const Dock := preload("res://addons/godot_ai/mcp_dock.gd")
 
+## `_log_buffer` is intentionally untyped: a `: McpLogBuffer` field
+## annotation resolves through the class_name registry at script-load,
+## tripping the same parse hazard. The type fence stays on the
+## `setup(log_buffer: McpLogBuffer)` parameter, resolved at call time.
 var _log_buffer
 var _log_display: RichTextLabel
 var _log_toggle: CheckButton

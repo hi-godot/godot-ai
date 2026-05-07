@@ -66,7 +66,7 @@ static func resolve_or_error(
 
 ## When the caller needs the scene root but no specific node yet — e.g.
 ## handlers that walk children or filter by group. Returns either
-## `{"scene_root": Node}` or a `ErrorCodes.make(...)` error dict.
+## `{"scene_root": Node}` or a `McpErrorCodes.make(...)` error dict.
 static func require_scene_or_error(scene_file: String = "") -> Dictionary:
 	var scene_check := ScenePath.require_edited_scene(scene_file)
 	if scene_check.has("error"):
