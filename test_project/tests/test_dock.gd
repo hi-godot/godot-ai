@@ -1005,46 +1005,43 @@ func test_restart_server_btn_visibility_follows_dev_mode_toggle() -> void:
 		"dev toggle off must hide the Setup section, hiding the Restart Server button")
 
 
-func test_restart_server_btn_dispatches_to_force_restart_preserving_mode() -> void:
-	## Click handler must call `force_restart_server_preserving_mode` so the
-	## plugin picks the right kill+respawn path (managed vs --reload) for
-	## whatever's currently running.
-	var plugin := _RestartDispatchPlugin.new()
-	plugin.has_managed = true
+## Mirrors `_seed_server_row` / `_cleanup_server_row`: stand up just enough
+## of the dock for the per-frame restart-button helpers to run without a
+## full `_build_ui` pass.
+func _seed_dev_restart_btn(plugin: _RestartDispatchPlugin) -> void:
 	_dock._plugin = plugin
 	_dock._dev_restart_btn = Button.new()
 
-	_dock._on_dev_restart_pressed()
-	var calls: int = plugin.preserve_mode_calls
 
+func _cleanup_dev_restart_btn(plugin: _RestartDispatchPlugin) -> void:
 	_dock._dev_restart_btn.free()
 	_dock._dev_restart_btn = null
 	_dock._plugin = null
 	plugin.free()
 
+
+func test_restart_server_btn_dispatches_to_force_restart_preserving_mode() -> void:
+	var plugin := _RestartDispatchPlugin.new()
+	plugin.has_managed = true
+	_seed_dev_restart_btn(plugin)
+
+	_dock._on_dev_restart_pressed()
+	var calls: int = plugin.preserve_mode_calls
+
+	_cleanup_dev_restart_btn(plugin)
 	assert_eq(calls, 1,
 		"Click must call force_restart_server_preserving_mode exactly once")
 
 
 func test_restart_server_btn_disabled_when_nothing_running() -> void:
-	## Per-frame `_update_dev_restart_btn` must reflect the live plugin
-	## state. With neither managed nor dev server running, the button
-	## stays disabled with an explanatory tooltip.
 	var plugin := _RestartDispatchPlugin.new()
-	plugin.has_managed = false
-	plugin.dev_running = false
-	_dock._plugin = plugin
-	_dock._dev_restart_btn = Button.new()
+	_seed_dev_restart_btn(plugin)
 
 	_dock._update_dev_restart_btn()
 	var disabled: bool = _dock._dev_restart_btn.disabled
 	var tooltip: String = _dock._dev_restart_btn.tooltip_text
 
-	_dock._dev_restart_btn.free()
-	_dock._dev_restart_btn = null
-	_dock._plugin = null
-	plugin.free()
-
+	_cleanup_dev_restart_btn(plugin)
 	assert_true(disabled, "No server running must disable the button")
 	assert_contains(tooltip, "No godot-ai server is running")
 
@@ -1052,18 +1049,13 @@ func test_restart_server_btn_disabled_when_nothing_running() -> void:
 func test_restart_server_btn_enabled_when_managed_running() -> void:
 	var plugin := _RestartDispatchPlugin.new()
 	plugin.has_managed = true
-	_dock._plugin = plugin
-	_dock._dev_restart_btn = Button.new()
+	_seed_dev_restart_btn(plugin)
 
 	_dock._update_dev_restart_btn()
 	var disabled: bool = _dock._dev_restart_btn.disabled
 	var tooltip: String = _dock._dev_restart_btn.tooltip_text
 
-	_dock._dev_restart_btn.free()
-	_dock._dev_restart_btn = null
-	_dock._plugin = null
-	plugin.free()
-
+	_cleanup_dev_restart_btn(plugin)
 	assert_false(disabled, "Managed server running must enable the button")
 	assert_contains(tooltip, "current source",
 		"Tooltip must explain the button picks up source changes")
