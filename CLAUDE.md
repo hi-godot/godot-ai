@@ -247,7 +247,7 @@ current working tree's `test_project/`.
 
 ## Client configuration
 
-The plugin auto-configures 18+ MCP clients via a registry + strategy system in
+The plugin auto-configures 19+ MCP clients via a registry + strategy system in
 `plugin/addons/godot_ai/clients/`:
 
 - `_base.gd` — `McpClient` descriptor (data only: id, display_name, config_type,
