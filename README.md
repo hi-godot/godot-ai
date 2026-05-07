@@ -20,7 +20,7 @@
 ---
 
 <p align="center">
-  <video src="docs/images/huddemo.mp4" autoplay loop muted playsinline width="800"></video><br>
+  <img src="docs/images/huddemo.gif" alt="Cyberpunk HUD demo" width="800"><br>
   <em>UI demo built in ~2 hours with zero coding, zero image gen, all programmatically drawn by Godot AI — <a href="https://github.com/hi-godot/cyberpunk-hud-demo">source</a></em>
 </p>
 
@@ -95,7 +95,7 @@ snippet.
 - *"Build a voxel block-world game with a player, blocks to place and destroy, and save slots."*
 
 <p align="center">
-  <video src="docs/images/blockarena.mp4" autoplay loop muted playsinline width="640"></video>
+  <img src="docs/images/blockarena.gif" alt="Block-world game scene built from MCP tool calls — voxel terrain, player, and UI" width="640">
 </p>
 <p align="center"><em>Demo gamelet with sophisticated save system built from a handful of Godot AI MCP prompts. Code and Godot project  <a href="https://github.com/dsarno/save-system-godot-claude">available free here</a>.</em></p>
 
