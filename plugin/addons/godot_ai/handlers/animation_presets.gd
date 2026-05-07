@@ -17,6 +17,11 @@ extends RefCounted
 
 
 const AnimationValues := preload("res://addons/godot_ai/handlers/animation_values.gd")
+## Local const names intentionally do NOT match the global `class_name` of the
+## preloaded scripts (`McpErrorCodes`, `McpScenePath`). See `_node_validator.gd`
+## for the full self-update parse-hazard rationale (#398).
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const ScenePath := preload("res://addons/godot_ai/utils/scene_path.gd")
 
 
 var _handler_weak: WeakRef
@@ -43,18 +48,18 @@ func preset_fade(params: Dictionary) -> Dictionary:
 	var overwrite: bool = params.get("overwrite", false)
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if target_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
 	if mode != "in" and mode != "out":
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid mode '%s'. Valid: 'in', 'out'" % mode)
 	if duration <= 0.0:
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "'duration' must be > 0")
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'duration' must be > 0")
 
 	var handler = _h()
 	if handler == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
 	var resolved: Dictionary = handler._resolve_player(player_path)
 	if resolved.has("error"):
 		return resolved
@@ -78,7 +83,7 @@ func preset_fade(params: Dictionary) -> Dictionary:
 			has_modulate = true
 			break
 	if not has_modulate:
-		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE,
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
 			"Target '%s' (class %s) has no 'modulate' property — fade requires a CanvasItem, Control, Node2D, or Sprite3D"
 			% [target_path, target.get_class()])
 
@@ -88,7 +93,7 @@ func preset_fade(params: Dictionary) -> Dictionary:
 	var old_anim: Animation = null
 	if library.has_animation(anim_name):
 		if not overwrite:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 				"Animation '%s' already exists. Pass overwrite=true or delete it first." % anim_name)
 		old_anim = library.get_animation(anim_name)
 
@@ -138,21 +143,21 @@ func preset_slide(params: Dictionary) -> Dictionary:
 	var overwrite: bool = params.get("overwrite", false)
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if target_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
 	if not ["left", "right", "up", "down"].has(direction):
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid direction '%s'. Valid: 'left', 'right', 'up', 'down'" % direction)
 	if mode != "in" and mode != "out":
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE,
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid mode '%s'. Valid: 'in', 'out'" % mode)
 	if duration <= 0.0:
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "'duration' must be > 0")
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'duration' must be > 0")
 
 	var handler = _h()
 	if handler == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
 	var resolved: Dictionary = handler._resolve_player(player_path)
 	if resolved.has("error"):
 		return resolved
@@ -174,7 +179,7 @@ func preset_slide(params: Dictionary) -> Dictionary:
 	var default_distance: float = 1.0 if kind == "3d" else 100.0
 	var distance: float = float(params.get("distance", default_distance))
 	if distance == 0.0:
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "'distance' must be non-zero")
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'distance' must be non-zero")
 
 	var offset: Variant = _direction_offset(kind, direction, distance)
 	var current_pos: Variant = target.position
@@ -193,7 +198,7 @@ func preset_slide(params: Dictionary) -> Dictionary:
 	var old_anim: Animation = null
 	if library.has_animation(anim_name):
 		if not overwrite:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 				"Animation '%s' already exists. Pass overwrite=true or delete it first." % anim_name)
 		old_anim = library.get_animation(anim_name)
 
@@ -242,17 +247,17 @@ func preset_shake(params: Dictionary) -> Dictionary:
 	var overwrite: bool = params.get("overwrite", false)
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if target_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
 	if duration <= 0.0:
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "'duration' must be > 0")
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'duration' must be > 0")
 	if frequency <= 0.0:
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "'frequency' must be > 0")
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'frequency' must be > 0")
 
 	var handler = _h()
 	if handler == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
 	var resolved: Dictionary = handler._resolve_player(player_path)
 	if resolved.has("error"):
 		return resolved
@@ -273,7 +278,7 @@ func preset_shake(params: Dictionary) -> Dictionary:
 	var default_intensity: float = 0.1 if kind == "3d" else 10.0
 	var intensity: float = float(params.get("intensity", default_intensity))
 	if intensity <= 0.0:
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "'intensity' must be > 0")
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'intensity' must be > 0")
 
 	if anim_name.is_empty():
 		anim_name = "shake"
@@ -281,7 +286,7 @@ func preset_shake(params: Dictionary) -> Dictionary:
 	var old_anim: Animation = null
 	if library.has_animation(anim_name):
 		if not overwrite:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 				"Animation '%s' already exists. Pass overwrite=true or delete it first." % anim_name)
 		old_anim = library.get_animation(anim_name)
 
@@ -354,19 +359,19 @@ func preset_pulse(params: Dictionary) -> Dictionary:
 	var overwrite: bool = params.get("overwrite", false)
 
 	if player_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if target_path.is_empty():
-		return McpErrorCodes.make(McpErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
 	if duration <= 0.0:
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "'duration' must be > 0")
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'duration' must be > 0")
 	if from_scale <= 0.0:
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "'from_scale' must be > 0")
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'from_scale' must be > 0")
 	if to_scale <= 0.0:
-		return McpErrorCodes.make(McpErrorCodes.VALUE_OUT_OF_RANGE, "'to_scale' must be > 0")
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'to_scale' must be > 0")
 
 	var handler = _h()
 	if handler == null:
-		return McpErrorCodes.make(McpErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
 	var resolved: Dictionary = handler._resolve_player(player_path)
 	if resolved.has("error"):
 		return resolved
@@ -389,7 +394,7 @@ func preset_pulse(params: Dictionary) -> Dictionary:
 	var old_anim: Animation = null
 	if library.has_animation(anim_name):
 		if not overwrite:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 				"Animation '%s' already exists. Pass overwrite=true or delete it first." % anim_name)
 		old_anim = library.get_animation(anim_name)
 
@@ -440,7 +445,7 @@ func preset_pulse(params: Dictionary) -> Dictionary:
 ## Resolve a preset target node and classify its transform kind.
 ##
 ## Accepts two `target_path` shapes:
-##   * Scene-absolute (starts with "/") — resolved through `McpScenePath.resolve`,
+##   * Scene-absolute (starts with "/") — resolved through `ScenePath.resolve`,
 ##     matching the convention used by every other scene-mutating tool. Targets
 ##     outside the player's `root_node` subtree are converted to `..`-prefixed
 ##     paths via `root_node.get_path_to(target)`, mirroring what the relative
@@ -459,7 +464,7 @@ func preset_pulse(params: Dictionary) -> Dictionary:
 func _resolve_preset_target(player: AnimationPlayer, target_path: String) -> Dictionary:
 	var root_node := AnimationValues.player_root_node(player)
 	if root_node == null:
-		return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 			"AnimationPlayer at %s has no resolvable root_node (is the scene open?)" % str(player.get_path()))
 
 	var target: Node = null
@@ -467,12 +472,12 @@ func _resolve_preset_target(player: AnimationPlayer, target_path: String) -> Dic
 	if target_path.begins_with("/"):
 		var scene_root := EditorInterface.get_edited_scene_root()
 		if scene_root == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 				"Cannot resolve scene-absolute target_path '%s': no scene open" % target_path)
-		target = McpScenePath.resolve(target_path, scene_root)
+		target = ScenePath.resolve(target_path, scene_root)
 		if target == null:
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
-				McpScenePath.format_node_error(target_path, scene_root))
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
+				ScenePath.format_node_error(target_path, scene_root))
 		# Convert to a root_node-relative path. For targets outside the
 		# subtree this yields a `..`-prefixed path, matching what the
 		# relative form already accepts (root_node.get_node_or_null
@@ -486,9 +491,9 @@ func _resolve_preset_target(player: AnimationPlayer, target_path: String) -> Dic
 			# path; use the clean scene-relative form so the hint is
 			# actionable.
 			var scene_root := EditorInterface.get_edited_scene_root()
-			var root_hint := McpScenePath.from_node(root_node, scene_root) if scene_root != null else str(root_node.name)
+			var root_hint := ScenePath.from_node(root_node, scene_root) if scene_root != null else str(root_node.name)
 			var abs_example := "/%s/path/to/target" % scene_root.name if scene_root != null else "/SceneRoot/path/to/target"
-			return McpErrorCodes.make(McpErrorCodes.INVALID_PARAMS,
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 				("Target node not found at '%s' (resolved relative to AnimationPlayer's root_node '%s'). "
 				+ "Pass a path relative to root_node (e.g. \"path/to/target\") or a scene-absolute path (e.g. \"%s\").")
 				% [target_path, root_hint, abs_example])
@@ -501,7 +506,7 @@ func _resolve_preset_target(player: AnimationPlayer, target_path: String) -> Dic
 	elif target is Node3D:
 		kind = "3d"
 	else:
-		return McpErrorCodes.make(McpErrorCodes.WRONG_TYPE,
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
 			"Target '%s' must be a Control, Node2D, or Node3D (got %s)" % [target_path, target.get_class()])
 	return {"node": target, "kind": kind, "track_path_root": track_path_root}
 

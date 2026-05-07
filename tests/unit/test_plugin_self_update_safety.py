@@ -58,15 +58,26 @@ PLUGIN_GD = PLUGIN_ROOT / "plugin.gd"
 # This is intentionally the targeted PR #309 adaptation surface plus the
 # PR 9 depth-1 infrastructure follow-up, not a broad cleanup of every
 # direct/transitive preload such as handlers or client strategy scripts.
+#
+# Issue #398 extended the list to the five files that emitted parse
+# errors during a real `v2.3.2 → v2.4.0` self-update — the audit-v2
+# regression that landed new `class_name` members behind bare-class_name
+# references. The structurally correct expansion (deny-by-default across
+# the whole load surface) is tracked in #399.
 TARGETED_LOAD_SURFACE_FILES = (
     PLUGIN_GD,
     PLUGIN_ROOT / "utils" / "server_lifecycle.gd",
     PLUGIN_ROOT / "utils" / "port_resolver.gd",
     PLUGIN_ROOT / "utils" / "update_manager.gd",
+    PLUGIN_ROOT / "utils" / "update_mixed_state.gd",
     PLUGIN_ROOT / "connection.gd",
     PLUGIN_ROOT / "dispatcher.gd",
     PLUGIN_ROOT / "mcp_dock.gd",
     PLUGIN_ROOT / "client_configurator.gd",
+    PLUGIN_ROOT / "dock_panels" / "log_viewer.gd",
+    PLUGIN_ROOT / "handlers" / "_node_validator.gd",
+    PLUGIN_ROOT / "handlers" / "animation_presets.gd",
+    PLUGIN_ROOT / "handlers" / "animation_values.gd",
 )
 
 
@@ -230,6 +241,52 @@ def test_targeted_load_scripts_do_not_access_members_via_class_name() -> None:
         'script-local `const Foo := preload("res://addons/godot_ai/...")` '
         "alias and call `Foo.X` instead. Offending references: "
         f"{sorted(set(offenders))}"
+    )
+
+
+def test_update_backup_suffix_stays_in_sync() -> None:
+    """`update_mixed_state.gd::BACKUP_SUFFIX` must equal the producer's value.
+
+    `update_mixed_state.gd` previously aliased the suffix from
+    `update_reload_runner.gd::INSTALL_BACKUP_SUFFIX` via a module-level
+    const initializer. That site failed to load during a real self-update
+    when a parse-cache lag left the runner's new constants invisible
+    (issue #398). The fix inlines the literal in `update_mixed_state.gd`
+    so script-load doesn't depend on the runner's cached form. This test
+    replaces the runtime-aliasing anti-drift guard with a build-time one.
+    """
+
+    runner = (PLUGIN_ROOT / "update_reload_runner.gd").read_text(encoding="utf-8")
+    scanner = (PLUGIN_ROOT / "utils" / "update_mixed_state.gd").read_text(encoding="utf-8")
+
+    runner_match = re.search(
+        r'^const\s+INSTALL_BACKUP_SUFFIX\s*:=\s*"([^"]+)"',
+        runner,
+        re.MULTILINE,
+    )
+    assert runner_match, (
+        'update_reload_runner.gd must declare `const INSTALL_BACKUP_SUFFIX := "..."` '
+        "as the authoritative producer of the backup-file suffix."
+    )
+
+    scanner_match = re.search(
+        r'^const\s+BACKUP_SUFFIX\s*:=\s*"([^"]+)"',
+        scanner,
+        re.MULTILINE,
+    )
+    assert scanner_match, (
+        'update_mixed_state.gd must declare `const BACKUP_SUFFIX := "..."` as a '
+        "string literal — aliasing via `UpdateReloadRunner.INSTALL_BACKUP_SUFFIX` "
+        "re-introduces the self-update parse hazard (issue #398)."
+    )
+
+    assert runner_match.group(1) == scanner_match.group(1), (
+        "update_mixed_state.gd::BACKUP_SUFFIX "
+        f"({scanner_match.group(1)!r}) drifted from the producer "
+        f"update_reload_runner.gd::INSTALL_BACKUP_SUFFIX "
+        f"({runner_match.group(1)!r}). Update both literals in lockstep — they "
+        "describe the same on-disk suffix, but the scanner's value is inlined "
+        "to avoid the parse hazard fixed in #398."
     )
 
 

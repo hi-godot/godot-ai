@@ -11,7 +11,18 @@ extends VBoxContainer
 
 signal logging_enabled_changed(enabled: bool)
 
-var _log_buffer: McpLogBuffer
+## Self-update parse-hazard policy: this script is on the plugin's load
+## surface (preloaded as a const from `mcp_dock.gd`). Field declarations
+## must NOT type-bind to plugin `class_name` types like `McpLogBuffer` —
+## the parser resolves those through the global class_name registry at
+## script-load time, which during the disable→extract→enable window holds
+## the cached pre-update class object. The type fence stays on the
+## `setup(log_buffer: McpLogBuffer)` parameter, which is resolved at call
+## time. The `Dock` const aliases `mcp_dock.gd` under a non-`Mcp*` name
+## for the same reason — see `_node_validator.gd` and #398.
+const Dock := preload("res://addons/godot_ai/mcp_dock.gd")
+
+var _log_buffer
 var _log_display: RichTextLabel
 var _log_toggle: CheckButton
 ## Last `McpLogBuffer.total_logged()` value painted into the display. Tracking
@@ -39,7 +50,7 @@ func _build_ui() -> void:
 	add_child(HSeparator.new())
 
 	var log_header_row := HBoxContainer.new()
-	var log_header := McpDock._make_header("MCP Log")
+	var log_header := Dock._make_header("MCP Log")
 	log_header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	log_header_row.add_child(log_header)
 
