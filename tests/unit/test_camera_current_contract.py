@@ -21,7 +21,7 @@ def test_current_switch_undo_captures_logical_or_effective_current() -> None:
     current", leaving the new camera active after undo.
     """
 
-    source = CAMERA_HANDLER_PATH.read_text()
+    source = CAMERA_HANDLER_PATH.read_text(encoding="utf-8")
     switch_block = get_func_block(
         source,
         "func _add_make_current_to_action(node: Node, type_str: String, scene_root: Node) -> void:",
@@ -31,13 +31,13 @@ def test_current_switch_undo_captures_logical_or_effective_current() -> None:
 
 
 def test_configure_current_false_uses_authoritative_current_guard() -> None:
-    source = CAMERA_HANDLER_PATH.read_text()
+    source = CAMERA_HANDLER_PATH.read_text(encoding="utf-8")
     configure_block = get_func_block(source, "func configure(params: Dictionary) -> Dictionary:")
     assert "var was_on: bool = _resolve_current(scene_root, node)" in configure_block
 
 
 def test_camera_reads_still_route_through_logical_current_resolvers() -> None:
-    source = CAMERA_HANDLER_PATH.read_text()
+    source = CAMERA_HANDLER_PATH.read_text(encoding="utf-8")
     get_block = get_func_block(source, "func get_camera(params: Dictionary) -> Dictionary:")
     list_block = get_func_block(source, "func list_cameras(_params: Dictionary) -> Dictionary:")
     assert "_resolve_current(scene_root, node)" in get_block

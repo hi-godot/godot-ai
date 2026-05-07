@@ -76,7 +76,7 @@ def _registered_mcp_class_names() -> set[str]:
     pattern = re.compile(r"^class_name\s+(Mcp\w+)\s*$", re.MULTILINE)
     found: set[str] = set()
     for gd_file in PLUGIN_ROOT.rglob("*.gd"):
-        found.update(pattern.findall(gd_file.read_text()))
+        found.update(pattern.findall(gd_file.read_text(encoding="utf-8")))
     return found
 
 
@@ -115,7 +115,7 @@ def test_targeted_load_scripts_have_no_typed_fields_against_plugin_class_names()
     offenders: list[str] = []
 
     for gd_file in TARGETED_LOAD_SURFACE_FILES:
-        source = _strip_gdscript_comments(gd_file.read_text())
+        source = _strip_gdscript_comments(gd_file.read_text(encoding="utf-8"))
         for match in typed_field.finditer(source):
             field_name, type_name = match.group(1), match.group(2)
             if type_name not in mcp_classes:
@@ -142,7 +142,7 @@ def test_plugin_gd_does_not_construct_via_class_name() -> None:
     declared at the top of `plugin.gd` and call `Foo.new(...)` instead.
     """
 
-    source = _strip_gdscript_comments(PLUGIN_GD.read_text())
+    source = _strip_gdscript_comments(PLUGIN_GD.read_text(encoding="utf-8"))
     mcp_classes = _registered_mcp_class_names()
 
     constructor = re.compile(r"\b(Mcp\w+)\.new\s*\(")
@@ -175,7 +175,7 @@ def test_targeted_load_scripts_do_not_construct_via_class_name() -> None:
     offenders: list[str] = []
 
     for gd_file in TARGETED_LOAD_SURFACE_FILES:
-        source = _strip_gdscript_comments(gd_file.read_text())
+        source = _strip_gdscript_comments(gd_file.read_text(encoding="utf-8"))
         for match in constructor.finditer(source):
             type_name = match.group(1)
             if type_name not in mcp_classes:
@@ -210,7 +210,7 @@ def test_targeted_load_scripts_do_not_access_members_via_class_name() -> None:
     offenders: list[str] = []
 
     for gd_file in TARGETED_LOAD_SURFACE_FILES:
-        source = _strip_gdscript_comments(gd_file.read_text())
+        source = _strip_gdscript_comments(gd_file.read_text(encoding="utf-8"))
         for match in member_access.finditer(source):
             type_name, member = match.group(1), match.group(2)
             if type_name not in mcp_classes:
@@ -242,7 +242,7 @@ def test_plugin_gd_documents_the_untyped_policy() -> None:
     the hazard.
     """
 
-    source = PLUGIN_GD.read_text()
+    source = PLUGIN_GD.read_text(encoding="utf-8")
     assert "Self-update parse-hazard policy" in source, (
         "plugin.gd must keep an explanatory comment near the untyped "
         "field declarations referencing the parse-hazard policy. Without "

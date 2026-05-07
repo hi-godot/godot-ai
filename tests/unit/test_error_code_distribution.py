@@ -20,13 +20,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-HANDLERS_DIR = (
-    Path(__file__).resolve().parents[2]
-    / "plugin"
-    / "addons"
-    / "godot_ai"
-    / "handlers"
-)
+HANDLERS_DIR = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godot_ai" / "handlers"
 
 ## Post-migration baseline: 97 INVALID_PARAMS sites in plugin/handlers/.
 ## The 367 specifically-coded sites are spread across NODE_NOT_FOUND (39),
@@ -57,7 +51,7 @@ def _count_code_uses(code: str) -> int:
     pattern = re.compile(rf"\b{re.escape(code)}\b")
     total = 0
     for gd_file in HANDLERS_DIR.glob("*.gd"):
-        total += len(pattern.findall(gd_file.read_text()))
+        total += len(pattern.findall(gd_file.read_text(encoding="utf-8")))
     return total
 
 
