@@ -1441,11 +1441,35 @@ func _update_dev_restart_btn() -> void:
 
 
 func _on_dev_restart_pressed() -> void:
-	if _plugin == null:
+	if _plugin == null or _server_restart_in_progress:
 		return
-	if _plugin.has_method("force_restart_server_preserving_mode"):
+	if not _plugin.has_method("force_restart_server_preserving_mode"):
+		return
+	_server_restart_in_progress = true
+	_update_dev_section_buttons()
+	if not is_inside_tree():
+		## Test path — no scene tree means no timer; run synchronously
+		## so suite assertions see the dispatch without `await`.
 		_plugin.force_restart_server_preserving_mode()
-	_update_dev_section_buttons.call_deferred()
+		_server_restart_in_progress = false
+		return
+	call_deferred("_perform_dev_restart_after_feedback")
+
+
+func _perform_dev_restart_after_feedback() -> void:
+	## Brief paint cycle so the user sees "Restarting…" before the
+	## blocking _wait_for_port_free freezes the editor for up to 5s.
+	await get_tree().create_timer(0.15).timeout
+	if _plugin != null:
+		_plugin.force_restart_server_preserving_mode()
+	## start_dev_server's spawn happens via a 0.5s SceneTree timer; give
+	## it time to land plus a buffer for the WS reconnect before clearing
+	## the busy state. The unconditional clear matches sibling restart
+	## buttons — overshoot is fine because subsequent _update_status calls
+	## refresh the button against live plugin state.
+	await get_tree().create_timer(2.0).timeout
+	_server_restart_in_progress = false
+	_update_dev_section_buttons()
 
 
 ## Single-scan refresh of every dev-section button state. Both buttons
@@ -1465,9 +1489,15 @@ func _update_dev_section_buttons() -> void:
 		_dev_server_btn.text = server_state["text"]
 		_dev_server_btn.tooltip_text = server_state["tooltip"]
 	if _dev_restart_btn != null:
-		var restart_state := _restart_server_btn_state(has_managed, dev_running)
-		_dev_restart_btn.disabled = not restart_state["enabled"]
-		_dev_restart_btn.tooltip_text = restart_state["tooltip"]
+		if _server_restart_in_progress:
+			_dev_restart_btn.disabled = true
+			_dev_restart_btn.text = "Restarting…"
+			_dev_restart_btn.tooltip_text = "Killing the current server and respawning…"
+		else:
+			var restart_state := _restart_server_btn_state(has_managed, dev_running)
+			_dev_restart_btn.disabled = not restart_state["enabled"]
+			_dev_restart_btn.text = "Restart Server"
+			_dev_restart_btn.tooltip_text = restart_state["tooltip"]
 
 
 func _on_install_uv() -> void:

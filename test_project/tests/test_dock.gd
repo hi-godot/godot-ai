@@ -1059,3 +1059,32 @@ func test_restart_server_btn_enabled_when_managed_running() -> void:
 	assert_false(disabled, "Managed server running must enable the button")
 	assert_contains(tooltip, "current source",
 		"Tooltip must explain the button picks up source changes")
+
+
+func test_restart_server_btn_shows_restarting_state_during_dispatch() -> void:
+	## Without "Restarting…" feedback, the user sees a 5s editor freeze
+	## (from _wait_for_port_free) with no acknowledgement of their click.
+	## The flag is set before dispatch and cleared after the spawn timer.
+	var plugin := _RestartDispatchPlugin.new()
+	plugin.has_managed = true
+	_seed_dev_restart_btn(plugin)
+	_dock._dev_restart_btn.text = "Restart Server"
+
+	_dock._server_restart_in_progress = true
+	_dock._update_dev_section_buttons()
+	var mid_text: String = _dock._dev_restart_btn.text
+	var mid_disabled: bool = _dock._dev_restart_btn.disabled
+
+	_dock._server_restart_in_progress = false
+	_dock._update_dev_section_buttons()
+	var post_text: String = _dock._dev_restart_btn.text
+	var post_disabled: bool = _dock._dev_restart_btn.disabled
+
+	_cleanup_dev_restart_btn(plugin)
+	assert_contains(mid_text, "Restarting",
+		"In-flight click must replace label with Restarting…")
+	assert_true(mid_disabled, "In-flight click must disable the button")
+	assert_eq(post_text, "Restart Server",
+		"Once the flag clears, label reverts to Restart Server")
+	assert_false(post_disabled,
+		"Cleared flag with managed server still up must re-enable the button")
