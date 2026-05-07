@@ -62,17 +62,20 @@ Wiring: `script/setup-dev` and `script/setup-dev.ps1` copy `script/githooks/post
 
 ### Godot editor + worktree safety
 
-**Always launch Godot from the root repo's `test_project/`, not from a worktree.** Worktrees can be auto-removed when their owning Claude Code session exits. MCP tools write files to whatever `test_project/` the editor is running — if that's a worktree that gets deleted, all uncommitted scene files, scripts, and themes are permanently lost.
+**Never launch Godot at *another session's* worktree.** Worktrees can be auto-removed when their owning Claude Code session exits — MCP tools write files to whatever `test_project/` the editor is running, so all uncommitted scene files, scripts, and themes inside a vanished worktree are permanently lost. Launching at *your own* worktree (the one this session created) is fine, and is the right call when you need to test plugin code that only exists on this branch — just commit frequently so an unexpected exit doesn't drop work.
 
 ```bash
 # SAFE — root repo, never auto-cleaned:
 /Applications/Godot_mono.app/Contents/MacOS/Godot --editor --path ~/godot-ai/test_project/
 
-# DANGEROUS — worktree, can vanish:
-/Applications/Godot_mono.app/Contents/MacOS/Godot --editor --path .claude/worktrees/some-name/test_project/
+# SAFE — this session's own worktree (commit frequently):
+/Applications/Godot_mono.app/Contents/MacOS/Godot --editor --path .claude/worktrees/<this-session>/test_project/
+
+# DANGEROUS — another session's worktree, can vanish out from under you:
+/Applications/Godot_mono.app/Contents/MacOS/Godot --editor --path .claude/worktrees/some-other-name/test_project/
 ```
 
-If you need worktree-specific test_project changes, use your own worktree (the one your session created), commit frequently, and never point Godot at a worktree owned by another session.
+When in doubt, prefer the root repo's `test_project/` — it's never auto-cleaned and matches what most CI smoke flows assume.
 
 ### Live-smoke scene hygiene
 
