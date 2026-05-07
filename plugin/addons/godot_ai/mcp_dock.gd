@@ -174,6 +174,10 @@ var _mode_override_btn: OptionButton
 var _setup_section: VBoxContainer
 var _setup_container: VBoxContainer
 var _dev_server_btn: Button
+## Same-version Python edits get adopted as compatible, so neither the
+## drift nor the crash Restart button surfaces — this is the unconditional
+## kick contributors need to pick up source changes without a version bump.
+var _dev_restart_btn: Button
 var _log_viewer: LogViewerScript
 
 var _last_connected := false
@@ -830,7 +834,7 @@ func _update_status() -> void:
 	_status_icon.color = status_color
 	_status_label.text = status_text
 
-	_update_dev_server_btn()
+	_update_dev_section_buttons()
 
 
 ## Render the diagnostic panel body for a given spawn state. The top
@@ -1253,6 +1257,7 @@ func _refresh_setup_status() -> void:
 	for child in _setup_container.get_children():
 		child.queue_free()
 	_dev_server_btn = null
+	_dev_restart_btn = null
 
 	var is_dev := ClientConfigurator.is_dev_checkout()
 	if is_dev:
@@ -1262,6 +1267,13 @@ func _refresh_setup_status() -> void:
 		_dev_server_btn.pressed.connect(_on_dev_server_pressed)
 		_update_dev_server_btn()
 		_setup_container.add_child(_dev_server_btn)
+
+		_dev_restart_btn = Button.new()
+		_dev_restart_btn.text = "Restart Server"
+		_dev_restart_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_dev_restart_btn.pressed.connect(_on_dev_restart_pressed)
+		_update_dev_restart_btn()
+		_setup_container.add_child(_dev_restart_btn)
 		return
 
 	# User mode — check for uv
@@ -1392,7 +1404,70 @@ func _on_dev_server_pressed() -> void:
 		_plugin.stop_dev_server()
 	else:
 		_plugin.start_dev_server()
-	_update_dev_server_btn.call_deferred()
+	_update_dev_section_buttons.call_deferred()
+
+
+## Pure helper for the Restart Server button — enabled iff something is
+## running on the HTTP port we can kick. Static so `test_dock_dev_server_btn`
+## can cover the truth table without a real plugin.
+static func _restart_server_btn_state(has_managed: bool, dev_running: bool) -> Dictionary:
+	var port := ClientConfigurator.http_port()
+	if has_managed or dev_running:
+		return {
+			"enabled": true,
+			"tooltip": (
+				"Kill the server on port %d and respawn from current source, "
+				+ "preserving managed vs --reload mode. Use this to pick up "
+				+ "Python server-source changes that don't bump the version."
+			) % port,
+		}
+	return {
+		"enabled": false,
+		"tooltip": "No godot-ai server is running on port %d." % port,
+	}
+
+
+func _update_dev_restart_btn() -> void:
+	if _dev_restart_btn == null:
+		return
+	if _plugin == null:
+		return
+	## See _update_dev_server_btn — same #168 self-update mixed-state guard.
+	if not (_plugin.has_method("has_managed_server") and _plugin.has_method("is_dev_server_running")):
+		return
+	var state := _restart_server_btn_state(_plugin.has_managed_server(), _plugin.is_dev_server_running())
+	_dev_restart_btn.disabled = not state["enabled"]
+	_dev_restart_btn.tooltip_text = state["tooltip"]
+
+
+func _on_dev_restart_pressed() -> void:
+	if _plugin == null:
+		return
+	if _plugin.has_method("force_restart_server_preserving_mode"):
+		_plugin.force_restart_server_preserving_mode()
+	_update_dev_section_buttons.call_deferred()
+
+
+## Single-scan refresh of every dev-section button state. Both buttons
+## key off the same `has_managed_server` / `is_dev_server_running` pair,
+## and the latter scrapes lsof/ps — so doing the discovery once and
+## applying to both avoids the duplicate subprocess fork on every
+## connection-state transition.
+func _update_dev_section_buttons() -> void:
+	if _plugin == null:
+		return
+	if not (_plugin.has_method("has_managed_server") and _plugin.has_method("is_dev_server_running")):
+		return
+	var has_managed: bool = _plugin.has_managed_server()
+	var dev_running: bool = _plugin.is_dev_server_running()
+	if _dev_server_btn != null:
+		var server_state := _dev_server_btn_state(has_managed, dev_running)
+		_dev_server_btn.text = server_state["text"]
+		_dev_server_btn.tooltip_text = server_state["tooltip"]
+	if _dev_restart_btn != null:
+		var restart_state := _restart_server_btn_state(has_managed, dev_running)
+		_dev_restart_btn.disabled = not restart_state["enabled"]
+		_dev_restart_btn.tooltip_text = restart_state["tooltip"]
 
 
 func _on_install_uv() -> void:

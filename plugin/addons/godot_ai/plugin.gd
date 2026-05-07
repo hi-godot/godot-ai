@@ -1413,6 +1413,28 @@ func force_restart_server() -> void:
 	_lifecycle.force_restart_server()
 
 
+## Same-version Python edits get adopted as compatible by the lifecycle's
+## start_server arm, so reloading or relaunching just re-adopts the stale
+## process. This is the "kill whatever's there and respawn from current
+## source" path the dock's Restart Server button hits, preserving managed
+## vs --reload mode.
+func force_restart_server_preserving_mode() -> bool:
+	if has_managed_server():
+		_lifecycle.force_restart_server()
+		return true
+	if is_dev_server_running():
+		stop_dev_server()
+		## OS.kill returns synchronously but the listener can take longer
+		## to release the port — without this wait, start_dev_server's
+		## fixed 500ms timer races the old uvicorn shutdown and the new
+		## --reload spawn fails to bind. Mirrors the managed path's wait
+		## inside _lifecycle.force_restart_server.
+		_wait_for_port_free(ClientConfigurator.http_port(), 5.0)
+		start_dev_server()
+		return true
+	return false
+
+
 func start_dev_server() -> void:
 	## Start a dev server with --reload that survives plugin reloads.
 	## Kills any managed server first, waits for the port to free, then spawns.
