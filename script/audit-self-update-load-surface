@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""Audit which .gd files are reachable during the self-update reload window.
+
+Prints the transitive preload closure rooted at plugin.gd, plus a comparison
+to TARGETED_LOAD_SURFACE_FILES in tests/unit/test_plugin_self_update_safety.py.
+
+Decision support for issue #399.
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PLUGIN_ROOT = REPO_ROOT / "plugin" / "addons" / "godot_ai"
+PLUGIN_GD = PLUGIN_ROOT / "plugin.gd"
+SAFETY_TEST = REPO_ROOT / "tests" / "unit" / "test_plugin_self_update_safety.py"
+
+PRELOAD_RE = re.compile(r'preload\(\s*"(res://addons/godot_ai/[^"]+\.gd)"\s*\)')
+LOAD_RE = re.compile(r'\bload\(\s*"(res://addons/godot_ai/[^"]+\.gd)"\s*\)')
+CLASS_NAME_RE = re.compile(r"^class_name\s+(Mcp\w+)\s*$", re.MULTILINE)
+
+
+def res_to_path(uri: str) -> Path:
+    rel = uri.removeprefix("res://addons/godot_ai/")
+    return PLUGIN_ROOT / rel
+
+
+def collect_class_name_map() -> dict[str, Path]:
+    out: dict[str, Path] = {}
+    for gd in PLUGIN_ROOT.rglob("*.gd"):
+        for m in CLASS_NAME_RE.finditer(gd.read_text(encoding="utf-8")):
+            out[m.group(1)] = gd
+    return out
+
+
+def parse_refs(gd: Path, class_map: dict[str, Path]) -> set[Path]:
+    """Return all addon-tree script paths referenced by `gd` at parse time.
+
+    Includes:
+    - preload("res://addons/godot_ai/...")  — resolved at script-load
+    - load("res://addons/godot_ai/...")     — runtime, but listed for completeness
+    - bare McpFoo references (the parse hazard itself) — typed-vars,
+      constructors, constant access. These resolve through the global
+      class_name registry, which is exactly what the self-update hazard
+      is about.
+    """
+    src = gd.read_text(encoding="utf-8")
+    # Strip comments so commented-out preloads / mentions in docstrings
+    # don't inflate the closure.
+    src_no_comments = re.sub(r"#.*$", "", src, flags=re.MULTILINE)
+
+    refs: set[Path] = set()
+    for m in PRELOAD_RE.finditer(src_no_comments):
+        refs.add(res_to_path(m.group(1)).resolve())
+    for m in LOAD_RE.finditer(src_no_comments):
+        refs.add(res_to_path(m.group(1)).resolve())
+
+    # Bare class_name refs that resolve through the global registry.
+    # We tag these separately because they're the hazard surface, not
+    # safe preloads.
+    for name, target in class_map.items():
+        # Word-boundary search for the class_name as an identifier.
+        if re.search(rf"\b{re.escape(name)}\b", src_no_comments):
+            refs.add(target.resolve())
+
+    return refs
+
+
+def closure(start: Path, class_map: dict[str, Path]) -> set[Path]:
+    seen: set[Path] = {start.resolve()}
+    stack: list[Path] = [start.resolve()]
+    while stack:
+        cur = stack.pop()
+        for ref in parse_refs(cur, class_map):
+            if ref not in seen and ref.exists():
+                seen.add(ref)
+                stack.append(ref)
+    return seen
+
+
+def parse_safety_allowlist() -> set[Path]:
+    src = SAFETY_TEST.read_text(encoding="utf-8")
+    block = re.search(
+        r"TARGETED_LOAD_SURFACE_FILES\s*=\s*\((.*?)\)",
+        src,
+        re.DOTALL,
+    )
+    if not block:
+        return set()
+    body = block.group(1)
+    files: set[Path] = set()
+    for line in body.splitlines():
+        line = line.strip().rstrip(",")
+        if not line or line.startswith("#"):
+            continue
+        if line == "PLUGIN_GD":
+            files.add(PLUGIN_GD.resolve())
+            continue
+        # PLUGIN_ROOT / "a" / "b.gd"
+        parts = re.findall(r'"([^"]+)"', line)
+        if not parts:
+            continue
+        path = PLUGIN_ROOT.joinpath(*parts).resolve()
+        files.add(path)
+    return files
+
+
+def rel(p: Path) -> str:
+    try:
+        return str(p.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(p)
+
+
+TYPED_FIELD_RE = re.compile(r"^\s*(?:static\s+)?var\s+\w+\s*:\s*(Mcp\w+)\b", re.MULTILINE)
+TYPED_PARAM_RE = re.compile(r"\b\w+\s*:\s*(Mcp\w+)\b")
+CONSTRUCTOR_RE = re.compile(r"\b(Mcp\w+)\s*\.\s*new\s*\(")
+STATIC_ACCESS_RE = re.compile(r"\b(Mcp\w+)\s*\.\s*[A-Z_][A-Z0-9_]*\b")
+
+
+def count_violations(gd: Path, class_map: dict[str, Path]) -> dict[str, int]:
+    src = gd.read_text(encoding="utf-8")
+    src = re.sub(r"#.*$", "", src, flags=re.MULTILINE)
+    own_class_names = set(CLASS_NAME_RE.findall(src))
+    registered = set(class_map.keys())
+
+    def keep(name: str) -> bool:
+        return name in registered and name not in own_class_names
+
+    typed = [m for m in TYPED_FIELD_RE.findall(src) if keep(m)]
+    typed_params = [m for m in TYPED_PARAM_RE.findall(src) if keep(m)]
+    ctor = [m for m in CONSTRUCTOR_RE.findall(src) if keep(m)]
+    static = [m for m in STATIC_ACCESS_RE.findall(src) if keep(m)]
+    return {
+        "typed_fields": len(typed),
+        "typed_params": len(typed_params),
+        "constructors": len(ctor),
+        "static_access": len(static),
+    }
+
+
+def main() -> int:
+    if not PLUGIN_GD.exists():
+        print(f"ERROR: {PLUGIN_GD} not found", file=sys.stderr)
+        return 1
+
+    class_map = collect_class_name_map()
+    reach = closure(PLUGIN_GD, class_map)
+    all_gd = {p.resolve() for p in PLUGIN_ROOT.rglob("*.gd")}
+    unreachable = all_gd - reach
+    allowlist = parse_safety_allowlist()
+
+    in_reach_not_allowlisted = sorted(reach - allowlist, key=rel)
+    in_allowlist_not_reach = sorted(allowlist - reach, key=rel)
+    matched = reach & allowlist
+
+    print(f"Total .gd files under {rel(PLUGIN_ROOT)}: {len(all_gd)}")
+    print(f"Reachable from plugin.gd (preload + class_name registry): {len(reach)}")
+    print(f"Unreachable (off load surface): {len(unreachable)}")
+    print(f"Current allowlist size: {len(allowlist)}")
+    print(f"  matched (allowlist ∩ reachable): {len(matched)}")
+    print(f"  in allowlist but NOT reachable: {len(in_allowlist_not_reach)}")
+    print(f"  reachable but NOT in allowlist (gap): {len(in_reach_not_allowlisted)}")
+    print()
+
+    if in_reach_not_allowlisted:
+        print("=== GAP: reachable from plugin.gd, not in safety allowlist ===")
+        for p in in_reach_not_allowlisted:
+            print(f"  {rel(p)}")
+        print()
+
+    if in_allowlist_not_reach:
+        print("=== Allowlist entries we couldn't trace (manual review) ===")
+        for p in in_allowlist_not_reach:
+            print(f"  {rel(p)}")
+        print()
+
+    print("=== Reachable closure ===")
+    for p in sorted(reach, key=rel):
+        marker = " (allowlisted)" if p in allowlist else ""
+        print(f"  {rel(p)}{marker}")
+    print()
+
+    print("=== Unreachable (would be opt-out under deny-by-default) ===")
+    for p in sorted(unreachable, key=rel):
+        print(f"  {rel(p)}")
+    print()
+
+    print("=== Live policy violations across reachable closure ===")
+    print("(typed-var / typed-param / Mcp*.new() / Mcp*.CONST against shared class_name)")
+    print()
+    totals = {"typed_fields": 0, "typed_params": 0, "constructors": 0, "static_access": 0}
+    files_with_violations: list[tuple[Path, dict[str, int]]] = []
+    for p in sorted(reach, key=rel):
+        v = count_violations(p, class_map)
+        s = sum(v.values())
+        if s > 0:
+            files_with_violations.append((p, v))
+            for k in totals:
+                totals[k] += v[k]
+    for p, v in files_with_violations:
+        flag = " (allowlisted)" if p in allowlist else ""
+        bits = ", ".join(f"{k}={v[k]}" for k in v if v[k])
+        print(f"  {rel(p)}{flag}: {bits}")
+    print()
+    print(f"Totals: {totals}")
+    print(f"Files with at least one violation: {len(files_with_violations)} / {len(reach)}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
