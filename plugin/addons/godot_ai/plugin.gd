@@ -1414,21 +1414,19 @@ func force_restart_server() -> void:
 
 
 ## Single entry point for the dock's primary "Restart Dev Server" button.
-## Kills whatever godot-ai server is currently on the HTTP port (managed,
-## adopted, or already-dev) and lands in `--reload` mode. Same-version
-## Python edits get adopted as compatible by the lifecycle's start_server
-## arm, so reloading the plugin won't pick them up — this is the explicit
-## "kill and respawn from current source" path. Returns true if a kill
-## happened, false if we just spawned fresh.
+## The user clicking Restart is explicit consent to take over the HTTP port,
+## so this is aggressive: any PID holding the port gets killed (managed,
+## branded-dev, or orphan multiprocessing.spawn workers whose parent died
+## so brand detection misses them). After the port frees we spawn a fresh
+## --reload dev server. Returns true if a kill happened, false if the port
+## was already free and we just spawned.
 func force_restart_or_start_dev_server() -> bool:
 	var port := ClientConfigurator.http_port()
 	var killed := false
 	if has_managed_server():
 		_lifecycle.reset_for_force_restart()
+	if _is_port_in_use(port):
 		_kill_processes_and_windows_spawn_children(_find_all_pids_on_port(port))
-		killed = true
-	elif is_dev_server_running():
-		stop_dev_server()
 		killed = true
 	if killed:
 		## OS.kill returns synchronously but uvicorn's listener can take
