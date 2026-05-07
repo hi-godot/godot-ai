@@ -41,3 +41,28 @@ func test_state_both_true_prefers_managed() -> void:
 	## would actually replace.
 	var state: Dictionary = McpDockScript._dev_server_btn_state(true, true)
 	assert_contains(state["text"], "Switch to dev mode")
+
+
+## --- _restart_server_btn_state -----------------------------------------
+
+func test_restart_btn_enabled_when_managed_server_running() -> void:
+	var state: Dictionary = McpDockScript._restart_server_btn_state(true, false)
+	assert_eq(state["enabled"], true,
+		"Managed server running must enable the Restart Server button")
+	assert_contains(state["tooltip"], "current source",
+		"Tooltip must explain the button picks up source changes")
+
+
+func test_restart_btn_enabled_when_dev_server_running() -> void:
+	var state: Dictionary = McpDockScript._restart_server_btn_state(false, true)
+	assert_eq(state["enabled"], true,
+		"External --reload dev server running must enable the Restart Server button")
+	assert_contains(state["tooltip"], "current source")
+
+
+func test_restart_btn_disabled_when_nothing_running() -> void:
+	var state: Dictionary = McpDockScript._restart_server_btn_state(false, false)
+	assert_eq(state["enabled"], false,
+		"With no godot-ai server on the port, the button must be disabled")
+	assert_contains(state["tooltip"], "No godot-ai server is running",
+		"Disabled tooltip must explain why so the user isn't left guessing")

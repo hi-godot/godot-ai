@@ -174,6 +174,14 @@ var _mode_override_btn: OptionButton
 var _setup_section: VBoxContainer
 var _setup_container: VBoxContainer
 var _dev_server_btn: Button
+## Force-respawn button shown alongside `_dev_server_btn` in dev checkouts
+## when Developer mode is on. Same-version Python edits get adopted as
+## compatible (server_lifecycle.gd `start_server` adoption arm), so neither
+## the version-drift restart nor the spawn-failure restart surfaces — this
+## is the unconditional "kill whatever's there and respawn from current
+## source" affordance contributors need to pick up source changes that
+## don't bump the version.
+var _dev_restart_btn: Button
 var _log_viewer: LogViewerScript
 
 var _last_connected := false
@@ -831,6 +839,7 @@ func _update_status() -> void:
 	_status_label.text = status_text
 
 	_update_dev_server_btn()
+	_update_dev_restart_btn()
 
 
 ## Render the diagnostic panel body for a given spawn state. The top
@@ -1253,6 +1262,7 @@ func _refresh_setup_status() -> void:
 	for child in _setup_container.get_children():
 		child.queue_free()
 	_dev_server_btn = null
+	_dev_restart_btn = null
 
 	var is_dev := ClientConfigurator.is_dev_checkout()
 	if is_dev:
@@ -1262,6 +1272,13 @@ func _refresh_setup_status() -> void:
 		_dev_server_btn.pressed.connect(_on_dev_server_pressed)
 		_update_dev_server_btn()
 		_setup_container.add_child(_dev_server_btn)
+
+		_dev_restart_btn = Button.new()
+		_dev_restart_btn.text = "Restart Server"
+		_dev_restart_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_dev_restart_btn.pressed.connect(_on_dev_restart_pressed)
+		_update_dev_restart_btn()
+		_setup_container.add_child(_dev_restart_btn)
 		return
 
 	# User mode — check for uv
@@ -1393,6 +1410,54 @@ func _on_dev_server_pressed() -> void:
 	else:
 		_plugin.start_dev_server()
 	_update_dev_server_btn.call_deferred()
+	_update_dev_restart_btn.call_deferred()
+
+
+## Pure helper — `Restart Server` is enabled whenever there's *something*
+## to restart on the HTTP port (managed server we spawned/adopted, OR an
+## external `--reload` dev server we recognize by brand). Disabled when
+## nothing is running, with a tooltip that says so. Static so the unit
+## test in `test_dock_dev_server_btn.gd` can cover the truth table without
+## a real plugin.
+static func _restart_server_btn_state(has_managed: bool, dev_running: bool) -> Dictionary:
+	var port := ClientConfigurator.http_port()
+	if has_managed or dev_running:
+		return {
+			"enabled": true,
+			"tooltip": (
+				"Kill the server on port %d and respawn from current source, "
+				+ "preserving managed vs --reload mode. Use this to pick up "
+				+ "Python server-source changes that don't bump the version."
+			) % port,
+		}
+	return {
+		"enabled": false,
+		"tooltip": "No godot-ai server is running on port %d." % port,
+	}
+
+
+func _update_dev_restart_btn() -> void:
+	if _dev_restart_btn == null:
+		return
+	if _plugin == null:
+		return
+	## Same defensive guard as `_update_dev_server_btn` for the self-update
+	## mixed-state window where the dock is alive but the plugin script
+	## class is mid-reload and missing methods. See #168.
+	if not (_plugin.has_method("has_managed_server") and _plugin.has_method("is_dev_server_running")):
+		return
+	var state := _restart_server_btn_state(_plugin.has_managed_server(), _plugin.is_dev_server_running())
+	_dev_restart_btn.disabled = not bool(state["enabled"])
+	_dev_restart_btn.tooltip_text = state["tooltip"]
+
+
+func _on_dev_restart_pressed() -> void:
+	if _plugin == null:
+		return
+	if _plugin.has_method("force_restart_server_preserving_mode"):
+		_plugin.force_restart_server_preserving_mode()
+	_update_dev_server_btn.call_deferred()
+	_update_dev_restart_btn.call_deferred()
 
 
 func _on_install_uv() -> void:

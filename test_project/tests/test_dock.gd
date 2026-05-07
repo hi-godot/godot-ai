@@ -25,6 +25,9 @@ class _RestartDispatchPlugin extends GodotAiPlugin:
 	var can_restart := false
 	var force_restart_calls := 0
 	var recover_calls := 0
+	var preserve_mode_calls := 0
+	var has_managed := false
+	var dev_running := false
 
 	func get_server_status() -> Dictionary:
 		return status.duplicate()
@@ -38,6 +41,16 @@ class _RestartDispatchPlugin extends GodotAiPlugin:
 	func recover_incompatible_server() -> bool:
 		recover_calls += 1
 		return true
+
+	func has_managed_server() -> bool:
+		return has_managed
+
+	func is_dev_server_running() -> bool:
+		return dev_running
+
+	func force_restart_server_preserving_mode() -> bool:
+		preserve_mode_calls += 1
+		return has_managed or dev_running
 
 
 var _dock: Node
@@ -947,3 +960,110 @@ func test_log_viewer_tick_keeps_painting_after_buffer_caps_at_max_lines() -> voi
 	assert_eq(panel._last_log_seq, cap + 1,
 		"viewer cursor must advance with the monotonic counter, not the bounded size")
 	panel.free()
+
+
+# --- Restart Server button (dev-mode) -----------------------------------
+
+func test_restart_server_btn_rendered_in_dev_checkout() -> void:
+	## The button only makes sense for contributors editing Python source —
+	## live in the Setup section's dev branch alongside `_dev_server_btn`.
+	## In a non-dev checkout (release install) the branch isn't entered and
+	## the button must not appear; we skip rather than fake the env.
+	if not McpClientConfigurator.is_dev_checkout():
+		skip("only meaningful in dev checkout")
+		return
+	_dock._build_ui()
+	_dock._refresh_setup_status()
+	assert_true(_dock._dev_restart_btn != null,
+		"Dev checkout must render the Restart Server button in the Setup section")
+	assert_eq(_dock._dev_restart_btn.text, "Restart Server")
+
+
+func test_restart_server_btn_visibility_follows_dev_mode_toggle() -> void:
+	## The button lives inside `_setup_section`, whose visibility is driven
+	## by `_apply_dev_mode_visibility`. With Developer mode off in a dev
+	## checkout the section hides — taking the button with it — which is the
+	## "ON + dev checkout" gate the task requires.
+	if not McpClientConfigurator.is_dev_checkout():
+		skip("only meaningful in dev checkout")
+		return
+	_dock._build_ui()
+	_dock._dev_mode_toggle.button_pressed = true
+	_dock._apply_dev_mode_visibility()
+	_dock._refresh_setup_status()
+	assert_true(_dock._setup_section.visible,
+		"precondition: dev toggle on must show the Setup section")
+	assert_true(_dock._dev_restart_btn != null,
+		"Restart Server button must be in the Setup section when dev toggle is on")
+
+	_dock._dev_mode_toggle.button_pressed = false
+	_dock._apply_dev_mode_visibility()
+	## In dev checkout with toggle off, the section hides but its children
+	## (including the button) remain in the tree — the gate is the section's
+	## visibility, not whether the button was constructed.
+	assert_false(_dock._setup_section.visible,
+		"dev toggle off must hide the Setup section, hiding the Restart Server button")
+
+
+func test_restart_server_btn_dispatches_to_force_restart_preserving_mode() -> void:
+	## Click handler must call `force_restart_server_preserving_mode` so the
+	## plugin picks the right kill+respawn path (managed vs --reload) for
+	## whatever's currently running.
+	var plugin := _RestartDispatchPlugin.new()
+	plugin.has_managed = true
+	_dock._plugin = plugin
+	_dock._dev_restart_btn = Button.new()
+
+	_dock._on_dev_restart_pressed()
+	var calls := plugin.preserve_mode_calls
+
+	_dock._dev_restart_btn.free()
+	_dock._dev_restart_btn = null
+	_dock._plugin = null
+	plugin.free()
+
+	assert_eq(calls, 1,
+		"Click must call force_restart_server_preserving_mode exactly once")
+
+
+func test_restart_server_btn_disabled_when_nothing_running() -> void:
+	## Per-frame `_update_dev_restart_btn` must reflect the live plugin
+	## state. With neither managed nor dev server running, the button
+	## stays disabled with an explanatory tooltip.
+	var plugin := _RestartDispatchPlugin.new()
+	plugin.has_managed = false
+	plugin.dev_running = false
+	_dock._plugin = plugin
+	_dock._dev_restart_btn = Button.new()
+
+	_dock._update_dev_restart_btn()
+	var disabled := _dock._dev_restart_btn.disabled
+	var tooltip := _dock._dev_restart_btn.tooltip_text
+
+	_dock._dev_restart_btn.free()
+	_dock._dev_restart_btn = null
+	_dock._plugin = null
+	plugin.free()
+
+	assert_true(disabled, "No server running must disable the button")
+	assert_contains(tooltip, "No godot-ai server is running")
+
+
+func test_restart_server_btn_enabled_when_managed_running() -> void:
+	var plugin := _RestartDispatchPlugin.new()
+	plugin.has_managed = true
+	_dock._plugin = plugin
+	_dock._dev_restart_btn = Button.new()
+
+	_dock._update_dev_restart_btn()
+	var disabled := _dock._dev_restart_btn.disabled
+	var tooltip := _dock._dev_restart_btn.tooltip_text
+
+	_dock._dev_restart_btn.free()
+	_dock._dev_restart_btn = null
+	_dock._plugin = null
+	plugin.free()
+
+	assert_false(disabled, "Managed server running must enable the button")
+	assert_contains(tooltip, "current source",
+		"Tooltip must explain the button picks up source changes")

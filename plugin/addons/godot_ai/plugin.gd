@@ -1413,6 +1413,26 @@ func force_restart_server() -> void:
 	_lifecycle.force_restart_server()
 
 
+## Force-respawn whichever server is currently running on this port,
+## preserving its launch mode. Managed servers go through the lifecycle's
+## kill+respawn path; `--reload` dev servers are killed by brand match and
+## relaunched with `--reload` so the user keeps Python auto-reload.
+##
+## Used by the dock's "Restart Server" button in dev mode, where same-version
+## edits to Python source get adopted as compatible and the server keeps
+## running stale code. Returns true if a restart was attempted, false if no
+## server is running on the HTTP port.
+func force_restart_server_preserving_mode() -> bool:
+	if has_managed_server():
+		_lifecycle.force_restart_server()
+		return true
+	if is_dev_server_running():
+		stop_dev_server()
+		start_dev_server()
+		return true
+	return false
+
+
 func start_dev_server() -> void:
 	## Start a dev server with --reload that survives plugin reloads.
 	## Kills any managed server first, waits for the port to free, then spawns.
