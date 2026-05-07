@@ -39,11 +39,6 @@ const LogViewerScript := preload("res://addons/godot_ai/dock_panels/log_viewer.g
 const PortPickerPanelScript := preload("res://addons/godot_ai/dock_panels/port_picker_panel.gd")
 
 const DEV_MODE_SETTING := "godot_ai/dev_mode"
-## Index ↔ persisted-value mapping for the mode-override dropdown. The array
-## index is the OptionButton item id; the string is what's written to the
-## EditorSetting and read by `ClientConfigurator.mode_override()`.
-const MODE_OVERRIDE_VALUES := ["", "user", "dev"]
-const MODE_OVERRIDE_LABELS := ["Auto", "Force user", "Force dev"]
 const CLIENT_STATUS_REFRESH_COOLDOWN_MSEC := 15 * 1000
 const CLIENT_STATUS_REFRESH_TIMEOUT_MSEC := 30 * 1000
 static var COLOR_MUTED := Color(0.7, 0.7, 0.7)
@@ -170,7 +165,6 @@ var _client_action_generations: Dictionary = {}
 var _dev_section: VBoxContainer
 var _server_label: Label
 var _reload_btn: Button
-var _mode_override_btn: OptionButton
 var _setup_section: VBoxContainer
 var _setup_container: VBoxContainer
 ## Primary dev-section button — always (re)starts a `--reload` dev server.
@@ -530,23 +524,6 @@ func _build_ui() -> void:
 	btn_row.add_child(_reload_btn)
 
 	_dev_section.add_child(btn_row)
-
-	# Dev-only override for testing the update-banner flow; persisted via EditorSettings.
-	var mode_row := HBoxContainer.new()
-	mode_row.add_theme_constant_override("separation", 6)
-	var mode_label := Label.new()
-	mode_label.text = "Mode override"
-	mode_label.tooltip_text = "Force dev or user mode for testing the update flow. Normally leave on Auto. GODOT_AI_MODE env var is the fallback when this is Auto."
-	mode_row.add_child(mode_label)
-	_mode_override_btn = OptionButton.new()
-	_mode_override_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for i in MODE_OVERRIDE_LABELS.size():
-		_mode_override_btn.add_item(MODE_OVERRIDE_LABELS[i], i)
-	_mode_override_btn.tooltip_text = mode_label.tooltip_text
-	_mode_override_btn.select(_mode_override_index_from_setting())
-	_mode_override_btn.item_selected.connect(_on_mode_override_selected)
-	mode_row.add_child(_mode_override_btn)
-	_dev_section.add_child(mode_row)
 
 	# --- Setup section (dev-only or when uv missing) ---
 	_setup_section = VBoxContainer.new()
@@ -1064,50 +1041,6 @@ func _apply_dev_mode_visibility() -> void:
 	var is_dev := ClientConfigurator.is_dev_checkout()
 	var uv_missing := not is_dev and ClientConfigurator.check_uv_version().is_empty()
 	_setup_section.visible = dev or uv_missing
-
-
-func _mode_override_index_from_setting() -> int:
-	var es := EditorInterface.get_editor_settings()
-	if es == null or not es.has_setting(ClientConfigurator.MODE_OVERRIDE_SETTING):
-		return 0
-	var v := str(es.get_setting(ClientConfigurator.MODE_OVERRIDE_SETTING)).strip_edges().to_lower()
-	return maxi(MODE_OVERRIDE_VALUES.find(v), 0)
-
-
-## Called whenever `is_dev_checkout()`'s answer could have changed — repaints
-## the install label/tooltip, rebuilds the setup container (Mode row, Dev
-## Server button vs uv status), and clears any stale update banner so a
-## fresh check paints over a clean slate. The Update button state is reset
-## too: a prior install attempt may have left it disabled with text like
-## "Dev checkout — update via git" or "Extract failed"; without this reset,
-## flipping the dropdown and re-checking would re-open the banner with the
-## stale button text.
-func _refresh_install_mode_ui() -> void:
-	_install_label.text = _install_mode_text()
-	_install_label.tooltip_text = _install_mode_tooltip()
-	_refresh_setup_status()
-	_update_banner.visible = false
-	if _update_manager != null:
-		_update_manager.clear_pending_download()
-	if _update_btn != null:
-		_update_btn.text = "Update"
-		_update_btn.disabled = false
-
-
-func _on_mode_override_selected(index: int) -> void:
-	var value: String = MODE_OVERRIDE_VALUES[index] if index >= 0 and index < MODE_OVERRIDE_VALUES.size() else ""
-	var es := EditorInterface.get_editor_settings()
-	if es != null:
-		es.set_setting(ClientConfigurator.MODE_OVERRIDE_SETTING, value)
-	_refresh_install_mode_ui()
-	## Cancel any in-flight startup check before firing a new one, otherwise
-	## the next `request()` returns ERR_BUSY and the dropdown flip silently
-	## fails to re-check. `call_deferred` lets the cancel settle before the
-	## new request goes out.
-	if _update_manager != null:
-		_update_manager.cancel_check()
-		_update_manager.check_for_updates.call_deferred()
-	print("MCP | mode override -> %s" % (value if value else "auto"))
 
 
 # --- Button handlers ---

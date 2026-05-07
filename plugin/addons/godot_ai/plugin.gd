@@ -1168,14 +1168,42 @@ static func _build_server_flags(port: int, ws_port: int) -> Array[String]:
 ## conservatively return false — better to surface incompatible-server and
 ## let the user click Restart than to kill the wrong process.
 func _pid_cmdline_is_godot_ai(pid: int) -> bool:
+	## Walks up the parent chain so a uvicorn `--reload` worker whose
+	## cmdline is just `multiprocessing.spawn` still matches when its
+	## parent reloader carries the godot_ai brand. Bound the walk so a
+	## hypothetical loop or runaway PPID can't stall the editor.
+	var current := pid
+	for _i in range(5):
+		if current <= 1:
+			return false
+		var cmd := ""
+		if OS.get_name() == "Windows":
+			cmd = _windows_pid_commandline(current)
+		else:
+			cmd = _posix_pid_commandline(current)
+		if _commandline_is_godot_ai_server(cmd):
+			return true
+		current = _pid_parent(current)
+	return false
+
+
+func _pid_parent(pid: int) -> int:
 	if pid <= 1:
-		return false
-	var cmd := ""
+		return 0
 	if OS.get_name() == "Windows":
-		cmd = _windows_pid_commandline(pid)
-	else:
-		cmd = _posix_pid_commandline(pid)
-	return _commandline_is_godot_ai_server(cmd)
+		var output: Array = []
+		var script := (
+			"Get-CimInstance Win32_Process -Filter 'ProcessId = %d' | "
+			+ "Select-Object -ExpandProperty ParentProcessId"
+		) % pid
+		_startup_trace_count("powershell")
+		if _execute_windows_powershell(script, output) != 0 or output.is_empty():
+			return 0
+		return int(str(output[0]).strip_edges())
+	var output_posix: Array = []
+	if OS.execute("ps", ["-o", "ppid=", "-p", str(pid)], output_posix, true) != 0 or output_posix.is_empty():
+		return 0
+	return int(str(output_posix[0]).strip_edges())
 
 
 static func _commandline_is_godot_ai_server(cmd: String) -> bool:
