@@ -88,21 +88,23 @@ OFF_LOAD_SURFACE = frozenset(
 # that a regression slipped through review.
 #
 # End state: 0. Steps 2 and 3 of #399 drive this down.
-BASELINE_VIOLATION_COUNT = 1258
+BASELINE_VIOLATION_COUNT = 1254
 
 
 Kind = Literal["typed_field", "typed_annotation", "constructor", "member_access"]
 
 _CLASS_NAME_RE = re.compile(r"^class_name\s+(Mcp\w+)\s*$", re.MULTILINE)
-# Top-level typed-var fields. Anchored to start-of-line; locals inside
-# functions are resolved lazily and don't participate in the parse-time
-# hazard.
-_TYPED_FIELD_RE = re.compile(r"^\s*(?:static\s+)?var\s+\w+\s*:\s*(Mcp\w+)\b", re.MULTILINE)
-# Any `name: McpFoo` annotation (params, top-level fields, typed locals).
-# Intentionally overlaps `_TYPED_FIELD_RE` for top-level vars: a single
-# typed field counts in both buckets, matching the original audit's
-# accounting so the baseline is a stable reproducible number rather
-# than a deduplicated one.
+# Top-level typed-var fields: `(static )?var name: McpFoo` at column 0.
+# Indented `var` declarations inside function bodies are still flagged
+# by `_TYPED_ANNOTATION_RE` below; this pass is the dedicated counter
+# for top-level fields specifically (the worst case, since they parse
+# at script-load).
+_TYPED_FIELD_RE = re.compile(r"^(?:static\s+)?var\s+\w+\s*:\s*(Mcp\w+)\b", re.MULTILINE)
+# Any `name: McpFoo` annotation (parameters, typed locals, indented
+# fields, return types). Intentionally overlaps `_TYPED_FIELD_RE` for
+# top-level fields so a single offender counts in both buckets --
+# matches the original audit's accounting and keeps the baseline a
+# stable reproducible number.
 _TYPED_ANNOTATION_RE = re.compile(r"\b\w+\s*:\s*(Mcp\w+)\b")
 _CONSTRUCTOR_RE = re.compile(r"\b(Mcp\w+)\s*\.\s*new\s*\(")
 # Any identifier after `Mcp*.`. `Mcp*.method()` hits the same
@@ -120,13 +122,54 @@ _PASSES: tuple[tuple[re.Pattern[str], Kind], ...] = (
 
 
 def _strip_gdscript_comments(source: str) -> str:
-    """Remove `## ...` doc comments and `# ...` line comments.
+    """Remove `# ...` line comments while preserving string literals.
 
-    The parse hazard only fires for executable references; mentions of
-    `McpConnection` or `class_name McpFoo` in explanatory prose must
-    not trip the lint.
+    A naive `re.sub(r"#.*$", ...)` truncates lines like
+    `remainder.begins_with("#")`, which can shift the violation count
+    when an offender appears later on the same line. This walks
+    character by character, recognising GDScript single, triple, and
+    prefixed (raw `r`, StringName `&`, NodePath `^`) string forms, and
+    only treats `#` as a comment when outside a string. Newlines are
+    preserved so line numbers in offender messages stay accurate.
     """
-    return re.sub(r"#.*$", "", source, flags=re.MULTILINE)
+    out: list[str] = []
+    n = len(source)
+    i = 0
+    while i < n:
+        c = source[i]
+        if c == "#":
+            while i < n and source[i] != "\n":
+                i += 1
+            continue
+        prefix_len = 0
+        if c in ("r", "&", "^") and i + 1 < n and source[i + 1] in ('"', "'"):
+            prefix_len = 1
+        q_start = i + prefix_len
+        if q_start < n and source[q_start] in ('"', "'"):
+            q = source[q_start]
+            if source[q_start : q_start + 3] == q * 3:
+                end = source.find(q * 3, q_start + 3)
+                end = (end + 3) if end != -1 else n
+            else:
+                j = q_start + 1
+                while j < n:
+                    ch = source[j]
+                    if ch == "\\":
+                        j += 2
+                        continue
+                    if ch == q:
+                        j += 1
+                        break
+                    if ch == "\n":
+                        break  # unterminated string; bail without crashing
+                    j += 1
+                end = j
+            out.append(source[i:end])
+            i = end
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def _format_ident(kind: Kind, match: re.Match[str]) -> str | None:
