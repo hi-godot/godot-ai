@@ -19,14 +19,15 @@ answer when the thing you want to see only exists in the *running* game.
 ## Recipe: testing a runtime UI option (e.g. main menu)
 
 ```
-1. editor_state                     -> confirm session, current_scene, readiness="ready"
-2. project_run(mode="current",      -> autosave=False so MCP scene mutations stay in memory
+1. editor_state                              -> confirm session, current_scene, readiness="ready"
+2. project_run(mode="current",               -> autosave=False so MCP scene mutations stay in memory
               autosave=False)
-3. poll editor_state every ~500ms   -> wait until is_playing=true AND game_capture_ready=true
-4. (interact: input_send / node_set_property / call_method as needed)
-5. editor_screenshot(source="game", -> request the capture
+3. poll editor_state every ~500ms            -> wait until is_playing=true AND game_capture_ready=true
+4. (interact via available write tools as    -> e.g. node_set_property, batch_execute,
+    needed for the scenario being tested)       ui_manage, theme_manage
+5. editor_screenshot(source="game",          -> request the capture
                      max_resolution=1280)
-6. project_stop                     -> always stop the run when done
+6. project_manage(op="stop")                 -> always stop the run when done
 ```
 
 `game_capture_ready` is the deterministic readiness signal — it flips true
@@ -73,8 +74,9 @@ sleep-and-pray; poll this field.
     `_ready` errored before reaching the `mcp:hello` send (check `logs_read
     source="game"`).
 - Worked once, fails on second attempt within the same play cycle?
-  → Did you `project_stop` and forget to `project_run` again? Each new run
-    rotates a token; the readiness flag is reset on `begin_game_run()`.
+  → Did you `project_manage(op="stop")` and forget to `project_run` again?
+    Each new run rotates a token; the readiness flag is reset on
+    `begin_game_run()`.
 
 ## Things to prefer over screenshots, when possible
 

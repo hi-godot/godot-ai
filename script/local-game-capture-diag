@@ -12,9 +12,13 @@ currently open). Walks the full bridge:
     4. (if --run is passed) call project_run(mode="current", autosave=False)
        and poll editor_state until is_playing=true AND game_capture_ready=true
     5. call editor_screenshot(source="game") and print PNG dimensions +
-       byte size — does NOT assert on pixel colors, so it works against
-       any scene
+       byte size (dimensions parsed from the PNG IHDR chunk) — does NOT
+       assert on pixel colors, so it works against any scene
     6. on any failure, dump recent plugin logs
+
+Pass --session <hint> to pin tool calls to a specific Godot editor when
+multiple are connected (the same routing problem the doc calls out as a
+common cause of capture timeouts).
 
 Use this when you're staring at a "Game-side autoload never registered its
 debugger capture within 20s" timeout and need to figure out which step broke.
@@ -179,6 +183,19 @@ def _print_autoload_section(url: str, sid: str) -> bool:
     return found
 
 
+def _png_dimensions(png: bytes) -> tuple[int, int] | None:
+    ## PNG layout: 8-byte signature, then IHDR chunk:
+    ##   bytes 8-11   chunk length (always 13 for IHDR)
+    ##   bytes 12-15  type ("IHDR")
+    ##   bytes 16-19  width (big-endian uint32)
+    ##   bytes 20-23  height (big-endian uint32)
+    if len(png) < 24 or png[:8] != b"\x89PNG\r\n\x1a\n" or png[12:16] != b"IHDR":
+        return None
+    width = int.from_bytes(png[16:20], "big")
+    height = int.from_bytes(png[20:24], "big")
+    return width, height
+
+
 def _wait_for_capture_ready(url: str, sid: str, timeout: float = 30.0) -> dict:
     deadline = time.monotonic() + timeout
     last: dict = {}
@@ -226,7 +243,16 @@ def main() -> int:
     parser.add_argument(
         "--keep-running",
         action="store_true",
-        help="Skip project_stop on exit (default is to stop the run we started).",
+        help="Skip the project_manage(op='stop') call on exit (default is to "
+        "stop the run we started).",
+    )
+    parser.add_argument(
+        "--session",
+        default=None,
+        help="Pin all tool calls to the Godot editor matching this hint "
+        "(exact session_id or substring of project name / path / id). "
+        "Calls session_activate before everything else; print the chosen "
+        "session. Useful when multiple editors are connected.",
     )
     args = parser.parse_args()
 
@@ -242,7 +268,23 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
-    print(f"Session: {sess.get('active_session_id') or sess}")
+    print(f"Sessions registered: count={sess.get('count')} "
+          f"active={sess.get('active_session_id')}")
+
+    if args.session:
+        try:
+            activated = _tool_call(
+                args.url, sid, "session_activate", {"session_id": args.session}, 50
+            )
+            chosen = (
+                activated.get("session_id")
+                or activated.get("data", {}).get("session_id")
+                or activated
+            )
+            print(f"  --session pinned: {chosen}")
+        except Exception as exc:
+            print(f"\nFAIL: --session activate '{args.session}' raised: {exc}")
+            return 1
 
     autoload_ok = _print_autoload_section(args.url, sid)
 
@@ -332,7 +374,12 @@ def main() -> int:
             return 1
 
         png = base64.b64decode(image_b64)
-        print(f"  PNG returned: {len(png)} bytes")
+        dims = _png_dimensions(png)
+        if dims is None:
+            print(f"  PNG returned: {len(png)} bytes (dimensions: malformed header)")
+        else:
+            w, h = dims
+            print(f"  PNG returned: {w}x{h}, {len(png)} bytes")
         if len(png) < 256:
             print("\nFAIL: PNG payload suspiciously small.")
             return 1
@@ -341,9 +388,14 @@ def main() -> int:
     finally:
         if we_started_run and not args.keep_running:
             try:
-                _tool_call(args.url, sid, "project_stop", {}, 999, timeout=10)
+                _tool_call(
+                    args.url, sid, "project_manage", {"op": "stop"}, 999, timeout=10
+                )
             except Exception as exc:
-                print(f"(cleanup) project_stop failed: {exc}", file=sys.stderr)
+                print(
+                    f"(cleanup) project_manage(op='stop') failed: {exc}",
+                    file=sys.stderr,
+                )
 
 
 if __name__ == "__main__":
