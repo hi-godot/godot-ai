@@ -1,0 +1,350 @@
+#!/usr/bin/env python3
+"""
+Local end-to-end diagnostic for editor_screenshot(source="game").
+
+Runs against an already-running Godot editor + plugin (whatever scene is
+currently open). Walks the full bridge:
+
+    1. connect to the MCP server (default http://127.0.0.1:8000/mcp)
+    2. confirm a Godot session is registered
+    3. dump autoload state + project.godot [autoload] section so you can
+       eyeball whether _mcp_game_helper is actually persisted to disk
+    4. (if --run is passed) call project_run(mode="current", autosave=False)
+       and poll editor_state until is_playing=true AND game_capture_ready=true
+    5. call editor_screenshot(source="game") and print PNG dimensions +
+       byte size — does NOT assert on pixel colors, so it works against
+       any scene
+    6. on any failure, dump recent plugin logs
+
+Use this when you're staring at a "Game-side autoload never registered its
+debugger capture within 20s" timeout and need to figure out which step broke.
+For a stricter pixel-check smoke against a fixture scene, see
+script/ci-game-capture-smoke.
+
+Exit codes:
+    0  bridge worked end-to-end (or readiness verified with --no-screenshot)
+    1  diagnostic failure — preceded by printed reason
+    2  setup failure (could not connect / no session registered)
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+
+DEFAULT_URL = os.environ.get("MCP_SERVER_URL", "http://127.0.0.1:8000/mcp")
+HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream",
+}
+
+
+def _post(url: str, session_id: str | None, body: dict, timeout: float = 10.0) -> dict:
+    headers = dict(HEADERS)
+    if session_id:
+        headers["Mcp-Session-Id"] = session_id
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read().decode("utf-8")
+        new_session = resp.headers.get("mcp-session-id")
+    result: dict = {"_session_id": new_session, "_raw": raw}
+    for line in raw.splitlines():
+        if line.startswith("data: "):
+            result.update(json.loads(line[6:]))
+            break
+    else:
+        try:
+            result.update(json.loads(raw))
+        except json.JSONDecodeError:
+            pass
+    return result
+
+
+def _tool_call(
+    url: str, session_id: str, name: str, args: dict, request_id: int, timeout: float = 30.0
+) -> dict:
+    body = {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "tools/call",
+        "params": {"name": name, "arguments": args},
+    }
+    resp = _post(url, session_id, body, timeout=timeout)
+    result = resp.get("result", {})
+    sc = result.get("structuredContent")
+    if sc:
+        return sc
+    for block in result.get("content") or []:
+        if block.get("type") == "text":
+            try:
+                return json.loads(block["text"])
+            except json.JSONDecodeError:
+                return {"_text": block["text"]}
+    return {"_raw": resp.get("_raw", "")}
+
+
+def _initialize(url: str) -> str:
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "local-game-capture-diag", "version": "1.0"},
+        },
+    }
+    resp = _post(url, None, body)
+    sid = resp.get("_session_id")
+    if not sid:
+        raise RuntimeError(f"No Mcp-Session-Id returned. Raw: {resp.get('_raw', '')[:300]}")
+    _post(url, sid, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+    return sid
+
+
+def _wait_for_session(url: str, sid: str, timeout: float = 15.0) -> dict:
+    deadline = time.monotonic() + timeout
+    last: dict = {}
+    while time.monotonic() < deadline:
+        last = _tool_call(url, sid, "session_manage", {"op": "list"}, 2)
+        if last.get("count", 0) > 0:
+            return last
+        time.sleep(1.0)
+    raise RuntimeError(f"No Godot session registered within {timeout}s. Last response: {last}")
+
+
+def _print_autoload_section(url: str, sid: str) -> bool:
+    """Return True if _mcp_game_helper is present in the autoload list."""
+    found = False
+    print("\n[1/3] Autoload list (from autoload_manage):")
+    try:
+        autoloads = _tool_call(url, sid, "autoload_manage", {"op": "list"}, 100)
+        items = autoloads.get("autoloads") or autoloads.get("data", {}).get("autoloads") or []
+        if not items:
+            print("  (autoload_manage returned no entries — payload was:")
+            print(f"   {json.dumps(autoloads, indent=2)[:400]})")
+        for entry in items:
+            name = entry.get("name") if isinstance(entry, dict) else str(entry)
+            path = entry.get("path") if isinstance(entry, dict) else ""
+            marker = " <-- target" if name == "_mcp_game_helper" else ""
+            print(f"  - {name}: {path}{marker}")
+            if name == "_mcp_game_helper":
+                found = True
+    except Exception as exc:
+        print(f"  autoload_manage failed: {exc}")
+
+    print("\n[2/3] [autoload] section in project.godot on disk:")
+    try:
+        proj = _tool_call(
+            url,
+            sid,
+            "filesystem_manage",
+            {"op": "read_text", "params": {"path": "res://project.godot"}},
+            101,
+        )
+        text = proj.get("content") or proj.get("data", {}).get("content", "")
+        in_section = False
+        any_lines = False
+        for line in text.splitlines():
+            if line.startswith("[autoload]"):
+                in_section = True
+                print(f"    {line}")
+                any_lines = True
+                continue
+            if in_section and line.startswith("["):
+                in_section = False
+            if in_section:
+                print(f"    {line}")
+                any_lines = True
+                if "_mcp_game_helper" in line:
+                    found = True
+        if not any_lines:
+            print("    (no [autoload] section in project.godot)")
+    except Exception as exc:
+        print(f"  filesystem_manage read_text failed: {exc}")
+
+    if not found:
+        print(
+            "\n  HINT: _mcp_game_helper is missing. Disable + re-enable the Godot AI\n"
+            "  plugin in Project Settings → Plugins to recreate it."
+        )
+    return found
+
+
+def _wait_for_capture_ready(url: str, sid: str, timeout: float = 30.0) -> dict:
+    deadline = time.monotonic() + timeout
+    last: dict = {}
+    while time.monotonic() < deadline:
+        last = _tool_call(url, sid, "editor_state", {}, 200)
+        if last.get("is_playing") and last.get("game_capture_ready"):
+            return last
+        time.sleep(0.5)
+    return last
+
+
+def _dump_recent_logs(url: str, sid: str) -> None:
+    print("\nRecent plugin logs (last 30 lines):")
+    try:
+        logs = _tool_call(url, sid, "logs_read", {"count": 30}, 900)
+        lines = logs.get("lines") or logs.get("data", {}).get("lines", [])
+        for line in lines:
+            print(f"    {line}")
+    except Exception as exc:
+        print(f"    logs_read failed: {exc}")
+    print("\nRecent game logs (last 30 lines):")
+    try:
+        logs = _tool_call(url, sid, "logs_read", {"source": "game", "count": 30}, 901)
+        lines = logs.get("lines") or logs.get("data", {}).get("lines", [])
+        for line in lines:
+            print(f"    {line}")
+    except Exception as exc:
+        print(f"    logs_read source=game failed: {exc}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--url", default=DEFAULT_URL, help="MCP server URL")
+    parser.add_argument(
+        "--run",
+        action="store_true",
+        help="Call project_run(mode='current', autosave=False) before screenshotting. "
+        "Without this flag, the script assumes you've already started the game.",
+    )
+    parser.add_argument(
+        "--no-screenshot",
+        action="store_true",
+        help="Stop after readiness check — don't actually take the screenshot.",
+    )
+    parser.add_argument(
+        "--keep-running",
+        action="store_true",
+        help="Skip project_stop on exit (default is to stop the run we started).",
+    )
+    args = parser.parse_args()
+
+    print(f"Connecting to {args.url}")
+    try:
+        sid = _initialize(args.url)
+        sess = _wait_for_session(args.url, sid)
+    except (urllib.error.URLError, RuntimeError) as exc:
+        print(f"\nSetup failed: {exc}", file=sys.stderr)
+        print(
+            "Is the Godot editor open with the plugin enabled?\n"
+            "Is the MCP server running on the expected port?",
+            file=sys.stderr,
+        )
+        return 2
+    print(f"Session: {sess.get('active_session_id') or sess}")
+
+    autoload_ok = _print_autoload_section(args.url, sid)
+
+    we_started_run = False
+    try:
+        print("\n[3/3] Readiness:")
+        state = _tool_call(args.url, sid, "editor_state", {}, 300)
+        print(
+            f"  is_playing={state.get('is_playing')} "
+            f"game_capture_ready={state.get('game_capture_ready')} "
+            f"readiness={state.get('readiness')}"
+        )
+
+        if args.run and not state.get("is_playing"):
+            print("  --run set; calling project_run(mode='current', autosave=False)")
+            _tool_call(
+                args.url,
+                sid,
+                "project_run",
+                {"mode": "current", "autosave": False},
+                301,
+                timeout=20,
+            )
+            we_started_run = True
+
+        if not state.get("is_playing") and not args.run:
+            print(
+                "\nGame is not running. Either pass --run to have this script start it,\n"
+                "or start it yourself via project_run (NOT F5 — F5 plays don't register\n"
+                "for editor_screenshot source='game')."
+            )
+            return 1
+
+        ready = _wait_for_capture_ready(args.url, sid)
+        if not ready.get("game_capture_ready"):
+            print("\nFAIL: game_capture_ready stayed false.")
+            print(f"  is_playing={ready.get('is_playing')}")
+            print(f"  readiness={ready.get('readiness')}")
+            print(f"  autoload registered={autoload_ok}")
+            print(
+                "\n  This is the same condition that produces the 'autoload never\n"
+                "  registered its debugger capture within 20s' timeout. The most\n"
+                "  common causes:"
+            )
+            print("    - autoload missing from project.godot (see above)")
+            print("    - game launched outside project_run (manual F5)")
+            print("    - game crashed before reaching the mcp:hello beacon")
+            _dump_recent_logs(args.url, sid)
+            return 1
+        print("  game_capture_ready=true — bridge is up.")
+
+        if args.no_screenshot:
+            return 0
+
+        print("\nCalling editor_screenshot(source='game', include_image=True)")
+        body = {
+            "jsonrpc": "2.0",
+            "id": 400,
+            "method": "tools/call",
+            "params": {
+                "name": "editor_screenshot",
+                "arguments": {
+                    "source": "game",
+                    "include_image": True,
+                    "max_resolution": 1280,
+                },
+            },
+        }
+        resp = _post(args.url, sid, body, timeout=25)
+        raw = resp.get("_raw", "")
+        image_b64 = None
+        for line in raw.splitlines():
+            if not line.startswith("data: "):
+                continue
+            data = json.loads(line[6:])
+            for block in data.get("result", {}).get("content", []):
+                if block.get("type") == "image":
+                    image_b64 = block.get("data")
+                    break
+            if image_b64:
+                break
+
+        if not image_b64:
+            print("\nFAIL: no image block in response.")
+            print(f"  Raw (first 500 bytes): {raw[:500]}")
+            _dump_recent_logs(args.url, sid)
+            return 1
+
+        png = base64.b64decode(image_b64)
+        print(f"  PNG returned: {len(png)} bytes")
+        if len(png) < 256:
+            print("\nFAIL: PNG payload suspiciously small.")
+            return 1
+        print("\nPASS: end-to-end game capture bridge works.")
+        return 0
+    finally:
+        if we_started_run and not args.keep_running:
+            try:
+                _tool_call(args.url, sid, "project_stop", {}, 999, timeout=10)
+            except Exception as exc:
+                print(f"(cleanup) project_stop failed: {exc}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
