@@ -358,9 +358,20 @@ def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> Non
 
     extract_block = get_func_block(runner_source, "func _extract_and_scan() -> void:")
     assert "_read_update_manifest()" in extract_block
-    assert "_install_zip_paths(_new_file_paths)" in extract_block
-    assert '_start_filesystem_scan("_install_existing_files_and_scan")' in extract_block
-    assert "_install_existing_files_and_scan.call_deferred()" in extract_block
+    assert "install_paths.append_array(_new_file_paths)" in extract_block
+    assert "install_paths.append_array(_existing_file_paths)" in extract_block
+    assert "_install_zip_paths(install_paths)" in extract_block
+    assert extract_block.count("_install_zip_paths(") == 1
+    assert '_start_filesystem_scan("_enable_new_plugin")' in extract_block
+    assert '_start_filesystem_scan("_install_existing_files_and_scan")' not in extract_block
+    assert "_install_existing_files_and_scan.call_deferred()" not in extract_block
+    assert "_install_existing_files_and_scan" not in runner_source
+    assert extract_block.index("_install_zip_paths(install_paths)") < extract_block.index(
+        "_finalize_install_success()"
+    )
+    assert extract_block.index("_cleanup_update_temp()") < extract_block.index(
+        '_start_filesystem_scan("_enable_new_plugin")'
+    )
 
     assert "INSTALL_BASE_PATH" in runner_source
     assert "TEMP_FILE_SUFFIX" in runner_source
@@ -419,13 +430,6 @@ def test_self_update_runner_disables_old_plugin_before_extract_and_scan() -> Non
         "guard treats its empty rel_path as unsafe and aborts the extract, "
         "breaking self-update for any user whose installed runner sees one."
     )
-
-    existing_block = get_func_block(
-        runner_source, "func _install_existing_files_and_scan() -> void:"
-    )
-    assert "_install_zip_paths(_existing_file_paths)" in existing_block
-    assert "_cleanup_update_temp()" in existing_block
-    assert '_start_filesystem_scan("_enable_new_plugin")' in existing_block
 
     safe_path_block = get_func_block(runner_source, "func _is_safe_zip_addon_file(")
     assert "file_path.is_absolute_path()" in safe_path_block

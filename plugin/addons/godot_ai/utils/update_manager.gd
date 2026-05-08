@@ -2,13 +2,23 @@
 class_name McpUpdateManager
 extends Node
 
-## Self-update pipeline + install-in-flight gate. Boundary: this manager
-## owns decisions, HTTP traffic, and the install state machine; the dock
-## owns banner rendering and forwards button clicks. The split exists
-## because the dock script is one of the files overwritten on disk during
-## install — keeping pipeline state on a separate Node lets the dock
-## tear down cleanly without losing the in-flight gate that other dock
-## spawn paths consult.
+## Self-update manager for pre-runner work. Owns release checks, HTTP ZIP
+## download, the install-in-flight gate, and install state signals back to
+## the dock. Once `_install_zip()` calls
+## `plugin.gd::install_downloaded_update(...)`, ownership transfers to
+## `update_reload_runner.gd`, which owns extract, scan, plugin re-enable,
+## and detached-dock cleanup.
+##
+## The dock owns banner rendering and forwards button clicks. The split
+## exists because the dock script is one of the files overwritten on disk
+## during install — keeping pipeline state on a separate Node lets the dock
+## tear down cleanly without losing the in-flight gate that other dock spawn
+## paths consult.
+##
+## `class_name McpUpdateManager` is retained because it shipped in a
+## published release. If this class is ever retired, follow CLAUDE.md's
+## never-delete-published-class_name shim policy instead of deleting the
+## declaration.
 ##
 ## `_plugin` and `_dock` are deliberately untyped: the same self-update
 ## window that overwrites this script also overwrites the dock and plugin

@@ -21,19 +21,19 @@ extends RefCounted
 ## feed it `tick(now_msec)` from the plugin's `_process` while
 ## `is_active()` is true.
 ##
-## Decoupled from the connection's signal surface — `tick()` polls
-## `_connection.is_connected` and `_connection.server_version` directly
-## — for the same parse-hazard reason `plugin.gd` polls instead of
-## subscribing: a self-update that adds a new signal to McpConnection
-## would crash the re-enabled plugin's `_enter_tree` until restart. We
-## still null-check `_connection` because `disarm()` releases it.
+## Decoupled from the connection's signal surface: `tick()` polls
+## `_connection.is_connected` and `_connection.server_version` directly.
+## A same-release signal addition plus a new consumer is shape-coupled work
+## for old two-phase runners; they can parse the consumer while the
+## McpConnection Script object still reflects v(N). We still null-check
+## `_connection` because `disarm()` releases it.
 
 ## How long to wait after the WebSocket opens before declaring the
 ## handshake_ack overdue. Mirrors `plugin.gd::SERVER_HANDSHAKE_VERSION_TIMEOUT_MS`
 ## — kept at this layer so the version-check seam is self-contained.
 const TIMEOUT_MS := 5 * 1000
 
-## Untyped on purpose for the same self-update parse-hazard reason
+## Untyped on purpose for the same self-update field-storage reason
 ## plugin.gd's fields are untyped. `_connection` is the live
 ## `McpConnection`; `_manager` is `McpServerLifecycleManager`.
 ## `_connection` is null between disarm() and the next arm() — the

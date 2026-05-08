@@ -76,6 +76,14 @@ script/local-self-update-smoke
 
 It creates a disposable project with a physical `addons/godot_ai/` copy, stages a synthetic v(N+1) plugin ZIP, launches Godot, and prints the single manual action: click Update in the Godot AI dock. After you close Godot normally, the script verifies the fixture version advanced, the update temp dir was consumed, and no new macOS `Godot*.ips` crash report appeared.
 
+### Self-update compatibility rules
+
+Self-update safety depends on the installed runner. Releases that include the fixed runner write one complete v(N+1) snapshot before Godot scans, so future upgrades from that release avoid mixed old/new script parsing. Users on older releases still take their next update through the old two-phase runner, so release shape still matters during that transition.
+
+- Do not delete a `class_name` declaration that has shipped in any release. If a published class needs to move or retire, leave the original file path and `class_name` in place as a compatibility shim.
+- Before cutting a release that may be installed by an old two-phase runner, avoid adding new files that reference constants, methods, or static/non-static shape changes added to existing load-surface scripts in the same release. This applies to `class_name` scripts and preload-only scripts.
+- Keep historical old-runner upgrade tests manual or explicitly marked. Default CI should gate the forward fixed-runner path, not permanently fail on old shipped runner behavior.
+
 ## Dev Server with Auto-Reload
 
 For Python-side changes without restarting Godot:

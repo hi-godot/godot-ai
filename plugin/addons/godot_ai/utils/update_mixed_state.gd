@@ -13,9 +13,9 @@ extends RefCounted
 
 const ADDON_DIR := "res://addons/godot_ai/"
 ## Producer is `update_reload_runner.gd::INSTALL_BACKUP_SUFFIX`. Inlined as a
-## literal — not aliased — because module-level const initializers run at
-## script-load and the alias re-introduces the self-update parse hazard
-## (#398). `test_update_backup_suffix_stays_in_sync` guards against drift.
+## literal because old two-phase runners can parse this diagnostic script
+## against stale runner Script-object content during their mixed-snapshot
+## scan. `test_update_backup_suffix_stays_in_sync` guards against drift.
 const BACKUP_SUFFIX := ".update_backup"
 ## Cap so a runaway addons tree (someone parented the wrong dir, an old
 ## crashed install left thousands of artifacts) can't blow the

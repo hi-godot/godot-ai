@@ -200,5 +200,13 @@ This tier is about install confidence, not deep correctness.
 - [ ] client configuration docs are accurate
 - [ ] CI covers the install surfaces users will actually hit
 - [ ] compatibility guidance exists
+- [ ] no shipped `class_name` declaration was deleted; any retired global class
+      remains at its published file path as a compatibility shim
+- [ ] self-update release shape is compatible with old two-phase runners:
+      new files in `addons/godot_ai/` do not reference constants, methods,
+      or static-ness changes added to existing load-surface scripts in the
+      same release. This applies to both `class_name` scripts and
+      preload-only scripts; old runners fail on stale Script-object content,
+      not just class registry skew.
 - [ ] the first-run experience is clear enough that a new user can succeed without direct help
 

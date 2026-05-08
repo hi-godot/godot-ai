@@ -33,7 +33,7 @@ globs:
   - `client_configurator.gd` — server discovery (venv → uvx → system), client config
   - `mcp_dock.gd` — editor dock panel with status, setup, logs, self-update banner, Tools tab
   - `tool_catalog.gd` — mirror of `src/godot_ai/tools/domains.py`; drives Tools tab; CI-enforced via `tests/unit/test_tool_domains.py`
-  - `update_reload_runner.gd` — self-update extract + plugin re-enable handoff
+  - `update_reload_runner.gd` — self-update single-pass extract, filesystem scan, and plugin re-enable handoff
 - `test_project/` — Godot 4.6 project (plugin symlinked via `addons/godot_ai`, locally built — not tracked in git)
   - `tests/` — GDScript test suites (auto-discovered by test_handler)
 - `tests/` — Python tests (pytest)
@@ -81,12 +81,21 @@ Test guardrails: the runner flags tests with 0 assertions as failures (catches s
 ## GDScript conventions
 
 - Handlers are `@tool` `RefCounted` scripts with **no** `class_name` — load them via `const X := preload("res://addons/godot_ai/handlers/foo_handler.gd")` from `plugin.gd`. The `Mcp*`-prefixed `class_name` is reserved for utility classes shared across the project (e.g. `McpScenePath`, `McpPropertyErrors`, `McpParamValidators`); see #253 for why bare `class_name`s on handlers are forbidden.
+- The `Mcp*` vs preload-only choice is style and namespace hygiene, not a self-update parse-safety mechanism. The fixed runner writes one complete v(N+1) snapshot before the filesystem scan so same-release references see consistent script content.
+- Never delete a `class_name` declaration that has shipped in any release. If a class needs to move or retire, leave the original file path and `class_name` as a compatibility shim. Static constants and static methods usually need explicit forwarding/redeclaration; `extends` alone does not preserve the full lookup shape.
 - Return `{"data": {...}}` on success, `McpErrorCodes.make(code, msg)` on failure — include the failing parameter value and use `error_string(err)` for Godot error codes
 - All scene mutations must use `EditorUndoRedoManager` — response includes `"undoable": true`
 - The dispatcher detects empty/null handler results and reports `INTERNAL_ERROR` — a handler crash no longer looks like success
 - Use `McpScenePath.from_node()` / `McpScenePath.resolve()` for clean paths like `/Main/Camera3D`
 - Use `##` for doc comments, typed arrays (`Array[String]`), never Python-style `"""`
 - Main thread only — 4ms frame budget in `_process()`, use `call_deferred` for mutations
+
+## Self-update compatibility
+
+- `plugin.gd::prepare_for_update_reload()` owns pre-runner server stop prep. `update_manager.gd` owns download, staging, and install gating. `update_reload_runner.gd` owns install, scan, enable, rollback bookkeeping, and detached-dock cleanup after handoff.
+- Forward self-update safety comes from the runner writing `_new_file_paths + _existing_file_paths` in one install pass, then issuing a single `EditorFileSystem.scan()` before re-enable. Do not reintroduce the old new-files scan followed by existing-files scan.
+- Old installed two-phase runners remain in the field until users take their next update. For releases that may be installed by those runners, avoid adding new files that reference constants, methods, or static/non-static shape changes added to existing load-surface scripts in the same release. This applies to both `class_name` scripts and preload-only scripts.
+- For update/reload/extract changes, run `script/local-self-update-smoke` against current source. Historical `--base-from-release-tag` cases document old-runner limits and must not become default CI gates.
 
 ## Python conventions
 
@@ -118,6 +127,8 @@ Cut a release via CLI:
 gh workflow run bump-and-release.yml -f bump=patch   # or minor / major
 ```
 This bumps `plugin.cfg` + `pyproject.toml`, commits, tags, and pushes. The `release.yml` workflow triggers on the tag and builds a `godot-ai-plugin.zip` for the Asset Library. The dock's self-update feature checks GitHub releases on startup and offers one-click updates to users.
+
+Before cutting a release, check the self-update compatibility rules above. In particular, do not delete shipped `class_name` declarations, and keep the release shape friendly to users whose installed runner is still the old two-phase implementation.
 
 ## Dev workflow
 

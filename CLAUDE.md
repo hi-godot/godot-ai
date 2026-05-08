@@ -24,7 +24,8 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
 - **Tools return `dict`**: Handlers call `runtime.send_command(command, params)` which returns a dict or raises. Tools create a `DirectRuntime` and delegate to handlers.
 - **Plugin runs on main thread**: All GDScript executes in `_process()` with a 4ms frame budget. Never block. Use `call_deferred` for scene tree mutations.
 - **Scene paths are clean**: `/Main/Camera3D` format, not raw Godot internal paths. Use `McpScenePath.from_node(node, scene_root)` in GDScript.
-- **Class naming**: classes that need a project-wide `class_name` (i.e. used as a type annotation across multiple files) carry the `Mcp*` prefix to avoid colliding with user-project classes. Internals only used inside the plugin (handlers, presets/values, test stubs) skip `class_name` entirely and load via `const X := preload("res://addons/godot_ai/...")` from `plugin.gd` and consumers. Do not add a bare-name `class_name` for a new class — pick `Mcp*` or `preload`.
+- **Class naming**: classes that need a project-wide `class_name` (i.e. used as a type annotation across multiple files) carry the `Mcp*` prefix to avoid colliding with user-project classes. Internals only used inside the plugin (handlers, presets/values, test stubs) skip `class_name` entirely and load via `const X := preload("res://addons/godot_ai/...")` from `plugin.gd` and consumers. Do not add a bare-name `class_name` for a new class — pick `Mcp*` or `preload`. The choice of `Mcp*` vs preload-only is stylistic, not a parse-safety measure; the #398 self-update parse-error class is fixed at the runner by writing one consistent snapshot before scan, and both forms are parse-safe across upgrades from the fixed release onward.
+- **Never delete a published `class_name` declaration**: removing `class_name X` from a class that was registered in any prior released version can trigger a "Could not resolve script" cascade during the self-update disable -> extract -> enable window. This is independent of the runner's single-phase install ordering. If a class_name must be retired, leave the original file path and `class_name` in place as a compatibility shim.
 - **MCP logging**: Plugin prints `MCP | [recv] command(params)` / `MCP | [send] command -> ok` to Godot console. Controlled by `mcp_logging` var.
 - **Tool surface — ~18 named verbs + per-domain `<domain>_manage` rollups**: To stay under hard tool-count caps in clients that ignore Anthropic's `defer_loading` (Antigravity, etc.), each domain exposes one rolled-up MCP tool that takes `op="<verb>"` + a `params` dict, alongside the high-traffic verbs as named tools. Schema-aware clients still see every `op` because `register_manage_tool` in `src/godot_ai/tools/_meta_tool.py` builds a dynamic `Literal[...]` enum. Core tools (`editor_state`, `scene_get_hierarchy`, `node_get_properties`, `session_activate`) stay non-deferred; named non-core verbs and every `<domain>_manage` rollup are tagged `meta={"defer_loading": True}` for tool-search-aware clients. Plugin command names (over WebSocket) are independent — the MCP tool `editor_reload_plugin` dispatches the plugin command `reload_plugin`. See `docs/TOOLS.md` for the full op map.
 - **Tool resources alongside tools**: Read-only `godot://...` URIs mirror the most-used reads (`godot://node/{path}/properties`, `godot://script/{path}`, `godot://materials`, …). Resources don't count against tool caps; tool forms are the fallback for clients that don't surface resources, and the only path that supports per-call `session_id` pinning. When a tool has a resource counterpart, its description appends `Resource form: godot://...` so aware clients can route the cheap reads through the URI.
@@ -32,6 +33,18 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
 - **Session IDs**: format is `<project-slug>@<4hex>` (e.g. `godot-ai@a3f2`). The slug is derived from the project directory name so agents can recognize which editor they're targeting; the hex suffix disambiguates same-project twins. Server treats the ID as an opaque key.
 - **Per-call session routing**: every Godot-talking tool accepts an optional `session_id` parameter. Empty (the default) resolves to the global active session. When supplied, that single call targets that session — `require_writable` and every handler inside the call see the pinned session, not the active one. Use this when multiple AI clients share one MCP server. For `<domain>_manage` rollups, `session_id` is a sibling of `op` and `params` (top-level), *not* nested inside `params`. Resources (`godot://...`) still resolve via the active session.
 - **FastMCP middleware order is load-bearing**: `src/godot_ai/server.py` registers, in this order, `PreserveGodotCommandErrorData → StripClientWrapperKwargs → ParseStringifiedParams → HintOpTypoOnManage`. FastMCP composes the chain via `reversed(self.middleware)`, so first-added is **outermost** (sees response last) and last-added is **innermost** (sees response first). The four positions are reasoned out in the docstring above the `mcp.add_middleware(...)` calls in `server.py`; the order is locked by `tests/unit/test_server_middleware_order.py`. Adding new middleware: read that docstring, decide the position, update both the docstring and the test in lockstep.
+
+### Published `class_name` compatibility
+
+Treat a shipped `class_name` as compatibility surface for self-update. v2.4.0 -> v2.4.1 reproduced a 500+ error cascade when `class_name McpErrorCodes` was dropped; v2.4.2 restored it. Single-phase install fixes mixed-snapshot parse errors, but it does not make deleting a previously registered class safe.
+
+If a `class_name` needs to become a shim, keep the original file path and declaration:
+
+- Inheritance-shaped classes can usually `extends "res://addons/godot_ai/.../impl_file.gd"`.
+- Static-constants/static-method classes need explicit forwarding or duplicated constants; `extends` does not surface static members through class-name lookup.
+- Mixed classes should either keep the implementation in the original file or hand-write a shim that preserves every published static and instance shape.
+
+Practical rule: keeping the implementation in the original class_name file is usually simpler and safer than retiring it. If a class truly becomes obsolete, leave a no-op `class_name` stub in place so older projects can pass through the self-update window cleanly.
 
 ## Worktrees
 
@@ -172,6 +185,20 @@ For self-update changes, run the local interactive smoke harness:
 ```bash
 script/local-self-update-smoke
 ```
+
+For runner-ordering changes, the current-as-base form above is the forward
+regression check: it proves the runner shipped in this branch can upgrade to a
+future zip without parse errors. A base from a pre-fix release is a historical
+constraint case: its old installed runner may still print transient parse
+errors during that one upgrade, and PRs in the new version cannot retroactively
+change that runner.
+
+Until old two-phase runners have aged out, release shape matters for the next
+upgrade those users take: avoid adding new files that reference constants,
+methods, or static/non-static shape changes added to existing load-surface
+scripts in the same release. This applies to both `class_name` scripts and
+preload-only scripts because the failure mode is stale Script-object content,
+not just class registry skew.
 
 Agent trigger: this smoke is required whenever a change touches any of these areas:
 

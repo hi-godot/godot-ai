@@ -9,16 +9,13 @@ extends RefCounted
 ## audit-v2 #20 (issue #364). Uses the audit-v2 #21 (issue #365) error
 ## vocabulary.
 
-## Local const names intentionally do NOT match the global `class_name`
-## of the preloaded scripts. When a script-local `const X = preload(...)`
-## shadows a global `class_name X`, GDScript still resolves bare `X.MEMBER`
-## references through the class_name registry — which during the
-## self-update disable→extract→enable window holds the cached pre-update
-## script object. New members added to those classes (e.g. audit-v2 #21's
-## extra error codes) appear missing on the cached object, so the parser
-## raises `Cannot find member ...` and refuses to load this script. Aliasing
-## under a non-`Mcp*` name routes the lookup through the local const's
-## preload-by-path resolution and avoids the registry entirely. See #398.
+## Local const names alias the preloaded scripts. The naming choice is
+## stylistic, not an upgrade-safety boundary: bare `McpErrorCodes.MEMBER`
+## and `ErrorCodes.MEMBER` both depend on the Script object Godot has for
+## `error_codes.gd`. The transient #398 parse errors were caused by the
+## old runner scanning a mixed old/new plugin snapshot and seeing stale
+## Script-object content; the runner now writes one v(N+1) snapshot before
+## its scan.
 const ScenePath := preload("res://addons/godot_ai/utils/scene_path.gd")
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
