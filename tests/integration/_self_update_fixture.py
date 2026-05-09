@@ -204,15 +204,28 @@ def run_godot_editor(
     if headless:
         command.append("--headless")
     command.extend(["--path", str(project_dir), "--editor"])
+    # MERGE stderr into stdout at the kernel level so the captured `output`
+    # is a single chronologically-ordered stream. `capture_output=True` would
+    # produce SEPARATE stdout/stderr buffers; concatenating them yields an
+    # "all-stdout-then-all-stderr" string with no time-ordering. The window
+    # markers below (`MCP | update runner disabling old plugin`,
+    # `MCP | plugin loaded`) are stdout-only, so a marker-bracketed window
+    # against an unmerged buffer can never see stderr-routed parse errors
+    # like `SCRIPT ERROR: Parse Error` (emitted via `OS::print_error`). The
+    # forward regression test in `test_self_update_upgrade_paths.py` would
+    # then silently pass while a reverted-to-two-phase runner shipped parse
+    # errors. Same reason existing CI scripts (.github/workflows/ci.yml)
+    # use `> log 2>&1`. Do not change without also fixing those scans.
     proc = subprocess.run(
         command,
         cwd=ROOT,
         env=env,
         text=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         timeout=90,
     )
-    output = proc.stdout + proc.stderr
+    output = proc.stdout
     assert proc.returncode == 0, output
     return output
 
