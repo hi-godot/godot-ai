@@ -14,6 +14,7 @@ from tests.integration._self_update_fixture import (
     godot_bin_or_skip,
     patch_server_start_noop,
     prepare_project_shell,
+    prime_class_cache,
     release_zip_from_cache,
     run_godot_editor,
 )
@@ -52,6 +53,12 @@ def test_v232_runner_documents_v240_parse_errors(tmp_path: Path) -> None:
     patch_server_start_noop(base_addon / "plugin.gd")
     shutil.copy2(next_zip, project / "_test_update_zip" / TEST_ZIP_NAME)
 
+    # Warm `.godot/global_script_class_cache.cfg` against the v2.3.2 base so
+    # the editor pass starts with the v2.3.2 McpErrorCodes registration in
+    # place. Without this, the editor's first scan races the autoload-driven
+    # runner and the registry-skew window the bug depends on never opens.
+    prime_class_cache(project, godot_bin)
+
     log = run_godot_editor(project, godot_bin, allow_headless=True, headless=False)
 
     assert "SELF_UPDATE_HISTORICAL | runner finished" in log
@@ -80,7 +87,10 @@ func _ready() -> void:
 \tif not Engine.is_editor_hint():
 \t\tqueue_free()
 \t\treturn
-\tif OS.get_cmdline_args().has("--import"):
+\t# Warmup passes set this so `prime_class_cache()` can populate the script
+\t# class registry without triggering the runner. Real editor passes leave
+\t# it unset, so the autoload runs even when --headless is in use.
+\tif OS.get_environment("_SELF_UPDATE_DRIVER_SKIP") == "1":
 \t\tqueue_free()
 \t\treturn
 \tset_process(true)

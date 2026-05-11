@@ -134,7 +134,11 @@ func _ready() -> void:
 \tif not Engine.is_editor_hint():
 \t\tqueue_free()
 \t\treturn
-\tif OS.get_cmdline_args().has("--import"):
+\t# `prime_class_cache()` sets this env var so its `--headless --import` /
+\t# `--headless --editor` pass populates `.godot/global_script_class_cache.cfg`
+\t# without triggering the runner. The actual editor pass that DOES want to
+\t# drive the runner runs without this env var, even when also headless.
+\tif OS.get_environment("_SELF_UPDATE_DRIVER_SKIP") == "1":
 \t\tqueue_free()
 \t\treturn
 \tset_process(true)
@@ -186,6 +190,32 @@ func _validate_install() -> void:
 """,
         encoding="utf-8",
     )
+
+
+def prime_class_cache(project_dir: Path, godot_bin: str, timeout: int = 60) -> None:
+    """Headless `--import` pass to populate `.godot/global_script_class_cache.cfg`.
+
+    Without this, the editor pass starts with an empty class registry, the
+    editor's first scan happens concurrently with the autoload kicking off
+    the runner, and the registry-skew window the historical-constraint test
+    relies on never opens.
+
+    Sets `_SELF_UPDATE_DRIVER_SKIP=1` so the autoload skips its runner work
+    during this warmup pass. The real editor pass that follows leaves the
+    env var unset, so the autoload runs normally there.
+    """
+    env = os.environ.copy()
+    env["_SELF_UPDATE_DRIVER_SKIP"] = "1"
+    proc = subprocess.run(
+        [godot_bin, "--headless", "--import", "--path", str(project_dir)],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+    )
+    assert proc.returncode == 0, proc.stdout
 
 
 def run_godot_editor(
