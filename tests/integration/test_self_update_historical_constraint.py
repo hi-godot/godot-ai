@@ -41,9 +41,7 @@ def test_v232_runner_documents_v240_parse_errors(tmp_path: Path) -> None:
     base_zip = release_zip_from_cache(cache_dir, "v2.3.2")
     next_zip = release_zip_from_cache(cache_dir, "v2.4.0")
     if base_zip is None or next_zip is None:
-        pytest.skip(
-            "cached v2.3.2 and v2.4.0 godot-ai-plugin.zip artifacts are required"
-        )
+        pytest.skip("cached v2.3.2 and v2.4.0 godot-ai-plugin.zip artifacts are required")
 
     project = tmp_path / "self-update-historical"
     prepare_project_shell(project)

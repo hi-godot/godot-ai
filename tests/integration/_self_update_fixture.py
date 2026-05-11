@@ -268,8 +268,7 @@ def assert_no_update_parse_errors(log: str) -> None:
     window = log[start:end]
     offenders = [pattern for pattern in PARSE_ERROR_PATTERNS if pattern in window]
     assert not offenders, (
-        "Unexpected parse/load errors during self-update window "
-        f"{offenders}:\n{window}"
+        f"Unexpected parse/load errors during self-update window {offenders}:\n{window}"
     )
 
 

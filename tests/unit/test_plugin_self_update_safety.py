@@ -19,9 +19,7 @@ PLUGIN_GD = PLUGIN_ROOT / "plugin.gd"
 def test_update_backup_suffix_stays_in_sync() -> None:
     """Build-time anti-drift guard for `update_mixed_state.gd::BACKUP_SUFFIX`."""
     runner = (PLUGIN_ROOT / "update_reload_runner.gd").read_text(encoding="utf-8")
-    scanner = (PLUGIN_ROOT / "utils" / "update_mixed_state.gd").read_text(
-        encoding="utf-8"
-    )
+    scanner = (PLUGIN_ROOT / "utils" / "update_mixed_state.gd").read_text(encoding="utf-8")
 
     runner_match = re.search(
         r'^const\s+INSTALL_BACKUP_SUFFIX\s*:=\s*"([^"]+)"',
