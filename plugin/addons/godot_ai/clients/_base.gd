@@ -83,12 +83,10 @@ var entry_initial_fields: Dictionary = {}
 ##             ...entry_initial_fields (only for new entries)}`
 ##   FLAT    — Claude Desktop shape: `{"command": <uvx>, "args": [...bridge...]}`
 ##             Verifier ALSO accepts a future url-style entry.
-##   NESTED  — Zed shape: `{"command": {"path": <uvx>, "args": [...]}, "settings": {}}`
-##             Verifier requires the bridge form (no url-style fallback).
 ##
 ## Enum (vs. String) so a typo in a descriptor fails at parse time instead of
 ## silently falling through `match` to the non-bridge path.
-enum UvxBridge { NONE, FLAT, NESTED }
+enum UvxBridge { NONE, FLAT }
 var entry_uvx_bridge: UvxBridge = UvxBridge.NONE
 
 ## Paths whose existence implies the user has this client installed.
@@ -152,7 +150,7 @@ static func _packed_slice(packed: PackedStringArray, from: int, to: int) -> Pack
 	return out
 
 
-# ----- stdio→http bridge helpers (Claude Desktop, Zed) --------------------
+# ---------- stdio→http bridge helpers (Claude Desktop) --------------------
 
 ## Pinned mcp-proxy release used by every stdio-only client's bridge. uvx's
 ## cache key is version-specific, so pinning guarantees all users run the
@@ -162,8 +160,8 @@ static func _packed_slice(packed: PackedStringArray, from: int, to: int) -> Pack
 const MCP_PROXY_VERSION := "0.11.0"
 
 
-## Resolve `uvx` to an absolute path. GUI-launched apps (Claude Desktop,
-## Zed) often run with a minimal PATH that excludes ~/.local/bin on macOS /
+## Resolve `uvx` to an absolute path. GUI-launched apps (Claude Desktop)
+## often run with a minimal PATH that excludes ~/.local/bin on macOS /
 ## Linux, so a bare "uvx" string in the config would fail at spawn time
 ## with the same "Server disconnected" symptom we're trying to cure. The
 ## shared three-tier McpCliFinder covers the well-known install dirs;

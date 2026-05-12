@@ -834,10 +834,9 @@ func test_json_strategy_distinguishes_missing_entry_from_url_drift() -> void:
 
 
 func test_json_strategy_drift_with_bridge_entry() -> void:
-	## Bridge clients (Claude Desktop "flat", Zed "nested") run through a
-	## different verify path in `_json_strategy.verify_entry` than the
-	## default url-field comparison. Drift must still surface as
-	## CONFIGURED_MISMATCH, not NOT_CONFIGURED — dock contract is the same.
+	## Bridge clients (Claude Desktop "flat") run through a different verify path in
+	## `_json_strategy.verify_entry` than the default url-field comparison. Drift must still
+	## surface as CONFIGURED_MISMATCH, not NOT_CONFIGURED — dock contract is the same.
 	var path := _scratch_dir.path_join("verify_drift.json")
 	_remove_if_exists(path)
 	var client := McpClient.new()
@@ -1466,22 +1465,6 @@ func test_claude_desktop_verify_flags_wrong_transport_as_drift() -> void:
 	assert_false(McpJsonStrategy.verify_entry(c, non_uvx_command, "http://x"), "non-uvx command must register as drift")
 
 
-func test_zed_verify_flags_non_uvx_command_path_as_drift() -> void:
-	## Parallel to claude_desktop's strict-verify: NESTED form must validate
-	## command.path too. A Zed entry pointing at the wrong binary will still
-	## "have the URL in args" but won't actually launch the bridge.
-	var c := McpClientRegistry.get_by_id("zed")
-	var bad_path := {
-		"command": {
-			"path": "/usr/bin/python",
-			"args": McpClient.mcp_proxy_bridge_args("http://x"),
-		},
-		"env": McpClient.bridge_env_for_uvx(),
-		"settings": {},
-	}
-	assert_false(McpJsonStrategy.verify_entry(c, bad_path, "http://x"), "non-uvx command.path must register as drift")
-
-
 func test_claude_desktop_verify_entry_accepts_future_url_form() -> void:
 	## Tolerance preserved from the pre-refactor verifier: a hypothetical
 	## future Claude Desktop that speaks HTTP natively would write a plain
@@ -1492,36 +1475,10 @@ func test_claude_desktop_verify_entry_accepts_future_url_form() -> void:
 	assert_true(McpJsonStrategy.verify_entry(c, future_entry, "http://x"), "future url-style entry should verify")
 
 
-func test_zed_bridges_via_uvx() -> void:
-	var c := McpClientRegistry.get_by_id("zed")
-	assert_eq(c.entry_uvx_bridge, McpClient.UvxBridge.NESTED, "zed must declare NESTED uvx bridge")
-	var entry := McpJsonStrategy.build_entry(c, "http://x")
-	var cmd = entry.get("command", {})
-	assert_true(cmd is Dictionary, "Zed entry.command must be a Dictionary (path+args shape)")
-	_assert_uvx_command(cmd.get("path", ""))
-	_assert_mcp_proxy_bridge_args(cmd.get("args", []), "http://x")
-	_assert_bridge_env_pin(entry)
-
-
-func test_zed_verify_entry_accepts_uvx_form() -> void:
-	## Parity with claude_desktop drift-detection test — if Zed's entry shape
-	## changes but the verifier isn't updated in lock-step, this catches it.
+func test_zed_uses_url() -> void:
 	var c := McpClientRegistry.get_by_id("zed")
 	var entry := McpJsonStrategy.build_entry(c, "http://x")
-	assert_true(McpJsonStrategy.verify_entry(c, entry, "http://x"), "uvx entry should verify as a match")
-
-
-func test_zed_verify_flags_pre_uv_link_mode_entry_as_drift() -> void:
-	## Same UV_LINK_MODE=copy pin as claude_desktop, in NESTED shape.
-	var c := McpClientRegistry.get_by_id("zed")
-	var legacy_no_env := {
-		"command": {
-			"path": "uvx",
-			"args": McpClient.mcp_proxy_bridge_args("http://x"),
-		},
-		"settings": {},
-	}
-	assert_false(McpJsonStrategy.verify_entry(c, legacy_no_env, "http://x"), "pre-fix Zed entry without env must register as drift")
+	assert_eq(entry.get("url", ""), "http://x")
 
 
 func test_mcp_proxy_bridge_args_pins_version() -> void:

@@ -296,7 +296,7 @@ The plugin auto-configures 19+ MCP clients via a registry + strategy system in
   `serverUrl`, Gemini's `httpUrl`); `entry_extra_fields` adds verbatim keys
   (Roo's `type: streamable-http`, OpenCode's `enabled: true`); `entry_uvx_bridge`
   composes the stdio→HTTP bridge shape for stdio-only clients (Claude Desktop's
-  `flat`, Zed's `nested`).
+  `flat`).
 - `_manual_command.gd` — synthesizes the dock's "Run this manually" string
   from the same declarative fields. No per-client builders.
 - `_path_template.gd` — expands `~`, `$HOME`, `$APPDATA`, `$XDG_CONFIG_HOME`,

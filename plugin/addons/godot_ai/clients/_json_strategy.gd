@@ -71,7 +71,7 @@ static func remove(client: McpClient, server_name: String) -> Dictionary:
 ## `entry_extra_fields` key force-set (the verified type pins) and every
 ## `entry_initial_fields` key set ONLY when absent (preserves user state
 ## like `alwaysAllow`/`autoApprove` arrays). For bridge clients (Claude
-## Desktop, Zed) it composes the uvx + mcp-proxy command shape unconditionally
+## Desktop) it composes the uvx + mcp-proxy command shape unconditionally
 ## — the bridge form has no user-mutable surface.
 static func build_entry(client: McpClient, server_url: String, existing: Variant = null) -> Dictionary:
 	match client.entry_uvx_bridge:
@@ -80,15 +80,6 @@ static func build_entry(client: McpClient, server_url: String, existing: Variant
 				"command": McpClient.resolve_uvx_path(),
 				"args": McpClient.mcp_proxy_bridge_args(server_url),
 				"env": _merge_bridge_env(existing),
-			}
-		McpClient.UvxBridge.NESTED:
-			return {
-				"command": {
-					"path": McpClient.resolve_uvx_path(),
-					"args": McpClient.mcp_proxy_bridge_args(server_url),
-				},
-				"env": _merge_bridge_env(existing),
-				"settings": {},
 			}
 	var entry: Dictionary = (existing as Dictionary).duplicate() if existing is Dictionary else {}
 	entry[client.entry_url_field] = server_url
@@ -118,16 +109,6 @@ static func verify_entry(client: McpClient, entry: Dictionary, server_url: Strin
 			if not (cmd is String and _command_is_uvx_like(cmd as String)):
 				return false
 			if not _bridge_args_are_valid(entry.get("args", []), server_url):
-				return false
-			return _bridge_env_matches(entry)
-		McpClient.UvxBridge.NESTED:
-			var cmd_obj = entry.get("command", {})
-			if not (cmd_obj is Dictionary):
-				return false
-			var npath = cmd_obj.get("path", "")
-			if not (npath is String and _command_is_uvx_like(npath as String)):
-				return false
-			if not _bridge_args_are_valid(cmd_obj.get("args", []), server_url):
 				return false
 			return _bridge_env_matches(entry)
 	if entry.get(client.entry_url_field, "") != server_url:
@@ -175,9 +156,9 @@ static func _merge_bridge_env(existing: Variant) -> Dictionary:
 
 
 ## Basename match for `uvx` / `uvx.exe`, accepting both the bare-name
-## fallback and an absolute path resolved by `McpCliFinder`. Shared by the
-## FLAT and NESTED bridge verifiers — the only place we ever inspect a
-## stored bridge command/path.
+## fallback and an absolute path resolved by `McpCliFinder`. Used by the
+## FLAT bridge verifier — the only place we ever inspect a stored bridge
+## command/path.
 static func _command_is_uvx_like(cmd: String) -> bool:
 	var basename := cmd.get_file()
 	return basename == "uvx" or basename == "uvx.exe"
