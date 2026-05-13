@@ -50,9 +50,9 @@ def test_runner_declares_install_status_enum() -> None:
 def test_runner_tracks_paths_written_for_cross_batch_rollback() -> None:
     source = RUNNER_PATH.read_text(encoding="utf-8")
     assert "var _paths_written = []" in source, (
-        "Per-file install records must accumulate across both `_new_file_paths` "
-        "and `_existing_file_paths` batches so a failure in the second batch "
-        "rolls back the first batch too. Untyped per the typed-storage hot-"
+        "Per-file install records must accumulate across the combined "
+        "`_new_file_paths` + `_existing_file_paths` install so a later "
+        "file failure rolls back earlier writes too. Untyped per the typed-storage hot-"
         "reload hazard pinned in test_self_update_runner_does_not_introduce_"
         "typed_variant_storage_hazards."
     )
@@ -189,17 +189,26 @@ def test_handle_install_failure_refuses_to_reenable_on_mixed_state() -> None:
 def test_extract_and_scan_routes_failure_through_handle_install_failure() -> None:
     source = RUNNER_PATH.read_text(encoding="utf-8")
     extract_block = get_func_block(source, "func _extract_and_scan() -> void:")
-    assert "_install_zip_paths(_new_file_paths)" in extract_block
+    assert "install_paths.append_array(_new_file_paths)" in extract_block
+    assert "install_paths.append_array(_existing_file_paths)" in extract_block
+    assert "_install_zip_paths(install_paths)" in extract_block
     assert "_handle_install_failure(status)" in extract_block, (
         "Failure path must go through the FAILED_MIXED-aware helper rather "
         "than unconditionally re-enabling the plugin."
     )
-    existing_block = get_func_block(source, "func _install_existing_files_and_scan() -> void:")
-    assert "_install_zip_paths(_existing_file_paths)" in existing_block
-    assert "_handle_install_failure(status)" in existing_block
-    assert "_finalize_install_success()" in existing_block, (
-        "After both batches succeed, finalize must clean up backup snapshots "
+    assert "_install_existing_files_and_scan" not in source
+    assert "_finalize_install_success()" in extract_block, (
+        "After the combined install succeeds, finalize must clean up backup snapshots "
         "so they don't accumulate as stale artifacts under addons/godot_ai/."
+    )
+    assert extract_block.index("_install_zip_paths(install_paths)") < extract_block.index(
+        "_finalize_install_success()"
+    )
+    assert extract_block.index("_finalize_install_success()") < extract_block.index(
+        "_cleanup_update_temp()"
+    )
+    assert extract_block.index("_cleanup_update_temp()") < extract_block.index(
+        '_start_filesystem_scan("_enable_new_plugin")'
     )
 
 

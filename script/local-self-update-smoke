@@ -139,9 +139,7 @@ def main() -> int:
     try:
         project_dir = args.project_dir.expanduser().resolve()
         if args.base_from_release_tag and args.base_from_zip:
-            raise HarnessError(
-                "Pass at most one of --base-from-release-tag / --base-from-zip"
-            )
+            raise HarnessError("Pass at most one of --base-from-release-tag / --base-from-zip")
         base_zip: Path | None = None
         if args.base_from_zip:
             base_zip = args.base_from_zip.expanduser().resolve()
@@ -213,10 +211,7 @@ def ensure_release_zip_cached(tag: str) -> Path:
     zip_path = cache_dir / f"godot-ai-plugin-{tag}.zip"
     if zip_path.is_file() and zip_path.stat().st_size > 0:
         return zip_path
-    url = (
-        "https://github.com/hi-godot/godot-ai/releases/download/"
-        f"{tag}/godot-ai-plugin.zip"
-    )
+    url = f"https://github.com/hi-godot/godot-ai/releases/download/{tag}/godot-ai-plugin.zip"
     print(f"Fetching release zip: {url}")
     try:
         with urllib.request.urlopen(url) as resp:
@@ -247,9 +242,7 @@ def extract_release_zip_to_addon(zip_path: Path, addon_dir: Path) -> None:
             with zf.open(member) as src, open(dest, "wb") as out:
                 shutil.copyfileobj(src, out)
     if not (addon_dir / "plugin.cfg").is_file():
-        raise HarnessError(
-            f"Extracted zip {zip_path} did not contain addons/godot_ai/plugin.cfg"
-        )
+        raise HarnessError(f"Extracted zip {zip_path} did not contain addons/godot_ai/plugin.cfg")
 
 
 def bump_patch_version(version: str) -> str:
@@ -393,6 +386,15 @@ def patch_fixture_plugin(
     force_local_update: bool,
     next_version: str,
 ) -> None:
+    # `server_lifecycle.gd` and `utils/update_manager.gd` were both added in
+    # v2.4.0 (extractions from plugin.gd and mcp_dock.gd respectively). The
+    # `--base-from-release-tag` flag accepts older tags, but the harness's
+    # patching here targets the v2.4.0+ extracted shape. For pre-v2.4.0
+    # bases, raise a clear error pointing at the integration test that DOES
+    # cover that path via a different mechanism (extract zip directly,
+    # invoke runner.start() on the base's own runner, assert parse errors
+    # fire as the documented historical constraint).
+    _require_v240_plus_addon_shape(addon_dir, version)
     patch_plugin_cfg(addon_dir / "plugin.cfg", version)
     patch_port_isolation(addon_dir / "client_configurator.gd", http_port, ws_port)
     patch_server_package_pin(addon_dir / "client_configurator.gd", server_version)
@@ -403,9 +405,36 @@ def patch_fixture_plugin(
     if force_local_update:
         # Update flow lives on McpUpdateManager; the dock keeps only
         # the visible banner UI.
-        patch_local_update_banner(
-            addon_dir / "utils" / "update_manager.gd", next_version
-        )
+        patch_local_update_banner(addon_dir / "utils" / "update_manager.gd", next_version)
+
+
+def _require_v240_plus_addon_shape(addon_dir: Path, version: str) -> None:
+    """Check that the addon tree has the v2.4.0+ extracted files this harness patches.
+
+    `server_lifecycle.gd` and `update_manager.gd` were both added in v2.4.0;
+    pre-v2.4.0 bases (notably v2.3.2) have the same logic embedded in
+    `plugin.gd` and `mcp_dock.gd` respectively under different names. The
+    harness's patches target the extracted shape and would need separate
+    paths to cover the embedded shape, which doesn't justify the
+    maintenance cost when the v2.3.2 -> current upgrade transition is
+    already covered by `tests/integration/test_self_update_historical_constraint.py`.
+    """
+    missing = [
+        rel
+        for rel in ("utils/server_lifecycle.gd", "utils/update_manager.gd")
+        if not (addon_dir / rel).is_file()
+    ]
+    if not missing:
+        return
+    raise HarnessError(
+        f"Base addon at version {version!r} is missing {missing}, which the "
+        "local smoke harness patches to override the update flow. Both files "
+        "were added in v2.4.0; pre-v2.4.0 release zips (e.g. v2.3.2) don't "
+        "have them. Use --base-from-release-tag v2.4.0 or later for the "
+        "interactive smoke. The v2.3.2 -> current upgrade transition is "
+        "covered by tests/integration/test_self_update_historical_constraint.py "
+        "(run with RUN_HISTORICAL_SELF_UPDATE=1 and a cached v2.3.2 zip)."
+    )
 
 
 def patch_plugin_cfg(path: Path, version: str) -> None:
@@ -720,8 +749,7 @@ func marker() -> String:
     dock_path = addon_dir / "mcp_dock.gd"
     text = dock_path.read_text(encoding="utf-8")
     marker = (
-        'const UpdateManagerScript := preload('
-        '"res://addons/godot_ai/utils/update_manager.gd")\n'
+        'const UpdateManagerScript := preload("res://addons/godot_ai/utils/update_manager.gd")\n'
     )
     text = replace_once(
         dock_path,
@@ -1009,8 +1037,7 @@ def smoke_stopped_server_during_update(lines: list[str]) -> bool:
 
 def smoke_reported_server_version_mismatch(lines: list[str]) -> bool:
     return any(
-        "is occupied by godot-ai server v" in line and "plugin expects v" in line
-        for line in lines
+        "is occupied by godot-ai server v" in line and "plugin expects v" in line for line in lines
     )
 
 

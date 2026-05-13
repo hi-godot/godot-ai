@@ -150,6 +150,11 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
 
+      - name: Self-update forward upgrade regression
+        shell: bash
+        timeout-minutes: 3
+        run: GODOT_BIN=godot pytest -q tests/integration/test_self_update_upgrade_paths.py
+
       - name: Start MCP server
         shell: bash
         run: bash script/ci-start-server

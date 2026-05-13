@@ -101,6 +101,8 @@ Passing criteria:
 - the editor process stays alive without manual or programmatic restart
 - the installed fixture plugin version advances to v(N+1)
 - `user://godot_ai_update/` is consumed after install
+- the update window prints no `SCRIPT ERROR: Parse Error`,
+  `ERROR: Failed to load script`, or `Could not resolve script` lines
 - no new `Godot*.ips` appears on macOS
 - the vNext `_exit_tree` trigger does not print during the update window
 

@@ -14,7 +14,7 @@ extends RefCounted
 ## `_host.<method>()` shims; the test fixtures override those shims to
 ## drive the manager without touching the editor.
 ##
-## `_host` is untyped to honor the self-update parse-hazard policy
+## `_host` is untyped to honor the self-update field-storage policy
 ## plugin.gd calls out near `_connection`.
 var _host
 

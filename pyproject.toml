@@ -69,6 +69,9 @@ where = ["src"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
+markers = [
+    "historical_constraint: documentation-only self-update tests for old shipped runners; skipped unless explicitly enabled",
+]
 
 [tool.ruff]
 target-version = "py311"

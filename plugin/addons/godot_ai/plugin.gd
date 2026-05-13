@@ -19,10 +19,9 @@ const MANAGED_SERVER_VERSION_SETTING := "godot_ai/managed_server_version"
 const MANAGED_SERVER_WS_PORT_SETTING := "godot_ai/managed_server_ws_port"
 const UPDATE_RELOAD_RUNNER_SCRIPT := preload("res://addons/godot_ai/update_reload_runner.gd")
 
-## Preloaded so `_stop_server` / `force_restart_server` can reference the
-## sweep without depending on the editor's `class_name` scan running first.
-## See utils/uv_cache_cleanup.gd for what this does and why it lives next
-## to the server-stop hot path.
+## Preloaded so `_stop_server` / `force_restart_server` have a local script
+## dependency for the cleanup helper. See utils/uv_cache_cleanup.gd for what
+## this does and why it lives next to the server-stop hot path.
 const UvCacheCleanup := preload("res://addons/godot_ai/utils/uv_cache_cleanup.gd")
 
 ## Server lifecycle + port discovery extracted from this file (#297 PR 5).
@@ -35,13 +34,11 @@ const PortResolver := preload("res://addons/godot_ai/utils/port_resolver.gd")
 const ServerStateScript := preload("res://addons/godot_ai/utils/mcp_server_state.gd")
 const StartupPathScript := preload("res://addons/godot_ai/utils/mcp_startup_path.gd")
 
-## Plugin-class scripts — preloaded so `plugin.gd`'s parse and instantiation
-## sites resolve via the script path, not via the global `class_name`
-## registry. See the self-update parse-hazard policy near the field
-## declarations below for why every `Mcp*` plugin-class reference in this
-## file goes through one of these consts. Naming follows the existing
-## `UvCacheCleanup := preload(...)` convention (script-local const aliasing
-## a class whose registered `class_name` is `Mcp*`).
+## Plugin-class scripts used by this file. The script-local preload aliases
+## are ordinary dependency shorthand and keep construction sites compact.
+## They are not the self-update safety boundary; #398 was stale Script-object
+## content from a mixed old/new snapshot, fixed by the runner's single-phase
+## write-before-scan model.
 const Connection := preload("res://addons/godot_ai/connection.gd")
 const Dispatcher := preload("res://addons/godot_ai/dispatcher.gd")
 const LogBuffer := preload("res://addons/godot_ai/utils/log_buffer.gd")
@@ -116,34 +113,31 @@ const STARTUP_TRACE_COUNTER_NAMES := [
 ## Untyped on purpose — see policy below. Type fences move to handler `_init`
 ## sites that take typed parameters.
 ##
-## Self-update parse-hazard policy: plugin entry-load code MUST NOT
-## reference any plugin-defined `class_name` (`Mcp*`) by name — neither
-## as a type annotation (`var x: McpFoo`), nor as a constructor
-## (`McpFoo.new()`), nor as any other member access (`McpFoo.CONST`,
-## `McpFoo.static_method()`). Every form resolves through Godot's global
-## class_name registry at parse time. During an in-place self-update,
-## `set_plugin_enabled(false)` re-parses `plugin.gd` against the freshly-
-## extracted addon tree before the registry has scanned the new files; a
-## reference to a class whose inheritance or class_name siblings changed
-## in the new release fails to resolve, the plugin enters a degraded
-## state, and the follow-up `_exit_tree` cascade crashes (see #242,
-## #244). Static-var initializers are the most dangerous form because
-## they execute at script-load: `static var _x := McpFoo.BAR` aborts the
-## parse before `_enter_tree` runs.
+## Self-update field and load-surface policy: plugin entry-load fields that
+## survive reload stay untyped. Typed fields against plugin-defined classes
+## were the #242 / #244 crash class: Godot can reparse a long-lived script
+## while its old field storage and the new type shape disagree. Static-var
+## initializers are the most dangerous form because they execute at
+## script-load; a top-level typed Dictionary/Array storage change can fail
+## before `_enter_tree` runs.
 ##
 ## The mitigation is two-part:
 ##   (1) Field declarations are untyped (this block).
-##   (2) Every other reference site uses script-local
-##       `const X := preload("res://...")` aliases declared at the top of
-##       the file (e.g. `Connection`, `Dispatcher`, `LogBuffer`,
-##       `ClientConfigurator`, `WindowsPortReservation`, …) — for
-##       constructors, constants, and static methods alike. `preload(...)`
-##       resolves the script by path at script-load, never consulting the
-##       global registry, so the parse stays clean across releases
-##       regardless of how the referenced class's `extends` chain or
-##       sibling class_names change.
+##   (2) Construction and static access use local names declared at the top
+##       of the file (e.g. `Connection`, `Dispatcher`, `LogBuffer`,
+##       `ClientConfigurator`, `WindowsPortReservation`, ...), which keeps
+##       this entry script's load surface explicit and reviewable.
 ##
-## `tests/unit/test_plugin_self_update_safety.py` locks these forms in.
+## Constructors, constants, and static methods on `Mcp*` classes are not the
+## self-update safety metric under the single-phase runner. The old syntactic
+## lint counted bare `Mcp*.MEMBER` references, but #398 was caused by the
+## runner scanning a mixed old/new snapshot and reusing stale Script-object
+## content. Bare names and preload aliases can both be parsed against stale
+## content under an old two-phase runner; from the fixed runner onward the
+## full v(N+1) snapshot is written before the scan. In short: preload aliases
+## are not the self-update safety metric.
+##
+## `tests/unit/test_plugin_self_update_safety.py` locks this wording in.
 ##
 ## `_editor_logger` was already untyped because its script extends Godot
 ## 4.5+'s Logger class and is loaded via `load()` so the plugin still parses
@@ -769,12 +763,12 @@ func _set_spawn_state(state: int) -> void:
 ## diagnostic.
 ##
 ## We intentionally poll `_connection.is_connected` from `_process`
-## instead of wiring a new signal on McpConnection — signals would be
-## cleaner, but `class_name McpConnection` is cached by the editor across
-## plugin disable/enable, and a self-update that added a new signal
-## crashes `_enter_tree` with "invalid access to property" until the
-## user restarts Godot. Polling only reads `is_connected` (present on
-## every shipped McpConnection), so upgrades stay hot-reloadable.
+## instead of wiring a new signal on McpConnection. A signal added in the
+## same release as a new consumer would be another shape-coupled update:
+## old two-phase runners can parse the consumer while the McpConnection
+## Script object still reflects v(N). Polling only reads `is_connected`
+## (present on every shipped McpConnection), so old-runner upgrade windows
+## do not depend on a same-release signal addition.
 ##
 ## The watch self-disarms after SPAWN_GRACE_MS so per-frame cost drops
 ## back to zero if it is ever armed by a legacy adoption path.

@@ -1,7 +1,21 @@
 @tool
 extends Node
 
-## Runs the self-update after the visible plugin has handed off control.
+## Self-update runner. Owns the install-and-reload sequence from
+## `start(zip_path, temp_dir, detached_dock)` onward: extract files into
+## `addons/godot_ai/` with rollback bookkeeping, scan the filesystem,
+## re-enable the plugin, and clean up the detached dock.
+##
+## Single-phase install: writes the full `_new_file_paths +
+## _existing_file_paths` set before issuing exactly one
+## `EditorFileSystem.scan()`. Godot's scan-time reparse pass then sees one
+## consistent v(N+1) snapshot, so new files and existing files can resolve
+## each other's same-release API changes regardless of parse order.
+##
+## Not owned here: HTTP download (in `utils/update_manager.gd`), banner UI
+## (in `mcp_dock.gd`), or server stop prep (called by
+## `plugin.gd::install_downloaded_update` before this runner starts via
+## `_lifecycle.prepare_for_update_reload()`).
 ##
 ## This node is deliberately tiny and not parented under the EditorPlugin:
 ## it survives `set_plugin_enabled(false)`, extracts the downloaded release,
@@ -56,8 +70,8 @@ var _scan_timed_out := false
 ## and typed Variant storage is part of the hot-reload crash class.
 var _new_file_paths = []
 var _existing_file_paths = []
-## Per-file install records accumulated across batches so a failure in the
-## second batch can roll back files already replaced in the first batch.
+## Per-file install records accumulated during install so a later failure
+## can roll back files already replaced earlier in the same update.
 ## Each entry is an untyped Dictionary with target_path / backup_path /
 ## had_original keys. Cleared by `_finalize_install_success` on full success
 ## and by `_rollback_paths_written` on failure.
@@ -116,19 +130,25 @@ func _extract_and_scan() -> void:
 		_wait_frames(POST_ENABLE_FREE_FRAMES, "_cleanup_and_finish")
 		return
 
-	var status := _install_zip_paths(_new_file_paths)
+	var install_paths := []
+	install_paths.append_array(_new_file_paths)
+	install_paths.append_array(_existing_file_paths)
+
+	var status := _install_zip_paths(install_paths)
 	if status != InstallStatus.OK:
 		_handle_install_failure(status)
 		return
 
-	if _new_file_paths.is_empty():
-		_install_existing_files_and_scan.call_deferred()
-	else:
-		## Register newly added class_name/base scripts while all old plugin
-		## files are still intact. Updating plugin.gd or handler preloads
-		## before this scan can make Godot parse a new dependency graph
-		## before its new global classes exist.
-		_start_filesystem_scan("_install_existing_files_and_scan")
+	_finalize_install_success()
+	_cleanup_update_temp()
+	## One scan covers both dependency directions: plugin.gd's preloads of
+	## new files resolve because those files are already present, and new
+	## files' references to new members or static-ness changes on existing
+	## load-surface scripts resolve because those existing files are also
+	## already at v(N+1). The goal is a consistent snapshot before scan, not
+	## a tree-atomic install; per-file writes still use `.tmp` + rename and
+	## rollback on failure.
+	_start_filesystem_scan("_enable_new_plugin")
 
 
 func _start_filesystem_scan(next_step: String = "_enable_new_plugin") -> void:
@@ -250,17 +270,6 @@ func _read_update_manifest() -> bool:
 	return true
 
 
-func _install_existing_files_and_scan() -> void:
-	var status := _install_zip_paths(_existing_file_paths)
-	if status != InstallStatus.OK:
-		_handle_install_failure(status)
-		return
-
-	_finalize_install_success()
-	_cleanup_update_temp()
-	_start_filesystem_scan("_enable_new_plugin")
-
-
 func _handle_install_failure(status: int) -> void:
 	if status == InstallStatus.FAILED_MIXED:
 		## Half-installed addon tree on disk: re-enabling the plugin would
@@ -309,8 +318,8 @@ func _install_zip_paths(paths: Array) -> int:
 	var reader := ZIPReader.new()
 	if reader.open(zip_path) != OK:
 		print("MCP | update extract failed: could not reopen %s" % zip_path)
-		## Nothing in this batch was written, but a previous batch may have
-		## left files on disk; roll those back too.
+		## Nothing else can be written, but earlier files from this update
+		## may have landed on disk; roll those back too.
 		return _rollback_paths_written()
 
 	var install_base := ProjectSettings.globalize_path(INSTALL_BASE_PATH)
@@ -441,7 +450,7 @@ func _rollback_paths_written() -> int:
 	return InstallStatus.FAILED_CLEAN
 
 
-## Discard accumulated backups after both install batches succeed. Backups
+## Discard accumulated backups after the combined install succeeds. Backups
 ## are best-effort: a failure here doesn't compromise the new install, just
 ## leaves stray *.update_backup files for the user to clean up.
 func _finalize_install_success() -> void:

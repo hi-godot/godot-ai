@@ -1,6 +1,6 @@
 # Godot AI — Plugin Architecture
 
-*Updated 2026-05-04 (add `PreserveGodotCommandErrorData` to the middleware list and note registration-order is load-bearing; previous: refresh file-structure tree, server-side modules, session metadata, and handshake JSON to match shipped code; add `<domain>_manage` rollups + resources + middleware to server responsibilities)*
+*Updated 2026-05-08 (document self-update runner/update-manager/plugin boundary and compatibility rules; previous: add `PreserveGodotCommandErrorData` to the middleware list and note registration-order is load-bearing; refresh file-structure tree, server-side modules, session metadata, and handshake JSON to match shipped code; add `<domain>_manage` rollups + resources + middleware to server responsibilities)*
 
 This document is the architecture reference for the Godot-side plugin and the server-to-plugin interaction model.
 
@@ -71,7 +71,7 @@ plugin/addons/godot_ai/
 ├── mcp_dock.gd                  ## editor dock: status, clients, logs, self-update banner, Tools tab
 ├── client_configurator.gd       ## thin facade for client config (configure/remove/status)
 ├── tool_catalog.gd              ## mirrors src/godot_ai/tools/domains.py; CI-enforced
-├── update_reload_runner.gd      ## self-update extract + plugin re-enable handoff
+├── update_reload_runner.gd      ## self-update single-pass extract, scan, and re-enable handoff
 ├── handlers/                    ## one file per domain; ~30 handlers
 │   ├── editor_handler.gd        ## screenshot, logs, monitors, reload_plugin, quit_editor
 │   ├── scene_handler.gd, node_handler.gd, script_handler.gd
@@ -187,6 +187,23 @@ Outer-to-inner teardown order matters (see #46). Handlers themselves are preload
 5. `_stop_server()` and reset the spawn-guard so a re-enabled plugin instance can respawn
 
 A symmetric `prepare_for_update_reload()` path runs during self-update so the new plugin version starts (or adopts) the right server.
+
+### Self-update Boundary And Compatibility
+
+The update path is intentionally split so the runner can stay focused on the fragile editor reload window:
+
+- `utils/update_manager.gd` owns pre-runner work: release lookup, download, staging, version checks, and install gating. Its `class_name McpUpdateManager` declaration is published API surface and must remain unless replaced by a same-path compatibility shim.
+- `plugin.gd::prepare_for_update_reload()` owns pre-runner server stop prep. It stops the managed server and resets the spawn guard before the runner starts. Do not move this server lifecycle prep into the runner.
+- `plugin.gd::install_downloaded_update(...)` is the handoff point. It calls `prepare_for_update_reload()`, detaches the dock so it survives plugin teardown, creates the runner, parents it to the editor root, and calls `runner.start(...)`.
+- `update_reload_runner.gd` owns the install-and-reload sequence from that handoff onward: extract files into `addons/godot_ai/`, keep rollback bookkeeping, scan the filesystem, re-enable the plugin, clean up update temp state, and free itself.
+
+The runner's key safety property is a consistent snapshot before scan. It writes all staged new and existing files for v(N+1) in one install pass, then runs one `EditorFileSystem.scan()` before enabling the plugin. This avoids Godot parsing a mixed old/new plugin snapshot and reusing stale Script-object content.
+
+Compatibility rules that follow from that model:
+
+- Never delete a `class_name` declaration that has shipped in a release. Dropping a registered global class can produce a "Could not resolve script" cascade during the disable -> extract -> enable window, independent of the single-pass runner fix.
+- If a published `class_name` has to retire, keep the original file path and declaration as a shape-aware shim. Static constants and static methods need explicit forwarding or redeclaration; simple `extends` is only enough for compatible instance-surface cases.
+- Until old two-phase runners have aged out, release ZIPs should avoid adding new files that reference constants, methods, or static/non-static shape changes added to existing load-surface scripts in the same release. This applies to both `class_name` scripts and preload-only scripts because the failure mode is stale Script-object content, not only class registry skew.
 
 ---
 
