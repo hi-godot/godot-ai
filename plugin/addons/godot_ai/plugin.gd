@@ -1513,7 +1513,10 @@ func start_dev_server() -> void:
 				OS.set_environment("PYTHONPATH", prev_pythonpath)
 
 		if pid > 0:
-			var suffix := " (PYTHONPATH=%s)" % worktree_src if not worktree_src.is_empty() else ""
+			## Match `server_lifecycle.gd::start_server`'s log wording —
+			## "prefix" since we prepended to any pre-existing PYTHONPATH,
+			## not replaced it. See #429 review.
+			var suffix := " (PYTHONPATH prefix=%s)" % worktree_src if not worktree_src.is_empty() else ""
 			print("MCP | started dev server with --reload (PID %d): %s %s%s" % [pid, cmd, " ".join(inner_args), suffix])
 		else:
 			push_warning("MCP | failed to start dev server")

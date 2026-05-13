@@ -547,7 +547,12 @@ func start_server() -> void:
 		## editor start's adopt branch heals it to the real port owner.
 		_host._write_managed_server_record(spawned_pid, current_version)
 		_startup_path = McpStartupPathScript.SPAWNED
-		var suffix := " (PYTHONPATH=%s)" % worktree_src if not worktree_src.is_empty() else ""
+		## Log "PYTHONPATH prefix=" rather than "PYTHONPATH=" so the line
+		## isn't misleading when an existing PYTHONPATH was present —
+		## we prepended `worktree_src`, not replaced. Keeps the log
+		## compact (worktree_src is the actionable piece; the full
+		## prev_pythonpath can be 5+ entries long on dev machines).
+		var suffix := " (PYTHONPATH prefix=%s)" % worktree_src if not worktree_src.is_empty() else ""
 		print("MCP | started server (PID %d, v%s): %s %s%s" % [spawned_pid, current_version, cmd, " ".join(args), suffix])
 		_host._start_server_watch()
 	else:
