@@ -462,6 +462,252 @@ func test_set_property_color_rejects_array_input() -> void:
 	assert_true(editor_undo(_undo_redo), "undo create should succeed")
 
 
+# ----- #429 — Packed*Array dict-coercion (silent zero-fill bug) -----
+
+func test_set_property_polygon2d_polygon_round_trip() -> void:
+	## Bug repro: setting a PackedVector2Array property (Polygon2D.polygon)
+	## with [{x,y}, ...] used to fall through _coerce_value unchanged.
+	## Godot's implicit Array → PackedVector2Array then per-element failed
+	## Dictionary → Vector2 and silently produced 6 × Vector2.ZERO. Must
+	## now coerce each dict and store the supplied vertices.
+	_handler.create_node({"type": "Polygon2D", "name": "_McpTestPoly", "parent_path": "/Main"})
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestPoly",
+		"property": "polygon",
+		"value": [
+			{"x": -104, "y": -40},
+			{"x":  -32, "y": -16},
+			{"x":    0, "y": -72},
+			{"x":   32, "y": -16},
+			{"x":  112, "y": -40},
+			{"x":    0, "y":  64},
+		],
+	})
+	assert_has_key(result, "data")
+	assert_true(result.data.undoable)
+
+	## Assert on the stored Variant — count-only checks would silently pass
+	## against the zero-fill failure mode.
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestPoly") as Polygon2D
+	assert_eq(node.polygon.size(), 6)
+	assert_true(node.polygon is PackedVector2Array, "stored value must be PackedVector2Array")
+	assert_eq(node.polygon[0], Vector2(-104, -40))
+	assert_eq(node.polygon[2], Vector2(0, -72))
+	assert_eq(node.polygon[5], Vector2(0, 64))
+	assert_true(editor_undo(_undo_redo), "undo set should succeed")
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
+
+
+func test_set_property_polygon2d_uv_round_trip() -> void:
+	## Same coercion path, different PackedVector2Array slot.
+	_handler.create_node({"type": "Polygon2D", "name": "_McpTestUv", "parent_path": "/Main"})
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestUv",
+		"property": "uv",
+		"value": [
+			{"x": 0, "y": 0},
+			{"x": 1, "y": 0},
+			{"x": 1, "y": 1},
+			{"x": 0, "y": 1},
+		],
+	})
+	assert_has_key(result, "data")
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestUv") as Polygon2D
+	assert_eq(node.uv.size(), 4)
+	assert_true(node.uv is PackedVector2Array)
+	assert_eq(node.uv[2], Vector2(1, 1))
+	assert_true(editor_undo(_undo_redo), "undo set should succeed")
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
+
+
+func test_set_property_packed_color_array_round_trip_dict_shape() -> void:
+	## PackedColorArray accepts both [{r,g,b,a}, ...] and ["#rrggbb", ...].
+	_handler.create_node({"type": "Polygon2D", "name": "_McpTestVColDict", "parent_path": "/Main"})
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestVColDict",
+		"property": "vertex_colors",
+		"value": [
+			{"r": 1, "g": 0, "b": 0, "a": 1},
+			{"r": 0, "g": 1, "b": 0, "a": 0.5},
+			{"r": 0, "g": 0, "b": 1},
+		],
+	})
+	assert_has_key(result, "data")
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestVColDict") as Polygon2D
+	assert_eq(node.vertex_colors.size(), 3)
+	assert_true(node.vertex_colors is PackedColorArray)
+	assert_eq(node.vertex_colors[0], Color(1, 0, 0, 1))
+	assert_eq(node.vertex_colors[1], Color(0, 1, 0, 0.5))
+	# Alpha defaults to 1 when omitted.
+	assert_eq(node.vertex_colors[2], Color(0, 0, 1, 1))
+	assert_true(editor_undo(_undo_redo), "undo set should succeed")
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
+
+
+func test_set_property_packed_color_array_round_trip_hex_string() -> void:
+	_handler.create_node({"type": "Polygon2D", "name": "_McpTestVColStr", "parent_path": "/Main"})
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestVColStr",
+		"property": "vertex_colors",
+		"value": ["#ff0000", "#00ff00", "#0000ff"],
+	})
+	assert_has_key(result, "data")
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestVColStr") as Polygon2D
+	assert_eq(node.vertex_colors.size(), 3)
+	assert_true(node.vertex_colors is PackedColorArray)
+	assert_eq(node.vertex_colors[0], Color(1, 0, 0, 1))
+	assert_eq(node.vertex_colors[2], Color(0, 0, 1, 1))
+	assert_true(editor_undo(_undo_redo), "undo set should succeed")
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
+
+
+func test_set_property_packed_vector2_array_rejects_flat_list() -> void:
+	## A flat [x, y, x, y, ...] list is an easy mistake; must error rather
+	## than silently zero-fill every element.
+	_handler.create_node({"type": "Polygon2D", "name": "_McpTestFlat", "parent_path": "/Main"})
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestFlat") as Polygon2D
+	var original := node.polygon
+
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestFlat",
+		"property": "polygon",
+		"value": [-104, -40, 0, -72, 32, -16],
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "PackedVector2Array")
+	## Property must be untouched on rejection.
+	assert_eq(node.polygon, original, "polygon must be unchanged after rejected coerce")
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
+
+
+func test_set_property_packed_vector2_array_rejects_mixed_shapes() -> void:
+	## Mixing dict items with non-dict items must also fail rather than
+	## partial-zero-fill the unrecognized elements.
+	_handler.create_node({"type": "Polygon2D", "name": "_McpTestMixed", "parent_path": "/Main"})
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestMixed") as Polygon2D
+	var original := node.polygon
+
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestMixed",
+		"property": "polygon",
+		"value": [{"x": 1, "y": 2}, "garbage", {"x": 3, "y": 4}],
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_eq(node.polygon, original, "polygon must be unchanged after rejected coerce")
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
+
+
+func test_coerce_packed_vector2_array_from_dict_list() -> void:
+	## Unit-level coverage on the static helper.
+	var coerced = NodeHandler._coerce_value(
+		[{"x": 1, "y": 2}, {"x": 3, "y": 4}],
+		TYPE_PACKED_VECTOR2_ARRAY,
+	)
+	assert_true(coerced is PackedVector2Array)
+	assert_eq(coerced.size(), 2)
+	assert_eq(coerced[0], Vector2(1, 2))
+	assert_eq(coerced[1], Vector2(3, 4))
+
+
+func test_coerce_packed_vector2_array_accepts_vector2_items() -> void:
+	## Internal callers may already have Vector2 values — passing through
+	## should not double-construct.
+	var coerced = NodeHandler._coerce_value(
+		[Vector2(1, 2), Vector2(3, 4)],
+		TYPE_PACKED_VECTOR2_ARRAY,
+	)
+	assert_true(coerced is PackedVector2Array)
+	assert_eq(coerced[1], Vector2(3, 4))
+
+
+func test_coerce_packed_vector3_array_from_dict_list() -> void:
+	var coerced = NodeHandler._coerce_value(
+		[{"x": 1, "y": 2, "z": 3}],
+		TYPE_PACKED_VECTOR3_ARRAY,
+	)
+	assert_true(coerced is PackedVector3Array)
+	assert_eq(coerced[0], Vector3(1, 2, 3))
+
+
+func test_coerce_packed_color_array_from_string() -> void:
+	var coerced = NodeHandler._coerce_value(["#ff0000", "#00ff00"], TYPE_PACKED_COLOR_ARRAY)
+	assert_true(coerced is PackedColorArray)
+	assert_eq(coerced[0], Color(1, 0, 0, 1))
+
+
+func test_coerce_packed_int32_array_from_numeric_list() -> void:
+	var coerced = NodeHandler._coerce_value([1, 2.0, 3], TYPE_PACKED_INT32_ARRAY)
+	assert_true(coerced is PackedInt32Array)
+	assert_eq(coerced.size(), 3)
+	assert_eq(coerced[1], 2)
+
+
+func test_coerce_packed_int64_array_from_numeric_list() -> void:
+	var coerced = NodeHandler._coerce_value([10, 20], TYPE_PACKED_INT64_ARRAY)
+	assert_true(coerced is PackedInt64Array)
+	assert_eq(coerced[0], 10)
+
+
+func test_coerce_packed_float32_array_from_numeric_list() -> void:
+	var coerced = NodeHandler._coerce_value([1, 2.5, 3], TYPE_PACKED_FLOAT32_ARRAY)
+	assert_true(coerced is PackedFloat32Array)
+	assert_eq(coerced.size(), 3)
+	assert_true(is_equal_approx(coerced[1], 2.5))
+
+
+func test_coerce_packed_float64_array_from_numeric_list() -> void:
+	var coerced = NodeHandler._coerce_value([1.5, 2.5], TYPE_PACKED_FLOAT64_ARRAY)
+	assert_true(coerced is PackedFloat64Array)
+
+
+func test_coerce_packed_string_array_from_string_list() -> void:
+	var coerced = NodeHandler._coerce_value(["a", "bb", "ccc"], TYPE_PACKED_STRING_ARRAY)
+	assert_true(coerced is PackedStringArray)
+	assert_eq(coerced[1], "bb")
+
+
+func test_coerce_packed_vector2_array_passes_through_on_bad_item() -> void:
+	## Contract: _coerce_value returns input unchanged on shape failure so
+	## the typed error comes from _check_coerced. A flat numeric list is a
+	## non-coercible Array.
+	var coerced = NodeHandler._coerce_value([-1, -2, 0, -3], TYPE_PACKED_VECTOR2_ARRAY)
+	assert_true(coerced is Array, "Bad-shape input must pass through unchanged")
+	assert_false(coerced is PackedVector2Array)
+
+
+func test_check_coerced_array_packed_vector2_returns_wrong_type() -> void:
+	## When _coerce_value passes through a bad Array, _check_coerced must
+	## flag it as WRONG_TYPE rather than letting it reach Godot's setter.
+	var coerce_err: Variant = NodeHandler._check_coerced([1, 2, 3], TYPE_PACKED_VECTOR2_ARRAY)
+	assert_true(coerce_err is Dictionary)
+	assert_eq(coerce_err.error.code, ErrorCodes.WRONG_TYPE)
+	assert_contains(coerce_err.error.message, "PackedVector2Array")
+	assert_contains(coerce_err.error.message, "Array")
+
+
+func test_check_coerced_passes_correct_packed_arrays() -> void:
+	## Right-typed packed arrays must pass through (return null).
+	assert_eq(NodeHandler._check_coerced(PackedVector2Array(), TYPE_PACKED_VECTOR2_ARRAY), null)
+	assert_eq(NodeHandler._check_coerced(PackedVector3Array(), TYPE_PACKED_VECTOR3_ARRAY), null)
+	assert_eq(NodeHandler._check_coerced(PackedColorArray(), TYPE_PACKED_COLOR_ARRAY), null)
+	assert_eq(NodeHandler._check_coerced(PackedInt32Array(), TYPE_PACKED_INT32_ARRAY), null)
+	assert_eq(NodeHandler._check_coerced(PackedFloat32Array(), TYPE_PACKED_FLOAT32_ARRAY), null)
+	assert_eq(NodeHandler._check_coerced(PackedStringArray(), TYPE_PACKED_STRING_ARRAY), null)
+
+
+func test_shape_hint_packed_arrays() -> void:
+	## The hint string is what agents read after a WRONG_TYPE — make sure
+	## each new packed type returns a list-shaped hint, not a dict.
+	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_VECTOR2_ARRAY), "[{\"x\":0,\"y\":0}, ...]")
+	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_VECTOR3_ARRAY), "[{\"x\":0,\"y\":0,\"z\":0}, ...]")
+	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_COLOR_ARRAY), "[{\"r\":0,\"g\":0,\"b\":0,\"a\":1}, ...]")
+	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_INT32_ARRAY), "[int, ...]")
+	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_INT64_ARRAY), "[int, ...]")
+	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_FLOAT32_ARRAY), "[float, ...]")
+	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_FLOAT64_ARRAY), "[float, ...]")
+	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_STRING_ARRAY), "[\"...\"]")
+
+
 func test_check_coerced_array_vector3_returns_wrong_type() -> void:
 	## Direct unit check on the helper — no scene needed. Pins the
 	## error shape so the message format change in #191 stays bisect-friendly.

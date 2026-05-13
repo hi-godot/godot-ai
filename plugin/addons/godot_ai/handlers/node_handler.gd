@@ -547,6 +547,22 @@ static func _check_coerced(value: Variant, target_type: int, prefix: String = ""
 			ok = value is Vector3
 		TYPE_COLOR:
 			ok = value is Color
+		TYPE_PACKED_VECTOR2_ARRAY:
+			ok = value is PackedVector2Array
+		TYPE_PACKED_VECTOR3_ARRAY:
+			ok = value is PackedVector3Array
+		TYPE_PACKED_COLOR_ARRAY:
+			ok = value is PackedColorArray
+		TYPE_PACKED_INT32_ARRAY:
+			ok = value is PackedInt32Array
+		TYPE_PACKED_INT64_ARRAY:
+			ok = value is PackedInt64Array
+		TYPE_PACKED_FLOAT32_ARRAY:
+			ok = value is PackedFloat32Array
+		TYPE_PACKED_FLOAT64_ARRAY:
+			ok = value is PackedFloat64Array
+		TYPE_PACKED_STRING_ARRAY:
+			ok = value is PackedStringArray
 		_:
 			return null
 	if ok:
@@ -564,8 +580,22 @@ static func _check_coerced(value: Variant, target_type: int, prefix: String = ""
 
 
 ## Build a "{\"x\":1,...}" hint string from the canonical key constants
-## so adding a key (e.g. Vector4) only touches VECTORN_KEYS.
+## so adding a key (e.g. Vector4) only touches VECTORN_KEYS. Packed*Array
+## targets short-circuit to a literal list-shaped hint.
 static func _shape_hint(target_type: int) -> String:
+	match target_type:
+		TYPE_PACKED_VECTOR2_ARRAY:
+			return "[{\"x\":0,\"y\":0}, ...]"
+		TYPE_PACKED_VECTOR3_ARRAY:
+			return "[{\"x\":0,\"y\":0,\"z\":0}, ...]"
+		TYPE_PACKED_COLOR_ARRAY:
+			return "[{\"r\":0,\"g\":0,\"b\":0,\"a\":1}, ...]"
+		TYPE_PACKED_INT32_ARRAY, TYPE_PACKED_INT64_ARRAY:
+			return "[int, ...]"
+		TYPE_PACKED_FLOAT32_ARRAY, TYPE_PACKED_FLOAT64_ARRAY:
+			return "[float, ...]"
+		TYPE_PACKED_STRING_ARRAY:
+			return "[\"...\"]"
 	var keys: Array[String] = []
 	match target_type:
 		TYPE_VECTOR2: keys = VECTOR2_KEYS
@@ -656,6 +686,70 @@ static func _coerce_value(value: Variant, target_type: int) -> Variant:
 		TYPE_DICTIONARY:
 			if value is Dictionary:
 				return value
+		TYPE_PACKED_VECTOR2_ARRAY:
+			if value is Array:
+				var out := PackedVector2Array()
+				for item in value:
+					if item is Vector2:
+						out.append(item)
+					elif item is Dictionary and item.has_all(VECTOR2_KEYS):
+						out.append(Vector2(item["x"], item["y"]))
+					else:
+						return value  # leave for _check_coerced to flag
+				return out
+		TYPE_PACKED_VECTOR3_ARRAY:
+			if value is Array:
+				var out := PackedVector3Array()
+				for item in value:
+					if item is Vector3:
+						out.append(item)
+					elif item is Dictionary and item.has_all(VECTOR3_KEYS):
+						out.append(Vector3(item["x"], item["y"], item["z"]))
+					else:
+						return value
+				return out
+		TYPE_PACKED_COLOR_ARRAY:
+			if value is Array:
+				var out := PackedColorArray()
+				for item in value:
+					if item is Color:
+						out.append(item)
+					elif item is Dictionary and item.has_all(COLOR_KEYS):
+						out.append(Color(item["r"], item["g"], item["b"], item.get("a", 1.0)))
+					elif item is String:
+						out.append(Color(item))
+					else:
+						return value
+				return out
+		TYPE_PACKED_INT32_ARRAY, TYPE_PACKED_INT64_ARRAY:
+			if value is Array:
+				var out: Variant = PackedInt32Array() if target_type == TYPE_PACKED_INT32_ARRAY else PackedInt64Array()
+				for item in value:
+					if item is int or item is float:
+						out.append(int(item))
+					else:
+						return value
+				return out
+		TYPE_PACKED_FLOAT32_ARRAY, TYPE_PACKED_FLOAT64_ARRAY:
+			if value is Array:
+				var out: Variant = PackedFloat32Array() if target_type == TYPE_PACKED_FLOAT32_ARRAY else PackedFloat64Array()
+				for item in value:
+					if item is float or item is int:
+						out.append(float(item))
+					else:
+						return value
+				return out
+		TYPE_PACKED_STRING_ARRAY:
+			if value is Array:
+				var out := PackedStringArray()
+				for item in value:
+					if item is String:
+						out.append(item)
+					else:
+						return value
+				return out
+		# PackedByteArray intentionally unhandled — needs design decision
+		# (base64 string vs. raw int list); JSON has no native byte type.
 	return value
 
 
