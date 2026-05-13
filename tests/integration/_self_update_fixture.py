@@ -279,6 +279,11 @@ def extract_addon_from_zip(zip_path: Path, target_addon: Path) -> None:
             if not info.filename.startswith("addons/godot_ai/") or info.is_dir():
                 continue
             rel = Path(info.filename).relative_to("addons/godot_ai")
+            if rel.is_absolute() or any(part in ("", ".", "..") for part in rel.parts):
+                raise ValueError(
+                    f"Refusing unsafe zip entry {info.filename!r}: relative path "
+                    f"{rel!s} contains absolute or traversal segments"
+                )
             out = target_addon / rel
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_bytes(zf.read(info.filename))
