@@ -327,17 +327,23 @@ static func _incompatible_server_message(
 ) -> String:
 	var version := _live_version_for_message(live)
 	var actual_ws_port := _live_ws_port_for_message(live)
+	## `package_path` is a v2.4.4+ field — older servers omit it. Suffix
+	## the message with "(loaded from <path>)" when present so the user
+	## can tell *which* `src/godot_ai/` is serving the port without
+	## walking the process tree. See #416.
+	var package_path := _live_package_path_for_message(live)
+	var path_suffix := " (loaded from %s)" % package_path if not package_path.is_empty() else ""
 	if not version.is_empty():
 		if actual_ws_port > 0 and actual_ws_port != expected_ws_port:
 			return (
-				"Port %d is occupied by godot-ai server v%s using WS port %d; "
+				"Port %d is occupied by godot-ai server v%s using WS port %d%s; "
 				+ "plugin expects v%s with WS port %d. Stop the old server or "
 				+ "change both HTTP and WS ports."
-			) % [port, version, actual_ws_port, expected_version, expected_ws_port]
+			) % [port, version, actual_ws_port, path_suffix, expected_version, expected_ws_port]
 		return (
-			"Port %d is occupied by godot-ai server v%s; plugin expects v%s. "
+			"Port %d is occupied by godot-ai server v%s%s; plugin expects v%s. "
 			+ "Stop the old server or change both HTTP and WS ports."
-		) % [port, version, expected_version]
+		) % [port, version, path_suffix, expected_version]
 	var status_code := int(live.get("status_code", 0))
 	if status_code > 0:
 		return (
@@ -364,6 +370,16 @@ static func _live_ws_port_for_message(live: Dictionary) -> int:
 	if live.has("name") and str(live.get("name", "")) != "godot-ai":
 		return 0
 	return int(live.get("ws_port", 0))
+
+
+static func _live_package_path_for_message(live: Dictionary) -> String:
+	## Only trust the path when the live snapshot confirms a godot-ai
+	## server — a probe of some unrelated HTTP service could in theory
+	## return a `package_path` JSON field, and we don't want to mislabel
+	## that as "godot-ai loaded from …" in the incompatible banner.
+	if live.has("name") and str(live.get("name", "")) != "godot-ai":
+		return ""
+	return str(live.get("package_path", ""))
 
 
 # ---- start_server / spawn watch / respawn -----------------------------
@@ -479,8 +495,48 @@ func start_server() -> void:
 		push_warning("MCP | port %d is reserved by Windows (Hyper-V / WSL2 / Docker)" % port)
 		return
 
+	## PYTHONPATH handling for dev checkouts: when the editor is launched
+	## against a worktree whose `src/godot_ai/__version__` differs from the
+	## root repo's editable install, the dev-venv python's `sitecustomize`
+	## adds the *root repo's* `src/` to `sys.path`. The spawned server then
+	## reports the root repo's version, the plugin's compatibility check
+	## flags it as incompatible, and the user gets a Restart-Server loop
+	## with no exit. `start_dev_server` already prepends the worktree's
+	## `src/` for its --reload spawn; mirror that here for the auto-spawn
+	## path so the same worktree-vs-root version skew is impossible. Gated
+	## on `is_dev_checkout()` so production user installs (no nearby `src/`)
+	## are untouched. See #418.
+	var worktree_src := ""
+	var prev_pythonpath := ""
+	var pythonpath_set := false
+	if ClientConfigurator.is_dev_checkout():
+		worktree_src = ClientConfigurator.find_worktree_src_dir(
+			ProjectSettings.globalize_path("res://")
+		)
+		if not worktree_src.is_empty():
+			prev_pythonpath = OS.get_environment("PYTHONPATH")
+			var sep := ";" if OS.get_name() == "Windows" else ":"
+			var new_pp := (
+				worktree_src
+				if prev_pythonpath.is_empty()
+				else worktree_src + sep + prev_pythonpath
+			)
+			OS.set_environment("PYTHONPATH", new_pp)
+			pythonpath_set = true
+
 	_server_pid = OS.create_process(cmd, args)
 	var spawned_pid := int(_server_pid)
+
+	## Restore PYTHONPATH immediately — the spawned child has already
+	## copied the env, so the editor's own process state returns to
+	## baseline. Leaving it set would leak to any later OS.create_process
+	## from unrelated paths.
+	if pythonpath_set:
+		if prev_pythonpath.is_empty():
+			OS.unset_environment("PYTHONPATH")
+		else:
+			OS.set_environment("PYTHONPATH", prev_pythonpath)
+
 	if spawned_pid > 0:
 		_server_spawn_ms = Time.get_ticks_msec()
 		_server_exit_ms = 0
@@ -491,7 +547,8 @@ func start_server() -> void:
 		## editor start's adopt branch heals it to the real port owner.
 		_host._write_managed_server_record(spawned_pid, current_version)
 		_startup_path = McpStartupPathScript.SPAWNED
-		print("MCP | started server (PID %d, v%s): %s %s" % [spawned_pid, current_version, cmd, " ".join(args)])
+		var suffix := " (PYTHONPATH=%s)" % worktree_src if not worktree_src.is_empty() else ""
+		print("MCP | started server (PID %d, v%s): %s %s%s" % [spawned_pid, current_version, cmd, " ".join(args), suffix])
 		_host._start_server_watch()
 	else:
 		set_terminal_diagnosis(McpServerStateScript.CRASHED)

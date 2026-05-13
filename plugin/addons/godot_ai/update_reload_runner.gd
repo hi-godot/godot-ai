@@ -84,6 +84,16 @@ var _paths_written = []
 ## is missing or stale on disk. Surfaces FAILED_MIXED so the runner refuses
 ## to re-enable the plugin against a half-installed tree.
 var _restore_failed := false
+## Test-only opt-out for the scan-watchdog `push_warning` lines. The
+## watchdog unit tests in `test_update_reload_runner.gd` invoke
+## `_on_scan_watchdog_timeout()` and the post-timeout
+## `_start_filesystem_scan` bypass branch directly to pin their behavior
+## — but those code paths' `push_warning` calls then appear as yellow
+## console noise in every `test_run`, training reviewers to ignore the
+## runner's real production warnings. Tests set this true; production
+## leaves it false so genuine scan timeouts during a real self-update
+## still surface loudly. See issue #413.
+var _suppress_scan_warnings := false
 
 
 func start(zip_path: String, temp_dir: String, detached_dock) -> void:
@@ -166,10 +176,11 @@ func _start_filesystem_scan(next_step: String = "_enable_new_plugin") -> void:
 	## actually completed. Skip the wait; Godot's normal background scan
 	## catches up after the plugin re-enables. See PR #381 review.
 	if _scan_timed_out:
-		push_warning(
-			"MCP | skipping filesystem_changed wait after previous timeout (next_step=%s)"
-			% deferred_step
-		)
+		if not _suppress_scan_warnings:
+			push_warning(
+				"MCP | skipping filesystem_changed wait after previous timeout (next_step=%s)"
+				% deferred_step
+			)
 		call_deferred(deferred_step)
 		return
 
@@ -209,10 +220,11 @@ func _on_scan_watchdog_timeout() -> void:
 	## `_waiting_for_scan == false`.
 	if not _waiting_for_scan:
 		return
-	push_warning(
-		"MCP | filesystem_changed didn't fire within %ds; proceeding without scan confirmation"
-		% int(SCAN_WATCHDOG_SECS)
-	)
+	if not _suppress_scan_warnings:
+		push_warning(
+			"MCP | filesystem_changed didn't fire within %ds; proceeding without scan confirmation"
+			% int(SCAN_WATCHDOG_SECS)
+		)
 	_scan_timed_out = true
 	var fs := EditorInterface.get_resource_filesystem()
 	if fs != null and fs.filesystem_changed.is_connected(_on_filesystem_changed):

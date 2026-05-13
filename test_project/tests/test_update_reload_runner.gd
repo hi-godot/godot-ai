@@ -511,6 +511,14 @@ func _arm_scan_state(runner) -> void:
 	# `EditorInterface.get_resource_filesystem().scan()` call. We can't
 	# trigger Godot's filesystem_changed signal from a test, so we drive
 	# the state machine directly.
+	#
+	# The watchdog `push_warning` lines are real signals during a live
+	# self-update — but the tests below intentionally invoke the timeout
+	# and post-timeout-bypass paths to pin their behavior, so the runner's
+	# warnings would appear three times per `test_run` (issue #413). Set
+	# the test-only suppress flag so the tested code paths stay quiet
+	# without the assertions losing coverage.
+	runner._suppress_scan_warnings = true
 	runner._waiting_for_scan = true
 	runner._scan_next_step = "_enable_new_plugin"
 	runner._arm_scan_watchdog()
@@ -591,6 +599,21 @@ func test_watchdog_timer_reused_across_arms() -> void:
 	assert_true(first_timer == second_timer, "timer reused, not recreated")
 	runner._finish_scan_wait()
 	_free_runner(runner)
+
+
+func test_suppress_scan_warnings_default_is_off() -> void:
+	## Production callers must NOT inherit the test-suppression flag. The
+	## `_arm_scan_state` helper above flips it true to silence the test
+	## suite's invocations of the watchdog code paths; verify that a fresh
+	## runner constructed outside that helper starts with the flag false so
+	## a real self-update's scan stall surfaces loudly to the user via
+	## `push_warning`. Pure invariant check — no state machine driven.
+	var runner = _new_runner()
+	assert_false(
+		runner._suppress_scan_warnings,
+		"runner default must keep production warnings on; only tests opt out",
+	)
+	runner.free()
 
 
 func test_subsequent_scan_after_watchdog_bypasses_listener_arm() -> void:

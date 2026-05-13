@@ -846,6 +846,59 @@ func test_incompatible_server_message_names_ws_port_mismatch() -> void:
 	assert_contains(message, "change both HTTP and WS ports")
 
 
+func test_incompatible_server_message_surfaces_package_path_when_present() -> void:
+	## v2.4.4+ /godot-ai/status carries `package_path` (issue #416). When
+	## the live snapshot includes it, the dock's banner must name the
+	## loaded path so the user can identify a worktree-vs-root version
+	## skew without walking the process tree.
+	var message := GodotAiPlugin._incompatible_server_message(
+		{
+			"name": "godot-ai",
+			"version": "1.4.4",
+			"package_path": "/Users/foo/godot-ai-branch/src/godot_ai",
+		},
+		"2.4.4",
+		18130,
+		McpClientConfigurator.ws_port(),
+	)
+	assert_contains(message, "v1.4.4")
+	assert_contains(
+		message,
+		"(loaded from /Users/foo/godot-ai-branch/src/godot_ai)",
+		"package_path must be surfaced verbatim so the user can match it to a worktree",
+	)
+	assert_contains(message, "plugin expects v2.4.4")
+
+
+func test_incompatible_server_message_omits_path_suffix_when_old_server() -> void:
+	## Old servers (pre-v2.4.4) omit `package_path`. The banner must
+	## degrade gracefully — no trailing "(loaded from )" stub.
+	var message := GodotAiPlugin._incompatible_server_message(
+		{"version": "1.2.10"},
+		"2.2.0",
+		8000,
+		McpClientConfigurator.ws_port(),
+	)
+	assert_false(
+		"loaded from" in message,
+		"missing package_path must not leave an empty parenthetical in the banner",
+	)
+
+
+func test_incompatible_server_message_ignores_package_path_for_non_godot_ai_peer() -> void:
+	## A non-godot-ai server on the port could in theory return a JSON
+	## `package_path` field. Don't label it as "godot-ai loaded from …" —
+	## the surface is for godot-ai version skew, not for misattribution.
+	var message := GodotAiPlugin._incompatible_server_message(
+		{"name": "other-server", "version": "9.9.9", "package_path": "/somewhere/else"},
+		"2.4.4",
+		8000,
+		McpClientConfigurator.ws_port(),
+	)
+	assert_false("loaded from" in message)
+	assert_false("/somewhere/else" in message)
+
+
 func test_incompatible_transition_refreshes_dock_client_statuses() -> void:
 	var plugin := _ProofPlugin.new()
 	var dock := _RefreshDock.new()

@@ -7,12 +7,14 @@ import logging
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+import godot_ai as _godot_ai_pkg
 from godot_ai import __version__ as _SERVER_VERSION
 from godot_ai.asgi import StaleMcpSessionDiagnosticMiddleware
 from godot_ai.godot_client.client import GodotClient
@@ -55,6 +57,14 @@ from godot_ai.transport.origin_guard import LocalhostOnlyHTTPMiddleware
 from godot_ai.transport.websocket import GodotWebSocketServer
 
 logger = logging.getLogger(__name__)
+
+## Filesystem location of the running `godot_ai` package — surfaced via the
+## /godot-ai/status probe so the editor's "Incompatible server" diagnostic
+## can tell the user *which* `src/godot_ai/` was actually loaded. In a
+## multi-worktree dev setup this is the only fast way to distinguish "root
+## .venv resolved to a stale branch" from "wrong PYTHONPATH" without
+## walking the process tree by hand. See issue #416.
+_SERVER_PACKAGE_PATH = str(Path(_godot_ai_pkg.__file__).resolve().parent)
 
 
 @dataclass
@@ -221,6 +231,12 @@ def create_server(
                 "ws_port": ws_port,
                 "tool_surface": "rollup",
                 "exclude_domains": sorted(exclude),
+                ## `package_path` lets the editor's incompatible-server
+                ## banner pinpoint the source of a version skew (e.g.
+                ## "loaded from /Users/.../godot-ai-feature-branch/src" vs
+                ## "loaded from /Users/.../godot-ai/src") without the
+                ## user having to walk the process tree. See #416.
+                "package_path": _SERVER_PACKAGE_PATH,
             }
         )
 

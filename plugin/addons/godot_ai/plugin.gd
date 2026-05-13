@@ -708,6 +708,10 @@ static func _probe_live_server_status(port: int, timeout_ms: int = SERVER_STATUS
 	result["name"] = str(parsed.get("name", ""))
 	result["version"] = _extract_server_version(parsed)
 	result["ws_port"] = int(parsed.get("ws_port", 0))
+	## `package_path` was added in v2.4.4 (#416) so the dock's
+	## "Incompatible server" banner can name the source of a version
+	## skew. Older servers omit it; treat the missing field as "".
+	result["package_path"] = str(parsed.get("package_path", ""))
 	return result
 
 
