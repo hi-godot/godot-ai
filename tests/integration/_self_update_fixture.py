@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import zipfile
 from importlib.machinery import SourceFileLoader
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import ModuleType
 
 import pytest
@@ -274,17 +274,37 @@ def assert_no_update_parse_errors(log: str) -> None:
 
 def extract_addon_from_zip(zip_path: Path, target_addon: Path) -> None:
     target_addon.mkdir(parents=True)
+    target_resolved = target_addon.resolve()
     with zipfile.ZipFile(zip_path) as zf:
         for info in zf.infolist():
             if not info.filename.startswith("addons/godot_ai/") or info.is_dir():
                 continue
-            rel = Path(info.filename).relative_to("addons/godot_ai")
+            # ZIP spec uses POSIX-style forward-slash separators; parsing the
+            # member name as PurePosixPath stops a Windows host from
+            # reinterpreting an entry like "addons/godot_ai/C:evil.txt" as a
+            # drive component (which would make `target_addon / rel` discard
+            # the prefix and write outside the fixture).
+            if "\\" in info.filename:
+                raise ValueError(
+                    f"Refusing unsafe zip entry {info.filename!r}: contains backslash"
+                )
+            rel = PurePosixPath(info.filename).relative_to("addons/godot_ai")
             if rel.is_absolute() or any(part in ("", ".", "..") for part in rel.parts):
                 raise ValueError(
                     f"Refusing unsafe zip entry {info.filename!r}: relative path "
                     f"{rel!s} contains absolute or traversal segments"
                 )
-            out = target_addon / rel
+            out = target_addon.joinpath(*rel.parts)
+            # Belt-and-suspenders containment: if the resolved output path
+            # would escape target_addon (e.g. an OS-specific path-parsing
+            # quirk we didn't anticipate), refuse the entry.
+            candidate = out if out.exists() else target_resolved / Path(*rel.parts)
+            resolved = candidate.resolve()
+            if not resolved.is_relative_to(target_resolved):
+                raise ValueError(
+                    f"Refusing unsafe zip entry {info.filename!r}: resolved "
+                    f"output {resolved!s} escapes target {target_resolved!s}"
+                )
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_bytes(zf.read(info.filename))
 
