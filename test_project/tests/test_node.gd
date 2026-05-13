@@ -705,7 +705,7 @@ func test_shape_hint_packed_arrays() -> void:
 	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_INT64_ARRAY), "[int, ...]")
 	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_FLOAT32_ARRAY), "[float, ...]")
 	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_FLOAT64_ARRAY), "[float, ...]")
-	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_STRING_ARRAY), "[\"...\"]")
+	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_STRING_ARRAY), "[\"...\", ...]")
 
 
 func test_check_coerced_array_vector3_returns_wrong_type() -> void:
@@ -718,6 +718,14 @@ func test_check_coerced_array_vector3_returns_wrong_type() -> void:
 	assert_eq(coerce_err.error.code, ErrorCodes.WRONG_TYPE)
 	assert_contains(coerce_err.error.message, "Vector3")
 	assert_contains(coerce_err.error.message, "Array")  # names the received type
+	## PR #424 follow-up: the message used to read "expected a dict like %s",
+	## which was self-contradictory once `_shape_hint` learned to return
+	## list-shaped hints for Packed*Array targets. Pin the new wording so a
+	## future revert can't reintroduce the inconsistency unnoticed.
+	assert_false(
+		String(coerce_err.error.message).contains("a dict like"),
+		"Message must drop the 'a dict like' phrasing — _shape_hint already encodes shape",
+	)
 
 
 func test_check_coerced_noop_for_non_compound_target() -> void:

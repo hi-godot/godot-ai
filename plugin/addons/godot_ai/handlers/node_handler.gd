@@ -570,9 +570,13 @@ static func _check_coerced(value: Variant, target_type: int, prefix: String = ""
 	var dict_err := _check_dict_coerce_failed(value, target_type)
 	if dict_err != null:
 		return ErrorCodes.prefix_message(dict_err, prefix)
+	## Wording stays neutral on shape — `_shape_hint` already produces a
+	## dict-shaped string for Vector2/3/Color and a list-shaped one for
+	## the Packed*Array slots. The old "expected a dict like [...]" phrasing
+	## read self-contradictory for packed targets (PR #424 review).
 	var err := ErrorCodes.make(
 		ErrorCodes.WRONG_TYPE,
-		"Cannot coerce %s to %s; expected a dict like %s" % [
+		"Cannot coerce %s to %s; expected %s" % [
 			type_string(typeof(value)), type_string(target_type), _shape_hint(target_type),
 		],
 	)
@@ -595,7 +599,7 @@ static func _shape_hint(target_type: int) -> String:
 		TYPE_PACKED_FLOAT32_ARRAY, TYPE_PACKED_FLOAT64_ARRAY:
 			return "[float, ...]"
 		TYPE_PACKED_STRING_ARRAY:
-			return "[\"...\"]"
+			return "[\"...\", ...]"
 	var keys: Array[String] = []
 	match target_type:
 		TYPE_VECTOR2: keys = VECTOR2_KEYS
