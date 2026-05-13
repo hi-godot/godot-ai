@@ -9,6 +9,8 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "script" / "local-self-update-smoke"
 
@@ -206,6 +208,54 @@ def test_self_update_smoke_harness_refuses_unmarked_existing_dir(tmp_path: Path)
 
     assert result.returncode != 0
     assert "not marked as a smoke fixture" in result.stderr
+
+
+def _make_addon_with(tmp_path: Path, *, present: tuple[str, ...]) -> Path:
+    addon = tmp_path / "addon"
+    (addon / "utils").mkdir(parents=True)
+    for rel in present:
+        (addon / rel).write_text("# fixture stub\n", encoding="utf-8")
+    return addon
+
+
+def test_v240_preflight_passes_when_both_files_present(tmp_path: Path) -> None:
+    smoke = load_smoke_script()
+    addon = _make_addon_with(
+        tmp_path,
+        present=("utils/server_lifecycle.gd", "utils/update_manager.gd"),
+    )
+    smoke._require_v240_plus_addon_shape(addon, "2.4.0")
+
+
+@pytest.mark.parametrize(
+    ("present", "expected_missing"),
+    [
+        (("utils/update_manager.gd",), "utils/server_lifecycle.gd"),
+        (("utils/server_lifecycle.gd",), "utils/update_manager.gd"),
+    ],
+)
+def test_v240_preflight_raises_clear_harness_error_for_single_missing_file(
+    tmp_path: Path, present: tuple[str, ...], expected_missing: str
+) -> None:
+    smoke = load_smoke_script()
+    addon = _make_addon_with(tmp_path, present=present)
+    with pytest.raises(smoke.HarnessError) as exc_info:
+        smoke._require_v240_plus_addon_shape(addon, "2.3.2")
+    message = str(exc_info.value)
+    assert expected_missing in message, message
+    assert "2.3.2" in message, message
+    assert "v2.4.0" in message, message
+    assert "--base-from-release-tag" in message, message
+
+
+def test_v240_preflight_lists_all_missing_files_when_both_absent(tmp_path: Path) -> None:
+    smoke = load_smoke_script()
+    addon = _make_addon_with(tmp_path, present=())
+    with pytest.raises(smoke.HarnessError) as exc_info:
+        smoke._require_v240_plus_addon_shape(addon, "2.3.2")
+    message = str(exc_info.value)
+    assert "utils/server_lifecycle.gd" in message, message
+    assert "utils/update_manager.gd" in message, message
 
 
 def test_self_update_smoke_harness_refuses_suspicious_marker(tmp_path: Path) -> None:
