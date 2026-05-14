@@ -655,6 +655,20 @@ def _extract_session_id(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str | 
     return None
 
 
+def _safe_exception_category(exc: Exception) -> str:
+    """Return a telemetry-safe error category without exception details.
+
+    ``GodotCommandError.__str__`` includes plugin-provided ``error.data``;
+    other exception messages can include user input or project paths. The
+    decorator only needs a stable category for aggregate failure counts.
+    """
+    if exc.__class__.__name__ == "GodotCommandError":
+        code = getattr(exc, "code", None)
+        if code:
+            return str(code)
+    return exc.__class__.__name__
+
+
 def _instrument(
     func: Callable[..., Any],
     *,
@@ -691,7 +705,7 @@ def _instrument(
                 _emit(start, True, sub, sid, None)
                 return result
             except Exception as exc:
-                err = str(exc)
+                err = _safe_exception_category(exc)
                 _emit(start, False, sub, sid, err)
                 raise
 
@@ -708,7 +722,7 @@ def _instrument(
             _emit(start, True, sub, sid, None)
             return result
         except Exception as exc:
-            err = str(exc)
+            err = _safe_exception_category(exc)
             _emit(start, False, sub, sid, err)
             raise
 

@@ -13,6 +13,7 @@ import asyncio
 import pytest
 
 from godot_ai import telemetry as tel
+from godot_ai.godot_client.client import GodotCommandError
 
 
 @pytest.fixture
@@ -67,7 +68,29 @@ class TestTelemetryToolSync:
 
         rec = sent[0]
         assert rec.data["success"] is False
-        assert rec.data["error"] == "boom"
+        assert rec.data["error"] == "ValueError"
+        assert "boom" not in rec.data["error"]
+
+    def test_records_godot_command_error_code_without_data(self, isolated_collector) -> None:
+        _, sent = isolated_collector
+
+        @tel.telemetry_tool("my_tool")
+        def my_tool() -> None:
+            raise GodotCommandError(
+                code="RESOURCE_NOT_FOUND",
+                message="Missing res://secret-project/player.gd",
+                data={"candidate": "res://secret-project/player_backup.gd"},
+            )
+
+        with pytest.raises(GodotCommandError):
+            my_tool()
+        _wait_for(sent, 1)
+
+        rec = sent[0]
+        assert rec.data["success"] is False
+        assert rec.data["error"] == "RESOURCE_NOT_FOUND"
+        assert "secret-project" not in rec.data["error"]
+        assert "candidate" not in rec.data["error"]
 
     def test_extracts_op_as_sub_action(self, isolated_collector) -> None:
         _, sent = isolated_collector
@@ -107,7 +130,7 @@ class TestTelemetryToolSync:
             x()
         _wait_for(sent, 1)
 
-        assert len(sent[0].data["error"]) == 200
+        assert sent[0].data["error"] == "RuntimeError"
 
 
 class TestTelemetryToolAsync:
@@ -137,7 +160,8 @@ class TestTelemetryToolAsync:
         _wait_for(sent, 1)
 
         assert sent[0].data["success"] is False
-        assert sent[0].data["error"] == "async boom"
+        assert sent[0].data["error"] == "RuntimeError"
+        assert "async boom" not in sent[0].data["error"]
 
 
 class TestTelemetryResource:
@@ -155,6 +179,23 @@ class TestTelemetryResource:
         assert rec.record_type is tel.RecordType.RESOURCE_RETRIEVAL
         assert rec.data["resource_name"] == "my_resource"
         assert rec.data["success"] is True
+
+    def test_resource_failure_records_class_name_not_message(self, isolated_collector) -> None:
+        _, sent = isolated_collector
+
+        @tel.telemetry_resource("my_resource")
+        def reader() -> dict:
+            raise ConnectionError("project path /Users/alice/private-game disappeared")
+
+        with pytest.raises(ConnectionError):
+            reader()
+        _wait_for(sent, 1)
+
+        rec = sent[0]
+        assert rec.record_type is tel.RecordType.RESOURCE_RETRIEVAL
+        assert rec.data["success"] is False
+        assert rec.data["error"] == "ConnectionError"
+        assert "private-game" not in rec.data["error"]
 
 
 class TestDecoratorNeverRaises:

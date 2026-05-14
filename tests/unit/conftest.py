@@ -24,10 +24,16 @@ from godot_ai import telemetry as tel
 def isolated_data_dir(monkeypatch, tmp_path: Path) -> Path:
     """Force ``TelemetryConfig._get_data_directory`` into a tmp_path,
     drop any inherited opt-out env vars (CI workflows / conftest.py
-    set them globally), and reset the module-level collector
-    singleton before and after the test."""
+    set them globally), force an invalid endpoint so unmocked sends
+    cannot reach production, and reset the module-level collector
+    singleton before and after the test.
+
+    Tests that assert endpoint resolution can still override or delete
+    ``GODOT_AI_TELEMETRY_ENDPOINT`` after this fixture is active.
+    """
     monkeypatch.delenv("GODOT_AI_DISABLE_TELEMETRY", raising=False)
     monkeypatch.delenv("DISABLE_TELEMETRY", raising=False)
+    monkeypatch.setenv("GODOT_AI_TELEMETRY_ENDPOINT", "ftp://test-leak-guard.invalid/")
     monkeypatch.setattr(tel.TelemetryConfig, "_get_data_directory", lambda self: tmp_path)
     tel.reset_telemetry()
     yield tmp_path

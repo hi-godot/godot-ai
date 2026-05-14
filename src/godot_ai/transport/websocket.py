@@ -46,6 +46,55 @@ _PLUGIN_EVENT_NAMES: frozenset[str] = frozenset(
         "dev_server_toggle",
     }
 )
+_SELF_UPDATE_STATUSES: frozenset[str] = frozenset(
+    {"success", "failed_clean", "failed_mixed", "unknown"}
+)
+_PLUGIN_RELOAD_SOURCES: frozenset[str] = frozenset({"dock_button", "mcp_tool", "unknown"})
+_DEV_SERVER_ACTIONS: frozenset[str] = frozenset({"start", "stop", "unknown"})
+_PLUGIN_EVENT_ERROR_MAX = 200
+
+
+def _truncate_text(value: Any, limit: int) -> str:
+    text = str(value)
+    return text if len(text) <= limit else text[:limit]
+
+
+def _sanitized_plugin_event_data(name: str, data: dict[str, Any]) -> dict[str, Any]:
+    """Return the server-side telemetry schema for a plugin event.
+
+    The plugin has its own allowlist, but a local peer with a valid session
+    can still submit arbitrary data. Keep this as the final outbound
+    telemetry boundary: known event name in, canonical safe fields out.
+    """
+    sanitized: dict[str, Any] = {}
+
+    if name == "dock_startup":
+        developer_mode = data.get("developer_mode")
+        if isinstance(developer_mode, bool):
+            sanitized["developer_mode"] = developer_mode
+    elif name == "self_update":
+        status = str(data.get("status", "unknown"))
+        sanitized["status"] = status if status in _SELF_UPDATE_STATUSES else "unknown"
+        if "from_version" in data:
+            sanitized["from_version"] = str(data["from_version"])
+        if "to_version" in data:
+            sanitized["to_version"] = str(data["to_version"])
+        if "error" in data:
+            sanitized["error"] = _truncate_text(data["error"], _PLUGIN_EVENT_ERROR_MAX)
+    elif name == "plugin_reload":
+        success = data.get("success")
+        if isinstance(success, bool):
+            sanitized["success"] = success
+        source = str(data.get("source", "unknown"))
+        sanitized["source"] = source if source in _PLUGIN_RELOAD_SOURCES else "unknown"
+        if "error" in data:
+            sanitized["error"] = _truncate_text(data["error"], _PLUGIN_EVENT_ERROR_MAX)
+    elif name == "dev_server_toggle":
+        action = str(data.get("action", "unknown"))
+        sanitized["action"] = action if action in _DEV_SERVER_ACTIONS else "unknown"
+
+    sanitized["event_name"] = name
+    return sanitized
 
 
 class GodotWebSocketServer:
@@ -200,18 +249,15 @@ class GodotWebSocketServer:
                 logger.info("Session %s: readiness -> %s", session_id[:8], session.readiness)
             elif event == "plugin_event":
                 ## Plugin-side events (self-update outcome, dock startup,
-                ## reload). The plugin owns the allowlist on the emit side;
-                ## here we only validate envelope shape and forward.
+                ## reload). The plugin owns the allowlist on the emit side,
+                ## but the server is the outbound telemetry trust boundary:
+                ## validate the envelope and project it into per-event safe
+                ## fields before forwarding.
                 payload = PluginTelemetryEvent.model_validate(event_data)
                 if payload.name in _PLUGIN_EVENT_NAMES:
-                    ## ``payload.name`` must win over any ``event_name`` key
-                    ## hidden inside ``payload.data`` — otherwise a malformed
-                    ## plugin event (or hijacked WS) could spoof the recorded
-                    ## event name past the allowlist. Spreading data first,
-                    ## then setting event_name, makes that override impossible.
                     record_telemetry(
                         RecordType.PLUGIN_EVENT,
-                        {**payload.data, "event_name": payload.name},
+                        _sanitized_plugin_event_data(payload.name, payload.data),
                         session_id=session_id,
                     )
                 else:

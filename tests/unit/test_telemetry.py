@@ -74,17 +74,30 @@ class TestHashSessionId:
 
 class TestTelemetryConfig:
     def test_default_enabled_uses_baked_in_endpoint(
-        self, clean_env, isolated_data_dir
+        self, monkeypatch, clean_env, isolated_data_dir
     ) -> None:
         """A fresh install with no env overrides should resolve to the
         baked-in production endpoint so the binary actually reports.
         Regression test for "telemetry on by default" — empty default
         endpoint used to mean zero traffic even when enabled."""
+        monkeypatch.delenv("GODOT_AI_TELEMETRY_ENDPOINT", raising=False)
         config = tel.TelemetryConfig()
         assert config.enabled is True
         assert config.endpoint == tel.TelemetryConfig.DEFAULT_ENDPOINT
         ## The bake-in must be a real https URL, not the empty string.
         assert config.endpoint.startswith("https://")
+
+    def test_isolated_fixture_uses_invalid_endpoint_leak_guard(
+        self, clean_env, isolated_data_dir
+    ) -> None:
+        """Unit tests remove opt-out to exercise enabled telemetry.
+
+        The shared fixture must still prevent an unmocked background
+        worker from POSTing to the baked-in production endpoint.
+        """
+        config = tel.TelemetryConfig()
+        assert config.enabled is True
+        assert config.endpoint == ""
 
     @pytest.mark.parametrize("var", ["GODOT_AI_DISABLE_TELEMETRY", "DISABLE_TELEMETRY"])
     def test_opt_out_via_env(self, monkeypatch, clean_env, isolated_data_dir, var: str) -> None:
