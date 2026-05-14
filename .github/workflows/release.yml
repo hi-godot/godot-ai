@@ -11,6 +11,12 @@ on:
 permissions:
   contents: write
 
+## Block telemetry from CI — same rationale as ci.yml. The release
+## workflow runs pytest before publishing; without this flag every tag
+## push would fire one or more synthetic events.
+env:
+  GODOT_AI_DISABLE_TELEMETRY: "true"
+
 jobs:
   # Publish the Python server package to PyPI FIRST so that by the time the
   # plugin ZIP is released and users self-update, the matching Python package

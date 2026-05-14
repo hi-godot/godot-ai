@@ -11,6 +11,12 @@
 # If omitted, runs a single import pass and checks its output.
 set -euo pipefail
 
+## Match the CI workflow env-block opt-out: no fake "installs" or stray
+## streaming-insert quota from local dev runs of this script either. The
+## collector treats this flag as a hard opt-out (no UUID, no worker, no
+## _send). See docs/TELEMETRY.md.
+export GODOT_AI_DISABLE_TELEMETRY=true
+
 PROJECT_DIR="${PROJECT_DIR:-test_project}"
 
 if [ "${1:-}" != "" ] && [ -f "$1" ]; then

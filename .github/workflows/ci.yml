@@ -7,6 +7,15 @@ on:
   pull_request:
     branches: [main, beta]
 
+## Stop CI from injecting fake "installs" into the telemetry dashboard or
+## burning streaming-insert quota on the backend. Opt-out is fully
+## side-effect-free in the collector (no UUID generated, no worker
+## thread, no _send), so the test/runtime behavior under this flag
+## matches a real opted-out end-user install. Mirrored in script/ci-*
+## shell scripts for any path that doesn't inherit this env.
+env:
+  GODOT_AI_DISABLE_TELEMETRY: "true"
+
 jobs:
   python-tests:
     name: Python ${{ matrix.python-version }} / ${{ matrix.os }}

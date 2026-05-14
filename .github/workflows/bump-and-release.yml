@@ -24,6 +24,10 @@ permissions:
   # integration".
   actions: write
 
+## Block telemetry from CI — same rationale as ci.yml.
+env:
+  GODOT_AI_DISABLE_TELEMETRY: "true"
+
 jobs:
   bump:
     runs-on: ubuntu-latest

@@ -8,6 +8,12 @@
 # Expects: Python server running on port 8000, Godot editor with plugin connected.
 set -euo pipefail
 
+## Match the CI workflow env-block opt-out: no fake "installs" or stray
+## streaming-insert quota from local dev runs of this script either. The
+## collector treats this flag as a hard opt-out (no UUID, no worker, no
+## _send). See docs/TELEMETRY.md.
+export GODOT_AI_DISABLE_TELEMETRY=true
+
 SERVER_URL="http://127.0.0.1:8000/mcp"
 HEADERS=(-H "Content-Type: application/json" -H "Accept: application/json, text/event-stream")
 REQ_ID=0
