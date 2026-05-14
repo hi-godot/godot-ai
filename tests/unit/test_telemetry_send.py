@@ -71,6 +71,25 @@ class TestSendOverHttpx:
         client_cls.assert_not_called()
         collector.shutdown()
 
+    def test_empty_endpoint_logs_only_once(
+        self, clean_env, isolated_data_dir, caplog
+    ) -> None:
+        """The 'endpoint unset; dropping' debug log must fire exactly
+        once even under a flood of dequeued records — otherwise a busy
+        session at debug level would spam logs."""
+        import logging
+
+        collector = tel.TelemetryCollector()
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="godot-ai-telemetry"):
+            for _ in range(50):
+                collector._send(_record())
+        endpoint_msgs = [
+            r for r in caplog.records if "endpoint unset" in r.getMessage()
+        ]
+        assert len(endpoint_msgs) == 1
+        collector.shutdown()
+
     def test_posts_when_endpoint_set(self, monkeypatch, clean_env, isolated_data_dir) -> None:
         monkeypatch.setenv("GODOT_AI_TELEMETRY_ENDPOINT", "https://example.com/x")
         collector = tel.TelemetryCollector()

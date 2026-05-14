@@ -66,6 +66,7 @@ __all__ = [
     "record_telemetry",
     "record_tool_usage",
     "reset_telemetry",
+    "shutdown_if_initialized",
     "telemetry_resource",
     "telemetry_tool",
 ]
@@ -145,12 +146,18 @@ class TelemetryConfig:
         self.endpoint = self._resolve_endpoint()
         self.timeout = self._resolve_timeout()
 
-        ## On-disk artifacts:
-        ##   customer_uuid.txt — stable anonymous id (per OS user/install)
-        ##   milestones.json   — one-shot event ledger
-        self.data_dir = self._get_data_directory()
-        self.uuid_file = self.data_dir / "customer_uuid.txt"
-        self.milestones_file = self.data_dir / "milestones.json"
+        ## On-disk artifacts are deferred until telemetry is actually
+        ## enabled: opt-out must not create the data directory or
+        ## generate a customer_uuid (see docs/TELEMETRY.md). The
+        ## collector won't call _load_persistent_data when disabled,
+        ## so leaving these as None is safe.
+        self.data_dir: Path | None = None
+        self.uuid_file: Path | None = None
+        self.milestones_file: Path | None = None
+        if self.enabled:
+            self.data_dir = self._get_data_directory()
+            self.uuid_file = self.data_dir / "customer_uuid.txt"
+            self.milestones_file = self.data_dir / "milestones.json"
 
         self.session_id = str(uuid.uuid4())
 
@@ -228,9 +235,20 @@ class TelemetryCollector:
         self._lock = threading.Lock()
         self._queue: queue.Queue[TelemetryRecord] = queue.Queue(maxsize=self.QUEUE_MAXSIZE)
         self._shutdown = False
+        ## One-shot guard for the "endpoint unset" debug log in _send so a
+        ## flood of dequeued records doesn't flood logs at debug level.
+        self._endpoint_unset_logged = False
+        ## When disabled (env opt-out), make construction fully
+        ## side-effect-free: no UUID generated, no milestones loaded,
+        ## no worker thread. ``record`` / ``record_milestone`` already
+        ## short-circuit on ``config.enabled``, so the empty queue and
+        ## dormant worker are harmless. This is the contract documented
+        ## in docs/TELEMETRY.md.
+        self._worker: threading.Thread | None = None
+        if not self.config.enabled:
+            return
 
         self._load_persistent_data()
-
         self._worker = threading.Thread(
             target=self._worker_loop, name="godot-ai-telemetry", daemon=True
         )
@@ -324,7 +342,8 @@ class TelemetryCollector:
 
     def shutdown(self) -> None:
         self._shutdown = True
-        if self._worker.is_alive():
+        ## Worker is None when telemetry was disabled at construction.
+        if self._worker is not None and self._worker.is_alive():
             self._worker.join(timeout=self.SHUTDOWN_TIMEOUT)
 
     # --- worker ----------------------------------------------------------
@@ -346,9 +365,15 @@ class TelemetryCollector:
     def _send(self, record: TelemetryRecord) -> None:
         endpoint = self.config.endpoint
         if not endpoint:
-            ## Pre-backend phase: log once at debug level so an operator
-            ## tailing logs can confirm telemetry is alive, then drop.
-            logger.debug("Telemetry endpoint unset; dropping record %s", record.record_type.value)
+            ## Pre-backend phase: log exactly once at debug level so an
+            ## operator tailing logs can confirm telemetry is alive, then
+            ## drop every subsequent record silently. Without the
+            ## one-shot flag, a busy session would flood debug logs.
+            if not self._endpoint_unset_logged:
+                logger.debug(
+                    "Telemetry endpoint unset; dropping records (logged once)"
+                )
+                self._endpoint_unset_logged = True
             return
 
         enriched = dict(record.data)
@@ -405,6 +430,22 @@ def reset_telemetry() -> None:
             _collector = None
 
 
+def shutdown_if_initialized() -> None:
+    """Shut down the collector iff it was already created.
+
+    Lifespan teardown should call this instead of ``get_telemetry().shutdown()``
+    so an opted-out server never instantiates the collector just to shut it
+    down. The module-level singleton is checked under the construction lock
+    so a concurrent ``get_telemetry()`` can't race us into instantiating
+    a fresh collector after we've decided not to.
+    """
+    global _collector
+    with _collector_lock:
+        if _collector is None:
+            return
+        _collector.shutdown()
+
+
 def record_telemetry(
     record_type: RecordType,
     data: dict[str, Any],
@@ -420,7 +461,14 @@ def record_milestone(milestone: MilestoneType, data: dict[str, Any] | None = Non
 
 
 def is_telemetry_enabled() -> bool:
-    return get_telemetry().config.enabled
+    """Pure env check — never instantiates the collector.
+
+    Callers may want to check the opt-out flag without paying for
+    collector construction (which generates a UUID and creates the data
+    directory). Reading the env vars directly preserves the
+    side-effect-free contract of opt-out.
+    """
+    return not TelemetryConfig._is_disabled_via_env()
 
 
 def _truncate(value: Any, limit: int) -> str:

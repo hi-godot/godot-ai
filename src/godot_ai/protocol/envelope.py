@@ -78,4 +78,4 @@ class ReadinessChangedEvent(BaseModel):
 ## forwards to ``telemetry.record_telemetry``.
 class PluginTelemetryEvent(BaseModel):
     name: str = ""
-    data: dict = {}
+    data: dict[str, Any] = Field(default_factory=dict)

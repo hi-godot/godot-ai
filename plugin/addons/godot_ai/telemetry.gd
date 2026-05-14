@@ -55,7 +55,9 @@ func record_event(name: String, data: Dictionary = {}) -> void:
 	if _disabled:
 		return
 	if not _ALLOWED_EVENTS.has(name):
-		push_warning("godot_ai.telemetry: dropping unknown event %s" % name)
+		## Drop silently — matches the server's behavior for unknown
+		## names, and avoids editor yellow-bar noise from third-party
+		## callers or stale event names mid-rollout.
 		return
 	if _connection != null and _connection.is_connected:
 		_flush()

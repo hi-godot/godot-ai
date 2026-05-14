@@ -204,9 +204,14 @@ class GodotWebSocketServer:
                 ## here we only validate envelope shape and forward.
                 payload = PluginTelemetryEvent.model_validate(event_data)
                 if payload.name in _PLUGIN_EVENT_NAMES:
+                    ## ``payload.name`` must win over any ``event_name`` key
+                    ## hidden inside ``payload.data`` — otherwise a malformed
+                    ## plugin event (or hijacked WS) could spoof the recorded
+                    ## event name past the allowlist. Spreading data first,
+                    ## then setting event_name, makes that override impossible.
                     record_telemetry(
                         RecordType.PLUGIN_EVENT,
-                        {"event_name": payload.name, **payload.data},
+                        {**payload.data, "event_name": payload.name},
                         session_id=session_id,
                     )
                 else:

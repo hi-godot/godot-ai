@@ -226,6 +226,44 @@ class TestPluginEventAllowlist:
         assert rec.session_id.endswith("@a3f2")
         assert "demo" not in rec.session_id
 
+    def test_payload_data_cannot_override_event_name(self, captured) -> None:
+        """A malformed plugin_event with an ``event_name`` key hidden in
+        its ``data`` dict must not be able to spoof the recorded event
+        name past the allowlist. The canonical name is ``payload.name``;
+        ``data`` is merged first so the canonical name always wins.
+        """
+        from godot_ai.transport import websocket as ws_mod
+
+        reg = SessionRegistry()
+        session = Session(
+            session_id="demo@a3f2",
+            godot_version="4.4.1",
+            project_path="/tmp/demo",
+            plugin_version="0.0.1",
+        )
+        reg.register(session)
+        captured.clear()
+
+        stub = types.SimpleNamespace(registry=reg)
+        ws_mod.GodotWebSocketServer._handle_event(
+            stub,  # type: ignore[arg-type]
+            "demo@a3f2",
+            {
+                "type": "event",
+                "event": "plugin_event",
+                "data": {
+                    "name": "dock_startup",
+                    "data": {"event_name": "FAKE_OVERRIDE", "other": 1},
+                },
+            },
+        )
+        _wait_for(captured, 1)
+
+        plugin_events = [r for r in captured if r.record_type is tel.RecordType.PLUGIN_EVENT]
+        assert len(plugin_events) == 1
+        assert plugin_events[0].data["event_name"] == "dock_startup"
+        assert plugin_events[0].data["other"] == 1
+
     def test_unknown_event_dropped(self, captured) -> None:
         from godot_ai.transport import websocket as ws_mod
 

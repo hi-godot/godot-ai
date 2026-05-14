@@ -226,3 +226,61 @@ class TestTelemetryCollector:
         ## ``put_nowait`` should silently drop once the bound is hit; the
         ## queue should be sitting at exactly ``QUEUE_MAXSIZE``.
         assert collector._queue.qsize() == collector.QUEUE_MAXSIZE
+
+    def test_disabled_does_not_touch_disk(
+        self, monkeypatch, clean_env, isolated_data_dir: Path
+    ) -> None:
+        """Opt-out must be fully side-effect-free: no UUID file, no
+        milestones file, no worker thread. Locks in the contract
+        documented in docs/TELEMETRY.md.
+        """
+        monkeypatch.setenv("GODOT_AI_DISABLE_TELEMETRY", "1")
+        collector = tel.TelemetryCollector()
+
+        ## No disk artifacts created.
+        assert not (isolated_data_dir / "customer_uuid.txt").exists()
+        assert not (isolated_data_dir / "milestones.json").exists()
+        ## No worker thread spun up.
+        assert collector._worker is None
+        ## No UUID in memory either.
+        assert collector._customer_uuid is None
+        ## Path-tracking fields are nullable; on-disk paths deferred.
+        assert collector.config.data_dir is None
+        assert collector.config.uuid_file is None
+        assert collector.config.milestones_file is None
+        ## Shutdown remains safe with no worker.
+        collector.shutdown()
+
+
+class TestPublicHelpers:
+    def test_is_telemetry_enabled_does_not_construct_collector(
+        self, monkeypatch, clean_env, isolated_data_dir: Path
+    ) -> None:
+        """``is_telemetry_enabled()`` is a pure env check by design — the
+        opt-out contract is that no collector / disk side effect happens
+        just from asking."""
+        assert tel._collector is None  # singleton not created yet
+        assert tel.is_telemetry_enabled() is True
+        assert tel._collector is None  # still not created
+        ## And the env-override path returns False without creating one.
+        monkeypatch.setenv("GODOT_AI_DISABLE_TELEMETRY", "1")
+        assert tel.is_telemetry_enabled() is False
+        assert tel._collector is None
+
+    def test_shutdown_if_initialized_noop_when_no_collector(
+        self, clean_env, isolated_data_dir: Path
+    ) -> None:
+        assert tel._collector is None
+        tel.shutdown_if_initialized()  # must not create or raise
+        assert tel._collector is None
+
+    def test_shutdown_if_initialized_shuts_down_existing(
+        self, clean_env, isolated_data_dir: Path
+    ) -> None:
+        tel.get_telemetry()
+        assert tel._collector is not None
+        worker = tel._collector._worker
+        tel.shutdown_if_initialized()
+        ## The collector should be told to stop; worker drains and exits.
+        assert tel._collector is not None  # singleton not cleared
+        assert worker is None or not worker.is_alive()

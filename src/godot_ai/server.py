@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
 import time
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
@@ -37,10 +36,10 @@ from godot_ai.sessions.registry import SessionRegistry
 from godot_ai.telemetry import (
     MilestoneType,
     RecordType,
-    get_telemetry,
     install_fastmcp_wraps,
     record_milestone,
     record_telemetry,
+    shutdown_if_initialized,
 )
 from godot_ai.tools.animation import register_animation_tools
 from godot_ai.tools.audio import register_audio_tools
@@ -118,9 +117,10 @@ def create_server(
 
         ## Defer initial telemetry off the lifespan start tick — mirrors
         ## unity-mcp's 1s stdio-handshake guard so the first POST never
-        ## races the MCP protocol's own startup chatter. Errors are
-        ## swallowed inside ``_emit_startup`` — telemetry can never
-        ## abort lifespan.
+        ## races the MCP protocol's own startup chatter. Scheduled via
+        ## the running loop (not a ``threading.Timer``) so a fast
+        ## shutdown cancels the pending callback cleanly instead of
+        ## leaving a non-daemon thread alive past lifespan teardown.
         start_clk = time.perf_counter()
 
         def _emit_startup() -> None:
@@ -137,18 +137,23 @@ def create_server(
             except Exception:  # noqa: BLE001
                 logger.debug("Startup telemetry failed", exc_info=True)
 
-        threading.Timer(1.0, _emit_startup).start()
+        loop = asyncio.get_running_loop()
+        startup_handle = loop.call_later(1.0, _emit_startup)
 
         try:
             yield AppContext(registry=registry, ws_server=ws_server, client=client)
         finally:
+            startup_handle.cancel()
             ws_task.cancel()
             try:
                 await ws_task
             except (asyncio.CancelledError, OSError):
                 pass
+            ## Use ``shutdown_if_initialized`` so an opted-out server
+            ## (which never created a collector) doesn't get one
+            ## materialized solely to be shut down.
             try:
-                get_telemetry().shutdown()
+                shutdown_if_initialized()
             except Exception:  # noqa: BLE001
                 logger.debug("Telemetry shutdown failed", exc_info=True)
 
