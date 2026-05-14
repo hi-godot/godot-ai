@@ -221,6 +221,25 @@ See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for development setup, testing, and 
 
 </details>
 
+<details>
+<summary><strong>Telemetry &amp; Privacy</strong></summary>
+
+Godot AI ships anonymous, privacy-focused telemetry (no code, no scene contents, no project or file names, no personal data). Project-directory slugs are sha256-hashed before any event leaves your machine; only an anonymous installation UUID, the tool/event name, success/duration, and platform/version fields are sent.
+
+Opt out by setting either environment variable to `true`:
+
+```bash
+export GODOT_AI_DISABLE_TELEMETRY=true
+# or the cross-tool convention
+export DISABLE_TELEMETRY=true
+```
+
+Opt-out is fully side-effect-free — no UUID generated, no worker thread, no files written.
+
+Full details (what's collected, where data lives, how to self-host the endpoint): [docs/TELEMETRY.md](docs/TELEMETRY.md).
+
+</details>
+
 ---
 
 ## Star History
