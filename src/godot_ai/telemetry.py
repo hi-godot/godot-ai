@@ -370,6 +370,23 @@ class TelemetryCollector:
         ## Worker is None when telemetry was disabled at construction.
         if self._worker is not None and self._worker.is_alive():
             self._worker.join(timeout=self.SHUTDOWN_TIMEOUT)
+
+        ## ``_send`` is single-consumer by design (only the worker
+        ## thread calls it), so the in-method lazy-create of
+        ## ``self._client`` is safe against double-construct. The
+        ## race we *do* have to avoid is closing ``self._client``
+        ## while the worker is mid-``post(...)``: closing an
+        ## ``httpx.Client`` from another thread while a request is
+        ## in flight is not an invariant httpx documents, and with
+        ## ``GODOT_AI_TELEMETRY_TIMEOUT`` allowed to exceed
+        ## ``SHUTDOWN_TIMEOUT`` the worker can still be inside
+        ## ``post()`` when the join times out. So: only close when
+        ## the worker is actually gone; otherwise leave it for
+        ## process exit to clean up. This preserves the non-blocking
+        ## teardown contract without closing the client mid-call.
+        if self._worker is not None and self._worker.is_alive():
+            logger.debug("Telemetry worker still alive at shutdown; leaving client open")
+            return
         if self._client is not None:
             with contextlib.suppress(Exception):
                 self._client.close()

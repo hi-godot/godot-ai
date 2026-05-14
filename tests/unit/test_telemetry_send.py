@@ -572,6 +572,54 @@ class TestShutdownEdges:
         assert not collector._worker.is_alive()
         collector.shutdown()  # must not raise
 
+    def test_shutdown_does_not_close_client_while_worker_in_flight(
+        self, monkeypatch, clean_env, isolated_data_dir
+    ) -> None:
+        """If the worker is still inside ``self._client.post(...)`` when
+        ``shutdown`` times out joining, closing the client from this
+        thread would tear an httpx connection out from under the
+        worker — undefined behavior. The contract is: only close when
+        the worker is actually gone. Locks in the race fix flagged
+        by the lazy-init second-opinion review.
+        """
+        import threading
+
+        monkeypatch.setenv("GODOT_AI_TELEMETRY_ENDPOINT", "https://example.com/x")
+        ## SHUTDOWN_TIMEOUT defaults to 2.0s; force a tighter window
+        ## so we don't slow the test suite waiting for it.
+        monkeypatch.setattr(tel.TelemetryCollector, "SHUTDOWN_TIMEOUT", 0.2)
+        collector = tel.TelemetryCollector()
+
+        ## Pin _client to a stub so we don't need network. Make
+        ## ``post`` block long enough that the join times out.
+        worker_in_post = threading.Event()
+        release = threading.Event()
+
+        def slow_post(*_a, **_kw):
+            worker_in_post.set()
+            release.wait(timeout=5.0)
+            return MagicMock(status_code=200)
+
+        client_inst = MagicMock()
+        client_inst.post.side_effect = slow_post
+        collector._client = client_inst
+
+        collector.record(tel.RecordType.USAGE, {"x": 1})
+        ## Wait for the worker to actually be inside post() before
+        ## calling shutdown, otherwise the worker might exit cleanly
+        ## and we'd test the wrong branch.
+        assert worker_in_post.wait(timeout=2.0), "worker never entered post()"
+
+        collector.shutdown()  # join times out → must NOT close client
+
+        client_inst.close.assert_not_called()
+        assert collector._client is client_inst, "client must still be live"
+
+        ## Let the in-flight post return so the worker can exit cleanly
+        ## (otherwise the daemon thread lingers).
+        release.set()
+        collector._worker.join(timeout=2.0)
+
 
 # --- silence threading test warnings ------------------------------------
 
