@@ -45,6 +45,7 @@ from urllib.parse import urlparse
 import httpx
 
 from godot_ai import __version__ as _PACKAGE_VERSION
+from godot_ai.protocol.errors import ErrorCode
 
 logger = logging.getLogger("godot-ai-telemetry")
 
@@ -664,8 +665,11 @@ def _safe_exception_category(exc: Exception) -> str:
     """
     if exc.__class__.__name__ == "GodotCommandError":
         code = getattr(exc, "code", None)
-        if code:
+        if code in {member.value for member in ErrorCode}:
             return str(code)
+        if isinstance(code, ErrorCode):
+            return code.value
+        return "GodotCommandError"
     return exc.__class__.__name__
 
 

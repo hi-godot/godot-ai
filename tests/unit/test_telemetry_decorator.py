@@ -92,6 +92,25 @@ class TestTelemetryToolSync:
         assert "secret-project" not in rec.data["error"]
         assert "candidate" not in rec.data["error"]
 
+    def test_replaces_unknown_godot_command_error_code(self, isolated_collector) -> None:
+        _, sent = isolated_collector
+
+        @tel.telemetry_tool("my_tool")
+        def my_tool() -> None:
+            raise GodotCommandError(
+                code="res://secret-project/error-code",
+                message="Missing res://secret-project/player.gd",
+            )
+
+        with pytest.raises(GodotCommandError):
+            my_tool()
+        _wait_for(sent, 1)
+
+        rec = sent[0]
+        assert rec.data["success"] is False
+        assert rec.data["error"] == "GodotCommandError"
+        assert "secret-project" not in rec.data["error"]
+
     def test_extracts_op_as_sub_action(self, isolated_collector) -> None:
         _, sent = isolated_collector
 
@@ -118,7 +137,7 @@ class TestTelemetryToolSync:
         assert sent[0].session_id.endswith("@a3f2")
         assert "my-game" not in sent[0].session_id
 
-    def test_truncates_long_error(self, isolated_collector) -> None:
+    def test_records_class_name_for_long_error_message(self, isolated_collector) -> None:
         _, sent = isolated_collector
         long_msg = "x" * 500
 

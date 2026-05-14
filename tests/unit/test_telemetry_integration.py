@@ -304,7 +304,7 @@ class TestPluginEventAllowlist:
             "source": "dock_button",
         }
 
-    def test_malformed_payload_values_are_replaced_or_truncated(self, captured) -> None:
+    def test_malformed_payload_values_are_replaced_safely(self, captured) -> None:
         from godot_ai.transport import websocket as ws_mod
 
         reg = SessionRegistry()
@@ -328,9 +328,9 @@ class TestPluginEventAllowlist:
                     "name": "self_update",
                     "data": {
                         "status": "res://unexpected",
-                        "from_version": 1,
-                        "to_version": None,
-                        "error": "x" * 250,
+                        "from_version": "1.2.3",
+                        "to_version": "res://private-game/addons/godot_ai",
+                        "error": "/Users/alice/private-game/full editor log",
                         "logs": "full editor log",
                     },
                 },
@@ -343,10 +343,52 @@ class TestPluginEventAllowlist:
         rec = plugin_events[0]
         assert rec.data["event_name"] == "self_update"
         assert rec.data["status"] == "unknown"
-        assert rec.data["from_version"] == "1"
-        assert rec.data["to_version"] == "None"
-        assert rec.data["error"] == "x" * 200
+        assert rec.data["from_version"] == "1.2.3"
+        assert rec.data["to_version"] == "unknown"
+        assert rec.data["error"] == "reported"
+        assert all("private-game" not in str(value) for value in rec.data.values())
         assert "logs" not in rec.data
+
+    def test_plugin_reload_error_message_is_replaced(self, captured) -> None:
+        from godot_ai.transport import websocket as ws_mod
+
+        reg = SessionRegistry()
+        session = Session(
+            session_id="demo@a3f2",
+            godot_version="4.4.1",
+            project_path="/tmp/demo",
+            plugin_version="0.0.1",
+        )
+        reg.register(session)
+        captured.clear()
+
+        stub = types.SimpleNamespace(registry=reg)
+        ws_mod.GodotWebSocketServer._handle_event(
+            stub,  # type: ignore[arg-type]
+            "demo@a3f2",
+            {
+                "type": "event",
+                "event": "plugin_event",
+                "data": {
+                    "name": "plugin_reload",
+                    "data": {
+                        "success": False,
+                        "source": "mcp_tool",
+                        "error": "failed reading /Users/alice/private-game/plugin.gd",
+                    },
+                },
+            },
+        )
+        _wait_for(captured, 1)
+
+        plugin_events = [r for r in captured if r.record_type is tel.RecordType.PLUGIN_EVENT]
+        assert len(plugin_events) == 1
+        assert plugin_events[0].data == {
+            "event_name": "plugin_reload",
+            "success": False,
+            "source": "mcp_tool",
+            "error": "reported",
+        }
 
     def test_plugin_reload_and_dev_server_enums_default_unknown(self, captured) -> None:
         from godot_ai.transport import websocket as ws_mod

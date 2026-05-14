@@ -6,6 +6,7 @@ import asyncio
 import errno
 import json
 import logging
+import re
 from typing import Any
 
 import websockets
@@ -51,12 +52,12 @@ _SELF_UPDATE_STATUSES: frozenset[str] = frozenset(
 )
 _PLUGIN_RELOAD_SOURCES: frozenset[str] = frozenset({"dock_button", "mcp_tool", "unknown"})
 _DEV_SERVER_ACTIONS: frozenset[str] = frozenset({"start", "stop", "unknown"})
-_PLUGIN_EVENT_ERROR_MAX = 200
+_VERSION_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
 
 
-def _truncate_text(value: Any, limit: int) -> str:
+def _safe_version_token(value: Any) -> str:
     text = str(value)
-    return text if len(text) <= limit else text[:limit]
+    return text if _VERSION_TOKEN_RE.fullmatch(text) else "unknown"
 
 
 def _sanitized_plugin_event_data(name: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -76,11 +77,11 @@ def _sanitized_plugin_event_data(name: str, data: dict[str, Any]) -> dict[str, A
         status = str(data.get("status", "unknown"))
         sanitized["status"] = status if status in _SELF_UPDATE_STATUSES else "unknown"
         if "from_version" in data:
-            sanitized["from_version"] = str(data["from_version"])
+            sanitized["from_version"] = _safe_version_token(data["from_version"])
         if "to_version" in data:
-            sanitized["to_version"] = str(data["to_version"])
+            sanitized["to_version"] = _safe_version_token(data["to_version"])
         if "error" in data:
-            sanitized["error"] = _truncate_text(data["error"], _PLUGIN_EVENT_ERROR_MAX)
+            sanitized["error"] = "reported"
     elif name == "plugin_reload":
         success = data.get("success")
         if isinstance(success, bool):
@@ -88,7 +89,7 @@ def _sanitized_plugin_event_data(name: str, data: dict[str, Any]) -> dict[str, A
         source = str(data.get("source", "unknown"))
         sanitized["source"] = source if source in _PLUGIN_RELOAD_SOURCES else "unknown"
         if "error" in data:
-            sanitized["error"] = _truncate_text(data["error"], _PLUGIN_EVENT_ERROR_MAX)
+            sanitized["error"] = "reported"
     elif name == "dev_server_toggle":
         action = str(data.get("action", "unknown"))
         sanitized["action"] = action if action in _DEV_SERVER_ACTIONS else "unknown"
