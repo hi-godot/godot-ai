@@ -1340,7 +1340,8 @@ func _on_dev_primary_pressed() -> void:
 		return
 	if not _plugin.has_method("force_restart_or_start_dev_server"):
 		return
-	_emit_dev_server_toggle_telemetry("start")
+	if _plugin.has_method("record_dev_server_toggle"):
+		_plugin.record_dev_server_toggle("start")
 	_server_restart_in_progress = true
 	_update_dev_section_buttons()
 	if not is_inside_tree():
@@ -1357,25 +1358,9 @@ func _on_dev_stop_pressed() -> void:
 		return
 	if _plugin.has_method("stop_dev_server"):
 		_plugin.stop_dev_server()
-		_emit_dev_server_toggle_telemetry("stop")
+		if _plugin.has_method("record_dev_server_toggle"):
+			_plugin.record_dev_server_toggle("stop")
 	_update_dev_section_buttons.call_deferred()
-
-
-## Emit a `dev_server_toggle` telemetry event. The dev server is a
-## Python subprocess unrelated to the plugin's own lifecycle — the
-## WebSocket connection stays alive across the toggle, so emission can
-## be synchronous (no EditorSettings persistence dance like
-## plugin_reload / self_update). Best-effort: missing `_telemetry`
-## on the plugin is silently skipped (older plugin instance during a
-## mixed-state self-update window).
-func _emit_dev_server_toggle_telemetry(action: String) -> void:
-	if _plugin == null or not ("_telemetry" in _plugin):
-		return
-	var telemetry = _plugin._telemetry
-	if telemetry == null:
-		return
-	if telemetry.has_method("record_dev_server_toggle"):
-		telemetry.record_dev_server_toggle(action)
 
 
 func _perform_dev_restart_after_feedback() -> void:

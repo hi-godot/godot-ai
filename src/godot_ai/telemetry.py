@@ -264,6 +264,12 @@ class TelemetryCollector:
         ## dormant worker are harmless. This is the contract documented
         ## in docs/TELEMETRY.md.
         self._worker: threading.Thread | None = None
+        ## Reusable httpx client. Built lazily on first send so a never-
+        ## sending session (empty endpoint) doesn't pay the setup cost,
+        ## and torn down in shutdown(). Reusing the client keeps the
+        ## TLS handshake + connection pool warm across records — a real
+        ## win on busy sessions that fire dozens of events.
+        self._client: httpx.Client | None = None
         if not self.config.enabled:
             return
 
@@ -364,6 +370,10 @@ class TelemetryCollector:
         ## Worker is None when telemetry was disabled at construction.
         if self._worker is not None and self._worker.is_alive():
             self._worker.join(timeout=self.SHUTDOWN_TIMEOUT)
+        if self._client is not None:
+            with contextlib.suppress(Exception):
+                self._client.close()
+            self._client = None
 
     # --- worker ----------------------------------------------------------
 
@@ -416,10 +426,11 @@ class TelemetryCollector:
             payload["milestone"] = record.milestone.value
 
         try:
-            with httpx.Client(timeout=self.config.timeout) as client:
-                response = client.post(endpoint, json=payload)
-                if not 200 <= response.status_code < 300:
-                    logger.debug("Telemetry endpoint returned HTTP %s", response.status_code)
+            if self._client is None:
+                self._client = httpx.Client(timeout=self.config.timeout)
+            response = self._client.post(endpoint, json=payload)
+            if not 200 <= response.status_code < 300:
+                logger.debug("Telemetry endpoint returned HTTP %s", response.status_code)
         except httpx.HTTPError as exc:
             logger.debug("Telemetry POST failed: %s", exc)
 
@@ -581,22 +592,43 @@ def record_failure(
 _SUB_ACTION_KEYS = ("op", "action", "sub_action")
 
 
-def _extract_sub_action(
-    func: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]
-) -> str | None:
-    """Pull the first known sub-action key out of a tool's bound args."""
+def _build_sub_action_extractor(func: Callable[..., Any]) -> Callable[..., str | None]:
+    """Build a per-decoration closure that maps (args, kwargs) -> sub-action.
+
+    ``inspect.signature`` is ~10us per call on a non-trivial signature;
+    factoring it out of the per-invocation hot path saves that on every
+    tool call. The signature can't change after decoration — we'd have
+    to redecorate to see a new one — so we resolve it exactly once.
+
+    Returns a small closure that either:
+    * Looks up the positional index of the first matching sub-action
+      param (resolved at decoration time), or
+    * Falls back to a kwargs-only lookup if no positional binding
+      is possible (TypeError / ValueError from ``inspect.signature``).
+    """
     try:
-        sig = inspect.signature(func)
-        bound = sig.bind_partial(*args, **kwargs)
+        params = list(inspect.signature(func).parameters.keys())
     except (TypeError, ValueError):
-        return None
+        params = []
+    ## Per-param: (kwarg-name, positional-index-or-None).
+    candidates: list[tuple[str, int | None]] = []
     for key in _SUB_ACTION_KEYS:
-        if key in bound.arguments:
-            value = bound.arguments[key]
+        idx = params.index(key) if key in params else None
+        candidates.append((key, idx))
+
+    def extract(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str | None:
+        for key, idx in candidates:
+            value: Any = None
+            if key in kwargs:
+                value = kwargs[key]
+            elif idx is not None and idx < len(args):
+                value = args[idx]
             if value is None:
                 continue
             return str(value)
-    return None
+        return None
+
+    return extract
 
 
 def _extract_session_id(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str | None:
@@ -615,6 +647,7 @@ def _instrument(
     """Wrap ``func`` with timing + telemetry. Handles sync and async."""
     is_async = inspect.iscoroutinefunction(func)
     record = record_tool_usage if kind == "tool" else record_resource_usage
+    extract_sub_action = _build_sub_action_extractor(func)
 
     def _emit(
         start: float, success: bool, sub: str | None, sid: str | None, err: str | None
@@ -633,7 +666,7 @@ def _instrument(
         @functools.wraps(func)
         async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
             start = time.perf_counter()
-            sub = _extract_sub_action(func, args, kwargs)
+            sub = extract_sub_action(args, kwargs)
             sid = _extract_session_id(args, kwargs)
             err: str | None = None
             try:
@@ -650,7 +683,7 @@ def _instrument(
     @functools.wraps(func)
     def _sync_wrapper(*args: Any, **kwargs: Any) -> Any:
         start = time.perf_counter()
-        sub = _extract_sub_action(func, args, kwargs)
+        sub = extract_sub_action(args, kwargs)
         sid = _extract_session_id(args, kwargs)
         err: str | None = None
         try:

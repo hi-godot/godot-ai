@@ -9,7 +9,6 @@ from bound args, and never raises out of a tool path.
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 import pytest
 
@@ -17,20 +16,15 @@ from godot_ai import telemetry as tel
 
 
 @pytest.fixture
-def isolated_collector(monkeypatch, tmp_path: Path):
-    """Drop the singleton, capture every sent record in a list."""
-    ## Make this fixture robust against CI workflows that set
-    ## ``GODOT_AI_DISABLE_TELEMETRY=true`` at the env-block level —
-    ## those tests still need a *live* collector to assert records.
-    monkeypatch.delenv("GODOT_AI_DISABLE_TELEMETRY", raising=False)
-    monkeypatch.delenv("DISABLE_TELEMETRY", raising=False)
-    monkeypatch.setattr(tel.TelemetryConfig, "_get_data_directory", lambda self: tmp_path)
-    tel.reset_telemetry()
+def isolated_collector(isolated_data_dir):
+    """A fresh telemetry collector with ``_send`` redirected into a list
+    so tests can assert on captured records. Builds on the shared
+    ``isolated_data_dir`` fixture (``tests/unit/conftest.py``) for the
+    env-clean + tmp-dir + reset_telemetry dance."""
     collector = tel.get_telemetry()
     sent: list[tel.TelemetryRecord] = []
     collector._send = sent.append  # type: ignore[method-assign]
-    yield collector, sent
-    tel.reset_telemetry()
+    return collector, sent
 
 
 def _wait_for(records: list, count: int, timeout: float = 2.0) -> None:

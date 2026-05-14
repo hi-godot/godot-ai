@@ -24,19 +24,7 @@ import pytest
 from godot_ai import telemetry as tel
 
 # --- shared fixtures -----------------------------------------------------
-
-
-@pytest.fixture
-def isolated_data_dir(monkeypatch, tmp_path: Path) -> Path:
-    ## Make this fixture robust against CI workflows that set
-    ## ``GODOT_AI_DISABLE_TELEMETRY=true`` at the env-block level —
-    ## those tests still need a *live* collector to assert records.
-    monkeypatch.delenv("GODOT_AI_DISABLE_TELEMETRY", raising=False)
-    monkeypatch.delenv("DISABLE_TELEMETRY", raising=False)
-    monkeypatch.setattr(tel.TelemetryConfig, "_get_data_directory", lambda self: tmp_path)
-    tel.reset_telemetry()
-    yield tmp_path
-    tel.reset_telemetry()
+## ``isolated_data_dir`` comes from ``tests/unit/conftest.py``.
 
 
 @pytest.fixture
@@ -103,15 +91,10 @@ class TestSendOverHttpx:
         monkeypatch.setenv("GODOT_AI_TELEMETRY_ENDPOINT", "https://example.com/x")
         collector = tel.TelemetryCollector()
 
-        response = MagicMock(status_code=200)
         client_inst = MagicMock()
-        client_inst.post.return_value = response
+        client_inst.post.return_value = MagicMock(status_code=200)
 
-        client_cm = MagicMock()
-        client_cm.__enter__ = MagicMock(return_value=client_inst)
-        client_cm.__exit__ = MagicMock(return_value=False)
-
-        with patch("godot_ai.telemetry.httpx.Client", return_value=client_cm):
+        with patch("godot_ai.telemetry.httpx.Client", return_value=client_inst):
             collector._send(_record())
 
         client_inst.post.assert_called_once()
@@ -130,6 +113,31 @@ class TestSendOverHttpx:
 
         collector.shutdown()
 
+    def test_client_is_reused_across_sends(
+        self, monkeypatch, clean_env, isolated_data_dir
+    ) -> None:
+        """``httpx.Client`` must be constructed at most once per collector
+        — reusing the same instance is the whole point of caching it on
+        ``self._client`` (keep-alive, warm TLS pool, lower per-record
+        overhead). Locks in the behavior change vs. the original
+        per-record ``with httpx.Client(...)`` pattern.
+        """
+        monkeypatch.setenv("GODOT_AI_TELEMETRY_ENDPOINT", "https://example.com/x")
+        collector = tel.TelemetryCollector()
+
+        client_inst = MagicMock()
+        client_inst.post.return_value = MagicMock(status_code=200)
+
+        with patch("godot_ai.telemetry.httpx.Client", return_value=client_inst) as ctor:
+            for _ in range(5):
+                collector._send(_record())
+
+        assert ctor.call_count == 1, "httpx.Client must be built once and reused"
+        assert client_inst.post.call_count == 5
+
+        collector.shutdown()
+        client_inst.close.assert_called_once()  ## shutdown must close the client
+
     def test_includes_milestone_field_when_set(
         self, monkeypatch, clean_env, isolated_data_dir
     ) -> None:
@@ -138,11 +146,8 @@ class TestSendOverHttpx:
 
         client_inst = MagicMock()
         client_inst.post.return_value = MagicMock(status_code=200)
-        cm = MagicMock()
-        cm.__enter__ = MagicMock(return_value=client_inst)
-        cm.__exit__ = MagicMock(return_value=False)
 
-        with patch("godot_ai.telemetry.httpx.Client", return_value=cm):
+        with patch("godot_ai.telemetry.httpx.Client", return_value=client_inst):
             collector._send(_record(milestone=tel.MilestoneType.FIRST_STARTUP))
 
         payload = client_inst.post.call_args.kwargs["json"]
@@ -158,11 +163,8 @@ class TestSendOverHttpx:
 
         client_inst = MagicMock()
         client_inst.post.return_value = MagicMock(status_code=500)
-        cm = MagicMock()
-        cm.__enter__ = MagicMock(return_value=client_inst)
-        cm.__exit__ = MagicMock(return_value=False)
 
-        with patch("godot_ai.telemetry.httpx.Client", return_value=cm):
+        with patch("godot_ai.telemetry.httpx.Client", return_value=client_inst):
             collector._send(_record())  # must not raise
 
         collector.shutdown()
@@ -173,11 +175,10 @@ class TestSendOverHttpx:
         monkeypatch.setenv("GODOT_AI_TELEMETRY_ENDPOINT", "https://example.com/x")
         collector = tel.TelemetryCollector()
 
-        cm = MagicMock()
-        cm.__enter__ = MagicMock(side_effect=_httpx.HTTPError("nope"))
-        cm.__exit__ = MagicMock(return_value=False)
+        client_inst = MagicMock()
+        client_inst.post.side_effect = _httpx.HTTPError("nope")
 
-        with patch("godot_ai.telemetry.httpx.Client", return_value=cm):
+        with patch("godot_ai.telemetry.httpx.Client", return_value=client_inst):
             collector._send(_record())  # must not raise
 
         collector.shutdown()

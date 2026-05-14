@@ -98,6 +98,11 @@ class SessionRegistry:
         self._sessions[session.session_id] = session
         if self._active_session_id is None:
             self._active_session_id = session.session_id
+        ## Session registration is on the editor's critical-path WebSocket
+        ## flow; a telemetry regression must not drop an editor session.
+        ## ``record_telemetry`` is contracted to be non-raising, but the
+        ## outer guard belts-and-suspenders the contract — locked in by
+        ## ``test_register_swallows_telemetry_exceptions``.
         try:
             record_telemetry(
                 RecordType.GODOT_CONNECTION,

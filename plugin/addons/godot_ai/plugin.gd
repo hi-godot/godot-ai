@@ -397,26 +397,28 @@ func _enter_tree() -> void:
 	_startup_trace_finish(startup_path if not startup_path.is_empty() else "loaded")
 
 
+## Public wrapper around the dev-server-toggle telemetry emit. Lets the
+## dock (or any other caller) record without reaching into ``_telemetry``
+## directly — keeps the plugin's internal field encapsulated. The dev
+## server is a Python subprocess unrelated to the plugin's own
+## lifecycle, so emission can be synchronous (no EditorSettings persist
+## dance like ``plugin_reload`` / ``self_update``).
+func record_dev_server_toggle(action: String) -> void:
+	if _telemetry == null:
+		return
+	_telemetry.record_dev_server_toggle(action)
+
+
 ## Drain any self_update event written by `update_reload_runner` during the
-## previous disable -> enable window. Best-effort; on any parse/setting error
-## we silently clear the slot so the slot can't wedge.
+## previous disable -> enable window.
 func _flush_pending_self_update_telemetry() -> void:
-	var settings := EditorInterface.get_editor_settings()
-	if settings == null:
-		return
 	var key := UPDATE_RELOAD_RUNNER_SCRIPT.PENDING_SELF_UPDATE_TELEMETRY_KEY
-	if not settings.has_setting(key):
-		return
-	var raw := str(settings.get_setting(key))
-	settings.set_setting(key, "")
-	if raw == "":
-		return
-	var parsed = JSON.parse_string(raw)
-	if typeof(parsed) != TYPE_DICTIONARY:
+	var parsed = Telemetry._drain_editor_setting_dict(key)
+	if parsed == null:
 		return
 	var status := str(parsed.get("status", "unknown"))
 	var error := str(parsed.get("error", ""))
-	_telemetry.record_self_update(status, "", "", error)
+	_telemetry.record_self_update(status, error=error)
 
 
 

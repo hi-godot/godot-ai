@@ -3,12 +3,7 @@
 # Usage: ci-start-server [python-command]
 # Default python command: python
 set -euo pipefail
-
-## Match the CI workflow env-block opt-out: no fake "installs" or stray
-## streaming-insert quota from local dev runs of this script either. The
-## collector treats this flag as a hard opt-out (no UUID, no worker, no
-## _send). See docs/TELEMETRY.md.
-export GODOT_AI_DISABLE_TELEMETRY=true
+source "$(dirname "$0")/_ci_env.sh"
 
 PYTHON_CMD="${1:-python}"
 PORT=8000

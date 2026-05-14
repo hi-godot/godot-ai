@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import types
-from pathlib import Path
 
 import pytest
 from fastmcp import FastMCP
@@ -21,19 +20,14 @@ from godot_ai.tools._meta_tool import register_manage_tool
 
 
 @pytest.fixture
-def captured(monkeypatch, tmp_path: Path):
-    ## Make this fixture robust against CI workflows that set
-    ## ``GODOT_AI_DISABLE_TELEMETRY=true`` at the env-block level —
-    ## those tests still need a *live* collector to assert records.
-    monkeypatch.delenv("GODOT_AI_DISABLE_TELEMETRY", raising=False)
-    monkeypatch.delenv("DISABLE_TELEMETRY", raising=False)
-    monkeypatch.setattr(tel.TelemetryConfig, "_get_data_directory", lambda self: tmp_path)
-    tel.reset_telemetry()
+def captured(isolated_data_dir):
+    """Yield the list that ``_send`` appends to. Builds on the shared
+    ``isolated_data_dir`` (``tests/unit/conftest.py``) for env-clean +
+    tmp-dir + reset_telemetry isolation."""
     collector = tel.get_telemetry()
     sent: list[tel.TelemetryRecord] = []
     collector._send = sent.append  # type: ignore[method-assign]
-    yield sent
-    tel.reset_telemetry()
+    return sent
 
 
 @pytest.fixture(autouse=True)

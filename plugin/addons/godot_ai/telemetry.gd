@@ -54,6 +54,29 @@ static func record_pending_plugin_reload(source: String) -> void:
 		JSON.stringify({"source": source, "success": true}),
 	)
 
+
+## Read + clear an EditorSetting JSON-encoded event payload. Returns
+## the parsed dict, or ``null`` if the key is absent / empty /
+## malformed. Used by ``flush_pending_plugin_reload`` (below) and by
+## ``plugin.gd::_flush_pending_self_update_telemetry``. Centralising
+## the read-and-clear dance keeps both flush sites symmetric with the
+## ``record_pending_*`` writers and prevents the "key gets stuck"
+## class of bug if a future flush helper forgets the clear step.
+static func _drain_editor_setting_dict(key: String):
+	var settings := EditorInterface.get_editor_settings()
+	if settings == null:
+		return null
+	if not settings.has_setting(key):
+		return null
+	var raw := str(settings.get_setting(key))
+	settings.set_setting(key, "")
+	if raw == "":
+		return null
+	var parsed = JSON.parse_string(raw)
+	if typeof(parsed) != TYPE_DICTIONARY:
+		return null
+	return parsed
+
 var _connection
 var _disabled: bool = false
 var _pending: Array = []  # of {name: String, data: Dictionary}
@@ -71,7 +94,9 @@ func _init(connection) -> void:
 		_connection.connection_state_changed.connect(_on_connection_state_changed)
 
 static func _truthy(value: String) -> bool:
-	return value.to_lower() in ["1", "true", "yes", "on"]
+	## Match ``plugin.gd::_env_truthy`` semantics — ``strip_edges()`` so
+	## a stray ``" true "`` from shell quoting still parses as truthy.
+	return value.strip_edges().to_lower() in ["1", "true", "yes", "on"]
 
 static func _resolve_disabled() -> bool:
 	if _truthy(OS.get_environment("GODOT_AI_DISABLE_TELEMETRY")):
@@ -153,20 +178,10 @@ func record_dev_server_toggle(action: String) -> void:
 
 
 ## Drain a pending ``plugin_reload`` event written by the previous
-## instance before it disabled itself. Best-effort; on any parse or
-## settings error we silently clear the slot so it can't wedge.
+## instance before it disabled itself.
 func flush_pending_plugin_reload() -> void:
-	var settings := EditorInterface.get_editor_settings()
-	if settings == null:
-		return
-	if not settings.has_setting(PENDING_PLUGIN_RELOAD_KEY):
-		return
-	var raw := str(settings.get_setting(PENDING_PLUGIN_RELOAD_KEY))
-	settings.set_setting(PENDING_PLUGIN_RELOAD_KEY, "")
-	if raw == "":
-		return
-	var parsed = JSON.parse_string(raw)
-	if typeof(parsed) != TYPE_DICTIONARY:
+	var parsed = _drain_editor_setting_dict(PENDING_PLUGIN_RELOAD_KEY)
+	if parsed == null:
 		return
 	var data := {
 		"success": bool(parsed.get("success", true)),
