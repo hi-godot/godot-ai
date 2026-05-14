@@ -19,6 +19,11 @@ from godot_ai import telemetry as tel
 @pytest.fixture
 def isolated_collector(monkeypatch, tmp_path: Path):
     """Drop the singleton, capture every sent record in a list."""
+    ## Make this fixture robust against CI workflows that set
+    ## ``GODOT_AI_DISABLE_TELEMETRY=true`` at the env-block level —
+    ## those tests still need a *live* collector to assert records.
+    monkeypatch.delenv("GODOT_AI_DISABLE_TELEMETRY", raising=False)
+    monkeypatch.delenv("DISABLE_TELEMETRY", raising=False)
     monkeypatch.setattr(tel.TelemetryConfig, "_get_data_directory", lambda self: tmp_path)
     tel.reset_telemetry()
     collector = tel.get_telemetry()
