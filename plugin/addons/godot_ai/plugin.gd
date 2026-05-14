@@ -418,7 +418,10 @@ func _flush_pending_self_update_telemetry() -> void:
 		return
 	var status := str(parsed.get("status", "unknown"))
 	var error := str(parsed.get("error", ""))
-	_telemetry.record_self_update(status, error=error)
+	## Positional args: GDScript doesn't support keyword args in calls
+	## (unlike Python). from_version + to_version are empty strings here
+	## — only ``status`` and ``error`` are known at flush time.
+	_telemetry.record_self_update(status, "", "", error)
 
 
 
