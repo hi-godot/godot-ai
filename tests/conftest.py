@@ -2,6 +2,24 @@
 
 from __future__ import annotations
 
+## Disable telemetry by default for every pytest run, BEFORE any
+## ``godot_ai`` import. Workflow-level ``env:`` blocks only catch CI
+## branches that have adopted the gating; this conftest line also
+## covers PRs that haven't merged the gating yet, contributors running
+## the suite locally, and ad-hoc tox/uv invocations. Without it the
+## ``mcp_stack`` fixture (which calls ``create_server``) fires one
+## STARTUP / FIRST_STARTUP record per pytest run on a fresh data dir
+## — observed as a per-CI-run trickle in BQ.
+##
+## ``setdefault`` preserves explicit overrides: tests that *want* the
+## enabled code path (the telemetry fixtures in tests/unit/test_telemetry*.py)
+## ``monkeypatch.delenv`` this var inside their fixture, and any caller
+## can pass ``GODOT_AI_DISABLE_TELEMETRY=false`` (or unset it) before
+## invoking pytest to bring the live path back.
+import os
+
+os.environ.setdefault("GODOT_AI_DISABLE_TELEMETRY", "true")
+
 import asyncio
 import json
 from dataclasses import dataclass, field
