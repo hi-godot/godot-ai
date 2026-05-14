@@ -14,12 +14,18 @@ const Telemetry := preload("res://addons/godot_ai/telemetry.gd")
 ##   on overflow, flush on the next emit once connected.
 
 class StubConnection extends RefCounted:
+	signal connection_state_changed(is_open: bool)
+
 	var is_connected := false
 	var sent: Array = []
 
 	func send_event(event_name: String, data: Dictionary = {}) -> bool:
 		sent.append({"event": event_name, "data": data})
 		return true
+
+	func flip_connected(is_open: bool) -> void:
+		is_connected = is_open
+		connection_state_changed.emit(is_open)
 
 
 func suite_name() -> String:
@@ -82,6 +88,31 @@ func test_buffers_when_disconnected_and_flushes_on_next_emit() -> void:
 	t.record_self_update("success")
 	assert_eq(t._test_pending_count(), 0, "Buffer should drain on flush")
 	assert_eq(conn.sent.size(), 2, "Buffered event plus the new one must both flush")
+
+
+func test_buffered_events_flush_when_connection_signal_fires() -> void:
+	## Regression: ``record_dock_startup`` runs from ``plugin._enter_tree``
+	## *before* the WebSocket reaches OPEN. Without subscribing to
+	## ``connection_state_changed`` the buffer would never drain in
+	## single-session installs that never emit a second plugin event.
+	var conn := StubConnection.new()
+	conn.is_connected = false
+	var t := Telemetry.new(conn)
+	## NOTE: not using _test_set_state because we want the constructor
+	## path (which wires up the signal subscription) to run as in prod.
+	t._disabled = false  # bypass env opt-out for the test
+
+	t.record_dock_startup()
+	t.record_self_update("success")
+	assert_eq(conn.sent.size(), 0, "Both events should be buffered pre-connect")
+	assert_eq(t._test_pending_count(), 2)
+
+	## Simulate the WebSocket flipping to OPEN — this is what
+	## ``Connection._process`` does in production.
+	conn.flip_connected(true)
+
+	assert_eq(t._test_pending_count(), 0, "Buffer must drain on connection_state_changed(true)")
+	assert_eq(conn.sent.size(), 2, "Both buffered events should ship without a third record_event call")
 
 
 func test_buffer_drops_oldest_at_cap() -> void:

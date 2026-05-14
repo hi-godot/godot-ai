@@ -277,10 +277,40 @@ class TestPublicHelpers:
     def test_shutdown_if_initialized_shuts_down_existing(
         self, clean_env, isolated_data_dir: Path
     ) -> None:
-        tel.get_telemetry()
-        assert tel._collector is not None
-        worker = tel._collector._worker
+        first = tel.get_telemetry()
+        worker = first._worker
         tel.shutdown_if_initialized()
-        ## The collector should be told to stop; worker drains and exits.
-        assert tel._collector is not None  # singleton not cleared
+        ## The original collector's worker drains and exits.
         assert worker is None or not worker.is_alive()
+        ## Module-level reference is cleared so a subsequent
+        ## ``get_telemetry()`` builds a fresh, live collector instead
+        ## of returning the dead one.
+        assert tel._collector is None
+
+    def test_lifespan_restart_in_same_process_gets_fresh_collector(
+        self, clean_env, isolated_data_dir: Path
+    ) -> None:
+        """Regression: after the first lifespan teardown, a subsequent
+        ``record_telemetry()`` was reusing the dead collector and the
+        worker had exited — every record was enqueued into a queue with
+        no drainer. uvicorn ``--reload`` (and repeated test runs in
+        one process) reproduce this. Locked in by this test."""
+        import time
+
+        first = tel.get_telemetry()
+        first_worker = first._worker
+        tel.shutdown_if_initialized()
+
+        second = tel.get_telemetry()
+        assert second is not first, "Second start must build a fresh collector"
+        assert second._worker is not first_worker
+        assert second._worker is not None and second._worker.is_alive()
+
+        ## And the new collector actually drains records.
+        sent: list[tel.TelemetryRecord] = []
+        second._send = sent.append  # type: ignore[method-assign]
+        tel.record_telemetry(tel.RecordType.USAGE, {"after_restart": True})
+        deadline = time.monotonic() + 1.0
+        while not sent and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert sent and sent[0].data["after_restart"] is True

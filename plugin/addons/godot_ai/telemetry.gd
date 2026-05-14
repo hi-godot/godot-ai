@@ -40,6 +40,14 @@ var _pending: Array = []  # of {name: String, data: Dictionary}
 func _init(connection) -> void:
 	_connection = connection
 	_disabled = _resolve_disabled()
+	## Subscribe to ``connection_state_changed`` so events buffered before
+	## the WebSocket handshake (e.g. ``record_dock_startup`` from
+	## ``plugin._enter_tree``) actually leave the editor. Without this,
+	## the buffer only drained on the next ``record_event`` call — when
+	## that call never came (the common single-session case), the very
+	## events we cared about most sat in the queue forever.
+	if _connection != null and _connection.has_signal("connection_state_changed"):
+		_connection.connection_state_changed.connect(_on_connection_state_changed)
 
 static func _truthy(value: String) -> bool:
 	return value.to_lower() in ["1", "true", "yes", "on"]
@@ -63,13 +71,22 @@ func record_event(name: String, data: Dictionary = {}) -> void:
 		_flush()
 		_send_one(name, data)
 		return
-	## Pre-handshake: stash in a small bounded buffer. The buffer is
-	## flushed on the next `record_event` after the connection is up,
-	## not via a signal (no `connection_changed` signal currently exists
-	## and adding one for telemetry would invert the dependency).
+	## Pre-handshake: stash in a small bounded buffer. Drained on the
+	## first ``connection_state_changed(true)`` after this point (see
+	## ``_on_connection_state_changed``). Falling back to "drain on the
+	## next record_event" is a footgun: the most useful plugin events
+	## (``dock_startup``, pending ``self_update``) fire from
+	## ``plugin._enter_tree`` before the handshake, and a single-session
+	## editor may never emit a second event — so without the signal-
+	## driven flush they sat buffered forever.
 	if _pending.size() >= _MAX_BUFFER:
 		_pending.pop_front()
 	_pending.append({"name": name, "data": data})
+
+
+func _on_connection_state_changed(is_open: bool) -> void:
+	if is_open:
+		_flush()
 
 func _flush() -> void:
 	if _pending.is_empty():

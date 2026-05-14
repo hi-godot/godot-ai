@@ -431,19 +431,27 @@ def reset_telemetry() -> None:
 
 
 def shutdown_if_initialized() -> None:
-    """Shut down the collector iff it was already created.
+    """Shut down the collector iff it was already created, and forget it.
 
     Lifespan teardown should call this instead of ``get_telemetry().shutdown()``
     so an opted-out server never instantiates the collector just to shut it
     down. The module-level singleton is checked under the construction lock
     so a concurrent ``get_telemetry()`` can't race us into instantiating
     a fresh collector after we've decided not to.
+
+    Crucially: after shutting the collector down we also clear the
+    module-level reference. Otherwise a subsequent lifespan start in the
+    same process (uvicorn ``--reload``, repeated test runs) would call
+    ``get_telemetry()`` and silently reuse the dead collector — whose
+    worker has exited — and every record would enqueue into a queue
+    that nothing drains.
     """
     global _collector
     with _collector_lock:
         if _collector is None:
             return
         _collector.shutdown()
+        _collector = None
 
 
 def record_telemetry(
