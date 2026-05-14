@@ -392,6 +392,7 @@ func _enter_tree() -> void:
 	if _telemetry != null:
 		_telemetry.record_dock_startup()
 		_flush_pending_self_update_telemetry()
+		_telemetry.flush_pending_plugin_reload()
 	var startup_path: String = str(_lifecycle.get_startup_path())
 	_startup_trace_finish(startup_path if not startup_path.is_empty() else "loaded")
 
@@ -416,6 +417,8 @@ func _flush_pending_self_update_telemetry() -> void:
 	var status := str(parsed.get("status", "unknown"))
 	var error := str(parsed.get("error", ""))
 	_telemetry.record_self_update(status, "", "", error)
+
+
 
 
 func _exit_tree() -> void:

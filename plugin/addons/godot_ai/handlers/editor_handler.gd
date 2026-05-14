@@ -2,6 +2,7 @@
 extends RefCounted
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const Telemetry := preload("res://addons/godot_ai/telemetry.gd")
 
 ## Handles editor state, selection, log, screenshot, and performance commands.
 
@@ -641,6 +642,10 @@ func clear_logs(_params: Dictionary) -> Dictionary:
 
 func reload_plugin(_params: Dictionary) -> Dictionary:
 	_log_buffer.log("reload_plugin requested, reloading next frame")
+	## Persist a pending plugin_reload telemetry event *before* the
+	## disable kills the live WebSocket. The re-enabled plugin's
+	## _enter_tree flushes via `_telemetry.flush_pending_plugin_reload()`.
+	Telemetry.record_pending_plugin_reload("mcp_tool")
 	_do_reload_plugin.call_deferred()
 	return {"data": {"status": "reloading", "message": "Plugin reload initiated"}}
 

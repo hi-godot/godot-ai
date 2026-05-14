@@ -33,6 +33,27 @@ const _ALLOWED_EVENTS := [
 
 const _MAX_BUFFER := 32
 
+## EditorSetting key used to defer a ``plugin_reload`` event across the
+## disable -> enable boundary. Callers that trigger plugin reload (the
+## dock reload button, ``editor_reload_plugin`` MCP-tool path) write
+## here *before* the disable kills the live WebSocket; the new
+## plugin's ``_enter_tree`` flushes via ``flush_pending_plugin_reload``.
+const PENDING_PLUGIN_RELOAD_KEY := "godot_ai/pending_plugin_reload_event"
+
+
+## Persist a ``plugin_reload`` event so the re-enabled plugin instance
+## can emit it once its new WebSocket is up. Static so callers without
+## a telemetry instance handle (e.g. ``editor_handler.reload_plugin``)
+## can use it via the preloaded const alias.
+static func record_pending_plugin_reload(source: String) -> void:
+	var settings := EditorInterface.get_editor_settings()
+	if settings == null:
+		return
+	settings.set_setting(
+		PENDING_PLUGIN_RELOAD_KEY,
+		JSON.stringify({"source": source, "success": true}),
+	)
+
 var _connection
 var _disabled: bool = false
 var _pending: Array = []  # of {name: String, data: Dictionary}
@@ -129,6 +150,32 @@ func record_self_update(
 
 func record_dev_server_toggle(action: String) -> void:
 	record_event("dev_server_toggle", {"action": action})
+
+
+## Drain a pending ``plugin_reload`` event written by the previous
+## instance before it disabled itself. Best-effort; on any parse or
+## settings error we silently clear the slot so it can't wedge.
+func flush_pending_plugin_reload() -> void:
+	var settings := EditorInterface.get_editor_settings()
+	if settings == null:
+		return
+	if not settings.has_setting(PENDING_PLUGIN_RELOAD_KEY):
+		return
+	var raw := str(settings.get_setting(PENDING_PLUGIN_RELOAD_KEY))
+	settings.set_setting(PENDING_PLUGIN_RELOAD_KEY, "")
+	if raw == "":
+		return
+	var parsed = JSON.parse_string(raw)
+	if typeof(parsed) != TYPE_DICTIONARY:
+		return
+	var data := {
+		"success": bool(parsed.get("success", true)),
+		"source": str(parsed.get("source", "unknown")),
+	}
+	var error := str(parsed.get("error", ""))
+	if error != "":
+		data["error"] = error.substr(0, 200)
+	record_event("plugin_reload", data)
 
 # --- test seam -------------------------------------------------------------
 
