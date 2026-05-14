@@ -1,0 +1,235 @@
+"""Tests for the ``telemetry_tool`` / ``telemetry_resource`` decorators and
+the ``install_fastmcp_wraps`` server-level wrap.
+
+The decorator wraps both sync and async functions, captures duration +
+success/error, extracts ``op``/``action``/``sub_action`` and ``session_id``
+from bound args, and never raises out of a tool path.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+import pytest
+
+from godot_ai import telemetry as tel
+
+
+@pytest.fixture
+def isolated_collector(monkeypatch, tmp_path: Path):
+    """Drop the singleton, capture every sent record in a list."""
+    monkeypatch.setattr(tel.TelemetryConfig, "_get_data_directory", lambda self: tmp_path)
+    tel.reset_telemetry()
+    collector = tel.get_telemetry()
+    sent: list[tel.TelemetryRecord] = []
+    collector._send = sent.append  # type: ignore[method-assign]
+    yield collector, sent
+    tel.reset_telemetry()
+
+
+def _wait_for(records: list, count: int, timeout: float = 2.0) -> None:
+    import time
+
+    deadline = time.monotonic() + timeout
+    while len(records) < count and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+
+class TestTelemetryToolSync:
+    def test_records_success(self, isolated_collector) -> None:
+        _, sent = isolated_collector
+
+        @tel.telemetry_tool("my_tool")
+        def my_tool(x: int) -> int:
+            return x * 2
+
+        assert my_tool(21) == 42
+        _wait_for(sent, 1)
+
+        assert len(sent) == 1
+        rec = sent[0]
+        assert rec.record_type is tel.RecordType.TOOL_EXECUTION
+        assert rec.data["tool_name"] == "my_tool"
+        assert rec.data["success"] is True
+        assert "duration_ms" in rec.data
+        assert "error" not in rec.data
+
+    def test_records_failure(self, isolated_collector) -> None:
+        _, sent = isolated_collector
+
+        @tel.telemetry_tool("my_tool")
+        def my_tool() -> None:
+            raise ValueError("boom")
+
+        with pytest.raises(ValueError, match="boom"):
+            my_tool()
+        _wait_for(sent, 1)
+
+        rec = sent[0]
+        assert rec.data["success"] is False
+        assert rec.data["error"] == "boom"
+
+    def test_extracts_op_as_sub_action(self, isolated_collector) -> None:
+        _, sent = isolated_collector
+
+        @tel.telemetry_tool("scene_manage")
+        def manage(op: str, params: dict | None = None) -> dict:
+            return {"ok": True}
+
+        manage(op="save_as", params={"path": "res://x.tscn"})
+        _wait_for(sent, 1)
+
+        assert sent[0].data["sub_action"] == "save_as"
+
+    def test_extracts_session_id(self, isolated_collector) -> None:
+        _, sent = isolated_collector
+
+        @tel.telemetry_tool("x")
+        def x(session_id: str = "") -> None:
+            return None
+
+        x(session_id="my-game@a3f2")
+        _wait_for(sent, 1)
+
+        ## session_id is hashed before serialization.
+        assert sent[0].session_id.endswith("@a3f2")
+        assert "my-game" not in sent[0].session_id
+
+    def test_truncates_long_error(self, isolated_collector) -> None:
+        _, sent = isolated_collector
+        long_msg = "x" * 500
+
+        @tel.telemetry_tool("x")
+        def x() -> None:
+            raise RuntimeError(long_msg)
+
+        with pytest.raises(RuntimeError):
+            x()
+        _wait_for(sent, 1)
+
+        assert len(sent[0].data["error"]) == 200
+
+
+class TestTelemetryToolAsync:
+    def test_async_records_success(self, isolated_collector) -> None:
+        _, sent = isolated_collector
+
+        @tel.telemetry_tool("async_tool")
+        async def my_async() -> int:
+            return 7
+
+        result = asyncio.run(my_async())
+        _wait_for(sent, 1)
+
+        assert result == 7
+        assert sent[0].data["success"] is True
+        assert sent[0].data["tool_name"] == "async_tool"
+
+    def test_async_records_failure(self, isolated_collector) -> None:
+        _, sent = isolated_collector
+
+        @tel.telemetry_tool("async_tool")
+        async def my_async() -> None:
+            raise RuntimeError("async boom")
+
+        with pytest.raises(RuntimeError, match="async boom"):
+            asyncio.run(my_async())
+        _wait_for(sent, 1)
+
+        assert sent[0].data["success"] is False
+        assert sent[0].data["error"] == "async boom"
+
+
+class TestTelemetryResource:
+    def test_records_resource_retrieval(self, isolated_collector) -> None:
+        _, sent = isolated_collector
+
+        @tel.telemetry_resource("my_resource")
+        def reader() -> dict:
+            return {"ok": True}
+
+        reader()
+        _wait_for(sent, 1)
+
+        rec = sent[0]
+        assert rec.record_type is tel.RecordType.RESOURCE_RETRIEVAL
+        assert rec.data["resource_name"] == "my_resource"
+        assert rec.data["success"] is True
+
+
+class TestDecoratorNeverRaises:
+    """If the telemetry pipeline itself blows up, the wrapped function
+    must still return its result and propagate its own exceptions."""
+
+    def test_emit_failure_does_not_break_caller(self, isolated_collector, monkeypatch) -> None:
+        _, _ = isolated_collector
+
+        def crash(*_a, **_kw) -> None:
+            raise RuntimeError("emit boom")
+
+        monkeypatch.setattr(tel, "record_tool_usage", crash)
+
+        @tel.telemetry_tool("x")
+        def x() -> int:
+            return 1
+
+        assert x() == 1
+
+
+class TestInstallFastmcpWraps:
+    """Verify that wrapping ``mcp.tool`` and ``mcp.resource`` on a real
+    FastMCP instance instruments tools registered after the wrap."""
+
+    def test_tools_registered_after_wrap_are_instrumented(self, isolated_collector) -> None:
+        _, sent = isolated_collector
+        from fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        tel.install_fastmcp_wraps(mcp)
+
+        @mcp.tool()
+        async def wrapped_tool(x: int) -> int:
+            return x + 1
+
+        asyncio.run(wrapped_tool(41))
+        _wait_for(sent, 1)
+
+        assert len(sent) == 1
+        assert sent[0].data["tool_name"] == "wrapped_tool"
+        assert sent[0].data["success"] is True
+
+    def test_bare_decorator_form_works(self, isolated_collector) -> None:
+        _, sent = isolated_collector
+        from fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        tel.install_fastmcp_wraps(mcp)
+
+        @mcp.tool
+        async def bare(x: int) -> int:
+            return x + 1
+
+        asyncio.run(bare(0))
+        _wait_for(sent, 1)
+        assert sent[0].data["tool_name"] == "bare"
+
+    def test_disabled_collector_skips_records_from_wrap(
+        self, isolated_collector, monkeypatch
+    ) -> None:
+        collector, sent = isolated_collector
+        collector.config.enabled = False
+
+        from fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        tel.install_fastmcp_wraps(mcp)
+
+        @mcp.tool()
+        async def wrapped(x: int) -> int:
+            return x
+
+        asyncio.run(wrapped(1))
+        _wait_for(sent, 0, timeout=0.3)
+
+        assert sent == []

@@ -41,6 +41,7 @@ const StartupPathScript := preload("res://addons/godot_ai/utils/mcp_startup_path
 ## write-before-scan model.
 const Connection := preload("res://addons/godot_ai/connection.gd")
 const Dispatcher := preload("res://addons/godot_ai/dispatcher.gd")
+const Telemetry := preload("res://addons/godot_ai/telemetry.gd")
 const LogBuffer := preload("res://addons/godot_ai/utils/log_buffer.gd")
 const GameLogBuffer := preload("res://addons/godot_ai/utils/game_log_buffer.gd")
 const EditorLogBuffer := preload("res://addons/godot_ai/utils/editor_log_buffer.gd")
@@ -145,6 +146,7 @@ const STARTUP_TRACE_COUNTER_NAMES := [
 ## "attached" state IS exactly "non-null".
 var _connection
 var _dispatcher
+var _telemetry
 var _log_buffer
 var _game_log_buffer
 var _editor_log_buffer
@@ -215,6 +217,8 @@ func _enter_tree() -> void:
 		and not ServerStateScript.is_terminal_diagnosis(_lifecycle.get_state())
 	):
 		_arm_server_version_check()
+
+	_telemetry = Telemetry.new(_connection)
 
 	_debugger_plugin = DebuggerPlugin.new(_log_buffer, _game_log_buffer)
 	add_debugger_plugin(_debugger_plugin)
@@ -385,8 +389,33 @@ func _enter_tree() -> void:
 	_startup_trace_phase("dock_attached")
 
 	_log_buffer.log("plugin loaded")
+	if _telemetry != null:
+		_telemetry.record_dock_startup()
+		_flush_pending_self_update_telemetry()
 	var startup_path: String = str(_lifecycle.get_startup_path())
 	_startup_trace_finish(startup_path if not startup_path.is_empty() else "loaded")
+
+
+## Drain any self_update event written by `update_reload_runner` during the
+## previous disable -> enable window. Best-effort; on any parse/setting error
+## we silently clear the slot so the slot can't wedge.
+func _flush_pending_self_update_telemetry() -> void:
+	var settings := EditorInterface.get_editor_settings()
+	if settings == null:
+		return
+	var key := UPDATE_RELOAD_RUNNER_SCRIPT.PENDING_SELF_UPDATE_TELEMETRY_KEY
+	if not settings.has_setting(key):
+		return
+	var raw := str(settings.get_setting(key))
+	settings.set_setting(key, "")
+	if raw == "":
+		return
+	var parsed = JSON.parse_string(raw)
+	if typeof(parsed) != TYPE_DICTIONARY:
+		return
+	var status := str(parsed.get("status", "unknown"))
+	var error := str(parsed.get("error", ""))
+	_telemetry.record_self_update(status, "", "", error)
 
 
 func _exit_tree() -> void:

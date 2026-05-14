@@ -1,6 +1,13 @@
 @tool
 extends Node
 
+## EditorSetting key used to defer a self_update telemetry event across the
+## disable -> enable boundary. The runner runs while the plugin is disabled,
+## so it can't send WebSocket events directly; it writes the outcome here
+## and the re-enabled plugin's `_enter_tree` flushes it. See
+## `plugin.gd::_flush_pending_self_update_telemetry`.
+const PENDING_SELF_UPDATE_TELEMETRY_KEY := "godot_ai/pending_self_update_event"
+
 ## Self-update runner. Owns the install-and-reload sequence from
 ## `start(zip_path, temp_dir, detached_dock)` onward: extract files into
 ## `addons/godot_ai/` with rollback bookkeeping, scan the filesystem,
@@ -283,6 +290,9 @@ func _read_update_manifest() -> bool:
 
 
 func _handle_install_failure(status: int) -> void:
+	_record_pending_self_update({
+		"status": "failed_mixed" if status == InstallStatus.FAILED_MIXED else "failed_clean",
+	})
 	if status == InstallStatus.FAILED_MIXED:
 		## Half-installed addon tree on disk: re-enabling the plugin would
 		## load a mix of vN and vN+1 files. Print a load-bearing diagnostic
@@ -470,6 +480,17 @@ func _finalize_install_success() -> void:
 		if record.get("had_original", false):
 			DirAccess.remove_absolute(String(record.get("backup_path", "")))
 	_paths_written.clear()
+	_record_pending_self_update({"status": "success"})
+
+
+## Persist a self_update event description so the re-enabled plugin can
+## emit it once its WebSocket is connected. Survives the disable -> enable
+## window where the runner cannot send anything itself.
+func _record_pending_self_update(data: Dictionary) -> void:
+	var settings := EditorInterface.get_editor_settings()
+	if settings == null:
+		return
+	settings.set_setting(PENDING_SELF_UPDATE_TELEMETRY_KEY, JSON.stringify(data))
 
 
 func _cleanup_update_temp() -> void:

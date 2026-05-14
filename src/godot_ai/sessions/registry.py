@@ -9,6 +9,12 @@ from datetime import datetime, timezone
 from functools import cached_property
 
 from godot_ai import __version__ as _SERVER_VERSION
+from godot_ai.telemetry import (
+    MilestoneType,
+    RecordType,
+    record_milestone,
+    record_telemetry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +98,23 @@ class SessionRegistry:
         self._sessions[session.session_id] = session
         if self._active_session_id is None:
             self._active_session_id = session.session_id
+        try:
+            record_telemetry(
+                RecordType.GODOT_CONNECTION,
+                {
+                    "event": "connected",
+                    "godot_version": session.godot_version,
+                    "plugin_version": session.plugin_version,
+                    "protocol_version": session.protocol_version,
+                    "server_launch_mode": session.server_launch_mode,
+                    "session_count": len(self._sessions),
+                },
+                session_id=session.session_id,
+            )
+            if len(self._sessions) >= 2:
+                record_milestone(MilestoneType.MULTIPLE_SESSIONS)
+        except Exception:  # noqa: BLE001
+            logger.debug("session connect telemetry failed", exc_info=True)
         remaining = []
         for future, exclude_id, known_ids, project_path in self._session_waiters:
             if future.done():
@@ -123,6 +146,14 @@ class SessionRegistry:
         ##   crash. Ambiguity-by-order can't apply with one survivor.
         ## - n=0: keep cleared; nothing to promote.
         self._sessions.pop(session_id, None)
+        try:
+            record_telemetry(
+                RecordType.GODOT_CONNECTION,
+                {"event": "disconnected", "session_count": len(self._sessions)},
+                session_id=session_id,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("session disconnect telemetry failed", exc_info=True)
         if self._active_session_id != session_id:
             return
         self._active_session_id = None

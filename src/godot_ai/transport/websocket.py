@@ -18,10 +18,12 @@ from godot_ai.protocol.envelope import (
     CommandResponse,
     HandshakeMessage,
     PlayStateChangedEvent,
+    PluginTelemetryEvent,
     ReadinessChangedEvent,
     SceneChangedEvent,
 )
 from godot_ai.sessions.registry import Session, SessionRegistry
+from godot_ai.telemetry import RecordType, record_telemetry
 from godot_ai.transport.origin_guard import make_websocket_request_guard
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,18 @@ DEFAULT_PORT = 9500
 ## 4001 to flag a handshake rejected for duplicate session_id so a debugging
 ## peer can distinguish it from a normal close.
 _CLOSE_CODE_DUPLICATE_SESSION = 4001
+
+## Allowlist of plugin-emitted telemetry event names. Drop everything else
+## silently; the plugin and server lists must stay in sync. Plugin-side
+## allowlist lives in ``plugin/addons/godot_ai/telemetry.gd``.
+_PLUGIN_EVENT_NAMES: frozenset[str] = frozenset(
+    {
+        "dock_startup",
+        "plugin_reload",
+        "self_update",
+        "dev_server_toggle",
+    }
+)
 
 
 class GodotWebSocketServer:
@@ -184,6 +198,23 @@ class GodotWebSocketServer:
                 payload = ReadinessChangedEvent.model_validate(event_data)
                 session.readiness = payload.readiness
                 logger.info("Session %s: readiness -> %s", session_id[:8], session.readiness)
+            elif event == "plugin_event":
+                ## Plugin-side events (self-update outcome, dock startup,
+                ## reload). The plugin owns the allowlist on the emit side;
+                ## here we only validate envelope shape and forward.
+                payload = PluginTelemetryEvent.model_validate(event_data)
+                if payload.name in _PLUGIN_EVENT_NAMES:
+                    record_telemetry(
+                        RecordType.PLUGIN_EVENT,
+                        {"event_name": payload.name, **payload.data},
+                        session_id=session_id,
+                    )
+                else:
+                    logger.debug(
+                        "Dropping plugin_event with unknown name %r from %s",
+                        payload.name,
+                        session_id[:8],
+                    )
         except ValidationError as exc:
             logger.warning(
                 "Dropping malformed %s event from session %s: %s",

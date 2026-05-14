@@ -69,3 +69,13 @@ class PlayStateChangedEvent(BaseModel):
 
 class ReadinessChangedEvent(BaseModel):
     readiness: str = "ready"
+
+
+## Plugin-emitted telemetry event. The plugin relays its own events
+## (self-update outcome, plugin reload, dock startup) through this
+## envelope so opt-out / endpoint / customer_uuid stay in one place
+## (Python). The dispatcher in transport/websocket.py validates and
+## forwards to ``telemetry.record_telemetry``.
+class PluginTelemetryEvent(BaseModel):
+    name: str = ""
+    data: dict = {}
