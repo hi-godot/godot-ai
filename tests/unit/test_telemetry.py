@@ -80,10 +80,18 @@ class TestHashSessionId:
 
 
 class TestTelemetryConfig:
-    def test_default_enabled_no_endpoint(self, clean_env, isolated_data_dir) -> None:
+    def test_default_enabled_uses_baked_in_endpoint(
+        self, clean_env, isolated_data_dir
+    ) -> None:
+        """A fresh install with no env overrides should resolve to the
+        baked-in production endpoint so the binary actually reports.
+        Regression test for "telemetry on by default" — empty default
+        endpoint used to mean zero traffic even when enabled."""
         config = tel.TelemetryConfig()
         assert config.enabled is True
-        assert config.endpoint == ""
+        assert config.endpoint == tel.TelemetryConfig.DEFAULT_ENDPOINT
+        ## The bake-in must be a real https URL, not the empty string.
+        assert config.endpoint.startswith("https://")
 
     @pytest.mark.parametrize("var", ["GODOT_AI_DISABLE_TELEMETRY", "DISABLE_TELEMETRY"])
     def test_opt_out_via_env(self, monkeypatch, clean_env, isolated_data_dir, var: str) -> None:

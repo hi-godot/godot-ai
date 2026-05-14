@@ -61,7 +61,9 @@ Allowlist (mirrored in `plugin/addons/godot_ai/telemetry.gd` and
 
 ## Opting out
 
-Set either environment variable to `true` / `1` / `yes` / `on`:
+Telemetry is **on by default** — a fresh install posts anonymous usage
+events to the maintainers' endpoint. To opt out, set either environment
+variable to `true` / `1` / `yes` / `on`:
 
 ```bash
 # Godot-AI-specific
@@ -72,18 +74,21 @@ export DISABLE_TELEMETRY=true
 ```
 
 Effect: the collector enters disabled mode. No records are enqueued, no
-UUID is generated, and the worker thread idles. The plugin-side helper
-honors the same variables and stops buffering events.
+UUID is generated, no worker thread is spawned, and no data directory
+is created. The plugin-side helper honors the same variables and stops
+buffering events. Opt-out is fully side-effect-free.
 
 ## Endpoint configuration
 
-The endpoint is opt-in. If `GODOT_AI_TELEMETRY_ENDPOINT` is unset (the
-default), the collector still runs but every record is dropped after
-dequeue. This lets the system be wired and tested without any traffic
-leaving the machine.
+Telemetry POSTs to a baked-in default endpoint operated by the
+godot-ai maintainers. The endpoint URL lives in
+``TelemetryConfig.DEFAULT_ENDPOINT`` (`src/godot_ai/telemetry.py`); see
+the source for the current value.
+
+Self-hosters and CI flows can override the destination:
 
 ```bash
-# Send to your own collector / database front-end:
+# Send to your own collector / database front-end instead:
 export GODOT_AI_TELEMETRY_ENDPOINT=https://telemetry.example.com/events
 
 # Optional: customize request timeout (default 1.5 seconds):
@@ -95,7 +100,10 @@ export GODOT_AI_TELEMETRY_ENDPOINT=http://127.0.0.1:7777/
 ```
 
 Only `http://` and `https://` schemes are accepted; localhost is rejected
-unless `GODOT_AI_TELEMETRY_ALLOW_LOOPBACK=1` is also set.
+unless `GODOT_AI_TELEMETRY_ALLOW_LOOPBACK=1` is also set. An invalid
+override does **not** silently fall back to the baked-in default — it
+disables sending and emits a warning, so a misconfigured self-host
+can't accidentally ship events to the maintainers' endpoint.
 
 ## Where data is stored locally
 

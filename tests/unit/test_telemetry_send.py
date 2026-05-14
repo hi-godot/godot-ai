@@ -65,7 +65,12 @@ class TestSendOverHttpx:
 
     def test_empty_endpoint_short_circuits(self, clean_env, isolated_data_dir) -> None:
         ## With no endpoint set, _send must not even open an httpx.Client.
+        ## Telemetry is on-by-default with a baked-in endpoint, so we
+        ## clear the resolved value to simulate the "invalid override
+        ## fell back to empty" path (e.g. a self-host that set a
+        ## malformed GODOT_AI_TELEMETRY_ENDPOINT).
         collector = tel.TelemetryCollector()
+        collector.config.endpoint = ""
         with patch("godot_ai.telemetry.httpx.Client") as client_cls:
             collector._send(_record())
         client_cls.assert_not_called()
@@ -80,13 +85,12 @@ class TestSendOverHttpx:
         import logging
 
         collector = tel.TelemetryCollector()
+        collector.config.endpoint = ""  # simulate empty-endpoint mode
         caplog.clear()
         with caplog.at_level(logging.DEBUG, logger="godot-ai-telemetry"):
             for _ in range(50):
                 collector._send(_record())
-        endpoint_msgs = [
-            r for r in caplog.records if "endpoint unset" in r.getMessage()
-        ]
+        endpoint_msgs = [r for r in caplog.records if "endpoint unset" in r.getMessage()]
         assert len(endpoint_msgs) == 1
         collector.shutdown()
 

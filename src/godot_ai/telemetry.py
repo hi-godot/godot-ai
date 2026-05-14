@@ -130,12 +130,25 @@ def hash_session_id(session_id: str | None) -> str:
 class TelemetryConfig:
     """Telemetry configuration resolved from env vars at construction time.
 
-    Empty endpoint = "collector runs but skips sends". Useful in the
-    pre-backend phase: ``customer_uuid`` is generated, milestones are
-    persisted, the queue/worker run, but no HTTPS traffic leaves the
-    process until ``GODOT_AI_TELEMETRY_ENDPOINT`` is set.
+    Telemetry is **on by default**: a fresh install posts anonymous
+    usage events to ``DEFAULT_ENDPOINT`` until the user sets
+    ``GODOT_AI_DISABLE_TELEMETRY=true`` (or the cross-tool
+    ``DISABLE_TELEMETRY=true``). ``GODOT_AI_TELEMETRY_ENDPOINT``
+    overrides the default for self-hosters and during smoke testing.
+
+    Privacy posture matches the docs in ``docs/TELEMETRY.md``: only
+    anonymous, slug-hashed identifiers leave the process, and the
+    collector is fully side-effect-free when disabled (no UUID
+    generated, no worker thread, no data directory created).
     """
 
+    ## Production telemetry endpoint baked in so installs without an
+    ## env-var override actually report. Maintainers can repoint by
+    ## setting ``GODOT_AI_TELEMETRY_ENDPOINT`` (e.g. self-hosters, the
+    ## test backend, the local-sink smoke flow). Validated through
+    ## ``_is_valid_endpoint`` like any other URL — wrong scheme /
+    ## loopback / missing netloc fall back to "no sends".
+    DEFAULT_ENDPOINT = "https://godot-ai-telemetry-pudmurzsnq-uw.a.run.app/events"
     DEFAULT_TIMEOUT = 1.5
 
     def __init__(self) -> None:
@@ -172,9 +185,15 @@ class TelemetryConfig:
         return cls._env_truthy("GODOT_AI_DISABLE_TELEMETRY") or cls._env_truthy("DISABLE_TELEMETRY")
 
     def _resolve_endpoint(self) -> str:
+        ## Resolution order: env override -> baked-in default. Both go
+        ## through the same scheme / loopback / netloc validation so an
+        ## invalid override doesn't silently fall back to production —
+        ## it stays empty and we surface a warning instead. (Falling
+        ## back would mask a misconfigured self-host trying to send to
+        ## the wrong place.)
         raw = os.environ.get("GODOT_AI_TELEMETRY_ENDPOINT", "").strip()
         if not raw:
-            return ""
+            raw = self.DEFAULT_ENDPOINT
         if self._is_valid_endpoint(raw):
             return raw
         logger.warning("Telemetry endpoint %r is invalid; sends will be skipped", raw)
