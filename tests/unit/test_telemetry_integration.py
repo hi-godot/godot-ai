@@ -114,6 +114,37 @@ class TestSessionRegistryTelemetry:
         milestones = [r for r in captured if r.milestone is tel.MilestoneType.MULTIPLE_SESSIONS]
         assert len(milestones) == 1
 
+    def test_register_swallows_telemetry_exceptions(self, captured, monkeypatch) -> None:
+        """A telemetry failure inside ``register`` must not break the
+        normal connect path. The except branch in registry.py is the
+        load-bearing guard against a transient telemetry crash taking
+        down session management — assert it actually swallows.
+        """
+        from godot_ai.sessions import registry as reg_mod
+
+        def boom(*_a, **_kw) -> None:
+            raise RuntimeError("telemetry kaboom")
+
+        monkeypatch.setattr(reg_mod, "record_telemetry", boom)
+        reg = SessionRegistry()
+        ## Must complete without raising; session is still registered.
+        reg.register(self._make_session())
+        assert reg.get("demo@a3f2") is not None
+
+    def test_unregister_swallows_telemetry_exceptions(self, captured, monkeypatch) -> None:
+        from godot_ai.sessions import registry as reg_mod
+
+        reg = SessionRegistry()
+        reg.register(self._make_session())
+
+        def boom(*_a, **_kw) -> None:
+            raise RuntimeError("telemetry kaboom")
+
+        monkeypatch.setattr(reg_mod, "record_telemetry", boom)
+        ## Must complete without raising.
+        reg.unregister("demo@a3f2")
+        assert reg.get("demo@a3f2") is None
+
 
 # --- manage-tool rollup captures op as sub_action ------------------------
 
