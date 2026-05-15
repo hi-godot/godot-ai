@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from godot_ai.handlers._readiness import require_writable, sync_readiness_from_snapshot
+from godot_ai.handlers._readiness import require_writable_async, sync_readiness_from_snapshot
 from godot_ai.runtime.direct import DirectRuntime
 
 COMMON_SETTINGS = [
@@ -70,7 +70,7 @@ async def project_stop(runtime: DirectRuntime) -> dict:
 
 
 async def project_settings_set(runtime: DirectRuntime, key: str, value: Any) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command("set_project_setting", {"key": key, "value": value})
 
 

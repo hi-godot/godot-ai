@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
 
@@ -13,7 +13,7 @@ async def theme_create(
     path: str,
     overwrite: bool = False,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "create_theme",
         {"path": path, "overwrite": overwrite},
@@ -27,7 +27,7 @@ async def theme_set_color(
     name: str,
     value: Any,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "theme_set_color",
         {
@@ -46,7 +46,7 @@ async def theme_set_constant(
     name: str,
     value: int,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "theme_set_constant",
         {
@@ -65,7 +65,7 @@ async def theme_set_font_size(
     name: str,
     value: int,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "theme_set_font_size",
         {
@@ -90,7 +90,7 @@ async def theme_set_stylebox_flat(
     shadow: dict[str, Any] | None = None,
     anti_aliasing: bool | None = None,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict[str, Any] = {
         "theme_path": theme_path,
         "class_name": class_name,
@@ -118,7 +118,7 @@ async def theme_apply(
     node_path: str,
     theme_path: str = "",
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "apply_theme",
         {"node_path": node_path, "theme_path": theme_path},

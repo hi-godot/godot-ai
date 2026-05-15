@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.tools._pagination import paginate
 
@@ -12,7 +12,7 @@ async def filesystem_read_text(runtime: DirectRuntime, path: str) -> dict:
 
 
 async def filesystem_write_text(runtime: DirectRuntime, path: str, content: str = "") -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "write_file",
         {"path": path, "content": content},
@@ -20,7 +20,7 @@ async def filesystem_write_text(runtime: DirectRuntime, path: str, content: str 
 
 
 async def filesystem_reimport(runtime: DirectRuntime, paths: list[str]) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command("reimport", {"paths": paths})
 
 

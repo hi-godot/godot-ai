@@ -11,7 +11,7 @@ from fastmcp.tools.base import Image as McpImage
 from mcp.types import TextContent
 
 from godot_ai import runtime_info
-from godot_ai.handlers._readiness import require_writable, sync_readiness_from_snapshot
+from godot_ai.handlers._readiness import require_writable_async, sync_readiness_from_snapshot
 from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.tools._pagination import paginate
 
@@ -328,7 +328,7 @@ async def editor_quit(runtime: DirectRuntime) -> dict:
 
 
 async def editor_selection_set(runtime: DirectRuntime, paths: list[str]) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command("set_selection", {"paths": paths})
 
 

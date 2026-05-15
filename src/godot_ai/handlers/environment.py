@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.handlers._target import target_params
 from godot_ai.runtime.direct import DirectRuntime
 
@@ -16,7 +16,7 @@ async def environment_create(
     resource_path: str = "",
     overwrite: bool = False,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict = {"preset": preset}
     # environment_create has no `property` param (path targets the whole
     # WorldEnvironment node) — pass "" to the shared helper.

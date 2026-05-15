@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
 
@@ -15,7 +15,7 @@ async def camera_create(
     type: str = "2d",
     make_current: bool = False,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "camera_create",
         {
@@ -32,7 +32,7 @@ async def camera_configure(
     camera_path: str,
     properties: dict[str, Any],
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "camera_configure",
         {"camera_path": camera_path, "properties": properties},
@@ -48,7 +48,7 @@ async def camera_set_limits_2d(
     bottom: int | None = None,
     smoothed: bool | None = None,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict[str, Any] = {"camera_path": camera_path}
     if left is not None:
         params["left"] = left
@@ -72,7 +72,7 @@ async def camera_set_damping_2d(
     drag_horizontal_enabled: bool | None = None,
     drag_vertical_enabled: bool | None = None,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict[str, Any] = {"camera_path": camera_path}
     if position_speed is not None:
         params["position_speed"] = position_speed
@@ -94,7 +94,7 @@ async def camera_follow_2d(
     smoothing_speed: float = 5.0,
     zero_transform: bool = True,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "camera_follow_2d",
         {
@@ -123,7 +123,7 @@ async def camera_apply_preset(
     make_current: bool = True,
     overrides: dict[str, Any] | None = None,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict[str, Any] = {
         "parent_path": parent_path,
         "name": name,

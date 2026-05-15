@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
 
@@ -19,7 +19,7 @@ async def signal_connect(
     target: str,
     method: str,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "connect_signal",
         {"path": path, "signal": signal, "target": target, "method": method},
@@ -33,7 +33,7 @@ async def signal_disconnect(
     target: str,
     method: str,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "disconnect_signal",
         {"path": path, "signal": signal, "target": target, "method": method},

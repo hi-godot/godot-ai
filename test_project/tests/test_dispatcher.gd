@@ -242,7 +242,7 @@ func test_tick_stamps_envelope_readiness_on_success_response() -> void:
 	## Python server's session cache self-heals on the very next tool call.
 	## Without this, a single dropped `readiness_changed` event leaves
 	## `EDITOR_NOT_READY` firing long after `project_run` against a
-	## writable editor (the recurring telemetry signal that motivated #X).
+	## writable editor (the recurring telemetry signal that motivated PR #437).
 	var d := _make_dispatcher()
 	d.mcp_logging = false
 	d.register("ok_cmd", func(_p): return {"data": {"value": 1}})

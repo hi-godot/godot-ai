@@ -60,7 +60,35 @@ def sync_readiness_from_snapshot(runtime: "DirectRuntime", value: object) -> boo
 
 
 def require_writable(runtime: "DirectRuntime") -> None:
-    """Check that the active session is in a writable state.
+    """Sync compatibility shim — kept so handlers that haven't yet been
+    migrated to ``await require_writable_async`` keep their existing
+    rejection behavior. Skips the live probe, so it can still wrongly
+    raise on a stale cache.
+
+    New write handlers should ``await require_writable_async(runtime)``.
+    """
+    _enforce_blocking_state(runtime.get_active_session())
+
+
+async def require_writable_async(runtime: "DirectRuntime") -> None:
+    """Check that the active session is in a writable state, with a live
+    readiness probe to defeat a stale cache.
+
+    Fast path (cache says ``ready`` / ``no_scene``): no probe, no network.
+
+    Slow path (cache says ``importing`` / ``playing``): the cache may be
+    stale because a `readiness_changed` event was lost in transit (a brief
+    WebSocket disconnect), or coalesced inside the plugin's
+    ``pause_processing`` window around save/play frames. Before rejecting
+    a write, fire one ``get_editor_state`` round trip — its envelope
+    readiness self-heals the session via the transport's
+    ``sync_readiness_for_session`` hook, and the explicit
+    ``data.readiness`` sync below covers in-process tests that wire a
+    custom client and bypass the WebSocket envelope. If the editor is
+    really busy, the probe confirms the cache and we raise as before.
+    If the plugin is unreachable, the actual write would fail anyway
+    — trust the cached value and raise the gating error so the caller
+    gets a clean ``EDITOR_NOT_READY`` instead of a connection error.
 
     Raises GodotCommandError with EDITOR_NOT_READY if the editor is
     importing or playing.  The ``ready`` and ``no_scene`` states are
@@ -75,18 +103,36 @@ def require_writable(runtime: "DirectRuntime") -> None:
     session = runtime.get_active_session()
     if session is None:
         return
+    if _READINESS_INFO.get(session.readiness) is None:
+        return  # cache says writable — fast path, no probe
 
-    readiness = session.readiness
-    info = _READINESS_INFO.get(readiness)
-    if info is not None:
-        ## Lazy import — `godot_client.client` pulls in the WS transport,
-        ## which now imports `sync_readiness_for_session` from this module.
-        ## Hoisting the import to module top would re-establish the cycle.
-        from godot_ai.godot_client.client import GodotCommandError
+    try:
+        result = await runtime.send_command("get_editor_state", timeout=2.0)
+        sync_readiness_for_session(session, result.get("readiness"))
+    except Exception:
+        ## Probe failed (timeout, disconnect, plugin error). Fall through
+        ## to enforcement against the cached value — at worst the caller
+        ## sees a stale rejection, but we don't escalate the failure mode
+        ## from "blocked" to "connection error".
+        pass
 
-        message, retryable = info
-        raise GodotCommandError(
-            code=ErrorCode.EDITOR_NOT_READY,
-            message=message,
-            data={"retryable": retryable, "state": readiness},
-        )
+    _enforce_blocking_state(session)
+
+
+def _enforce_blocking_state(session: "Session | None") -> None:
+    if session is None:
+        return
+    info = _READINESS_INFO.get(session.readiness)
+    if info is None:
+        return
+    ## Lazy import — `godot_client.client` pulls in the WS transport,
+    ## which now imports `sync_readiness_for_session` from this module.
+    ## Hoisting the import to module top would re-establish the cycle.
+    from godot_ai.godot_client.client import GodotCommandError
+
+    message, retryable = info
+    raise GodotCommandError(
+        code=ErrorCode.EDITOR_NOT_READY,
+        message=message,
+        data={"retryable": retryable, "state": session.readiness},
+    )

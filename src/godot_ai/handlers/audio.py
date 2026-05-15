@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
 
@@ -14,7 +14,7 @@ async def audio_player_create(
     name: str = "AudioStreamPlayer",
     type: str = "1d",
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "audio_player_create",
         {"parent_path": parent_path, "name": name, "type": type},
@@ -26,7 +26,7 @@ async def audio_player_set_stream(
     player_path: str,
     stream_path: str,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "audio_player_set_stream",
         {"player_path": player_path, "stream_path": stream_path},
@@ -41,7 +41,7 @@ async def audio_player_set_playback(
     autoplay: bool | None = None,
     bus: str | None = None,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict[str, Any] = {"player_path": player_path}
     if volume_db is not None:
         params["volume_db"] = volume_db

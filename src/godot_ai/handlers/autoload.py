@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
 
@@ -16,7 +16,7 @@ async def autoload_add(
     path: str,
     singleton: bool = True,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "add_autoload",
         {"name": name, "path": path, "singleton": singleton},
@@ -24,5 +24,5 @@ async def autoload_add(
 
 
 async def autoload_remove(runtime: DirectRuntime, name: str) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command("remove_autoload", {"name": name})

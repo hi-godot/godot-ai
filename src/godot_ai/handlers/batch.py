@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
 
@@ -11,7 +11,7 @@ async def batch_execute(
     commands: list[dict],
     undo: bool = True,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     if not isinstance(commands, list) or not commands:
         return {
             "succeeded": 0,

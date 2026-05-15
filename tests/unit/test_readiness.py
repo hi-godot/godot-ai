@@ -6,7 +6,11 @@ import pytest
 
 from godot_ai.godot_client.client import GodotCommandError
 from godot_ai.handlers import editor as editor_handlers
-from godot_ai.handlers._readiness import KNOWN_READINESS, require_writable
+from godot_ai.handlers._readiness import (
+    KNOWN_READINESS,
+    require_writable,
+    require_writable_async,
+)
 from godot_ai.protocol.errors import ErrorCode
 from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.sessions.registry import Session, SessionRegistry
@@ -188,3 +192,115 @@ def test_known_readiness_covers_all_states_handlers_emit():
     plugin and server states out of sync. The plugin's get_readiness emits
     exactly these values today (see connection.gd::get_readiness)."""
     assert KNOWN_READINESS == frozenset({"ready", "importing", "playing", "no_scene"})
+
+
+# --- require_writable_async live-probe self-heal —
+# the case the envelope-level sync alone can't cover: the FIRST tool call
+# after a stale state IS the write itself, so there's no prior response
+# envelope to refresh the cache. ---
+
+
+class _ProbeClient:
+    """Counts probe calls so tests can assert the fast path skipped them."""
+
+    def __init__(self, readiness: str | None, raise_on_probe: bool = False):
+        self._readiness = readiness
+        self._raise = raise_on_probe
+        self.probe_calls = 0
+
+    async def send(
+        self,
+        command: str,
+        params: dict | None = None,
+        session_id: str | None = None,
+        timeout: float = 5.0,
+    ) -> dict:
+        if command != "get_editor_state":
+            raise AssertionError(f"unexpected command: {command}")
+        self.probe_calls += 1
+        if self._raise:
+            raise ConnectionError("simulated plugin disconnect")
+        payload: dict = {
+            "current_scene": "res://main.tscn",
+            "project_name": "p",
+            "is_playing": self._readiness == "playing",
+            "godot_version": "4.4.1",
+        }
+        if self._readiness is not None:
+            payload["readiness"] = self._readiness
+        return payload
+
+
+def _runtime_with_probe(
+    cached: str, probe_reports: str | None, raise_on_probe: bool = False
+) -> tuple[DirectRuntime, Session, _ProbeClient]:
+    session = _make_session(cached)
+    registry = SessionRegistry()
+    registry.register(session)
+    client = _ProbeClient(probe_reports, raise_on_probe=raise_on_probe)
+    runtime = DirectRuntime(registry=registry, client=client)
+    return runtime, session, client
+
+
+async def test_require_writable_async_fast_path_skips_probe_when_ready():
+    """Cache says writable -> no network, no probe. Critical for the
+    common case so the gate adds zero latency."""
+    runtime, session, client = _runtime_with_probe(cached="ready", probe_reports="ready")
+    await require_writable_async(runtime)
+    assert client.probe_calls == 0
+
+
+async def test_require_writable_async_probe_heals_stale_playing_cache():
+    """The case the envelope sync alone can't catch — the first call after
+    a stale 'playing' state is the write itself. The async gate must
+    probe before rejecting and let the call through if the editor is
+    actually ready."""
+    runtime, session, client = _runtime_with_probe(cached="playing", probe_reports="ready")
+    await require_writable_async(runtime)
+    assert client.probe_calls == 1
+    assert session.readiness == "ready", "probe must heal the cache before letting the call through"
+
+
+async def test_require_writable_async_probe_confirms_truly_playing():
+    """If the editor really is playing, the probe confirms and we still
+    raise — agents must not slip writes through to a running game."""
+    runtime, session, client = _runtime_with_probe(cached="playing", probe_reports="playing")
+    with pytest.raises(GodotCommandError) as exc_info:
+        await require_writable_async(runtime)
+    assert exc_info.value.code == ErrorCode.EDITOR_NOT_READY
+    assert client.probe_calls == 1
+    assert session.readiness == "playing"
+
+
+async def test_require_writable_async_probe_failure_falls_back_to_cached_value():
+    """If the probe itself fails (timeout, disconnect, plugin error), we
+    can't trust the network — raise the gating error against the cached
+    value rather than escalating to a connection error. The actual write
+    would have failed too, so this keeps the failure mode coherent."""
+    runtime, session, client = _runtime_with_probe(
+        cached="playing", probe_reports="ready", raise_on_probe=True
+    )
+    with pytest.raises(GodotCommandError) as exc_info:
+        await require_writable_async(runtime)
+    assert exc_info.value.code == ErrorCode.EDITOR_NOT_READY
+    assert exc_info.value.data == {"retryable": False, "state": "playing"}
+    assert client.probe_calls == 1
+
+
+async def test_require_writable_async_no_session_is_no_op():
+    runtime = DirectRuntime(registry=SessionRegistry(), client=_ProbeClient("ready"))
+    await require_writable_async(runtime)  # no raise
+
+
+async def test_require_writable_async_probe_handles_unknown_state_gracefully():
+    """Forward-compat: if the probe returns a state the server doesn't
+    know yet, sync_readiness_for_session is a no-op and we enforce
+    against the prior cached value. A future plugin's new state name
+    can't accidentally let a write slip through or get blocked."""
+    runtime, session, client = _runtime_with_probe(
+        cached="playing", probe_reports="bogus_future_state"
+    )
+    with pytest.raises(GodotCommandError):
+        await require_writable_async(runtime)
+    assert client.probe_calls == 1
+    assert session.readiness == "playing"

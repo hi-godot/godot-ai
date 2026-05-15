@@ -40,7 +40,8 @@ def mcp():
 
 
 def _handler_calls_require_writable(handler: Any) -> bool:
-    """Return True if the handler's source contains a ``require_writable(...)`` call.
+    """Return True if the handler's source contains a ``require_writable``
+    or ``require_writable_async`` call.
 
     AST-based so a string literal mentioning the name (or a comment) doesn't
     register as a call. Walks both bare (``require_writable(rt)``) and
@@ -57,13 +58,14 @@ def _handler_calls_require_writable(handler: Any) -> bool:
     except SyntaxError:
         return False
 
+    names = {"require_writable", "require_writable_async"}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        if isinstance(func, ast.Name) and func.id == "require_writable":
+        if isinstance(func, ast.Name) and func.id in names:
             return True
-        if isinstance(func, ast.Attribute) and func.attr == "require_writable":
+        if isinstance(func, ast.Attribute) and func.attr in names:
             return True
     return False
 

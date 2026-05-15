@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.handlers._target import target_params
 from godot_ai.runtime.direct import DirectRuntime
 
@@ -18,7 +18,7 @@ async def gradient_texture_create(
     resource_path: str = "",
     overwrite: bool = False,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params = {"stops": stops, "width": width, "height": height, "fill": fill}
     params.update(target_params(path, property, resource_path, overwrite))
     return await runtime.send_command("gradient_texture_create", params)
@@ -37,7 +37,7 @@ async def noise_texture_create(
     resource_path: str = "",
     overwrite: bool = False,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict = {
         "noise_type": noise_type,
         "width": width,

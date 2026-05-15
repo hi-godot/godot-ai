@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
 
 async def script_create(runtime: DirectRuntime, path: str, content: str = "") -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "create_script",
         {"path": path, "content": content},
@@ -21,7 +21,7 @@ async def script_patch(
     new_text: str,
     replace_all: bool = False,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "patch_script",
         {
@@ -38,7 +38,7 @@ async def script_read(runtime: DirectRuntime, path: str) -> dict:
 
 
 async def script_attach(runtime: DirectRuntime, path: str, script_path: str) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "attach_script",
         {"path": path, "script_path": script_path},
@@ -46,7 +46,7 @@ async def script_attach(runtime: DirectRuntime, path: str, script_path: str) -> 
 
 
 async def script_detach(runtime: DirectRuntime, path: str) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command("detach_script", {"path": path})
 
 

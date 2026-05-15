@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
 
@@ -20,7 +20,7 @@ async def input_map_add_action(
     action: str,
     deadzone: float = 0.5,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "add_action",
         {"action": action, "deadzone": deadzone},
@@ -28,7 +28,7 @@ async def input_map_add_action(
 
 
 async def input_map_remove_action(runtime: DirectRuntime, action: str) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command("remove_action", {"action": action})
 
 
@@ -38,7 +38,7 @@ async def input_map_bind_event(
     event_type: str,
     **kwargs: Any,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict[str, Any] = {"action": action, "event_type": event_type}
     params.update(kwargs)
     return await runtime.send_command("bind_event", params)

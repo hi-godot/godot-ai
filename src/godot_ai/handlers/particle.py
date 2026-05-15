@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
 
@@ -14,7 +14,7 @@ async def particle_create(
     name: str = "Particles",
     type: str = "gpu_3d",
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "particle_create",
         {"parent_path": parent_path, "name": name, "type": type},
@@ -26,7 +26,7 @@ async def particle_set_main(
     node_path: str,
     properties: dict[str, Any],
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "particle_set_main",
         {"node_path": node_path, "properties": properties},
@@ -38,7 +38,7 @@ async def particle_set_process(
     node_path: str,
     properties: dict[str, Any],
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "particle_set_process",
         {"node_path": node_path, "properties": properties},
@@ -53,7 +53,7 @@ async def particle_set_draw_pass(
     texture: str = "",
     material: str = "",
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict[str, Any] = {"node_path": node_path, "pass": pass_}
     if mesh:
         params["mesh"] = mesh
@@ -80,7 +80,7 @@ async def particle_apply_preset(
     type: str = "gpu_3d",
     overrides: dict[str, Any] | None = None,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict[str, Any] = {
         "parent_path": parent_path,
         "name": name,

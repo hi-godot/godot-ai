@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
 
@@ -15,7 +15,7 @@ async def material_create(
     shader_path: str = "",
     overwrite: bool = False,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict[str, Any] = {"path": path, "type": type, "overwrite": overwrite}
     if shader_path:
         params["shader_path"] = shader_path
@@ -28,7 +28,7 @@ async def material_set_param(
     param: str,
     value: Any,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "material_set_param",
         {"path": path, "param": param, "value": value},
@@ -41,7 +41,7 @@ async def material_set_shader_param(
     param: str,
     value: Any,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "material_set_shader_param",
         {"path": path, "param": param, "value": value},
@@ -71,7 +71,7 @@ async def material_assign(
     create_if_missing: bool = False,
     type: str = "standard",
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict[str, Any] = {
         "node_path": node_path,
         "slot": slot,
@@ -91,7 +91,7 @@ async def material_apply_to_node(
     slot: str = "override",
     save_to: str = "",
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     payload: dict[str, Any] = {
         "node_path": node_path,
         "type": type,
@@ -110,7 +110,7 @@ async def material_apply_preset(
     node_path: str = "",
     overrides: dict[str, Any] | None = None,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict[str, Any] = {"preset": preset}
     if path:
         params["path"] = path

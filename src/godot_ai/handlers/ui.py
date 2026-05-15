@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
 
@@ -15,7 +15,7 @@ async def ui_set_anchor_preset(
     resize_mode: str = "minsize",
     margin: int = 0,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "set_anchor_preset",
         {
@@ -32,7 +32,7 @@ async def ui_set_text(
     path: str,
     text: str,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "set_text",
         {"path": path, "text": text},
@@ -44,7 +44,7 @@ async def ui_build_layout(
     tree: dict[str, Any],
     parent_path: str = "",
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "build_layout",
         {"tree": tree, "parent_path": parent_path},

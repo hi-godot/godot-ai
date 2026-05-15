@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
 
@@ -13,7 +13,7 @@ async def animation_player_create(
     parent_path: str,
     name: str = "AnimationPlayer",
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "animation_player_create",
         {"parent_path": parent_path, "name": name},
@@ -28,7 +28,7 @@ async def animation_create(
     loop_mode: str = "none",
     overwrite: bool = False,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict = {
         "player_path": player_path,
         "name": name,
@@ -48,7 +48,7 @@ async def animation_add_property_track(
     keyframes: list[dict],
     interpolation: str = "linear",
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "animation_add_property_track",
         {
@@ -68,7 +68,7 @@ async def animation_add_method_track(
     target_node_path: str,
     keyframes: list[dict],
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "animation_add_method_track",
         {
@@ -85,7 +85,7 @@ async def animation_set_autoplay(
     player_path: str,
     animation_name: str = "",
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "animation_set_autoplay",
         {"player_path": player_path, "animation_name": animation_name},
@@ -139,7 +139,7 @@ async def animation_delete(
     player_path: str,
     animation_name: str,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     return await runtime.send_command(
         "animation_delete",
         {"player_path": player_path, "animation_name": animation_name},
@@ -167,7 +167,7 @@ async def animation_create_simple(
     loop_mode: str = "none",
     overwrite: bool = False,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict[str, Any] = {
         "player_path": player_path,
         "name": name,
@@ -190,7 +190,7 @@ async def animation_preset_fade(
     animation_name: str = "",
     overwrite: bool = False,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict[str, Any] = {
         "player_path": player_path,
         "target_path": target_path,
@@ -215,7 +215,7 @@ async def animation_preset_slide(
     animation_name: str = "",
     overwrite: bool = False,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict[str, Any] = {
         "player_path": player_path,
         "target_path": target_path,
@@ -243,7 +243,7 @@ async def animation_preset_shake(
     animation_name: str = "",
     overwrite: bool = False,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict[str, Any] = {
         "player_path": player_path,
         "target_path": target_path,
@@ -270,7 +270,7 @@ async def animation_preset_pulse(
     animation_name: str = "",
     overwrite: bool = False,
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict[str, Any] = {
         "player_path": player_path,
         "target_path": target_path,

@@ -40,6 +40,12 @@ from godot_ai.sessions.registry import Session, SessionRegistry
 class StubClient:
     def __init__(self):
         self.calls: list[dict] = []
+        ## What the probe in `require_writable_async` should observe as
+        ## the editor's live readiness. Tests that exercise the gating
+        ## behavior with a blocking cached state must set this to match
+        ## the cached value (otherwise the probe heals the cache and the
+        ## write incorrectly slips through).
+        self.live_readiness: str = "ready"
 
     async def send(
         self,
@@ -141,9 +147,9 @@ class StubClient:
             return {
                 "current_scene": "res://main.tscn",
                 "project_name": "TestProject",
-                "is_playing": False,
+                "is_playing": self.live_readiness == "playing",
                 "godot_version": "4.4.1",
-                "readiness": "ready",
+                "readiness": self.live_readiness,
             }
         if command == "get_selection":
             return {"selected": ["/Main/Camera3D"]}
@@ -2515,6 +2521,7 @@ async def test_curve_set_points_requires_writable():
     from godot_ai.sessions.registry import Session
 
     client = StubClient()
+    client.live_readiness = "importing"
     session = Session(
         session_id="s1",
         godot_version="4.4",
@@ -2563,6 +2570,7 @@ async def test_gradient_texture_create_requires_writable():
     from godot_ai.sessions.registry import Session
 
     client = StubClient()
+    client.live_readiness = "importing"
     session = Session(
         session_id="s1",
         godot_version="4.4",
@@ -2608,6 +2616,7 @@ async def test_noise_texture_create_requires_writable():
     from godot_ai.sessions.registry import Session
 
     client = StubClient()
+    client.live_readiness = "importing"
     session = Session(
         session_id="s1",
         godot_version="4.4",
@@ -2688,6 +2697,7 @@ async def test_environment_create_requires_writable():
     from godot_ai.sessions.registry import Session
 
     client = StubClient()
+    client.live_readiness = "importing"
     session = Session(
         session_id="s1",
         godot_version="4.4",
@@ -2751,6 +2761,7 @@ async def test_physics_shape_autofit_requires_writable():
     from godot_ai.sessions.registry import Session
 
     client = StubClient()
+    client.live_readiness = "importing"
     session = Session(
         session_id="s1",
         godot_version="4.4",
@@ -2771,6 +2782,7 @@ async def test_resource_create_requires_writable():
     from godot_ai.sessions.registry import Session
 
     client = StubClient()
+    client.live_readiness = "importing"
     session = Session(
         session_id="s1",
         godot_version="4.4",
@@ -3916,6 +3928,7 @@ async def test_animation_player_create_requires_writable():
     from godot_ai.sessions.registry import Session
 
     client = StubClient()
+    client.live_readiness = "importing"
     session = Session(
         session_id="s1",
         godot_version="4.4",
@@ -4747,6 +4760,7 @@ async def test_audio_list_handler_is_read_only():
 async def test_audio_player_create_blocks_when_not_writable():
     """audio_player_create requires a writable session (uses require_writable)."""
     client = StubClient()
+    client.live_readiness = "playing"
     session = Session(
         session_id="s1",
         godot_version="4.4",
@@ -4760,4 +4774,8 @@ async def test_audio_player_create_blocks_when_not_writable():
     with pytest.raises(Exception) as exc_info:
         await audio_handlers.audio_player_create(runtime, parent_path="/Main")
     assert "play mode" in str(exc_info.value).lower()
-    assert client.calls == []
+    ## The gate fires one `get_editor_state` probe to confirm the cache
+    ## isn't stale before raising — that's expected. What must NOT have
+    ## happened is the actual write command leaving the server.
+    sent = [call["command"] for call in client.calls]
+    assert "create_audio_stream_player" not in sent

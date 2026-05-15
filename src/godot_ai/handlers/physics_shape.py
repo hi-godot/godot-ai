@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from godot_ai.handlers._readiness import require_writable
+from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
 
@@ -12,7 +12,7 @@ async def physics_shape_autofit(
     source_path: str = "",
     shape_type: str = "",
 ) -> dict:
-    require_writable(runtime)
+    await require_writable_async(runtime)
     params: dict = {"path": path}
     if source_path:
         params["source_path"] = source_path
