@@ -713,6 +713,7 @@ def _instrument(
                 _emit(start, False, sub, sid, err)
                 raise
 
+        _expose_wrapped_surface(_async_wrapper, func)
         return _async_wrapper
 
     @functools.wraps(func)
@@ -730,7 +731,30 @@ def _instrument(
             _emit(start, False, sub, sid, err)
             raise
 
+    _expose_wrapped_surface(_sync_wrapper, func)
     return _sync_wrapper
+
+
+def _expose_wrapped_surface(wrapper: Callable[..., Any], func: Callable[..., Any]) -> None:
+    ## FastMCP's schema generator (``without_injected_parameters`` →
+    ## ``typing.get_type_hints`` → Pydantic ``TypeAdapter``) inspects the
+    ## wrapper's own ``__signature__`` / ``__annotations__`` rather than
+    ## chasing ``__wrapped__`` consistently. On the Python / Pydantic
+    ## combos that surface issue #435, the chain returns a ``type_hints``
+    ## dict missing the ``op`` key for ``<domain>_manage`` rollups,
+    ## crashing schema build at server startup with ``KeyError: 'op'``.
+    ##
+    ## ``functools.wraps`` already assigns ``__annotations__`` to the
+    ## wrapped dict, but does not synthesize ``__signature__``. Re-assign
+    ## a *fresh* dict copy of ``__annotations__`` (so a downstream
+    ## consumer mutating it can't corrupt the underlying handler's dict)
+    ## and pin ``__signature__`` to the real signature so callers don't
+    ## have to follow ``__wrapped__``.
+    try:
+        wrapper.__signature__ = inspect.signature(func)  # type: ignore[attr-defined]
+    except (TypeError, ValueError):
+        pass
+    wrapper.__annotations__ = dict(getattr(func, "__annotations__", {}))
 
 
 def telemetry_tool(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:

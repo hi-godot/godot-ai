@@ -292,3 +292,54 @@ class TestInstallFastmcpWraps:
         _wait_for(sent, 0, timeout=0.3)
 
         assert sent == []
+
+    def test_manage_tool_schema_builds_through_wrap(self, isolated_collector) -> None:
+        """Issue #435 regression: ``<domain>_manage`` rollups have their
+        ``op`` annotation set post-hoc to a dynamically-built ``Literal[...]``
+        (see ``_meta_tool.py`` rationale). When the telemetry wrap put a
+        ``functools.wraps``-decorated wrapper between FastMCP and the closure,
+        FastMCP's ``without_injected_parameters`` → Pydantic schema build
+        crashed with ``KeyError: 'op'`` on some Python / Pydantic combos
+        because the wrapper's own ``__annotations__`` / ``__globals__`` lost
+        the dynamic ``Literal``. The fix pins ``__signature__`` and a fresh
+        ``__annotations__`` copy on the instrumented wrapper so FastMCP can
+        introspect it directly.
+
+        This test reproduces the failing path: register a manage tool through
+        an ``install_fastmcp_wraps``-wrapped FastMCP and force schema
+        generation by listing tools. Pre-fix this raised ``KeyError: 'op'``.
+        """
+        from fastmcp import FastMCP
+
+        from godot_ai.tools._meta_tool import register_manage_tool
+
+        mcp = FastMCP("test")
+        tel.install_fastmcp_wraps(mcp)
+
+        async def op_a(runtime, **_kwargs):  # type: ignore[no-untyped-def]
+            return {"ok": True}
+
+        async def op_b(runtime, **_kwargs):  # type: ignore[no-untyped-def]
+            return {"ok": True}
+
+        register_manage_tool(
+            mcp,
+            tool_name="test_manage",
+            description="test manage rollup",
+            ops={"alpha": op_a, "beta": op_b},
+        )
+
+        ## Forcing tool list materializes the Pydantic schema for every
+        ## registered tool — that's the call that exploded in #435.
+        tools = asyncio.run(mcp.list_tools())
+        names = {t.name for t in tools}
+        assert "test_manage" in names
+
+        test_manage = next(t for t in tools if t.name == "test_manage")
+        schema = test_manage.parameters or {}
+        ## Schema must enumerate the op literal — proves Pydantic saw the
+        ## ``op`` annotation rather than skipping or defaulting it.
+        op_schema = schema.get("properties", {}).get("op", {})
+        assert op_schema.get("enum") == ["alpha", "beta"], (
+            f"op enum missing or wrong; got schema={op_schema!r}"
+        )
