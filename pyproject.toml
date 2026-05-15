@@ -30,7 +30,11 @@ classifiers = [
     "Framework :: AsyncIO",
 ]
 dependencies = [
-    "fastmcp>=3.0.0",
+    # 3.3.0 (released 2026-05-15) ships a circular import in fastmcp.server
+    # that surfaces as "FastMCP server support is not installed" at pytest
+    # collection time on every fresh install. Lift the upper bound once
+    # upstream ships a fix.
+    "fastmcp>=3.0.0,<3.3.0",
     "websockets>=13.0",
     "pydantic>=2.0",
 ]
