@@ -22,14 +22,26 @@ Ops:
         (``spatial_editor/*``, etc.). The ``is_builtin`` field on each
         entry is true for any action not authored by the user.
   • add_action(action, deadzone=0.5)
-        Create a new empty input action.
+        Create a new empty input action. ``deadzone`` must be in
+        ``[0.0, 1.0]`` — Godot uses it as the analog-stick dead-zone
+        threshold; values outside this range are rejected with
+        ``VALUE_OUT_OF_RANGE``. Typical values are 0.2-0.5; leave the
+        default 0.5 unless you have a reason. Not a key-repeat delay.
   • remove_action(action)
         Remove an action and all its event bindings.
   • bind_event(action, event_type, keycode="", ctrl=False, alt=False,
                 shift=False, meta=False, button=None)
-        Bind a key/mouse/gamepad event to an action. event_type is
-        "key" | "mouse_button" | "joy_button". keycode is required for
-        "key"; button is required for the others.
+        Bind a key/mouse/gamepad event to an action. The action must
+        already exist (call ``add_action`` first). ``event_type`` is
+        ``"key"`` | ``"mouse_button"`` | ``"joy_button"``.
+          - ``key``: ``keycode`` is a Godot keycode *name string* like
+            ``"A"``, ``"Space"``, ``"Enter"``, ``"Escape"``, ``"F1"``,
+            ``"Left"`` — not an integer and not ``KEY_*``. Modifier
+            booleans ``ctrl`` / ``alt`` / ``shift`` / ``meta`` optional.
+          - ``mouse_button``: ``button`` is an int — 1=left, 2=right,
+            3=middle, 4=wheel up, 5=wheel down.
+          - ``joy_button``: ``button`` is the ``JoyButton`` index
+            (e.g. 0=A/Cross, 1=B/Circle).
 """
 
 

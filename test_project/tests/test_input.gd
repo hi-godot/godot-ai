@@ -101,6 +101,29 @@ func test_add_action_duplicate() -> void:
 	_handler.remove_action({"action": TEST_ACTION})
 
 
+func test_add_action_rejects_deadzone_below_zero() -> void:
+	## Issue #439: callers (LLMs) pass deadzone values outside [0, 1].
+	## Reject explicitly with VALUE_OUT_OF_RANGE so retries can converge.
+	var result := _handler.add_action({"action": TEST_ACTION, "deadzone": -0.1})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_false(InputMap.has_action(TEST_ACTION), "Action must not be created on validation failure")
+
+
+func test_add_action_rejects_deadzone_above_one() -> void:
+	var result := _handler.add_action({"action": TEST_ACTION, "deadzone": 1.5})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_false(InputMap.has_action(TEST_ACTION), "Action must not be created on validation failure")
+
+
+func test_add_action_accepts_boundary_deadzones() -> void:
+	var result := _handler.add_action({"action": TEST_ACTION, "deadzone": 0.0})
+	assert_has_key(result, "data")
+	_handler.remove_action({"action": TEST_ACTION})
+	result = _handler.add_action({"action": TEST_ACTION, "deadzone": 1.0})
+	assert_has_key(result, "data")
+	_handler.remove_action({"action": TEST_ACTION})
+
+
 # ----- remove_action -----
 
 func test_remove_action_missing_name() -> void:
@@ -140,6 +163,61 @@ func test_bind_event_unsupported_type() -> void:
 	})
 	assert_is_error(result)
 	_handler.remove_action({"action": TEST_ACTION})
+
+
+func test_bind_event_key_missing_keycode() -> void:
+	## Issue #439: was collapsed into "Unsupported event_type" — now reports
+	## the actual missing param so retries can converge.
+	_handler.add_action({"action": TEST_ACTION})
+	var result := _handler.bind_event({
+		"action": TEST_ACTION,
+		"event_type": "key",
+	})
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
+	_handler.remove_action({"action": TEST_ACTION})
+
+
+func test_bind_event_key_invalid_keycode() -> void:
+	_handler.add_action({"action": TEST_ACTION})
+	var result := _handler.bind_event({
+		"action": TEST_ACTION,
+		"event_type": "key",
+		"keycode": "NotARealKey",
+	})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	_handler.remove_action({"action": TEST_ACTION})
+
+
+func test_bind_event_mouse_button_missing_button() -> void:
+	_handler.add_action({"action": TEST_ACTION})
+	var result := _handler.bind_event({
+		"action": TEST_ACTION,
+		"event_type": "mouse_button",
+	})
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
+	_handler.remove_action({"action": TEST_ACTION})
+
+
+func test_bind_event_mouse_button_zero_button() -> void:
+	_handler.add_action({"action": TEST_ACTION})
+	var result := _handler.bind_event({
+		"action": TEST_ACTION,
+		"event_type": "mouse_button",
+		"button": 0,
+	})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	_handler.remove_action({"action": TEST_ACTION})
+
+
+func test_bind_event_unknown_action_message_suggests_add_action() -> void:
+	## The error string should point the caller at the fix so they don't loop.
+	var result := _handler.bind_event({
+		"action": "_nope_xyz",
+		"event_type": "key",
+		"keycode": "Space",
+	})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(result.error.message, "add_action")
 
 
 func test_bind_key_event() -> void:

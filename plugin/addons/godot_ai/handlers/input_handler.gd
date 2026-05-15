@@ -54,6 +54,10 @@ func add_action(params: Dictionary) -> Dictionary:
 	if action.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: action")
 
+	if deadzone < 0.0 or deadzone > 1.0:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+			"deadzone must be in [0.0, 1.0] (got %s). Typical values are 0.2-0.5; default is 0.5." % deadzone)
+
 	if InputMap.has_action(action):
 		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Action '%s' already exists" % action)
 
@@ -127,11 +131,13 @@ func bind_event(params: Dictionary) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: event_type")
 
 	if not InputMap.has_action(action):
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Action '%s' not found" % action)
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+			"Action '%s' not found. Call input_map_manage(op='add_action', params={action: '%s'}) first." % [action, action])
 
-	var event: InputEvent = _create_event(event_type, params)
-	if event == null:
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Unsupported event_type: %s (use key, mouse_button, or joy_button)" % event_type)
+	var event_or_error = _create_event(event_type, params)
+	if event_or_error is Dictionary:
+		return event_or_error
+	var event: InputEvent = event_or_error
 
 	InputMap.action_add_event(action, event)
 
@@ -151,35 +157,45 @@ func bind_event(params: Dictionary) -> Dictionary:
 	}
 
 
-func _create_event(event_type: String, params: Dictionary) -> InputEvent:
+## Returns an InputEvent on success, or a Dictionary error on failure.
+## Caller must check ``result is Dictionary`` before treating it as an event.
+func _create_event(event_type: String, params: Dictionary):
 	match event_type:
 		"key":
 			var ev := InputEventKey.new()
 			var keycode_str: String = params.get("keycode", "")
 			if keycode_str.is_empty():
-				return null
+				return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM,
+					"event_type='key' requires keycode (e.g. 'Space', 'A', 'Enter', 'Escape', 'F1').")
 			ev.keycode = OS.find_keycode_from_string(keycode_str)
 			if ev.keycode == KEY_NONE:
-				return null
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+					"Invalid keycode '%s'. Use Godot keycode names like 'A', 'Space', 'Enter', 'Escape', 'F1', 'Left', 'Right'." % keycode_str)
 			ev.ctrl_pressed = params.get("ctrl", false)
 			ev.alt_pressed = params.get("alt", false)
 			ev.shift_pressed = params.get("shift", false)
 			ev.meta_pressed = params.get("meta", false)
 			return ev
 		"mouse_button":
-			var ev := InputEventMouseButton.new()
-			var button: int = params.get("button", 0)
+			if not params.has("button"):
+				return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM,
+					"event_type='mouse_button' requires button (1=left, 2=right, 3=middle, 4=wheel up, 5=wheel down).")
+			var button: int = int(params.get("button", 0))
 			if button <= 0:
-				return null
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+					"mouse_button button must be > 0 (got %d). Use 1=left, 2=right, 3=middle, 4=wheel up, 5=wheel down." % button)
+			var ev := InputEventMouseButton.new()
 			ev.button_index = button
 			return ev
 		"joy_button":
-			var ev := InputEventJoypadButton.new()
 			if not params.has("button"):
-				return null
+				return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM,
+					"event_type='joy_button' requires button (JoyButton index, e.g. 0=A/Cross, 1=B/Circle).")
+			var ev := InputEventJoypadButton.new()
 			ev.button_index = int(params.get("button", 0))
 			return ev
-	return null
+	return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+		"Unsupported event_type: '%s'. Use 'key', 'mouse_button', or 'joy_button'." % event_type)
 
 
 func _serialize_event(event: InputEvent) -> Dictionary:
