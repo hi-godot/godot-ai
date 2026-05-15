@@ -302,6 +302,13 @@ func send_deferred_response(request_id: String, payload: Dictionary) -> void:
 	response["request_id"] = request_id
 	if not response.has("status"):
 		response["status"] = "ok" if payload.has("data") else "error"
+	## Symmetric with McpDispatcher::_dispatch — stamp live readiness on the
+	## deferred reply so the server's session cache self-heals from any
+	## response, not just the synchronous ones. Lets `project_stop` (the
+	## main deferred-response producer) stay correct even if its bespoke
+	## `readiness_after` payload field were ever dropped.
+	if not response.has("readiness"):
+		response["readiness"] = get_readiness()
 	if _send_json(response) and dispatcher != null:
 		dispatcher.complete_deferred_response(request_id)
 
@@ -429,6 +436,11 @@ static func _make_backpressure_error(
 		"request_id": request_id,
 		"status": "error",
 		"data": {},
+		## Stamp readiness on the backpressure error too — the server's
+		## per-response self-heal applies to every response shape the
+		## plugin emits, and the next legitimate reply may already be
+		## queued behind this one.
+		"readiness": get_readiness(),
 		"error": {
 			"code": ErrorCodes.INTERNAL_ERROR,
 			"message": (

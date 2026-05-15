@@ -871,3 +871,167 @@ class TestEditorStateSelfHeal:
         finally:
             await asyncio.wait_for(task, timeout=2.0)
             await plugin.close()
+
+
+# --- Per-response envelope self-heal: stale "playing" cache clears on the
+# very next tool call without an `editor_state` ceremony, because the
+# plugin stamps live readiness onto every response. ---
+
+
+class TestResponseEnvelopeReadinessSelfHeal:
+    async def test_any_response_envelope_heals_stale_playing_cache(self, harness):
+        """A stale 'playing' cache is cleared by the next tool call's reply,
+        not just by `editor_state`. Reproduces the recurring telemetry signal
+        where `EDITOR_NOT_READY` fires long after `project_run` because a
+        `readiness_changed -> ready` event was dropped or coalesced.
+
+        The mock plugin replies to a non-`editor_state` read with
+        `readiness="ready"` in the envelope; the server must heal the cache
+        before exposing the next `require_writable` call to the agent.
+        """
+        plugin = await harness.connect_plugin(session_id="env-heal-1", readiness="playing")
+        client = GodotClient(harness.server, harness.registry)
+        runtime = DirectRuntime(registry=harness.registry, client=client)
+        session = harness.registry.get("env-heal-1")
+        assert session.readiness == "playing"
+
+        async def mock_plugin_loop():
+            ## First call is a read that has nothing to do with readiness;
+            ## the envelope's `readiness` field alone must heal the cache.
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_selection"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"selected_paths": [], "count": 0},
+                readiness="ready",
+            )
+            ## Now the agent issues a write. Without the envelope sync,
+            ## `require_writable` would still see the stale "playing" cache
+            ## and reject before `save_scene` ever leaves the server.
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "save_scene"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"path": "res://main.tscn", "undoable": False},
+                readiness="ready",
+            )
+
+        task = asyncio.create_task(mock_plugin_loop())
+        try:
+            await editor_handlers.editor_selection_get(runtime)
+            assert session.readiness == "ready", (
+                "envelope-level readiness on the get_selection reply must "
+                "have healed the stale 'playing' cache"
+            )
+            saved = await scene_handlers.scene_save(runtime)
+            assert saved["path"] == "res://main.tscn"
+        finally:
+            await asyncio.wait_for(task, timeout=2.0)
+            await plugin.close()
+
+    async def test_error_response_envelope_also_heals_cache(self, harness):
+        """Error replies carry the envelope readiness too. Without this, an
+        agent retrying a recoverable error would still see a stale cache."""
+        plugin = await harness.connect_plugin(session_id="env-heal-err", readiness="playing")
+        client = GodotClient(harness.server, harness.registry)
+        runtime = DirectRuntime(registry=harness.registry, client=client)
+        session = harness.registry.get("env-heal-err")
+
+        async def mock_plugin_loop():
+            cmd = await plugin.recv_command()
+            await plugin.send_error(
+                cmd["request_id"],
+                code="NODE_NOT_FOUND",
+                message="no such node",
+                readiness="ready",
+            )
+
+        task = asyncio.create_task(mock_plugin_loop())
+        try:
+            with pytest.raises(GodotCommandError):
+                await runtime.send_command("get_node", {"path": "/None"})
+            assert session.readiness == "ready"
+        finally:
+            await asyncio.wait_for(task, timeout=2.0)
+            await plugin.close()
+
+    async def test_envelope_heal_promotes_ready_to_playing(self, harness):
+        """Bidirectional — a stale 'ready' cache is promoted to 'playing'
+        from the envelope, so the next write correctly blocks instead of
+        slipping through against a now-running game."""
+        plugin = await harness.connect_plugin(session_id="env-heal-2", readiness="ready")
+        client = GodotClient(harness.server, harness.registry)
+        runtime = DirectRuntime(registry=harness.registry, client=client)
+        session = harness.registry.get("env-heal-2")
+
+        async def mock_plugin():
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"selected_paths": [], "count": 0},
+                readiness="playing",
+            )
+
+        task = asyncio.create_task(mock_plugin())
+        try:
+            await editor_handlers.editor_selection_get(runtime)
+            assert session.readiness == "playing"
+            with pytest.raises(GodotCommandError) as exc_info:
+                await scene_handlers.scene_save(runtime)
+            assert exc_info.value.code == "EDITOR_NOT_READY"
+        finally:
+            await asyncio.wait_for(task, timeout=2.0)
+            await plugin.close()
+
+    async def test_old_plugin_omitting_envelope_readiness_is_a_no_op(self, harness):
+        """Old plugins (pre-envelope-stamping) don't send the field at all.
+        The cache must keep its current value rather than being blanked."""
+        plugin = await harness.connect_plugin(session_id="env-heal-old", readiness="playing")
+        client = GodotClient(harness.server, harness.registry)
+        runtime = DirectRuntime(registry=harness.registry, client=client)
+        session = harness.registry.get("env-heal-old")
+
+        async def mock_plugin():
+            cmd = await plugin.recv_command()
+            ## `readiness=None` -> field omitted on the wire, exactly what
+            ## an unupgraded plugin would send.
+            await plugin.send_response(
+                cmd["request_id"],
+                {"selected_paths": [], "count": 0},
+                readiness=None,
+            )
+
+        task = asyncio.create_task(mock_plugin())
+        try:
+            await editor_handlers.editor_selection_get(runtime)
+            assert session.readiness == "playing", (
+                "old plugin omitting `readiness` must not blank or change the cache"
+            )
+        finally:
+            await asyncio.wait_for(task, timeout=2.0)
+            await plugin.close()
+
+    async def test_unknown_envelope_readiness_value_is_ignored(self, harness):
+        """A future plugin emitting a state the server doesn't know yet
+        must not corrupt the cache — the canonical KNOWN_READINESS set
+        gates writes through forward-compat omission."""
+        plugin = await harness.connect_plugin(session_id="env-heal-fwd", readiness="ready")
+        client = GodotClient(harness.server, harness.registry)
+        runtime = DirectRuntime(registry=harness.registry, client=client)
+        session = harness.registry.get("env-heal-fwd")
+
+        async def mock_plugin():
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"selected_paths": [], "count": 0},
+                readiness="bogus_state",
+            )
+
+        task = asyncio.create_task(mock_plugin())
+        try:
+            await editor_handlers.editor_selection_get(runtime)
+            assert session.readiness == "ready"
+        finally:
+            await asyncio.wait_for(task, timeout=2.0)
+            await plugin.close()

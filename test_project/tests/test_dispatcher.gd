@@ -232,3 +232,67 @@ func test_tick_suppresses_deferred_response_and_threads_request_id() -> void:
 	assert_eq(seen.get("request_id", ""), "req-deferred-1")
 	assert_false(params.has("_request_id"), "Dispatcher internals must not mutate queued params")
 	assert_eq(d.tick().size(), 0, "Deferred command should be drained from the queue")
+
+
+# ----- envelope-level readiness stamp (server-side stale-cache self-heal) -----
+
+
+func test_tick_stamps_envelope_readiness_on_success_response() -> void:
+	## Every dispatcher reply now carries the live editor readiness so the
+	## Python server's session cache self-heals on the very next tool call.
+	## Without this, a single dropped `readiness_changed` event leaves
+	## `EDITOR_NOT_READY` firing long after `project_run` against a
+	## writable editor (the recurring telemetry signal that motivated #X).
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	d.register("ok_cmd", func(_p): return {"data": {"value": 1}})
+	d.enqueue({"request_id": "req-rd-ok", "command": "ok_cmd", "params": {}})
+
+	var responses := d.tick(100.0)
+	assert_eq(responses.size(), 1)
+	assert_has_key(responses[0], "readiness")
+	## The dispatcher runs inside the editor, so any non-empty live readiness
+	## from `McpConnection.get_readiness()` is acceptable here — pin only
+	## the contract (presence + member of the canonical set).
+	var allowed := ["ready", "no_scene", "playing", "importing"]
+	assert_true(
+		responses[0].readiness in allowed,
+		"readiness must be a known state, got %s" % responses[0].readiness,
+	)
+
+
+func test_tick_stamps_envelope_readiness_on_handler_error_response() -> void:
+	## Error replies must also self-heal the cache. Otherwise an agent
+	## retrying a recoverable error sees the stale "playing" cache and
+	## bails out before reaching the next legitimate write.
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	d.register("bad_cmd", func(_p):
+		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, "no such node"))
+	d.enqueue({"request_id": "req-rd-err", "command": "bad_cmd", "params": {}})
+
+	var responses := d.tick(100.0)
+	assert_eq(responses.size(), 1)
+	assert_is_error(responses[0], ErrorCodes.NODE_NOT_FOUND)
+	assert_has_key(responses[0], "readiness")
+
+
+func test_tick_stamps_envelope_readiness_on_deferred_timeout_response() -> void:
+	## Symmetric with the success/error paths — a deferred-timeout reply
+	## is still a server-bound response, so the envelope must heal the
+	## cache from this branch too.
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	d.deferred_timeout_overrides_ms["never_replies"] = 1
+	d.register("never_replies", func(_p): return McpDispatcher.DEFERRED_RESPONSE)
+	d.enqueue({"request_id": "req-rd-defer", "command": "never_replies", "params": {}})
+
+	d.tick(100.0)
+	var responses: Array[Dictionary] = []
+	var started := Time.get_ticks_msec()
+	while responses.is_empty() and Time.get_ticks_msec() - started < 100:
+		responses = d.tick(100.0)
+
+	assert_eq(responses.size(), 1)
+	assert_is_error(responses[0], ErrorCodes.DEFERRED_TIMEOUT)
+	assert_has_key(responses[0], "readiness")

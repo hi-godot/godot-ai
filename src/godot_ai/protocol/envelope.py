@@ -23,6 +23,15 @@ class CommandResponse(BaseModel):
     status: str  # "ok" or "error"
     data: dict[str, Any] = Field(default_factory=dict)
     error: ErrorDetail | None = None
+    ## Live readiness snapshot stamped by the plugin's dispatcher onto every
+    ## response envelope. The server uses it to keep `Session.readiness` in
+    ## lockstep with editor state, so a stale "playing" / "importing" cache
+    ## (e.g. a `readiness_changed` event lost in transit, or a one-frame race
+    ## around `pause_processing`) self-heals on the very next tool call —
+    ## without the agent having to call `editor_state` first. Older plugins
+    ## omit the field; the server falls through to the existing event-driven
+    ## path. See connection.gd::get_readiness for the producer.
+    readiness: str | None = None
 
 
 class ErrorDetail(BaseModel):

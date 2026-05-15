@@ -159,6 +159,15 @@ func _dispatch(cmd: Dictionary) -> Dictionary:
 	result["request_id"] = request_id
 	if not result.has("status"):
 		result["status"] = "ok"
+	## Stamp live editor readiness onto every command-response envelope so
+	## the server's `Session.readiness` cache self-heals on the very next
+	## tool call. Without this, a single dropped `readiness_changed` event
+	## (or a one-frame race around `pause_processing`) leaves the cache
+	## stuck at "playing" / "importing" long after the editor has settled,
+	## and write tools fail with EDITOR_NOT_READY against a writable editor.
+	## See connection.gd::send_deferred_response for the deferred-response
+	## counterpart, which stamps the same field.
+	result["readiness"] = McpConnection.get_readiness()
 
 	if mcp_logging:
 		var status: String = result.get("status", "ok")
@@ -245,6 +254,11 @@ func _collect_deferred_timeouts() -> Array[Dictionary]:
 			"elapsed_ms": elapsed_ms,
 			"timeout_ms": timeout_ms,
 		}
+		## Same envelope-level readiness stamp as `_dispatch` — keep the
+		## self-heal channel symmetric across every reply shape the
+		## dispatcher emits so the server cache can't drift just because
+		## the editor happened to time out a deferred command.
+		response["readiness"] = McpConnection.get_readiness()
 		responses.append(response)
 		if mcp_logging and _log_buffer != null:
 			_log_buffer.log("[defer] %s (request %s) -> timeout" % [command, request_id])

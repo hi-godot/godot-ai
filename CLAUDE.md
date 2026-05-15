@@ -15,7 +15,7 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
 - **Protocol**: JSON over WebSocket. Request/response with `request_id` correlation. Handshake on connect.
 - **Session model**: Multiple Godot editors can connect. Tools route through active session.
 - **Handler/Runtime layer**: Shared handlers in `src/godot_ai/handlers/` contain tool logic. They depend on `DirectRuntime`, the in-process runtime adapter. Tools and resources are thin wrappers that create a runtime and delegate.
-- **Readiness gating**: Write operations check session readiness (`ready`/`importing`/`playing`/`no_scene`) before executing. Plugin sends readiness in handshake and via `readiness_changed` events. Python `require_writable()` in `handlers/_readiness.py` gates all write handlers.
+- **Readiness gating**: Write operations check session readiness (`ready`/`importing`/`playing`/`no_scene`) before executing. Plugin sends readiness in handshake and via `readiness_changed` events. Python `require_writable()` in `handlers/_readiness.py` gates all write handlers. Every command response also carries an envelope-level `readiness` field stamped by the plugin's dispatcher; the server's WebSocket transport pipes it through `sync_readiness_for_session` so a stale `playing`/`importing` cache (e.g. a dropped `readiness_changed` event after the game stopped) self-heals on the very next tool call — no `editor_state` ceremony required. Any new plugin response builder (success, error, deferred reply, backpressure error) must include the field; old plugins that omit it fall back to the event-driven path.
 
 ## Key conventions
 

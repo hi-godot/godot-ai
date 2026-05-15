@@ -42,8 +42,19 @@ class MockGodotPlugin:
         raw = await asyncio.wait_for(self.ws.recv(), timeout=timeout)
         return json.loads(raw)
 
-    async def send_response(self, request_id: str, data: dict, status: str = "ok") -> None:
-        msg = {"request_id": request_id, "status": status, "data": data}
+    async def send_response(
+        self,
+        request_id: str,
+        data: dict,
+        status: str = "ok",
+        readiness: str | None = None,
+    ) -> None:
+        msg: dict = {"request_id": request_id, "status": status, "data": data}
+        ## Mirror the real plugin: every dispatcher response carries a live
+        ## `readiness` envelope field. Tests that pass `readiness=None`
+        ## simulate an old plugin pre-dating the per-envelope self-heal.
+        if readiness is not None:
+            msg["readiness"] = readiness
         await self.ws.send(json.dumps(msg))
 
     async def send_error(
@@ -52,13 +63,16 @@ class MockGodotPlugin:
         code: str,
         message: str,
         data: dict | None = None,
+        readiness: str | None = None,
     ) -> None:
-        msg = {
+        msg: dict = {
             "request_id": request_id,
             "status": "error",
             "data": {},
             "error": {"code": code, "message": message, "data": data or {}},
         }
+        if readiness is not None:
+            msg["readiness"] = readiness
         await self.ws.send(json.dumps(msg))
 
     async def send_event(self, event: str, data: dict) -> None:

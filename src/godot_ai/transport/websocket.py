@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from websockets.asyncio.server import ServerConnection
 
 from godot_ai import __version__ as _SERVER_VERSION
+from godot_ai.handlers._readiness import sync_readiness_for_session
 from godot_ai.protocol.envelope import (
     CommandRequest,
     CommandResponse,
@@ -208,6 +209,15 @@ class GodotWebSocketServer:
 
                 # Handle command responses
                 response = CommandResponse.model_validate(data)
+                ## Heal `Session.readiness` from every response envelope.
+                ## The plugin stamps live readiness onto its dispatcher
+                ## output, so the cache stays in lockstep with editor
+                ## state — no `editor_state` ceremony required after a
+                ## game stop / autosave / import. Old plugins omit the
+                ## field; the helper treats `None` as a no-op so the
+                ## existing event-driven path still applies.
+                if response.readiness is not None and live is not None:
+                    sync_readiness_for_session(live, response.readiness)
                 future = self._pending.pop(response.request_id, None)
                 if future and not future.done():
                     future.set_result(response)
