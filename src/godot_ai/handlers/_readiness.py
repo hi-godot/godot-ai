@@ -29,9 +29,10 @@ KNOWN_READINESS: frozenset[str] = frozenset(_READINESS_INFO) | {"ready", "no_sce
 def sync_readiness_for_session(session: Session | None, value: object) -> bool:
     """Copy an authoritative readiness snapshot onto a specific session.
 
-    Returns True if the cache was updated, False if the session is None or
+    Returns True if the cache was updated, False if the session is None,
     the snapshot wasn't a recognized readiness value (forward-compat: a
-    newer plugin sending an unknown state is ignored, not propagated).
+    newer plugin sending an unknown state is ignored, not propagated),
+    or the value already matches the cache (no-op transition).
 
     Used by the WebSocket transport to heal `Session.readiness` from the
     `readiness` envelope field stamped on every command response by the
@@ -40,6 +41,8 @@ def sync_readiness_for_session(session: Session | None, value: object) -> bool:
     long after the game has stopped.
     """
     if session is None or value not in KNOWN_READINESS:
+        return False
+    if session.readiness == value:
         return False
     session.readiness = value  # type: ignore[assignment]
     return True
@@ -59,17 +62,6 @@ def sync_readiness_from_snapshot(runtime: "DirectRuntime", value: object) -> boo
     return sync_readiness_for_session(runtime.get_active_session(), value)
 
 
-def require_writable(runtime: "DirectRuntime") -> None:
-    """Sync compatibility shim — kept so handlers that haven't yet been
-    migrated to ``await require_writable_async`` keep their existing
-    rejection behavior. Skips the live probe, so it can still wrongly
-    raise on a stale cache.
-
-    New write handlers should ``await require_writable_async(runtime)``.
-    """
-    _enforce_blocking_state(runtime.get_active_session())
-
-
 async def require_writable_async(runtime: "DirectRuntime") -> None:
     """Check that the active session is in a writable state, with a live
     readiness probe to defeat a stale cache.
@@ -80,15 +72,14 @@ async def require_writable_async(runtime: "DirectRuntime") -> None:
     stale because a `readiness_changed` event was lost in transit (a brief
     WebSocket disconnect), or coalesced inside the plugin's
     ``pause_processing`` window around save/play frames. Before rejecting
-    a write, fire one ``get_editor_state`` round trip — its envelope
-    readiness self-heals the session via the transport's
-    ``sync_readiness_for_session`` hook, and the explicit
-    ``data.readiness`` sync below covers in-process tests that wire a
-    custom client and bypass the WebSocket envelope. If the editor is
-    really busy, the probe confirms the cache and we raise as before.
-    If the plugin is unreachable, the actual write would fail anyway
-    — trust the cached value and raise the gating error so the caller
-    gets a clean ``EDITOR_NOT_READY`` instead of a connection error.
+    a write, fire one ``get_editor_state`` round trip — production replies
+    self-heal the cache via the WebSocket transport's envelope sync; the
+    explicit ``sync_readiness_for_session`` call below covers in-process
+    tests that wire a custom client and bypass the transport. If the
+    editor really is busy, the probe confirms the cache and we raise as
+    before. If the plugin is unreachable, the actual write would fail
+    anyway — trust the cached value and raise the gating error so the
+    caller gets a clean ``EDITOR_NOT_READY`` instead of a connection error.
 
     Raises GodotCommandError with EDITOR_NOT_READY if the editor is
     importing or playing.  The ``ready`` and ``no_scene`` states are

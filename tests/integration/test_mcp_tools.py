@@ -2726,25 +2726,7 @@ class TestReadinessGating:
         # First set importing to block writes
         await self._set_readiness(plugin, "importing")
 
-        async def confirm_blocking_state():
-            ## The new live probe in `require_writable_async` fires one
-            ## `get_editor_state` round trip before rejecting. Confirm
-            ## the cache value here so the gate raises immediately
-            ## instead of waiting out the 2s probe timeout.
-            cmd = await plugin.recv_command()
-            assert cmd["command"] == "get_editor_state"
-            await plugin.send_response(
-                cmd["request_id"],
-                {
-                    "godot_version": "4.4.1",
-                    "project_name": "Test",
-                    "current_scene": "",
-                    "is_playing": False,
-                    "readiness": "importing",
-                },
-            )
-
-        probe_task = asyncio.create_task(confirm_blocking_state())
+        probe_task = asyncio.create_task(self._confirm_blocking_probe(plugin, "importing"))
         result = await client.call_tool(
             "node_create",
             {"type": "Node3D", "name": "Blocked"},
