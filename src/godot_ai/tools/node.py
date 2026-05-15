@@ -118,6 +118,14 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
     ) -> dict:
         """Set a property on a node.
 
+        Verify the property name first — call ``node_get_properties`` (or read
+        ``godot://node/{path}/properties``) to confirm the exact name and type
+        before writing. Guessing common Godot names often fails with
+        PROPERTY_NOT_ON_CLASS because Godot's actual properties differ from
+        intuition (e.g. ``Camera3D`` uses ``fov``/``current``, not ``field_of_view``;
+        ``Sprite2D`` uses ``texture``, not ``image``; ``Node3D`` uses
+        ``position``/``rotation``/``scale``, not ``transform.origin``).
+
         Coerces ``value`` to the property's type:
         - Vector2/Vector3: dict with x/y/z keys.
         - Color: dict {r,g,b,a} or hex string ("#ff0000").
@@ -130,7 +138,9 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
         Args:
             path: Scene path relative to the edited scene root (e.g.
                 "/Main/Camera3D"), NOT runtime "/root/..." paths.
-            property: Property name (e.g. "fov", "position", "mesh").
+            property: Property name (e.g. "fov", "position", "mesh"). Must match
+                Godot's exact identifier — introspect with ``node_get_properties``
+                if unsure rather than guessing.
             value: New value. Pass null (or "" for resources) to clear.
             scene_file: Optional editor-scene guard.
             session_id: Optional Godot session to target. Empty = active session.
