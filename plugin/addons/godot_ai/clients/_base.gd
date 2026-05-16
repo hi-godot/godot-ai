@@ -26,7 +26,7 @@ enum Status { NOT_CONFIGURED, CONFIGURED, CONFIGURED_MISMATCH, ERROR }
 ## in `McpClientConfigurator` all emit the same names — agents pattern-match
 ## against this set, so a fifth value being silently introduced would break
 ## them.
-static func status_label(status: Status) -> String:
+static func status_label(status: McpClient.Status) -> String:
 	match status:
 		Status.CONFIGURED:
 			return "configured"

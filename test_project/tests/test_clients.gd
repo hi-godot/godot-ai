@@ -2,6 +2,7 @@
 extends McpTestSuite
 
 const ClientHandler := preload("res://addons/godot_ai/handlers/client_handler.gd")
+const ClientBaseScript := preload("res://addons/godot_ai/clients/_base.gd")
 
 ## Tests for the client configuration registry + strategies.
 ##
@@ -125,6 +126,32 @@ func _find_callable(value: Variant, breadcrumb: String) -> String:
 			if not hit.is_empty():
 				return hit
 	return ""
+
+
+func test_status_label_callable_via_preload_alias() -> void:
+	## Regression for #444: calling `status_label` on `McpClient` through a
+	## `const ... := preload(...)` alias parses on stricter Godot versions.
+	## Before the fix, the parser flagged
+	##   `Invalid argument for "status_label()": argument 1 should be "Status"
+	##    but is "McpClient.Status".`
+	## because the parameter type was declared as the unqualified `Status`
+	## (local-scope enum in `_base.gd`) while the argument resolved through
+	## the preload alias as `McpClient.Status`. A parse failure in
+	## `client_configurator.gd` then cascaded into runtime "Nonexistent
+	## function" errors for `ensure_settings_registered` and
+	## `startup_trace_enabled` at plugin enable.
+	##
+	## This test fails to *load* (caught by the runner's load_errors path) if
+	## the parser regression returns, so even reaching `run_test()` here
+	## proves the surface is intact. The asserts below additionally pin the
+	## label values that agents pattern-match against.
+	var via_alias_value: ClientBaseScript.Status = ClientBaseScript.Status.CONFIGURED
+	assert_eq(ClientBaseScript.status_label(via_alias_value), "configured")
+	assert_eq(ClientBaseScript.status_label(ClientBaseScript.Status.NOT_CONFIGURED), "not_configured")
+	assert_eq(ClientBaseScript.status_label(ClientBaseScript.Status.CONFIGURED_MISMATCH), "configured_mismatch")
+	assert_eq(ClientBaseScript.status_label(ClientBaseScript.Status.ERROR), "error")
+	# And the class_name namespace form keeps working too.
+	assert_eq(McpClient.status_label(McpClient.Status.CONFIGURED), "configured")
 
 
 func test_every_client_has_manual_command() -> void:

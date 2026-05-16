@@ -314,7 +314,7 @@ static func _verify_post_state(
 		"status": "error",
 		"message": "%s reported %s ok but verification still reads %s (expected %s).%s" % [
 			client.display_name, action,
-			Client.status_label(actual), Client.status_label(expected),
+			McpClient.status_label(actual), McpClient.status_label(expected),
 			path_hint,
 		],
 	}
