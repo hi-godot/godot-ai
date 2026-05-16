@@ -1932,18 +1932,15 @@ func _on_tools_apply() -> void:
 
 
 func _on_tools_reset() -> void:
+	## Resets only the tool-domain exclusions, not the telemetry toggle.
+	## Telemetry is a privacy preference users typically want to set once
+	## and have honored — flipping it back to "on" via a generic Reset
+	## button would be a surprising privacy regression. The button label
+	## is scoped to tools accordingly.
 	_tools_pending_excluded = PackedStringArray()
 	for id in _tools_domain_checkboxes:
 		var chk: CheckBox = _tools_domain_checkboxes[id]
 		chk.set_pressed_no_signal(true)
-	## Restore telemetry to its default (on) too, so "Reset to defaults"
-	## consistently restores every setting on this tab. Skip when the
-	## toggle is disabled because an env var is locking the value — the
-	## env var wins, and we shouldn't create a dirty pending state the
-	## user can't apply from the UI.
-	if _telemetry_toggle != null and not _telemetry_toggle.disabled:
-		_telemetry_pending_enabled = true
-		_telemetry_toggle.set_pressed_no_signal(true)
 	_refresh_tools_ui_state()
 
 
