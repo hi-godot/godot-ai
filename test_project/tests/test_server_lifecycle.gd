@@ -84,9 +84,49 @@ class _ManagerHostStub extends GodotAiPlugin:
 
 const TEST_PORT := 65431
 
+const _TENV1 := "GODOT_AI_DISABLE_TELEMETRY"
+const _TENV2 := "DISABLE_TELEMETRY"
+
+var _saved_tenv1: Variant = null
+var _saved_tenv2: Variant = null
+var _had_telemetry_setting: bool = false
+var _saved_telemetry_setting: Variant = null
+
 
 func suite_name() -> String:
 	return "server_lifecycle"
+
+
+func suite_setup(_ctx: Dictionary) -> void:
+	_saved_tenv1 = OS.get_environment(_TENV1) if OS.has_environment(_TENV1) else null
+	_saved_tenv2 = OS.get_environment(_TENV2) if OS.has_environment(_TENV2) else null
+	var es := EditorInterface.get_editor_settings()
+	_had_telemetry_setting = es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED)
+	if _had_telemetry_setting:
+		_saved_telemetry_setting = es.get_setting(McpSettings.SETTING_TELEMETRY_ENABLED)
+
+
+func suite_teardown() -> void:
+	_restore_tenv(_TENV1, _saved_tenv1)
+	_restore_tenv(_TENV2, _saved_tenv2)
+	var es := EditorInterface.get_editor_settings()
+	if not _had_telemetry_setting:
+		if es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED):
+			es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, null)
+	else:
+		es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, _saved_telemetry_setting)
+
+
+func _restore_tenv(name: String, saved: Variant) -> void:
+	if saved == null:
+		OS.unset_environment(name)
+	else:
+		OS.set_environment(name, str(saved))
+
+
+func _clear_telemetry_env_vars() -> void:
+	OS.unset_environment(_TENV1)
+	OS.unset_environment(_TENV2)
 
 
 # ----- seam wiring -----------------------------------------------------
@@ -305,3 +345,94 @@ func test_prepare_for_update_reload_clears_spawn_guard() -> void:
 ## respawn_with_refresh is covered by script/ci-reload-test (10 reload
 ## iterations + full test suite). Stubbing McpClientConfigurator's
 ## get_server_command at this layer would re-implement config resolution.
+
+
+# ----- _inject_telemetry_env -------------------------------------------
+
+func test_inject_sets_env_when_telemetry_disabled_in_settings() -> void:
+	_clear_telemetry_env_vars()
+	EditorInterface.get_editor_settings().set_setting(
+		McpSettings.SETTING_TELEMETRY_ENABLED, false
+	)
+	var host := _ManagerHostStub.new()
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	var injected := manager._inject_telemetry_env()
+	var env_present := OS.has_environment(_TENV1)
+	if injected:
+		OS.unset_environment(_TENV1)
+	host.free()
+
+	assert_true(injected, "_inject_telemetry_env must return true when it sets the var")
+	assert_true(env_present, "GODOT_AI_DISABLE_TELEMETRY must be set in process env for the spawn")
+
+
+func test_inject_env_is_unset_after_caller_restores() -> void:
+	## Regression guard: start_server / respawn_with_refresh unset the var
+	## immediately after OS.create_process. Verify the restore pattern works
+	## so a future refactor can't silently leak the flag into later spawns.
+	_clear_telemetry_env_vars()
+	EditorInterface.get_editor_settings().set_setting(
+		McpSettings.SETTING_TELEMETRY_ENABLED, false
+	)
+	var host := _ManagerHostStub.new()
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	var injected := manager._inject_telemetry_env()
+	if injected:
+		OS.unset_environment(_TENV1)  ## mirrors what start_server / respawn_with_refresh do
+	var env_present_after := OS.has_environment(_TENV1)
+	host.free()
+
+	assert_false(env_present_after, "editor process env must be clean after the spawn-window restore")
+
+
+func test_inject_skips_when_setting_is_true() -> void:
+	_clear_telemetry_env_vars()
+	EditorInterface.get_editor_settings().set_setting(
+		McpSettings.SETTING_TELEMETRY_ENABLED, true
+	)
+	var host := _ManagerHostStub.new()
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	var injected := manager._inject_telemetry_env()
+	var env_present := OS.has_environment(_TENV1)
+	if injected:
+		OS.unset_environment(_TENV1)
+	host.free()
+
+	assert_false(injected, "must not inject when telemetry is enabled")
+	assert_false(env_present, "GODOT_AI_DISABLE_TELEMETRY must not be set when telemetry is enabled")
+
+
+func test_inject_skips_when_godot_ai_disable_telemetry_already_present() -> void:
+	## Env var already set by the user / CI — must not double-inject or
+	## report it as injected (which would cause the caller to unset it on
+	## cleanup, removing the user's own setting).
+	OS.set_environment(_TENV1, "true")
+	OS.unset_environment(_TENV2)
+	EditorInterface.get_editor_settings().set_setting(
+		McpSettings.SETTING_TELEMETRY_ENABLED, false
+	)
+	var host := _ManagerHostStub.new()
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	var injected := manager._inject_telemetry_env()
+	host.free()
+
+	assert_false(injected, "must not inject when GODOT_AI_DISABLE_TELEMETRY is already in env")
+
+
+func test_inject_skips_when_disable_telemetry_already_present() -> void:
+	OS.unset_environment(_TENV1)
+	OS.set_environment(_TENV2, "1")
+	EditorInterface.get_editor_settings().set_setting(
+		McpSettings.SETTING_TELEMETRY_ENABLED, false
+	)
+	var host := _ManagerHostStub.new()
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	var injected := manager._inject_telemetry_env()
+	host.free()
+
+	assert_false(injected, "must not inject when DISABLE_TELEMETRY is already in env")

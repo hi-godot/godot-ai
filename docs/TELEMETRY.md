@@ -18,7 +18,8 @@ goes, and how to opt out. All telemetry code is open source and lives in
 - **Non-blocking**: events go through a bounded in-process queue and a
   single daemon worker. Telemetry failures never propagate to tool
   callers.
-- **Easy opt-out**: one environment variable. See "Opting out" below.
+- **Easy opt-out**: Respects opt-out via environment variable or through
+  in-editor settings menu. See "Opting out" below.
 
 ## What we collect
 
@@ -83,7 +84,7 @@ export GODOT_AI_DISABLE_TELEMETRY=true
 export DISABLE_TELEMETRY=true
 ```
 
-If either of the above environment variables are enabled, the opt-out is
+If either of the above environment variables is enabled, the opt-out is
 saved to Godot's editor settings and will persist between runs. Similarly,
 if an environment variable is explicitly set and disabled, that will be
 persisted to the editor settings.
@@ -93,12 +94,11 @@ startup.
 
 ### Effect
 
-On opt-out (whether via UI or env var): the collector enters disabled
-mode. No records are enqueued, no UUID is generated, no worker thread is
-spawned, and no data directory is created. Existing local telemetry
-files (`customer_uuid.txt`, `milestones.json`) are deleted on the next
-server startup. The plugin-side helper honors the same variables and
-stops buffering events. Opt-out is fully side-effect-free.
+On opt-out, the collector enters disabled mode. No records are enqueued,
+no UUID is generated, no worker thread is spawned, and no data directory
+is created. Existing local telemetry files (`customer_uuid.txt`,
+`milestones.json`) are deleted on the next server startup. The plugin-side
+helper honors the same variables and stops buffering events.
 
 ## Endpoint configuration
 

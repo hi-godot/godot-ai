@@ -175,9 +175,11 @@ class TestTelemetryConfigCleanup:
         assert config.enabled is False
 
     def test_cleanup_logs_warning_on_oserror(
-        self, monkeypatch, clean_env, isolated_data_dir: Path
+        self, monkeypatch, clean_env, isolated_data_dir: Path, caplog
     ) -> None:
         """A deletion failure logs a warning and does not propagate."""
+        import logging
+
         monkeypatch.setenv("GODOT_AI_DISABLE_TELEMETRY", "true")
         uuid_file = isolated_data_dir / "customer_uuid.txt"
         uuid_file.write_text("fake-uuid")
@@ -186,9 +188,14 @@ class TestTelemetryConfigCleanup:
             raise OSError("permission denied")
 
         monkeypatch.setattr(type(uuid_file), "unlink", _bad_unlink)
-        # Should complete without raising:
-        config = tel.TelemetryConfig()
+        # Should complete without raising and must emit a warning:
+        with caplog.at_level(logging.WARNING, logger="godot_ai.telemetry"):
+            config = tel.TelemetryConfig()
         assert config.enabled is False
+        expected_err = "Could not remove telemetry file customer_uuid.txt"
+        assert any(
+            r.levelno == logging.WARNING and expected_err in r.message for r in caplog.records
+        ), f"Expected warning about customer_uuid.txt, got: {caplog.records}"
 
 
 # --- TelemetryCollector --------------------------------------------------

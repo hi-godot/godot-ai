@@ -71,10 +71,14 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
     assert "const DEFAULT_WS_PORT := 19500" in base_configurator
     assert 'const SELF_UPDATE_SMOKE_SERVER_VERSION := "2.2.0"' in base_configurator
     assert "var version := SELF_UPDATE_SMOKE_SERVER_VERSION" in base_configurator
-    assert "godot_ai_self_update_smoke/excluded_domains" in base_configurator
     assert "return default_port" in base_configurator
     assert "static func ensure_settings_registered() -> void:" in base_configurator
     assert "static func _register_port_setting(" in base_configurator
+
+    base_settings = (project / "addons" / "godot_ai" / "utils" / "settings.gd").read_text(
+        encoding="utf-8"
+    )
+    assert "godot_ai_self_update_smoke/excluded_domains" in base_settings
 
     base_plugin = (project / "addons" / "godot_ai" / "plugin.gd").read_text(encoding="utf-8")
     assert "godot_ai_self_update_smoke/managed_server_pid" in base_plugin
@@ -99,6 +103,7 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
         vnext_dock = zf.read("addons/godot_ai/mcp_dock.gd").decode()
         vnext_manager = zf.read("addons/godot_ai/utils/update_manager.gd").decode()
         vnext_configurator = zf.read("addons/godot_ai/client_configurator.gd").decode()
+        vnext_settings = zf.read("addons/godot_ai/utils/settings.gd").decode()
         vnext_plugin = zf.read("addons/godot_ai/plugin.gd").decode()
         vnext_lifecycle = zf.read("addons/godot_ai/utils/server_lifecycle.gd").decode()
         vnext_base = zf.read("addons/godot_ai/utils/self_update_smoke_base.gd").decode()
@@ -120,10 +125,10 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
     assert 'const SELF_UPDATE_SMOKE_SERVER_VERSION := "2.2.0"' in vnext_configurator
     assert 'godot-ai==%s" % version' in vnext_configurator
     assert "var version := SELF_UPDATE_SMOKE_SERVER_VERSION" in vnext_configurator
-    assert "godot_ai_self_update_smoke/excluded_domains" in vnext_configurator
     assert "return default_port" in vnext_configurator
     assert "static func ensure_settings_registered() -> void:" in vnext_configurator
     assert "static func _register_port_setting(" in vnext_configurator
+    assert "godot_ai_self_update_smoke/excluded_domains" in vnext_settings
     assert "godot_ai_self_update_smoke/managed_server_pid" in vnext_plugin
     assert 'const SELF_UPDATE_SMOKE_EXPECTED_SERVER_VERSION := "2.2.0"' in vnext_lifecycle
     assert "func _expected_server_version() -> String:" in vnext_lifecycle

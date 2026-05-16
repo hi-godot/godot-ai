@@ -28,11 +28,80 @@ class StubConnection extends RefCounted:
 		connection_state_changed.emit(is_open)
 
 
+const _TENV1 := "GODOT_AI_DISABLE_TELEMETRY"
+const _TENV2 := "DISABLE_TELEMETRY"
+
+var _saved_tenv1: Variant = null
+var _saved_tenv2: Variant = null
+var _had_telemetry_setting: bool = false
+var _saved_telemetry_setting: Variant = null
+
+
 func suite_name() -> String:
 	return "plugin_telemetry"
 
 
+func suite_setup(_ctx: Dictionary) -> void:
+	_saved_tenv1 = OS.get_environment(_TENV1) if OS.has_environment(_TENV1) else null
+	_saved_tenv2 = OS.get_environment(_TENV2) if OS.has_environment(_TENV2) else null
+	var es := EditorInterface.get_editor_settings()
+	_had_telemetry_setting = es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED)
+	if _had_telemetry_setting:
+		_saved_telemetry_setting = es.get_setting(McpSettings.SETTING_TELEMETRY_ENABLED)
+
+
+func suite_teardown() -> void:
+	_restore_tenv(_TENV1, _saved_tenv1)
+	_restore_tenv(_TENV2, _saved_tenv2)
+	var es := EditorInterface.get_editor_settings()
+	if not _had_telemetry_setting:
+		if es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED):
+			es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, null)
+	else:
+		es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, _saved_telemetry_setting)
+
+
+func _restore_tenv(name: String, saved: Variant) -> void:
+	if saved == null:
+		OS.unset_environment(name)
+	else:
+		OS.set_environment(name, str(saved))
+
+
+func _clear_telemetry_env_vars() -> void:
+	OS.unset_environment(_TENV1)
+	OS.unset_environment(_TENV2)
+
+
 # ----- opt-out -----
+
+func test_disabled_when_editor_setting_is_false() -> void:
+	## Regression guard for the UI opt-out / plugin-reload race:
+	## _inject_telemetry_env unsets GODOT_AI_DISABLE_TELEMETRY right after
+	## OS.create_process, so the new plugin instance's Telemetry constructor
+	## must fall back to the persisted EditorSetting instead of re-enabling.
+	_clear_telemetry_env_vars()
+	EditorInterface.get_editor_settings().set_setting(
+		McpSettings.SETTING_TELEMETRY_ENABLED, false
+	)
+	var conn := StubConnection.new()
+	var t := Telemetry.new(conn)
+	var is_disabled := t._disabled
+	assert_true(is_disabled,
+		"telemetry must be disabled when EditorSetting is false and no env var is set")
+
+
+func test_enabled_when_editor_setting_is_true() -> void:
+	_clear_telemetry_env_vars()
+	EditorInterface.get_editor_settings().set_setting(
+		McpSettings.SETTING_TELEMETRY_ENABLED, true
+	)
+	var conn := StubConnection.new()
+	var t := Telemetry.new(conn)
+	var is_disabled := t._disabled
+	assert_false(is_disabled,
+		"telemetry must be enabled when EditorSetting is true and no env var is set")
+
 
 func test_disabled_drops_event_without_send() -> void:
 	var conn := StubConnection.new()

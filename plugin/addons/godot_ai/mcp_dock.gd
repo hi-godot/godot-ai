@@ -381,12 +381,12 @@ func _on_redock() -> void:
 
 
 func _build_margin_container(margin: int = 12) -> MarginContainer:
-	var marginContainer := MarginContainer.new()
-	marginContainer.add_theme_constant_override("margin_left", margin)
-	marginContainer.add_theme_constant_override("margin_right", margin)
-	marginContainer.add_theme_constant_override("margin_top", margin)
-	marginContainer.add_theme_constant_override("margin_bottom", margin)
-	return marginContainer
+	var margin_container := MarginContainer.new()
+	margin_container.add_theme_constant_override("margin_left", margin)
+	margin_container.add_theme_constant_override("margin_right", margin)
+	margin_container.add_theme_constant_override("margin_top", margin)
+	margin_container.add_theme_constant_override("margin_bottom", margin)
+	return margin_container
 
 
 func _build_ui() -> void:
@@ -571,7 +571,7 @@ func _build_ui() -> void:
 
 	var clients_open_btn := Button.new()
 	clients_open_btn.text = "Clients & Settings"
-	clients_open_btn.tooltip_text = "Open the MCP settings window — configure AI clients or disable tool domains to fit under a client's hard tool-count cap (e.g. Antigravity's 100)."
+	clients_open_btn.tooltip_text = "Open the MCP settings window — configure AI clients, choose telemetry preferences, or disable tool domains to fit under a client's hard tool-count cap (e.g. Antigravity's 100)."
 	clients_open_btn.pressed.connect(_on_open_clients_window)
 	clients_row.add_child(clients_open_btn)
 
@@ -595,7 +595,7 @@ func _build_ui() -> void:
 
 	_clients_window = Window.new()
 	_clients_window.title = "MCP Clients & Settings"
-	_clients_window.min_size = Vector2i(560, 460) * EditorInterface.get_editor_scale()
+	_clients_window.min_size = Vector2i(Vector2i(560, 460) * EditorInterface.get_editor_scale())
 	_clients_window.visible = false
 	_clients_window.close_requested.connect(_on_clients_window_close_requested)
 	add_child(_clients_window)
@@ -991,7 +991,7 @@ func _on_log_logging_enabled_changed(enabled: bool) -> void:
 func _on_port_apply_requested(new_port: int) -> void:
 	var es := EditorInterface.get_editor_settings()
 	if es != null:
-		es.set_setting(ClientConfigurator.SETTING_HTTP_PORT, new_port)
+		es.set_setting(McpSettings.SETTING_HTTP_PORT, new_port)
 	## Every saved client config now points at the old port. Re-sweep so the
 	## drift banner appears in the same frame the user committed the change —
 	## the plugin reload below will run a second sweep on its own first paint,
@@ -1015,19 +1015,13 @@ func _refresh_server_label() -> void:
 # --- Telemetry setting persistence ---
 
 
-func _env_truthy(var_name: String) -> bool:
-	var val: String = OS.get_environment(var_name).strip_edges().to_lower()
-	return val in ["1", "true", "yes", "on"]
-
-
 ## Returns true if GODOT_AI_DISABLE_TELEMETRY or DISABLE_TELEMETRY is set
 ## to a truthy value, false if either is set and non-truthy, null if neither
 ## env var is present at all.
 func _is_telemetry_disabled_via_env() -> Variant:
-	var disabled: bool = _env_truthy("GODOT_AI_DISABLE_TELEMETRY") or _env_truthy("DISABLE_TELEMETRY")
-	if OS.has_environment("GODOT_AI_DISABLE_TELEMETRY") or OS.has_environment("DISABLE_TELEMETRY"):
-		return disabled
-	return null
+	if not (OS.has_environment("GODOT_AI_DISABLE_TELEMETRY") or OS.has_environment("DISABLE_TELEMETRY")):
+		return null
+	return McpSettings.env_truthy("GODOT_AI_DISABLE_TELEMETRY") or McpSettings.env_truthy("DISABLE_TELEMETRY")
 
 
 ## Reads the telemetry preference, applying env-var override when present.
@@ -1044,15 +1038,15 @@ func _load_telemetry_setting() -> void:
 		## the env var honour the last-set value.
 		enabled = not bool(env_disabled)
 		if es != null:
-			es.set_setting("godot_ai/telemetry_enabled", enabled)
+			es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, enabled)
 	else:
 		## No env var: read (or create) the EditorSettings key.
-		if es != null and es.has_setting("godot_ai/telemetry_enabled"):
-			enabled = bool(es.get_setting("godot_ai/telemetry_enabled"))
+		if es != null and es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED):
+			enabled = bool(es.get_setting(McpSettings.SETTING_TELEMETRY_ENABLED))
 		else:
 			enabled = true
 			if es != null:
-				es.set_setting("godot_ai/telemetry_enabled", true)
+				es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, true)
 
 	_telemetry_pending_enabled = enabled
 	_telemetry_saved_enabled = enabled
@@ -1117,7 +1111,7 @@ func _apply_dev_mode_visibility() -> void:
 # --- Button handlers ---
 
 
-func _do_plugin_reload():
+func _do_plugin_reload() -> void:
 	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", false)
 	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", true)
 
@@ -1920,14 +1914,14 @@ func _on_tools_apply() -> void:
 	var canonical_excluded := ToolCatalog.canonical(_tools_pending_excluded)
 	var es := EditorInterface.get_editor_settings()
 	if es != null:
-		es.set_setting(ClientConfigurator.SETTING_EXCLUDED_DOMAINS, canonical_excluded)
-		es.set_setting("godot_ai/telemetry_enabled", _telemetry_pending_enabled)
+		es.set_setting(McpSettings.SETTING_EXCLUDED_DOMAINS, canonical_excluded)
+		es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, _telemetry_pending_enabled)
 	_tools_saved_excluded = _tools_pending_excluded.duplicate()
 	_telemetry_saved_enabled = _telemetry_pending_enabled
 	_refresh_tools_ui_state()
-	## Plugin reload respawns the server with the new `--exclude-domains`
-	## flag (see `plugin.gd::_build_server_flags`). Mirrors the port-change
-	## Apply flow.
+	## Plugin reload respawns the server with the new `--exclude-domains` flag
+	## (see `plugin.gd::_build_server_flags`) and telemetry option. Mirrors the
+	## port-change Apply flow.
 	_on_reload_plugin()
 
 

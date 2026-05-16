@@ -30,8 +30,8 @@ func suite_setup(_ctx: Dictionary) -> void:
 	DirAccess.make_dir_recursive_absolute(_scratch_dir)
 	var es := EditorInterface.get_editor_settings()
 	if es != null:
-		if es.has_setting(McpClientConfigurator.SETTING_HTTP_PORT):
-			_saved_http_port = es.get_setting(McpClientConfigurator.SETTING_HTTP_PORT)
+		if es.has_setting(McpSettings.SETTING_HTTP_PORT):
+			_saved_http_port = es.get_setting(McpSettings.SETTING_HTTP_PORT)
 		if es.has_setting(McpClientConfigurator.SETTING_WS_PORT):
 			_saved_ws_port = es.get_setting(McpClientConfigurator.SETTING_WS_PORT)
 
@@ -603,7 +603,7 @@ func test_http_port_reads_configured_value() -> void:
 	_clear_port_settings()
 	var es := EditorInterface.get_editor_settings()
 	assert_true(es != null, "EditorSettings unavailable")
-	es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, 8123)
+	es.set_setting(McpSettings.SETTING_HTTP_PORT, 8123)
 	assert_eq(McpClientConfigurator.http_port(), 8123)
 	_clear_port_settings()
 
@@ -615,9 +615,9 @@ func test_http_port_rejects_out_of_range() -> void:
 	_clear_port_settings()
 	var es := EditorInterface.get_editor_settings()
 	assert_true(es != null, "EditorSettings unavailable")
-	es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, 80)
+	es.set_setting(McpSettings.SETTING_HTTP_PORT, 80)
 	assert_eq(McpClientConfigurator.http_port(), McpClientConfigurator.DEFAULT_HTTP_PORT)
-	es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, 70000)
+	es.set_setting(McpSettings.SETTING_HTTP_PORT, 70000)
 	assert_eq(McpClientConfigurator.http_port(), McpClientConfigurator.DEFAULT_HTTP_PORT)
 	_clear_port_settings()
 
@@ -654,7 +654,7 @@ func test_http_url_uses_current_http_port() -> void:
 	_clear_port_settings()
 	var es := EditorInterface.get_editor_settings()
 	assert_true(es != null, "EditorSettings unavailable")
-	es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, 8321)
+	es.set_setting(McpSettings.SETTING_HTTP_PORT, 8321)
 	assert_eq(McpClientConfigurator.http_url(), "http://127.0.0.1:8321/mcp")
 	_clear_port_settings()
 	assert_eq(
@@ -1857,7 +1857,7 @@ func _clear_port_settings() -> void:
 	var es := EditorInterface.get_editor_settings()
 	if es == null:
 		return
-	es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, McpClientConfigurator.DEFAULT_HTTP_PORT)
+	es.set_setting(McpSettings.SETTING_HTTP_PORT, McpClientConfigurator.DEFAULT_HTTP_PORT)
 	es.set_setting(McpClientConfigurator.SETTING_WS_PORT, McpClientConfigurator.DEFAULT_WS_PORT)
 
 
@@ -1866,9 +1866,9 @@ func _restore_port_settings() -> void:
 	if es == null:
 		return
 	if _saved_http_port == null:
-		es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, McpClientConfigurator.DEFAULT_HTTP_PORT)
+		es.set_setting(McpSettings.SETTING_HTTP_PORT, McpClientConfigurator.DEFAULT_HTTP_PORT)
 	else:
-		es.set_setting(McpClientConfigurator.SETTING_HTTP_PORT, _saved_http_port)
+		es.set_setting(McpSettings.SETTING_HTTP_PORT, _saved_http_port)
 	if _saved_ws_port == null:
 		es.set_setting(McpClientConfigurator.SETTING_WS_PORT, McpClientConfigurator.DEFAULT_WS_PORT)
 	else:

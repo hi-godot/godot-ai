@@ -2,14 +2,12 @@
 extends McpTestSuite
 
 ## Tests that the EditorSettings key "godot_ai/telemetry_enabled" can be read
-## and written correctly. This is the storage-layer check written before the
-## UI code exists.
+## and written correctly. This suite covers the storage-layer behavior
+## independently of any telemetry UI.
 
 func suite_name() -> String:
 	return "telemetry_setting"
 
-
-const SETTING_KEY := "godot_ai/telemetry_enabled"
 
 ## Instance var to preserve the real setting value across setup/teardown.
 var _original_value: Variant = null
@@ -19,9 +17,9 @@ var _had_setting: bool = false
 func suite_setup(_ctx: Dictionary) -> void:
 	## Preserve whatever the real setting is before tests mutate it.
 	var es := EditorInterface.get_editor_settings()
-	_had_setting = es.has_setting(SETTING_KEY)
+	_had_setting = es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED)
 	if _had_setting:
-		_original_value = es.get_setting(SETTING_KEY)
+		_original_value = es.get_setting(McpSettings.SETTING_TELEMETRY_ENABLED)
 
 
 func suite_teardown() -> void:
@@ -29,42 +27,42 @@ func suite_teardown() -> void:
 	var es := EditorInterface.get_editor_settings()
 	if not _had_setting:
 		## Setting didn't exist before tests ran — remove it if we added it.
-		## EditorSettings has no erase_setting; setting to null removes it in Godot 4.
-		if es.has_setting(SETTING_KEY):
-			es.set_setting(SETTING_KEY, null)
+		## NB: Passing null to set_setting is the intended way to unset editor settings in Godot 3/4.
+		if es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED):
+			es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, null)
 	else:
-		es.set_setting(SETTING_KEY, _original_value)
+		es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, _original_value)
 
 
 func test_setting_defaults_true_when_absent() -> void:
 	## Simulate what _load_telemetry_setting does on first run: if absent, write true.
 	var es := EditorInterface.get_editor_settings()
 	## Clear any existing value so we can test the absent-setting path.
-	if es.has_setting(SETTING_KEY):
-		es.set_setting(SETTING_KEY, null)
+	if es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED):
+		es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, null)
 	## After clearing, check absence — note: set_setting(null) may or may not
 	## remove the key depending on Godot version. Work around: skip directly to
 	## the init logic assertion.
-	if not es.has_setting(SETTING_KEY):
-		es.set_setting(SETTING_KEY, true)
-	assert_true(bool(es.get_setting(SETTING_KEY)), "absent setting should resolve to true after first-run init")
+	if not es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED):
+		es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, true)
+	assert_true(bool(es.get_setting(McpSettings.SETTING_TELEMETRY_ENABLED)), "absent setting should resolve to true after first-run init")
 
 
 func test_setting_persists_false() -> void:
 	var es := EditorInterface.get_editor_settings()
-	es.set_setting(SETTING_KEY, false)
-	assert_true(not bool(es.get_setting(SETTING_KEY)), "false should persist")
+	es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, false)
+	assert_true(not bool(es.get_setting(McpSettings.SETTING_TELEMETRY_ENABLED)), "false should persist")
 
 
 func test_setting_persists_true() -> void:
 	var es := EditorInterface.get_editor_settings()
-	es.set_setting(SETTING_KEY, true)
-	assert_true(bool(es.get_setting(SETTING_KEY)), "true should persist")
+	es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, true)
+	assert_true(bool(es.get_setting(McpSettings.SETTING_TELEMETRY_ENABLED)), "true should persist")
 
 
 func test_setting_roundtrip_false_then_true() -> void:
 	var es := EditorInterface.get_editor_settings()
-	es.set_setting(SETTING_KEY, false)
-	assert_false(bool(es.get_setting(SETTING_KEY)), "write false then read back false")
-	es.set_setting(SETTING_KEY, true)
-	assert_true(bool(es.get_setting(SETTING_KEY)), "write true then read back true")
+	es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, false)
+	assert_false(bool(es.get_setting(McpSettings.SETTING_TELEMETRY_ENABLED)), "write false then read back false")
+	es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, true)
+	assert_true(bool(es.get_setting(McpSettings.SETTING_TELEMETRY_ENABLED)), "write true then read back true")

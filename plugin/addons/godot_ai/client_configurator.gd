@@ -34,25 +34,16 @@ const SERVER_NAME := "godot-ai"
 ## the Windows-reservation diagnostics this is the escape hatch for.
 const DEFAULT_HTTP_PORT := 8000
 const DEFAULT_WS_PORT := 9500
-const SETTING_HTTP_PORT := "godot_ai/http_port"
-const SETTING_WS_PORT := "godot_ai/ws_port"
-const SETTING_STARTUP_TRACE := "godot_ai/log_startup_timing"
 const STARTUP_TRACE_ENV := "GODOT_AI_STARTUP_TRACE"
 const MIN_PORT := 1024
 const MAX_PORT := 65535
-
-## Comma-separated list of tool domains to drop from the server at spawn
-## time. Maps 1:1 onto the `--exclude-domains` CLI flag. Set via the dock's
-## "Tools" tab; a change requires a server restart (the dock handles this
-## by triggering a plugin reload). Unknown names are warned about on the
-## Python side and skipped, so an EditorSetting left over from a previous
-## plugin version can't wedge the spawn.
-const SETTING_EXCLUDED_DOMAINS := "godot_ai/excluded_domains"
+const SETTING_WS_PORT := "godot_ai/ws_port"
+const SETTING_STARTUP_TRACE := "godot_ai/log_startup_timing"
 
 
 ## Active HTTP port: user override (if in range) or `DEFAULT_HTTP_PORT`.
 static func http_port() -> int:
-	return _read_port_setting(SETTING_HTTP_PORT, DEFAULT_HTTP_PORT)
+	return _read_port_setting(McpSettings.SETTING_HTTP_PORT, DEFAULT_HTTP_PORT)
 
 
 ## Active WebSocket port: user override (if in range) or `DEFAULT_WS_PORT`.
@@ -83,7 +74,7 @@ static func ensure_settings_registered() -> void:
 	var es := EditorInterface.get_editor_settings()
 	if es == null:
 		return
-	_register_port_setting(es, SETTING_HTTP_PORT, DEFAULT_HTTP_PORT)
+	_register_port_setting(es, McpSettings.SETTING_HTTP_PORT, DEFAULT_HTTP_PORT)
 	_register_port_setting(es, SETTING_WS_PORT, DEFAULT_WS_PORT)
 	_register_bool_setting(es, SETTING_STARTUP_TRACE, false)
 
@@ -128,9 +119,9 @@ static func startup_trace_enabled() -> bool:
 ## `--exclude-domains` don't see an empty argument.
 static func excluded_domains() -> String:
 	var es := EditorInterface.get_editor_settings()
-	if es == null or not es.has_setting(SETTING_EXCLUDED_DOMAINS):
+	if es == null or not es.has_setting(McpSettings.SETTING_EXCLUDED_DOMAINS):
 		return ""
-	var raw := str(es.get_setting(SETTING_EXCLUDED_DOMAINS))
+	var raw := str(es.get_setting(McpSettings.SETTING_EXCLUDED_DOMAINS))
 	var parts := PackedStringArray()
 	for p in raw.split(","):
 		var t := p.strip_edges()

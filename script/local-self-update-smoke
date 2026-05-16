@@ -396,7 +396,12 @@ def patch_fixture_plugin(
     # fire as the documented historical constraint).
     _require_v240_plus_addon_shape(addon_dir, version)
     patch_plugin_cfg(addon_dir / "plugin.cfg", version)
-    patch_port_isolation(addon_dir / "client_configurator.gd", http_port, ws_port)
+    patch_port_isolation(
+        addon_dir / "client_configurator.gd",
+        addon_dir / "utils" / "settings.gd",
+        http_port,
+        ws_port,
+    )
     patch_server_package_pin(addon_dir / "client_configurator.gd", server_version)
     patch_managed_record_isolation(addon_dir / "plugin.gd")
     patch_lifecycle_expected_server_version(
@@ -451,42 +456,50 @@ def patch_plugin_cfg(path: Path, version: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def patch_port_isolation(path: Path, http_port: int, ws_port: int) -> None:
-    text = path.read_text(encoding="utf-8")
+def patch_port_isolation(
+    configurator_path: Path, settings_path: Path, http_port: int, ws_port: int
+) -> None:
+    # SETTING_HTTP_PORT and SETTING_EXCLUDED_DOMAINS live in utils/settings.gd.
+    stext = settings_path.read_text(encoding="utf-8")
+    stext = replace_once(
+        settings_path,
+        stext,
+        'const SETTING_HTTP_PORT := "godot_ai/http_port"',
+        'const SETTING_HTTP_PORT := "godot_ai_self_update_smoke/http_port"',
+        "SETTING_HTTP_PORT",
+    )
+    stext = replace_once(
+        settings_path,
+        stext,
+        'const SETTING_EXCLUDED_DOMAINS := "godot_ai/excluded_domains"',
+        'const SETTING_EXCLUDED_DOMAINS := "godot_ai_self_update_smoke/excluded_domains"',
+        "SETTING_EXCLUDED_DOMAINS",
+    )
+    settings_path.write_text(stext, encoding="utf-8")
+
+    # DEFAULT_HTTP_PORT, DEFAULT_WS_PORT, SETTING_WS_PORT, and
+    # _read_port_setting all remain in client_configurator.gd.
+    text = configurator_path.read_text(encoding="utf-8")
     text = subn_once(
-        path,
+        configurator_path,
         text,
         r"const DEFAULT_HTTP_PORT := \d+",
         f"const DEFAULT_HTTP_PORT := {http_port}",
         "DEFAULT_HTTP_PORT",
     )
     text = subn_once(
-        path,
+        configurator_path,
         text,
         r"const DEFAULT_WS_PORT := \d+",
         f"const DEFAULT_WS_PORT := {ws_port}",
         "DEFAULT_WS_PORT",
     )
     text = replace_once(
-        path,
-        text,
-        'const SETTING_HTTP_PORT := "godot_ai/http_port"',
-        'const SETTING_HTTP_PORT := "godot_ai_self_update_smoke/http_port"',
-        "SETTING_HTTP_PORT",
-    )
-    text = replace_once(
-        path,
+        configurator_path,
         text,
         'const SETTING_WS_PORT := "godot_ai/ws_port"',
         'const SETTING_WS_PORT := "godot_ai_self_update_smoke/ws_port"',
         "SETTING_WS_PORT",
-    )
-    text = replace_once(
-        path,
-        text,
-        'const SETTING_EXCLUDED_DOMAINS := "godot_ai/excluded_domains"',
-        'const SETTING_EXCLUDED_DOMAINS := "godot_ai_self_update_smoke/excluded_domains"',
-        "SETTING_EXCLUDED_DOMAINS",
     )
     text = replace_function(
         text,
@@ -496,7 +509,7 @@ def patch_port_isolation(path: Path, http_port: int, ws_port: int) -> None:
 \t## global EditorSettings. Keep its ports deterministic and fixture-local.
 \treturn default_port""",
     )
-    path.write_text(text, encoding="utf-8")
+    configurator_path.write_text(text, encoding="utf-8")
 
 
 def patch_server_package_pin(path: Path, server_version: str) -> None:

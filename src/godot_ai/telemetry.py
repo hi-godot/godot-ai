@@ -138,9 +138,9 @@ class TelemetryConfig:
     overrides the default for self-hosters and during smoke testing.
 
     Privacy posture matches the docs in ``docs/TELEMETRY.md``: only
-    anonymous, slug-hashed identifiers leave the process, and the
-    collector is fully side-effect-free when disabled (no UUID
-    generated, no worker thread, no data directory created).
+    anonymous, slug-hashed identifiers leave the process. If telemetry
+    is disabled, any existing local files are cleaned up, no UUID is
+    generated, and no worker thread is created.
     """
 
     ## Production telemetry endpoint baked in so installs without an
@@ -277,17 +277,13 @@ class TelemetryCollector:
         self._customer_uuid: str | None = None
         self._milestones: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
+        ## When telemetry is disabled, this queue is unused as documented
+        ## in docs/TELEMETRY.md.
         self._queue: queue.Queue[TelemetryRecord] = queue.Queue(maxsize=self.QUEUE_MAXSIZE)
         self._shutdown = False
         ## One-shot guard for the "endpoint unset" debug log in _send so a
         ## flood of dequeued records doesn't flood logs at debug level.
         self._endpoint_unset_logged = False
-        ## When disabled (env opt-out), make construction fully
-        ## side-effect-free: no UUID generated, no milestones loaded,
-        ## no worker thread. ``record`` / ``record_milestone`` already
-        ## short-circuit on ``config.enabled``, so the empty queue and
-        ## dormant worker are harmless. This is the contract documented
-        ## in docs/TELEMETRY.md.
         self._worker: threading.Thread | None = None
         ## Reusable httpx client. Built lazily on first send so a never-
         ## sending session (empty endpoint) doesn't pay the setup cost,
@@ -543,8 +539,7 @@ def is_telemetry_enabled() -> bool:
 
     Callers may want to check the opt-out flag without paying for
     collector construction (which generates a UUID and creates the data
-    directory). Reading the env vars directly preserves the
-    side-effect-free contract of opt-out.
+    directory).
     """
     return not TelemetryConfig._is_disabled_via_env()
 

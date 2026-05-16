@@ -8,11 +8,16 @@
 ## and the bounded-queue worker stay in one place (Python), not
 ## duplicated in GDScript.
 ##
-## Opt-out: honors `GODOT_AI_DISABLE_TELEMETRY` and `DISABLE_TELEMETRY`
-## environment variables on the GDScript side too, so events are never
-## buffered (let alone sent) when the operator opts out — useful when
-## a tester wants to confirm the disable flag is effective before any
-## handshake has happened.
+## Opt-out options priority:
+##   1. `GODOT_AI_DISABLE_TELEMETRY` / `DISABLE_TELEMETRY` env vars —
+##      checked first so CI / operators can force-disable without touching
+##      EditorSettings.
+##   2. The `godot_ai/telemetry_enabled` EditorSetting — set through the
+## 		mcp dock and persisted between sessions.
+##
+## When telemetry is disabled, events are never buffered or sent. If an env
+## var is explicitly set to a non-truthy value, telemetry is enabled even if
+## the editor setting is false.
 ##
 ## Buffering: events recorded before the WebSocket is connected go into
 ## a small bounded buffer and flush on the next `record_event` call once
@@ -83,7 +88,7 @@ var _pending: Array = []  # of {name: String, data: Dictionary}
 
 func _init(connection) -> void:
 	_connection = connection
-	_disabled = _resolve_disabled()
+	_disabled = not McpSettings.telemetry_enabled()
 	## Subscribe to ``connection_state_changed`` so events buffered before
 	## the WebSocket handshake (e.g. ``record_dock_startup`` from
 	## ``plugin._enter_tree``) actually leave the editor. Without this,
@@ -93,17 +98,6 @@ func _init(connection) -> void:
 	if _connection != null and _connection.has_signal("connection_state_changed"):
 		_connection.connection_state_changed.connect(_on_connection_state_changed)
 
-static func _truthy(value: String) -> bool:
-	## Match ``plugin.gd::_env_truthy`` semantics — ``strip_edges()`` so
-	## a stray ``" true "`` from shell quoting still parses as truthy.
-	return value.strip_edges().to_lower() in ["1", "true", "yes", "on"]
-
-static func _resolve_disabled() -> bool:
-	if _truthy(OS.get_environment("GODOT_AI_DISABLE_TELEMETRY")):
-		return true
-	if _truthy(OS.get_environment("DISABLE_TELEMETRY")):
-		return true
-	return false
 
 func record_event(name: String, data: Dictionary = {}) -> void:
 	if _disabled:

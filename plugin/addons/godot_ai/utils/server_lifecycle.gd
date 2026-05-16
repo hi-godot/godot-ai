@@ -391,15 +391,12 @@ static func _live_package_path_for_message(live: Dictionary) -> String:
 ## "godot_ai/telemetry_enabled" is set to false. Returns true if the var was
 ## injected so the caller can unset it after spawning.
 func _inject_telemetry_env() -> bool:
+	## Guard: if the user or CI already set an env var (even to "false"), leave
+	## it alone. McpSettings.telemetry_enabled() only reads the EditorSetting
+	## when no env var overrides are present.
 	if OS.has_environment("GODOT_AI_DISABLE_TELEMETRY") or OS.has_environment("DISABLE_TELEMETRY"):
 		return false
-	var es := EditorInterface.get_editor_settings()
-	var telemetry_enabled: bool = (
-		bool(es.get_setting("godot_ai/telemetry_enabled"))
-		if es != null and es.has_setting("godot_ai/telemetry_enabled")
-		else true
-	)
-	if not telemetry_enabled:
+	if not McpSettings.telemetry_enabled():
 		OS.set_environment("GODOT_AI_DISABLE_TELEMETRY", "true")
 		return true
 	return false
