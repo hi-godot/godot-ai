@@ -17,6 +17,16 @@ extends Logger
 ## and the host (game_helper.gd) flushes once per frame from the main
 ## thread, where EngineDebugger.send_message is safe to call.
 
+## `McpLogBacktrace` is published as a `class_name` on log_backtrace.gd, but a
+## freshly-launched game subprocess (no prior editor scan; e.g. CI launching
+## `--headless --path`) hits this autoload before the global class_name table
+## is populated, and parsing this script fails with
+## "Identifier 'McpLogBacktrace' not declared in the current scope". Using
+## `const preload` resolves the path at parse time and is independent of the
+## class_name registry — matches the project convention in CLAUDE.md
+## ("Internals … skip class_name entirely and load via const preload").
+const _LogBacktrace := preload("res://addons/godot_ai/utils/log_backtrace.gd")
+
 var _pending: Array = []
 var _mutex := Mutex.new()
 
@@ -41,7 +51,7 @@ func _log_error(
 	## location has nowhere structured to land for the game side, so we
 	## inline it into `text`. editor_logger keeps the resolved fields
 	## as structured columns instead.
-	var resolved := McpLogBacktrace.resolve_error(
+	var resolved := _LogBacktrace.resolve_error(
 		function, file, line, code, rationale, error_type, script_backtraces,
 	)
 	var loc := ""
