@@ -145,6 +145,52 @@ class TestTelemetryConfig:
         assert tel.TelemetryConfig().timeout == tel.TelemetryConfig.DEFAULT_TIMEOUT
 
 
+class TestTelemetryConfigCleanup:
+    """TelemetryConfig deletes persisted files when telemetry is disabled."""
+
+    def test_cleanup_deletes_existing_files(
+        self, monkeypatch, clean_env, isolated_data_dir: Path
+    ) -> None:
+        """Both persisted files are removed when opt-out is active."""
+        monkeypatch.setenv("GODOT_AI_DISABLE_TELEMETRY", "true")
+        # Pre-create the files so cleanup has something to delete.
+        (isolated_data_dir / "customer_uuid.txt").write_text("fake-uuid")
+        (isolated_data_dir / "milestones.json").write_text("{}")
+
+        tel.TelemetryConfig()  # disabled path → cleanup runs
+
+        assert not (isolated_data_dir / "customer_uuid.txt").exists()
+        assert not (isolated_data_dir / "milestones.json").exists()
+
+    def test_cleanup_is_noop_when_files_absent(
+        self, monkeypatch, clean_env, isolated_data_dir: Path
+    ) -> None:
+        """No error when files don't exist (fresh opt-out)."""
+        monkeypatch.setenv("GODOT_AI_DISABLE_TELEMETRY", "true")
+        # Ensure files are absent.
+        for name in ("customer_uuid.txt", "milestones.json"):
+            (isolated_data_dir / name).unlink(missing_ok=True)
+
+        config = tel.TelemetryConfig()  # must not raise
+        assert config.enabled is False
+
+    def test_cleanup_logs_warning_on_oserror(
+        self, monkeypatch, clean_env, isolated_data_dir: Path
+    ) -> None:
+        """A deletion failure logs a warning and does not propagate."""
+        monkeypatch.setenv("GODOT_AI_DISABLE_TELEMETRY", "true")
+        uuid_file = isolated_data_dir / "customer_uuid.txt"
+        uuid_file.write_text("fake-uuid")
+
+        def _bad_unlink(self_path, missing_ok=False):  # noqa: ARG001
+            raise OSError("permission denied")
+
+        monkeypatch.setattr(type(uuid_file), "unlink", _bad_unlink)
+        # Should complete without raising:
+        config = tel.TelemetryConfig()
+        assert config.enabled is False
+
+
 # --- TelemetryCollector --------------------------------------------------
 
 

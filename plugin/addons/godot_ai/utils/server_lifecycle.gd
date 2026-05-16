@@ -384,6 +384,27 @@ static func _live_package_path_for_message(live: Dictionary) -> String:
 
 # ---- start_server / spawn watch / respawn -----------------------------
 
+
+## Sets GODOT_AI_DISABLE_TELEMETRY in the process environment for the
+## upcoming OS.create_process call if: (a) neither GODOT_AI_DISABLE_TELEMETRY
+## nor DISABLE_TELEMETRY is already set, and (b) the EditorSettings key
+## "godot_ai/telemetry_enabled" is set to false. Returns true if the var was
+## injected so the caller can unset it after spawning.
+func _inject_telemetry_env() -> bool:
+	if OS.has_environment("GODOT_AI_DISABLE_TELEMETRY") or OS.has_environment("DISABLE_TELEMETRY"):
+		return false
+	var es := EditorInterface.get_editor_settings()
+	var telemetry_enabled: bool = (
+		bool(es.get_setting("godot_ai/telemetry_enabled"))
+		if es != null and es.has_setting("godot_ai/telemetry_enabled")
+		else true
+	)
+	if not telemetry_enabled:
+		OS.set_environment("GODOT_AI_DISABLE_TELEMETRY", "true")
+		return true
+	return false
+
+
 ## Branch table (recorded version is the "is this ours?" signal — uvx
 ## launcher PIDs go stale; #135/#137):
 ##   port free                                -> spawn fresh, record PID
@@ -495,6 +516,8 @@ func start_server() -> void:
 		push_warning("MCP | port %d is reserved by Windows (Hyper-V / WSL2 / Docker)" % port)
 		return
 
+	var injected_telemetry_env := _inject_telemetry_env()
+
 	## PYTHONPATH handling for dev checkouts: when the editor is launched
 	## against a worktree whose `src/godot_ai/__version__` differs from the
 	## root repo's editable install, the dev-venv python's `sitecustomize`
@@ -536,6 +559,9 @@ func start_server() -> void:
 			OS.unset_environment("PYTHONPATH")
 		else:
 			OS.set_environment("PYTHONPATH", prev_pythonpath)
+
+	if injected_telemetry_env:
+		OS.unset_environment("GODOT_AI_DISABLE_TELEMETRY")
 
 	if spawned_pid > 0:
 		_server_spawn_ms = Time.get_ticks_msec()
@@ -604,7 +630,10 @@ func respawn_with_refresh() -> void:
 	args.append_array(_host._build_server_flags(ClientConfigurator.http_port(), int(_host._resolved_ws_port)))
 	_host._clear_pid_file()
 	_host._log_buffer.log("retrying with --refresh (PyPI index may be stale)")
+	var injected_telemetry_env := _inject_telemetry_env()
 	_server_pid = OS.create_process(cmd, args)
+	if injected_telemetry_env:
+		OS.unset_environment("GODOT_AI_DISABLE_TELEMETRY")
 	var spawn_pid := int(_server_pid)
 	if spawn_pid > 0:
 		_server_spawn_ms = Time.get_ticks_msec()

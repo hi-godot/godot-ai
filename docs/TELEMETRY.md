@@ -62,8 +62,18 @@ Allowlist (mirrored in `plugin/addons/godot_ai/telemetry.gd` and
 ## Opting out
 
 Telemetry is **on by default** — a fresh install posts anonymous usage
-events to the maintainers' endpoint. To opt out, set either environment
-variable to `true` / `1` / `yes` / `on`:
+events to the maintainers' endpoint. There are two ways to opt out:
+
+### Via the editor UI
+
+Open the "Clients & Settings" popup from the Godot AI dock, go to the
+"Settings" tab, and uncheck the "Telemetry" checkbox. Click "Apply &
+Restart Server" to apply the change. The preference is persisted in
+EditorSettings and survives across editor restarts.
+
+### Via environment variable
+
+Set either environment variable to `true` / `1` / `yes` / `on`:
 
 ```bash
 # Godot-AI-specific
@@ -73,10 +83,22 @@ export GODOT_AI_DISABLE_TELEMETRY=true
 export DISABLE_TELEMETRY=true
 ```
 
-Effect: the collector enters disabled mode. No records are enqueued, no
-UUID is generated, no worker thread is spawned, and no data directory
-is created. The plugin-side helper honors the same variables and stops
-buffering events. Opt-out is fully side-effect-free.
+If either of the above environment variables are enabled, the opt-out is
+saved to Godot's editor settings and will persist between runs. Similarly,
+if an environment variable is explicitly set and disabled, that will be
+persisted to the editor settings.
+
+If telemetry is disabled, any local telemetry files are removed upon server
+startup.
+
+### Effect
+
+On opt-out (whether via UI or env var): the collector enters disabled
+mode. No records are enqueued, no UUID is generated, no worker thread is
+spawned, and no data directory is created. Existing local telemetry
+files (`customer_uuid.txt`, `milestones.json`) are deleted on the next
+server startup. The plugin-side helper honors the same variables and
+stops buffering events. Opt-out is fully side-effect-free.
 
 ## Endpoint configuration
 

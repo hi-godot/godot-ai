@@ -69,9 +69,7 @@ class TestSendOverHttpx:
         client_cls.assert_not_called()
         collector.shutdown()
 
-    def test_empty_endpoint_logs_only_once(
-        self, clean_env, isolated_data_dir, caplog
-    ) -> None:
+    def test_empty_endpoint_logs_only_once(self, clean_env, isolated_data_dir, caplog) -> None:
         """The 'endpoint unset; dropping' debug log must fire exactly
         once even under a flood of dequeued records — otherwise a busy
         session at debug level would spam logs."""
@@ -113,9 +111,7 @@ class TestSendOverHttpx:
 
         collector.shutdown()
 
-    def test_client_is_reused_across_sends(
-        self, monkeypatch, clean_env, isolated_data_dir
-    ) -> None:
+    def test_client_is_reused_across_sends(self, monkeypatch, clean_env, isolated_data_dir) -> None:
         """``httpx.Client`` must be constructed at most once per collector
         — reusing the same instance is the whole point of caching it on
         ``self._client`` (keep-alive, warm TLS pool, lower per-record

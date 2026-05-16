@@ -285,9 +285,7 @@ def extract_addon_from_zip(zip_path: Path, target_addon: Path) -> None:
             # drive component (which would make `target_addon / rel` discard
             # the prefix and write outside the fixture).
             if "\\" in info.filename:
-                raise ValueError(
-                    f"Refusing unsafe zip entry {info.filename!r}: contains backslash"
-                )
+                raise ValueError(f"Refusing unsafe zip entry {info.filename!r}: contains backslash")
             rel = PurePosixPath(info.filename).relative_to("addons/godot_ai")
             if rel.is_absolute() or any(part in ("", ".", "..") for part in rel.parts):
                 raise ValueError(

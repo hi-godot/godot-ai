@@ -154,6 +154,7 @@ class TelemetryConfig:
 
     def __init__(self) -> None:
         self.enabled = not self._is_disabled_via_env()
+        logger.info(f"Telemetry {['disabled', 'enabled'][self.enabled]}")
         ## allow_loopback must be resolved before _resolve_endpoint(), which
         ## reads it to decide whether to accept http://127.0.0.1 endpoints.
         self.allow_loopback = self._env_truthy("GODOT_AI_TELEMETRY_ALLOW_LOOPBACK")
@@ -172,6 +173,8 @@ class TelemetryConfig:
             self.data_dir = self._get_data_directory()
             self.uuid_file = self.data_dir / "customer_uuid.txt"
             self.milestones_file = self.data_dir / "milestones.json"
+        else:
+            self._cleanup_local_files()
 
         self.session_id = str(uuid.uuid4())
 
@@ -227,19 +230,40 @@ class TelemetryConfig:
         return True
 
     @staticmethod
-    def _get_data_directory() -> Path:
+    def _resolve_data_directory() -> Path:
+        """Resolve data directory path without creating it."""
         if os.name == "nt":  # Windows
             base = Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
         elif sys.platform == "darwin":
             base = Path.home() / "Library" / "Application Support"
         else:
             base = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
-        data_dir = base / "godot-ai"
+        return base / "godot-ai"
+
+    @staticmethod
+    def _get_data_directory() -> Path:
+        """Return data directory path, creating the directory and parent directories as needed."""
+        data_dir = TelemetryConfig._resolve_data_directory()
         try:
             data_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             logger.debug("Telemetry data dir %s unwritable: %s", data_dir, exc)
         return data_dir
+
+    def _cleanup_local_files(self) -> None:
+        """Best-effort deletion of persisted telemetry files on opt-out."""
+        try:
+            data_dir = self._resolve_data_directory()
+            if not data_dir.exists():
+                return
+        except Exception:
+            return
+
+        for filename in ("customer_uuid.txt", "milestones.json"):
+            try:
+                (data_dir / filename).unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("Could not remove telemetry file %s: %s", filename, exc)
 
 
 class TelemetryCollector:
@@ -417,9 +441,7 @@ class TelemetryCollector:
             ## drop every subsequent record silently. Without the
             ## one-shot flag, a busy session would flood debug logs.
             if not self._endpoint_unset_logged:
-                logger.debug(
-                    "Telemetry endpoint unset; dropping records (logged once)"
-                )
+                logger.debug("Telemetry endpoint unset; dropping records (logged once)")
                 self._endpoint_unset_logged = True
             return
 

@@ -65,7 +65,7 @@ var _clients_window: Window
 var _dev_mode_toggle: CheckButton
 var _install_label: Label
 
-# Tools tab (secondary window, Tab 2) — domain-exclusion UI for clients
+# Settings tab (secondary window, Tab 2) — domain-exclusion UI for clients
 # that cap total tool count (Antigravity: 100). Pending set is mutated by
 # checkbox clicks; saved set reflects what the spawned server actually
 # sees. `Apply & Restart Server` writes pending → setting and triggers a
@@ -78,6 +78,9 @@ var _tools_apply_btn: Button
 var _tools_reset_btn: Button
 var _tools_dirty_warning: Label
 var _tools_close_confirm: ConfirmationDialog
+var _telemetry_toggle: CheckButton
+var _telemetry_pending_enabled: bool = true
+var _telemetry_saved_enabled: bool = true
 
 ## Per-client UI handles, keyed by client id. Each entry holds the row's
 ## status dot, configure button, remove button, manual-command panel + text.
@@ -377,6 +380,15 @@ func _on_redock() -> void:
 		win.close_requested.emit()
 
 
+func _build_margin_container(margin: int = 12) -> MarginContainer:
+	var marginContainer := MarginContainer.new()
+	marginContainer.add_theme_constant_override("margin_left", margin)
+	marginContainer.add_theme_constant_override("margin_right", margin)
+	marginContainer.add_theme_constant_override("margin_top", margin)
+	marginContainer.add_theme_constant_override("margin_bottom", margin)
+	return marginContainer
+
+
 func _build_ui() -> void:
 	add_theme_constant_override("separation", 8)
 
@@ -558,7 +570,7 @@ func _build_ui() -> void:
 	clients_row.add_child(clients_refresh_btn)
 
 	var clients_open_btn := Button.new()
-	clients_open_btn.text = "Clients & Tools"
+	clients_open_btn.text = "Clients & Settings"
 	clients_open_btn.tooltip_text = "Open the MCP settings window — configure AI clients or disable tool domains to fit under a client's hard tool-count cap (e.g. Antigravity's 100)."
 	clients_open_btn.pressed.connect(_on_open_clients_window)
 	clients_row.add_child(clients_open_btn)
@@ -582,34 +594,27 @@ func _build_ui() -> void:
 	add_child(_drift_banner)
 
 	_clients_window = Window.new()
-	_clients_window.title = "MCP Clients & Tools"
-	_clients_window.min_size = Vector2i(560, 460)
+	_clients_window.title = "MCP Clients & Settings"
+	_clients_window.min_size = Vector2i(560, 460) * EditorInterface.get_editor_scale()
 	_clients_window.visible = false
 	_clients_window.close_requested.connect(_on_clients_window_close_requested)
 	add_child(_clients_window)
-
-	var window_margin := MarginContainer.new()
-	window_margin.anchor_right = 1.0
-	window_margin.anchor_bottom = 1.0
-	window_margin.add_theme_constant_override("margin_left", 12)
-	window_margin.add_theme_constant_override("margin_right", 12)
-	window_margin.add_theme_constant_override("margin_top", 12)
-	window_margin.add_theme_constant_override("margin_bottom", 12)
-	_clients_window.add_child(window_margin)
 
 	## Two-tab secondary window: Clients (existing per-client rows) and Tools
 	## (domain-exclusion checkboxes for clients that cap total tool count,
 	## like Antigravity at 100). Adding a third tab is one more _build_*_tab
 	## call and a set_tab_title line — no surgery on the rest of the window.
 	var tabs := TabContainer.new()
-	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	window_margin.add_child(tabs)
+	tabs.anchor_right = 1.0
+	tabs.anchor_bottom = 1.0
+	_clients_window.add_child(tabs)
 
 	var clients_tab := VBoxContainer.new()
-	clients_tab.name = "Clients"
 	clients_tab.add_theme_constant_override("separation", 8)
-	tabs.add_child(clients_tab)
+	var clients_margin := _build_margin_container()
+	clients_margin.name = "Clients"
+	clients_margin.add_child(clients_tab)
+	tabs.add_child(clients_margin)
 
 	_client_configure_all_btn = Button.new()
 	_client_configure_all_btn.text = "Configure all"
@@ -1007,7 +1012,72 @@ func _refresh_server_label() -> void:
 	_server_label.text = "WS: %d  HTTP: %d" % [ws_port, ClientConfigurator.http_port()]
 
 
+# --- Telemetry setting persistence ---
+
+
+func _env_truthy(var_name: String) -> bool:
+	var val: String = OS.get_environment(var_name).strip_edges().to_lower()
+	return val in ["1", "true", "yes", "on"]
+
+
+## Returns true if GODOT_AI_DISABLE_TELEMETRY or DISABLE_TELEMETRY is set
+## to a truthy value, false if either is set and non-truthy, null if neither
+## env var is present at all.
+func _is_telemetry_disabled_via_env() -> Variant:
+	var disabled: bool = _env_truthy("GODOT_AI_DISABLE_TELEMETRY") or _env_truthy("DISABLE_TELEMETRY")
+	if OS.has_environment("GODOT_AI_DISABLE_TELEMETRY") or OS.has_environment("DISABLE_TELEMETRY"):
+		return disabled
+	return null
+
+
+## Reads the telemetry preference, applying env-var override when present.
+## Initialises _telemetry_pending_enabled / _telemetry_saved_enabled and
+## sets the checkbox state + locked tooltip. Call after _telemetry_toggle
+## has been created.
+func _load_telemetry_setting() -> void:
+	var es := EditorInterface.get_editor_settings()
+	var env_disabled = _is_telemetry_disabled_via_env()
+
+	var enabled: bool
+	if env_disabled != null:
+		## Env var present: resolve and save to EditorSettings so future sessions without
+		## the env var honour the last-set value.
+		enabled = not bool(env_disabled)
+		if es != null:
+			es.set_setting("godot_ai/telemetry_enabled", enabled)
+	else:
+		## No env var: read (or create) the EditorSettings key.
+		if es != null and es.has_setting("godot_ai/telemetry_enabled"):
+			enabled = bool(es.get_setting("godot_ai/telemetry_enabled"))
+		else:
+			enabled = true
+			if es != null:
+				es.set_setting("godot_ai/telemetry_enabled", true)
+
+	_telemetry_pending_enabled = enabled
+	_telemetry_saved_enabled = enabled
+
+	if _telemetry_toggle == null:
+		return
+	_telemetry_toggle.set_pressed_no_signal(enabled)
+	if env_disabled != null:
+		_telemetry_toggle.disabled = true
+		_telemetry_toggle.tooltip_text = (
+			"Telemetry is controlled by an environment variable "
+			+ "(GODOT_AI_DISABLE_TELEMETRY / DISABLE_TELEMETRY)."
+		)
+	else:
+		_telemetry_toggle.disabled = false
+		_telemetry_toggle.tooltip_text = ""
+
+
+func _on_telemetry_toggled(pressed: bool) -> void:
+	_telemetry_pending_enabled = pressed
+	_refresh_tools_ui_state()
+
+
 # --- Dev mode persistence ---
+
 
 func _load_dev_mode() -> bool:
 	# Default OFF for every install (including dev checkouts). Contributors
@@ -1046,14 +1116,22 @@ func _apply_dev_mode_visibility() -> void:
 
 # --- Button handlers ---
 
+
+func _do_plugin_reload():
+	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", false)
+	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", true)
+
+
 func _on_reload_plugin() -> void:
 	# Persist a pending plugin_reload telemetry event *before* the
 	# disable kills the live WebSocket — the new plugin's _enter_tree
 	# flushes it via `_telemetry.flush_pending_plugin_reload()`.
 	Telemetry.record_pending_plugin_reload("dock_button")
-	# Toggle plugin off/on to reload all GDScript
-	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", false)
-	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", true)
+	# Defer the toggle so any in-flight input event finishes propagating
+	# before the dock (and its Window children) leave the tree. Calling
+	# set_plugin_enabled synchronously from a button press frees the
+	# viewport mid-dispatch.
+	_do_plugin_reload.call_deferred()
 
 
 ## Setup-section "Server" row: always report the TRUE running server
@@ -1605,14 +1683,18 @@ func _on_open_clients_window() -> void:
 	_clients_window.popup_centered(Vector2i(640, 600))
 
 
+func _settings_are_dirty() -> bool:
+	return _tools_pending_excluded != _tools_saved_excluded or _telemetry_pending_enabled != _telemetry_saved_enabled
+
+
 func _on_clients_window_close_requested() -> void:
 	if _clients_window == null:
 		return
-	## If the user has checked/unchecked domains without applying, a close
-	## would silently throw the pending state away. Prompt; if they confirm
-	## discard, reset pending → saved so the window shows the persisted
+	## If the user has unapplied settings, a close would silently throw the
+	## pending state away. Prompt before discarding current options and if
+	## they confirm, reset pending → saved so the window shows the persisted
 	## state the next time they open it.
-	if _tools_pending_excluded != _tools_saved_excluded:
+	if _settings_are_dirty():
 		_show_tools_close_confirm()
 		return
 	_clients_window.hide()
@@ -1625,9 +1707,11 @@ func _build_tools_tab(tabs: TabContainer) -> void:
 	## `_reset_tools_pending_from_setting()` re-syncs checkbox state from the
 	## saved setting each time the window opens.
 	var tools_tab := VBoxContainer.new()
-	tools_tab.name = "Tools"
 	tools_tab.add_theme_constant_override("separation", 8)
-	tabs.add_child(tools_tab)
+	var tools_margin := _build_margin_container()
+	tools_margin.name = "Settings"
+	tools_margin.add_child(tools_tab)
+	tabs.add_child(tools_margin)
 
 	var intro := Label.new()
 	intro.text = (
@@ -1643,7 +1727,7 @@ func _build_tools_tab(tabs: TabContainer) -> void:
 	var count_row := HBoxContainer.new()
 	count_row.add_theme_constant_override("separation", 8)
 	var count_header := Label.new()
-	count_header.text = "Enabled:"
+	count_header.text = "Tools Enabled:"
 	count_header.add_theme_color_override("font_color", COLOR_MUTED)
 	count_row.add_child(count_header)
 	_tools_count_label = Label.new()
@@ -1698,6 +1782,19 @@ func _build_tools_tab(tabs: TabContainer) -> void:
 	_tools_domain_checkboxes.clear()
 	for entry in ToolCatalog.DOMAINS:
 		_build_tools_domain_row(grid, entry)
+
+	tools_tab.add_child(HSeparator.new())
+
+	var telemetry_row := HBoxContainer.new()
+	telemetry_row.add_theme_constant_override("separation", 8)
+	var telemetry_label := Label.new()
+	telemetry_label.text = "Telemetry"
+	telemetry_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	telemetry_row.add_child(telemetry_label)
+	_telemetry_toggle = CheckButton.new()
+	_telemetry_toggle.toggled.connect(_on_telemetry_toggled)
+	telemetry_row.add_child(_telemetry_toggle)
+	tools_tab.add_child(telemetry_row)
 
 	tools_tab.add_child(HSeparator.new())
 
@@ -1786,6 +1883,9 @@ func _reset_tools_pending_from_setting() -> void:
 		## `set_pressed_no_signal` — mutating programmatically should not
 		## fire the toggled handler, which would mutate pending back.
 		chk.set_pressed_no_signal(_tools_pending_excluded.find(id) == -1)
+	## Also reset telemetry pending state from the persisted setting.
+	if _telemetry_toggle != null:
+		_load_telemetry_setting()
 
 
 func _on_tools_domain_toggled(pressed: bool, domain_id: String) -> void:
@@ -1804,7 +1904,7 @@ func _refresh_tools_ui_state() -> void:
 	var enabled := ToolCatalog.enabled_tool_count(_tools_pending_excluded)
 	var total := ToolCatalog.total_tool_count()
 	_tools_count_label.text = "%d / %d" % [enabled, total]
-	var dirty := _tools_pending_excluded != _tools_saved_excluded
+	var dirty := _settings_are_dirty()
 	_tools_dirty_warning.visible = dirty
 	_tools_apply_btn.disabled = not dirty
 	## Color the count when the user is over Antigravity's cap — a soft
@@ -1821,7 +1921,9 @@ func _on_tools_apply() -> void:
 	var es := EditorInterface.get_editor_settings()
 	if es != null:
 		es.set_setting(ClientConfigurator.SETTING_EXCLUDED_DOMAINS, canonical_excluded)
+		es.set_setting("godot_ai/telemetry_enabled", _telemetry_pending_enabled)
 	_tools_saved_excluded = _tools_pending_excluded.duplicate()
+	_telemetry_saved_enabled = _telemetry_pending_enabled
 	_refresh_tools_ui_state()
 	## Plugin reload respawns the server with the new `--exclude-domains`
 	## flag (see `plugin.gd::_build_server_flags`). Mirrors the port-change
