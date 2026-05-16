@@ -76,6 +76,28 @@ func test_create_script_basic() -> void:
 	DirAccess.remove_absolute(path)
 
 
+func test_finish_create_script_deferred_is_static_and_handles_null_connection() -> void:
+	## Under stress (many concurrent script_create + editor_reload_plugin
+	## mid-burst) the ScriptHandler RefCounted was being freed mid-await of
+	## _finish_create_script_deferred, producing "Resumed function ... after
+	## await, but class instance is gone" errors and dropping the response.
+	## The fix is to make the deferred completion a `static` function so the
+	## coroutine doesn't capture self.
+	##
+	## Calling the function directly via the Script resource exercises both
+	## guarantees in one go: if the function isn't `static`, the parser
+	## rejects this call site ("Cannot call non-static function ... directly,
+	## make an instance instead") and the whole test file fails to load. If
+	## it IS static, the null-connection branch must bail without awaiting or
+	## sending a deferred response — the safety net for teardown-time callers.
+	##
+	## The Python source-pin in tests/unit/test_script_create_import_settle.py
+	## also asserts the `static func` declaration at the source-text level.
+	var ScriptHandlerScript := preload("res://addons/godot_ai/handlers/script_handler.gd")
+	ScriptHandlerScript._finish_create_script_deferred(null, "req-x", "res://nope.gd", {})
+	assert_true(true, "Static call with null connection must not raise")
+
+
 func test_create_script_overwrite_omits_cleanup_hint() -> void:
 	## On overwrite the caller already had the file on disk; cleanup.rm would
 	## point them at user content, not just scratch — so the field is omitted.

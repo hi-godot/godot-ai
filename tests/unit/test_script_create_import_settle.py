@@ -77,7 +77,7 @@ def test_finish_create_script_deferred_polls_resourceloader_with_bounded_loop() 
         "timeout, a committed file can still surface to callers as "
         "DEFERRED_TIMEOUT."
     )
-    deferred_block = get_func_block(source, "func _finish_create_script_deferred")
+    deferred_block = get_func_block(source, "static func _finish_create_script_deferred")
     assert "var deadline_ms := Time.get_ticks_msec() + _IMPORT_SETTLE_MAX_MSEC" in deferred_block
     assert "Time.get_ticks_msec() < deadline_ms" in deferred_block
     assert "ResourceLoader.exists(path)" in deferred_block, (
@@ -97,15 +97,16 @@ def test_finish_create_script_deferred_polls_resourceloader_with_bounded_loop() 
         "window and a committed write can still hit the dispatcher timeout (#324)."
     )
     # The reply must use send_deferred_response with a {"data": ...} payload.
-    assert "_connection.send_deferred_response(request_id" in deferred_block, (
+    assert "connection.send_deferred_response(request_id" in deferred_block, (
         "After settling, the handler must push the response over the "
         "connection's send_deferred_response — the dispatcher won't do it."
     )
     assert 'payload["import_settle"] = "settled" if settled else "timeout"' in deferred_block
     assert 'payload["import_pending"] = not settled' in deferred_block
     # Match the project_handler.stop_project pattern: drop the response if
-    # the plugin tore down during the await.
-    assert "is_instance_valid(_connection)" in deferred_block, (
+    # the plugin tore down during the await. The static refactor passes
+    # `connection` explicitly instead of relying on `self._connection`.
+    assert "is_instance_valid(connection)" in deferred_block, (
         "If _exit_tree fires during the await the connection is freed; the "
         "deferred reply must check is_instance_valid and bail silently."
     )
@@ -121,7 +122,7 @@ def test_create_script_reports_committed_status_even_when_import_wait_times_out(
         "plain safe retry."
     )
     assert '"import_settle": "already_known" if existed_before else "not_waited"' in source
-    deferred_block = get_func_block(source, "func _finish_create_script_deferred")
+    deferred_block = get_func_block(source, "static func _finish_create_script_deferred")
     assert 'payload["import_settle"] = "settled" if settled else "timeout"' in deferred_block, (
         "Deferred completion must distinguish import success from import-settle "
         "timeout while still returning a success payload for the committed file."
@@ -129,6 +130,38 @@ def test_create_script_reports_committed_status_even_when_import_wait_times_out(
     assert 'payload["import_pending"] = not settled' in deferred_block, (
         "When import settling times out, callers need an explicit import_pending "
         "flag instead of interpreting a transport timeout as write failure."
+    )
+
+
+def test_finish_create_script_deferred_is_static() -> None:
+    """Source-pin: the deferred completion must be a `static func`.
+
+    Under concurrent script_create storms (e.g. /tmp/shitstorm2.py) combined
+    with editor_reload_plugin firing during the burst, the ScriptHandler
+    RefCounted was being freed mid-await, producing "Resumed function
+    '_finish_create_script_deferred()' after await, but class instance is
+    gone" and dropping the deferred response. The fix is to declare the
+    coroutine `static` so it captures no `self` reference, surviving handler
+    GC. This source check prevents a silent revert.
+    """
+    source = SCRIPT_HANDLER.read_text(encoding="utf-8")
+    assert "static func _finish_create_script_deferred(" in source, (
+        "_finish_create_script_deferred must be declared `static` so the "
+        "deferred coroutine doesn't capture self. Without this, a handler "
+        "freed mid-await produces 'class instance is gone' errors and drops "
+        "the response."
+    )
+    # And the connection must be passed in explicitly, not pulled from self.
+    assert "connection: McpConnection," in source, (
+        "The static function must take the connection as an explicit "
+        "parameter — referencing self._connection would re-introduce the "
+        "implicit `self` capture the static refactor avoids."
+    )
+    # The caller in create_script must thread _connection through.
+    assert "_finish_create_script_deferred(_connection, request_id, path, data)" in source, (
+        "create_script must pass `_connection` explicitly to the static "
+        "deferred completion. A bare call with no args would silently "
+        "regress to depending on instance state."
     )
 
 
