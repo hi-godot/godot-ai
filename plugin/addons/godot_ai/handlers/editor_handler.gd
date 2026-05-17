@@ -279,6 +279,16 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 			viewport = EditorInterface.get_editor_viewport_3d()
 			if viewport == null:
 				return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "No 3D viewport available")
+			## The 3D viewport's texture is empty when the edited scene
+			## has no Node3D content (2D-only scene, or no scene open),
+			## and the empty-image guard further down used to surface
+			## that as INTERNAL_ERROR — leaving callers with no signal
+			## that the failure was caller-side. Reject up front with a
+			## structured hint so the LLM can pick a sensible next step
+			## (open a 3D scene, switch to source="cinematic", etc.).
+			var precheck := viewport_screenshot_precheck(EditorInterface.get_edited_scene_root())
+			if precheck.has("error"):
+				return precheck
 		"game":
 			if not EditorInterface.is_playing_scene():
 				return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Game is not running — use source='viewport' or start the project first")
@@ -385,7 +395,10 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 			## Consistent with single-shot path: error if no frames rendered
 			## (e.g. headless mode where force_draw produces no output).
 			if images.is_empty():
-				return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Coverage sweep rendered no images")
+				return _empty_image_error(
+					"viewport",
+					"Coverage sweep rendered no images. The 3D viewport produced no output across any of the preset angles — typically because the editor is in headless mode (force_draw has no rendered output) or the 3D viewport has not drawn a frame yet."
+				)
 
 			var aabb_center := combined_aabb.get_center()
 			var aabb_size := combined_aabb.size
@@ -423,7 +436,10 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 		RenderingServer.camera_set_transform(cam_rid, saved_xform)
 
 		if image == null or image.is_empty():
-			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Framed viewport rendered an empty image")
+			return _empty_image_error(
+				"viewport",
+				"Framed viewport rendered an empty image after repositioning the camera onto the view_target. The 3D viewport produced no output — typically headless mode or the 3D viewport has not drawn a frame yet."
+			)
 
 		var result := _finalize_image(image, "viewport", max_resolution)
 		result.data["view_target"] = view_target
@@ -445,7 +461,10 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 	var image: Image = viewport.get_texture().get_image()
 
 	if image == null or image.is_empty():
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to capture image from %s" % source)
+		return _empty_image_error(
+			source,
+			"Captured an empty image from %s. The 3D viewport produced no output — typically headless mode or the 3D viewport has not drawn a frame yet." % source
+		)
 
 	return _finalize_image(image, source, max_resolution)
 
@@ -507,11 +526,80 @@ func _take_cinematic_screenshot(max_resolution: int) -> Dictionary:
 	sub_vp.queue_free()
 
 	if image == null or image.is_empty():
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Cinematic render produced an empty image")
+		return _empty_image_error(
+			"cinematic",
+			"Cinematic render produced an empty image. The SubViewport returned no texture — typically headless mode (force_draw has no rendered output) or the scene's Camera3D is positioned so nothing visible is in frame."
+		)
 
 	var result := _finalize_image(image, "cinematic", max_resolution)
 	result.data["camera_path"] = McpScenePath.from_node(scene_camera, scene_root)
 	return result
+
+
+## Reject a `source="viewport"` screenshot before we ever pull the
+## texture if the edited scene has no Node3D content. The 3D viewport
+## returns an empty (or stale) image in that case; surfacing it as
+## INTERNAL_ERROR ("Failed to capture image from viewport") gave LLM
+## callers no signal that the right move is to switch source or open a
+## 3D scene. 152 hits / 63 uuids in 24h across plugin versions 2.5.0 ->
+## 2.5.6 traced back to this. Returns `{}` on success.
+##
+## Caller passes `EditorInterface.get_edited_scene_root()`; the static
+## form lets tests exercise the branches with a synthetic scene root
+## without driving the editor.
+static func viewport_screenshot_precheck(scene_root: Node) -> Dictionary:
+	if scene_root == null:
+		return _make_viewport_not_3d_error(
+			"",
+			"The editor 3D viewport is empty because no scene is open. Open a scene with `scene_open` first."
+		)
+	if scene_root is Node3D:
+		return {}
+	## Anything that isn't a Node3D — Node2D, Control, plain Node — leaves
+	## the 3D viewport with nothing to render. Report the real root type
+	## so the caller can tell why the default source failed.
+	var root_type := scene_root.get_class()
+	var hint: String
+	if scene_root is Node2D or scene_root is Control:
+		hint = (
+			"The 3D viewport is empty because the current scene is 2D (%s root). "
+			+ "Options: (a) open a 3D scene, "
+			+ "(b) use source=\"cinematic\" if a Camera3D exists in the scene, "
+			+ "(c) call scene_get_hierarchy first to inspect what's available."
+		) % root_type
+	else:
+		hint = (
+			"The 3D viewport is empty because the current scene root (%s) has no Node3D content. "
+			+ "Options: (a) open a scene whose root is a Node3D, "
+			+ "(b) use source=\"cinematic\" if a Camera3D exists in the scene, "
+			+ "(c) call scene_get_hierarchy first to inspect what's available."
+		) % root_type
+	return _make_viewport_not_3d_error(root_type, hint)
+
+
+static func _make_viewport_not_3d_error(scene_root_type: String, hint: String) -> Dictionary:
+	var err := ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, hint)
+	err["error"]["data"] = {
+		"editor_state": "viewport_not_3d",
+		"scene_root_type": scene_root_type,
+		"hint": hint,
+	}
+	return err
+
+
+## Reclassifies the rare empty-image returns from EDITOR_NOT_READY's
+## sibling INTERNAL_ERROR. Reached only when the precheck passed (so the
+## scene is genuinely 3D-rooted) but the texture still came back empty —
+## headless rendering, a freshly opened editor whose 3D viewport hasn't
+## drawn a frame, or a SubViewport that lost its target.
+func _empty_image_error(source: String, hint: String) -> Dictionary:
+	var err := ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, hint)
+	err["error"]["data"] = {
+		"editor_state": "viewport_empty",
+		"source": source,
+		"hint": hint,
+	}
+	return err
 
 
 ## Return the Camera3D that would be active if the scene were running.

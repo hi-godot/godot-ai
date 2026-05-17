@@ -129,10 +129,19 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
     ):
         """Capture a screenshot of the Godot editor viewport or running game.
 
+        Picking a source: the default ``"viewport"`` only works for a 3D-rooted
+        scene — the editor's 3D viewport is what gets captured. A 2D scene
+        (Node2D/Control root) or an editor with no scene open returns
+        ``EDITOR_NOT_READY`` carrying ``error.data = {editor_state:
+        "viewport_not_3d", scene_root_type, hint}``; switch to ``"cinematic"``
+        if the scene has a Camera3D, or open a 3D scene first.
+
         Sources:
-        - "viewport" (default): editor 3D viewport.
+        - "viewport" (default): editor 3D viewport. Requires a 3D-rooted scene
+          currently being edited; see above for the 2D / no-scene error shape.
         - "cinematic": render edited scene through its current Camera3D
-          (no editor gizmos). INVALID_PARAMS if no current Camera3D.
+          (no editor gizmos). Requires a Camera3D in the scene; NODE_NOT_FOUND
+          if none is marked ``current``.
         - "game": running game's framebuffer (only when project is running).
 
         ``include_image=True`` (default) returns an MCP ImageContent block.

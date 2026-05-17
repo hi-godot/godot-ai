@@ -128,6 +128,71 @@ func test_screenshot_game_not_playing() -> void:
 	assert_is_error(result)
 
 
+# ----- viewport_screenshot_precheck (#XXX: stop returning INTERNAL_ERROR on 2D) -----
+
+func test_viewport_precheck_passes_for_node3d_root() -> void:
+	## Happy path: scene_root is Node3D, precheck returns empty dict so
+	## take_screenshot falls through to its normal capture path.
+	var root := Node3D.new()
+	var result := EditorHandler.viewport_screenshot_precheck(root)
+	root.free()
+	assert_eq(result, {}, "Node3D root should return {} (no error)")
+
+
+func test_viewport_precheck_rejects_node2d_root() -> void:
+	var root := Node2D.new()
+	var result := EditorHandler.viewport_screenshot_precheck(root)
+	root.free()
+	assert_is_error(result, ErrorCodes.EDITOR_NOT_READY)
+	assert_has_key(result.error, "data")
+	assert_eq(result.error.data.editor_state, "viewport_not_3d")
+	assert_eq(result.error.data.scene_root_type, "Node2D")
+	## The hint must mention the 2D nature, cinematic alternative, and
+	## scene_get_hierarchy so the LLM can actually act on it.
+	assert_contains(result.error.data.hint, "Node2D")
+	assert_contains(result.error.data.hint, "cinematic")
+	assert_contains(result.error.data.hint, "scene_get_hierarchy")
+
+
+func test_viewport_precheck_rejects_control_root() -> void:
+	var root := Control.new()
+	var result := EditorHandler.viewport_screenshot_precheck(root)
+	root.free()
+	assert_is_error(result, ErrorCodes.EDITOR_NOT_READY)
+	assert_eq(result.error.data.editor_state, "viewport_not_3d")
+	assert_eq(result.error.data.scene_root_type, "Control")
+
+
+func test_viewport_precheck_rejects_plain_node_root() -> void:
+	## A scene rooted at a plain Node has no Node3D content and no 2D
+	## either — still no 3D viewport content, so still rejected, but the
+	## hint phrasing is the generic non-3D form rather than the 2D one.
+	var root := Node.new()
+	var result := EditorHandler.viewport_screenshot_precheck(root)
+	root.free()
+	assert_is_error(result, ErrorCodes.EDITOR_NOT_READY)
+	assert_eq(result.error.data.editor_state, "viewport_not_3d")
+	assert_eq(result.error.data.scene_root_type, "Node")
+	assert_contains(result.error.data.hint, "no Node3D content")
+
+
+func test_viewport_precheck_rejects_null_scene() -> void:
+	var result := EditorHandler.viewport_screenshot_precheck(null)
+	assert_is_error(result, ErrorCodes.EDITOR_NOT_READY)
+	assert_eq(result.error.data.editor_state, "viewport_not_3d")
+	assert_eq(result.error.data.scene_root_type, "")
+	assert_contains(result.error.data.hint, "no scene is open")
+
+
+func test_viewport_precheck_passes_for_node3d_subclass() -> void:
+	## Camera3D extends Node3D — a scene rooted at any Node3D subclass
+	## should pass the precheck (the 3D viewport will render it).
+	var root := Camera3D.new()
+	var result := EditorHandler.viewport_screenshot_precheck(root)
+	root.free()
+	assert_eq(result, {}, "Node3D subclass root should pass")
+
+
 func test_debugger_plugin_capture_prefix() -> void:
 	var plugin := McpDebuggerPlugin.new()
 	assert_true(plugin._has_capture("mcp"), "Should accept 'mcp' prefix")

@@ -3324,6 +3324,70 @@ async def test_editor_screenshot_handler_cinematic_surfaces_camera_path():
     assert result["camera_path"] == "/Main/Camera3D"
 
 
+async def test_editor_screenshot_handler_relays_viewport_not_3d_error():
+    """When the plugin rejects a viewport screenshot on a 2D scene with the
+    new structured EDITOR_NOT_READY + data.editor_state=viewport_not_3d, the
+    handler must surface the data dict on the raised GodotCommandError so
+    LLM callers see the hint and can switch source or open a 3D scene.
+    Fixes the 152-hit / 63-uuid INTERNAL_ERROR cluster on editor_screenshot.
+    """
+    from godot_ai.godot_client.client import GodotCommandError
+
+    class ViewportNot3DClient:
+        async def send(self, command, params=None, session_id=None, timeout=5.0):
+            raise GodotCommandError(
+                code="EDITOR_NOT_READY",
+                message=(
+                    "The 3D viewport is empty because the current scene is 2D "
+                    "(Node2D root). Options: (a) open a 3D scene, "
+                    "(b) use source=\"cinematic\" if a Camera3D exists in the scene, "
+                    "(c) call scene_get_hierarchy first to inspect what's available."
+                ),
+                data={
+                    "editor_state": "viewport_not_3d",
+                    "scene_root_type": "Node2D",
+                    "hint": "The 3D viewport is empty because the current scene is 2D...",
+                },
+            )
+
+    runtime = DirectRuntime(registry=SessionRegistry(), client=ViewportNot3DClient())
+    with pytest.raises(GodotCommandError) as excinfo:
+        await editor_handlers.editor_screenshot(runtime, include_image=False)
+    err = excinfo.value
+    assert err.code == "EDITOR_NOT_READY"
+    assert err.data["editor_state"] == "viewport_not_3d"
+    assert err.data["scene_root_type"] == "Node2D"
+    assert err.data["hint"]  # non-empty hint for the LLM
+
+
+async def test_editor_screenshot_handler_relays_viewport_empty_error():
+    """The fallback empty-image guards (post-precheck) now return
+    EDITOR_NOT_READY + data.editor_state=viewport_empty instead of
+    INTERNAL_ERROR. Verify the data dict propagates through the handler.
+    """
+    from godot_ai.godot_client.client import GodotCommandError
+
+    class ViewportEmptyClient:
+        async def send(self, command, params=None, session_id=None, timeout=5.0):
+            raise GodotCommandError(
+                code="EDITOR_NOT_READY",
+                message="Captured an empty image from viewport.",
+                data={
+                    "editor_state": "viewport_empty",
+                    "source": "viewport",
+                    "hint": "Captured an empty image from viewport.",
+                },
+            )
+
+    runtime = DirectRuntime(registry=SessionRegistry(), client=ViewportEmptyClient())
+    with pytest.raises(GodotCommandError) as excinfo:
+        await editor_handlers.editor_screenshot(runtime, include_image=False)
+    err = excinfo.value
+    assert err.code == "EDITOR_NOT_READY"
+    assert err.data["editor_state"] == "viewport_empty"
+    assert err.data["source"] == "viewport"
+
+
 # ---------------------------------------------------------------------------
 # Performance monitor handler tests
 # ---------------------------------------------------------------------------
