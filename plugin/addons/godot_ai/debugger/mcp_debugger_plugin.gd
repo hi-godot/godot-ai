@@ -390,7 +390,7 @@ func _send_eval(
 		if conn == null or not is_instance_valid(conn):
 			return
 		_send_error(conn, request_id, ErrorCodes.INTERNAL_ERROR,
-			"Game eval timed out after %.0fs. Eval code may be stuck in an infinite loop or await." % timeout_sec)
+			"Game eval timed out after %.0fs — eval code may be stuck in an infinite loop / await, OR triggered a GDScript runtime error that halted execution before responding. Check logs_read(source='game') for push_error/runtime errors from this run." % timeout_sec)
 		if _log_buffer:
 			_log_buffer.log("[debug] !! eval timeout (%s)" % request_id)
 	timer.timeout.connect(timeout_callable)
@@ -420,9 +420,10 @@ func _on_eval_response(data: Array) -> void:
 		return
 
 	var result_json: String = data[1] if data.size() > 1 else "null"
+	var parsed = JSON.parse_string(result_json)
 	connection.send_deferred_response(request_id, {
 		"data": {
-			"result": result_json,
+			"result": parsed if parsed != null else result_json,
 			"source": "game",
 		}
 	})

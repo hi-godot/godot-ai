@@ -341,7 +341,11 @@ async def logs_resource_data(runtime: DirectRuntime) -> dict:
 
 
 async def game_eval(runtime: DirectRuntime, code: str) -> dict:
-    """Execute GDScript in the running game. Use 'return' for values."""
+    """Execute GDScript in the running game. Use 'return' for values.
+
+    Runtime errors in the eval code are not caught — if eval times out,
+    check ``logs_read(source='game')`` for push_error output.
+    """
     return await runtime.send_command(
         "game_eval", {"code": code}, timeout=15.0
     )

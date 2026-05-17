@@ -15,7 +15,7 @@ from godot_ai.tools import DEFER_META
 from godot_ai.tools._meta_tool import register_manage_tool
 
 _DESCRIPTION = """\
-Editor selection, performance monitors, quit, log clearing.
+Editor selection, performance monitors, quit, log clearing, game eval.
 
 Resource forms (prefer for active-session reads):
   godot://editor/state, godot://selection/current, godot://performance
@@ -34,7 +34,11 @@ Ops:
         Gracefully quit the Godot editor on next frame.
   • logs_clear()
         Clear the MCP log buffer. Returns lines_cleared.
-"""
+  • game_eval(code)
+        Execute GDScript in the running game with return values. Uses
+        'await' so user code can await internally. Runtime errors are not
+        caught — if eval times out, check logs_read(source='game') for
+        push_error output."""
 
 
 def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:

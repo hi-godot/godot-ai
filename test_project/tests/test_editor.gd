@@ -1272,4 +1272,32 @@ func test_game_logger_falls_back_to_original_file_when_no_backtrace() -> void:
 	var pending: Array = logger.drain()
 	assert_eq(pending.size(), 1)
 	assert_contains(pending[0][1], "res://foo.gd:42", "Fallback path:line should appear when no backtrace is present")
+
+
+# ----- game_eval -----
+
+func test_game_eval_missing_code_returns_error() -> void:
+	var result := _handler.game_eval({})
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
+
+
+func test_game_eval_without_debugger_plugin_returns_error() -> void:
+	## _handler is constructed without a debugger plugin in suite_setup,
+	## so game_eval should return INTERNAL_ERROR.
+	var result := _handler.game_eval({"code": "return 42"})
+	assert_is_error(result, ErrorCodes.INTERNAL_ERROR)
+
+
+func test_game_eval_silently_drops_unknown_eval_response() -> void:
+	## _on_eval_response for an unknown request_id must silently drop
+	## without crashing (same pattern as screenshot_error_unknown_request).
+	var plugin := McpDebuggerPlugin.new()
+	plugin._on_eval_response(["unknown-id", "42"])
+	assert_true(true, "No crash when replying to unknown eval request_id")
+
+
+func test_game_eval_silently_drops_unknown_eval_error() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin._on_eval_error(["unknown-id", "some error"])
+	assert_true(true, "No crash when replying to unknown eval request_id")
 	assert_contains(pending[0][1], "my_func", "Fallback function name should appear when no backtrace is present")

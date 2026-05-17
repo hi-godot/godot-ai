@@ -678,7 +678,7 @@ func quit_editor(_params: Dictionary) -> Dictionary:
 func game_eval(params: Dictionary) -> Dictionary:
 	var code: String = params.get("code", "")
 	if code.is_empty():
-		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "code is required")
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "code is required")
 
 	if _debugger_plugin == null or _connection == null:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,

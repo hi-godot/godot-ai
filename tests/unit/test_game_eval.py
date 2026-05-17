@@ -1,6 +1,7 @@
 """Tests for the game_eval handler."""
 
 import pytest
+
 from godot_ai.handlers import editor as editor_handlers
 from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.sessions.registry import SessionRegistry
