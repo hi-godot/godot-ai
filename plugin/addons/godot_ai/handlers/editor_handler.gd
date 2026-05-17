@@ -553,28 +553,44 @@ static func viewport_screenshot_precheck(scene_root: Node) -> Dictionary:
 			"",
 			"The editor 3D viewport is empty because no scene is open. Open a scene with `scene_open` first."
 		)
-	if scene_root is Node3D:
+	## A scene with any Node3D content — root or descendant — has
+	## something the 3D viewport can render. Walking the tree (rather
+	## than only checking the root type) avoids a false reject on the
+	## common `Node` / `Node2D` root + Node3D descendant pattern.
+	if _scene_has_node3d_content(scene_root):
 		return {}
-	## Anything that isn't a Node3D — Node2D, Control, plain Node — leaves
-	## the 3D viewport with nothing to render. Report the real root type
-	## so the caller can tell why the default source failed.
 	var root_type := scene_root.get_class()
 	var hint: String
 	if scene_root is Node2D or scene_root is Control:
 		hint = (
-			"The 3D viewport is empty because the current scene is 2D (%s root). "
+			"The 3D viewport is empty because the current scene is 2D (%s root) with no Node3D descendants. "
 			+ "Options: (a) open a 3D scene, "
 			+ "(b) use source=\"cinematic\" if a Camera3D exists in the scene, "
 			+ "(c) call scene_get_hierarchy first to inspect what's available."
 		) % root_type
 	else:
 		hint = (
-			"The 3D viewport is empty because the current scene root (%s) has no Node3D content. "
-			+ "Options: (a) open a scene whose root is a Node3D, "
+			"The 3D viewport is empty because the current scene (%s root) has no Node3D content anywhere in the tree. "
+			+ "Options: (a) open or add a Node3D, "
 			+ "(b) use source=\"cinematic\" if a Camera3D exists in the scene, "
 			+ "(c) call scene_get_hierarchy first to inspect what's available."
 		) % root_type
 	return _make_viewport_not_3d_error(root_type, hint)
+
+
+## True if scene_root is itself a Node3D or owns any Node3D descendant.
+## DFS short-circuits on the first hit so empty 2D scenes stay cheap.
+static func _scene_has_node3d_content(scene_root: Node) -> bool:
+	if scene_root is Node3D:
+		return true
+	var stack: Array[Node] = [scene_root]
+	while not stack.is_empty():
+		var node: Node = stack.pop_back()
+		for child in node.get_children():
+			if child is Node3D:
+				return true
+			stack.append(child)
+	return false
 
 
 static func _make_viewport_not_3d_error(scene_root_type: String, hint: String) -> Dictionary:

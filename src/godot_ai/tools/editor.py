@@ -129,19 +129,21 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
     ):
         """Capture a screenshot of the Godot editor viewport or running game.
 
-        Picking a source: the default ``"viewport"`` only works for a 3D-rooted
-        scene — the editor's 3D viewport is what gets captured. A 2D scene
-        (Node2D/Control root) or an editor with no scene open returns
-        ``EDITOR_NOT_READY`` carrying ``error.data = {editor_state:
-        "viewport_not_3d", scene_root_type, hint}``; switch to ``"cinematic"``
-        if the scene has a Camera3D, or open a 3D scene first.
+        Picking a source: the default ``"viewport"`` captures the editor's 3D
+        viewport, which is empty if the edited scene has no Node3D anywhere in
+        the tree (or no scene is open). Those cases return ``EDITOR_NOT_READY``
+        with ``error.data = {editor_state: "viewport_not_3d", scene_root_type}``
+        and an actionable ``error.message`` — switch to ``"cinematic"`` if the
+        scene has a Camera3D, or open a scene with 3D content.
 
         Sources:
-        - "viewport" (default): editor 3D viewport. Requires a 3D-rooted scene
-          currently being edited; see above for the 2D / no-scene error shape.
-        - "cinematic": render edited scene through its current Camera3D
-          (no editor gizmos). Requires a Camera3D in the scene; NODE_NOT_FOUND
-          if none is marked ``current``.
+        - "viewport" (default): editor 3D viewport. Requires Node3D content in
+          the edited scene (root or any descendant); see above for the
+          no-3D-content / no-scene error shape.
+        - "cinematic": render edited scene through its active Camera3D (no
+          editor gizmos). Prefers a Camera3D marked ``current``; falls back to
+          the first Camera3D found in a depth-first walk. NODE_NOT_FOUND only
+          when the scene contains no Camera3D at all.
         - "game": running game's framebuffer (only when project is running).
 
         ``include_image=True`` (default) returns an MCP ImageContent block.

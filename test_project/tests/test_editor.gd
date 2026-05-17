@@ -163,10 +163,9 @@ func test_viewport_precheck_rejects_control_root() -> void:
 	assert_eq(result.error.data.scene_root_type, "Control")
 
 
-func test_viewport_precheck_rejects_plain_node_root() -> void:
-	## A scene rooted at a plain Node has no Node3D content and no 2D
-	## either — still no 3D viewport content, so still rejected, but the
-	## hint phrasing is the generic non-3D form rather than the 2D one.
+func test_viewport_precheck_rejects_plain_node_root_with_no_3d_descendants() -> void:
+	## A scene rooted at a plain Node with no Node3D anywhere in the tree
+	## leaves the 3D viewport empty — reject with the generic non-3D hint.
 	var root := Node.new()
 	var result := EditorHandler.viewport_screenshot_precheck(root)
 	root.free()
@@ -174,6 +173,56 @@ func test_viewport_precheck_rejects_plain_node_root() -> void:
 	assert_eq(result.error.data.editor_state, "viewport_not_3d")
 	assert_eq(result.error.data.scene_root_type, "Node")
 	assert_contains(result.error.message, "no Node3D content")
+
+
+func test_viewport_precheck_passes_for_plain_node_root_with_3d_descendant() -> void:
+	## Common pattern: scene root is a plain Node (or scene-organizing
+	## wrapper) with a Node3D child. The 3D viewport CAN render the
+	## descendant, so don't reject.
+	var root := Node.new()
+	var child := Node3D.new()
+	root.add_child(child)
+	var result := EditorHandler.viewport_screenshot_precheck(root)
+	root.free()
+	assert_eq(result, {}, "plain Node root with Node3D descendant should pass")
+
+
+func test_viewport_precheck_passes_for_node2d_root_with_3d_descendant() -> void:
+	## Less common but valid: a Node2D root containing a Node3D descendant
+	## (e.g. a UI scene that embeds a 3D preview). The 3D viewport has
+	## content to render — don't reject on root type alone.
+	var root := Node2D.new()
+	var child := Node3D.new()
+	root.add_child(child)
+	var result := EditorHandler.viewport_screenshot_precheck(root)
+	root.free()
+	assert_eq(result, {}, "Node2D root with Node3D descendant should pass")
+
+
+func test_viewport_precheck_rejects_node2d_root_with_only_2d_descendants() -> void:
+	## A Node2D scene with only Node2D / Control descendants still has
+	## no 3D content. Must reject (the original 2D-scene problem).
+	var root := Node2D.new()
+	var child := Sprite2D.new()
+	root.add_child(child)
+	var result := EditorHandler.viewport_screenshot_precheck(root)
+	root.free()
+	assert_is_error(result, ErrorCodes.EDITOR_NOT_READY)
+	assert_eq(result.error.data.editor_state, "viewport_not_3d")
+	assert_eq(result.error.data.scene_root_type, "Node2D")
+
+
+func test_viewport_precheck_walks_deep_descendants() -> void:
+	## DFS must reach Node3D content nested multiple levels deep, not
+	## just direct children.
+	var root := Node.new()
+	var mid := Node.new()
+	var deep := Node3D.new()
+	root.add_child(mid)
+	mid.add_child(deep)
+	var result := EditorHandler.viewport_screenshot_precheck(root)
+	root.free()
+	assert_eq(result, {}, "deeply-nested Node3D should be discovered")
 
 
 func test_viewport_precheck_rejects_null_scene() -> void:
