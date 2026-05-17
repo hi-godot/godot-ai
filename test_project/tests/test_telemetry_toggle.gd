@@ -16,7 +16,6 @@ const _ENV2 := "DISABLE_TELEMETRY"
 
 var _saved_env1: Variant = null
 var _saved_env2: Variant = null
-var _had_setting: bool = false
 var _saved_setting: Variant = null
 
 
@@ -24,22 +23,14 @@ func suite_setup(_ctx: Dictionary) -> void:
 	_saved_env1 = OS.get_environment(_ENV1) if OS.has_environment(_ENV1) else null
 	_saved_env2 = OS.get_environment(_ENV2) if OS.has_environment(_ENV2) else null
 	var es := EditorInterface.get_editor_settings()
-	_had_setting = es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED)
-	if _had_setting:
+	if es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED):
 		_saved_setting = es.get_setting(McpSettings.SETTING_TELEMETRY_ENABLED)
 
 
 func suite_teardown() -> void:
 	_restore_env(_ENV1, _saved_env1)
 	_restore_env(_ENV2, _saved_env2)
-	var es := EditorInterface.get_editor_settings()
-	if not _had_setting:
-		if es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED):
-			## Setting didn't exist before tests ran — remove it if we added it.
-			## NB: Passing null to set_setting is the intended way to unset editor settings in Godot 3/4.
-			es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, null)
-	else:
-		es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, _saved_setting)
+	EditorInterface.get_editor_settings().set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, _saved_setting)
 
 
 func _restore_env(name: String, saved: Variant) -> void:

@@ -3385,7 +3385,7 @@ async def test_editor_screenshot_handler_relays_viewport_not_3d_error():
                 message=(
                     "The 3D viewport is empty because the current scene is 2D "
                     "(Node2D root). Options: (a) open a 3D scene, "
-                    "(b) use source=\"cinematic\" if a Camera3D exists in the scene, "
+                    '(b) use source="cinematic" if a Camera3D exists in the scene, '
                     "(c) call scene_get_hierarchy first to inspect what's available."
                 ),
                 data={

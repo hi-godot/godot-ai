@@ -14,12 +14,21 @@ class _StubGameEvalClient:
         self.calls: list[dict] = []
         self._eval_result = eval_result or {"data": {"result": "42", "source": "game"}}
 
-    async def send(self, command: str, params: dict | None = None,
-                   session_id: str | None = None, timeout: float = 5.0) -> dict:
-        self.calls.append({
-            "command": command, "params": params,
-            "session_id": session_id, "timeout": timeout,
-        })
+    async def send(
+        self,
+        command: str,
+        params: dict | None = None,
+        session_id: str | None = None,
+        timeout: float = 5.0,
+    ) -> dict:
+        self.calls.append(
+            {
+                "command": command,
+                "params": params,
+                "session_id": session_id,
+                "timeout": timeout,
+            }
+        )
         if command == "game_eval":
             return self._eval_result
         return {"data": {}}
@@ -48,8 +57,5 @@ async def test_game_eval_uses_custom_timeout():
 async def test_game_eval_passes_code_verbatim():
     client = _StubGameEvalClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    await editor_handlers.game_eval(
-        runtime,
-        code="return get_tree().root.name"
-    )
+    await editor_handlers.game_eval(runtime, code="return get_tree().root.name")
     assert client.calls[-1]["params"]["code"] == "return get_tree().root.name"

@@ -89,7 +89,6 @@ const _TENV2 := "DISABLE_TELEMETRY"
 
 var _saved_tenv1: Variant = null
 var _saved_tenv2: Variant = null
-var _had_telemetry_setting: bool = false
 var _saved_telemetry_setting: Variant = null
 
 
@@ -101,20 +100,14 @@ func suite_setup(_ctx: Dictionary) -> void:
 	_saved_tenv1 = OS.get_environment(_TENV1) if OS.has_environment(_TENV1) else null
 	_saved_tenv2 = OS.get_environment(_TENV2) if OS.has_environment(_TENV2) else null
 	var es := EditorInterface.get_editor_settings()
-	_had_telemetry_setting = es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED)
-	if _had_telemetry_setting:
+	if es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED):
 		_saved_telemetry_setting = es.get_setting(McpSettings.SETTING_TELEMETRY_ENABLED)
 
 
 func suite_teardown() -> void:
 	_restore_tenv(_TENV1, _saved_tenv1)
 	_restore_tenv(_TENV2, _saved_tenv2)
-	var es := EditorInterface.get_editor_settings()
-	if not _had_telemetry_setting:
-		if es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED):
-			es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, null)
-	else:
-		es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, _saved_telemetry_setting)
+	EditorInterface.get_editor_settings().set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, _saved_telemetry_setting)
 
 
 func _restore_tenv(name: String, saved: Variant) -> void:

@@ -346,6 +346,4 @@ async def game_eval(runtime: DirectRuntime, code: str) -> dict:
     Runtime errors in the eval code are not caught — if eval times out,
     check ``logs_read(source='game')`` for push_error output.
     """
-    return await runtime.send_command(
-        "game_eval", {"code": code}, timeout=15.0
-    )
+    return await runtime.send_command("game_eval", {"code": code}, timeout=15.0)
