@@ -4869,6 +4869,8 @@ async def test_audio_list_handler_is_read_only():
 
 async def test_audio_player_create_blocks_when_not_writable():
     """audio_player_create requires a writable session (uses require_writable)."""
+    from godot_ai.godot_client.client import GodotCommandError
+
     client = StubClient()
     client.live_readiness = "playing"
     session = Session(
@@ -4881,7 +4883,7 @@ async def test_audio_player_create_blocks_when_not_writable():
     registry = SessionRegistry()
     registry.register(session)
     runtime = DirectRuntime(registry=registry, client=client)
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(GodotCommandError) as exc_info:
         await audio_handlers.audio_player_create(runtime, parent_path="/Main")
     assert "play mode" in str(exc_info.value).lower()
     ## The gate fires one `get_editor_state` probe to confirm the cache

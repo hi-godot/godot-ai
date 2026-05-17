@@ -569,6 +569,20 @@ func test_add_property_track_transition_raw_float() -> void:
 		],
 	})
 	assert_has_key(result, "data")
+	# Read back the stored keyframes so a broken dict→Vector3 coercion or a
+	# silently-dropped transition can't pass this test.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var anim: Animation = player.get_animation("anim")
+	var v0 = anim.track_get_key_value(0, 0)
+	var v1 = anim.track_get_key_value(0, 1)
+	assert_true(v0 is Vector3, "from value must coerce to Vector3, not stay as Dict")
+	assert_true(v1 is Vector3, "to value must coerce to Vector3, not stay as Dict")
+	assert_eq(v1.x, 100.0)
+	assert_true(abs(anim.track_get_key_transition(0, 0) - 3.0) < 0.0001,
+		"raw-float transition should be stored on key 0")
+	assert_true(abs(anim.track_get_key_transition(0, 1) - 3.0) < 0.0001,
+		"raw-float transition should be stored on key 1")
 	_remove_node(player_path)
 
 

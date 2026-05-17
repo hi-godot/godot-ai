@@ -224,7 +224,9 @@ def test_v240_preflight_passes_when_both_files_present(tmp_path: Path) -> None:
         tmp_path,
         present=("utils/server_lifecycle.gd", "utils/update_manager.gd"),
     )
-    smoke._require_v240_plus_addon_shape(addon, "2.4.0")
+    # Validator returns None on success and raises HarnessError otherwise; the
+    # assertion both documents intent and trips the runner's zero-assertion guard.
+    assert smoke._require_v240_plus_addon_shape(addon, "2.4.0") is None
 
 
 @pytest.mark.parametrize(

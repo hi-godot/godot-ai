@@ -65,6 +65,10 @@ func test_create_theme_overwrite_allowed() -> void:
 	_make_theme()
 	var result := _handler.create_theme({"path": TEST_THEME_PATH, "overwrite": true})
 	assert_has_key(result, "data")
+	assert_eq(result.data.overwritten, true,
+		"overwritten flag must reflect the pre-existing file")
+	assert_true(FileAccess.file_exists(TEST_THEME_PATH),
+		"theme file should still exist after overwrite")
 
 
 # ----- theme_set_color -----
@@ -96,6 +100,15 @@ func test_theme_set_color_accepts_dict() -> void:
 		"value": {"r": 0.5, "g": 0.3, "b": 0.1, "a": 1.0},
 	})
 	assert_has_key(result, "data")
+	# Read back from disk so a missing dict→Color coercion can't pass by
+	# returning a successful envelope while storing a raw Dict.
+	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	assert_true(theme.has_color("font_color", "Label"))
+	var c := theme.get_color("font_color", "Label")
+	assert_true(c is Color, "Stored value must be a Color, not a raw Dict")
+	assert_true(abs(c.r - 0.5) < 0.01)
+	assert_true(abs(c.g - 0.3) < 0.01)
+	assert_true(abs(c.b - 0.1) < 0.01)
 
 
 func test_theme_set_color_rejects_garbage_string() -> void:

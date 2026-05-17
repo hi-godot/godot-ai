@@ -119,6 +119,10 @@ func test_create_overwrite_allowed() -> void:
 	_make_material()
 	var result := _handler.create_material({"path": TEST_MATERIAL_PATH, "overwrite": true})
 	assert_has_key(result, "data")
+	assert_eq(result.data.overwritten, true,
+		"overwritten flag must reflect the pre-existing file")
+	assert_true(FileAccess.file_exists(TEST_MATERIAL_PATH),
+		"material file should still exist after overwrite")
 
 
 func test_create_shader_requires_shader_path() -> void:
@@ -179,6 +183,9 @@ func test_set_param_bool() -> void:
 		"value": true,
 	})
 	assert_has_key(result, "data")
+	var mat: Material = ResourceLoader.load(TEST_MATERIAL_PATH)
+	assert_eq(mat.get("emission_enabled"), true,
+		"emission_enabled should be stored as the bool we passed")
 
 
 func test_set_param_transparency_enum_by_name() -> void:
