@@ -2890,6 +2890,74 @@ class TestProjectStopTool:
         assert not result.is_error
         assert result.data["stopped"] is True
 
+    async def test_stop_with_omitted_params(self, mcp_stack):
+        """Bare ``project_manage(op="stop")`` — the most common shape.
+
+        Telemetry shows 87 unique installs/24h hit INVALID_PARAMS on this op.
+        The dispatch layer must accept a missing ``params`` field and forward
+        an empty call to the plugin without error.
+        """
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "stop_project"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "stopped": True,
+                    "was_running": False,
+                    "undoable": False,
+                    "reason": "Project was not running; no action taken",
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("project_manage", {"op": "stop"})
+        await task
+
+        assert not result.is_error
+        assert result.data["stopped"] is True
+        assert result.data["was_running"] is False
+
+    async def test_stop_with_stringified_params(self, mcp_stack):
+        """Some MCP clients stringify ``params`` — middleware must JSON-decode."""
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "stop_project"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"stopped": True, "was_running": True, "undoable": False},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("project_manage", {"op": "stop", "params": "{}"})
+        await task
+
+        assert not result.is_error
+
+    async def test_stop_rejects_extra_keys_with_helpful_hint(self, mcp_stack):
+        """Invented kwargs like ``force=True`` must surface the accepted set.
+
+        Before this fix, the response was a bare ``TypeError`` text wrapped as
+        INVALID_PARAMS — agents couldn't tell which key was wrong. Now the
+        error names the unexpected key(s) and the accepted set (here, none).
+        """
+        client, _ = mcp_stack
+
+        result = await client.call_tool(
+            "project_manage",
+            {"op": "stop", "params": {"force": True}},
+            raise_on_error=False,
+        )
+        assert result.is_error
+        text = str(result.content)
+        assert "Unexpected param(s)" in text
+        assert "'force'" in text
+        assert "Accepted params for op 'stop'" in text
+
 
 # ---------------------------------------------------------------------------
 # editor_screenshot

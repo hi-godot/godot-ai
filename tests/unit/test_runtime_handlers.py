@@ -3070,6 +3070,51 @@ async def test_project_stop_handler():
     assert client.calls[-1]["command"] == "stop_project"
 
 
+async def test_project_stop_handler_passes_through_idempotent_payload():
+    """Idempotent-stop path (was_running=false) flows through the Python wrapper
+    untouched. Regression for the fleet-wide INVALID_PARAMS pattern: 87 unique
+    installs/24h hit the old "Project is not running" error. The plugin now
+    returns success; the Python handler must not re-wrap it as an error.
+    """
+
+    class IdempotentStopClient(StubClient):
+        async def send(self, command, params=None, session_id=None, timeout=5.0):
+            self.calls.append({"command": command, "params": params})
+            return {
+                "stopped": True,
+                "was_running": False,
+                "undoable": False,
+                "reason": "Project was not running; no action taken",
+            }
+
+    client = IdempotentStopClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await project_handlers.project_stop(runtime)
+    assert result["stopped"] is True
+    assert result["was_running"] is False
+
+
+async def test_project_run_handler_passes_through_already_running_payload():
+    """Idempotent-run path (was_already_running=true) flows through unchanged."""
+
+    class AlreadyRunningClient(StubClient):
+        async def send(self, command, params=None, session_id=None, timeout=5.0):
+            self.calls.append({"command": command, "params": params})
+            return {
+                "mode": (params or {}).get("mode", "main"),
+                "scene": "",
+                "autosave": True,
+                "was_already_running": True,
+                "undoable": False,
+            }
+
+    client = AlreadyRunningClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await project_handlers.project_run(runtime)
+    assert result["was_already_running"] is True
+    assert result["mode"] == "main"
+
+
 # ---------------------------------------------------------------------------
 # Performance monitor handler tests
 # ---------------------------------------------------------------------------

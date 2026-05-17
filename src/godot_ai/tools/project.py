@@ -21,7 +21,13 @@ Resource form: ``godot://project/info`` and ``godot://project/settings``
 
 Ops:
   • stop()
-        Stop the running project (game). Errors if not running.
+        Stop the running project (game). Takes no params — call as
+        ``project_manage(op="stop")`` or with ``params={}``. Idempotent:
+        succeeds with ``was_running=false`` if the project isn't running.
+        Do NOT pass extra fields like ``force`` or ``reason`` inside
+        ``params`` — only the registered keys are accepted (here, none).
+        For multi-editor setups, pass ``session_id`` as a sibling of
+        ``op``/``params``, not inside ``params``.
   • settings_get(key)
         Read a ProjectSettings key (e.g. "application/config/name").
   • settings_set(key, value)
@@ -44,6 +50,10 @@ def register_project_tools(mcp: FastMCP) -> None:
         - "main": Run the project's main scene (default).
         - "current": Run the currently open scene.
         - "custom": Run a specific scene (requires ``scene``).
+
+        Idempotent: if the project is already running, returns success with
+        ``data.was_already_running=true`` (no scene switch). To switch scenes,
+        call ``project_manage(op="stop")`` first, then ``project_run`` again.
 
         Args:
             mode: "main" | "current" | "custom". Default "main".

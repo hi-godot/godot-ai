@@ -75,8 +75,22 @@ func set_project_setting(params: Dictionary) -> Dictionary:
 func run_project(params: Dictionary) -> Dictionary:
 	var mode: String = params.get("mode", "main")
 	var autosave: bool = params.get("autosave", true)
+	# Idempotent: a project that's already running satisfies the caller's intent.
+	# Returning INVALID_PARAMS here punished agents that legitimately called run
+	# to ensure the project is playing (87+ installs/day hit the matching
+	# stop-not-running case in telemetry). Surface state via was_already_running
+	# so a caller wanting a *different* scene can detect and stop+restart.
 	if EditorInterface.is_playing_scene():
-		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Project is already running")
+		return {
+			"data": {
+				"mode": mode,
+				"scene": params.get("scene", ""),
+				"autosave": autosave,
+				"was_already_running": true,
+				"undoable": false,
+				"reason": "Project was already running; no action taken",
+			}
+		}
 
 	var validation_error: Variant = null
 	if mode == "custom":
@@ -133,6 +147,7 @@ func run_project(params: Dictionary) -> Dictionary:
 			"mode": mode,
 			"scene": params.get("scene", ""),
 			"autosave": autosave,
+			"was_already_running": false,
 			"undoable": false,
 			"reason": "Play/stop is a runtime action",
 		}
@@ -140,8 +155,19 @@ func run_project(params: Dictionary) -> Dictionary:
 
 
 func stop_project(params: Dictionary) -> Dictionary:
+	# Idempotent: a project that's already stopped satisfies the caller's intent.
+	# Returning INVALID_PARAMS here was the largest single source of fleet-wide
+	# project_manage failures (87 installs/24h). was_running=false lets callers
+	# distinguish a no-op stop from one that actually halted a running session.
 	if not EditorInterface.is_playing_scene():
-		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Project is not running")
+		return {
+			"data": {
+				"stopped": true,
+				"was_running": false,
+				"undoable": false,
+				"reason": "Project was not running; no action taken",
+			}
+		}
 
 	if _debugger_plugin != null:
 		_debugger_plugin.end_game_run()
@@ -161,6 +187,7 @@ func stop_project(params: Dictionary) -> Dictionary:
 	return {
 		"data": {
 			"stopped": true,
+			"was_running": true,
 			"undoable": false,
 			"reason": "Play/stop is a runtime action",
 		}
@@ -181,6 +208,7 @@ func _finish_stop_project_deferred(request_id: String) -> void:
 	_connection.send_deferred_response(request_id, {
 		"data": {
 			"stopped": true,
+			"was_running": true,
 			"undoable": false,
 			"reason": "Play/stop is a runtime action",
 			"readiness_after": McpConnection.get_readiness(),

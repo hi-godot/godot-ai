@@ -342,6 +342,65 @@ async def test_dispatch_wraps_extra_param_typeerror():
     assert exc.value.data["received"] == ["extra"]
 
 
+@pytest.mark.asyncio
+async def test_dispatch_extra_param_hint_lists_unexpected_and_accepted():
+    """A no-arg op called with extra keys must surface both lists.
+
+    Regression for the fleet-wide project_manage(op="stop") confusion: LLMs
+    invent kwargs like force=True. The error must name the offending key and
+    the (empty) set of accepted keys so the agent can self-correct.
+    """
+
+    async def no_params(rt):
+        del rt
+        return {}
+
+    with pytest.raises(GodotCommandError) as exc:
+        await dispatch_manage_op(
+            ops={"stop": no_params},
+            tool_name="project_manage",
+            runtime=None,
+            op="stop",
+            params={"force": True, "reason": "user"},
+        )
+
+    err = exc.value
+    assert err.code == ErrorCode.INVALID_PARAMS
+    assert "Unexpected param(s)" in err.message
+    assert "'force'" in err.message
+    assert "'reason'" in err.message
+    assert "Accepted params for op 'stop'" in err.message
+    assert err.data["accepted"] == []
+    assert err.data["unexpected"] == ["force", "reason"]
+    assert err.data["received"] == ["force", "reason"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_extra_param_hint_lists_handler_kwargs():
+    """Op with several accepted kwargs surfaces those in the hint."""
+
+    async def with_kwargs(rt, mode="main", scene="", autosave=True):
+        del rt, mode, scene, autosave
+        return {}
+
+    with pytest.raises(GodotCommandError) as exc:
+        await dispatch_manage_op(
+            ops={"run": with_kwargs},
+            tool_name="project_manage",
+            runtime=None,
+            op="run",
+            params={"mode": "main", "bogus": 1},
+        )
+
+    err = exc.value
+    assert "'bogus'" in err.message
+    assert "'mode'" in err.message
+    assert "'scene'" in err.message
+    assert "'autosave'" in err.message
+    assert err.data["accepted"] == ["mode", "scene", "autosave"]
+    assert err.data["unexpected"] == ["bogus"]
+
+
 # ---------------------------------------------------------------------------
 # JSON-string coercion
 # ---------------------------------------------------------------------------

@@ -362,8 +362,54 @@ async def dispatch_manage_op(
             result = await result
         return result
     except TypeError as exc:
+        ## When a caller passes a key the handler doesn't accept (a common LLM
+        ## failure mode: invented kwargs like ``force=True`` on ``stop``,
+        ## ``session_id`` nested inside ``params``), the bare TypeError text
+        ## reads like an internal error. Surface the handler's accepted-key set
+        ## and the unexpected key (if Pydantic-style detectable) so the agent
+        ## can self-correct without a second round-trip.
+        signature, _ = _handler_meta(handler)
+        accepted: list[str] = []
+        if signature is not None:
+            ## The first positional is always the runtime — skip by position
+            ## rather than name (handlers in tests use ``rt``; real handlers
+            ## use ``runtime``).
+            params_iter = iter(signature.parameters.items())
+            next(params_iter, None)
+            accepted = [
+                name
+                for name, param in params_iter
+                if param.kind
+                in (
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    inspect.Parameter.KEYWORD_ONLY,
+                )
+            ]
+        received = list(call_params.keys())
+        ## When we can't introspect the handler signature, leave unexpected empty
+        ## so the hint reads as the bare TypeError (no false claims about keys).
+        if signature is None:
+            unexpected = []
+        else:
+            unexpected = [k for k in received if k not in accepted]
+        hint = f"{tool_name}.{op}: {exc}"
+        if signature is not None:
+            accepted_label = ", ".join(repr(k) for k in accepted) if accepted else "(none)"
+            if unexpected:
+                hint += (
+                    f". Unexpected param(s): {', '.join(repr(k) for k in unexpected)}. "
+                    f"Accepted params for op {op!r}: {accepted_label}"
+                )
+            else:
+                hint += f". Accepted params for op {op!r}: {accepted_label}"
         raise GodotCommandError(
             code=ErrorCode.INVALID_PARAMS,
-            message=f"{tool_name}.{op}: {exc}",
-            data={"tool": tool_name, "op": op, "received": list(call_params.keys())},
+            message=hint,
+            data={
+                "tool": tool_name,
+                "op": op,
+                "received": received,
+                "accepted": accepted,
+                "unexpected": unexpected,
+            },
         ) from exc

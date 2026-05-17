@@ -198,6 +198,20 @@ func test_run_project_autosave_false_restores_editor_setting() -> void:
 
 # ----- stop_project -----
 
-func test_stop_project_rejects_when_not_playing() -> void:
+func test_stop_project_idempotent_when_not_playing() -> void:
+	## Telemetry: 87 unique installs/day hit INVALID_PARAMS on
+	## project_manage(op="stop") because the plugin rejected stop-when-not-running.
+	## Calling stop to ensure the project is stopped is a valid intent; the
+	## handler now returns success with was_running=false instead of erroring.
 	var result := _handler.stop_project({})
-	assert_is_error(result)
+	assert_has_key(result, "data")
+	assert_has_key(result.data, "stopped")
+	assert_eq(result.data.stopped, true)
+	assert_has_key(result.data, "was_running")
+	assert_eq(result.data.was_running, false)
+
+
+## NOTE: run_project's was_already_running branch can't be exercised here —
+## actually starting playback from the editor test runner would re-enter the
+## test loop. End-to-end coverage of that branch lives in the Python integration
+## tests. The success/validation paths are covered by the run_project tests above.
