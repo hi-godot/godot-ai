@@ -30,6 +30,10 @@ export_presets.cfg
 *.swo
 *~
 
+# Claude Code worktrees (per-session checkouts under .claude/worktrees/)
+# — .claude/settings.json, hooks/, skills/ are tracked; worktrees/ is local-only.
+.claude/worktrees/
+
 # OS
 .DS_Store
 Thumbs.db
