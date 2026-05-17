@@ -595,7 +595,8 @@ func _build_ui() -> void:
 
 	_clients_window = Window.new()
 	_clients_window.title = "MCP Clients & Settings"
-	_clients_window.min_size = Vector2i(Vector2i(560, 460) * EditorInterface.get_editor_scale())
+	## `Vector2i * float` yields Vector2; wrap the result back to Vector2i.
+	_clients_window.min_size = Vector2i(Vector2(560, 460) * EditorInterface.get_editor_scale())
 	_clients_window.visible = false
 	_clients_window.close_requested.connect(_on_clients_window_close_requested)
 	add_child(_clients_window)

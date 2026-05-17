@@ -13,7 +13,7 @@
 ##      checked first so CI / operators can force-disable without touching
 ##      EditorSettings.
 ##   2. The `godot_ai/telemetry_enabled` EditorSetting — set through the
-## 		mcp dock and persisted between sessions.
+##      MCP dock and persisted between sessions.
 ##
 ## When telemetry is disabled, events are never buffered or sent. If an env
 ## var is explicitly set to a non-truthy value, telemetry is enabled even if

@@ -38,11 +38,9 @@ func test_setting_defaults_true_when_absent() -> void:
 	## Simulate what _load_telemetry_setting does on first run: if absent, write true.
 	var es := EditorInterface.get_editor_settings()
 	## Clear any existing value so we can test the absent-setting path.
+	## NB: Passing null to set_setting is the intended way to unset editor settings in Godot 3/4.
 	if es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED):
 		es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, null)
-	## After clearing, check absence — note: set_setting(null) may or may not
-	## remove the key depending on Godot version. Work around: skip directly to
-	## the init logic assertion.
 	if not es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED):
 		es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, true)
 	assert_true(bool(es.get_setting(McpSettings.SETTING_TELEMETRY_ENABLED)), "absent setting should resolve to true after first-run init")
