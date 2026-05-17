@@ -87,32 +87,40 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Build plugin ZIP
-        # Ship `addons/` + `LICENSE` at the zip's top level. The multi-top
-        # shape matters: Godot's AssetLib install dialog defaults "Ignore
-        # asset root" to CHECKED whenever it detects a single top-level
-        # folder, which would strip `addons/` and drop `godot_ai/` at
+        # Ship `addons/` + `godot-ai-LICENSE.txt` at the zip's top level. The
+        # multi-top shape matters: Godot's AssetLib install dialog defaults
+        # "Ignore asset root" to CHECKED whenever it detects a single top-
+        # level folder, which would strip `addons/` and drop `godot_ai/` at
         # res:// — outside the plugin path and outside the addons-warning
         # exclusion. With two top-level entries, Godot doesn't offer the
         # strip option, so files land as-archived at res://addons/godot_ai/
         # regardless of any user-toggled preference.
+        #
+        # The second top-level entry is namespaced (`godot-ai-LICENSE.txt`)
+        # rather than a bare `LICENSE`. A bare `LICENSE` lands at
+        # `res://LICENSE` on install and silently overwrites the user's own
+        # project LICENSE file — issue #450. The namespaced name preserves
+        # the AssetLib trick without clobbering anything in a typical project.
+        # The canonical addon-scoped license still ships at
+        # `addons/godot_ai/LICENSE` for in-tree consumers.
         run: |
           mkdir -p staging/addons
           cp -r plugin/addons/godot_ai staging/addons/
-          cp LICENSE staging/
+          cp LICENSE staging/godot-ai-LICENSE.txt
           cd staging
           # `-D` strips zero-byte directory entries. The 2.2.x/2.3.0 self-
           # update runner has an over-strict safety check that flags the
           # bare `addons/godot_ai/` directory entry as unsafe and aborts
           # the extract. Stripping directory entries lets those installs
           # successfully self-update to a fixed runner.
-          zip -D -r ../godot-ai-plugin.zip addons/ LICENSE
+          zip -D -r ../godot-ai-plugin.zip addons/ godot-ai-LICENSE.txt
 
       - name: Verify zip structure
         run: |
           # unzip -Z1 lists only entry names, one per line, no header/footer
           tops=$(unzip -Z1 godot-ai-plugin.zip | awk -F/ '{print $1}' | sort -u | tr '\n' ' ' | sed 's/ $//')
-          if [ "$tops" != "LICENSE addons" ]; then
-            echo "ERROR: expected top-level entries 'LICENSE addons' in zip, got:" >&2
+          if [ "$tops" != "addons godot-ai-LICENSE.txt" ]; then
+            echo "ERROR: expected top-level entries 'addons godot-ai-LICENSE.txt' in zip, got:" >&2
             echo "  $tops" >&2
             exit 1
           fi
@@ -120,8 +128,15 @@ jobs:
             echo "ERROR: plugin.cfg not at expected path addons/godot_ai/plugin.cfg" >&2
             exit 1
           fi
-          if ! unzip -Z1 godot-ai-plugin.zip | grep -qx 'LICENSE'; then
-            echo "ERROR: LICENSE not present at zip root" >&2
+          if ! unzip -Z1 godot-ai-plugin.zip | grep -qx 'godot-ai-LICENSE.txt'; then
+            echo "ERROR: godot-ai-LICENSE.txt not present at zip root" >&2
+            exit 1
+          fi
+          # Guard against the issue-#450 regression: a bare `LICENSE` at zip
+          # root would silently overwrite the installing project's own
+          # LICENSE on AssetLib install.
+          if unzip -Z1 godot-ai-plugin.zip | grep -qx 'LICENSE'; then
+            echo "ERROR: zip contains bare 'LICENSE' at root — would clobber user project LICENSE on install (see #450)" >&2
             exit 1
           fi
           # Hard-fail if the zip contains zero-byte directory entries (paths
@@ -144,7 +159,7 @@ jobs:
             unzip -Z1 godot-ai-plugin.zip | grep ' 2\.' >&2
             exit 1
           fi
-          echo "Zip structure verified: addons/godot_ai/... + LICENSE (multi-top)"
+          echo "Zip structure verified: addons/godot_ai/... + godot-ai-LICENSE.txt (multi-top)"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3

@@ -38,7 +38,7 @@ _REAL_FILES: tuple[tuple[str, bytes], ...] = (
     ("addons/godot_ai/plugin.cfg", b'[plugin]\nname="godot-ai"\n'),
     ("addons/godot_ai/plugin.gd", b"@tool\nextends EditorPlugin\n"),
     ("addons/godot_ai/utils/example.gd", b"extends RefCounted\n"),
-    ("LICENSE", b"MIT\n"),
+    ("godot-ai-LICENSE.txt", b"MIT\n"),
 )
 
 # Directory entries an unstripped `zip -r` (without `-D`) would emit. Note
