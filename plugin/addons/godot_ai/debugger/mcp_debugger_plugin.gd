@@ -420,10 +420,11 @@ func _on_eval_response(data: Array) -> void:
 		return
 
 	var result_json: String = data[1] if data.size() > 1 else "null"
-	var parsed = JSON.parse_string(result_json)
+	var json := JSON.new()
+	var parse_err := json.parse(result_json)
 	connection.send_deferred_response(request_id, {
 		"data": {
-			"result": parsed if parsed != null else result_json,
+			"result": json.data if parse_err == OK else result_json,
 			"source": "game",
 		}
 	})
