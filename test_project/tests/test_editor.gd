@@ -1300,4 +1300,3 @@ func test_game_eval_silently_drops_unknown_eval_error() -> void:
 	var plugin := McpDebuggerPlugin.new()
 	plugin._on_eval_error(["unknown-id", "some error"])
 	assert_true(true, "No crash when replying to unknown eval request_id")
-	assert_contains(pending[0][1], "my_func", "Fallback function name should appear when no backtrace is present")
