@@ -114,6 +114,9 @@ func _on_debug_message(message: String, data: Array) -> bool:
 		"take_screenshot":
 			_handle_take_screenshot(data)
 			return true
+		"eval":
+			_handle_eval(data)
+			return true
 	return false
 
 
@@ -162,3 +165,172 @@ func _handle_take_screenshot(data: Array) -> void:
 
 func _reply_error(request_id: String, message: String) -> void:
 	EngineDebugger.send_message("mcp:screenshot_error", [request_id, message])
+
+
+## --- game_eval: execute arbitrary GDScript in the running game ---
+
+func _handle_eval(data: Array) -> void:
+	var request_id: String = data[0] if data.size() > 0 else ""
+	var code: String = data[1] if data.size() > 1 else ""
+
+	if code.is_empty():
+		EngineDebugger.send_message("mcp:eval_error", [request_id, "No code provided"])
+		return
+
+	## Wrap user code so we can capture a return value.
+	## Uses await so user code can use `await` internally.
+	var script_source := (
+		"extends Node\n"
+		+ "func execute():\n"
+		+ "\tvar __result = null\n"
+		+ "\t__result = await _run()\n"
+		+ "\treturn __result\n\n"
+		+ "func _run():\n"
+		+ _indent_eval_code(code)
+	)
+
+	var script: GDScript = GDScript.new()
+	script.source_code = script_source
+	var err: int = script.reload()
+	if err != OK:
+		EngineDebugger.send_message("mcp:eval_error",
+			[request_id, "Failed to compile GDScript (error %d). Check syntax." % err])
+		return
+
+	var temp_node := Node.new()
+	temp_node.set_script(script)
+	temp_node.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(temp_node)
+
+	var result = null
+	if temp_node.has_method("execute"):
+		result = await temp_node.execute()
+
+	temp_node.queue_free()
+	EngineDebugger.send_message("mcp:eval_response",
+		[request_id, JSON.stringify(_variant_to_json(result))])
+
+
+func _indent_eval_code(code: String) -> String:
+	var lines: PackedStringArray = code.split("\n")
+	var out := ""
+	for line in lines:
+		out += "\t" + line + "\n"
+	return out
+
+
+## Serialize any Godot Variant to a JSON-safe dictionary/array/primitive.
+## Ported from godot-mcp's mcp_interaction_server.gd.
+func _variant_to_json(value: Variant) -> Variant:
+	if value == null:
+		return null
+	if value is bool or value is int or value is float or value is String:
+		return value
+	if value is Vector2:
+		return {"x": value.x, "y": value.y}
+	if value is Vector3:
+		return {"x": value.x, "y": value.y, "z": value.z}
+	if value is Vector4:
+		return {"x": value.x, "y": value.y, "z": value.z, "w": value.w}
+	if value is Vector2i:
+		return {"x": value.x, "y": value.y}
+	if value is Vector3i:
+		return {"x": value.x, "y": value.y, "z": value.z}
+	if value is Vector4i:
+		return {"x": value.x, "y": value.y, "z": value.z, "w": value.w}
+	if value is Color:
+		return {"r": value.r, "g": value.g, "b": value.b, "a": value.a}
+	if value is Quaternion:
+		return {"x": value.x, "y": value.y, "z": value.z, "w": value.w}
+	if value is Basis:
+		return {
+			"x": _variant_to_json(value.x),
+			"y": _variant_to_json(value.y),
+			"z": _variant_to_json(value.z),
+		}
+	if value is Transform3D:
+		return {
+			"basis": _variant_to_json(value.basis),
+			"origin": _variant_to_json(value.origin),
+		}
+	if value is Transform2D:
+		return {
+			"x": _variant_to_json(value.x),
+			"y": _variant_to_json(value.y),
+			"origin": _variant_to_json(value.origin),
+		}
+	if value is Rect2:
+		return {
+			"position": _variant_to_json(value.position),
+			"size": _variant_to_json(value.size),
+		}
+	if value is Rect2i:
+		return {
+			"position": _variant_to_json(value.position),
+			"size": _variant_to_json(value.size),
+		}
+	if value is AABB:
+		return {
+			"position": _variant_to_json(value.position),
+			"size": _variant_to_json(value.size),
+		}
+	if value is NodePath or value is StringName:
+		return str(value)
+	if value is Plane:
+		return {
+			"normal": _variant_to_json(value.normal),
+			"d": value.d,
+		}
+	if value is Projection:
+		return {
+			"x": _variant_to_json(value.x),
+			"y": _variant_to_json(value.y),
+			"z": _variant_to_json(value.z),
+			"w": _variant_to_json(value.w),
+		}
+	## Packed arrays
+	if value is PackedByteArray:
+		var arr: Array = []
+		for item in value: arr.append(item)
+		return arr
+	if value is PackedInt32Array or value is PackedInt64Array:
+		var arr: Array = []
+		for item in value: arr.append(item)
+		return arr
+	if value is PackedFloat32Array or value is PackedFloat64Array:
+		var arr: Array = []
+		for item in value: arr.append(item)
+		return arr
+	if value is PackedStringArray:
+		var arr: Array = []
+		for item in value: arr.append(item)
+		return arr
+	if value is PackedVector2Array:
+		var arr: Array = []
+		for item in value: arr.append({"x": item.x, "y": item.y})
+		return arr
+	if value is PackedVector3Array:
+		var arr: Array = []
+		for item in value: arr.append({"x": item.x, "y": item.y, "z": item.z})
+		return arr
+	if value is PackedVector4Array:
+		var arr: Array = []
+		for item in value: arr.append({"x": item.x, "y": item.y, "z": item.z, "w": item.w})
+		return arr
+	if value is PackedColorArray:
+		var arr: Array = []
+		for item in value: arr.append({"r": item.r, "g": item.g, "b": item.b, "a": item.a})
+		return arr
+	## Generic arrays and dictionaries — recurse
+	if value is Array:
+		var arr: Array = []
+		for item in value:
+			arr.append(_variant_to_json(item))
+		return arr
+	if value is Dictionary:
+		var dict: Dictionary = {}
+		for key in value.keys():
+			dict[str(key)] = _variant_to_json(value[key])
+		return dict
+	## Fallback: string representation
+	return str(value)

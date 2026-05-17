@@ -17,6 +17,7 @@ const DEFERRED_TIMEOUT_MS_BY_COMMAND := {
 	"create_script": 4500,
 	"stop_project": 4500,
 	"take_screenshot": 30000,
+	"game_eval": 15000,
 }
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 

@@ -134,6 +134,12 @@ func _capture(message: String, data: Array, _session_id: int) -> bool:
 			elif _log_buffer:
 				_log_buffer.log("[debug] <- mcp:hello from game_helper")
 			return true
+		"mcp:eval_response":
+			_on_eval_response(data)
+			return true
+		"mcp:eval_error":
+			_on_eval_error(data)
+			return true
 	return false
 
 
@@ -315,3 +321,127 @@ func _clear_pending(request_id: String) -> void:
 	if timer != null and timer.timeout.is_connected(cb):
 		timer.timeout.disconnect(cb)
 	_pending.erase(request_id)
+
+
+## --- game_eval: execute arbitrary GDScript in the running game ---
+
+func request_game_eval(
+	code: String,
+	request_id: String,
+	connection: McpConnection,
+	timeout_sec: float = 10.0,
+) -> void:
+	if request_id.is_empty():
+		push_warning("MCP debugger: eval request missing request_id")
+		return
+
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR,
+			"Editor main loop is not a SceneTree — cannot schedule eval")
+		return
+
+	if is_game_capture_ready():
+		_send_eval(tree, code, request_id, connection, timeout_sec)
+		return
+
+	if _log_buffer:
+		_log_buffer.log("[debug] waiting for game_helper hello before eval (%s)" % request_id)
+	_wait_then_eval(tree, code, request_id, connection, timeout_sec)
+
+
+func _wait_then_eval(
+	tree: SceneTree,
+	code: String,
+	request_id: String,
+	connection: McpConnection,
+	timeout_sec: float,
+) -> void:
+	var deadline := Time.get_ticks_msec() + int(GAME_READY_WAIT_SEC * 1000.0)
+	while not is_game_capture_ready() and Time.get_ticks_msec() < deadline:
+		await tree.process_frame
+	if not is_game_capture_ready():
+		_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR,
+			"Game-side autoload never registered its debugger capture within %ds. Is the game actually running?" % int(GAME_READY_WAIT_SEC))
+		return
+	_send_eval(tree, code, request_id, connection, timeout_sec)
+
+
+func _send_eval(
+	tree: SceneTree,
+	code: String,
+	request_id: String,
+	connection: McpConnection,
+	timeout_sec: float,
+) -> void:
+	var session: EditorDebuggerSession = _first_active_session()
+	if session == null:
+		_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR,
+			"No active debugger session — is the game actually running?")
+		return
+
+	var timer: SceneTreeTimer = tree.create_timer(timeout_sec)
+	var timeout_callable := func() -> void:
+		var pending_entry = _pending.get(request_id)
+		if pending_entry == null:
+			return
+		_pending.erase(request_id)
+		var conn: McpConnection = pending_entry.connection
+		if conn == null or not is_instance_valid(conn):
+			return
+		_send_error(conn, request_id, ErrorCodes.INTERNAL_ERROR,
+			"Game eval timed out after %.0fs. Eval code may be stuck in an infinite loop or await." % timeout_sec)
+		if _log_buffer:
+			_log_buffer.log("[debug] !! eval timeout (%s)" % request_id)
+	timer.timeout.connect(timeout_callable)
+	_pending[request_id] = {
+		"connection": connection,
+		"timer": timer,
+		"timeout_callable": timeout_callable,
+	}
+
+	session.send_message("mcp:eval", [request_id, code])
+	if _log_buffer:
+		_log_buffer.log("[debug] -> mcp:eval (%s)" % request_id)
+
+
+func _on_eval_response(data: Array) -> void:
+	if data.size() < 2:
+		push_warning("MCP debugger: malformed eval response (expected 2 fields, got %d)" % data.size())
+		return
+	var request_id: String = data[0]
+	var pending_entry = _pending.get(request_id)
+	if pending_entry == null:
+		return
+	_clear_pending(request_id)
+
+	var connection: McpConnection = pending_entry.connection
+	if connection == null or not is_instance_valid(connection):
+		return
+
+	var result_json: String = data[1] if data.size() > 1 else "null"
+	connection.send_deferred_response(request_id, {
+		"data": {
+			"result": result_json,
+			"source": "game",
+		}
+	})
+	if _log_buffer:
+		_log_buffer.log("[debug] <- mcp:eval_response (%s)" % request_id)
+
+
+func _on_eval_error(data: Array) -> void:
+	if data.size() < 2:
+		return
+	var request_id: String = data[0]
+	var message: String = data[1]
+	var pending_entry = _pending.get(request_id)
+	if pending_entry == null:
+		return
+	_clear_pending(request_id)
+	var connection: McpConnection = pending_entry.connection
+	if connection == null or not is_instance_valid(connection):
+		return
+	_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, message)
+	if _log_buffer:
+		_log_buffer.log("[debug] <- mcp:eval_error (%s): %s" % [request_id, message])

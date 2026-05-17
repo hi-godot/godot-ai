@@ -196,6 +196,7 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
             "monitors_get": editor_handlers.performance_monitors_get,
             "quit": editor_handlers.editor_quit,
             "logs_clear": editor_handlers.logs_clear,
+            "game_eval": editor_handlers.game_eval,
         },
         read_resource_forms={
             "state": "godot://editor/state",
@@ -206,5 +207,6 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
             ## has a resource counterpart.
             "quit": None,
             "logs_clear": None,
+            "game_eval": None,
         },
     )
