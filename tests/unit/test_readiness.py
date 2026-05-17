@@ -202,11 +202,17 @@ async def test_require_writable_async_rejects_importing_after_probe_confirms():
     with pytest.raises(GodotCommandError) as exc_info:
         await require_writable_async(runtime)
     assert exc_info.value.code == ErrorCode.EDITOR_NOT_READY
-    assert exc_info.value.data == {"retryable": True, "state": "importing"}
+    data = exc_info.value.data
+    assert data["editor_state"] == "importing"
+    assert data["retryable"] is True
+    # The hint must be an explicit, action-oriented instruction so AI callers
+    # don't loop the failing write. See F-EDITOR-NOT-READY-LOOP fix.
+    assert "Wait" in data["hint"] or "wait" in data["hint"]
+    assert "importing" in data["hint"].lower()
     # Structured hints are also embedded in the serialized form so MCP
     # clients that only see str(exc) can still distinguish retryable cases.
     assert "retryable=True" in str(exc_info.value)
-    assert "state=importing" in str(exc_info.value)
+    assert "editor_state=importing" in str(exc_info.value)
     assert client.probe_calls == 1
 
 
@@ -216,11 +222,19 @@ async def test_require_writable_async_rejects_playing_after_probe_confirms():
         await require_writable_async(runtime)
     assert exc_info.value.code == ErrorCode.EDITOR_NOT_READY
     assert "play mode" in exc_info.value.message
-    # The message names the recovery tool so MCP clients don't have to
-    # infer "how do I unstick this" from the state string alone.
-    assert "project_stop" in exc_info.value.message
-    assert exc_info.value.data == {"retryable": False, "state": "playing"}
+    # The message names the recovery tool (the rolled-up form) so MCP
+    # clients don't have to infer "how do I unstick this" from the state
+    # string alone.
+    assert 'project_manage(op="stop")' in exc_info.value.message
+    data = exc_info.value.data
+    assert data["editor_state"] == "playing"
+    assert data["retryable"] is False
+    # Hint must name the exact recovery call — this is the F-EDITOR-NOT-READY-
+    # LOOP fix: cure the 89%-of-EDITOR_NOT_READYs-from-2-users retry pattern
+    # by telling the LLM exactly which tool stops the stall.
+    assert 'project_manage(op="stop")' in data["hint"]
     assert "retryable=False" in str(exc_info.value)
+    assert "editor_state=playing" in str(exc_info.value)
     assert client.probe_calls == 1
 
 
@@ -235,7 +249,10 @@ async def test_require_writable_async_probe_failure_falls_back_to_cached_value()
     with pytest.raises(GodotCommandError) as exc_info:
         await require_writable_async(runtime)
     assert exc_info.value.code == ErrorCode.EDITOR_NOT_READY
-    assert exc_info.value.data == {"retryable": False, "state": "playing"}
+    data = exc_info.value.data
+    assert data["editor_state"] == "playing"
+    assert data["retryable"] is False
+    assert 'project_manage(op="stop")' in data["hint"]
     assert client.probe_calls == 1
 
 

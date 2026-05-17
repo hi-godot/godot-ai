@@ -10,12 +10,32 @@ from godot_ai.sessions.registry import Session
 if TYPE_CHECKING:
     from godot_ai.runtime.direct import DirectRuntime
 
-# (message, retryable). Retryable means the condition clears on its own
+# (message, retryable, hint). Retryable means the condition clears on its own
 # (Godot finishes reimporting); non-retryable requires the caller to change
-# state (stop the game).
-_READINESS_INFO: dict[str, tuple[str, bool]] = {
-    "importing": ("Editor is importing resources — try again shortly", True),
-    "playing": ("Editor is in play mode — call project_stop to stop the game, then retry", False),
+# state (stop the game). The ``hint`` is a one-line, action-oriented sentence
+# surfaced to AI callers via the error ``data`` payload — its job is to tell
+# an LLM exactly which tool call (or wait) breaks the stall, so it stops
+# looping the failing write. See PR for the F-EDITOR-NOT-READY-LOOP fix
+# (telemetry showed two users alone producing 89% of EDITOR_NOT_READY
+# errors on plugin v2.5.6, all from caller-side retry loops during
+# ``playing``).
+_READINESS_INFO: dict[str, tuple[str, bool, str]] = {
+    "importing": (
+        "Editor is importing resources — try again shortly",
+        True,
+        (
+            "Editor is importing assets. Wait briefly and retry — "
+            "readiness will update via the response envelope."
+        ),
+    ),
+    "playing": (
+        'Editor is in play mode — call project_manage(op="stop") to stop the game, then retry',
+        False,
+        (
+            'Editor is playing the scene. Call project_manage(op="stop") '
+            "(or wait for the user to stop the game) before retrying writes."
+        ),
+    ),
 }
 
 # Every readiness value the plugin can emit. Derived from the blocking-state
@@ -87,9 +107,12 @@ async def require_writable_async(runtime: "DirectRuntime") -> None:
     is open.  If no session exists, this is a no-op; the downstream
     ``send_command`` will raise on its own.
 
-    The raised error carries ``data={"retryable": bool, "state": str}`` so
-    callers can distinguish a transient ``importing`` window (retry with
-    backoff) from a terminal ``playing`` state (stop the game first).
+    The raised error carries ``data={"editor_state": str, "retryable": bool,
+    "hint": str}`` so callers can distinguish a transient ``importing`` window
+    (retry with backoff) from a terminal ``playing`` state (stop the game
+    first) AND get an explicit one-line recovery instruction. The hint is
+    what stops the EDITOR_NOT_READY-loop pattern: without it, AI callers
+    just retry the failing write until the user notices.
     """
     session = runtime.get_active_session()
     if session is None:
@@ -121,9 +144,13 @@ def _enforce_blocking_state(session: "Session | None") -> None:
     ## Hoisting the import to module top would re-establish the cycle.
     from godot_ai.godot_client.client import GodotCommandError
 
-    message, retryable = info
+    message, retryable, hint = info
     raise GodotCommandError(
         code=ErrorCode.EDITOR_NOT_READY,
         message=message,
-        data={"retryable": retryable, "state": session.readiness},
+        data={
+            "editor_state": session.readiness,
+            "retryable": retryable,
+            "hint": hint,
+        },
     )
