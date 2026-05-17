@@ -109,6 +109,7 @@ func test_theme_set_color_accepts_dict() -> void:
 	assert_true(abs(c.r - 0.5) < 0.01)
 	assert_true(abs(c.g - 0.3) < 0.01)
 	assert_true(abs(c.b - 0.1) < 0.01)
+	assert_true(abs(c.a - 1.0) < 0.01)
 
 
 func test_theme_set_color_rejects_garbage_string() -> void:

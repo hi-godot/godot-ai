@@ -578,6 +578,7 @@ func test_add_property_track_transition_raw_float() -> void:
 	var v1 = anim.track_get_key_value(0, 1)
 	assert_true(v0 is Vector3, "from value must coerce to Vector3, not stay as Dict")
 	assert_true(v1 is Vector3, "to value must coerce to Vector3, not stay as Dict")
+	assert_eq(v0.x, 0.0)
 	assert_eq(v1.x, 100.0)
 	assert_true(abs(anim.track_get_key_transition(0, 0) - 3.0) < 0.0001,
 		"raw-float transition should be stored on key 0")
