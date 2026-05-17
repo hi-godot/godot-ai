@@ -128,7 +128,7 @@ func test_screenshot_game_not_playing() -> void:
 	assert_is_error(result)
 
 
-# ----- viewport_screenshot_precheck (#XXX: stop returning INTERNAL_ERROR on 2D) -----
+# ----- viewport_screenshot_precheck (#456: stop returning INTERNAL_ERROR on 2D) -----
 
 func test_viewport_precheck_passes_for_node3d_root() -> void:
 	## Happy path: scene_root is Node3D, precheck returns empty dict so
@@ -147,11 +147,11 @@ func test_viewport_precheck_rejects_node2d_root() -> void:
 	assert_has_key(result.error, "data")
 	assert_eq(result.error.data.editor_state, "viewport_not_3d")
 	assert_eq(result.error.data.scene_root_type, "Node2D")
-	## The hint must mention the 2D nature, cinematic alternative, and
+	## The message must mention the 2D nature, cinematic alternative, and
 	## scene_get_hierarchy so the LLM can actually act on it.
-	assert_contains(result.error.data.hint, "Node2D")
-	assert_contains(result.error.data.hint, "cinematic")
-	assert_contains(result.error.data.hint, "scene_get_hierarchy")
+	assert_contains(result.error.message, "Node2D")
+	assert_contains(result.error.message, "cinematic")
+	assert_contains(result.error.message, "scene_get_hierarchy")
 
 
 func test_viewport_precheck_rejects_control_root() -> void:
@@ -173,7 +173,7 @@ func test_viewport_precheck_rejects_plain_node_root() -> void:
 	assert_is_error(result, ErrorCodes.EDITOR_NOT_READY)
 	assert_eq(result.error.data.editor_state, "viewport_not_3d")
 	assert_eq(result.error.data.scene_root_type, "Node")
-	assert_contains(result.error.data.hint, "no Node3D content")
+	assert_contains(result.error.message, "no Node3D content")
 
 
 func test_viewport_precheck_rejects_null_scene() -> void:
@@ -181,7 +181,7 @@ func test_viewport_precheck_rejects_null_scene() -> void:
 	assert_is_error(result, ErrorCodes.EDITOR_NOT_READY)
 	assert_eq(result.error.data.editor_state, "viewport_not_3d")
 	assert_eq(result.error.data.scene_root_type, "")
-	assert_contains(result.error.data.hint, "no scene is open")
+	assert_contains(result.error.message, "no scene is open")
 
 
 func test_viewport_precheck_passes_for_node3d_subclass() -> void:

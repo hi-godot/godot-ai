@@ -578,26 +578,25 @@ static func viewport_screenshot_precheck(scene_root: Node) -> Dictionary:
 
 
 static func _make_viewport_not_3d_error(scene_root_type: String, hint: String) -> Dictionary:
+	## `hint` becomes `error.message`; not duplicated into `data` because
+	## `GodotCommandError`'s string form already appends every `data` key
+	## as a suffix on the agent-visible error.
 	var err := ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, hint)
 	err["error"]["data"] = {
 		"editor_state": "viewport_not_3d",
 		"scene_root_type": scene_root_type,
-		"hint": hint,
 	}
 	return err
 
 
-## Reclassifies the rare empty-image returns from EDITOR_NOT_READY's
-## sibling INTERNAL_ERROR. Reached only when the precheck passed (so the
-## scene is genuinely 3D-rooted) but the texture still came back empty —
-## headless rendering, a freshly opened editor whose 3D viewport hasn't
-## drawn a frame, or a SubViewport that lost its target.
-func _empty_image_error(source: String, hint: String) -> Dictionary:
+## Reached only when the precheck passed but the texture still came
+## back empty — headless rendering, a freshly opened editor whose 3D
+## viewport hasn't drawn a frame, or a SubViewport that lost its target.
+static func _empty_image_error(source: String, hint: String) -> Dictionary:
 	var err := ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, hint)
 	err["error"]["data"] = {
 		"editor_state": "viewport_empty",
 		"source": source,
-		"hint": hint,
 	}
 	return err
 

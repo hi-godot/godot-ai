@@ -3346,7 +3346,6 @@ async def test_editor_screenshot_handler_relays_viewport_not_3d_error():
                 data={
                     "editor_state": "viewport_not_3d",
                     "scene_root_type": "Node2D",
-                    "hint": "The 3D viewport is empty because the current scene is 2D...",
                 },
             )
 
@@ -3357,7 +3356,10 @@ async def test_editor_screenshot_handler_relays_viewport_not_3d_error():
     assert err.code == "EDITOR_NOT_READY"
     assert err.data["editor_state"] == "viewport_not_3d"
     assert err.data["scene_root_type"] == "Node2D"
-    assert err.data["hint"]  # non-empty hint for the LLM
+    ## Hint copy lives in `message` (not duplicated into `data`); the LLM
+    ## still sees it via str(err) since GodotCommandError formats the
+    ## message + data suffix.
+    assert "scene_get_hierarchy" in err.message
 
 
 async def test_editor_screenshot_handler_relays_viewport_empty_error():
@@ -3375,7 +3377,6 @@ async def test_editor_screenshot_handler_relays_viewport_empty_error():
                 data={
                     "editor_state": "viewport_empty",
                     "source": "viewport",
-                    "hint": "Captured an empty image from viewport.",
                 },
             )
 
