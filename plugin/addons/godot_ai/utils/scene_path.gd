@@ -75,9 +75,12 @@ static func require_edited_scene(expected_scene_file: String) -> Dictionary:
 	var root := EditorInterface.get_edited_scene_root()
 	if root == null:
 		# Mirrors the structured payload that the Python-side require_writable
-		# gate attaches for `playing` / `importing` so AI callers always see
-		# the same `data.editor_state` / `data.hint` shape on EDITOR_NOT_READY
-		# regardless of which non-writable condition triggered it.
+		# gate attaches for `playing` / `importing`. Together these cover the
+		# three recoverable editor *states* (playing / importing / no_scene)
+		# — the EDITOR_NOT_READY paths an AI caller can act on. Other
+		# EDITOR_NOT_READY callsites describing internal-state failures
+		# ("EditorFileSystem not available" etc.) intentionally don't carry
+		# this payload because there's no useful caller hint to give.
 		var err := ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "No scene open")
 		err["error"]["data"] = {
 			"editor_state": "no_scene",

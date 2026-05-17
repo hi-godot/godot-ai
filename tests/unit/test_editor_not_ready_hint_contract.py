@@ -2,15 +2,24 @@
 
 Telemetry on plugin v2.5.6 showed 89% of EDITOR_NOT_READY errors came from
 two users in retry loops during ``playing`` — the LLM saw a bare error and
-kept guessing. The fix is to attach a ``data`` block with
-``editor_state``/``retryable``/``hint`` to *every* EDITOR_NOT_READY path
-so an AI caller always sees the recovery action.
+kept guessing. The fix attaches a ``data`` block with
+``editor_state``/``retryable``/``hint`` to the EDITOR_NOT_READY paths that
+correspond to recoverable editor *states* — the Python ``require_writable``
+gate (``playing``/``importing``) and the GDScript ``require_edited_scene``
+helper (``no_scene``). These are the paths AI callers loop on because
+there's an obvious recovery action.
 
-The Python gate (``handlers/_readiness.py``) is covered behaviorally by
-``test_readiness.py``. This file locks the GDScript-side ``no_scene``
-branch in ``utils/scene_path.gd`` — that path can't be exercised from the
-live GDScript test runner because the test harness always has a scene
-open, so we verify the source attaches the structured payload.
+Other EDITOR_NOT_READY callsites in handlers (e.g. "EditorFileSystem not
+available", "AnimationHandler not available", "No 3D viewport available")
+describe internal-state failures with no caller-actionable recovery and
+are intentionally left unenriched — adding a fabricated hint there would
+mislead more than it would help.
+
+The Python gate is covered behaviorally by ``test_readiness.py``. This
+file locks the GDScript-side ``no_scene`` branch in ``utils/scene_path.gd``
+— that path can't be exercised from the live GDScript test runner because
+the test harness always has a scene open, so we verify the source attaches
+the structured payload.
 """
 
 from __future__ import annotations
