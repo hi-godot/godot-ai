@@ -59,6 +59,7 @@ import argparse
 import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from socketserver import TCPServer
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--transport", default="streamable-http")
@@ -94,9 +95,21 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
 
 
+class FastBindServer(ThreadingHTTPServer):
+    """Skip HTTPServer's reverse-DNS lookup. The stock server_bind calls
+    socket.getfqdn(host) to set self.server_name — on macOS CI runners
+    with no PTR for 127.0.0.1 and unreachable upstream DNS, that hangs
+    ~30s before falling back. We don't need server_name; route by path."""
+    def server_bind(self):
+        TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
+
+
 # Bind FIRST so the "listening" print isn't a lie — the smoke polls
 # /godot-ai/status immediately after seeing it.
-server = ThreadingHTTPServer(("127.0.0.1", args.port), H)
+server = FastBindServer(("127.0.0.1", args.port), H)
 print(f"stale-sim pid={os.getpid()} listening on :{args.port}", flush=True)
 server.serve_forever()
 '''
