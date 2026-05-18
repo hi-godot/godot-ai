@@ -289,8 +289,8 @@ func test_get_server_status_shape_is_stable() -> void:
 
 
 func test_server_status_compatibility_requires_matching_ws_port() -> void:
-	var ok := GodotAiPlugin._server_status_compatibility("2.2.0", "2.2.0", 9500, 9500, false)
-	var wrong_ws := GodotAiPlugin._server_status_compatibility("2.2.0", "2.2.0", 9600, 9500, false)
+	var ok := GodotAiPlugin._server_status_compatibility("2.2.0", "2.2.0", 9500, 9500)
+	var wrong_ws := GodotAiPlugin._server_status_compatibility("2.2.0", "2.2.0", 9600, 9500)
 	assert_true(bool(ok.get("compatible", false)), "matching version + WS port must be compatible")
 	assert_false(
 		bool(wrong_ws.get("compatible", true)),
@@ -517,6 +517,47 @@ func test_legacy_pidfile_proof_returns_all_branded_listener_pids() -> void:
 	var pids: Array[int] = []
 	pids.assign(proof.get("pids", []))
 	assert_eq(pids, [11111, 22222] as Array[int])
+
+
+func test_legacy_pidfile_proof_accepts_reloader_shape() -> void:
+	## `uvicorn --reload` writes the pid-file from the reloader/launcher PID
+	## but the worker child binds the port — so the pidfile PID is alive +
+	## branded yet absent from `listener_pids`. Before the fix, the proof
+	## helper bailed unconditionally for this shape, leaving the plugin
+	## unable to recycle a stuck dev server. The fix accepts the proof and
+	## adds both the branded worker AND the branded reloader PID to the
+	## kill targets so the reloader can't immediately respawn a replacement.
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [22222] as Array[int]  # worker, not reloader
+	plugin.pid_file_pid = 11111  # reloader, not a listener
+	plugin.alive_pids = [11111, 22222] as Array[int]
+	plugin.branded_pids = [11111, 22222] as Array[int]
+
+	var targets := plugin._legacy_pidfile_kill_targets(TEST_PORT, plugin.listener_pids)
+	plugin.free()
+
+	assert_eq(
+		targets, [22222, 11111] as Array[int],
+		"branded worker first (listener loop), then branded reloader (pidfile pid)"
+	)
+
+
+func test_legacy_pidfile_proof_rejects_unbranded_pidfile_pid() -> void:
+	## A stale pidfile PID can outlive its original process and the kernel
+	## may recycle it for an unrelated branded-or-not process. The brand
+	## check on the pidfile PID is the load-bearing guard — without it,
+	## a stale pidfile alone could authorize killing a branded listener
+	## that doesn't belong to us.
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [22222] as Array[int]
+	plugin.pid_file_pid = 11111
+	plugin.alive_pids = [11111, 22222] as Array[int]
+	plugin.branded_pids = [22222] as Array[int]  # listener branded, pidfile NOT
+
+	var targets := plugin._legacy_pidfile_kill_targets(TEST_PORT, plugin.listener_pids)
+	plugin.free()
+
+	assert_true(targets.is_empty(), "unbranded pidfile PID must not authorize any kill")
 
 
 func test_strong_proof_accepts_status_matching_managed_record_version() -> void:
@@ -767,7 +808,7 @@ func test_stale_ws_port_does_not_authorize_killing_external_server() -> void:
 	## Step 2: with the freshly-resolved expected port, a live current
 	## server passes compatibility — the precondition for adoption.
 	var compatibility := GodotAiPlugin._server_status_compatibility(
-		CURRENT, CURRENT, LIVE_CURRENT_WS, resolved, false
+		CURRENT, CURRENT, LIVE_CURRENT_WS, resolved
 	)
 	assert_true(
 		bool(compatibility.get("compatible", false)),
@@ -804,22 +845,28 @@ func test_matching_compatible_adoption_keeps_managed_ownership() -> void:
 	assert_true(can_restart, "managed adoption must keep restart authorization")
 
 
-func test_server_version_compatibility_requires_exact_match_in_release_mode() -> void:
-	var exact := GodotAiPlugin._server_version_compatibility("2.2.0", "2.2.0", false)
-	var old := GodotAiPlugin._server_version_compatibility("1.2.10", "2.2.0", false)
-	var unknown := GodotAiPlugin._server_version_compatibility("", "2.2.0", false)
-	assert_true(bool(exact.get("compatible", false)), "exact release version must be compatible")
-	assert_false(bool(old.get("compatible", true)), "old release server must be incompatible")
+func test_server_version_compatibility_requires_exact_match() -> void:
+	var exact := GodotAiPlugin._server_version_compatibility("2.2.0", "2.2.0")
+	var old := GodotAiPlugin._server_version_compatibility("1.2.10", "2.2.0")
+	var unknown := GodotAiPlugin._server_version_compatibility("", "2.2.0")
+	assert_true(bool(exact.get("compatible", false)), "exact version must be compatible")
+	assert_false(bool(old.get("compatible", true)), "old server must be incompatible")
 	assert_false(bool(unknown.get("compatible", true)), "unknown live version must be incompatible")
+	assert_eq(old.get("reason", ""), "version_mismatch")
+	assert_eq(unknown.get("reason", ""), "unknown")
 
 
-func test_server_version_compatibility_allows_visible_dev_mismatch() -> void:
-	var result := GodotAiPlugin._server_version_compatibility("2.2.0-dev", "2.2.0", true)
-	assert_true(bool(result.get("compatible", false)), "dev checkout may reuse a mismatched dev server")
-	assert_true(
-		bool(result.get("dev_mismatch_allowed", false)),
-		"dev mismatch must be flagged so the dock can render it visibly"
+func test_server_version_compatibility_rejects_dev_mismatch() -> void:
+	## Plugin and server speak one version-coupled protocol. Tolerating a
+	## dev-mode mismatch silently adopts a stale server (e.g. a sibling
+	## worktree's). Mismatch must route through `recover_strong_port_occupant`
+	## instead.
+	var result := GodotAiPlugin._server_version_compatibility("2.2.0-dev", "2.2.0")
+	assert_false(
+		bool(result.get("compatible", true)),
+		"dev-mode mismatch must be incompatible so startup can kill+respawn"
 	)
+	assert_eq(result.get("reason", ""), "version_mismatch")
 
 
 func test_incompatible_server_message_names_actual_version_when_discoverable() -> void:

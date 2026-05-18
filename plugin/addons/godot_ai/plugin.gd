@@ -657,10 +657,10 @@ static func _incompatible_server_message(
 
 
 static func _server_version_compatibility(
-	actual_version: String, expected_version: String, is_dev_checkout: bool
+	actual_version: String, expected_version: String
 ) -> Dictionary:
 	return ServerLifecycleManager._server_version_compatibility(
-		actual_version, expected_version, is_dev_checkout
+		actual_version, expected_version
 	)
 
 
@@ -669,10 +669,9 @@ static func _server_status_compatibility(
 	expected_version: String,
 	actual_ws_port: int,
 	expected_ws_port: int,
-	is_dev_checkout: bool,
 ) -> Dictionary:
 	return ServerLifecycleManager._server_status_compatibility(
-		actual_version, expected_version, actual_ws_port, expected_ws_port, is_dev_checkout
+		actual_version, expected_version, actual_ws_port, expected_ws_port
 	)
 
 
@@ -1099,18 +1098,26 @@ func _recover_strong_port_occupant(port: int, wait_s: float, pre_kill_live: Dict
 func _legacy_pidfile_kill_targets(_port: int, listener_pids: Array[int]) -> Array[int]:
 	var targets: Array[int] = []
 	var pidfile_pid := _read_pid_file_for_proof()
-	var pidfile_alive := _pid_alive_for_proof(pidfile_pid)
-	var pidfile_branded := _pid_cmdline_is_godot_ai_for_proof(pidfile_pid)
 	if pidfile_pid <= 1 or pidfile_pid == OS.get_process_id():
 		return targets
-	if not listener_pids.has(pidfile_pid) or not pidfile_alive:
-		return targets
-	if not pidfile_branded:
+	## An alive, branded pid-file PID is sufficient ownership proof. Under
+	## `uvicorn --reload` the reloader writes the pid-file but a child worker
+	## binds the port, so `listener_pids` never contains the reloader PID.
+	## Requiring `listener_pids.has(pidfile_pid)` here used to silently skip
+	## the kill path for the entire reload-shaped server family. The branded
+	## listener loop below still does the per-PID brand check so we never
+	## kill an unrelated process that happens to share the port.
+	if not _pid_alive_for_proof(pidfile_pid) or not _pid_cmdline_is_godot_ai_for_proof(pidfile_pid):
 		return targets
 
 	for pid in listener_pids:
 		if pid > 1 and pid != OS.get_process_id() and _pid_cmdline_is_godot_ai_for_proof(pid):
 			targets.append(pid)
+	## Also kill the reloader/launcher itself when it isn't already a listener.
+	## Without this, `--reload` workers would be killed but their parent would
+	## immediately respawn a replacement and the port would never free.
+	if not targets.has(pidfile_pid):
+		targets.append(pidfile_pid)
 	return targets
 
 

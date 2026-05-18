@@ -684,33 +684,18 @@ Launch the editor with console logging:
     "\$GODOT" --editor --path "\$PROJECT" 2>&1 | tee /tmp/mcp-editor.log
     tail -f /tmp/mcp-editor.log | grep -E 'MCP \\||godot[_-]ai'
 
-## Dev checkout: force user mode for version-mismatch scenarios
+## Dev checkout: strict version match in all modes
 
-Scenarios 1, 2, 3, and 5 deliberately pin the simulator to a version that
-does NOT match the plugin, and expect the plugin to treat the occupant as
-incompatible. In a dev checkout (a clone next to a \`.venv\`)
-\`McpClientConfigurator.is_dev_checkout()\` returns true, and
-\`_server_version_compatibility\` then returns \`{compatible: true,
-dev_mismatch_allowed: true}\` regardless of version — so the plugin happily
-adopts the simulator and the proof log lines never fire. The heuristic
-checks \`.venv/bin/python\` on POSIX and \`.venv/Scripts/python.exe\` on
-Windows (\`client_configurator.gd::_find_venv_python\`), so a Windows
-source checkout is also affected.
-
-Before launching Godot for these scenarios from a dev checkout, force user
-mode in one of two ways:
-
-- Set the env var on the launch line. POSIX:
-
-      GODOT_AI_MODE=user "\$GODOT" --editor --path "\$PROJECT" 2>&1 | tee /tmp/mcp-editor.log
-
-  PowerShell (set in the same shell before \`&\`-launching Godot):
-
-      \$env:GODOT_AI_MODE = "user"
-      & "C:\\path\\to\\Godot.exe" --editor --path "$project_win"
-
-- Or open the dock's "Mode override" dropdown (visible when Developer mode
-  is on) and pick "Force user".
+Scenarios 1, 2, 3, and 5 pin the simulator to a version that does NOT match
+the plugin and expect the plugin to treat the occupant as incompatible. As
+of the strict-version-match change, this is the behavior in both dev and
+user modes — \`_server_version_compatibility\` only returns compatible on
+an exact match. Earlier versions of this matrix asked you to set
+\`GODOT_AI_MODE=user\` from a dev checkout to bypass a lenient dev-mode
+branch; that branch is gone, so no override is needed for the
+version-mismatch scenarios. \`GODOT_AI_MODE\` and the dock's Mode override
+still control update-check behavior (whether the yellow Update banner can
+appear).
 
 The dock dropdown persists as the EditorSetting \`godot_ai/mode_override\`
 and **wins over the env var** — \`mode_override()\` reads the EditorSetting
@@ -767,9 +752,6 @@ Use PowerShell. This tests the legacy-pidfile proof tier that motivated the PR.
 
     Get-NetTCPConnection -LocalPort 8000
     Get-CimInstance Win32_Process -Filter ("ProcessId=" + \$sim.Id) | Select ProcessId,CommandLine
-    # Dev checkout: force user mode (see "Dev checkout" section above).
-    # Skip the next line on a non-dev install.
-    \$env:GODOT_AI_MODE = "user"
     & "C:\\path\\to\\Godot.exe" --editor --path "$project_win"
 
 Pass criteria:
@@ -820,9 +802,9 @@ Close Godot and add or replace these lines in \$EDITOR_SETTINGS:
     godot_ai/managed_server_version = "2.1.0"
     godot_ai/managed_server_ws_port = 9500
 
-Then launch (dev checkout: force user mode — see "Dev checkout" section above):
+Then launch:
 
-    GODOT_AI_MODE=user "\$GODOT" --editor --path "\$PROJECT" 2>&1 | tee /tmp/mcp-editor.log
+    "\$GODOT" --editor --path "\$PROJECT" 2>&1 | tee /tmp/mcp-editor.log
 
 Pass criteria:
 
@@ -861,9 +843,9 @@ scenario 7).
     SIM_PID=\$!
     ps -ww -p \$SIM_PID -o args=
 
-Then launch (dev checkout: force user mode — see "Dev checkout" section above):
+Then launch:
 
-    GODOT_AI_MODE=user "\$GODOT" --editor --path "\$PROJECT" 2>&1 | tee /tmp/mcp-editor.log
+    "\$GODOT" --editor --path "\$PROJECT" 2>&1 | tee /tmp/mcp-editor.log
 
 Initial pass criteria:
 

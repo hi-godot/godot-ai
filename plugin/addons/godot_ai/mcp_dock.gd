@@ -779,13 +779,8 @@ func _update_status() -> void:
 		status_text = "Restarting server..."
 		status_color = COLOR_AMBER
 	elif connected:
-		if bool(server_status.get("dev_version_mismatch_allowed", false)):
-			var actual := str(server_status.get("actual_version", ""))
-			status_text = "Connected (dev server v%s)" % actual if not actual.is_empty() else "Connected (dev server)"
-			status_color = COLOR_AMBER
-		else:
-			status_text = "Connected"
-			status_color = Color.GREEN
+		status_text = "Connected"
+		status_color = Color.GREEN
 	elif state == ServerStateScript.CRASHED:
 		var exit_ms: int = server_status.get("exit_ms", 0)
 		status_text = "Server exited after %.1fs" % (exit_ms / 1000.0)
@@ -1183,27 +1178,22 @@ func _refresh_server_version_label(server_status: Dictionary = {}) -> void:
 		text = "godot-ai == %s" % server_ver
 		color = Color.GREEN
 	else:
-		var dev_allowed := bool(server_status.get("dev_version_mismatch_allowed", false))
-		if dev_allowed:
-			text = "godot-ai == %s  (plugin %s, dev)" % [server_ver, expected_ver]
-			color = COLOR_AMBER
-		else:
-			text = "godot-ai == %s  (expected %s)" % [server_ver, expected_ver]
-			var is_incompatible: bool = state == ServerStateScript.INCOMPATIBLE
-			color = Color.RED if is_incompatible else COLOR_AMBER
-			var has_managed_proof: bool = (
-				_plugin != null
-				and _plugin.has_method("can_restart_managed_server")
-				and _plugin.can_restart_managed_server()
-			)
-			var can_recover: bool = bool(server_status.get("can_recover_incompatible", false))
-			show_restart = (
-				(not is_incompatible and has_managed_proof)
-				## Recoverable incompatible servers get the primary action in
-				## the top error panel. Duplicating it in Setup made the UI
-				## look like it had multiple restart paths.
-				or (is_incompatible and can_recover and _crash_restart_btn == null)
-			)
+		text = "godot-ai == %s  (expected %s)" % [server_ver, expected_ver]
+		var is_incompatible: bool = state == ServerStateScript.INCOMPATIBLE
+		color = Color.RED if is_incompatible else COLOR_AMBER
+		var has_managed_proof: bool = (
+			_plugin != null
+			and _plugin.has_method("can_restart_managed_server")
+			and _plugin.can_restart_managed_server()
+		)
+		var can_recover: bool = bool(server_status.get("can_recover_incompatible", false))
+		show_restart = (
+			(not is_incompatible and has_managed_proof)
+			## Recoverable incompatible servers get the primary action in
+			## the top error panel. Duplicating it in Setup made the UI
+			## look like it had multiple restart paths.
+			or (is_incompatible and can_recover and _crash_restart_btn == null)
+		)
 	if text == _last_rendered_server_text:
 		_setup_server_label.add_theme_color_override("font_color", color)
 		_update_restart_button(show_restart)

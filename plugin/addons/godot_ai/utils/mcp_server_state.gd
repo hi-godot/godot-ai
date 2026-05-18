@@ -6,9 +6,9 @@ extends RefCounted
 ## lifecycle. Single source of truth — supersedes the boolean-flag thicket
 ## (`_server_started_this_session`, `_awaiting_server_version`,
 ## `_server_version_deadline_ms`, `_connection_blocked`,
-## `_can_recover_incompatible`, `_server_dev_version_mismatch_allowed`,
-## `_refresh_retried`, `_adoption_watch_deadline_ms`) and the older
-## terminal-only McpSpawnState string union.
+## `_can_recover_incompatible`, `_refresh_retried`,
+## `_adoption_watch_deadline_ms`) and the older terminal-only
+## McpSpawnState string union.
 ##
 ## The integer values matter — they're what `get_server_status()`
 ## surfaces, what the dock pattern-matches on, and what the test suites

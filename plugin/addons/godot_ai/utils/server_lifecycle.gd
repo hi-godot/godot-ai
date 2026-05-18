@@ -46,7 +46,6 @@ var _server_actual_name: String = ""
 
 ## Diagnostic + recovery flags surfaced to the dock via `get_status()`.
 var _server_status_message: String = ""
-var _server_dev_version_mismatch_allowed: bool = false
 var _can_recover_incompatible: bool = false
 var _connection_blocked: bool = false
 
@@ -87,7 +86,6 @@ func get_status_dict() -> Dictionary:
 		"actual_version": _server_actual_version,
 		"expected_version": _server_expected_version,
 		"message": _server_status_message,
-		"dev_version_mismatch_allowed": _server_dev_version_mismatch_allowed,
 		"can_recover_incompatible": _can_recover_incompatible,
 		"connection_blocked": _connection_blocked,
 	}
@@ -215,21 +213,9 @@ func handle_server_version_verified(expected_version: String, version: String) -
 	_server_actual_version = version
 	var expected := _resolve_expected_version(expected_version)
 	_server_expected_version = expected
-	var compatibility := _server_version_compatibility(
-		version,
-		expected,
-		ClientConfigurator.is_dev_checkout()
-	)
+	var compatibility := _server_version_compatibility(version, expected)
 	if compatibility.get("compatible", false):
 		_can_recover_incompatible = false
-		_server_dev_version_mismatch_allowed = bool(
-			compatibility.get("dev_mismatch_allowed", false)
-		)
-		if _server_dev_version_mismatch_allowed:
-			_server_status_message = (
-				"Using dev server v%s with plugin v%s "
-				+ "(dev checkout version mismatch allowed)."
-			) % [version, expected]
 		## Foreign-port and post-spawn handshakes both clear to READY
 		## on a successful handshake. Late re-arms from READY also land
 		## here and self-confirm.
@@ -259,18 +245,22 @@ func handle_server_version_unverified(expected_version: String) -> void:
 
 # ---- Compatibility / version helpers (pure) ---------------------------
 
+## Plugin and server speak a single, version-coupled protocol — new commands
+## and response fields are added together. Treating dev-mode mismatches as
+## "compatible" silently adopts a stale server whose code may differ from the
+## live source tree (e.g. another worktree on a different branch holding
+## port 8000). Strict match in all modes routes mismatches through
+## `recover_strong_port_occupant`, which kills the branded port-holder and
+## lets `start_server` spawn fresh against the current source.
 static func _server_version_compatibility(
 	actual_version: String,
-	expected_version: String,
-	is_dev_checkout: bool
+	expected_version: String
 ) -> Dictionary:
 	if actual_version.is_empty():
-		return {"compatible": false, "reason": "unknown", "dev_mismatch_allowed": false}
+		return {"compatible": false, "reason": "unknown"}
 	if actual_version == expected_version:
-		return {"compatible": true, "reason": "exact", "dev_mismatch_allowed": false}
-	if is_dev_checkout:
-		return {"compatible": true, "reason": "dev_mismatch", "dev_mismatch_allowed": true}
-	return {"compatible": false, "reason": "version_mismatch", "dev_mismatch_allowed": false}
+		return {"compatible": true, "reason": "exact"}
+	return {"compatible": false, "reason": "version_mismatch"}
 
 
 static func _server_status_compatibility(
@@ -278,17 +268,12 @@ static func _server_status_compatibility(
 	expected_version: String,
 	actual_ws_port: int,
 	expected_ws_port: int,
-	is_dev_checkout: bool,
 ) -> Dictionary:
-	var version_result := _server_version_compatibility(
-		actual_version,
-		expected_version,
-		is_dev_checkout
-	)
+	var version_result := _server_version_compatibility(actual_version, expected_version)
 	if not bool(version_result.get("compatible", false)):
 		return version_result
 	if actual_ws_port != expected_ws_port:
-		return {"compatible": false, "reason": "ws_port_mismatch", "dev_mismatch_allowed": false}
+		return {"compatible": false, "reason": "ws_port_mismatch"}
 	return version_result
 
 
@@ -308,7 +293,6 @@ func _set_incompatible_server(live: Dictionary, expected_version: String, port: 
 	_server_expected_version = expected_version
 	_server_actual_name = str(live.get("name", ""))
 	_server_actual_version = _live_version_for_message(live)
-	_server_dev_version_mismatch_allowed = false
 	_server_status_message = _incompatible_server_message(
 		live, expected_version, port, int(_host._resolved_ws_port)
 	)
@@ -442,18 +426,11 @@ func start_server() -> void:
 			current_version,
 			live_ws_port,
 			ws_port,
-			ClientConfigurator.is_dev_checkout()
 		)
 		if compatibility.get("compatible", false):
 			_server_actual_name = "godot-ai"
 			_server_actual_version = live_version
 			_can_recover_incompatible = false
-			_server_dev_version_mismatch_allowed = bool(compatibility.get("dev_mismatch_allowed", false))
-			if bool(_server_dev_version_mismatch_allowed):
-				_server_status_message = (
-					"Using dev server v%s on WS port %d with plugin v%s "
-					+ "(dev checkout version mismatch allowed)."
-				) % [str(_server_actual_version), live_ws_port, current_version]
 			var owner := int(_host._find_managed_pid(port))
 			var owner_label := adopt_compatible_server(record_version, current_version, owner)
 			_host._server_started_this_session = true
