@@ -36,12 +36,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TEST_PROJECT = ROOT / "test_project"
-PROJECT_NAME = "MCP Test Project"
 PORT = 8000
 WS_PORT = 9500
 STALE_VERSION = "0.0.0-stale"
 STATUS_URL = f"http://127.0.0.1:{PORT}/godot-ai/status"
 EXPECTED_PROOF_NAMES = ("managed_record", "pidfile_listener", "status_matches_record")
+LOG_LINES_TIMEOUT = 60.0
+FRESH_STATUS_TIMEOUT = 30.0
+
+DISCOVER_USER_DIR_GD = '''\
+extends SceneTree
+
+func _initialize() -> void:
+\tprint("USER_DATA_DIR=" + OS.get_user_data_dir())
+\tquit()
+'''
 
 
 SIM_SOURCE = '''\
@@ -94,14 +103,28 @@ class SmokeError(RuntimeError):
     pass
 
 
-def godot_user_data_dir() -> Path:
-    """The directory Godot uses for `user://` under PROJECT_NAME on this OS."""
-    system = platform.system()
-    if system == "Darwin":
-        return Path.home() / "Library" / "Application Support" / "Godot" / "app_userdata" / PROJECT_NAME
-    if system == "Windows":
-        return Path(os.environ["APPDATA"]) / "Godot" / "app_userdata" / PROJECT_NAME
-    return Path.home() / ".local" / "share" / "godot" / "app_userdata" / PROJECT_NAME
+def discover_user_dir(godot: str) -> Path:
+    """Ask Godot itself for `OS.get_user_data_dir()`. More reliable than
+    re-deriving the per-OS convention by hand — the plugin reads
+    `user://godot_ai_server.pid` via Godot's own resolution, so we must
+    write the pidfile to the *exact* same place."""
+    helper = TEST_PROJECT / "_smoke_get_user_dir.gd"
+    helper.write_text(DISCOVER_USER_DIR_GD)
+    try:
+        result = subprocess.run(
+            [godot, "--headless", "--path", str(TEST_PROJECT),
+             "--script", "res://_smoke_get_user_dir.gd"],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+        for line in result.stdout.splitlines():
+            if line.startswith("USER_DATA_DIR="):
+                return Path(line[len("USER_DATA_DIR="):].strip())
+        raise SmokeError(
+            f"discover_user_dir: no marker line in Godot output.\n"
+            f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+        )
+    finally:
+        helper.unlink(missing_ok=True)
 
 
 def write_sim(workdir: Path) -> Path:
@@ -200,13 +223,17 @@ def main() -> int:
 
     godot = find_godot()
     plugin_version = find_plugin_version()
-    user_dir = godot_user_data_dir()
+
+    godot_ai_path = shutil.which("godot-ai") or "(not on PATH)"
+    print(f"godot={godot}")
+    print(f"godot-ai={godot_ai_path}")
+    print(f"plugin version={plugin_version}")
+
+    print("discovering Godot user data dir...")
+    user_dir = discover_user_dir(godot)
+    print(f"user data dir={user_dir}")
     user_dir.mkdir(parents=True, exist_ok=True)
     pidfile = user_dir / "godot_ai_server.pid"
-
-    print(f"godot={godot}")
-    print(f"plugin version={plugin_version}")
-    print(f"user data dir={user_dir}")
     print(f"pidfile={pidfile}")
 
     # Pre-clean: stale pidfile / managed record from a prior run would route
@@ -248,8 +275,9 @@ def main() -> int:
 
             proof_needle = "MCP | strong proof:"
             kill_needle = "MCP | killed pids"
-            print(f"waiting up to {args.timeout}s for kill+respawn log lines...")
-            matched = wait_for_log_lines(editor_log, [proof_needle, kill_needle], args.timeout)
+            log_timeout = max(args.timeout, LOG_LINES_TIMEOUT)
+            print(f"waiting up to {log_timeout}s for kill+respawn log lines...")
+            matched = wait_for_log_lines(editor_log, [proof_needle, kill_needle], log_timeout)
             print(f"saw: {matched[proof_needle]!r}")
             print(f"saw: {matched[kill_needle]!r}")
 
@@ -260,8 +288,9 @@ def main() -> int:
                     f"expected one of {EXPECTED_PROOF_NAMES}"
                 )
 
-            print(f"verifying respawned server reports plugin version {plugin_version}...")
-            fresh = wait_for_status(plugin_version, timeout_s=20.0)
+            print(f"verifying respawned server reports plugin version {plugin_version} "
+                  f"(timeout {FRESH_STATUS_TIMEOUT}s)...")
+            fresh = wait_for_status(plugin_version, timeout_s=FRESH_STATUS_TIMEOUT)
             print(f"fresh server status: {fresh}")
 
             if pid_alive(sim_pid):
@@ -274,8 +303,24 @@ def main() -> int:
         return 0
     except SmokeError as e:
         print(f"FAIL: {e}", file=sys.stderr)
+        print(f"===== user data dir state ({user_dir}) =====", file=sys.stderr)
+        if user_dir.exists():
+            for entry in sorted(user_dir.iterdir()):
+                marker = "[pidfile]" if entry.name == "godot_ai_server.pid" else ""
+                print(f"  {entry.name} {marker}", file=sys.stderr)
+                if entry.name == "godot_ai_server.pid":
+                    try:
+                        print(f"    contents: {entry.read_text().strip()!r}", file=sys.stderr)
+                    except OSError as oe:
+                        print(f"    read error: {oe}", file=sys.stderr)
+        else:
+            print("  (user dir does not exist)", file=sys.stderr)
+        print(f"===== MCP-tagged log lines =====", file=sys.stderr)
         if editor_log.exists():
-            print("===== editor log (last 200 lines) =====", file=sys.stderr)
+            for line in editor_log.read_text(errors="replace").splitlines():
+                if "MCP " in line or "godot_ai" in line or "godot-ai" in line:
+                    print(f"  {line}", file=sys.stderr)
+            print(f"===== editor log (last 200 lines) =====", file=sys.stderr)
             tail = editor_log.read_text(errors="replace").splitlines()[-200:]
             print("\n".join(tail), file=sys.stderr)
         return 1
