@@ -1,0 +1,308 @@
+#!/usr/bin/env python3
+"""Live smoke: plugin kills a stale port-8000 server and respawns its own.
+
+Plants a synthetic godot-ai server simulator (different version) on port 8000,
+launches Godot headless against test_project/, and asserts that the plugin's
+`recover_strong_port_occupant` path observably:
+
+  1. Detects the version mismatch.
+  2. Logs `MCP | strong proof: <name>`.
+  3. Logs `MCP | killed pids [...]`.
+  4. Spawns its own server (`/godot-ai/status` reports the plugin version).
+  5. The simulator PID is gone.
+
+Backfills the automated coverage gap: the unit tests in test_plugin_lifecycle.gd
+mock all OS interactions, and `script/manual-orphan-test` exercises the real
+kill path but is a manual operator helper. This script runs the same path in CI
+on every OS, so a regression in the per-OS kill / cmdline-brand machinery is
+caught before merge.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import platform
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+TEST_PROJECT = ROOT / "test_project"
+PROJECT_NAME = "MCP Test Project"
+PORT = 8000
+WS_PORT = 9500
+STALE_VERSION = "0.0.0-stale"
+STATUS_URL = f"http://127.0.0.1:{PORT}/godot-ai/status"
+EXPECTED_PROOF_NAMES = ("managed_record", "pidfile_listener", "status_matches_record")
+
+
+SIM_SOURCE = '''\
+"""Stale godot-ai server simulator for ci-stale-server-smoke."""
+import argparse
+import json
+import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--transport", default="streamable-http")
+ap.add_argument("--port", type=int, default=8000)
+ap.add_argument("--ws-port", type=int, default=9500)
+ap.add_argument("--pid-file", required=True)
+ap.add_argument("--fake-version", default="0.0.0-stale")
+args, _ = ap.parse_known_args()
+
+os.makedirs(os.path.dirname(args.pid_file), exist_ok=True)
+with open(args.pid_file, "w", encoding="utf-8") as f:
+    f.write(str(os.getpid()))
+
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a, **kw):  # silence
+        pass
+
+    def do_GET(self):
+        if self.path == "/godot-ai/status":
+            body = json.dumps({
+                "name": "godot-ai",
+                "version": args.fake_version,
+                "ws_port": args.ws_port,
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+
+print(f"stale-sim pid={os.getpid()} listening on :{args.port}", flush=True)
+ThreadingHTTPServer(("127.0.0.1", args.port), H).serve_forever()
+'''
+
+
+class SmokeError(RuntimeError):
+    pass
+
+
+def godot_user_data_dir() -> Path:
+    """The directory Godot uses for `user://` under PROJECT_NAME on this OS."""
+    system = platform.system()
+    if system == "Darwin":
+        return Path.home() / "Library" / "Application Support" / "Godot" / "app_userdata" / PROJECT_NAME
+    if system == "Windows":
+        return Path(os.environ["APPDATA"]) / "Godot" / "app_userdata" / PROJECT_NAME
+    return Path.home() / ".local" / "share" / "godot" / "app_userdata" / PROJECT_NAME
+
+
+def write_sim(workdir: Path) -> Path:
+    pkg = workdir / "godot_ai"
+    pkg.mkdir(parents=True, exist_ok=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "__main__.py").write_text(SIM_SOURCE)
+    return workdir
+
+
+def extract_version(payload: dict) -> str:
+    """Mirror plugin.gd::_extract_server_version: try server_version first,
+    then version. The real server emits server_version; the sim emits version."""
+    return str(payload.get("server_version") or payload.get("version") or "")
+
+
+def wait_for_status(version: str | None, timeout_s: float) -> dict:
+    """Poll /godot-ai/status until it returns the expected version (or any
+    JSON if version is None). Returns the parsed payload."""
+    deadline = time.monotonic() + timeout_s
+    last_err: str | None = None
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(STATUS_URL, timeout=2) as r:
+                payload = json.loads(r.read().decode())
+                found = extract_version(payload)
+                if version is None or found == version:
+                    return payload
+                last_err = f"version={found!r} (waiting for {version!r})"
+        except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+            last_err = str(e)
+        time.sleep(0.5)
+    raise SmokeError(f"status endpoint did not match within {timeout_s}s: {last_err}")
+
+
+def wait_for_log_lines(log_path: Path, needles: list[str], timeout_s: float) -> dict[str, str]:
+    """Tail `log_path` until every needle matches at least one line. Returns
+    a {needle: matched_line} dict."""
+    found: dict[str, str] = {}
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if log_path.exists():
+            for line in log_path.read_text(errors="replace").splitlines():
+                for needle in needles:
+                    if needle in found:
+                        continue
+                    if needle in line:
+                        found[needle] = line
+            if len(found) == len(needles):
+                return found
+        time.sleep(0.5)
+    missing = [n for n in needles if n not in found]
+    raise SmokeError(f"never saw log lines: {missing!r}. found: {list(found.keys())!r}")
+
+
+def pid_alive(pid: int) -> bool:
+    if platform.system() == "Windows":
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, check=False,
+        )
+        return str(pid) in out.stdout
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def find_godot() -> str:
+    for candidate in (os.environ.get("GODOT_BIN"), "godot", "Godot"):
+        if not candidate:
+            continue
+        if shutil.which(candidate):
+            return candidate
+    raise SmokeError("godot not on PATH (set GODOT_BIN)")
+
+
+def find_plugin_version() -> str:
+    cfg = ROOT / "plugin" / "addons" / "godot_ai" / "plugin.cfg"
+    for line in cfg.read_text().splitlines():
+        if line.startswith("version="):
+            return line.split("=", 1)[1].strip().strip('"')
+    raise SmokeError(f"could not find version= in {cfg}")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--log-dir", default=".", help="Where to write godot-stale-smoke.log")
+    ap.add_argument("--timeout", type=float, default=45.0)
+    args = ap.parse_args()
+
+    log_dir = Path(args.log_dir).resolve()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    editor_log = log_dir / "godot-stale-smoke.log"
+
+    godot = find_godot()
+    plugin_version = find_plugin_version()
+    user_dir = godot_user_data_dir()
+    user_dir.mkdir(parents=True, exist_ok=True)
+    pidfile = user_dir / "godot_ai_server.pid"
+
+    print(f"godot={godot}")
+    print(f"plugin version={plugin_version}")
+    print(f"user data dir={user_dir}")
+    print(f"pidfile={pidfile}")
+
+    # Pre-clean: stale pidfile / managed record from a prior run would route
+    # the plugin through a different proof tier than the one we're targeting.
+    if pidfile.exists():
+        pidfile.unlink()
+
+    sim: subprocess.Popen | None = None
+    godot_proc: subprocess.Popen | None = None
+    workdir = Path(tempfile.mkdtemp(prefix="stale-sim-"))
+    try:
+        write_sim(workdir)
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(workdir) + os.pathsep + env.get("PYTHONPATH", "")
+        sim_cmd = [
+            sys.executable, "-m", "godot_ai",
+            "--transport", "streamable-http",
+            "--port", str(PORT),
+            "--ws-port", str(WS_PORT),
+            "--pid-file", str(pidfile),
+            "--fake-version", STALE_VERSION,
+        ]
+        print(f"starting stale sim: {' '.join(sim_cmd)}")
+        sim = subprocess.Popen(sim_cmd, env=env)
+        sim_pid = sim.pid
+        print(f"sim pid={sim_pid}")
+
+        sim_status = wait_for_status(STALE_VERSION, timeout_s=10.0)
+        print(f"sim status confirmed: {sim_status}")
+
+        editor_log.write_text("")
+        log_fh = editor_log.open("ab")
+        try:
+            godot_env = os.environ.copy()
+            godot_env["GODOT_AI_ALLOW_HEADLESS"] = "1"
+            godot_cmd = [godot, "--headless", "--path", str(TEST_PROJECT), "--editor"]
+            print(f"launching godot: {' '.join(godot_cmd)}")
+            godot_proc = subprocess.Popen(godot_cmd, env=godot_env, stdout=log_fh, stderr=log_fh)
+
+            proof_needle = "MCP | strong proof:"
+            kill_needle = "MCP | killed pids"
+            print(f"waiting up to {args.timeout}s for kill+respawn log lines...")
+            matched = wait_for_log_lines(editor_log, [proof_needle, kill_needle], args.timeout)
+            print(f"saw: {matched[proof_needle]!r}")
+            print(f"saw: {matched[kill_needle]!r}")
+
+            proof_line = matched[proof_needle]
+            if not any(name in proof_line for name in EXPECTED_PROOF_NAMES):
+                raise SmokeError(
+                    f"proof line did not name a strong-proof tier: {proof_line!r}; "
+                    f"expected one of {EXPECTED_PROOF_NAMES}"
+                )
+
+            print(f"verifying respawned server reports plugin version {plugin_version}...")
+            fresh = wait_for_status(plugin_version, timeout_s=20.0)
+            print(f"fresh server status: {fresh}")
+
+            if pid_alive(sim_pid):
+                raise SmokeError(f"sim pid {sim_pid} is still alive after kill+respawn")
+            print(f"sim pid {sim_pid} is gone, as expected")
+        finally:
+            log_fh.close()
+
+        print("PASS: stale-server kill+respawn smoke")
+        return 0
+    except SmokeError as e:
+        print(f"FAIL: {e}", file=sys.stderr)
+        if editor_log.exists():
+            print("===== editor log (last 200 lines) =====", file=sys.stderr)
+            tail = editor_log.read_text(errors="replace").splitlines()[-200:]
+            print("\n".join(tail), file=sys.stderr)
+        return 1
+    finally:
+        if godot_proc is not None and godot_proc.poll() is None:
+            print(f"terminating godot pid={godot_proc.pid}")
+            if platform.system() == "Windows":
+                godot_proc.terminate()
+            else:
+                godot_proc.send_signal(signal.SIGTERM)
+            try:
+                godot_proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                godot_proc.kill()
+        if sim is not None and sim.poll() is None:
+            print(f"terminating sim pid={sim.pid}")
+            sim.terminate()
+            try:
+                sim.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                sim.kill()
+        shutil.rmtree(workdir, ignore_errors=True)
+        # Clear pidfile that may have been left by the respawned server, so
+        # adjacent CI steps see a clean state.
+        if pidfile.exists():
+            pidfile.unlink()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

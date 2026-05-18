@@ -203,6 +203,69 @@ jobs:
           echo "===== godot-import.log (last 200 lines) ====="
           tail -n 200 godot-import.log || echo "(log not found)"
 
+  # Verifies the plugin's automatic kill+respawn flow when port 8000 is held
+  # by a stale godot-ai server (different version). The unit tests in
+  # test_plugin_lifecycle.gd mock every OS interaction; this is the only
+  # automated job that exercises the real per-OS branded-kill machinery
+  # (PowerShell on Windows, /proc on Linux, ps on macOS). Replaces the
+  # manual operator runs of `script/manual-orphan-test`.
+  stale-server-smoke:
+    name: Stale server smoke / ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux
+          - os: macos-latest
+            label: macOS
+          - os: windows-latest
+            label: Windows
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build plugin link
+        shell: bash
+        run: bash script/verify-worktree
+
+      - uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 4.6.2
+          use-dotnet: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Import and validate GDScript
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          godot --headless --path test_project --import > godot-import.log 2>&1 || true
+          bash script/ci-check-gdscript godot-import.log
+
+      - name: Run stale-server smoke
+        shell: bash
+        timeout-minutes: 3
+        run: python script/ci-stale-server-smoke --log-dir .
+
+      - name: Dump editor log on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "===== godot-stale-smoke.log (last 500 lines) ====="
+          tail -n 500 godot-stale-smoke.log || echo "(log not found)"
+          echo "===== godot-import.log (last 200 lines) ====="
+          tail -n 200 godot-import.log || echo "(log not found)"
+
   # Separate job from godot-tests: the capture smoke test needs a real
   # rendering driver (null RenderingDevice in --headless produces empty
   # framebuffers) and a display server. Linux uses xvfb-run; macOS and
