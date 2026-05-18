@@ -125,7 +125,7 @@ def discover_user_dir(godot: str) -> Path:
     `user://godot_ai_server.pid` via Godot's own resolution, so we must
     write the pidfile to the *exact* same place."""
     helper = TEST_PROJECT / "_smoke_get_user_dir.gd"
-    helper.write_text(DISCOVER_USER_DIR_GD)
+    helper.write_text(DISCOVER_USER_DIR_GD, encoding="utf-8")
     try:
         result = subprocess.run(
             [godot, "--headless", "--path", str(TEST_PROJECT),
@@ -146,8 +146,11 @@ def discover_user_dir(godot: str) -> Path:
 def write_sim(workdir: Path) -> Path:
     pkg = workdir / "godot_ai"
     pkg.mkdir(parents=True, exist_ok=True)
-    (pkg / "__init__.py").write_text("")
-    (pkg / "__main__.py").write_text(SIM_SOURCE)
+    # Explicit UTF-8 — Path.write_text defaults to locale encoding (cp1252 on
+    # Windows), which would mangle non-ASCII chars in docstrings into bytes
+    # the child Python (reading source as UTF-8) rejects with SyntaxError.
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "__main__.py").write_text(SIM_SOURCE, encoding="utf-8")
     return workdir
 
 
