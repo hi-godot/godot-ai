@@ -144,12 +144,23 @@ def extract_version(payload: dict) -> str:
     return str(payload.get("server_version") or payload.get("version") or "")
 
 
-def wait_for_status(version: str | None, timeout_s: float) -> dict:
+def wait_for_status(
+    version: str | None,
+    timeout_s: float,
+    sim: subprocess.Popen | None = None,
+) -> dict:
     """Poll /godot-ai/status until it returns the expected version (or any
-    JSON if version is None). Returns the parsed payload."""
+    JSON if version is None). Returns the parsed payload. When `sim` is
+    given, fail fast if it dies — there's no point waiting 30s for a port
+    nobody is bound to anymore."""
     deadline = time.monotonic() + timeout_s
     last_err: str | None = None
     while time.monotonic() < deadline:
+        if sim is not None and sim.poll() is not None:
+            raise SmokeError(
+                f"stale sim died early (exit {sim.returncode}) while waiting "
+                f"for status; last urlopen error: {last_err!r}"
+            )
         try:
             with urllib.request.urlopen(STATUS_URL, timeout=2) as r:
                 payload = json.loads(r.read().decode())
@@ -250,6 +261,7 @@ def main() -> int:
     log_dir = Path(args.log_dir).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
     editor_log = log_dir / "godot-stale-smoke.log"
+    sim_log = log_dir / "stale-sim.log"
 
     godot = find_godot()
     plugin_version = find_plugin_version()
@@ -287,11 +299,12 @@ def main() -> int:
             "--fake-version", STALE_VERSION,
         ]
         print(f"starting stale sim: {' '.join(sim_cmd)}")
-        sim = subprocess.Popen(sim_cmd, env=env)
+        sim_log_fh = sim_log.open("wb")
+        sim = subprocess.Popen(sim_cmd, env=env, stdout=sim_log_fh, stderr=subprocess.STDOUT)
         sim_pid = sim.pid
-        print(f"sim pid={sim_pid}")
+        print(f"sim pid={sim_pid}, sim log={sim_log}")
 
-        sim_status = wait_for_status(STALE_VERSION, timeout_s=30.0)
+        sim_status = wait_for_status(STALE_VERSION, timeout_s=30.0, sim=sim)
         print(f"sim status confirmed: {sim_status}")
 
         editor_log.write_text("")
@@ -340,6 +353,15 @@ def main() -> int:
         return 0
     except SmokeError as e:
         print(f"FAIL: {e}", file=sys.stderr)
+        print(f"===== stale sim stdout/stderr ({sim_log}) =====", file=sys.stderr)
+        if sim_log.exists():
+            content = sim_log.read_text(errors="replace")
+            if content.strip():
+                print(content, file=sys.stderr)
+            else:
+                print("(empty — sim produced no output before terminating)", file=sys.stderr)
+        else:
+            print("(sim log not created)", file=sys.stderr)
         print(f"===== user data dir state ({user_dir}) =====", file=sys.stderr)
         if user_dir.exists():
             for entry in sorted(user_dir.iterdir()):
