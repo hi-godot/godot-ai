@@ -1111,7 +1111,13 @@ func _legacy_pidfile_kill_targets(_port: int, listener_pids: Array[int]) -> Arra
 		return targets
 
 	for pid in listener_pids:
-		if pid > 1 and pid != OS.get_process_id() and _pid_cmdline_is_godot_ai_for_proof(pid):
+		if pid <= 1 or pid == OS.get_process_id():
+			continue
+		## Reuse the brand result already proven above when this listener is
+		## the same PID as the pidfile — saves a parent-chain walk and a
+		## shell-out (PowerShell on Windows, /proc on Linux, ps on macOS) per
+		## startup proof evaluation.
+		if pid == pidfile_pid or _pid_cmdline_is_godot_ai_for_proof(pid):
 			targets.append(pid)
 	## Also kill the reloader/launcher itself when it isn't already a listener.
 	## Without this, `--reload` workers would be killed but their parent would
