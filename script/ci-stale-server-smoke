@@ -94,8 +94,11 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
 
 
+# Bind FIRST so the "listening" print isn't a lie — the smoke polls
+# /godot-ai/status immediately after seeing it.
+server = ThreadingHTTPServer(("127.0.0.1", args.port), H)
 print(f"stale-sim pid={os.getpid()} listening on :{args.port}", flush=True)
-ThreadingHTTPServer(("127.0.0.1", args.port), H).serve_forever()
+server.serve_forever()
 '''
 
 
@@ -180,27 +183,54 @@ def wait_for_log_lines(log_path: Path, needles: list[str], timeout_s: float) -> 
     raise SmokeError(f"never saw log lines: {missing!r}. found: {list(found.keys())!r}")
 
 
-def pid_alive(pid: int) -> bool:
-    if platform.system() == "Windows":
-        out = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-            capture_output=True, text=True, check=False,
-        )
-        return str(pid) in out.stdout
-    try:
-        os.kill(pid, 0)
-        return True
-    except (OSError, ProcessLookupError):
-        return False
+def child_is_alive(proc: subprocess.Popen) -> bool:
+    """Reap the child via Popen.poll() before answering. A naive
+    `os.kill(pid, 0)` check returns True for unreaped zombies — so when
+    the plugin kills the sim externally, the sim becomes a zombie under
+    our smoke (its parent) and the cheap signal-zero probe lies. poll()
+    issues waitpid and clears the zombie, giving us an honest answer."""
+    return proc.poll() is None
 
 
 def find_godot() -> str:
-    for candidate in (os.environ.get("GODOT_BIN"), "godot", "Godot"):
+    """Locate the Godot binary. shutil.which is fine on POSIX, but on
+    Windows the chickensoft action sometimes registers godot via a
+    name that PATHEXT/which logic doesn't find from Python (it works
+    from bash because bash uses its own resolution). Fall back to the
+    OS-native `where`/`which` shell command which mirrors what bash
+    sees."""
+    candidates = [
+        os.environ.get("GODOT_BIN"),
+        os.environ.get("GODOT4_BIN"),
+        "godot",
+        "Godot",
+    ]
+    for candidate in candidates:
         if not candidate:
             continue
-        if shutil.which(candidate):
+        resolved = shutil.which(candidate)
+        if resolved:
+            print(f"find_godot: shutil.which({candidate!r}) -> {resolved}")
             return candidate
-    raise SmokeError("godot not on PATH (set GODOT_BIN)")
+
+    cmd = "where" if platform.system() == "Windows" else "which"
+    for name in ("godot", "Godot"):
+        try:
+            out = subprocess.run(
+                [cmd, name], capture_output=True, text=True, timeout=10, check=False
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+        if out.returncode == 0 and out.stdout.strip():
+            resolved = out.stdout.strip().splitlines()[0]
+            print(f"find_godot: {cmd} {name} -> {resolved}")
+            return resolved
+
+    path = os.environ.get("PATH", "")
+    raise SmokeError(
+        f"godot not on PATH (set GODOT_BIN). Tried {candidates!r} via "
+        f"shutil.which and `{cmd}`. PATH={path!r}"
+    )
 
 
 def find_plugin_version() -> str:
@@ -261,7 +291,7 @@ def main() -> int:
         sim_pid = sim.pid
         print(f"sim pid={sim_pid}")
 
-        sim_status = wait_for_status(STALE_VERSION, timeout_s=10.0)
+        sim_status = wait_for_status(STALE_VERSION, timeout_s=30.0)
         print(f"sim status confirmed: {sim_status}")
 
         editor_log.write_text("")
@@ -293,9 +323,16 @@ def main() -> int:
             fresh = wait_for_status(plugin_version, timeout_s=FRESH_STATUS_TIMEOUT)
             print(f"fresh server status: {fresh}")
 
-            if pid_alive(sim_pid):
+            # Give the plugin's kill a moment to land + reap. The plugin's
+            # `_kill_processes_and_windows_spawn_children` returns once the
+            # signal is sent; the sim process may still be in flight here.
+            for _ in range(20):
+                if not child_is_alive(sim):
+                    break
+                time.sleep(0.25)
+            if child_is_alive(sim):
                 raise SmokeError(f"sim pid {sim_pid} is still alive after kill+respawn")
-            print(f"sim pid {sim_pid} is gone, as expected")
+            print(f"sim pid {sim_pid} is gone (exit={sim.returncode}), as expected")
         finally:
             log_fh.close()
 
