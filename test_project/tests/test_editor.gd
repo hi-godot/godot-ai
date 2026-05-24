@@ -1414,3 +1414,103 @@ func test_game_eval_silently_drops_unknown_eval_error() -> void:
 	var plugin := McpDebuggerPlugin.new()
 	plugin._on_eval_error(["unknown-id", "some error"])
 	assert_true(true, "No crash when replying to unknown eval request_id")
+
+
+# ----- runtime handlers: missing-param + no-debugger -----
+
+
+func test_game_get_property_missing_params_returns_error() -> void:
+	var result := _handler.game_get_property({})
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
+
+
+func test_game_get_property_without_debugger_plugin_returns_error() -> void:
+	var result := _handler.game_get_property(
+		{"node_path": "/root/Player", "property": "position"})
+	assert_is_error(result, ErrorCodes.INTERNAL_ERROR)
+
+
+func test_game_set_property_missing_params_returns_error() -> void:
+	var result := _handler.game_set_property({})
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
+
+
+func test_game_call_method_missing_params_returns_error() -> void:
+	var result := _handler.game_call_method({})
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
+
+
+func test_game_click_missing_params_returns_error() -> void:
+	var result := _handler.game_click({})
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
+
+
+func test_game_list_signals_missing_params_returns_error() -> void:
+	var result := _handler.game_list_signals({})
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
+
+
+func test_game_spawn_node_missing_params_returns_error() -> void:
+	var result := _handler.game_spawn_node({})
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
+
+
+func test_game_remove_node_missing_params_returns_error() -> void:
+	var result := _handler.game_remove_node({})
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
+
+
+func test_game_instantiate_scene_missing_params_returns_error() -> void:
+	var result := _handler.game_instantiate_scene({})
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
+
+
+# ----- debugger plugin: unknown request_id silently dropped -----
+
+
+func test_game_get_property_response_unknown_request_does_not_crash() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin._on_get_property_response(["unknown-id", "{\"x\":1}"])
+	assert_true(true, "No crash on unknown get_property request_id")
+
+
+func test_game_get_property_error_unknown_request_does_not_crash() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin._on_get_property_error(["unknown-id", "some error"])
+	assert_true(true, "No crash on unknown get_property error request_id")
+
+
+func test_game_set_property_response_unknown_request_does_not_crash() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin._on_set_property_response(["unknown-id", "ok"])
+	assert_true(true, "No crash on unknown set_property request_id")
+
+
+func test_game_call_method_response_unknown_request_does_not_crash() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin._on_call_method_response(["unknown-id", "null"])
+	assert_true(true, "No crash on unknown call_method request_id")
+
+
+func test_game_click_response_unknown_request_does_not_crash() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin._on_click_response(["unknown-id", "{\"x\":400}"])
+	assert_true(true, "No crash on unknown click request_id")
+
+
+func test_game_list_signals_response_unknown_request_does_not_crash() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin._on_list_signals_response(["unknown-id", "[]"])
+	assert_true(true, "No crash on unknown list_signals request_id")
+
+
+func test_game_spawn_node_response_unknown_request_does_not_crash() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin._on_spawn_node_response(["unknown-id", "{\"name\":\"Node\"}"])
+	assert_true(true, "No crash on unknown spawn_node request_id")
+
+
+func test_game_remove_node_response_unknown_request_does_not_crash() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin._on_remove_node_response(["unknown-id", "ok"])
+	assert_true(true, "No crash on unknown remove_node request_id")

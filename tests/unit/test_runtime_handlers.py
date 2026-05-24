@@ -4891,3 +4891,611 @@ async def test_audio_player_create_blocks_when_not_writable():
     ## happened is the actual write command leaving the server.
     sent = [call["command"] for call in client.calls]
     assert "create_audio_stream_player" not in sent
+
+# ---------------------------------------------------------------------------
+# Runtime game handler tests (37 commands -- game_get_property, etc.)
+# ---------------------------------------------------------------------------
+
+
+class _StubRuntimeClient:
+    """Records send() calls and returns canned responses."""
+
+    def __init__(self, *, canned: dict | None = None):
+        self.calls: list[dict] = []
+        self._canned = canned or {"data": {}}
+
+    async def send(self, command: str, params: dict | None = None,
+                   session_id: str | None = None, timeout: float = 5.0) -> dict:
+        self.calls.append({
+            "command": command, "params": params,
+            "session_id": session_id, "timeout": timeout,
+        })
+        return self._canned
+
+
+def _make_runtime(canned: dict | None = None) -> DirectRuntime:
+    return DirectRuntime(registry=SessionRegistry(),
+                         client=_StubRuntimeClient(canned=canned))  # type: ignore[arg-type]
+
+
+def _last_call(rt: DirectRuntime) -> dict:
+    return rt._client.calls[-1]  # type: ignore[union-attr]
+
+
+# ── Properties ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_game_get_property_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_get_property(
+        rt, node_path="/root/Player", property="position")
+    c = _last_call(rt)
+    assert c["command"] == "game_get_property"
+    assert c["params"] == {"node_path": "/root/Player", "property": "position"}
+    assert c["timeout"] == 10.0
+
+
+@pytest.mark.asyncio
+async def test_game_set_property_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_set_property(
+        rt, node_path="/root/Player", property="position",
+        value={"x": 0, "y": 5, "z": 0})
+    c = _last_call(rt)
+    assert c["command"] == "game_set_property"
+    assert c["params"]["node_path"] == "/root/Player"
+    assert c["params"]["property"] == "position"
+    assert c["params"]["value"] == {"x": 0, "y": 5, "z": 0}
+
+
+@pytest.mark.asyncio
+async def test_game_set_property_with_type_hint() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_set_property(
+        rt, node_path="/root/Light", property="color",
+        value={"r": 1, "g": 0, "b": 0}, type_hint="Color")
+    assert _last_call(rt)["params"]["type_hint"] == "Color"
+
+
+# ── Methods ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_game_call_method_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_call_method(
+        rt, node_path="/root/Player", method="is_on_floor")
+    c = _last_call(rt)
+    assert c["command"] == "game_call_method"
+    assert c["params"]["method"] == "is_on_floor"
+    assert c["params"]["args"] == []
+    assert c["timeout"] == 10.0
+
+
+@pytest.mark.asyncio
+async def test_game_call_method_with_args() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_call_method(
+        rt, node_path="/root/Player", method="has_node",
+        args=["Camera3D"])
+    assert _last_call(rt)["params"]["args"] == ["Camera3D"]
+
+
+# ── Input ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_game_click_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_click(rt, x=400, y=300, button=1)
+    c = _last_call(rt)
+    assert c["command"] == "game_click"
+    assert c["params"] == {"x": 400, "y": 300, "button": 1}
+
+
+@pytest.mark.asyncio
+async def test_game_key_press_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_key_press(rt, key="SPACE")
+    c = _last_call(rt)
+    assert c["command"] == "game_key_press"
+    assert c["params"]["key"] == "SPACE"
+    assert c["params"]["pressed"] is True
+
+
+@pytest.mark.asyncio
+async def test_game_key_press_action() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_key_press(
+        rt, action="move_left", pressed=False)
+    c = _last_call(rt)
+    assert c["params"]["action"] == "move_left"
+    assert c["params"]["pressed"] is False
+
+
+@pytest.mark.asyncio
+async def test_game_mouse_move_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_mouse_move(
+        rt, x=200, y=150, relative_x=10, relative_y=0)
+    c = _last_call(rt)
+    assert c["command"] == "game_mouse_move"
+    assert c["params"]["x"] == 200
+    assert c["params"]["relative_x"] == 10
+    assert c["timeout"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_game_key_hold_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_key_hold(rt, key="W")
+    c = _last_call(rt)
+    assert c["command"] == "game_key_hold"
+    assert c["params"]["key"] == "W"
+
+
+@pytest.mark.asyncio
+async def test_game_key_release_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_key_release(rt, key="W")
+    c = _last_call(rt)
+    assert c["command"] == "game_key_release"
+    assert c["params"]["key"] == "W"
+
+
+@pytest.mark.asyncio
+async def test_game_scroll_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_scroll(rt, x=0, y=1)
+    c = _last_call(rt)
+    assert c["command"] == "game_scroll"
+    assert c["params"]["y"] == 1
+
+
+# ── Signals ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_game_list_signals_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_list_signals(
+        rt, node_path="/root/Player")
+    c = _last_call(rt)
+    assert c["command"] == "game_list_signals"
+    assert c["params"]["node_path"] == "/root/Player"
+
+
+@pytest.mark.asyncio
+async def test_game_connect_signal_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_connect_signal(
+        rt, node_path="/root/Player", signal_name="health_changed",
+        target_node_path="/root/UI", target_method="_on_health_changed")
+    c = _last_call(rt)
+    assert c["command"] == "game_connect_signal"
+    assert c["params"]["signal_name"] == "health_changed"
+    assert c["params"]["target_node_path"] == "/root/UI"
+    assert c["params"]["target_method"] == "_on_health_changed"
+
+
+@pytest.mark.asyncio
+async def test_game_disconnect_signal_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_disconnect_signal(
+        rt, node_path="/root/Player", signal_name="health_changed",
+        target_node_path="/root/UI", target_method="_on_health_changed")
+    c = _last_call(rt)
+    assert c["command"] == "game_disconnect_signal"
+
+
+@pytest.mark.asyncio
+async def test_game_emit_signal_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_emit_signal(
+        rt, node_path="/root/Player", signal_name="damaged",
+        args=[10])
+    c = _last_call(rt)
+    assert c["command"] == "game_emit_signal"
+    assert c["params"]["signal_name"] == "damaged"
+    assert c["params"]["args"] == [10]
+
+
+# ── Core Runtime ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_game_pause_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_pause(rt, paused=True)
+    c = _last_call(rt)
+    assert c["command"] == "game_pause"
+    assert c["params"]["paused"] is True
+
+
+@pytest.mark.asyncio
+async def test_game_get_scene_tree_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_get_scene_tree(rt)
+    assert _last_call(rt)["command"] == "game_get_scene_tree"
+
+
+@pytest.mark.asyncio
+async def test_game_get_node_info_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_get_node_info(
+        rt, node_path="/root/Player")
+    c = _last_call(rt)
+    assert c["command"] == "game_get_node_info"
+
+
+@pytest.mark.asyncio
+async def test_game_spawn_node_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_spawn_node(
+        rt, type="MeshInstance3D", name="DebugSphere",
+        parent_path="/root/World",
+        properties={"position": {"x": 0, "y": 5, "z": 0}})
+    c = _last_call(rt)
+    assert c["command"] == "game_spawn_node"
+    assert c["params"]["type"] == "MeshInstance3D"
+
+
+@pytest.mark.asyncio
+async def test_game_remove_node_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_remove_node(
+        rt, node_path="/root/World/DebugSphere")
+    assert _last_call(rt)["command"] == "game_remove_node"
+
+
+@pytest.mark.asyncio
+async def test_game_instantiate_scene_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_instantiate_scene(
+        rt, scene_path="res://scenes/enemy.tscn",
+        parent_path="/root/World")
+    c = _last_call(rt)
+    assert c["command"] == "game_instantiate_scene"
+    assert c["params"]["scene_path"] == "res://scenes/enemy.tscn"
+
+
+# ── Search ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_game_get_performance_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_get_performance(rt)
+    assert _last_call(rt)["command"] == "game_get_performance"
+
+
+@pytest.mark.asyncio
+async def test_game_get_ui_elements_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_get_ui_elements(rt)
+    assert _last_call(rt)["command"] == "game_get_ui_elements"
+
+
+@pytest.mark.asyncio
+async def test_game_get_nodes_in_group_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_get_nodes_in_group(rt, group="enemies")
+    c = _last_call(rt)
+    assert c["command"] == "game_get_nodes_in_group"
+    assert c["params"]["group"] == "enemies"
+
+
+@pytest.mark.asyncio
+async def test_game_find_nodes_by_class_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_find_nodes_by_class(
+        rt, class_name="MeshInstance3D")
+    c = _last_call(rt)
+    assert c["command"] == "game_find_nodes_by_class"
+    assert c["params"]["class_name"] == "MeshInstance3D"
+
+
+# ── Camera ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_game_get_camera_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_get_camera(rt)
+    assert _last_call(rt)["command"] == "game_get_camera"
+
+
+@pytest.mark.asyncio
+async def test_game_set_camera_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_set_camera(
+        rt, position={"x": 0, "y": 10, "z": 20},
+        rotation={"x": -15, "y": 45, "z": 0}, fov=90)
+    c = _last_call(rt)
+    assert c["command"] == "game_set_camera"
+    assert c["params"]["fov"] == 90
+
+
+@pytest.mark.asyncio
+async def test_game_raycast_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_raycast(
+        rt, from_={"x": 0, "y": 10, "z": 0},
+        to={"x": 0, "y": -10, "z": 0})
+    c = _last_call(rt)
+    assert c["command"] == "game_raycast"
+
+
+@pytest.mark.asyncio
+async def test_game_play_animation_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_play_animation(
+        rt, node_path="/root/Enemy/AnimationPlayer",
+        action="play", animation="walk")
+    c = _last_call(rt)
+    assert c["command"] == "game_play_animation"
+    assert c["params"]["action"] == "play"
+
+
+@pytest.mark.asyncio
+async def test_game_serialize_state_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_serialize_state(
+        rt, node_path="/root/World", action="save", max_depth=3)
+    c = _last_call(rt)
+    assert c["command"] == "game_serialize_state"
+    assert c["params"]["action"] == "save"
+
+
+# ── Audio ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_game_get_audio_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_get_audio(rt)
+    assert _last_call(rt)["command"] == "game_get_audio"
+
+
+@pytest.mark.asyncio
+async def test_game_audio_play_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_audio_play(
+        rt, node_path="/root/Music", action="play",
+        stream="res://sounds/explosion.ogg", volume=0.8, pitch=1.2)
+    c = _last_call(rt)
+    assert c["command"] == "game_audio_play"
+    assert c["params"]["volume"] == 0.8
+
+
+@pytest.mark.asyncio
+async def test_game_audio_bus_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_audio_bus(
+        rt, bus_name="SFX", volume=0.5)
+    c = _last_call(rt)
+    assert c["command"] == "game_audio_bus"
+    assert c["params"]["volume"] == 0.5
+
+
+# ── Environment ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_game_environment_get_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_environment(rt, action="get")
+    c = _last_call(rt)
+    assert c["command"] == "game_environment"
+    assert c["params"]["action"] == "get"
+
+
+@pytest.mark.asyncio
+async def test_game_environment_set_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_environment(
+        rt, action="set",
+        background_color={"r": 0.1, "g": 0.05, "b": 0.2},
+        fog_enabled=True, fog_density=0.02)
+    c = _last_call(rt)
+    assert c["params"]["fog_enabled"] is True
+
+
+# ── Physics ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_game_physics_body_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_physics_body(
+        rt, node_path="/root/Player",
+        gravity_scale=2.0, mass=80)
+    c = _last_call(rt)
+    assert c["command"] == "game_physics_body"
+    assert c["params"]["gravity_scale"] == 2.0
+
+
+# ── 3D ──────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_game_light_3d_create_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_light_3d(
+        rt, parent_path="/root/World", light_type="omni",
+        color={"r": 1, "g": 1, "b": 1}, energy=2)
+    c = _last_call(rt)
+    assert c["command"] == "game_light_3d"
+    assert c["params"]["light_type"] == "omni"
+
+
+@pytest.mark.asyncio
+async def test_game_mesh_instance_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_mesh_instance(
+        rt, parent_path="/root/World", mesh_type="sphere",
+        radius=0.5, material="#ff4444")
+    c = _last_call(rt)
+    assert c["command"] == "game_mesh_instance"
+    assert c["params"]["mesh_type"] == "sphere"
+
+
+# ── Navigation ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_game_navigate_path_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_navigate_path(
+        rt, start={"x": 5, "y": 0, "z": 5},
+        end={"x": -5, "y": 0, "z": 5})
+    c = _last_call(rt)
+    assert c["command"] == "game_navigate_path"
+
+
+@pytest.mark.asyncio
+async def test_game_navigation_3d_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_navigation_3d(
+        rt, action="create", parent_path="/root/World",
+        cell_size=0.3, agent_radius=0.5, agent_height=2)
+    c = _last_call(rt)
+    assert c["command"] == "game_navigation_3d"
+    assert c["params"]["cell_size"] == 0.3
+
+
+# ── Animation ───────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_game_animation_tree_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_animation_tree(
+        rt, node_path="/root/AnimationTree",
+        action="travel", state_name="idle")
+    c = _last_call(rt)
+    assert c["command"] == "game_animation_tree"
+    assert c["params"]["state_name"] == "idle"
+
+
+@pytest.mark.asyncio
+async def test_game_create_animation_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_create_animation(
+        rt, node_path="/root/AnimationPlayer",
+        animation_name="bounce", length=1.0,
+        tracks=[{"path": ":position", "keys": []}])
+    c = _last_call(rt)
+    assert c["command"] == "game_create_animation"
+    assert c["params"]["animation_name"] == "bounce"
+
+
+@pytest.mark.asyncio
+async def test_game_skeleton_ik_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_skeleton_ik(
+        rt, node_path="/root/SkeletonIK3D",
+        action="set_target", target={"x": 0, "y": 2, "z": 0})
+    c = _last_call(rt)
+    assert c["command"] == "game_skeleton_ik"
+
+
+# ── System ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_game_time_scale_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_time_scale(
+        rt, action="set", time_scale=0.5)
+    c = _last_call(rt)
+    assert c["command"] == "game_time_scale"
+    assert c["params"]["time_scale"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_game_window_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_window(
+        rt, action="set", width=1920, height=1080, title="Test")
+    c = _last_call(rt)
+    assert c["command"] == "game_window"
+    assert c["params"]["title"] == "Test"
+
+
+@pytest.mark.asyncio
+async def test_game_gamepad_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_gamepad(
+        rt, type="button", index=0, value=1)
+    c = _last_call(rt)
+    assert c["command"] == "game_gamepad"
+    assert c["params"]["type"] == "button"
+
+
+@pytest.mark.asyncio
+async def test_game_mouse_drag_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_mouse_drag(
+        rt, from_x=100, from_y=200, to_x=500, to_y=300, button=1)
+    c = _last_call(rt)
+    assert c["command"] == "game_mouse_drag"
+    assert c["params"]["button"] == 1
+
+
+@pytest.mark.asyncio
+async def test_game_ui_debug_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_ui_debug(
+        rt, node_path="/root/UI/Score", action="text", text="Score: 42")
+    c = _last_call(rt)
+    assert c["command"] == "game_ui_debug"
+    assert c["params"]["text"] == "Score: 42"
+
+
+# ── Debug ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_game_debug_draw_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_debug_draw(
+        rt, action="line",
+        from_={"x": 0, "y": 0, "z": 0},
+        to={"x": 10, "y": 0, "z": 0},
+        color={"r": 1, "g": 0, "b": 0})
+    c = _last_call(rt)
+    assert c["command"] == "game_debug_draw"
+    assert c["params"]["action"] == "line"
+
+
+@pytest.mark.asyncio
+async def test_game_input_state_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_input_state(rt, action="query")
+    c = _last_call(rt)
+    assert c["command"] == "game_input_state"
+    assert c["params"]["action"] == "query"
+
+
+@pytest.mark.asyncio
+async def test_game_create_timer_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_create_timer(
+        rt, parent_path="/root/World", wait_time=2.0,
+        one_shot=True, autostart=True)
+    c = _last_call(rt)
+    assert c["command"] == "game_create_timer"
+    assert c["params"]["wait_time"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_game_tween_property_dispatches() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_tween_property(
+        rt, node_path="/root/Player", property="position",
+        final_value={"x": 5, "y": 2, "z": 0}, duration=1.5)
+    c = _last_call(rt)
+    assert c["command"] == "game_tween_property"
+    assert c["params"]["duration"] == 1.5

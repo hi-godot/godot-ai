@@ -379,14 +379,6 @@ async def game_call_method(runtime: DirectRuntime, node_path: str, method: str,
         {"node_path": node_path, "method": method, "args": args or []},
         timeout=10.0,
     )
-async def game_call_method(runtime: DirectRuntime, node_path: str, method: str,
-                            args: list | None = None) -> dict:
-    """Call a method on any node in the running game with optional arguments."""
-    return await runtime.send_command(
-        "game_call_method",
-        {"node_path": node_path, "method": method, "args": args or []},
-        timeout=10.0,
-    )
 
 
 async def game_click(runtime: DirectRuntime, x: float, y: float,
@@ -565,10 +557,14 @@ async def game_set_camera(runtime: DirectRuntime, position: dict | None = None,
                            fov: float | None = None, zoom: dict | None = None) -> dict:
     """Set camera properties at runtime."""
     params: dict = {}
-    if position: params["position"] = position
-    if rotation: params["rotation"] = rotation
-    if fov is not None: params["fov"] = fov
-    if zoom: params["zoom"] = zoom
+    if position:
+        params["position"] = position
+    if rotation:
+        params["rotation"] = rotation
+    if fov is not None:
+        params["fov"] = fov
+    if zoom:
+        params["zoom"] = zoom
     return await runtime.send_command(
         "game_set_camera", params, timeout=5.0)
 
@@ -621,11 +617,16 @@ async def game_audio_play(runtime: DirectRuntime, node_path: str = "",
                            bus: str = "", from_position: float = 0.0) -> dict:
     """Control AudioStreamPlayer (play/stop/pause/resume) at runtime."""
     params: dict = {"node_path": node_path, "action": action}
-    if stream: params["stream"] = stream
-    if volume is not None: params["volume"] = volume
-    if pitch is not None: params["pitch"] = pitch
-    if bus: params["bus"] = bus
-    if from_position: params["from_position"] = from_position
+    if stream:
+        params["stream"] = stream
+    if volume is not None:
+        params["volume"] = volume
+    if pitch is not None:
+        params["pitch"] = pitch
+    if bus:
+        params["bus"] = bus
+    if from_position:
+        params["from_position"] = from_position
     return await runtime.send_command(
         "game_audio_play", params, timeout=10.0)
 
@@ -635,9 +636,12 @@ async def game_audio_bus(runtime: DirectRuntime, bus_name: str = "Master",
                           solo: bool | None = None) -> dict:
     """Get/set audio bus volume, mute, solo at runtime."""
     params: dict = {"bus_name": bus_name}
-    if volume is not None: params["volume"] = volume
-    if mute is not None: params["mute"] = mute
-    if solo is not None: params["solo"] = solo
+    if volume is not None:
+        params["volume"] = volume
+    if mute is not None:
+        params["mute"] = mute
+    if solo is not None:
+        params["solo"] = solo
     return await runtime.send_command(
         "game_audio_bus", params, timeout=5.0)
 
@@ -656,17 +660,28 @@ async def game_environment(runtime: DirectRuntime, action: str = "get",
                             horizon_color: dict | None = None) -> dict:
     """Get/set environment settings or create procedural sky at runtime."""
     params: dict = {"action": action}
-    if background_color: params["background_color"] = background_color
-    if ambient_light_color: params["ambient_light_color"] = ambient_light_color
-    if ambient_light_energy is not None: params["ambient_light_energy"] = ambient_light_energy
-    if fog_enabled is not None: params["fog_enabled"] = fog_enabled
-    if fog_density is not None: params["fog_density"] = fog_density
-    if glow_enabled is not None: params["glow_enabled"] = glow_enabled
-    if glow_intensity is not None: params["glow_intensity"] = glow_intensity
-    if brightness is not None: params["brightness"] = brightness
-    if contrast is not None: params["contrast"] = contrast
-    if top_color: params["top_color"] = top_color
-    if horizon_color: params["horizon_color"] = horizon_color
+    if background_color:
+        params["background_color"] = background_color
+    if ambient_light_color:
+        params["ambient_light_color"] = ambient_light_color
+    if ambient_light_energy is not None:
+        params["ambient_light_energy"] = ambient_light_energy
+    if fog_enabled is not None:
+        params["fog_enabled"] = fog_enabled
+    if fog_density is not None:
+        params["fog_density"] = fog_density
+    if glow_enabled is not None:
+        params["glow_enabled"] = glow_enabled
+    if glow_intensity is not None:
+        params["glow_intensity"] = glow_intensity
+    if brightness is not None:
+        params["brightness"] = brightness
+    if contrast is not None:
+        params["contrast"] = contrast
+    if top_color:
+        params["top_color"] = top_color
+    if horizon_color:
+        params["horizon_color"] = horizon_color
     return await runtime.send_command(
         "game_environment", params, timeout=10.0)
 
@@ -682,14 +697,22 @@ async def game_physics_body(runtime: DirectRuntime, node_path: str = "",
                              bounce: float | None = None) -> dict:
     """Get/set physics body properties (gravity, mass, velocity, friction) at runtime."""
     params: dict = {"node_path": node_path}
-    if gravity_scale is not None: params["gravity_scale"] = gravity_scale
-    if mass is not None: params["mass"] = mass
-    if freeze is not None: params["freeze"] = freeze
-    if sleeping is not None: params["sleeping"] = sleeping
-    if linear_velocity: params["linear_velocity"] = linear_velocity
-    if angular_velocity is not None: params["angular_velocity"] = angular_velocity
-    if friction is not None: params["friction"] = friction
-    if bounce is not None: params["bounce"] = bounce
+    if gravity_scale is not None:
+        params["gravity_scale"] = gravity_scale
+    if mass is not None:
+        params["mass"] = mass
+    if freeze is not None:
+        params["freeze"] = freeze
+    if sleeping is not None:
+        params["sleeping"] = sleeping
+    if linear_velocity:
+        params["linear_velocity"] = linear_velocity
+    if angular_velocity is not None:
+        params["angular_velocity"] = angular_velocity
+    if friction is not None:
+        params["friction"] = friction
+    if bounce is not None:
+        params["bounce"] = bounce
     return await runtime.send_command(
         "game_physics_body", params, timeout=10.0)
 
@@ -705,16 +728,24 @@ async def game_light_3d(runtime: DirectRuntime, action: str = "create",
     if action == "create":
         params["parent_path"] = parent_path
         params["light_type"] = light_type
-        if color: params["color"] = color
-        if energy is not None: params["energy"] = energy
-        if shadows is not None: params["shadows"] = shadows
-        if range_ is not None: params["range"] = range_
-        if name: params["name"] = name
+        if color:
+            params["color"] = color
+        if energy is not None:
+            params["energy"] = energy
+        if shadows is not None:
+            params["shadows"] = shadows
+        if range_ is not None:
+            params["range"] = range_
+        if name:
+            params["name"] = name
     else:
         params["node_path"] = node_path
-        if color: params["color"] = color
-        if energy is not None: params["energy"] = energy
-        if shadows is not None: params["shadows"] = shadows
+        if color:
+            params["color"] = color
+        if energy is not None:
+            params["energy"] = energy
+        if shadows is not None:
+            params["shadows"] = shadows
     return await runtime.send_command(
         "game_light_3d", params, timeout=10.0)
 
@@ -726,11 +757,16 @@ async def game_mesh_instance(runtime: DirectRuntime, parent_path: str = "/root",
                               material: str = "", name: str = "") -> dict:
     """Create primitive 3D meshes (box/sphere/cylinder/capsule/plane) at runtime."""
     params: dict = {"parent_path": parent_path, "mesh_type": mesh_type}
-    if size: params["size"] = size
-    if radius is not None: params["radius"] = radius
-    if height is not None: params["height"] = height
-    if material: params["material"] = material
-    if name: params["name"] = name
+    if size:
+        params["size"] = size
+    if radius is not None:
+        params["radius"] = radius
+    if height is not None:
+        params["height"] = height
+    if material:
+        params["material"] = material
+    if name:
+        params["name"] = name
     return await runtime.send_command(
         "game_mesh_instance", params, timeout=10.0)
 
@@ -753,10 +789,14 @@ async def game_navigation_3d(runtime: DirectRuntime, action: str = "create",
     params: dict = {"action": action}
     if action == "create":
         params["parent_path"] = parent_path
-        if cell_size is not None: params["cell_size"] = cell_size
-        if agent_radius is not None: params["agent_radius"] = agent_radius
-        if agent_height is not None: params["agent_height"] = agent_height
-        if name: params["name"] = name
+        if cell_size is not None:
+            params["cell_size"] = cell_size
+        if agent_radius is not None:
+            params["agent_radius"] = agent_radius
+        if agent_height is not None:
+            params["agent_height"] = agent_height
+        if name:
+            params["name"] = name
     else:
         params["node_path"] = node_path
     return await runtime.send_command(
@@ -792,7 +832,8 @@ async def game_skeleton_ik(runtime: DirectRuntime, node_path: str = "",
                             target: dict | None = None) -> dict:
     """Control SkeletonIK3D (start/stop/set_target) at runtime."""
     params: dict = {"node_path": node_path, "action": action}
-    if target: params["target"] = target
+    if target:
+        params["target"] = target
     return await runtime.send_command(
         "game_skeleton_ik", params, timeout=10.0)
 
@@ -810,9 +851,12 @@ async def game_window(runtime: DirectRuntime, action: str = "get",
                        title: str = "") -> dict:
     """Get or set window size/title at runtime."""
     params: dict = {"action": action}
-    if width is not None: params["width"] = width
-    if height is not None: params["height"] = height
-    if title: params["title"] = title
+    if width is not None:
+        params["width"] = width
+    if height is not None:
+        params["height"] = height
+    if title:
+        params["title"] = title
     return await runtime.send_command(
         "game_window", params, timeout=5.0)
 
@@ -842,10 +886,14 @@ async def game_ui_debug(runtime: DirectRuntime, node_path: str = "",
                           size: dict | None = None) -> dict:
     """Get/set UI Control properties (visible, position, size, text) at runtime."""
     params: dict = {"node_path": node_path, "action": action}
-    if visible is not None: params["visible"] = visible
-    if text and action == "text": params["text"] = text
-    if position: params["position"] = position
-    if size: params["size"] = size
+    if visible is not None:
+        params["visible"] = visible
+    if text and action == "text":
+        params["text"] = text
+    if position:
+        params["position"] = position
+    if size:
+        params["size"] = size
     return await runtime.send_command(
         "game_ui_debug", params, timeout=5.0)
 
@@ -857,13 +905,20 @@ async def game_debug_draw(runtime: DirectRuntime, action: str = "line",
                            duration: int = 0) -> dict:
     """Draw debug lines/spheres/boxes at runtime for visualization."""
     params: dict = {"action": action}
-    if color: params["color"] = color
-    if from_: params["from"] = from_
-    if to: params["to"] = to
-    if center: params["center"] = center
-    if action == "sphere": params["radius"] = radius
-    if size: params["size"] = size
-    if duration: params["duration"] = duration
+    if color:
+        params["color"] = color
+    if from_:
+        params["from"] = from_
+    if to:
+        params["to"] = to
+    if center:
+        params["center"] = center
+    if action == "sphere":
+        params["radius"] = radius
+    if size:
+        params["size"] = size
+    if duration:
+        params["duration"] = duration
     return await runtime.send_command(
         "game_debug_draw", params, timeout=10.0)
 
@@ -873,8 +928,10 @@ async def game_input_state(runtime: DirectRuntime, action: str = "query",
                             mouse_mode: str = "visible") -> dict:
     """Query input state or warp mouse at runtime."""
     params: dict = {"action": action}
-    if action == "warp_mouse": params |= {"x": x, "y": y}
-    if action == "mouse_mode": params["mouse_mode"] = mouse_mode
+    if action == "warp_mouse":
+        params |= {"x": x, "y": y}
+    if action == "mouse_mode":
+        params["mouse_mode"] = mouse_mode
     return await runtime.send_command(
         "game_input_state", params, timeout=5.0)
 
@@ -885,7 +942,8 @@ async def game_create_timer(runtime: DirectRuntime, parent_path: str = "/root",
     """Create a Timer node at runtime."""
     params: dict = {"parent_path": parent_path, "wait_time": wait_time,
                     "one_shot": one_shot, "autostart": autostart}
-    if name: params["name"] = name
+    if name:
+        params["name"] = name
     return await runtime.send_command(
         "game_create_timer", params, timeout=10.0)
 

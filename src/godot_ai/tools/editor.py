@@ -15,7 +15,7 @@ from godot_ai.tools import DEFER_META
 from godot_ai.tools._meta_tool import register_manage_tool
 
 _DESCRIPTION = """\
-Editor selection, performance monitors, quit, log clearing, game eval.
+Editor selection, performance monitors, quit, log clearing, game eval, runtime tools.
 
 Resource forms (prefer for active-session reads):
   godot://editor/state, godot://selection/current, godot://performance
@@ -34,16 +34,110 @@ Ops:
         Gracefully quit the Godot editor on next frame.
   • logs_clear()
         Clear the MCP log buffer. Returns lines_cleared.
+
+  — Runtime tools (game must be running) —
+
   • game_eval(code)
-        Execute GDScript in the running game with return values. Uses
-        'await' so user code can await internally. Runtime errors are not
-        caught — if eval times out, check logs_read(source='game') for
-        push_error output.
+        Execute GDScript in the running game with return values.
   • game_get_property(node_path, property)
         Read a property from any node in the running game by path.
   • game_set_property(node_path, property, value, type_hint="")
-        Set a property on a node in the running game. Optional type_hint
-        for Vector2/3/Color/etc. coercion."""
+        Set a property on a node in the running game.
+  • game_call_method(node_path, method, args=[])
+        Call a method on a runtime node with optional arguments.
+  • game_click(x, y, button=1)
+        Simulate a mouse click. button: 1=left, 2=right, 3=middle.
+  • game_key_press(key="", action="", pressed=True)
+        Simulate a key press or input action.
+  • game_mouse_move(x, y, relative_x=0, relative_y=0)
+        Simulate mouse movement (absolute or relative).
+  • game_key_hold(key="", action="")
+        Hold a key or input action (no auto-release).
+  • game_key_release(key="", action="")
+        Release a held key or input action.
+  • game_scroll(x=0, y=0)
+        Simulate mouse wheel scroll.
+  • game_list_signals(node_path="")
+        List signals and connections on a runtime node.
+  • game_connect_signal(node_path="", signal_name="", target_node_path="", target_method="")
+        Connect a signal to a method on another node at runtime.
+  • game_disconnect_signal(node_path="", signal_name="", target_node_path="", target_method="")
+        Disconnect a signal connection at runtime.
+  • game_emit_signal(node_path="", signal_name="", args=None)
+        Emit a signal on a runtime node with optional arguments.
+  • game_pause(paused=True)
+        Pause or resume the running game.
+  • game_get_scene_tree()
+        Return the full runtime scene tree as nested JSON.
+  • game_get_node_info(node_path="")
+        Detailed runtime node info: properties, signals, methods, children.
+  • game_spawn_node(type="", name="", parent_path="/root", properties={})
+        Spawn a new node in the running game with optional properties.
+  • game_remove_node(node_path="")
+        Queue-free a node in the running game.
+  • game_instantiate_scene(scene_path="", parent_path="/root")
+        Instantiate a PackedScene into the running game.
+  • game_get_performance()
+        Runtime performance snapshot: FPS, memory, object count, draw calls.
+  • game_get_ui_elements()
+        Scan visible UI Control elements at runtime.
+  • game_get_nodes_in_group(group="")
+        Find all runtime nodes in a group.
+  • game_find_nodes_by_class(class_name="", exact=False)
+        Find all runtime nodes of a given class.
+  • game_get_camera()
+        Get the active runtime camera (2D or 3D) properties.
+  • game_set_camera(position=None, rotation=None, fov=None, zoom=None)
+        Move/configure the active runtime camera.
+  • game_raycast(from, to, collide_with_areas=False, collide_with_bodies=True)
+        Perform a 2D/3D raycast at runtime.
+  • game_play_animation(node_path="", action="play", animation="")
+        Control AnimationPlayer (play/stop/pause/list) at runtime.
+  • game_serialize_state(node_path="/root", action="save", max_depth=-1, data=None)
+        Save/restore runtime node subtree state.
+  • game_get_audio()
+        List audio buses and AudioStreamPlayer nodes at runtime.
+  • game_audio_play(node_path="", action="play", stream="", volume=None,
+        pitch=None, bus="", from_position=0)
+        Control audio playback (play/stop/pause/resume) at runtime.
+  • game_audio_bus(bus_name="Master", volume=None, mute=None, solo=None)
+        Get/set audio bus volume, mute, solo at runtime.
+  • game_environment(action="get", ...)
+        Get/set environment (background, fog, glow) or create procedural sky.
+  • game_physics_body(node_path="", gravity_scale=None, mass=None, ...)
+        Get/set physics body properties at runtime.
+  • game_light_3d(action="create", ...)
+        Create/configure 3D lights (omni/directional/spot) at runtime.
+  • game_mesh_instance(parent_path="/root", mesh_type="box", ...)
+        Create primitive 3D meshes (box/sphere/cylinder/capsule/plane) at runtime.
+  • game_navigate_path(start, end, optimize=True)
+        Pathfind between two points using runtime navigation map.
+  • game_navigation_3d(action="create", ...)
+        Create/bake/configure NavigationRegion3D at runtime.
+  • game_animation_tree(node_path="", action="travel", ...)
+        Control AnimationTree (travel/get_state/active/set_param) at runtime.
+  • game_create_animation(node_path="", animation_name="", length=1.0, ...)
+        Create Animation resources with tracks and keyframes at runtime.
+  • game_skeleton_ik(node_path="", action="start", ...)
+        Control SkeletonIK3D (start/stop/set_target) at runtime.
+  • game_time_scale(action="get", time_scale=None)
+        Get/set game time scale at runtime.
+  • game_window(action="get", width=None, height=None, title="")
+        Get/set window size and title at runtime.
+  • game_gamepad(type="button", index=0, value=0, axis_value=0.0)
+        Simulate gamepad input (button/axis) at runtime.
+  • game_mouse_drag(from_x=0, from_y=0, to_x=0, to_y=0, button=1)
+        Simulate mouse drag (press→move→release) at runtime.
+  • game_ui_debug(node_path="", action="get", ...)
+        Inspect/modify UI Control properties at runtime.
+  • game_debug_draw(action="line", ...)
+        Draw debug lines/spheres/boxes for runtime visualization.
+  • game_input_state(action="query", ...)
+        Query input state or warp mouse at runtime.
+  • game_create_timer(parent_path="/root", wait_time=1.0, one_shot=False, autostart=False, name="")
+        Create a Timer node at runtime.
+  • game_tween_property(node_path="", property="", final_value=None, duration=1.0, ...)
+        Animate a node property with a Tween at runtime."""
 
 
 def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
