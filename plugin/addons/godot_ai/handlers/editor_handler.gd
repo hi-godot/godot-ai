@@ -874,8 +874,6 @@ func game_call_method(params: Dictionary) -> Dictionary:
 
 	_debugger_plugin.request_game_call_method(node_path, method_name, args, request_id, _connection)
 	return McpDispatcher.DEFERRED_RESPONSE
-	_debugger_plugin.request_game_call_method(node_path, method_name, args, request_id, _connection)
-	return McpDispatcher.DEFERRED_RESPONSE
 
 
 func game_click(params: Dictionary) -> Dictionary:
