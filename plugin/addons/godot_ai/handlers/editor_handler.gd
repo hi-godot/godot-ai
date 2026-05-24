@@ -882,6 +882,8 @@ func game_click(params: Dictionary) -> Dictionary:
 	var x: float = float(params.get("x", 0))
 	var y: float = float(params.get("y", 0))
 	var button: int = int(params.get("button", 1))
+	if x == 0 and y == 0:
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "x and y are required")
 	if _debugger_plugin == null or _connection == null:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
 	if not EditorInterface.is_playing_scene():
@@ -973,12 +975,12 @@ func game_scroll(params: Dictionary) -> Dictionary:
 
 func game_list_signals(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("node_path", "")
+	if node_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "node_path is required")
 	if _debugger_plugin == null or _connection == null:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
 	if not EditorInterface.is_playing_scene():
 		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
-	if node_path.is_empty():
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing node_path")
 	var request_id: String = params.get("_request_id", "")
 	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
 	_debugger_plugin.request_game_list_signals(node_path, request_id, _connection)
@@ -990,12 +992,12 @@ func game_connect_signal(params: Dictionary) -> Dictionary:
 	var signal_name: String = params.get("signal_name", "")
 	var target_node_path: String = params.get("target_node_path", "")
 	var target_method: String = params.get("target_method", "")
+	if node_path.is_empty() or signal_name.is_empty() or target_node_path.is_empty() or target_method.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "node_path, signal_name, target_node_path, and target_method are required")
 	if _debugger_plugin == null or _connection == null:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
 	if not EditorInterface.is_playing_scene():
 		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
-	if node_path.is_empty() or signal_name.is_empty() or target_node_path.is_empty() or target_method.is_empty():
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing required params")
 	var request_id: String = params.get("_request_id", "")
 	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
 	_debugger_plugin.request_game_connect_signal(node_path, signal_name, target_node_path, target_method, request_id, _connection)
@@ -1007,12 +1009,12 @@ func game_disconnect_signal(params: Dictionary) -> Dictionary:
 	var signal_name: String = params.get("signal_name", "")
 	var target_node_path: String = params.get("target_node_path", "")
 	var target_method: String = params.get("target_method", "")
+	if node_path.is_empty() or signal_name.is_empty() or target_node_path.is_empty() or target_method.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "node_path, signal_name, target_node_path, and target_method are required")
 	if _debugger_plugin == null or _connection == null:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
 	if not EditorInterface.is_playing_scene():
 		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
-	if node_path.is_empty() or signal_name.is_empty() or target_node_path.is_empty() or target_method.is_empty():
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing required params")
 	var request_id: String = params.get("_request_id", "")
 	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
 	_debugger_plugin.request_game_disconnect_signal(node_path, signal_name, target_node_path, target_method, request_id, _connection)
@@ -1077,12 +1079,12 @@ func game_spawn_node(params: Dictionary) -> Dictionary:
 	var node_name: String = params.get("name", "")
 	var parent_path: String = params.get("parent_path", "/root")
 	var properties: Dictionary = params.get("properties", {})
+	if type_name.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "type is required")
 	if _debugger_plugin == null or _connection == null:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
 	if not EditorInterface.is_playing_scene():
 		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
-	if type_name.is_empty():
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing type")
 	var request_id: String = params.get("_request_id", "")
 	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
 	_debugger_plugin.request_game_spawn_node(type_name, node_name, parent_path, JSON.stringify(properties), request_id, _connection)
@@ -1091,12 +1093,12 @@ func game_spawn_node(params: Dictionary) -> Dictionary:
 
 func game_remove_node(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("node_path", "")
+	if node_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "node_path is required")
 	if _debugger_plugin == null or _connection == null:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
 	if not EditorInterface.is_playing_scene():
 		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
-	if node_path.is_empty():
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing node_path")
 	var request_id: String = params.get("_request_id", "")
 	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
 	_debugger_plugin.request_game_remove_node(node_path, request_id, _connection)
@@ -1106,12 +1108,12 @@ func game_remove_node(params: Dictionary) -> Dictionary:
 func game_instantiate_scene(params: Dictionary) -> Dictionary:
 	var scene_path: String = params.get("scene_path", "")
 	var parent_path: String = params.get("parent_path", "/root")
+	if scene_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "scene_path is required")
 	if _debugger_plugin == null or _connection == null:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
 	if not EditorInterface.is_playing_scene():
 		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
-	if scene_path.is_empty():
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing scene_path")
 	var request_id: String = params.get("_request_id", "")
 	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
 	_debugger_plugin.request_game_instantiate_scene(scene_path, parent_path, request_id, _connection)
