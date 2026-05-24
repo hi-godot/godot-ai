@@ -5499,3 +5499,236 @@ async def test_game_tween_property_dispatches() -> None:
     c = _last_call(rt)
     assert c["command"] == "game_tween_property"
     assert c["params"]["duration"] == 1.5
+
+
+# ── Optional-param branches (coverage) ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_game_set_camera_all_params() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_set_camera(
+        rt, position={"x": 1, "y": 2, "z": 3},
+        rotation={"x": 15, "y": 30, "z": 0},
+        fov=90, zoom={"x": 2, "y": 2})
+    c = _last_call(rt)
+    assert c["params"]["position"] == {"x": 1, "y": 2, "z": 3}
+    assert c["params"]["rotation"] == {"x": 15, "y": 30, "z": 0}
+    assert c["params"]["fov"] == 90
+    assert c["params"]["zoom"] == {"x": 2, "y": 2}
+
+
+@pytest.mark.asyncio
+async def test_game_audio_play_all_params() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_audio_play(
+        rt, node_path="/root/Music", action="play",
+        stream="res://sounds/test.ogg", volume=0.8, pitch=1.2,
+        bus="SFX", from_position=0.5)
+    c = _last_call(rt)
+    assert c["params"]["stream"] == "res://sounds/test.ogg"
+    assert c["params"]["volume"] == 0.8
+    assert c["params"]["pitch"] == 1.2
+    assert c["params"]["bus"] == "SFX"
+    assert c["params"]["from_position"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_game_audio_bus_all_params() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_audio_bus(
+        rt, bus_name="SFX", volume=0.5, mute=True, solo=False)
+    c = _last_call(rt)
+    assert c["params"]["volume"] == 0.5
+    assert c["params"]["mute"] is True
+    assert c["params"]["solo"] is False
+
+
+@pytest.mark.asyncio
+async def test_game_environment_set_all_params() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_environment(
+        rt, action="set",
+        background_color={"r": 0.1, "g": 0.2, "b": 0.3},
+        ambient_light_color={"r": 0.5, "g": 0.5, "b": 0.5},
+        ambient_light_energy=1.0, fog_enabled=True, fog_density=0.01,
+        glow_enabled=True, glow_intensity=1.5, brightness=1.2, contrast=0.8,
+        top_color={"r": 0.2, "g": 0.5, "b": 1.0},
+        horizon_color={"r": 0.5, "g": 0.6, "b": 0.7})
+    c = _last_call(rt)
+    assert c["params"]["background_color"] == {"r": 0.1, "g": 0.2, "b": 0.3}
+    assert c["params"]["fog_enabled"] is True
+    assert c["params"]["glow_intensity"] == 1.5
+    assert c["params"]["top_color"] == {"r": 0.2, "g": 0.5, "b": 1.0}
+
+
+@pytest.mark.asyncio
+async def test_game_physics_body_all_params() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_physics_body(
+        rt, node_path="/root/Player",
+        gravity_scale=2.0, mass=80, freeze=True, sleeping=False,
+        linear_velocity={"x": 1, "y": 0, "z": 0},
+        angular_velocity={"x": 0, "y": 1, "z": 0},
+        friction=0.5, bounce=0.8)
+    c = _last_call(rt)
+    assert c["params"]["gravity_scale"] == 2.0
+    assert c["params"]["mass"] == 80
+    assert c["params"]["friction"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_game_light_3d_create_all_params() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_light_3d(
+        rt, action="create", parent_path="/root/World",
+        light_type="omni", color={"r": 1, "g": 0, "b": 0},
+        energy=4, shadows=True, range_=10, name="TestLight")
+    c = _last_call(rt)
+    assert c["params"]["light_type"] == "omni"
+    assert c["params"]["color"] == {"r": 1, "g": 0, "b": 0}
+    assert c["params"]["shadows"] is True
+    assert c["params"]["name"] == "TestLight"
+
+
+@pytest.mark.asyncio
+async def test_game_light_3d_configure_all_params() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_light_3d(
+        rt, action="configure", node_path="/root/World/TestLight",
+        color={"r": 0, "g": 1, "b": 0}, energy=2)
+    c = _last_call(rt)
+    assert c["params"]["node_path"] == "/root/World/TestLight"
+    assert c["params"]["color"] == {"r": 0, "g": 1, "b": 0}
+
+
+@pytest.mark.asyncio
+async def test_game_mesh_instance_all_params() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_mesh_instance(
+        rt, parent_path="/root/World", mesh_type="sphere",
+        size={"x": 1, "y": 1, "z": 1}, radius=0.5,
+        height=2.0, material="#ff4444", name="DebugSphere")
+    c = _last_call(rt)
+    assert c["params"]["mesh_type"] == "sphere"
+    assert c["params"]["radius"] == 0.5
+    assert c["params"]["material"] == "#ff4444"
+
+
+@pytest.mark.asyncio
+async def test_game_navigation_3d_create_all_params() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_navigation_3d(
+        rt, action="create", parent_path="/root/World",
+        cell_size=0.3, agent_radius=0.5, agent_height=2.0, name="NavMesh")
+    c = _last_call(rt)
+    assert c["params"]["cell_size"] == 0.3
+    assert c["params"]["agent_radius"] == 0.5
+    assert c["params"]["name"] == "NavMesh"
+
+
+@pytest.mark.asyncio
+async def test_game_skeleton_ik_with_target() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_skeleton_ik(
+        rt, node_path="/root/SkeletonIK3D", action="set_target",
+        target={"x": 0, "y": 2, "z": 0})
+    c = _last_call(rt)
+    assert c["params"]["target"] == {"x": 0, "y": 2, "z": 0}
+
+
+@pytest.mark.asyncio
+async def test_game_window_set_all_params() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_window(
+        rt, action="set", width=1920, height=1080, title="Test Window")
+    c = _last_call(rt)
+    assert c["params"]["width"] == 1920
+    assert c["params"]["height"] == 1080
+    assert c["params"]["title"] == "Test Window"
+
+
+@pytest.mark.asyncio
+async def test_game_ui_debug_all_params() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_ui_debug(
+        rt, node_path="/root/UI/Hotbar", action="set",
+        visible=False, position={"x": 10, "y": 20}, size={"w": 100, "h": 50})
+    c = _last_call(rt)
+    assert c["params"]["visible"] is False
+    assert c["params"]["position"] == {"x": 10, "y": 20}
+    assert c["params"]["size"] == {"w": 100, "h": 50}
+
+
+@pytest.mark.asyncio
+async def test_game_debug_draw_sphere() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_debug_draw(
+        rt, action="sphere", center={"x": 1, "y": 2, "z": 3},
+        radius=2.0, color={"r": 0, "g": 1, "b": 0})
+    c = _last_call(rt)
+    assert c["params"]["action"] == "sphere"
+    assert c["params"]["radius"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_game_input_state_warp_mouse() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_input_state(
+        rt, action="warp_mouse", x=512, y=384)
+    c = _last_call(rt)
+    assert c["params"]["action"] == "warp_mouse"
+    assert c["params"]["x"] == 512
+    assert c["params"]["y"] == 384
+
+
+@pytest.mark.asyncio
+async def test_game_input_state_mouse_mode() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_input_state(
+        rt, action="mouse_mode", mouse_mode="captured")
+    c = _last_call(rt)
+    assert c["params"]["mouse_mode"] == "captured"
+
+
+@pytest.mark.asyncio
+async def test_game_create_timer_with_name() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_create_timer(
+        rt, parent_path="/root/World", wait_time=2.0,
+        one_shot=True, autostart=True, name="MyTimer")
+    c = _last_call(rt)
+    assert c["params"]["name"] == "MyTimer"
+
+
+@pytest.mark.asyncio
+async def test_game_light_3d_configure_with_shadows() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_light_3d(
+        rt, action="configure", node_path="/root/World/TestLight",
+        shadows=True)
+    c = _last_call(rt)
+    assert c["params"]["node_path"] == "/root/World/TestLight"
+    assert c["params"]["shadows"] is True
+
+
+@pytest.mark.asyncio
+async def test_game_navigation_3d_bake() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_navigation_3d(
+        rt, action="bake", node_path="/root/World/NavMesh")
+    c = _last_call(rt)
+    assert c["command"] == "game_navigation_3d"
+    assert c["params"]["action"] == "bake"
+    assert c["params"]["node_path"] == "/root/World/NavMesh"
+
+
+@pytest.mark.asyncio
+async def test_game_debug_draw_with_size_duration() -> None:
+    rt = _make_runtime()
+    await editor_handlers.game_debug_draw(
+        rt, action="sphere", center={"x": 0, "y": 0, "z": 0},
+        radius=1.0, size={"x": 2, "y": 2, "z": 2}, duration=3)
+    c = _last_call(rt)
+    assert c["params"]["size"] == {"x": 2, "y": 2, "z": 2}
+    assert c["params"]["duration"] == 3
