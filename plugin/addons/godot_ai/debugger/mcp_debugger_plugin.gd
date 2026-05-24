@@ -140,6 +140,258 @@ func _capture(message: String, data: Array, _session_id: int) -> bool:
 		"mcp:eval_error":
 			_on_eval_error(data)
 			return true
+		"mcp:get_property_response":
+			_on_get_property_response(data)
+			return true
+		"mcp:get_property_error":
+			_on_get_property_error(data)
+			return true
+		"mcp:set_property_response":
+			_on_set_property_response(data)
+			return true
+		"mcp:set_property_error":
+			_on_set_property_error(data)
+			return true
+		"mcp:call_method_response":
+			_on_call_method_response(data)
+			return true
+		"mcp:call_method_error":
+			_on_call_method_error(data)
+			return true
+		"mcp:click_response":
+			_on_click_response(data)
+			return true
+		"mcp:key_press_response":
+			_on_key_press_response(data)
+			return true
+		"mcp:key_press_error":
+			_on_key_press_error(data)
+			return true
+		"mcp:mouse_move_response":
+			_on_mouse_move_response(data)
+			return true
+		"mcp:key_hold_response":
+			_on_key_hold_response(data)
+			return true
+		"mcp:key_hold_error":
+			_on_key_hold_error(data)
+			return true
+		"mcp:key_release_response":
+			_on_key_release_response(data)
+			return true
+		"mcp:key_release_error":
+			_on_key_release_error(data)
+			return true
+		"mcp:scroll_response":
+			_on_scroll_response(data)
+			return true
+		"mcp:list_signals_response":
+			_on_list_signals_response(data)
+			return true
+		"mcp:list_signals_error":
+			_on_list_signals_error(data)
+			return true
+		"mcp:connect_signal_response":
+			_on_connect_signal_response(data)
+			return true
+		"mcp:connect_signal_error":
+			_on_connect_signal_error(data)
+			return true
+		"mcp:disconnect_signal_response":
+			_on_disconnect_signal_response(data)
+			return true
+		"mcp:disconnect_signal_error":
+			_on_disconnect_signal_error(data)
+			return true
+		"mcp:emit_signal_response":
+			_on_emit_signal_response(data)
+			return true
+		"mcp:emit_signal_error":
+			_on_emit_signal_error(data)
+			return true
+		"mcp:pause_response":
+			_on_pause_response(data)
+			return true
+		"mcp:get_scene_tree_response":
+			_on_get_scene_tree_response(data)
+			return true
+		"mcp:get_scene_tree_error":
+			_on_get_scene_tree_error(data)
+			return true
+		"mcp:get_node_info_response":
+			_on_get_node_info_response(data)
+			return true
+		"mcp:get_node_info_error":
+			_on_get_node_info_error(data)
+			return true
+		"mcp:spawn_node_response":
+			_on_spawn_node_response(data)
+			return true
+		"mcp:spawn_node_error":
+			_on_spawn_node_error(data)
+			return true
+		"mcp:remove_node_response":
+			_on_remove_node_response(data)
+			return true
+		"mcp:remove_node_error":
+			_on_remove_node_error(data)
+			return true
+		"mcp:instantiate_scene_response":
+			_on_instantiate_scene_response(data)
+			return true
+		"mcp:instantiate_scene_error":
+			_on_instantiate_scene_error(data)
+			return true
+		"mcp:get_performance_response":
+			_on_get_performance_response(data)
+			return true
+		"mcp:get_ui_elements_response":
+			_on_get_ui_elements_response(data)
+			return true
+		"mcp:get_nodes_in_group_response":
+			_on_get_nodes_in_group_response(data)
+			return true
+		"mcp:get_nodes_in_group_error":
+			_on_get_nodes_in_group_error(data)
+			return true
+		"mcp:find_nodes_by_class_response":
+			_on_find_nodes_by_class_response(data)
+			return true
+		"mcp:find_nodes_by_class_error":
+			_on_find_nodes_by_class_error(data)
+			return true
+		"mcp:get_camera_response":
+			_on_get_camera_response(data)
+			return true
+		"mcp:set_camera_response":
+			_on_set_camera_response(data)
+			return true
+		"mcp:set_camera_error":
+			_on_set_camera_error(data)
+			return true
+		"mcp:raycast_response":
+			_on_raycast_response(data)
+			return true
+		"mcp:raycast_error":
+			_on_raycast_error(data)
+			return true
+		"mcp:play_animation_response":
+			_on_play_animation_response(data)
+			return true
+		"mcp:play_animation_error":
+			_on_play_animation_error(data)
+			return true
+		"mcp:serialize_state_response":
+			_on_serialize_state_response(data)
+			return true
+		"mcp:serialize_state_error":
+			_on_serialize_state_error(data)
+			return true
+		"mcp:get_audio_response":
+			_on_get_audio_response(data)
+			return true
+		"mcp:audio_play_response":
+			_on_audio_play_response(data)
+			return true
+		"mcp:audio_play_error":
+			_on_audio_play_error(data)
+			return true
+		"mcp:audio_bus_response":
+			_on_audio_bus_response(data)
+			return true
+		"mcp:audio_bus_error":
+			_on_audio_bus_error(data)
+			return true
+		"mcp:environment_response":
+			_on_environment_response(data)
+			return true
+		"mcp:environment_error":
+			_on_environment_error(data)
+			return true
+		"mcp:physics_body_response":
+			_on_physics_body_response(data)
+			return true
+		"mcp:physics_body_error":
+			_on_physics_body_error(data)
+			return true
+		"mcp:light_3d_response":
+			_on_light_3d_response(data)
+			return true
+		"mcp:light_3d_error":
+			_on_light_3d_error(data)
+			return true
+		"mcp:mesh_instance_response":
+			_on_mesh_instance_response(data)
+			return true
+		"mcp:mesh_instance_error":
+			_on_mesh_instance_error(data)
+			return true
+		"mcp:navigate_path_response":
+			_on_navigate_path_response(data)
+			return true
+		"mcp:navigate_path_error":
+			_on_navigate_path_error(data)
+			return true
+		"mcp:navigation_3d_response":
+			_on_navigation_3d_response(data)
+			return true
+		"mcp:navigation_3d_error":
+			_on_navigation_3d_error(data)
+			return true
+		"mcp:animation_tree_response":
+			_on_animation_tree_response(data)
+			return true
+		"mcp:animation_tree_error":
+			_on_animation_tree_error(data)
+			return true
+		"mcp:create_animation_response":
+			_on_create_animation_response(data)
+			return true
+		"mcp:create_animation_error":
+			_on_create_animation_error(data)
+			return true
+		"mcp:skeleton_ik_response":
+			_on_skeleton_ik_response(data)
+			return true
+		"mcp:skeleton_ik_error":
+			_on_skeleton_ik_error(data)
+			return true
+		"mcp:time_scale_response":
+			_on_time_scale_response(data)
+			return true
+		"mcp:window_response":
+			_on_window_response(data)
+			return true
+		"mcp:gamepad_response":
+			_on_gamepad_response(data)
+			return true
+		"mcp:mouse_drag_response":
+			_on_mouse_drag_response(data)
+			return true
+		"mcp:ui_debug_response":
+			_on_ui_debug_response(data)
+			return true
+		"mcp:ui_debug_error":
+			_on_ui_debug_error(data)
+			return true
+		"mcp:debug_draw_response":
+			_on_debug_draw_response(data)
+			return true
+		"mcp:input_state_response":
+			_on_input_state_response(data)
+			return true
+		"mcp:create_timer_response":
+			_on_create_timer_response(data)
+			return true
+		"mcp:create_timer_error":
+			_on_create_timer_error(data)
+			return true
+		"mcp:tween_property_response":
+			_on_tween_property_response(data)
+			return true
+		"mcp:tween_property_error":
+			_on_tween_property_error(data)
+			return true
 	return false
 
 
@@ -447,3 +699,1452 @@ func _on_eval_error(data: Array) -> void:
 	_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, message)
 	if _log_buffer:
 		_log_buffer.log("[debug] <- mcp:eval_error (%s): %s" % [request_id, message])
+
+
+## --- game_get_property / game_set_property ---
+
+func request_game_get_property(
+	node_path: String,
+	property: String,
+	request_id: String,
+	connection: McpConnection,
+	timeout_sec: float = 5.0,
+) -> void:
+	if request_id.is_empty():
+		push_warning("MCP debugger: get_property request missing request_id")
+		return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR,
+			"Editor main loop is not a SceneTree")
+		return
+	_send_debugger(tree, "mcp:get_property", [request_id, node_path, property],
+		request_id, connection, timeout_sec)
+
+
+func request_game_set_property(
+	node_path: String,
+	property: String,
+	value_json: String,
+	request_id: String,
+	connection: McpConnection,
+	timeout_sec: float = 5.0,
+) -> void:
+	if request_id.is_empty():
+		push_warning("MCP debugger: set_property request missing request_id")
+		return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR,
+			"Editor main loop is not a SceneTree")
+		return
+	_send_debugger(tree, "mcp:set_property", [request_id, node_path, property, value_json],
+		request_id, connection, timeout_sec)
+
+
+func _send_debugger(
+	tree: SceneTree,
+	message: String,
+	payload: Array,
+	request_id: String,
+	connection: McpConnection,
+	timeout_sec: float,
+) -> void:
+	var session: EditorDebuggerSession = _first_active_session()
+	if session == null:
+		_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR,
+			"No active debugger session — is the game actually running?")
+		return
+
+	var timer: SceneTreeTimer = tree.create_timer(timeout_sec)
+	var timeout_callable := func() -> void:
+		var pending_entry = _pending.get(request_id)
+		if pending_entry == null:
+			return
+		_pending.erase(request_id)
+		var conn: McpConnection = pending_entry.connection
+		if conn == null or not is_instance_valid(conn):
+			return
+		_send_error(conn, request_id, ErrorCodes.INTERNAL_ERROR,
+			"Game command '%s' timed out after %.0fs." % [message, timeout_sec])
+		if _log_buffer:
+			_log_buffer.log("[debug] !! %s timeout (%s)" % [message, request_id])
+	timer.timeout.connect(timeout_callable)
+	_pending[request_id] = {
+		"connection": connection,
+		"timer": timer,
+		"timeout_callable": timeout_callable,
+	}
+
+	session.send_message(message, payload)
+	if _log_buffer:
+		_log_buffer.log("[debug] -> %s (%s)" % [message, request_id])
+
+
+func _on_get_property_response(data: Array) -> void:
+	if data.size() < 2:
+		return
+	var request_id: String = data[0]
+	var result_json: String = data[1] if data.size() > 1 else "null"
+	var pending_entry = _pending.get(request_id)
+	if pending_entry == null:
+		return
+	_clear_pending(request_id)
+	var connection: McpConnection = pending_entry.connection
+	if connection == null or not is_instance_valid(connection):
+		return
+	var parsed = JSON.parse_string(result_json)
+	connection.send_deferred_response(request_id, {
+		"data": {"value": parsed if parsed != null else result_json, "source": "game"}
+	})
+	if _log_buffer:
+		_log_buffer.log("[debug] <- mcp:get_property_response (%s)" % request_id)
+
+
+func _on_get_property_error(data: Array) -> void:
+	if data.size() < 2:
+		return
+	var request_id: String = data[0]
+	var message: String = data[1]
+	var pending_entry = _pending.get(request_id)
+	if pending_entry == null:
+		return
+	_clear_pending(request_id)
+	var connection: McpConnection = pending_entry.connection
+	if connection == null or not is_instance_valid(connection):
+		return
+	_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, message)
+
+
+func _on_set_property_response(data: Array) -> void:
+	if data.size() < 2:
+		return
+	var request_id: String = data[0]
+	var result_json: String = data[1] if data.size() > 1 else "null"
+	var pending_entry = _pending.get(request_id)
+	if pending_entry == null:
+		return
+	_clear_pending(request_id)
+	var connection: McpConnection = pending_entry.connection
+	if connection == null or not is_instance_valid(connection):
+		return
+	var parsed = JSON.parse_string(result_json)
+	connection.send_deferred_response(request_id, {
+		"data": {"value": parsed if parsed != null else result_json, "source": "game"}
+	})
+	if _log_buffer:
+		_log_buffer.log("[debug] <- mcp:set_property_response (%s)" % request_id)
+
+
+func _on_set_property_error(data: Array) -> void:
+	if data.size() < 2:
+		return
+	var request_id: String = data[0]
+	var message: String = data[1]
+	var pending_entry = _pending.get(request_id)
+	if pending_entry == null:
+		return
+	_clear_pending(request_id)
+	var connection: McpConnection = pending_entry.connection
+	if connection == null or not is_instance_valid(connection):
+		return
+	_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, message)
+
+
+## --- game_call_method ---
+
+func request_game_call_method(
+	node_path: String, method_name: String, args: Array,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0,
+) -> void:
+	if request_id.is_empty():
+		return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree")
+		return
+	_send_debugger(tree, "mcp:call_method",
+		[request_id, node_path, method_name, JSON.stringify(args)],
+		request_id, connection, timeout_sec)
+
+
+func _on_call_method_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "null")
+	conn.send_deferred_response(rid,
+		{"data": {"result": parsed if parsed != null else data[1], "source": "game"}})
+
+
+func _on_call_method_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+## --- Input simulation ---
+
+func request_game_click(x: float, y: float, button: int,
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:click", [request_id, x, y, button], request_id, connection, timeout_sec)
+
+
+func request_game_key_press(key: String, action: String, pressed: bool,
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:key_press", [request_id, key, action, pressed], request_id, connection, timeout_sec)
+
+
+func request_game_mouse_move(x: float, y: float, rel_x: float, rel_y: float,
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:mouse_move", [request_id, x, y, rel_x, rel_y], request_id, connection, timeout_sec)
+
+
+func _on_click_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]; var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid); var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_key_press_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]; var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid); var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_key_press_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]; var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid); var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_mouse_move_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]; var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid); var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func request_game_key_hold(key: String, action: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:key_hold", [request_id, key, action], request_id, connection, timeout_sec)
+
+
+func request_game_key_release(key: String, action: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:key_release", [request_id, key, action], request_id, connection, timeout_sec)
+
+
+func request_game_scroll(x: float, y: float,
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:scroll", [request_id, x, y], request_id, connection, timeout_sec)
+
+
+func _on_key_hold_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]; var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid); var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_key_hold_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]; var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid); var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_key_release_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]; var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid); var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_key_release_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]; var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid); var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_scroll_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]; var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid); var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func request_game_list_signals(node_path: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:list_signals", [request_id, node_path], request_id, connection, timeout_sec)
+
+
+func request_game_connect_signal(node_path: String, signal_name: String, target_node_path: String, target_method: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:connect_signal", [request_id, node_path, signal_name, target_node_path, target_method], request_id, connection, timeout_sec)
+
+
+func request_game_disconnect_signal(node_path: String, signal_name: String, target_node_path: String, target_method: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:disconnect_signal", [request_id, node_path, signal_name, target_node_path, target_method], request_id, connection, timeout_sec)
+
+
+func request_game_emit_signal(node_path: String, signal_name: String, args: Array,
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:emit_signal", [request_id, node_path, signal_name, JSON.stringify(args)], request_id, connection, timeout_sec)
+
+
+func _on_list_signals_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "[]")
+	conn.send_deferred_response(rid, {"data": {"signals": parsed if parsed else [], "source": "game"}})
+
+
+func _on_list_signals_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_connect_signal_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_connect_signal_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_disconnect_signal_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_disconnect_signal_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_emit_signal_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_emit_signal_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func request_game_pause(paused: bool,
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:pause", [request_id, paused], request_id, connection, timeout_sec)
+
+
+func request_game_get_scene_tree(
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:get_scene_tree", [request_id], request_id, connection, timeout_sec)
+
+
+func request_game_get_node_info(node_path: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:get_node_info", [request_id, node_path], request_id, connection, timeout_sec)
+
+
+func request_game_spawn_node(type_name: String, node_name: String, parent_path: String, properties: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:spawn_node", [request_id, type_name, node_name, parent_path, properties], request_id, connection, timeout_sec)
+
+
+func request_game_remove_node(node_path: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:remove_node", [request_id, node_path], request_id, connection, timeout_sec)
+
+
+func request_game_instantiate_scene(scene_path: String, parent_path: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:instantiate_scene", [request_id, scene_path, parent_path], request_id, connection, timeout_sec)
+
+
+func _on_pause_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_get_scene_tree_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": {"tree": parsed if parsed else {}}})
+
+
+func _on_get_scene_tree_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_get_node_info_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_get_node_info_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_spawn_node_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_spawn_node_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_remove_node_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_remove_node_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_instantiate_scene_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_instantiate_scene_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func request_game_get_performance(
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:get_performance", [request_id], request_id, connection, timeout_sec)
+
+
+func request_game_get_ui_elements(
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:get_ui_elements", [request_id], request_id, connection, timeout_sec)
+
+
+func request_game_get_nodes_in_group(group_name: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:get_nodes_in_group", [request_id, group_name], request_id, connection, timeout_sec)
+
+
+func request_game_find_nodes_by_class(cls: String, root_path: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:find_nodes_by_class", [request_id, cls, root_path], request_id, connection, timeout_sec)
+
+
+func _on_get_performance_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_get_ui_elements_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "[]")
+	conn.send_deferred_response(rid, {"data": {"elements": parsed if parsed else []}})
+
+
+func _on_get_nodes_in_group_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_get_nodes_in_group_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_find_nodes_by_class_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_find_nodes_by_class_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func request_game_get_camera(
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:get_camera", [request_id], request_id, connection, timeout_sec)
+
+
+func request_game_set_camera(params_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:set_camera", [request_id, params_json], request_id, connection, timeout_sec)
+
+
+func request_game_raycast(params_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:raycast", [request_id, params_json], request_id, connection, timeout_sec)
+
+
+func request_game_play_animation(node_path: String, action: String, anim: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:play_animation", [request_id, node_path, action, anim], request_id, connection, timeout_sec)
+
+
+func request_game_serialize_state(node_path: String, action: String, max_depth: int, data_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 15.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:serialize_state", [request_id, node_path, action, max_depth, data_json], request_id, connection, timeout_sec)
+
+
+func _on_get_camera_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_set_camera_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_set_camera_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_raycast_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_raycast_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_play_animation_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_play_animation_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_serialize_state_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_serialize_state_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func request_game_get_audio(
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:get_audio", [request_id], request_id, connection, timeout_sec)
+
+
+func request_game_audio_play(node_path: String, action: String, params_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:audio_play", [request_id, node_path, action, params_json], request_id, connection, timeout_sec)
+
+
+func request_game_audio_bus(bus_name: String, params_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:audio_bus", [request_id, bus_name, params_json], request_id, connection, timeout_sec)
+
+
+func _on_get_audio_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_audio_play_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_audio_play_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_audio_bus_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_audio_bus_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func request_game_environment(action: String, params_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:environment", [request_id, action, params_json], request_id, connection, timeout_sec)
+
+
+func _on_environment_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_environment_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func request_game_physics_body(node_path: String, params_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:physics_body", [request_id, node_path, params_json], request_id, connection, timeout_sec)
+
+
+func _on_physics_body_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_physics_body_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func request_game_light_3d(action: String, params_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:light_3d", [request_id, action, params_json], request_id, connection, timeout_sec)
+
+
+func request_game_mesh_instance(params_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:mesh_instance", [request_id, params_json], request_id, connection, timeout_sec)
+
+
+func _on_light_3d_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_light_3d_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_mesh_instance_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_mesh_instance_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func request_game_navigate_path(params_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:navigate_path", [request_id, params_json], request_id, connection, timeout_sec)
+
+
+func request_game_navigation_3d(action: String, params_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 15.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:navigation_3d", [request_id, action, params_json], request_id, connection, timeout_sec)
+
+
+func _on_navigate_path_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_navigate_path_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_navigation_3d_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_navigation_3d_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func request_game_animation_tree(node_path: String, action: String, param: String, param2,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:animation_tree", [request_id, node_path, action, param, param2], request_id, connection, timeout_sec)
+
+
+func request_game_create_animation(params_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 15.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:create_animation", [request_id, params_json], request_id, connection, timeout_sec)
+
+
+func request_game_skeleton_ik(node_path: String, action: String, params_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:skeleton_ik", [request_id, node_path, action, params_json], request_id, connection, timeout_sec)
+
+
+func _on_animation_tree_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_animation_tree_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_create_animation_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_create_animation_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_skeleton_ik_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_skeleton_ik_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func request_game_time_scale(action: String, value: float,
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:time_scale", [request_id, action, value], request_id, connection, timeout_sec)
+
+
+func request_game_window(action: String, params_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:window", [request_id, action, params_json], request_id, connection, timeout_sec)
+
+
+func request_game_gamepad(input_type: String, index: int, value: float, device: int,
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:gamepad", [request_id, input_type, index, value, device], request_id, connection, timeout_sec)
+
+
+func request_game_mouse_drag(from_x: float, from_y: float, to_x: float, to_y: float, button: int,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:mouse_drag", [request_id, from_x, from_y, to_x, to_y, button], request_id, connection, timeout_sec)
+
+
+func request_game_ui_debug(node_path: String, action: String, params_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:ui_debug", [request_id, node_path, action, params_json], request_id, connection, timeout_sec)
+
+
+func _on_time_scale_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_window_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_gamepad_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_mouse_drag_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_ui_debug_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_ui_debug_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func request_game_debug_draw(action: String, params_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:debug_draw", [request_id, action, params_json], request_id, connection, timeout_sec)
+
+
+func request_game_input_state(action: String, params_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 5.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:input_state", [request_id, action, params_json], request_id, connection, timeout_sec)
+
+
+func request_game_create_timer(params_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:create_timer", [request_id, params_json], request_id, connection, timeout_sec)
+
+
+func request_game_tween_property(params_json: String,
+	request_id: String, connection: McpConnection, timeout_sec: float = 10.0) -> void:
+	if request_id.is_empty(): return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: _send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, "No SceneTree"); return
+	_send_debugger(tree, "mcp:tween_property", [request_id, params_json], request_id, connection, timeout_sec)
+
+
+func _on_debug_draw_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_input_state_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_create_timer_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_create_timer_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])
+
+
+func _on_tween_property_response(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	var parsed = JSON.parse_string(data[1] if data.size() > 1 else "{}")
+	conn.send_deferred_response(rid, {"data": parsed if parsed else {}})
+
+
+func _on_tween_property_error(data: Array) -> void:
+	if data.size() < 2: return
+	var rid: String = data[0]
+	var pend = _pending.get(rid)
+	if pend == null: return
+	_clear_pending(rid)
+	var conn: McpConnection = pend.connection
+	if conn == null or not is_instance_valid(conn): return
+	_send_error(conn, rid, ErrorCodes.INTERNAL_ERROR, data[1])

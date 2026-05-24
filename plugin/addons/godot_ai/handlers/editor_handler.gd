@@ -798,3 +798,765 @@ func game_eval(params: Dictionary) -> Dictionary:
 
 	_debugger_plugin.request_game_eval(code, request_id, _connection)
 	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_get_property(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	var property: String = params.get("property", "")
+	if node_path.is_empty() or property.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM,
+			"node_path and property are required")
+
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
+			"Debugger bridge unavailable")
+
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY,
+			"Game is not running — start the project first")
+
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
+			"Missing request_id")
+
+	_debugger_plugin.request_game_get_property(node_path, property, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_set_property(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	var property: String = params.get("property", "")
+	var value = params.get("value", null)
+
+	if node_path.is_empty() or property.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM,
+			"node_path and property are required")
+
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
+			"Debugger bridge unavailable")
+
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY,
+			"Game is not running — start the project first")
+
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
+			"Missing request_id")
+
+	var value_json := JSON.stringify(value)
+	_debugger_plugin.request_game_set_property(node_path, property, value_json, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_call_method(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	var method_name: String = params.get("method", "")
+	var args: Array = params.get("args", [])
+
+	if node_path.is_empty() or method_name.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM,
+			"node_path and method are required")
+
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
+			"Debugger bridge unavailable")
+
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY,
+			"Game is not running — start the project first")
+
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+
+	_debugger_plugin.request_game_call_method(node_path, method_name, args, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+	_debugger_plugin.request_game_call_method(node_path, method_name, args, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_click(params: Dictionary) -> Dictionary:
+	var x: float = float(params.get("x", 0))
+	var y: float = float(params.get("y", 0))
+	var button: int = int(params.get("button", 1))
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_click(x, y, button, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_key_press(params: Dictionary) -> Dictionary:
+	var key: String = params.get("key", "")
+	var action: String = params.get("action", "")
+	var pressed: bool = params.get("pressed", true)
+	if key.is_empty() and action.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "key or action required")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_key_press(key, action, pressed, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_mouse_move(params: Dictionary) -> Dictionary:
+	var x: float = float(params.get("x", 0))
+	var y: float = float(params.get("y", 0))
+	var rel_x: float = float(params.get("relative_x", 0))
+	var rel_y: float = float(params.get("relative_y", 0))
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_mouse_move(x, y, rel_x, rel_y, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+	_debugger_plugin.request_game_mouse_move(x, y, rel_x, rel_y, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_key_hold(params: Dictionary) -> Dictionary:
+	var key: String = params.get("key", "")
+	var action: String = params.get("action", "")
+	if key.is_empty() and action.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "key or action required")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_key_hold(key, action, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_key_release(params: Dictionary) -> Dictionary:
+	var key: String = params.get("key", "")
+	var action: String = params.get("action", "")
+	if key.is_empty() and action.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "key or action required")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_key_release(key, action, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_scroll(params: Dictionary) -> Dictionary:
+	var x: float = float(params.get("x", 0))
+	var y: float = float(params.get("y", 0))
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_scroll(x, y, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_list_signals(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	if node_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing node_path")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_list_signals(node_path, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_connect_signal(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	var signal_name: String = params.get("signal_name", "")
+	var target_node_path: String = params.get("target_node_path", "")
+	var target_method: String = params.get("target_method", "")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	if node_path.is_empty() or signal_name.is_empty() or target_node_path.is_empty() or target_method.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing required params")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_connect_signal(node_path, signal_name, target_node_path, target_method, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_disconnect_signal(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	var signal_name: String = params.get("signal_name", "")
+	var target_node_path: String = params.get("target_node_path", "")
+	var target_method: String = params.get("target_method", "")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	if node_path.is_empty() or signal_name.is_empty() or target_node_path.is_empty() or target_method.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing required params")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_disconnect_signal(node_path, signal_name, target_node_path, target_method, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_emit_signal(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	var signal_name: String = params.get("signal_name", "")
+	var args: Array = params.get("args", [])
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	if node_path.is_empty() or signal_name.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing node_path or signal_name")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_emit_signal(node_path, signal_name, args, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_pause(params: Dictionary) -> Dictionary:
+	var paused: bool = params.get("paused", true)
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_pause(paused, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_get_scene_tree(params: Dictionary) -> Dictionary:
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_get_scene_tree(request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_get_node_info(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	if node_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing node_path")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_get_node_info(node_path, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_spawn_node(params: Dictionary) -> Dictionary:
+	var type_name: String = params.get("type", "")
+	var node_name: String = params.get("name", "")
+	var parent_path: String = params.get("parent_path", "/root")
+	var properties: Dictionary = params.get("properties", {})
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	if type_name.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing type")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_spawn_node(type_name, node_name, parent_path, JSON.stringify(properties), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_remove_node(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	if node_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing node_path")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_remove_node(node_path, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_instantiate_scene(params: Dictionary) -> Dictionary:
+	var scene_path: String = params.get("scene_path", "")
+	var parent_path: String = params.get("parent_path", "/root")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	if scene_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing scene_path")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_instantiate_scene(scene_path, parent_path, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_get_performance(params: Dictionary) -> Dictionary:
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_get_performance(request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_get_ui_elements(params: Dictionary) -> Dictionary:
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_get_ui_elements(request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_get_nodes_in_group(params: Dictionary) -> Dictionary:
+	var group: String = params.get("group", "")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	if group.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing group")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_get_nodes_in_group(group, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_find_nodes_by_class(params: Dictionary) -> Dictionary:
+	var cls: String = params.get("class_name", "")
+	var root_path: String = params.get("root_path", "/root")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	if cls.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing class_name")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_find_nodes_by_class(cls, root_path, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_get_camera(params: Dictionary) -> Dictionary:
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_get_camera(request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_set_camera(params: Dictionary) -> Dictionary:
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var cam_params: Dictionary = {}
+	for key in params:
+		if key != "_request_id":
+			cam_params[key] = params[key]
+	_debugger_plugin.request_game_set_camera(JSON.stringify(cam_params), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_raycast(params: Dictionary) -> Dictionary:
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var ray_params: Dictionary = {"from": params.get("from", {}), "to": params.get("to", {})}
+	if params.has("collision_mask"): ray_params["collision_mask"] = params["collision_mask"]
+	_debugger_plugin.request_game_raycast(JSON.stringify(ray_params), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_play_animation(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	var action: String = params.get("action", "play")
+	var anim: String = params.get("animation", "")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	if node_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing node_path")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_play_animation(node_path, action, anim, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_serialize_state(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "/root")
+	var action: String = params.get("action", "save")
+	var max_depth: int = int(params.get("max_depth", 5))
+	var data: Dictionary = params.get("data", {})
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_serialize_state(node_path, action, max_depth, JSON.stringify(data), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_get_audio(params: Dictionary) -> Dictionary:
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_get_audio(request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_audio_play(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	var action: String = params.get("action", "play")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	if node_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing node_path")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var audio_params: Dictionary = {}
+	for key in params:
+		if key != "_request_id" and key != "node_path" and key != "action":
+			audio_params[key] = params[key]
+	_debugger_plugin.request_game_audio_play(node_path, action, JSON.stringify(audio_params), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_audio_bus(params: Dictionary) -> Dictionary:
+	var bus_name: String = params.get("bus_name", "Master")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var bus_params: Dictionary = {}
+	for key in params:
+		if key != "_request_id" and key != "bus_name":
+			bus_params[key] = params[key]
+	_debugger_plugin.request_game_audio_bus(bus_name, JSON.stringify(bus_params), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_environment(params: Dictionary) -> Dictionary:
+	var action: String = params.get("action", "get")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var env_params: Dictionary = {}
+	for key in params:
+		if key != "_request_id" and key != "action":
+			env_params[key] = params[key]
+	_debugger_plugin.request_game_environment(action, JSON.stringify(env_params), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_physics_body(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	if node_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing node_path")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var body_params: Dictionary = {}
+	for key in params:
+		if key != "_request_id" and key != "node_path":
+			body_params[key] = params[key]
+	_debugger_plugin.request_game_physics_body(node_path, JSON.stringify(body_params), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_light_3d(params: Dictionary) -> Dictionary:
+	var action: String = params.get("action", "create")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var lparams: Dictionary = {}
+	for key in params:
+		if key != "_request_id" and key != "action":
+			lparams[key] = params[key]
+	_debugger_plugin.request_game_light_3d(action, JSON.stringify(lparams), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_mesh_instance(params: Dictionary) -> Dictionary:
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var mparams: Dictionary = {}
+	for key in params:
+		if key != "_request_id":
+			mparams[key] = params[key]
+	_debugger_plugin.request_game_mesh_instance(JSON.stringify(mparams), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_navigate_path(params: Dictionary) -> Dictionary:
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var np: Dictionary = {}
+	for key in params:
+		if key != "_request_id":
+			np[key] = params[key]
+	_debugger_plugin.request_game_navigate_path(JSON.stringify(np), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_navigation_3d(params: Dictionary) -> Dictionary:
+	var action: String = params.get("action", "create")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var np: Dictionary = {}
+	for key in params:
+		if key != "_request_id" and key != "action":
+			np[key] = params[key]
+	_debugger_plugin.request_game_navigation_3d(action, JSON.stringify(np), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_animation_tree(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	var action: String = params.get("action", "get_state")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	if node_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing node_path")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_animation_tree(node_path, action, str(params.get("state_name", "")), params.get("param_value", 0), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_create_animation(params: Dictionary) -> Dictionary:
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var ap: Dictionary = {}
+	for key in params:
+		if key != "_request_id":
+			ap[key] = params[key]
+	_debugger_plugin.request_game_create_animation(JSON.stringify(ap), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_skeleton_ik(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	var action: String = params.get("action", "start")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	if node_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing node_path")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var ip: Dictionary = {}
+	for key in params:
+		if key != "_request_id" and key != "node_path" and key != "action":
+			ip[key] = params[key]
+	_debugger_plugin.request_game_skeleton_ik(node_path, action, JSON.stringify(ip), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_time_scale(params: Dictionary) -> Dictionary:
+	var action: String = params.get("action", "get")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var value: float = float(params.get("time_scale", 1.0))
+	_debugger_plugin.request_game_time_scale(action, value, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_window(params: Dictionary) -> Dictionary:
+	var action: String = params.get("action", "get")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var wp: Dictionary = {}
+	for key in params:
+		if key != "_request_id" and key != "action":
+			wp[key] = params[key]
+	_debugger_plugin.request_game_window(action, JSON.stringify(wp), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_gamepad(params: Dictionary) -> Dictionary:
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_gamepad(str(params.get("type", "button")), int(params.get("index", 0)), float(params.get("value", 0)), int(params.get("device", 0)), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_mouse_drag(params: Dictionary) -> Dictionary:
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	_debugger_plugin.request_game_mouse_drag(float(params.get("from_x", 0)), float(params.get("from_y", 0)), float(params.get("to_x", 0)), float(params.get("to_y", 0)), int(params.get("button", 1)), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_ui_debug(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	var action: String = params.get("action", "get")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	if node_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing node_path")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var up: Dictionary = {}
+	for key in params:
+		if key != "_request_id" and key != "node_path" and key != "action":
+			up[key] = params[key]
+	_debugger_plugin.request_game_ui_debug(node_path, action, JSON.stringify(up), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_debug_draw(params: Dictionary) -> Dictionary:
+	var action: String = params.get("action", "line")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var dp: Dictionary = {}
+	for key in params:
+		if key != "_request_id" and key != "action":
+			dp[key] = params[key]
+	_debugger_plugin.request_game_debug_draw(action, JSON.stringify(dp), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_input_state(params: Dictionary) -> Dictionary:
+	var action: String = params.get("action", "query")
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var ip: Dictionary = {}
+	for key in params:
+		if key != "_request_id" and key != "action":
+			ip[key] = params[key]
+	_debugger_plugin.request_game_input_state(action, JSON.stringify(ip), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_create_timer(params: Dictionary) -> Dictionary:
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var tp: Dictionary = {}
+	for key in params:
+		if key != "_request_id":
+			tp[key] = params[key]
+	_debugger_plugin.request_game_create_timer(JSON.stringify(tp), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+func game_tween_property(params: Dictionary) -> Dictionary:
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Debugger bridge unavailable")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Game is not running")
+	var request_id: String = params.get("_request_id", "")
+	if request_id.is_empty(): return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Missing request_id")
+	var wp: Dictionary = {}
+	for key in params:
+		if key != "_request_id":
+			wp[key] = params[key]
+	_debugger_plugin.request_game_tween_property(JSON.stringify(wp), request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE

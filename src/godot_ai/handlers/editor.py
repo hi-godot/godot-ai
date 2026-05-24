@@ -349,3 +349,552 @@ async def game_eval(runtime: DirectRuntime, code: str) -> dict:
     return await runtime.send_command(
         "game_eval", {"code": code}, timeout=15.0
     )
+
+
+async def game_get_property(runtime: DirectRuntime, node_path: str, property: str) -> dict:
+    """Read a property from a node in the running game."""
+    return await runtime.send_command(
+        "game_get_property",
+        {"node_path": node_path, "property": property},
+        timeout=10.0,
+    )
+
+
+async def game_set_property(runtime: DirectRuntime, node_path: str, property: str,
+                             value, type_hint: str = "") -> dict:
+    """Set a property on a node in the running game."""
+    return await runtime.send_command(
+        "game_set_property",
+        {"node_path": node_path, "property": property, "value": value,
+         "type_hint": type_hint},
+        timeout=10.0,
+    )
+
+
+async def game_call_method(runtime: DirectRuntime, node_path: str, method: str,
+                            args: list | None = None) -> dict:
+    """Call a method on any node in the running game with optional arguments."""
+    return await runtime.send_command(
+        "game_call_method",
+        {"node_path": node_path, "method": method, "args": args or []},
+        timeout=10.0,
+    )
+async def game_call_method(runtime: DirectRuntime, node_path: str, method: str,
+                            args: list | None = None) -> dict:
+    """Call a method on any node in the running game with optional arguments."""
+    return await runtime.send_command(
+        "game_call_method",
+        {"node_path": node_path, "method": method, "args": args or []},
+        timeout=10.0,
+    )
+
+
+async def game_click(runtime: DirectRuntime, x: float, y: float,
+                      button: int = 1) -> dict:
+    """Simulate a mouse click at (x,y) in the running game. button: 1=left, 2=right, 3=middle."""
+    return await runtime.send_command(
+        "game_click", {"x": x, "y": y, "button": button}, timeout=10.0)
+
+
+async def game_key_press(runtime: DirectRuntime, key: str = "",
+                          action: str = "", pressed: bool = True) -> dict:
+    """Simulate a key press or input action in the running game."""
+    return await runtime.send_command(
+        "game_key_press",
+        {"key": key, "action": action, "pressed": pressed},
+        timeout=10.0,
+    )
+
+
+async def game_mouse_move(runtime: DirectRuntime, x: float, y: float,
+                           relative_x: float = 0.0, relative_y: float = 0.0) -> dict:
+    """Simulate mouse movement in the running game."""
+    return await runtime.send_command(
+        "game_mouse_move",
+        {"x": x, "y": y, "relative_x": relative_x, "relative_y": relative_y},
+        timeout=5.0,
+    )
+
+
+async def game_key_hold(runtime: DirectRuntime, key: str = "",
+                         action: str = "") -> dict:
+    """Hold a key or input action in the running game (no auto-release)."""
+    return await runtime.send_command(
+        "game_key_hold", {"key": key, "action": action}, timeout=10.0)
+
+
+async def game_key_release(runtime: DirectRuntime, key: str = "",
+                            action: str = "") -> dict:
+    """Release a held key or input action in the running game."""
+    return await runtime.send_command(
+        "game_key_release", {"key": key, "action": action}, timeout=10.0)
+
+
+async def game_scroll(runtime: DirectRuntime, x: float = 0.0, y: float = 0.0) -> dict:
+    """Simulate mouse scroll wheel in the running game. y>0=up, y<0=down."""
+    return await runtime.send_command(
+        "game_scroll", {"x": x, "y": y}, timeout=5.0)
+
+
+async def game_list_signals(runtime: DirectRuntime, node_path: str = "") -> dict:
+    """List all signals and their connections on a runtime node."""
+    return await runtime.send_command(
+        "game_list_signals", {"node_path": node_path}, timeout=10.0)
+
+
+async def game_connect_signal(runtime: DirectRuntime, node_path: str = "",
+                               signal_name: str = "", target_node_path: str = "",
+                               target_method: str = "") -> dict:
+    """Connect a signal from node_path to a method on target_node_path at runtime."""
+    return await runtime.send_command(
+        "game_connect_signal", {
+            "node_path": node_path,
+            "signal_name": signal_name,
+            "target_node_path": target_node_path,
+            "target_method": target_method,
+        }, timeout=10.0)
+
+
+async def game_disconnect_signal(runtime: DirectRuntime, node_path: str = "",
+                                  signal_name: str = "", target_node_path: str = "",
+                                  target_method: str = "") -> dict:
+    """Disconnect a signal connection at runtime."""
+    return await runtime.send_command(
+        "game_disconnect_signal", {
+            "node_path": node_path,
+            "signal_name": signal_name,
+            "target_node_path": target_node_path,
+            "target_method": target_method,
+        }, timeout=10.0)
+
+
+async def game_emit_signal(runtime: DirectRuntime, node_path: str = "",
+                            signal_name: str = "", args: list | None = None) -> dict:
+    """Emit a signal on a runtime node with optional arguments."""
+    return await runtime.send_command(
+        "game_emit_signal", {
+            "node_path": node_path,
+            "signal_name": signal_name,
+            "args": args or [],
+        }, timeout=10.0)
+
+
+async def game_pause(runtime: DirectRuntime, paused: bool = True) -> dict:
+    """Pause or resume the running game."""
+    return await runtime.send_command(
+        "game_pause", {"paused": paused}, timeout=5.0)
+
+
+async def game_get_scene_tree(runtime: DirectRuntime) -> dict:
+    """Get the full runtime scene tree."""
+    return await runtime.send_command(
+        "game_get_scene_tree", {}, timeout=10.0)
+
+
+async def game_get_node_info(runtime: DirectRuntime, node_path: str = "") -> dict:
+    """Get detailed info about a runtime node (properties, signals, methods, children)."""
+    return await runtime.send_command(
+        "game_get_node_info", {"node_path": node_path}, timeout=10.0)
+
+
+async def game_spawn_node(runtime: DirectRuntime, type: str = "",
+                           name: str = "", parent_path: str = "/root",
+                           properties: dict | None = None) -> dict:
+    """Spawn a new node at runtime."""
+    return await runtime.send_command(
+        "game_spawn_node", {
+            "type": type,
+            "name": name,
+            "parent_path": parent_path,
+            "properties": properties or {},
+        }, timeout=10.0)
+
+
+async def game_remove_node(runtime: DirectRuntime, node_path: str = "") -> dict:
+    """Remove a node at runtime via queue_free()."""
+    return await runtime.send_command(
+        "game_remove_node", {"node_path": node_path}, timeout=10.0)
+
+
+async def game_instantiate_scene(runtime: DirectRuntime, scene_path: str = "",
+                                  parent_path: str = "/root") -> dict:
+    """Instantiate a PackedScene at runtime."""
+    return await runtime.send_command(
+        "game_instantiate_scene", {
+            "scene_path": scene_path,
+            "parent_path": parent_path,
+        }, timeout=10.0)
+
+
+async def game_get_performance(runtime: DirectRuntime) -> dict:
+    """Get performance metrics from the running game (FPS, memory, objects, draw calls)."""
+    return await runtime.send_command(
+        "game_get_performance", {}, timeout=5.0)
+
+
+async def game_get_ui_elements(runtime: DirectRuntime) -> dict:
+    """Scan the runtime UI tree and return visible Control elements."""
+    return await runtime.send_command(
+        "game_get_ui_elements", {}, timeout=10.0)
+
+
+async def game_get_nodes_in_group(runtime: DirectRuntime, group: str = "") -> dict:
+    """Get all nodes in a group at runtime."""
+    return await runtime.send_command(
+        "game_get_nodes_in_group", {"group": group}, timeout=10.0)
+
+
+async def game_find_nodes_by_class(runtime: DirectRuntime, class_name: str = "",
+                                    root_path: str = "/root") -> dict:
+    """Find all nodes of a given class at runtime."""
+    return await runtime.send_command(
+        "game_find_nodes_by_class", {
+            "class_name": class_name,
+            "root_path": root_path,
+        }, timeout=10.0)
+
+
+async def game_get_camera(runtime: DirectRuntime) -> dict:
+    """Get active camera info (2D/3D) at runtime."""
+    return await runtime.send_command(
+        "game_get_camera", {}, timeout=5.0)
+
+
+async def game_set_camera(runtime: DirectRuntime, position: dict | None = None,
+                           rotation: dict | None = None,
+                           fov: float | None = None, zoom: dict | None = None) -> dict:
+    """Set camera properties at runtime."""
+    params: dict = {}
+    if position: params["position"] = position
+    if rotation: params["rotation"] = rotation
+    if fov is not None: params["fov"] = fov
+    if zoom: params["zoom"] = zoom
+    return await runtime.send_command(
+        "game_set_camera", params, timeout=5.0)
+
+
+async def game_raycast(runtime: DirectRuntime, from_: dict, to: dict,
+                        collision_mask: int = 0xFFFFFFFF) -> dict:
+    """Perform a 3D or 2D raycast at runtime."""
+    return await runtime.send_command(
+        "game_raycast", {
+            "from": from_,
+            "to": to,
+            "collision_mask": collision_mask,
+        }, timeout=10.0)
+
+
+async def game_play_animation(runtime: DirectRuntime, node_path: str = "",
+                               action: str = "play",
+                               animation: str = "") -> dict:
+    """Control an AnimationPlayer (play/stop/pause/list) at runtime."""
+    return await runtime.send_command(
+        "game_play_animation", {
+            "node_path": node_path,
+            "action": action,
+            "animation": animation,
+        }, timeout=10.0)
+
+
+async def game_serialize_state(runtime: DirectRuntime, node_path: str = "/root",
+                                action: str = "save", max_depth: int = 5,
+                                data: dict | None = None) -> dict:
+    """Serialize or restore runtime node state."""
+    return await runtime.send_command(
+        "game_serialize_state", {
+            "node_path": node_path,
+            "action": action,
+            "max_depth": max_depth,
+            "data": data or {},
+        }, timeout=15.0)
+
+
+async def game_get_audio(runtime: DirectRuntime) -> dict:
+    """List audio buses and AudioStreamPlayer nodes at runtime."""
+    return await runtime.send_command(
+        "game_get_audio", {}, timeout=10.0)
+
+
+async def game_audio_play(runtime: DirectRuntime, node_path: str = "",
+                           action: str = "play", stream: str = "",
+                           volume: float | None = None, pitch: float | None = None,
+                           bus: str = "", from_position: float = 0.0) -> dict:
+    """Control AudioStreamPlayer (play/stop/pause/resume) at runtime."""
+    params: dict = {"node_path": node_path, "action": action}
+    if stream: params["stream"] = stream
+    if volume is not None: params["volume"] = volume
+    if pitch is not None: params["pitch"] = pitch
+    if bus: params["bus"] = bus
+    if from_position: params["from_position"] = from_position
+    return await runtime.send_command(
+        "game_audio_play", params, timeout=10.0)
+
+
+async def game_audio_bus(runtime: DirectRuntime, bus_name: str = "Master",
+                          volume: float | None = None, mute: bool | None = None,
+                          solo: bool | None = None) -> dict:
+    """Get/set audio bus volume, mute, solo at runtime."""
+    params: dict = {"bus_name": bus_name}
+    if volume is not None: params["volume"] = volume
+    if mute is not None: params["mute"] = mute
+    if solo is not None: params["solo"] = solo
+    return await runtime.send_command(
+        "game_audio_bus", params, timeout=5.0)
+
+
+async def game_environment(runtime: DirectRuntime, action: str = "get",
+                            background_color: dict | None = None,
+                            ambient_light_color: dict | None = None,
+                            ambient_light_energy: float | None = None,
+                            fog_enabled: bool | None = None,
+                            fog_density: float | None = None,
+                            glow_enabled: bool | None = None,
+                            glow_intensity: float | None = None,
+                            brightness: float | None = None,
+                            contrast: float | None = None,
+                            top_color: dict | None = None,
+                            horizon_color: dict | None = None) -> dict:
+    """Get/set environment settings or create procedural sky at runtime."""
+    params: dict = {"action": action}
+    if background_color: params["background_color"] = background_color
+    if ambient_light_color: params["ambient_light_color"] = ambient_light_color
+    if ambient_light_energy is not None: params["ambient_light_energy"] = ambient_light_energy
+    if fog_enabled is not None: params["fog_enabled"] = fog_enabled
+    if fog_density is not None: params["fog_density"] = fog_density
+    if glow_enabled is not None: params["glow_enabled"] = glow_enabled
+    if glow_intensity is not None: params["glow_intensity"] = glow_intensity
+    if brightness is not None: params["brightness"] = brightness
+    if contrast is not None: params["contrast"] = contrast
+    if top_color: params["top_color"] = top_color
+    if horizon_color: params["horizon_color"] = horizon_color
+    return await runtime.send_command(
+        "game_environment", params, timeout=10.0)
+
+
+async def game_physics_body(runtime: DirectRuntime, node_path: str = "",
+                             gravity_scale: float | None = None,
+                             mass: float | None = None,
+                             freeze: bool | None = None,
+                             sleeping: bool | None = None,
+                             linear_velocity: dict | None = None,
+                             angular_velocity: float | dict | None = None,
+                             friction: float | None = None,
+                             bounce: float | None = None) -> dict:
+    """Get/set physics body properties (gravity, mass, velocity, friction) at runtime."""
+    params: dict = {"node_path": node_path}
+    if gravity_scale is not None: params["gravity_scale"] = gravity_scale
+    if mass is not None: params["mass"] = mass
+    if freeze is not None: params["freeze"] = freeze
+    if sleeping is not None: params["sleeping"] = sleeping
+    if linear_velocity: params["linear_velocity"] = linear_velocity
+    if angular_velocity is not None: params["angular_velocity"] = angular_velocity
+    if friction is not None: params["friction"] = friction
+    if bounce is not None: params["bounce"] = bounce
+    return await runtime.send_command(
+        "game_physics_body", params, timeout=10.0)
+
+
+async def game_light_3d(runtime: DirectRuntime, action: str = "create",
+                         parent_path: str = "/root",
+                         light_type: str = "omni",
+                         color: dict | None = None, energy: float | None = None,
+                         shadows: bool | None = None, range_: float | None = None,
+                         name: str = "", node_path: str = "") -> dict:
+    """Create or configure 3D lights (directional/omni/spot) at runtime."""
+    params: dict = {"action": action}
+    if action == "create":
+        params["parent_path"] = parent_path
+        params["light_type"] = light_type
+        if color: params["color"] = color
+        if energy is not None: params["energy"] = energy
+        if shadows is not None: params["shadows"] = shadows
+        if range_ is not None: params["range"] = range_
+        if name: params["name"] = name
+    else:
+        params["node_path"] = node_path
+        if color: params["color"] = color
+        if energy is not None: params["energy"] = energy
+        if shadows is not None: params["shadows"] = shadows
+    return await runtime.send_command(
+        "game_light_3d", params, timeout=10.0)
+
+
+async def game_mesh_instance(runtime: DirectRuntime, parent_path: str = "/root",
+                              mesh_type: str = "box",
+                              size: dict | None = None, radius: float | None = None,
+                              height: float | None = None,
+                              material: str = "", name: str = "") -> dict:
+    """Create primitive 3D meshes (box/sphere/cylinder/capsule/plane) at runtime."""
+    params: dict = {"parent_path": parent_path, "mesh_type": mesh_type}
+    if size: params["size"] = size
+    if radius is not None: params["radius"] = radius
+    if height is not None: params["height"] = height
+    if material: params["material"] = material
+    if name: params["name"] = name
+    return await runtime.send_command(
+        "game_mesh_instance", params, timeout=10.0)
+
+
+async def game_navigate_path(runtime: DirectRuntime, start: dict, end: dict,
+                              optimize: bool = True) -> dict:
+    """Pathfind between two points using the navigation map (2D or 3D)."""
+    return await runtime.send_command(
+        "game_navigate_path", {"start": start, "end": end, "optimize": optimize},
+        timeout=10.0)
+
+
+async def game_navigation_3d(runtime: DirectRuntime, action: str = "create",
+                              parent_path: str = "/root", node_path: str = "",
+                              cell_size: float | None = None,
+                              agent_radius: float | None = None,
+                              agent_height: float | None = None,
+                              name: str = "") -> dict:
+    """Create or bake NavigationRegion3D at runtime."""
+    params: dict = {"action": action}
+    if action == "create":
+        params["parent_path"] = parent_path
+        if cell_size is not None: params["cell_size"] = cell_size
+        if agent_radius is not None: params["agent_radius"] = agent_radius
+        if agent_height is not None: params["agent_height"] = agent_height
+        if name: params["name"] = name
+    else:
+        params["node_path"] = node_path
+    return await runtime.send_command(
+        "game_navigation_3d", params, timeout=15.0)
+
+
+async def game_animation_tree(runtime: DirectRuntime, node_path: str = "",
+                               action: str = "get_state",
+                               state_name: str = "", param_value: float = 0.0) -> dict:
+    """Control AnimationTree (travel/get_state/set_param) at runtime."""
+    return await runtime.send_command(
+        "game_animation_tree", {
+            "node_path": node_path, "action": action,
+            "state_name": state_name, "param_value": param_value,
+        }, timeout=10.0)
+
+
+async def game_create_animation(runtime: DirectRuntime, node_path: str = "",
+                                 animation_name: str = "", length: float = 1.0,
+                                 loop_mode: int = 0, library: str = "",
+                                 tracks: list | None = None) -> dict:
+    """Create Animation resource with tracks/keyframes at runtime."""
+    return await runtime.send_command(
+        "game_create_animation", {
+            "node_path": node_path, "animation_name": animation_name,
+            "length": length, "loop_mode": loop_mode, "library": library,
+            "tracks": tracks or [],
+        }, timeout=15.0)
+
+
+async def game_skeleton_ik(runtime: DirectRuntime, node_path: str = "",
+                            action: str = "start",
+                            target: dict | None = None) -> dict:
+    """Control SkeletonIK3D (start/stop/set_target) at runtime."""
+    params: dict = {"node_path": node_path, "action": action}
+    if target: params["target"] = target
+    return await runtime.send_command(
+        "game_skeleton_ik", params, timeout=10.0)
+
+
+async def game_time_scale(runtime: DirectRuntime, action: str = "get",
+                           time_scale: float = 1.0) -> dict:
+    """Get or set Engine.time_scale at runtime."""
+    return await runtime.send_command(
+        "game_time_scale", {"action": action, "time_scale": time_scale},
+        timeout=5.0)
+
+
+async def game_window(runtime: DirectRuntime, action: str = "get",
+                       width: int | None = None, height: int | None = None,
+                       title: str = "") -> dict:
+    """Get or set window size/title at runtime."""
+    params: dict = {"action": action}
+    if width is not None: params["width"] = width
+    if height is not None: params["height"] = height
+    if title: params["title"] = title
+    return await runtime.send_command(
+        "game_window", params, timeout=5.0)
+
+
+async def game_gamepad(runtime: DirectRuntime, type: str = "button",
+                        index: int = 0, value: float = 0.0,
+                        device: int = 0) -> dict:
+    """Simulate gamepad button or axis input at runtime."""
+    return await runtime.send_command(
+        "game_gamepad", {"type": type, "index": index, "value": value,
+                         "device": device}, timeout=5.0)
+
+
+async def game_mouse_drag(runtime: DirectRuntime, from_x: float = 0.0,
+                           from_y: float = 0.0, to_x: float = 0.0,
+                           to_y: float = 0.0, button: int = 1) -> dict:
+    """Simulate mouse drag from one position to another at runtime."""
+    return await runtime.send_command(
+        "game_mouse_drag", {"from_x": from_x, "from_y": from_y,
+                            "to_x": to_x, "to_y": to_y, "button": button},
+        timeout=10.0)
+
+
+async def game_ui_debug(runtime: DirectRuntime, node_path: str = "",
+                          action: str = "get", visible: bool | None = None,
+                          text: str = "", position: dict | None = None,
+                          size: dict | None = None) -> dict:
+    """Get/set UI Control properties (visible, position, size, text) at runtime."""
+    params: dict = {"node_path": node_path, "action": action}
+    if visible is not None: params["visible"] = visible
+    if text and action == "text": params["text"] = text
+    if position: params["position"] = position
+    if size: params["size"] = size
+    return await runtime.send_command(
+        "game_ui_debug", params, timeout=5.0)
+
+
+async def game_debug_draw(runtime: DirectRuntime, action: str = "line",
+                           color: dict | None = None, from_: dict | None = None,
+                           to: dict | None = None, center: dict | None = None,
+                           radius: float = 0.5, size: dict | None = None,
+                           duration: int = 0) -> dict:
+    """Draw debug lines/spheres/boxes at runtime for visualization."""
+    params: dict = {"action": action}
+    if color: params["color"] = color
+    if from_: params["from"] = from_
+    if to: params["to"] = to
+    if center: params["center"] = center
+    if action == "sphere": params["radius"] = radius
+    if size: params["size"] = size
+    if duration: params["duration"] = duration
+    return await runtime.send_command(
+        "game_debug_draw", params, timeout=10.0)
+
+
+async def game_input_state(runtime: DirectRuntime, action: str = "query",
+                            x: float = 0.0, y: float = 0.0,
+                            mouse_mode: str = "visible") -> dict:
+    """Query input state or warp mouse at runtime."""
+    params: dict = {"action": action}
+    if action == "warp_mouse": params |= {"x": x, "y": y}
+    if action == "mouse_mode": params["mouse_mode"] = mouse_mode
+    return await runtime.send_command(
+        "game_input_state", params, timeout=5.0)
+
+
+async def game_create_timer(runtime: DirectRuntime, parent_path: str = "/root",
+                              wait_time: float = 1.0, one_shot: bool = False,
+                              autostart: bool = False, name: str = "") -> dict:
+    """Create a Timer node at runtime."""
+    params: dict = {"parent_path": parent_path, "wait_time": wait_time,
+                    "one_shot": one_shot, "autostart": autostart}
+    if name: params["name"] = name
+    return await runtime.send_command(
+        "game_create_timer", params, timeout=10.0)
+
+
+async def game_tween_property(runtime: DirectRuntime, node_path: str = "",
+                                property: str = "", final_value=None,
+                                duration: float = 1.0) -> dict:
+    """Animate a property with a tween at runtime."""
+    return await runtime.send_command(
+        "game_tween_property", {"node_path": node_path, "property": property,
+                                "final_value": final_value, "duration": duration},
+        timeout=10.0)
