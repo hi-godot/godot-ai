@@ -378,9 +378,13 @@ func _game_input_state(params: Dictionary) -> Dictionary:
 
 
 func _dict_to_vector2(value: Variant) -> Vector2:
+	var viewport := get_viewport()
+	var fallback := viewport.get_mouse_position() if viewport != null else Vector2.ZERO
 	if value is Dictionary:
-		return Vector2(float(value.get("x", 0.0)), float(value.get("y", 0.0)))
-	return Vector2.ZERO
+		if value.is_empty() or (not value.has("x") and not value.has("y")):
+			return fallback
+		return Vector2(float(value.get("x", fallback.x)), float(value.get("y", fallback.y)))
+	return fallback
 
 
 func _mouse_button_index(name: String) -> int:
