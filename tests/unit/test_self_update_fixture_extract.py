@@ -24,6 +24,25 @@ def _write_zip(path: Path, members: dict[str, bytes]) -> None:
             zf.writestr(name, data)
 
 
+def _write_zip_with_raw_member_name(
+    path: Path,
+    normalized_name: str,
+    raw_name: str,
+    data: bytes,
+) -> None:
+    assert len(normalized_name) == len(raw_name)
+    _write_zip(
+        path,
+        {
+            "addons/godot_ai/plugin.cfg": b"[plugin]\nname=ok\n",
+            normalized_name: data,
+        },
+    )
+    path.write_bytes(
+        path.read_bytes().replace(normalized_name.encode("ascii"), raw_name.encode("ascii"))
+    )
+
+
 def test_clean_zip_extracts_files_to_target(tmp_path: Path) -> None:
     zip_path = tmp_path / "good.zip"
     _write_zip(
@@ -54,12 +73,11 @@ def test_parent_traversal_entry_is_rejected(tmp_path: Path) -> None:
 
 def test_backslash_in_entry_name_is_rejected(tmp_path: Path) -> None:
     zip_path = tmp_path / "bad.zip"
-    _write_zip(
+    _write_zip_with_raw_member_name(
         zip_path,
-        {
-            "addons/godot_ai/plugin.cfg": b"[plugin]\nname=ok\n",
-            "addons/godot_ai/sub\\windows-style.gd": b"oops",
-        },
+        "addons/godot_ai/sub/windows-style.gd",
+        "addons/godot_ai/sub\\windows-style.gd",
+        b"oops",
     )
     with pytest.raises(ValueError, match="contains backslash"):
         extract_addon_from_zip(zip_path, tmp_path / "target")
