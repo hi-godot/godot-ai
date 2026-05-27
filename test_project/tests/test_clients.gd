@@ -679,7 +679,9 @@ func test_path_template_expands_home() -> void:
 func test_path_template_xdg_fallback() -> void:
 	var home := OS.get_environment("HOME")
 	if home.is_empty():
-		assert_true(false, "HOME not set")
+		home = OS.get_environment("USERPROFILE")
+	if home.is_empty():
+		assert_true(false, "HOME / USERPROFILE not set in test environment")
 		return
 	var resolved := McpPathTemplate.expand("$XDG_CONFIG_HOME/foo")
 	# Either uses XDG_CONFIG_HOME if set, or falls back to ~/.config
