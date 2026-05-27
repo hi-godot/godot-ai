@@ -54,7 +54,7 @@ class TestResolveDataDirectory:
             def home():
                 return MockPath("/home/test")
 
-        with patch("godot_ai.telemetry.os.name", "nt"):
+        with patch("godot_ai.telemetry.sys.platform", "win32"):
             with patch("godot_ai.telemetry.Path", MockPath):
                 result = tel.TelemetryConfig._resolve_data_directory()
         assert result.name == "godot-ai"
@@ -63,8 +63,9 @@ class TestResolveDataDirectory:
     def test_windows_fallback_to_home(self, monkeypatch, clean_env) -> None:
         """Windows falls back to user's home if APPDATA is unset."""
         monkeypatch.setenv("APPDATA", "")
-        with patch("godot_ai.telemetry.Path.home", return_value=Path("C:\\Users\\Test")):
-            result = tel.TelemetryConfig._resolve_data_directory()
+        with patch("godot_ai.telemetry.sys.platform", "win32"):
+            with patch("godot_ai.telemetry.Path.home", return_value=Path("C:\\Users\\Test")):
+                result = tel.TelemetryConfig._resolve_data_directory()
         assert "godot-ai" in str(result)
         assert "Test" in str(result)
 
@@ -81,7 +82,7 @@ class TestResolveDataDirectory:
         with patch("godot_ai.telemetry.sys.platform", "linux"):
             monkeypatch.setenv("XDG_DATA_HOME", "/custom/data")
             result = tel.TelemetryConfig._resolve_data_directory()
-        assert str(result) == "/custom/data/godot-ai"
+        assert str(result).replace("\\", "/") == "/custom/data/godot-ai"
 
     def test_linux_fallback_to_home(self, monkeypatch, clean_env) -> None:
         """Linux falls back to ~/.local/share when XDG_DATA_HOME unset."""

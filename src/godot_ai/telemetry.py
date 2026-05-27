@@ -232,12 +232,12 @@ class TelemetryConfig:
     @staticmethod
     def _resolve_data_directory() -> Path:
         """Resolve data directory path without creating it."""
-        if os.name == "nt":  # Windows
-            base = Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
+        if sys.platform.startswith("win"):  # Windows
+            base = Path(os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming"))
         elif sys.platform == "darwin":
             base = Path.home() / "Library" / "Application Support"
         else:
-            base = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
+            base = Path(os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share"))
         return base / "godot-ai"
 
     @staticmethod
