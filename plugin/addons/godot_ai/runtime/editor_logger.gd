@@ -5,9 +5,11 @@ extends Logger
 ##
 ## NOTE: deliberately no `class_name` — `extends Logger` requires the Logger
 ## class which Godot only exposes from 4.5+. plugin.gd loads this script
-## dynamically via load() after gating on
-## ClassDB.class_exists("Logger"), so the script never gets parsed on
-## older engines. Registered via OS.add_logger() from plugin.gd::_enter_tree
+## dynamically via load() and only calls OS.add_logger() after gating on
+## ClassDB.class_exists("Logger"). On Godot < 4.5 the editor filesystem scan
+## still parses this file and emits a benign `Parse Error: Could not find
+## base class "Logger"` to the Output panel; the script is never instanced
+## or used. Registered via OS.add_logger() from plugin.gd::_enter_tree
 ## so we can intercept editor-process script errors — parse errors, @tool
 ## runtime errors, EditorPlugin errors, push_error/push_warning — and
 ## surface them via `logs_read(source="editor")`. Without this, the LLM

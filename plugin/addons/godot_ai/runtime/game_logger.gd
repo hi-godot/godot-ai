@@ -5,9 +5,11 @@ extends Logger
 ##
 ## NOTE: deliberately no `class_name` — `extends Logger` requires the Logger
 ## class which Godot only exposes from 4.5+. game_helper.gd loads this
-## script dynamically via load() after gating on
-## ClassDB.class_exists("Logger"), so the script never gets parsed on
-## older engines. Registered via OS.add_logger() from inside
+## script dynamically via load() and only calls OS.add_logger() after
+## gating on ClassDB.class_exists("Logger"). On Godot < 4.5 the editor
+## filesystem scan still parses this file and emits a benign `Parse Error:
+## Could not find base class "Logger"` to the Output panel; the script is
+## never instanced or used. Registered via OS.add_logger() from inside
 ## the running game so we can intercept print(), printerr(), push_error(),
 ## and push_warning() and ferry them back to the editor over the
 ## EngineDebugger channel — the same bridge PR #76 uses for screenshots.
