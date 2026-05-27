@@ -38,9 +38,25 @@ def _write_zip_with_raw_member_name(
             normalized_name: data,
         },
     )
-    path.write_bytes(
-        path.read_bytes().replace(normalized_name.encode("ascii"), raw_name.encode("ascii"))
+    normalized_name_bytes = normalized_name.encode("ascii")
+    raw_name_bytes = raw_name.encode("ascii")
+    original_bytes = path.read_bytes()
+    mutated_bytes = original_bytes.replace(normalized_name_bytes, raw_name_bytes)
+
+    assert mutated_bytes != original_bytes, (
+        "failed to inject raw ZIP member name: normalized member name bytes were "
+        "not found in archive"
     )
+    assert raw_name_bytes in mutated_bytes, (
+        "failed to inject raw ZIP member name: mutated archive does not contain "
+        "the expected raw member name bytes"
+    )
+    assert normalized_name_bytes not in mutated_bytes, (
+        "failed to inject raw ZIP member name: archive still contains the "
+        "normalized member name bytes after mutation"
+    )
+
+    path.write_bytes(mutated_bytes)
 
 
 def test_clean_zip_extracts_files_to_target(tmp_path: Path) -> None:
