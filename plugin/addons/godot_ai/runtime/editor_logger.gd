@@ -9,7 +9,10 @@ extends Logger
 ## ClassDB.class_exists("Logger"). On Godot < 4.5 the editor filesystem scan
 ## still parses this file and emits a benign `Parse Error: Could not find
 ## base class "Logger"` to the Output panel; the script is never instanced
-## or used. Registered via OS.add_logger() from plugin.gd::_enter_tree
+## or used. (Side effect: `script/ci-check-gdscript` greps for "Parse Error"
+## as a hard failure, so it reports false positives when run locally against
+## a Godot < 4.5 install. CI itself runs on the pinned 4.6.2 and is
+## unaffected.) Registered via OS.add_logger() from plugin.gd::_enter_tree
 ## so we can intercept editor-process script errors — parse errors, @tool
 ## runtime errors, EditorPlugin errors, push_error/push_warning — and
 ## surface them via `logs_read(source="editor")`. Without this, the LLM

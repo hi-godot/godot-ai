@@ -9,7 +9,10 @@ extends Logger
 ## gating on ClassDB.class_exists("Logger"). On Godot < 4.5 the editor
 ## filesystem scan still parses this file and emits a benign `Parse Error:
 ## Could not find base class "Logger"` to the Output panel; the script is
-## never instanced or used. Registered via OS.add_logger() from inside
+## never instanced or used. (Side effect: `script/ci-check-gdscript` greps
+## for "Parse Error" as a hard failure, so it reports false positives when
+## run locally against a Godot < 4.5 install. CI itself runs on the pinned
+## 4.6.2 and is unaffected.) Registered via OS.add_logger() from inside
 ## the running game so we can intercept print(), printerr(), push_error(),
 ## and push_warning() and ferry them back to the editor over the
 ## EngineDebugger channel — the same bridge PR #76 uses for screenshots.

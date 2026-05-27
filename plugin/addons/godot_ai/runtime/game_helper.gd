@@ -55,9 +55,11 @@ func _ready() -> void:
 	## Capture print() / printerr() / push_error() / push_warning() and
 	## ferry them to the editor in mcp:log_batch messages flushed from
 	## _process. Logger subclassing was added in Godot 4.5 — gate on
-	## ClassDB so the rest of the helper still loads on 4.4 (the logger
-	## script never gets parsed because we only load() it inside this
-	## branch).
+	## ClassDB so the rest of the helper still loads on older engines.
+	## On Godot < 4.5 the editor filesystem scan still parses
+	## game_logger.gd and emits a benign `Parse Error: Could not find
+	## base class "Logger"` to the Output panel; the script is never
+	## instanced or used.
 	if ClassDB.class_exists("Logger") and OS.has_method("add_logger"):
 		var logger_script := load(GAME_LOGGER_PATH)
 		if logger_script != null:
