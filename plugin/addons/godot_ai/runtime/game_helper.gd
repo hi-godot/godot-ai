@@ -117,6 +117,9 @@ func _on_debug_message(message: String, data: Array) -> bool:
 		"eval":
 			_handle_eval(data)
 			return true
+		"game_command":
+			_handle_game_command(data)
+			return true
 	return false
 
 
@@ -165,6 +168,232 @@ func _handle_take_screenshot(data: Array) -> void:
 
 func _reply_error(request_id: String, message: String) -> void:
 	EngineDebugger.send_message("mcp:screenshot_error", [request_id, message])
+
+
+## --- game_command: curated runtime inspection and input ---
+
+func _handle_game_command(data: Array) -> void:
+	var request_id: String = data[0] if data.size() > 0 else ""
+	var op: String = data[1] if data.size() > 1 else ""
+	var params_json: String = data[2] if data.size() > 2 else "{}"
+
+	if request_id.is_empty():
+		return
+	if op.is_empty():
+		_reply_game_command_error(request_id, "No op provided")
+		return
+
+	var json := JSON.new()
+	var parse_err := json.parse(params_json)
+	if parse_err != OK or not (json.data is Dictionary):
+		_reply_game_command_error(request_id, "Invalid params JSON")
+		return
+
+	var result: Dictionary
+	match op:
+		"get_scene_tree":
+			result = _game_get_scene_tree(json.data)
+		"get_node_info":
+			result = _game_get_node_info(json.data)
+		"input_key":
+			result = _game_input_key(json.data)
+		"input_mouse":
+			result = _game_input_mouse(json.data)
+		"input_gamepad":
+			result = _game_input_gamepad(json.data)
+		"input_state":
+			result = _game_input_state(json.data)
+		_:
+			_reply_game_command_error(request_id, "Unknown game op: %s" % op)
+			return
+
+	result["source"] = "game"
+	result["op"] = op
+	EngineDebugger.send_message("mcp:game_command_response",
+		[request_id, JSON.stringify(_variant_to_json(result))])
+
+
+func _reply_game_command_error(request_id: String, message: String) -> void:
+	EngineDebugger.send_message("mcp:game_command_error", [request_id, message])
+
+
+func _game_get_scene_tree(params: Dictionary) -> Dictionary:
+	var depth := maxi(0, int(params.get("depth", 10)))
+	var root := _resolve_runtime_node(str(params.get("root_path", "")))
+	if root == null:
+		return {"root": "", "nodes": [], "total_count": 0, "not_found": params.get("root_path", "")}
+
+	var nodes: Array[Dictionary] = []
+	_collect_runtime_nodes(root, 0, depth, nodes)
+	return {
+		"root": _runtime_path(root),
+		"nodes": nodes,
+		"total_count": nodes.size(),
+	}
+
+
+func _collect_runtime_nodes(node: Node, current_depth: int, max_depth: int, out: Array[Dictionary]) -> void:
+	out.append({
+		"name": node.name,
+		"type": node.get_class(),
+		"path": _runtime_path(node),
+		"children_count": node.get_child_count(),
+	})
+	if current_depth >= max_depth:
+		return
+	for child in node.get_children():
+		if child is Node:
+			_collect_runtime_nodes(child, current_depth + 1, max_depth, out)
+
+
+func _game_get_node_info(params: Dictionary) -> Dictionary:
+	var path := str(params.get("path", ""))
+	var node := _resolve_runtime_node(path)
+	if node == null:
+		return {"path": path, "found": false}
+
+	var info := {
+		"path": _runtime_path(node),
+		"name": node.name,
+		"type": node.get_class(),
+		"children_count": node.get_child_count(),
+		"groups": node.get_groups(),
+		"found": true,
+	}
+	if bool(params.get("include_properties", true)):
+		info["properties"] = _runtime_node_properties(node)
+	return info
+
+
+func _runtime_node_properties(node: Node) -> Dictionary:
+	var props := {}
+	for p in node.get_property_list():
+		var name := str(p.get("name", ""))
+		var usage := int(p.get("usage", 0))
+		if name.is_empty() or (usage & PROPERTY_USAGE_EDITOR) == 0:
+			continue
+		props[name] = _variant_to_json(node.get(name))
+	return props
+
+
+func _resolve_runtime_node(path: String) -> Node:
+	var scene_root := get_tree().current_scene
+	if scene_root == null:
+		return null
+	if path.is_empty() or path == "/":
+		return scene_root
+
+	if path.begins_with("/root/"):
+		return get_tree().root.get_node_or_null(path.trim_prefix("/root/"))
+
+	var scene_path := path.trim_prefix("/")
+	if scene_path == str(scene_root.name):
+		return scene_root
+	var prefix := str(scene_root.name) + "/"
+	if scene_path.begins_with(prefix):
+		scene_path = scene_path.substr(prefix.length())
+	return scene_root.get_node_or_null(scene_path)
+
+
+func _runtime_path(node: Node) -> String:
+	var scene_root := get_tree().current_scene
+	if scene_root == null:
+		return str(node.get_path())
+	if node == scene_root:
+		return "/" + str(scene_root.name)
+	return "/" + str(scene_root.name) + "/" + str(scene_root.get_path_to(node))
+
+
+func _game_input_key(params: Dictionary) -> Dictionary:
+	var key_name := str(params.get("key", ""))
+	var keycode := OS.find_keycode_from_string(key_name)
+	if keycode == KEY_NONE:
+		return {"sent": false, "error": "Unknown key: %s" % key_name}
+	var ev := InputEventKey.new()
+	ev.keycode = keycode
+	ev.physical_keycode = keycode
+	ev.pressed = bool(params.get("pressed", true))
+	ev.echo = bool(params.get("echo", false))
+	Input.parse_input_event(ev)
+	return {"sent": true, "key": key_name, "pressed": ev.pressed}
+
+
+func _game_input_mouse(params: Dictionary) -> Dictionary:
+	var event := str(params.get("event", "button"))
+	var pos := _dict_to_vector2(params.get("position", {}))
+	match event:
+		"motion":
+			var motion := InputEventMouseMotion.new()
+			motion.position = pos
+			motion.global_position = pos
+			Input.parse_input_event(motion)
+			return {"sent": true, "event": "motion", "position": _variant_to_json(pos)}
+		"button":
+			var button_event := InputEventMouseButton.new()
+			button_event.position = pos
+			button_event.global_position = pos
+			button_event.button_index = _mouse_button_index(str(params.get("button", "left")))
+			button_event.pressed = bool(params.get("pressed", true))
+			Input.parse_input_event(button_event)
+			return {
+				"sent": true,
+				"event": "button",
+				"button": params.get("button", "left"),
+				"pressed": button_event.pressed,
+				"position": _variant_to_json(pos),
+			}
+	return {"sent": false, "error": "Invalid mouse event: %s" % event}
+
+
+func _game_input_gamepad(params: Dictionary) -> Dictionary:
+	var device := int(params.get("device", 0))
+	var control := str(params.get("control", "button"))
+	match control:
+		"button":
+			var button := InputEventJoypadButton.new()
+			button.device = device
+			button.button_index = int(params.get("index", 0))
+			button.pressed = bool(params.get("pressed", true))
+			Input.parse_input_event(button)
+			return {"sent": true, "control": "button", "device": device, "index": button.button_index, "pressed": button.pressed}
+		"axis":
+			var axis := InputEventJoypadMotion.new()
+			axis.device = device
+			axis.axis = int(params.get("index", 0))
+			axis.axis_value = float(params.get("value", 0.0))
+			Input.parse_input_event(axis)
+			return {"sent": true, "control": "axis", "device": device, "index": axis.axis, "value": axis.axis_value}
+	return {"sent": false, "error": "Invalid gamepad control: %s" % control}
+
+
+func _game_input_state(params: Dictionary) -> Dictionary:
+	var actions: Array = params.get("actions", [])
+	if actions.is_empty():
+		actions = InputMap.get_actions()
+	var states := {}
+	for action in actions:
+		var name := str(action)
+		states[name] = Input.is_action_pressed(name)
+	return {"actions": states}
+
+
+func _dict_to_vector2(value: Variant) -> Vector2:
+	if value is Dictionary:
+		return Vector2(float(value.get("x", 0.0)), float(value.get("y", 0.0)))
+	return Vector2.ZERO
+
+
+func _mouse_button_index(name: String) -> int:
+	match name:
+		"right":
+			return MOUSE_BUTTON_RIGHT
+		"middle":
+			return MOUSE_BUTTON_MIDDLE
+		"wheel_up":
+			return MOUSE_BUTTON_WHEEL_UP
+		"wheel_down":
+			return MOUSE_BUTTON_WHEEL_DOWN
+	return MOUSE_BUTTON_LEFT
 
 
 ## --- game_eval: execute arbitrary GDScript in the running game ---

@@ -128,6 +128,26 @@ func test_screenshot_game_not_playing() -> void:
 	assert_is_error(result)
 
 
+# ----- game_command -----
+
+func test_game_command_missing_op() -> void:
+	var result := _handler.game_command({})
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
+
+
+func test_game_command_not_playing() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	var handler := EditorHandler.new(McpLogBuffer.new(), McpConnection.new(), plugin)
+	var result := handler.game_command({"op": "get_scene_tree"})
+	assert_is_error(result, ErrorCodes.EDITOR_NOT_READY)
+
+
+func test_debugger_plugin_game_command_response_unknown_request() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin._on_game_command_response(["unknown-id", "{\"ok\":true}"])
+	assert_true(true, "Unknown responses should be ignored without crashing")
+
+
 # ----- viewport_screenshot_precheck (#456: stop returning INTERNAL_ERROR on 2D) -----
 
 func test_viewport_precheck_passes_for_node3d_root() -> void:

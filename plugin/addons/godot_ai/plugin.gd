@@ -280,6 +280,7 @@ func _enter_tree() -> void:
 	_dispatcher.register("reload_plugin", editor_handler.reload_plugin)
 	_dispatcher.register("quit_editor", editor_handler.quit_editor)
 	_dispatcher.register("game_eval", editor_handler.game_eval)
+	_dispatcher.register("game_command", editor_handler.game_command)
 	_dispatcher.register("get_project_setting", project_handler.get_project_setting)
 	_dispatcher.register("set_project_setting", project_handler.set_project_setting)
 	_dispatcher.register("run_project", project_handler.run_project)

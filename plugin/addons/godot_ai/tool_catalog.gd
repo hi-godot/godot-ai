@@ -37,6 +37,7 @@ const DOMAINS := [
 	{"id": "client", "label": "client", "count": 1, "tools": ["client_manage"]},
 	{"id": "editor", "label": "editor", "count": 4, "tools": ["editor_manage", "editor_reload_plugin", "editor_screenshot", "logs_read"]},
 	{"id": "filesystem", "label": "filesystem", "count": 1, "tools": ["filesystem_manage"]},
+	{"id": "game", "label": "game", "count": 1, "tools": ["game_manage"]},
 	{"id": "input_map", "label": "input_map", "count": 1, "tools": ["input_map_manage"]},
 	{"id": "material", "label": "material", "count": 1, "tools": ["material_manage"]},
 	{"id": "node", "label": "node", "count": 4, "tools": ["node_create", "node_find", "node_manage", "node_set_property"]},

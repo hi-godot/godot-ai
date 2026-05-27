@@ -49,6 +49,7 @@ from godot_ai.tools.camera import register_camera_tools
 from godot_ai.tools.client import register_client_tools
 from godot_ai.tools.editor import register_editor_tools
 from godot_ai.tools.filesystem import register_filesystem_tools
+from godot_ai.tools.game import register_game_tools
 from godot_ai.tools.input_map import register_input_map_tools
 from godot_ai.tools.material import register_material_tools
 from godot_ai.tools.node import register_node_tools
@@ -194,6 +195,8 @@ def create_server(
             "                   follow_2d, get, list, apply_preset\n"
             "  signal_manage    list, connect, disconnect\n"
             "  input_map_manage list, add_action, remove_action, bind_event\n"
+            "  game_manage      get_scene_tree, get_node_info, input_key,\n"
+            "                   input_mouse, input_gamepad, input_state\n"
             "  autoload_manage  list, add, remove\n"
             "  filesystem_manage read_text, write_text, reimport, search\n"
             "  theme_manage     create, set_color, set_constant, set_font_size,\n"
@@ -315,6 +318,8 @@ def create_server(
         register_autoload_tools(mcp)
     if "input_map" not in exclude:
         register_input_map_tools(mcp)
+    if "game" not in exclude:
+        register_game_tools(mcp)
     if "testing" not in exclude:
         register_testing_tools(mcp)
     if "batch" not in exclude:

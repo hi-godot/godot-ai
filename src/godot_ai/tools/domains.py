@@ -38,6 +38,7 @@ DOMAINS: tuple[str, ...] = (
     "signal",
     "autoload",
     "input_map",
+    "game",
     "testing",
     "batch",
     "ui",

@@ -18,6 +18,7 @@ from godot_ai.handlers import curve as curve_handlers
 from godot_ai.handlers import editor as editor_handlers
 from godot_ai.handlers import environment as environment_handlers
 from godot_ai.handlers import filesystem as filesystem_handlers
+from godot_ai.handlers import game as game_handlers
 from godot_ai.handlers import input_map as input_map_handlers
 from godot_ai.handlers import material as material_handlers
 from godot_ai.handlers import node as node_handlers
@@ -130,6 +131,12 @@ class StubClient:
                     "dropped_count": 0,
                 }
             return {"lines": [f"line {i}" for i in range(6)]}
+        if command == "game_command":
+            return {
+                "source": "game",
+                "op": params.get("op", ""),
+                "params": params.get("params", {}),
+            }
         if command == "get_project_setting":
             key = params["key"] if params else ""
             return {"key": key, "value": f"value:{key}"}
@@ -1366,6 +1373,96 @@ async def test_logs_read_handler_plugin_normalizes_structured_payload():
     result = await editor_handlers.logs_read(runtime, count=10)
 
     assert result["lines"] == ["structured 0", "structured 1"]
+
+
+# ---------------------------------------------------------------------------
+# Runtime game handler tests
+# ---------------------------------------------------------------------------
+
+
+async def test_game_get_scene_tree_sends_game_command():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+
+    result = await game_handlers.game_get_scene_tree(runtime, depth=4, root_path="/Main")
+
+    assert result["source"] == "game"
+    assert result["op"] == "get_scene_tree"
+    assert client.calls[-1]["command"] == "game_command"
+    assert client.calls[-1]["params"] == {
+        "op": "get_scene_tree",
+        "params": {"depth": 4, "root_path": "/Main"},
+    }
+    assert client.calls[-1]["timeout"] == game_handlers.GAME_COMMAND_TIMEOUT_SEC
+
+
+async def test_game_get_node_info_sends_game_command():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+
+    await game_handlers.game_get_node_info(runtime, path="/Main/Player")
+
+    assert client.calls[-1]["params"] == {
+        "op": "get_node_info",
+        "params": {"path": "/Main/Player", "include_properties": True},
+    }
+
+
+async def test_game_input_key_sends_game_command():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+
+    await game_handlers.game_input_key(runtime, key="Space", pressed=True, echo=False)
+
+    assert client.calls[-1]["params"] == {
+        "op": "input_key",
+        "params": {"key": "Space", "pressed": True, "echo": False},
+    }
+
+
+async def test_game_input_mouse_sends_game_command():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+
+    await game_handlers.game_input_mouse(
+        runtime, event="button", position={"x": 10, "y": 20}, button="left", pressed=True
+    )
+
+    assert client.calls[-1]["params"] == {
+        "op": "input_mouse",
+        "params": {
+            "event": "button",
+            "position": {"x": 10, "y": 20},
+            "button": "left",
+            "pressed": True,
+        },
+    }
+
+
+async def test_game_input_gamepad_sends_game_command():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+
+    await game_handlers.game_input_gamepad(
+        runtime, device=1, control="button", index=0, pressed=True
+    )
+
+    assert client.calls[-1]["params"] == {
+        "op": "input_gamepad",
+        "params": {"device": 1, "control": "button", "index": 0, "pressed": True},
+    }
+
+
+async def test_game_input_state_sends_game_command():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+
+    await game_handlers.game_input_state(runtime, actions=["ui_accept"])
+
+    assert client.calls[-1]["params"] == {
+        "op": "input_state",
+        "params": {"actions": ["ui_accept"]},
+    }
 
 
 async def test_project_settings_resource_collects_results():
