@@ -487,6 +487,12 @@ func _build_ui() -> void:
 	_update_label = Label.new()
 	_update_label.add_theme_font_size_override("font_size", 15)
 	_update_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3))
+	## Wrap long banner text (e.g. the < 4.4 manual-update guidance) instead
+	## of letting a single line stretch the whole dock wide. The dock is a
+	## fixed-width side panel, so constrain horizontally and wrap.
+	_update_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_update_label.size_flags_horizontal = Control.SIZE_FILL
+	_update_label.custom_minimum_size = Vector2(0, 0)
 	_update_banner.add_child(_update_label)
 
 	var update_btn_row := HBoxContainer.new()

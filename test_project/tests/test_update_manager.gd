@@ -45,6 +45,24 @@ func test_version_can_self_update_true_at_and_above_4_4() -> void:
 		"a future 5.0 (minor 0) must not be misclassified by the minor check")
 
 
+func test_manual_update_label_includes_version_and_guidance() -> void:
+	## Shown up-front on < 4.4 (before any click) so the user understands the
+	## manual-update flow. Must name the version and the 4.4+ requirement.
+	var with_v := McpUpdateManagerScript._manual_update_label("2.5.7")
+	assert_contains(with_v, "2.5.7", "label must name the available version")
+	assert_contains(with_v, "Godot 4.4+", "label must state the engine requirement")
+	assert_contains(with_v, "addons/godot_ai/", "label must point at the manual-swap path")
+
+
+func test_manual_update_label_omits_version_when_unknown() -> void:
+	## On the click path the version isn't re-threaded; the label degrades to
+	## a generic "Update available" without a stray "v" token.
+	var no_v := McpUpdateManagerScript._manual_update_label("")
+	assert_contains(no_v, "Update available", "generic label must still lead with 'Update available'")
+	assert_false(no_v.contains(" v"), "no version token when version is empty")
+	assert_contains(no_v, "Godot 4.4+", "label must still state the engine requirement")
+
+
 # ---- parse_releases_response (pure / static) ---------------------------
 
 func _make_body(json_str: String) -> PackedByteArray:

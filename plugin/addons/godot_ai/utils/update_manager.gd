@@ -122,6 +122,21 @@ static func _version_can_self_update(major: int, minor: int) -> bool:
 	return major > 4 or (major == 4 and minor >= 4)
 
 
+## Banner guidance for the gated (< 4.4) path. Shown up-front at check time
+## (with the available version) and again on click, so the user understands
+## the manual-update flow before they press anything. Single source of truth
+## so check-time and click-time text never drift.
+static func _manual_update_label(version: String) -> String:
+	var prefix := "Update available"
+	if not version.is_empty():
+		prefix = "Update v%s available" % version
+	return (
+		prefix
+		+ " — in-editor update needs Godot 4.4+. Open the download page, then "
+		+ "replace addons/godot_ai/ manually and relaunch."
+	)
+
+
 ## Driven by the dock's Update button. On Godot < 4.4 (see `_can_self_update`)
 ## the in-editor install is disabled — we open the release page for a manual
 ## download instead, never entering the extract pipeline that crashes those
@@ -132,14 +147,12 @@ static func _version_can_self_update(major: int, minor: int) -> bool:
 func start_install() -> void:
 	if not _can_self_update():
 		OS.shell_open(RELEASES_PAGE)
+		## Keep the up-front guidance label (already shown since check time);
+		## just confirm the page opened and lock the button.
 		install_state_changed.emit({
 			"button_text": "Opened download page",
 			"button_disabled": true,
-			"label_text": (
-				"Update available — in-editor update needs Godot 4.4+. "
-				+ "Download the new addon and replace addons/godot_ai/ manually, "
-				+ "then relaunch Godot."
-			),
+			"label_text": _manual_update_label(""),
 		})
 		return
 
@@ -268,11 +281,14 @@ func _on_update_check_completed(
 		return
 	_latest_download_url = String(parsed.get("download_url", ""))
 	update_check_completed.emit(parsed)
-	## On engines that can't self-update (Godot < 4.4, #475), relabel the
-	## button up-front so the user knows clicking opens a download page
-	## rather than running an in-editor update.
+	## On engines that can't self-update (Godot < 4.4, #475), surface the
+	## full manual-update guidance AND relabel the button up-front — before
+	## any click — so the user knows what the button does and why.
 	if not _can_self_update():
-		install_state_changed.emit({"button_text": "Open download page"})
+		install_state_changed.emit({
+			"button_text": "Open download page",
+			"label_text": _manual_update_label(String(parsed.get("version", ""))),
+		})
 
 
 func _on_download_completed(
