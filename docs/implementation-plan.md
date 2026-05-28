@@ -46,6 +46,7 @@ Adjacent reference docs:
 - [x] `performance.get_monitors` with optional filter (30 Godot Performance monitors)
 - [x] `logs.clear`
 - [x] WebSocket buffer increase (4 MB) for large payloads like screenshot base64
+- [x] `game_manage` — running-game inspection + synthetic input (#470): `get_scene_tree`, `get_node_info`, `input_key`, `input_mouse`, `input_gamepad`, `input_state`. Routed to the live game process via `game_eval` / `game_command` through the `_mcp_game_helper` autoload, so the AI can read the actual runtime scene tree and drive input while the game plays — not just the editor-side scene.
 
 **Why this matters:** Without a reliable launch-observe-inspect loop, the AI can build project structure but cannot tighten feel, readability, or performance.
 
