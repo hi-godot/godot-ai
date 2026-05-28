@@ -340,7 +340,11 @@ func _install_zip() -> void:
 		_plugin != null
 		and _plugin.has_method("install_downloaded_update")
 	)
-	if int(version.get("minor", 0)) >= 4 and has_runner:
+	## Same major-aware predicate as the _can_self_update() gate, so a future
+	## Godot 5.x (minor 0) takes the runner path the gate promised — not the
+	## pre-4.4 inline extract. A bare `minor >= 4` here would route 5.0 to the
+	## crash-prone inline path even though the gate let it in.
+	if _version_can_self_update(int(version.get("major", 0)), int(version.get("minor", 0))) and has_runner:
 		install_state_changed.emit({"button_text": "Reloading..."})
 		## Runner takes over: plugin tears down, runner extracts + scans +
 		## re-enables. `install_downloaded_update` calls
@@ -393,7 +397,7 @@ func _install_zip_inline(version: Dictionary) -> void:
 	if _plugin != null and _plugin.has_method("prepare_for_update_reload"):
 		_plugin.prepare_for_update_reload()
 
-	if int(version.get("minor", 0)) >= 4:
+	if _version_can_self_update(int(version.get("major", 0)), int(version.get("minor", 0))):
 		install_state_changed.emit({"button_text": "Scanning..."})
 		## Filesystem scan must complete before plugin reload — otherwise
 		## plugin.gd re-parses against a ClassDB that hasn't seen the new
