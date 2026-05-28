@@ -25,7 +25,7 @@ from __future__ import annotations
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godot_ai"
-GAME_LOGGER = PLUGIN_ROOT / "runtime" / "game_logger.gd"
+GAME_LOGGER = PLUGIN_ROOT / "runtime" / "loggers" / "game_logger.gd"
 
 
 def test_game_logger_preloads_log_backtrace_by_path() -> None:
