@@ -24,7 +24,7 @@ const CAPTURE_PREFIX := "mcp"
 ## packet budget in a single send. Surplus stays queued for the next frame.
 const FLUSH_BATCH_LIMIT := 200
 
-const GAME_LOGGER_PATH := "res://addons/godot_ai/runtime/game_logger.gd"
+const LoggerLoader := preload("res://addons/godot_ai/runtime/logger_loader.gd")
 
 var _registered := false
 ## Untyped because the McpGameLogger script is loaded dynamically (it
@@ -56,12 +56,11 @@ func _ready() -> void:
 	## ferry them to the editor in mcp:log_batch messages flushed from
 	## _process. Logger subclassing was added in Godot 4.5 — gate on
 	## ClassDB so the rest of the helper still loads on older engines.
-	## On Godot < 4.5 the editor filesystem scan still parses
-	## game_logger.gd and emits a benign `Parse Error: Could not find
-	## base class "Logger"` to the Output panel; the script is never
-	## instanced or used.
+	## game_logger.gd lives in the `.gdignore`'d runtime/loggers/ folder so
+	## it never parse-errors during a < 4.5 editor scan; LoggerLoader
+	## compiles it from source at runtime, only past this gate.
 	if ClassDB.class_exists("Logger") and OS.has_method("add_logger"):
-		var logger_script := load(GAME_LOGGER_PATH)
+		var logger_script := LoggerLoader.build(LoggerLoader.GAME_LOGGER_PATH)
 		if logger_script != null:
 			_logger = logger_script.new()
 			OS.call("add_logger", _logger)

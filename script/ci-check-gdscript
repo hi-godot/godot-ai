@@ -22,39 +22,19 @@ else
   godot --headless --path "$PROJECT_DIR" --import > "$IMPORT_LOG" 2>&1 || true
 fi
 
-# On Godot < 4.5, runtime/editor_logger.gd and runtime/game_logger.gd
-# `extends Logger` and the filesystem scan emits two lines for each:
-#   SCRIPT ERROR: Parse Error: Could not find base class "Logger".
-#   ERROR: Failed to load script ".../(editor|game)_logger.gd" with error "Parse error".
-# (with the file path on a separate "at:" line). The scripts are only
-# load()-ed at runtime behind a ClassDB.class_exists("Logger") gate,
-# never instanced. See the comment headers in those two files.
-#
-# This filter is OPT-IN via env var: on Godot >= 4.5 (where Logger exists),
-# any Logger-related parse error WOULD be a real bug — silently filtering
-# would lose CI coverage. The 4.3 canary row in .github/workflows/ci.yml
-# sets ALLOW_LOGGER_PARSE_ERRORS=1; default is strict.
-SCAN_LOG="$IMPORT_LOG"
-FILTERED_LOG=""
-if [ "${ALLOW_LOGGER_PARSE_ERRORS:-}" = "1" ]; then
-  FILTERED_LOG=$(mktemp)
-  grep -vE \
-    -e 'Could not find base class "Logger"' \
-    -e 'Failed to load script "res://addons/godot_ai/runtime/(editor|game)_logger\.gd"' \
-    "$IMPORT_LOG" > "$FILTERED_LOG" || true
-  SCAN_LOG="$FILTERED_LOG"
-fi
-
-# Check for parse errors in the (possibly filtered) import output.
-ERRORS=$(grep -ciE "SCRIPT ERROR|Parse Error|Failed to load script" "$SCAN_LOG" 2>/dev/null || true)
+# Check for parse errors in the import output. This is strict on every
+# Godot version: the `extends Logger` scripts that used to parse-error on
+# < 4.5 now live in the `.gdignore`'d runtime/loggers/ folder (built from
+# source at runtime by logger_loader.gd), so a clean scan has zero parse
+# errors on 4.3 too. No version-specific allowlist needed — any
+# SCRIPT ERROR / Parse Error here is a real failure.
+ERRORS=$(grep -ciE "SCRIPT ERROR|Parse Error|Failed to load script" "$IMPORT_LOG" 2>/dev/null || true)
 ERRORS="${ERRORS:-0}"
 
 if [ "$ERRORS" -gt 0 ]; then
   echo "GDScript parse errors found:"
-  grep -iE "SCRIPT ERROR|Parse Error|Failed to load script" "$SCAN_LOG" | sed 's/^/  /'
-  [ -n "$FILTERED_LOG" ] && rm -f "$FILTERED_LOG"
+  grep -iE "SCRIPT ERROR|Parse Error|Failed to load script" "$IMPORT_LOG" | sed 's/^/  /'
   exit 1
 fi
 
-[ -n "$FILTERED_LOG" ] && rm -f "$FILTERED_LOG"
 echo "All GDScript files OK"

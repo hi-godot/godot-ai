@@ -4,17 +4,15 @@ extends Logger
 ## Game-process Logger subclass.
 ##
 ## NOTE: deliberately no `class_name` — `extends Logger` requires the Logger
-## class which Godot only exposes from 4.5+. game_helper.gd loads this
-## script dynamically via load() and only calls OS.add_logger() after
-## gating on ClassDB.class_exists("Logger"). On Godot < 4.5 the editor
-## filesystem scan still parses this file and emits a benign `Parse Error:
-## Could not find base class "Logger"` to the Output panel; the script is
-## never instanced or used. (Side effect: `script/ci-check-gdscript` greps
-## for "Parse Error" as a hard failure, so it reports false positives when
-## run locally against a Godot < 4.5 install. CI itself runs on the pinned
-## 4.6.2 and is unaffected.) Registered via OS.add_logger() from inside
-## the running game so we can intercept print(), printerr(), push_error(),
-## and push_warning() and ferry them back to the editor over the
+## class which Godot only exposes from 4.5+. This file lives in the
+## `.gdignore`'d `runtime/loggers/` folder so Godot's editor filesystem scan
+## skips it entirely — on Godot < 4.5 it is never parsed, so it emits no
+## "Could not find base class Logger" error (it used to, before #475's
+## follow-up). game_helper.gd builds it from source at runtime via
+## `logger_loader.gd` and only calls OS.add_logger() after gating on
+## ClassDB.class_exists("Logger"). Registered from inside the running game
+## so we can intercept print(), printerr(), push_error(), and
+## push_warning() and ferry them back to the editor over the
 ## EngineDebugger channel — the same bridge PR #76 uses for screenshots.
 ##
 ## Logger virtuals can be called from any thread (e.g. async loaders push

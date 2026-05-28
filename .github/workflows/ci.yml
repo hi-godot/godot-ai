@@ -182,13 +182,6 @@ jobs:
       - name: Import and validate GDScript
         shell: bash
         timeout-minutes: 3
-        ## On the 4.3 canary, allow the benign `extends Logger` parse
-        ## errors emitted because the `Logger` class doesn't exist
-        ## before Godot 4.5. The 4.6.2 rows leave this off so any
-        ## Logger-related parse error on engines that DO have the class
-        ## still surfaces as a real failure (per Copilot review on #478).
-        env:
-          ALLOW_LOGGER_PARSE_ERRORS: ${{ matrix.godot-version == '4.3.0' && '1' || '0' }}
         run: |
           godot --headless --path test_project --import > godot-import.log 2>&1 || true
           bash script/ci-check-gdscript godot-import.log

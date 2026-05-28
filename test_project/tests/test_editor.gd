@@ -1008,7 +1008,7 @@ func test_get_logs_source_invalid_message_lists_editor() -> void:
 
 # ----- EditorLogger filtering (issue #231) -----
 
-const _EDITOR_LOGGER_PATH := "res://addons/godot_ai/runtime/editor_logger.gd"
+const _LoggerLoader := preload("res://addons/godot_ai/runtime/logger_loader.gd")
 
 
 func test_editor_logger_captures_user_script_parse_error() -> void:
@@ -1019,7 +1019,7 @@ func test_editor_logger_captures_user_script_parse_error() -> void:
 		skip("Logger class requires Godot 4.5+")
 		return
 	var ed_buf := McpEditorLogBuffer.new()
-	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
+	var logger = _LoggerLoader.build(_LoggerLoader.EDITOR_LOGGER_PATH).new(ed_buf)
 	logger._log_error(
 		"_parse",
 		"res://broken.gd",
@@ -1043,7 +1043,7 @@ func test_editor_logger_warn_error_type_maps_to_warn_level() -> void:
 		skip("Logger class requires Godot 4.5+")
 		return
 	var ed_buf := McpEditorLogBuffer.new()
-	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
+	var logger = _LoggerLoader.build(_LoggerLoader.EDITOR_LOGGER_PATH).new(ed_buf)
 	logger._log_error("_run", "res://x.gd", 3, "deprecated", "", false, 1, [])
 	var entries := ed_buf.get_range(0, 10)
 	assert_eq(entries.size(), 1)
@@ -1059,7 +1059,7 @@ func test_editor_logger_drops_internal_godot_cpp_noise() -> void:
 		skip("Logger class requires Godot 4.5+")
 		return
 	var ed_buf := McpEditorLogBuffer.new()
-	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
+	var logger = _LoggerLoader.build(_LoggerLoader.EDITOR_LOGGER_PATH).new(ed_buf)
 	logger._log_error("foo", "scene/main/scene_tree.cpp", 1234, "noise", "", false, 0, [])
 	assert_eq(ed_buf.total_count(), 0, "C++-source errors with no script backtrace should be filtered")
 
@@ -1073,7 +1073,7 @@ func test_editor_logger_captures_engine_resource_error_with_res_path() -> void:
 		skip("Logger class requires Godot 4.5+")
 		return
 	var ed_buf := McpEditorLogBuffer.new()
-	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
+	var logger = _LoggerLoader.build(_LoggerLoader.EDITOR_LOGGER_PATH).new(ed_buf)
 	logger._log_error(
 		"_load",
 		"core/io/resource_loader.cpp",
@@ -1097,7 +1097,7 @@ func test_editor_logger_drops_engine_resource_error_for_godot_ai_addon() -> void
 		skip("Logger class requires Godot 4.5+")
 		return
 	var ed_buf := McpEditorLogBuffer.new()
-	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
+	var logger = _LoggerLoader.build(_LoggerLoader.EDITOR_LOGGER_PATH).new(ed_buf)
 	logger._log_error(
 		"_load",
 		"core/io/resource_loader.cpp",
@@ -1118,7 +1118,7 @@ func test_editor_logger_drops_godot_ai_addon_to_avoid_feedback_loop() -> void:
 		skip("Logger class requires Godot 4.5+")
 		return
 	var ed_buf := McpEditorLogBuffer.new()
-	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
+	var logger = _LoggerLoader.build(_LoggerLoader.EDITOR_LOGGER_PATH).new(ed_buf)
 	logger._log_error("_start_server", "res://addons/godot_ai/plugin.gd", 100, "self-noise", "", false, 1, [])
 	assert_eq(ed_buf.total_count(), 0, "addons/godot_ai/ paths should be filtered")
 
@@ -1132,7 +1132,7 @@ func test_editor_logger_uses_script_backtrace_for_push_error() -> void:
 		skip("Logger class requires Godot 4.5+")
 		return
 	var ed_buf := McpEditorLogBuffer.new()
-	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
+	var logger = _LoggerLoader.build(_LoggerLoader.EDITOR_LOGGER_PATH).new(ed_buf)
 
 	## Build a stub backtrace object with the same getter shape Godot
 	## passes via _log_error. ScriptBacktrace can't be constructed in
@@ -1164,7 +1164,7 @@ func test_editor_logger_drops_push_error_from_plugin_via_backtrace() -> void:
 		skip("Logger class requires Godot 4.5+")
 		return
 	var ed_buf := McpEditorLogBuffer.new()
-	var logger = load(_EDITOR_LOGGER_PATH).new(ed_buf)
+	var logger = _LoggerLoader.build(_LoggerLoader.EDITOR_LOGGER_PATH).new(ed_buf)
 	var bt := StubBacktrace.new("res://addons/godot_ai/plugin.gd", 50, "_attach_editor_logger")
 	logger._log_error(
 		"push_warning",
@@ -1187,7 +1187,7 @@ func test_editor_logger_no_op_when_buffer_unset() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return
-	var logger = load(_EDITOR_LOGGER_PATH).new()
+	var logger = _LoggerLoader.build(_LoggerLoader.EDITOR_LOGGER_PATH).new()
 	logger._log_error("f", "res://x.gd", 1, "msg", "", false, 0, [])
 	assert_true(true, "No crash when buffer is null")
 
@@ -1198,7 +1198,7 @@ func test_editor_logger_is_user_script_predicate() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return
-	var script = load(_EDITOR_LOGGER_PATH)
+	var script = _LoggerLoader.build(_LoggerLoader.EDITOR_LOGGER_PATH)
 	assert_true(script._is_user_script("res://foo.gd"))
 	assert_true(script._is_user_script("res://Bar.cs"))
 	assert_true(script._is_user_script("/abs/path/foo.gd"))
@@ -1212,7 +1212,7 @@ func test_editor_logger_extract_user_res_path_predicate() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return
-	var script = load(_EDITOR_LOGGER_PATH)
+	var script = _LoggerLoader.build(_LoggerLoader.EDITOR_LOGGER_PATH)
 	assert_eq(
 		script._extract_user_res_path("Cannot open file 'res://does/not/exist.tres'."),
 		"res://does/not/exist.tres",
@@ -1229,7 +1229,7 @@ func test_editor_logger_is_in_godot_ai_addon_predicate() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return
-	var script = load(_EDITOR_LOGGER_PATH)
+	var script = _LoggerLoader.build(_LoggerLoader.EDITOR_LOGGER_PATH)
 	assert_true(script._is_in_godot_ai_addon("res://addons/godot_ai/plugin.gd"))
 	assert_true(script._is_in_godot_ai_addon("/abs/project/addons/godot_ai/handler.gd"))
 	assert_false(script._is_in_godot_ai_addon("res://user_script.gd"))
@@ -1304,7 +1304,9 @@ func test_debugger_plugin_log_batch_no_buffer_is_safe() -> void:
 
 # ----- GameLogger._log_error arg routing (PR #78 smoke bug) -----
 
-const _GAME_LOGGER_PATH := "res://addons/godot_ai/runtime/game_logger.gd"
+# game_logger lives in the .gdignore'd runtime/loggers/ folder and is built
+# from source by LoggerLoader (see _LoggerLoader above) — load() won't resolve
+# a .gdignore'd path, so these tests go through the loader too.
 
 
 func test_game_logger_single_arg_push_warning_preserves_user_message() -> void:
@@ -1314,7 +1316,7 @@ func test_game_logger_single_arg_push_warning_preserves_user_message() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return
-	var logger = load(_GAME_LOGGER_PATH).new()
+	var logger = _LoggerLoader.build(_LoggerLoader.GAME_LOGGER_PATH).new()
 	logger._log_error("push_warning", "core/variant/variant_utility.cpp", 1034, "warn-game", "", false, 1, [])
 	var pending: Array = logger.drain()
 	assert_eq(pending.size(), 1)
@@ -1326,7 +1328,7 @@ func test_game_logger_single_arg_push_error_preserves_user_message() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return
-	var logger = load(_GAME_LOGGER_PATH).new()
+	var logger = _LoggerLoader.build(_LoggerLoader.GAME_LOGGER_PATH).new()
 	logger._log_error("push_error", "core/variant/variant_utility.cpp", 1000, "err-game", "", false, 0, [])
 	var pending: Array = logger.drain()
 	assert_eq(pending.size(), 1)
@@ -1339,7 +1341,7 @@ func test_game_logger_two_arg_push_error_prefers_rationale() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return
-	var logger = load(_GAME_LOGGER_PATH).new()
+	var logger = _LoggerLoader.build(_LoggerLoader.GAME_LOGGER_PATH).new()
 	logger._log_error("my_func", "res://foo.gd", 42, "ERR_CODE", "detailed reason", false, 0, [])
 	var pending: Array = logger.drain()
 	assert_eq(pending.size(), 1)
@@ -1353,7 +1355,7 @@ func test_game_logger_printerr_routes_to_error_level() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return
-	var logger = load(_GAME_LOGGER_PATH).new()
+	var logger = _LoggerLoader.build(_LoggerLoader.GAME_LOGGER_PATH).new()
 	logger._log_message("oops", true)
 	logger._log_message("hi", false)
 	var pending: Array = logger.drain()
@@ -1373,7 +1375,7 @@ func test_game_logger_uses_script_backtrace_for_push_error() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return
-	var logger = load(_GAME_LOGGER_PATH).new()
+	var logger = _LoggerLoader.build(_LoggerLoader.GAME_LOGGER_PATH).new()
 	var bt := StubBacktrace.new("res://player.gd", 88, "_take_damage")
 	logger._log_error(
 		"push_error",
@@ -1401,7 +1403,7 @@ func test_game_logger_falls_back_to_original_file_when_no_backtrace() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return
-	var logger = load(_GAME_LOGGER_PATH).new()
+	var logger = _LoggerLoader.build(_LoggerLoader.GAME_LOGGER_PATH).new()
 	logger._log_error("my_func", "res://foo.gd", 42, "ERR_CODE", "detailed reason", false, 0, [])
 	var pending: Array = logger.drain()
 	assert_eq(pending.size(), 1)

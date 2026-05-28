@@ -7,9 +7,12 @@ const GAME_HELPER_AUTOLOAD_PATH := "res://addons/godot_ai/runtime/game_helper.gd
 ## Editor-process Logger subclass — captures parse errors, @tool runtime
 ## errors, and push_error/push_warning so the LLM can read them via
 ## `logs_read(source="editor")`. Loaded dynamically because
-## `extends Logger` requires Godot 4.5+; gating on ClassDB at registration
-## time keeps the plugin loadable on 4.4. See issue #231.
-const EDITOR_LOGGER_PATH := "res://addons/godot_ai/runtime/editor_logger.gd"
+## `extends Logger` requires Godot 4.5+. The logger script lives in the
+## `.gdignore`'d `runtime/loggers/` folder so Godot's editor scan never
+## parses it (no "Could not find base class Logger" error on < 4.5), and
+## LoggerLoader compiles it from source at runtime only after the
+## ClassDB.class_exists("Logger") gate below. See issue #231 / #475.
+const LoggerLoader := preload("res://addons/godot_ai/runtime/logger_loader.gd")
 
 ## EditorSettings keys used to remember which server process the plugin
 ## spawned — survives editor restarts, lets a later editor session adopt
@@ -503,7 +506,7 @@ func _exit_tree() -> void:
 func _attach_editor_logger() -> void:
 	if not (ClassDB.class_exists("Logger") and OS.has_method("add_logger")):
 		return
-	var logger_script := load(EDITOR_LOGGER_PATH)
+	var logger_script := LoggerLoader.build(LoggerLoader.EDITOR_LOGGER_PATH)
 	if logger_script == null:
 		return
 	_editor_logger = logger_script.new(_editor_log_buffer)

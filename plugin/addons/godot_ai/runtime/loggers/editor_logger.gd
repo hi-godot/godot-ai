@@ -4,15 +4,14 @@ extends Logger
 ## Editor-process Logger subclass.
 ##
 ## NOTE: deliberately no `class_name` — `extends Logger` requires the Logger
-## class which Godot only exposes from 4.5+. plugin.gd loads this script
-## dynamically via load() and only calls OS.add_logger() after gating on
-## ClassDB.class_exists("Logger"). On Godot < 4.5 the editor filesystem scan
-## still parses this file and emits a benign `Parse Error: Could not find
-## base class "Logger"` to the Output panel; the script is never instanced
-## or used. (Side effect: `script/ci-check-gdscript` greps for "Parse Error"
-## as a hard failure, so it reports false positives when run locally against
-## a Godot < 4.5 install. CI itself runs on the pinned 4.6.2 and is
-## unaffected.) Registered via OS.add_logger() from plugin.gd::_enter_tree
+## class which Godot only exposes from 4.5+. This file lives in the
+## `.gdignore`'d `runtime/loggers/` folder so Godot's editor filesystem scan
+## skips it entirely — on Godot < 4.5 it is never parsed, so it emits no
+## "Could not find base class Logger" error (it used to, before #475's
+## follow-up). plugin.gd builds it from source at runtime via
+## `logger_loader.gd` and only calls OS.add_logger() after gating on
+## ClassDB.class_exists("Logger"), so the `extends Logger` parse only ever
+## happens on 4.5+ where it resolves. Registered from plugin.gd::_enter_tree
 ## so we can intercept editor-process script errors — parse errors, @tool
 ## runtime errors, EditorPlugin errors, push_error/push_warning — and
 ## surface them via `logs_read(source="editor")`. Without this, the LLM
