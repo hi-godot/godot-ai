@@ -78,6 +78,8 @@ Run Godot tests: use `run_tests` MCP tool (no reload needed for test file edits)
 
 Test guardrails: the runner flags tests with 0 assertions as failures (catches silent `return` before asserting). Always use `assert_true(false, "reason")` before early `return` in test methods. Test discovery is resilient — a broken `.gd` file doesn't kill discovery of the rest.
 
+Version-gated skips: for a test that depends on 4.4+-only behavior, call `if skip_on_godot_lt("4.4", "reason"): return` at the top (`McpTestSuite.skip_on_godot_lt` returns `bool`). CI runs a Godot 4.3 Linux canary (`Godot tests / Linux (Godot 4.3)`, pinned to `4.3.0`) in addition to the three 4.6.2 OS rows; the canary sets `ALLOW_LOGGER_PARSE_ERRORS=1` (suppresses the benign `extends Logger` parse errors in `ci-check-gdscript`) and `SKIP_POSTCHURN_TEST_RUN=1` (the reload smoke's post-churn `test_run` outruns the 30s curl timeout on slow 4.3 GDScript exec).
+
 ## GDScript conventions
 
 - Handlers are `@tool` `RefCounted` scripts with **no** `class_name` — load them via `const X := preload("res://addons/godot_ai/handlers/foo_handler.gd")` from `plugin.gd`. The `Mcp*`-prefixed `class_name` is reserved for utility classes shared across the project (e.g. `McpScenePath`, `McpPropertyErrors`, `McpParamValidators`); see #253 for why bare `class_name`s on handlers are forbidden.
@@ -89,6 +91,8 @@ Test guardrails: the runner flags tests with 0 assertions as failures (catches s
 - Use `McpScenePath.from_node()` / `McpScenePath.resolve()` for clean paths like `/Main/Camera3D`
 - Use `##` for doc comments, typed arrays (`Array[String]`), never Python-style `"""`
 - Main thread only — 4ms frame budget in `_process()`, use `call_deferred` for mutations
+- **Forward-compat engine APIs**: call newer-than-4.3 engine methods via `Engine.call("method", ...)` / `OS.call("method", ...)`, never a direct reference. A direct `Engine.capture_script_backtraces(...)` is rejected by the 4.3 *parser* (type-checked against the native class) even behind an `Engine.has_method(...)` runtime guard, cascading to a full plugin-load failure on 4.3 (#476). `Engine.call(...)` is identical at runtime on 4.4+ but invisible to the older parser.
+- **`extends Logger` is 4.5+**: `runtime/editor_logger.gd` / `game_logger.gd` extend `Logger` and are only `load()`-ed behind a `ClassDB.class_exists("Logger")` gate. On < 4.5 they emit a benign `Could not find base class "Logger"` parse error during the editor's filesystem scan (never instantiated, plugin still works). Don't add a third 4.5+-base script without the same gating + comment.
 
 ## Self-update compatibility
 

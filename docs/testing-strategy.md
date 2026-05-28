@@ -128,14 +128,14 @@ If a tool has undo semantics, readiness constraints, or cross-session behavior, 
 The CI stack should exercise at least four tiers:
 
 - Python unit and integration tests (3 OS x 2 Python versions)
-- Godot-side editor test suites (3 OS via `chickensoft-games/setup-godot@v2` on GitHub Actions runners) — **headless**; no rendering
+- Godot-side editor test suites (3 OS @ Godot 4.6.2 + a Linux Godot 4.3 canary, via `chickensoft-games/setup-godot@v2` on GitHub Actions runners) — **headless**; no rendering. The 4.3 canary (Phase 1 of #477) guards the documented-minimum engine against the parse-cascade class of regression (#476). Tests that depend on 4.4+-only engine behavior skip via `McpTestSuite.skip_on_godot_lt("4.4", reason)`.
 - release-surface smoke, especially install and packaging paths once distribution work is active (3 OS)
 - local interactive self-update smoke for update/reload/extract changes (`script/local-self-update-smoke`)
 - **pixel-level capture smoke** for tools that cross the editor → game-process boundary (3 OS). The `game-capture-smoke-{linux,macos,windows}` jobs launch Godot with a real rendering driver (`xvfb-run -a ... godot --rendering-driver opengl3` on Linux, windowed on macOS and Windows), play `test_project/capture_smoke.tscn` (four colored quadrants), round-trip `editor_screenshot(source="game")` through the debugger-channel bridge, decode the returned PNG with Pillow, and assert the centre of each quadrant matches the expected color within tolerance. Catches regressions in the `_mcp_game_helper` autoload registration, the `DEFERRED_RESPONSE` dispatcher path, and the `McpConnection.send_deferred_response` reply pipeline — none of which are exercised by the headless Godot test suite.
 
 ### CI hardening measures
 
-- **GDScript validation**: `script/ci-check-gdscript` runs after `--import` and before the editor launches. It scans the import log for `SCRIPT ERROR` / `Parse Error` lines and fails the build immediately if any GDScript file has syntax errors. This catches broken scripts before the test runner starts.
+- **GDScript validation**: `script/ci-check-gdscript` runs after `--import` and before the editor launches. It scans the import log for `SCRIPT ERROR` / `Parse Error` lines and fails the build immediately if any GDScript file has syntax errors. This catches broken scripts before the test runner starts. On the Godot 4.3 canary it sets `ALLOW_LOGGER_PARSE_ERRORS=1` to suppress the two benign `extends Logger` parse errors (the `Logger` base class only exists on 4.5+); the 4.6.2 rows stay strict so a real Logger error on an engine that has the class still fails CI.
 - **Step timeouts**: test and smoke steps have `timeout-minutes` set to prevent CI hangs from frozen Godot processes.
 - **Filesystem scan settling**: `script/ci-godot-tests` includes a short sleep after editor startup so the filesystem scan completes and test discovery finds all suites.
 - **Resilient test discovery**: `test_handler.gd` catches per-file load errors during `_discover_suites()`. A broken test file does not prevent the rest of the suite from running; errors are reported in the response alongside successful results.
