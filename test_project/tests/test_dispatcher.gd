@@ -129,6 +129,8 @@ func test_malformed_result_log_includes_non_empty_backtrace() -> void:
 	## GDScript failures surface to the dispatcher as malformed results, so
 	## this pins the same guard path without making the test runner depend on
 	## engine-version-specific runtime-error continuation semantics.
+	if skip_on_godot_lt("4.4", "Engine.capture_script_backtraces / get_stack() format differs on 4.3"):
+		return
 	var buf := McpLogBuffer.new()
 	var d := McpDispatcher.new(buf)
 	d.mcp_logging = true

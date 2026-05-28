@@ -93,6 +93,34 @@ func skip_suite(reason: String) -> void:
 	_suite_skipped_reason = reason
 
 
+## Mark the current test as skipped when the running Godot is older than
+## `min_version` (a "major.minor" string like "4.4"). Use for tests that
+## exercise an engine API or behavior that only exists on newer Godot.
+## Returns true when the test was skipped, so callers can `return` from
+## the test body.
+##
+## Example:
+##     func test_uses_44_only_api() -> void:
+##         if skip_on_godot_lt("4.4", "Engine.capture_script_backtraces is 4.4+"):
+##             return
+##         ...
+func skip_on_godot_lt(min_version: String, reason: String = "") -> bool:
+	var v := Engine.get_version_info()
+	var current_major := int(v.get("major", 0))
+	var current_minor := int(v.get("minor", 0))
+	var parts := min_version.split(".")
+	var want_major := int(parts[0]) if parts.size() > 0 else 0
+	var want_minor := int(parts[1]) if parts.size() > 1 else 0
+	if (
+		current_major < want_major
+		or (current_major == want_major and current_minor < want_minor)
+	):
+		var msg := reason if not reason.is_empty() else "requires Godot %s+" % min_version
+		skip(msg + " (running %d.%d)" % [current_major, current_minor])
+		return true
+	return false
+
+
 ## Trigger an undo against whichever history (scene or global) holds the most
 ## recent action. `EditorUndoRedoManager` in Godot 4.x doesn't expose `.undo()`
 ## directly — you resolve the history's underlying UndoRedo and call it there.
