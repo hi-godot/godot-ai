@@ -78,7 +78,7 @@ Run Godot tests: use `run_tests` MCP tool (no reload needed for test file edits)
 
 Test guardrails: the runner flags tests with 0 assertions as failures (catches silent `return` before asserting). Always use `assert_true(false, "reason")` before early `return` in test methods. Test discovery is resilient — a broken `.gd` file doesn't kill discovery of the rest.
 
-Version-gated skips: for a test that depends on 4.4+-only behavior, call `if skip_on_godot_lt("4.4", "reason"): return` at the top (`McpTestSuite.skip_on_godot_lt` returns `bool`). CI runs a Godot 4.3 Linux canary (`Godot tests / Linux (Godot 4.3)`, pinned to `4.3.0`) in addition to the three 4.6.2 OS rows; the canary sets `ALLOW_LOGGER_PARSE_ERRORS=1` (suppresses the benign `extends Logger` parse errors in `ci-check-gdscript`) and `SKIP_POSTCHURN_TEST_RUN=1` (the reload smoke's post-churn `test_run` outruns the 30s curl timeout on slow 4.3 GDScript exec).
+Version-gated skips: for a test that depends on 4.4+-only behavior, call `if skip_on_godot_lt("4.4", "reason"): return` at the top (`McpTestSuite.skip_on_godot_lt` returns `bool`). CI runs a Godot 4.3 Linux canary (`Godot tests / Linux (Godot 4.3)`, pinned to `4.3.0`) in addition to the three 4.6.2 OS rows; the canary sets `SKIP_POSTCHURN_TEST_RUN=1` (the reload smoke's post-churn `test_run` outruns the 30s curl timeout on slow 4.3 GDScript exec). `ci-check-gdscript` is strict on all versions — the `extends Logger` scripts live in the `.gdignore`'d `runtime/loggers/` folder (built at runtime by `logger_loader.gd`), so 4.3 has zero parse errors with no allowlist.
 
 ## GDScript conventions
 

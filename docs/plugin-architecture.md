@@ -94,8 +94,11 @@ plugin/addons/godot_ai/
 │   └── mcp_debugger_plugin.gd   ## editor-side debugger-channel bridge
 ├── runtime/
 │   ├── game_helper.gd           ## autoload that runs inside the game subprocess
-│   ├── game_logger.gd           ## game-side logger, ferries lines back via debugger
-│   ├── editor_logger.gd         ## editor-process logger for logs_read(source="editor")
+│   ├── logger_loader.gd         ## builds the .gdignore'd Logger scripts from source at runtime (4.5+)
+│   ├── loggers/                 ## .gdignore'd so the editor scan never parses `extends Logger`
+│   │   ├── .gdignore
+│   │   ├── game_logger.gd       ## game-side logger, ferries lines back via debugger
+│   │   └── editor_logger.gd     ## editor-process logger for logs_read(source="editor")
 │   └── draw_recipe.gd           ## reusable runtime for control_draw_recipe
 ├── testing/
 │   ├── test_runner.gd, test_suite.gd, stub_backtrace.gd
