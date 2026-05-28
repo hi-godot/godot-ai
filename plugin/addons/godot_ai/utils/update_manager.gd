@@ -146,14 +146,20 @@ static func _manual_update_label(version: String) -> String:
 ## pipeline.
 func start_install() -> void:
 	if not _can_self_update():
-		OS.shell_open(RELEASES_PAGE)
-		## Keep the up-front guidance label (already shown since check time);
-		## just confirm the page opened and lock the button.
-		install_state_changed.emit({
-			"button_text": "Opened download page",
-			"button_disabled": true,
-			"label_text": _manual_update_label(""),
-		})
+		## Only claim success + lock the button if the browser actually opened.
+		## On failure (no handler, headless) keep the button enabled so the
+		## user can retry. Either way, leave the version-bearing guidance label
+		## from check time in place — don't re-emit label_text.
+		if OS.shell_open(RELEASES_PAGE) == OK:
+			install_state_changed.emit({
+				"button_text": "Opened download page",
+				"button_disabled": true,
+			})
+		else:
+			install_state_changed.emit({
+				"button_text": "Couldn't open browser — retry",
+				"button_disabled": false,
+			})
 		return
 
 	if _latest_download_url.is_empty():
