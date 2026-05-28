@@ -33,6 +33,14 @@ extends Logger
 
 const ADDON_PATH_MARKER := "/addons/godot_ai/"
 
+## Resolve McpLogBacktrace by path, not by the `McpLogBacktrace` class_name.
+## This script is compiled from source at runtime by logger_loader.gd; a bare
+## class_name reference depends on the global class-name table being populated
+## at compile time, which isn't guaranteed on a cold editor enable mid-scan.
+## `const preload` resolves at compile time independent of the registry —
+## matches game_logger.gd's deliberate choice for the same reason.
+const _LogBacktrace := preload("res://addons/godot_ai/utils/log_backtrace.gd")
+
 ## McpEditorLogBuffer — untyped because this script is loaded dynamically and
 ## McpEditorLogBuffer's class_name isn't yet registered on the parser at the
 ## time `extends Logger` resolves. Constructor-injected so the hot path
@@ -65,7 +73,7 @@ func _log_error(
 	var message_res_path := _extract_user_res_path(message)
 	if not _is_user_script(file) and script_backtraces.is_empty() and message_res_path.is_empty():
 		return
-	var resolved := McpLogBacktrace.resolve_error(
+	var resolved := _LogBacktrace.resolve_error(
 		function, file, line, code, rationale, error_type, script_backtraces,
 	)
 	if not _is_user_script(resolved.path):

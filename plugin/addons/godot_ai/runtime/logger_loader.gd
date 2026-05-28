@@ -41,10 +41,16 @@ static func build(path: String) -> GDScript:
 		return null
 	var script := GDScript.new()
 	script.source_code = source
-	## Give it a stable resource path so error messages and any internal
-	## path resolution behave; the path is `.gdignore`'d so this never
-	## collides with an imported resource.
-	script.resource_path = path
+	## Deliberately do NOT set `script.resource_path`: this builds a fresh
+	## anonymous GDScript every call, and a reload cycle (editor_reload_plugin,
+	## self-update disable→enable) calls build() again for the same path. Two
+	## live Resources sharing one non-empty resource_path trips Godot's
+	## "Another resource is loaded from path ..." error and leaves the new
+	## script with an empty path anyway — re-introducing red console text on
+	## every reload, the exact thing this folder's .gdignore set out to remove.
+	## game_helper.gd::_handle_eval compiles from source the same way and also
+	## omits resource_path. The script still resolves its absolute preloads /
+	## class_names fine without a path.
 	if script.reload() != OK:
 		return null
 	return script
