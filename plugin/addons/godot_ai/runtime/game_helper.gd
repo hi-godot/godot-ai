@@ -197,6 +197,8 @@ func _handle_game_command(data: Array) -> void:
 			result = _game_get_scene_tree(json.data)
 		"get_node_info":
 			result = _game_get_node_info(json.data)
+		"get_ui_elements":
+			result = _game_get_ui_elements(json.data)
 		"input_key":
 			result = _game_input_key(json.data)
 		"input_mouse":
@@ -267,6 +269,110 @@ func _game_get_node_info(params: Dictionary) -> Dictionary:
 	return info
 
 
+func _game_get_ui_elements(params: Dictionary) -> Dictionary:
+	var max_depth := maxi(0, int(params.get("max_depth", 10)))
+	var include_hidden := bool(params.get("include_hidden", false))
+	var include_disabled := bool(params.get("include_disabled", true))
+	var root_path := str(params.get("root_path", ""))
+	var root := _resolve_runtime_node(root_path)
+	if root == null:
+		return {"root": "", "elements": [], "total_count": 0, "not_found": root_path}
+
+	var elements: Array[Dictionary] = []
+	_collect_ui_elements(root, 0, max_depth, include_hidden, include_disabled, elements)
+	return {
+		"root": _runtime_path(root),
+		"elements": elements,
+		"total_count": elements.size(),
+	}
+
+
+func _collect_ui_elements(
+	node: Node,
+	current_depth: int,
+	max_depth: int,
+	include_hidden: bool,
+	include_disabled: bool,
+	out: Array[Dictionary]
+) -> void:
+	if node is Control:
+		var control := node as Control
+		var visible := _control_visible_in_tree(control)
+		var disabled := _control_disabled(control)
+		if (include_hidden or visible) and (include_disabled or not disabled):
+			out.append(_ui_element_info(control, visible, disabled))
+
+	if current_depth >= max_depth:
+		return
+	for child in node.get_children():
+		if child is Node:
+			_collect_ui_elements(
+				child,
+				current_depth + 1,
+				max_depth,
+				include_hidden,
+				include_disabled,
+				out
+			)
+
+
+func _ui_element_info(control: Control, visible: bool, disabled: bool) -> Dictionary:
+	var info := {
+		"path": _runtime_path(control),
+		"name": control.name,
+		"type": control.get_class(),
+		"visible": visible,
+		"disabled": disabled,
+		"rect": _variant_to_json(control.get_rect()),
+		"global_rect": _variant_to_json(control.get_global_rect()),
+	}
+	if _object_has_property(control, "text"):
+		info["text"] = str(control.get("text"))
+	return info
+
+
+func _control_disabled(control: Control) -> bool:
+	if _object_has_property(control, "disabled"):
+		return bool(control.get("disabled"))
+	return false
+
+
+func _control_visible_in_tree(control: Control) -> bool:
+	if not control.visible:
+		return false
+	var parent := control.get_parent()
+	while parent != null:
+		if parent is CanvasItem and not (parent as CanvasItem).visible:
+			return false
+		parent = parent.get_parent()
+	if Engine.is_editor_hint():
+		return true
+	return control.is_visible_in_tree()
+
+
+static var _property_name_cache: Dictionary = {}
+
+
+func _object_has_property(obj: Object, property_name: String) -> bool:
+	var key := _property_cache_key(obj)
+	if not _property_name_cache.has(key):
+		var names := {}
+		for prop in obj.get_property_list():
+			names[str(prop.get("name", ""))] = true
+		_property_name_cache[key] = names
+	return (_property_name_cache[key] as Dictionary).has(property_name)
+
+
+func _property_cache_key(obj: Object) -> String:
+	var script = obj.get_script()
+	if script == null:
+		return obj.get_class()
+	var script_id := str(script.get_instance_id())
+	if not script.resource_path.is_empty():
+		script_id = script.resource_path
+	return "%s:%s" % [obj.get_class(), script_id]
+
+
 func _runtime_node_properties(node: Node) -> Dictionary:
 	var props := {}
 	for p in node.get_property_list():
@@ -279,7 +385,7 @@ func _runtime_node_properties(node: Node) -> Dictionary:
 
 
 func _resolve_runtime_node(path: String) -> Node:
-	var scene_root := get_tree().current_scene
+	var scene_root := _current_scene_root()
 	if scene_root == null:
 		return null
 	if path.is_empty() or path == "/":
@@ -298,12 +404,22 @@ func _resolve_runtime_node(path: String) -> Node:
 
 
 func _runtime_path(node: Node) -> String:
-	var scene_root := get_tree().current_scene
+	var scene_root := _current_scene_root()
 	if scene_root == null:
 		return str(node.get_path())
 	if node == scene_root:
 		return "/" + str(scene_root.name)
 	return "/" + str(scene_root.name) + "/" + str(scene_root.get_path_to(node))
+
+
+func _current_scene_root() -> Node:
+	var tree := get_tree()
+	if tree == null:
+		return null
+	var scene_root := tree.current_scene
+	if scene_root == null and Engine.is_editor_hint():
+		scene_root = EditorInterface.get_edited_scene_root()
+	return scene_root
 
 
 func _game_input_key(params: Dictionary) -> Dictionary:

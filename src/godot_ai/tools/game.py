@@ -20,6 +20,10 @@ Ops:
         path or a scene-relative path rooted at the current scene.
   - get_node_info(path, include_properties=True)
         Inspect one running node's metadata and optional property snapshot.
+  - get_ui_elements(root_path="", include_hidden=False,
+                    include_disabled=True, max_depth=10)
+        Inspect visible runtime Control nodes for UI testing. Includes path,
+        type, text where present, disabled state, and rect metadata.
   - input_key(key, pressed=True, echo=False)
         Send a key press/release to the running game.
   - input_mouse(event, position=None, button="left", pressed=True)
@@ -38,6 +42,7 @@ def register_game_tools(mcp: FastMCP) -> None:
         ops={
             "get_scene_tree": game_handlers.game_get_scene_tree,
             "get_node_info": game_handlers.game_get_node_info,
+            "get_ui_elements": game_handlers.game_get_ui_elements,
             "input_key": game_handlers.game_input_key,
             "input_mouse": game_handlers.game_input_mouse,
             "input_gamepad": game_handlers.game_input_gamepad,
@@ -46,6 +51,7 @@ def register_game_tools(mcp: FastMCP) -> None:
         read_resource_forms={
             "get_scene_tree": None,
             "get_node_info": None,
+            "get_ui_elements": None,
             "input_key": None,
             "input_mouse": None,
             "input_gamepad": None,

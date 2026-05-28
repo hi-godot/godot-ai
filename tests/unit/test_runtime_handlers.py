@@ -1408,6 +1408,31 @@ async def test_game_get_node_info_sends_game_command():
     }
 
 
+async def test_game_get_ui_elements_sends_game_command():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+
+    await game_handlers.game_get_ui_elements(
+        runtime,
+        root_path="/Main/HUD",
+        include_hidden=True,
+        include_disabled=False,
+        max_depth=3,
+    )
+
+    assert client.calls[-1]["command"] == "game_command"
+    assert client.calls[-1]["params"] == {
+        "op": "get_ui_elements",
+        "params": {
+            "root_path": "/Main/HUD",
+            "include_hidden": True,
+            "include_disabled": False,
+            "max_depth": 3,
+        },
+    }
+    assert client.calls[-1]["timeout"] == game_handlers.GAME_COMMAND_TIMEOUT_SEC
+
+
 async def test_game_input_key_sends_game_command():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)

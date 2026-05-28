@@ -40,6 +40,23 @@ async def game_get_node_info(
     )
 
 
+async def game_get_ui_elements(
+    runtime: DirectRuntime,
+    root_path: str = "",
+    include_hidden: bool = False,
+    include_disabled: bool = True,
+    max_depth: int = 10,
+) -> dict:
+    params: dict[str, Any] = {
+        "include_hidden": include_hidden,
+        "include_disabled": include_disabled,
+        "max_depth": max_depth,
+    }
+    if root_path:
+        params["root_path"] = root_path
+    return await _game_command(runtime, "get_ui_elements", params)
+
+
 async def game_input_key(
     runtime: DirectRuntime,
     key: str,
