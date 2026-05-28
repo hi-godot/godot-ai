@@ -9,7 +9,7 @@ that script fails with:
 
     SCRIPT ERROR: Parse Error: Identifier "McpLogBacktrace" not declared in
     the current scope.
-    at: GDScript::reload (res://addons/godot_ai/runtime/game_logger.gd:44)
+    at: GDScript::reload (res://addons/godot_ai/runtime/loggers/game_logger.gd:44)
 
 …and the entire game-side log-bridge fails to load. This breaks `print()`
 / `printerr()` ferrying back to the editor for any user whose first launch
