@@ -23,6 +23,28 @@ func suite_name() -> String:
 	return "update_manager"
 
 
+# ---- _version_can_self_update (pure / static, #475 gate) ---------------
+
+func test_version_can_self_update_false_below_4_4() -> void:
+	## Godot < 4.4 takes the extract-then-restart path that crashes (#475),
+	## so the in-editor self-update is gated off on those engines.
+	assert_false(McpUpdateManagerScript._version_can_self_update(4, 3),
+		"4.3 must be gated (in-editor self-update disabled)")
+	assert_false(McpUpdateManagerScript._version_can_self_update(4, 0),
+		"4.0 must be gated")
+	assert_false(McpUpdateManagerScript._version_can_self_update(3, 9),
+		"a hypothetical 3.x must be gated")
+
+
+func test_version_can_self_update_true_at_and_above_4_4() -> void:
+	assert_true(McpUpdateManagerScript._version_can_self_update(4, 4),
+		"4.4 is the first engine that can self-update in place")
+	assert_true(McpUpdateManagerScript._version_can_self_update(4, 6),
+		"4.6 can self-update")
+	assert_true(McpUpdateManagerScript._version_can_self_update(5, 0),
+		"a future 5.0 (minor 0) must not be misclassified by the minor check")
+
+
 # ---- parse_releases_response (pure / static) ---------------------------
 
 func _make_body(json_str: String) -> PackedByteArray:

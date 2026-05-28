@@ -103,11 +103,46 @@ func clear_pending_download() -> void:
 	_latest_download_url = ""
 
 
-## Driven by the dock's Update button. With no resolved download URL —
-## either the check never completed, or the release didn't ship a
-## matching asset — falls back to opening the release page. Otherwise
-## kicks off the download → extract → reload pipeline.
+## True when the running Godot can self-update in place. Godot < 4.4 takes
+## the `_install_zip_inline` extract-then-restart path, and that engine's
+## stricter `GDScript::reload()` (`!p_keep_state && has_instances` ->
+## `ERR_ALREADY_IN_USE`) turns the extract-over-live-scripts into a reload
+## error flood plus a SIGSEGV in `EditorDockManager::remove_dock` /
+## `SceneTree::finalize` on the restart/quit (#475). So on < 4.4 we don't
+## run the in-editor pipeline at all — the user updates manually.
+## Guards `major` too so a future Godot 5.x (minor 0) isn't misclassified.
+func _can_self_update() -> bool:
+	var v := Engine.get_version_info()
+	return _version_can_self_update(int(v.get("major", 0)), int(v.get("minor", 0)))
+
+
+## Pure version predicate, split out so it's testable without faking the
+## running engine. In-editor self-update needs Godot >= 4.4.
+static func _version_can_self_update(major: int, minor: int) -> bool:
+	return major > 4 or (major == 4 and minor >= 4)
+
+
+## Driven by the dock's Update button. On Godot < 4.4 (see `_can_self_update`)
+## the in-editor install is disabled — we open the release page for a manual
+## download instead, never entering the extract pipeline that crashes those
+## engines. With no resolved download URL — either the check never completed,
+## or the release didn't ship a matching asset — also falls back to opening
+## the release page. Otherwise kicks off the download → extract → reload
+## pipeline.
 func start_install() -> void:
+	if not _can_self_update():
+		OS.shell_open(RELEASES_PAGE)
+		install_state_changed.emit({
+			"button_text": "Opened download page",
+			"button_disabled": true,
+			"label_text": (
+				"Update available — in-editor update needs Godot 4.4+. "
+				+ "Download the new addon and replace addons/godot_ai/ manually, "
+				+ "then relaunch Godot."
+			),
+		})
+		return
+
 	if _latest_download_url.is_empty():
 		OS.shell_open(RELEASES_PAGE)
 		return
@@ -233,6 +268,11 @@ func _on_update_check_completed(
 		return
 	_latest_download_url = String(parsed.get("download_url", ""))
 	update_check_completed.emit(parsed)
+	## On engines that can't self-update (Godot < 4.4, #475), relabel the
+	## button up-front so the user knows clicking opens a download page
+	## rather than running an in-editor update.
+	if not _can_self_update():
+		install_state_changed.emit({"button_text": "Open download page"})
 
 
 func _on_download_completed(
