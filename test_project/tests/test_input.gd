@@ -219,6 +219,17 @@ func test_bind_event_joy_axis_missing_axis() -> void:
 	_handler.remove_action({"action": TEST_ACTION})
 
 
+func test_bind_event_joy_axis_null_axis() -> void:
+	_handler.add_action({"action": TEST_ACTION})
+	var result := _handler.bind_event({
+		"action": TEST_ACTION,
+		"event_type": "joy_axis",
+		"axis": null,
+	})
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
+	_handler.remove_action({"action": TEST_ACTION})
+
+
 func test_bind_event_unknown_action_message_suggests_add_action() -> void:
 	## The error string should point the caller at the fix so they don't loop.
 	var result := _handler.bind_event({
