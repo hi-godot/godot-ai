@@ -27,9 +27,9 @@ extends Node
 ## the same convention.
 
 const RELEASES_URL := (
-	"https://api.github.com/repos/hi-godot/godot-ai/releases/latest"
+	"https://api.github.com/repos/DevelopmentOpenworld/godot-ai/releases/latest"
 )
-const RELEASES_PAGE := "https://github.com/hi-godot/godot-ai/releases/latest"
+const RELEASES_PAGE := "https://github.com/DevelopmentOpenworld/godot-ai/releases/latest"
 const UPDATE_TEMP_DIR := "user://godot_ai_update/"
 const UPDATE_TEMP_ZIP := "user://godot_ai_update/update.zip"
 const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")
