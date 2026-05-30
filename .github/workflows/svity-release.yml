@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  GODOT_AI_DISABLE_TELEMETRY: "true"
+
+jobs:
+  # Мы убрали весь job 'publish-pypi'
+  build-plugin-zip:
+    runs-on: ubuntu-latest
+    # Строка 'needs: publish-pypi' УДАЛЕНА, теперь сборка ZIP стартует сразу!
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build plugin ZIP
+        run: |
+          mkdir -p staging/addons
+          cp -r plugin/addons/godot_ai staging/addons/
+          cp LICENSE staging/godot-ai-LICENSE.txt
+          cd staging
+          zip -D -r ../godot-ai-plugin.zip addons/ godot-ai-LICENSE.txt
+
+      - name: Verify zip structure
+        run: |
+          tops=$(unzip -Z1 godot-ai-plugin.zip | awk -F/ '{print $1}' | sort -u | tr '\n' ' ' | sed 's/ $//')
+          if [ "$tops" != "addons godot-ai-LICENSE.txt" ]; then
+            echo "ERROR: expected top-level entries 'addons godot-ai-LICENSE.txt' in zip, got:" >&2
+            echo "  $tops" >&2
+            exit 1
+          fi
+          if ! unzip -Z1 godot-ai-plugin.zip | grep -qx 'addons/godot_ai/plugin.cfg'; then
+            echo "ERROR: plugin.cfg not at expected path addons/godot_ai/plugin.cfg" >&2
+            exit 1
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: godot-ai-plugin.zip
+          generate_release_notes: true
