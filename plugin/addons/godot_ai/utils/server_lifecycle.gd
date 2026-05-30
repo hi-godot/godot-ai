@@ -521,6 +521,14 @@ func start_server() -> void:
 			OS.set_environment("PYTHONPATH", new_pp)
 			pythonpath_set = true
 
+	## Tell the spawned server which editor owns it so it can self-reap if we
+	## die without a clean stop_server (crash / hard-kill). Passed via env, not
+	## a CLI flag, so an older server (staggered user-mode upgrade) silently
+	## ignores an unknown var instead of failing argparse. Left set, not
+	## restored: it's this editor's own constant PID, so it's correct for every
+	## server this editor spawns and harmless to any other subprocess.
+	OS.set_environment("GODOT_AI_OWNER_PID", str(OS.get_process_id()))
+
 	_server_pid = OS.create_process(cmd, args)
 	var spawned_pid := int(_server_pid)
 

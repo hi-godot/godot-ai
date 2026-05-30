@@ -110,17 +110,20 @@ def test_main_runs_server_directly_without_reload(monkeypatch):
     server = StubServer(app=None)
     calls: dict[str, object] = {}
 
-    def fake_create_server(ws_port: int, *, exclude_domains=None):
+    def fake_create_server(ws_port: int, *, exclude_domains=None, owner_pid=None):
         calls["ws_port"] = ws_port
         calls["exclude_domains"] = exclude_domains
+        calls["owner_pid"] = owner_pid
         return server
 
+    monkeypatch.delenv("GODOT_AI_OWNER_PID", raising=False)
     monkeypatch.setattr("godot_ai.server.create_server", fake_create_server)
 
     godot_ai.main(["--transport", "streamable-http", "--port", "8123", "--ws-port", "9555"])
 
     assert calls["ws_port"] == 9555
     assert calls["exclude_domains"] == set()
+    assert calls["owner_pid"] is None
     assert server.run_calls == [{"transport": "streamable-http", "port": 8123}]
 
 
@@ -128,7 +131,7 @@ def test_main_forwards_exclude_domains_to_create_server(monkeypatch):
     server = StubServer(app=None)
     calls: dict[str, object] = {}
 
-    def fake_create_server(ws_port: int, *, exclude_domains=None):
+    def fake_create_server(ws_port: int, *, exclude_domains=None, owner_pid=None):
         calls["exclude_domains"] = exclude_domains
         return server
 
@@ -145,6 +148,54 @@ def test_main_forwards_exclude_domains_to_create_server(monkeypatch):
 
     ## Whitespace is stripped and duplicates collapsed; the set has no order.
     assert calls["exclude_domains"] == {"audio", "particle", "theme"}
+
+
+def test_main_plumbs_owner_pid_from_flag(monkeypatch):
+    server = StubServer(app=None)
+    calls: dict[str, object] = {}
+
+    def fake_create_server(ws_port: int, *, exclude_domains=None, owner_pid=None):
+        calls["owner_pid"] = owner_pid
+        return server
+
+    monkeypatch.delenv("GODOT_AI_OWNER_PID", raising=False)
+    monkeypatch.setattr("godot_ai.server.create_server", fake_create_server)
+
+    godot_ai.main(["--transport", "stdio", "--owner-pid", "4242"])
+
+    assert calls["owner_pid"] == 4242
+
+
+def test_main_plumbs_owner_pid_from_env(monkeypatch):
+    server = StubServer(app=None)
+    calls: dict[str, object] = {}
+
+    def fake_create_server(ws_port: int, *, exclude_domains=None, owner_pid=None):
+        calls["owner_pid"] = owner_pid
+        return server
+
+    monkeypatch.setenv("GODOT_AI_OWNER_PID", "777")
+    monkeypatch.setattr("godot_ai.server.create_server", fake_create_server)
+
+    godot_ai.main(["--transport", "stdio"])
+
+    assert calls["owner_pid"] == 777
+
+
+def test_main_ignores_malformed_owner_pid_env(monkeypatch):
+    server = StubServer(app=None)
+    calls: dict[str, object] = {}
+
+    def fake_create_server(ws_port: int, *, exclude_domains=None, owner_pid=None):
+        calls["owner_pid"] = owner_pid
+        return server
+
+    monkeypatch.setenv("GODOT_AI_OWNER_PID", "not-a-pid")
+    monkeypatch.setattr("godot_ai.server.create_server", fake_create_server)
+
+    godot_ai.main(["--transport", "stdio"])
+
+    assert calls["owner_pid"] is None
 
 
 def test_main_rejects_unknown_exclude_domain(monkeypatch, capsys):

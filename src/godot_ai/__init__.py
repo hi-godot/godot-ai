@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import tomllib
 from collections.abc import Sequence
 from importlib.metadata import PackageNotFoundError
@@ -73,6 +74,18 @@ def main(argv: Sequence[str] | None = None) -> None:
         ),
     )
     parser.add_argument(
+        "--owner-pid",
+        type=int,
+        default=None,
+        help=(
+            "PID of the Godot editor that spawned this server. When set, the "
+            "server self-terminates if that editor dies (crash / hard-kill with "
+            "no clean stop_server) and no other editor has adopted it, so a "
+            "detached server can't orphan onto the port. Omitted for externally "
+            "managed servers (CI, manual --reload)."
+        ),
+    )
+    parser.add_argument(
         "--exclude-domains",
         default="",
         help=(
@@ -96,6 +109,18 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     install_pid_file(args.pid_file)
 
+    ## The plugin passes the owning editor's PID via GODOT_AI_OWNER_PID (env,
+    ## not a flag, so older servers ignore it). An explicit --owner-pid wins
+    ## for tests / manual use.
+    owner_pid = args.owner_pid
+    if owner_pid is None:
+        env_owner = os.environ.get("GODOT_AI_OWNER_PID", "").strip()
+        if env_owner:
+            try:
+                owner_pid = int(env_owner)
+            except ValueError:
+                owner_pid = None
+
     if args.reload and args.transport in ("sse", "streamable-http"):
         from godot_ai.asgi import run_with_reload
 
@@ -109,7 +134,11 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     from godot_ai.server import create_server
 
-    server = create_server(ws_port=args.ws_port, exclude_domains=exclude_domains)
+    server = create_server(
+        ws_port=args.ws_port,
+        exclude_domains=exclude_domains,
+        owner_pid=owner_pid,
+    )
 
     transport_kwargs = {}
     if args.transport in ("sse", "streamable-http"):

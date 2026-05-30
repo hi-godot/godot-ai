@@ -165,7 +165,7 @@ def test_main_plumbs_pid_file_into_runtime_info(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         "godot_ai.server.create_server",
-        lambda ws_port, *, exclude_domains=None: StubServer(),
+        lambda ws_port, *, exclude_domains=None, owner_pid=None: StubServer(),
     )
 
     import godot_ai

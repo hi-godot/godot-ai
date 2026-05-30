@@ -25,6 +25,7 @@ from godot_ai.middleware import (
     PreserveGodotCommandErrorData,
     StripClientWrapperKwargs,
 )
+from godot_ai.orphan_reaper import watch_owner
 from godot_ai.resources.editor import register_editor_resources
 from godot_ai.resources.library import register_library_resources
 from godot_ai.resources.nodes import register_node_resources
@@ -103,6 +104,7 @@ def create_server(
     ws_port: int = 9500,
     *,
     exclude_domains: Iterable[str] | None = None,
+    owner_pid: int | None = None,
 ) -> FastMCP:
     logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
 
@@ -115,6 +117,17 @@ def create_server(
 
         ws_task = asyncio.create_task(ws_server.start())
         logger.info("WebSocket server starting on port %d", ws_server.port)
+
+        ## When the plugin auto-spawns us it passes --owner-pid. Reap this
+        ## detached server if that editor dies without a clean stop_server and
+        ## nobody has adopted us (zero sessions). Servers started without an
+        ## owner pid (CI, manual --reload) skip this entirely.
+        reaper_task: asyncio.Task | None = None
+        if owner_pid and owner_pid > 0:
+            reaper_task = asyncio.create_task(
+                watch_owner(owner_pid, lambda: len(registry.list_all()))
+            )
+            logger.info("Orphan reaper armed for owner editor pid %d", owner_pid)
 
         ## Defer initial telemetry off the lifespan start tick — mirrors
         ## unity-mcp's 1s stdio-handshake guard so the first POST never
@@ -145,6 +158,12 @@ def create_server(
             yield AppContext(registry=registry, ws_server=ws_server, client=client)
         finally:
             startup_handle.cancel()
+            if reaper_task is not None:
+                reaper_task.cancel()
+                try:
+                    await reaper_task
+                except (asyncio.CancelledError, OSError):
+                    pass
             ws_task.cancel()
             try:
                 await ws_task
