@@ -182,6 +182,13 @@ jobs:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_CHANGELOG_WEBHOOK }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Strip any whitespace/newlines from the secret. `gh secret set`
+          # captures a trailing newline if the value was piped/pasted with
+          # one, which makes curl reject the URL with "(3) Malformed input to
+          # a URL function". A webhook URL contains no internal whitespace, so
+          # stripping all whitespace is safe and fixes contaminated secrets
+          # regardless of how they were set.
+          DISCORD_WEBHOOK=$(printf '%s' "$DISCORD_WEBHOOK" | tr -d '[:space:]')
           if [ -z "$DISCORD_WEBHOOK" ]; then
             echo "DISCORD_CHANGELOG_WEBHOOK not set — skipping changelog post."
             exit 0
@@ -208,6 +215,12 @@ jobs:
                  color: 5793266
                } ]
              }')
-          curl -fsS -H "Content-Type: application/json" \
-            -X POST -d "$payload" "$DISCORD_WEBHOOK"
-          echo "Posted changelog for $tag to Discord."
+          # The changelog post is non-essential: the release already shipped
+          # before this step. A Discord outage or a bad webhook must not turn
+          # a successful release red — log a warning annotation and exit 0.
+          if curl -fsS --retry 3 --retry-delay 2 -H "Content-Type: application/json" \
+               -X POST -d "$payload" "$DISCORD_WEBHOOK"; then
+            echo "Posted changelog for $tag to Discord."
+          else
+            echo "::warning::Discord changelog post for $tag failed (release itself is unaffected)."
+          fi
