@@ -27,6 +27,7 @@ import asyncio
 import logging
 import os
 import signal
+import sys
 from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
@@ -34,16 +35,35 @@ logger = logging.getLogger(__name__)
 DEFAULT_POLL_SECONDS = 5.0
 
 
-def pid_alive(pid: int) -> bool:
-    """True if a process with ``pid`` currently exists.
+def should_arm_reaper(owner_pid: int | None) -> bool:
+    """Whether the orphan reaper should run for ``owner_pid``.
 
-    Uses signal 0, which performs the kernel's permission/existence check
-    without delivering a signal. A surviving-but-unrelated pid (after reuse)
-    is an accepted, vanishingly-rare false-positive — it only delays a reap,
-    never causes a wrong one.
+    Disabled on Windows: the liveness/self-shutdown primitives here are only
+    live-validated on POSIX, and ``os.kill`` semantics differ sharply on
+    Windows (no signal-0 probe — any non-CTRL signal calls ``TerminateProcess``).
+    Rather than ship process-control code we can't exercise, Windows keeps its
+    prior behavior (the editor's clean ``_exit_tree`` still stops the server;
+    an orphan from a hard crash lingers until the next session's port
+    reconciliation, exactly as before this change). Tracked as a follow-up.
+    """
+    return bool(owner_pid and owner_pid > 0) and not sys.platform.startswith("win")
+
+
+def pid_alive(pid: int) -> bool:
+    """True if a process with ``pid`` currently exists. Never kills ``pid``.
+
+    POSIX uses signal 0 — the kernel's permission/existence check with no
+    signal delivered. Windows can't use ``os.kill(pid, 0)`` (that would call
+    ``TerminateProcess`` and kill the very process we're probing), so it opens a
+    SYNCHRONIZE handle and asks ``WaitForSingleObject`` whether the process is
+    still running. A surviving-but-unrelated pid (after reuse) is an accepted,
+    vanishingly-rare false-positive — it only delays a reap, never causes a
+    wrong one.
     """
     if pid <= 0:
         return False
+    if sys.platform.startswith("win"):
+        return _pid_alive_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -51,7 +71,32 @@ def pid_alive(pid: int) -> bool:
     except PermissionError:
         # Exists but owned by another user — still "alive" for our purposes.
         return True
+    except OSError:
+        # Unexpected errno: be conservative and treat as alive so we never
+        # reap a server whose owner might still be around.
+        return True
     return True
+
+
+def _pid_alive_windows(pid: int) -> bool:
+    """Non-destructive Windows liveness probe via OpenProcess/WaitForSingleObject.
+
+    Defensive only — the reaper is not armed on Windows (see
+    ``should_arm_reaper``), so this never runs in production today. Kept correct
+    so a future Windows enablement (or a manual ``--owner-pid`` run) is safe.
+    """
+    import ctypes
+
+    SYNCHRONIZE = 0x00100000
+    WAIT_TIMEOUT = 0x00000102  # still running
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+    if not handle:
+        return False  # no such process (or no access) — treat as gone
+    try:
+        return kernel32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _request_self_shutdown() -> None:

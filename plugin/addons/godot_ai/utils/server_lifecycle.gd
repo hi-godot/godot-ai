@@ -527,7 +527,11 @@ func start_server() -> void:
 	## ignores an unknown var instead of failing argparse. Left set, not
 	## restored: it's this editor's own constant PID, so it's correct for every
 	## server this editor spawns and harmless to any other subprocess.
-	OS.set_environment("GODOT_AI_OWNER_PID", str(OS.get_process_id()))
+	## Skipped on Windows: the server's reaper is POSIX-only for now (Windows
+	## process-liveness/self-shutdown isn't live-validated yet), so there's no
+	## point shipping the owner PID there. The server gates on this too.
+	if OS.get_name() != "Windows":
+		OS.set_environment("GODOT_AI_OWNER_PID", str(OS.get_process_id()))
 
 	_server_pid = OS.create_process(cmd, args)
 	var spawned_pid := int(_server_pid)

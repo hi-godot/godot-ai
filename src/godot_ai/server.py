@@ -25,7 +25,7 @@ from godot_ai.middleware import (
     PreserveGodotCommandErrorData,
     StripClientWrapperKwargs,
 )
-from godot_ai.orphan_reaper import watch_owner
+from godot_ai.orphan_reaper import should_arm_reaper, watch_owner
 from godot_ai.resources.editor import register_editor_resources
 from godot_ai.resources.library import register_library_resources
 from godot_ai.resources.nodes import register_node_resources
@@ -121,13 +121,20 @@ def create_server(
         ## When the plugin auto-spawns us it passes --owner-pid. Reap this
         ## detached server if that editor dies without a clean stop_server and
         ## nobody has adopted us (zero sessions). Servers started without an
-        ## owner pid (CI, manual --reload) skip this entirely.
+        ## owner pid (CI, manual --reload) skip this entirely, as does Windows
+        ## (see should_arm_reaper).
         reaper_task: asyncio.Task | None = None
-        if owner_pid and owner_pid > 0:
+        if should_arm_reaper(owner_pid):
             reaper_task = asyncio.create_task(
                 watch_owner(owner_pid, lambda: len(registry.list_all()))
             )
             logger.info("Orphan reaper armed for owner editor pid %d", owner_pid)
+        elif owner_pid and owner_pid > 0:
+            logger.info(
+                "Owner editor pid %d supplied but orphan reaper is disabled on "
+                "this platform; relying on clean editor shutdown.",
+                owner_pid,
+            )
 
         ## Defer initial telemetry off the lifespan start tick — mirrors
         ## unity-mcp's 1s stdio-handshake guard so the first POST never

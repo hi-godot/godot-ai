@@ -9,7 +9,28 @@ import sys
 
 import pytest
 
-from godot_ai.orphan_reaper import pid_alive, watch_owner
+from godot_ai import orphan_reaper
+from godot_ai.orphan_reaper import pid_alive, should_arm_reaper, watch_owner
+
+
+def test_should_arm_requires_valid_pid():
+    assert should_arm_reaper(None) is False
+    assert should_arm_reaper(0) is False
+    assert should_arm_reaper(-1) is False
+
+
+def test_should_arm_true_on_posix(monkeypatch):
+    monkeypatch.setattr(orphan_reaper.sys, "platform", "darwin")
+    assert should_arm_reaper(1234) is True
+    monkeypatch.setattr(orphan_reaper.sys, "platform", "linux")
+    assert should_arm_reaper(1234) is True
+
+
+def test_should_arm_false_on_windows(monkeypatch):
+    ## Windows process-control semantics (os.kill == TerminateProcess) make the
+    ## POSIX liveness probe destructive; the reaper must stay disabled there.
+    monkeypatch.setattr(orphan_reaper.sys, "platform", "win32")
+    assert should_arm_reaper(1234) is False
 
 
 def test_pid_alive_for_self():
