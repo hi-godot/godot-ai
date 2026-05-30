@@ -37,6 +37,17 @@ def _port_open(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
+def _wait_port_closed(port: int, timeout: float) -> bool:
+    """Poll until nothing is listening on ``port`` (socket teardown isn't
+    instant after a process exits — avoids a TIME_WAIT flake)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _port_open(port):
+            return True
+        time.sleep(0.2)
+    return not _port_open(port)
+
+
 def _terminate(proc: subprocess.Popen | None) -> None:
     if proc is None or proc.poll() is not None:
         return
@@ -50,6 +61,10 @@ def _terminate(proc: subprocess.Popen | None) -> None:
 def test_server_subprocess_reaps_when_owner_dies():
     http_port = _free_port()
     ws_port = _free_port()
+    # Two independent _free_port() calls can hand back the same just-released
+    # ephemeral port; the server can't bind both on one port. Force them apart.
+    while ws_port == http_port:
+        ws_port = _free_port()
 
     env = dict(os.environ)
     env["GODOT_AI_DISABLE_TELEMETRY"] = "true"
@@ -101,8 +116,8 @@ def test_server_subprocess_reaps_when_owner_dies():
         except subprocess.TimeoutExpired:
             pytest.fail("server did NOT self-terminate after owner died (reaper failed)")
         assert rc is not None
-        # Port released after the process exits.
-        assert not _port_open(http_port)
+        # Port released after the process exits (poll: teardown isn't instant).
+        assert _wait_port_closed(http_port, timeout=5), "http port not released after reap"
     finally:
         _terminate(server)
         _terminate(owner)

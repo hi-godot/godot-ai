@@ -121,3 +121,29 @@ async def test_reaps_once_adopter_disconnects():
         timeout=2.0,
     )
     assert calls == [True]
+
+
+async def test_grace_recheck_prevents_reap_on_transient_zero():
+    ## Adoption hand-off race: owner is dead, but the adopter's session dips to
+    ## zero for one sample (a WebSocket reconnect across a plugin reload) and
+    ## then comes back. The grace re-check must NOT reap in that window.
+    calls: list[bool] = []
+    counts = iter([0])  # first sample: transient zero; thereafter: adopter back
+
+    def session_count() -> int:
+        return next(counts, 1)
+
+    task = asyncio.create_task(
+        watch_owner(
+            4242,
+            session_count,
+            poll_seconds=0.005,
+            is_alive=lambda _pid: False,
+            shutdown=lambda: calls.append(True),
+        )
+    )
+    await asyncio.sleep(0.1)  # many poll+grace cycles
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert calls == [], "must not reap when a transient zero recovers within the grace window"

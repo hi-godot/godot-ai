@@ -74,9 +74,16 @@ def pid_alive(pid: int) -> bool:
     signal delivered. Windows can't use ``os.kill(pid, 0)`` (that would call
     ``TerminateProcess`` and kill the very process we're probing), so it opens a
     SYNCHRONIZE handle and asks ``WaitForSingleObject`` whether the process is
-    still running. A surviving-but-unrelated pid (after reuse) is an accepted,
-    vanishingly-rare false-positive — it only delays a reap, never causes a
-    wrong one.
+    still running.
+
+    Known limitation: this is a bare-pid check with no identity proof (no start
+    time, no cmdline brand — unlike the plugin's ``_pid_cmdline_is_godot_ai``
+    kill-target gating). If the owner editor's pid is recycled to an unrelated
+    process, this reports it alive and the reaper never fires — a (rare) missed
+    reap, not a wrong kill. Acceptable here: the server still falls back to the
+    pre-existing behavior (clean editor shutdown stops it; the next session's
+    port reconciliation reclaims a true orphan), so a missed reap degrades to
+    the status quo rather than leaking unboundedly.
     """
     if pid <= 0:
         return False
@@ -132,6 +139,7 @@ async def watch_owner(
     session_count: Callable[[], int],
     *,
     poll_seconds: float = DEFAULT_POLL_SECONDS,
+    grace_seconds: float | None = None,
     is_alive: Callable[[int], bool] = pid_alive,
     shutdown: Callable[[], None] = _request_self_shutdown,
 ) -> None:
@@ -140,13 +148,26 @@ async def watch_owner(
     Runs until it triggers a shutdown or is cancelled on lifespan teardown.
     The injectable ``is_alive`` / ``shutdown`` / ``session_count`` seams keep
     it unit-testable without spawning real processes.
+
+    A reap requires the "owner dead AND zero sessions" condition to hold on two
+    samples ``grace_seconds`` apart (default: one poll interval). This guards
+    the adoption hand-off race: when an adopter editor's WebSocket briefly drops
+    — a plugin reload, a GC pause, a transient blip — ``session_count()`` dips to
+    zero for that instant, and a single-sample reap would SIGTERM the server out
+    from under the still-live adopter. The re-check lets the reconnect re-register
+    before we act. The cost is bounded extra reap latency for a genuine orphan
+    (poll + grace), which is fine for a cleanup watchdog.
     """
+    if grace_seconds is None:
+        grace_seconds = poll_seconds
     while True:
         await asyncio.sleep(poll_seconds)
-        if is_alive(owner_pid):
+        if is_alive(owner_pid) or session_count() > 0:
             continue
-        if session_count() > 0:
-            # Owner died but another editor adopted us — stay up for it.
+        # Looks orphaned. Re-confirm after a grace window so a transient
+        # zero-session blip (adopter reconnecting) can't trigger a wrong reap.
+        await asyncio.sleep(grace_seconds)
+        if is_alive(owner_pid) or session_count() > 0:
             continue
         logger.info(
             "Owner editor pid %d is gone and no sessions are connected; "

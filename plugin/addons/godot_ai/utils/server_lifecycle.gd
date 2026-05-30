@@ -386,6 +386,17 @@ func _inject_telemetry_env() -> bool:
 	return false
 
 
+## Set GODOT_AI_OWNER_PID to this editor's PID for the next OS.create_process,
+## so the spawned server can self-reap if this editor crashes. Returns true if
+## set (caller must unset right after spawning — keep it out of the persistent
+## editor env). No-op on Windows, where the server's reaper is disabled.
+func _set_owner_pid_env() -> bool:
+	if OS.get_name() == "Windows":
+		return false
+	OS.set_environment("GODOT_AI_OWNER_PID", str(OS.get_process_id()))
+	return true
+
+
 ## Branch table (recorded version is the "is this ours?" signal — uvx
 ## launcher PIDs go stale; #135/#137):
 ##   port free                                -> spawn fresh, record PID
@@ -524,17 +535,21 @@ func start_server() -> void:
 	## Tell the spawned server which editor owns it so it can self-reap if we
 	## die without a clean stop_server (crash / hard-kill). Passed via env, not
 	## a CLI flag, so an older server (staggered user-mode upgrade) silently
-	## ignores an unknown var instead of failing argparse. Left set, not
-	## restored: it's this editor's own constant PID, so it's correct for every
-	## server this editor spawns and harmless to any other subprocess.
+	## ignores an unknown var instead of failing argparse. Scoped tightly around
+	## create_process and unset right after (like PYTHONPATH below): the child
+	## inherits it, but it must NOT linger in the editor env, or a later
+	## non-reload `godot-ai` subprocess (dev server, future spawn) would inherit
+	## it and wrongly arm a reaper keyed to this editor.
 	## Skipped on Windows: the server's reaper is POSIX-only for now (Windows
-	## process-liveness/self-shutdown isn't live-validated yet), so there's no
-	## point shipping the owner PID there. The server gates on this too.
-	if OS.get_name() != "Windows":
-		OS.set_environment("GODOT_AI_OWNER_PID", str(OS.get_process_id()))
+	## process-liveness/self-shutdown isn't live-validated yet). The server
+	## gates on this too.
+	var owner_env_set := _set_owner_pid_env()
 
 	_server_pid = OS.create_process(cmd, args)
 	var spawned_pid := int(_server_pid)
+
+	if owner_env_set:
+		OS.unset_environment("GODOT_AI_OWNER_PID")
 
 	## Restore PYTHONPATH immediately — the spawned child has already
 	## copied the env, so the editor's own process state returns to
@@ -617,7 +632,12 @@ func respawn_with_refresh() -> void:
 	_host._clear_pid_file()
 	_host._log_buffer.log("retrying with --refresh (PyPI index may be stale)")
 	var injected_telemetry_env := _inject_telemetry_env()
+	## Set owner PID for THIS spawn too (don't rely on it lingering from
+	## start_server) — and unset right after, same scoping as start_server.
+	var owner_env_set := _set_owner_pid_env()
 	_server_pid = OS.create_process(cmd, args)
+	if owner_env_set:
+		OS.unset_environment("GODOT_AI_OWNER_PID")
 	if injected_telemetry_env:
 		OS.unset_environment("GODOT_AI_DISABLE_TELEMETRY")
 	var spawn_pid := int(_server_pid)
