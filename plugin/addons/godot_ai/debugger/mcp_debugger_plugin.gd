@@ -30,6 +30,20 @@ const DEFAULT_TIMEOUT_SEC := 8.0
 ## silent black hole. On CI the game subprocess has been observed
 ## taking ~15s to boot + register.
 const GAME_READY_WAIT_SEC := 20.0
+## #490: how long to wait for the game's mcp:eval_compiled beacon before
+## concluding the eval source failed to compile. A parse error aborts the
+## game-side handler before it can reply, so without this we'd wait the
+## full eval timeout for a syntax mistake. reload() of valid source is
+## sub-millisecond, so 3s is comfortably clear of false positives.
+const EVAL_COMPILE_GRACE_SEC := 3.0
+## #490: once an eval compiles, the editor polls the game every this many
+## seconds with mcp:eval_check. A backgrounded play-in-editor game has a
+## frozen idle loop (no _process / SceneTreeTimer ticks) so it can't
+## self-report a runtime error that aborted the eval — but its debugger
+## capture callback still answers a probe. The editor's own loop keeps
+## ticking, so it drives the poll. 0.35s keeps detection well under a second
+## without flooding the channel; most evals reply before the first probe.
+const EVAL_PROBE_INTERVAL_SEC := 0.35
 
 var _log_buffer: McpLogBuffer
 var _game_log_buffer: McpGameLogBuffer
@@ -139,6 +153,12 @@ func _capture(message: String, data: Array, _session_id: int) -> bool:
 			return true
 		"mcp:eval_error":
 			_on_eval_error(data)
+			return true
+		"mcp:eval_compiled":
+			_on_eval_compiled(data)
+			return true
+		"mcp:eval_runtime_error":
+			_on_eval_runtime_error(data)
 			return true
 		"mcp:game_command_response":
 			_on_game_command_response(data)
@@ -326,6 +346,15 @@ func _clear_pending(request_id: String) -> void:
 	var cb: Callable = pending.get("timeout_callable", Callable())
 	if timer != null and timer.timeout.is_connected(cb):
 		timer.timeout.disconnect(cb)
+	## #490: eval requests also carry a compile-grace timer and a runtime probe.
+	var grace: SceneTreeTimer = pending.get("grace_timer")
+	var gcb: Callable = pending.get("grace_callable", Callable())
+	if grace != null and grace.timeout.is_connected(gcb):
+		grace.timeout.disconnect(gcb)
+	var probe: SceneTreeTimer = pending.get("probe_timer")
+	var pcb: Callable = pending.get("probe_callable", Callable())
+	if probe != null and probe.timeout.is_connected(pcb):
+		probe.timeout.disconnect(pcb)
 	_pending.erase(request_id)
 
 
@@ -398,19 +427,40 @@ func _send_eval(
 		var pending_entry = _pending.get(request_id)
 		if pending_entry == null:
 			return
-		_pending.erase(request_id)
+		_clear_pending(request_id)
 		var conn: McpConnection = pending_entry.connection
 		if conn == null or not is_instance_valid(conn):
 			return
 		_send_error(conn, request_id, ErrorCodes.INTERNAL_ERROR,
-			"Game eval timed out after %.0fs — eval code may be stuck in an infinite loop / await, OR triggered a GDScript runtime error that halted execution before responding. Check logs_read(source='game') for push_error/runtime errors from this run." % timeout_sec)
+			"Game eval compiled and started running but never returned within %.0fs — the code is likely stuck in an infinite loop or awaiting a signal/timer that never fires. Check logs_read(source='game')." % timeout_sec)
 		if _log_buffer:
 			_log_buffer.log("[debug] !! eval timeout (%s)" % request_id)
 	timer.timeout.connect(timeout_callable)
+
+	## #490: arm the compile-grace timer. If mcp:eval_compiled hasn't set
+	## `compiled` by the time it fires, the eval source failed to parse.
+	var grace: SceneTreeTimer = tree.create_timer(EVAL_COMPILE_GRACE_SEC)
+	var grace_callable := func() -> void:
+		var pending_entry = _pending.get(request_id)
+		if pending_entry == null or pending_entry.get("compiled", false):
+			return
+		_clear_pending(request_id)
+		var conn: McpConnection = pending_entry.connection
+		if conn == null or not is_instance_valid(conn):
+			return
+		_send_error(conn, request_id, ErrorCodes.EVAL_COMPILE_ERROR,
+			"Game eval failed to compile — likely a GDScript syntax/parse error. The parse error text is in the editor's Output/Debugger panel; it is not capturable from the running game. Check your eval code's syntax.")
+		if _log_buffer:
+			_log_buffer.log("[debug] !! eval compile error (%s)" % request_id)
+	grace.timeout.connect(grace_callable)
+
 	_pending[request_id] = {
 		"connection": connection,
 		"timer": timer,
 		"timeout_callable": timeout_callable,
+		"grace_timer": grace,
+		"grace_callable": grace_callable,
+		"compiled": false,
 	}
 
 	session.send_message("mcp:eval", [request_id, code])
@@ -460,6 +510,78 @@ func _on_eval_error(data: Array) -> void:
 	_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, message)
 	if _log_buffer:
 		_log_buffer.log("[debug] <- mcp:eval_error (%s): %s" % [request_id, message])
+
+
+## #490: the game sends this the instant reload() of the eval source
+## succeeds. Flips the pending entry's `compiled` flag so the compile-grace
+## timer won't fire a false EVAL_COMPILE_ERROR.
+func _on_eval_compiled(data: Array) -> void:
+	if data.is_empty():
+		return
+	var request_id: String = data[0]
+	var pending_entry = _pending.get(request_id)
+	if pending_entry == null:
+		return
+	pending_entry["compiled"] = true
+	if _log_buffer:
+		_log_buffer.log("[debug] <- mcp:eval_compiled (%s)" % request_id)
+	## #490: compiled OK — start polling for a runtime error that may have
+	## aborted execute(). A backgrounded game can't self-report it, so the
+	## editor probes via mcp:eval_check until the eval resolves.
+	_arm_eval_probe(request_id)
+
+
+## #490: the game reported a runtime error that aborted the eval — either
+## from its _process fast path (focused game) or in answer to an editor
+## eval_check probe (backgrounded game). Reply fast with the real error text
+## instead of waiting for the hang timeout.
+func _on_eval_runtime_error(data: Array) -> void:
+	if data.size() < 2:
+		return
+	var request_id: String = data[0]
+	var message: String = data[1]
+	var pending_entry = _pending.get(request_id)
+	if pending_entry == null:
+		return
+	_clear_pending(request_id)
+	var connection: McpConnection = pending_entry.connection
+	if connection == null or not is_instance_valid(connection):
+		return
+	var msg := "Game eval raised a runtime error: %s" % message if not message.is_empty() else "Game eval raised a runtime error (no message captured). Check logs_read(source='game')."
+	_send_error(connection, request_id, ErrorCodes.EVAL_RUNTIME_ERROR, msg)
+	if _log_buffer:
+		_log_buffer.log("[debug] <- mcp:eval_runtime_error (%s): %s" % [request_id, message])
+
+
+## #490: arm one probe tick for an in-flight eval. Re-arms itself each tick
+## until the request resolves — eval_response / eval_runtime_error /
+## eval_compile_error / hang-timeout all call _clear_pending, which erases the
+## entry and stops the chain. Uses the editor's own SceneTreeTimer because the
+## editor loop keeps ticking even while a backgrounded game's loop is frozen.
+func _arm_eval_probe(request_id: String) -> void:
+	var pending_entry = _pending.get(request_id)
+	if pending_entry == null:
+		return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		return
+	var probe_timer: SceneTreeTimer = tree.create_timer(EVAL_PROBE_INTERVAL_SEC)
+	var probe_callable := func() -> void: _on_eval_probe_tick(request_id)
+	pending_entry["probe_timer"] = probe_timer
+	pending_entry["probe_callable"] = probe_callable
+	probe_timer.timeout.connect(probe_callable)
+
+
+## #490: poke the game for a runtime-error verdict, then re-arm. The game's
+## _handle_eval_check answers with mcp:eval_runtime_error if a script error
+## aborted this eval, else stays silent and we poll again next interval.
+func _on_eval_probe_tick(request_id: String) -> void:
+	if not _pending.has(request_id):
+		return  ## resolved — stop probing
+	var session: EditorDebuggerSession = _first_active_session()
+	if session != null and session.is_active():
+		session.send_message("mcp:eval_check", [request_id])
+	_arm_eval_probe(request_id)
 
 
 ## --- game_command: curated runtime game operations ---

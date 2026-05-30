@@ -26,6 +26,9 @@ const EDITOR_NOT_READY := "EDITOR_NOT_READY"
 const UNKNOWN_COMMAND := "UNKNOWN_COMMAND"
 const INTERNAL_ERROR := "INTERNAL_ERROR"
 const DEFERRED_TIMEOUT := "DEFERRED_TIMEOUT"
+# game_eval failure codes (#490) — keep in sync with protocol/errors.py
+const EVAL_COMPILE_ERROR := "EVAL_COMPILE_ERROR"
+const EVAL_RUNTIME_ERROR := "EVAL_RUNTIME_ERROR"
 ## audit-v2 #21 (issue #365): finer-grained codes carved out of the 471
 ## INVALID_PARAMS sites so agents can distinguish recoverable input
 ## errors from structural ones. INVALID_PARAMS stays for genuinely

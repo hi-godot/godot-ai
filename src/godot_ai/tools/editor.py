@@ -36,9 +36,11 @@ Ops:
         Clear the MCP log buffer. Returns lines_cleared.
   • game_eval(code)
         Execute GDScript in the running game with return values. Uses
-        'await' so user code can await internally. Runtime errors are not
-        caught — if eval times out, check logs_read(source='game') for
-        push_error output."""
+        'await' so user code can await internally. Errors return fast and
+        actionable: EVAL_COMPILE_ERROR for a syntax/parse error,
+        EVAL_RUNTIME_ERROR (with the real message + line) for a runtime
+        error; a genuine infinite loop / never-firing await still times out.
+        'await' only progresses while the game window is focused."""
 
 
 def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:

@@ -36,6 +36,13 @@ var _logger_attached := false
 ## frames at FLUSH_BATCH_LIMIT per frame rather than blasting the whole
 ## queue in a single _process tick.
 var _pending_outbound: Array = []
+## #490: the in-flight eval. The editor's eval_check probe (and, when the game
+## is focused, the _process fast path) read these to report a runtime error
+## that aborted execute() before _handle_eval could reply. _eval_request_id
+## is "" when no eval is running.
+var _eval_request_id := ""
+var _eval_node: Node = null
+var _eval_script_err_baseline := 0
 
 
 func _ready() -> void:
@@ -82,6 +89,12 @@ func _process(_delta: float) -> void:
 	## print loop can't stall the game by shoving thousands of entries
 	## through the debugger packet path in a single tick. Surplus stays in
 	## `_pending_outbound` and bleeds out across subsequent frames.
+	## #490: best-effort fast path — when the game is focused and its idle
+	## loop ticks, report an eval-aborting runtime error a frame after it
+	## happens. When the game is backgrounded this never runs (the idle loop
+	## freezes), so the editor's eval_check probe → _handle_eval_check is the
+	## reliable path. Cheap no-op when no eval is in flight.
+	_try_report_eval_runtime_error()
 	if not _logger_attached or _logger == null:
 		return
 	if not EngineDebugger.is_active():
@@ -117,6 +130,9 @@ func _on_debug_message(message: String, data: Array) -> bool:
 			return true
 		"eval":
 			_handle_eval(data)
+			return true
+		"eval_check":
+			_handle_eval_check(data)
 			return true
 		"game_command":
 			_handle_game_command(data)
@@ -553,32 +569,58 @@ func _handle_eval(data: Array) -> void:
 		_reply_eval_error(request_id, "No code provided")
 		return
 
-	## Wrap user code so we can capture a return value.
-	## Uses await so user code can use `await` internally.
+	## Wrap user code so we can capture a return value and a completion flag.
+	## Uses await so user code can use `await` internally. __mcp_finished marks
+	## a clean finish so a runtime error logged afterwards can't be mis-reported
+	## against this request. (#490)
 	var script_source := (
 		"extends Node\n"
+		+ "var __mcp_finished := false\n"
 		+ "func execute():\n"
-		+ "\tvar __result = null\n"
-		+ "\t__result = await _run()\n"
+		+ "\tvar __result = await _run()\n"
+		+ "\t__mcp_finished = true\n"
 		+ "\treturn __result\n\n"
 		+ "func _run():\n"
 		+ _indent_eval_code(code)
 	)
 
+	## #490: mark this eval in-flight and snapshot the script-error counter
+	## BEFORE reload()/execute(). In a debug build a parse error aborts
+	## reload() and a runtime error aborts execute() — either way this
+	## function may never reach its reply. The editor infers a compile error
+	## from the missing mcp:eval_compiled beacon, and reports a runtime error
+	## (via its eval_check probe / the _process fast path) when the
+	## script-error counter advances past this baseline.
+	_eval_request_id = request_id
+	_eval_node = null
+	_eval_script_err_baseline = _logger.script_error_seq() if _logger != null else 0
+
 	var script: GDScript = GDScript.new()
 	script.source_code = script_source
+	## reload() ABORTS this function on a parse error in a debug build (it does
+	## not return a non-OK code there), so the lines below only run when the
+	## source compiled. Keep reload() INLINE — moving it behind a timer/await
+	## poisons subsequent evals (#490). The err branch still matters for the
+	## editor process (handler unit tests), where reload() does return.
 	var err: int = script.reload()
 	if err != OK:
+		_eval_request_id = ""
 		_reply_eval_error(request_id,
 			"Failed to compile GDScript (error %d). Check syntax." % err)
 		return
 
+	## Compiled OK — tell the editor so it doesn't flag a compile error.
+	EngineDebugger.send_message("mcp:eval_compiled", [request_id])
+
 	var temp_node := Node.new()
 	temp_node.set_script(script)
 	temp_node.process_mode = Node.PROCESS_MODE_ALWAYS
+	_eval_node = temp_node
 	add_child(temp_node)
 
 	if not temp_node.has_method("execute"):
+		_eval_request_id = ""
+		_eval_node = null
 		temp_node.queue_free()
 		_reply_eval_error(request_id, "Internal error: eval wrapper is missing execute().")
 		return
@@ -601,10 +643,18 @@ func _handle_eval(data: Array) -> void:
 
 	if not holder["done"]:
 		## Still running past the deadline. Mark abandoned so a late
-		## completion in _drive_eval drops its result and frees the node,
-		## detach the node now so it stops touching the scene, and reply with
-		## a clear timeout instead of letting the request ride to INTERNAL_ERROR.
+		## completion in _drive_eval drops its result and frees the node.
 		holder["abandoned"] = true
+		## #490: a runtime error aborts _drive_eval the same way a hung await
+		## does — holder never completes. Disambiguate via the script-error
+		## counter: if it advanced, report the real runtime error (with text +
+		## line) instead of the generic timeout. (Usually the editor probe or
+		## the _process fast path already reported it well before this 8s
+		## deadline; this is the last-resort path.)
+		if _try_report_eval_runtime_error(request_id):
+			return
+		_eval_request_id = ""
+		_eval_node = null
 		if is_instance_valid(temp_node):
 			remove_child(temp_node)
 		_reply_eval_error(request_id,
@@ -614,6 +664,12 @@ func _handle_eval(data: Array) -> void:
 				% int(EVAL_TIMEOUT_SEC))
 		return
 
+	## Reached only if execute() did NOT abort. Clear the in-flight marker
+	## first so the _process fast path / editor probe can't double-report,
+	## then reply.
+	if _eval_request_id == request_id:
+		_eval_request_id = ""
+		_eval_node = null
 	temp_node.queue_free()
 	_reply_eval_response(request_id, holder["value"])
 
@@ -648,6 +704,50 @@ func _reply_eval_error(request_id: String, message: String) -> void:
 func _reply_eval_response(request_id: String, value: Variant) -> void:
 	EngineDebugger.send_message("mcp:eval_response",
 		[request_id, JSON.stringify(_variant_to_json(value))])
+
+
+## #490: report a runtime error that aborted the in-flight eval before it
+## could reply, using the logger's captured text + resolved line. Called two
+## ways: every frame from _process (the fast path, only effective when the
+## game is focused and its idle loop ticks), and on demand from
+## _handle_eval_check when the editor probes — the ONLY reliable path when a
+## backgrounded game's idle loop is frozen, because the debugger capture
+## callback still runs. Gated on the logger's ERROR_TYPE_SCRIPT counter so
+## push_error()/push_warning() (types 0/1) can't trip it, and skipped once the
+## eval node reports __mcp_finished so an error logged after a clean finish
+## can't misfire. `request_id_filter` (when non-empty) restricts reporting to
+## that request. Returns true if it reported.
+func _try_report_eval_runtime_error(request_id_filter := "") -> bool:
+	if _eval_request_id == "" or _logger == null:
+		return false
+	if request_id_filter != "" and _eval_request_id != request_id_filter:
+		return false
+	if _eval_node != null and is_instance_valid(_eval_node) and _eval_node.get("__mcp_finished"):
+		return false
+	if _logger.script_error_seq() <= _eval_script_err_baseline:
+		return false
+	var rid := _eval_request_id
+	var text: String = _logger.last_script_error_text()
+	_eval_request_id = ""
+	if _eval_node != null and is_instance_valid(_eval_node):
+		_eval_node.queue_free()
+	_eval_node = null
+	if EngineDebugger.is_active():
+		EngineDebugger.send_message("mcp:eval_runtime_error", [rid, text])
+	return true
+
+
+## #490: answer an editor eval_check probe. The editor polls this once the
+## eval has compiled but not yet replied. This runs in the debugger capture
+## callback, which stays live even when the backgrounded game's _process is
+## frozen — so it's the reliable channel for reporting a runtime error that
+## aborted the eval. Report if one is detected for this request, else stay
+## silent (the editor keeps polling until the real reply or the hang timeout).
+func _handle_eval_check(data: Array) -> void:
+	var request_id: String = data[0] if data.size() > 0 else ""
+	if request_id.is_empty():
+		return
+	_try_report_eval_runtime_error(request_id)
 
 
 func _indent_eval_code(code: String) -> String:

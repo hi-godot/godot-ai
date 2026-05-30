@@ -13,6 +13,11 @@ class ErrorCode(StrEnum):
     UNKNOWN_COMMAND = "UNKNOWN_COMMAND"
     INTERNAL_ERROR = "INTERNAL_ERROR"
     DEFERRED_TIMEOUT = "DEFERRED_TIMEOUT"
+    # game_eval failure codes (#490): distinguish a compile/parse failure
+    # or a runtime error from the generic 10s timeout so agents get a fast,
+    # actionable reply. Keep in sync with utils/error_codes.gd.
+    EVAL_COMPILE_ERROR = "EVAL_COMPILE_ERROR"
+    EVAL_RUNTIME_ERROR = "EVAL_RUNTIME_ERROR"
     ## audit-v2 #21 (issue #365): finer-grained codes carved out of the
     ## 471 INVALID_PARAMS sites so agents can distinguish recoverable
     ## input errors from structural ones. INVALID_PARAMS stays for

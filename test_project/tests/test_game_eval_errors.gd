@@ -1,0 +1,322 @@
+@tool
+extends McpTestSuite
+
+## #490: coverage for the fast game_eval error detection plumbing.
+##
+## Two halves, both exercised here without a live game subprocess:
+##   1. game_logger.gd — counts ERROR_TYPE_SCRIPT (2) errors and stores the
+##      latest text, while leaving push_error/push_warning (types 0/1) alone.
+##   2. game_helper.gd — _try_report_eval_runtime_error / _handle_eval_check,
+##      which turn that counter into an mcp:eval_runtime_error reply when the
+##      editor probes. The probe matters because the backgrounded play-in-editor
+##      game's _process is frozen, so _on_debug_message (which routes
+##      _handle_eval_check) is the only reliable channel — see CLAUDE.md.
+##
+## The game_logger extends Logger (Godot 4.5+), so every test gates on
+## ClassDB.class_exists("Logger") and skips on older engines (matches the
+## editor_logger tests in test_editor.gd).
+
+const _LoggerLoader := preload("res://addons/godot_ai/runtime/logger_loader.gd")
+const GameHelper := preload("res://addons/godot_ai/runtime/game_helper.gd")
+const StubBacktrace := preload("res://addons/godot_ai/testing/stub_backtrace.gd")
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+
+const _SCRIPT_ERROR := 2  ## ERROR_TYPE_SCRIPT
+const _WARNING := 1       ## ERROR_TYPE_WARNING (push_warning)
+const _ERROR := 0         ## ERROR_TYPE_ERROR (push_error)
+
+
+func suite_name() -> String:
+	return "game_eval_errors"
+
+
+func _build_game_logger():
+	var script := _LoggerLoader.build(_LoggerLoader.GAME_LOGGER_PATH)
+	assert_true(script != null, "game_logger.gd should compile on Godot 4.5+")
+	return script.new() if script != null else null
+
+
+## Attach a fresh game_logger to a fresh (out-of-tree) game_helper so its
+## _process never runs and the eval-tracking state stays exactly as set.
+func _build_helper_with_logger() -> Array:
+	var helper: Node = GameHelper.new()
+	var logger = _build_game_logger()
+	helper._logger = logger
+	helper._eval_node = null
+	return [helper, logger]
+
+
+# --- game_logger: script-error counter ---
+
+func test_script_error_increments_seq_and_stores_text() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var logger = _build_game_logger()
+	if logger == null:
+		return
+	assert_eq(logger.script_error_seq(), 0, "counter starts at zero")
+	logger._log_error(
+		"_run", "res://eval.gd", 10,
+		"Invalid call. Nonexistent function 'foo' in base 'Nil'.", "",
+		false, _SCRIPT_ERROR, [],
+	)
+	assert_eq(logger.script_error_seq(), 1, "a script-type error bumps the counter")
+	var text: String = logger.last_script_error_text()
+	assert_contains(text, "Nonexistent function 'foo'", "stores the real error message")
+	assert_contains(text, "res://eval.gd:10 @ _run", "inlines the resolved source location")
+
+
+func test_script_error_text_prefers_backtrace_frame() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var logger = _build_game_logger()
+	if logger == null:
+		return
+	## A real runtime error reports the engine call site in file/line but the
+	## user frame in script_backtraces[0]; the user frame must win.
+	logger._log_error(
+		"execute", "res://wrapper.gd", 4, "boom", "",
+		false, _SCRIPT_ERROR, [StubBacktrace.new("res://user.gd", 99, "_run")],
+	)
+	assert_eq(logger.script_error_seq(), 1)
+	assert_contains(logger.last_script_error_text(), "res://user.gd:99 @ _run",
+		"resolves to the user backtrace frame, not the engine call site")
+
+
+func test_push_error_does_not_bump_script_seq() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var logger = _build_game_logger()
+	if logger == null:
+		return
+	## push_error("x") arrives as type 0 with the message in `code`.
+	logger._log_error("_run", "res://eval.gd", 5, "x", "", false, _ERROR, [])
+	assert_eq(logger.script_error_seq(), 0,
+		"push_error (type 0) must NOT bump the script-error counter (the #490 guard)")
+
+
+func test_push_warning_does_not_bump_script_seq() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var logger = _build_game_logger()
+	if logger == null:
+		return
+	logger._log_error("_run", "res://eval.gd", 5, "deprecated", "", false, _WARNING, [])
+	assert_eq(logger.script_error_seq(), 0,
+		"push_warning (type 1) must NOT bump the script-error counter")
+
+
+# --- game_helper: report logic answering the editor probe ---
+
+func test_try_report_noop_while_in_flight_without_error() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var pair := _build_helper_with_logger()
+	var helper: Node = pair[0]
+	var logger = pair[1]
+	helper._eval_request_id = "REQ1"
+	helper._eval_script_err_baseline = logger.script_error_seq()
+	assert_false(helper._try_report_eval_runtime_error(),
+		"no script error yet → nothing to report")
+	assert_eq(helper._eval_request_id, "REQ1", "request stays in flight")
+	helper.free()
+
+
+func test_try_report_fires_after_runtime_error() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var pair := _build_helper_with_logger()
+	var helper: Node = pair[0]
+	var logger = pair[1]
+	helper._eval_request_id = "REQ1"
+	helper._eval_script_err_baseline = logger.script_error_seq()
+	logger._log_error("_run", "res://eval.gd", 9, "kaboom", "", false, _SCRIPT_ERROR, [])
+	assert_true(helper._try_report_eval_runtime_error(),
+		"counter advanced past baseline → reports the runtime error")
+	assert_eq(helper._eval_request_id, "", "request cleared once reported")
+	helper.free()
+
+
+func test_try_report_respects_request_id_filter() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var pair := _build_helper_with_logger()
+	var helper: Node = pair[0]
+	var logger = pair[1]
+	helper._eval_request_id = "REQ1"
+	helper._eval_script_err_baseline = logger.script_error_seq()
+	logger._log_error("_run", "res://eval.gd", 9, "kaboom", "", false, _SCRIPT_ERROR, [])
+	assert_false(helper._try_report_eval_runtime_error("OTHER"),
+		"a probe for a different request must not report this one")
+	assert_eq(helper._eval_request_id, "REQ1", "request untouched on filter mismatch")
+	assert_true(helper._try_report_eval_runtime_error("REQ1"),
+		"a probe for the matching request reports it")
+	assert_eq(helper._eval_request_id, "")
+	helper.free()
+
+
+func test_try_report_ignores_push_error() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var pair := _build_helper_with_logger()
+	var helper: Node = pair[0]
+	var logger = pair[1]
+	helper._eval_request_id = "REQ1"
+	helper._eval_script_err_baseline = logger.script_error_seq()
+	logger._log_error("_run", "res://eval.gd", 5, "x", "", false, _ERROR, [])
+	assert_false(helper._try_report_eval_runtime_error(),
+		"a benign push_error must not be mis-reported as a fatal runtime error")
+	assert_eq(helper._eval_request_id, "REQ1", "eval keeps running after a push_error")
+	helper.free()
+
+
+func test_try_report_skips_finished_eval() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var pair := _build_helper_with_logger()
+	var helper: Node = pair[0]
+	var logger = pair[1]
+	## An eval node that already finished cleanly sets __mcp_finished; a script
+	## error logged afterwards must not retroactively fail the completed eval.
+	## Instantiate via .new() (not Node.new()+set_script) so the member
+	## initializer runs and __mcp_finished is a real, readable property —
+	## standing in for the generated wrapper that sets it true after a clean
+	## return. (get/set on a bare set_script node does not expose it.)
+	var fin_script := GDScript.new()
+	fin_script.source_code = "extends Node\nvar __mcp_finished := true\n"
+	fin_script.reload()
+	var fin_node: Node = fin_script.new()
+	helper._eval_node = fin_node
+	helper._eval_request_id = "REQ1"
+	helper._eval_script_err_baseline = logger.script_error_seq()
+	logger._log_error("_run", "res://eval.gd", 9, "late", "", false, _SCRIPT_ERROR, [])
+	assert_false(helper._try_report_eval_runtime_error(),
+		"a finished eval node short-circuits the report")
+	assert_eq(helper._eval_request_id, "REQ1", "request not cleared for a finished eval")
+	fin_node.free()
+	helper.free()
+
+
+func test_handle_eval_check_reports_matching_request() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var pair := _build_helper_with_logger()
+	var helper: Node = pair[0]
+	var logger = pair[1]
+	helper._eval_request_id = "REQ1"
+	helper._eval_script_err_baseline = logger.script_error_seq()
+	logger._log_error("_run", "res://eval.gd", 9, "kaboom", "", false, _SCRIPT_ERROR, [])
+	helper._handle_eval_check(["REQ1"])
+	assert_eq(helper._eval_request_id, "",
+		"a probe for the erroring in-flight request clears it (reply sent)")
+	helper.free()
+
+
+func test_handle_eval_check_ignores_other_request() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var pair := _build_helper_with_logger()
+	var helper: Node = pair[0]
+	var logger = pair[1]
+	helper._eval_request_id = "REQ1"
+	helper._eval_script_err_baseline = logger.script_error_seq()
+	logger._log_error("_run", "res://eval.gd", 9, "kaboom", "", false, _SCRIPT_ERROR, [])
+	helper._handle_eval_check(["DIFFERENT"])
+	assert_eq(helper._eval_request_id, "REQ1",
+		"a probe naming a different request is a no-op")
+	helper.free()
+
+
+# --- editor side: McpDebuggerPlugin compile/runtime handlers ---
+
+## Records send_deferred_response payloads instead of touching a real socket.
+class _StubConnection:
+	extends McpConnection
+	var captured: Array = []
+
+	func send_deferred_response(request_id: String, payload: Dictionary) -> void:
+		captured.append({"request_id": request_id, "payload": payload})
+
+
+func test_on_eval_compiled_flips_compiled_flag() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	var rid := "rid-compiled"
+	plugin._pending[rid] = {"connection": null, "compiled": false}
+	plugin._on_eval_compiled([rid])
+	assert_true(plugin._pending[rid]["compiled"],
+		"mcp:eval_compiled flips the pending entry's compiled flag so the grace timer won't fire")
+	## _on_eval_compiled arms a self-re-arming probe timer; clear it so the
+	## test leaves nothing ticking.
+	plugin._clear_pending(rid)
+
+
+func test_on_eval_compiled_unknown_request_no_crash() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin._on_eval_compiled(["unknown-id"])
+	assert_true(true, "mcp:eval_compiled for an unknown request_id is silently ignored")
+
+
+func test_on_eval_runtime_error_clears_pending_and_replies_with_code() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	var rid := "rid-runtime"
+	plugin._pending[rid] = {"connection": conn, "compiled": true}
+	plugin._on_eval_runtime_error(
+		[rid, "Invalid call. Nonexistent function 'foo' in base 'Nil'."])
+	assert_false(plugin._pending.has(rid), "a runtime error clears the pending entry")
+	assert_eq(conn.captured.size(), 1, "exactly one deferred reply is sent")
+	var payload: Dictionary = conn.captured[0]["payload"]
+	assert_has_key(payload, "error")
+	assert_eq(payload["error"]["code"], ErrorCodes.EVAL_RUNTIME_ERROR,
+		"replies with the EVAL_RUNTIME_ERROR code")
+	assert_contains(payload["error"]["message"], "Nonexistent function 'foo'",
+		"surfaces the real runtime error text")
+	conn.free()
+
+
+func test_on_eval_runtime_error_unknown_request_no_crash() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin._on_eval_runtime_error(["unknown-id", "boom"])
+	assert_true(true, "mcp:eval_runtime_error for an unknown request_id is silently dropped")
+
+
+func test_clear_pending_disconnects_grace_and_probe_timers() -> void:
+	## #490: eval pending entries carry a compile-grace timer and a runtime
+	## probe timer beyond the base timeout timer; _clear_pending must release
+	## all of them so a resolved request leaves nothing armed.
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		skip("No SceneTree available")
+		return
+	var plugin := McpDebuggerPlugin.new()
+	var rid := "rid-clear-eval"
+	var grace_cb := func() -> void: pass
+	var probe_cb := func() -> void: pass
+	var grace := tree.create_timer(60.0)
+	var probe := tree.create_timer(60.0)
+	grace.timeout.connect(grace_cb)
+	probe.timeout.connect(probe_cb)
+	plugin._pending[rid] = {
+		"connection": null,
+		"grace_timer": grace,
+		"grace_callable": grace_cb,
+		"probe_timer": probe,
+		"probe_callable": probe_cb,
+	}
+	plugin._clear_pending(rid)
+	assert_false(plugin._pending.has(rid), "_clear_pending erases the request entry")
+	assert_false(grace.timeout.is_connected(grace_cb),
+		"_clear_pending disconnects the compile-grace timer")
+	assert_false(probe.timeout.is_connected(probe_cb),
+		"_clear_pending disconnects the runtime probe timer")

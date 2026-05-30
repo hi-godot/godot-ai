@@ -2,7 +2,9 @@
 
 import pytest
 
+from godot_ai.godot_client.client import GodotCommandError
 from godot_ai.handlers import editor as editor_handlers
+from godot_ai.protocol.errors import ErrorCode
 from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.sessions.registry import SessionRegistry
 
@@ -59,3 +61,51 @@ async def test_game_eval_passes_code_verbatim():
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     await editor_handlers.game_eval(runtime, code="return get_tree().root.name")
     assert client.calls[-1]["params"]["code"] == "return get_tree().root.name"
+
+
+# --- #490: fast compile / runtime error codes ---
+
+
+def test_eval_error_codes_exist():
+    """The two codes the plugin emits for fast game_eval failures."""
+    assert ErrorCode.EVAL_COMPILE_ERROR == "EVAL_COMPILE_ERROR"
+    assert ErrorCode.EVAL_RUNTIME_ERROR == "EVAL_RUNTIME_ERROR"
+
+
+class _RaisingGameEvalClient:
+    """Simulates the real client raising on an error response from the plugin."""
+
+    def __init__(self, code: str, message: str):
+        self._code = code
+        self._message = message
+
+    async def send(
+        self,
+        command: str,
+        params: dict | None = None,
+        session_id: str | None = None,
+        timeout: float = 5.0,
+    ) -> dict:
+        raise GodotCommandError(code=self._code, message=self._message)
+
+
+@pytest.mark.asyncio
+async def test_game_eval_propagates_compile_error_code():
+    client = _RaisingGameEvalClient(ErrorCode.EVAL_COMPILE_ERROR, "Game eval failed to compile")
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    with pytest.raises(GodotCommandError) as exc:
+        await editor_handlers.game_eval(runtime, code="return 1 +")
+    assert exc.value.code == ErrorCode.EVAL_COMPILE_ERROR
+
+
+@pytest.mark.asyncio
+async def test_game_eval_propagates_runtime_error_code_and_text():
+    client = _RaisingGameEvalClient(
+        ErrorCode.EVAL_RUNTIME_ERROR,
+        "Game eval raised a runtime error: Invalid call. Nonexistent function 'foo' in base 'Nil'.",
+    )
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    with pytest.raises(GodotCommandError) as exc:
+        await editor_handlers.game_eval(runtime, code="var x = null\nreturn x.foo()")
+    assert exc.value.code == ErrorCode.EVAL_RUNTIME_ERROR
+    assert "Invalid call" in exc.value.message

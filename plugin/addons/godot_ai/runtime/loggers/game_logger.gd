@@ -32,6 +32,16 @@ const _LogBacktrace := preload("res://addons/godot_ai/utils/log_backtrace.gd")
 
 var _pending: Array = []
 var _mutex := Mutex.new()
+## #490: monotonic count of GDScript runtime (script-type) errors seen this
+## run, plus the text of the most recent one. game_helper snapshots the
+## count before running eval code and compares each frame to detect a
+## runtime error that aborted the eval before it could reply. Gated on
+## ERROR_TYPE_SCRIPT (2) so push_error()/push_warning() (types 0/1) don't
+## count — otherwise a benign push_error in eval code would be misreported
+## as a fatal error. Mutex-guarded: _log_error can fire from any thread.
+const _ERROR_TYPE_SCRIPT := 2
+var _script_error_seq: int = 0
+var _last_script_error_text: String = ""
 
 
 func _log_message(message: String, error: bool) -> void:
@@ -62,6 +72,11 @@ func _log_error(
 		loc = "%s:%d @ %s" % [resolved.path, resolved.line, resolved.function] if not resolved.function.is_empty() else "%s:%d" % [resolved.path, resolved.line]
 	var text: String = "%s (%s)" % [resolved.message, loc] if not loc.is_empty() else resolved.message
 	_append(resolved.level, text)
+	if error_type == _ERROR_TYPE_SCRIPT:
+		_mutex.lock()
+		_script_error_seq += 1
+		_last_script_error_text = text
+		_mutex.unlock()
 
 
 func _append(level: String, text: String) -> void:
@@ -85,3 +100,22 @@ func has_pending() -> bool:
 	var any := not _pending.is_empty()
 	_mutex.unlock()
 	return any
+
+
+## #490: monotonic count of script-type runtime errors seen this run.
+## game_helper snapshots this before eval and compares after to detect a
+## runtime error that aborted execute(). Mutex-guarded.
+func script_error_seq() -> int:
+	_mutex.lock()
+	var v := _script_error_seq
+	_mutex.unlock()
+	return v
+
+
+## #490: text (with inlined path:line @ function) of the most recent
+## script-type runtime error, or "" if none seen this run.
+func last_script_error_text() -> String:
+	_mutex.lock()
+	var v := _last_script_error_text
+	_mutex.unlock()
+	return v
