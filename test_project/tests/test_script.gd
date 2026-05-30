@@ -28,6 +28,9 @@ func _ready() -> void:
 
 func move(direction: Vector3) -> void:
 	pass
+
+static func make_default() -> _McpTestScript:
+	return null
 """
 
 
@@ -405,6 +408,9 @@ func test_find_symbols_functions() -> void:
 		func_names.append(fn.name)
 	assert_contains(func_names, "_ready")
 	assert_contains(func_names, "move")
+	## Regression: `static func` declarations must be detected too (not just
+	## plain `func`). See script_handler.find_symbols.
+	assert_contains(func_names, "make_default")
 
 
 func test_find_symbols_signals() -> void:

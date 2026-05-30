@@ -144,8 +144,10 @@ func _set_scalar(
 		)
 	var parsed = parser.call(raw_value)
 	if parsed == null:
+		## color slots want a color hint; constant/font_size are integer slots.
+		var hint := _COLOR_HINT if kind == "color" else "expected an integer"
 		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
-			"Invalid %s value: %s (%s)" % [kind, raw_value, _COLOR_HINT])
+			"Invalid %s value: %s (%s)" % [kind, raw_value, hint])
 
 	var had_before: bool = has_fn.call(theme, name, class_name_param)
 	var before_value = getter.call(theme, name, class_name_param) if had_before else null
