@@ -331,6 +331,13 @@ func _clear_pending(request_id: String) -> void:
 
 ## --- game_eval: execute arbitrary GDScript in the running game ---
 
+## Editor-side fallback timer for game_eval. MUST stay above the game-side
+## EVAL_TIMEOUT_SEC (8.0) in runtime/game_helper.gd and below the dispatcher's
+## game_eval budget (15000 ms) in dispatcher.gd — i.e. game 8s < editor 10s <
+## dispatcher 15s. This timer only fires when the game never replies at all,
+## and its message (the timeout_callable below) is intentionally generic. Drop
+## timeout_sec at/below 8s and it pre-empts the game's actionable "Eval
+## exceeded 8s" message — see the TIMEOUT ORDERING note on EVAL_TIMEOUT_SEC.
 func request_game_eval(
 	code: String,
 	request_id: String,
