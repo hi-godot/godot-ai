@@ -68,27 +68,34 @@ def should_arm_reaper(owner_pid: int | None) -> bool:
 
 
 def pid_alive(pid: int) -> bool:
-    """True if a process with ``pid`` currently exists. Never kills ``pid``.
+    """True if a process with ``pid`` currently exists. POSIX-only; never kills it.
 
-    POSIX uses signal 0 — the kernel's permission/existence check with no
-    signal delivered. Windows can't use ``os.kill(pid, 0)`` (that would call
-    ``TerminateProcess`` and kill the very process we're probing), so it opens a
-    SYNCHRONIZE handle and asks ``WaitForSingleObject`` whether the process is
-    still running.
+    Uses signal 0 — the kernel's permission/existence check with no signal
+    delivered. Windows is intentionally unsupported: ``os.kill(pid, 0)`` there
+    would call ``TerminateProcess`` and kill the very process we're probing, and
+    the reaper is disabled on Windows anyway (see ``should_arm_reaper``), so this
+    is never reached. It raises rather than silently mis-probing, so a future
+    Windows enablement must add a real, access-denied-conservative liveness check
+    (e.g. OpenProcess + GetExitCodeProcess via WinDLL with proper signatures)
+    rather than inheriting an untested one.
 
     Known limitation: this is a bare-pid check with no identity proof (no start
     time, no cmdline brand — unlike the plugin's ``_pid_cmdline_is_godot_ai``
     kill-target gating). If the owner editor's pid is recycled to an unrelated
     process, this reports it alive and the reaper never fires — a (rare) missed
-    reap, not a wrong kill. Acceptable here: the server still falls back to the
-    pre-existing behavior (clean editor shutdown stops it; the next session's
-    port reconciliation reclaims a true orphan), so a missed reap degrades to
-    the status quo rather than leaking unboundedly.
+    reap, not a wrong kill. The server still falls back to the pre-existing
+    behavior (clean editor shutdown stops it; the next session's port
+    reconciliation reclaims a true orphan), so a missed reap degrades to the
+    status quo rather than leaking unboundedly.
     """
     if pid <= 0:
         return False
     if sys.platform.startswith("win"):
-        return _pid_alive_windows(pid)
+        raise NotImplementedError(
+            "pid_alive is POSIX-only; the orphan reaper is disabled on Windows "
+            "(see should_arm_reaper). Implement a Windows liveness probe before "
+            "enabling it there."
+        )
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -101,27 +108,6 @@ def pid_alive(pid: int) -> bool:
         # reap a server whose owner might still be around.
         return True
     return True
-
-
-def _pid_alive_windows(pid: int) -> bool:
-    """Non-destructive Windows liveness probe via OpenProcess/WaitForSingleObject.
-
-    Defensive only — the reaper is not armed on Windows (see
-    ``should_arm_reaper``), so this never runs in production today. Kept correct
-    so a future Windows enablement (or a manual ``--owner-pid`` run) is safe.
-    """
-    import ctypes
-
-    SYNCHRONIZE = 0x00100000
-    WAIT_TIMEOUT = 0x00000102  # still running
-    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-    handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
-    if not handle:
-        return False  # no such process (or no access) — treat as gone
-    try:
-        return kernel32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
-    finally:
-        kernel32.CloseHandle(handle)
 
 
 def _request_self_shutdown() -> None:

@@ -42,6 +42,15 @@ def test_pid_alive_false_for_nonpositive():
     assert pid_alive(-1) is False
 
 
+def test_pid_alive_raises_on_windows(monkeypatch):
+    ## Must NOT fall through to os.kill on Windows (that would TerminateProcess
+    ## the probed pid). The reaper is gated off Windows, so this is unreachable
+    ## in practice, but it fails loud rather than mis-probing.
+    monkeypatch.setattr(orphan_reaper.sys, "platform", "win32")
+    with pytest.raises(NotImplementedError):
+        pid_alive(12345)
+
+
 def test_pid_alive_false_for_dead_process():
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
     proc.wait()
