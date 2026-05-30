@@ -310,9 +310,12 @@ def main() -> int:
         raise
     finally:
         try:
-            _tool_call(session_id, "project_stop", {}, 999, timeout=10)
+            ## "stop" has no named tool — it lives only under the project_manage
+            ## rollup, so calling "project_stop" returns an unknown-tool error
+            ## and the game subprocess is never stopped.
+            _tool_call(session_id, "project_manage", {"op": "stop"}, 999, timeout=10)
         except Exception as exc:
-            print(f"(cleanup) project_stop failed: {exc}", file=sys.stderr)
+            print(f"(cleanup) project stop failed: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ from typing import Any
 from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import project as project_handlers
+from godot_ai.resources import safe_payload, safe_payload_sync
 from godot_ai.runtime.direct import DirectRuntime
 
 COMMON_SETTINGS = project_handlers.COMMON_SETTINGS
@@ -17,10 +18,10 @@ def register_project_resources(mcp: FastMCP) -> None:
     async def get_project_info(ctx: Context) -> dict[str, Any]:
         """Project name, Godot version, paths, and play state."""
         runtime = DirectRuntime.from_context(ctx)
-        return project_handlers.project_info_resource_data(runtime)
+        return safe_payload_sync(lambda: project_handlers.project_info_resource_data(runtime))
 
     @mcp.resource("godot://project/settings", mime_type="application/json")
     async def get_project_settings(ctx: Context) -> dict[str, Any]:
         """Common project settings subset (display, physics, rendering)."""
         runtime = DirectRuntime.from_context(ctx)
-        return await project_handlers.project_settings_resource_data(runtime)
+        return await safe_payload(project_handlers.project_settings_resource_data(runtime))

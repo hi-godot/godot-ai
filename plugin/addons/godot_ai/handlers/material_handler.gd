@@ -350,7 +350,7 @@ func assign_material(params: Dictionary) -> Dictionary:
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node
-	var scene_root: Node = _resolved.scene_root
+	var _scene_root: Node = _resolved.scene_root
 
 	var slot: String = params.get("slot", "override")
 	var resource_path: String = params.get("resource_path", "")
@@ -442,7 +442,7 @@ func apply_to_node(params: Dictionary) -> Dictionary:
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node
-	var scene_root: Node = _resolved.scene_root
+	var _scene_root: Node = _resolved.scene_root
 
 	var slot: String = params.get("slot", "override")
 	var slot_result := _resolve_slot_property(node, slot)
@@ -476,7 +476,12 @@ func apply_to_node(params: Dictionary) -> Dictionary:
 		var efs := EditorInterface.get_resource_filesystem()
 		if efs != null:
 			efs.update_file(save_to)
-		mat = ResourceLoader.load(save_to)  # Use the saved reference to keep scene ref small.
+		# Prefer the on-disk reference (keeps the scene ref small), but fall
+		# back to the in-memory material if the reload fails — otherwise a null
+		# would clear the slot and crash mat.get_class() below.
+		var reloaded := ResourceLoader.load(save_to)
+		if reloaded != null:
+			mat = reloaded
 		saved = true
 
 	var old_value = node.get(property)
@@ -588,7 +593,7 @@ func apply_preset(params: Dictionary) -> Dictionary:
 		if _resolved.has("error"):
 			return _resolved
 		var node: Node = _resolved.node
-		var scene_root: Node = _resolved.scene_root
+		var _scene_root: Node = _resolved.scene_root
 		var slot_result := _resolve_slot_property(node, params.get("slot", "override"))
 		if slot_result.has("error"):
 			return slot_result

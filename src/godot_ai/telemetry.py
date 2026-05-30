@@ -588,6 +588,9 @@ def record_resource_usage(
     record_telemetry(RecordType.RESOURCE_RETRIEVAL, data, session_id=session_id)
 
 
+## Reserved telemetry helpers: the forward API for latency/failure records.
+## Not yet wired into any production call site (exercised only by
+## tests/unit/test_telemetry_send.py) — see the decorator note below.
 def record_latency(
     operation: str,
     duration_ms: float,
@@ -619,11 +622,14 @@ def record_failure(
 # --- decorators ---------------------------------------------------------
 
 ## unity-mcp's decorator string-matches a few tool names to emit
-## milestones inside the wrapper. We keep the decorator generic: handlers
-## emit their own milestones explicitly via ``record_milestone``. The
-## decorator only captures execution shape (success, duration, sub_action,
-## error). See ``handlers/script.py`` and ``handlers/scene.py`` for the
-## FIRST_SCRIPT_CREATION / FIRST_SCENE_MODIFICATION emit points.
+## milestones inside the wrapper. We keep the decorator generic: it only
+## captures execution shape (success, duration, sub_action, error).
+## Milestones are emitted explicitly via ``record_milestone`` at their own
+## call sites. Today only FIRST_STARTUP (server.py) and MULTIPLE_SESSIONS
+## (sessions/registry.py) are wired up; the remaining MilestoneType /
+## RecordType members (FIRST_TOOL_USAGE, FIRST_SCRIPT_CREATION,
+## FIRST_SCENE_MODIFICATION, CLIENT_CONNECTION, LATENCY, FAILURE) are
+## reserved for future use and are not yet emitted from any production path.
 _SUB_ACTION_KEYS = ("op", "action", "sub_action")
 
 

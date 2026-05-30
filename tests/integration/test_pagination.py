@@ -1,4 +1,13 @@
-"""Integration tests: pagination round-trip via mock Godot plugin."""
+"""Integration tests: full-result command round-trips via the mock Godot plugin.
+
+These verify that ``GodotClient.send`` returns the plugin's full list payload
+intact for the list-returning commands. They are NOT pagination tests despite
+the historical filename — actual offset/limit slicing is exercised end-to-end
+through the tool layer in ``tests/integration/test_mcp_tools.py`` (which asserts
+``offset`` / ``limit`` / ``has_more`` for scene_get_hierarchy, node_find,
+logs_read, and filesystem search) and against the ``paginate()`` helper directly
+in ``tests/unit/test_pagination.py``.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +24,7 @@ def _make_files(count: int) -> list[dict]:
     return [{"path": f"res://file_{i}.gd", "type": "GDScript"} for i in range(count)]
 
 
-class TestSceneHierarchyPagination:
+class TestSceneHierarchyRoundTrip:
     async def test_full_result_from_godot(self, harness):
         """Verify Godot returns full results that Python-side pagination can slice."""
         plugin = await harness.connect_plugin()
@@ -37,7 +46,7 @@ class TestSceneHierarchyPagination:
         await plugin.close()
 
 
-class TestNodeFindPagination:
+class TestNodeFindRoundTrip:
     async def test_find_nodes_returns_full_set(self, harness):
         plugin = await harness.connect_plugin()
         client = GodotClient(harness.server, harness.registry)
@@ -56,7 +65,7 @@ class TestNodeFindPagination:
         await plugin.close()
 
 
-class TestFilesystemSearchPagination:
+class TestFilesystemSearchRoundTrip:
     async def test_search_returns_all_files(self, harness):
         plugin = await harness.connect_plugin()
         client = GodotClient(harness.server, harness.registry)
@@ -78,7 +87,7 @@ class TestFilesystemSearchPagination:
         await plugin.close()
 
 
-class TestLogsPagination:
+class TestLogsRoundTrip:
     async def test_logs_returns_lines(self, harness):
         plugin = await harness.connect_plugin()
         client = GodotClient(harness.server, harness.registry)

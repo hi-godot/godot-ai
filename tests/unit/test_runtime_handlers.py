@@ -1864,7 +1864,7 @@ async def test_logs_resource_data_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     result = await editor_handlers.logs_resource_data(runtime)
-    assert "lines" in result
+    assert result["lines"] == [f"line {i}" for i in range(6)]
     assert client.calls[-1]["params"] == {"count": 100}
 
 
@@ -5026,4 +5026,4 @@ async def test_audio_player_create_blocks_when_not_writable():
     ## isn't stale before raising — that's expected. What must NOT have
     ## happened is the actual write command leaving the server.
     sent = [call["command"] for call in client.calls]
-    assert "create_audio_stream_player" not in sent
+    assert "audio_player_create" not in sent

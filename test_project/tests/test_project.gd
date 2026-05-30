@@ -181,7 +181,8 @@ func test_run_project_autosave_false_restores_editor_setting() -> void:
 	var autosave_key := "run/auto_save/save_before_running"
 	var editor_settings := EditorInterface.get_editor_settings()
 	if editor_settings == null or not editor_settings.has_setting(autosave_key):
-		return  ## setting not present in this engine build; skip
+		skip("run/auto_save/save_before_running not present in this engine build")
+		return
 	var prior = editor_settings.get_setting(autosave_key)
 	editor_settings.set_setting(autosave_key, true)
 

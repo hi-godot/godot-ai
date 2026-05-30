@@ -785,53 +785,6 @@ func _instantiate_player(player_path: String, scene_root: Node) -> Dictionary:
 	}
 
 
-## Like `_resolve_player`, but when the node at `player_path` doesn't exist,
-## prepare a fresh AnimationPlayer to be added at that path instead of
-## erroring. Parallels the existing library auto-create affordance — callers
-## bundle the `add_child` step into the same undo action so player + library
-## + animation roll back together. Returns the same shape as `_resolve_player`
-## plus `{player_created: bool, player_parent: Node}` when a new player is
-## staged. If the node exists but isn't an AnimationPlayer, errors exactly
-## like `_resolve_player` — that's a genuine type mismatch, not a missing node.
-func _resolve_or_create_player(player_path: String) -> Dictionary:
-	var _scene_check := McpNodeValidator.require_scene_or_error()
-	if _scene_check.has("error"):
-		return _scene_check
-	var scene_root: Node = _scene_check.scene_root
-	if McpScenePath.resolve(player_path, scene_root) != null:
-		# Node exists — delegate so the type-mismatch error stays identical
-		# to _resolve_player's.
-		var existing := _resolve_player(player_path)
-		if not existing.has("error"):
-			existing["player_created"] = false
-		return existing
-
-	# Stage a fresh AnimationPlayer at player_path. Parent must exist (same
-	# rule as node_create) — otherwise the caller's path is ambiguous.
-	var parent_path := player_path.get_base_dir()
-	var new_name := player_path.get_file()
-	if new_name.is_empty():
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
-			"Invalid player_path (no node name): %s" % player_path)
-	var parent: Node
-	if parent_path.is_empty() or parent_path == "/":
-		parent = scene_root
-	else:
-		parent = McpScenePath.resolve(parent_path, scene_root)
-		if parent == null:
-			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND,
-				"Node not found: %s (and its parent %s also does not exist — create the parent first)" %
-				[player_path, parent_path])
-	var new_player := AnimationPlayer.new()
-	new_player.name = new_name
-	return {
-		"player": new_player,
-		"library": null,
-		"player_created": true,
-		"player_parent": parent,
-	}
-
-
 ## Resolve for read operations (no library requirement).
 func _resolve_player_read(player_path: String) -> Dictionary:
 	var resolved := McpNodeValidator.resolve_or_error(player_path, "player_path")

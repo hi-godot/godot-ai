@@ -143,10 +143,12 @@ const STARTUP_TRACE_COUNTER_NAMES := [
 ##
 ## `tests/unit/test_plugin_self_update_safety.py` locks this wording in.
 ##
-## `_editor_logger` was already untyped because its script extends Godot
-## 4.5+'s Logger class and is loaded via `load()` so the plugin still parses
-## on 4.4. Null on Godot < 4.5 or before `_attach_editor_logger` runs;
-## "attached" state IS exactly "non-null".
+## `_editor_logger` is untyped because its script extends Godot 4.5+'s Logger
+## class: `logger_loader.gd` compiles it at runtime from on-disk source
+## (FileAccess + `GDScript.new()`) past the `ClassDB.class_exists("Logger")`
+## gate in `_attach_editor_logger`, so the plugin still parses on 4.4. Null on
+## Godot < 4.5 or before `_attach_editor_logger` runs; "attached" state IS
+## exactly "non-null".
 var _connection
 var _dispatcher
 var _telemetry

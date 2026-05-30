@@ -116,7 +116,7 @@ func assign_resource(params: Dictionary) -> Dictionary:
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node
-	var scene_root: Node = _resolved.scene_root
+	var _scene_root: Node = _resolved.scene_root
 
 	# Verify property exists
 	var found := false
@@ -295,7 +295,7 @@ func _assign_created_resource(res: Resource, type_str: String, node_path: String
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node
-	var scene_root: Node = _resolved.scene_root
+	var _scene_root: Node = _resolved.scene_root
 
 	var found := false
 	var prop_type: int = TYPE_NIL

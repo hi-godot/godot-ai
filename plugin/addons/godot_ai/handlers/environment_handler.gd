@@ -145,7 +145,7 @@ func _assign_environment(env: Environment, sky: Sky, sky_material: ProceduralSky
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node
-	var scene_root: Node = _resolved.scene_root
+	var _scene_root: Node = _resolved.scene_root
 	if not (node is WorldEnvironment):
 		return ErrorCodes.make(
 			ErrorCodes.WRONG_TYPE,

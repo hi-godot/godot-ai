@@ -1358,7 +1358,7 @@ class TestResourceReads:
         result = await client.read_resource("godot://logs/recent")
         await task
         data = json.loads(result[0].text)
-        assert "lines" in data
+        assert data["lines"] == ["log line 1"]
 
     async def test_read_scene_current_resource(self, mcp_stack):
         client, plugin = mcp_stack

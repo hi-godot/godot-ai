@@ -261,16 +261,13 @@ func _set_process_gpu(node: Node, node_path: String, properties: Dictionary) -> 
 
 
 func _set_process_cpu(node: Node, node_path: String, properties: Dictionary) -> Dictionary:
-	# CPU particles expose the same vocabulary directly on the node.
-	# Map a few GPU-only names to the CPU equivalents where they differ.
-	var aliases := {
-		"emission_sphere_radius": "emission_sphere_radius",
-	}
+	# CPU particles expose the same property vocabulary directly on the node,
+	# so property names pass through unchanged.
 	var coerced: Dictionary = {}
 	var old_values: Dictionary = {}
 
 	for property in properties:
-		var prop_name: String = aliases.get(String(property), String(property))
+		var prop_name: String = String(property)
 		var prop_type := _node_property_type(node, prop_name)
 		if prop_type == TYPE_NIL:
 			return ErrorCodes.make(

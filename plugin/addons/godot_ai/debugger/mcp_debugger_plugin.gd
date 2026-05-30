@@ -111,7 +111,7 @@ func is_game_capture_ready() -> bool:
 	return _game_run_active and _game_ready and _ready_run_token == _game_run_token
 
 
-func _capture(message: String, data: Array, _session_id: int) -> bool:
+func _capture(message: String, data: Array, session_id: int) -> bool:
 	## Godot passes the full "prefix:tail" string as `message`.
 	match message:
 		"mcp:screenshot_response":
@@ -128,9 +128,9 @@ func _capture(message: String, data: Array, _session_id: int) -> bool:
 				if _log_buffer:
 					_log_buffer.log("[debug] ignored mcp:hello with no active game run")
 				return true
-			if _game_session_id != -1 and _session_id != _game_session_id:
+			if _game_session_id != -1 and session_id != _game_session_id:
 				if _log_buffer:
-					_log_buffer.log("[debug] ignored stale mcp:hello from debugger session %d (current %d)" % [_session_id, _game_session_id])
+					_log_buffer.log("[debug] ignored stale mcp:hello from debugger session %d (current %d)" % [session_id, _game_session_id])
 				return true
 			## Boot beacon from the game-side autoload. Tells us the
 			## game has registered its "mcp" capture and is safe to send

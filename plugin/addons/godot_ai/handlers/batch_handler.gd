@@ -87,9 +87,11 @@ func batch_execute(params: Dictionary) -> Dictionary:
 	return {"data": response_data}
 
 
-## Capture UndoRedo references for the scene and global histories. Safe to call
-## multiple times; appends only new references. Must be called only after at
-## least one action has been committed to each history.
+## Capture the scene's UndoRedo reference for batch rollback. Safe to call
+## multiple times; appends only the new reference. MCP write handlers all pin
+## their actions to the scene history, so the scene UndoRedo is the only one
+## rollback needs. Must be called only after at least one action has been
+## committed to the scene history.
 func _capture_histories(histories: Array) -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:

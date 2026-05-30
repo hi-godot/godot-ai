@@ -53,9 +53,14 @@ def test_run_with_reload_uses_uvicorn_factory(monkeypatch):
         calls["app"] = app
         calls["kwargs"] = kwargs
 
-    monkeypatch.delenv(asgi.DEV_TRANSPORT_ENV, raising=False)
-    monkeypatch.delenv(asgi.DEV_WS_PORT_ENV, raising=False)
-    monkeypatch.delenv(asgi.DEV_EXCLUDE_DOMAINS_ENV, raising=False)
+    ## Seed via setenv (not delenv): run_with_reload writes these three vars
+    ## straight into os.environ as a side effect, and pytest's delenv on an
+    ## absent key registers no undo — so the written values would leak into
+    ## the process env for later tests. setenv records an undo that restores
+    ## (deletes) them at teardown regardless of what the call writes.
+    monkeypatch.setenv(asgi.DEV_TRANSPORT_ENV, "")
+    monkeypatch.setenv(asgi.DEV_WS_PORT_ENV, "")
+    monkeypatch.setenv(asgi.DEV_EXCLUDE_DOMAINS_ENV, "")
     monkeypatch.setattr(asgi.uvicorn, "run", fake_run)
 
     asgi.run_with_reload(

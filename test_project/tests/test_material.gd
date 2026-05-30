@@ -161,6 +161,10 @@ func test_set_param_color_dict() -> void:
 	var mat: Material = ResourceLoader.load(TEST_MATERIAL_PATH)
 	var c: Color = mat.get("albedo_color")
 	assert_true(c is Color)
+	assert_true(abs(c.r - 0.5) < 0.01, "Red should be 0.5")
+	assert_true(abs(c.g - 0.25) < 0.01, "Green should be 0.25")
+	assert_true(abs(c.b - 0.75) < 0.01, "Blue should be 0.75")
+	assert_true(abs(c.a - 1.0) < 0.01, "Alpha should be 1.0")
 
 
 func test_set_param_metallic_float() -> void:

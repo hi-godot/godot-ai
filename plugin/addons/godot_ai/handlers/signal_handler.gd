@@ -184,7 +184,14 @@ func disconnect_signal(params: Dictionary) -> Dictionary:
 
 func _resolve_signal_params(params: Dictionary) -> Dictionary:
 	for key in ["path", "signal", "target", "method"]:
-		if params.get(key, "").is_empty():
+		## Type-check before calling .is_empty(): a non-string value (e.g. an
+		## int or dict) has no is_empty() and would crash the handler, which
+		## the dispatcher only reports as an opaque "malformed result" (#210).
+		var value = params.get(key, "")
+		var type_err = McpParamValidators.require_string(key, value)
+		if type_err != null:
+			return type_err
+		if value.is_empty():
 			return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: %s" % key)
 
 	var _scene_check := McpNodeValidator.require_scene_or_error()

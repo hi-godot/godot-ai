@@ -234,7 +234,7 @@ func attach_script(params: Dictionary) -> Dictionary:
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node
-	var scene_root: Node = _resolved.scene_root
+	var _scene_root: Node = _resolved.scene_root
 
 	if not ResourceLoader.exists(script_path):
 		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Script not found: %s" % script_path)
@@ -270,7 +270,7 @@ func detach_script(params: Dictionary) -> Dictionary:
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node
-	var scene_root: Node = _resolved.scene_root
+	var _scene_root: Node = _resolved.scene_root
 
 	var old_script: Script = node.get_script()
 	if old_script == null:
@@ -335,9 +335,10 @@ func find_symbols(params: Dictionary) -> Dictionary:
 			else:
 				signals_list.append(sig_text)
 
-		# func
-		if line.begins_with("func "):
-			var func_text := line.substr(5).strip_edges()
+		# func (including `static func` — strip the leading `static ` first)
+		var func_line := line.substr(7).strip_edges() if line.begins_with("static func ") else line
+		if func_line.begins_with("func "):
+			var func_text := func_line.substr(5).strip_edges()
 			var paren_idx := func_text.find("(")
 			if paren_idx >= 0:
 				functions.append({

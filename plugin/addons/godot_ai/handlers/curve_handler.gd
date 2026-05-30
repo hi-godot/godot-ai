@@ -221,37 +221,6 @@ static func _coerce_points(curve: Resource, points: Array) -> Dictionary:
 	return {"snapshot": snapshot}
 
 
-static func _snapshot_curve(curve: Resource) -> Array:
-	var snapshot: Array = []
-	if curve is Curve:
-		var c: Curve = curve
-		for i in range(c.point_count):
-			snapshot.append({
-				"offset": c.get_point_position(i).x,
-				"value": c.get_point_position(i).y,
-				"left_tangent": c.get_point_left_tangent(i),
-				"right_tangent": c.get_point_right_tangent(i),
-			})
-	elif curve is Curve2D:
-		var c2: Curve2D = curve
-		for i in range(c2.point_count):
-			snapshot.append({
-				"position": c2.get_point_position(i),
-				"in": c2.get_point_in(i),
-				"out": c2.get_point_out(i),
-			})
-	elif curve is Curve3D:
-		var c3: Curve3D = curve
-		for i in range(c3.point_count):
-			snapshot.append({
-				"position": c3.get_point_position(i),
-				"in": c3.get_point_in(i),
-				"out": c3.get_point_out(i),
-				"tilt": c3.get_point_tilt(i),
-			})
-	return snapshot
-
-
 func _apply_snapshot_to_curve(curve: Resource, snapshot: Array) -> void:
 	curve.clear_points()
 	if curve is Curve:
