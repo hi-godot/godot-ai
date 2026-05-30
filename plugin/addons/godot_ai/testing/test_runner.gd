@@ -75,6 +75,14 @@ func run_suites(suites: Array, suite_filter: String = "", test_filter: String = 
 	_results.clear()
 	var start := Time.get_ticks_msec()
 
+	## Silence the plugin's ring-buffer console echo while tests run. Negative-
+	## path suites deliberately fill the ring with 500 lines and log malformed-
+	## result errors; echoing all of that buries an all-green run in scary
+	## console output. The ring contents tests assert on are untouched, and
+	## the flag is restored after the run so live logging resumes.
+	var _prev_console_echo := McpLogBuffer.console_echo
+	McpLogBuffer.console_echo = false
+
 	for suite: McpTestSuite in suites:
 		if not suite_filter.is_empty() and suite.suite_name() != suite_filter:
 			continue
@@ -117,6 +125,7 @@ func run_suites(suites: Array, suite_filter: String = "", test_filter: String = 
 			_cleanup_leaked_nodes(scene_root, before_children)
 
 	_last_run_ms = Time.get_ticks_msec() - start
+	McpLogBuffer.console_echo = _prev_console_echo
 	return get_results(verbose)
 
 

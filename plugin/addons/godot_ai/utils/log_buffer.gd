@@ -6,6 +6,15 @@ extends RefCounted
 
 const MAX_LINES := 500
 
+## When false, `log()` still records into the ring buffer but does not echo the
+## line to the Godot console. The test runner flips this off for the duration
+## of a run so negative-path suites (which intentionally drive a 500-line ring
+## fill and malformed-result error logging) don't bury an all-green run in
+## console noise. Ring *contents* — what tests assert on via `get_recent()` /
+## `total_logged()` — are unaffected. Engine-level C++ errors raised by
+## negative-path tests are not routed through here and still surface.
+static var console_echo := true
+
 var _lines: Array[String] = []
 ## Monotonic count of every line ever passed to `log()` since the last
 ## `clear()`. Distinct from `_lines.size()`, which is bounded at MAX_LINES.
@@ -19,7 +28,8 @@ var enabled := true
 
 func log(msg: String) -> void:
 	var line := "MCP | %s" % msg
-	print(line)
+	if enabled and console_echo:
+		print(line)
 	_lines.append(line)
 	if _lines.size() > MAX_LINES:
 		_lines = _lines.slice(-MAX_LINES)
