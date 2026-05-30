@@ -504,10 +504,10 @@ static var _uv_version_searched: bool = false
 
 ## Cached for the editor session. The dock's `_refresh_setup_status`
 ## (called via `call_deferred` from `_build_ui`) calls this on the
-## main thread in user mode, so a single cold `uvx --version` shell-out
-## adds ~80 ms to the dock's first paint on Linux and more on Windows.
-## Subsequent calls (focus-in refresh, manual Refresh clicks) reuse the
-## cached string.
+## main thread in user mode, so a single cold `OS.execute(uvx,
+## ["--version"])` adds ~80 ms to the dock's first paint on Linux and
+## more on Windows. Subsequent calls (focus-in refresh, manual Refresh
+## clicks) reuse the cached string.
 ##
 ## Invalidate via `invalidate_uv_version_cache()` when the user
 ## installs / reinstalls uv via the dock so the next refresh reflects
@@ -522,13 +522,9 @@ static func check_uv_version() -> String:
 		_uv_version_searched = true
 		_uv_version_cache = ""
 		return ""
-	## Bounded exec (not blocking OS.execute) so a hung/contended uvx can't
-	## wedge the main thread on the dock's first paint — same rationale as
-	## every other per-client CLI shell-out (#238/#239).
-	var result := McpCliExec.run(uvx, ["--version"], 5000)
-	var text := String(result.get("stdout", "")).strip_edges()
-	if int(result.get("exit_code", -1)) == 0 and not text.is_empty():
-		_uv_version_cache = text
+	var output: Array = []
+	if OS.execute(uvx, ["--version"], output, true) == 0 and output.size() > 0:
+		_uv_version_cache = output[0].strip_edges()
 	else:
 		_uv_version_cache = ""
 	_uv_version_searched = true
@@ -599,12 +595,9 @@ static func find_worktree_src_dir(start_dir: String) -> String:
 
 static func _find_system_install() -> String:
 	var cmd := "which" if OS.get_name() != "Windows" else "where"
-	## Bounded exec so a hung which/where can't wedge the caller (#238/#239).
-	var result := McpCliExec.run(cmd, ["godot-ai"], 3000)
-	if int(result.get("exit_code", -1)) == 0:
-		## `where` can emit multiple matches; take the first line like the
-		## prior output[0] read did.
-		var found := String(result.get("stdout", "")).strip_edges().split("\n", false)
-		if not found.is_empty() and not String(found[0]).strip_edges().is_empty():
-			return String(found[0]).strip_edges()
+	var output: Array = []
+	if OS.execute(cmd, ["godot-ai"], output, true) == 0 and output.size() > 0:
+		var found: String = output[0].strip_edges()
+		if not found.is_empty():
+			return found
 	return ""
