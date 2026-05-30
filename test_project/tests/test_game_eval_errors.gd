@@ -344,3 +344,53 @@ func test_clear_pending_disconnects_grace_and_probe_timers() -> void:
 		"_clear_pending disconnects the compile-grace timer")
 	assert_false(probe.timeout.is_connected(probe_cb),
 		"_clear_pending disconnects the runtime probe timer")
+
+
+func test_on_eval_ack_sets_flag() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	var rid := "rid-ack"
+	plugin._pending[rid] = {"connection": null, "acked": false, "compiled": false}
+	plugin._on_eval_ack([rid])
+	assert_true(plugin._pending[rid]["acked"],
+		"mcp:eval_ack flips the pending entry's acked flag")
+
+
+func test_eval_grace_fires_compile_error_when_acked_but_not_compiled() -> void:
+	## The positive compile-failure signal: the game acked (started reload) but
+	## never sent mcp:eval_compiled → the source failed to parse.
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	var rid := "rid-grace-compile"
+	plugin._pending[rid] = {"connection": conn, "acked": true, "compiled": false}
+	plugin._on_eval_grace(rid)
+	assert_false(plugin._pending.has(rid), "a confirmed compile error clears pending")
+	assert_eq(conn.captured.size(), 1, "one deferred reply")
+	assert_eq(conn.captured[0]["payload"]["error"]["code"], ErrorCodes.EVAL_COMPILE_ERROR,
+		"replies with EVAL_COMPILE_ERROR")
+	conn.free()
+
+
+func test_eval_grace_defers_when_not_acked() -> void:
+	## The fix: a missing ack means the game hasn't serviced the eval yet (busy
+	## main thread), NOT a parse error. Must NOT fire EVAL_COMPILE_ERROR and must
+	## leave pending intact so the eventual real reply is still delivered.
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	var rid := "rid-grace-noack"
+	plugin._pending[rid] = {"connection": conn, "acked": false, "compiled": false}
+	plugin._on_eval_grace(rid)
+	assert_true(plugin._pending.has(rid),
+		"an un-acked eval is left pending (deferred to the normal timeout)")
+	assert_eq(conn.captured.size(), 0, "no false EVAL_COMPILE_ERROR is sent")
+	conn.free()
+
+
+func test_eval_grace_noop_when_already_compiled() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	var rid := "rid-grace-compiled"
+	plugin._pending[rid] = {"connection": conn, "acked": true, "compiled": true}
+	plugin._on_eval_grace(rid)
+	assert_true(plugin._pending.has(rid), "a compiled eval is untouched by the grace timer")
+	assert_eq(conn.captured.size(), 0, "no compile error for a compiled eval")
+	conn.free()

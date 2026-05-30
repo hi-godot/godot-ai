@@ -154,6 +154,9 @@ func _capture(message: String, data: Array, _session_id: int) -> bool:
 		"mcp:eval_error":
 			_on_eval_error(data)
 			return true
+		"mcp:eval_ack":
+			_on_eval_ack(data)
+			return true
 		"mcp:eval_compiled":
 			_on_eval_compiled(data)
 			return true
@@ -437,21 +440,12 @@ func _send_eval(
 			_log_buffer.log("[debug] !! eval timeout (%s)" % request_id)
 	timer.timeout.connect(timeout_callable)
 
-	## #490: arm the compile-grace timer. If mcp:eval_compiled hasn't set
-	## `compiled` by the time it fires, the eval source failed to parse.
+	## #490: arm the compile-grace timer. _on_eval_grace concludes a parse error
+	## only when the game acked the eval (it received the message and started
+	## reload()) but never sent mcp:eval_compiled — see there for why a missing
+	## ack must NOT be read as a compile error.
 	var grace: SceneTreeTimer = tree.create_timer(EVAL_COMPILE_GRACE_SEC)
-	var grace_callable := func() -> void:
-		var pending_entry = _pending.get(request_id)
-		if pending_entry == null or pending_entry.get("compiled", false):
-			return
-		_clear_pending(request_id)
-		var conn: McpConnection = pending_entry.connection
-		if conn == null or not is_instance_valid(conn):
-			return
-		_send_error(conn, request_id, ErrorCodes.EVAL_COMPILE_ERROR,
-			"Game eval failed to compile — likely a GDScript syntax/parse error. The parse error text is in the editor's Output/Debugger panel; it is not capturable from the running game. Check your eval code's syntax.")
-		if _log_buffer:
-			_log_buffer.log("[debug] !! eval compile error (%s)" % request_id)
+	var grace_callable := func() -> void: _on_eval_grace(request_id)
 	grace.timeout.connect(grace_callable)
 
 	_pending[request_id] = {
@@ -460,6 +454,7 @@ func _send_eval(
 		"timeout_callable": timeout_callable,
 		"grace_timer": grace,
 		"grace_callable": grace_callable,
+		"acked": false,
 		"compiled": false,
 	}
 
@@ -510,6 +505,47 @@ func _on_eval_error(data: Array) -> void:
 	_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, message)
 	if _log_buffer:
 		_log_buffer.log("[debug] <- mcp:eval_error (%s): %s" % [request_id, message])
+
+
+## #490: the game sends this at the top of _handle_eval, BEFORE reload() (so it
+## survives a parse-error abort). It positively signals "the game received this
+## eval and started compiling it" — letting _on_eval_grace tell a real parse
+## error (acked, never compiled) apart from a message the game hasn't serviced
+## yet (never acked — main thread blocked by a long frame/load or a CPU-bound
+## prior eval).
+func _on_eval_ack(data: Array) -> void:
+	if data.is_empty():
+		return
+	var request_id: String = data[0]
+	var pending_entry = _pending.get(request_id)
+	if pending_entry == null:
+		return
+	pending_entry["acked"] = true
+	if _log_buffer:
+		_log_buffer.log("[debug] <- mcp:eval_ack (%s)" % request_id)
+
+
+## #490: compile-grace timer fired. Conclude a parse error ONLY when the game
+## acked the eval (started reload()) but never sent mcp:eval_compiled. If it
+## never acked, the game simply hasn't serviced the message yet — NOT a parse
+## error — so leave _pending intact and let the normal eval timeout handle it
+## rather than false-failing a valid eval and dropping its eventual real reply.
+func _on_eval_grace(request_id: String) -> void:
+	var pending_entry = _pending.get(request_id)
+	if pending_entry == null or pending_entry.get("compiled", false):
+		return
+	if not pending_entry.get("acked", false):
+		if _log_buffer:
+			_log_buffer.log("[debug] eval grace: no ack yet, deferring to timeout (%s)" % request_id)
+		return
+	_clear_pending(request_id)
+	var conn: McpConnection = pending_entry.connection
+	if conn == null or not is_instance_valid(conn):
+		return
+	_send_error(conn, request_id, ErrorCodes.EVAL_COMPILE_ERROR,
+		"Game eval failed to compile — likely a GDScript syntax/parse error. The parse error text is in the editor's Output/Debugger panel; it is not capturable from the running game. Check your eval code's syntax.")
+	if _log_buffer:
+		_log_buffer.log("[debug] !! eval compile error (%s)" % request_id)
 
 
 ## #490: the game sends this the instant reload() of the eval source

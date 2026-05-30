@@ -593,6 +593,12 @@ func _handle_eval(data: Array) -> void:
 
 	var script: GDScript = GDScript.new()
 	script.source_code = script_source
+	## #490: ack BEFORE reload(). A parse error aborts this function at reload()
+	## without a return code in a debug build, so this is our only chance to tell
+	## the editor "received + about to compile." The editor uses that to tell a
+	## real parse error (acked, never compiled) apart from a message it simply
+	## hasn't serviced yet (never acked); see mcp_debugger_plugin._on_eval_grace.
+	EngineDebugger.send_message("mcp:eval_ack", [request_id])
 	## reload() ABORTS this function on a parse error in a debug build (it does
 	## not return a non-OK code there), so the lines below only run when the
 	## source compiled. Keep reload() INLINE — moving it behind a timer/await
