@@ -38,6 +38,16 @@ fi
 link="test_project/addons/godot_ai"
 expected_target_abs="$repo_root/plugin/addons/godot_ai"
 
+# Are we on Windows? Junctions appear as plain directories to bash, so the
+# "is it a directory?" fallback below is only meaningful there. On macOS/Linux
+# a non-symlink directory at $link is a stale real copy (e.g. left by a
+# self-update smoke test or botched checkout) holding OUTDATED plugin code —
+# it must be treated as broken and replaced with the symlink, never accepted.
+is_windows=0
+case "${OS:-}${OSTYPE:-}" in
+    *Windows_NT*|*msys*|*cygwin*) is_windows=1 ;;
+esac
+
 link_ok=0
 if [ -L "$link" ]; then
     # POSIX symlink — resolve and compare
@@ -45,9 +55,12 @@ if [ -L "$link" ]; then
     if [ "$resolved" = "$expected_target_abs" ]; then
         link_ok=1
     fi
-elif [ -d "$link" ]; then
-    # Could be a Windows junction. Compare contents via plugin.gd presence.
-    # On Windows, junctions appear as directories to bash.
+elif [ "$is_windows" = "1" ] && [ -d "$link" ]; then
+    # On Windows, directory junctions appear as plain directories to bash and
+    # can't be told apart from real dirs the way `-L` distinguishes symlinks.
+    # Accept a junction-shaped dir via plugin.gd presence. (Not reachable on
+    # macOS/Linux: there, a real dir here is a stale copy and falls through to
+    # the rm -rf + recreate path below.)
     if [ -f "$link/plugin.gd" ]; then
         link_ok=1
     fi
