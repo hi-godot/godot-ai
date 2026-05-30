@@ -3,18 +3,20 @@ extends McpTestSuite
 
 ## #490: coverage for the fast game_eval error detection plumbing.
 ##
-## Two halves, both exercised here without a live game subprocess:
-##   1. game_logger.gd — counts ERROR_TYPE_SCRIPT (2) errors and stores the
-##      latest text, while leaving push_error/push_warning (types 0/1) alone.
-##   2. game_helper.gd — _try_report_eval_runtime_error / _handle_eval_check,
-##      which turn that counter into an mcp:eval_runtime_error reply when the
-##      editor probes. The probe matters because the backgrounded play-in-editor
-##      game's _process is frozen, so _on_debug_message (which routes
-##      _handle_eval_check) is the only reliable channel — see CLAUDE.md.
+## Three layers, all exercised here without a live game subprocess:
+##   1. game_logger.gd — counts ERROR_TYPE_SCRIPT (2) errors into a ring that
+##      records each error's backtrace function names, and exposes
+##      find_script_error_since(baseline, fn) for token correlation.
+##   2. game_helper.gd — per-request in-flight tracking + token correlation:
+##      _try_report_eval_runtime_error / _handle_eval_check only fail an eval
+##      when an error past its baseline carries its uniquely named wrapper
+##      function, so unrelated game errors and sibling overlapping evals never
+##      cross-attribute.
+##   3. mcp_debugger_plugin.gd — editor-side _on_eval_compiled /
+##      _on_eval_runtime_error / _clear_pending for the eval flow.
 ##
-## The game_logger extends Logger (Godot 4.5+), so every test gates on
-## ClassDB.class_exists("Logger") and skips on older engines (matches the
-## editor_logger tests in test_editor.gd).
+## game_logger extends Logger (Godot 4.5+), so the logger/helper tests gate on
+## ClassDB.class_exists("Logger") and skip on older engines.
 
 const _LoggerLoader := preload("res://addons/godot_ai/runtime/logger_loader.gd")
 const GameHelper := preload("res://addons/godot_ai/runtime/game_helper.gd")
@@ -36,17 +38,33 @@ func _build_game_logger():
 	return script.new() if script != null else null
 
 
-## Attach a fresh game_logger to a fresh (out-of-tree) game_helper so its
-## _process never runs and the eval-tracking state stays exactly as set.
+## Fresh (out-of-tree) game_helper with a fresh logger attached, so _process
+## never runs and the in-flight state stays exactly as the test sets it.
 func _build_helper_with_logger() -> Array:
 	var helper: Node = GameHelper.new()
 	var logger = _build_game_logger()
 	helper._logger = logger
-	helper._eval_node = null
 	return [helper, logger]
 
 
-# --- game_logger: script-error counter ---
+## Register an in-flight eval the way _handle_eval does (node omitted — these
+## unit tests don't create a real eval node).
+func _register_inflight(helper: Node, request_id: String, token: String) -> void:
+	helper._inflight_evals[request_id] = {
+		"node": null,
+		"token": token,
+		"baseline": helper._logger.script_error_seq(),
+	}
+
+
+## Emit a script-type (runtime) error whose backtrace frame is `fn`.
+func _log_script_error(logger, fn: String, msg := "kaboom") -> void:
+	logger._log_error(
+		fn, "res://eval.gd", 10, msg, "",
+		false, _SCRIPT_ERROR, [StubBacktrace.new("res://eval.gd", 10, fn)])
+
+
+# --- game_logger: script-error ring + token lookup ---
 
 func test_script_error_increments_seq_and_stores_text() -> void:
 	if not ClassDB.class_exists("Logger"):
@@ -110,99 +128,107 @@ func test_push_warning_does_not_bump_script_seq() -> void:
 		"push_warning (type 1) must NOT bump the script-error counter")
 
 
-# --- game_helper: report logic answering the editor probe ---
+func test_find_script_error_since_matches_function_token() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var logger = _build_game_logger()
+	if logger == null:
+		return
+	_log_script_error(logger, "_mcp_run_9", "boom")
+	assert_contains(logger.find_script_error_since(0, "_mcp_run_9"), "boom",
+		"finds an error whose backtrace contains the queried function")
+	assert_eq(logger.find_script_error_since(0, "_mcp_run_other"), "",
+		"no match for a function not in any backtrace")
 
-func test_try_report_noop_while_in_flight_without_error() -> void:
+
+func test_find_script_error_since_respects_baseline() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	var logger = _build_game_logger()
+	if logger == null:
+		return
+	_log_script_error(logger, "_mcp_run_9", "boom")  # seq -> 1
+	assert_eq(logger.find_script_error_since(1, "_mcp_run_9"), "",
+		"errors at/below the baseline seq are excluded")
+	assert_contains(logger.find_script_error_since(0, "_mcp_run_9"), "boom",
+		"errors after the baseline are included")
+
+
+# --- game_helper: per-request token-correlated reporting ---
+
+func test_try_report_fires_after_matching_runtime_error() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return
 	var pair := _build_helper_with_logger()
 	var helper: Node = pair[0]
 	var logger = pair[1]
-	helper._eval_request_id = "REQ1"
-	helper._eval_script_err_baseline = logger.script_error_seq()
-	assert_false(helper._try_report_eval_runtime_error(),
-		"no script error yet → nothing to report")
-	assert_eq(helper._eval_request_id, "REQ1", "request stays in flight")
-	helper.free()
-
-
-func test_try_report_fires_after_runtime_error() -> void:
-	if not ClassDB.class_exists("Logger"):
-		skip("Logger class requires Godot 4.5+")
-		return
-	var pair := _build_helper_with_logger()
-	var helper: Node = pair[0]
-	var logger = pair[1]
-	helper._eval_request_id = "REQ1"
-	helper._eval_script_err_baseline = logger.script_error_seq()
-	logger._log_error("_run", "res://eval.gd", 9, "kaboom", "", false, _SCRIPT_ERROR, [])
-	assert_true(helper._try_report_eval_runtime_error(),
-		"counter advanced past baseline → reports the runtime error")
-	assert_eq(helper._eval_request_id, "", "request cleared once reported")
-	helper.free()
-
-
-func test_try_report_respects_request_id_filter() -> void:
-	if not ClassDB.class_exists("Logger"):
-		skip("Logger class requires Godot 4.5+")
-		return
-	var pair := _build_helper_with_logger()
-	var helper: Node = pair[0]
-	var logger = pair[1]
-	helper._eval_request_id = "REQ1"
-	helper._eval_script_err_baseline = logger.script_error_seq()
-	logger._log_error("_run", "res://eval.gd", 9, "kaboom", "", false, _SCRIPT_ERROR, [])
-	assert_false(helper._try_report_eval_runtime_error("OTHER"),
-		"a probe for a different request must not report this one")
-	assert_eq(helper._eval_request_id, "REQ1", "request untouched on filter mismatch")
+	_register_inflight(helper, "REQ1", "7")
+	assert_false(helper._try_report_eval_runtime_error("REQ1"),
+		"no error yet → nothing to report")
+	_log_script_error(logger, "_mcp_run_7", "Nonexistent function 'foo'")
 	assert_true(helper._try_report_eval_runtime_error("REQ1"),
-		"a probe for the matching request reports it")
-	assert_eq(helper._eval_request_id, "")
+		"an error carrying the eval's token reports it")
+	assert_false(helper._inflight_evals.has("REQ1"),
+		"a reported eval is removed from in-flight")
 	helper.free()
 
 
-func test_try_report_ignores_push_error() -> void:
+func test_try_report_ignores_unrelated_game_error() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	## P2a: a runtime error from the game's own code (different function) while
+	## the eval is in flight must NOT fail the eval.
+	var pair := _build_helper_with_logger()
+	var helper: Node = pair[0]
+	var logger = pair[1]
+	_register_inflight(helper, "REQ1", "7")
+	_log_script_error(logger, "_on_some_game_signal", "unrelated game bug")
+	assert_false(helper._try_report_eval_runtime_error("REQ1"),
+		"an unrelated error (no eval token in its backtrace) must not fail the eval")
+	assert_true(helper._inflight_evals.has("REQ1"), "eval stays in flight")
+	helper.free()
+
+
+func test_try_report_isolates_overlapping_evals() -> void:
+	if not ClassDB.class_exists("Logger"):
+		skip("Logger class requires Godot 4.5+")
+		return
+	## P2b: two evals in flight; only one raises a runtime error. The other
+	## must be unaffected.
+	var pair := _build_helper_with_logger()
+	var helper: Node = pair[0]
+	var logger = pair[1]
+	_register_inflight(helper, "REQ_A", "1")
+	_register_inflight(helper, "REQ_B", "2")
+	_log_script_error(logger, "_mcp_run_2", "B failed")
+	assert_false(helper._try_report_eval_runtime_error("REQ_A"),
+		"eval A is not failed by eval B's error")
+	assert_true(helper._inflight_evals.has("REQ_A"), "eval A stays in flight")
+	assert_true(helper._try_report_eval_runtime_error("REQ_B"),
+		"eval B is failed by its own error")
+	assert_false(helper._inflight_evals.has("REQ_B"), "eval B is removed")
+	helper.free()
+
+
+func test_try_report_ignores_push_error_even_from_eval() -> void:
 	if not ClassDB.class_exists("Logger"):
 		skip("Logger class requires Godot 4.5+")
 		return
 	var pair := _build_helper_with_logger()
 	var helper: Node = pair[0]
 	var logger = pair[1]
-	helper._eval_request_id = "REQ1"
-	helper._eval_script_err_baseline = logger.script_error_seq()
-	logger._log_error("_run", "res://eval.gd", 5, "x", "", false, _ERROR, [])
-	assert_false(helper._try_report_eval_runtime_error(),
-		"a benign push_error must not be mis-reported as a fatal runtime error")
-	assert_eq(helper._eval_request_id, "REQ1", "eval keeps running after a push_error")
-	helper.free()
-
-
-func test_try_report_skips_finished_eval() -> void:
-	if not ClassDB.class_exists("Logger"):
-		skip("Logger class requires Godot 4.5+")
-		return
-	var pair := _build_helper_with_logger()
-	var helper: Node = pair[0]
-	var logger = pair[1]
-	## An eval node that already finished cleanly sets __mcp_finished; a script
-	## error logged afterwards must not retroactively fail the completed eval.
-	## Instantiate via .new() (not Node.new()+set_script) so the member
-	## initializer runs and __mcp_finished is a real, readable property —
-	## standing in for the generated wrapper that sets it true after a clean
-	## return. (get/set on a bare set_script node does not expose it.)
-	var fin_script := GDScript.new()
-	fin_script.source_code = "extends Node\nvar __mcp_finished := true\n"
-	fin_script.reload()
-	var fin_node: Node = fin_script.new()
-	helper._eval_node = fin_node
-	helper._eval_request_id = "REQ1"
-	helper._eval_script_err_baseline = logger.script_error_seq()
-	logger._log_error("_run", "res://eval.gd", 9, "late", "", false, _SCRIPT_ERROR, [])
-	assert_false(helper._try_report_eval_runtime_error(),
-		"a finished eval node short-circuits the report")
-	assert_eq(helper._eval_request_id, "REQ1", "request not cleared for a finished eval")
-	fin_node.free()
+	_register_inflight(helper, "REQ1", "7")
+	## A push_error from inside the eval carries the eval token but is type 0,
+	## so it never enters the script-error ring — the eval keeps running.
+	logger._log_error("_mcp_run_7", "res://eval.gd", 5, "x", "",
+		false, _ERROR, [StubBacktrace.new("res://eval.gd", 5, "_mcp_run_7")])
+	assert_false(helper._try_report_eval_runtime_error("REQ1"),
+		"a push_error (type 0) must not fail the eval, even with the eval token")
+	assert_true(helper._inflight_evals.has("REQ1"))
 	helper.free()
 
 
@@ -213,12 +239,11 @@ func test_handle_eval_check_reports_matching_request() -> void:
 	var pair := _build_helper_with_logger()
 	var helper: Node = pair[0]
 	var logger = pair[1]
-	helper._eval_request_id = "REQ1"
-	helper._eval_script_err_baseline = logger.script_error_seq()
-	logger._log_error("_run", "res://eval.gd", 9, "kaboom", "", false, _SCRIPT_ERROR, [])
+	_register_inflight(helper, "REQ1", "7")
+	_log_script_error(logger, "_mcp_run_7")
 	helper._handle_eval_check(["REQ1"])
-	assert_eq(helper._eval_request_id, "",
-		"a probe for the erroring in-flight request clears it (reply sent)")
+	assert_false(helper._inflight_evals.has("REQ1"),
+		"a probe for the erroring in-flight request reports + removes it")
 	helper.free()
 
 
@@ -229,11 +254,10 @@ func test_handle_eval_check_ignores_other_request() -> void:
 	var pair := _build_helper_with_logger()
 	var helper: Node = pair[0]
 	var logger = pair[1]
-	helper._eval_request_id = "REQ1"
-	helper._eval_script_err_baseline = logger.script_error_seq()
-	logger._log_error("_run", "res://eval.gd", 9, "kaboom", "", false, _SCRIPT_ERROR, [])
+	_register_inflight(helper, "REQ1", "7")
+	_log_script_error(logger, "_mcp_run_7")
 	helper._handle_eval_check(["DIFFERENT"])
-	assert_eq(helper._eval_request_id, "REQ1",
+	assert_true(helper._inflight_evals.has("REQ1"),
 		"a probe naming a different request is a no-op")
 	helper.free()
 
