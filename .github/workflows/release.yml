@@ -166,3 +166,48 @@ jobs:
         with:
           files: godot-ai-plugin.zip
           generate_release_notes: true
+
+      - name: Post changelog to Discord
+        # Posts the release's auto-generated notes to the #changelog channel
+        # via a channel-scoped webhook. Skips cleanly when the webhook secret
+        # isn't configured, so releases never break if it's unset/removed.
+        #
+        # The post is silent: flags:4096 is Discord's SUPPRESS_NOTIFICATIONS
+        # (the @silent mechanism) — the message lands in the channel and marks
+        # it unread, but triggers NO push/desktop notification for anyone,
+        # regardless of their per-channel notification settings. The generated
+        # notes never contain @everyone/@here, and allowed_mentions.parse:[] is
+        # belt-and-suspenders against any @mention in the notes ever pinging.
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_CHANGELOG_WEBHOOK }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "DISCORD_CHANGELOG_WEBHOOK not set — skipping changelog post."
+            exit 0
+          fi
+          tag="$GITHUB_REF_NAME"
+          name=$(gh release view "$tag" --json name  --jq '.name')
+          url=$(gh release view "$tag"  --json url   --jq '.url')
+          notes=$(gh release view "$tag" --json body --jq '.body')
+          # Discord embed description caps at 4096 chars; leave headroom and
+          # append a link line so the full notes are always one click away.
+          desc=$(printf '%s' "$notes" | head -c 3900)
+          payload=$(jq -n \
+            --arg title "$name" \
+            --arg url "$url" \
+            --arg desc "$desc" \
+            '{
+               username: "Godot AI",
+               allowed_mentions: { parse: [] },
+               flags: 4096,
+               embeds: [ {
+                 title: $title,
+                 url: $url,
+                 description: ($desc + "\n\n[View full release →](" + $url + ")"),
+                 color: 5793266
+               } ]
+             }')
+          curl -fsS -H "Content-Type: application/json" \
+            -X POST -d "$payload" "$DISCORD_WEBHOOK"
+          echo "Posted changelog for $tag to Discord."
