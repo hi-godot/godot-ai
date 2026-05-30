@@ -33,6 +33,24 @@ from collections.abc import Callable
 logger = logging.getLogger(__name__)
 
 DEFAULT_POLL_SECONDS = 5.0
+POLL_SECONDS_ENV = "GODOT_AI_REAPER_POLL_SECONDS"
+
+
+def poll_seconds_from_env() -> float:
+    """Reaper poll interval, overridable via ``GODOT_AI_REAPER_POLL_SECONDS``.
+
+    Defaults to :data:`DEFAULT_POLL_SECONDS`. The override exists so the
+    subprocess integration test can drive a fast (<1s) reap instead of waiting
+    the production 5s; a malformed value falls back to the default.
+    """
+    raw = os.environ.get(POLL_SECONDS_ENV, "").strip()
+    if not raw:
+        return DEFAULT_POLL_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_POLL_SECONDS
+    return value if value > 0 else DEFAULT_POLL_SECONDS
 
 
 def should_arm_reaper(owner_pid: int | None) -> bool:

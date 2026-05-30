@@ -25,7 +25,7 @@ from godot_ai.middleware import (
     PreserveGodotCommandErrorData,
     StripClientWrapperKwargs,
 )
-from godot_ai.orphan_reaper import should_arm_reaper, watch_owner
+from godot_ai.orphan_reaper import poll_seconds_from_env, should_arm_reaper, watch_owner
 from godot_ai.resources.editor import register_editor_resources
 from godot_ai.resources.library import register_library_resources
 from godot_ai.resources.nodes import register_node_resources
@@ -126,7 +126,11 @@ def create_server(
         reaper_task: asyncio.Task | None = None
         if should_arm_reaper(owner_pid):
             reaper_task = asyncio.create_task(
-                watch_owner(owner_pid, lambda: len(registry.list_all()))
+                watch_owner(
+                    owner_pid,
+                    lambda: len(registry.list_all()),
+                    poll_seconds=poll_seconds_from_env(),
+                )
             )
             logger.info("Orphan reaper armed for owner editor pid %d", owner_pid)
         elif owner_pid and owner_pid > 0:
