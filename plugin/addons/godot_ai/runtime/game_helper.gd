@@ -519,6 +519,21 @@ func _mouse_button_index(name: String) -> int:
 
 ## --- game_eval: execute arbitrary GDScript in the running game ---
 
+## Wall-clock ceiling for a single game_eval. Evaluated code that awaits
+## something which never completes (a signal that never fires, a timer on a
+## paused tree) would otherwise pin the request open until the dispatcher's
+## 15s deferred budget / the server's 15s command timeout fires it as an
+## opaque INTERNAL_ERROR — with the temp eval Node leaked into the tree.
+## Bounding it here (comfortably under that 15s ceiling, with round-trip
+## margin) lets us free the node and reply with an actionable message
+## instead. See hi-godot/godot-ai#487.
+##
+## NOTE: this catches a hung `await`, not a CPU-bound loop with no `await` —
+## a tight `while true:` with no yield blocks the main thread, so nothing
+## (including this poll) runs until it yields. That case is out of scope.
+const EVAL_TIMEOUT_SEC := 8.0
+
+
 func _handle_eval(data: Array) -> void:
 	var request_id: String = data[0] if data.size() > 0 else ""
 	var code: String = data[1] if data.size() > 1 else ""
@@ -552,13 +567,61 @@ func _handle_eval(data: Array) -> void:
 	temp_node.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(temp_node)
 
-	var result = null
-	if temp_node.has_method("execute"):
-		result = await temp_node.execute()
+	if not temp_node.has_method("execute"):
+		temp_node.queue_free()
+		EngineDebugger.send_message("mcp:eval_error",
+			[request_id, "Internal error: eval wrapper is missing execute()."])
+		return
+
+	## Drive execute() as a fire-and-forget coroutine that records its
+	## outcome into `holder`, then poll frames until it finishes or the
+	## deadline passes. A plain `await temp_node.execute()` has no escape
+	## hatch: if user code never returns, we never reach the reply/cleanup
+	## below and the request hangs with the node leaked.
+	var holder := {"done": false, "value": null, "abandoned": false}
+	_drive_eval(temp_node, holder)
+
+	var tree := get_tree()
+	var deadline_ms := int(EVAL_TIMEOUT_SEC * 1000.0)
+	var start_ms := Time.get_ticks_msec()
+	## process_frame fires every idle frame regardless of tree pause, so this
+	## deadline still elapses while the game is paused.
+	while not holder["done"] and (Time.get_ticks_msec() - start_ms) < deadline_ms:
+		await tree.process_frame
+
+	if not holder["done"]:
+		## Still running past the deadline. Mark abandoned so a late
+		## completion in _drive_eval drops its result and frees the node,
+		## detach the node now so it stops touching the scene, and reply with
+		## a clear timeout instead of letting the request ride to INTERNAL_ERROR.
+		holder["abandoned"] = true
+		if is_instance_valid(temp_node):
+			remove_child(temp_node)
+		EngineDebugger.send_message("mcp:eval_error",
+			[request_id, ("Eval exceeded %ds and was aborted — the code likely awaits "
+				+ "something that never completes (a signal that never fires, a timer on "
+				+ "a paused tree) or loops forever. Check logs_read(source='game').")
+				% int(EVAL_TIMEOUT_SEC)])
+		return
 
 	temp_node.queue_free()
 	EngineDebugger.send_message("mcp:eval_response",
-		[request_id, JSON.stringify(_variant_to_json(result))])
+		[request_id, JSON.stringify(_variant_to_json(holder["value"]))])
+
+
+## Run the compiled eval node's execute() and stash the result. Kept
+## separate from _handle_eval so the latter can race it against a deadline
+## via frame polling. If the eval was abandoned (timed out) before this
+## resumes, drop the result and free the now-detached node — _handle_eval
+## has already replied.
+func _drive_eval(node: Node, holder: Dictionary) -> void:
+	var value = await node.execute()
+	if holder.get("abandoned", false):
+		if is_instance_valid(node):
+			node.queue_free()
+		return
+	holder["value"] = value
+	holder["done"] = true
 
 
 func _indent_eval_code(code: String) -> String:
