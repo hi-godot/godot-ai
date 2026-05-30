@@ -47,7 +47,7 @@ def _make_sandbox(tmp_path: Path) -> Path:
     (root / "script").mkdir(parents=True)
     (root / "plugin" / "addons" / "godot_ai").mkdir(parents=True)
     (root / "plugin" / "addons" / "godot_ai" / "plugin.gd").write_text(
-        "# canonical plugin source\n"
+        "# canonical plugin source\n", encoding="utf-8"
     )
     (root / "test_project" / "addons").mkdir(parents=True)
 
@@ -72,7 +72,7 @@ def test_stale_real_dir_is_repaired_to_symlink(tmp_path: Path) -> None:
 
     # Stale real-dir copy holding OUTDATED plugin code.
     link.mkdir()
-    (link / "plugin.gd").write_text("# OUTDATED stale copy\n")
+    (link / "plugin.gd").write_text("# OUTDATED stale copy\n", encoding="utf-8")
 
     result = _run(root)
 
@@ -80,7 +80,7 @@ def test_stale_real_dir_is_repaired_to_symlink(tmp_path: Path) -> None:
     assert link.is_symlink(), "stale real dir should have been replaced with a symlink"
     assert link.resolve() == (root / "plugin" / "addons" / "godot_ai").resolve()
     # And it now resolves to the canonical (not the stale) plugin.gd.
-    assert (link / "plugin.gd").read_text() == "# canonical plugin source\n"
+    assert (link / "plugin.gd").read_text(encoding="utf-8") == "# canonical plugin source\n"
 
 
 def test_healthy_symlink_is_left_intact(tmp_path: Path) -> None:
