@@ -37,7 +37,7 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
   - `connection.gd` — WebSocket client, reconnection, `send_deferred_response`
   - `dispatcher.gd` — command routing with frame budget; `DEFERRED_RESPONSE` sentinel
   - `handlers/` — scene, node, editor, project, client, script, resource, filesystem, signal, autoload, input, test, batch, ui, theme, animation (+ values/presets), material (+ values/presets), particle (+ values/presets), camera, audio, environment, texture, curve, physics_shape, control_draw_recipe
-  - `clients/` — descriptor + strategy system (`_base`, `_registry`, `_json_strategy`, `_toml_strategy`, `_cli_strategy`, `_atomic_write`, `_cli_finder`, `_path_template`, `_manual_command`) and 18 client descriptors
+  - `clients/` — descriptor + strategy system (`_base`, `_registry`, `_json_strategy`, `_toml_strategy`, `_cli_strategy`, `_atomic_write`, `_cli_finder`, `_path_template`, `_manual_command`) and 19 client descriptors
   - `runtime/game_helper.gd` — game-side autoload that ferries logs back to the editor (`logs_read source=game`)
   - `testing/` — McpTestRunner + McpTestSuite framework
   - `utils/` — scene_path, error_codes, log_buffer
