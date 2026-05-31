@@ -215,7 +215,7 @@ whose command line contains `spawn_main(parent_pid=...)` and delete
 <details>
 <summary><strong>Contributing</strong></summary>
 
-See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for development setup, testing, and PR guidelines.
+See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for development setup, testing, and PR guidelines. AI assistants should also read [AGENTS.md](AGENTS.md).
 
 **Windows contributors:** run `.\script\setup-dev.ps1` in PowerShell. It builds `test_project\addons\godot_ai` as a directory junction — no admin rights and no Windows Developer Mode required.
 

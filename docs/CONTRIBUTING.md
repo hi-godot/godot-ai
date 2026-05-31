@@ -1,5 +1,9 @@
 # Contributing to Godot AI
 
+AI assistants working in this repository should read the shared guide in
+[AGENTS.md](../AGENTS.md). Client-specific files should point there instead of
+duplicating general repo guidance.
+
 ## Development Setup
 
 **macOS / Linux:**
