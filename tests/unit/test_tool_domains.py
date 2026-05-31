@@ -24,6 +24,7 @@ _SRC_ROOT = _REPO_ROOT / "src" / "godot_ai"
 ## here and in the dock.
 _CATALOG_GD = _REPO_ROOT / "plugin" / "addons" / "godot_ai" / "tool_catalog.gd"
 _RUNTIME_BOUNDARY_DOCS = [
+    _REPO_ROOT / "AGENTS.md",
     _REPO_ROOT / "CLAUDE.md",
     _REPO_ROOT / "docs" / "plugin-architecture.md",
     _REPO_ROOT / ".claude" / "skills" / "godot-ai" / "skill.md",
