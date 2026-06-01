@@ -62,3 +62,6 @@ test_project/tests/space_city_assets/
 
 # Test runtime artifacts (created by GDScript tests; ephemeral)
 test_project/tests/_mcp_test_*
+
+# stormtest scratch artifacts (script/stormtest.py)
+_stormtest/

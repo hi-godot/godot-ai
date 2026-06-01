@@ -275,6 +275,19 @@ test_results_get             # review last results
 
 Test suites extend `McpTestSuite` (assertion methods: `assert_true`, `assert_eq`, `assert_has_key`, `assert_contains`, `assert_is_error`, etc.). Drop `test_*.gd` files in `res://tests/` and they're auto-discovered.
 
+### Stress / load testing — `script/stormtest.py`
+
+`stormtest` opens many concurrent MCP clients and fires rapid, randomized tool calls across **every** domain at a live editor, with periodic `editor_reload_plugin` churn mixed in. It's a robustness test, not a correctness test: it answers "does the editor + plugin + WebSocket dispatcher + server survive sustained concurrent abuse and reload cycles without crashing?" and surfaces per-tool latency/error hot-spots. Use it after changes to the dispatcher, transport, readiness gating, session routing, or the reload/handoff path. Full reference: `docs/STRESS_TESTING.md`.
+
+```bash
+.venv/bin/python script/stormtest.py                       # ≈ 1000 calls, with reload churn
+SS_WORKERS=12 SS_WAVES=30 .venv/bin/python script/stormtest.py   # brutal ≈ 9000 calls
+SS_RELOAD=0 .venv/bin/python script/stormtest.py           # reads-only smoke, no reloads
+SS_URL=http://127.0.0.1:8010/mcp .venv/bin/python script/stormtest.py  # target another stack
+```
+
+To stress a *branch's* code (plugin + server), point a Godot editor at that worktree's `test_project/` and serve its `src/` via `script/serve-this-worktree` (external server, so `editor_reload_plugin` exercises reload without killing the server), then run stormtest against it. A full JSON snapshot lands in `$TMPDIR/stormtest_report.json` (override with `SS_REPORT`), flushed every few seconds so a crash/kill still leaves data. A small `EDITOR_NOT_READY` / `NODE_NOT_FOUND` / `CONNECTION` error rate is expected noise under concurrency + reloads — watch instead for the process dying, a reload that never recovers, or one op with pathological error/latency.
+
 **Guardrails built into the test runner:**
 - **Zero-assertion detection**: Tests that complete with 0 assertions are flagged as failures ("Test completed with 0 assertions — likely skipped its logic"). This catches tests that silently `return` before asserting anything.
 - **Resilient discovery**: If a `.gd` file fails to load (parse error, duplicate method, wrong base class), the rest of the suites still run and the failing files are reported in `load_errors`.
