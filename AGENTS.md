@@ -288,6 +288,8 @@ SS_URL=http://127.0.0.1:8010/mcp .venv/bin/python script/stormtest.py  # target 
 
 To stress a *branch's* code (plugin + server), point a Godot editor at that worktree's `test_project/` and serve its `src/` via `script/serve-this-worktree` (external server, so `editor_reload_plugin` exercises reload without killing the server), then run stormtest against it. A full JSON snapshot lands in `$TMPDIR/stormtest_report.json` (override with `SS_REPORT`), flushed every few seconds so a crash/kill still leaves data. A small `EDITOR_NOT_READY` / `NODE_NOT_FOUND` / `CONNECTION` error rate is expected noise under concurrency + reloads — watch instead for the process dying, a reload that never recovers, or one op with pathological error/latency.
 
+On Windows, a reads-dominant run (`SS_RELOAD=0`) works, but **reload churn (`SS_RELOAD=1`, the default) currently wedges the harness** and the external-server mitigation doesn't apply (`serve-this-worktree` is bash-only; a hand-started external `--reload` server gets killed by the reload). The editor itself survives reloads — only the harness hangs. Use `.venv\Scripts\python.exe` and note `$TMPDIR` is `%TEMP%`. See the "Windows / cross-platform notes" callout in `docs/STRESS_TESTING.md` (issues #513 / #514; resilience tracked in #509).
+
 **Guardrails built into the test runner:**
 - **Zero-assertion detection**: Tests that complete with 0 assertions are flagged as failures ("Test completed with 0 assertions — likely skipped its logic"). This catches tests that silently `return` before asserting anything.
 - **Resilient discovery**: If a `.gd` file fails to load (parse error, duplicate method, wrong base class), the rest of the suites still run and the failing files are reported in `load_errors`.

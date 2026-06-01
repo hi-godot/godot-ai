@@ -63,6 +63,43 @@ SS_RELOAD=0 SS_WORKERS=4 SS_WAVES=3 .venv/bin/python script/stormtest.py
 SS_URL=http://127.0.0.1:8010/mcp .venv/bin/python script/stormtest.py
 ```
 
+### Windows / cross-platform notes
+
+> ⚠️ **Running on Windows? Reads/writes work; reload churn does not (yet).**
+>
+> **Concurrent reads/writes are fine.** The harness *logic* is platform-agnostic:
+> the in-editor scratch paths (`res://_stormtest/…`) use Godot's virtual
+> filesystem, and the report path goes through `tempfile.gettempdir()` /
+> `os.path.join`, so both resolve correctly on every OS. A reads-dominant run
+> (`SS_RELOAD=0`) is clean on Windows.
+>
+> **Reload churn (`SS_RELOAD=1`, the default) currently does NOT work on Windows**
+> — two independent problems, both tracked:
+> - Against a plugin-managed server, the first `editor_reload_plugin` **wedges the
+>   harness**: the asyncio loop stalls past `CALL_TIMEOUT` when the server is
+>   killed mid-reload under concurrent load. The *editor* survives fine (it
+>   reloads and re-registers a new session) — only the harness hangs. See
+>   [#513](https://github.com/hi-godot/godot-ai/issues/513).
+> - The "run the server externally" mitigation **also fails on Windows**:
+>   `script/serve-this-worktree` is bash-only (no PowerShell port, and it never
+>   passes `--ws-port`), and even a hand-started external `--reload` server gets
+>   **killed by the reload** (`_stop_server` takes down the port owner with no
+>   respawn). See [#514](https://github.com/hi-godot/godot-ai/issues/514).
+>
+>   Until those land, validate reload survival on Windows with a *single-threaded*
+>   reload loop (reload → reconnect → confirm a new `session_id`) rather than the
+>   concurrent churn mode.
+>
+> **Invocation also differs (POSIX → Windows):**
+> - **venv interpreter** — use `.venv\Scripts\python.exe`, not `.venv/bin/python`.
+> - **`$TMPDIR`** in the examples is POSIX; the report lands in the platform temp
+>   dir (`%TEMP%` on Windows). Pass an explicit `SS_REPORT=…` for a known
+>   location, and prefer forward slashes (Python accepts them on Windows and they
+>   dodge backslash-escaping surprises).
+>
+> Making the tooling resilient enough to drop this heads-up is tracked in
+> [#509](https://github.com/hi-godot/godot-ai/issues/509).
+
 ### Knobs (env)
 
 | Var | Default | Meaning |
