@@ -57,8 +57,13 @@ func write_file(params: Dictionary) -> Dictionary:
 	file.store_string(content)
 	file.close()
 
-	# Trigger reimport so the editor recognises the new/changed file
-	EditorInterface.get_resource_filesystem().scan()
+	# Single-file register, not a full scan() — a scan() per write stacks
+	# filesystem WorkerThreadPool tasks under concurrent writes and can SIGABRT
+	# in the global-class update (see dsarno/godot#6 and create_script in
+	# script_handler.gd). update_file() is what reimport()/material/theme use.
+	var efs := EditorInterface.get_resource_filesystem()
+	if efs != null:
+		efs.update_file(path)
 
 	var data := {
 		"path": path,

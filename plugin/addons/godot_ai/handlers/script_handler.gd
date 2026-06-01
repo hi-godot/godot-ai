@@ -50,8 +50,16 @@ func create_script(params: Dictionary) -> Dictionary:
 	file.store_string(content)
 	file.close()
 
-	# Trigger reimport so the editor recognises the new file
-	EditorInterface.get_resource_filesystem().scan()
+	# Register just this file with the editor instead of a full recursive
+	# scan(). A scan() per write stacks `update_scripts_classes` /
+	# `update_script_paths_documentation` WorkerThreadPool tasks under concurrent
+	# script creation ("Task ... already exists" / "!tasks.has(p_task)"), which
+	# races the global-class registry and can SIGABRT in
+	# ScriptServer::remove_global_class_by_path (see dsarno/godot#6).
+	# update_file() is the single-file path the rest of the plugin already uses.
+	var efs := EditorInterface.get_resource_filesystem()
+	if efs != null:
+		efs.update_file(path)
 
 	var data := {
 		"path": path,
@@ -206,7 +214,10 @@ func patch_script(params: Dictionary) -> Dictionary:
 	write.store_string(new_content)
 	write.close()
 
-	EditorInterface.get_resource_filesystem().scan()
+	# Single-file register, not a full scan() — see create_script (dsarno/godot#6).
+	var efs := EditorInterface.get_resource_filesystem()
+	if efs != null:
+		efs.update_file(path)
 
 	return {
 		"data": {
