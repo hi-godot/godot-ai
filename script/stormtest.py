@@ -570,8 +570,8 @@ async def op_particle(w: Worker):
             {
                 "op": "set_process",
                 "params": {
-                    "path": f"{w.base}/{name}",
-                    "properties": {"scale_min": 0.5, "scale_max": 1.5},
+                    "node_path": f"{w.base}/{name}",
+                    "properties": {"gravity": {"x": 0, "y": -9.8, "z": 0}},
                 },
             },
             op_label="particle_manage.set_process",
