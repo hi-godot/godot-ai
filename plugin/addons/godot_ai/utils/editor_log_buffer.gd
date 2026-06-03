@@ -32,7 +32,7 @@ func _init() -> void:
 	super._init(MAX_LINES)
 
 
-func append(level: String, text: String, path: String = "", line: int = 0, function: String = "") -> void:
+func append(level: String, text: String, path: String = "", line: int = 0, function: String = "", details: Dictionary = {}) -> void:
 	var entry := {
 		"source": "editor",
 		"level": _coerce_level(level),
@@ -41,6 +41,8 @@ func append(level: String, text: String, path: String = "", line: int = 0, funct
 		"line": line,
 		"function": function,
 	}
+	if not details.is_empty():
+		entry["details"] = details.duplicate(true)
 	_mutex.lock()
 	_append_entry(entry)
 	_mutex.unlock()

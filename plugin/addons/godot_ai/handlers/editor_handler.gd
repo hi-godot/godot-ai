@@ -13,14 +13,16 @@ var _connection: McpConnection
 var _debugger_plugin: McpDebuggerPlugin
 var _game_log_buffer: McpGameLogBuffer
 var _editor_log_buffer: McpEditorLogBuffer
+var _debugger_errors_root: Node
 
 
-func _init(log_buffer: McpLogBuffer, connection: McpConnection = null, debugger_plugin: McpDebuggerPlugin = null, game_log_buffer: McpGameLogBuffer = null, editor_log_buffer: McpEditorLogBuffer = null) -> void:
+func _init(log_buffer: McpLogBuffer, connection: McpConnection = null, debugger_plugin: McpDebuggerPlugin = null, game_log_buffer: McpGameLogBuffer = null, editor_log_buffer: McpEditorLogBuffer = null, debugger_errors_root: Node = null) -> void:
 	_log_buffer = log_buffer
 	_connection = connection
 	_debugger_plugin = debugger_plugin
 	_game_log_buffer = game_log_buffer
 	_editor_log_buffer = editor_log_buffer
+	_debugger_errors_root = debugger_errors_root
 
 
 func get_editor_state(_params: Dictionary) -> Dictionary:
@@ -66,6 +68,7 @@ func get_logs(params: Dictionary) -> Dictionary:
 	var count: int = maxi(0, int(params.get("count", 50)))
 	var offset: int = maxi(0, int(params.get("offset", 0)))
 	var source: String = str(params.get("source", "plugin"))
+	var include_details: bool = bool(params.get("include_details", false))
 	if not source in VALID_LOG_SOURCES:
 		return ErrorCodes.make(
 			ErrorCodes.VALUE_OUT_OF_RANGE,
@@ -76,11 +79,11 @@ func get_logs(params: Dictionary) -> Dictionary:
 		"plugin":
 			return _get_plugin_logs(count, offset)
 		"game":
-			return _get_game_logs(count, offset)
+			return _get_game_logs(count, offset, include_details)
 		"editor":
-			return _get_editor_logs(count, offset)
+			return _get_editor_logs(count, offset, include_details)
 		"all":
-			return _get_all_logs(count, offset)
+			return _get_all_logs(count, offset, include_details)
 	return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Unreachable")
 
 
@@ -101,7 +104,7 @@ func _get_plugin_logs(count: int, offset: int) -> Dictionary:
 	}
 
 
-func _get_game_logs(count: int, offset: int) -> Dictionary:
+func _get_game_logs(count: int, offset: int, include_details: bool) -> Dictionary:
 	if _game_log_buffer == null:
 		return {
 			"data": {
@@ -115,7 +118,7 @@ func _get_game_logs(count: int, offset: int) -> Dictionary:
 				"dropped_count": 0,
 			}
 		}
-	var page := _game_log_buffer.get_range(offset, count)
+	var page := _entries_for_response(_game_log_buffer.get_range(offset, count), include_details)
 	return {
 		"data": {
 			"source": "game",
@@ -130,37 +133,28 @@ func _get_game_logs(count: int, offset: int) -> Dictionary:
 	}
 
 
-func _get_editor_logs(count: int, offset: int) -> Dictionary:
+func _get_editor_logs(count: int, offset: int, include_details: bool) -> Dictionary:
 	## Editor-process script errors (parse errors, @tool runtime errors,
 	## EditorPlugin errors, push_error/push_warning). Captured by
 	## editor_logger.gd via OS.add_logger and gated on Godot 4.5+; on older
-	## engines or before plugin enable the buffer is null/empty and we
-	## return an empty page so callers can poll unconditionally.
-	if _editor_log_buffer == null:
-		return {
-			"data": {
-				"source": "editor",
-				"lines": [],
-				"total_count": 0,
-				"returned_count": 0,
-				"offset": offset,
-				"dropped_count": 0,
-			}
-		}
-	var page := _editor_log_buffer.get_range(offset, count)
+	## engines the buffer can be null. Godot also sends GDScript reload
+	## warnings/errors straight to the Debugger dock's Errors tab; those do
+	## not flow through OS.add_logger, so merge the visible tree rows here.
+	var all_entries := _collect_editor_log_entries()
+	var page := _entries_for_response(_slice_entries(all_entries, offset, count), include_details)
 	return {
 		"data": {
 			"source": "editor",
 			"lines": page,
-			"total_count": _editor_log_buffer.total_count(),
+			"total_count": all_entries.size(),
 			"returned_count": page.size(),
 			"offset": offset,
-			"dropped_count": _editor_log_buffer.dropped_count(),
+			"dropped_count": _editor_log_buffer.dropped_count() if _editor_log_buffer != null else 0,
 		}
 	}
 
 
-func _get_all_logs(count: int, offset: int) -> Dictionary:
+func _get_all_logs(count: int, offset: int, include_details: bool) -> Dictionary:
 	## Plugin lines have no timestamp, so we can't merge chronologically.
 	## Concatenate plugin → editor → game and apply the offset/count window
 	## over the combined list. The per-line `source` field tells callers
@@ -170,9 +164,8 @@ func _get_all_logs(count: int, offset: int) -> Dictionary:
 	var combined: Array[Dictionary] = []
 	for line in _log_buffer.get_recent(_log_buffer.total_count()):
 		combined.append({"source": "plugin", "level": "info", "text": line})
-	if _editor_log_buffer != null:
-		for entry in _editor_log_buffer.get_range(0, _editor_log_buffer.total_count()):
-			combined.append(entry)
+	for entry in _collect_editor_log_entries():
+		combined.append(entry)
 	if _game_log_buffer != null:
 		for entry in _game_log_buffer.get_range(0, _game_log_buffer.total_count()):
 			combined.append(entry)
@@ -180,6 +173,7 @@ func _get_all_logs(count: int, offset: int) -> Dictionary:
 	var page: Array[Dictionary] = []
 	for i in range(mini(offset, combined.size()), stop):
 		page.append(combined[i])
+	page = _entries_for_response(page, include_details)
 	var run_id := ""
 	var dropped := 0
 	if _game_log_buffer != null:
@@ -199,6 +193,191 @@ func _get_all_logs(count: int, offset: int) -> Dictionary:
 			"dropped_count": dropped,
 		}
 	}
+
+
+func _entries_for_response(entries: Array[Dictionary], include_details: bool) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for entry in entries:
+		var copy: Dictionary = entry.duplicate(true)
+		if not include_details:
+			copy.erase("details")
+		out.append(copy)
+	return out
+
+
+func _collect_editor_log_entries() -> Array[Dictionary]:
+	var entries: Array[Dictionary] = []
+	if _editor_log_buffer != null:
+		for entry in _editor_log_buffer.get_range(0, _editor_log_buffer.total_count()):
+			entries.append(entry)
+	for entry in _read_debugger_error_entries():
+		if not _has_equivalent_log_entry(entries, entry):
+			entries.append(entry)
+	return entries
+
+
+func _read_debugger_error_entries() -> Array[Dictionary]:
+	if _debugger_plugin == null and _debugger_errors_root == null:
+		return []
+	var root: Node = _debugger_errors_root
+	if root == null:
+		root = EditorInterface.get_base_control()
+	if root == null:
+		return []
+	var trees: Array[Tree] = []
+	_collect_debugger_error_trees(root, trees)
+	var entries: Array[Dictionary] = []
+	for tree in trees:
+		for entry in _entries_from_debugger_error_tree(tree):
+			if not _has_equivalent_log_entry(entries, entry):
+				entries.append(entry)
+	return entries
+
+
+static func _collect_debugger_error_trees(node: Node, out: Array[Tree]) -> void:
+	if node is Tree and _tree_has_debugger_errors(node as Tree):
+		out.append(node as Tree)
+	for child in node.get_children():
+		if child is Node:
+			_collect_debugger_error_trees(child as Node, out)
+
+
+static func _tree_has_debugger_errors(tree: Tree) -> bool:
+	var root := tree.get_root()
+	if root == null:
+		return false
+	var item := root.get_first_child()
+	while item != null:
+		if _is_debugger_error_item(item):
+			return true
+		item = item.get_next()
+	return false
+
+
+static func _entries_from_debugger_error_tree(tree: Tree) -> Array[Dictionary]:
+	var entries: Array[Dictionary] = []
+	var root := tree.get_root()
+	if root == null:
+		return entries
+	var item := root.get_first_child()
+	while item != null:
+		if _is_debugger_error_item(item):
+			entries.append(_entry_from_debugger_error_item(item))
+		item = item.get_next()
+	return entries
+
+
+static func _entry_from_debugger_error_item(item: TreeItem) -> Dictionary:
+	var title := item.get_text(1)
+	var loc := _location_from_metadata(item.get_metadata(0))
+	var function := _function_from_title(title)
+	return {
+		"source": "editor",
+		"level": "warn" if item.has_meta("_is_warning") else "error",
+		"text": title,
+		"path": str(loc.get("path", "")),
+		"line": int(loc.get("line", 0)),
+		"function": function,
+		"details": _details_from_debugger_error_item(item, loc, function),
+	}
+
+
+static func _details_from_debugger_error_item(item: TreeItem, loc: Dictionary, function: String) -> Dictionary:
+	var children: Array[Dictionary] = []
+	var frames: Array[Dictionary] = []
+	var child := item.get_first_child()
+	while child != null:
+		var child_loc := _location_from_metadata(child.get_metadata(0))
+		var child_entry := {
+			"label": child.get_text(0),
+			"text": child.get_text(1),
+			"path": str(child_loc.get("path", "")),
+			"line": int(child_loc.get("line", 0)),
+		}
+		children.append(child_entry)
+		if _is_stack_trace_item(child, child_loc):
+			frames.append({
+				"path": child_entry.path,
+				"line": child_entry.line,
+				"function": _function_from_frame_text(child_entry.text),
+			})
+		child = child.get_next()
+	return {
+		"debugger_tab": "Errors",
+		"time": item.get_text(0),
+		"message": item.get_text(1),
+		"error_type_name": "warning" if item.has_meta("_is_warning") else "error",
+		"source": {
+			"path": str(loc.get("path", "")),
+			"line": int(loc.get("line", 0)),
+			"function": function,
+		},
+		"resolved": {
+			"path": str(loc.get("path", "")),
+			"line": int(loc.get("line", 0)),
+			"function": function,
+		},
+		"children": children,
+		"frames": frames,
+	}
+
+
+static func _is_debugger_error_item(item: TreeItem) -> bool:
+	return item.has_meta("_is_warning") or item.has_meta("_is_error")
+
+
+static func _is_stack_trace_item(item: TreeItem, loc: Dictionary) -> bool:
+	if str(item.get_text(0)).find("Stack Trace") >= 0:
+		return true
+	return not str(loc.get("path", "")).is_empty() and not item.get_parent().has_meta("_is_warning") and not item.get_parent().has_meta("_is_error")
+
+
+static func _location_from_metadata(meta: Variant) -> Dictionary:
+	if meta is Array and meta.size() >= 2:
+		return {"path": str(meta[0]), "line": int(meta[1])}
+	return {"path": "", "line": 0}
+
+
+static func _function_from_title(title: String) -> String:
+	var colon := title.find(": ")
+	if colon <= 0:
+		return ""
+	return title.substr(0, colon)
+
+
+static func _function_from_frame_text(text: String) -> String:
+	var marker := text.find(" @ ")
+	if marker < 0:
+		return ""
+	var fn := text.substr(marker + 3).strip_edges()
+	if fn.ends_with("()"):
+		fn = fn.substr(0, fn.length() - 2)
+	return fn
+
+
+static func _slice_entries(entries: Array[Dictionary], offset: int, count: int) -> Array[Dictionary]:
+	var page: Array[Dictionary] = []
+	var stop := mini(entries.size(), offset + count)
+	for i in range(mini(offset, entries.size()), stop):
+		page.append(entries[i])
+	return page
+
+
+static func _has_equivalent_log_entry(entries: Array[Dictionary], candidate: Dictionary) -> bool:
+	var key := _log_entry_key(candidate)
+	for entry in entries:
+		if _log_entry_key(entry) == key:
+			return true
+	return false
+
+
+static func _log_entry_key(entry: Dictionary) -> String:
+	return "%s|%s|%s|%s" % [
+		str(entry.get("level", "")),
+		str(entry.get("text", "")),
+		str(entry.get("path", "")),
+		str(entry.get("line", 0)),
+	]
 
 
 ## Map of human-readable monitor names to Performance.Monitor enum values.
@@ -736,11 +915,30 @@ func get_performance_monitors(params: Dictionary) -> Dictionary:
 func clear_logs(_params: Dictionary) -> Dictionary:
 	var count := _log_buffer.total_count()
 	_log_buffer.clear()
+	var debugger_errors_cleared := _clear_debugger_error_trees()
 	return {
 		"data": {
 			"cleared_count": count,
+			"debugger_errors_cleared": debugger_errors_cleared,
 		}
 	}
+
+
+func _clear_debugger_error_trees() -> int:
+	if _debugger_plugin == null and _debugger_errors_root == null:
+		return 0
+	var root: Node = _debugger_errors_root
+	if root == null:
+		root = EditorInterface.get_base_control()
+	if root == null:
+		return 0
+	var trees: Array[Tree] = []
+	_collect_debugger_error_trees(root, trees)
+	var cleared := 0
+	for tree in trees:
+		cleared += _entries_from_debugger_error_tree(tree).size()
+		tree.clear()
+	return cleared
 
 
 func reload_plugin(_params: Dictionary) -> Dictionary:

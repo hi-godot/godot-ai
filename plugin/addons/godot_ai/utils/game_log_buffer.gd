@@ -23,8 +23,11 @@ func _init() -> void:
 	super._init(MAX_LINES)
 
 
-func append(level: String, text: String) -> void:
-	_append_entry({"source": "game", "level": _coerce_level(level), "text": text})
+func append(level: String, text: String, details: Dictionary = {}) -> void:
+	var entry := {"source": "game", "level": _coerce_level(level), "text": text}
+	if not details.is_empty():
+		entry["details"] = details.duplicate(true)
+	_append_entry(entry)
 
 
 ## Rotate the run identifier and drop all buffered entries. Called when the

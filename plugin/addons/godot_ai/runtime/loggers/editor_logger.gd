@@ -82,11 +82,25 @@ func _log_error(
 		resolved.path = message_res_path
 		resolved.line = 0
 		resolved.function = function
+		_update_resolved_details(resolved)
 	if _is_in_godot_ai_addon(resolved.path):
 		return
 	if not message_res_path.is_empty() and _is_in_godot_ai_addon(message_res_path):
 		return
-	_buffer.append(resolved.level, resolved.message, resolved.path, resolved.line, resolved.function)
+	var details: Dictionary = resolved.get("details", {})
+	_buffer.append(resolved.level, resolved.message, resolved.path, resolved.line, resolved.function, details)
+
+
+static func _update_resolved_details(resolved: Dictionary) -> void:
+	var details: Dictionary = resolved.get("details", {})
+	if details.is_empty():
+		return
+	details["resolved"] = {
+		"path": resolved.get("path", ""),
+		"line": resolved.get("line", 0),
+		"function": resolved.get("function", ""),
+	}
+	resolved["details"] = details
 
 
 ## Predicate broken out so tests can drive the path-filter logic without

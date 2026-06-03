@@ -442,6 +442,80 @@ class TestLogsReadTool:
         assert data["dropped_count"] == 0
         assert data["stale_run_id"] is False
 
+    async def test_include_details_returns_errors_tab_context(self, mcp_stack):
+        client, plugin = mcp_stack
+        entries = [
+            {
+                "source": "editor",
+                "level": "error",
+                "text": "Invalid get index 'hp' on base Nil.",
+                "path": "res://player.gd",
+                "line": 44,
+                "function": "_take_damage",
+                "details": {
+                    "code": "Invalid get index 'hp' on base Nil.",
+                    "rationale": "",
+                    "error_type": 2,
+                    "error_type_name": "script",
+                    "source": {
+                        "path": "core/variant/variant_utility.cpp",
+                        "line": 1000,
+                        "function": "push_error",
+                    },
+                    "resolved": {
+                        "path": "res://player.gd",
+                        "line": 44,
+                        "function": "_take_damage",
+                    },
+                    "frames": [
+                        {
+                            "path": "res://player.gd",
+                            "line": 44,
+                            "function": "_take_damage",
+                        },
+                        {
+                            "path": "res://main.gd",
+                            "line": 12,
+                            "function": "_ready",
+                        },
+                    ],
+                },
+            }
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_logs"
+            assert cmd["params"] == {
+                "count": 50,
+                "offset": 0,
+                "source": "editor",
+                "include_details": True,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "source": "editor",
+                    "lines": entries,
+                    "total_count": 1,
+                    "returned_count": 1,
+                    "offset": 0,
+                    "dropped_count": 0,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "logs_read",
+            {"source": "editor", "include_details": True},
+        )
+        await task
+
+        data = result.data
+        assert data["lines"] == entries
+        assert data["lines"][0]["details"]["resolved"]["path"] == "res://player.gd"
+        assert data["lines"][0]["details"]["frames"][1]["function"] == "_ready"
+
 
 # ---------------------------------------------------------------------------
 # node_find

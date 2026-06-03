@@ -75,7 +75,8 @@ func _log_error(
 	if not resolved.path.is_empty():
 		loc = "%s:%d @ %s" % [resolved.path, resolved.line, resolved.function] if not resolved.function.is_empty() else "%s:%d" % [resolved.path, resolved.line]
 	var text: String = "%s (%s)" % [resolved.message, loc] if not loc.is_empty() else resolved.message
-	_append(resolved.level, text)
+	var details: Dictionary = resolved.get("details", {})
+	_append(resolved.level, text, details)
 	if error_type == _ERROR_TYPE_SCRIPT:
 		## Collect every function name in the first non-empty backtrace so
 		## game_helper can match its eval's uniquely named wrapper function.
@@ -93,9 +94,12 @@ func _log_error(
 		_mutex.unlock()
 
 
-func _append(level: String, text: String) -> void:
+func _append(level: String, text: String, details: Dictionary = {}) -> void:
 	_mutex.lock()
-	_pending.append([level, text])
+	if details.is_empty():
+		_pending.append([level, text])
+	else:
+		_pending.append([level, text, details.duplicate(true)])
 	_mutex.unlock()
 
 

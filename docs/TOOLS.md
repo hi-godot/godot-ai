@@ -29,10 +29,16 @@ not the MCP tool names.
 | `script_create` / `script_attach` / `script_patch` | Create, attach, anchor-edit GDScript files |
 | `project_run` | Play the project (autosave persists in-memory MCP edits unless `autosave=False`) |
 | `test_run` | Run GDScript test suites in the editor |
-| `logs_read` | Read plugin / game / editor / combined log buffers. `source="editor"` surfaces parse errors + @tool/EditorPlugin runtime errors + push_error/push_warning (Godot 4.5+, filtered to user .gd/.cs) — use this when the editor's Output panel shows red lines but `logs_read` returned nothing |
+| `logs_read` | Read plugin / game / editor / combined log buffers. `source="editor"` surfaces parse errors, GDScript reload warnings, @tool/EditorPlugin runtime errors, push_error/push_warning, and visible Debugger dock Errors-tab rows — use this when the editor's Output or Debugger Errors panel shows red/yellow rows |
 | `editor_screenshot` | Capture editor viewport, cinematic camera, or running game framebuffer |
 | `editor_reload_plugin` | Reload the plugin and wait for reconnect (server must be external) |
 | `animation_create` | Create an Animation clip (auto-creates AnimationPlayer + library if missing) |
+
+`logs_read` also accepts `include_details=true` for `source="editor"`,
+`source="game"`, and `source="all"`. Detailed entries include the original
+Godot `_log_error` code/rationale when available, error type, resolved source
+location, and stack/error-tree context corresponding to the Debugger dock's
+Errors tab.
 
 ## Domain rollups (`<domain>_manage`)
 

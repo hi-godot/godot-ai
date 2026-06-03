@@ -76,6 +76,7 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         offset: int = 0,
         source: str = "plugin",
         since_run_id: str = "",
+        include_details: bool = False,
         session_id: str = "",
     ) -> dict:
         """Read recent log lines from the Godot editor, plugin, or running game.
@@ -88,25 +89,32 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
           via ``_mcp_game_helper`` autoload (Godot 4.5+). Buffer 2000, clears
           on each ``project_run``. Entries: {source, level, text}; response
           carries run_id, is_running, dropped_count.
-        - "editor": editor-process script errors — parse errors, @tool/
-          EditorPlugin runtime errors, push_error/push_warning (Godot 4.5+).
-          Use when the editor's Output panel shows red lines but other
-          sources turned up nothing. Buffer 500, persists across
-          ``project_run``. Entries: {source, level, text, path, line,
-          function}. Filtered to .gd/.cs in the user project;
-          addons/godot_ai/ dropped. Errors fired before plugin enable are
-          not captured.
+        - "editor": editor-process script errors and the Debugger dock's
+          visible Errors-tab rows — parse errors, GDScript reload warnings,
+          @tool/EditorPlugin runtime errors, push_error/push_warning.
+          Logger-backed entries require Godot 4.5+; Errors-tab rows are read
+          from the editor UI when available. Use when the editor Output or
+          Debugger Errors panel shows red/yellow rows but other sources turned
+          up nothing. Buffer 500 for logger-backed entries; Debugger rows are
+          live UI state. Entries: {source, level, text, path, line, function}.
+          Filtered to .gd/.cs in the user project for Logger-backed entries;
+          addons/godot_ai/ dropped. Logger entries fired before plugin enable
+          are not captured.
         - "all": plugin → editor → game lines (with source per entry).
 
         Tail pattern: poll with offset=N + since_run_id=R. ``stale_run_id: true``
         means the buffer has rotated; reset offset to 0 and capture new run_id.
         ``run_id`` is empty for ``source="editor"`` (editor logs don't rotate).
+        Set ``include_details=True`` for Errors-tab style metadata on game/editor
+        entries: original code/rationale, error type, resolved source, and
+        stack frames. Default false preserves compact responses.
 
         Args:
             count: Max lines to return. Default 50.
             offset: Lines to skip. Default 0.
             source: "plugin" | "game" | "editor" | "all". Default "plugin".
             since_run_id: Stale-detection token from a previous response.
+            include_details: Include rich error metadata for game/editor entries.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -116,6 +124,7 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
             offset=offset,
             source=source,
             since_run_id=since_run_id,
+            include_details=include_details,
         )
 
     @mcp.tool(output_schema=None, meta=DEFER_META)

@@ -9,31 +9,30 @@ extends RefCounted
 ## backtrace-remapping path without a live script execution — Godot
 ## doesn't expose a constructor for the real ScriptBacktrace.
 ##
-## Single-frame is enough: both loggers only consult the first non-empty
-## frame of `script_backtraces` (via `McpLogBacktrace.resolve_error`).
+## Defaults to a single frame for existing tests, but can carry multiple
+## frames so detail payload tests can verify full stack preservation.
 
-var _file: String
-var _line: int
-var _function: String
+var _frames: Array[Dictionary] = []
 
 
-func _init(file: String, line: int, function: String) -> void:
-	_file = file
-	_line = line
-	_function = function
+func _init(file: String, line: int, function: String, frames: Array[Dictionary] = []) -> void:
+	if frames.is_empty():
+		_frames = [{"path": file, "line": line, "function": function}]
+	else:
+		_frames = frames
 
 
 func get_frame_count() -> int:
-	return 1
+	return _frames.size()
 
 
-func get_frame_file(_idx: int) -> String:
-	return _file
+func get_frame_file(idx: int) -> String:
+	return str(_frames[idx].get("path", ""))
 
 
-func get_frame_line(_idx: int) -> int:
-	return _line
+func get_frame_line(idx: int) -> int:
+	return int(_frames[idx].get("line", 0))
 
 
-func get_frame_function(_idx: int) -> String:
-	return _function
+func get_frame_function(idx: int) -> String:
+	return str(_frames[idx].get("function", ""))

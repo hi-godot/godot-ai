@@ -192,14 +192,24 @@ func _capture(message: String, data: Array, session_id: int) -> bool:
 func _on_log_batch(data: Array) -> void:
 	if _game_log_buffer == null:
 		return
-	## data layout: [[[level, text], [level, text], ...]]
+	## data layout: [[[level, text, details?], ...]]
 	if data.is_empty() or not (data[0] is Array):
 		return
 	var entries: Array = data[0]
 	for entry in entries:
+		if entry is Dictionary:
+			var dict_details: Dictionary = {}
+			var raw_dict_details = entry.get("details", {})
+			if raw_dict_details is Dictionary:
+				dict_details = raw_dict_details
+			_game_log_buffer.append(str(entry.get("level", "info")), str(entry.get("text", "")), dict_details)
+			continue
 		if not (entry is Array) or entry.size() < 2:
 			continue
-		_game_log_buffer.append(str(entry[0]), str(entry[1]))
+		var details: Dictionary = {}
+		if entry.size() > 2 and entry[2] is Dictionary:
+			details = entry[2]
+		_game_log_buffer.append(str(entry[0]), str(entry[1]), details)
 
 
 ## Request a game-process framebuffer capture over the debugger channel.

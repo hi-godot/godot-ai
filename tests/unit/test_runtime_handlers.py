@@ -68,12 +68,24 @@ class StubClient:
         if command == "get_logs":
             params_dict = params or {}
             source = params_dict.get("source", "plugin")
+            include_details = bool(params_dict.get("include_details", False))
             if source == "game":
                 req_offset = int(params_dict.get("offset", 0))
                 req_count = int(params_dict.get("count", 50))
                 all_entries = [
                     {"source": "game", "level": "info", "text": f"game {i}"} for i in range(5)
                 ]
+                if include_details:
+                    for entry in all_entries:
+                        entry["details"] = {
+                            "code": entry["text"],
+                            "rationale": "",
+                            "error_type": 0,
+                            "error_type_name": "error",
+                            "source": {"path": "", "line": 0, "function": ""},
+                            "resolved": {"path": "", "line": 0, "function": ""},
+                            "frames": [],
+                        }
                 page = all_entries[req_offset : req_offset + req_count]
                 return {
                     "source": "game",
@@ -99,6 +111,31 @@ class StubClient:
                     }
                     for i in range(3)
                 ]
+                if include_details:
+                    for entry in all_entries:
+                        entry["details"] = {
+                            "code": entry["text"],
+                            "rationale": "",
+                            "error_type": 2,
+                            "error_type_name": "script",
+                            "source": {
+                                "path": "core/variant/variant_utility.cpp",
+                                "line": 1000,
+                                "function": "push_error",
+                            },
+                            "resolved": {
+                                "path": entry["path"],
+                                "line": entry["line"],
+                                "function": entry["function"],
+                            },
+                            "frames": [
+                                {
+                                    "path": entry["path"],
+                                    "line": entry["line"],
+                                    "function": entry["function"],
+                                }
+                            ],
+                        }
                 page = all_entries[req_offset : req_offset + req_count]
                 return {
                     "source": "editor",
@@ -1345,6 +1382,30 @@ async def test_logs_read_handler_source_editor_passes_through():
     assert result["is_running"] is False
     assert result["stale_run_id"] is False
     assert result["has_more"] is False
+
+
+async def test_logs_read_handler_include_details_passes_through():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+
+    result = await editor_handlers.logs_read(
+        runtime,
+        count=1,
+        offset=0,
+        source="editor",
+        include_details=True,
+    )
+
+    last_call = client.calls[-1]
+    assert last_call["command"] == "get_logs"
+    assert last_call["params"] == {
+        "count": 1,
+        "offset": 0,
+        "source": "editor",
+        "include_details": True,
+    }
+    assert result["lines"][0]["details"]["error_type_name"] == "script"
+    assert result["lines"][0]["details"]["frames"][0]["path"] == "res://script_0.gd"
 
 
 async def test_logs_read_handler_plugin_normalizes_structured_payload():
