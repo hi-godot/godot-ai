@@ -18,6 +18,12 @@ class ErrorCode(StrEnum):
     # actionable reply. Keep in sync with utils/error_codes.gd.
     EVAL_COMPILE_ERROR = "EVAL_COMPILE_ERROR"
     EVAL_RUNTIME_ERROR = "EVAL_RUNTIME_ERROR"
+    # #518: the play session is up but the game-side autoload never registered
+    # its debugger capture within the readiness wait (boot-window race, worst on
+    # Windows, or a missing/disabled autoload). Carved out of INTERNAL_ERROR so
+    # this fast (~3s), caller-actionable failure stops being counted as the
+    # opaque "eval hung" 10s timeout. Keep in sync with utils/error_codes.gd.
+    EVAL_GAME_NOT_READY = "EVAL_GAME_NOT_READY"
     ## audit-v2 #21 (issue #365): finer-grained codes carved out of the
     ## 471 INVALID_PARAMS sites so agents can distinguish recoverable
     ## input errors from structural ones. INVALID_PARAMS stays for

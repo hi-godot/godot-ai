@@ -67,9 +67,12 @@ async def test_game_eval_passes_code_verbatim():
 
 
 def test_eval_error_codes_exist():
-    """The two codes the plugin emits for fast game_eval failures."""
+    """The codes the plugin emits for fast game_eval failures."""
     assert ErrorCode.EVAL_COMPILE_ERROR == "EVAL_COMPILE_ERROR"
     assert ErrorCode.EVAL_RUNTIME_ERROR == "EVAL_RUNTIME_ERROR"
+    # #518: the play-session-up-but-capture-not-ready race, carved out of
+    # INTERNAL_ERROR so it stops being counted as a genuine eval hang.
+    assert ErrorCode.EVAL_GAME_NOT_READY == "EVAL_GAME_NOT_READY"
 
 
 class _RaisingGameEvalClient:

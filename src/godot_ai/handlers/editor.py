@@ -345,10 +345,13 @@ async def game_eval(runtime: DirectRuntime, code: str) -> dict:
 
     Errors come back fast and actionable (#490): a syntax/parse error returns
     ``EVAL_COMPILE_ERROR`` and a runtime error returns ``EVAL_RUNTIME_ERROR``
-    with the real message and resolved line, instead of a generic timeout. A
-    genuine infinite loop / never-firing await still hits the timeout. Note
-    that ``await`` (timers, signals, frames) only progresses while the game
-    window is focused; a backgrounded play-in-editor game has a frozen idle
-    loop, so an awaiting eval reads as a timeout until the game is focused.
+    with the real message and resolved line, instead of a generic timeout.
+    ``EVAL_GAME_NOT_READY`` (#518) means the play session is up but the
+    game-side capture hasn't registered yet — let the game finish launching and
+    retry, or check the ``_mcp_game_helper`` autoload is enabled. A genuine
+    infinite loop / never-firing await still hits the timeout. Note that
+    ``await`` (timers, signals, frames) only progresses while the game window is
+    focused; a backgrounded play-in-editor game has a frozen idle loop, so an
+    awaiting eval reads as a timeout until the game is focused.
     """
     return await runtime.send_command("game_eval", {"code": code}, timeout=15.0)

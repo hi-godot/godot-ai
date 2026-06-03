@@ -29,6 +29,15 @@ const DEFERRED_TIMEOUT := "DEFERRED_TIMEOUT"
 # game_eval failure codes (#490) — keep in sync with protocol/errors.py
 const EVAL_COMPILE_ERROR := "EVAL_COMPILE_ERROR"
 const EVAL_RUNTIME_ERROR := "EVAL_RUNTIME_ERROR"
+## #518: the play session is up (EditorInterface.is_playing_scene() is true, so
+## editor_handler's EDITOR_NOT_READY "game is not running" gate already passed)
+## but the game-side _mcp_game_helper autoload never registered its debugger
+## capture within EVAL_READY_WAIT_SEC. Carved out of INTERNAL_ERROR so this
+## boot-window / missing-autoload race stops masquerading as the opaque "eval
+## hung" 10s timeout in telemetry — the same split #490 made for compile/runtime
+## errors. NOT a hang: it fires fast (~3s) and is caller-actionable (let the game
+## finish booting and retry, or check the autoload is enabled).
+const EVAL_GAME_NOT_READY := "EVAL_GAME_NOT_READY"
 ## audit-v2 #21 (issue #365): finer-grained codes carved out of the 471
 ## INVALID_PARAMS sites so agents can distinguish recoverable input
 ## errors from structural ones. INVALID_PARAMS stays for genuinely
