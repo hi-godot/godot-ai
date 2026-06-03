@@ -438,7 +438,7 @@ func _wait_then_eval(
 		## and caller-actionable; classifying it apart from the opaque 10s hang
 		## keeps the INTERNAL_ERROR telemetry bucket meaning "the eval truly hung".
 		_send_error(connection, request_id, ErrorCodes.EVAL_GAME_NOT_READY,
-			"Game-side autoload never registered its debugger capture within %ds. Is the game actually running? Start it with project_run / the editor's Play button, then retry. If it IS running, check Project Settings → Autoload for _mcp_game_helper (added automatically when the plugin is enabled)." % int(EVAL_READY_WAIT_SEC))
+			"Game-side capture didn't register within %ds. The play session is already running, so the game is most likely still booting — wait a moment and retry. If it persists, the _mcp_game_helper autoload is missing or disabled (Project Settings → Autoload; added automatically when the plugin is enabled), or the game uses a custom main loop." % int(EVAL_READY_WAIT_SEC))
 		return
 	_send_eval(tree, code, request_id, connection, timeout_sec)
 
@@ -452,10 +452,11 @@ func _send_eval(
 ) -> void:
 	var session: EditorDebuggerSession = _first_active_session()
 	if session == null:
-		## #518: same not-ready condition as _wait_then_eval (capture reported
-		## ready but no live debugger session), so the same caller-actionable code.
+		## #518: capture reported ready but the debugger session is no longer live
+		## (the game just stopped / is restarting) — a not-ready race, so the same
+		## caller-actionable EVAL_GAME_NOT_READY rather than the opaque hang bucket.
 		_send_error(connection, request_id, ErrorCodes.EVAL_GAME_NOT_READY,
-			"No active debugger session — is the game actually running?")
+			"Game-side capture registered but its debugger session is no longer active — the game likely just stopped or is restarting. Confirm it's running and retry.")
 		return
 
 	var timer: SceneTreeTimer = tree.create_timer(timeout_sec)
