@@ -406,14 +406,16 @@ func test_send_eval_without_active_session_replies_game_not_ready() -> void:
 		skip("No SceneTree available")
 		return
 	var plugin := McpDebuggerPlugin.new()
-	var conn := _StubConnection.new()
-	plugin._send_eval(tree, "return 1", "rid-no-session", conn, 10.0)
-	if conn.captured.is_empty():
-		## A live debugger session is present (e.g. a game running under this
-		## editor), so the no-session branch wasn't exercised — don't false-fail.
-		conn.free()
+	## Gate BEFORE calling _send_eval: a bare plugin normally has no session, but
+	## if one were present _send_eval would take its live path (arm timers, send a
+	## real mcp:eval into the running game). Skip first so the test never has side
+	## effects in that case rather than bailing after the fact.
+	if plugin._first_active_session() != null:
 		skip("an active debugger session is present; no-session branch not exercised")
 		return
+	var conn := _StubConnection.new()
+	plugin._send_eval(tree, "return 1", "rid-no-session", conn, 10.0)
+	assert_eq(conn.captured.size(), 1, "exactly one deferred reply is sent")
 	assert_eq(conn.captured[0]["payload"]["error"]["code"], ErrorCodes.EVAL_GAME_NOT_READY,
 		"no active debugger session replies with EVAL_GAME_NOT_READY, not INTERNAL_ERROR")
 	conn.free()

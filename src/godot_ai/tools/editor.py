@@ -39,8 +39,9 @@ Ops:
         'await' so user code can await internally. Errors return fast and
         actionable: EVAL_COMPILE_ERROR for a syntax/parse error,
         EVAL_RUNTIME_ERROR (with the real message + line) for a runtime
-        error; EVAL_GAME_NOT_READY if the game is still launching (retry
-        once it's up); a genuine infinite loop / never-firing await still
+        error; EVAL_GAME_NOT_READY if the game isn't ready yet — still
+        launching (retry once it's up) or the _mcp_game_helper autoload is
+        missing/disabled; a genuine infinite loop / never-firing await still
         times out. 'await' only progresses while the game window is focused."""
 
 
