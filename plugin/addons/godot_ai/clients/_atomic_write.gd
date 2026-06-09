@@ -20,23 +20,40 @@ static func write(path: String, content: String) -> bool:
 		if DirAccess.make_dir_recursive_absolute(dir_path) != OK:
 			return false
 
+	# Decide the permission mode the final file (and its backup) must carry
+	# BEFORE we replace anything. A rewrite must preserve the prior file's
+	# mode: the Claude CLI creates ~/.claude.json as 0600 (it holds OAuth
+	# creds + history), and a naive FileAccess write + DirAccess copy would
+	# silently relax that to the umask default (0644) and leak it on shared
+	# machines. A brand-new config defaults to owner-only 0600 since these
+	# files routinely carry tokens. On platforms without POSIX permissions
+	# (Windows) the get/set calls no-op and this logic is inert. See #297
+	# finding TC-1.
+	var had_original := FileAccess.file_exists(path)
+	var target_mode := _resolve_target_mode(path, had_original)
+
 	var tmp_path := path + ".tmp"
 	var file := FileAccess.open(tmp_path, FileAccess.WRITE)
 	if file == null:
 		return false
 	file.store_string(content)
 	file.close()
+	# Set the mode on the tmp inode before the rename — rename preserves the
+	# inode's mode, so the swapped-in file lands with the right permissions
+	# and is never briefly world-readable under the target name.
+	_apply_mode(tmp_path, target_mode)
 
 	# Best-effort: snapshot the prior file before we touch the target so we
 	# can restore on a failed swap. The backup is also kept on success as a
-	# one-shot rollback aid for the user.
+	# one-shot rollback aid for the user — give it the same (preserved) mode
+	# so a 0600 config's backup isn't itself a world-readable copy.
 	var backup_path := path + ".backup"
-	var had_original := FileAccess.file_exists(path)
 	var backup_made := false
 	if had_original:
 		DirAccess.remove_absolute(backup_path)
 		if DirAccess.copy_absolute(path, backup_path) == OK:
 			backup_made = true
+			_apply_mode(backup_path, target_mode)
 
 	if DirAccess.rename_absolute(tmp_path, path) == OK:
 		return true
@@ -46,6 +63,9 @@ static func write(path: String, content: String) -> bool:
 	# removes the original before writing the new bytes, so a failure here
 	# leaves the user's prior config in place rather than nuking it.
 	if DirAccess.copy_absolute(tmp_path, path) == OK and _written_size_matches(path, content):
+		# copy_absolute creates the destination with the default mode, so
+		# re-apply the preserved/owner-only mode after the copy lands.
+		_apply_mode(path, target_mode)
 		DirAccess.remove_absolute(tmp_path)
 		return true
 
@@ -59,6 +79,7 @@ static func write(path: String, content: String) -> bool:
 		# and the false return value tells the caller the swap didn't
 		# complete.
 		DirAccess.copy_absolute(backup_path, path)
+		_apply_mode(path, target_mode)
 	elif not had_original and FileAccess.file_exists(path):
 		# No prior file existed but copy_absolute landed partial bytes at
 		# `path`. Remove them so the failure leaves nothing on disk rather
@@ -74,6 +95,28 @@ static func write(path: String, content: String) -> bool:
 	# backup we couldn't take.)
 	DirAccess.remove_absolute(tmp_path)
 	return false
+
+
+static func _resolve_target_mode(path: String, had_original: bool) -> int:
+	# Preserve the prior file's POSIX mode on a rewrite; default a brand-new
+	# config to owner read+write (0600). A non-positive get_unix_permissions
+	# means the file is gone or the platform has no POSIX permissions
+	# (Windows) — fall back to the owner-only default, which set_unix_permissions
+	# will simply no-op there.
+	if had_original:
+		var existing := FileAccess.get_unix_permissions(path)
+		if existing > 0:
+			return existing
+	return FileAccess.UNIX_READ_OWNER | FileAccess.UNIX_WRITE_OWNER
+
+
+static func _apply_mode(path: String, mode: int) -> void:
+	# Best-effort. set_unix_permissions returns ERR_UNAVAILABLE on platforms
+	# without POSIX permissions (Windows); ignoring it keeps the write working
+	# there. mode <= 0 should never happen (resolve always returns >0) but is
+	# guarded so a future caller can't chmod a file to nothing.
+	if mode > 0:
+		FileAccess.set_unix_permissions(path, mode)
 
 
 static func _written_size_matches(path: String, content: String) -> bool:

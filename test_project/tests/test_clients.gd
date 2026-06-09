@@ -1401,6 +1401,113 @@ func test_atomic_write_preserves_existing_file_when_swap_fails() -> void:
 	DirAccess.remove_absolute(backup_path)
 
 
+# ----- atomic write: permission preservation (#297 finding TC-1) -----
+#
+# The Claude CLI creates ~/.claude.json as 0600 (it holds OAuth creds). A
+# rewrite must preserve that mode rather than relaxing it to the umask default,
+# and the .backup must not become a world-readable copy of a private file.
+# These bits don't exist on Windows, so the suite skips there.
+
+const _PERM_MASK := 0x1FF  # 0o777 — the rwx bits for owner/group/other
+
+
+func _owner_only_mode() -> int:
+	return FileAccess.UNIX_READ_OWNER | FileAccess.UNIX_WRITE_OWNER
+
+
+func test_atomic_write_preserves_restrictive_mode_on_rewrite() -> void:
+	if OS.get_name() == "Windows":
+		skip("POSIX file permissions are unavailable on Windows")
+		return
+	var path := _scratch_dir.path_join("perm_preserve_0600.txt")
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string("secret v1")
+	f.close()
+	var owner_only := _owner_only_mode()
+	assert_eq(
+		FileAccess.set_unix_permissions(path, owner_only), OK, "test setup: chmod 0600 must succeed"
+	)
+
+	assert_true(McpAtomicWrite.write(path, "secret v2"))
+
+	assert_eq(
+		FileAccess.get_unix_permissions(path) & _PERM_MASK,
+		owner_only,
+		"a rewrite must preserve the prior 0600 mode, not relax it to 0644",
+	)
+	DirAccess.remove_absolute(path + ".backup")
+
+
+func test_atomic_write_backup_inherits_restrictive_mode() -> void:
+	if OS.get_name() == "Windows":
+		skip("POSIX file permissions are unavailable on Windows")
+		return
+	var path := _scratch_dir.path_join("perm_backup_0600.txt")
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string("secret v1")
+	f.close()
+	var owner_only := _owner_only_mode()
+	assert_eq(FileAccess.set_unix_permissions(path, owner_only), OK, "test setup: chmod 0600")
+
+	assert_true(McpAtomicWrite.write(path, "secret v2"))
+
+	var backup_path := path + ".backup"
+	assert_true(FileAccess.file_exists(backup_path), "backup must exist")
+	assert_eq(
+		FileAccess.get_unix_permissions(backup_path) & _PERM_MASK,
+		owner_only,
+		"the .backup of a 0600 file must itself be 0600, not a world-readable copy",
+	)
+	DirAccess.remove_absolute(backup_path)
+
+
+func test_atomic_write_new_file_defaults_to_owner_only() -> void:
+	if OS.get_name() == "Windows":
+		skip("POSIX file permissions are unavailable on Windows")
+		return
+	var path := _scratch_dir.path_join("perm_new_file.txt")
+	# No prior file: nothing to preserve, so a fresh config defaults to 0600
+	# regardless of the process umask.
+	assert_false(FileAccess.file_exists(path), "test setup: target must not pre-exist")
+
+	assert_true(McpAtomicWrite.write(path, "fresh token config"))
+
+	assert_eq(
+		FileAccess.get_unix_permissions(path) & _PERM_MASK,
+		_owner_only_mode(),
+		"a brand-new config must default to owner-only 0600",
+	)
+
+
+func test_atomic_write_preserves_relaxed_mode_on_rewrite() -> void:
+	## We preserve the prior mode — we do NOT force 0600 on a file that was
+	## already group/other-readable (e.g. a 0644 cursor config). This proves
+	## the fix is "preserve", not "clamp everything to 0600".
+	if OS.get_name() == "Windows":
+		skip("POSIX file permissions are unavailable on Windows")
+		return
+	var path := _scratch_dir.path_join("perm_preserve_0644.txt")
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string("public v1")
+	f.close()
+	var relaxed := (
+		FileAccess.UNIX_READ_OWNER
+		| FileAccess.UNIX_WRITE_OWNER
+		| FileAccess.UNIX_READ_GROUP
+		| FileAccess.UNIX_READ_OTHER
+	)  # 0644
+	assert_eq(FileAccess.set_unix_permissions(path, relaxed), OK, "test setup: chmod 0644")
+
+	assert_true(McpAtomicWrite.write(path, "public v2"))
+
+	assert_eq(
+		FileAccess.get_unix_permissions(path) & _PERM_MASK,
+		relaxed,
+		"a 0644 file must stay 0644 — preserve the prior mode, don't clamp to 0600",
+	)
+	DirAccess.remove_absolute(path + ".backup")
+
+
 # ----- handler -----
 
 func test_handler_rejects_unknown_client() -> void:
