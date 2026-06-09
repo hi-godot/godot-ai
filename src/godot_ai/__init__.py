@@ -94,10 +94,12 @@ def main(argv: Sequence[str] | None = None) -> None:
             "Expose the server to a named LAN range for remote agents (issue "
             "#421). Takes a CIDR or bare IP (repeatable, or comma-separated), "
             "e.g. --allow-host 192.168.1.0/24. When set, both transports bind "
-            "off loopback and the rebinding guard widens its Host allowlist to "
-            "these networks ONLY — browser Origin / Sec-Fetch-Site checks stay "
-            "on. Omit for the default loopback-only behavior. Prefer an SSH "
-            "tunnel / Tailscale on untrusted networks; only name ranges you trust."
+            "off loopback and access is gated on the real socket peer address "
+            "(unforgeable) falling inside these networks ONLY — the Host header "
+            "is range-checked too but is not the authority, and browser Origin "
+            "/ Sec-Fetch-Site checks stay on. Omit for the default loopback-only "
+            "behavior. Prefer an SSH tunnel / Tailscale on untrusted networks; "
+            "only name ranges you trust."
         ),
     )
     parser.add_argument(

@@ -19,6 +19,7 @@ from godot_ai.transport.origin_guard import (
     is_allowed_origin,
     is_allowed_sec_fetch_site,
     parse_allow_hosts,
+    peer_ip_allowed,
 )
 
 # ---------------------------------------------------------------------------
@@ -243,8 +244,14 @@ async def _call_middleware(
     *,
     headers: list[tuple[bytes, bytes]],
     scope_type: str = "http",
+    client: tuple[str, int] | None = None,
 ) -> tuple[list[dict], bool]:
-    """Run the middleware against a synthetic scope; return (sent, inner_called)."""
+    """Run the middleware against a synthetic scope; return (sent, inner_called).
+
+    ``client`` populates ASGI's ``scope["client"]`` (the real ``(host, port)``
+    peer). Omitted by default so loopback-only tests don't need it — the peer
+    gate is a pass-through unless ``allowed_networks`` is set.
+    """
     inner_called = False
 
     async def inner(scope, receive, send):
@@ -263,6 +270,8 @@ async def _call_middleware(
         return {"type": "http.request", "body": b"", "more_body": False}
 
     scope = {"type": scope_type, "method": "GET", "path": "/x", "headers": headers}
+    if client is not None:
+        scope["client"] = client
     await middleware(scope, receive, send)
     return sent, inner_called
 
@@ -518,8 +527,8 @@ def test_is_allowed_host_without_networks_unchanged() -> None:
 
 def test_evaluate_loopback_native_lan_agent_passes() -> None:
     nets = parse_allow_hosts(["192.168.1.0/24"])
-    # Native remote agent: LAN Host, no Origin, no Sec-Fetch-Site.
-    assert evaluate_loopback(["192.168.1.50:8000"], [], [], nets) is True
+    # Native remote agent: in-range peer, LAN Host, no Origin/Sec-Fetch-Site.
+    assert evaluate_loopback(["192.168.1.50:8000"], [], [], nets, peer_ip="192.168.1.50") is True
 
 
 def test_evaluate_loopback_lan_browser_origin_rejected() -> None:
@@ -532,6 +541,7 @@ def test_evaluate_loopback_lan_browser_origin_rejected() -> None:
             ["http://192.168.1.50:8000"],
             [],
             nets,
+            peer_ip="192.168.1.50",
         )
         is False
     )
@@ -539,7 +549,26 @@ def test_evaluate_loopback_lan_browser_origin_rejected() -> None:
 
 def test_evaluate_loopback_lan_cross_site_subresource_rejected() -> None:
     nets = parse_allow_hosts(["192.168.1.0/24"])
-    assert evaluate_loopback(["192.168.1.50:8000"], [], ["cross-site"], nets) is False
+    assert (
+        evaluate_loopback(["192.168.1.50:8000"], [], ["cross-site"], nets, peer_ip="192.168.1.50")
+        is False
+    )
+
+
+def test_evaluate_loopback_spoofed_host_foreign_peer_rejected() -> None:
+    """The core --allow-host fix: an out-of-range peer that spoofs an
+    in-range Host header is rejected on the peer gate. Host alone is not
+    the authority."""
+    nets = parse_allow_hosts(["192.168.1.0/24"])
+    # Attacker at 10.0.0.5 (outside the CIDR) sends Host: 192.168.1.50.
+    assert evaluate_loopback(["192.168.1.50:8000"], [], [], nets, peer_ip="10.0.0.5") is False
+
+
+def test_evaluate_loopback_in_range_peer_loopback_host_passes() -> None:
+    """A local client on the LAN-bound server (peer 127.0.0.1, Host
+    loopback) still works after the opt-in."""
+    nets = parse_allow_hosts(["192.168.1.0/24"])
+    assert evaluate_loopback(["127.0.0.1:8000"], [], [], nets, peer_ip="127.0.0.1") is True
 
 
 async def test_middleware_allows_lan_host_when_opted_in() -> None:
@@ -548,6 +577,7 @@ async def test_middleware_allows_lan_host_when_opted_in() -> None:
     sent, inner_called = await _call_middleware(
         middleware,
         headers=[(b"host", b"192.168.1.50:8000")],
+        client=("192.168.1.50", 51234),
     )
     assert inner_called is True
     assert sent[0]["status"] == 200
@@ -562,17 +592,62 @@ async def test_middleware_rejects_lan_host_browser_origin_when_opted_in() -> Non
             (b"host", b"192.168.1.50:8000"),
             (b"origin", b"http://192.168.1.50:8000"),
         ],
+        client=("192.168.1.50", 51234),
     )
     assert inner_called is False
     assert sent[0]["status"] == 403
 
 
+async def test_middleware_rejects_spoofed_host_from_foreign_peer() -> None:
+    """The --allow-host fix at the transport boundary: a peer OUTSIDE the
+    allowed range spoofs an in-range Host header. The peer gate refuses it
+    even though the Host passes the range check."""
+    nets = parse_allow_hosts(["192.168.1.0/24"])
+    middleware = LocalhostOnlyHTTPMiddleware(app=None, allowed_networks=nets)  # type: ignore[arg-type]
+    sent, inner_called = await _call_middleware(
+        middleware,
+        headers=[(b"host", b"192.168.1.50:8000")],
+        client=("10.0.0.5", 51234),
+    )
+    assert inner_called is False
+    assert sent[0]["status"] == 403
+
+
+async def test_middleware_rejects_when_opted_in_and_peer_unknown() -> None:
+    """Bound off loopback but the ASGI server didn't populate scope["client"]
+    — fail closed rather than fall back to the spoofable Host header."""
+    nets = parse_allow_hosts(["192.168.1.0/24"])
+    middleware = LocalhostOnlyHTTPMiddleware(app=None, allowed_networks=nets)  # type: ignore[arg-type]
+    sent, inner_called = await _call_middleware(
+        middleware,
+        headers=[(b"host", b"192.168.1.50:8000")],
+        client=None,
+    )
+    assert inner_called is False
+    assert sent[0]["status"] == 403
+
+
+async def test_middleware_allows_loopback_peer_when_opted_in() -> None:
+    """A local client (peer 127.0.0.1) on a LAN-bound server still works."""
+    nets = parse_allow_hosts(["192.168.1.0/24"])
+    middleware = LocalhostOnlyHTTPMiddleware(app=None, allowed_networks=nets)  # type: ignore[arg-type]
+    sent, inner_called = await _call_middleware(
+        middleware,
+        headers=[(b"host", b"127.0.0.1:8000")],
+        client=("127.0.0.1", 51234),
+    )
+    assert inner_called is True
+    assert sent[0]["status"] == 200
+
+
 async def test_middleware_rejects_lan_host_without_opt_in() -> None:
-    # Default middleware (no networks) keeps rejecting LAN hosts.
+    # Default middleware (no networks) keeps rejecting LAN hosts. A loopback
+    # peer is irrelevant — the loopback bind already guarantees it.
     middleware = LocalhostOnlyHTTPMiddleware(app=None)  # type: ignore[arg-type]
     sent, inner_called = await _call_middleware(
         middleware,
         headers=[(b"host", b"192.168.1.50:8000")],
+        client=("127.0.0.1", 51234),
     )
     assert inner_called is False
     assert sent[0]["status"] == 403
@@ -599,3 +674,56 @@ def test_bind_host_for_networks_prioritizes_ipv4_reachability() -> None:
     # and silently drop IPv4 reachability. See bind_host_for_networks docstring.
     assert bind_host_for_networks(parse_allow_hosts(["192.168.1.0/24", "fd00::/8"])) == "0.0.0.0"
     assert bind_host_for_networks(parse_allow_hosts(["fd00::/8", "10.0.0.0/8"])) == "0.0.0.0"
+
+
+# ---------------------------------------------------------------------------
+# peer_ip_allowed — the authoritative, unforgeable LAN gate (--allow-host fix)
+# ---------------------------------------------------------------------------
+
+
+def test_peer_ip_allowed_no_networks_is_passthrough() -> None:
+    # Loopback-only default: the kernel bind guarantees a loopback peer, so the
+    # gate is a pass-through — even when the peer is unknown — keeping behavior
+    # byte-for-byte unchanged.
+    assert peer_ip_allowed(None, None) is True
+    assert peer_ip_allowed("127.0.0.1", None) is True
+    assert peer_ip_allowed("192.168.1.50", None) is True
+    assert peer_ip_allowed("10.0.0.5", []) is True
+
+
+def test_peer_ip_allowed_in_network() -> None:
+    nets = parse_allow_hosts(["192.168.1.0/24"])
+    assert peer_ip_allowed("192.168.1.50", nets) is True
+    assert peer_ip_allowed("192.168.1.1", nets) is True
+
+
+def test_peer_ip_allowed_out_of_network_rejected() -> None:
+    nets = parse_allow_hosts(["192.168.1.0/24"])
+    assert peer_ip_allowed("192.168.2.50", nets) is False
+    assert peer_ip_allowed("10.0.0.5", nets) is False
+
+
+def test_peer_ip_allowed_loopback_always_ok_when_opted_in() -> None:
+    nets = parse_allow_hosts(["192.168.1.0/24"])
+    assert peer_ip_allowed("127.0.0.1", nets) is True
+    assert peer_ip_allowed("::1", nets) is True
+
+
+def test_peer_ip_allowed_missing_fails_closed_when_opted_in() -> None:
+    nets = parse_allow_hosts(["192.168.1.0/24"])
+    assert peer_ip_allowed(None, nets) is False
+    assert peer_ip_allowed("", nets) is False
+
+
+def test_peer_ip_allowed_unparseable_fails_closed() -> None:
+    nets = parse_allow_hosts(["192.168.1.0/24"])
+    assert peer_ip_allowed("not-an-ip", nets) is False
+    # A DNS name never reaches here (peer is always an IP literal), but if it
+    # somehow did, it must not slip through.
+    assert peer_ip_allowed("attacker.example.com", nets) is False
+
+
+def test_peer_ip_allowed_strips_ipv6_zone_id() -> None:
+    nets = parse_allow_hosts(["fd00::/8"])
+    assert peer_ip_allowed("fd00::1%eth0", nets) is True
+    assert peer_ip_allowed("2001:db8::1%eth0", nets) is False
