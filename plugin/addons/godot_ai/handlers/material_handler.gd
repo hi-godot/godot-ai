@@ -67,6 +67,9 @@ func create_material(params: Dictionary) -> Dictionary:
 				ErrorCodes.INVALID_PARAMS,
 				"ShaderMaterial requires shader_path (res:// path to a .gdshader)"
 			)
+		var shader_path_err := McpPathValidator.validate_resource_path(shader_path)
+		if not shader_path_err.is_empty():
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, shader_path_err)
 		if not ResourceLoader.exists(shader_path):
 			return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Shader not found: %s" % shader_path)
 		var shader_res := ResourceLoader.load(shader_path)
@@ -297,8 +300,9 @@ func list_materials(params: Dictionary) -> Dictionary:
 	var root: String = params.get("root", "res://")
 	var type_filter: String = params.get("type", "")
 
-	if not root.begins_with("res://"):
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "root must start with res://")
+	var root_err := McpPathValidator.validate_resource_path(root)
+	if not root_err.is_empty():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, root_err)
 
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs == null:
@@ -366,6 +370,9 @@ func assign_material(params: Dictionary) -> Dictionary:
 	var mat: Material = null
 	var material_created := false
 	if not resource_path.is_empty():
+		var rpath_err := McpPathValidator.validate_resource_path(resource_path)
+		if not rpath_err.is_empty():
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, rpath_err)
 		if not ResourceLoader.exists(resource_path):
 			if create_if_missing:
 				# We'd need to create a new file here — refuse; callers should
@@ -668,8 +675,9 @@ static func _reverse_type_map() -> Dictionary:
 static func _validate_material_path(path: String, param_name: String) -> Variant:
 	if path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: %s" % param_name)
-	if not path.begins_with("res://"):
-		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "%s must start with res:// (got %s)" % [param_name, path])
+	var path_err := McpPathValidator.validate_resource_path(path, true)
+	if not path_err.is_empty():
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "%s: %s" % [param_name, path_err])
 	var has_suffix := false
 	for s in _SUPPORTED_SUFFIXES:
 		if path.ends_with(s):

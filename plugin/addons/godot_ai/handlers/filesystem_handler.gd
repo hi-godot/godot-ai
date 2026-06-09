@@ -37,7 +37,7 @@ func write_file(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 	var content: String = params.get("content", "")
 
-	var path_err := McpPathValidator.validate_resource_path(path)
+	var path_err := McpPathValidator.validate_resource_path(path, true)
 	if not path_err.is_empty():
 		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, path_err)
 

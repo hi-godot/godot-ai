@@ -153,9 +153,12 @@ static func parse_gradient(value: Variant) -> Variant:
 	return grad
 
 
-## Load a Texture2D from a res:// path. Returns null on failure.
+## Load a Texture2D from a res:// path. Returns null on failure (including a
+## path that fails res:// confinement / traversal validation).
 static func load_texture(path: String) -> Texture2D:
 	if path.is_empty():
+		return null
+	if not McpPathValidator.validate_resource_path(path).is_empty():
 		return null
 	if not ResourceLoader.exists(path):
 		return null

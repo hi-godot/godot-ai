@@ -27,7 +27,7 @@ func create_script(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 	var content: String = params.get("content", "")
 
-	var path_err := McpPathValidator.validate_resource_path(path)
+	var path_err := McpPathValidator.validate_resource_path(path, true)
 	if not path_err.is_empty():
 		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, path_err)
 
@@ -171,7 +171,7 @@ func patch_script(params: Dictionary) -> Dictionary:
 	var new_text: String = params.get("new_text", "")
 	var replace_all: bool = params.get("replace_all", false)
 
-	var path_err := McpPathValidator.validate_resource_path(path)
+	var path_err := McpPathValidator.validate_resource_path(path, true)
 	if not path_err.is_empty():
 		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, path_err)
 	if not "old_text" in params:
@@ -240,6 +240,10 @@ func attach_script(params: Dictionary) -> Dictionary:
 
 	if script_path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: script_path")
+
+	var spath_err := McpPathValidator.validate_resource_path(script_path)
+	if not spath_err.is_empty():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, spath_err)
 
 	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
 	if _resolved.has("error"):

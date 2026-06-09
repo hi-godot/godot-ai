@@ -94,3 +94,66 @@ func test_well_formed_nested_path_passes_boundary_check() -> void:
 	## that smuggles a `..` past the substring guard.
 	var safe := McpPathValidator.validate_resource_path("res://addons/godot_ai")
 	assert_eq(safe, "", "well-formed nested path must validate")
+
+
+# ----- null byte (truncation trap, audit GH-4) -----
+
+func test_rejects_embedded_null_byte() -> void:
+	## A NUL can truncate a C string, so the path written could differ from the
+	## one validated/reported. Reject any path containing one.
+	##
+	## Some Godot builds (e.g. 4.3) strip embedded nulls from String, so the
+	## payload can't be constructed there — the validator's check is simply a
+	## harmless no-op on those builds (a String that can't hold a null can't
+	## smuggle one past the guard). Skip rather than assert 4.6-only behavior.
+	var nul := String.chr(0)
+	if nul.is_empty() or not ("res://a" + nul + "b").contains(nul):
+		skip("this Godot build does not retain embedded null bytes in String")
+		return
+	# No "..": the ONLY reason to reject this path is the embedded null.
+	var err := McpPathValidator.validate_resource_path("res://safe" + nul + "name.gd")
+	assert_false(err.is_empty(), "path with an embedded null byte must be rejected")
+	assert_contains(err, "null")
+
+
+# ----- write blocklist: project-critical files (audit GH-3) -----
+#
+# These pass every structural check (res://-rooted, no traversal, under root)
+# but overwriting them corrupts the project. Blocked for writes, allowed for
+# reads (inspecting config is legitimate).
+
+func test_write_rejects_project_godot() -> void:
+	var err := McpPathValidator.validate_resource_path("res://project.godot", true)
+	assert_false(err.is_empty(), "writing res://project.godot must be rejected")
+	assert_contains(err, "project.godot")
+
+
+func test_write_rejects_godot_metadata_dir() -> void:
+	var err := McpPathValidator.validate_resource_path("res://.godot/uid_cache.bin", true)
+	assert_false(err.is_empty(), "writing under res://.godot/ must be rejected")
+	assert_contains(err, ".godot")
+
+
+func test_write_rejects_import_sidecar() -> void:
+	var err := McpPathValidator.validate_resource_path("res://icon.svg.import", true)
+	assert_false(err.is_empty(), "writing a .import sidecar must be rejected")
+	assert_contains(err, ".import")
+
+
+func test_write_allows_normal_resource_path() -> void:
+	## The blocklist must not catch ordinary writes.
+	assert_eq(McpPathValidator.validate_resource_path("res://scenes/level.tscn", true), "")
+	assert_eq(McpPathValidator.validate_resource_path("res://data/config.json", true), "")
+
+
+func test_read_allows_project_critical_files() -> void:
+	## for_write defaults to false — reading project config / import data is
+	## legitimate and must not be blocked.
+	assert_eq(McpPathValidator.validate_resource_path("res://project.godot"), "")
+	assert_eq(McpPathValidator.validate_resource_path("res://.godot/uid_cache.bin"), "")
+	assert_eq(McpPathValidator.validate_resource_path("res://icon.svg.import"), "")
+
+
+func test_write_still_rejects_traversal() -> void:
+	## The structural traversal check fires regardless of for_write.
+	assert_false(McpPathValidator.validate_resource_path("res://../etc/passwd", true).is_empty())

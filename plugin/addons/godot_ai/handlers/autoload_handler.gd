@@ -33,8 +33,9 @@ func add_autoload(params: Dictionary) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
 	if path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
-	if not path.begins_with("res://"):
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Path must start with res:// (got: %s)" % path)
+	var path_err := McpPathValidator.validate_resource_path(path)
+	if not path_err.is_empty():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, path_err)
 	if not FileAccess.file_exists(path):
 		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "File not found: %s" % path)
 

@@ -101,6 +101,10 @@ func set_stream(params: Dictionary) -> Dictionary:
 	if stream_path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: stream_path")
 
+	var stream_path_err := McpPathValidator.validate_resource_path(stream_path)
+	if not stream_path_err.is_empty():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, stream_path_err)
+
 	var resolved := _resolve_player(player_path)
 	if resolved.has("error"):
 		return resolved
@@ -259,8 +263,9 @@ func list_streams(params: Dictionary) -> Dictionary:
 	var root: String = params.get("root", "res://")
 	var include_duration: bool = bool(params.get("include_duration", true))
 
-	if not root.begins_with("res://"):
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "root must start with res://")
+	var root_err := McpPathValidator.validate_resource_path(root)
+	if not root_err.is_empty():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, root_err)
 
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs == null:

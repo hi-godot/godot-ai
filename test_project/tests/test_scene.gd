@@ -171,6 +171,19 @@ func test_create_scene_invalid_path_prefix() -> void:
 	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
 
 
+func test_create_scene_rejects_traversal() -> void:
+	## create_scene now routes through McpPathValidator — a traversal payload
+	## that escapes the project root must be rejected (audit GH-1).
+	var result := _handler.create_scene({"path": "res://../evil.tscn"})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+
+
+func test_create_scene_rejects_project_godot_overwrite() -> void:
+	## Write blocklist (audit GH-3): refuse clobbering the project manifest.
+	var result := _handler.create_scene({"path": "res://project.godot"})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+
+
 # ----- open_scene (validation only — opening scenes triggers UI that blocks test runner) -----
 
 func test_open_scene_missing_path() -> void:

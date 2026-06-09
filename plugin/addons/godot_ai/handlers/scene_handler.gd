@@ -90,8 +90,9 @@ func create_scene(params: Dictionary) -> Dictionary:
 	if path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
-	if not path.begins_with("res://"):
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Path must start with res://")
+	var path_err := McpPathValidator.validate_resource_path(path, true)
+	if not path_err.is_empty():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, path_err)
 
 	if not path.ends_with(".tscn") and not path.ends_with(".scn"):
 		path += ".tscn"
@@ -148,6 +149,10 @@ func open_scene(params: Dictionary) -> Dictionary:
 	if path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
+	var path_err := McpPathValidator.validate_resource_path(path)
+	if not path_err.is_empty():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, path_err)
+
 	if not ResourceLoader.exists(path):
 		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Scene not found: %s" % path)
 
@@ -202,8 +207,9 @@ func save_scene_as(params: Dictionary) -> Dictionary:
 	if path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
-	if not path.begins_with("res://"):
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Path must start with res://")
+	var path_err := McpPathValidator.validate_resource_path(path, true)
+	if not path_err.is_empty():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, path_err)
 
 	if not path.ends_with(".tscn") and not path.ends_with(".scn"):
 		path += ".tscn"

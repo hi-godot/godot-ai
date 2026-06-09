@@ -38,6 +38,9 @@ func set_points(params: Dictionary) -> Dictionary:
 	var node: Node = null
 	var curve_created := false
 	if has_file_target:
+		var rpath_err := McpPathValidator.validate_resource_path(resource_path, true)
+		if not rpath_err.is_empty():
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, rpath_err)
 		if not ResourceLoader.exists(resource_path):
 			return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Resource not found: %s" % resource_path)
 		# ResourceLoader.load() returns Godot's cached Resource. Duplicate

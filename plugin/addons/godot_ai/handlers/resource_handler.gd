@@ -64,8 +64,9 @@ func load_resource(params: Dictionary) -> Dictionary:
 	if path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
-	if not path.begins_with("res://"):
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Path must start with res://")
+	var path_err := McpPathValidator.validate_resource_path(path)
+	if not path_err.is_empty():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, path_err)
 
 	if not ResourceLoader.exists(path):
 		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Resource not found: %s" % path)
@@ -111,6 +112,10 @@ func assign_resource(params: Dictionary) -> Dictionary:
 
 	if resource_path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: resource_path")
+
+	var rpath_err := McpPathValidator.validate_resource_path(resource_path)
+	if not rpath_err.is_empty():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, rpath_err)
 
 	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
 	if _resolved.has("error"):
@@ -248,6 +253,12 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary) ->
 			if v == "":
 				v = null
 			else:
+				var vpath_err := McpPathValidator.validate_resource_path(v)
+				if not vpath_err.is_empty():
+					return ErrorCodes.make(
+						ErrorCodes.VALUE_OUT_OF_RANGE,
+						"%s (property '%s')" % [vpath_err, key]
+					)
 				var loaded := ResourceLoader.load(v)
 				if loaded == null:
 					return ErrorCodes.make(

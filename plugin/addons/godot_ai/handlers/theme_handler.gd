@@ -444,11 +444,9 @@ func _load_theme_from_params(params: Dictionary) -> Dictionary:
 static func _validate_res_path(path: String, required_suffix: String, param_name: String = "theme_path") -> Variant:
 	if path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: %s" % param_name)
-	if not path.begins_with("res://"):
-		return ErrorCodes.make(
-			ErrorCodes.VALUE_OUT_OF_RANGE,
-			"%s must start with res:// (got %s)" % [param_name, path]
-		)
+	var path_err := McpPathValidator.validate_resource_path(path, true)
+	if not path_err.is_empty():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "%s: %s" % [param_name, path_err])
 	if not path.ends_with(required_suffix):
 		return ErrorCodes.make(
 			ErrorCodes.VALUE_OUT_OF_RANGE,
