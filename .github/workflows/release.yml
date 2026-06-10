@@ -32,7 +32,7 @@ jobs:
       id-token: write  # required for PyPI OIDC
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Verify ref is a version tag
         # Guard against a manual workflow_dispatch on a branch ref (e.g.
@@ -46,7 +46,7 @@ jobs:
           fi
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.13"
 
@@ -67,7 +67,7 @@ jobs:
         run: python -m build
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
           # Idempotent re-runs: if this version is already on PyPI (e.g. a
           # previous run published but a downstream job failed), skip the
@@ -84,7 +84,7 @@ jobs:
     needs: publish-pypi
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Build plugin ZIP
         # Ship `addons/` + `godot-ai-LICENSE.txt` at the zip's top level. The
@@ -162,7 +162,7 @@ jobs:
           echo "Zip structure verified: addons/godot_ai/... + godot-ai-LICENSE.txt (multi-top)"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
         with:
           files: godot-ai-plugin.zip
           generate_release_notes: true

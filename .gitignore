@@ -65,3 +65,10 @@ test_project/tests/_mcp_test_*
 
 # stormtest scratch artifacts (script/stormtest.py)
 _stormtest/
+
+# Local audit / review reports (generated deliverables, not part of the repo)
+/security-audit*.html
+/robustness-review*.html
+
+# Self-update smoke-test artifact dropped into the test project
+test_project/godot-ai-LICENSE.txt
