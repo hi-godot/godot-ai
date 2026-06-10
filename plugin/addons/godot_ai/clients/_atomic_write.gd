@@ -36,6 +36,12 @@ static func write(path: String, content: String) -> bool:
 	var file := FileAccess.open(tmp_path, FileAccess.WRITE)
 	if file == null:
 		return false
+	# Lock the temp inode down BEFORE writing any bytes. FileAccess.open creates
+	# it at the umask default (often 0644); chmod'ing the still-empty file first
+	# means the config contents are never on disk under a world-readable mode in
+	# the create->chmod gap. rename preserves the inode mode, so the swapped-in
+	# file lands correct and is never briefly world-readable under the target name.
+	_apply_mode(tmp_path, target_mode)
 	file.store_string(content)
 	# Push Godot's internal buffer out to the OS before the rename. Godot
 	# exposes no fsync, so the bytes aren't guaranteed durable on the physical
@@ -44,15 +50,24 @@ static func write(path: String, content: String) -> bool:
 	# of the write at the application layer, which is the failure this guards.
 	file.flush()
 	file.close()
-	# Set the mode on the tmp inode before the rename — rename preserves the
-	# inode's mode, so the swapped-in file lands with the right permissions
-	# and is never briefly world-readable under the target name.
+	# Re-assert the mode on the closed inode. The pre-write chmod above closes
+	# the world-readable window; this second apply is the authoritative one
+	# (a chmod issued while the FileAccess handle is still open doesn't reliably
+	# stick inside the editor) and guarantees the final mode before the rename,
+	# which preserves it.
 	_apply_mode(tmp_path, target_mode)
 
 	# Best-effort: snapshot the prior file before we touch the target so we
 	# can restore on a failed swap. The backup is also kept on success as a
 	# one-shot rollback aid for the user — give it the same (preserved) mode
 	# so a 0600 config's backup isn't itself a world-readable copy.
+	#
+	# copy_absolute creates the backup at the umask default and we can only
+	# chmod it afterward, so there's a sub-millisecond window where the backup
+	# carries default perms. Accepted: it duplicates bytes already sitting at
+	# `path` (which the caller created 0600) inside the user's own config dir,
+	# and Godot exposes no API to create the copy pre-chmod'd. Not worth
+	# reimplementing copy by hand to shave that window.
 	var backup_path := path + ".backup"
 	var backup_made := false
 	if had_original:
