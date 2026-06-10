@@ -727,3 +727,14 @@ def test_peer_ip_allowed_strips_ipv6_zone_id() -> None:
     nets = parse_allow_hosts(["fd00::/8"])
     assert peer_ip_allowed("fd00::1%eth0", nets) is True
     assert peer_ip_allowed("2001:db8::1%eth0", nets) is False
+
+
+def test_peer_ip_allowed_unwraps_ipv4_mapped_ipv6() -> None:
+    ## A dual-stack listener can report an IPv4 peer as IPv4-mapped IPv6
+    ## (``::ffff:a.b.c.d``); ``.is_loopback`` is False on that form and it
+    ## never matches an IPv4 network, so without unwrapping a genuine
+    ## loopback / in-network peer would be wrongly rejected.
+    nets = parse_allow_hosts(["192.168.1.0/24"])
+    assert peer_ip_allowed("::ffff:127.0.0.1", nets) is True  # mapped loopback
+    assert peer_ip_allowed("::ffff:192.168.1.50", nets) is True  # mapped in-network
+    assert peer_ip_allowed("::ffff:10.0.0.5", nets) is False  # mapped out-of-network

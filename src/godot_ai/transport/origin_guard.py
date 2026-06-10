@@ -194,6 +194,12 @@ def peer_ip_allowed(peer_ip: str | None, allowed_networks: Sequence[IPNetwork] |
         ip = ipaddress.ip_address(candidate)
     except ValueError:
         return False
+    ## A dual-stack listener can report an IPv4 peer in IPv4-mapped IPv6 form
+    ## (``::ffff:127.0.0.1``), whose ``.is_loopback`` is False and which never
+    ## matches an IPv4 allowlist network. Unwrap it to the real IPv4 address so
+    ## a genuine loopback / in-network peer isn't wrongly rejected.
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
     if ip.is_loopback:
         return True
     return any(ip in net for net in allowed_networks)
