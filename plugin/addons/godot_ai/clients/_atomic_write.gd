@@ -37,6 +37,12 @@ static func write(path: String, content: String) -> bool:
 	if file == null:
 		return false
 	file.store_string(content)
+	# Push Godot's internal buffer out to the OS before the rename. Godot
+	# exposes no fsync, so the bytes aren't guaranteed durable on the physical
+	# disk until the OS flushes its own cache — a power loss in that window can
+	# still lose the data. But flush() ensures the rename can't be ordered ahead
+	# of the write at the application layer, which is the failure this guards.
+	file.flush()
 	file.close()
 	# Set the mode on the tmp inode before the rename — rename preserves the
 	# inode's mode, so the swapped-in file lands with the right permissions
