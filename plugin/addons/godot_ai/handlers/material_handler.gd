@@ -65,7 +65,7 @@ func create_material(params: Dictionary) -> Dictionary:
 		if shader_path.is_empty():
 			return ErrorCodes.make(
 				ErrorCodes.INVALID_PARAMS,
-				"ShaderMaterial requires shader_path (res:// path to a .gdshader)"
+				"ShaderMaterial requires shader_path (res:// / uid:// / user:// path to a .gdshader)"
 			)
 		var shader_path_err = McpPathValidator.loadable_error(shader_path, "shader_path")
 		if shader_path_err != null:

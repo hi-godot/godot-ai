@@ -213,7 +213,7 @@ func set_text(params: Dictionary) -> Dictionary:
 ## Params:
 ##   tree         - Dictionary describing the root node. Required fields: "type".
 ##                  Optional: "name", "properties" (dict), "anchor_preset",
-##                  "anchor_margin", "theme" (res:// path), "children" (array).
+##                  "anchor_margin", "theme" (res://, uid:// or user:// path), "children" (array).
 ##   parent_path  - Parent scene path. Empty or "/" = scene root.
 ##
 ## Validation is done before any scene mutation: class names, property
@@ -295,7 +295,7 @@ func _build_subtree(spec: Dictionary) -> Dictionary:
 				node.free()
 				return apply_err
 
-	# Theme (res:// path -> Resource).
+	# Theme (res:// / uid:// / user:// path -> Resource).
 	if spec.has("theme"):
 		var theme_path: String = str(spec.get("theme", ""))
 		if not theme_path.is_empty():
@@ -415,7 +415,7 @@ func _apply_property(node: Node, prop: String, value: Variant) -> Variant:
 				else:
 					return ErrorCodes.make(
 						ErrorCodes.INVALID_PARAMS,
-						"theme_override_styles/ expects a res:// path to a StyleBox"
+						"theme_override_styles/ expects a res:// / uid:// / user:// path to a StyleBox"
 					)
 			else:
 				var coercion := _coerce_for_type(value, coerce_type)
