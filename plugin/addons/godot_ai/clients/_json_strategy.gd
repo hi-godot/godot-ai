@@ -252,7 +252,7 @@ static func _walk_path(root: Dictionary, key_path: PackedStringArray) -> Variant
 static func _narrow_integral_numbers(value: Variant) -> Variant:
 	match typeof(value):
 		TYPE_FLOAT:
-			if is_finite(value) and value == floor(value) and absf(value) < 9007199254740992.0:
+			if is_finite(value) and value == floor(value) and absf(value) <= 9007199254740992.0:
 				return int(value)
 		TYPE_DICTIONARY:
 			for k in value:

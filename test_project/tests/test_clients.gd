@@ -847,7 +847,10 @@ func test_json_strategy_preserves_integer_fields() -> void:
 	assert_false(content.contains('"port": 8080.0'), "port must not become 8080.0")
 	assert_false(content.contains('"retries": 3.0'), "retries must not be floatified")
 	assert_false(content.contains('"numStartups": 47.0'), "top-level int must not be floatified")
-	assert_false(content.contains("1.0,") or content.contains("2.0,"), "array ints must not be floatified")
+	# Check each element regardless of trailing comma/newline so a floatified
+	# last element ("3.0" with no comma) is also caught.
+	for floatified in ["1.0", "2.0", "3.0"]:
+		assert_false(content.contains(floatified), "array int must not be floatified (%s)" % floatified)
 	# Still valid JSON, other entry preserved, our entry added.
 	var parsed = JSON.parse_string(content)
 	assert_true(parsed["mcpServers"].has("someone-else"))

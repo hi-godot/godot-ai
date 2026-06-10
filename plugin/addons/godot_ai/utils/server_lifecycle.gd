@@ -371,8 +371,9 @@ static func _live_package_path_for_message(live: Dictionary) -> String:
 
 ## Sets GODOT_AI_DISABLE_TELEMETRY in the process environment for the
 ## upcoming OS.create_process call if: (a) neither GODOT_AI_DISABLE_TELEMETRY
-## nor DISABLE_TELEMETRY is already set, and (b) the EditorSettings key
-## "godot_ai/telemetry_enabled" is set to false. Returns true if the var was
+## nor DISABLE_TELEMETRY is already set to a *truthy* value (a falsey "0" does
+## NOT count — it must not suppress a dock UI opt-out), and (b) the effective
+## McpSettings.telemetry_enabled() is false. Returns true if the var was
 ## injected so the caller can unset it after spawning.
 func _inject_telemetry_env() -> bool:
 	## If telemetry is already disabled by a *truthy* env var, leave the env as
