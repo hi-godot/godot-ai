@@ -27,9 +27,9 @@ func create_script(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 	var content: String = params.get("content", "")
 
-	var path_err := McpPathValidator.validate_resource_path(path, true)
-	if not path_err.is_empty():
-		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, path_err)
+	var path_err = McpPathValidator.path_error(path, "path", true)
+	if path_err != null:
+		return path_err
 
 	if not path.ends_with(".gd"):
 		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Path must end with .gd")
@@ -141,9 +141,9 @@ static func _finish_create_script_deferred(
 func read_script(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 
-	var path_err := McpPathValidator.validate_resource_path(path)
-	if not path_err.is_empty():
-		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, path_err)
+	var path_err = McpPathValidator.path_error(path, "path")
+	if path_err != null:
+		return path_err
 
 	if not FileAccess.file_exists(path):
 		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "File not found: %s" % path)
@@ -171,9 +171,9 @@ func patch_script(params: Dictionary) -> Dictionary:
 	var new_text: String = params.get("new_text", "")
 	var replace_all: bool = params.get("replace_all", false)
 
-	var path_err := McpPathValidator.validate_resource_path(path, true)
-	if not path_err.is_empty():
-		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, path_err)
+	var path_err = McpPathValidator.path_error(path, "path", true)
+	if path_err != null:
+		return path_err
 	if not "old_text" in params:
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: old_text")
 	if not "new_text" in params:
@@ -241,9 +241,9 @@ func attach_script(params: Dictionary) -> Dictionary:
 	if script_path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: script_path")
 
-	var spath_err := McpPathValidator.validate_resource_path(script_path)
-	if not spath_err.is_empty():
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, spath_err)
+	var spath_err = McpPathValidator.loadable_error(script_path, "script_path")
+	if spath_err != null:
+		return spath_err
 
 	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
 	if _resolved.has("error"):
@@ -308,9 +308,9 @@ func detach_script(params: Dictionary) -> Dictionary:
 func find_symbols(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 
-	var path_err := McpPathValidator.validate_resource_path(path)
-	if not path_err.is_empty():
-		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, path_err)
+	var path_err = McpPathValidator.path_error(path, "path")
+	if path_err != null:
+		return path_err
 
 	if not FileAccess.file_exists(path):
 		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "File not found: %s" % path)

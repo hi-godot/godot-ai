@@ -299,10 +299,10 @@ func _build_subtree(spec: Dictionary) -> Dictionary:
 	if spec.has("theme"):
 		var theme_path: String = str(spec.get("theme", ""))
 		if not theme_path.is_empty():
-			var theme_path_err := McpPathValidator.validate_resource_path(theme_path)
-			if not theme_path_err.is_empty():
+			var theme_path_err = McpPathValidator.loadable_error(theme_path, "theme")
+			if theme_path_err != null:
 				node.free()
-				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, theme_path_err)
+				return theme_path_err
 			if not ResourceLoader.exists(theme_path):
 				node.free()
 				return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Theme not found: %s" % theme_path)
@@ -401,10 +401,10 @@ func _apply_property(node: Node, prop: String, value: Variant) -> Variant:
 
 			# For stylebox overrides, load from a res:// path.
 			if coerce_type == TYPE_OBJECT:
-				if value is String and value.begins_with("res://"):
-					var style_path_err := McpPathValidator.validate_resource_path(value)
-					if not style_path_err.is_empty():
-						return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, style_path_err)
+				if value is String and (value.begins_with("res://") or value.begins_with("uid://") or value.begins_with("user://")):
+					var style_path_err = McpPathValidator.loadable_error(value, "stylebox")
+					if style_path_err != null:
+						return style_path_err
 					var res := ResourceLoader.load(value)
 					if res == null or not res is StyleBox:
 						return ErrorCodes.make(

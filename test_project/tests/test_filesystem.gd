@@ -48,7 +48,7 @@ func test_read_file_basic() -> void:
 
 func test_read_file_missing_path() -> void:
 	var result := _handler.read_file({})
-	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_read_file_invalid_prefix() -> void:
@@ -106,7 +106,7 @@ func test_write_file_overwrite_omits_cleanup_hint() -> void:
 
 func test_write_file_missing_path() -> void:
 	var result := _handler.write_file({"content": "hello"})
-	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_write_file_invalid_prefix() -> void:

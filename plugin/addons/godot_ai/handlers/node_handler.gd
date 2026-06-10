@@ -39,9 +39,9 @@ func create_node(params: Dictionary) -> Dictionary:
 		# scene instance (foldout icon, the .tscn stores a reference instead of
 		# an exploded subtree). Descendants remain owned by their sub-scene;
 		# setting their owner to our scene_root would break the instance link.
-		var scene_path_err := McpPathValidator.validate_resource_path(scene_path)
-		if not scene_path_err.is_empty():
-			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, scene_path_err)
+		var scene_path_err = McpPathValidator.loadable_error(scene_path, "scene_path")
+		if scene_path_err != null:
+			return scene_path_err
 		if not ResourceLoader.exists(scene_path):
 			return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Scene not found: %s" % scene_path)
 		var packed_scene = ResourceLoader.load(scene_path)
@@ -223,9 +223,9 @@ func set_property(params: Dictionary) -> Dictionary:
 		if value == "":
 			value = null
 		else:
-			var value_path_err := McpPathValidator.validate_resource_path(value)
-			if not value_path_err.is_empty():
-				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, value_path_err)
+			var value_path_err = McpPathValidator.loadable_error(value, "value")
+			if value_path_err != null:
+				return value_path_err
 			if not ResourceLoader.exists(value):
 				return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Resource not found: %s" % value)
 			var loaded := ResourceLoader.load(value)

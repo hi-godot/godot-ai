@@ -10,8 +10,8 @@ const AudioHandler := preload("res://addons/godot_ai/handlers/audio_handler.gd")
 ## audio asset listing.
 ##
 ## A silent AudioStreamWAV fixture is generated at runtime (written to a
-## res:// .tres path and registered via EditorFileSystem.update_file) rather
-## than committing a binary file. Cleaned up by suite_teardown.
+## user:// .tres path, outside the project tree) rather than committing a
+## binary file. Cleaned up by suite_teardown.
 ##
 ## NOTE: GDScript tests must not call save_scene, scene_create, scene_open,
 ## quit_editor, or reload_plugin (see CLAUDE.md Known Issues).
@@ -41,12 +41,9 @@ func suite_teardown() -> void:
 		_fixture_path = ""
 
 
-# Build a tiny silent 16-bit mono WAV stream and save it to a res:// path.
-# It must be res://-rooted because set_stream (like the other load handlers)
-# now confines paths through McpPathValidator, which rejects user:// just as
-# it rejects traversal — see test_path_validator.test_user_prefix_rejected.
-# update_file() registers it with EditorFileSystem so ResourceLoader.exists()
-# sees it synchronously, without waiting on a full filesystem scan.
+# Build a tiny silent 16-bit mono WAV stream saved to a user:// path. user://
+# is outside the project tree (no repo pollution, no EditorFileSystem index to
+# keep in sync), and set_stream accepts it via validate_loadable_path.
 func _make_fixture() -> String:
 	var stream := AudioStreamWAV.new()
 	stream.format = AudioStreamWAV.FORMAT_16_BITS
@@ -57,13 +54,10 @@ func _make_fixture() -> String:
 	silence.resize(4410)
 	silence.fill(0)
 	stream.data = silence
-	var path := "res://test_audio_fixture.wav.tres"
+	var path := "user://test_audio_fixture.wav.tres"
 	var err := ResourceSaver.save(stream, path)
 	if err != OK:
 		return ""
-	var efs := EditorInterface.get_resource_filesystem()
-	if efs != null:
-		efs.update_file(path)
 	return path
 
 

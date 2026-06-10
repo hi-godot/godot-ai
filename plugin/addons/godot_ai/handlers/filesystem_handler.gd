@@ -9,9 +9,9 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 func read_file(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 
-	var path_err := McpPathValidator.validate_resource_path(path)
-	if not path_err.is_empty():
-		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, path_err)
+	var path_err = McpPathValidator.path_error(path, "path")
+	if path_err != null:
+		return path_err
 
 	if not FileAccess.file_exists(path):
 		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "File not found: %s" % path)
@@ -37,9 +37,9 @@ func write_file(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 	var content: String = params.get("content", "")
 
-	var path_err := McpPathValidator.validate_resource_path(path, true)
-	if not path_err.is_empty():
-		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, path_err)
+	var path_err = McpPathValidator.path_error(path, "path", true)
+	if path_err != null:
+		return path_err
 
 	# Ensure parent directory exists
 	var dir_path := path.get_base_dir()

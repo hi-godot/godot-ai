@@ -71,9 +71,9 @@ static func save_to_disk(
 	extra_fields: Dictionary = {},
 	pause_target: McpConnection = null,
 ) -> Dictionary:
-	var path_err := McpPathValidator.validate_resource_path(resource_path, true)
-	if not path_err.is_empty():
-		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, path_err)
+	var path_err = McpPathValidator.path_error(resource_path, "resource_path", true)
+	if path_err != null:
+		return path_err
 
 	var existed_before := FileAccess.file_exists(resource_path)
 	if existed_before and not overwrite:

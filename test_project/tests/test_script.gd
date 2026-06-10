@@ -120,7 +120,7 @@ func test_create_script_overwrite_omits_cleanup_hint() -> void:
 
 func test_create_script_missing_path() -> void:
 	var result := _handler.create_script({"content": "extends Node\n"})
-	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_create_script_invalid_prefix() -> void:
@@ -290,7 +290,7 @@ func test_read_script_basic() -> void:
 
 func test_read_script_missing_path() -> void:
 	var result := _handler.read_script({})
-	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_read_script_invalid_prefix() -> void:
@@ -432,7 +432,7 @@ func test_find_symbols_exports() -> void:
 
 func test_find_symbols_missing_path() -> void:
 	var result := _handler.find_symbols({})
-	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
 
 
 func test_find_symbols_invalid_prefix() -> void:
