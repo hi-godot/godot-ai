@@ -429,3 +429,27 @@ func test_inject_skips_when_disable_telemetry_already_present() -> void:
 	host.free()
 
 	assert_false(injected, "must not inject when DISABLE_TELEMETRY is already in env")
+
+
+func test_inject_when_env_present_but_falsey_and_setting_disabled() -> void:
+	## A falsey env value (e.g. DISABLE_TELEMETRY=0) must NOT suppress a dock UI
+	## opt-out. The Python server parses the env truthily, so a falsey value
+	## leaves the server *enabled* — the plugin has to inject the disable flag
+	## so the opt-out actually reaches the spawned server. The old
+	## has_environment() guard treated any value (even "0") as "handled" and
+	## silently shipped telemetry against the user's UI choice. (#530)
+	_clear_telemetry_env_vars()
+	OS.set_environment(_TENV2, "0")
+	EditorInterface.get_editor_settings().set_setting(
+		McpSettings.SETTING_TELEMETRY_ENABLED, false
+	)
+	var host := _ManagerHostStub.new()
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	var injected := manager._inject_telemetry_env()
+	var env_present := OS.has_environment(_TENV1)
+	host.free()
+	_clear_telemetry_env_vars()
+
+	assert_true(injected, "a falsey DISABLE_TELEMETRY must not suppress the UI opt-out")
+	assert_true(env_present, "GODOT_AI_DISABLE_TELEMETRY must be injected for the spawn")

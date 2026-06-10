@@ -820,6 +820,40 @@ func test_json_strategy_preserves_other_servers() -> void:
 	assert_true(parsed["mcpServers"].has("godot-ai"), "Our entry not added")
 
 
+func test_json_strategy_preserves_integer_fields() -> void:
+	## Godot parses every JSON number as a float; a naive round-trip re-emits the
+	## user's integer fields (ports, counts) as "8080.0", which strict consumers
+	## reject and which churns numbers across the user's other entries. The
+	## strategy must re-narrow integral numbers so ints stay ints. (#528 / TC-2)
+	var path := _scratch_dir.path_join("ints.json")
+	var seed := {
+		"mcpServers": {"someone-else": {"url": "http://other/", "port": 8080, "retries": 3}},
+		"numStartups": 47,
+		"weights": [1, 2, 3],
+	}
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(JSON.stringify(seed))
+	f.close()
+
+	var client := _make_test_json_client(path)
+	var result := McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	assert_eq(result.get("status"), "ok")
+
+	var content_file := FileAccess.open(path, FileAccess.READ)
+	var content := content_file.get_as_text()
+	content_file.close()
+	# Integers must survive as integers — not be floatified to "8080.0".
+	assert_true(content.contains('"port": 8080'), "port int must be present")
+	assert_false(content.contains('"port": 8080.0'), "port must not become 8080.0")
+	assert_false(content.contains('"retries": 3.0'), "retries must not be floatified")
+	assert_false(content.contains('"numStartups": 47.0'), "top-level int must not be floatified")
+	assert_false(content.contains("1.0,") or content.contains("2.0,"), "array ints must not be floatified")
+	# Still valid JSON, other entry preserved, our entry added.
+	var parsed = JSON.parse_string(content)
+	assert_true(parsed["mcpServers"].has("someone-else"))
+	assert_true(parsed["mcpServers"].has("godot-ai"))
+
+
 func test_json_strategy_refuses_to_overwrite_unparseable_file() -> void:
 	## Regression: if the config file exists but we can't parse it (trailing
 	## comma, stray comment, truncated write), `configure()` used to silently

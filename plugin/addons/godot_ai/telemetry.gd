@@ -15,9 +15,9 @@
 ##   2. The `godot_ai/telemetry_enabled` EditorSetting — set through the
 ##      MCP dock and persisted between sessions.
 ##
-## When telemetry is disabled, events are never buffered or sent. If an env
-## var is explicitly set to a non-truthy value, telemetry is enabled even if
-## the editor setting is false.
+## When telemetry is disabled, events are never buffered or sent. Only a
+## *truthy* env var force-disables; a falsey or absent env var falls through
+## to the EditorSetting (which defaults to enabled). See McpSettings.telemetry_enabled.
 ##
 ## Buffering: events recorded before the WebSocket is connected go into
 ## a small bounded buffer and flush on the next `record_event` call once
