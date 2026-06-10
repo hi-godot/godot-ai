@@ -62,7 +62,7 @@ LOOPBACK_HOSTNAMES: frozenset[str] = frozenset({"127.0.0.1", "localhost", "[::1]
 LOOPBACK_ORIGIN_SCHEMES: frozenset[str] = frozenset({"http", "https", "ws", "wss"})
 
 FORBIDDEN_BODY = (
-    b"forbidden: non-loopback Host or Origin (DNS rebinding guard)\n"
+    b"forbidden: peer, Host, or Origin not permitted (DNS rebinding / --allow-host guard)\n"
     b"see https://github.com/hi-godot/godot-ai issue #345 for details\n"
 )
 FORBIDDEN_BODY_TEXT = FORBIDDEN_BODY.decode("utf-8")
@@ -385,15 +385,15 @@ async def _send_forbidden(send: Send) -> None:
 def make_websocket_request_guard(allowed_networks: Sequence[IPNetwork] | None = None):
     """Return a ``process_request`` hook for ``websockets.asyncio.server.serve``.
 
-    The hook fires before the WebSocket upgrade. When Host or Origin
-    fails the loopback allowlist the hook synthesizes an HTTP 403 via
-    ``connection.respond(...)``; returning that response from
-    ``process_request`` aborts the upgrade without ever creating a
-    Session.
+    The hook fires before the WebSocket upgrade. When the real peer
+    address, Host, or Origin fails the allowlist the hook synthesizes an
+    HTTP 403 via ``connection.respond(...)``; returning that response from
+    ``process_request`` aborts the upgrade without ever creating a Session.
 
-    ``allowed_networks`` (the ``--allow-host`` opt-in, #421) widens the
-    Host allowlist identically to the HTTP middleware so the two
-    transports never diverge.
+    ``allowed_networks`` (the ``--allow-host`` opt-in, #421) gates the
+    unforgeable peer address (``remote_address``) and widens the Host
+    allowlist identically to the HTTP middleware, so the two transports
+    never diverge.
     """
     networks = list(allowed_networks) if allowed_networks else None
 
