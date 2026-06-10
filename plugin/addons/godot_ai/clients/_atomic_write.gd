@@ -105,10 +105,15 @@ static func write(path: String, content: String) -> bool:
 
 static func _resolve_target_mode(path: String, had_original: bool) -> int:
 	# Preserve the prior file's POSIX mode on a rewrite; default a brand-new
-	# config to owner read+write (0600). A non-positive get_unix_permissions
-	# means the file is gone or the platform has no POSIX permissions
-	# (Windows) — fall back to the owner-only default, which set_unix_permissions
-	# will simply no-op there.
+	# config (or any case we can't read a mode for) to owner read+write (0600).
+	#
+	# get_unix_permissions returns 0 both on Windows (no POSIX perms) and for a
+	# genuine 0000 file. Treating 0 as "use the 0600 floor" is deliberate, not a
+	# missed case: these are config files the plugin must read and write, 0000 is
+	# unusable, and re-applying 0000 would lock the owner out next run. 0600 is
+	# still owner-only so this never widens access. (A genuinely-0000 file can't
+	# reach a rewrite through the config strategies anyway — their read-first
+	# guard fails to open it and refuses the write before we get here.)
 	if had_original:
 		var existing := FileAccess.get_unix_permissions(path)
 		if existing > 0:
@@ -118,11 +123,16 @@ static func _resolve_target_mode(path: String, had_original: bool) -> int:
 
 static func _apply_mode(path: String, mode: int) -> void:
 	# Best-effort. set_unix_permissions returns ERR_UNAVAILABLE on platforms
-	# without POSIX permissions (Windows); ignoring it keeps the write working
-	# there. mode <= 0 should never happen (resolve always returns >0) but is
-	# guarded so a future caller can't chmod a file to nothing.
-	if mode > 0:
-		FileAccess.set_unix_permissions(path, mode)
+	# without POSIX permissions (Windows); that's expected and ignored so the
+	# write still works there. mode <= 0 should never happen (resolve always
+	# returns >0) but is guarded so a future caller can't chmod a file to nothing.
+	if mode <= 0:
+		return
+	var err := FileAccess.set_unix_permissions(path, mode)
+	# Surface a real chmod failure (not the Windows no-op) so permission
+	# hardening on a sensitive config doesn't fail completely silently.
+	if err != OK and err != ERR_UNAVAILABLE:
+		push_warning("MCP | could not set permissions on %s (error %d)" % [path, err])
 
 
 static func _written_size_matches(path: String, content: String) -> bool:
