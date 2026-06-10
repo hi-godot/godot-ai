@@ -82,7 +82,13 @@ def test_script_handler_uses_path_validator_at_every_entry_point() -> None:
     # Each listed entry point (issue #347 + attach_script) calls the validator.
     # attach_script is included so a regression where it stops validating its
     # path is caught (Copilot review on #546).
-    for func_name in ("create_script", "read_script", "patch_script", "attach_script", "find_symbols"):
+    for func_name in (
+        "create_script",
+        "read_script",
+        "patch_script",
+        "attach_script",
+        "find_symbols",
+    ):
         assert f"func {func_name}" in source, f"{func_name} missing from script_handler"
     # Handlers delegate via path_error / loadable_error / validate_resource_path
     # — count any McpPathValidator. reference so the wrapper refactor still pins
