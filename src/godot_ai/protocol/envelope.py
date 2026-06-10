@@ -46,7 +46,12 @@ class HandshakeMessage(BaseModel):
     """Initial handshake sent by the Godot plugin on connection."""
 
     type: str = "handshake"
-    session_id: str
+    ## Bounded + charset-constrained: the plugin always produces "<slug>@<4hex>"
+    ## (slug is [a-z0-9-]; see connection.gd::_make_session_id), so this only
+    ## rejects a malformed or non-plugin peer. The value is used as a registry
+    ## key, logged, and hashed into telemetry, so an unbounded/arbitrary string
+    ## from an untrusted WS client shouldn't flow downstream unchecked (#527).
+    session_id: str = Field(pattern=r"^[A-Za-z0-9._@-]{1,128}$")
     godot_version: str
     project_path: str
     plugin_version: str

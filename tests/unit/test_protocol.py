@@ -2,6 +2,9 @@
 
 import json
 
+import pytest
+from pydantic import ValidationError
+
 from godot_ai.protocol.envelope import (
     CommandRequest,
     CommandResponse,
@@ -134,3 +137,34 @@ class TestHandshakeMessage:
             }
         )
         assert msg.server_launch_mode == "dev_venv"
+
+    def test_canonical_session_id_accepted(self):
+        ## The plugin's "<slug>@<4hex>" form must validate (connection.gd).
+        msg = HandshakeMessage(
+            session_id="my-game@a3f2",
+            godot_version="4.4.1",
+            project_path="/tmp/project",
+            plugin_version="0.0.1",
+        )
+        assert msg.session_id == "my-game@a3f2"
+
+    @pytest.mark.parametrize(
+        "bad_id",
+        [
+            "",  # empty
+            "has space",  # whitespace
+            "a/b/../etc",  # path separators / traversal shape
+            "x" * 129,  # over the 128 bound
+            "emoji😀",  # non-ASCII control/payload
+        ],
+    )
+    def test_malformed_session_id_rejected(self, bad_id):
+        ## An untrusted WS peer can't register an arbitrary/oversized id that
+        ## then flows into the registry key, logs, and telemetry hash (#527).
+        with pytest.raises(ValidationError):
+            HandshakeMessage(
+                session_id=bad_id,
+                godot_version="4.4.1",
+                project_path="/tmp/project",
+                plugin_version="0.0.1",
+            )
