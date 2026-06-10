@@ -32,8 +32,11 @@ Ops:
         a list of monitor names to filter; None returns everything.
   • quit()
         Gracefully quit the Godot editor on next frame.
-  • logs_clear()
-        Clear the MCP log buffer. Returns lines_cleared.
+  • logs_clear(clear_debugger_errors=False)
+        Clear the MCP log buffer. Returns cleared_count. Pass
+        clear_debugger_errors=True to also clear the Debugger dock's
+        visible Errors-tab rows (user-facing UI, so opt-in only); the
+        response then includes debugger_errors_cleared.
   • game_eval(code)
         Execute GDScript in the running game with return values. Uses
         'await' so user code can await internally. Errors return fast and

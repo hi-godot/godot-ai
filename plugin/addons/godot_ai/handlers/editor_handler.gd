@@ -14,6 +14,7 @@ var _debugger_plugin: McpDebuggerPlugin
 var _game_log_buffer: McpGameLogBuffer
 var _editor_log_buffer: McpEditorLogBuffer
 var _debugger_errors_root: Node
+var _debugger_search_root_cache: Node
 
 
 func _init(log_buffer: McpLogBuffer, connection: McpConnection = null, debugger_plugin: McpDebuggerPlugin = null, game_log_buffer: McpGameLogBuffer = null, editor_log_buffer: McpEditorLogBuffer = null, debugger_errors_root: Node = null) -> void:
@@ -196,12 +197,17 @@ func _get_all_logs(count: int, offset: int, include_details: bool) -> Dictionary
 
 
 func _entries_for_response(entries: Array[Dictionary], include_details: bool) -> Array[Dictionary]:
+	## Compact responses only drop the top-level "details" key, so a shallow
+	## copy is enough; the deep copy is reserved for the opt-in details path
+	## where nested dicts leave the buffer.
 	var out: Array[Dictionary] = []
 	for entry in entries:
-		var copy: Dictionary = entry.duplicate(true)
-		if not include_details:
+		if include_details:
+			out.append(entry.duplicate(true))
+		else:
+			var copy: Dictionary = entry.duplicate(false)
 			copy.erase("details")
-		out.append(copy)
+			out.append(copy)
 	return out
 
 
@@ -217,21 +223,55 @@ func _collect_editor_log_entries() -> Array[Dictionary]:
 
 
 func _read_debugger_error_entries() -> Array[Dictionary]:
-	if _debugger_plugin == null and _debugger_errors_root == null:
-		return []
-	var root: Node = _debugger_errors_root
-	if root == null:
-		root = EditorInterface.get_base_control()
-	if root == null:
-		return []
-	var trees: Array[Tree] = []
-	_collect_debugger_error_trees(root, trees)
 	var entries: Array[Dictionary] = []
-	for tree in trees:
+	for tree in _locate_debugger_error_trees():
 		for entry in _entries_from_debugger_error_tree(tree):
 			if not _has_equivalent_log_entry(entries, entry):
 				entries.append(entry)
 	return entries
+
+
+func _locate_debugger_error_trees() -> Array[Tree]:
+	var trees: Array[Tree] = []
+	if _debugger_plugin == null and _debugger_errors_root == null:
+		return trees
+	var root: Node = _debugger_errors_root
+	if root == null:
+		root = _debugger_search_root()
+	if root == null:
+		return trees
+	_collect_debugger_error_trees(root, trees)
+	return trees
+
+
+func _debugger_search_root() -> Node:
+	## logs_read is a polling tool, so per-call discovery must not recurse the
+	## entire editor UI. EditorDebuggerNode is the bottom-panel container that
+	## owns every ScriptEditorDebugger session tab and lives for the editor's
+	## lifetime — find it once from the base control, then scan only its
+	## subtree on later calls. The error Trees themselves can't be cached:
+	## they are identified by their content, and an emptied tree is
+	## indistinguishable from any other Tree.
+	if is_instance_valid(_debugger_search_root_cache):
+		return _debugger_search_root_cache
+	_debugger_search_root_cache = null
+	var base := EditorInterface.get_base_control()
+	if base == null:
+		return null
+	_debugger_search_root_cache = _find_first_of_class(base, "EditorDebuggerNode")
+	if _debugger_search_root_cache == null:
+		return base
+	return _debugger_search_root_cache
+
+
+static func _find_first_of_class(node: Node, klass: String) -> Node:
+	if node.get_class() == klass:
+		return node
+	for child in node.get_children():
+		var found := _find_first_of_class(child, klass)
+		if found != null:
+			return found
+	return null
 
 
 static func _collect_debugger_error_trees(node: Node, out: Array[Tree]) -> void:
@@ -284,23 +324,15 @@ static func _entry_from_debugger_error_item(item: TreeItem) -> Dictionary:
 
 static func _details_from_debugger_error_item(item: TreeItem, loc: Dictionary, function: String) -> Dictionary:
 	var children: Array[Dictionary] = []
-	var frames: Array[Dictionary] = []
 	var child := item.get_first_child()
 	while child != null:
 		var child_loc := _location_from_metadata(child.get_metadata(0))
-		var child_entry := {
+		children.append({
 			"label": child.get_text(0),
 			"text": child.get_text(1),
 			"path": str(child_loc.get("path", "")),
 			"line": int(child_loc.get("line", 0)),
-		}
-		children.append(child_entry)
-		if _is_stack_trace_item(child, child_loc):
-			frames.append({
-				"path": child_entry.path,
-				"line": child_entry.line,
-				"function": _function_from_frame_text(child_entry.text),
-			})
+		})
 		child = child.get_next()
 	return {
 		"debugger_tab": "Errors",
@@ -318,7 +350,7 @@ static func _details_from_debugger_error_item(item: TreeItem, loc: Dictionary, f
 			"function": function,
 		},
 		"children": children,
-		"frames": frames,
+		"frames": _frames_from_error_children(children),
 	}
 
 
@@ -326,10 +358,39 @@ static func _is_debugger_error_item(item: TreeItem) -> bool:
 	return item.has_meta("_is_warning") or item.has_meta("_is_error")
 
 
-static func _is_stack_trace_item(item: TreeItem, loc: Dictionary) -> bool:
-	if str(item.get_text(0)).find("Stack Trace") >= 0:
-		return true
-	return not str(loc.get("path", "")).is_empty() and not item.get_parent().has_meta("_is_warning") and not item.get_parent().has_meta("_is_error")
+## ScriptEditorDebugger lays out an error item's children flat, in order: an
+## optional "<X Error>" row, one "<X Source>" row, then one row per stack
+## frame. Only frame 0 carries the "<Stack Trace>" label (TTR-translated);
+## later frames have an empty label. Every frame row carries [path, line]
+## metadata, but so can the Error/Source rows, so metadata alone can't
+## identify frames — the frame run has to be found first.
+static func _frames_from_error_children(children: Array[Dictionary]) -> Array[Dictionary]:
+	var start := -1
+	for i in children.size():
+		if str(children[i].label).contains("Stack Trace"):
+			start = i
+			break
+	if start < 0:
+		## Non-English editor locale: the "<Stack Trace>" label is translated.
+		## Frames past the first are the only rows with an empty label and a
+		## real location; back up one row to recover the labeled first frame
+		## (rows before the frame run always have a non-empty label).
+		for i in children.size():
+			if str(children[i].label).is_empty() and not str(children[i].path).is_empty():
+				start = maxi(i - 1, 0)
+				break
+	if start < 0:
+		return []
+	var frames: Array[Dictionary] = []
+	for i in range(start, children.size()):
+		if str(children[i].path).is_empty():
+			continue
+		frames.append({
+			"path": children[i].path,
+			"line": children[i].line,
+			"function": _function_from_frame_text(children[i].text),
+		})
+	return frames
 
 
 static func _location_from_metadata(meta: Variant) -> Dictionary:
@@ -912,33 +973,49 @@ func get_performance_monitors(params: Dictionary) -> Dictionary:
 	}
 
 
-func clear_logs(_params: Dictionary) -> Dictionary:
+func clear_logs(params: Dictionary) -> Dictionary:
 	var count := _log_buffer.total_count()
 	_log_buffer.clear()
-	var debugger_errors_cleared := _clear_debugger_error_trees()
-	return {
-		"data": {
-			"cleared_count": count,
-			"debugger_errors_cleared": debugger_errors_cleared,
-		}
-	}
+	var data := {"cleared_count": count}
+	## The Debugger Errors panel is user-visible editor UI, not an MCP-owned
+	## buffer — wiping it stays behind an explicit opt-in.
+	if bool(params.get("clear_debugger_errors", false)):
+		data["debugger_errors_cleared"] = _clear_debugger_error_trees()
+	return {"data": data}
 
 
 func _clear_debugger_error_trees() -> int:
-	if _debugger_plugin == null and _debugger_errors_root == null:
-		return 0
-	var root: Node = _debugger_errors_root
-	if root == null:
-		root = EditorInterface.get_base_control()
-	if root == null:
-		return 0
-	var trees: Array[Tree] = []
-	_collect_debugger_error_trees(root, trees)
 	var cleared := 0
-	for tree in trees:
+	for tree in _locate_debugger_error_trees():
 		cleared += _entries_from_debugger_error_tree(tree).size()
-		tree.clear()
+		if not _press_debugger_clear_button(tree):
+			## No Clear button near this tree (synthetic roots in tests).
+			## A raw clear is acceptable there; the real panel always routes
+			## through the button below.
+			tree.clear()
 	return cleared
+
+
+## Clear via ScriptEditorDebugger's own Clear button so the engine runs
+## _clear_errors_list() — clearing the Tree directly leaves error_count/
+## warning_count, the "Errors (N)" tab badge, the errors_cleared signal, and
+## the toolbar button states out of sync with the emptied tree. The button is
+## identified by its pressed-connection target, not its (translated) label.
+static func _press_debugger_clear_button(tree: Tree) -> bool:
+	var parent := tree.get_parent()
+	if parent == null:
+		return false
+	var stack: Array[Node] = [parent]
+	while not stack.is_empty():
+		var node: Node = stack.pop_back()
+		if node is BaseButton:
+			for conn in node.get_signal_connection_list("pressed"):
+				if str(conn.get("callable", "")).contains("_clear_errors_list"):
+					node.emit_signal("pressed")
+					return true
+		for child in node.get_children():
+			stack.push_back(child)
+	return false
 
 
 func reload_plugin(_params: Dictionary) -> Dictionary:

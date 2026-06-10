@@ -183,8 +183,11 @@ async def performance_monitors_get(
     return await runtime.send_command("get_performance_monitors", params)
 
 
-async def logs_clear(runtime: DirectRuntime) -> dict:
-    return await runtime.send_command("clear_logs")
+async def logs_clear(runtime: DirectRuntime, clear_debugger_errors: bool = False) -> dict:
+    params: dict = {}
+    if clear_debugger_errors:
+        params["clear_debugger_errors"] = True
+    return await runtime.send_command("clear_logs", params)
 
 
 _VALID_LOG_SOURCES = ("plugin", "game", "editor", "all")

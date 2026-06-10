@@ -40,6 +40,11 @@ Godot `_log_error` code/rationale when available, error type, resolved source
 location, and stack/error-tree context corresponding to the Debugger dock's
 Errors tab.
 
+`editor_manage(op="logs_clear")` accepts `clear_debugger_errors=true` to also
+clear the Debugger dock's visible Errors-tab rows (routed through the panel's
+own Clear path so the tab badge and counters reset). The Errors panel is
+user-facing UI, so the default leaves it untouched.
+
 ## Domain rollups (`<domain>_manage`)
 
 Each rollup is a single MCP tool dispatched by `op` name + `params` dict.

@@ -2849,6 +2849,27 @@ class TestLogsClearTool:
         assert not result.is_error
         assert result.data["cleared_count"] == 12
 
+    async def test_clear_debugger_errors_opt_in_forwards(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "clear_logs"
+            assert cmd["params"]["clear_debugger_errors"] is True
+            await plugin.send_response(
+                cmd["request_id"], {"cleared_count": 3, "debugger_errors_cleared": 2}
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "editor_manage",
+            {"op": "logs_clear", "params": {"clear_debugger_errors": True}},
+        )
+        await task
+
+        assert not result.is_error
+        assert result.data["debugger_errors_cleared"] == 2
+
 
 # ---------------------------------------------------------------------------
 # project_run / project_stop

@@ -114,14 +114,60 @@ func test_clear_logs_empties_buffer() -> void:
 	assert_eq(buf.total_count(), 0)
 
 
-func test_clear_logs_clears_debugger_errors_tree() -> void:
+func test_clear_logs_leaves_debugger_errors_tree_by_default() -> void:
 	var tree := _make_debugger_errors_tree()
 	var handler := EditorHandler.new(McpLogBuffer.new(), null, McpDebuggerPlugin.new(), null, null, tree)
 	var result := handler.clear_logs({})
 	assert_eq(result.data.cleared_count, 0)
+	assert_false(result.data.has("debugger_errors_cleared"), "Errors-tab clear is opt-in")
+	var logs := handler.get_logs({"source": "editor", "count": 10})
+	assert_eq(logs.data.total_count, 2, "Visible Errors rows must survive a default clear_logs")
+	tree.free()
+
+
+func test_clear_logs_clears_debugger_errors_tree_on_opt_in() -> void:
+	var tree := _make_debugger_errors_tree()
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, McpDebuggerPlugin.new(), null, null, tree)
+	var result := handler.clear_logs({"clear_debugger_errors": true})
+	assert_eq(result.data.cleared_count, 0)
 	assert_eq(result.data.debugger_errors_cleared, 2)
 	var logs := handler.get_logs({"source": "editor", "count": 10})
 	assert_eq(logs.data.total_count, 0)
+	tree.free()
+
+
+class DebuggerClearStub:
+	extends RefCounted
+	var tree: Tree
+	var pressed_count := 0
+
+	func _clear_errors_list() -> void:
+		pressed_count += 1
+		tree.clear()
+
+
+func test_clear_logs_routes_through_debugger_clear_button() -> void:
+	## The real Errors panel must be cleared via its own Clear button so the
+	## engine resets error_count/warning_count, the tab badge, and button
+	## states — model the panel as button + tree under one container and
+	## assert the button's pressed path ran instead of a raw Tree.clear().
+	var panel := VBoxContainer.new()
+	var toolbar := HBoxContainer.new()
+	panel.add_child(toolbar)
+	var clear_button := Button.new()
+	toolbar.add_child(clear_button)
+	var tree := _make_debugger_errors_tree()
+	panel.add_child(tree)
+	var stub := DebuggerClearStub.new()
+	stub.tree = tree
+	clear_button.pressed.connect(stub._clear_errors_list)
+
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, McpDebuggerPlugin.new(), null, null, panel)
+	var result := handler.clear_logs({"clear_debugger_errors": true})
+	assert_eq(result.data.debugger_errors_cleared, 2)
+	assert_eq(stub.pressed_count, 1, "Clear must go through the panel's own Clear button")
+	assert_true(tree.get_root() == null, "Button handler should have emptied the tree")
+	panel.free()
 
 
 # ----- get_performance_monitors -----
@@ -1036,8 +1082,48 @@ func test_get_logs_source_editor_details_include_debugger_errors_children() -> v
 	assert_eq(details.source.path, "res://scripts/player.gd")
 	assert_eq(details.children[0].label, "<GDScript Error>")
 	assert_eq(details.children[1].label, "<GDScript Source>")
+	assert_eq(details.frames.size(), 2, "Every stack row must land in frames, not just the labeled first one")
 	assert_eq(details.frames[0].path, "res://scripts/player.gd")
 	assert_eq(details.frames[0].function, "_ready")
+	assert_eq(details.frames[1].path, "res://scripts/main.gd")
+	assert_eq(details.frames[1].line, 12)
+	assert_eq(details.frames[1].function, "_start")
+	tree.free()
+
+
+func test_get_logs_details_frames_survive_translated_stack_trace_label() -> void:
+	## The "<Stack Trace>" label is TTR-translated, so frame detection must
+	## not depend on the English text: frames past the first are the only
+	## rows with an empty label and a real location, and the row before the
+	## first of those is the labeled first frame.
+	var tree := Tree.new()
+	tree.set_columns(2)
+	tree.set_hide_root(true)
+	var root := tree.create_item()
+	var error := tree.create_item(root)
+	error.set_meta("_is_error", true)
+	error.set_text(0, "0:00:01:002")
+	error.set_text(1, "_ready: boom")
+	error.set_metadata(0, ["res://scripts/player.gd", 8])
+	var source := tree.create_item(error)
+	source.set_text(0, "<GDScript-Quelle>")
+	source.set_text(1, "player.gd:8 @ _ready()")
+	source.set_metadata(0, ["res://scripts/player.gd", 8])
+	var frame_0 := tree.create_item(error)
+	frame_0.set_text(0, "<Stapelverfolgung>")
+	frame_0.set_text(1, "player.gd:8 @ _ready()")
+	frame_0.set_metadata(0, ["res://scripts/player.gd", 8])
+	var frame_1 := tree.create_item(error)
+	frame_1.set_text(1, "main.gd:3 @ _init()")
+	frame_1.set_metadata(0, ["res://scripts/main.gd", 3])
+
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, McpDebuggerPlugin.new(), null, null, tree)
+	var result := handler.get_logs({"source": "editor", "count": 1, "include_details": true})
+	var frames: Array = result.data.lines[0].details.frames
+	assert_eq(frames.size(), 2)
+	assert_eq(frames[0].function, "_ready")
+	assert_eq(frames[1].function, "_init")
+	tree.free()
 
 
 func test_get_logs_source_editor_dedupes_debugger_errors_tree() -> void:
@@ -1111,6 +1197,11 @@ func test_get_logs_source_invalid_message_lists_editor() -> void:
 	assert_contains(result.error.message, "editor")
 
 
+## Mirrors ScriptEditorDebugger's real Errors-tab layout (verified against
+## script_editor_debugger.cpp on 4.3 and 4.6): children of an error item are
+## flat — optional "<X Error>" row, one "<X Source>" row, then one row per
+## stack frame. Only frame 0 carries the "<Stack Trace>" label; later frames
+## have an empty label. Frame text uses the file *name*, not the res:// path.
 func _make_debugger_errors_tree() -> Tree:
 	var tree := Tree.new()
 	tree.set_columns(2)
@@ -1125,14 +1216,18 @@ func _make_debugger_errors_tree() -> Tree:
 	var warning_condition := tree.create_item(warning)
 	warning_condition.set_text(0, "<GDScript Error>")
 	warning_condition.set_text(1, "BUILTIN_SHADOWED")
+	warning_condition.set_metadata(0, ["res://scripts/player.gd", 21])
 	var warning_source := tree.create_item(warning)
 	warning_source.set_text(0, "<GDScript Source>")
 	warning_source.set_text(1, "player.gd:21 @ GDScript::reload()")
 	warning_source.set_metadata(0, ["res://scripts/player.gd", 21])
 	var warning_frame := tree.create_item(warning)
 	warning_frame.set_text(0, "<Stack Trace>")
-	warning_frame.set_text(1, "res://scripts/player.gd:21 @ _ready()")
+	warning_frame.set_text(1, "player.gd:21 @ _ready()")
 	warning_frame.set_metadata(0, ["res://scripts/player.gd", 21])
+	var warning_frame_2 := tree.create_item(warning)
+	warning_frame_2.set_text(1, "main.gd:12 @ _start()")
+	warning_frame_2.set_metadata(0, ["res://scripts/main.gd", 12])
 
 	var error := tree.create_item(root)
 	error.set_meta("_is_error", true)

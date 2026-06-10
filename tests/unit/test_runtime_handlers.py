@@ -1543,9 +1543,7 @@ async def test_game_input_gamepad_axis_sends_value_not_pressed():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
 
-    await game_handlers.game_input_gamepad(
-        runtime, device=2, control="axis", index=1, value=0.5
-    )
+    await game_handlers.game_input_gamepad(runtime, device=2, control="axis", index=1, value=0.5)
 
     params = client.calls[-1]["params"]["params"]
     assert client.calls[-1]["params"]["op"] == "input_gamepad"
@@ -3206,6 +3204,15 @@ async def test_logs_clear_handler():
     result = await editor_handlers.logs_clear(runtime)
     assert result["cleared_count"] == 5
     assert client.calls[-1]["command"] == "clear_logs"
+    assert client.calls[-1]["params"] == {}
+
+
+async def test_logs_clear_handler_passes_clear_debugger_errors_opt_in():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await editor_handlers.logs_clear(runtime, clear_debugger_errors=True)
+    assert client.calls[-1]["command"] == "clear_logs"
+    assert client.calls[-1]["params"] == {"clear_debugger_errors": True}
 
 
 # ---------------------------------------------------------------------------
