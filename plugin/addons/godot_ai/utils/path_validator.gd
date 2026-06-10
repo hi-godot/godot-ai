@@ -68,7 +68,11 @@ static func _user_root() -> String:
 static func validate_resource_path(path: String, for_write: bool = false) -> String:
 	if path.is_empty():
 		return "Missing required param: path"
-	if path.contains(String.chr(0)):
+	## Guard the sentinel: on builds where String.chr(0) yields "" (some engines
+	## normalize embedded nulls away, e.g. 4.3), contains("") would be true and
+	## reject every path. A String that can't hold a null can't smuggle one.
+	var nul := String.chr(0)
+	if not nul.is_empty() and path.contains(nul):
 		return "Path must not contain null bytes"
 	if not path.begins_with("res://"):
 		return "Path must start with res://"
@@ -90,7 +94,11 @@ static func validate_resource_path(path: String, for_write: bool = false) -> Str
 static func validate_loadable_path(path: String) -> String:
 	if path.is_empty():
 		return "Missing required param: path"
-	if path.contains(String.chr(0)):
+	## Guard the sentinel: on builds where String.chr(0) yields "" (some engines
+	## normalize embedded nulls away, e.g. 4.3), contains("") would be true and
+	## reject every path. A String that can't hold a null can't smuggle one.
+	var nul := String.chr(0)
+	if not nul.is_empty() and path.contains(nul):
 		return "Path must not contain null bytes"
 	if path.begins_with("uid://"):
 		return ""

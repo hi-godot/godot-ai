@@ -399,7 +399,7 @@ func _apply_property(node: Node, prop: String, value: Variant) -> Variant:
 			var info: Dictionary = _THEME_OVERRIDE_MAP[prefix]
 			var coerce_type: int = info.coerce_type
 
-			# For stylebox overrides, load from a res:// path.
+			# For stylebox overrides, load from a res:// / uid:// / user:// path.
 			if coerce_type == TYPE_OBJECT:
 				if value is String and (value.begins_with("res://") or value.begins_with("uid://") or value.begins_with("user://")):
 					var style_path_err = McpPathValidator.loadable_error(value, "stylebox")
