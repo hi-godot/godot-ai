@@ -21,6 +21,7 @@ const DEFERRED_TIMEOUT_MS_BY_COMMAND := {
 	"game_command": 15000,
 }
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const FuzzySuggestions := preload("res://addons/godot_ai/utils/fuzzy_suggestions.gd")
 
 
 func _init(log_buffer: McpLogBuffer) -> void:
@@ -61,18 +62,7 @@ func has_command(command: String) -> bool:
 ## array if no candidates clear the threshold. Used by batch_execute to surface
 ## "did you mean" suggestions when an unknown command is passed.
 func suggest_similar(cmd_name: String, limit: int = 3, threshold: float = 0.5) -> Array[String]:
-	if cmd_name.is_empty() or _handlers.is_empty():
-		return []
-	var scored: Array = []
-	for name in _handlers.keys():
-		var score: float = cmd_name.similarity(name)
-		if score >= threshold:
-			scored.append([score, name])
-	scored.sort_custom(func(a, b): return a[0] > b[0])
-	var result: Array[String] = []
-	for i in range(min(limit, scored.size())):
-		result.append(scored[i][1])
-	return result
+	return FuzzySuggestions.rank(cmd_name, _handlers.keys(), limit, threshold, 0.0, 0.0)
 
 
 ## Enqueue a raw command dict received from the WebSocket.

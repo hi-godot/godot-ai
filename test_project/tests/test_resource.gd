@@ -387,6 +387,18 @@ func test_get_resource_info_properties_sorted() -> void:
 	assert_eq(names, sorted_names, "properties should be sorted alphabetically by name")
 
 
+func test_get_resource_info_includes_hint_string() -> void:
+	var result := _handler.get_resource_info({"type": "BaseMaterial3D"})
+	assert_has_key(result, "data")
+	var shading_mode: Dictionary = {}
+	for prop in result.data.properties:
+		if prop.name == "shading_mode":
+			shading_mode = prop
+			break
+	assert_false(shading_mode.is_empty(), "shading_mode property should be present")
+	assert_contains(shading_mode.hint_string, "Unshaded")
+
+
 func test_create_resource_saves_to_disk() -> void:
 	var out_path := "res://test_tmp_box.tres"
 	# Clean up any prior test artifact.

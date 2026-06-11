@@ -64,6 +64,7 @@ const ProjectHandler := preload("res://addons/godot_ai/handlers/project_handler.
 const ClientHandler := preload("res://addons/godot_ai/handlers/client_handler.gd")
 const ScriptHandler := preload("res://addons/godot_ai/handlers/script_handler.gd")
 const ResourceHandler := preload("res://addons/godot_ai/handlers/resource_handler.gd")
+const ApiHandler := preload("res://addons/godot_ai/handlers/api_handler.gd")
 const FilesystemHandler := preload("res://addons/godot_ai/handlers/filesystem_handler.gd")
 const SignalHandler := preload("res://addons/godot_ai/handlers/signal_handler.gd")
 const AutoloadHandler := preload("res://addons/godot_ai/handlers/autoload_handler.gd")
@@ -243,6 +244,7 @@ func _enter_tree() -> void:
 	var client_handler := ClientHandler.new()
 	var script_handler := ScriptHandler.new(get_undo_redo(), _connection)
 	var resource_handler := ResourceHandler.new(get_undo_redo(), _connection)
+	var api_handler := ApiHandler.new()
 	var filesystem_handler := FilesystemHandler.new()
 	var signal_handler := SignalHandler.new(get_undo_redo())
 	var autoload_handler := AutoloadHandler.new()
@@ -261,7 +263,7 @@ func _enter_tree() -> void:
 	var texture_handler := TextureHandler.new(get_undo_redo(), _connection)
 	var curve_handler := CurveHandler.new(get_undo_redo(), _connection)
 	var control_draw_recipe_handler := ControlDrawRecipeHandler.new(get_undo_redo())
-	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler, ui_handler, theme_handler, animation_handler, material_handler, particle_handler, camera_handler, audio_handler, physics_shape_handler, environment_handler, texture_handler, curve_handler, control_draw_recipe_handler]
+	_handlers = [editor_handler, scene_handler, node_handler, project_handler, client_handler, script_handler, resource_handler, api_handler, filesystem_handler, signal_handler, autoload_handler, input_handler, test_handler, batch_handler, ui_handler, theme_handler, animation_handler, material_handler, particle_handler, camera_handler, audio_handler, physics_shape_handler, environment_handler, texture_handler, curve_handler, control_draw_recipe_handler]
 
 	_dispatcher.register("get_editor_state", editor_handler.get_editor_state)
 	_dispatcher.register("get_scene_tree", scene_handler.get_scene_tree)
@@ -312,6 +314,7 @@ func _enter_tree() -> void:
 	_dispatcher.register("assign_resource", resource_handler.assign_resource)
 	_dispatcher.register("create_resource", resource_handler.create_resource)
 	_dispatcher.register("get_resource_info", resource_handler.get_resource_info)
+	_dispatcher.register("get_class_info", api_handler.get_class_info)
 	_dispatcher.register("read_file", filesystem_handler.read_file)
 	_dispatcher.register("write_file", filesystem_handler.write_file)
 	_dispatcher.register("reimport", filesystem_handler.reimport)

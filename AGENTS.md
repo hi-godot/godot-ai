@@ -23,8 +23,8 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
 
 - `src/godot_ai/` — Python MCP server (FastMCP v3)
   - `server.py` — entrypoint, lifespan, tool registration, `--exclude-domains` support
-  - `tools/` — MCP tool modules (session, editor, scene, node, project, script, resource, filesystem, signal, autoload, input_map, game, testing, batch, client, ui, theme, animation, material, particle, camera, audio) + `_meta_tool.py` (`register_manage_tool` rollup factory)
-  - `resources/` — `godot://...` read-only URIs (sessions, editor, project, nodes, scripts, scenes, library)
+  - `tools/` — MCP tool modules (session, editor, scene, node, project, script, resource, api, filesystem, signal, autoload, input_map, game, testing, batch, client, ui, theme, animation, material, particle, camera, audio) + `_meta_tool.py` (`register_manage_tool` rollup factory)
+  - `resources/` — `godot://...` read-only URIs (sessions, editor, project, nodes, classes, scripts, scenes, library)
   - `middleware/` — `PreserveGodotCommandErrorData`, `StripClientWrapperKwargs`, `ParseStringifiedParams`, `HintOpTypoOnManage` (registration order is load-bearing — see the docstring above the `mcp.add_middleware(...)` calls in `server.py` and `tests/unit/test_server_middleware_order.py`)
   - `handlers/` — shared sync handlers using `DirectRuntime`; `_readiness.py` gates writes
   - `runtime/direct.py` — `DirectRuntime`, the in-process runtime adapter
@@ -390,7 +390,7 @@ The MCP tool surface is shaped to satisfy two pressures at once:
 1. **Anthropic tool-search clients** (`tool_search_tool_bm25_20251119` / `tool_search_tool_regex_20251119`) — non-core tools are tagged `meta={"defer_loading": True}` so the client only loads schemas it searches for.
 2. **Tool-count caps in non-search clients** (Antigravity, etc., that ignore `defer_loading` and refuse to start past ~40 tools) — long-tail verbs collapse into per-domain `<domain>_manage` rollups (`op="<verb>"` + `params` dict). Schema-aware clients still see every op via the dynamic `Literal[...]` enum built by `register_manage_tool` in `tools/_meta_tool.py`.
 
-Result: ~40 MCP tools (4 core + 15 named verbs + 21 rollups), down from a flat surface that crossed 100. Plugin command names over WebSocket stay independent — they're documented in `tool_catalog.gd` and unchanged by the rollup refactor.
+Result: ~41 MCP tools (4 core + 15 named verbs + 22 rollups), down from a flat surface that crossed 100. Plugin command names over WebSocket stay independent — they're documented in `tool_catalog.gd` and unchanged by the rollup refactor.
 
 - All tools follow `domain_action` namespacing — no ambiguous prefixes
 - Core tools loaded upfront (no `meta=`): `editor_state`, `scene_get_hierarchy`, `node_get_properties`, `session_activate`

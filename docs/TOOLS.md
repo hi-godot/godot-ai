@@ -1,6 +1,6 @@
 # Available Tools
 
-Godot AI exposes ~39 MCP tools — ~18 high-traffic verbs as named tools, plus
+Godot AI exposes ~41 MCP tools — ~18 high-traffic verbs as named tools, plus
 one rolled-up `<domain>_manage` per domain that takes `op="..."` + a `params`
 dict. The rollup pattern keeps the tool count well below the 100-tool caps
 some clients enforce while still exposing every action.
@@ -82,7 +82,15 @@ Calls take the form:
 | `theme_manage` | `create`, `set_color`, `set_constant`, `set_font_size`, `set_stylebox_flat`, `apply` |
 | `ui_manage` | `set_anchor_preset`, `set_text`, `build_layout`, `draw_recipe` |
 | `resource_manage` | `search`, `load`, `assign`, `get_info`, `create`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `gradient_texture_create`, `noise_texture_create` |
+| `api_manage` | `get_class` |
 | `client_manage` | `status`, `configure`, `remove` |
+
+`api_manage(op="get_class")` inspects Godot API/ClassDB metadata for a class
+without creating an instance. By default it returns direct class members only,
+with each returned section capped at 100 items. Pass `sections` (`properties`,
+`methods`, `signals`, `enums`, `constants`, `inheritors`),
+`include_inherited=true`, `include_inheritors=true`, `offset`, or `limit=0`
+when a fuller class reference is needed.
 
 Every rolled-up tool also accepts an optional top-level `session_id` for
 per-call multi-editor routing (sibling of `op` and `params`, *not* nested
@@ -106,6 +114,7 @@ don't, and the only path that supports `session_id` pinning.
 | `godot://node/{path}/properties` | All properties of a node by scene path |
 | `godot://node/{path}/children` | Direct children (name, type, path each) |
 | `godot://node/{path}/groups` | Group memberships for a node |
+| `godot://class/{class_name}` | ClassDB metadata: properties, methods, signals, enums, constants, inheritance, and defaults |
 | `godot://script/{path}` | GDScript source by res:// path (drop the `res://` prefix) |
 | `godot://project/info` | Active project metadata |
 | `godot://project/settings` | Common project settings subset |

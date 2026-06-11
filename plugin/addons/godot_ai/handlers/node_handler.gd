@@ -2,6 +2,7 @@
 extends RefCounted
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const VariantSerializer := preload("res://addons/godot_ai/utils/variant_serializer.gd")
 
 ## Handles node creation and manipulation with undo/redo support.
 
@@ -862,67 +863,4 @@ static func _reject_if_scene_root(node: Node, scene_root: Node, op: String) -> V
 ## dicts/arrays so agents can inspect fields instead of parsing Godot's
 ## debug repr — see issue #214.
 static func _serialize_value(value: Variant) -> Variant:
-	if value == null:
-		return null
-	match typeof(value):
-		TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING:
-			return value
-		TYPE_STRING_NAME:
-			return str(value)
-		TYPE_VECTOR2, TYPE_VECTOR2I:
-			return {"x": value.x, "y": value.y}
-		TYPE_VECTOR3, TYPE_VECTOR3I:
-			return {"x": value.x, "y": value.y, "z": value.z}
-		TYPE_VECTOR4, TYPE_VECTOR4I, TYPE_QUATERNION:
-			return {"x": value.x, "y": value.y, "z": value.z, "w": value.w}
-		TYPE_COLOR:
-			return {"r": value.r, "g": value.g, "b": value.b, "a": value.a}
-		TYPE_RECT2, TYPE_RECT2I, TYPE_AABB:
-			return {
-				"position": _serialize_value(value.position),
-				"size": _serialize_value(value.size),
-			}
-		TYPE_PLANE:
-			return {"normal": _serialize_value(value.normal), "d": value.d}
-		TYPE_BASIS:
-			return {
-				"x": _serialize_value(value.x),
-				"y": _serialize_value(value.y),
-				"z": _serialize_value(value.z),
-			}
-		TYPE_TRANSFORM2D:
-			return {
-				"x": _serialize_value(value.x),
-				"y": _serialize_value(value.y),
-				"origin": _serialize_value(value.origin),
-			}
-		TYPE_TRANSFORM3D:
-			return {
-				"basis": _serialize_value(value.basis),
-				"origin": _serialize_value(value.origin),
-			}
-		TYPE_PROJECTION:
-			return {
-				"x": _serialize_value(value.x),
-				"y": _serialize_value(value.y),
-				"z": _serialize_value(value.z),
-				"w": _serialize_value(value.w),
-			}
-		TYPE_NODE_PATH:
-			return str(value)
-		TYPE_ARRAY, TYPE_PACKED_BYTE_ARRAY, TYPE_PACKED_INT32_ARRAY, TYPE_PACKED_INT64_ARRAY, TYPE_PACKED_FLOAT32_ARRAY, TYPE_PACKED_FLOAT64_ARRAY, TYPE_PACKED_STRING_ARRAY, TYPE_PACKED_VECTOR2_ARRAY, TYPE_PACKED_VECTOR3_ARRAY, TYPE_PACKED_COLOR_ARRAY:
-			var arr: Array = []
-			for item in value:
-				arr.append(_serialize_value(item))
-			return arr
-		TYPE_DICTIONARY:
-			var out := {}
-			for k in value:
-				out[str(k)] = _serialize_value(value[k])
-			return out
-		TYPE_OBJECT:
-			if value is Resource and value.resource_path:
-				return value.resource_path
-			return str(value)
-		_:
-			return str(value)
+	return VariantSerializer.serialize(value)

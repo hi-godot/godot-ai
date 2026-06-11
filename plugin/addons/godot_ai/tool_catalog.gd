@@ -30,6 +30,7 @@ const CORE_TOOLS := [
 ##   tools: flat list of tool names registered by this domain (non-core only)
 const DOMAINS := [
 	{"id": "animation", "label": "animation", "count": 2, "tools": ["animation_create", "animation_manage"]},
+	{"id": "api", "label": "api", "count": 1, "tools": ["api_manage"]},
 	{"id": "audio", "label": "audio", "count": 1, "tools": ["audio_manage"]},
 	{"id": "autoload", "label": "autoload", "count": 1, "tools": ["autoload_manage"]},
 	{"id": "batch", "label": "batch", "count": 1, "tools": ["batch_execute"]},

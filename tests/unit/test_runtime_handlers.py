@@ -8,6 +8,7 @@ import pytest
 
 from godot_ai import runtime_info
 from godot_ai.handlers import animation as animation_handlers
+from godot_ai.handlers import api as api_handlers
 from godot_ai.handlers import audio as audio_handlers
 from godot_ai.handlers import autoload as autoload_handlers
 from godot_ai.handlers import batch as batch_handlers
@@ -287,6 +288,17 @@ class StubClient:
                 "is_abstract": False,
                 "properties": [{"name": "size", "type": "Vector3", "hint": 0, "usage": 4}],
                 "property_count": 1,
+            }
+        if command == "get_class_info":
+            return {
+                "class_name": params.get("class_name", ""),
+                "parent_class": "PhysicsBody3D",
+                "inheritance_chain": ["CharacterBody3D", "PhysicsBody3D", "Node"],
+                "properties": [],
+                "methods": [],
+                "signals": [],
+                "enums": [],
+                "constants": [],
             }
         if command == "open_scene":
             return {"path": params.get("path", ""), "undoable": False}
@@ -2675,6 +2687,43 @@ async def test_resource_get_info_handler_forwards_type():
     assert result["type"] == "BoxMesh"
     assert result["can_instantiate"] is True
     assert any(p["name"] == "size" for p in result["properties"])
+
+
+async def test_api_get_class_handler_forwards_class_name():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await api_handlers.api_get_class(runtime, class_name="CharacterBody3D")
+    assert client.calls[-1]["command"] == "get_class_info"
+    assert client.calls[-1]["params"] == {
+        "class_name": "CharacterBody3D",
+        "include_inherited": False,
+        "include_inheritors": False,
+        "offset": 0,
+        "limit": 100,
+    }
+    assert result["class_name"] == "CharacterBody3D"
+
+
+async def test_api_get_class_handler_forwards_options():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await api_handlers.api_get_class(
+        runtime,
+        class_name="Control",
+        sections=["properties"],
+        include_inherited=True,
+        include_inheritors=True,
+        offset=100,
+        limit=50,
+    )
+    assert client.calls[-1]["params"] == {
+        "class_name": "Control",
+        "sections": ["properties"],
+        "include_inherited": True,
+        "include_inheritors": True,
+        "offset": 100,
+        "limit": 50,
+    }
 
 
 async def test_curve_set_points_inline_handler():

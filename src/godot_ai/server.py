@@ -26,6 +26,7 @@ from godot_ai.middleware import (
     StripClientWrapperKwargs,
 )
 from godot_ai.orphan_reaper import poll_seconds_from_env, should_arm_reaper, watch_owner
+from godot_ai.resources.classes import register_class_resources
 from godot_ai.resources.editor import register_editor_resources
 from godot_ai.resources.library import register_library_resources
 from godot_ai.resources.nodes import register_node_resources
@@ -43,6 +44,7 @@ from godot_ai.telemetry import (
     shutdown_if_initialized,
 )
 from godot_ai.tools.animation import register_animation_tools
+from godot_ai.tools.api import register_api_tools
 from godot_ai.tools.audio import register_audio_tools
 from godot_ai.tools.autoload import register_autoload_tools
 from godot_ai.tools.batch import register_batch_tools
@@ -242,12 +244,14 @@ def create_server(
             "                   curve_set_points, environment_create,\n"
             "                   physics_shape_autofit, gradient_texture_create,\n"
             "                   noise_texture_create\n"
+            "  api_manage       get_class\n"
             "  client_manage    status, configure, remove\n\n"
             "Resources (read-only URIs, no tool-count cost — prefer for active-session "
             "reads when the client surfaces them):\n"
             "  godot://sessions, godot://editor/state, godot://selection/current,\n"
             "  godot://logs/recent, godot://scene/current, godot://scene/hierarchy,\n"
             "  godot://node/{path}/properties|children|groups,\n"
+            "  godot://class/{class_name},\n"
             "  godot://script/{path}, godot://project/info, godot://project/settings,\n"
             "  godot://materials, godot://input_map, godot://performance,\n"
             "  godot://test/results\n\n"
@@ -348,6 +352,8 @@ def create_server(
         register_script_tools(mcp)
     if "resource" not in exclude:
         register_resource_tools(mcp)
+    if "api" not in exclude:
+        register_api_tools(mcp)
     if "filesystem" not in exclude:
         register_filesystem_tools(mcp)
     if "client" not in exclude:
@@ -386,5 +392,6 @@ def create_server(
     register_node_resources(mcp)
     register_script_resources(mcp)
     register_library_resources(mcp)
+    register_class_resources(mcp)
 
     return mcp

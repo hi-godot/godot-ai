@@ -246,6 +246,47 @@ class TestNodeResourceTemplates:
 
 
 # ---------------------------------------------------------------------------
+# godot://class/{class_name} template
+# ---------------------------------------------------------------------------
+
+
+class TestClassResourceTemplate:
+    async def test_class_info_template(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_class_info"
+            assert cmd["params"] == {
+                "class_name": "CharacterBody3D",
+                "include_inherited": False,
+                "include_inheritors": False,
+                "offset": 0,
+                "limit": 100,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "class_name": "CharacterBody3D",
+                    "parent_class": "PhysicsBody3D",
+                    "properties": [],
+                    "methods": [],
+                    "signals": [],
+                    "enums": [],
+                    "constants": [],
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.read_resource("godot://class/CharacterBody3D")
+        await task
+
+        data = _parse_resource(result)
+        assert data["class_name"] == "CharacterBody3D"
+        assert data["parent_class"] == "PhysicsBody3D"
+
+
+# ---------------------------------------------------------------------------
 # godot://script/{path} template
 # ---------------------------------------------------------------------------
 

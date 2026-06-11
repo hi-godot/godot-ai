@@ -1146,15 +1146,14 @@ class TestReloadPluginTool:
         """Issue #393: when the server is plugin-managed, the structured
         ack must come back to the caller AND the WS reload command must
         only fire afterward, from the background task. Use a small but
-        observable delay so the ordering assertion isn't relying on
-        scheduler luck — peeking the WS immediately after `call_tool()`
-        returns must time out, then the command lands once the delay
-        elapses."""
+        observable delay so the ordering assertion has room for FastMCP
+        round-trip variance — peeking the WS immediately after `call_tool()`
+        returns must time out, then the command lands once the delay elapses."""
         from godot_ai import runtime_info
         from godot_ai.handlers import editor as editor_handlers
 
         monkeypatch.setattr(runtime_info, "_PID_FILE_PATH", tmp_path / "fake.pid")
-        monkeypatch.setattr(editor_handlers, "PLUGIN_MANAGED_RELOAD_DELAY_SEC", 0.05)
+        monkeypatch.setattr(editor_handlers, "PLUGIN_MANAGED_RELOAD_DELAY_SEC", 0.25)
 
         client, plugin = mcp_stack
         result = await client.call_tool("editor_reload_plugin", {})
@@ -1970,6 +1969,133 @@ class TestResourceGetInfoTool:
 
         assert result.data["is_abstract"] is True
         assert "BoxShape3D" in result.data["concrete_subclasses"]
+
+
+# ---------------------------------------------------------------------------
+# api_manage get_class
+# ---------------------------------------------------------------------------
+
+
+class TestApiGetClassTool:
+    async def test_returns_class_metadata(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_class_info"
+            assert cmd["params"] == {
+                "class_name": "CharacterBody3D",
+                "include_inherited": False,
+                "include_inheritors": False,
+                "offset": 0,
+                "limit": 100,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "class_name": "CharacterBody3D",
+                    "engine_version": "4.6.3.stable",
+                    "parent_class": "PhysicsBody3D",
+                    "inheritance_chain": ["CharacterBody3D", "PhysicsBody3D", "Node"],
+                    "can_instantiate": True,
+                    "is_abstract": False,
+                    "inheritors": [],
+                    "concrete_inheritors": [],
+                    "properties": [
+                        {
+                            "name": "motion_mode",
+                            "type": "int",
+                            "class_name": "",
+                            "hint": 2,
+                            "hint_string": "Grounded,Floating",
+                            "usage": 6,
+                            "default": 0,
+                        }
+                    ],
+                    "property_count": 1,
+                    "methods": [],
+                    "method_count": 0,
+                    "signals": [],
+                    "signal_count": 0,
+                    "enums": [],
+                    "enum_count": 0,
+                    "constants": [],
+                    "constant_count": 0,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "api_manage", {"op": "get_class", "params": {"class_name": "CharacterBody3D"}}
+        )
+        await task
+
+        assert result.data["class_name"] == "CharacterBody3D"
+        assert result.data["properties"][0]["hint_string"] == "Grounded,Floating"
+
+    async def test_forwards_options(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_class_info"
+            assert cmd["params"] == {
+                "class_name": "Control",
+                "sections": ["properties"],
+                "include_inherited": True,
+                "include_inheritors": True,
+                "offset": 10,
+                "limit": 5,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "class_name": "Control",
+                    "properties": [],
+                    "property_count": 200,
+                    "property_returned_count": 0,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "api_manage",
+            {
+                "op": "get_class",
+                "params": {
+                    "class_name": "Control",
+                    "sections": ["properties"],
+                    "include_inherited": True,
+                    "include_inheritors": True,
+                    "offset": 10,
+                    "limit": 5,
+                },
+            },
+        )
+        await task
+
+        assert result.data["class_name"] == "Control"
+
+    async def test_invalid_section_returns_suggestions(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_class_info"
+            await plugin.send_error(
+                cmd["request_id"],
+                "INVALID_PARAMS",
+                "Unknown class-info section(s): method. Valid sections: properties, methods",
+                {"suggestions": {"method": ["methods"]}},
+            )
+
+        task = asyncio.create_task(respond())
+        with pytest.raises(Exception, match="INVALID_PARAMS.*method.*methods"):
+            await client.call_tool(
+                "api_manage",
+                {"op": "get_class", "params": {"class_name": "Control", "sections": ["method"]}},
+            )
+        await task
 
 
 # ---------------------------------------------------------------------------

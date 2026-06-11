@@ -24,6 +24,22 @@ class TestResourceRegistration:
 
         return {str(getattr(resource, "uri", resource)) for resource in resources}
 
+    async def _resource_template_uris(self, mcp) -> set[str]:
+        list_templates = getattr(mcp, "list_resource_templates", None) or getattr(
+            mcp, "get_resource_templates", None
+        )
+        templates = await list_templates()
+        if isinstance(templates, dict):
+            templates = templates.values()
+        uris: set[str] = set()
+        for template in templates:
+            for attr in ("uriTemplate", "uri_template", "uri"):
+                value = getattr(template, attr, None)
+                if value is not None:
+                    uris.add(str(value))
+                    break
+        return uris
+
     async def test_sessions_resource_registered(self, mcp):
         assert "godot://sessions" in await self._resource_uris(mcp)
 
@@ -44,6 +60,9 @@ class TestResourceRegistration:
 
     async def test_logs_recent_resource_registered(self, mcp):
         assert "godot://logs/recent" in await self._resource_uris(mcp)
+
+    async def test_class_resource_template_registered(self, mcp):
+        assert "godot://class/{class_name}" in await self._resource_template_uris(mcp)
 
     async def test_total_resource_count(self, mcp):
         ## 7 originals + 5 list resources (editor/state, materials, input_map,

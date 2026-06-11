@@ -33,6 +33,7 @@ DOMAINS: tuple[str, ...] = (
     "project",
     "script",
     "resource",
+    "api",
     "filesystem",
     "client",
     "signal",
