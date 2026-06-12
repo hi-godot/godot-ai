@@ -30,6 +30,10 @@ var _storage: Array[Dictionary] = []
 ## (the one about to be overwritten).
 var _head := 0
 var _dropped_count := 0
+## Monotonic number of entries appended since this ring was created. Unlike
+## `_storage.size()` and `_dropped_count`, this intentionally survives clear()
+## so callers can use it as a stable "next entry to read" cursor.
+var _appended_total := 0
 
 
 func _init(max_lines: int) -> void:
@@ -42,11 +46,12 @@ func _append_entry(entry: Dictionary) -> void:
 	if _storage.size() < _max_lines:
 		_storage.append(entry)
 		_head = _storage.size() % _max_lines
-		return
-	## Full — overwrite oldest in place, advance head, count the drop.
-	_storage[_head] = entry
-	_head = (_head + 1) % _max_lines
-	_dropped_count += 1
+	else:
+		## Full — overwrite oldest in place, advance head, count the drop.
+		_storage[_head] = entry
+		_head = (_head + 1) % _max_lines
+		_dropped_count += 1
+	_appended_total += 1
 
 
 ## Lockless slice. Subclasses with a mutex wrap their `get_range` /
@@ -72,6 +77,34 @@ func get_recent(count: int) -> Array[Dictionary]:
 	return _get_range_unlocked(start, size - start)
 
 
+## Lockless cursor read. The cursor is the next sequence to read: calling
+## get_since(appended_total()) after a snapshot returns only later appends.
+func _get_since_unlocked(since_seq: int, limit: int = -1) -> Dictionary:
+	var size := _storage.size()
+	var oldest_seq := _appended_total - size
+	var start_seq := mini(maxi(since_seq, oldest_seq), _appended_total)
+	var start := start_seq - oldest_seq
+	var available := maxi(0, size - start)
+	var count := available
+	if limit >= 0:
+		count = mini(available, limit)
+	var entries := _get_range_unlocked(start, count)
+	var next_cursor := start_seq + entries.size()
+	return {
+		"cursor": since_seq,
+		"oldest_cursor": oldest_seq,
+		"next_cursor": next_cursor,
+		"appended_total": _appended_total,
+		"truncated": since_seq < oldest_seq,
+		"has_more": next_cursor < _appended_total,
+		"entries": entries,
+	}
+
+
+func get_since(since_seq: int, limit: int = -1) -> Dictionary:
+	return _get_since_unlocked(since_seq, limit)
+
+
 ## Lockless accessors. Subclasses with a mutex use these under their lock
 ## so the field reads stay encapsulated in the base instead of leaking
 ## `_storage` / `_dropped_count` reach-through into the subclass.
@@ -83,12 +116,20 @@ func _dropped_count_unlocked() -> int:
 	return _dropped_count
 
 
+func _appended_total_unlocked() -> int:
+	return _appended_total
+
+
 func total_count() -> int:
 	return _total_count_unlocked()
 
 
 func dropped_count() -> int:
 	return _dropped_count_unlocked()
+
+
+func appended_total() -> int:
+	return _appended_total_unlocked()
 
 
 ## Translate a logical index (0 = oldest retained) to a physical

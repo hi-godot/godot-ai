@@ -1011,19 +1011,102 @@ func test_editor_log_buffer_ring_evicts_and_tracks_dropped() -> void:
 		buf.append("error", "n %d" % i, "res://x.gd", i)
 	assert_eq(buf.total_count(), cap, "Buffer should cap at MAX_LINES")
 	assert_eq(buf.dropped_count(), 7, "Should record 7 evictions")
+	assert_eq(buf.appended_total(), cap + 7, "Cursor should advance for every append")
 	## Oldest 7 dropped: first remaining entry should be index 7.
 	var first := buf.get_range(0, 1)
 	assert_eq(first[0].text, "n 7")
+
+
+func test_editor_log_buffer_get_since_returns_entries_after_cursor() -> void:
+	var buf := McpEditorLogBuffer.new()
+	buf.append("error", "before-a", "res://a.gd", 1)
+	buf.append("error", "before-b", "res://b.gd", 2)
+	var cursor := buf.appended_total()
+	buf.append("error", "after-a", "res://a.gd", 3)
+	buf.append("warn", "after-b", "res://b.gd", 4)
+
+	var result := buf.get_since(cursor)
+	assert_eq(result.cursor, cursor)
+	assert_eq(result.entries.size(), 2)
+	assert_eq(result.entries[0].text, "after-a")
+	assert_eq(result.entries[1].text, "after-b")
+	assert_eq(result.next_cursor, buf.appended_total())
+	assert_false(result.truncated)
+	assert_false(result.has_more)
+
+
+func test_editor_log_buffer_get_since_reports_overflow_truncation() -> void:
+	var buf := McpEditorLogBuffer.new()
+	var cap := McpEditorLogBuffer.MAX_LINES
+	var cursor := buf.appended_total()
+	for i in range(cap + 3):
+		buf.append("error", "storm %d" % i, "res://storm.gd", i)
+
+	var result := buf.get_since(cursor)
+	assert_true(result.truncated, "Overflow after the cursor must be visible")
+	assert_eq(result.entries.size(), cap)
+	assert_eq(result.entries[0].text, "storm 3")
+	assert_eq(result.entries[cap - 1].text, "storm %d" % (cap + 2))
+	assert_eq(result.oldest_cursor, 3)
+	assert_eq(result.next_cursor, buf.appended_total())
+
+
+func test_editor_log_buffer_get_since_limit_paginates_without_losing_cursor() -> void:
+	var buf := McpEditorLogBuffer.new()
+	for i in range(5):
+		buf.append("error", "page %d" % i)
+
+	var first := buf.get_since(0, 2)
+	assert_eq(first.entries.size(), 2)
+	assert_eq(first.entries[0].text, "page 0")
+	assert_eq(first.next_cursor, 2)
+	assert_true(first.has_more)
+
+	var second := buf.get_since(first.next_cursor, 10)
+	assert_eq(second.entries.size(), 3)
+	assert_eq(second.entries[0].text, "page 2")
+	assert_eq(second.next_cursor, 5)
+	assert_false(second.has_more)
+
+
+func test_editor_log_buffer_get_since_future_cursor_clamps_to_tail() -> void:
+	var buf := McpEditorLogBuffer.new()
+	for i in range(3):
+		buf.append("error", "future %d" % i)
+
+	var result := buf.get_since(99)
+	assert_false(result.truncated)
+	assert_eq(result.entries.size(), 0)
+	assert_eq(result.next_cursor, buf.appended_total())
+	assert_false(result.has_more)
 
 
 func test_editor_log_buffer_clear_resets_counts() -> void:
 	var buf := McpEditorLogBuffer.new()
 	for i in range(5):
 		buf.append("error", "n %d" % i)
+	var cursor := buf.appended_total()
 	var cleared := buf.clear()
 	assert_eq(cleared, 5, "clear() should report cleared count")
 	assert_eq(buf.total_count(), 0)
 	assert_eq(buf.dropped_count(), 0)
+	assert_eq(buf.appended_total(), cursor, "clear() must not reset the cursor")
+
+
+func test_editor_log_buffer_get_since_reports_clear_truncation() -> void:
+	var buf := McpEditorLogBuffer.new()
+	for i in range(5):
+		buf.append("error", "before-clear %d" % i)
+	var stale_cursor := 2
+	buf.clear()
+	buf.append("error", "after-clear", "res://after.gd", 9)
+
+	var result := buf.get_since(stale_cursor)
+	assert_true(result.truncated, "Clear after the cursor should degrade the window")
+	assert_eq(result.entries.size(), 1)
+	assert_eq(result.entries[0].text, "after-clear")
+	assert_eq(result.oldest_cursor, 5)
+	assert_eq(result.next_cursor, 6)
 
 
 # ----- get_logs source="editor" routing (issue #231) -----
