@@ -46,6 +46,27 @@ func test_get_class_info_invalid_section_suggests_plural() -> void:
 	assert_contains(result.error.data.suggestions.method, "methods")
 
 
+func test_get_class_info_negative_limit_errors() -> void:
+	var result := _handler.get_class_info({
+		"class_name": "CharacterBody3D",
+		"limit": -1,
+	})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "limit")
+
+
+func test_get_class_info_singleton_does_not_report_abstract() -> void:
+	var result := _handler.get_class_info({
+		"class_name": "Input",
+		"sections": ["methods"],
+		"limit": 1,
+	})
+	assert_has_key(result, "data")
+	assert_false(result.data.has("is_abstract"))
+	assert_false(result.data.can_instantiate)
+	assert_true(result.data.is_singleton)
+
+
 func test_get_class_info_character_body_3d() -> void:
 	var result := _handler.get_class_info({
 		"class_name": "CharacterBody3D",
@@ -54,6 +75,7 @@ func test_get_class_info_character_body_3d() -> void:
 	})
 	assert_has_key(result, "data")
 	assert_eq(result.data.class_name, "CharacterBody3D")
+	assert_false(result.data.has("is_abstract"))
 	assert_contains(result.data.inheritance_chain, "PhysicsBody3D")
 	assert_contains(result.data.inheritance_chain, "Node")
 	assert_gt(result.data.property_count, 0)

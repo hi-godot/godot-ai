@@ -21,6 +21,8 @@ Ops:
         Return selected class-reference sections without creating a scene
         instance. sections may be a comma-separated string or list containing
         properties, methods, signals, enums, constants, inheritors.
+        For pagination, request one section at a time so offset/limit apply
+        only to the list you are paging.
 """
 
 

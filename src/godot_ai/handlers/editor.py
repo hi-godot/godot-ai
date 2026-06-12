@@ -321,10 +321,6 @@ async def editor_reload_plugin(runtime: DirectRuntime) -> dict:
 
 
 async def _dispatch_reload_async(runtime: DirectRuntime, old_id: str) -> None:
-    ## Start the grace delay on the next event-loop turn. That gives the
-    ## caller's response path a chance to continue before this background task
-    ## begins counting down toward the WebSocket reload command.
-    await asyncio.sleep(0)
     if PLUGIN_MANAGED_RELOAD_DELAY_SEC > 0:
         await asyncio.sleep(PLUGIN_MANAGED_RELOAD_DELAY_SEC)
     try:

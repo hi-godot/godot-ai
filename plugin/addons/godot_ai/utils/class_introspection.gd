@@ -17,7 +17,7 @@ static func build(type_name: String, options: Dictionary = {}) -> Dictionary:
 	var offset := max(0, int(options.get("offset", 0)))
 	var limit := int(options.get("limit", MAX_DEFAULT_ITEMS))
 	if limit < 0:
-		limit = 0
+		limit = MAX_DEFAULT_ITEMS
 	var can_instantiate := ClassDB.can_instantiate(type_name)
 
 	var data := {
@@ -26,7 +26,7 @@ static func build(type_name: String, options: Dictionary = {}) -> Dictionary:
 		"parent_class": str(ClassDB.get_parent_class(type_name)),
 		"inheritance_chain": _inheritance_chain(type_name),
 		"can_instantiate": can_instantiate,
-		"is_abstract": not can_instantiate,
+		"is_singleton": Engine.has_singleton(type_name),
 		"include_inherited": include_inherited,
 		"offset": offset,
 		"limit": limit,

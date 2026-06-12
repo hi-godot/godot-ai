@@ -19,6 +19,11 @@ func get_class_info(params: Dictionary) -> Dictionary:
 		if not script_class.is_empty():
 			return _script_class_error(requested_class, script_class)
 		return _unknown_class_error(requested_class)
+	if params.has("limit") and int(params.get("limit")) < 0:
+		return ErrorCodes.make(
+			ErrorCodes.INVALID_PARAMS,
+			"limit must be >= 0; use limit=0 only when an unlimited section is needed"
+		)
 	var section_check := ClassIntrospection.validate_sections(
 		params.get("sections", ClassIntrospection.DEFAULT_SECTIONS)
 	)

@@ -347,9 +347,16 @@ func test_get_resource_info_concrete_type_box_mesh() -> void:
 	assert_false(result.data.is_abstract)
 	assert_gt(result.data.property_count, 0)
 	var prop_names: Array = []
+	var size_prop: Dictionary = {}
 	for p in result.data.properties:
 		prop_names.append(p.name)
+		if p.name == "size":
+			size_prop = p
 	assert_contains(prop_names, "size", "BoxMesh.size must appear in properties")
+	assert_has_key(size_prop, "default")
+	assert_eq(size_prop.default.x, 1.0)
+	assert_eq(size_prop.default.y, 1.0)
+	assert_eq(size_prop.default.z, 1.0)
 
 
 func test_get_resource_info_concrete_type_cylinder_mesh() -> void:

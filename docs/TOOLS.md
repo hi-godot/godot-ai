@@ -90,7 +90,8 @@ without creating an instance. By default it returns direct class members only,
 with each returned section capped at 100 items. Pass `sections` (`properties`,
 `methods`, `signals`, `enums`, `constants`, `inheritors`),
 `include_inherited=true`, `include_inheritors=true`, `offset`, or `limit=0`
-when a fuller class reference is needed.
+when a fuller class reference is needed. When paginating, request one section
+at a time so `offset`/`limit` apply only to the list you are paging.
 
 Every rolled-up tool also accepts an optional top-level `session_id` for
 per-call multi-editor routing (sibling of `op` and `params`, *not* nested

@@ -1146,6 +1146,13 @@ func test_serialize_packed_vector3_array_returns_xyz_dicts() -> void:
 	assert_eq(result[0]["z"], 3.0)
 
 
+func test_serialize_packed_vector4_array_returns_xyzw_dicts() -> void:
+	var result = NodeHandler._serialize_value(PackedVector4Array([Vector4(1, 2, 3, 4)]))
+	assert_true(result is Array)
+	assert_eq(result[0]["x"], 1.0)
+	assert_eq(result[0]["w"], 4.0)
+
+
 func test_serialize_packed_color_array_returns_rgba_dicts() -> void:
 	var result = NodeHandler._serialize_value(PackedColorArray([Color(1, 0, 0, 0.5)]))
 	assert_true(result is Array)
