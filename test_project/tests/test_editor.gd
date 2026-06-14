@@ -1081,7 +1081,7 @@ func test_editor_log_buffer_get_since_future_cursor_clamps_to_tail() -> void:
 	assert_false(result.has_more)
 
 
-func test_editor_log_buffer_clear_resets_counts() -> void:
+func test_editor_log_buffer_clear_resets_retained_counts_but_preserves_cursor() -> void:
 	var buf := McpEditorLogBuffer.new()
 	for i in range(5):
 		buf.append("error", "n %d" % i)
