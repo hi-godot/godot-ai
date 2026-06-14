@@ -2,11 +2,13 @@
 extends RefCounted
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const DiagnosticsCapture := preload("res://addons/godot_ai/utils/diagnostics_capture.gd")
 
 ## Handles script creation, reading, attaching, detaching, and symbol inspection.
 
 var _undo_redo: EditorUndoRedoManager
 var _connection: McpConnection
+var _editor_log_buffer: McpEditorLogBuffer
 
 # Bounded settle window for `ResourceLoader.exists(path)` after `scan()` so
 # that an agent calling create_script -> attach_script back-to-back doesn't
@@ -18,9 +20,10 @@ const _IMPORT_SETTLE_MAX_FRAMES := 300
 const _IMPORT_SETTLE_MAX_MSEC := 3500
 
 
-func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null) -> void:
+func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null, editor_log_buffer: McpEditorLogBuffer = null) -> void:
 	_undo_redo = undo_redo
 	_connection = connection
+	_editor_log_buffer = editor_log_buffer
 
 
 func create_script(params: Dictionary) -> Dictionary:
@@ -50,6 +53,17 @@ func create_script(params: Dictionary) -> Dictionary:
 	file.store_string(content)
 	file.close()
 
+	var data := {
+		"path": path,
+		"size": content.length(),
+		"committed": true,
+		"import_settled": existed_before,
+		"import_settle": "already_known" if existed_before else "not_waited",
+		"undoable": false,
+		"reason": "File system operations cannot be undone via editor undo",
+	}
+	_attach_gdscript_diagnostics(data, path, content)
+
 	# Register just this file with the editor instead of a full recursive
 	# scan(). A scan() per write stacks `update_scripts_classes` /
 	# `update_script_paths_documentation` WorkerThreadPool tasks under concurrent
@@ -61,15 +75,6 @@ func create_script(params: Dictionary) -> Dictionary:
 	if efs != null:
 		efs.update_file(path)
 
-	var data := {
-		"path": path,
-		"size": content.length(),
-		"committed": true,
-		"import_settled": existed_before,
-		"import_settle": "already_known" if existed_before else "not_waited",
-		"undoable": false,
-		"reason": "File system operations cannot be undone via editor undo",
-	}
 	# `.gd.uid` is the sidecar Godot generates on scan; list both so the caller
 	# can rm the full set in one go.
 	McpResourceIO.attach_cleanup_hint(data, existed_before, [path, path + ".uid"])
@@ -165,6 +170,66 @@ func read_script(params: Dictionary) -> Dictionary:
 	}
 
 
+func _attach_gdscript_diagnostics(data: Dictionary, path: String, content: String) -> void:
+	var capture := DiagnosticsCapture.capture_this_file(_editor_log_buffer, path, func() -> Dictionary:
+		return _validate_gdscript_source(content)
+	)
+	var diagnostics: Array = capture.get("diagnostics", [])
+	var validation: Dictionary = capture.get("action", {})
+	var diagnostics_detail: String = capture.get("diagnostics_detail", "none")
+	if not validation.get("ok", true) and diagnostics.is_empty():
+		diagnostics.append(_fallback_gdscript_diagnostic(path, validation.get("error_code", FAILED), content))
+		diagnostics_detail = "fallback"
+	data["diagnostics"] = diagnostics
+	data["diagnostics_detail"] = diagnostics_detail
+	data["diagnostics_scope"] = capture.get("diagnostics_scope", "this_file")
+	data["diagnostics_status"] = capture.get("diagnostics_status", "checked")
+
+
+static func _validate_gdscript_source(content: String) -> Dictionary:
+	var script := GDScript.new()
+	script.source_code = content
+	## Keep validation off the live cached resource: assigning resource_path to
+	## this ephemeral Script can collide with loaded instances. reload() still
+	## performs normal GDScript analysis, including static initializer work, so
+	## this check is intentionally scoped to `.gd` writes where the editor would
+	## compile the file on scan anyway.
+	var err := script.reload()
+	return {
+		"ok": err == OK,
+		"error_code": err,
+	}
+
+
+static func _fallback_gdscript_diagnostic(path: String, error_code: int, content: String) -> Dictionary:
+	var line := _fallback_gdscript_error_line(content)
+	return {
+		"source": "editor",
+		"level": "error",
+		"text": "GDScript reload failed with error code %d." % error_code,
+		"path": path,
+		"line": line,
+		"function": "GDScript::reload",
+		"details": {
+			"code": "gdscript_reload_failed",
+			"error_code": error_code,
+			"fallback_line": true,
+			"source": {
+				"path": path,
+				"line": line,
+			},
+		},
+	}
+
+
+static func _fallback_gdscript_error_line(content: String) -> int:
+	var lines := content.split("\n")
+	for i in range(lines.size() - 1, -1, -1):
+		if not str(lines[i]).strip_edges().is_empty():
+			return i + 1
+	return 1
+
+
 func patch_script(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 	var old_text: String = params.get("old_text", "")
@@ -214,21 +279,22 @@ func patch_script(params: Dictionary) -> Dictionary:
 	write.store_string(new_content)
 	write.close()
 
+	var data := {
+		"path": path,
+		"replacements": replacements,
+		"size": new_content.length(),
+		"old_size": content.length(),
+		"undoable": false,
+		"reason": "File system operations cannot be undone via editor undo",
+	}
+	_attach_gdscript_diagnostics(data, path, new_content)
+
 	# Single-file register, not a full scan() — see create_script (dsarno/godot#6).
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs != null:
 		efs.update_file(path)
 
-	return {
-		"data": {
-			"path": path,
-			"replacements": replacements,
-			"size": new_content.length(),
-			"old_size": content.length(),
-			"undoable": false,
-			"reason": "File system operations cannot be undone via editor undo",
-		}
-	}
+	return {"data": data}
 
 
 func attach_script(params: Dictionary) -> Dictionary:

@@ -3,6 +3,7 @@ extends McpTestSuite
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
+const DiagnosticsCapture := preload("res://addons/godot_ai/utils/diagnostics_capture.gd")
 const EditorHandler := preload("res://addons/godot_ai/handlers/editor_handler.gd")
 const StubBacktrace := preload("res://addons/godot_ai/testing/stub_backtrace.gd")
 
@@ -1107,6 +1108,46 @@ func test_editor_log_buffer_get_since_reports_clear_truncation() -> void:
 	assert_eq(result.entries[0].text, "after-clear")
 	assert_eq(result.oldest_cursor, 5)
 	assert_eq(result.next_cursor, 6)
+
+
+# ----- Diagnostics capture -----
+
+func test_diagnostics_capture_rewrites_ephemeral_gdscript_paths() -> void:
+	var buf := McpEditorLogBuffer.new()
+	var target := "res://scripts/player.gd"
+	var result := DiagnosticsCapture.capture_this_file(buf, target, func() -> Dictionary:
+		buf.append("error", "Parse Error: Expected statement", "gdscript://12345.gd", 7, "GDScript::reload", {
+			"source": {"path": "gdscript://12345.gd", "line": 7},
+			"frames": [{"path": "gdscript://12345.gd", "line": 7, "function": "GDScript::reload"}],
+		})
+		return {"ok": false, "error_code": ERR_PARSE_ERROR}
+	)
+
+	assert_eq(result.diagnostics_scope, "this_file")
+	assert_eq(result.diagnostics_status, "checked")
+	assert_eq(result.diagnostics_detail, "log_capture")
+	assert_eq(result.diagnostics.size(), 1)
+	assert_eq(result.diagnostics[0].path, target)
+	assert_eq(result.diagnostics[0].line, 7)
+	assert_eq(result.diagnostics[0].details.source.path, target)
+	assert_eq(result.diagnostics[0].details.frames[0].path, target)
+
+
+func test_diagnostics_capture_reports_partial_when_window_overflows() -> void:
+	var buf := McpEditorLogBuffer.new()
+	var cap := McpEditorLogBuffer.MAX_LINES
+	var target := "res://scripts/storm.gd"
+	var result := DiagnosticsCapture.capture_this_file(buf, target, func() -> Dictionary:
+		for i in range(cap + 2):
+			buf.append("error", "storm %d" % i, target, i)
+		return {"ok": false, "error_code": ERR_PARSE_ERROR}
+	)
+
+	assert_eq(result.diagnostics_status, "partial")
+	assert_eq(result.diagnostics_detail, "log_capture")
+	assert_eq(result.diagnostics_scope, "this_file")
+	assert_eq(result.diagnostics.size(), cap)
+	assert_eq(result.diagnostics[0].text, "storm 2")
 
 
 # ----- get_logs source="editor" routing (issue #231) -----

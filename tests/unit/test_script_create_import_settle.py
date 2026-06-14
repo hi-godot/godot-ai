@@ -36,7 +36,10 @@ def test_script_handler_holds_connection_for_deferred_replies() -> None:
     )
     # _init must accept the connection. Default null keeps batch_execute and
     # unit-test contexts working on the synchronous fallback path.
-    expected_init = "func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null)"
+    expected_init = (
+        "func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null, "
+        "editor_log_buffer: McpEditorLogBuffer = null)"
+    )
     assert expected_init in source, (
         "ScriptHandler._init must accept the connection as an optional "
         "second parameter so test contexts can keep using the sync fallback."
@@ -169,7 +172,7 @@ def test_plugin_gd_passes_connection_to_script_handler() -> None:
     """plugin.gd must wire _connection into ScriptHandler — the field is null otherwise."""
     source = PLUGIN_GD.read_text(encoding="utf-8")
 
-    assert "ScriptHandler.new(get_undo_redo(), _connection)" in source, (
+    assert "ScriptHandler.new(get_undo_redo(), _connection, _editor_log_buffer)" in source, (
         "plugin.gd must construct ScriptHandler with the connection so the "
         "deferred-reply path is reachable in production. Without this, every "
         "create_script falls back to the synchronous reply and #261 returns."
