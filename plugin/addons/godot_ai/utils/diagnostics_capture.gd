@@ -45,11 +45,14 @@ static func _diagnostics_for_target(entries: Array, target_path: String) -> Arra
 static func _entry_matches_target(entry: Dictionary, target_path: String) -> bool:
 	var path := str(entry.get("path", ""))
 	## Ephemeral GDScript reloads report synthetic `gdscript://...` paths, and
-	## some logger events have no path at all. Accepting empty paths is a small
-	## residual misattribution risk for concurrent pathless editor errors, but
-	## the cursor window is deliberately narrow and this is the only way to keep
-	## pathless validation diagnostics from being dropped.
-	return path == target_path or path.is_empty() or _is_ephemeral_gdscript_path(path)
+	## some logger events have no path at all. Accept pathless/ephemeral entries
+	## only when their structured details do not point at a different concrete
+	## file; otherwise we would rewrite an unrelated diagnostic onto target_path.
+	if path == target_path:
+		return true
+	if path.is_empty() or _is_ephemeral_gdscript_path(path):
+		return not _details_conflict_with_target(entry.get("details", {}), target_path)
+	return false
 
 
 static func _normalize_entry(entry: Dictionary, target_path: String) -> Dictionary:
@@ -95,3 +98,33 @@ static func _should_rewrite_path(path: String, _target_path: String) -> bool:
 
 static func _is_ephemeral_gdscript_path(path: String) -> bool:
 	return path.begins_with("gdscript://")
+
+
+static func _details_conflict_with_target(details_value, target_path: String) -> bool:
+	if not details_value is Dictionary:
+		return false
+	var details: Dictionary = details_value
+	for key in ["source", "resolved"]:
+		if _location_conflicts_with_target(details.get(key), target_path):
+			return true
+	if _locations_conflict_with_target(details.get("frames"), target_path):
+		return true
+	if _locations_conflict_with_target(details.get("children"), target_path):
+		return true
+	return false
+
+
+static func _locations_conflict_with_target(items, target_path: String) -> bool:
+	if not items is Array:
+		return false
+	for item in items:
+		if _location_conflicts_with_target(item, target_path):
+			return true
+	return false
+
+
+static func _location_conflicts_with_target(location_value, target_path: String) -> bool:
+	if not location_value is Dictionary:
+		return false
+	var path := str(location_value.get("path", ""))
+	return not path.is_empty() and not _is_ephemeral_gdscript_path(path) and path != target_path

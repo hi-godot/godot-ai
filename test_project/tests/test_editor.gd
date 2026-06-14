@@ -1133,6 +1133,21 @@ func test_diagnostics_capture_rewrites_ephemeral_gdscript_paths() -> void:
 	assert_eq(result.diagnostics[0].details.frames[0].path, target)
 
 
+func test_diagnostics_capture_rejects_pathless_entries_for_other_files() -> void:
+	var buf := McpEditorLogBuffer.new()
+	var target := "res://scripts/player.gd"
+	var result := DiagnosticsCapture.capture_this_file(buf, target, func() -> Dictionary:
+		buf.append("error", "unrelated parse error", "", 0, "", {
+			"source": {"path": "res://scripts/other.gd", "line": 12},
+			"frames": [{"path": "res://scripts/other.gd", "line": 12, "function": "_ready"}],
+		})
+		return {"ok": false, "error_code": ERR_PARSE_ERROR}
+	)
+
+	assert_eq(result.diagnostics_detail, "none")
+	assert_eq(result.diagnostics, [])
+
+
 func test_diagnostics_capture_reports_partial_when_window_overflows() -> void:
 	var buf := McpEditorLogBuffer.new()
 	var cap := McpEditorLogBuffer.MAX_LINES

@@ -116,6 +116,9 @@ func test_create_script_with_log_buffer_falls_back_when_ephemeral_reload_is_not_
 	## response honest: validation is checked, detail fidelity is fallback.
 	if skip_on_godot_lt("4.5", "Logger subclass only exists on Godot 4.5+"):
 		return
+	if not OS.has_method("add_logger"):
+		skip("Logger API is unavailable")
+		return
 	var logger_script := _LoggerLoader.build(_LoggerLoader.EDITOR_LOGGER_PATH)
 	assert_true(logger_script != null, "Editor logger script should compile on Godot 4.5+")
 	if logger_script == null:
@@ -316,7 +319,7 @@ func test_patch_script_ambiguous_match_without_replace_all() -> void:
 
 func test_patch_script_replace_all() -> void:
 	var path := "res://tests/_mcp_test_patch_all.gd"
-	var original := "foo()\nfoo()\nfoo()\n"
+	var original := "extends Node\n\n# foo\n# foo\n# foo\n"
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	file.store_string(original)
 	file.close()
@@ -333,7 +336,7 @@ func test_patch_script_replace_all() -> void:
 	var read := FileAccess.open(path, FileAccess.READ)
 	var new_content := read.get_as_text()
 	read.close()
-	assert_eq(new_content, "bar()\nbar()\nbar()\n")
+	assert_eq(new_content, "extends Node\n\n# bar\n# bar\n# bar\n")
 	DirAccess.remove_absolute(path)
 
 
