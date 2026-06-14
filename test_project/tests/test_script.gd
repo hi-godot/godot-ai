@@ -5,11 +5,13 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
 const ScriptHandler := preload("res://addons/godot_ai/handlers/script_handler.gd")
+const _LoggerLoader := preload("res://addons/godot_ai/runtime/logger_loader.gd")
 
 ## Tests for ScriptHandler — script creation, reading, attach/detach, and symbol inspection.
 
 var _handler: ScriptHandler
 var _undo_redo: EditorUndoRedoManager
+var _attached_shared_logger = null
 
 const TEST_SCRIPT_PATH := "res://tests/_mcp_test_script.gd"
 const TEST_SCRIPT_CONTENT := """class_name _McpTestScript
@@ -49,6 +51,7 @@ func suite_setup(ctx: Dictionary) -> void:
 
 
 func suite_teardown() -> void:
+	_detach_shared_editor_logger()
 	# Clean up test script file
 	if FileAccess.file_exists(TEST_SCRIPT_PATH):
 		DirAccess.remove_absolute(TEST_SCRIPT_PATH)
@@ -107,6 +110,23 @@ func test_create_script_reports_log_capture_diagnostics_with_real_line() -> void
 	DirAccess.remove_absolute(path)
 
 
+func test_create_script_validation_does_not_pollute_shared_editor_log() -> void:
+	var shared_buf := McpEditorLogBuffer.new()
+	if not _attach_shared_editor_logger(shared_buf):
+		return
+	var path := "res://tests/_mcp_test_invalid_create_shared_log.gd"
+	var content := "extends Node\n\nfunc _ready() -> void:\n\tif\n\tpass\n"
+	var cursor := shared_buf.appended_total()
+	var result := _handler.create_script({"path": path, "content": content})
+	_detach_shared_editor_logger()
+
+	assert_has_key(result, "data")
+	assert_eq(result.data.diagnostics_detail, "log_capture")
+	var captured := shared_buf.get_since(cursor)
+	assert_eq(captured.entries.size(), 0, "Validation load diagnostics must not leak into the shared editor log")
+	DirAccess.remove_absolute(path)
+
+
 func test_create_script_reports_fallback_diagnostics_without_logger() -> void:
 	if ClassDB.class_exists("Logger"):
 		skip("Fallback branch is exercised on Godot versions without Logger")
@@ -123,6 +143,28 @@ func test_create_script_reports_fallback_diagnostics_without_logger() -> void:
 	assert_eq(result.data.diagnostics[0].line, 5)
 	assert_eq(result.data.diagnostics[0].details.fallback_line, true)
 	DirAccess.remove_absolute(path)
+
+
+func _attach_shared_editor_logger(buffer: McpEditorLogBuffer) -> bool:
+	_detach_shared_editor_logger()
+	if skip_on_godot_lt("4.5", "Logger subclass only exists on Godot 4.5+"):
+		return false
+	if not OS.has_method("add_logger") or not OS.has_method("remove_logger"):
+		skip("Logger API is unavailable")
+		return false
+	var logger_script := _LoggerLoader.build(_LoggerLoader.EDITOR_LOGGER_PATH)
+	assert_true(logger_script != null, "Editor logger script should compile on Godot 4.5+")
+	if logger_script == null:
+		return false
+	_attached_shared_logger = logger_script.new(buffer)
+	OS.call("add_logger", _attached_shared_logger)
+	return true
+
+
+func _detach_shared_editor_logger() -> void:
+	if _attached_shared_logger != null and OS.has_method("remove_logger"):
+		OS.call("remove_logger", _attached_shared_logger)
+	_attached_shared_logger = null
 
 
 func test_finish_create_script_deferred_is_static_and_handles_null_connection() -> void:
@@ -257,6 +299,31 @@ func test_patch_script_reports_log_capture_diagnostics_with_real_line() -> void:
 	var new_content := read.get_as_text()
 	read.close()
 	assert_contains(new_content, "if")
+	DirAccess.remove_absolute(path)
+
+
+func test_patch_script_validation_does_not_pollute_shared_editor_log() -> void:
+	var shared_buf := McpEditorLogBuffer.new()
+	if not _attach_shared_editor_logger(shared_buf):
+		return
+	var path := "res://tests/_mcp_test_invalid_patch_shared_log.gd"
+	var original := "extends Node\n\nfunc _ready() -> void:\n\tpass\n\tprint(\"after\")\n"
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(original)
+	file.close()
+
+	var cursor := shared_buf.appended_total()
+	var result := _handler.patch_script({
+		"path": path,
+		"old_text": "pass",
+		"new_text": "if",
+	})
+	_detach_shared_editor_logger()
+
+	assert_has_key(result, "data")
+	assert_eq(result.data.diagnostics_detail, "log_capture")
+	var captured := shared_buf.get_since(cursor)
+	assert_eq(captured.entries.size(), 0, "Validation load diagnostics must not leak into the shared editor log")
 	DirAccess.remove_absolute(path)
 
 
