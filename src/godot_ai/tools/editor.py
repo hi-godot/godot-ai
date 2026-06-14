@@ -79,6 +79,7 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         offset: int = 0,
         source: str = "plugin",
         since_run_id: str = "",
+        since_cursor: int | None = None,
         include_details: bool = False,
         session_id: str = "",
     ) -> dict:
@@ -105,9 +106,16 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
           are not captured.
         - "all": plugin → editor → game lines (with source per entry).
 
-        Tail pattern: poll with offset=N + since_run_id=R. ``stale_run_id: true``
-        means the buffer has rotated; reset offset to 0 and capture new run_id.
-        ``run_id`` is empty for ``source="editor"`` (editor logs don't rotate).
+        Tail pattern: for game logs, poll with offset=N + since_run_id=R.
+        ``stale_run_id: true`` means the buffer has rotated; reset offset to 0
+        and capture new run_id. For editor logs, read once to capture
+        ``next_cursor`` and pass it back as ``since_cursor`` on later calls.
+        ``since_cursor`` reads Logger-backed editor entries only; live Debugger
+        Errors-tab rows are included in regular source="editor" reads but do
+        not have stable cursors. When ``since_cursor`` is set, it supersedes
+        ``offset``. ``truncated: true`` means older entries fell out of the
+        ring before the poll; continue from the returned ``next_cursor`` and
+        treat ``oldest_cursor`` as the earliest retained sequence.
         Set ``include_details=True`` for Errors-tab style metadata on game/editor
         entries: original code/rationale, error type, resolved source, and
         stack frames. Default false preserves compact responses.
@@ -117,6 +125,7 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
             offset: Lines to skip. Default 0.
             source: "plugin" | "game" | "editor" | "all". Default "plugin".
             since_run_id: Stale-detection token from a previous response.
+            since_cursor: Editor-log cursor from a previous source="editor" response.
             include_details: Include rich error metadata for game/editor entries.
             session_id: Optional Godot session to target. Empty = active session.
         """
@@ -127,6 +136,7 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
             offset=offset,
             source=source,
             since_run_id=since_run_id,
+            since_cursor=since_cursor,
             include_details=include_details,
         )
 

@@ -70,6 +70,8 @@ func get_logs(params: Dictionary) -> Dictionary:
 	var offset: int = maxi(0, int(params.get("offset", 0)))
 	var source: String = str(params.get("source", "plugin"))
 	var include_details: bool = bool(params.get("include_details", false))
+	var has_since_cursor := params.has("since_cursor") and params.get("since_cursor") != null
+	var since_cursor: int = maxi(0, int(params.get("since_cursor", 0)))
 	if not source in VALID_LOG_SOURCES:
 		return ErrorCodes.make(
 			ErrorCodes.VALUE_OUT_OF_RANGE,
@@ -82,7 +84,7 @@ func get_logs(params: Dictionary) -> Dictionary:
 		"game":
 			return _get_game_logs(count, offset, include_details)
 		"editor":
-			return _get_editor_logs(count, offset, include_details)
+			return _get_editor_logs(count, offset, include_details, has_since_cursor, since_cursor)
 		"all":
 			return _get_all_logs(count, offset, include_details)
 	return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Unreachable")
@@ -134,15 +136,18 @@ func _get_game_logs(count: int, offset: int, include_details: bool) -> Dictionar
 	}
 
 
-func _get_editor_logs(count: int, offset: int, include_details: bool) -> Dictionary:
+func _get_editor_logs(count: int, offset: int, include_details: bool, has_since_cursor: bool = false, since_cursor: int = 0) -> Dictionary:
 	## Editor-process script errors (parse errors, @tool runtime errors,
 	## EditorPlugin errors, push_error/push_warning). Captured by
 	## editor_logger.gd via OS.add_logger and gated on Godot 4.5+; on older
 	## engines the buffer can be null. Godot also sends GDScript reload
 	## warnings/errors straight to the Debugger dock's Errors tab; those do
 	## not flow through OS.add_logger, so merge the visible tree rows here.
+	if has_since_cursor:
+		return _get_editor_logs_since(count, since_cursor, include_details)
 	var all_entries := _collect_editor_log_entries()
 	var page := _entries_for_response(_slice_entries(all_entries, offset, count), include_details)
+	var appended_total := _editor_log_buffer.appended_total() if _editor_log_buffer != null else 0
 	return {
 		"data": {
 			"source": "editor",
@@ -151,6 +156,45 @@ func _get_editor_logs(count: int, offset: int, include_details: bool) -> Diction
 			"returned_count": page.size(),
 			"offset": offset,
 			"dropped_count": _editor_log_buffer.dropped_count() if _editor_log_buffer != null else 0,
+			"next_cursor": appended_total,
+			"appended_total": appended_total,
+		}
+	}
+
+
+func _get_editor_logs_since(count: int, since_cursor: int, include_details: bool) -> Dictionary:
+	## Cursor reads are defined over the monotonic editor logger ring only.
+	## Visible Debugger Errors-tab rows are live UI state, not ring entries,
+	## so regular offset reads still merge them while since_cursor polling
+	## reports only Logger-backed entries.
+	var captured := {
+		"cursor": since_cursor,
+		"oldest_cursor": 0,
+		"next_cursor": 0,
+		"appended_total": 0,
+		"truncated": false,
+		"has_more": false,
+		"entries": [],
+	}
+	var dropped := 0
+	if _editor_log_buffer != null:
+		captured = _editor_log_buffer.get_since(since_cursor, count)
+		dropped = _editor_log_buffer.dropped_count()
+	var page := _entries_for_response(captured.get("entries", []), include_details)
+	return {
+		"data": {
+			"source": "editor",
+			"lines": page,
+			"total_count": int(captured.get("appended_total", 0)),
+			"returned_count": page.size(),
+			"offset": 0,
+			"dropped_count": dropped,
+			"cursor": int(captured.get("cursor", since_cursor)),
+			"oldest_cursor": int(captured.get("oldest_cursor", 0)),
+			"next_cursor": int(captured.get("next_cursor", 0)),
+			"appended_total": int(captured.get("appended_total", 0)),
+			"truncated": bool(captured.get("truncated", false)),
+			"has_more": bool(captured.get("has_more", false)),
 		}
 	}
 

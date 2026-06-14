@@ -1322,6 +1322,60 @@ func test_get_logs_source_editor_offset_applies() -> void:
 	assert_eq(result.data.total_count, 5)
 
 
+func test_get_logs_source_editor_regular_read_returns_next_cursor() -> void:
+	var ed_buf := McpEditorLogBuffer.new()
+	ed_buf.append("error", "before", "res://x.gd", 1)
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, null, null, ed_buf)
+	var result := handler.get_logs({"source": "editor", "count": 10})
+	assert_eq(result.data.lines.size(), 1)
+	assert_eq(result.data.next_cursor, ed_buf.appended_total())
+	assert_eq(result.data.appended_total, ed_buf.appended_total())
+
+
+func test_get_logs_source_editor_since_cursor_returns_incremental_entries() -> void:
+	var ed_buf := McpEditorLogBuffer.new()
+	ed_buf.append("error", "before-a", "res://before.gd", 1)
+	ed_buf.append("error", "before-b", "res://before.gd", 2)
+	var cursor := ed_buf.appended_total()
+	ed_buf.append("error", "after-a", "res://after.gd", 3)
+	ed_buf.append("warn", "after-b", "res://after.gd", 4)
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, null, null, ed_buf)
+	var result := handler.get_logs({"source": "editor", "since_cursor": cursor, "count": 1})
+	assert_eq(result.data.lines.size(), 1)
+	assert_eq(result.data.lines[0].text, "after-a")
+	assert_eq(result.data.cursor, cursor)
+	assert_eq(result.data.next_cursor, cursor + 1)
+	assert_eq(result.data.appended_total, ed_buf.appended_total())
+	assert_true(result.data.has_more)
+	assert_false(result.data.truncated)
+
+
+func test_get_logs_source_editor_since_cursor_reports_truncation() -> void:
+	var ed_buf := McpEditorLogBuffer.new()
+	var cap := McpEditorLogBuffer.MAX_LINES
+	for i in range(cap + 2):
+		ed_buf.append("error", "storm %d" % i, "res://storm.gd", i)
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, null, null, ed_buf)
+	var result := handler.get_logs({"source": "editor", "since_cursor": 0, "count": 10})
+	assert_true(result.data.truncated)
+	assert_eq(result.data.oldest_cursor, 2)
+	assert_eq(result.data.lines[0].text, "storm 2")
+	assert_eq(result.data.next_cursor, 12)
+	assert_true(result.data.has_more)
+
+
+func test_get_logs_source_editor_since_cursor_excludes_debugger_errors_tree() -> void:
+	var ed_buf := McpEditorLogBuffer.new()
+	var cursor := ed_buf.appended_total()
+	var tree := _make_debugger_errors_tree()
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, McpDebuggerPlugin.new(), null, ed_buf, tree)
+	var result := handler.get_logs({"source": "editor", "since_cursor": cursor, "count": 10})
+	assert_eq(result.data.lines.size(), 0, "Cursor mode is scoped to Logger-backed editor entries")
+	assert_eq(result.data.next_cursor, cursor)
+	assert_false(result.data.has_more)
+	tree.free()
+
+
 func test_get_logs_source_all_includes_editor_between_plugin_and_game() -> void:
 	var plugin_buf := McpLogBuffer.new()
 	plugin_buf.log("plugin-a")

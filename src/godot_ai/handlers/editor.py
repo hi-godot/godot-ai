@@ -199,6 +199,7 @@ async def logs_read(
     offset: int = 0,
     source: str = "plugin",
     since_run_id: str = "",
+    since_cursor: int | None = None,
     include_details: bool = False,
 ) -> dict:
     if source not in _VALID_LOG_SOURCES:
@@ -227,6 +228,8 @@ async def logs_read(
     ## ring buffer's run_id, dropped_count, and is_running stay
     ## authoritative on the editor side.
     params = {"count": count, "offset": offset, "source": source}
+    if source == "editor" and since_cursor is not None:
+        params["since_cursor"] = since_cursor
     if include_details:
         params["include_details"] = True
     result = await runtime.send_command(
@@ -253,19 +256,29 @@ async def logs_read(
         }
     lines = result.get("lines", [])
     total = int(result.get("total_count", len(lines)))
-    return {
+    response = {
         "source": source,
         "lines": lines,
         "total_count": total,
         "returned_count": len(lines),
-        "offset": offset,
+        "offset": int(result.get("offset", offset)),
         "limit": count,
-        "has_more": offset + count < total,
+        "has_more": bool(result.get("has_more", offset + count < total)),
         "run_id": run_id,
         "is_running": result.get("is_running", False),
         "dropped_count": result.get("dropped_count", 0),
         "stale_run_id": False,
     }
+    for key in (
+        "cursor",
+        "oldest_cursor",
+        "next_cursor",
+        "appended_total",
+        "truncated",
+    ):
+        if key in result:
+            response[key] = result[key]
+    return response
 
 
 async def editor_reload_plugin(runtime: DirectRuntime) -> dict:

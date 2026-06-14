@@ -40,6 +40,20 @@ Godot `_log_error` code/rationale when available, error type, resolved source
 location, and stack/error-tree context corresponding to the Debugger dock's
 Errors tab.
 
+For incremental editor-log polling, call `logs_read(source="editor")` once and
+save the returned `next_cursor`; later calls can pass
+`logs_read(source="editor", since_cursor=N)` to receive only Logger-backed
+editor entries appended after that cursor. Cursor responses include
+`cursor`, `oldest_cursor`, `next_cursor`, `appended_total`, `truncated`, and
+`has_more`; `since_cursor` supersedes `offset`. If `truncated=true`, the
+caller fell behind the ring and some entries were evicted before the poll —
+continue from the returned `next_cursor` and treat `oldest_cursor` as the
+earliest retained sequence. If the plugin reloads, a stale high cursor
+self-heals to the new tail with an empty response and a corrected
+`next_cursor`. Live Debugger dock Errors-tab rows are merged into regular
+`source="editor"` reads, but they are UI state rather than ring-buffer entries
+and are not included in `since_cursor` responses.
+
 `editor_manage(op="logs_clear")` accepts `clear_debugger_errors=true` to also
 clear the Debugger dock's visible Errors-tab rows (routed through the panel's
 own Clear path so the tab badge and counters reset). The Errors panel is

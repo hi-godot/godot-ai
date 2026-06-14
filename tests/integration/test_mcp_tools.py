@@ -442,6 +442,61 @@ class TestLogsReadTool:
         assert data["dropped_count"] == 0
         assert data["stale_run_id"] is False
 
+    async def test_source_editor_since_cursor_passes_through(self, mcp_stack):
+        client, plugin = mcp_stack
+        entries = [
+            {
+                "source": "editor",
+                "level": "error",
+                "text": "Parse Error: Expected statement",
+                "path": "res://broken.gd",
+                "line": 12,
+                "function": "GDScript::reload",
+            },
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_logs"
+            assert cmd["params"] == {
+                "count": 1,
+                "offset": 0,
+                "source": "editor",
+                "since_cursor": 7,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "source": "editor",
+                    "lines": entries,
+                    "total_count": 9,
+                    "returned_count": 1,
+                    "offset": 0,
+                    "dropped_count": 0,
+                    "cursor": 7,
+                    "oldest_cursor": 0,
+                    "next_cursor": 8,
+                    "appended_total": 9,
+                    "truncated": False,
+                    "has_more": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "logs_read",
+            {"source": "editor", "since_cursor": 7, "count": 1},
+        )
+        await task
+
+        data = result.data
+        assert data["lines"] == entries
+        assert data["cursor"] == 7
+        assert data["next_cursor"] == 8
+        assert data["appended_total"] == 9
+        assert data["truncated"] is False
+        assert data["has_more"] is True
+
     async def test_include_details_returns_errors_tab_context(self, mcp_stack):
         client, plugin = mcp_stack
         entries = [

@@ -101,6 +101,7 @@ class StubClient:
             if source == "editor":
                 req_offset = int(params_dict.get("offset", 0))
                 req_count = int(params_dict.get("count", 50))
+                req_since_cursor = params_dict.get("since_cursor")
                 all_entries = [
                     {
                         "source": "editor",
@@ -137,6 +138,23 @@ class StubClient:
                                 }
                             ],
                         }
+                if req_since_cursor is not None:
+                    start = min(max(int(req_since_cursor), 0), len(all_entries))
+                    page = all_entries[start : start + req_count]
+                    return {
+                        "source": "editor",
+                        "lines": page,
+                        "total_count": len(all_entries),
+                        "returned_count": len(page),
+                        "offset": 0,
+                        "dropped_count": 0,
+                        "cursor": int(req_since_cursor),
+                        "oldest_cursor": 0,
+                        "next_cursor": start + len(page),
+                        "appended_total": len(all_entries),
+                        "truncated": False,
+                        "has_more": start + len(page) < len(all_entries),
+                    }
                 page = all_entries[req_offset : req_offset + req_count]
                 return {
                     "source": "editor",
@@ -145,6 +163,8 @@ class StubClient:
                     "returned_count": len(page),
                     "offset": req_offset,
                     "dropped_count": 0,
+                    "next_cursor": len(all_entries),
+                    "appended_total": len(all_entries),
                 }
             if source == "all":
                 return {
@@ -1394,6 +1414,42 @@ async def test_logs_read_handler_source_editor_passes_through():
     assert result["is_running"] is False
     assert result["stale_run_id"] is False
     assert result["has_more"] is False
+    assert result["next_cursor"] == 3
+    assert result["appended_total"] == 3
+
+
+async def test_logs_read_handler_source_editor_since_cursor_passes_through():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+
+    result = await editor_handlers.logs_read(runtime, count=1, source="editor", since_cursor=1)
+
+    last_call = client.calls[-1]
+    assert last_call["command"] == "get_logs"
+    assert last_call["params"] == {
+        "count": 1,
+        "offset": 0,
+        "source": "editor",
+        "since_cursor": 1,
+    }
+
+    assert result["source"] == "editor"
+    assert result["lines"] == [
+        {
+            "source": "editor",
+            "level": "error",
+            "text": "editor err 1",
+            "path": "res://script_1.gd",
+            "line": 11,
+            "function": "_ready",
+        },
+    ]
+    assert result["cursor"] == 1
+    assert result["oldest_cursor"] == 0
+    assert result["next_cursor"] == 2
+    assert result["appended_total"] == 3
+    assert result["truncated"] is False
+    assert result["has_more"] is True
 
 
 async def test_logs_read_handler_include_details_passes_through():
