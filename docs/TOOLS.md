@@ -49,12 +49,13 @@ user-facing UI, so the default leaves it untouched.
 editor import step and include per-write diagnostics in their response:
 `diagnostics` (array of structured editor-style entries), `diagnostics_scope`
 (`"this_file"`), `diagnostics_status` (`"checked"` or `"partial"` if the scoped
-log window overflowed), and `diagnostics_detail`. `diagnostics_detail` is
-`"log_capture"` when entries came from the editor log capture window,
-`"fallback"` when `GDScript.reload()` failed but Godot did not expose structured
-log details for the ephemeral script, and `"none"` when no diagnostics were
-reported. Fallback diagnostics still prove the content failed validation, but
-their line number is a best-effort hint marked with `details.fallback_line`.
+validation log window overflowed), and `diagnostics_detail`.
+`diagnostics_detail` is `"log_capture"` when Godot 4.5+'s Logger API supplied
+real parse diagnostics for the written file, `"fallback"` when validation failed
+but Logger details were unavailable (for example on Godot < 4.5), and `"none"`
+when no diagnostics were reported. Fallback diagnostics still prove the content
+failed validation, but their line number is a best-effort hint marked with
+`details.fallback_line`.
 
 ## Domain rollups (`<domain>_manage`)
 

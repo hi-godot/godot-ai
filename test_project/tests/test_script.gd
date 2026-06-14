@@ -5,15 +5,11 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
 const ScriptHandler := preload("res://addons/godot_ai/handlers/script_handler.gd")
-const _LoggerLoader := preload("res://addons/godot_ai/runtime/logger_loader.gd")
 
 ## Tests for ScriptHandler — script creation, reading, attach/detach, and symbol inspection.
 
 var _handler: ScriptHandler
-var _handler_with_logs: ScriptHandler
-var _editor_log_buffer: McpEditorLogBuffer
 var _undo_redo: EditorUndoRedoManager
-var _attached_test_logger = null
 
 const TEST_SCRIPT_PATH := "res://tests/_mcp_test_script.gd"
 const TEST_SCRIPT_CONTENT := """class_name _McpTestScript
@@ -45,8 +41,6 @@ func suite_name() -> String:
 func suite_setup(ctx: Dictionary) -> void:
 	_undo_redo = ctx.get("undo_redo")
 	_handler = ScriptHandler.new(_undo_redo)
-	_editor_log_buffer = McpEditorLogBuffer.new()
-	_handler_with_logs = ScriptHandler.new(_undo_redo, null, _editor_log_buffer)
 	# Create a test script file for read/symbol tests
 	var file := FileAccess.open(TEST_SCRIPT_PATH, FileAccess.WRITE)
 	if file:
@@ -55,7 +49,6 @@ func suite_setup(ctx: Dictionary) -> void:
 
 
 func suite_teardown() -> void:
-	_detach_test_logger()
 	# Clean up test script file
 	if FileAccess.file_exists(TEST_SCRIPT_PATH):
 		DirAccess.remove_absolute(TEST_SCRIPT_PATH)
@@ -90,7 +83,9 @@ func test_create_script_basic() -> void:
 	DirAccess.remove_absolute(path)
 
 
-func test_create_script_reports_fallback_diagnostics_without_log_buffer() -> void:
+func test_create_script_reports_log_capture_diagnostics_with_real_line() -> void:
+	if skip_on_godot_lt("4.5", "Logger subclass only exists on Godot 4.5+"):
+		return
 	var path := "res://tests/_mcp_test_invalid_create.gd"
 	var content := "extends Node\n\nfunc _ready() -> void:\n\tif\n\tpass\n"
 	var result := _handler.create_script({"path": path, "content": content})
@@ -99,67 +94,35 @@ func test_create_script_reports_fallback_diagnostics_without_log_buffer() -> voi
 	assert_eq(result.data.committed, true)
 	assert_eq(result.data.diagnostics_scope, "this_file")
 	assert_eq(result.data.diagnostics_status, "checked")
-	assert_eq(result.data.diagnostics_detail, "fallback")
+	assert_eq(result.data.diagnostics_detail, "log_capture")
 	assert_gt(result.data.diagnostics.size(), 0, "Invalid GDScript should report diagnostics")
 	assert_eq(result.data.diagnostics[0].path, path)
-	assert_eq(result.data.diagnostics[0].line, 5)
+	assert_eq(result.data.diagnostics[0].line, 4)
 	assert_eq(result.data.diagnostics[0].level, "error")
-	assert_eq(result.data.diagnostics[0].details.fallback_line, true)
+	assert_contains(result.data.diagnostics[0].text, "Parse Error")
+	assert_false(result.data.diagnostics[0].details.has("fallback_line"), "Real capture must not use fallback line guesses")
+	assert_eq(result.data.diagnostics[0].details.source.path, path)
+	assert_eq(result.data.diagnostics[0].details.source.line, 4)
 	assert_true(FileAccess.file_exists(path), "Invalid content is still written so the agent can fix it")
 	DirAccess.remove_absolute(path)
 
 
-func test_create_script_with_log_buffer_falls_back_when_ephemeral_reload_is_not_logged() -> void:
-	## Empirical guard for the real chain. Godot 4.6 prints ephemeral
-	## GDScript.reload() parse errors to stderr with a gdscript:// path, but
-	## they do not pass through OS.add_logger into McpEditorLogBuffer. Keep the
-	## response honest: validation is checked, detail fidelity is fallback.
-	if skip_on_godot_lt("4.5", "Logger subclass only exists on Godot 4.5+"):
+func test_create_script_reports_fallback_diagnostics_without_logger() -> void:
+	if ClassDB.class_exists("Logger"):
+		skip("Fallback branch is exercised on Godot versions without Logger")
 		return
-	if not OS.has_method("add_logger"):
-		skip("Logger API is unavailable")
-		return
-	var logger_script := _LoggerLoader.build(_LoggerLoader.EDITOR_LOGGER_PATH)
-	assert_true(logger_script != null, "Editor logger script should compile on Godot 4.5+")
-	if logger_script == null:
-		return
-	_attached_test_logger = logger_script.new(_editor_log_buffer)
-	var path := "res://tests/_mcp_test_invalid_create_logged.gd"
+	var path := "res://tests/_mcp_test_invalid_create_no_logger.gd"
 	var content := "extends Node\n\nfunc _ready() -> void:\n\tif\n\tpass\n"
-	_editor_log_buffer.clear()
-	OS.call("add_logger", _attached_test_logger)
-	var result := _handler_with_logs.create_script({"path": path, "content": content})
-	_detach_test_logger()
+	var result := _handler.create_script({"path": path, "content": content})
 	assert_has_key(result, "data")
 	assert_eq(result.data.diagnostics_scope, "this_file")
 	assert_eq(result.data.diagnostics_status, "checked")
 	assert_eq(result.data.diagnostics_detail, "fallback")
-	assert_eq(_count_ephemeral_reload_parse_errors(_editor_log_buffer.get_recent(20)), 0, "Ephemeral reload parse errors are not logger-captured")
 	assert_gt(result.data.diagnostics.size(), 0)
 	assert_eq(result.data.diagnostics[0].path, path)
+	assert_eq(result.data.diagnostics[0].line, 5)
 	assert_eq(result.data.diagnostics[0].details.fallback_line, true)
 	DirAccess.remove_absolute(path)
-
-
-func _count_ephemeral_reload_parse_errors(entries: Array[Dictionary]) -> int:
-	var count := 0
-	for entry in entries:
-		var path := str(entry.get("path", ""))
-		var text := str(entry.get("text", ""))
-		var function := str(entry.get("function", ""))
-		if (
-			(path.is_empty() or path.begins_with("gdscript://"))
-			and text.find("Parse Error") != -1
-			and function.find("GDScript") != -1
-		):
-			count += 1
-	return count
-
-
-func _detach_test_logger() -> void:
-	if _attached_test_logger != null and OS.has_method("remove_logger"):
-		OS.call("remove_logger", _attached_test_logger)
-	_attached_test_logger = null
 
 
 func test_finish_create_script_deferred_is_static_and_handles_null_connection() -> void:
@@ -261,7 +224,9 @@ func test_patch_script_basic() -> void:
 	DirAccess.remove_absolute(path)
 
 
-func test_patch_script_reports_fallback_diagnostics_without_log_buffer() -> void:
+func test_patch_script_reports_log_capture_diagnostics_with_real_line() -> void:
+	if skip_on_godot_lt("4.5", "Logger subclass only exists on Godot 4.5+"):
+		return
 	var path := "res://tests/_mcp_test_invalid_patch.gd"
 	var original := "extends Node\n\nfunc _ready() -> void:\n\tpass\n\tprint(\"after\")\n"
 	var file := FileAccess.open(path, FileAccess.WRITE)
@@ -278,17 +243,47 @@ func test_patch_script_reports_fallback_diagnostics_without_log_buffer() -> void
 	assert_eq(result.data.replacements, 1)
 	assert_eq(result.data.diagnostics_scope, "this_file")
 	assert_eq(result.data.diagnostics_status, "checked")
-	assert_eq(result.data.diagnostics_detail, "fallback")
+	assert_eq(result.data.diagnostics_detail, "log_capture")
 	assert_gt(result.data.diagnostics.size(), 0, "Invalid patched GDScript should report diagnostics")
 	assert_eq(result.data.diagnostics[0].path, path)
-	assert_eq(result.data.diagnostics[0].line, 5)
+	assert_eq(result.data.diagnostics[0].line, 4)
 	assert_eq(result.data.diagnostics[0].level, "error")
-	assert_eq(result.data.diagnostics[0].details.fallback_line, true)
+	assert_contains(result.data.diagnostics[0].text, "Parse Error")
+	assert_false(result.data.diagnostics[0].details.has("fallback_line"), "Real capture must not use fallback line guesses")
+	assert_eq(result.data.diagnostics[0].details.source.path, path)
+	assert_eq(result.data.diagnostics[0].details.source.line, 4)
 
 	var read := FileAccess.open(path, FileAccess.READ)
 	var new_content := read.get_as_text()
 	read.close()
 	assert_contains(new_content, "if")
+	DirAccess.remove_absolute(path)
+
+
+func test_patch_script_reports_fallback_diagnostics_without_logger() -> void:
+	if ClassDB.class_exists("Logger"):
+		skip("Fallback branch is exercised on Godot versions without Logger")
+		return
+	var path := "res://tests/_mcp_test_invalid_patch_no_logger.gd"
+	var original := "extends Node\n\nfunc _ready() -> void:\n\tpass\n\tprint(\"after\")\n"
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(original)
+	file.close()
+
+	var result := _handler.patch_script({
+		"path": path,
+		"old_text": "pass",
+		"new_text": "if",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.path, path)
+	assert_eq(result.data.diagnostics_scope, "this_file")
+	assert_eq(result.data.diagnostics_status, "checked")
+	assert_eq(result.data.diagnostics_detail, "fallback")
+	assert_gt(result.data.diagnostics.size(), 0)
+	assert_eq(result.data.diagnostics[0].path, path)
+	assert_eq(result.data.diagnostics[0].line, 5)
+	assert_eq(result.data.diagnostics[0].details.fallback_line, true)
 	DirAccess.remove_absolute(path)
 
 

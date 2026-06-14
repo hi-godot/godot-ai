@@ -3,12 +3,12 @@ extends RefCounted
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const DiagnosticsCapture := preload("res://addons/godot_ai/utils/diagnostics_capture.gd")
+const LoggerLoader := preload("res://addons/godot_ai/runtime/logger_loader.gd")
 
 ## Handles script creation, reading, attaching, detaching, and symbol inspection.
 
 var _undo_redo: EditorUndoRedoManager
 var _connection: McpConnection
-var _editor_log_buffer: McpEditorLogBuffer
 
 # Bounded settle window for `ResourceLoader.exists(path)` after `scan()` so
 # that an agent calling create_script -> attach_script back-to-back doesn't
@@ -20,10 +20,9 @@ const _IMPORT_SETTLE_MAX_FRAMES := 300
 const _IMPORT_SETTLE_MAX_MSEC := 3500
 
 
-func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null, editor_log_buffer: McpEditorLogBuffer = null) -> void:
+func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null) -> void:
 	_undo_redo = undo_redo
 	_connection = connection
-	_editor_log_buffer = editor_log_buffer
 
 
 func create_script(params: Dictionary) -> Dictionary:
@@ -171,19 +170,23 @@ func read_script(params: Dictionary) -> Dictionary:
 
 
 func _attach_gdscript_diagnostics(data: Dictionary, path: String, content: String) -> void:
-	var capture := DiagnosticsCapture.capture_this_file(_editor_log_buffer, path, func() -> Dictionary:
-		return _validate_gdscript_source(content)
-	)
-	var diagnostics: Array = capture.get("diagnostics", [])
-	var validation: Dictionary = capture.get("action", {})
-	var diagnostics_detail: String = capture.get("diagnostics_detail", "none")
+	var validation := _validate_gdscript_source(content)
+	var diagnostics: Array = []
+	var diagnostics_detail := "none"
+	var diagnostics_status := "checked"
+
+	if not validation.get("ok", true):
+		var capture := _capture_gdscript_load_diagnostics(path)
+		diagnostics = capture.get("diagnostics", [])
+		diagnostics_detail = capture.get("diagnostics_detail", "none")
+		diagnostics_status = capture.get("diagnostics_status", "checked")
 	if not validation.get("ok", true) and diagnostics.is_empty():
 		diagnostics.append(_fallback_gdscript_diagnostic(path, validation.get("error_code", FAILED), content))
 		diagnostics_detail = "fallback"
 	data["diagnostics"] = diagnostics
 	data["diagnostics_detail"] = diagnostics_detail
-	data["diagnostics_scope"] = capture.get("diagnostics_scope", "this_file")
-	data["diagnostics_status"] = capture.get("diagnostics_status", "checked")
+	data["diagnostics_scope"] = "this_file"
+	data["diagnostics_status"] = diagnostics_status
 
 
 static func _validate_gdscript_source(content: String) -> Dictionary:
@@ -198,6 +201,35 @@ static func _validate_gdscript_source(content: String) -> Dictionary:
 	return {
 		"ok": err == OK,
 		"error_code": err,
+	}
+
+
+static func _capture_gdscript_load_diagnostics(path: String) -> Dictionary:
+	if not (ClassDB.class_exists("Logger") and OS.has_method("add_logger") and OS.has_method("remove_logger")):
+		return _empty_diagnostics_capture()
+	var logger_script := LoggerLoader.build(LoggerLoader.VALIDATION_LOGGER_PATH)
+	if logger_script == null:
+		return _empty_diagnostics_capture()
+	var buffer := McpEditorLogBuffer.new()
+	var logger = logger_script.new(buffer)
+	var capture := DiagnosticsCapture.capture_this_file(buffer, path, func() -> Dictionary:
+		OS.call("add_logger", logger)
+		# ResourceLoader.load() reports parse failure instead of throwing, and
+		# a failed GDScript parse does not execute user code; remove immediately
+		# after the synchronous load to keep the private capture window tiny.
+		ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
+		OS.call("remove_logger", logger)
+		return {}
+	)
+	return capture
+
+
+static func _empty_diagnostics_capture() -> Dictionary:
+	return {
+		"diagnostics": [],
+		"diagnostics_detail": "none",
+		"diagnostics_scope": "this_file",
+		"diagnostics_status": "checked",
 	}
 
 

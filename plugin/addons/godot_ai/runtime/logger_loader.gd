@@ -25,6 +25,7 @@ extends RefCounted
 
 const EDITOR_LOGGER_PATH := "res://addons/godot_ai/runtime/loggers/editor_logger.gd"
 const GAME_LOGGER_PATH := "res://addons/godot_ai/runtime/loggers/game_logger.gd"
+const VALIDATION_LOGGER_PATH := "res://addons/godot_ai/runtime/loggers/validation_logger.gd"
 
 
 ## Compile a `.gdignore`'d logger script from its on-disk source. Returns the

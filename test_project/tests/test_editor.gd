@@ -1112,13 +1112,13 @@ func test_editor_log_buffer_get_since_reports_clear_truncation() -> void:
 
 # ----- Diagnostics capture -----
 
-func test_diagnostics_capture_rewrites_ephemeral_gdscript_paths() -> void:
+func test_diagnostics_capture_uses_details_source_for_target_match() -> void:
 	var buf := McpEditorLogBuffer.new()
 	var target := "res://scripts/player.gd"
 	var result := DiagnosticsCapture.capture_this_file(buf, target, func() -> Dictionary:
-		buf.append("error", "Parse Error: Expected statement", "gdscript://12345.gd", 7, "GDScript::reload", {
-			"source": {"path": "gdscript://12345.gd", "line": 7},
-			"frames": [{"path": "gdscript://12345.gd", "line": 7, "function": "GDScript::reload"}],
+		buf.append("error", "Parse Error: Expected statement", "res://addons/godot_ai/handlers/script_handler.gd", 55, "_validate", {
+			"source": {"path": target, "line": 7, "function": "GDScript::reload"},
+			"resolved": {"path": "res://addons/godot_ai/handlers/script_handler.gd", "line": 55, "function": "_validate"},
 		})
 		return {"ok": false, "error_code": ERR_PARSE_ERROR}
 	)
@@ -1129,8 +1129,33 @@ func test_diagnostics_capture_rewrites_ephemeral_gdscript_paths() -> void:
 	assert_eq(result.diagnostics.size(), 1)
 	assert_eq(result.diagnostics[0].path, target)
 	assert_eq(result.diagnostics[0].line, 7)
+	assert_eq(result.diagnostics[0].function, "GDScript::reload")
 	assert_eq(result.diagnostics[0].details.source.path, target)
-	assert_eq(result.diagnostics[0].details.frames[0].path, target)
+	assert_eq(result.diagnostics[0].details.resolved.path, "res://addons/godot_ai/handlers/script_handler.gd")
+
+
+func test_diagnostics_capture_excludes_load_wrapper_and_keeps_multiple_parse_errors() -> void:
+	var buf := McpEditorLogBuffer.new()
+	var target := "res://scripts/player.gd"
+	var result := DiagnosticsCapture.capture_this_file(buf, target, func() -> Dictionary:
+		buf.append("error", "Parse Error: first", "res://addons/godot_ai/handlers/script_handler.gd", 40, "_validate", {
+			"source": {"path": target, "line": 4, "function": "GDScript::reload"},
+		})
+		buf.append("error", "Failed to load script \"res://scripts/player.gd\" with error \"Parse error\".", "res://addons/godot_ai/handlers/script_handler.gd", 40, "_validate", {
+			"source": {"path": "modules/gdscript/gdscript.cpp", "line": 2907, "function": "load"},
+		})
+		buf.append("error", "Parse Error: second", "res://addons/godot_ai/handlers/script_handler.gd", 40, "_validate", {
+			"source": {"path": target, "line": 8, "function": "GDScript::reload"},
+		})
+		return {"ok": false, "error_code": ERR_PARSE_ERROR}
+	)
+
+	assert_eq(result.diagnostics_detail, "log_capture")
+	assert_eq(result.diagnostics.size(), 2)
+	assert_eq(result.diagnostics[0].text, "Parse Error: first")
+	assert_eq(result.diagnostics[0].line, 4)
+	assert_eq(result.diagnostics[1].text, "Parse Error: second")
+	assert_eq(result.diagnostics[1].line, 8)
 
 
 func test_diagnostics_capture_rejects_pathless_entries_for_other_files() -> void:
@@ -1154,7 +1179,9 @@ func test_diagnostics_capture_reports_partial_when_window_overflows() -> void:
 	var target := "res://scripts/storm.gd"
 	var result := DiagnosticsCapture.capture_this_file(buf, target, func() -> Dictionary:
 		for i in range(cap + 2):
-			buf.append("error", "storm %d" % i, target, i)
+			buf.append("error", "storm %d" % i, "res://addons/godot_ai/handlers/script_handler.gd", i, "_validate", {
+				"source": {"path": target, "line": i, "function": "GDScript::reload"},
+			})
 		return {"ok": false, "error_code": ERR_PARSE_ERROR}
 	)
 

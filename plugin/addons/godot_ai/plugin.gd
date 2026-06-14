@@ -242,7 +242,7 @@ func _enter_tree() -> void:
 	var node_handler := NodeHandler.new(get_undo_redo())
 	var project_handler := ProjectHandler.new(_connection, _debugger_plugin)
 	var client_handler := ClientHandler.new()
-	var script_handler := ScriptHandler.new(get_undo_redo(), _connection, _editor_log_buffer)
+	var script_handler := ScriptHandler.new(get_undo_redo(), _connection)
 	var resource_handler := ResourceHandler.new(get_undo_redo(), _connection)
 	var api_handler := ApiHandler.new()
 	var filesystem_handler := FilesystemHandler.new()
