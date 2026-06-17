@@ -13,6 +13,12 @@ var _script_error_capture: Object = null
 var _capture_registered := false
 
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE and _capture_registered and _script_error_capture != null:
+		OS.call("remove_logger", _script_error_capture)
+		_capture_registered = false
+
+
 func run_suite(suite: McpTestSuite, test_filter: String = "", exclude_test_filter: String = "") -> void:
 	var owns_capture := not _capture_registered
 	if owns_capture:
