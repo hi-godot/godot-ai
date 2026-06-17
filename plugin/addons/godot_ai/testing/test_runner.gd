@@ -5,11 +5,19 @@ extends RefCounted
 ## Lightweight test runner for MCP plugin tests. Discovers test_* methods
 ## on McpTestSuite instances, runs them, and collects structured results.
 
+const ScriptErrorCaptureLoader := preload("res://addons/godot_ai/testing/script_error_capture_loader.gd")
+
 var _results: Array[Dictionary] = []
 var _last_run_ms: int = 0
+var _script_error_capture: Object = null
+var _capture_registered := false
 
 
 func run_suite(suite: McpTestSuite, test_filter: String = "", exclude_test_filter: String = "") -> void:
+	var owns_capture := not _capture_registered
+	if owns_capture:
+		_register_capture()
+
 	var name := suite.suite_name()
 	var methods := _get_test_methods(suite)
 	var exclusions := _parse_exclusions(exclude_test_filter)
@@ -29,9 +37,12 @@ func run_suite(suite: McpTestSuite, test_filter: String = "", exclude_test_filte
 			continue
 
 		suite._reset()
+		_begin_script_error_capture()
 		suite.setup()
 		suite.call(method_name)
 		suite.teardown()
+		var script_errors := _end_script_error_capture()
+		suite._free_tracked()
 
 		## Issue #19 defence: free any `_McpTest*` nodes the test created, even
 		## nested ones. If the scene gets auto-saved mid-test while one of these
@@ -39,9 +50,22 @@ func run_suite(suite: McpTestSuite, test_filter: String = "", exclude_test_filte
 		## with a "missing dependency" error. Runs after every test, not just at
 		## suite boundaries, so a test that fails mid-flow can't leave a trap
 		## for the next test or for scene autosave.
-		var scene_root_for_cleanup := EditorInterface.get_edited_scene_root()
+		var scene_root_for_cleanup := _edited_scene_root()
 		if scene_root_for_cleanup != null and scene_root_for_cleanup.is_inside_tree():
 			_free_mcp_test_nodes_recursive(scene_root_for_cleanup)
+
+		if not script_errors.is_empty():
+			var abort_message := "Aborted by SCRIPT ERROR: %s" % "; ".join(script_errors)
+			if suite._failed:
+				abort_message += " (after assertion failure: %s)" % suite._message
+			_results.append({
+				"suite": name,
+				"test": method_name,
+				"passed": false,
+				"message": abort_message,
+				"assertion_count": suite._assertion_count,
+			})
+			continue
 
 		if suite._skipped:
 			_results.append({
@@ -70,6 +94,9 @@ func run_suite(suite: McpTestSuite, test_filter: String = "", exclude_test_filte
 			"assertion_count": suite._assertion_count,
 		})
 
+	if owns_capture:
+		_unregister_capture()
+
 
 func run_suites(suites: Array, suite_filter: String = "", test_filter: String = "", ctx: Dictionary = {}, verbose: bool = false, exclude_test_filter: String = "") -> Dictionary:
 	_results.clear()
@@ -83,12 +110,14 @@ func run_suites(suites: Array, suite_filter: String = "", test_filter: String = 
 	var _prev_console_echo := McpLogBuffer.console_echo
 	McpLogBuffer.console_echo = false
 
+	_register_capture()
+
 	for suite: McpTestSuite in suites:
 		if not suite_filter.is_empty() and suite.suite_name() != suite_filter:
 			continue
 
 		## Snapshot scene children before the suite so we can clean up leaks.
-		var scene_root := EditorInterface.get_edited_scene_root()
+		var scene_root := _edited_scene_root()
 		var before_children: Array[Node] = []
 		if scene_root != null:
 			before_children = _get_children_snapshot(scene_root)
@@ -119,6 +148,7 @@ func run_suites(suites: Array, suite_filter: String = "", test_filter: String = 
 		else:
 			run_suite(suite, test_filter, exclude_test_filter)
 		suite.suite_teardown()
+		suite._free_tracked()
 
 		## Remove any nodes the suite left behind (failed undo, missing cleanup).
 		if scene_root != null and scene_root.is_inside_tree():
@@ -126,7 +156,43 @@ func run_suites(suites: Array, suite_filter: String = "", test_filter: String = 
 
 	_last_run_ms = Time.get_ticks_msec() - start
 	McpLogBuffer.console_echo = _prev_console_echo
+	_unregister_capture()
 	return get_results(verbose)
+
+
+func _register_capture() -> void:
+	if _capture_registered:
+		return
+	if _script_error_capture == null:
+		_script_error_capture = ScriptErrorCaptureLoader.build()
+	if _script_error_capture == null:
+		return
+	OS.call("add_logger", _script_error_capture)
+	_capture_registered = true
+
+
+func _unregister_capture() -> void:
+	if not _capture_registered:
+		return
+	OS.call("remove_logger", _script_error_capture)
+	_capture_registered = false
+
+
+func _begin_script_error_capture() -> void:
+	if _script_error_capture != null and _capture_registered:
+		_script_error_capture.call("begin_capture")
+
+
+func _end_script_error_capture() -> PackedStringArray:
+	if _script_error_capture == null or not _capture_registered:
+		return PackedStringArray()
+	return _script_error_capture.call("end_capture") as PackedStringArray
+
+
+static func _edited_scene_root() -> Node:
+	if not Engine.is_editor_hint():
+		return null
+	return EditorInterface.get_edited_scene_root()
 
 
 func get_results(verbose: bool = false) -> Dictionary:

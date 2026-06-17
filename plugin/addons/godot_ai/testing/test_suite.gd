@@ -31,6 +31,34 @@ func suite_teardown() -> void:
 	pass
 
 
+# ----- tracked allocations (freed by the runner after each test) -----
+
+var _tracked_objects: Array[Object] = []
+
+
+## Register a manually-managed Object (plain Object or out-of-tree Node) so
+## the runner frees it after the current test. RefCounted instances are
+## accepted but ignored because they manage their own lifetime.
+func track(obj: Object) -> Object:
+	if obj != null and not obj is RefCounted:
+		_tracked_objects.append(obj)
+	return obj
+
+
+## Free everything registered via track(). Called by the runner after each
+## test's teardown() and again after suite_teardown().
+func _free_tracked() -> void:
+	for obj in _tracked_objects:
+		if not is_instance_valid(obj) or (obj is Node and obj.is_queued_for_deletion()):
+			continue
+		if obj is Node:
+			var parent := (obj as Node).get_parent()
+			if parent != null:
+				parent.remove_child(obj)
+		obj.free()
+	_tracked_objects.clear()
+
+
 # ----- assertion state (managed by McpTestRunner) -----
 
 var _failed: bool = false
