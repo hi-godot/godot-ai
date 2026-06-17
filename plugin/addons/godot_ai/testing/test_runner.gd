@@ -41,7 +41,7 @@ func run_suite(suite: McpTestSuite, test_filter: String = "", exclude_test_filte
 		suite.setup()
 		suite.call(method_name)
 		suite.teardown()
-		var script_errors := _end_script_error_capture()
+		var script_errors := suite._unexpected_script_errors(_end_script_error_capture())
 		suite._free_tracked()
 
 		## Issue #19 defence: free any `_McpTest*` nodes the test created, even

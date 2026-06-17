@@ -66,6 +66,7 @@ var _message: String = ""
 var _assertion_count: int = 0
 var _skipped: bool = false
 var _skip_reason: String = ""
+var _expected_script_error_substrings: Array[String] = []
 
 # ----- suite-level state (managed by McpTestRunner) -----
 
@@ -81,6 +82,7 @@ func _reset() -> void:
 	_assertion_count = 0
 	_skipped = false
 	_skip_reason = ""
+	_expected_script_error_substrings.clear()
 
 
 func _reset_suite_state() -> void:
@@ -147,6 +149,29 @@ func skip_on_godot_lt(min_version: String, reason: String = "") -> bool:
 		skip(msg + " (running %d.%d)" % [current_major, current_minor])
 		return true
 	return false
+
+
+## Allow one captured SCRIPT ERROR whose text contains `substring`.
+## Use only for negative-path tests that intentionally compile or execute
+## invalid GDScript and assert on the resulting diagnostics.
+func expect_script_error_containing(substring: String) -> void:
+	_expected_script_error_substrings.append(substring)
+
+
+func _unexpected_script_errors(captured: PackedStringArray) -> PackedStringArray:
+	var unexpected := PackedStringArray()
+	var remaining := _expected_script_error_substrings.duplicate()
+	for error in captured:
+		var matched_index := -1
+		for i in range(remaining.size()):
+			if error.find(remaining[i]) != -1:
+				matched_index = i
+				break
+		if matched_index == -1:
+			unexpected.append(error)
+		else:
+			remaining.remove_at(matched_index)
+	return unexpected
 
 
 ## Trigger an undo against whichever history (scene or global) holds the most

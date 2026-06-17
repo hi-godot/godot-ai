@@ -77,6 +77,16 @@ class _TrackedAllocationSuite extends McpTestSuite:
 		assert_true(is_instance_valid(tracked_node))
 
 
+class _ExpectedScriptErrorSuite extends McpTestSuite:
+	func suite_name() -> String: return "inner_expected_script_error"
+	func test_expected_script_error_does_not_abort() -> void:
+		expect_script_error_containing("Parse Error: Expected conditional expression after \"if\".")
+		var script := GDScript.new()
+		script.source_code = "extends Node\n\nfunc _ready() -> void:\n\tif\n"
+		var err := script.reload()
+		assert_ne(err, OK, "invalid GDScript should fail to compile")
+
+
 class _FailedSetupSuite extends McpTestSuite:
 	func suite_name() -> String: return "inner_failed_setup"
 	func suite_setup(_ctx: Dictionary) -> void:
@@ -216,6 +226,17 @@ func test_tracked_allocations_are_freed_after_each_test() -> void:
 	assert_eq(result.failed, 0)
 	assert_false(is_instance_valid(suite.tracked_object), "tracked plain Object should be freed")
 	assert_false(is_instance_valid(suite.tracked_node), "tracked out-of-tree Node should be freed")
+
+
+func test_expected_script_error_does_not_fail_test() -> void:
+	if skip_on_godot_lt("4.5", "Logger subclass only exists on Godot 4.5+"):
+		return
+	var runner := McpTestRunner.new()
+	expect_script_error_containing("Parse Error: Expected conditional expression after \"if\".")
+	var result := runner.run_suites([_ExpectedScriptErrorSuite.new()])
+
+	assert_eq(result.failed, 0, "expected script errors should be filtered")
+	assert_eq(result.passed, 1)
 
 
 static func _edited_scene_root() -> Node:

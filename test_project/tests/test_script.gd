@@ -91,6 +91,8 @@ func test_create_script_reports_log_capture_diagnostics_with_real_line() -> void
 		return
 	var path := "res://tests/_mcp_test_invalid_create.gd"
 	var content := "extends Node\n\nfunc _ready() -> void:\n\tif\n\tpass\n"
+	expect_script_error_containing("Parse Error: Expected conditional expression after \"if\".")
+	expect_script_error_containing("Parse Error: Expected conditional expression after \"if\".")
 	var result := _handler.create_script({"path": path, "content": content})
 	assert_has_key(result, "data")
 	assert_eq(result.data.path, path)
@@ -117,6 +119,8 @@ func test_create_script_validation_does_not_pollute_shared_editor_log() -> void:
 	var path := "res://tests/_mcp_test_invalid_create_shared_log.gd"
 	var content := "extends Node\n\nfunc _ready() -> void:\n\tif\n\tpass\n"
 	var cursor := shared_buf.appended_total()
+	expect_script_error_containing("Parse Error: Expected conditional expression after \"if\".")
+	expect_script_error_containing("Parse Error: Expected conditional expression after \"if\".")
 	var result := _handler.create_script({"path": path, "content": content})
 	_detach_shared_editor_logger()
 
@@ -275,6 +279,8 @@ func test_patch_script_reports_log_capture_diagnostics_with_real_line() -> void:
 	file.store_string(original)
 	file.close()
 
+	expect_script_error_containing("Parse Error: Expected conditional expression after \"if\".")
+	expect_script_error_containing("Parse Error: Expected conditional expression after \"if\".")
 	var result := _handler.patch_script({
 		"path": path,
 		"old_text": "pass",
@@ -313,6 +319,8 @@ func test_patch_script_validation_does_not_pollute_shared_editor_log() -> void:
 	file.close()
 
 	var cursor := shared_buf.appended_total()
+	expect_script_error_containing("Parse Error: Expected conditional expression after \"if\".")
+	expect_script_error_containing("Parse Error: Expected conditional expression after \"if\".")
 	var result := _handler.patch_script({
 		"path": path,
 		"old_text": "pass",
