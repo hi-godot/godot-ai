@@ -430,7 +430,15 @@ func _current_scene_root() -> Node:
 		return null
 	var scene_root := tree.current_scene
 	if scene_root == null and Engine.is_editor_hint():
-		scene_root = EditorInterface.get_edited_scene_root()
+		# Look the editor singleton up by name rather than referencing the bare
+		# `EditorInterface` identifier: that identifier is compiled out of export
+		# templates, so the GDScript parser rejects it ("Identifier
+		# "EditorInterface" not declared in the current scope") in an exported
+		# build even though `Engine.is_editor_hint()` would never run it there.
+		# That parse failure stops this autoload from loading in every export.
+		var editor := Engine.get_singleton(&"EditorInterface")
+		if editor:
+			scene_root = editor.get_edited_scene_root()
 	return scene_root
 
 
