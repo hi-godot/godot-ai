@@ -86,6 +86,7 @@ func check_for_updates() -> void:
 		_http_request = HTTPRequest.new()
 		_http_request.request_completed.connect(_on_update_check_completed)
 		add_child(_http_request)
+	_with_editor_http_proxy(_http_request)
 	_http_request.request(RELEASES_URL, ["Accept: application/vnd.github+json"])
 
 
@@ -181,6 +182,7 @@ func start_install() -> void:
 	_download_request.max_redirects = 10
 	_download_request.request_completed.connect(_on_download_completed)
 	add_child(_download_request)
+	_with_editor_http_proxy(_download_request)
 	var err := _download_request.request(_latest_download_url)
 	if err != OK:
 		## `request_completed` never fires when `request()` itself errors,
@@ -441,3 +443,11 @@ func _reload_after_update() -> void:
 func _drain_dock_workers() -> void:
 	if _dock != null and _dock.has_method("prepare_for_self_update_drain"):
 		_dock.prepare_for_self_update_drain()
+
+
+func _with_editor_http_proxy(request: HTTPRequest) -> void:
+	var editor_settings = EditorInterface.get_editor_settings()
+	if editor_settings.get_setting("network/http_proxy/host") and editor_settings.get_setting("network/http_proxy/host"):
+		request.set_http_proxy(editor_settings.get_setting("network/http_proxy/host"), int(editor_settings.get_setting("network/http_proxy/host")))
+		request.set_https_proxy(editor_settings.get_setting("network/http_proxy/host"), int(editor_settings.get_setting("network/http_proxy/host")))
+
