@@ -110,6 +110,9 @@ func run_suites(suites: Array, suite_filter: String = "", test_filter: String = 
 	var _prev_console_echo := McpLogBuffer.console_echo
 	McpLogBuffer.console_echo = false
 
+	## If a prior run was interrupted after registering the logger but before
+	## normal teardown, remove that stale registration before starting fresh.
+	_unregister_capture()
 	_register_capture()
 
 	for suite: McpTestSuite in suites:
@@ -173,6 +176,9 @@ func _register_capture() -> void:
 
 func _unregister_capture() -> void:
 	if not _capture_registered:
+		return
+	if _script_error_capture == null:
+		_capture_registered = false
 		return
 	OS.call("remove_logger", _script_error_capture)
 	_capture_registered = false
