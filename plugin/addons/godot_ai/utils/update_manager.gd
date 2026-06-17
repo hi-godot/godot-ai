@@ -446,8 +446,19 @@ func _drain_dock_workers() -> void:
 
 
 func _with_editor_http_proxy(request: HTTPRequest) -> void:
-	var editor_settings = EditorInterface.get_editor_settings()
-	if editor_settings.get_setting("network/http_proxy/host") and editor_settings.get_setting("network/http_proxy/host"):
-		request.set_http_proxy(editor_settings.get_setting("network/http_proxy/host"), int(editor_settings.get_setting("network/http_proxy/host")))
-		request.set_https_proxy(editor_settings.get_setting("network/http_proxy/host"), int(editor_settings.get_setting("network/http_proxy/host")))
+	var es := EditorInterface.get_editor_settings()
+ 	if es == null:
+ 		return
+ 	var host := ""
+ 	var port := 0
+ 	if es.has_setting("network/http_proxy/host"):
+ 		host = str(es.get_setting("network/http_proxy/host")).strip_edges()
+ 	if es.has_setting("network/http_proxy/port"):
+ 		port = int(es.get_setting("network/http_proxy/port"))
+ 	## Always apply (even when host/port are empty) so reused HTTPRequest
+ 	## instances don’t keep a stale proxy after the user clears settings.
+ 	if request.has_method("set_http_proxy"):
+ 		request.call("set_http_proxy", host, port)
+ 	if request.has_method("set_https_proxy"):
+ 		request.call("set_https_proxy", host, port)
 
