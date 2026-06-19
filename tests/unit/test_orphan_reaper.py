@@ -12,6 +12,11 @@ import pytest
 from godot_ai import orphan_reaper
 from godot_ai.orphan_reaper import pid_alive, should_arm_reaper, watch_owner
 
+POSIX_ONLY_PID_ALIVE = pytest.mark.skipif(
+    sys.platform.startswith("win"),
+    reason="pid_alive is POSIX-only; orphan reaper is disabled on Windows",
+)
+
 
 def test_should_arm_requires_valid_pid():
     assert should_arm_reaper(None) is False
@@ -33,6 +38,7 @@ def test_should_arm_false_on_windows(monkeypatch):
     assert should_arm_reaper(1234) is False
 
 
+@POSIX_ONLY_PID_ALIVE
 def test_pid_alive_for_self():
     assert pid_alive(os.getpid()) is True
 
@@ -51,6 +57,7 @@ def test_pid_alive_raises_on_windows(monkeypatch):
         pid_alive(12345)
 
 
+@POSIX_ONLY_PID_ALIVE
 def test_pid_alive_false_for_dead_process():
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
     proc.wait()
