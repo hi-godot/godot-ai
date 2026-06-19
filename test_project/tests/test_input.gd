@@ -255,6 +255,64 @@ func test_bind_key_event() -> void:
 	_handler.remove_action({"action": TEST_ACTION})
 
 
+func test_bind_key_event_matches_all_keyboard_devices() -> void:
+	_handler.add_action({"action": TEST_ACTION})
+	var result := _handler.bind_event({
+		"action": TEST_ACTION,
+		"event_type": "key",
+		"keycode": "Space",
+	})
+	assert_has_key(result, "data")
+
+	var events := InputMap.action_get_events(TEST_ACTION)
+	assert_eq(events.size(), 1)
+	var stored_event = events[0]
+	assert_true(stored_event is InputEventKey)
+	assert_eq(stored_event.device, -1)
+
+	var default_device_event := InputEventKey.new()
+	default_device_event.keycode = KEY_SPACE
+	default_device_event.pressed = true
+	assert_true(InputMap.event_is_action(default_device_event, TEST_ACTION))
+
+	var explicit_device_event := InputEventKey.new()
+	explicit_device_event.keycode = KEY_SPACE
+	explicit_device_event.device = 1
+	explicit_device_event.pressed = true
+	assert_true(InputMap.event_is_action(explicit_device_event, TEST_ACTION))
+
+	_handler.remove_action({"action": TEST_ACTION})
+
+
+func test_bind_mouse_button_event_matches_all_mouse_devices() -> void:
+	_handler.add_action({"action": TEST_ACTION})
+	var result := _handler.bind_event({
+		"action": TEST_ACTION,
+		"event_type": "mouse_button",
+		"button": MOUSE_BUTTON_LEFT,
+	})
+	assert_has_key(result, "data")
+
+	var events := InputMap.action_get_events(TEST_ACTION)
+	assert_eq(events.size(), 1)
+	var stored_event = events[0]
+	assert_true(stored_event is InputEventMouseButton)
+	assert_eq(stored_event.device, -1)
+
+	var default_device_event := InputEventMouseButton.new()
+	default_device_event.button_index = MOUSE_BUTTON_LEFT
+	default_device_event.pressed = true
+	assert_true(InputMap.event_is_action(default_device_event, TEST_ACTION))
+
+	var explicit_device_event := InputEventMouseButton.new()
+	explicit_device_event.button_index = MOUSE_BUTTON_LEFT
+	explicit_device_event.device = 1
+	explicit_device_event.pressed = true
+	assert_true(InputMap.event_is_action(explicit_device_event, TEST_ACTION))
+
+	_handler.remove_action({"action": TEST_ACTION})
+
+
 func test_bind_joy_axis_event() -> void:
 	_handler.add_action({"action": TEST_ACTION})
 	var result := _handler.bind_event({

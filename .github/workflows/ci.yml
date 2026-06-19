@@ -144,6 +144,9 @@ jobs:
           - os: windows-latest
             label: Windows
             godot-version: "4.6.2"
+          - os: ubuntu-latest
+            label: Linux (Godot 4.7)
+            godot-version: "4.7.0"
           ## 4.3 Linux canary — README advertises "Godot 4.3+" support and
           ## #476's parse-cascade regression went unnoticed for 24 days
           ## because every CI run was on 4.6.2. Phase 1 of #477: one cheap

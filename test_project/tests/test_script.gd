@@ -172,7 +172,10 @@ func _detach_shared_editor_logger() -> void:
 
 
 func _expect_invalid_if_parse_errors() -> void:
-	# Godot emits this diagnostic twice: once for gdscript:// validation and once for the res:// file load.
+	# Godot 4.7 adds one more logger-visible copy of this parse diagnostic.
+	# Expect the maximum seen across supported engines; older versions tolerate
+	# extra expectations for errors that are never emitted.
+	expect_script_error_containing(INVALID_IF_PARSE_ERROR)
 	expect_script_error_containing(INVALID_IF_PARSE_ERROR)
 	expect_script_error_containing(INVALID_IF_PARSE_ERROR)
 

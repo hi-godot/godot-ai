@@ -175,6 +175,7 @@ func _create_event(event_type: String, params: Dictionary):
 			ev.alt_pressed = params.get("alt", false)
 			ev.shift_pressed = params.get("shift", false)
 			ev.meta_pressed = params.get("meta", false)
+			ev.device = -1
 			return ev
 		"mouse_button":
 			if not params.has("button"):
@@ -186,6 +187,7 @@ func _create_event(event_type: String, params: Dictionary):
 					"mouse_button button must be > 0 (got %d). Use 1=left, 2=right, 3=middle, 4=wheel up, 5=wheel down." % button)
 			var ev := InputEventMouseButton.new()
 			ev.button_index = button
+			ev.device = -1
 			return ev
 		"joy_button":
 			if not params.has("button"):
