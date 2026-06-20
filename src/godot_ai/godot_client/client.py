@@ -74,14 +74,20 @@ class GodotClient:
             "circuit_open": True,
             **snapshot,
         }
+        message = (
+            "Editor-bridge circuit is open after repeated transport failures - "
+            f"retry in {retry_after_ms}ms"
+        )
         if session_id is None and snapshot.get("last_failure_kind") == "no_active_session":
             data = no_active_session_data(**data)
+            message = (
+                "Editor-bridge circuit is open after repeated no-session failures - "
+                "this MCP server still has no connected Godot editor; "
+                f"retry in {retry_after_ms}ms"
+            )
         raise GodotCommandError(
             code=ErrorCode.PLUGIN_DISCONNECTED,
-            message=(
-                "Editor-bridge circuit is open after repeated transport failures — "
-                f"retry in {retry_after_ms}ms"
-            ),
+            message=message,
             data=data,
         )
 

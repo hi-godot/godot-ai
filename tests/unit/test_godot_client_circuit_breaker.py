@@ -158,6 +158,7 @@ class TestCircuitOpens:
         assert data["retryable"] is True
         assert data["retry_after_ms"] > 0
         assert data["last_failure_kind"] == "no_active_session"
+        assert "no connected Godot editor" in exc_info.value.message
         assert "retry in" in exc_info.value.message
 
     async def test_session_not_found_threshold_opens_circuit_keyed_by_session(self) -> None:
@@ -293,6 +294,7 @@ class TestErrorPayloadShape:
         assert err.data["reason"] == "no_active_session"
         assert err.data["connected"] is False
         assert err.data["diagnostics"]["check_sessions"] == "session_manage(op='list')"
+        assert "no connected Godot editor" in err.message
 
         ## Payload is JSON-serializable (no Exception objects or Enums) so it
         ## flows through MCP without surprises.
