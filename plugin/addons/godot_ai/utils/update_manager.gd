@@ -34,6 +34,21 @@ const UPDATE_TEMP_DIR := "user://godot_ai_update/"
 const UPDATE_TEMP_ZIP := "user://godot_ai_update/update.zip"
 const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")
 
+## Hosts the self-update download is allowed to come from. The download URL
+## is taken verbatim from the GitHub Releases API's `browser_download_url`,
+## so before fetching we pin it to https on a GitHub-owned host — a tampered
+## or unexpected API response can't then point the in-editor updater at an
+## arbitrary origin. (HTTPRequest follows the github.com -> githubusercontent
+## redirect internally; this validates the entry point. Release-side checksum
+## / provenance verification of the downloaded bytes remains tracked in #523.)
+const _TRUSTED_DOWNLOAD_HOSTS := [
+	"github.com",
+	"www.github.com",
+	"api.github.com",
+	"objects.githubusercontent.com",
+	"release-assets.githubusercontent.com",
+]
+
 ## Emitted after `check_for_updates()` resolves a newer remote version.
 ## Payload mirrors the Dictionary returned by `parse_releases_response`:
 ##   {has_update, version, forced, label_text, download_url}
@@ -166,6 +181,22 @@ func start_install() -> void:
 		OS.shell_open(RELEASES_PAGE)
 		return
 
+	## Pin the resolved asset URL to https on a GitHub host before fetching.
+	## Fall back to the release page (a user-driven browser download) rather
+	## than pulling an executable plugin payload from an unexpected origin.
+	## See #523.
+	if not _is_trusted_download_url(_latest_download_url):
+		push_error(
+			"MCP | refusing self-update download from untrusted URL: %s"
+			% _latest_download_url
+		)
+		OS.shell_open(RELEASES_PAGE)
+		install_state_changed.emit({
+			"button_text": "Update via download page",
+			"button_disabled": false,
+		})
+		return
+
 	install_state_changed.emit({
 		"button_text": "Downloading...",
 		"button_disabled": true,
@@ -259,6 +290,30 @@ static func parse_releases_response(
 	out["label_text"] = label_text
 	out["download_url"] = url
 	return out
+
+
+## True only for an `https://` URL whose host is one of
+## `_TRUSTED_DOWNLOAD_HOSTS`. Parses the authority by hand (GDScript has no
+## URL parser): strips userinfo via the LAST `@` so `https://github.com@evil
+## .com/...` resolves to `evil.com` (rejected), and strips any `:port`.
+## Static so the guard is unit-testable without instancing the manager.
+static func _is_trusted_download_url(url: String) -> bool:
+	const SCHEME := "https://"
+	if not url.begins_with(SCHEME):
+		return false
+	var rest := url.substr(SCHEME.length())
+	var authority := rest
+	var slash := rest.find("/")
+	if slash >= 0:
+		authority = rest.substr(0, slash)
+	## Host is everything after the LAST '@' (userinfo precedes it).
+	var at := authority.rfind("@")
+	if at >= 0:
+		authority = authority.substr(at + 1)
+	var colon := authority.find(":")
+	if colon >= 0:
+		authority = authority.substr(0, colon)
+	return authority.to_lower() in _TRUSTED_DOWNLOAD_HOSTS
 
 
 static func _is_newer(remote: String, local: String) -> bool:
@@ -382,16 +437,43 @@ func _install_zip_inline(version: Dictionary) -> void:
 	for file_path in files:
 		if not file_path.begins_with("addons/godot_ai/"):
 			continue
+		## Skip zip dir entries; parent dirs are created from each validated
+		## file's base dir below — the same shape the runner uses. Creating a
+		## dir from an unvalidated entry would itself be a traversal hole.
 		if file_path.ends_with("/"):
-			DirAccess.make_dir_recursive_absolute(install_base.path_join(file_path))
-		else:
-			var dir := file_path.get_base_dir()
-			DirAccess.make_dir_recursive_absolute(install_base.path_join(dir))
-			var content := reader.read_file(file_path)
-			var f := FileAccess.open(install_base.path_join(file_path), FileAccess.WRITE)
-			if f != null:
-				f.store_buffer(content)
-				f.close()
+			continue
+		## Reject path-traversal / absolute / backslash entries BEFORE any
+		## path_join + write. The modern runner enforces this via
+		## `update_reload_runner.gd::_is_safe_zip_addon_file`; the pre-4.4
+		## inline path used to gate only on the `addons/godot_ai/` prefix, so
+		## `addons/godot_ai/../../evil.gd` escaped the addon dir. This guard
+		## closes that gap so the weaker path runs the same checks. See #522.
+		if not _is_safe_zip_addon_file(file_path):
+			_abort_inline_install(reader, "unsafe zip path: %s" % file_path)
+			return
+		var dir := file_path.get_base_dir()
+		DirAccess.make_dir_recursive_absolute(install_base.path_join(dir))
+		var content := reader.read_file(file_path)
+		var target := install_base.path_join(file_path)
+		var f := FileAccess.open(target, FileAccess.WRITE)
+		## Unlike the runner (tmp+rename+per-file backup+rollback), this pre-4.4
+		## path writes directly over live files and can't roll back. It used to
+		## skip a null open and ignore store_buffer errors silently, leaving a
+		## partially-overwritten addons tree while still telling the user to
+		## restart onto it. Check both error surfaces and abort loudly instead.
+		## See #524.
+		if f == null:
+			_abort_inline_install(
+				reader,
+				"could not open %s for write (error %d)" % [target, FileAccess.get_open_error()],
+			)
+			return
+		f.store_buffer(content)
+		var write_error := f.get_error()
+		f.close()
+		if write_error != OK:
+			_abort_inline_install(reader, "write error %d for %s" % [write_error, target])
+			return
 
 	reader.close()
 
@@ -426,6 +508,47 @@ func _install_zip_inline(version: Dictionary) -> void:
 			"label_text": "Updated! Restart the editor.",
 			"outcome": "success",
 		})
+
+
+## Abort the inline (pre-4.4) extract on a path-safety or write failure.
+## Closes the ZIP reader, drops the in-flight gate so dock spawn paths
+## un-block, and surfaces the failure loudly: this path has no rollback, so
+## the addons tree may be partially overwritten and the user must reinstall
+## from the download page rather than relaunch onto a half-written plugin.
+## See #522 / #524.
+func _abort_inline_install(reader: ZIPReader, reason: String) -> void:
+	reader.close()
+	_install_in_flight = false
+	push_error(
+		"MCP | self-update extract failed: %s. addons/godot_ai/ may be"
+		% reason
+		+ " partially updated — reinstall the plugin from the download page"
+		+ " before relaunching."
+	)
+	print("MCP | self-update extract aborted: %s" % reason)
+	install_state_changed.emit({
+		"button_text": "Extract failed — reinstall",
+		"button_disabled": false,
+	})
+
+
+## Mirror of `update_reload_runner.gd::_is_safe_zip_addon_file`. Rejects any
+## entry that could escape `addons/godot_ai/` — absolute paths, backslashes,
+## and `.`/`..`/empty path segments — before it reaches a `path_join` + write
+## on the inline (pre-4.4) extract path, which has no rollback. Static so the
+## guard is unit-testable without instancing the manager. See #522.
+static func _is_safe_zip_addon_file(file_path: String) -> bool:
+	if file_path.is_absolute_path() or file_path.contains("\\"):
+		return false
+	if not file_path.begins_with("addons/godot_ai/"):
+		return false
+	var rel_path := file_path.trim_prefix("addons/godot_ai/")
+	if rel_path.is_empty() or rel_path.ends_with("/"):
+		return false
+	for segment in rel_path.split("/", true):
+		if segment.is_empty() or segment == "." or segment == "..":
+			return false
+	return true
 
 
 func _on_filesystem_scanned_for_update() -> void:

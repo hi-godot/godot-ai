@@ -63,6 +63,73 @@ func test_manual_update_label_omits_version_when_unknown() -> void:
 	assert_contains(no_v, "Godot 4.4+", "label must still state the engine requirement")
 
 
+# ---- _is_safe_zip_addon_file (pure / static, #522) --------------------
+
+func test_safe_zip_addon_file_accepts_normal_entries() -> void:
+	## The inline (pre-4.4) extract path validates every entry with the same
+	## guard the runner enforces, so ordinary addon files must pass.
+	assert_true(
+		McpUpdateManagerScript._is_safe_zip_addon_file("addons/godot_ai/plugin.gd"),
+		"a top-level addon file must be accepted")
+	assert_true(
+		McpUpdateManagerScript._is_safe_zip_addon_file("addons/godot_ai/utils/settings.gd"),
+		"a nested addon file must be accepted")
+
+
+func test_safe_zip_addon_file_rejects_traversal_and_escapes() -> void:
+	## These are exactly the shapes the prefix-only check used to let through
+	## onto a path_join + write (#522).
+	assert_false(
+		McpUpdateManagerScript._is_safe_zip_addon_file("addons/godot_ai/../../evil.gd"),
+		"`..` segments must be rejected — they escape the addon dir")
+	assert_false(
+		McpUpdateManagerScript._is_safe_zip_addon_file("/etc/passwd"),
+		"absolute paths must be rejected")
+	assert_false(
+		McpUpdateManagerScript._is_safe_zip_addon_file("addons/godot_ai/foo\\..\\bar.gd"),
+		"backslashes must be rejected (Windows-style traversal)")
+	assert_false(
+		McpUpdateManagerScript._is_safe_zip_addon_file("addons/other/file.gd"),
+		"entries outside addons/godot_ai/ must be rejected")
+	assert_false(
+		McpUpdateManagerScript._is_safe_zip_addon_file("addons/godot_ai/"),
+		"the bare prefix (dir entry) must be rejected as a file")
+	assert_false(
+		McpUpdateManagerScript._is_safe_zip_addon_file("addons/godot_ai/a//b.gd"),
+		"empty path segments must be rejected")
+
+
+# ---- _is_trusted_download_url (pure / static, #523) -------------------
+
+func test_trusted_download_url_accepts_github_hosts() -> void:
+	assert_true(
+		McpUpdateManagerScript._is_trusted_download_url(TEST_ASSET_URL),
+		"a normal github.com release asset URL must be trusted")
+	assert_true(
+		McpUpdateManagerScript._is_trusted_download_url(
+			"https://objects.githubusercontent.com/github-production-release/x.zip"),
+		"the githubusercontent redirect target host must be trusted")
+
+
+func test_trusted_download_url_rejects_untrusted_and_insecure() -> void:
+	assert_false(
+		McpUpdateManagerScript._is_trusted_download_url(
+			"http://github.com/hi-godot/godot-ai/releases/download/v1/godot-ai-plugin.zip"),
+		"plain http must be rejected even on a github host")
+	assert_false(
+		McpUpdateManagerScript._is_trusted_download_url("https://example.invalid/payload.zip"),
+		"a non-github host must be rejected")
+	assert_false(
+		McpUpdateManagerScript._is_trusted_download_url("https://github.com.evil.com/x.zip"),
+		"a look-alike host suffix must be rejected")
+	assert_false(
+		McpUpdateManagerScript._is_trusted_download_url("https://github.com@evil.com/x.zip"),
+		"userinfo spoofing (host is after the last @) must be rejected")
+	assert_false(
+		McpUpdateManagerScript._is_trusted_download_url(""),
+		"an empty URL must be rejected")
+
+
 # ---- parse_releases_response (pure / static) ---------------------------
 
 func _make_body(json_str: String) -> PackedByteArray:
