@@ -231,9 +231,12 @@ static func _instantiate_resource(type_str: String) -> Variant:
 		return built_in
 	for entry in ProjectSettings.get_global_class_list():
 		if entry.get("class", "") == type_str:
-			var scr: Variant = load(entry.get("path", ""))
-			if not (scr is Script) or not scr.can_instantiate():
-				return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Cannot instantiate script class %s" % type_str)
+			var script_path: String = entry.get("path", "")
+			var scr: Variant = load(script_path)
+			if not (scr is Script):
+				return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to load script class %s from %s" % [type_str, script_path])
+			if not scr.can_instantiate():
+				return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s cannot be instantiated in the editor (abstract, or a non-@tool script — add @tool to instantiate it here)" % type_str)
 			var inst: Variant = scr.new()
 			if not (inst is Resource):
 				return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s is not a Resource type" % type_str)
@@ -285,16 +288,15 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary) ->
 			# resource_create/environment_create callers can populate
 			# sub-resource slots (ShaderMaterial.shader, etc.) in one shot.
 			var sub_type: String = v.get("__class__", "")
-			var class_err := _validate_resource_class(sub_type)
-			if class_err != null:
-				return class_err
-			var sub_instance := ClassDB.instantiate(sub_type)
-			if sub_instance == null or not (sub_instance is Resource):
-				return ErrorCodes.make(
-					ErrorCodes.INTERNAL_ERROR,
-					"Failed to instantiate %s as a Resource for property '%s'" % [sub_type, key]
-				)
-			var sub_res: Resource = sub_instance
+			# Resolve via the shared helper so the nested shortcut accepts both
+			# engine built-ins (ClassDB) and project `class_name` Resources,
+			# exactly like the top-level resource_create path.
+			var sub_made := _instantiate_resource(sub_type)
+			if sub_made is Dictionary:
+				# Preserve the property-slot context the inline path used to add.
+				sub_made["error"]["message"] = "%s (for property '%s')" % [sub_made["error"]["message"], key]
+				return sub_made
+			var sub_res: Resource = sub_made
 			var remaining: Dictionary = (v as Dictionary).duplicate()
 			remaining.erase("__class__")
 			if not remaining.is_empty():

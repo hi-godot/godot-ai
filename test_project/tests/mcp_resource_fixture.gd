@@ -8,3 +8,7 @@ extends Resource
 ## class_name so the tests can reference MyTestResource by type.
 
 @export var label: String = ""
+
+## Sub-resource slot used by the nested-`__class__` shortcut tests: a generic
+## Resource slot so a custom class_name Resource can be nested under it.
+@export var sub: Resource = null

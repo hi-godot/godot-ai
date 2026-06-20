@@ -583,3 +583,48 @@ func test_create_resource_custom_class_to_file() -> void:
 	assert_true(loaded is MyTestResource, "saved resource should load as MyTestResource")
 	assert_eq(loaded.label, "hi")
 	DirAccess.remove_absolute(out_path)
+
+
+# ----- regression: nested __class__ shortcut must resolve project class_name -----
+
+func test_apply_properties_nested_custom_class_name_instantiates_sub_resource() -> void:
+	# The nested {"__class__": ...} shortcut must resolve project class_name
+	# Resources (not just engine built-ins), mirroring the top-level
+	# _instantiate_resource path. A custom MyTestResource nested in a sub-resource
+	# slot must instantiate rather than failing "Unknown resource type".
+	var host := MyTestResource.new()
+	var err: Variant = ResourceHandler._apply_resource_properties(host, {
+		"sub": {"__class__": "MyTestResource", "label": "child"},
+	})
+	assert_true(err == null, "nested custom class_name should apply cleanly; got: %s" % str(err))
+	assert_true(host.sub is MyTestResource, "nested __class__ must instantiate the custom Resource; got: %s" % str(host.sub))
+	if host.sub is MyTestResource:
+		assert_eq((host.sub as MyTestResource).label, "child")
+
+
+func test_instantiate_resource_non_instantiable_project_class_is_wrong_type() -> void:
+	# A project class_name whose can_instantiate() is false (here a non-@tool
+	# script, non-instantiable in the editor) must return WRONG_TYPE — mirroring
+	# the built-in abstract path — not INTERNAL_ERROR.
+	# Precondition: pin the load-bearing assumption that the non-@tool fixture is
+	# non-instantiable in this (editor) context — so a future scripting-enabled
+	# runner surfaces a clear precondition failure rather than a confusing
+	# "expected error, got success" on the assertion below.
+	var nontool := load("res://tests/mcp_non_tool_resource_fixture.gd") as Script
+	assert_false(nontool.can_instantiate(),
+		"fixture precondition: non-@tool script must be non-instantiable in editor context")
+	assert_is_error(ResourceHandler._instantiate_resource("McpNonToolResource"),
+		ErrorCodes.WRONG_TYPE)
+
+
+func test_apply_properties_nested_failure_names_the_property() -> void:
+	# Routing the nested __class__ shortcut through _instantiate_resource must
+	# still name the offending property slot in the error, preserving the
+	# diagnostic context the inline path used to provide.
+	var host := MyTestResource.new()
+	var err: Variant = ResourceHandler._apply_resource_properties(host, {
+		"sub": {"__class__": "NotARealType_xyz"},
+	})
+	assert_true(err is Dictionary, "expected an error dict; got: %s" % str(err))
+	if err is Dictionary:
+		assert_contains(err["error"]["message"], "for property 'sub'")
