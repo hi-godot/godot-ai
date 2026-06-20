@@ -126,11 +126,17 @@ class TestPreThresholdBehavior:
         assert breaker.check_open(None) is None
         assert breaker.snapshot(None)["consecutive_failures"] == 2
 
-    async def test_first_session_not_found_failures_raise_connection_error(self) -> None:
+    async def test_first_session_not_found_failures_raise_actionable_error(self) -> None:
         client, _, breaker = _client(_make_registry(), threshold=3)
         for _ in range(2):
-            with pytest.raises(ConnectionError, match="not found"):
+            with pytest.raises(GodotCommandError) as exc_info:
                 await client.send("anything", session_id="ghost")
+            assert exc_info.value.code == "PLUGIN_DISCONNECTED"
+            assert "ghost" in exc_info.value.message
+            assert exc_info.value.data["reason"] == "session_not_found"
+            assert exc_info.value.data["session_id"] == "ghost"
+            assert exc_info.value.data["connected"] is False
+            assert "session_manage(op='list')" in exc_info.value.data["hint"]
         assert breaker.check_open("ghost") is None
 
     async def test_first_transport_timeout_raises_bare_timeout(self) -> None:
@@ -164,12 +170,18 @@ class TestCircuitOpens:
     async def test_session_not_found_threshold_opens_circuit_keyed_by_session(self) -> None:
         client, _, breaker = _client(_make_registry(), threshold=3)
         for _ in range(3):
-            with pytest.raises(ConnectionError):
+            with pytest.raises(GodotCommandError):
                 await client.send("anything", session_id="ghost")
         with pytest.raises(GodotCommandError) as exc_info:
             await client.send("anything", session_id="ghost")
         assert exc_info.value.code == "PLUGIN_DISCONNECTED"
-        assert exc_info.value.data["last_failure_kind"] == "session_not_found"
+        data = exc_info.value.data
+        assert data["last_failure_kind"] == "session_not_found"
+        assert data["reason"] == "session_not_found"
+        assert data["session_id"] == "ghost"
+        assert data["circuit_open"] is True
+        assert "missing-session" in exc_info.value.message
+        assert "still not connected" in exc_info.value.message
 
     async def test_transport_timeout_threshold_opens_circuit(self) -> None:
         client, ws, _ = _client(_make_registry("sess", active="sess"), threshold=3)
@@ -264,7 +276,7 @@ class TestPerSessionIsolation:
         client, ws, breaker = _client(registry, threshold=3)
         ## Trip the circuit on a missing pinned session.
         for _ in range(3):
-            with pytest.raises(ConnectionError):
+            with pytest.raises(GodotCommandError):
                 await client.send("anything", session_id="ghost")
         with pytest.raises(GodotCommandError):
             await client.send("anything", session_id="ghost")

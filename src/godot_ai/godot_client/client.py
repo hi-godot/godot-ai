@@ -11,6 +11,8 @@ from godot_ai.godot_client.circuit_breaker import EditorBridgeCircuitBreaker
 from godot_ai.godot_client.session_diagnostics import (
     NO_ACTIVE_SESSION_MESSAGE,
     no_active_session_data,
+    session_not_found_data,
+    session_not_found_message,
 )
 from godot_ai.protocol.errors import ErrorCode
 from godot_ai.sessions.registry import SessionRegistry
@@ -75,14 +77,21 @@ class GodotClient:
             **snapshot,
         }
         message = (
-            "Editor-bridge circuit is open after repeated transport failures - "
+            "Editor-bridge circuit is open after repeated transport failures — "
             f"retry in {retry_after_ms}ms"
         )
         if session_id is None and snapshot.get("last_failure_kind") == "no_active_session":
             data = no_active_session_data(**data)
             message = (
-                "Editor-bridge circuit is open after repeated no-session failures - "
+                "Editor-bridge circuit is open after repeated no-session failures — "
                 "this MCP server still has no connected Godot editor; "
+                f"retry in {retry_after_ms}ms"
+            )
+        elif session_id is not None and snapshot.get("last_failure_kind") == "session_not_found":
+            data = session_not_found_data(session_id, **data)
+            message = (
+                "Editor-bridge circuit is open after repeated missing-session failures — "
+                f"session '{session_id}' is still not connected to this MCP server; "
                 f"retry in {retry_after_ms}ms"
             )
         raise GodotCommandError(
@@ -150,8 +159,10 @@ class GodotClient:
 
         if self.registry.get(session_id) is None:
             self._record_failure(session_id, kind="session_not_found")
-            raise ConnectionError(
-                f"Session {session_id} not found. Error code: {ErrorCode.SESSION_NOT_FOUND}"
+            raise GodotCommandError(
+                code=ErrorCode.PLUGIN_DISCONNECTED,
+                message=session_not_found_message(session_id),
+                data=session_not_found_data(session_id, circuit_open=False),
             )
 
         try:
