@@ -23,6 +23,7 @@ import os
 import platform
 import subprocess
 import sys
+import time
 
 DEFAULT_PORT = 8000
 DEFAULT_WS_PORT = 9500
@@ -92,21 +93,38 @@ def _free_port(port: int) -> None:
                 os.kill(int(pid), 15)
             except (ProcessLookupError, ValueError, PermissionError):
                 pass
+    # The socket can stay bound briefly after the owner dies; wait for it to
+    # actually free so the new server doesn't lose a bind race. Bounded so a
+    # stubborn listener doesn't hang the launcher — we proceed and let the
+    # server's own bind error surface if it never releases.
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        if not _pids_on_port(port):
+            return
+        time.sleep(0.2)
 
 
 def _extract_int_flag(args: list[str], name: str, default: int) -> int:
-    """Read --name <v> / --name=v from a passthrough arg list (no removal)."""
+    """Read --name <v> / --name=v from a passthrough arg list (no removal).
+
+    Exits on a present-but-malformed flag rather than silently using the
+    default — otherwise a typo'd `--port` would free/echo the default port
+    while the doomed bad value still passes through to the server, leaving the
+    editor with no server.
+    """
     for i, a in enumerate(args):
-        if a == name and i + 1 < len(args):
-            try:
-                return int(args[i + 1])
-            except ValueError:
-                return default
-        if a.startswith(name + "="):
-            try:
-                return int(a.split("=", 1)[1])
-            except ValueError:
-                return default
+        if a == name:
+            if i + 1 >= len(args):
+                sys.exit(f"error: {name} requires an integer value")
+            raw = args[i + 1]
+        elif a.startswith(name + "="):
+            raw = a.split("=", 1)[1]
+        else:
+            continue
+        try:
+            return int(raw)
+        except ValueError:
+            sys.exit(f"error: {name} value {raw!r} is not an integer")
     return default
 
 

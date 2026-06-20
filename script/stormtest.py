@@ -21,9 +21,10 @@ A full JSON snapshot is flushed to stormtest_report.json every few seconds so
 a crash or kill still leaves analyzable data (latency p50/p95/max + per-op
 error codes).
 
-Run against a running editor whose MCP server is on :8000:
+Run against a running editor whose MCP server is on :8000 (use `python` with
+the venv active, or the venv interpreter directly — same on every OS):
 
-    .venv/bin/python script/stormtest.py
+    python script/stormtest.py
 
 Knobs (all env-overridable):
     SS_WORKERS   parallel client connections           (default 8)

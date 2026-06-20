@@ -137,7 +137,7 @@ server reliably survive the reload is tracked in
 | `SS_RECONNECT_TIMEOUT` | 30 | seconds to wait for the server to return after a reload |
 | `SS_CLOSE_TIMEOUT` | 5 | hard cap (s) on client teardown so a dead-server socket can't wedge the loop |
 | `SS_URL` | `http://127.0.0.1:8000/mcp` | target MCP endpoint |
-| `SS_REPORT` | `$TMPDIR/stormtest_report.json` | where to write the JSON snapshot |
+| `SS_REPORT` | `<platform temp dir>/stormtest_report.json` | where to write the JSON snapshot (temp dir via `tempfile.gettempdir()`; `%TEMP%` on Windows) |
 
 Total calls ≈ `WORKERS × WAVES × CALLS` minus the chaos worker's reload waves.
 
