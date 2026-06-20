@@ -178,19 +178,10 @@ func create_resource(params: Dictionary) -> Dictionary:
 		return home_err
 	var has_file_target := not resource_path.is_empty()
 
-	var class_err := _validate_resource_class(type_str)
-	if class_err != null:
-		return class_err
-
-	var instance := ClassDB.instantiate(type_str)
-	if instance == null:
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s" % type_str)
-	if not (instance is Resource):
-		return ErrorCodes.make(
-			ErrorCodes.INTERNAL_ERROR,
-			"Instantiated %s but result is not a Resource (got %s)" % [type_str, instance.get_class()]
-		)
-	var res: Resource = instance
+	var made := _instantiate_resource(type_str)
+	if made is Dictionary:
+		return made
+	var res: Resource = made
 
 	if not properties.is_empty():
 		var apply_err := _apply_resource_properties(res, properties)
@@ -224,6 +215,30 @@ static func _validate_resource_class(type_str: String) -> Variant:
 			"%s is abstract and cannot be instantiated — use a concrete subclass (e.g. BoxMesh, BoxShape3D, StyleBoxFlat)" % type_str
 		)
 	return null
+
+
+## Resolve a resource type name to a fresh instance. Handles engine built-ins
+## (ClassDB) and project `class_name` Resources (the global script-class
+## registry). Returns a Resource on success, or an error dict on failure.
+static func _instantiate_resource(type_str: String) -> Variant:
+	if ClassDB.class_exists(type_str):
+		var class_err: Variant = _validate_resource_class(type_str)
+		if class_err != null:
+			return class_err
+		var built_in := ClassDB.instantiate(type_str)
+		if built_in == null or not (built_in is Resource):
+			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s as a Resource" % type_str)
+		return built_in
+	for entry in ProjectSettings.get_global_class_list():
+		if entry.get("class", "") == type_str:
+			var scr: Variant = load(entry.get("path", ""))
+			if not (scr is Script) or not scr.can_instantiate():
+				return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Cannot instantiate script class %s" % type_str)
+			var inst: Variant = scr.new()
+			if not (inst is Resource):
+				return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s is not a Resource type" % type_str)
+			return inst
+	return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Unknown resource type: %s" % type_str)
 
 
 ## Apply a dict of property values to a freshly-instantiated Resource,

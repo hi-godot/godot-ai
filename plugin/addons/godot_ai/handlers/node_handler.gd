@@ -239,16 +239,10 @@ func set_property(params: Dictionary) -> Dictionary:
 		# properties. Mirrors resource_create's inline-assign path but
 		# avoids a separate tool call for the common case.
 		var type_str: String = value.get("__class__", "")
-		var class_err := ResourceHandler._validate_resource_class(type_str)
-		if class_err != null:
-			return class_err
-		var instance := ClassDB.instantiate(type_str)
-		if instance == null or not (instance is Resource):
-			return ErrorCodes.make(
-				ErrorCodes.INTERNAL_ERROR,
-				"Failed to instantiate %s as a Resource" % type_str
-			)
-		var res: Resource = instance
+		var made := ResourceHandler._instantiate_resource(type_str)
+		if made is Dictionary:
+			return made
+		var res: Resource = made
 		var remaining: Dictionary = (value as Dictionary).duplicate()
 		remaining.erase("__class__")
 		if not remaining.is_empty():

@@ -552,3 +552,34 @@ func test_create_resource_nested_class_dict_invalid_class() -> void:
 	})
 	assert_is_error(result)
 	_remove_node(tr)
+
+
+# ----- custom class_name Resource instantiation -----
+
+func test_instantiate_resource_builtin_still_works() -> void:
+	# Regression: engine built-ins must still resolve via ClassDB.
+	assert_true(ResourceHandler._instantiate_resource("BoxMesh") is BoxMesh)
+
+
+func test_instantiate_resource_custom_class_name() -> void:
+	var made: Variant = ResourceHandler._instantiate_resource("MyTestResource")
+	assert_true(made is MyTestResource, "should instantiate a project class_name Resource")
+
+
+func test_instantiate_resource_unknown_type_errors() -> void:
+	assert_is_error(ResourceHandler._instantiate_resource("NotARealType_xyz"),
+		ErrorCodes.VALUE_OUT_OF_RANGE)
+
+
+func test_create_resource_custom_class_to_file() -> void:
+	var out_path := "res://tests/_mcp_test_custom_resource.tres"
+	var result := _handler.create_resource({
+		"type": "MyTestResource",
+		"resource_path": out_path,
+		"properties": {"label": "hi"},
+	})
+	assert_has_key(result, "data")
+	var loaded := load(out_path)
+	assert_true(loaded is MyTestResource, "saved resource should load as MyTestResource")
+	assert_eq(loaded.label, "hi")
+	DirAccess.remove_absolute(out_path)
