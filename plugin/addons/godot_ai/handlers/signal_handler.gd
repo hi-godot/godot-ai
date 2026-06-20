@@ -152,7 +152,7 @@ func connect_signal(params: Dictionary) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Signal '%s' already connected to %s.%s" % [signal_name, params.target, method])
 
 	_undo_redo.create_action("MCP: Connect signal %s" % signal_name)
-	_undo_redo.add_do_method(source, "connect", signal_name, callable)
+	_undo_redo.add_do_method(source, "connect", signal_name, callable, Object.CONNECT_PERSIST)
 	_undo_redo.add_undo_method(source, "disconnect", signal_name, callable)
 	_undo_redo.commit_action()
 
@@ -176,7 +176,7 @@ func disconnect_signal(params: Dictionary) -> Dictionary:
 
 	_undo_redo.create_action("MCP: Disconnect signal %s" % signal_name)
 	_undo_redo.add_do_method(source, "disconnect", signal_name, callable)
-	_undo_redo.add_undo_method(source, "connect", signal_name, callable)
+	_undo_redo.add_undo_method(source, "connect", signal_name, callable, Object.CONNECT_PERSIST)
 	_undo_redo.commit_action()
 
 	return {"data": _signal_response(source, signal_name, target, method, scene_root)}
