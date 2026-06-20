@@ -294,9 +294,10 @@ static func parse_releases_response(
 
 ## True only for an `https://` URL whose host is one of
 ## `_TRUSTED_DOWNLOAD_HOSTS`. Parses the authority by hand (GDScript has no
-## URL parser): strips userinfo via the LAST `@` so `https://github.com@evil
-## .com/...` resolves to `evil.com` (rejected), and strips any `:port`.
-## Static so the guard is unit-testable without instancing the manager.
+## URL parser): strips userinfo via the LAST `@` so a spoof like
+## `https://github.com@evil.com/...` resolves to `evil.com` (rejected), and
+## strips any `:port`. Static so the guard is unit-testable without
+## instancing the manager.
 static func _is_trusted_download_url(url: String) -> bool:
 	const SCHEME := "https://"
 	if not url.begins_with(SCHEME):
