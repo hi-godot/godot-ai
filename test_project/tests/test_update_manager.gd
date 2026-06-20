@@ -130,6 +130,55 @@ func test_trusted_download_url_rejects_untrusted_and_insecure() -> void:
 		"an empty URL must be rejected")
 
 
+# ---- _parse_sha256_digest (pure / static, #523) ----------------------
+
+func test_parse_sha256_digest_accepts_sha256sum_line() -> void:
+	## `sha256sum godot-ai-plugin.zip` emits "<hex>  <name>"; only the digest
+	## is used.
+	var hex := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	var parsed := McpUpdateManagerScript._parse_sha256_digest(hex + "  godot-ai-plugin.zip\n")
+	assert_eq(parsed, hex, "must extract the digest from a sha256sum line")
+
+
+func test_parse_sha256_digest_accepts_bare_and_uppercase_digest() -> void:
+	var hex := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	assert_eq(McpUpdateManagerScript._parse_sha256_digest(hex), hex,
+		"a bare digest line must be accepted")
+	assert_eq(McpUpdateManagerScript._parse_sha256_digest(hex.to_upper()), hex,
+		"an uppercase digest must be normalized to lowercase")
+
+
+func test_parse_sha256_digest_rejects_malformed() -> void:
+	assert_eq(McpUpdateManagerScript._parse_sha256_digest(""), "",
+		"empty content must be rejected")
+	assert_eq(McpUpdateManagerScript._parse_sha256_digest("deadbeef"), "",
+		"a too-short digest must be rejected")
+	assert_eq(
+		McpUpdateManagerScript._parse_sha256_digest(
+			"z3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+		"",
+		"a non-hex character must be rejected")
+
+
+func test_parse_sha256_digest_matches_fileaccess_hash() -> void:
+	## End-to-end: the digest the plugin parses from a sha256sum line must
+	## equal what FileAccess.get_sha256 produces for the same bytes — the
+	## exact comparison _on_checksum_completed makes before extracting.
+	var path := "user://_test_checksum_target.bin"
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	assert_true(f != null, "seed file must open for write")
+	f.store_string("godot-ai self-update integrity test payload")
+	f.close()
+
+	var real := FileAccess.get_sha256(path).to_lower()
+	var sidecar_line := "%s  godot-ai-plugin.zip\n" % real
+	var parsed := McpUpdateManagerScript._parse_sha256_digest(sidecar_line)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+	assert_eq(parsed, real,
+		"parsed sidecar digest must match FileAccess.get_sha256 (the verify compare)")
+
+
 # ---- parse_releases_response (pure / static) ---------------------------
 
 func _make_body(json_str: String) -> PackedByteArray:
@@ -202,6 +251,37 @@ func test_parse_releases_response_handles_malformed_json() -> void:
 	)
 	assert_false(bool(result.get("has_update", true)),
 		"Malformed JSON must not flag an update")
+
+
+func test_parse_releases_response_captures_checksum_asset_url() -> void:
+	## The release ships a `godot-ai-plugin.zip.sha256` sidecar; its URL must
+	## be surfaced so the installer can verify integrity before extract (#523).
+	var checksum_url := TEST_ASSET_URL + ".sha256"
+	var body := _make_body(JSON.stringify({
+		"tag_name": "v999.0.0",
+		"assets": [
+			{"name": TEST_ASSET_NAME, "browser_download_url": TEST_ASSET_URL},
+			{"name": TEST_ASSET_NAME + ".sha256", "browser_download_url": checksum_url},
+		],
+	}))
+	var result := McpUpdateManagerScript.parse_releases_response(
+		HTTPRequest.RESULT_SUCCESS, 200, body
+	)
+	assert_eq(String(result.get("download_url", "")), TEST_ASSET_URL,
+		"zip asset URL must still resolve when a checksum sidecar is present")
+	assert_eq(String(result.get("checksum_url", "")), checksum_url,
+		"the .sha256 sidecar URL must be captured")
+
+
+func test_parse_releases_response_checksum_empty_when_absent() -> void:
+	## Older releases without a sidecar must leave checksum_url empty so the
+	## installer takes the verify-if-present (skip) path rather than failing.
+	var body := _make_body(_make_release_payload("v999.0.0"))
+	var result := McpUpdateManagerScript.parse_releases_response(
+		HTTPRequest.RESULT_SUCCESS, 200, body
+	)
+	assert_eq(String(result.get("checksum_url", "")), "",
+		"no sidecar asset must yield an empty checksum_url")
 
 
 func test_parse_releases_response_missing_asset_returns_empty_url() -> void:

@@ -68,7 +68,12 @@ var _dock
 
 var _http_request: HTTPRequest
 var _download_request: HTTPRequest
+var _verify_request: HTTPRequest
 var _latest_download_url: String = ""
+## URL of the `godot-ai-plugin.zip.sha256` sidecar asset, when the release
+## ships one. Used to verify the downloaded archive's integrity before extract
+## (#523). Empty for older releases published without a checksum sidecar.
+var _latest_checksum_url: String = ""
 
 ## Set for the duration of `_install_zip` — extract-overwrite of plugin
 ## scripts on disk would crash any worker mid-`GDScriptFunction::call`
@@ -116,6 +121,7 @@ func cancel_check() -> void:
 ## flips so a fresh check paints over a clean banner.
 func clear_pending_download() -> void:
 	_latest_download_url = ""
+	_latest_checksum_url = ""
 
 
 ## True when the running Godot can self-update in place. Godot < 4.4 takes
@@ -243,6 +249,7 @@ func is_install_in_flight() -> bool:
 ##   forced: bool                    ## mode_override() == "user" (banner-only hint)
 ##   label_text: String              ## "Update available: vX.Y.Z" + " (forced)"
 ##   download_url: String            ## matching `godot-ai-plugin.zip` asset URL
+##   checksum_url: String            ## `godot-ai-plugin.zip.sha256` asset URL ("" if absent)
 ##
 ## Static so tests drive it without instancing the manager.
 static func parse_releases_response(
@@ -254,6 +261,7 @@ static func parse_releases_response(
 		"forced": false,
 		"label_text": "",
 		"download_url": "",
+		"checksum_url": "",
 	}
 	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
 		return out
@@ -270,12 +278,15 @@ static func parse_releases_response(
 		return out
 
 	var url := ""
+	var checksum_url := ""
 	var assets: Array = json.get("assets", [])
 	for asset in assets:
 		var asset_dict: Dictionary = asset
-		if String(asset_dict.get("name", "")) == "godot-ai-plugin.zip":
+		var asset_name := String(asset_dict.get("name", ""))
+		if asset_name == "godot-ai-plugin.zip":
 			url = String(asset_dict.get("browser_download_url", ""))
-			break
+		elif asset_name == "godot-ai-plugin.zip.sha256":
+			checksum_url = String(asset_dict.get("browser_download_url", ""))
 
 	var forced := ClientConfigurator.mode_override() == "user"
 	var label_text := "Update available: v%s" % remote_version
@@ -289,6 +300,7 @@ static func parse_releases_response(
 	out["forced"] = forced
 	out["label_text"] = label_text
 	out["download_url"] = url
+	out["checksum_url"] = checksum_url
 	return out
 
 
@@ -342,6 +354,7 @@ func _on_update_check_completed(
 	if not bool(parsed.get("has_update", false)):
 		return
 	_latest_download_url = String(parsed.get("download_url", ""))
+	_latest_checksum_url = String(parsed.get("checksum_url", ""))
 	update_check_completed.emit(parsed)
 	## On engines that can't self-update (Godot < 4.4, #475), surface the
 	## full manual-update guidance AND relabel the button up-front — before
@@ -371,9 +384,117 @@ func _on_download_completed(
 		})
 		return
 
+	# Deferred so the HTTPRequest callback returns before the next step starts.
+	_verify_then_install.call_deferred()
+
+
+# ---- Integrity verification (#523) -------------------------------------
+
+## Gate the extract on a SHA-256 match against the release's checksum sidecar.
+## TLS + host pinning already constrain where the bytes came from; this
+## verifies the bytes themselves so a tampered asset (or a compromised CDN
+## object) can't be installed over live plugin code. Releases published
+## without a `.sha256` sidecar (older versions) install without this check —
+## verify-if-present rather than hard-fail, so existing releases stay
+## updatable; the host pin still applies to the download itself.
+func _verify_then_install() -> void:
+	if _latest_checksum_url.is_empty():
+		print("MCP | no checksum published for this release; skipping integrity verification")
+		install_state_changed.emit({"button_text": "Installing..."})
+		_install_zip()
+		return
+
+	## A present-but-untrusted checksum URL is a tamper signal, not a
+	## backward-compat case — refuse rather than silently skip.
+	if not _is_trusted_download_url(_latest_checksum_url):
+		_fail_verification("checksum URL is not a trusted GitHub host")
+		return
+
+	install_state_changed.emit({"button_text": "Verifying..."})
+	if _verify_request != null:
+		_verify_request.queue_free()
+	_verify_request = HTTPRequest.new()
+	_verify_request.max_redirects = 10
+	_verify_request.request_completed.connect(_on_checksum_completed)
+	add_child(_verify_request)
+	var err := _verify_request.request(_latest_checksum_url)
+	if err != OK:
+		_verify_request.queue_free()
+		_verify_request = null
+		_fail_verification("could not request checksum (error %d)" % err)
+
+
+func _on_checksum_completed(
+	result: int,
+	response_code: int,
+	_headers: PackedStringArray,
+	body: PackedByteArray
+) -> void:
+	if _verify_request != null:
+		_verify_request.queue_free()
+		_verify_request = null
+
+	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
+		_fail_verification("checksum download failed (result=%d code=%d)" % [result, response_code])
+		return
+
+	var expected := _parse_sha256_digest(body.get_string_from_utf8())
+	if expected.is_empty():
+		_fail_verification("malformed checksum file")
+		return
+
+	var zip_path := ProjectSettings.globalize_path(UPDATE_TEMP_ZIP)
+	var actual := FileAccess.get_sha256(zip_path).to_lower()
+	if actual.is_empty():
+		_fail_verification("could not hash the downloaded archive")
+		return
+	if actual != expected:
+		_fail_verification(
+			"checksum mismatch (expected %s…, got %s…)"
+			% [expected.substr(0, 12), actual.substr(0, 12)]
+		)
+		return
+
+	print("MCP | self-update checksum verified (sha256 %s)" % actual)
 	install_state_changed.emit({"button_text": "Installing..."})
-	# Deferred so the HTTPRequest callback returns before the extract starts.
-	_install_zip.call_deferred()
+	_install_zip()
+
+
+## Surface an integrity-check failure and drop the staged zip so the bad
+## bytes can never reach the extract path. Keeps the button enabled for retry.
+func _fail_verification(reason: String) -> void:
+	push_error(
+		"MCP | self-update integrity check failed: %s. The download was not installed."
+		% reason
+	)
+	print("MCP | self-update aborted (integrity): %s" % reason)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(UPDATE_TEMP_ZIP))
+	install_state_changed.emit({
+		"button_text": "Verification failed — retry",
+		"button_disabled": false,
+	})
+
+
+## Extract the hex digest from a `sha256sum`-style file ("<hex>  <name>") or a
+## bare digest line. Returns lowercase 64-char hex, or "" if the content isn't
+## a valid SHA-256 digest. Static so it's unit-testable. See #523.
+static func _parse_sha256_digest(text: String) -> String:
+	var trimmed := text.strip_edges()
+	if trimmed.is_empty():
+		return ""
+	## First whitespace-delimited token; `sha256sum` separates digest and
+	## filename with two spaces, so allow_empty=false collapses the run.
+	var tokens := trimmed.split(" ", false)
+	if tokens.is_empty():
+		return ""
+	var digest := String(tokens[0]).strip_edges().to_lower()
+	if digest.length() != 64:
+		return ""
+	for i in digest.length():
+		var c := digest[i]
+		if not ((c >= "0" and c <= "9") or (c >= "a" and c <= "f")):
+			return ""
+	return digest
 
 
 # ---- Install orchestration ---------------------------------------------
