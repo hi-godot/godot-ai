@@ -11,6 +11,25 @@ def _parse_resource(result) -> dict:
     return json.loads(result[0].text)
 
 
+class TestNoActiveSessionResource:
+    async def test_project_info_resource_explains_missing_editor_session(self):
+        from fastmcp import Client
+
+        from godot_ai.server import create_server
+
+        mcp = create_server(ws_port=19603)
+        async with Client(mcp) as client:
+            result = await client.read_resource("godot://project/info")
+
+        data = _parse_resource(result)
+        assert "No active Godot session" in data["error"]
+        assert data["connected"] is False
+        assert data["reason"] == "no_active_session"
+        assert data["retryable"] is True
+        assert data["diagnostics"]["check_sessions"] == "session_manage(op='list')"
+        assert "container localhost is not host localhost" in data["hint"]
+
+
 # ---------------------------------------------------------------------------
 # godot://sessions
 # ---------------------------------------------------------------------------

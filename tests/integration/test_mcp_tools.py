@@ -8,6 +8,27 @@ import json
 import pytest
 import websockets
 
+
+class TestNoActiveSessionDiagnostics:
+    async def test_tool_error_explains_missing_editor_session(self):
+        from fastmcp import Client
+
+        from godot_ai.server import create_server
+
+        mcp = create_server(ws_port=19602)
+        async with Client(mcp) as client:
+            result = await client.call_tool("editor_state", {}, raise_on_error=False)
+
+        assert result.is_error
+        error = result.structured_content["error"]
+        assert error["code"] == "PLUGIN_DISCONNECTED"
+        assert "No active Godot session" in error["message"]
+        assert error["data"]["reason"] == "no_active_session"
+        assert error["data"]["connected"] is False
+        assert "session_manage(op='list')" in error["data"]["hint"]
+        assert "container localhost is not host localhost" in error["data"]["hint"]
+
+
 # ---------------------------------------------------------------------------
 # scene_get_hierarchy
 # ---------------------------------------------------------------------------

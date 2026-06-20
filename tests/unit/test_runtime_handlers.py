@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from godot_ai import runtime_info
+from godot_ai.godot_client.client import GodotCommandError
 from godot_ai.handlers import animation as animation_handlers
 from godot_ai.handlers import api as api_handlers
 from godot_ai.handlers import audio as audio_handlers
@@ -1691,8 +1692,13 @@ async def test_reload_plugin_handles_disconnect_before_ack_if_replacement_is_pre
 
 async def test_reload_plugin_raises_when_no_active_session():
     runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
-    with pytest.raises(ConnectionError, match="No active Godot session"):
+    with pytest.raises(GodotCommandError) as exc_info:
         await editor_handlers.editor_reload_plugin(runtime)
+    assert exc_info.value.code == "PLUGIN_DISCONNECTED"
+    assert "No active Godot session" in exc_info.value.message
+    assert exc_info.value.data["reason"] == "no_active_session"
+    assert exc_info.value.data["connected"] is False
+    assert exc_info.value.data["diagnostics"]["check_sessions"] == "session_manage(op='list')"
 
 
 async def test_reload_plugin_pins_target_session_when_multiple_connected():
@@ -2498,8 +2504,11 @@ def test_project_info_resource_data_with_active_session():
 def test_project_info_resource_data_no_session():
     runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
     result = project_handlers.project_info_resource_data(runtime)
-    assert result["error"] == "No active Godot session"
+    assert "No active Godot session" in result["error"]
     assert result["connected"] is False
+    assert result["reason"] == "no_active_session"
+    assert result["retryable"] is True
+    assert "container localhost is not host localhost" in result["hint"]
 
 
 async def test_filesystem_search_handler():

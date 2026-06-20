@@ -8,6 +8,10 @@ from typing import Any
 from fastmcp.exceptions import FastMCPError
 
 from godot_ai.godot_client.circuit_breaker import EditorBridgeCircuitBreaker
+from godot_ai.godot_client.session_diagnostics import (
+    NO_ACTIVE_SESSION_MESSAGE,
+    no_active_session_data,
+)
 from godot_ai.protocol.errors import ErrorCode
 from godot_ai.sessions.registry import SessionRegistry
 from godot_ai.transport.websocket import GodotWebSocketServer
@@ -64,18 +68,21 @@ class GodotClient:
         if retry_after_ms is None:
             return
         snapshot = self._circuit.snapshot(session_id)
+        data = {
+            "retryable": True,
+            "retry_after_ms": retry_after_ms,
+            "circuit_open": True,
+            **snapshot,
+        }
+        if session_id is None and snapshot.get("last_failure_kind") == "no_active_session":
+            data = no_active_session_data(**data)
         raise GodotCommandError(
             code=ErrorCode.PLUGIN_DISCONNECTED,
             message=(
                 "Editor-bridge circuit is open after repeated transport failures — "
                 f"retry in {retry_after_ms}ms"
             ),
-            data={
-                "retryable": True,
-                "retry_after_ms": retry_after_ms,
-                "circuit_open": True,
-                **snapshot,
-            },
+            data=data,
         )
 
     def _record_failure(self, session_id: str | None, kind: str) -> None:
@@ -103,6 +110,8 @@ class GodotClient:
 
         If session_id is None, uses the active session.
         Raises GodotCommandError if the plugin returns an error.
+        Raises GodotCommandError(PLUGIN_DISCONNECTED) when there is no active
+        Godot editor session.
         Raises GodotCommandError(PLUGIN_DISCONNECTED) when the per-session
         transport circuit is open (death-spiral protection — see
         ``EditorBridgeCircuitBreaker``).
@@ -117,7 +126,11 @@ class GodotClient:
             if session is None:
                 self._raise_if_circuit_open(None)
                 self._record_failure(None, kind="no_active_session")
-                raise ConnectionError("No active Godot session")
+                raise GodotCommandError(
+                    code=ErrorCode.PLUGIN_DISCONNECTED,
+                    message=NO_ACTIVE_SESSION_MESSAGE,
+                    data=no_active_session_data(circuit_open=False),
+                )
             session_id = session.session_id
             if len(self.registry) > 1:
                 logger.debug(
