@@ -44,16 +44,28 @@ Knobs (all env-overridable):
 
 from __future__ import annotations
 
-import asyncio
-import json
 import os
-import random
-import signal
-import tempfile
-import time
-from collections import Counter, defaultdict
+import sys
+from pathlib import Path
 
-from fastmcp import Client
+# Re-exec into the project's .venv so a bare `python script/stormtest.py` works
+# on every OS without first activating the venv — the third-party imports below
+# resolve there. No-op when already in the venv, when there's no venv, or when
+# SS_NO_REEXEC is set. See #509.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _dev_env import reexec_into_venv  # noqa: E402
+
+reexec_into_venv(guard_env="GODOT_AI_STORMTEST_REEXEC", opt_out_env="SS_NO_REEXEC")
+
+import asyncio  # noqa: E402
+import json  # noqa: E402
+import random  # noqa: E402
+import signal  # noqa: E402
+import tempfile  # noqa: E402
+import time  # noqa: E402
+from collections import Counter, defaultdict  # noqa: E402
+
+from fastmcp import Client  # noqa: E402
 
 URL = os.environ.get("SS_URL", "http://127.0.0.1:8000/mcp")
 

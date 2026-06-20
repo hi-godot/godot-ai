@@ -49,10 +49,11 @@ test of a branch's code, point the editor at that branch's worktree and serve
 that worktree's `src/` (see [Serving a worktree](#serving-a-worktree-code-under-test)
 below), so both the GDScript plugin and the Python server are the code under test.
 
-The commands below use `python` (the same on every OS — activate the venv, or
-substitute the venv interpreter: `.venv/bin/python` on macOS/Linux,
-`.venv\Scripts\python.exe` on Windows). `stormtest.py`'s host-side paths are
-already platform-agnostic.
+The commands below use `python` and are identical on every OS. `stormtest.py`
+re-execs itself into the project `.venv` on launch, so you don't need to
+activate the venv or name `.venv/bin/python` vs `.venv\Scripts\python.exe`
+first — any `python` on PATH works (opt out with `SS_NO_REEXEC=1`). Host-side
+paths are already platform-agnostic.
 
 ```bash
 # default ≈ 1000 calls, with reload churn, against localhost:8000
@@ -136,6 +137,7 @@ server reliably survive the reload is tracked in
 | `SS_ISOLATED_ITERS` | 10 | reload iterations in `isolated` mode |
 | `SS_RECONNECT_TIMEOUT` | 30 | seconds to wait for the server to return after a reload |
 | `SS_CLOSE_TIMEOUT` | 5 | hard cap (s) on client teardown so a dead-server socket can't wedge the loop |
+| `SS_NO_REEXEC` | _(unset)_ | set to skip the auto re-exec into the project `.venv` (run under the current interpreter as-is) |
 | `SS_URL` | `http://127.0.0.1:8000/mcp` | target MCP endpoint |
 | `SS_REPORT` | `<platform temp dir>/stormtest_report.json` | where to write the JSON snapshot (temp dir via `tempfile.gettempdir()`; `%TEMP%` on Windows) |
 

@@ -9,7 +9,8 @@ repo's editable install), frees the HTTP port, and launches the server with
 `--reload` and **both** `--port` and `--ws-port` so it matches an editor using
 non-default port overrides.
 
-Run it with any Python on PATH — it re-launches the resolved venv interpreter:
+Run it with any Python on PATH; the shared helpers and the spawned server both
+resolve the venv interpreter:
 
     python script/serve_worktree.py --port 8000 --ws-port 9500
     python script/serve_worktree.py --port 18130 --ws-port 19630   # editor overrides
@@ -20,157 +21,61 @@ Extra arguments are passed through to `python -m godot_ai`.
 from __future__ import annotations
 
 import os
-import platform
 import subprocess
 import sys
-import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import _dev_env  # noqa: E402
 
 DEFAULT_PORT = 8000
 DEFAULT_WS_PORT = 9500
 
 
-def _run(cmd: list[str]) -> str:
-    """Best-effort subprocess capture; '' if the tool is missing or errors."""
-    try:
-        return subprocess.run(
-            cmd, capture_output=True, text=True, check=False
-        ).stdout
-    except (FileNotFoundError, OSError):
-        return ""
-
-
-def _git(args: list[str], cwd: str | None = None) -> str:
-    return _run(["git", *args] if cwd is None else ["git", "-C", cwd, *args]).strip()
-
-
-def _resolve_roots() -> tuple[str, str]:
-    """Return (worktree_root, root_repo). The `.venv` and editable install live
-    in the main repo's common dir, not the worktree, so resolve both."""
-    worktree = _git(["rev-parse", "--show-toplevel"])
-    if not worktree:
-        sys.exit("error: not inside a git repository")
-    common = _git(["rev-parse", "--git-common-dir"], cwd=worktree)
-    # --git-common-dir may be relative to the worktree root.
-    if not os.path.isabs(common):
-        common = os.path.abspath(os.path.join(worktree, common))
-    root_repo = os.path.dirname(common)
-    return worktree, root_repo
-
-
-def _venv_python(root_repo: str) -> str:
-    if platform.system() == "Windows":
-        return os.path.join(root_repo, ".venv", "Scripts", "python.exe")
-    return os.path.join(root_repo, ".venv", "bin", "python")
-
-
-def _pids_on_port(port: int) -> set[str]:
-    """LISTENING PIDs on `port`, via the OS's own tooling (no psutil dep)."""
-    if platform.system() == "Windows":
-        pids: set[str] = set()
-        for line in _run(["netstat", "-ano", "-p", "tcp"]).splitlines():
-            parts = line.split()
-            # proto  local-addr  foreign-addr  STATE  pid
-            if len(parts) >= 5 and parts[3].upper() == "LISTENING":
-                if parts[1].rsplit(":", 1)[-1] == str(port):
-                    pids.add(parts[4])
-        return pids
-    out = _run(["lsof", "-i", f":{port}", "-sTCP:LISTEN", "-t"])
-    return {p.strip() for p in out.split() if p.strip()}
-
-
-def _free_port(port: int) -> None:
-    """Best-effort: stop whatever is LISTENING on `port` so we replace the
-    plugin-spawned server rather than stack on top of it."""
-    pids = _pids_on_port(port)
-    if not pids:
-        return
-    print(f"Stopping existing listener(s) on port {port}: {', '.join(sorted(pids))}")
-    for pid in pids:
-        if platform.system() == "Windows":
-            _run(["taskkill", "/F", "/PID", pid])
-        else:
-            try:
-                os.kill(int(pid), 15)
-            except (ProcessLookupError, ValueError, PermissionError):
-                pass
-    # The socket can stay bound briefly after the owner dies; wait for it to
-    # actually free so the new server doesn't lose a bind race. Bounded so a
-    # stubborn listener doesn't hang the launcher — we proceed and let the
-    # server's own bind error surface if it never releases.
-    deadline = time.monotonic() + 3.0
-    while time.monotonic() < deadline:
-        if not _pids_on_port(port):
-            return
-        time.sleep(0.2)
-
-
-def _extract_int_flag(args: list[str], name: str, default: int) -> int:
-    """Read --name <v> / --name=v from a passthrough arg list (no removal).
-
-    Exits on a present-but-malformed flag rather than silently using the
-    default — otherwise a typo'd `--port` would free/echo the default port
-    while the doomed bad value still passes through to the server, leaving the
-    editor with no server.
-    """
-    for i, a in enumerate(args):
-        if a == name:
-            if i + 1 >= len(args):
-                sys.exit(f"error: {name} requires an integer value")
-            raw = args[i + 1]
-        elif a.startswith(name + "="):
-            raw = a.split("=", 1)[1]
-        else:
-            continue
-        try:
-            return int(raw)
-        except ValueError:
-            sys.exit(f"error: {name} value {raw!r} is not an integer")
-    return default
-
-
-def _has_flag(args: list[str], name: str) -> bool:
-    return any(a == name or a.startswith(name + "=") for a in args)
-
-
 def main() -> int:
     passthrough = sys.argv[1:]
-    worktree, root_repo = _resolve_roots()
 
-    venv_py = _venv_python(root_repo)
-    if not os.path.isfile(venv_py):
+    worktree = _dev_env.worktree_root()
+    root = _dev_env.root_repo(worktree)
+
+    venv_py = _dev_env.venv_python(root / ".venv")
+    if not venv_py.is_file():
         sys.exit(
             f"error: {venv_py} not found — run script/setup-dev "
             "(or setup-dev.ps1 on Windows) in the root repo first"
         )
 
-    src = os.path.join(worktree, "src")
-    if not os.path.isdir(src):
+    src = _dev_env.worktree_src(worktree)
+    if not src.is_dir():
         sys.exit(f"error: {src} not found")
 
-    port = _extract_int_flag(passthrough, "--port", DEFAULT_PORT)
-    ws_port = _extract_int_flag(passthrough, "--ws-port", DEFAULT_WS_PORT)
+    # Pull the ports out so we can free the HTTP port and re-emit both
+    # canonically; fail fast on a malformed value rather than starting on the
+    # wrong port.
+    try:
+        port, rest = _dev_env.extract_int_flag(passthrough, "--port", DEFAULT_PORT)
+        ws_port, rest = _dev_env.extract_int_flag(rest, "--ws-port", DEFAULT_WS_PORT)
+    except ValueError as exc:
+        sys.exit(f"error: {exc}")
 
-    _free_port(port)
+    _dev_env.free_port(port)
 
-    # Default the transport/ports/reload, but let explicit passthrough args win.
-    cmd = [venv_py, "-m", "godot_ai"]
-    if not _has_flag(passthrough, "--transport"):
+    cmd = [str(venv_py), "-m", "godot_ai"]
+    # Default the transport/reload, but let explicit passthrough args win.
+    if not _dev_env.has_flag(rest, "--transport"):
         cmd += ["--transport", "streamable-http"]
-    if not _has_flag(passthrough, "--port"):
-        cmd += ["--port", str(port)]
-    if not _has_flag(passthrough, "--ws-port"):
-        cmd += ["--ws-port", str(ws_port)]
-    if not _has_flag(passthrough, "--reload"):
+    cmd += ["--port", str(port), "--ws-port", str(ws_port)]
+    if not _dev_env.has_flag(rest, "--reload"):
         cmd += ["--reload"]
-    cmd += passthrough
+    cmd += rest
 
     env = dict(os.environ)
-    sep = os.pathsep
     existing = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = src + (sep + existing if existing else "")
+    env["PYTHONPATH"] = str(src) + (os.pathsep + existing if existing else "")
 
     print(f"Serving worktree: {worktree}")
-    print(f"Using venv:       {os.path.join(root_repo, '.venv')}")
+    print(f"Using venv:       {root / '.venv'}")
     print(f"PYTHONPATH:       {src}")
     print(f"HTTP port:        {port}    WS port: {ws_port}")
 
