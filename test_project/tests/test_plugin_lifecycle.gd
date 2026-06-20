@@ -1025,6 +1025,9 @@ func test_drift_kill_preserves_record_and_does_not_spawn_when_port_stays_held() 
 	plugin.listener_pids = [24680] as Array[int]
 	plugin.managed_record = {"pid": 24680, "version": "old-managed-for-test", "ws_port": 9500}
 	plugin.alive_pids = [24680] as Array[int]
+	## The recorded PID is genuinely our managed server, so it's branded
+	## godot-ai — the managed_record kill branch now requires that brand (#525).
+	plugin.branded_pids = [24680] as Array[int]
 	plugin.live_status = {"name": "other-server", "version": "old-managed-for-test", "ws_port": 9500, "status_code": 200}
 
 	plugin._start_server()
