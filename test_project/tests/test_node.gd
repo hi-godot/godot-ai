@@ -629,6 +629,15 @@ func test_coerce_packed_vector3_array_from_dict_list() -> void:
 	assert_eq(coerced[0], Vector3(1, 2, 3))
 
 
+func test_coerce_packed_vector4_array_from_dict_list() -> void:
+	var coerced = NodeHandler._coerce_value(
+		[{"x": 1, "y": 2, "z": 3, "w": 4}],
+		TYPE_PACKED_VECTOR4_ARRAY,
+	)
+	assert_true(coerced is PackedVector4Array)
+	assert_eq(coerced[0], Vector4(1, 2, 3, 4))
+
+
 func test_coerce_packed_color_array_from_string() -> void:
 	var coerced = NodeHandler._coerce_value(["#ff0000", "#00ff00"], TYPE_PACKED_COLOR_ARRAY)
 	assert_true(coerced is PackedColorArray)
@@ -685,10 +694,22 @@ func test_check_coerced_array_packed_vector2_returns_wrong_type() -> void:
 	assert_contains(coerce_err.error.message, "Array")
 
 
+func test_check_coerced_array_packed_vector4_returns_wrong_type() -> void:
+	## A bad Array passed through _coerce_value must get the shape-hint
+	## WRONG_TYPE, same as the other packed types — not the generic
+	## "no coercion for that type" default.
+	var coerce_err: Variant = NodeHandler._check_coerced([1, 2, 3], TYPE_PACKED_VECTOR4_ARRAY)
+	assert_true(coerce_err is Dictionary)
+	assert_eq(coerce_err.error.code, ErrorCodes.WRONG_TYPE)
+	assert_contains(coerce_err.error.message, "PackedVector4Array")
+	assert_contains(coerce_err.error.message, "expected")
+
+
 func test_check_coerced_passes_correct_packed_arrays() -> void:
 	## Right-typed packed arrays must pass through (return null).
 	assert_eq(NodeHandler._check_coerced(PackedVector2Array(), TYPE_PACKED_VECTOR2_ARRAY), null)
 	assert_eq(NodeHandler._check_coerced(PackedVector3Array(), TYPE_PACKED_VECTOR3_ARRAY), null)
+	assert_eq(NodeHandler._check_coerced(PackedVector4Array(), TYPE_PACKED_VECTOR4_ARRAY), null)
 	assert_eq(NodeHandler._check_coerced(PackedColorArray(), TYPE_PACKED_COLOR_ARRAY), null)
 	assert_eq(NodeHandler._check_coerced(PackedInt32Array(), TYPE_PACKED_INT32_ARRAY), null)
 	assert_eq(NodeHandler._check_coerced(PackedFloat32Array(), TYPE_PACKED_FLOAT32_ARRAY), null)
@@ -700,6 +721,7 @@ func test_shape_hint_packed_arrays() -> void:
 	## each new packed type returns a list-shaped hint, not a dict.
 	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_VECTOR2_ARRAY), "[{\"x\":0,\"y\":0}, ...]")
 	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_VECTOR3_ARRAY), "[{\"x\":0,\"y\":0,\"z\":0}, ...]")
+	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_VECTOR4_ARRAY), "[{\"x\":0,\"y\":0,\"z\":0,\"w\":0}, ...]")
 	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_COLOR_ARRAY), "[{\"r\":0,\"g\":0,\"b\":0,\"a\":1}, ...]")
 	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_INT32_ARRAY), "[int, ...]")
 	assert_eq(NodeHandler._shape_hint(TYPE_PACKED_INT64_ARRAY), "[int, ...]")

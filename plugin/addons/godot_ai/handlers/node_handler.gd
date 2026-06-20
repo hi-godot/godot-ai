@@ -557,6 +557,8 @@ static func _check_coerced(value: Variant, target_type: int, prefix: String = ""
 			ok = value is PackedVector2Array
 		TYPE_PACKED_VECTOR3_ARRAY:
 			ok = value is PackedVector3Array
+		TYPE_PACKED_VECTOR4_ARRAY:
+			ok = value is PackedVector4Array
 		TYPE_PACKED_COLOR_ARRAY:
 			ok = value is PackedColorArray
 		TYPE_PACKED_INT32_ARRAY:
@@ -621,6 +623,8 @@ static func _shape_hint(target_type: int) -> String:
 			return "[{\"x\":0,\"y\":0}, ...]"
 		TYPE_PACKED_VECTOR3_ARRAY:
 			return "[{\"x\":0,\"y\":0,\"z\":0}, ...]"
+		TYPE_PACKED_VECTOR4_ARRAY:
+			return "[{\"x\":0,\"y\":0,\"z\":0,\"w\":0}, ...]"
 		TYPE_PACKED_COLOR_ARRAY:
 			return "[{\"r\":0,\"g\":0,\"b\":0,\"a\":1}, ...]"
 		TYPE_PACKED_INT32_ARRAY, TYPE_PACKED_INT64_ARRAY:
@@ -756,6 +760,17 @@ static func _coerce_value(value: Variant, target_type: int) -> Variant:
 						out.append(item)
 					elif item is Dictionary and item.has_all(VECTOR3_KEYS):
 						out.append(Vector3(item["x"], item["y"], item["z"]))
+					else:
+						return value
+				return out
+		TYPE_PACKED_VECTOR4_ARRAY:
+			if value is Array:
+				var out := PackedVector4Array()
+				for item in value:
+					if item is Vector4:
+						out.append(item)
+					elif item is Dictionary and item.has_all(VECTOR4_KEYS):
+						out.append(Vector4(item["x"], item["y"], item["z"], item["w"]))
 					else:
 						return value
 				return out
