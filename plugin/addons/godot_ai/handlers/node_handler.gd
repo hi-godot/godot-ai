@@ -569,7 +569,17 @@ static func _check_coerced(value: Variant, target_type: int, prefix: String = ""
 		TYPE_PACKED_STRING_ARRAY:
 			ok = value is PackedStringArray
 		_:
-			return null
+			# null / untyped-TYPE_NIL / already-correct-type are handled by
+			# Godot's setter; anything else would silently no-op, so error.
+			if value == null or target_type == TYPE_NIL or typeof(value) == target_type:
+				return null
+			var unsupported := ErrorCodes.make(
+				ErrorCodes.WRONG_TYPE,
+				"Cannot write %s to a %s property; godot-ai has no coercion for that type" % [
+					type_string(typeof(value)), type_string(target_type),
+				],
+			)
+			return ErrorCodes.prefix_message(unsupported, prefix)
 	if ok:
 		return null
 	var dict_err := _check_dict_coerce_failed(value, target_type)

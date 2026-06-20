@@ -1598,3 +1598,26 @@ func test_create_node_scene_file_matching_active_scene_passes() -> void:
 	assert_true(editor_undo(_undo_redo), "undo should succeed")
 
 
+# ----- honest failure for un-coercible writes -----
+
+func test_check_coerced_rejects_unsupported_struct() -> void:
+	# PackedByteArray is intentionally never coerced (base64-vs-int design gap),
+	# so it is a durable stand-in for "a type with no coercion branch".
+	var result: Variant = NodeHandler._check_coerced([1, 2, 3], TYPE_PACKED_BYTE_ARRAY)
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+
+
+func test_check_coerced_allows_null_clear() -> void:
+	# Clearing an Object/NodePath property to null must still pass (no regression).
+	assert_eq(NodeHandler._check_coerced(null, TYPE_OBJECT), null)
+
+
+func test_check_coerced_allows_untyped_property() -> void:
+	# Dynamic @export vars report a TYPE_NIL target; must stay permissive.
+	assert_eq(NodeHandler._check_coerced(42, TYPE_NIL), null)
+
+
+func test_check_coerced_allows_matching_scalar() -> void:
+	assert_eq(NodeHandler._check_coerced(50.0, TYPE_FLOAT), null)
+
+
