@@ -1621,3 +1621,86 @@ func test_check_coerced_allows_matching_scalar() -> void:
 	assert_eq(NodeHandler._check_coerced(50.0, TYPE_FLOAT), null)
 
 
+# ----- struct coercion (pure, no scene node) -----
+
+func test_coerce_vector2i() -> void:
+	# assert the TYPE strictly: a raw dict compares == to a struct under GDScript's
+	# permissive cross-type !=, so assert_eq alone would false-pass an un-coerced dict.
+	var result: Variant = NodeHandler._coerce_value({"x": 3, "y": 4}, TYPE_VECTOR2I)
+	assert_true(result is Vector2i, "should coerce to Vector2i")
+	assert_eq(result, Vector2i(3, 4))
+
+
+func test_coerce_vector4() -> void:
+	var result: Variant = NodeHandler._coerce_value({"x": 1, "y": 2, "z": 3, "w": 4}, TYPE_VECTOR4)
+	assert_true(result is Vector4, "should coerce to Vector4")
+	assert_eq(result, Vector4(1, 2, 3, 4))
+
+
+func test_coerce_rect2() -> void:
+	var shape := {"position": {"x": 0, "y": 0}, "size": {"x": 6, "y": 6}}
+	var result: Variant = NodeHandler._coerce_value(shape, TYPE_RECT2)
+	assert_true(result is Rect2, "should coerce to Rect2")
+	assert_eq(result, Rect2(0, 0, 6, 6))
+
+
+func test_coerce_transform2d() -> void:
+	var shape := {"x": {"x": 1, "y": 0}, "y": {"x": 0, "y": 1}, "origin": {"x": 5, "y": 7}}
+	var result: Variant = NodeHandler._coerce_value(shape, TYPE_TRANSFORM2D)
+	assert_true(result is Transform2D, "should coerce to Transform2D")
+	assert_eq(result, Transform2D(Vector2(1, 0), Vector2(0, 1), Vector2(5, 7)))
+
+
+func test_coerce_transform3d_nested() -> void:
+	# Compound-of-compound: Transform3D -> Basis -> Vector3, all via recursion.
+	var basis_shape := {
+		"x": {"x": 1, "y": 0, "z": 0},
+		"y": {"x": 0, "y": 1, "z": 0},
+		"z": {"x": 0, "y": 0, "z": 1},
+	}
+	var shape := {"basis": basis_shape, "origin": {"x": 2, "y": 3, "z": 4}}
+	var result: Variant = NodeHandler._coerce_value(shape, TYPE_TRANSFORM3D)
+	assert_true(result is Transform3D, "should coerce to Transform3D")
+	assert_eq((result as Transform3D).origin, Vector3(2, 3, 4))
+
+
+func test_coerce_rect2_wrong_shape_flows_through() -> void:
+	# Missing "size" -> not coerced -> stays a Dictionary so _check_coerced flags it.
+	var bad := {"position": {"x": 0, "y": 0}}
+	var coerced: Variant = NodeHandler._coerce_value(bad, TYPE_RECT2)
+	assert_true(coerced is Dictionary, "wrong-shape dict must flow through unchanged")
+	assert_is_error(NodeHandler._check_coerced(coerced, TYPE_RECT2), ErrorCodes.WRONG_TYPE)
+
+
+# ----- end-to-end set_property lands on the node -----
+
+func test_set_property_rect2_lands() -> void:
+	_handler.create_node({"type": "Sprite2D", "name": "_McpTestRect2", "parent_path": "/Main"})
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestRect2") as Sprite2D
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestRect2",
+		"property": "region_rect",
+		"value": {"position": {"x": 0, "y": 0}, "size": {"x": 6, "y": 6}},
+	})
+	assert_has_key(result, "data")
+	assert_true(result.data.undoable)
+	assert_eq(node.region_rect, Rect2(0, 0, 6, 6), "Rect2 must land on the node, not just echo")
+	assert_true(editor_undo(_undo_redo), "undo set should succeed")
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
+
+
+func test_set_property_transform2d_lands() -> void:
+	_handler.create_node({"type": "Node2D", "name": "_McpTestXform2D", "parent_path": "/Main"})
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestXform2D") as Node2D
+	var expected := Transform2D(Vector2(1, 0), Vector2(0, 1), Vector2(5, 7))
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestXform2D",
+		"property": "transform",
+		"value": {"x": {"x": 1, "y": 0}, "y": {"x": 0, "y": 1}, "origin": {"x": 5, "y": 7}},
+	})
+	assert_has_key(result, "data")
+	assert_eq(node.transform, expected, "Transform2D must land on the node")
+	assert_true(editor_undo(_undo_redo), "undo set should succeed")
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
+
+
