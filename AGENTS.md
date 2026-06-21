@@ -164,6 +164,8 @@ ruff check src/ tests/       # lint
 ruff format src/ tests/      # format
 ```
 
+`uv.lock` is intentionally untracked: dependencies resolve from `pyproject.toml`, and CI installs with pip (`pip install -e ".[dev]"`) rather than enforcing a uv lockfile.
+
 **macOS + Python 3.13 note**: Files inside `.venv` inherit the macOS hidden flag (dot-prefix directory). Python 3.13 skips hidden `.pth` files (CPython gh-113659), breaking editable installs. `script/setup-dev` generates a `sitecustomize.py` in the venv that adds `src/` to `sys.path` via normal import (unaffected by hidden flags). No manual `chflags` needed.
 
 **Windows note**: use `.\script\setup-dev.ps1` instead of `script/setup-dev`. The Windows script creates `test_project\addons\godot_ai` as a directory junction — no admin rights and no Windows Developer Mode required. If you ever need to recreate the link by hand (e.g. outside setup-dev), either form works:
