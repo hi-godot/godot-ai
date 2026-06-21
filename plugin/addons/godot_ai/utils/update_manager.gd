@@ -314,6 +314,8 @@ static func _is_trusted_download_url(url: String) -> bool:
 	const SCHEME := "https://"
 	if not url.begins_with(SCHEME):
 		return false
+	if url.find("\\") >= 0:
+		return false
 	var rest := url.substr(SCHEME.length())
 	var authority := rest
 	var slash := rest.find("/")
@@ -457,7 +459,7 @@ func _on_checksum_completed(
 
 	print("MCP | self-update checksum verified (sha256 %s)" % actual)
 	install_state_changed.emit({"button_text": "Installing..."})
-	_install_zip()
+	_install_zip.call_deferred()
 
 
 ## Surface an integrity-check failure and drop the staged zip so the bad
@@ -483,8 +485,9 @@ static func _parse_sha256_digest(text: String) -> String:
 	if trimmed.is_empty():
 		return ""
 	## First whitespace-delimited token; `sha256sum` separates digest and
-	## filename with two spaces, so allow_empty=false collapses the run.
-	var tokens := trimmed.split(" ", false)
+	## filename with two spaces, but some tools use tabs.
+	var normalized := trimmed.replace("\t", " ").replace("\n", " ").replace("\r", " ")
+	var tokens := normalized.split(" ", false)
 	if tokens.is_empty():
 		return ""
 	var digest := String(tokens[0]).strip_edges().to_lower()
