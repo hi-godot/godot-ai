@@ -76,12 +76,12 @@ static func run(
 	var deadline := Time.get_ticks_msec() + maxi(timeout_ms, _POLL_INTERVAL_MS)
 	while OS.is_process_running(pid):
 		if Time.get_ticks_msec() >= deadline:
-			## Read whatever made it to the pipes before we kill the
-			## process — partial output beats blank "timed out" when the
-			## CLI was emitting useful diagnostics on its way to hanging.
+			## Kill before draining: a pipe read can block while the child is
+			## still alive. Once it exits, drain any buffered partial output.
+			OS.kill(pid)
+			OS.delay_msec(_POLL_INTERVAL_MS)
 			var partial_stdout := _drain_pipe(stdio)
 			var partial_stderr := _drain_pipe(stderr_pipe) if capture_stderr else ""
-			OS.kill(pid)
 			_close_pipes(stdio, stderr_pipe)
 			return {
 				"exit_code": -1,
@@ -119,9 +119,19 @@ static func _spawn_failed_result() -> Dictionary:
 
 
 static func _drain_pipe(pipe: Variant) -> String:
-	if pipe is FileAccess:
-		return (pipe as FileAccess).get_as_text()
-	return ""
+	if not (pipe is FileAccess):
+		return ""
+	var f := pipe as FileAccess
+	var bytes := PackedByteArray()
+	var max_bytes := 1 << 20  # 1 MiB, far above expected client CLI output.
+	while bytes.size() < max_bytes:
+		var chunk := f.get_buffer(mini(4096, max_bytes - bytes.size()))
+		if chunk.is_empty():
+			break
+		bytes.append_array(chunk)
+		if f.eof_reached():
+			break
+	return bytes.get_string_from_utf8()
 
 
 static func _join_streams(stdout: String, stderr_text: String) -> String:
