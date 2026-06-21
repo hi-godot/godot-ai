@@ -36,6 +36,17 @@ func test_has_worker_alive_only_for_running_states() -> void:
 	assert_false(McpClientRefreshState.has_worker_alive(McpClientRefreshState.SHUTTING_DOWN))
 
 
+func test_timed_out_refresh_does_not_disable_client_actions() -> void:
+	assert_true(McpClientRefreshState.should_disable_client_actions(McpClientRefreshState.RUNNING))
+	assert_false(McpClientRefreshState.should_disable_client_actions(
+		McpClientRefreshState.RUNNING_TIMED_OUT),
+		"Timed-out workers are orphanable, but the dock must let users retry client actions")
+	assert_false(McpClientRefreshState.should_disable_client_actions(McpClientRefreshState.IDLE))
+	assert_false(McpClientRefreshState.should_disable_client_actions(
+		McpClientRefreshState.DEFERRED_FOR_FILESYSTEM))
+	assert_false(McpClientRefreshState.should_disable_client_actions(McpClientRefreshState.SHUTTING_DOWN))
+
+
 func test_is_blocked_for_spawn_only_during_shutdown() -> void:
 	## SHUTTING_DOWN is sticky; no spawn paths should fire while it's set.
 	assert_true(McpClientRefreshState.is_blocked_for_spawn(McpClientRefreshState.SHUTTING_DOWN))

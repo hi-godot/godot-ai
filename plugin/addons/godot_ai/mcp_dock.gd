@@ -1645,7 +1645,7 @@ func _on_configure_all_clients() -> void:
 			_apply_row_status(String(client_id), Client.Status.ERROR, _server_blocked_client_message())
 		_refresh_clients_summary()
 		return
-	if ClientRefreshStateScript.has_worker_alive(_refresh_state):
+	if ClientRefreshStateScript.should_disable_client_actions(_refresh_state):
 		return
 	for client_id in _client_rows:
 		var status: Client.Status = _client_rows[client_id].get("status", Client.Status.NOT_CONFIGURED)
@@ -1976,7 +1976,7 @@ func _refresh_clients_summary() -> void:
 		)
 	_clients_summary_label.text = text
 	if _client_configure_all_btn != null:
-		_client_configure_all_btn.disabled = ClientRefreshStateScript.has_worker_alive(_refresh_state)
+		_client_configure_all_btn.disabled = ClientRefreshStateScript.should_disable_client_actions(_refresh_state)
 	_refresh_drift_banner(mismatched_ids)
 
 

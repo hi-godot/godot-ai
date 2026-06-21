@@ -509,8 +509,8 @@ static func invalidate_uvx_cli_cache() -> void:
 ## Thread safety: `CliFinder.invalidate()` guards `_cache` / `_searched`
 ## with a mutex so it can race safely against worker threads calling
 ## `find()` from `_run_client_action_worker`. The mutex is held only
-## across the dictionary clear, never across `OS.execute`, so this call
-## can never block the main thread on a subprocess.
+## across the dictionary clear, never across the bounded subprocess lookup,
+## so this call can never block the main thread on a subprocess.
 static func invalidate_cli_cache() -> void:
 	CliFinder.invalidate()
 

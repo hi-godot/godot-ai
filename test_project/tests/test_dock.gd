@@ -669,6 +669,20 @@ func test_finalize_action_buttons_reenables_after_in_flight() -> void:
 		"Remove button must re-enable too")
 
 
+func test_timed_out_client_refresh_reenables_configure_all() -> void:
+	## A status refresh can outlive the watchdog when an underlying process
+	## blocks in a way GDScript cannot interrupt. The dock should keep the
+	## warning badge, but it must not strand Configure all behind the orphaned
+	## worker forever.
+	_dock._build_ui()
+	_dock._refresh_state = McpClientRefreshState.RUNNING_TIMED_OUT
+	_dock._refresh_clients_summary()
+	assert_contains(_dock._clients_summary_label.text, "client probe still running",
+		"Timed-out refreshes should still be visible in the summary")
+	assert_false(_dock._client_configure_all_btn.disabled,
+		"Timed-out refreshes must not keep client actions disabled")
+
+
 func test_dispatch_client_action_short_circuits_during_self_update() -> void:
 	## Same gate the refresh worker honors: while
 	## `McpUpdateManager._install_zip` is overwriting plugin scripts on
