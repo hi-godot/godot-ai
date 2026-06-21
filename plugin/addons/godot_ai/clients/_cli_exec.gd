@@ -44,6 +44,18 @@ static func run(
 ) -> Dictionary:
 	if exe.is_empty():
 		return _spawn_failed_result()
+	if _uses_blocking_legacy_path():
+		return _run_blocking_legacy(exe, args)
+
+	return _run_piped(exe, args, timeout_ms, capture_stderr)
+
+
+static func _run_piped(
+	exe: String,
+	args: Array,
+	timeout_ms: int,
+	capture_stderr: bool,
+) -> Dictionary:
 
 	var spawn_exe := exe
 	var spawn_args := args
@@ -107,6 +119,27 @@ static func run(
 	}
 
 
+static func _run_blocking_legacy(exe: String, args: Array) -> Dictionary:
+	## Godot 4.3's OS.execute_with_pipe has capture/exit-code differences
+	## locked by the 4.3 canary skips in test_cli_exec.gd. Preserve the old
+	## blocking discovery behavior there so startup-critical probes keep the
+	## same semantics that worked before the bounded-pipe path landed.
+	var output: Array = []
+	var exit_code := OS.execute(exe, args, output, true)
+	var lines := PackedStringArray()
+	for line in output:
+		lines.append(str(line))
+	var stdout := "\n".join(lines)
+	return {
+		"exit_code": exit_code,
+		"stdout": stdout,
+		"stderr": "",
+		"output": stdout,
+		"timed_out": false,
+		"spawn_failed": exit_code == -1,
+	}
+
+
 static func _spawn_failed_result() -> Dictionary:
 	return {
 		"exit_code": -1,
@@ -151,3 +184,10 @@ static func _close_pipes(stdio: Variant, stderr_pipe: Variant) -> void:
 		(stdio as FileAccess).close()
 	if stderr_pipe is FileAccess:
 		(stderr_pipe as FileAccess).close()
+
+
+static func _uses_blocking_legacy_path() -> bool:
+	var version := Engine.get_version_info()
+	var major := int(version.get("major", 4))
+	var minor := int(version.get("minor", 0))
+	return major < 4 or (major == 4 and minor < 4)
