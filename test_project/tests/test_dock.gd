@@ -132,9 +132,15 @@ func test_clients_header_and_actions_use_narrow_layout() -> void:
 		var button := action_child as Button
 		if button != null:
 			button_texts.append(button.text)
-	var expected: Array[String] = ["Refresh", "Settings"]
+	var expected: Array[String] = ["Refresh", "Clients & Tools"]
 	assert_eq(button_texts, expected,
 		"Client action buttons should stay compact and keep their handlers")
+	assert_eq(_dock._clients_window.title, "Godot AI",
+		"Clients & Tools window should use the product context as its title")
+	var tabs := _dock._clients_window.get_child(0) as TabContainer
+	assert_true(tabs != null, "Clients & Tools window should contain a tab container")
+	assert_eq(tabs.get_tab_title(0), "Clients")
+	assert_eq(tabs.get_tab_title(1), "Tools")
 
 
 func test_drift_banner_hidden_when_no_mismatched_clients() -> void:

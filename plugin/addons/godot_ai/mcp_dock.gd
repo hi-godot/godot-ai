@@ -65,7 +65,7 @@ var _clients_window: Window
 var _dev_mode_toggle: CheckButton
 var _install_label: Label
 
-# Settings tab (secondary window, Tab 2) — domain-exclusion UI for clients
+# Tools tab (secondary window, Tab 2) — domain-exclusion UI for clients
 # that cap total tool count (Antigravity: 100). Pending set is mutated by
 # checkbox clicks; saved set reflects what the spawned server actually
 # sees. `Apply & Restart Server` writes pending → setting and triggers a
@@ -582,8 +582,8 @@ func _build_ui() -> void:
 	clients_actions.add_child(clients_refresh_btn)
 
 	var clients_open_btn := Button.new()
-	clients_open_btn.text = "Settings"
-	clients_open_btn.tooltip_text = "Open the MCP settings window — configure AI clients, choose telemetry preferences, or disable tool domains to fit under a client's hard tool-count cap (e.g. Antigravity's 100)."
+	clients_open_btn.text = "Clients & Tools"
+	clients_open_btn.tooltip_text = "Open the Clients & Tools window — configure AI clients, choose telemetry preferences, or disable tool domains to fit under a client's hard tool-count cap (e.g. Antigravity's 100)."
 	clients_open_btn.pressed.connect(_on_open_clients_window)
 	clients_actions.add_child(clients_open_btn)
 
@@ -607,7 +607,7 @@ func _build_ui() -> void:
 	add_child(_drift_banner)
 
 	_clients_window = Window.new()
-	_clients_window.title = "MCP Clients & Settings"
+	_clients_window.title = "Godot AI"
 	## `Vector2i * float` yields Vector2; wrap the result back to Vector2i.
 	_clients_window.min_size = Vector2i(Vector2(560, 460) * EditorInterface.get_editor_scale())
 	_clients_window.visible = false
@@ -1707,7 +1707,7 @@ func _build_tools_tab(tabs: TabContainer) -> void:
 	var tools_tab := VBoxContainer.new()
 	tools_tab.add_theme_constant_override("separation", 8)
 	var tools_margin := _build_margin_container()
-	tools_margin.name = "Settings"
+	tools_margin.name = "Tools"
 	tools_margin.add_child(tools_tab)
 	tabs.add_child(tools_margin)
 
