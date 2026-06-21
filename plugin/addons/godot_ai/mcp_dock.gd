@@ -558,30 +558,37 @@ func _build_ui() -> void:
 	add_child(HSeparator.new())
 
 	# --- Clients ---
-	var clients_row := HBoxContainer.new()
-	clients_row.add_theme_constant_override("separation", 8)
+	var clients_header_row := HBoxContainer.new()
+	clients_header_row.add_theme_constant_override("separation", 8)
 
 	var clients_header := _make_header("Clients")
-	clients_row.add_child(clients_header)
+	clients_header_row.add_child(clients_header)
 
 	_clients_summary_label = Label.new()
 	_clients_summary_label.add_theme_color_override("font_color", COLOR_MUTED)
+	_clients_summary_label.clip_text = true
+	_clients_summary_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_clients_summary_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	clients_row.add_child(_clients_summary_label)
+	clients_header_row.add_child(_clients_summary_label)
+
+	var clients_actions := HFlowContainer.new()
+	clients_actions.add_theme_constant_override("h_separation", 8)
+	clients_actions.add_theme_constant_override("v_separation", 4)
 
 	var clients_refresh_btn := Button.new()
 	clients_refresh_btn.text = "Refresh"
 	clients_refresh_btn.tooltip_text = "Refresh client status in the background. Cached status stays visible while checks run."
 	clients_refresh_btn.pressed.connect(_on_refresh_clients_pressed)
-	clients_row.add_child(clients_refresh_btn)
+	clients_actions.add_child(clients_refresh_btn)
 
 	var clients_open_btn := Button.new()
-	clients_open_btn.text = "Clients & Settings"
+	clients_open_btn.text = "Settings"
 	clients_open_btn.tooltip_text = "Open the MCP settings window — configure AI clients, choose telemetry preferences, or disable tool domains to fit under a client's hard tool-count cap (e.g. Antigravity's 100)."
 	clients_open_btn.pressed.connect(_on_open_clients_window)
-	clients_row.add_child(clients_open_btn)
+	clients_actions.add_child(clients_open_btn)
 
-	add_child(clients_row)
+	add_child(clients_header_row)
+	add_child(clients_actions)
 
 	# Drift banner — hidden until a sweep finds at least one mismatched client.
 	_drift_banner = VBoxContainer.new()

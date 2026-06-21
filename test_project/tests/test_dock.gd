@@ -97,6 +97,46 @@ func test_install_label_mouse_filter_allows_tooltip() -> void:
 	assert_eq(_dock._install_label.mouse_filter, Control.MOUSE_FILTER_STOP)
 
 
+func test_clients_header_and_actions_use_narrow_layout() -> void:
+	## The dock's minimum width is the max of the direct VBox children. Keep
+	## the Clients section split so the header/count and action buttons do not
+	## add their minimum widths into one wide HBox row.
+	_dock._build_ui()
+	var clients_header_row := _dock._clients_summary_label.get_parent() as HBoxContainer
+	assert_true(clients_header_row != null, "Clients header row should exist")
+	var has_clients_header := false
+	for row_child in clients_header_row.get_children():
+		if row_child is Label:
+			var label := row_child as Label
+			if label.text == "Clients":
+				has_clients_header = true
+				break
+	assert_true(has_clients_header, "Summary count should stay with the Clients header")
+	assert_true(_dock._clients_summary_label.clip_text,
+		"Summary count should ellipsize instead of expanding the dock")
+	assert_eq(
+		_dock._clients_summary_label.text_overrun_behavior,
+		TextServer.OVERRUN_TRIM_ELLIPSIS,
+		"Summary count should use ellipsis overrun")
+
+	var header_idx := _dock.get_children().find(clients_header_row)
+	assert_gt(header_idx, -1, "Clients header row should be a direct dock child")
+	assert_true(header_idx + 1 < _dock.get_child_count(),
+		"Clients actions row should follow the header row")
+	var clients_actions := _dock.get_child(header_idx + 1)
+	assert_true(clients_actions is HFlowContainer,
+		"Client actions should wrap in an HFlowContainer")
+	var actions_flow := clients_actions as HFlowContainer
+	var button_texts: Array[String] = []
+	for action_child in actions_flow.get_children():
+		var button := action_child as Button
+		if button != null:
+			button_texts.append(button.text)
+	var expected: Array[String] = ["Refresh", "Settings"]
+	assert_eq(button_texts, expected,
+		"Client action buttons should stay compact and keep their handlers")
+
+
 func test_drift_banner_hidden_when_no_mismatched_clients() -> void:
 	## The amber banner should stay hidden until a sweep finds at least one
 	## mismatched client — otherwise it'd flash up on every `_build_ui` call
