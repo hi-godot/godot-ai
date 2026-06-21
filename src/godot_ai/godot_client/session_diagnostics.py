@@ -7,9 +7,9 @@ from typing import Any
 NO_ACTIVE_SESSION_MESSAGE = (
     "No active Godot session — this MCP server has no connected Godot editor. "
     "Open the project in the Godot editor with the Godot AI plugin enabled, "
-    "make sure a scene is open, and verify the editor and this MCP server share "
-    "the same loopback/network namespace. In Docker or remote-agent setups, do "
-    "not point the agent at a different server than the one the editor connects to."
+    "and verify the editor and this MCP server share the same loopback/network "
+    "namespace. In Docker or remote-agent setups, do not point the agent at a "
+    "different server than the one the editor connects to."
 )
 
 NO_ACTIVE_SESSION_HINT = (
