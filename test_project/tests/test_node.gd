@@ -1686,6 +1686,69 @@ func test_coerce_transform3d_nested() -> void:
 	assert_eq((result as Transform3D).origin, Vector3(2, 3, 4))
 
 
+func test_coerce_vector3i() -> void:
+	var result: Variant = NodeHandler._coerce_value({"x": 5, "y": 6, "z": 7}, TYPE_VECTOR3I)
+	assert_true(result is Vector3i, "should coerce to Vector3i")
+	assert_eq(result, Vector3i(5, 6, 7))
+
+
+func test_coerce_vector4i() -> void:
+	var result: Variant = NodeHandler._coerce_value({"x": 1, "y": 2, "z": 3, "w": 4}, TYPE_VECTOR4I)
+	assert_true(result is Vector4i, "should coerce to Vector4i")
+	assert_eq(result, Vector4i(1, 2, 3, 4))
+
+
+func test_coerce_quaternion() -> void:
+	var result: Variant = NodeHandler._coerce_value({"x": 0, "y": 0, "z": 0, "w": 1}, TYPE_QUATERNION)
+	assert_true(result is Quaternion, "should coerce to Quaternion")
+	assert_eq(result, Quaternion(0, 0, 0, 1))
+
+
+func test_coerce_rect2i() -> void:
+	var shape := {"position": {"x": 0, "y": 0}, "size": {"x": 6, "y": 6}}
+	var result: Variant = NodeHandler._coerce_value(shape, TYPE_RECT2I)
+	assert_true(result is Rect2i, "should coerce to Rect2i")
+	assert_eq(result, Rect2i(0, 0, 6, 6))
+
+
+func test_coerce_aabb() -> void:
+	var shape := {"position": {"x": 0, "y": 0, "z": 0}, "size": {"x": 1, "y": 2, "z": 3}}
+	var result: Variant = NodeHandler._coerce_value(shape, TYPE_AABB)
+	assert_true(result is AABB, "should coerce to AABB")
+	assert_eq(result, AABB(Vector3(0, 0, 0), Vector3(1, 2, 3)))
+
+
+func test_coerce_plane() -> void:
+	var shape := {"normal": {"x": 0, "y": 1, "z": 0}, "d": 5}
+	var result: Variant = NodeHandler._coerce_value(shape, TYPE_PLANE)
+	assert_true(result is Plane, "should coerce to Plane")
+	assert_eq(result, Plane(Vector3(0, 1, 0), 5))
+
+
+func test_coerce_basis() -> void:
+	var shape := {
+		"x": {"x": 1, "y": 0, "z": 0},
+		"y": {"x": 0, "y": 1, "z": 0},
+		"z": {"x": 0, "y": 0, "z": 1},
+	}
+	var result: Variant = NodeHandler._coerce_value(shape, TYPE_BASIS)
+	assert_true(result is Basis, "should coerce to Basis")
+	assert_eq(result, Basis(Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1)))
+
+
+func test_coerce_projection_nested() -> void:
+	# Compound-of-compound: Projection -> Vector4 columns, all via recursion.
+	var shape := {
+		"x": {"x": 1, "y": 0, "z": 0, "w": 0},
+		"y": {"x": 0, "y": 1, "z": 0, "w": 0},
+		"z": {"x": 0, "y": 0, "z": 1, "w": 0},
+		"w": {"x": 0, "y": 0, "z": 0, "w": 1},
+	}
+	var result: Variant = NodeHandler._coerce_value(shape, TYPE_PROJECTION)
+	assert_true(result is Projection, "should coerce to Projection")
+	assert_eq((result as Projection).w, Vector4(0, 0, 0, 1))
+
+
 func test_coerce_rect2_wrong_shape_flows_through() -> void:
 	# Missing "size" -> not coerced -> stays a Dictionary so _check_coerced flags it.
 	var bad := {"position": {"x": 0, "y": 0}}
