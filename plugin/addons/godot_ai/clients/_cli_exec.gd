@@ -34,6 +34,7 @@ extends RefCounted
 
 const DEFAULT_TIMEOUT_MS := 8000
 const _POLL_INTERVAL_MS := 50
+const _KILL_GRACE_MS := 500
 
 
 static func run(
@@ -45,6 +46,9 @@ static func run(
 	if exe.is_empty():
 		return _spawn_failed_result()
 	if _uses_blocking_legacy_path():
+		## Godot 4.3 keeps the old blocking path because execute_with_pipe
+		## capture/exit semantics differ there. The bounded timeout/kill
+		## behavior is available on Godot 4.4+ only.
 		return _run_blocking_legacy(exe, args)
 
 	return _run_piped(exe, args, timeout_ms, capture_stderr)
@@ -91,9 +95,15 @@ static func _run_piped(
 			## Kill before draining: a pipe read can block while the child is
 			## still alive. Once it exits, drain any buffered partial output.
 			OS.kill(pid)
-			OS.delay_msec(_POLL_INTERVAL_MS)
-			var partial_stdout := _drain_pipe(stdio)
-			var partial_stderr := _drain_pipe(stderr_pipe) if capture_stderr else ""
+			var kill_deadline := Time.get_ticks_msec() + _KILL_GRACE_MS
+			while OS.is_process_running(pid) and Time.get_ticks_msec() < kill_deadline:
+				OS.delay_msec(_POLL_INTERVAL_MS)
+
+			var partial_stdout := ""
+			var partial_stderr := ""
+			if not OS.is_process_running(pid):
+				partial_stdout = _drain_pipe(stdio)
+				partial_stderr = _drain_pipe(stderr_pipe) if capture_stderr else ""
 			_close_pipes(stdio, stderr_pipe)
 			return {
 				"exit_code": -1,
