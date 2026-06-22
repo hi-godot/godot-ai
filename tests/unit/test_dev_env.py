@@ -50,6 +50,15 @@ def test_find_venv_python_absent(monkeypatch, tmp_path):
     assert _dev_env.find_venv_python() is None
 
 
+def test_find_venv_python_rejects_directory(monkeypatch, tmp_path):
+    # A directory sitting at the interpreter path must read as "no venv", not be
+    # handed to execv() — is_file() guards that (exists() would not).
+    exe = _dev_env.venv_python(tmp_path / ".venv")
+    exe.mkdir(parents=True)
+    monkeypatch.setattr(_dev_env, "root_repo", lambda worktree=None: tmp_path)
+    assert _dev_env.find_venv_python() is None
+
+
 # --------------------------------------------------------------------------- #
 # worktree / root-repo resolution
 # --------------------------------------------------------------------------- #
@@ -139,6 +148,16 @@ def test_parse_netstat_pids():
     assert _dev_env.parse_netstat_pids(out, 8000) == [4321]
     assert _dev_env.parse_netstat_pids(out, 9500) == [9999]
     assert _dev_env.parse_netstat_pids(out, 1234) == []
+
+
+def test_parse_netstat_pids_locale_independent():
+    # Non-English Windows localizes the State column; listeners must still be
+    # found via the wildcard foreign address (*:0), not the literal "LISTENING".
+    out = (
+        "  TCP    0.0.0.0:8000           0.0.0.0:0              ABHÖREN         4321\n"
+        "  TCP    0.0.0.0:8000           1.2.3.4:55555          HERGESTELLT     1111\n"
+    )
+    assert _dev_env.parse_netstat_pids(out, 8000) == [4321]
 
 
 # --------------------------------------------------------------------------- #

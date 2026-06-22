@@ -88,9 +88,14 @@ def worktree_src(worktree: Path | None = None) -> Path:
 
 
 def find_venv_python(worktree: Path | None = None) -> Path | None:
-    """Locate the checkout's venv interpreter, or ``None`` if it doesn't exist."""
+    """The checkout's venv interpreter, or ``None`` if it isn't a real file.
+
+    ``is_file()`` (not ``exists()``) so a directory sitting at the interpreter
+    path is treated as "no venv" rather than handed to ``execv()``, which would
+    crash with an OSError instead of cleanly falling through.
+    """
     candidate = venv_python(root_repo(worktree) / ".venv")
-    return candidate if candidate.exists() else None
+    return candidate if candidate.is_file() else None
 
 
 def reexec_into_venv(*, guard_env: str, opt_out_env: str | None = None) -> None:
@@ -168,17 +173,28 @@ def parse_lsof_pids(output: str) -> list[int]:
 
 
 def parse_netstat_pids(output: str, port: int) -> list[int]:
-    """Listener PIDs for ``port`` from Windows ``netstat -ano`` output."""
+    """Listener PIDs for ``port`` from Windows ``netstat -ano`` output.
+
+    Identifies listeners by a wildcard foreign address (``0.0.0.0:0`` / ``[::]:0``)
+    rather than the literal ``LISTENING`` state — that state string is localized
+    on non-English Windows (e.g. ``ABHÖREN``, ``ÉCOUTE``), so keying on it would
+    silently miss listeners and leave the port un-freed. A bound-but-connected
+    socket has a real foreign ``host:port``, so ``foreign == *:0`` is the stable,
+    locale-independent listener signal.
+    """
     needle = f":{port}"
     pids: list[int] = []
     for line in output.splitlines():
         parts = line.split()
-        if len(parts) < 5 or "LISTENING" not in parts:
+        if len(parts) < 5:
             continue
-        if not parts[1].endswith(needle):  # local addr, e.g. 0.0.0.0:8000 or [::]:8000
+        local, foreign, pid = parts[1], parts[2], parts[-1]
+        if not foreign.endswith(":0"):  # wildcard foreign addr => listener
             continue
-        if parts[-1].isdigit():
-            pids.append(int(parts[-1]))
+        if not local.endswith(needle):  # local addr, e.g. 0.0.0.0:8000 or [::]:8000
+            continue
+        if pid.isdigit():
+            pids.append(int(pid))
     return list(dict.fromkeys(pids))
 
 
