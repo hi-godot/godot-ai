@@ -398,3 +398,59 @@ func test_disconnect_undo_restores_persistent_connection() -> void:
 	assert_true(editor_undo(_undo_redo), "undo connect should succeed")
 	src.free()
 	tgt.free()
+
+
+func test_disconnect_undo_preserves_runtime_only_connection() -> void:
+	# CodeRabbit #584: undo-of-disconnect must restore the connection's ORIGINAL
+	# flags, not unconditionally force CONNECT_PERSIST. A runtime-only (flags == 0)
+	# connection that is MCP-disconnected and then undone must come back
+	# runtime-only — promoting it to persistent would make it silently serialize
+	# into the scene on the next save. Paired with
+	# test_disconnect_undo_restores_persistent_connection (which pins the
+	# CONNECT_PERSIST case from the other side), this forces the undo to restore
+	# the *actual* prior flags rather than a hardcoded constant.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+
+	var src := Node.new()
+	src.name = "_McpTestSigSrc3"
+	scene_root.add_child(src)
+	src.owner = scene_root
+	var tgt := Node.new()
+	tgt.name = "_McpTestSigTgt3"
+	scene_root.add_child(tgt)
+	tgt.owner = scene_root
+
+	# A runtime-only connection (flags == 0), made directly — NOT via the MCP
+	# connect_signal, which would tag it CONNECT_PERSIST.
+	var callable := Callable(tgt, "queue_free")
+	assert_eq(src.connect("ready", callable), OK, "setup: runtime connect should succeed")
+
+	var src_path := "/%s/_McpTestSigSrc3" % scene_root.name
+	var tgt_path := "/%s/_McpTestSigTgt3" % scene_root.name
+	assert_has_key(_handler.disconnect_signal({
+		"path": src_path, "signal": "ready", "target": tgt_path, "method": "queue_free",
+	}), "data")
+
+	# Undo the disconnect -> the undo callable re-connects the signal.
+	assert_true(editor_undo(_undo_redo), "undo disconnect should succeed")
+	assert_true(src.is_connected("ready", callable),
+		"undo-of-disconnect should restore the connection")
+
+	# The restored connection must keep its ORIGINAL runtime-only flags (0),
+	# not be promoted to CONNECT_PERSIST.
+	var restored_flags := -1
+	for conn in src.get_signal_connection_list("ready"):
+		if conn.get("callable", Callable()) == callable:
+			restored_flags = int(conn.get("flags", -1))
+			break
+	assert_eq(restored_flags, 0,
+		"undo must restore original runtime-only flags, not force CONNECT_PERSIST (got %d)" % restored_flags)
+
+	# Cleanup: drop the restored connection, free the nodes.
+	if src.is_connected("ready", callable):
+		src.disconnect("ready", callable)
+	src.free()
+	tgt.free()
