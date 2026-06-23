@@ -14,7 +14,7 @@ The plugin auto-starts the MCP server and connects over WebSocket. No manual con
 
 ## Requirements
 
-- Godot 4.3+ (4.4+ recommended)
+- Godot 4.3+ (4.7+ recommended)
 - [uv](https://docs.astral.sh/uv/) (used to install the Python server)
   <details>
   <summary>Install uv</summary>

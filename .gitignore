@@ -14,6 +14,8 @@ venv/
 .coverage.*
 coverage.xml
 htmlcov/
+# Not tracked: not CI-enforced (CI uses pip); pyproject ranges are the source of truth.
+uv.lock
 
 # PyInstaller
 *.spec

@@ -34,6 +34,7 @@ extends RefCounted
 
 const DEFAULT_TIMEOUT_MS := 8000
 const _POLL_INTERVAL_MS := 50
+const _KILL_GRACE_MS := 500
 
 
 static func run(
@@ -44,6 +45,21 @@ static func run(
 ) -> Dictionary:
 	if exe.is_empty():
 		return _spawn_failed_result()
+	if _uses_blocking_legacy_path():
+		## Godot 4.3 keeps the old blocking path because execute_with_pipe
+		## capture/exit semantics differ there. The bounded timeout/kill
+		## behavior is available on Godot 4.4+ only.
+		return _run_blocking_legacy(exe, args)
+
+	return _run_piped(exe, args, timeout_ms, capture_stderr)
+
+
+static func _run_piped(
+	exe: String,
+	args: Array,
+	timeout_ms: int,
+	capture_stderr: bool,
+) -> Dictionary:
 
 	var spawn_exe := exe
 	var spawn_args := args
@@ -76,12 +92,18 @@ static func run(
 	var deadline := Time.get_ticks_msec() + maxi(timeout_ms, _POLL_INTERVAL_MS)
 	while OS.is_process_running(pid):
 		if Time.get_ticks_msec() >= deadline:
-			## Read whatever made it to the pipes before we kill the
-			## process — partial output beats blank "timed out" when the
-			## CLI was emitting useful diagnostics on its way to hanging.
-			var partial_stdout := _drain_pipe(stdio)
-			var partial_stderr := _drain_pipe(stderr_pipe) if capture_stderr else ""
+			## Kill before draining: a pipe read can block while the child is
+			## still alive. Once it exits, drain any buffered partial output.
 			OS.kill(pid)
+			var kill_deadline := Time.get_ticks_msec() + _KILL_GRACE_MS
+			while OS.is_process_running(pid) and Time.get_ticks_msec() < kill_deadline:
+				OS.delay_msec(_POLL_INTERVAL_MS)
+
+			var partial_stdout := ""
+			var partial_stderr := ""
+			if not OS.is_process_running(pid):
+				partial_stdout = _drain_pipe(stdio)
+				partial_stderr = _drain_pipe(stderr_pipe) if capture_stderr else ""
 			_close_pipes(stdio, stderr_pipe)
 			return {
 				"exit_code": -1,
@@ -107,6 +129,27 @@ static func run(
 	}
 
 
+static func _run_blocking_legacy(exe: String, args: Array) -> Dictionary:
+	## Godot 4.3's OS.execute_with_pipe has capture/exit-code differences
+	## locked by the 4.3 canary skips in test_cli_exec.gd. Preserve the old
+	## blocking discovery behavior there so startup-critical probes keep the
+	## same semantics that worked before the bounded-pipe path landed.
+	var output: Array = []
+	var exit_code := OS.execute(exe, args, output, true)
+	var lines := PackedStringArray()
+	for line in output:
+		lines.append(str(line))
+	var stdout := "\n".join(lines)
+	return {
+		"exit_code": exit_code,
+		"stdout": stdout,
+		"stderr": "",
+		"output": stdout,
+		"timed_out": false,
+		"spawn_failed": exit_code == -1,
+	}
+
+
 static func _spawn_failed_result() -> Dictionary:
 	return {
 		"exit_code": -1,
@@ -119,9 +162,19 @@ static func _spawn_failed_result() -> Dictionary:
 
 
 static func _drain_pipe(pipe: Variant) -> String:
-	if pipe is FileAccess:
-		return (pipe as FileAccess).get_as_text()
-	return ""
+	if not (pipe is FileAccess):
+		return ""
+	var f := pipe as FileAccess
+	var bytes := PackedByteArray()
+	var max_bytes := 1 << 20  # 1 MiB, far above expected client CLI output.
+	while bytes.size() < max_bytes:
+		var chunk := f.get_buffer(mini(4096, max_bytes - bytes.size()))
+		if chunk.is_empty():
+			break
+		bytes.append_array(chunk)
+		if f.eof_reached():
+			break
+	return bytes.get_string_from_utf8()
 
 
 static func _join_streams(stdout: String, stderr_text: String) -> String:
@@ -141,3 +194,10 @@ static func _close_pipes(stdio: Variant, stderr_pipe: Variant) -> void:
 		(stdio as FileAccess).close()
 	if stderr_pipe is FileAccess:
 		(stderr_pipe as FileAccess).close()
+
+
+static func _uses_blocking_legacy_path() -> bool:
+	var version := Engine.get_version_info()
+	var major := int(version.get("major", 4))
+	var minor := int(version.get("minor", 0))
+	return major < 4 or (major == 4 and minor < 4)

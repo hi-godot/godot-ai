@@ -5,6 +5,10 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from godot_ai.godot_client.session_diagnostics import (
+    NO_ACTIVE_SESSION_MESSAGE,
+    no_active_session_data,
+)
 from godot_ai.handlers._readiness import require_writable_async, sync_readiness_from_snapshot
 from godot_ai.runtime.direct import DirectRuntime
 
@@ -77,7 +81,10 @@ async def project_settings_set(runtime: DirectRuntime, key: str, value: Any) -> 
 def project_info_resource_data(runtime: DirectRuntime) -> dict:
     session = runtime.get_active_session()
     if session is None:
-        return {"error": "No active Godot session", "connected": False}
+        return {
+            "error": NO_ACTIVE_SESSION_MESSAGE,
+            **no_active_session_data(circuit_open=False),
+        }
 
     info = session.to_dict()
     info.pop("connected_at", None)

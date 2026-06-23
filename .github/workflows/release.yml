@@ -161,10 +161,21 @@ jobs:
           fi
           echo "Zip structure verified: addons/godot_ai/... + godot-ai-LICENSE.txt (multi-top)"
 
+      - name: Generate SHA-256 checksum
+        # Sidecar checksum for the plugin's self-updater to verify the
+        # downloaded archive's integrity before extracting over live plugin
+        # code (#523). `sha256sum`'s "<hex>  <name>" format is what the plugin
+        # parses (utils/update_manager.gd::_parse_sha256_digest).
+        run: |
+          sha256sum godot-ai-plugin.zip > godot-ai-plugin.zip.sha256
+          cat godot-ai-plugin.zip.sha256
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
         with:
-          files: godot-ai-plugin.zip
+          files: |
+            godot-ai-plugin.zip
+            godot-ai-plugin.zip.sha256
           generate_release_notes: true
 
       - name: Post changelog to Discord

@@ -110,21 +110,33 @@ def _client(registry, *, threshold: int = 3, initial_open_ms: int = 1000):
 
 
 class TestPreThresholdBehavior:
-    """Below the threshold, bare exceptions still propagate (back-compat)."""
+    """Below the threshold, transport exceptions still propagate."""
 
-    async def test_first_no_session_failures_raise_connection_error(self) -> None:
+    async def test_first_no_session_failures_raise_actionable_error(self) -> None:
         client, _, breaker = _client(_make_registry(), threshold=3)
         for _ in range(2):
-            with pytest.raises(ConnectionError, match="No active Godot session"):
+            with pytest.raises(GodotCommandError) as exc_info:
                 await client.send("anything")
+            assert exc_info.value.code == "PLUGIN_DISCONNECTED"
+            assert "No active Godot session" in exc_info.value.message
+            assert exc_info.value.data["reason"] == "no_active_session"
+            assert exc_info.value.data["connected"] is False
+            assert exc_info.value.data["retryable"] is True
+            assert "container localhost is not host localhost" in exc_info.value.data["hint"]
         assert breaker.check_open(None) is None
         assert breaker.snapshot(None)["consecutive_failures"] == 2
 
-    async def test_first_session_not_found_failures_raise_connection_error(self) -> None:
+    async def test_first_session_not_found_failures_raise_actionable_error(self) -> None:
         client, _, breaker = _client(_make_registry(), threshold=3)
         for _ in range(2):
-            with pytest.raises(ConnectionError, match="not found"):
+            with pytest.raises(GodotCommandError) as exc_info:
                 await client.send("anything", session_id="ghost")
+            assert exc_info.value.code == "PLUGIN_DISCONNECTED"
+            assert "ghost" in exc_info.value.message
+            assert exc_info.value.data["reason"] == "session_not_found"
+            assert exc_info.value.data["session_id"] == "ghost"
+            assert exc_info.value.data["connected"] is False
+            assert "session_manage(op='list')" in exc_info.value.data["hint"]
         assert breaker.check_open("ghost") is None
 
     async def test_first_transport_timeout_raises_bare_timeout(self) -> None:
@@ -141,7 +153,7 @@ class TestCircuitOpens:
     async def test_no_session_threshold_opens_circuit(self) -> None:
         client, _, breaker = _client(_make_registry(), threshold=3)
         for _ in range(3):
-            with pytest.raises(ConnectionError):
+            with pytest.raises(GodotCommandError):
                 await client.send("anything")
         ## Threshold reached on the 3rd failure — the 4th call short-circuits.
         with pytest.raises(GodotCommandError) as exc_info:
@@ -152,17 +164,24 @@ class TestCircuitOpens:
         assert data["retryable"] is True
         assert data["retry_after_ms"] > 0
         assert data["last_failure_kind"] == "no_active_session"
+        assert "no connected Godot editor" in exc_info.value.message
         assert "retry in" in exc_info.value.message
 
     async def test_session_not_found_threshold_opens_circuit_keyed_by_session(self) -> None:
         client, _, breaker = _client(_make_registry(), threshold=3)
         for _ in range(3):
-            with pytest.raises(ConnectionError):
+            with pytest.raises(GodotCommandError):
                 await client.send("anything", session_id="ghost")
         with pytest.raises(GodotCommandError) as exc_info:
             await client.send("anything", session_id="ghost")
         assert exc_info.value.code == "PLUGIN_DISCONNECTED"
-        assert exc_info.value.data["last_failure_kind"] == "session_not_found"
+        data = exc_info.value.data
+        assert data["last_failure_kind"] == "session_not_found"
+        assert data["reason"] == "session_not_found"
+        assert data["session_id"] == "ghost"
+        assert data["circuit_open"] is True
+        assert "missing-session" in exc_info.value.message
+        assert "still not connected" in exc_info.value.message
 
     async def test_transport_timeout_threshold_opens_circuit(self) -> None:
         client, ws, _ = _client(_make_registry("sess", active="sess"), threshold=3)
@@ -232,7 +251,7 @@ class TestReset:
         ## per-session call must also clear the global no-session circuit.
         client, ws, breaker = _client(_make_registry(), threshold=3)
         for _ in range(3):
-            with pytest.raises(ConnectionError):
+            with pytest.raises(GodotCommandError):
                 await client.send("anything")
         assert breaker.check_open(None) is not None
 
@@ -257,7 +276,7 @@ class TestPerSessionIsolation:
         client, ws, breaker = _client(registry, threshold=3)
         ## Trip the circuit on a missing pinned session.
         for _ in range(3):
-            with pytest.raises(ConnectionError):
+            with pytest.raises(GodotCommandError):
                 await client.send("anything", session_id="ghost")
         with pytest.raises(GodotCommandError):
             await client.send("anything", session_id="ghost")
@@ -272,7 +291,7 @@ class TestErrorPayloadShape:
     async def test_payload_carries_actionable_fields(self) -> None:
         client, _, _ = _client(_make_registry(), threshold=3)
         for _ in range(3):
-            with pytest.raises(ConnectionError):
+            with pytest.raises(GodotCommandError):
                 await client.send("anything")
         with pytest.raises(GodotCommandError) as exc_info:
             await client.send("anything")
@@ -284,6 +303,10 @@ class TestErrorPayloadShape:
         assert err.data["retry_after_ms"] >= 1
         assert err.data["circuit_open"] is True
         assert err.data["consecutive_failures"] >= 3
+        assert err.data["reason"] == "no_active_session"
+        assert err.data["connected"] is False
+        assert err.data["diagnostics"]["check_sessions"] == "session_manage(op='list')"
+        assert "no connected Godot editor" in err.message
 
         ## Payload is JSON-serializable (no Exception objects or Enums) so it
         ## flows through MCP without surprises.
@@ -302,10 +325,10 @@ class TestSettingsViaConstructor:
             # default breaker
         )
         for _ in range(4):
-            with pytest.raises(ConnectionError):
+            with pytest.raises(GodotCommandError):
                 await client.send("anything")
         assert client.circuit_breaker.check_open(None) is None
-        with pytest.raises(ConnectionError):
+        with pytest.raises(GodotCommandError):
             await client.send("anything")  # 5th — trips
         with pytest.raises(GodotCommandError) as exc_info:
             await client.send("anything")  # 6th — short-circuits

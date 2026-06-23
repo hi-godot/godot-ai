@@ -81,9 +81,9 @@ func _log_error(
 		## Collect every function name in the first non-empty backtrace so
 		## game_helper can match its eval's uniquely named wrapper function.
 		var funcs := PackedStringArray()
-		for bt in script_backtraces:
+		for bt: RefCounted in script_backtraces:
 			if bt != null and bt.get_frame_count() > 0:
-				for i in bt.get_frame_count():
+				for i: int in bt.get_frame_count():
 					funcs.append(bt.get_frame_function(i))
 				break
 		_mutex.lock()

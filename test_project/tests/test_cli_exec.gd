@@ -94,6 +94,8 @@ func test_run_can_skip_stderr_capture_for_status_probe() -> void:
 
 
 func test_run_kills_subprocess_when_budget_expires() -> void:
+	if skip_on_godot_lt("4.4", "bounded timeout/kill only exists on the 4.4+ execute_with_pipe path; 4.3 uses the blocking legacy path with no kill"):
+		return
 	## The headline behavior: a hung CLI no longer hangs the editor.
 	## Spawn `sleep 5` with a 200ms budget — McpCliExec should kill it
 	## and return timed_out=true. The whole assertion path must complete

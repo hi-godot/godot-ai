@@ -21,9 +21,10 @@ A full JSON snapshot is flushed to stormtest_report.json every few seconds so
 a crash or kill still leaves analyzable data (latency p50/p95/max + per-op
 error codes).
 
-Run against a running editor whose MCP server is on :8000:
+Run against a running editor whose MCP server is on :8000 (use `python` with
+the venv active, or the venv interpreter directly — same on every OS):
 
-    .venv/bin/python script/stormtest.py
+    python script/stormtest.py
 
 Knobs (all env-overridable):
     SS_WORKERS   parallel client connections           (default 8)
@@ -31,11 +32,14 @@ Knobs (all env-overridable):
     SS_CALLS     calls per worker per wave              (default 25)
     SS_RELOAD    1=include reload churn, 0=skip         (default 1)
     SS_RELOAD_EVERY       chaos worker reloads every N waves  (default 2)
+    SS_RELOAD_MODE        concurrent | isolated          (default concurrent)
+    SS_ISOLATED_ITERS     reloads in isolated mode       (default 10)
     SS_RECONNECT_TIMEOUT  seconds to wait for the server to return (default 30)
     SS_URL       target MCP endpoint  (default http://127.0.0.1:8000/mcp)
 
     Default ≈ 1000 calls.  Brutal: SS_WORKERS=12 SS_WAVES=30 (≈ 9000 calls).
     Reads-only smoke: SS_RELOAD=0.
+    Windows-friendly reload survival check: SS_RELOAD_MODE=isolated.
 """
 
 from __future__ import annotations
@@ -65,6 +69,17 @@ RECONNECT_TIMEOUT = float(os.environ.get("SS_RECONNECT_TIMEOUT", "30"))
 # forever and wedges the whole run. On timeout we treat it as a CONNECTION
 # failure and reconnect.
 CALL_TIMEOUT = float(os.environ.get("SS_CALL_TIMEOUT", "20"))
+# Reload mode. "concurrent" (default) = the chaos worker reloads mid-run while
+# N workers keep hammering. "isolated" = a single-threaded reload→reconnect→
+# verify loop with no concurrent load — the Windows-friendly survival check,
+# since concurrent churn against a plugin-managed server can wedge the asyncio
+# loop on Windows (#513). Isolated mode gives a clean survived-N/N number.
+RELOAD_MODE = os.environ.get("SS_RELOAD_MODE", "concurrent").strip().lower()
+ISOLATED_ITERS = int(os.environ.get("SS_ISOLATED_ITERS", "10"))
+# Hard ceiling on client teardown. On Windows a dead server's socket may not
+# get a prompt RST, so a graceful close can hang; cap it so teardown can never
+# wedge the loop (the concrete stall behind #513).
+CLOSE_TIMEOUT = float(os.environ.get("SS_CLOSE_TIMEOUT", "5"))
 
 SCRATCH_DIR = "res://_stormtest"
 SCRATCH_SCENE = f"{SCRATCH_DIR}/storm.tscn"
@@ -176,6 +191,18 @@ def _err_code(exc: Exception) -> str:
     return type(exc).__name__
 
 
+async def _hard_close(client) -> None:
+    """Close a client without ever hanging the loop. A graceful __aexit__ can
+    stall on Windows when the peer server died mid-reload (the socket gets no
+    prompt RST), so bound it with a timeout and swallow everything. See #513."""
+    if client is None:
+        return
+    try:
+        await asyncio.wait_for(client.__aexit__(None, None, None), timeout=CLOSE_TIMEOUT)
+    except (Exception, asyncio.TimeoutError, asyncio.CancelledError):
+        pass
+
+
 class Worker:
     def __init__(self, wi: int):
         self.wi = wi
@@ -195,12 +222,8 @@ class Worker:
 
     async def connect(self) -> bool:
         """(Re)establish this worker's MCP connection. Retries until timeout."""
-        if self.client is not None:
-            try:
-                await self.client.__aexit__(None, None, None)
-            except Exception:
-                pass
-            self.client = None
+        await _hard_close(self.client)
+        self.client = None
         deadline = time.monotonic() + RECONNECT_TIMEOUT
         attempt = 0
         while time.monotonic() < deadline and not STOP[0]:
@@ -212,10 +235,7 @@ class Worker:
                 self.client = c
                 return True
             except Exception:
-                try:
-                    await c.__aexit__(None, None, None)
-                except Exception:
-                    pass
+                await _hard_close(c)
                 await asyncio.sleep(min(2.0, 0.2 * attempt))
         return False
 
@@ -713,11 +733,8 @@ async def worker_loop(w: Worker):
                     M["by_op_err"]["UNCAUGHT"] += 1
         # tiny yield so workers interleave but stay hot
         await asyncio.sleep(0)
-    try:
-        if w.client:
-            await w.client.__aexit__(None, None, None)
-    except Exception:
-        pass
+    await _hard_close(w.client)
+    w.client = None
 
 
 async def do_reload(w: Worker):
@@ -754,6 +771,76 @@ async def do_reload(w: Worker):
         f"  [chaos] <<< reconnected after reload "
         f"(survived {M['reloads_survived']}/{M['reloads_attempted']})"
     )
+
+
+async def _active_session_id(w: Worker) -> str:
+    """Best-effort current session id, for confirming a reload rotated it.
+    Returns '?' on any hiccup — the survived count is the real signal."""
+    try:
+        res = await w.client.call_tool("session_manage", {"op": "list", "params": {}})
+        data = getattr(res, "data", None) or {}
+        sessions = data.get("sessions") or []
+        if sessions:
+            first = sessions[0]
+            return str(first.get("session_id") or first.get("id") or "?")
+    except Exception:
+        return "?"
+    return "?"
+
+
+async def run_isolated_reload() -> None:
+    """Single-threaded reload→reconnect→verify loop (#513). No concurrent load,
+    so it can't hit the Windows concurrent-churn wedge — it yields a clean
+    survived-N/N number and per-reload recovery time. This is the documented
+    Windows path for validating reload survival."""
+    print(
+        f"stormtest [isolated reload]  iters={ISOLATED_ITERS} "
+        f"reconnect_timeout={RECONNECT_TIMEOUT}s  url={URL}"
+    )
+    w = Worker(0)
+    if not await w.connect():
+        print("  could not reach the editor — is it running with the plugin enabled?")
+        STOP[0] = True
+        return
+
+    for i in range(ISOLATED_ITERS):
+        if STOP[0]:
+            break
+        before = await _active_session_id(w)
+        M["reloads_attempted"] += 1
+        print(f"  >>> reload #{i + 1}/{ISOLATED_ITERS}  (session before: {before})")
+        try:
+            async with asyncio.timeout(CALL_TIMEOUT):
+                await w.client.call_tool("editor_reload_plugin", {})
+        except Exception as exc:
+            print(f"      reload call returned/raised: {_err_code(exc)} (expected during handoff)")
+
+        # Drop the (now-severed) client without risking a teardown stall, then
+        # wait for the disable→extract→enable window before reconnecting.
+        await _hard_close(w.client)
+        w.client = None
+        t0 = time.monotonic()
+        await asyncio.sleep(2.0)
+        ok = await w.connect()
+        dt = time.monotonic() - t0
+        if not ok:
+            print(
+                f"      !!! editor did not return within {RECONNECT_TIMEOUT}s — "
+                "reload NOT survived (managed server likely killed by the reload)"
+            )
+            STOP[0] = True
+            break
+        after = await _active_session_id(w)
+        M["reloads_survived"] += 1
+        M["reload_recovery_s"].append(dt)
+        M["reconnects"] += 1
+        print(
+            f"      <<< reconnected in {dt:.1f}s  (session after: {after})  "
+            f"survived {M['reloads_survived']}/{M['reloads_attempted']}"
+        )
+
+    await _hard_close(w.client)
+    w.client = None
 
 
 async def health_monitor():
@@ -877,6 +964,17 @@ async def main():
             loop.add_signal_handler(sig, lambda: STOP.__setitem__(0, True))
         except (NotImplementedError, RuntimeError):
             pass
+
+    # Isolated reload mode: no scratch scene, no concurrent workers — just the
+    # single-threaded reload survival loop. Self-contained so it sidesteps the
+    # concurrent-churn wedge entirely (#513).
+    if RELOAD_MODE == "isolated":
+        START[0] = time.monotonic()
+        try:
+            await run_isolated_reload()
+        finally:
+            report()
+        return
 
     original = await setup()
     START[0] = time.monotonic()

@@ -152,6 +152,9 @@ func test_recover_kills_and_clears_when_port_frees() -> void:
 	var host := _ManagerHostStub.new()
 	host.listener_pids = [22222] as Array[int]
 	host.alive_pids = [22222] as Array[int]
+	## The recorded PID is our managed server, so it's branded godot-ai — the
+	## managed_record kill branch now requires that brand (#525).
+	host.branded_pids = [22222] as Array[int]
 	host.managed_record = {"pid": 22222, "version": "2.1.0", "ws_port": 9500}
 	host.port_in_use_sequence = [false] as Array[bool]
 	var manager := McpServerLifecycleManagerScript.new(host)
@@ -166,6 +169,9 @@ func test_recover_preserves_record_when_port_held() -> void:
 	var host := _ManagerHostStub.new()
 	host.listener_pids = [33333] as Array[int]
 	host.alive_pids = [33333] as Array[int]
+	## Branded ours so the managed_record proof fires and a kill is attempted;
+	## the port then stays held, exercising the preserve-record path (#525).
+	host.branded_pids = [33333] as Array[int]
 	host.managed_record = {"pid": 33333, "version": "2.1.0", "ws_port": 9500}
 	host.port_in_use_sequence = [true] as Array[bool]
 	var manager := McpServerLifecycleManagerScript.new(host)

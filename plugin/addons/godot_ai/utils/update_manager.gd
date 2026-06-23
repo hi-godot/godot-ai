@@ -34,6 +34,21 @@ const UPDATE_TEMP_DIR := "user://godot_ai_update/"
 const UPDATE_TEMP_ZIP := "user://godot_ai_update/update.zip"
 const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")
 
+## Hosts the self-update download is allowed to come from. The download URL
+## is taken verbatim from the GitHub Releases API's `browser_download_url`,
+## so before fetching we pin it to https on a GitHub-owned host — a tampered
+## or unexpected API response can't then point the in-editor updater at an
+## arbitrary origin. (HTTPRequest follows the github.com -> githubusercontent
+## redirect internally; this validates the entry point. Release-side checksum
+## / provenance verification of the downloaded bytes remains tracked in #523.)
+const _TRUSTED_DOWNLOAD_HOSTS := [
+	"github.com",
+	"www.github.com",
+	"api.github.com",
+	"objects.githubusercontent.com",
+	"release-assets.githubusercontent.com",
+]
+
 ## Emitted after `check_for_updates()` resolves a newer remote version.
 ## Payload mirrors the Dictionary returned by `parse_releases_response`:
 ##   {has_update, version, forced, label_text, download_url}
@@ -53,7 +68,12 @@ var _dock
 
 var _http_request: HTTPRequest
 var _download_request: HTTPRequest
+var _verify_request: HTTPRequest
 var _latest_download_url: String = ""
+## URL of the `godot-ai-plugin.zip.sha256` sidecar asset, when the release
+## ships one. Used to verify the downloaded archive's integrity before extract
+## (#523). Empty for older releases published without a checksum sidecar.
+var _latest_checksum_url: String = ""
 
 ## Set for the duration of `_install_zip` — extract-overwrite of plugin
 ## scripts on disk would crash any worker mid-`GDScriptFunction::call`
@@ -101,6 +121,7 @@ func cancel_check() -> void:
 ## flips so a fresh check paints over a clean banner.
 func clear_pending_download() -> void:
 	_latest_download_url = ""
+	_latest_checksum_url = ""
 
 
 ## True when the running Godot can self-update in place. Godot < 4.4 takes
@@ -166,6 +187,22 @@ func start_install() -> void:
 		OS.shell_open(RELEASES_PAGE)
 		return
 
+	## Pin the resolved asset URL to https on a GitHub host before fetching.
+	## Fall back to the release page (a user-driven browser download) rather
+	## than pulling an executable plugin payload from an unexpected origin.
+	## See #523.
+	if not _is_trusted_download_url(_latest_download_url):
+		push_error(
+			"MCP | refusing self-update download from untrusted URL: %s"
+			% _latest_download_url
+		)
+		OS.shell_open(RELEASES_PAGE)
+		install_state_changed.emit({
+			"button_text": "Update via download page",
+			"button_disabled": false,
+		})
+		return
+
 	install_state_changed.emit({
 		"button_text": "Downloading...",
 		"button_disabled": true,
@@ -212,6 +249,7 @@ func is_install_in_flight() -> bool:
 ##   forced: bool                    ## mode_override() == "user" (banner-only hint)
 ##   label_text: String              ## "Update available: vX.Y.Z" + " (forced)"
 ##   download_url: String            ## matching `godot-ai-plugin.zip` asset URL
+##   checksum_url: String            ## `godot-ai-plugin.zip.sha256` asset URL ("" if absent)
 ##
 ## Static so tests drive it without instancing the manager.
 static func parse_releases_response(
@@ -223,6 +261,7 @@ static func parse_releases_response(
 		"forced": false,
 		"label_text": "",
 		"download_url": "",
+		"checksum_url": "",
 	}
 	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
 		return out
@@ -239,12 +278,15 @@ static func parse_releases_response(
 		return out
 
 	var url := ""
+	var checksum_url := ""
 	var assets: Array = json.get("assets", [])
 	for asset in assets:
 		var asset_dict: Dictionary = asset
-		if String(asset_dict.get("name", "")) == "godot-ai-plugin.zip":
+		var asset_name := String(asset_dict.get("name", ""))
+		if asset_name == "godot-ai-plugin.zip":
 			url = String(asset_dict.get("browser_download_url", ""))
-			break
+		elif asset_name == "godot-ai-plugin.zip.sha256":
+			checksum_url = String(asset_dict.get("browser_download_url", ""))
 
 	var forced := ClientConfigurator.mode_override() == "user"
 	var label_text := "Update available: v%s" % remote_version
@@ -258,7 +300,33 @@ static func parse_releases_response(
 	out["forced"] = forced
 	out["label_text"] = label_text
 	out["download_url"] = url
+	out["checksum_url"] = checksum_url
 	return out
+
+
+## True only for an `https://` URL whose host is one of
+## `_TRUSTED_DOWNLOAD_HOSTS`. Parses the authority by hand (GDScript has no
+## URL parser): strips userinfo via the LAST `@` so a spoof like
+## `https://github.com@evil.com/...` resolves to `evil.com` (rejected), and
+## strips any `:port`. Static so the guard is unit-testable without
+## instancing the manager.
+static func _is_trusted_download_url(url: String) -> bool:
+	const SCHEME := "https://"
+	if not url.begins_with(SCHEME):
+		return false
+	var rest := url.substr(SCHEME.length())
+	var authority := rest
+	var slash := rest.find("/")
+	if slash >= 0:
+		authority = rest.substr(0, slash)
+	## Host is everything after the LAST '@' (userinfo precedes it).
+	var at := authority.rfind("@")
+	if at >= 0:
+		authority = authority.substr(at + 1)
+	var colon := authority.find(":")
+	if colon >= 0:
+		authority = authority.substr(0, colon)
+	return authority.to_lower() in _TRUSTED_DOWNLOAD_HOSTS
 
 
 static func _is_newer(remote: String, local: String) -> bool:
@@ -286,6 +354,7 @@ func _on_update_check_completed(
 	if not bool(parsed.get("has_update", false)):
 		return
 	_latest_download_url = String(parsed.get("download_url", ""))
+	_latest_checksum_url = String(parsed.get("checksum_url", ""))
 	update_check_completed.emit(parsed)
 	## On engines that can't self-update (Godot < 4.4, #475), surface the
 	## full manual-update guidance AND relabel the button up-front — before
@@ -315,9 +384,117 @@ func _on_download_completed(
 		})
 		return
 
+	# Deferred so the HTTPRequest callback returns before the next step starts.
+	_verify_then_install.call_deferred()
+
+
+# ---- Integrity verification (#523) -------------------------------------
+
+## Gate the extract on a SHA-256 match against the release's checksum sidecar.
+## TLS + host pinning already constrain where the bytes came from; this
+## verifies the bytes themselves so a tampered asset (or a compromised CDN
+## object) can't be installed over live plugin code. Releases published
+## without a `.sha256` sidecar (older versions) install without this check —
+## verify-if-present rather than hard-fail, so existing releases stay
+## updatable; the host pin still applies to the download itself.
+func _verify_then_install() -> void:
+	if _latest_checksum_url.is_empty():
+		print("MCP | no checksum published for this release; skipping integrity verification")
+		install_state_changed.emit({"button_text": "Installing..."})
+		_install_zip()
+		return
+
+	## A present-but-untrusted checksum URL is a tamper signal, not a
+	## backward-compat case — refuse rather than silently skip.
+	if not _is_trusted_download_url(_latest_checksum_url):
+		_fail_verification("checksum URL is not a trusted GitHub host")
+		return
+
+	install_state_changed.emit({"button_text": "Verifying..."})
+	if _verify_request != null:
+		_verify_request.queue_free()
+	_verify_request = HTTPRequest.new()
+	_verify_request.max_redirects = 10
+	_verify_request.request_completed.connect(_on_checksum_completed)
+	add_child(_verify_request)
+	var err := _verify_request.request(_latest_checksum_url)
+	if err != OK:
+		_verify_request.queue_free()
+		_verify_request = null
+		_fail_verification("could not request checksum (error %d)" % err)
+
+
+func _on_checksum_completed(
+	result: int,
+	response_code: int,
+	_headers: PackedStringArray,
+	body: PackedByteArray
+) -> void:
+	if _verify_request != null:
+		_verify_request.queue_free()
+		_verify_request = null
+
+	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
+		_fail_verification("checksum download failed (result=%d code=%d)" % [result, response_code])
+		return
+
+	var expected := _parse_sha256_digest(body.get_string_from_utf8())
+	if expected.is_empty():
+		_fail_verification("malformed checksum file")
+		return
+
+	var zip_path := ProjectSettings.globalize_path(UPDATE_TEMP_ZIP)
+	var actual := FileAccess.get_sha256(zip_path).to_lower()
+	if actual.is_empty():
+		_fail_verification("could not hash the downloaded archive")
+		return
+	if actual != expected:
+		_fail_verification(
+			"checksum mismatch (expected %s…, got %s…)"
+			% [expected.substr(0, 12), actual.substr(0, 12)]
+		)
+		return
+
+	print("MCP | self-update checksum verified (sha256 %s)" % actual)
 	install_state_changed.emit({"button_text": "Installing..."})
-	# Deferred so the HTTPRequest callback returns before the extract starts.
-	_install_zip.call_deferred()
+	_install_zip()
+
+
+## Surface an integrity-check failure and drop the staged zip so the bad
+## bytes can never reach the extract path. Keeps the button enabled for retry.
+func _fail_verification(reason: String) -> void:
+	push_error(
+		"MCP | self-update integrity check failed: %s. The download was not installed."
+		% reason
+	)
+	print("MCP | self-update aborted (integrity): %s" % reason)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(UPDATE_TEMP_ZIP))
+	install_state_changed.emit({
+		"button_text": "Verification failed — retry",
+		"button_disabled": false,
+	})
+
+
+## Extract the hex digest from a `sha256sum`-style file ("<hex>  <name>") or a
+## bare digest line. Returns lowercase 64-char hex, or "" if the content isn't
+## a valid SHA-256 digest. Static so it's unit-testable. See #523.
+static func _parse_sha256_digest(text: String) -> String:
+	var trimmed := text.strip_edges()
+	if trimmed.is_empty():
+		return ""
+	## First whitespace-delimited token; `sha256sum` separates digest and
+	## filename with two spaces, so allow_empty=false collapses the run.
+	var tokens := trimmed.split(" ", false)
+	if tokens.is_empty():
+		return ""
+	var digest := String(tokens[0]).strip_edges().to_lower()
+	if digest.length() != 64:
+		return ""
+	for i in digest.length():
+		var c := digest[i]
+		if not ((c >= "0" and c <= "9") or (c >= "a" and c <= "f")):
+			return ""
+	return digest
 
 
 # ---- Install orchestration ---------------------------------------------
@@ -382,16 +559,43 @@ func _install_zip_inline(version: Dictionary) -> void:
 	for file_path in files:
 		if not file_path.begins_with("addons/godot_ai/"):
 			continue
+		## Skip zip dir entries; parent dirs are created from each validated
+		## file's base dir below — the same shape the runner uses. Creating a
+		## dir from an unvalidated entry would itself be a traversal hole.
 		if file_path.ends_with("/"):
-			DirAccess.make_dir_recursive_absolute(install_base.path_join(file_path))
-		else:
-			var dir := file_path.get_base_dir()
-			DirAccess.make_dir_recursive_absolute(install_base.path_join(dir))
-			var content := reader.read_file(file_path)
-			var f := FileAccess.open(install_base.path_join(file_path), FileAccess.WRITE)
-			if f != null:
-				f.store_buffer(content)
-				f.close()
+			continue
+		## Reject path-traversal / absolute / backslash entries BEFORE any
+		## path_join + write. The modern runner enforces this via
+		## `update_reload_runner.gd::_is_safe_zip_addon_file`; the pre-4.4
+		## inline path used to gate only on the `addons/godot_ai/` prefix, so
+		## `addons/godot_ai/../../evil.gd` escaped the addon dir. This guard
+		## closes that gap so the weaker path runs the same checks. See #522.
+		if not _is_safe_zip_addon_file(file_path):
+			_abort_inline_install(reader, "unsafe zip path: %s" % file_path)
+			return
+		var dir := file_path.get_base_dir()
+		DirAccess.make_dir_recursive_absolute(install_base.path_join(dir))
+		var content := reader.read_file(file_path)
+		var target := install_base.path_join(file_path)
+		var f := FileAccess.open(target, FileAccess.WRITE)
+		## Unlike the runner (tmp+rename+per-file backup+rollback), this pre-4.4
+		## path writes directly over live files and can't roll back. It used to
+		## skip a null open and ignore store_buffer errors silently, leaving a
+		## partially-overwritten addons tree while still telling the user to
+		## restart onto it. Check both error surfaces and abort loudly instead.
+		## See #524.
+		if f == null:
+			_abort_inline_install(
+				reader,
+				"could not open %s for write (error %d)" % [target, FileAccess.get_open_error()],
+			)
+			return
+		f.store_buffer(content)
+		var write_error := f.get_error()
+		f.close()
+		if write_error != OK:
+			_abort_inline_install(reader, "write error %d for %s" % [write_error, target])
+			return
 
 	reader.close()
 
@@ -426,6 +630,47 @@ func _install_zip_inline(version: Dictionary) -> void:
 			"label_text": "Updated! Restart the editor.",
 			"outcome": "success",
 		})
+
+
+## Abort the inline (pre-4.4) extract on a path-safety or write failure.
+## Closes the ZIP reader, drops the in-flight gate so dock spawn paths
+## un-block, and surfaces the failure loudly: this path has no rollback, so
+## the addons tree may be partially overwritten and the user must reinstall
+## from the download page rather than relaunch onto a half-written plugin.
+## See #522 / #524.
+func _abort_inline_install(reader: ZIPReader, reason: String) -> void:
+	reader.close()
+	_install_in_flight = false
+	push_error(
+		"MCP | self-update extract failed: %s. addons/godot_ai/ may be"
+		% reason
+		+ " partially updated — reinstall the plugin from the download page"
+		+ " before relaunching."
+	)
+	print("MCP | self-update extract aborted: %s" % reason)
+	install_state_changed.emit({
+		"button_text": "Extract failed — reinstall",
+		"button_disabled": false,
+	})
+
+
+## Mirror of `update_reload_runner.gd::_is_safe_zip_addon_file`. Rejects any
+## entry that could escape `addons/godot_ai/` — absolute paths, backslashes,
+## and `.`/`..`/empty path segments — before it reaches a `path_join` + write
+## on the inline (pre-4.4) extract path, which has no rollback. Static so the
+## guard is unit-testable without instancing the manager. See #522.
+static func _is_safe_zip_addon_file(file_path: String) -> bool:
+	if file_path.is_absolute_path() or file_path.contains("\\"):
+		return false
+	if not file_path.begins_with("addons/godot_ai/"):
+		return false
+	var rel_path := file_path.trim_prefix("addons/godot_ai/")
+	if rel_path.is_empty() or rel_path.ends_with("/"):
+		return false
+	for segment in rel_path.split("/", true):
+		if segment.is_empty() or segment == "." or segment == "..":
+			return false
+	return true
 
 
 func _on_filesystem_scanned_for_update() -> void:

@@ -39,6 +39,7 @@ const MIN_PORT := 1024
 const MAX_PORT := 65535
 const SETTING_WS_PORT := "godot_ai/ws_port"
 const SETTING_STARTUP_TRACE := "godot_ai/log_startup_timing"
+const _DISCOVERY_TIMEOUT_MS := 3000
 
 
 ## Active HTTP port: user override (if in range) or `DEFAULT_HTTP_PORT`.
@@ -509,8 +510,8 @@ static func invalidate_uvx_cli_cache() -> void:
 ## Thread safety: `CliFinder.invalidate()` guards `_cache` / `_searched`
 ## with a mutex so it can race safely against worker threads calling
 ## `find()` from `_run_client_action_worker`. The mutex is held only
-## across the dictionary clear, never across `OS.execute`, so this call
-## can never block the main thread on a subprocess.
+## across the dictionary clear, never across the bounded subprocess lookup,
+## so this call can never block the main thread on a subprocess.
 static func invalidate_cli_cache() -> void:
 	CliFinder.invalidate()
 
@@ -521,10 +522,9 @@ static var _uv_version_searched: bool = false
 
 ## Cached for the editor session. The dock's `_refresh_setup_status`
 ## (called via `call_deferred` from `_build_ui`) calls this on the
-## main thread in user mode, so a single cold `OS.execute(uvx,
-## ["--version"])` adds ~80 ms to the dock's first paint on Linux and
-## more on Windows. Subsequent calls (focus-in refresh, manual Refresh
-## clicks) reuse the cached string.
+## main thread in user mode, so the cold `uvx --version` probe is
+## wall-clock bounded and cached. Subsequent calls (focus-in refresh,
+## manual Refresh clicks) reuse the cached string.
 ##
 ## Invalidate via `invalidate_uv_version_cache()` when the user
 ## installs / reinstalls uv via the dock so the next refresh reflects
@@ -539,9 +539,10 @@ static func check_uv_version() -> String:
 		_uv_version_searched = true
 		_uv_version_cache = ""
 		return ""
-	var output: Array = []
-	if OS.execute(uvx, ["--version"], output, true) == 0 and output.size() > 0:
-		_uv_version_cache = output[0].strip_edges()
+	var result := McpCliExec.run(uvx, ["--version"], _DISCOVERY_TIMEOUT_MS, false)
+	if int(result.get("exit_code", -1)) == 0:
+		var lines := PackedStringArray(str(result.get("stdout", "")).split("\n"))
+		_uv_version_cache = lines[0].strip_edges() if lines.size() > 0 else ""
 	else:
 		_uv_version_cache = ""
 	_uv_version_searched = true
@@ -612,9 +613,12 @@ static func find_worktree_src_dir(start_dir: String) -> String:
 
 static func _find_system_install() -> String:
 	var cmd := "which" if OS.get_name() != "Windows" else "where"
-	var output: Array = []
-	if OS.execute(cmd, ["godot-ai"], output, true) == 0 and output.size() > 0:
-		var found: String = output[0].strip_edges()
+	var result := McpCliExec.run(cmd, ["godot-ai"], _DISCOVERY_TIMEOUT_MS, false)
+	if int(result.get("exit_code", -1)) == 0:
+		var lines := PackedStringArray(str(result.get("stdout", "")).split("\n"))
+		if lines.is_empty():
+			return ""
+		var found := CliFinder._pick_best_path(lines) if OS.get_name() == "Windows" else lines[0].strip_edges()
 		if not found.is_empty():
 			return found
 	return ""

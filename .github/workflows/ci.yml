@@ -137,20 +137,17 @@ jobs:
         include:
           - os: ubuntu-latest
             label: Linux
-            godot-version: "4.6.2"
+            godot-version: "4.7.0"
           - os: macos-latest
             label: macOS
-            godot-version: "4.6.2"
+            godot-version: "4.7.0"
           - os: windows-latest
             label: Windows
-            godot-version: "4.6.2"
-          - os: ubuntu-latest
-            label: Linux (Godot 4.7)
             godot-version: "4.7.0"
           ## 4.3 Linux canary — README advertises "Godot 4.3+" support and
           ## #476's parse-cascade regression went unnoticed for 24 days
-          ## because every CI run was on 4.6.2. Phase 1 of #477: one cheap
-          ## Linux canary to catch the same class of regression in future.
+          ## because every CI run was on the primary engine. Phase 1 of #477:
+          ## one cheap Linux canary to catch the same class of regression in future.
           ## Phase 2 (full 3-OS 4.3 coverage) is deferred.
           - os: ubuntu-latest
             label: Linux (Godot 4.3)
@@ -259,7 +256,7 @@ jobs:
 
       - uses: chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789 # v2
         with:
-          version: 4.6.2
+          version: 4.7.0
           use-dotnet: false
 
       - name: Set up Python
@@ -308,10 +305,17 @@ jobs:
         include:
           - os: ubuntu-latest
             label: Linux
+            godot-version: "4.7.0"
           - os: macos-latest
             label: macOS
+            godot-version: "4.7.0"
           - os: windows-latest
             label: Windows
+            ## Godot 4.7's Windows game subprocess requires a Vulkan
+            ## surface that the headless GitHub runner does not provide
+            ## (VK_KHR_surface missing). Keep Windows capture on 4.6.2
+            ## until CI has a software Vulkan/OpenGL fallback.
+            godot-version: "4.6.2"
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -322,7 +326,7 @@ jobs:
 
       - uses: chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789 # v2
         with:
-          version: 4.6.2
+          version: ${{ matrix.godot-version }}
           use-dotnet: false
 
       - name: Install xvfb

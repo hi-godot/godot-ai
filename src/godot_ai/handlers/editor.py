@@ -11,7 +11,13 @@ from fastmcp.tools.base import Image as McpImage
 from mcp.types import TextContent
 
 from godot_ai import runtime_info
+from godot_ai.godot_client.client import GodotCommandError
+from godot_ai.godot_client.session_diagnostics import (
+    NO_ACTIVE_SESSION_MESSAGE,
+    no_active_session_data,
+)
 from godot_ai.handlers._readiness import require_writable_async, sync_readiness_from_snapshot
+from godot_ai.protocol.errors import ErrorCode
 from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.tools._pagination import paginate
 
@@ -284,7 +290,11 @@ async def logs_read(
 async def editor_reload_plugin(runtime: DirectRuntime) -> dict:
     active = runtime.get_active_session()
     if active is None:
-        raise ConnectionError("No active Godot session")
+        raise GodotCommandError(
+            code=ErrorCode.PLUGIN_DISCONNECTED,
+            message=NO_ACTIVE_SESSION_MESSAGE,
+            data=no_active_session_data(circuit_open=False),
+        )
     old_id = active.session_id
 
     if runtime_info.is_plugin_managed():

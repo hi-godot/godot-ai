@@ -307,3 +307,150 @@ func test_connect_signal_declared_but_uninstantiated_autoload() -> void:
 		ProjectSettings.set_setting(setting_key, before_value)
 	else:
 		ProjectSettings.set_setting(setting_key, null)
+
+
+# ----- connections persist into the packed scene (CONNECT_PERSIST) -----
+
+func test_connect_signal_persists_in_packed_scene() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+
+	# Two scene-owned nodes so the connection is eligible to serialize.
+	var src := Node.new()
+	src.name = "_McpTestSigSrc"
+	scene_root.add_child(src)
+	src.owner = scene_root
+	var tgt := Node.new()
+	tgt.name = "_McpTestSigTgt"
+	scene_root.add_child(tgt)
+	tgt.owner = scene_root
+
+	# Baseline AFTER adding the nodes but BEFORE connecting, so a pre-existing
+	# [connection] in main.tscn can't mask a missing CONNECT_PERSIST flag.
+	var baseline := PackedScene.new()
+	assert_eq(baseline.pack(scene_root), OK, "baseline pack should succeed")
+	var before: int = baseline.get_state().get_connection_count()
+
+	var result := _handler.connect_signal({
+		"path": "/%s/_McpTestSigSrc" % scene_root.name,
+		"signal": "ready",
+		"target": "/%s/_McpTestSigTgt" % scene_root.name,
+		"method": "queue_free",
+	})
+	assert_has_key(result, "data")
+
+	# The CONNECT_PERSIST flag is what makes the connection serialize.
+	var packed := PackedScene.new()
+	assert_eq(packed.pack(scene_root), OK, "pack should succeed")
+	assert_gt(packed.get_state().get_connection_count(), before,
+		"CONNECT_PERSIST connection must serialize into the packed scene")
+
+	# Revert the connection, then free the manually-created nodes (this suite
+	# frees scene nodes directly — there is no track() helper).
+	assert_true(editor_undo(_undo_redo), "undo connect should succeed")
+	src.free()
+	tgt.free()
+
+
+func test_disconnect_undo_restores_persistent_connection() -> void:
+	# Symmetry with connect: undoing an MCP disconnect re-connects via the undo
+	# callable, which must also carry CONNECT_PERSIST — else the restored
+	# connection is runtime-only and silently dropped on the next save.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+
+	var src := Node.new()
+	src.name = "_McpTestSigSrc2"
+	scene_root.add_child(src)
+	src.owner = scene_root
+	var tgt := Node.new()
+	tgt.name = "_McpTestSigTgt2"
+	scene_root.add_child(tgt)
+	tgt.owner = scene_root
+
+	var baseline := PackedScene.new()
+	assert_eq(baseline.pack(scene_root), OK, "baseline pack should succeed")
+	var before: int = baseline.get_state().get_connection_count()
+
+	var src_path := "/%s/_McpTestSigSrc2" % scene_root.name
+	var tgt_path := "/%s/_McpTestSigTgt2" % scene_root.name
+	assert_has_key(_handler.connect_signal({
+		"path": src_path, "signal": "ready", "target": tgt_path, "method": "queue_free",
+	}), "data")
+	assert_has_key(_handler.disconnect_signal({
+		"path": src_path, "signal": "ready", "target": tgt_path, "method": "queue_free",
+	}), "data")
+
+	# Undo the disconnect -> the undo callable re-connects the signal.
+	assert_true(editor_undo(_undo_redo), "undo disconnect should succeed")
+
+	# The re-established connection must serialize (CONNECT_PERSIST).
+	var packed := PackedScene.new()
+	assert_eq(packed.pack(scene_root), OK, "pack should succeed")
+	assert_gt(packed.get_state().get_connection_count(), before,
+		"connection restored by undo-of-disconnect must be CONNECT_PERSIST")
+
+	# Cleanup: unwind the connect action too, then free the nodes.
+	assert_true(editor_undo(_undo_redo), "undo connect should succeed")
+	src.free()
+	tgt.free()
+
+
+func test_disconnect_undo_preserves_runtime_only_connection() -> void:
+	# CodeRabbit #584: undo-of-disconnect must restore the connection's ORIGINAL
+	# flags, not unconditionally force CONNECT_PERSIST. A runtime-only (flags == 0)
+	# connection that is MCP-disconnected and then undone must come back
+	# runtime-only — promoting it to persistent would make it silently serialize
+	# into the scene on the next save. Paired with
+	# test_disconnect_undo_restores_persistent_connection (which pins the
+	# CONNECT_PERSIST case from the other side), this forces the undo to restore
+	# the *actual* prior flags rather than a hardcoded constant.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+
+	var src := Node.new()
+	src.name = "_McpTestSigSrc3"
+	scene_root.add_child(src)
+	src.owner = scene_root
+	var tgt := Node.new()
+	tgt.name = "_McpTestSigTgt3"
+	scene_root.add_child(tgt)
+	tgt.owner = scene_root
+
+	# A runtime-only connection (flags == 0), made directly — NOT via the MCP
+	# connect_signal, which would tag it CONNECT_PERSIST.
+	var callable := Callable(tgt, "queue_free")
+	assert_eq(src.connect("ready", callable), OK, "setup: runtime connect should succeed")
+
+	var src_path := "/%s/_McpTestSigSrc3" % scene_root.name
+	var tgt_path := "/%s/_McpTestSigTgt3" % scene_root.name
+	assert_has_key(_handler.disconnect_signal({
+		"path": src_path, "signal": "ready", "target": tgt_path, "method": "queue_free",
+	}), "data")
+
+	# Undo the disconnect -> the undo callable re-connects the signal.
+	assert_true(editor_undo(_undo_redo), "undo disconnect should succeed")
+	assert_true(src.is_connected("ready", callable),
+		"undo-of-disconnect should restore the connection")
+
+	# The restored connection must keep its ORIGINAL runtime-only flags (0),
+	# not be promoted to CONNECT_PERSIST.
+	var restored_flags := -1
+	for conn in src.get_signal_connection_list("ready"):
+		if conn.get("callable", Callable()) == callable:
+			restored_flags = int(conn.get("flags", -1))
+			break
+	assert_eq(restored_flags, 0,
+		"undo must restore original runtime-only flags, not force CONNECT_PERSIST (got %d)" % restored_flags)
+
+	# Cleanup: drop the restored connection, free the nodes.
+	if src.is_connected("ready", callable):
+		src.disconnect("ready", callable)
+	src.free()
+	tgt.free()

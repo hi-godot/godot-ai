@@ -30,7 +30,7 @@
 
 ### Prerequisites
 
-- Godot `4.3+` (`4.4+` recommended)
+- Godot `4.3+` (`4.7+` recommended)
 - [uv](https://docs.astral.sh/uv/) (for the Python server):
   - **macOS / Linux:** `curl -LsSf https://astral.sh/uv/install.sh | sh`
   - **Windows (PowerShell):** `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`

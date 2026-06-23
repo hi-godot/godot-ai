@@ -491,6 +491,10 @@ func test_strong_proof_accepts_live_managed_record_pid() -> void:
 	plugin.listener_pids = [24680] as Array[int]
 	plugin.managed_record = {"pid": 24680, "version": "2.1.0", "ws_port": 9500}
 	plugin.alive_pids = [24680] as Array[int]
+	## The managed_record kill target now clears the same cmdline brand gate
+	## as the pidfile_listener branch (#525), so the recorded PID must be
+	## branded for the proof to hold.
+	plugin.branded_pids = [24680] as Array[int]
 
 	var proof := plugin._evaluate_strong_port_occupant_proof(TEST_PORT)
 	plugin.free()
@@ -499,6 +503,31 @@ func test_strong_proof_accepts_live_managed_record_pid() -> void:
 	var pids: Array[int] = []
 	pids.assign(proof.get("pids", []))
 	assert_eq(pids, [24680] as Array[int])
+
+
+func test_strong_proof_rejects_unbranded_managed_record_pid() -> void:
+	## A recorded PID can outlive the server it named and be recycled by the
+	## kernel for an unrelated process that binds the same port. Before #525
+	## the managed_record branch trusted an alive listener PID with no cmdline
+	## brand check — so that unrelated process could be selected as a kill
+	## target. With the brand gate, an unbranded recorded PID yields no proof
+	## (and the helper falls through to the stricter status-match branch,
+	## which also fails here), so nothing is authorized for the kill.
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [24680] as Array[int]
+	plugin.managed_record = {"pid": 24680, "version": "2.1.0", "ws_port": 9500}
+	plugin.alive_pids = [24680] as Array[int]
+	plugin.branded_pids = [] as Array[int]  # recorded PID is alive + listening but NOT ours
+	plugin.live_status = {"name": "", "version": "", "ws_port": 0, "status_code": 0}
+
+	var proof := plugin._evaluate_strong_port_occupant_proof(TEST_PORT)
+	plugin.free()
+
+	assert_eq(proof.get("proof", ""), "",
+		"an unbranded recorded PID must not authorize a managed_record kill")
+	var pids: Array[int] = []
+	pids.assign(proof.get("pids", []))
+	assert_true(pids.is_empty(), "no kill targets when the recorded PID isn't branded ours")
 
 
 func test_legacy_pidfile_proof_returns_all_branded_listener_pids() -> void:
@@ -996,6 +1025,9 @@ func test_drift_kill_preserves_record_and_does_not_spawn_when_port_stays_held() 
 	plugin.listener_pids = [24680] as Array[int]
 	plugin.managed_record = {"pid": 24680, "version": "old-managed-for-test", "ws_port": 9500}
 	plugin.alive_pids = [24680] as Array[int]
+	## The recorded PID is genuinely our managed server, so it's branded
+	## godot-ai — the managed_record kill branch now requires that brand (#525).
+	plugin.branded_pids = [24680] as Array[int]
 	plugin.live_status = {"name": "other-server", "version": "old-managed-for-test", "ws_port": 9500, "status_code": 200}
 
 	plugin._start_server()
