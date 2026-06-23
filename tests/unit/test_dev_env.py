@@ -144,7 +144,9 @@ def test_parse_netstat_pids():
         "  TCP    127.0.0.1:9500         0.0.0.0:0              LISTENING       9999\n"
         "  TCP    [::]:8000              [::]:0                 LISTENING       4321\n"
         "  TCP    0.0.0.0:8000           1.2.3.4:55555          ESTABLISHED     1111\n"
+        "  UDP    0.0.0.0:8000           *:*                                    2222\n"
     )
+    # IPv4 + IPv6 listeners both counted; ESTABLISHED and UDP rows skipped.
     assert _dev_env.parse_netstat_pids(out, 8000) == [4321]
     assert _dev_env.parse_netstat_pids(out, 9500) == [9999]
     assert _dev_env.parse_netstat_pids(out, 1234) == []

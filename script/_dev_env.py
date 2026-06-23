@@ -215,8 +215,12 @@ def _port_listening(port: int) -> bool:
 def _listener_pids(port: int) -> list[int]:
     try:
         if os.name == "nt":
+            # No `-p tcp`: on Windows that filters to IPv4 only, missing IPv6
+            # listeners on `::1` (which _port_listening probes for — #511). The
+            # bare form reports tcp + tcpv6; parse_netstat_pids isolates the
+            # listener rows for either family and skips the shorter UDP rows.
             out = subprocess.run(
-                ["netstat", "-ano", "-p", "tcp"],
+                ["netstat", "-ano"],
                 capture_output=True,
                 text=True,
             ).stdout
