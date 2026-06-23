@@ -14,7 +14,7 @@ extends RefCounted
 ## the main thread (manual Refresh path). Godot `Dictionary` is not safe for
 ## concurrent mutation, so `_cache` / `_searched` access is guarded by
 ## `_mutex`. The mutex is held only across dictionary read/write — the slow
-## `_resolve()` path (FileAccess + `OS.execute`) runs unlocked, so a
+## `_resolve()` path (FileAccess + bounded subprocess lookup) runs unlocked, so a
 ## main-thread `invalidate()` can never block on a worker's subprocess.
 ## Two workers racing the same exe both call `_resolve()` and both write
 ## back the same answer; that's wasted work, not corruption.
@@ -23,6 +23,8 @@ extends RefCounted
 static var _mutex: Mutex = Mutex.new()
 static var _cache: Dictionary = {}  # exe_name -> resolved path (or "")
 static var _searched: Dictionary = {}
+
+const _LOOKUP_TIMEOUT_MS := 3000
 
 
 ## Find any of the supplied exe names; returns the first hit.
@@ -54,8 +56,8 @@ static func _find_one(exe_name: String) -> String:
 	_mutex.unlock()
 	if already_searched:
 		return cached
-	# `_resolve()` does FileAccess + `OS.execute` (forks `bash -lc` /
-	# `which`), which can take 100ms-1s. Holding the mutex across that
+	# `_resolve()` does FileAccess + bounded subprocess lookup (forks
+	# `bash -lc` / `which`), which can take 100ms-1s. Holding the mutex across that
 	# would let a concurrent `invalidate()` on the main thread freeze the
 	# editor for the duration of the subprocess — which defeats the whole
 	# point of running CLI lookup off the main thread.
@@ -81,20 +83,19 @@ static func _resolve(exe_name: String) -> String:
 		var shell := OS.get_environment("SHELL")
 		if shell.is_empty():
 			shell = "/bin/bash"
-		var login_output: Array = []
 		var stripped := exe_name.trim_suffix(".exe")
-		var login_exit := OS.execute(shell, ["-lc", "command -v %s" % stripped], login_output, true)
-		if login_exit == 0 and login_output.size() > 0:
-			var login_found: String = login_output[0].strip_edges()
+		var login_result := McpCliExec.run(shell, ["-lc", "command -v %s" % stripped], _LOOKUP_TIMEOUT_MS, false)
+		if int(login_result.get("exit_code", -1)) == 0:
+			var login_found: String = str(login_result.get("stdout", "")).strip_edges()
 			if not login_found.is_empty() and FileAccess.file_exists(login_found):
 				return login_found
 
 	# 3. which / where with inherited PATH
 	var lookup := "where" if is_windows else "which"
-	var output: Array = []
-	var exit_code := OS.execute(lookup, [exe_name], output, true)
-	if exit_code == 0 and output.size() > 0:
-		var lines := PackedStringArray(output[0].split("\n"))
+	var result := McpCliExec.run(lookup, [exe_name], _LOOKUP_TIMEOUT_MS, false)
+	if int(result.get("exit_code", -1)) == 0:
+		var output := str(result.get("stdout", ""))
+		var lines := PackedStringArray(output.split("\n"))
 		var found := _pick_best_path(lines) if is_windows else lines[0].strip_edges()
 		if not found.is_empty():
 			return found

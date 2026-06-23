@@ -65,7 +65,7 @@ var _clients_window: Window
 var _dev_mode_toggle: CheckButton
 var _install_label: Label
 
-# Settings tab (secondary window, Tab 2) — domain-exclusion UI for clients
+# Tools tab (secondary window, Tab 2) — domain-exclusion UI for clients
 # that cap total tool count (Antigravity: 100). Pending set is mutated by
 # checkbox clicks; saved set reflects what the spawned server actually
 # sees. `Apply & Restart Server` writes pending → setting and triggers a
@@ -558,30 +558,37 @@ func _build_ui() -> void:
 	add_child(HSeparator.new())
 
 	# --- Clients ---
-	var clients_row := HBoxContainer.new()
-	clients_row.add_theme_constant_override("separation", 8)
+	var clients_header_row := HBoxContainer.new()
+	clients_header_row.add_theme_constant_override("separation", 8)
 
 	var clients_header := _make_header("Clients")
-	clients_row.add_child(clients_header)
+	clients_header_row.add_child(clients_header)
 
 	_clients_summary_label = Label.new()
 	_clients_summary_label.add_theme_color_override("font_color", COLOR_MUTED)
+	_clients_summary_label.clip_text = true
+	_clients_summary_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_clients_summary_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	clients_row.add_child(_clients_summary_label)
+	clients_header_row.add_child(_clients_summary_label)
+
+	var clients_actions := HFlowContainer.new()
+	clients_actions.add_theme_constant_override("h_separation", 8)
+	clients_actions.add_theme_constant_override("v_separation", 4)
 
 	var clients_refresh_btn := Button.new()
 	clients_refresh_btn.text = "Refresh"
 	clients_refresh_btn.tooltip_text = "Refresh client status in the background. Cached status stays visible while checks run."
 	clients_refresh_btn.pressed.connect(_on_refresh_clients_pressed)
-	clients_row.add_child(clients_refresh_btn)
+	clients_actions.add_child(clients_refresh_btn)
 
 	var clients_open_btn := Button.new()
-	clients_open_btn.text = "Clients & Settings"
-	clients_open_btn.tooltip_text = "Open the MCP settings window — configure AI clients, choose telemetry preferences, or disable tool domains to fit under a client's hard tool-count cap (e.g. Antigravity's 100)."
+	clients_open_btn.text = "Clients & Tools"
+	clients_open_btn.tooltip_text = "Open the Clients & Tools window — configure AI clients, choose telemetry preferences, or disable tool domains to fit under a client's hard tool-count cap (e.g. Antigravity's 100)."
 	clients_open_btn.pressed.connect(_on_open_clients_window)
-	clients_row.add_child(clients_open_btn)
+	clients_actions.add_child(clients_open_btn)
 
-	add_child(clients_row)
+	add_child(clients_header_row)
+	add_child(clients_actions)
 
 	# Drift banner — hidden until a sweep finds at least one mismatched client.
 	_drift_banner = VBoxContainer.new()
@@ -600,7 +607,7 @@ func _build_ui() -> void:
 	add_child(_drift_banner)
 
 	_clients_window = Window.new()
-	_clients_window.title = "MCP Clients & Settings"
+	_clients_window.title = "Godot AI"
 	## `Vector2i * float` yields Vector2; wrap the result back to Vector2i.
 	_clients_window.min_size = Vector2i(Vector2(560, 460) * EditorInterface.get_editor_scale())
 	_clients_window.visible = false
@@ -1645,7 +1652,7 @@ func _on_configure_all_clients() -> void:
 			_apply_row_status(String(client_id), Client.Status.ERROR, _server_blocked_client_message())
 		_refresh_clients_summary()
 		return
-	if ClientRefreshStateScript.has_worker_alive(_refresh_state):
+	if ClientRefreshStateScript.should_disable_client_actions(_refresh_state):
 		return
 	for client_id in _client_rows:
 		var status: Client.Status = _client_rows[client_id].get("status", Client.Status.NOT_CONFIGURED)
@@ -1700,7 +1707,7 @@ func _build_tools_tab(tabs: TabContainer) -> void:
 	var tools_tab := VBoxContainer.new()
 	tools_tab.add_theme_constant_override("separation", 8)
 	var tools_margin := _build_margin_container()
-	tools_margin.name = "Settings"
+	tools_margin.name = "Tools"
 	tools_margin.add_child(tools_tab)
 	tabs.add_child(tools_margin)
 
@@ -1976,7 +1983,7 @@ func _refresh_clients_summary() -> void:
 		)
 	_clients_summary_label.text = text
 	if _client_configure_all_btn != null:
-		_client_configure_all_btn.disabled = ClientRefreshStateScript.has_worker_alive(_refresh_state)
+		_client_configure_all_btn.disabled = ClientRefreshStateScript.should_disable_client_actions(_refresh_state)
 	_refresh_drift_banner(mismatched_ids)
 
 

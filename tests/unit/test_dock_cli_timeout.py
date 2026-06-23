@@ -57,6 +57,10 @@ def test_cli_exec_helper_uses_pipe_spawn_and_poll_kill() -> None:
     assert "OS.execute_with_pipe(" in helper_source
     assert "OS.is_process_running(" in helper_source
     assert "OS.kill(" in helper_source
+    assert "get_as_text()" not in helper_source, (
+        "Do not drain OS.execute_with_pipe FileAccess handles with get_as_text(); "
+        "on Windows it can emit native PeekNamedPipe errors into Godot's Output panel."
+    )
     # Sanity-check the return shape so callers can rely on the four keys.
     for key in ("exit_code", "stdout", "timed_out", "spawn_failed"):
         assert f'"{key}"' in helper_source, (

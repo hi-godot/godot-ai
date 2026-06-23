@@ -528,6 +528,7 @@ func _set_owner_recursive(node: Node, owner: Node) -> void:
 ## is optional — the coercer defaults it to 1.0 when absent.
 const VECTOR2_KEYS: Array[String] = ["x", "y"]
 const VECTOR3_KEYS: Array[String] = ["x", "y", "z"]
+const VECTOR4_KEYS: Array[String] = ["x", "y", "z", "w"]
 const COLOR_KEYS: Array[String] = ["r", "g", "b"]
 
 
@@ -556,6 +557,8 @@ static func _check_coerced(value: Variant, target_type: int, prefix: String = ""
 			ok = value is PackedVector2Array
 		TYPE_PACKED_VECTOR3_ARRAY:
 			ok = value is PackedVector3Array
+		TYPE_PACKED_VECTOR4_ARRAY:
+			ok = value is PackedVector4Array
 		TYPE_PACKED_COLOR_ARRAY:
 			ok = value is PackedColorArray
 		TYPE_PACKED_INT32_ARRAY:
@@ -568,8 +571,31 @@ static func _check_coerced(value: Variant, target_type: int, prefix: String = ""
 			ok = value is PackedFloat64Array
 		TYPE_PACKED_STRING_ARRAY:
 			ok = value is PackedStringArray
+		TYPE_VECTOR2I: ok = value is Vector2i
+		TYPE_VECTOR3I: ok = value is Vector3i
+		TYPE_VECTOR4: ok = value is Vector4
+		TYPE_VECTOR4I: ok = value is Vector4i
+		TYPE_QUATERNION: ok = value is Quaternion
+		TYPE_RECT2: ok = value is Rect2
+		TYPE_RECT2I: ok = value is Rect2i
+		TYPE_AABB: ok = value is AABB
+		TYPE_PLANE: ok = value is Plane
+		TYPE_BASIS: ok = value is Basis
+		TYPE_TRANSFORM2D: ok = value is Transform2D
+		TYPE_TRANSFORM3D: ok = value is Transform3D
+		TYPE_PROJECTION: ok = value is Projection
 		_:
-			return null
+			# null / untyped-TYPE_NIL / already-correct-type are handled by
+			# Godot's setter; anything else would silently no-op, so error.
+			if value == null or target_type == TYPE_NIL or typeof(value) == target_type:
+				return null
+			var unsupported := ErrorCodes.make(
+				ErrorCodes.WRONG_TYPE,
+				"Cannot write %s to a %s property; godot-ai has no coercion for that type" % [
+					type_string(typeof(value)), type_string(target_type),
+				],
+			)
+			return ErrorCodes.prefix_message(unsupported, prefix)
 	if ok:
 		return null
 	var dict_err := _check_dict_coerce_failed(value, target_type)
@@ -597,6 +623,8 @@ static func _shape_hint(target_type: int) -> String:
 			return "[{\"x\":0,\"y\":0}, ...]"
 		TYPE_PACKED_VECTOR3_ARRAY:
 			return "[{\"x\":0,\"y\":0,\"z\":0}, ...]"
+		TYPE_PACKED_VECTOR4_ARRAY:
+			return "[{\"x\":0,\"y\":0,\"z\":0,\"w\":0}, ...]"
 		TYPE_PACKED_COLOR_ARRAY:
 			return "[{\"r\":0,\"g\":0,\"b\":0,\"a\":1}, ...]"
 		TYPE_PACKED_INT32_ARRAY, TYPE_PACKED_INT64_ARRAY:
@@ -605,6 +633,24 @@ static func _shape_hint(target_type: int) -> String:
 			return "[float, ...]"
 		TYPE_PACKED_STRING_ARRAY:
 			return "[\"...\", ...]"
+		TYPE_VECTOR2I:
+			return "{\"x\":0,\"y\":0}"
+		TYPE_VECTOR3I:
+			return "{\"x\":0,\"y\":0,\"z\":0}"
+		TYPE_VECTOR4, TYPE_VECTOR4I, TYPE_QUATERNION:
+			return "{\"x\":0,\"y\":0,\"z\":0,\"w\":0}"
+		TYPE_RECT2, TYPE_RECT2I, TYPE_AABB:
+			return "{\"position\":{...},\"size\":{...}}"
+		TYPE_PLANE:
+			return "{\"normal\":{...},\"d\":0}"
+		TYPE_BASIS:
+			return "{\"x\":{...},\"y\":{...},\"z\":{...}}"
+		TYPE_TRANSFORM2D:
+			return "{\"x\":{...},\"y\":{...},\"origin\":{...}}"
+		TYPE_TRANSFORM3D:
+			return "{\"basis\":{...},\"origin\":{...}}"
+		TYPE_PROJECTION:
+			return "{\"x\":{...},\"y\":{...},\"z\":{...},\"w\":{...}}"
 	var keys: Array[String] = []
 	match target_type:
 		TYPE_VECTOR2: keys = VECTOR2_KEYS
@@ -717,6 +763,17 @@ static func _coerce_value(value: Variant, target_type: int) -> Variant:
 					else:
 						return value
 				return out
+		TYPE_PACKED_VECTOR4_ARRAY:
+			if value is Array:
+				var out := PackedVector4Array()
+				for item in value:
+					if item is Vector4:
+						out.append(item)
+					elif item is Dictionary and item.has_all(VECTOR4_KEYS):
+						out.append(Vector4(item["x"], item["y"], item["z"], item["w"]))
+					else:
+						return value
+				return out
 		TYPE_PACKED_COLOR_ARRAY:
 			if value is Array:
 				var out := PackedColorArray()
@@ -757,6 +814,72 @@ static func _coerce_value(value: Variant, target_type: int) -> Variant:
 					else:
 						return value
 				return out
+		TYPE_VECTOR2I:
+			if value is Dictionary and value.has_all(VECTOR2_KEYS):
+				return Vector2i(int(value["x"]), int(value["y"]))
+		TYPE_VECTOR3I:
+			if value is Dictionary and value.has_all(VECTOR3_KEYS):
+				return Vector3i(int(value["x"]), int(value["y"]), int(value["z"]))
+		TYPE_VECTOR4:
+			if value is Dictionary and value.has_all(VECTOR4_KEYS):
+				return Vector4(value["x"], value["y"], value["z"], value["w"])
+		TYPE_VECTOR4I:
+			if value is Dictionary and value.has_all(VECTOR4_KEYS):
+				return Vector4i(int(value["x"]), int(value["y"]), int(value["z"]), int(value["w"]))
+		TYPE_QUATERNION:
+			if value is Dictionary and value.has_all(VECTOR4_KEYS):
+				return Quaternion(value["x"], value["y"], value["z"], value["w"])
+		TYPE_RECT2:
+			if value is Dictionary and value.has("position") and value.has("size"):
+				var p: Variant = _coerce_value(value["position"], TYPE_VECTOR2)
+				var s: Variant = _coerce_value(value["size"], TYPE_VECTOR2)
+				if p is Vector2 and s is Vector2:
+					return Rect2(p, s)
+		TYPE_RECT2I:
+			if value is Dictionary and value.has("position") and value.has("size"):
+				var p: Variant = _coerce_value(value["position"], TYPE_VECTOR2I)
+				var s: Variant = _coerce_value(value["size"], TYPE_VECTOR2I)
+				if p is Vector2i and s is Vector2i:
+					return Rect2i(p, s)
+		TYPE_AABB:
+			if value is Dictionary and value.has("position") and value.has("size"):
+				var p: Variant = _coerce_value(value["position"], TYPE_VECTOR3)
+				var s: Variant = _coerce_value(value["size"], TYPE_VECTOR3)
+				if p is Vector3 and s is Vector3:
+					return AABB(p, s)
+		TYPE_PLANE:
+			if value is Dictionary and value.has("normal") and value.has("d"):
+				var n: Variant = _coerce_value(value["normal"], TYPE_VECTOR3)
+				if n is Vector3:
+					return Plane(n, float(value["d"]))
+		TYPE_BASIS:
+			if value is Dictionary and value.has_all(["x", "y", "z"]):
+				var bx: Variant = _coerce_value(value["x"], TYPE_VECTOR3)
+				var by: Variant = _coerce_value(value["y"], TYPE_VECTOR3)
+				var bz: Variant = _coerce_value(value["z"], TYPE_VECTOR3)
+				if bx is Vector3 and by is Vector3 and bz is Vector3:
+					return Basis(bx, by, bz)
+		TYPE_TRANSFORM2D:
+			if value is Dictionary and value.has_all(["x", "y", "origin"]):
+				var tx: Variant = _coerce_value(value["x"], TYPE_VECTOR2)
+				var ty: Variant = _coerce_value(value["y"], TYPE_VECTOR2)
+				var to_: Variant = _coerce_value(value["origin"], TYPE_VECTOR2)
+				if tx is Vector2 and ty is Vector2 and to_ is Vector2:
+					return Transform2D(tx, ty, to_)
+		TYPE_TRANSFORM3D:
+			if value is Dictionary and value.has("basis") and value.has("origin"):
+				var b: Variant = _coerce_value(value["basis"], TYPE_BASIS)
+				var o: Variant = _coerce_value(value["origin"], TYPE_VECTOR3)
+				if b is Basis and o is Vector3:
+					return Transform3D(b, o)
+		TYPE_PROJECTION:
+			if value is Dictionary and value.has_all(VECTOR4_KEYS):
+				var px: Variant = _coerce_value(value["x"], TYPE_VECTOR4)
+				var py: Variant = _coerce_value(value["y"], TYPE_VECTOR4)
+				var pz: Variant = _coerce_value(value["z"], TYPE_VECTOR4)
+				var pw: Variant = _coerce_value(value["w"], TYPE_VECTOR4)
+				if px is Vector4 and py is Vector4 and pz is Vector4 and pw is Vector4:
+					return Projection(px, py, pz, pw)
 		# PackedByteArray intentionally unhandled — needs design decision
 		# (base64 string vs. raw int list); JSON has no native byte type.
 	return value

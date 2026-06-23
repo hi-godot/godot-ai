@@ -152,7 +152,7 @@ func connect_signal(params: Dictionary) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Signal '%s' already connected to %s.%s" % [signal_name, params.target, method])
 
 	_undo_redo.create_action("MCP: Connect signal %s" % signal_name)
-	_undo_redo.add_do_method(source, "connect", signal_name, callable)
+	_undo_redo.add_do_method(source, "connect", signal_name, callable, Object.CONNECT_PERSIST)
 	_undo_redo.add_undo_method(source, "disconnect", signal_name, callable)
 	_undo_redo.commit_action()
 
@@ -174,9 +174,19 @@ func disconnect_signal(params: Dictionary) -> Dictionary:
 	if not source.is_connected(signal_name, callable):
 		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Signal '%s' is not connected to %s.%s" % [signal_name, params.target, method])
 
+	# Capture the connection's current flags so undo restores it exactly as it
+	# was, not unconditionally as CONNECT_PERSIST. Hardcoding PERSIST here would
+	# silently promote a runtime-only connection into one that serializes on the
+	# next save. (The connection still exists at this point — checked above.)
+	var reconnect_flags := 0
+	for conn in source.get_signal_connection_list(signal_name):
+		if conn.get("callable", Callable()) == callable:
+			reconnect_flags = int(conn.get("flags", 0))
+			break
+
 	_undo_redo.create_action("MCP: Disconnect signal %s" % signal_name)
 	_undo_redo.add_do_method(source, "disconnect", signal_name, callable)
-	_undo_redo.add_undo_method(source, "connect", signal_name, callable)
+	_undo_redo.add_undo_method(source, "connect", signal_name, callable, reconnect_flags)
 	_undo_redo.commit_action()
 
 	return {"data": _signal_response(source, signal_name, target, method, scene_root)}

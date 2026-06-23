@@ -360,7 +360,7 @@ config_version=5
 [application]
 config/name="Godot AI Self Update Smoke"
 run/main_scene="res://empty.tscn"
-config/features=PackedStringArray("4.6")
+config/features=PackedStringArray("4.7")
 
 [editor_plugins]
 enabled=PackedStringArray("res://addons/godot_ai/plugin.cfg")

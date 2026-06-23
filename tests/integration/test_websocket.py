@@ -258,13 +258,24 @@ class TestErrors:
 
     async def test_send_to_no_active_session_raises(self, harness):
         client = GodotClient(harness.server, harness.registry)
-        with pytest.raises(ConnectionError, match="No active Godot session"):
+        with pytest.raises(GodotCommandError) as exc_info:
             await client.send("anything")
+        assert exc_info.value.code == "PLUGIN_DISCONNECTED"
+        assert "No active Godot session" in exc_info.value.message
+        assert exc_info.value.data["reason"] == "no_active_session"
+        assert exc_info.value.data["connected"] is False
+        assert "container localhost is not host localhost" in exc_info.value.data["hint"]
 
     async def test_send_to_unknown_session_raises(self, harness):
         client = GodotClient(harness.server, harness.registry)
-        with pytest.raises(ConnectionError, match="not found"):
+        with pytest.raises(GodotCommandError) as exc_info:
             await client.send("anything", session_id="nonexistent")
+        assert exc_info.value.code == "PLUGIN_DISCONNECTED"
+        assert "nonexistent" in exc_info.value.message
+        assert exc_info.value.data["reason"] == "session_not_found"
+        assert exc_info.value.data["session_id"] == "nonexistent"
+        assert exc_info.value.data["connected"] is False
+        assert "session_manage(op='list')" in exc_info.value.data["hint"]
 
     async def test_timeout_raises(self, harness):
         plugin = await harness.connect_plugin()

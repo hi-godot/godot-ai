@@ -7,8 +7,8 @@ forwarded string still works at runtime but agents and tests that match on
 `ErrorCode.X` silently miss it. Tracked as #297 audit finding #12.
 
 The contract is one-way: GDScript ⊆ Python. Python carries server-only codes
-(SESSION_NOT_FOUND, COMMAND_TIMEOUT, PLUGIN_DISCONNECTED) the plugin never
-emits; that asymmetry is intentional.
+(COMMAND_TIMEOUT, PLUGIN_DISCONNECTED) the plugin never emits; that asymmetry
+is intentional.
 """
 
 from __future__ import annotations
