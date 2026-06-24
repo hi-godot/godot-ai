@@ -1774,6 +1774,36 @@ func test_set_property_rect2_lands() -> void:
 	assert_true(editor_undo(_undo_redo), "undo create should succeed")
 
 
+func test_set_property_rect2_can_be_verified_by_readback() -> void:
+	_handler.create_node({"type": "Sprite2D", "name": "_McpTestRect2Readback", "parent_path": "/Main"})
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestRect2Readback") as Sprite2D
+	node.region_enabled = true
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestRect2Readback",
+		"property": "region_rect",
+		"value": {"position": {"x": 2, "y": 3}, "size": {"x": 8, "y": 13}},
+	})
+	assert_has_key(result, "data")
+	assert_eq(node.region_rect, Rect2(2, 3, 8, 13), "Rect2 must land before read-back")
+
+	var readback := _handler.get_node_properties({"path": "/Main/_McpTestRect2Readback"})
+	assert_has_key(readback, "data")
+	var found := false
+	for prop in readback.data.properties:
+		if prop.name == "region_rect":
+			found = true
+			assert_eq(prop.type, "Rect2")
+			assert_true(prop.value is Dictionary, "region_rect read-back must be structured")
+			assert_eq(prop.value.position.x, 2.0)
+			assert_eq(prop.value.position.y, 3.0)
+			assert_eq(prop.value.size.x, 8.0)
+			assert_eq(prop.value.size.y, 13.0)
+			break
+	assert_true(found, "region_rect property must be present in read-back")
+	assert_true(editor_undo(_undo_redo), "undo set should succeed")
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
+
+
 func test_set_property_transform2d_lands() -> void:
 	_handler.create_node({"type": "Node2D", "name": "_McpTestXform2D", "parent_path": "/Main"})
 	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestXform2D") as Node2D
