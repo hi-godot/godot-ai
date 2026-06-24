@@ -126,6 +126,12 @@ func test_trusted_download_url_rejects_untrusted_and_insecure() -> void:
 		McpUpdateManagerScript._is_trusted_download_url("https://github.com@evil.com/x.zip"),
 		"userinfo spoofing (host is after the last @) must be rejected")
 	assert_false(
+		McpUpdateManagerScript._is_trusted_download_url("https://github.com\\@evil.com/x.zip"),
+		"a backslash before userinfo syntax must be rejected")
+	assert_false(
+		McpUpdateManagerScript._is_trusted_download_url("https://github.com\\evil.com/x.zip"),
+		"a backslash in the apparent authority must be rejected")
+	assert_false(
 		McpUpdateManagerScript._is_trusted_download_url(""),
 		"an empty URL must be rejected")
 
@@ -146,6 +152,14 @@ func test_parse_sha256_digest_accepts_bare_and_uppercase_digest() -> void:
 		"a bare digest line must be accepted")
 	assert_eq(McpUpdateManagerScript._parse_sha256_digest(hex.to_upper()), hex,
 		"an uppercase digest must be normalized to lowercase")
+
+
+func test_parse_sha256_digest_accepts_tab_and_newline_separators() -> void:
+	var hex := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	assert_eq(McpUpdateManagerScript._parse_sha256_digest(hex + "\tgodot-ai-plugin.zip"), hex,
+		"a tab-separated checksum sidecar must be accepted")
+	assert_eq(McpUpdateManagerScript._parse_sha256_digest(hex + "\ngodot-ai-plugin.zip"), hex,
+		"a newline-separated checksum sidecar must be accepted")
 
 
 func test_parse_sha256_digest_rejects_malformed() -> void:
