@@ -573,6 +573,8 @@ func test_instantiate_resource_unknown_type_errors() -> void:
 
 func test_create_resource_custom_class_to_file() -> void:
 	var out_path := "res://tests/_mcp_test_custom_resource.tres"
+	if FileAccess.file_exists(out_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(out_path))
 	var result := _handler.create_resource({
 		"type": "MyTestResource",
 		"resource_path": out_path,
@@ -582,7 +584,7 @@ func test_create_resource_custom_class_to_file() -> void:
 	var loaded := load(out_path)
 	assert_true(loaded is MyTestResource, "saved resource should load as MyTestResource")
 	assert_eq(loaded.label, "hi")
-	DirAccess.remove_absolute(out_path)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(out_path))
 
 
 # ----- regression: nested __class__ shortcut must resolve project class_name -----
