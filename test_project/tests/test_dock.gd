@@ -58,6 +58,17 @@ class _RestartDispatchPlugin extends GodotAiPlugin:
 		dev_running = false
 
 
+class _RefreshCountingDock extends McpDockScript:
+	var action_completion_refreshes := 0
+
+	func _request_client_action_completion_refresh() -> void:
+		action_completion_refreshes += 1
+
+
+static func _finished_thread_noop() -> void:
+	pass
+
+
 var _dock: Node
 
 
@@ -727,6 +738,128 @@ func test_timed_out_client_refresh_reenables_configure_all() -> void:
 		"Timed-out refreshes should still be visible in the summary")
 	assert_false(_dock._client_configure_all_btn.disabled,
 		"Timed-out refreshes must not keep client actions disabled")
+
+
+func test_timed_out_client_action_reenables_row_and_ignores_late_result() -> void:
+	## Configure/Remove actions have a separate worker slot from status
+	## refresh. If that worker wedges in a file/process primitive, the row
+	## must recover instead of leaving "Configuring..." up forever.
+	_dock._build_ui()
+	var any_id := _first_client_id()
+	if any_id.is_empty():
+		skip("No clients registered")
+		return
+	_dock._set_row_action_in_flight(any_id, "configure")
+	_dock._client_action_threads[any_id] = null
+	_dock._client_action_generations[any_id] = 4
+	_dock._client_action_started_msec[any_id] = Time.get_ticks_msec() - McpDockScript.CLIENT_ACTION_TIMEOUT_MSEC - 1
+	_dock._client_action_names[any_id] = "configure"
+
+	_dock._check_client_action_timeouts()
+
+	var row: Dictionary = _dock._client_rows[any_id]
+	assert_false(_dock._client_action_threads.has(any_id),
+		"Timed-out action slot must be cleared so the row can retry")
+	assert_false((row["configure_btn"] as Button).disabled,
+		"Configure button must re-enable after the action watchdog fires")
+	assert_false((row["remove_btn"] as Button).disabled,
+		"Remove button must re-enable too")
+	assert_eq(row.get("status"), McpClient.Status.ERROR,
+		"Timed-out action must leave an error status instead of stale busy UI")
+	assert_contains((row["name_label"] as Label).text, "Configure did not report completion",
+		"Timed-out action error should explain why the row recovered")
+	assert_eq(int(_dock._client_action_generations.get(any_id, 0)), 5,
+		"Watchdog must bump generation so a late worker result is ignored")
+
+	_dock._apply_client_action_result(any_id, "configure", {"status": "ok"}, 4)
+	assert_eq(row.get("status"), McpClient.Status.ERROR,
+		"Late success from the abandoned generation must not overwrite the timeout")
+
+
+func test_completed_client_action_clears_timeout_metadata() -> void:
+	## Mirror for the watchdog path: a normal fast completion must clear the
+	## per-row timeout bookkeeping, so a later tick cannot turn a successful
+	## Configure into a false timeout.
+	_dock._build_ui()
+	var any_id := _first_client_id()
+	if any_id.is_empty():
+		skip("No clients registered")
+		return
+	_dock._set_row_action_in_flight(any_id, "configure")
+	_dock._client_action_threads[any_id] = null
+	_dock._client_action_generations[any_id] = 9
+	_dock._client_action_started_msec[any_id] = Time.get_ticks_msec() - McpDockScript.CLIENT_ACTION_TIMEOUT_MSEC - 1
+	_dock._client_action_names[any_id] = "configure"
+
+	_dock._apply_client_action_result(any_id, "configure", {"status": "ok"}, 9)
+	_dock._check_client_action_timeouts()
+
+	var row: Dictionary = _dock._client_rows[any_id]
+	assert_false(_dock._client_action_threads.has(any_id),
+		"Successful completion must clear the action thread slot")
+	assert_false(_dock._client_action_started_msec.has(any_id),
+		"Successful completion must clear timeout start metadata")
+	assert_false(_dock._client_action_names.has(any_id),
+		"Successful completion must clear timeout action metadata")
+	assert_eq(row.get("status"), McpClient.Status.CONFIGURED,
+		"A completed Configure must remain configured after a later watchdog tick")
+	assert_false((row["configure_btn"] as Button).disabled,
+		"Successful completion must re-enable the configure button")
+
+
+func test_client_action_timeout_ticks_without_connection() -> void:
+	## A server reload or transport drop can temporarily clear the dock's
+	## connection object. The row watchdog must still tick in that state;
+	## otherwise a dropped configure result leaves "Configuring..." forever.
+	_dock._build_ui()
+	var any_id := _first_client_id()
+	if any_id.is_empty():
+		skip("No clients registered")
+		return
+	_dock._connection = null
+	_dock._set_row_action_in_flight(any_id, "configure")
+	_dock._client_action_threads[any_id] = null
+	_dock._client_action_generations[any_id] = 14
+	_dock._client_action_started_msec[any_id] = Time.get_ticks_msec() - McpDockScript.CLIENT_ACTION_TIMEOUT_MSEC - 1
+	_dock._client_action_names[any_id] = "configure"
+
+	_dock._process(0.0)
+
+	var row: Dictionary = _dock._client_rows[any_id]
+	assert_false(_dock._client_action_threads.has(any_id),
+		"Action watchdog must clear the stuck slot even without a connection")
+	assert_false((row["configure_btn"] as Button).disabled,
+		"Configure button must recover even while the MCP connection is absent")
+	assert_contains((row["name_label"] as Label).text, "Configure did not report completion",
+		"Recovered row should explain that the action result went missing")
+
+
+func test_completed_orphaned_client_action_requests_status_refresh() -> void:
+	## If a genuinely slow action is still alive at timeout, the immediate
+	## refresh can run before the side effect lands. When that abandoned
+	## worker later finishes, pruning it should request one more status sweep
+	## so the row can reconcile to the final on-disk state.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	assert_true(scene_root != null, "Dock orphan-prune test needs an edited scene root")
+	if scene_root == null:
+		return
+	var thread := Thread.new()
+	var err := thread.start(Callable(self, "_finished_thread_noop"))
+	assert_eq(err, OK, "Finished orphan fixture thread should start")
+	while thread.is_alive():
+		OS.delay_msec(1)
+	var dock := _RefreshCountingDock.new()
+	dock._orphaned_client_action_threads.append(thread)
+	scene_root.add_child(dock)
+
+	dock._prune_orphaned_client_action_threads()
+
+	assert_true(dock._orphaned_client_action_threads.is_empty(),
+		"Prune must reap the completed orphan action thread")
+	assert_eq(dock.action_completion_refreshes, 1,
+		"Completed orphan action should request a status refresh")
+	scene_root.remove_child(dock)
+	dock.free()
 
 
 func test_dispatch_client_action_short_circuits_during_self_update() -> void:

@@ -42,6 +42,7 @@ const PortPickerPanelScript := preload("res://addons/godot_ai/dock_panels/port_p
 const DEV_MODE_SETTING := "godot_ai/dev_mode"
 const CLIENT_STATUS_REFRESH_COOLDOWN_MSEC := 15 * 1000
 const CLIENT_STATUS_REFRESH_TIMEOUT_MSEC := 30 * 1000
+const CLIENT_ACTION_TIMEOUT_MSEC := 30 * 1000
 static var COLOR_MUTED := Color(0.7, 0.7, 0.7)
 static var COLOR_HEADER := Color(0.95, 0.95, 0.95)
 ## Used for "in-progress" / "stale, action needed" UI: the startup-grace
@@ -164,6 +165,11 @@ static var _orphaned_client_status_refresh_threads: Array[Thread] = []
 ## does for the refresh worker.
 var _client_action_threads: Dictionary = {}
 var _client_action_generations: Dictionary = {}
+var _client_action_started_msec: Dictionary = {}
+var _client_action_names: Dictionary = {}
+## Timed-out Configure/Remove workers are abandoned but retained here until
+## they finish, so GDScript does not destroy a live Thread object.
+static var _orphaned_client_action_threads: Array[Thread] = []
 
 # Dev-mode only
 var _dev_section: VBoxContainer
@@ -238,10 +244,12 @@ func _ready() -> void:
 
 
 func _process(_delta: float) -> void:
+	_prune_orphaned_client_status_refresh_threads()
+	_prune_orphaned_client_action_threads()
+	_check_client_status_refresh_timeout()
+	_check_client_action_timeouts()
 	if _connection == null:
 		return
-	_prune_orphaned_client_status_refresh_threads()
-	_check_client_status_refresh_timeout()
 	_retry_deferred_client_status_refresh()
 	_update_status()
 	if _log_viewer != null and _log_viewer.visible:
@@ -309,8 +317,9 @@ func _drain_client_action_workers() -> void:
 	## plugin disable / install-update path reloads our script class, so any
 	## live Thread must finish before its slot is GC'd or we hit
 	## `~Thread … destroyed without its completion having been realized` →
-	## VM corruption. Bounded by `McpCliExec` wall-clock budgets, so the
-	## worst case is a ~10s blocking drain, vs. an unbounded SIGSEGV.
+	## VM corruption. Normal UI recovery is handled by the per-row watchdog;
+	## teardown still blocks because GDScript's Thread API has no kill/timeout
+	## primitive and destroying a live Thread corrupts the VM.
 	##
 	## Generation-bumped per-row so any pending `call_deferred(
 	## "_apply_client_action_result")` from a worker that finished after we
@@ -328,6 +337,8 @@ func _drain_client_action_workers() -> void:
 		if t != null:
 			t.wait_to_finish()
 		_client_action_generations[client_id] = int(_client_action_generations.get(client_id, 0)) + 1
+		_client_action_started_msec.erase(client_id)
+		_client_action_names.erase(client_id)
 		_finalize_action_buttons(String(client_id))
 		var row: Dictionary = _client_rows.get(String(client_id), {})
 		if not row.is_empty():
@@ -337,6 +348,71 @@ func _drain_client_action_workers() -> void:
 				""
 			)
 	_client_action_threads.clear()
+	for thread in _orphaned_client_action_threads:
+		if thread != null:
+			thread.wait_to_finish()
+	_orphaned_client_action_threads.clear()
+	_client_action_started_msec.clear()
+	_client_action_names.clear()
+
+
+func _check_client_action_timeouts() -> void:
+	var now := Time.get_ticks_msec()
+	for client_id in _client_action_threads.keys():
+		if not _client_action_started_msec.has(client_id):
+			continue
+		var started := int(_client_action_started_msec.get(client_id, 0))
+		if now - started >= CLIENT_ACTION_TIMEOUT_MSEC:
+			_abandon_client_action_thread(String(client_id))
+
+
+func _abandon_client_action_thread(client_id: String) -> void:
+	if not _client_action_threads.has(client_id):
+		return
+	var thread: Thread = _client_action_threads[client_id]
+	var elapsed := Time.get_ticks_msec() - int(_client_action_started_msec.get(client_id, Time.get_ticks_msec()))
+	var worker_alive := thread != null and thread.is_alive()
+	if thread != null:
+		_orphaned_client_action_threads.append(thread)
+	_client_action_threads.erase(client_id)
+	_client_action_started_msec.erase(client_id)
+	var action := str(_client_action_names.get(client_id, "configure"))
+	_client_action_names.erase(client_id)
+	_client_action_generations[client_id] = int(_client_action_generations.get(client_id, 0)) + 1
+	_finalize_action_buttons(client_id)
+	print("MCP | client action timed out: client=%s action=%s elapsed_ms=%d worker_alive=%s" % [
+		client_id,
+		action,
+		elapsed,
+		str(worker_alive),
+	])
+	var label := "Remove" if action == "remove" else "Configure"
+	_apply_row_status(
+		client_id,
+		Client.Status.ERROR,
+		"%s did not report completion in time; refreshing current status." % label
+	)
+	_refresh_clients_summary()
+	if is_inside_tree():
+		_request_client_status_refresh(true)
+
+
+func _prune_orphaned_client_action_threads() -> void:
+	var completed_orphan := false
+	for i in range(_orphaned_client_action_threads.size() - 1, -1, -1):
+		var thread := _orphaned_client_action_threads[i]
+		if thread == null:
+			_orphaned_client_action_threads.remove_at(i)
+		elif not thread.is_alive():
+			thread.wait_to_finish()
+			_orphaned_client_action_threads.remove_at(i)
+			completed_orphan = true
+	if completed_orphan and is_inside_tree():
+		_request_client_action_completion_refresh()
+
+
+func _request_client_action_completion_refresh() -> void:
+	_request_client_status_refresh(true)
 
 
 func _notification(what: int) -> void:
@@ -1555,11 +1631,15 @@ func _dispatch_client_action(client_id: String, action: String) -> void:
 	_client_action_generations[client_id] = generation
 	var thread := Thread.new()
 	_client_action_threads[client_id] = thread
+	_client_action_started_msec[client_id] = Time.get_ticks_msec()
+	_client_action_names[client_id] = action
 	var err := thread.start(
 		Callable(self, "_run_client_action_worker").bind(client_id, action, server_url, generation)
 	)
 	if err != OK:
 		_client_action_threads.erase(client_id)
+		_client_action_started_msec.erase(client_id)
+		_client_action_names.erase(client_id)
 		_finalize_action_buttons(client_id)
 		_apply_row_status(client_id, Client.Status.ERROR, "couldn't start worker thread")
 		_refresh_clients_summary()
@@ -1585,6 +1665,8 @@ func _apply_client_action_result(client_id: String, action: String, result: Dict
 		if t != null:
 			t.wait_to_finish()
 		_client_action_threads.erase(client_id)
+		_client_action_started_msec.erase(client_id)
+		_client_action_names.erase(client_id)
 	_finalize_action_buttons(client_id)
 	if _server_blocks_client_health():
 		_apply_row_status(client_id, Client.Status.ERROR, _server_blocked_client_message())
