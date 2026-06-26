@@ -72,6 +72,7 @@ func get_logs(params: Dictionary) -> Dictionary:
 	var include_details: bool = bool(params.get("include_details", false))
 	var has_since_cursor := params.has("since_cursor") and params.get("since_cursor") != null
 	var since_cursor: int = maxi(0, int(params.get("since_cursor", 0)))
+	var since_run_id := "" if params.get("since_run_id", null) == null else str(params.get("since_run_id", ""))
 	if not source in VALID_LOG_SOURCES:
 		return ErrorCodes.make(
 			ErrorCodes.VALUE_OUT_OF_RANGE,
@@ -82,12 +83,28 @@ func get_logs(params: Dictionary) -> Dictionary:
 		"plugin":
 			return _get_plugin_logs(count, offset)
 		"game":
-			return _get_game_logs(count, offset, include_details)
+			return _get_game_logs(count, offset, include_details, since_run_id)
 		"editor":
 			return _get_editor_logs(count, offset, include_details, has_since_cursor, since_cursor)
 		"all":
 			return _get_all_logs(count, offset, include_details)
 	return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Unreachable")
+
+
+func _current_game_status() -> Dictionary:
+	if _debugger_plugin == null:
+		return {
+			"status": "stopped",
+			"active": false,
+			"ready": false,
+			"helper_expected": true,
+		}
+	return _debugger_plugin.get_game_status()
+
+
+func _is_game_log_running(game_status: Dictionary) -> bool:
+	var status := str(game_status.get("status", "stopped"))
+	return not status in ["not_live", "stopped"]
 
 
 func _get_plugin_logs(count: int, offset: int) -> Dictionary:
@@ -107,7 +124,8 @@ func _get_plugin_logs(count: int, offset: int) -> Dictionary:
 	}
 
 
-func _get_game_logs(count: int, offset: int, include_details: bool) -> Dictionary:
+func _get_game_logs(count: int, offset: int, include_details: bool, since_run_id: String = "") -> Dictionary:
+	var game_status := _current_game_status()
 	if _game_log_buffer == null:
 		return {
 			"data": {
@@ -117,21 +135,31 @@ func _get_game_logs(count: int, offset: int, include_details: bool) -> Dictionar
 				"returned_count": 0,
 				"offset": offset,
 				"run_id": "",
+				"current_run_id": "",
 				"is_running": false,
+				"game_status": game_status,
 				"dropped_count": 0,
+				"stale_run_id": false,
 			}
 		}
-	var page := _entries_for_response(_game_log_buffer.get_range(offset, count), include_details)
+	var current_run_id := _game_log_buffer.run_id()
+	var target_run_id := since_run_id if not since_run_id.is_empty() else current_run_id
+	var stale_run_id := not since_run_id.is_empty() and since_run_id != current_run_id
+	var run_page := _game_log_buffer.get_run_page(target_run_id, offset, count)
+	var page := _entries_for_response(run_page.get("entries", []), include_details)
 	return {
 		"data": {
 			"source": "game",
 			"lines": page,
-			"total_count": _game_log_buffer.total_count(),
+			"total_count": int(run_page.get("total_count", 0)),
 			"returned_count": page.size(),
 			"offset": offset,
-			"run_id": _game_log_buffer.run_id(),
-			"is_running": EditorInterface.is_playing_scene(),
+			"run_id": target_run_id,
+			"current_run_id": current_run_id,
+			"is_running": _is_game_log_running(game_status),
+			"game_status": game_status,
 			"dropped_count": _game_log_buffer.dropped_count(),
+			"stale_run_id": stale_run_id,
 		}
 	}
 
@@ -211,21 +239,24 @@ func _get_all_logs(count: int, offset: int, include_details: bool) -> Dictionary
 		combined.append({"source": "plugin", "level": "info", "text": line})
 	for entry in _collect_editor_log_entries():
 		combined.append(entry)
+	var run_id := ""
+	var current_run_id := ""
+	var dropped := 0
 	if _game_log_buffer != null:
-		for entry in _game_log_buffer.get_range(0, _game_log_buffer.total_count()):
+		run_id = _game_log_buffer.run_id()
+		current_run_id = run_id
+		dropped = _game_log_buffer.dropped_count()
+		var run_page := _game_log_buffer.get_run_page(run_id, 0, McpGameLogBuffer.MAX_LINES)
+		for entry in run_page.get("entries", []):
 			combined.append(entry)
 	var stop := mini(combined.size(), offset + count)
 	var page: Array[Dictionary] = []
 	for i in range(mini(offset, combined.size()), stop):
 		page.append(combined[i])
 	page = _entries_for_response(page, include_details)
-	var run_id := ""
-	var dropped := 0
-	if _game_log_buffer != null:
-		run_id = _game_log_buffer.run_id()
-		dropped = _game_log_buffer.dropped_count()
 	if _editor_log_buffer != null:
 		dropped += _editor_log_buffer.dropped_count()
+	var game_status := _current_game_status()
 	return {
 		"data": {
 			"source": "all",
@@ -234,7 +265,9 @@ func _get_all_logs(count: int, offset: int, include_details: bool) -> Dictionary
 			"returned_count": page.size(),
 			"offset": offset,
 			"run_id": run_id,
-			"is_running": EditorInterface.is_playing_scene(),
+			"current_run_id": current_run_id,
+			"is_running": _is_game_log_running(game_status),
+			"game_status": game_status,
 			"dropped_count": dropped,
 		}
 	}

@@ -90,9 +90,12 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         Sources:
         - "plugin" (default): MCP plugin recv/send/event traffic. Buffer 500.
         - "game": stdout/stderr/push_error/push_warning from playing game
-          via ``_mcp_game_helper`` autoload (Godot 4.5+). Buffer 2000, clears
-          on each ``project_run``. Entries: {source, level, text}; response
-          carries run_id, is_running, dropped_count.
+          via ``_mcp_game_helper`` autoload (Godot 4.5+). Buffer 2000, with
+          lines retained across runs and tagged by run_id. Default reads return
+          current-run lines only; pass ``since_run_id`` from an earlier response
+          to read that prior run. Entries: {source, level, text, run_id};
+          response carries run_id, current_run_id, is_running, game_status,
+          dropped_count, stale_run_id.
         - "editor": editor-process script errors and the Debugger dock's
           visible Errors-tab rows — parse errors, GDScript reload warnings,
           @tool/EditorPlugin runtime errors, push_error/push_warning.
@@ -106,9 +109,12 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
           are not captured.
         - "all": plugin → editor → game lines (with source per entry).
 
-        Tail pattern: for game logs, poll with offset=N + since_run_id=R.
-        ``stale_run_id: true`` means the buffer has rotated; reset offset to 0
-        and capture new run_id. For editor logs, read once to capture
+        Tail pattern: for game logs, poll the current run with offset=N and
+        keep the returned run_id. ``current_run_id`` identifies the active run;
+        ``run_id`` identifies the run being read. Passing
+        ``since_run_id=old_run_id`` reads retained lines for that prior run, and
+        ``stale_run_id: true`` means the requested run is not the current run.
+        For editor logs, read once to capture
         ``next_cursor`` and pass it back as ``since_cursor`` on later calls.
         ``since_cursor`` reads Logger-backed editor entries only; live Debugger
         Errors-tab rows are included in regular source="editor" reads but do
@@ -124,7 +130,8 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
             count: Max lines to return. Default 50.
             offset: Lines to skip. Default 0.
             source: "plugin" | "game" | "editor" | "all". Default "plugin".
-            since_run_id: Stale-detection token from a previous response.
+            since_run_id: Game-log run id from a previous response; reads that
+                retained run instead of the current run.
             since_cursor: Editor-log cursor from a previous source="editor" response.
             include_details: Include rich error metadata for game/editor entries.
             session_id: Optional Godot session to target. Empty = active session.

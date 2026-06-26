@@ -40,6 +40,25 @@ Godot `_log_error` code/rationale when available, error type, resolved source
 location, and stack/error-tree context corresponding to the Debugger dock's
 Errors tab.
 
+For game logs, `logs_read(source="game")` returns lines from the current game
+run only. Each play-start creates a new `run_id`, even if the game never reaches
+the `_mcp_game_helper` hello beacon; prior run lines stay retained but do not
+appear in the default response. To retrieve a prior run, keep the `run_id` from
+an earlier response and pass `logs_read(source="game", since_run_id="...")`;
+the response includes both `run_id` (the run being read) and `current_run_id`
+(the latest run). `stale_run_id=true` means the requested run is not the current
+one. There is no single `source="game"` call that returns every retained game
+line across all runs; consumers that need history should retain run ids and
+query each run explicitly.
+
+Game and combined log responses also include `game_status` and a liveness-based
+`is_running`. `is_running` is no longer raw editor play-state: it is `false` for
+`game_status.status` of `"not_live"` or `"stopped"`, and `true` for `"live"`,
+`"launching"`, or `"no_helper"`. This lets a parse/load failure that leaves the
+editor play button active report as not running, while a legitimate headless or
+custom-main-loop project without `_mcp_game_helper` remains running with
+`game_status.status="no_helper"`.
+
 For incremental editor-log polling, call `logs_read(source="editor")` once and
 save the returned `next_cursor`; later calls can pass
 `logs_read(source="editor", since_cursor=N)` to receive only Logger-backed

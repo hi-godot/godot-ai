@@ -121,8 +121,14 @@ func begin_game_run(editor_log_cursor: int = 0, helper_expected: bool = true) ->
 	_game_run_started_msec = Time.get_ticks_msec()
 	_game_run_started_editor_cursor = maxi(0, editor_log_cursor)
 	_game_helper_expected = helper_expected
+	var run_id := ""
+	if _game_log_buffer:
+		run_id = _game_log_buffer.clear_for_new_run()
 	if _log_buffer:
-		_log_buffer.log("[debug] game capture pending run token %d" % _game_run_token)
+		var log_text := "[debug] game capture pending run token %d" % _game_run_token
+		if not run_id.is_empty():
+			log_text += " (run %s)" % run_id
+		_log_buffer.log(log_text)
 
 
 func end_game_run() -> void:
@@ -300,18 +306,15 @@ func _capture(message: String, data: Array, session_id: int) -> bool:
 			## Boot beacon from the game-side autoload. Tells us the
 			## game has registered its "mcp" capture and is safe to send
 			## take_screenshot to — before this, Godot's debugger would
-			## drop our message silently. Also marks a fresh play
-			## cycle: rotate the game-log buffer so each run starts
-			## clean and gets a new run_id.
+			## drop our message silently.
 			_game_ready = true
 			_ready_run_token = _game_run_token
 			game_ready.emit()
-			if _game_log_buffer:
-				var run_id := _game_log_buffer.clear_for_new_run()
-				if _log_buffer:
-					_log_buffer.log("[debug] <- mcp:hello from game_helper (run %s)" % run_id)
-			elif _log_buffer:
-				_log_buffer.log("[debug] <- mcp:hello from game_helper")
+			if _log_buffer:
+				if _game_log_buffer:
+					_log_buffer.log("[debug] <- mcp:hello from game_helper (run %s)" % _game_log_buffer.run_id())
+				else:
+					_log_buffer.log("[debug] <- mcp:hello from game_helper")
 			return true
 		"mcp:eval_response":
 			_on_eval_response(data)

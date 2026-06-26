@@ -768,18 +768,21 @@ func test_game_log_buffer_ring_evicts_and_tracks_dropped() -> void:
 	assert_eq(first[0].text, "n 5")
 
 
-func test_game_log_buffer_clear_for_new_run_rotates_run_id() -> void:
+func test_game_log_buffer_clear_for_new_run_rotates_run_id_without_dropping_lines() -> void:
 	var buf := McpGameLogBuffer.new()
 	buf.append("info", "before")
-	## Time.get_ticks_msec changes between calls — guarantees distinct ids.
+	## Run ids include a sequence so fast back-to-back rotations differ.
 	var first_id := buf.clear_for_new_run()
 	assert_ne(first_id, "", "Initial clear should return a non-empty run id")
-	assert_eq(buf.total_count(), 0, "Buffer should be empty after clear")
-	OS.delay_msec(2)
+	assert_eq(buf.total_count(), 1, "Rotating should preserve prior lines")
+	assert_eq(buf.get_range(0, 1)[0].run_id, "", "Pre-run lines keep their original empty run id")
 	buf.append("info", "after")
 	var second_id := buf.clear_for_new_run()
 	assert_ne(first_id, second_id, "Each clear should rotate the run id")
-	assert_eq(buf.dropped_count(), 0, "dropped_count resets on new run")
+	assert_eq(buf.total_count(), 2, "Second rotation should still preserve history")
+	assert_eq(buf.get_run_range(first_id, 0, 10).size(), 1)
+	assert_eq(buf.get_run_range(first_id, 0, 10)[0].text, "after")
+	assert_eq(buf.get_run_range(second_id, 0, 10).size(), 0)
 
 
 func test_game_log_buffer_preserves_order_after_multiple_wraps() -> void:
@@ -902,6 +905,96 @@ func test_get_logs_source_game_returns_buffered_entries() -> void:
 	assert_ne(result.data.run_id, "", "run_id should be set after clear_for_new_run")
 
 
+func test_get_logs_source_game_defaults_to_current_run_only() -> void:
+	var game_buf := McpGameLogBuffer.new()
+	var first_id := game_buf.clear_for_new_run()
+	game_buf.append("info", "first run")
+	var second_id := game_buf.clear_for_new_run()
+	game_buf.append("info", "second run")
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, null, game_buf)
+
+	var result := handler.get_logs({"source": "game", "count": 10})
+
+	assert_eq(result.data.run_id, second_id)
+	assert_eq(result.data.current_run_id, second_id)
+	assert_eq(result.data.total_count, 1)
+	assert_eq(result.data.lines.size(), 1)
+	assert_eq(result.data.lines[0].text, "second run")
+	assert_eq(result.data.lines[0].run_id, second_id)
+	assert_false(result.data.stale_run_id)
+	assert_eq(game_buf.get_run_range(first_id, 0, 10).size(), 1, "prior run remains retrievable")
+
+
+func test_get_logs_source_game_since_run_id_reads_prior_run() -> void:
+	var game_buf := McpGameLogBuffer.new()
+	var first_id := game_buf.clear_for_new_run()
+	game_buf.append("info", "first run")
+	var second_id := game_buf.clear_for_new_run()
+	game_buf.append("info", "second run")
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, null, game_buf)
+
+	var result := handler.get_logs({"source": "game", "since_run_id": first_id, "count": 10})
+
+	assert_eq(result.data.run_id, first_id)
+	assert_eq(result.data.current_run_id, second_id)
+	assert_eq(result.data.lines.size(), 1)
+	assert_eq(result.data.lines[0].text, "first run")
+	assert_true(result.data.stale_run_id)
+
+
+func test_get_logs_source_game_no_hello_run_reports_not_live_without_stale_lines() -> void:
+	var game_buf := McpGameLogBuffer.new()
+	var previous_id := game_buf.clear_for_new_run()
+	game_buf.append("info", "previous run")
+	var plugin := McpDebuggerPlugin.new(null, game_buf)
+	plugin.begin_game_run(0, true)
+	var current_id := game_buf.run_id()
+	plugin._game_run_started_msec -= int(McpDebuggerPlugin.GAME_READY_WAIT_SEC * 1000.0) + 1
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, plugin, game_buf)
+
+	var current := handler.get_logs({"source": "game", "count": 10})
+	var previous := handler.get_logs({"source": "game", "since_run_id": previous_id, "count": 10})
+
+	assert_eq(current.data.run_id, current_id)
+	assert_eq(current.data.lines.size(), 0, "current no-hello run must not inherit prior lines")
+	assert_eq(current.data.total_count, 0)
+	assert_eq(current.data.game_status.status, "not_live")
+	assert_eq(current.data.is_running, false)
+	assert_eq(previous.data.lines.size(), 1, "previous run is still retrievable explicitly")
+	assert_eq(previous.data.lines[0].text, "previous run")
+	assert_true(previous.data.stale_run_id)
+
+
+func test_get_logs_source_game_no_helper_counts_as_running() -> void:
+	var game_buf := McpGameLogBuffer.new()
+	var plugin := McpDebuggerPlugin.new(null, game_buf)
+	plugin.begin_game_run(0, false)
+	plugin._game_run_started_msec -= int(McpDebuggerPlugin.GAME_READY_WAIT_SEC * 1000.0) + 1
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, plugin, game_buf)
+
+	var result := handler.get_logs({"source": "game", "count": 10})
+
+	assert_eq(result.data.game_status.status, "no_helper")
+	assert_eq(result.data.is_running, true)
+
+
+func test_get_logs_source_game_live_run_counts_as_running() -> void:
+	var game_buf := McpGameLogBuffer.new()
+	var plugin := McpDebuggerPlugin.new(null, game_buf)
+	plugin.begin_game_run(0, true)
+	var current_id := game_buf.run_id()
+	plugin._capture("mcp:hello", [], -1)
+	game_buf.append("info", "ready")
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, plugin, game_buf)
+
+	var result := handler.get_logs({"source": "game", "count": 10})
+
+	assert_eq(result.data.game_status.status, "live")
+	assert_eq(result.data.is_running, true)
+	assert_eq(result.data.lines.size(), 1)
+	assert_eq(result.data.lines[0].run_id, current_id)
+
+
 func test_get_logs_include_details_returns_buffered_metadata() -> void:
 	var game_buf := McpGameLogBuffer.new()
 	game_buf.append("error", "game boom", {
@@ -955,6 +1048,25 @@ func test_get_logs_source_all_includes_both_streams() -> void:
 	assert_eq(result.data.lines[2].source, "game")
 	assert_eq(result.data.lines[2].level, "warn")
 	assert_eq(result.data.lines[2].text, "game-c")
+
+
+func test_get_logs_source_all_scopes_game_entries_to_current_run() -> void:
+	var plugin_buf := McpLogBuffer.new()
+	plugin_buf.log("plugin")
+	var game_buf := McpGameLogBuffer.new()
+	game_buf.clear_for_new_run()
+	game_buf.append("info", "old game")
+	var current_id := game_buf.clear_for_new_run()
+	game_buf.append("info", "current game")
+	var handler := EditorHandler.new(plugin_buf, null, null, game_buf)
+
+	var result := handler.get_logs({"source": "all", "count": 10})
+
+	assert_eq(result.data.run_id, current_id)
+	assert_eq(result.data.lines.size(), 2)
+	assert_contains(result.data.lines[0].text, "plugin")
+	assert_eq(result.data.lines[1].text, "current game")
+	assert_eq(result.data.lines[1].run_id, current_id)
 
 
 # ----- McpEditorLogBuffer (issue #231) -----
@@ -1744,14 +1856,16 @@ func test_debugger_plugin_log_batch_preserves_details() -> void:
 	assert_eq(entries[1].details.code, "WARN")
 
 
-func test_debugger_plugin_hello_rotates_run_id() -> void:
+func test_debugger_plugin_begin_game_run_rotates_run_id() -> void:
 	var game_buf := McpGameLogBuffer.new()
 	game_buf.append("info", "stale from previous run")
 	var plugin := McpDebuggerPlugin.new(null, game_buf)
 	plugin.begin_game_run()
+	var run_id := game_buf.run_id()
+	assert_ne(run_id, "", "begin_game_run should set a run_id")
+	assert_eq(game_buf.total_count(), 1, "begin_game_run should preserve prior lines")
 	plugin._capture("mcp:hello", [], 0)
-	assert_eq(game_buf.total_count(), 0, "hello should clear the game buffer")
-	assert_ne(game_buf.run_id(), "", "hello should set a run_id")
+	assert_eq(game_buf.run_id(), run_id, "hello should confirm liveness without rotating run identity")
 
 
 func test_debugger_plugin_readiness_is_scoped_to_current_run() -> void:
@@ -1948,14 +2062,15 @@ func test_debugger_plugin_ignores_hello_from_stale_session() -> void:
 	var game_buf := McpGameLogBuffer.new()
 	var plugin := McpDebuggerPlugin.new(null, game_buf)
 	plugin.begin_game_run()
+	var run_id := game_buf.run_id()
 	plugin._setup_session(22)
 	plugin._capture("mcp:hello", [], 21)
 	assert_false(plugin.is_game_capture_ready(), "hello from an old debugger session must not ready current run")
-	assert_eq(game_buf.run_id(), "", "stale hello must not rotate logs for current run")
+	assert_eq(game_buf.run_id(), run_id, "stale hello must not rotate logs for current run")
 
 	plugin._capture("mcp:hello", [], 22)
 	assert_true(plugin.is_game_capture_ready(), "hello from current session should ready capture")
-	assert_ne(game_buf.run_id(), "", "current hello rotates run logs")
+	assert_eq(game_buf.run_id(), run_id, "current hello confirms the existing run identity")
 
 
 func test_debugger_plugin_log_batch_no_buffer_is_safe() -> void:
