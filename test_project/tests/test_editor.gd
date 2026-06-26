@@ -54,6 +54,12 @@ func test_editor_state_game_capture_ready_false_without_debugger_plugin() -> voi
 	var result := _handler.get_editor_state({})
 	assert_has_key(result.data, "game_capture_ready")
 	assert_eq(result.data.game_capture_ready, false)
+	assert_has_key(result.data, "game_status")
+	assert_eq(result.data.game_status.status, "stopped")
+	assert_eq(result.data.game_status.helper_live, false)
+	assert_eq(result.data.game_status.session_active, false)
+	assert_eq(result.data.helper_live, false)
+	assert_eq(result.data.session_active, false)
 
 
 func test_editor_state_game_capture_ready_tracks_debugger_plugin_flag() -> void:
@@ -69,6 +75,36 @@ func test_editor_state_game_capture_ready_tracks_debugger_plugin_flag() -> void:
 	plugin.begin_game_run()
 	result = handler.get_editor_state({})
 	assert_eq(result.data.game_capture_ready, false, "new project_run clears stale readiness immediately")
+
+
+func test_editor_state_game_status_tracks_debugger_plugin_lifecycle() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, plugin)
+
+	var result := handler.get_editor_state({})
+	assert_eq(result.data.game_status.status, "stopped")
+	assert_eq(result.data.game_status.helper_live, false)
+	assert_eq(result.data.game_status.session_active, false)
+	assert_eq(result.data.helper_live, false)
+	assert_eq(result.data.session_active, false)
+
+	plugin.begin_game_run(13, true)
+	result = handler.get_editor_state({})
+	assert_eq(result.data.game_status.status, "launching")
+	assert_eq(result.data.game_status.editor_log_cursor, 13)
+	assert_eq(result.data.game_status.helper_live, false)
+	assert_eq(result.data.game_status.session_active, true)
+	assert_eq(result.data.helper_live, false)
+	assert_eq(result.data.session_active, true)
+
+	plugin._capture("mcp:hello", [], -1)
+	result = handler.get_editor_state({})
+	assert_eq(result.data.game_status.status, "live")
+	assert_eq(result.data.game_capture_ready, true)
+	assert_eq(result.data.game_status.helper_live, true)
+	assert_eq(result.data.game_status.session_active, true)
+	assert_eq(result.data.helper_live, true)
+	assert_eq(result.data.session_active, true)
 
 
 # ----- get_selection -----
@@ -959,7 +995,11 @@ func test_get_logs_source_game_no_hello_run_reports_not_live_without_stale_lines
 	assert_eq(current.data.lines.size(), 0, "current no-hello run must not inherit prior lines")
 	assert_eq(current.data.total_count, 0)
 	assert_eq(current.data.game_status.status, "not_live")
+	assert_eq(current.data.game_status.helper_live, false)
+	assert_eq(current.data.game_status.session_active, false)
 	assert_eq(current.data.is_running, false)
+	assert_eq(current.data.helper_live, false)
+	assert_eq(current.data.session_active, false)
 	assert_eq(previous.data.lines.size(), 1, "previous run is still retrievable explicitly")
 	assert_eq(previous.data.lines[0].text, "previous run")
 	assert_true(previous.data.stale_run_id)
@@ -975,7 +1015,11 @@ func test_get_logs_source_game_no_helper_counts_as_running() -> void:
 	var result := handler.get_logs({"source": "game", "count": 10})
 
 	assert_eq(result.data.game_status.status, "no_helper")
+	assert_eq(result.data.game_status.helper_live, false)
+	assert_eq(result.data.game_status.session_active, true)
 	assert_eq(result.data.is_running, true)
+	assert_eq(result.data.helper_live, false)
+	assert_eq(result.data.session_active, true)
 
 
 func test_get_logs_source_game_live_run_counts_as_running() -> void:
@@ -990,7 +1034,11 @@ func test_get_logs_source_game_live_run_counts_as_running() -> void:
 	var result := handler.get_logs({"source": "game", "count": 10})
 
 	assert_eq(result.data.game_status.status, "live")
+	assert_eq(result.data.game_status.helper_live, true)
+	assert_eq(result.data.game_status.session_active, true)
 	assert_eq(result.data.is_running, true)
+	assert_eq(result.data.helper_live, true)
+	assert_eq(result.data.session_active, true)
 	assert_eq(result.data.lines.size(), 1)
 	assert_eq(result.data.lines[0].run_id, current_id)
 

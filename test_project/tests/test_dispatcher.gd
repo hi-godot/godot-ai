@@ -2,6 +2,7 @@
 extends McpTestSuite
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const ProjectHandler := preload("res://addons/godot_ai/handlers/project_handler.gd")
 
 ## Tests for McpDispatcher — specifically the crash-detection guardrail
 ## that catches handlers returning malformed results (null, empty dict,
@@ -208,6 +209,15 @@ func test_deferred_completion_removes_pending_entry() -> void:
 	assert_false(
 		d.complete_deferred_response("req-ok"),
 		"late duplicate deferred responses should be rejected",
+	)
+
+
+func test_run_project_has_deferred_timeout_budget() -> void:
+	assert_has_key(McpDispatcher.DEFERRED_TIMEOUT_MS_BY_COMMAND, "run_project")
+	assert_gt(
+		int(McpDispatcher.DEFERRED_TIMEOUT_MS_BY_COMMAND.run_project),
+		int(ProjectHandler.RUN_READY_WAIT_SEC * 1000.0),
+		"dispatcher timeout must exceed project_run's liveness wait window",
 	)
 
 

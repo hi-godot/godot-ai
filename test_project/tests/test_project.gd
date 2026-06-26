@@ -197,6 +197,134 @@ func test_run_project_autosave_false_restores_editor_setting() -> void:
 	editor_settings.set_setting(autosave_key, prior)
 
 
+func _run_status(status: String, elapsed_msec: int = 0, ready_wait_msec: int = 3000) -> Dictionary:
+	return {
+		"status": status,
+		"run_token": 1,
+		"active": status != "stopped",
+		"ready": status == "live",
+		"helper_expected": status != "no_helper",
+		"run_started_msec": 100,
+		"elapsed_msec": elapsed_msec,
+		"ready_wait_msec": ready_wait_msec,
+		"editor_log_cursor": 7,
+	}
+
+
+func _errors_info(errors: Array[Dictionary] = [], scope: String = "none", truncated: bool = false) -> Dictionary:
+	return {
+		"errors": errors,
+		"scope": scope,
+		"truncated": truncated,
+	}
+
+
+func test_run_project_liveness_decision_live_short_circuits() -> void:
+	var decision := _handler._run_project_liveness_decision(_run_status("live", 100), _errors_info())
+	assert_eq(decision.resolve, true)
+	assert_eq(decision.liveness_status, "live")
+	assert_contains(decision.message, "live")
+
+
+func test_run_project_liveness_decision_run_scoped_error_short_circuits() -> void:
+	var err := {"text": "Parse Error: Expected expression", "path": "res://broken.gd", "line": 4}
+	var decision := _handler._run_project_liveness_decision(
+		_run_status("launching", 100),
+		_errors_info([err], "run")
+	)
+	assert_eq(decision.resolve, true)
+	assert_eq(decision.liveness_status, "not_live")
+	assert_contains(decision.message, "failed to load")
+	assert_contains(decision.message, "res://broken.gd:4")
+	assert_eq(decision.recent_errors.size(), 1)
+	assert_eq(decision.recent_errors_scope, "run")
+
+
+func test_run_project_liveness_decision_retained_error_does_not_short_circuit_launching() -> void:
+	var err := {"text": "Parse Error: Old", "path": "res://old.gd", "line": 2}
+	var decision := _handler._run_project_liveness_decision(
+		_run_status("launching", 100),
+		_errors_info([err], "retained_recent")
+	)
+	assert_eq(decision.resolve, false)
+	assert_eq(decision.recent_errors_may_predate_run, true)
+
+
+func test_run_project_liveness_decision_not_live_without_errors_is_soft() -> void:
+	var decision := _handler._run_project_liveness_decision(_run_status("not_live", 3000), _errors_info())
+	assert_eq(decision.resolve, true)
+	assert_eq(decision.liveness_status, "not_live")
+	assert_contains(decision.message, "did not become live")
+	assert_false(decision.message.contains("crashed"), "no correlated error must not claim a crash")
+
+
+func test_run_project_liveness_decision_not_live_with_retained_error_is_labeled() -> void:
+	var err := {"text": "Parse Error: Old", "path": "res://old.gd", "line": 2}
+	var decision := _handler._run_project_liveness_decision(
+		_run_status("not_live", 3000),
+		_errors_info([err], "retained_recent")
+	)
+	assert_eq(decision.resolve, true)
+	assert_contains(decision.message, "may predate this run")
+	assert_eq(decision.recent_errors_may_predate_run, true)
+
+
+func test_run_project_liveness_decision_no_helper_resolves_running() -> void:
+	var decision := _handler._run_project_liveness_decision(_run_status("no_helper", 3000), _errors_info())
+	assert_eq(decision.resolve, true)
+	assert_eq(decision.liveness_status, "no_helper")
+	assert_contains(decision.message, "_mcp_game_helper")
+
+
+func test_run_project_liveness_decision_stopped_resolves_stop_race() -> void:
+	var decision := _handler._run_project_liveness_decision(_run_status("stopped", 250), _errors_info())
+	assert_eq(decision.resolve, true)
+	assert_eq(decision.liveness_status, "stopped")
+	assert_contains(decision.message, "stopped")
+
+
+func test_run_project_response_carries_liveness_shape() -> void:
+	var base := {
+		"mode": "main",
+		"scene": "",
+		"autosave": true,
+		"was_already_running": false,
+		"undoable": false,
+		"reason": "Play/stop is a runtime action",
+	}
+	var decision := _handler._run_project_liveness_decision(_run_status("live", 100), _errors_info())
+	var response := _handler._run_project_response(base, decision)
+	assert_has_key(response.data, "game_status")
+	assert_eq(response.data.game_status.status, "live")
+	assert_eq(response.data.game_status.helper_live, true)
+	assert_eq(response.data.game_status.session_active, true)
+	assert_eq(response.data.helper_live, true)
+	assert_eq(response.data.session_active, true)
+	assert_false(response.data.has("liveness_status"), "public response uses game_status.status")
+	assert_false(response.data.has("game_live"), "public response uses helper_live")
+	assert_has_key(response.data, "recent_errors")
+
+
+func test_run_project_response_carries_liveness_shape_when_already_running() -> void:
+	var base := _handler._run_project_base_data(
+		"main",
+		"",
+		true,
+		true,
+		"Project was already running; no action taken"
+	)
+	var decision := _handler._run_project_liveness_decision(_run_status("live", 100), _errors_info())
+	var response := _handler._run_project_response(base, decision)
+	assert_eq(response.data.was_already_running, true)
+	assert_has_key(response.data, "game_status")
+	assert_eq(response.data.game_status.status, "live")
+	assert_eq(response.data.game_status.helper_live, true)
+	assert_eq(response.data.game_status.session_active, true)
+	assert_eq(response.data.helper_live, true)
+	assert_eq(response.data.session_active, true)
+	assert_eq(response.data.reason, "Project was already running; the Godot AI game helper is live.")
+
+
 # ----- stop_project -----
 
 func test_stop_project_idempotent_when_not_playing() -> void:

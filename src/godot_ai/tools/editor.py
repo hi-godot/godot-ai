@@ -63,6 +63,12 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         the game has stopped — calling ``editor_state`` once syncs the cache
         and the next write proceeds. Issue #262.
 
+        Response includes ``game_status`` for authoritative game liveness,
+        plus ``helper_live`` (status == "live") and ``session_active``
+        (status not in {"not_live", "stopped"}) mirrored from the same fields
+        inside ``game_status``. ``is_playing`` remains raw editor play-state;
+        use ``game_status.status`` for liveness decisions.
+
         Args:
             session_id: Optional Godot session to target. Empty = active session.
         """
@@ -94,8 +100,10 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
           lines retained across runs and tagged by run_id. Default reads return
           current-run lines only; pass ``since_run_id`` from an earlier response
           to read that prior run. Entries: {source, level, text, run_id};
-          response carries run_id, current_run_id, is_running, game_status,
-          dropped_count, stale_run_id.
+          response carries run_id, current_run_id, game_status, helper_live,
+          session_active, dropped_count, stale_run_id. helper_live and
+          session_active mirror the same fields inside game_status; is_running
+          is retained as a compatibility alias of session_active.
         - "editor": editor-process script errors and the Debugger dock's
           visible Errors-tab rows — parse errors, GDScript reload warnings,
           @tool/EditorPlugin runtime errors, push_error/push_warning.

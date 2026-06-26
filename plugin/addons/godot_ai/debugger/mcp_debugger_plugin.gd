@@ -142,6 +142,14 @@ func is_game_capture_ready() -> bool:
 	return _game_run_active and _game_ready and _ready_run_token == _game_run_token
 
 
+static func with_liveness_flags(status: Dictionary) -> Dictionary:
+	var enriched := status.duplicate(true)
+	var state := str(enriched.get("status", "stopped"))
+	enriched["helper_live"] = state == "live"
+	enriched["session_active"] = not state in ["not_live", "stopped"]
+	return enriched
+
+
 func get_game_status(now_msec: int = -1, ready_wait_sec: float = GAME_READY_WAIT_SEC) -> Dictionary:
 	var resolved_now := Time.get_ticks_msec() if now_msec < 0 else now_msec
 	var ready_wait_msec := maxi(0, int(ready_wait_sec * 1000.0))
@@ -157,7 +165,7 @@ func get_game_status(now_msec: int = -1, ready_wait_sec: float = GAME_READY_WAIT
 			status = "not_live"
 		else:
 			status = "launching"
-	return {
+	return with_liveness_flags({
 		"status": status,
 		"run_token": _game_run_token,
 		"active": _game_run_active,
@@ -167,12 +175,12 @@ func get_game_status(now_msec: int = -1, ready_wait_sec: float = GAME_READY_WAIT
 		"elapsed_msec": elapsed_msec,
 		"ready_wait_msec": ready_wait_msec,
 		"editor_log_cursor": _game_run_started_editor_cursor,
-	}
+	})
 
 
 func _explain_not_live(status: Dictionary, code: String = ErrorCodes.INTERNAL_ERROR) -> Dictionary:
 	var state := str(status.get("status", "stopped"))
-	var errors_info := _recent_editor_errors_since(int(status.get("editor_log_cursor", 0)))
+	var errors_info := recent_editor_errors_since(int(status.get("editor_log_cursor", 0)))
 	var recent_errors: Array = errors_info.get("errors", [])
 	var recent_errors_scope := str(errors_info.get("scope", "none"))
 	var truncated := bool(errors_info.get("truncated", false))
@@ -207,6 +215,10 @@ func _explain_not_live(status: Dictionary, code: String = ErrorCodes.INTERNAL_ER
 	inner["data"] = data
 	err["error"] = inner
 	return err
+
+
+func recent_editor_errors_since(cursor: int) -> Dictionary:
+	return _recent_editor_errors_since(cursor)
 
 
 func _recent_editor_errors_since(cursor: int) -> Dictionary:

@@ -14,7 +14,7 @@ not the MCP tool names.
 
 | Tool | Description |
 |------|-------------|
-| `editor_state` | Editor version, project name, current scene, readiness, play state |
+| `editor_state` | Editor version, project name, current scene, readiness, play state, and game liveness status |
 | `scene_get_hierarchy` | Paginated scene tree walk (depth, offset, limit) |
 | `node_get_properties` | Full property snapshot of a node |
 | `session_activate` | Pin subsequent calls to a specific connected editor |
@@ -27,7 +27,7 @@ not the MCP tool names.
 | `node_create` / `node_set_property` / `node_find` | Common node writes + search |
 | `scene_open` / `scene_save` | Open and save scenes |
 | `script_create` / `script_attach` / `script_patch` | Create, attach, anchor-edit GDScript files |
-| `project_run` | Play the project (autosave persists in-memory MCP edits unless `autosave=False`) |
+| `project_run` | Play the project, then wait briefly for game liveness (autosave persists in-memory MCP edits unless `autosave=False`) |
 | `test_run` | Run GDScript test suites in the editor |
 | `logs_read` | Read plugin / game / editor / combined log buffers. `source="editor"` surfaces parse errors, GDScript reload warnings, @tool/EditorPlugin runtime errors, push_error/push_warning, and visible Debugger dock Errors-tab rows — use this when the editor's Output or Debugger Errors panel shows red/yellow rows |
 | `editor_screenshot` | Capture editor viewport, cinematic camera, or running game framebuffer |
@@ -40,6 +40,27 @@ Godot `_log_error` code/rationale when available, error type, resolved source
 location, and stack/error-tree context corresponding to the Debugger dock's
 Errors tab.
 
+`project_run` starts playback and waits briefly for the running game to become
+live through `_mcp_game_helper`. Its response includes `game_status`,
+`helper_live`, `session_active`, and any `recent_errors` found while waiting.
+The booleans are derived once inside `game_status` and mirrored at the top
+level for convenience.
+`game_status.status="live"` means the helper checked in. `"not_live"` means the
+game launched but did not become live before the helper-ready window elapsed;
+if a run-scoped parse/load error appeared, the response names it and points to
+`logs_read(source="editor", include_details=true)`. `"no_helper"` means the
+game launched but this project has no `_mcp_game_helper` autoload, as with some
+headless/custom-main-loop setups: `helper_live=false` while
+`session_active=true`. `"launching"` is a soft "not live yet" state and can
+reconcile on a later `editor_state` poll.
+
+`editor_state` includes the same `game_status` object in addition to the legacy
+`is_playing` boolean and `game_capture_ready`. It also mirrors
+`game_status.helper_live` (`game_status.status=="live"`) and
+`game_status.session_active` (`game_status.status` is not `"not_live"` or
+`"stopped"`). `is_playing` remains raw editor play-state for compatibility; use
+`game_status.status` for liveness decisions.
+
 For game logs, `logs_read(source="game")` returns lines from the current game
 run only. Each play-start creates a new `run_id`, even if the game never reaches
 the `_mcp_game_helper` hello beacon; prior run lines stay retained but do not
@@ -51,12 +72,15 @@ one. There is no single `source="game"` call that returns every retained game
 line across all runs; consumers that need history should retain run ids and
 query each run explicitly.
 
-Game and combined log responses also include `game_status` and a liveness-based
-`is_running`. `is_running` is no longer raw editor play-state: it is `false` for
+Game and combined log responses also include `game_status`, `helper_live`, and
+`session_active`; the top-level booleans mirror `game_status.helper_live` and
+`game_status.session_active`. For compatibility, `is_running` is retained as an
+alias of `session_active`; it is no longer raw editor play-state. Both are `false` for
 `game_status.status` of `"not_live"` or `"stopped"`, and `true` for `"live"`,
 `"launching"`, or `"no_helper"`. This lets a parse/load failure that leaves the
 editor play button active report as not running, while a legitimate headless or
-custom-main-loop project without `_mcp_game_helper` remains running with
+custom-main-loop project without `_mcp_game_helper` remains active with
+`helper_live=false`, `session_active=true`, and
 `game_status.status="no_helper"`.
 
 For incremental editor-log polling, call `logs_read(source="editor")` once and

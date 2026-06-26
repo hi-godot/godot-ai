@@ -6,6 +6,7 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 ## Handles project settings and filesystem search commands.
 
 const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
+const RUN_READY_WAIT_SEC := 3.0
 
 var _connection: McpConnection
 var _debugger_plugin
@@ -83,16 +84,15 @@ func run_project(params: Dictionary) -> Dictionary:
 	# stop-not-running case in telemetry). Surface state via was_already_running
 	# so a caller wanting a *different* scene can detect and stop+restart.
 	if EditorInterface.is_playing_scene():
-		return {
-			"data": {
-				"mode": mode,
-				"scene": params.get("scene", ""),
-				"autosave": autosave,
-				"was_already_running": true,
-				"undoable": false,
-				"reason": "Project was already running; no action taken",
-			}
-		}
+		return _run_project_current_liveness_response(
+			_run_project_base_data(
+				mode,
+				str(params.get("scene", "")),
+				autosave,
+				true,
+				"Project was already running; no action taken"
+			)
+		)
 
 	var validation_error: Variant = null
 	if mode == "custom":
@@ -144,16 +144,19 @@ func run_project(params: Dictionary) -> Dictionary:
 	if _connection:
 		_connection.pause_processing = false
 
-	return {
-		"data": {
-			"mode": mode,
-			"scene": params.get("scene", ""),
-			"autosave": autosave,
-			"was_already_running": false,
-			"undoable": false,
-			"reason": "Play/stop is a runtime action",
-		}
-	}
+	var base_data := _run_project_base_data(
+		mode,
+		str(params.get("scene", "")),
+		autosave,
+		false,
+		"Play/stop is a runtime action"
+	)
+	var request_id: String = params.get("_request_id", "")
+	if _connection != null and _debugger_plugin != null and not request_id.is_empty():
+		_finish_run_project_deferred(request_id, base_data)
+		return McpDispatcher.DEFERRED_RESPONSE
+
+	return _run_project_current_liveness_response(base_data)
 
 
 func _editor_log_cursor() -> int:
@@ -162,6 +165,150 @@ func _editor_log_cursor() -> int:
 
 func _game_helper_autoload_expected() -> bool:
 	return ProjectSettings.has_setting("autoload/_mcp_game_helper")
+
+
+func _run_project_base_data(
+	mode: String,
+	scene: String,
+	autosave: bool,
+	was_already_running: bool,
+	reason: String
+) -> Dictionary:
+	return {
+		"mode": mode,
+		"scene": scene,
+		"autosave": autosave,
+		"was_already_running": was_already_running,
+		"undoable": false,
+		"reason": reason,
+	}
+
+
+func _run_project_current_liveness_response(base_data: Dictionary) -> Dictionary:
+	if _debugger_plugin == null:
+		return {"data": base_data}
+	var status: Dictionary = _debugger_plugin.get_game_status(-1, RUN_READY_WAIT_SEC)
+	var errors_info: Dictionary = _debugger_plugin.recent_editor_errors_since(int(status.get("editor_log_cursor", 0)))
+	return _run_project_response(base_data, _run_project_liveness_decision(status, errors_info))
+
+
+func _finish_run_project_deferred(request_id: String, base_data: Dictionary) -> void:
+	var tree := _connection.get_tree()
+	while true:
+		await tree.process_frame
+		if not is_instance_valid(_connection):
+			return
+		var pre_status: Dictionary = _debugger_plugin.get_game_status(-1, RUN_READY_WAIT_SEC)
+		if (
+			not EditorInterface.is_playing_scene()
+			and int(pre_status.get("elapsed_msec", 0)) > 100
+			and str(pre_status.get("status", "stopped")) == "launching"
+		):
+			_debugger_plugin.end_game_run()
+		var status: Dictionary = _debugger_plugin.get_game_status(-1, RUN_READY_WAIT_SEC)
+		var errors_info: Dictionary = _debugger_plugin.recent_editor_errors_since(int(status.get("editor_log_cursor", 0)))
+		var decision := _run_project_liveness_decision(status, errors_info)
+		if not bool(decision.get("resolve", false)):
+			continue
+		_connection.send_deferred_response(request_id, _run_project_response(base_data, decision))
+		return
+
+
+func _run_project_response(base_data: Dictionary, decision: Dictionary) -> Dictionary:
+	var data := base_data.duplicate(true)
+	var game_status: Dictionary = decision.get("game_status", {})
+	data["game_status"] = game_status
+	data["helper_live"] = bool(game_status.get("helper_live", false))
+	data["session_active"] = bool(game_status.get("session_active", false))
+	if bool(data.get("was_already_running", false)):
+		data["reason"] = _run_project_already_running_message(decision)
+	else:
+		data["reason"] = decision.get("message", data.get("reason", "Play/stop is a runtime action"))
+	data["recent_errors"] = decision.get("recent_errors", [])
+	data["recent_errors_scope"] = decision.get("recent_errors_scope", "none")
+	data["recent_errors_may_predate_run"] = decision.get("recent_errors_may_predate_run", false)
+	data["recent_errors_truncated"] = decision.get("recent_errors_truncated", false)
+	return {"data": data}
+
+
+func _run_project_already_running_message(decision: Dictionary) -> String:
+	var state := str(decision.get("liveness_status", "unknown"))
+	match state:
+		"live":
+			return "Project was already running; the Godot AI game helper is live."
+		"not_live":
+			var errors: Array = decision.get("recent_errors", [])
+			var scope := str(decision.get("recent_errors_scope", "none"))
+			if not errors.is_empty() and scope == "run":
+				return "Project was already running but failed to load before the Godot AI game helper registered: %s. Check logs_read(source='editor', include_details=true)." % _format_editor_error_summary(errors[0])
+			if not errors.is_empty():
+				return "Project was already running but is not responding. A recent editor error may be related, but may predate this run: %s. Check logs_read(source='editor', include_details=true)." % _format_editor_error_summary(errors[0])
+			return "Project was already running but did not become live before the helper-ready window elapsed. Check logs_read(source='editor', include_details=true) and poll editor_state."
+		"no_helper":
+			return "Project was already running, but no _mcp_game_helper autoload is expected. Headless or custom-main-loop projects cannot confirm helper liveness."
+		"launching":
+			return "Project was already running and is still waiting for the Godot AI game helper to register. Poll editor_state shortly."
+		"stopped":
+			return "Project was already marked playing by the editor, but no active game liveness run exists."
+		_:
+			return "Project was already running; current liveness status is %s." % state
+
+
+func _run_project_liveness_decision(status: Dictionary, errors_info: Dictionary = {}) -> Dictionary:
+	var enriched_status := McpDebuggerPlugin.with_liveness_flags(status)
+	var state := str(status.get("status", "stopped"))
+	var recent_errors: Array = errors_info.get("errors", [])
+	var errors_scope := str(errors_info.get("scope", "none"))
+	var truncated := bool(errors_info.get("truncated", false))
+	var correlated_error := not recent_errors.is_empty() and errors_scope == "run"
+	var elapsed_msec := int(status.get("elapsed_msec", 0))
+	var ready_wait_msec := int(status.get("ready_wait_msec", int(RUN_READY_WAIT_SEC * 1000.0)))
+	var decision := {
+		"resolve": false,
+		"game_status": enriched_status,
+		"liveness_status": state,
+		"recent_errors": recent_errors,
+		"recent_errors_scope": errors_scope,
+		"recent_errors_may_predate_run": errors_scope == "retained_recent",
+		"recent_errors_truncated": truncated,
+		"message": "",
+	}
+	if state == "live":
+		decision["resolve"] = true
+		decision["message"] = "Game launched and the Godot AI game helper is live."
+	elif correlated_error:
+		decision["resolve"] = true
+		decision["liveness_status"] = "not_live"
+		decision["message"] = "Game launched but failed to load before the Godot AI game helper registered: %s. Check logs_read(source='editor', include_details=true)." % _format_editor_error_summary(recent_errors[0])
+		if truncated:
+			decision["message"] += " Editor logs since this run may be truncated; showing retained errors."
+	elif state == "not_live":
+		decision["resolve"] = true
+		if not recent_errors.is_empty():
+			decision["message"] = "Game launched but is not responding. A recent editor error may be related, but may predate this run: %s. Check logs_read(source='editor', include_details=true)." % _format_editor_error_summary(recent_errors[0])
+		else:
+			decision["message"] = "Game launched but did not become live before the helper-ready window elapsed. It may still be booting or may have failed silently; check logs_read(source='editor', include_details=true) and poll editor_state."
+	elif state == "no_helper":
+		decision["resolve"] = true
+		decision["message"] = "Game launched, but no _mcp_game_helper autoload is expected. Headless or custom-main-loop projects cannot confirm helper liveness; use editor_state and viewport/editor tools where applicable."
+	elif state == "stopped":
+		decision["resolve"] = true
+		decision["message"] = "The play session stopped, or no active game liveness run exists, before the Godot AI game helper became live."
+	elif state == "launching" and elapsed_msec >= ready_wait_msec:
+		decision["resolve"] = true
+		decision["message"] = "Game launched but is not yet live after %.1fs; it may still be booting. Poll editor_state and check logs_read(source='editor', include_details=true)." % (float(elapsed_msec) / 1000.0)
+	return decision
+
+
+func _format_editor_error_summary(entry: Dictionary) -> String:
+	var text := str(entry.get("text", "editor error"))
+	var path := str(entry.get("path", ""))
+	var line := int(entry.get("line", 0))
+	if not path.is_empty() and line > 0:
+		return "%s (%s:%d)" % [text, path, line]
+	if not path.is_empty():
+		return "%s (%s)" % [text, path]
+	return text
 
 
 func stop_project(params: Dictionary) -> Dictionary:

@@ -55,6 +55,19 @@ def register_project_tools(mcp: FastMCP) -> None:
         ``data.was_already_running=true`` (no scene switch). To switch scenes,
         call ``project_manage(op="stop")`` first, then ``project_run`` again.
 
+        After starting playback, waits briefly for the Godot AI game helper to
+        check in. The response includes ``game_status``, ``helper_live``
+        (status == "live"), ``session_active`` (status not in {"not_live",
+        "stopped"}), and any ``recent_errors`` observed during the run window.
+        The top-level booleans mirror the same fields inside ``game_status``.
+        ``game_status.status="not_live"`` means playback launched but the game
+        did not become live before the helper-ready window elapsed;
+        ``"no_helper"`` means the project has no _mcp_game_helper autoload, as
+        with some headless/custom-main-loop setups (helper_live=false,
+        session_active=true); ``"stopped"`` means playback stopped or never
+        became active before liveness could be confirmed (helper_live=false,
+        session_active=false). Poll ``editor_state`` to see late transitions.
+
         Args:
             mode: "main" | "current" | "custom". Default "main".
             scene: Scene path (e.g. "res://levels/level1.tscn"). Required for "custom".

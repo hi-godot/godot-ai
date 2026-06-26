@@ -28,6 +28,7 @@ func _init(log_buffer: McpLogBuffer, connection: McpConnection = null, debugger_
 
 func get_editor_state(_params: Dictionary) -> Dictionary:
 	var scene_root := EditorInterface.get_edited_scene_root()
+	var game_status := _current_game_status()
 	var data := {
 		"godot_version": Engine.get_version_info().get("string", "unknown"),
 		"project_name": ProjectSettings.get_setting("application/config/name", ""),
@@ -38,6 +39,9 @@ func get_editor_state(_params: Dictionary) -> Dictionary:
 		## false between Play→Stop cycles. Lets capture-source=game callers
 		## poll for a real ready signal instead of guessing with sleep().
 		"game_capture_ready": _debugger_plugin != null and _debugger_plugin.is_game_capture_ready(),
+		"game_status": game_status,
+		"helper_live": bool(game_status.get("helper_live", false)),
+		"session_active": bool(game_status.get("session_active", false)),
 	}
 	## Half-installed addon tree from a failed self-update rollback. When
 	## non-empty, the agent / dock paint the operator-facing recovery copy
@@ -93,18 +97,13 @@ func get_logs(params: Dictionary) -> Dictionary:
 
 func _current_game_status() -> Dictionary:
 	if _debugger_plugin == null:
-		return {
+		return McpDebuggerPlugin.with_liveness_flags({
 			"status": "stopped",
 			"active": false,
 			"ready": false,
 			"helper_expected": true,
-		}
+		})
 	return _debugger_plugin.get_game_status()
-
-
-func _is_game_log_running(game_status: Dictionary) -> bool:
-	var status := str(game_status.get("status", "stopped"))
-	return not status in ["not_live", "stopped"]
 
 
 func _get_plugin_logs(count: int, offset: int) -> Dictionary:
@@ -126,6 +125,8 @@ func _get_plugin_logs(count: int, offset: int) -> Dictionary:
 
 func _get_game_logs(count: int, offset: int, include_details: bool, since_run_id: String = "") -> Dictionary:
 	var game_status := _current_game_status()
+	var helper_live := bool(game_status.get("helper_live", false))
+	var session_active := bool(game_status.get("session_active", false))
 	if _game_log_buffer == null:
 		return {
 			"data": {
@@ -136,7 +137,9 @@ func _get_game_logs(count: int, offset: int, include_details: bool, since_run_id
 				"offset": offset,
 				"run_id": "",
 				"current_run_id": "",
-				"is_running": false,
+				"is_running": session_active,
+				"helper_live": helper_live,
+				"session_active": session_active,
 				"game_status": game_status,
 				"dropped_count": 0,
 				"stale_run_id": false,
@@ -156,7 +159,9 @@ func _get_game_logs(count: int, offset: int, include_details: bool, since_run_id
 			"offset": offset,
 			"run_id": target_run_id,
 			"current_run_id": current_run_id,
-			"is_running": _is_game_log_running(game_status),
+			"is_running": session_active,
+			"helper_live": helper_live,
+			"session_active": session_active,
 			"game_status": game_status,
 			"dropped_count": _game_log_buffer.dropped_count(),
 			"stale_run_id": stale_run_id,
@@ -266,7 +271,9 @@ func _get_all_logs(count: int, offset: int, include_details: bool) -> Dictionary
 			"offset": offset,
 			"run_id": run_id,
 			"current_run_id": current_run_id,
-			"is_running": _is_game_log_running(game_status),
+			"is_running": bool(game_status.get("session_active", false)),
+			"helper_live": bool(game_status.get("helper_live", false)),
+			"session_active": bool(game_status.get("session_active", false)),
 			"game_status": game_status,
 			"dropped_count": dropped,
 		}
