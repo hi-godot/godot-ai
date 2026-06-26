@@ -21,15 +21,18 @@ def test_focus_in_uses_async_cooled_down_refresh_instead_of_blocking_sweep() -> 
     assert "_refresh_all_client_statuses()" not in _focus_in_block(source)
 
 
-def test_client_status_refresh_runs_on_background_thread_and_applies_deferred() -> None:
-    """Blocking client probes should run off-thread; UI updates should apply deferred."""
+def test_client_status_refresh_runs_on_background_thread_and_reaps_on_main() -> None:
+    """Blocking client probes should run off-thread; UI updates should be reaped on main."""
 
     source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
 
     assert "var _client_status_refresh_thread: Thread" in source
     assert "_client_status_refresh_thread.start" in source
     assert "ClientConfigurator.check_status" in source
-    assert 'call_deferred("_apply_client_status_refresh_results' in source
+    assert "func _poll_completed_client_status_refresh_thread(" in source
+    process_block = get_func_block(source, "func _process(_delta: float) -> void:")
+    assert "_poll_completed_client_status_refresh_thread()" in process_block
+    assert 'call_deferred("_apply_client_status_refresh_results' not in source
 
 
 def test_client_status_refresh_coalesces_and_manual_refresh_bypasses_cooldown() -> None:

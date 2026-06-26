@@ -938,7 +938,7 @@ func test_completed_action_thread_is_polled_and_applied() -> void:
 		OS.delay_msec(1)
 	_dock._client_action_threads[any_id] = thread
 
-	_dock._poll_completed_client_action_threads()
+	_dock._process(0.0)
 
 	var row: Dictionary = _dock._client_rows[any_id]
 	assert_false(_dock._client_action_threads.has(any_id),
@@ -978,7 +978,7 @@ func test_completed_status_refresh_thread_is_polled_and_applied() -> void:
 		OS.delay_msec(1)
 	_dock._client_status_refresh_thread = thread
 
-	_dock._poll_completed_client_status_refresh_thread()
+	_dock._process(0.0)
 
 	var row: Dictionary = _dock._client_rows[any_id]
 	assert_eq(_dock._client_status_refresh_thread, null,

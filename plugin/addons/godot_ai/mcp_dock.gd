@@ -281,6 +281,8 @@ func _exit_tree() -> void:
 ## drains directly because it has additional state-machine work
 ## (SHUTTING_DOWN sticky-set) that the install-time path must NOT inherit.
 func prepare_for_self_update_drain() -> void:
+	_poll_completed_client_status_refresh_thread()
+	_poll_completed_client_action_threads()
 	_drain_client_status_refresh_workers()
 	_drain_client_action_workers()
 
