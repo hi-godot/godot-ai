@@ -9,11 +9,13 @@ const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
 
 var _connection: McpConnection
 var _debugger_plugin
+var _editor_log_buffer
 
 
-func _init(connection: McpConnection = null, debugger_plugin = null) -> void:
+func _init(connection: McpConnection = null, debugger_plugin = null, editor_log_buffer = null) -> void:
 	_connection = connection
 	_debugger_plugin = debugger_plugin
+	_editor_log_buffer = editor_log_buffer
 
 
 func get_project_setting(params: Dictionary) -> Dictionary:
@@ -125,7 +127,7 @@ func run_project(params: Dictionary) -> Dictionary:
 		restore_setting = true
 
 	if _debugger_plugin != null:
-		_debugger_plugin.begin_game_run()
+		_debugger_plugin.begin_game_run(_editor_log_cursor(), _game_helper_autoload_expected())
 
 	match mode:
 		"main":
@@ -152,6 +154,14 @@ func run_project(params: Dictionary) -> Dictionary:
 			"reason": "Play/stop is a runtime action",
 		}
 	}
+
+
+func _editor_log_cursor() -> int:
+	return _editor_log_buffer.appended_total() if _editor_log_buffer != null else 0
+
+
+func _game_helper_autoload_expected() -> bool:
+	return ProjectSettings.has_setting("autoload/_mcp_game_helper")
 
 
 func stop_project(params: Dictionary) -> Dictionary:

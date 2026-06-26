@@ -80,6 +80,9 @@ var _game_run_token := 0
 var _ready_run_token := -1
 var _game_session_id := -1
 var _game_run_active := false
+var _game_run_started_msec := 0
+var _game_run_started_editor_cursor := 0
+var _game_helper_expected := true
 signal game_ready
 
 
@@ -107,12 +110,15 @@ func _setup_session(session_id: int) -> void:
 	_game_session_id = session_id
 
 
-func begin_game_run() -> void:
+func begin_game_run(editor_log_cursor: int = 0, helper_expected: bool = true) -> void:
 	_game_run_token += 1
 	_game_run_active = true
 	_game_ready = false
 	_ready_run_token = -1
 	_game_session_id = -1
+	_game_run_started_msec = Time.get_ticks_msec()
+	_game_run_started_editor_cursor = maxi(0, editor_log_cursor)
+	_game_helper_expected = helper_expected
 	if _log_buffer:
 		_log_buffer.log("[debug] game capture pending run token %d" % _game_run_token)
 
@@ -126,6 +132,34 @@ func end_game_run() -> void:
 
 func is_game_capture_ready() -> bool:
 	return _game_run_active and _game_ready and _ready_run_token == _game_run_token
+
+
+func get_game_status(now_msec: int = -1, ready_wait_sec: float = GAME_READY_WAIT_SEC) -> Dictionary:
+	var resolved_now := Time.get_ticks_msec() if now_msec < 0 else now_msec
+	var ready_wait_msec := maxi(0, int(ready_wait_sec * 1000.0))
+	var elapsed_msec := maxi(0, resolved_now - _game_run_started_msec) if _game_run_active else 0
+	## "stopped" also covers idle/never-ran; no game run is currently active.
+	var status := "stopped"
+	if _game_run_active:
+		if is_game_capture_ready():
+			status = "live"
+		elif not _game_helper_expected:
+			status = "no_helper"
+		elif elapsed_msec >= ready_wait_msec:
+			status = "not_live"
+		else:
+			status = "launching"
+	return {
+		"status": status,
+		"run_token": _game_run_token,
+		"active": _game_run_active,
+		"ready": is_game_capture_ready(),
+		"helper_expected": _game_helper_expected,
+		"run_started_msec": _game_run_started_msec,
+		"elapsed_msec": elapsed_msec,
+		"ready_wait_msec": ready_wait_msec,
+		"editor_log_cursor": _game_run_started_editor_cursor,
+	}
 
 
 func _capture(message: String, data: Array, session_id: int) -> bool:

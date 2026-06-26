@@ -1773,6 +1773,58 @@ func test_debugger_plugin_readiness_is_scoped_to_current_run() -> void:
 	assert_false(plugin.is_game_capture_ready(), "late hello after stop must not restore readiness")
 
 
+func test_debugger_plugin_game_status_tracks_run_lifecycle() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	var status := plugin.get_game_status()
+	assert_eq(status.status, "stopped")
+	assert_eq(status.active, false)
+	assert_eq(status.ready, false)
+
+	plugin.begin_game_run(42, true)
+	status = plugin.get_game_status(plugin._game_run_started_msec)
+	assert_eq(status.status, "launching")
+	assert_eq(status.run_token, 1)
+	assert_eq(status.active, true)
+	assert_eq(status.ready, false)
+	assert_eq(status.helper_expected, true)
+	assert_eq(status.editor_log_cursor, 42)
+
+	plugin._capture("mcp:hello", [], -1)
+	status = plugin.get_game_status()
+	assert_eq(status.status, "live")
+	assert_eq(status.ready, true)
+
+	plugin.begin_game_run(99, true)
+	status = plugin.get_game_status(plugin._game_run_started_msec)
+	assert_eq(status.status, "launching")
+	plugin._game_ready = true
+	status = plugin.get_game_status(plugin._game_run_started_msec)
+	assert_eq(status.status, "launching", "raw ready flag without the current token is stale")
+
+	var after_window := plugin._game_run_started_msec + int(McpDebuggerPlugin.GAME_READY_WAIT_SEC * 1000.0)
+	status = plugin.get_game_status(after_window - 1)
+	assert_eq(status.status, "launching", "run stays launching until the wait window is exhausted")
+	status = plugin.get_game_status(after_window)
+	assert_eq(status.status, "not_live", "wait window boundary is inclusive")
+	assert_eq(status.editor_log_cursor, 99)
+
+	plugin.end_game_run()
+	status = plugin.get_game_status()
+	assert_eq(status.status, "stopped")
+	assert_eq(status.active, false)
+	assert_eq(status.ready, false)
+
+
+func test_debugger_plugin_game_status_reports_no_helper_when_not_expected() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin.begin_game_run(7, false)
+	var after_window := plugin._game_run_started_msec + int(McpDebuggerPlugin.GAME_READY_WAIT_SEC * 1000.0)
+	var status := plugin.get_game_status(after_window)
+	assert_eq(status.status, "no_helper")
+	assert_eq(status.helper_expected, false)
+	assert_eq(status.editor_log_cursor, 7)
+
+
 func test_debugger_plugin_ignores_hello_from_stale_session() -> void:
 	var game_buf := McpGameLogBuffer.new()
 	var plugin := McpDebuggerPlugin.new(null, game_buf)
