@@ -619,6 +619,25 @@ func test_instantiate_resource_non_instantiable_project_class_is_wrong_type() ->
 		ErrorCodes.WRONG_TYPE)
 
 
+func test_instantiate_resource_tool_node_class_rejected_before_construction() -> void:
+	# Regression for the orphan-Node leak: a project class_name whose native base
+	# is NOT a Resource (here @tool extends Node) must be rejected BEFORE
+	# scr.new(). Because it is @tool, can_instantiate() is true, so the old
+	# construct-then-reject path ran _init() and leaked the orphan Node it never
+	# frees (Node is not ref-counted). The base-type gate
+	# (get_instance_base_type + is_parent_class) must reject it pre-construction.
+	# Precondition: the fixture IS instantiable here, so a WRONG_TYPE can only
+	# come from the pre-construction base-type gate, not from can_instantiate().
+	var tool_node := load("res://tests/mcp_tool_node_fixture.gd") as Script
+	assert_true(tool_node.can_instantiate(),
+		"fixture precondition: @tool script must be instantiable, so rejection must be pre-construction")
+	McpToolNodeFixture.init_count = 0
+	assert_is_error(ResourceHandler._instantiate_resource("McpToolNodeFixture"),
+		ErrorCodes.WRONG_TYPE)
+	assert_eq(McpToolNodeFixture.init_count, 0,
+		"_init must NOT run: the script must be rejected before scr.new()")
+
+
 func test_apply_properties_nested_failure_names_the_property() -> void:
 	# Routing the nested __class__ shortcut through _instantiate_resource must
 	# still name the offending property slot in the error, preserving the

@@ -235,12 +235,18 @@ static func _instantiate_resource(type_str: String) -> Variant:
 			var scr: Variant = load(script_path)
 			if not (scr is Script):
 				return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to load script class %s from %s" % [type_str, script_path])
+			# Reject non-Resource script classes BEFORE constructing them:
+			# scr.new() runs _init(), and an @tool class_name extending a
+			# non-RefCounted type (e.g. Node) would otherwise build — and leak —
+			# an orphan instance this path never frees. get_instance_base_type()
+			# resolves to the native base, so multi-level custom Resource
+			# hierarchies (B extends A extends Resource) still pass.
+			var base_type: StringName = scr.get_instance_base_type()
+			if not ClassDB.is_parent_class(base_type, "Resource"):
+				return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s is not a Resource type (extends %s)" % [type_str, base_type])
 			if not scr.can_instantiate():
 				return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s cannot be instantiated in the editor (abstract, or a non-@tool script — add @tool to instantiate it here)" % type_str)
-			var inst: Variant = scr.new()
-			if not (inst is Resource):
-				return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s is not a Resource type" % type_str)
-			return inst
+			return scr.new()
 	return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Unknown resource type: %s" % type_str)
 
 
