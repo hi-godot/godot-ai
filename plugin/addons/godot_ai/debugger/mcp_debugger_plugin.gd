@@ -64,6 +64,7 @@ const EVAL_PROBE_INTERVAL_SEC := 0.35
 
 var _log_buffer: McpLogBuffer
 var _game_log_buffer: McpGameLogBuffer
+var _editor_log_buffer: McpEditorLogBuffer
 
 ## Pending request_id -> {connection, timer, timeout_callable}.
 ## We retain the bound timeout lambda so `_clear_pending` can disconnect
@@ -86,9 +87,10 @@ var _game_helper_expected := true
 signal game_ready
 
 
-func _init(log_buffer: McpLogBuffer = null, game_log_buffer: McpGameLogBuffer = null) -> void:
+func _init(log_buffer: McpLogBuffer = null, game_log_buffer: McpGameLogBuffer = null, editor_log_buffer: McpEditorLogBuffer = null) -> void:
 	_log_buffer = log_buffer
 	_game_log_buffer = game_log_buffer
+	_editor_log_buffer = editor_log_buffer
 
 
 func _has_capture(prefix: String) -> bool:
@@ -160,6 +162,118 @@ func get_game_status(now_msec: int = -1, ready_wait_sec: float = GAME_READY_WAIT
 		"ready_wait_msec": ready_wait_msec,
 		"editor_log_cursor": _game_run_started_editor_cursor,
 	}
+
+
+func _explain_not_live(status: Dictionary, code: String = ErrorCodes.INTERNAL_ERROR) -> Dictionary:
+	var state := str(status.get("status", "stopped"))
+	var errors_info := _recent_editor_errors_since(int(status.get("editor_log_cursor", 0)))
+	var recent_errors: Array = errors_info.get("errors", [])
+	var recent_errors_scope := str(errors_info.get("scope", "none"))
+	var truncated := bool(errors_info.get("truncated", false))
+	var data := {
+		"game_status": status.duplicate(true),
+		"recent_errors": recent_errors,
+		"recent_errors_scope": recent_errors_scope,
+		"recent_errors_may_predate_run": recent_errors_scope == "retained_recent",
+		"recent_errors_truncated": truncated,
+	}
+	var message := ""
+	match state:
+		"not_live":
+			if not recent_errors.is_empty() and recent_errors_scope == "run":
+				message = "The game failed to load or crashed before the Godot AI game helper registered: %s. Check logs_read(source='editor', include_details=true)." % _format_editor_error_summary(recent_errors[0])
+				if truncated:
+					message += " Editor logs since this run may be truncated; showing retained errors."
+			elif not recent_errors.is_empty():
+				message = "The game is not responding and reported no load errors during this run. A recent editor error may be related, but may predate this run: %s. Check logs_read(source='editor', include_details=true)." % _format_editor_error_summary(recent_errors[0])
+			else:
+				message = "The game is not responding and reported no load errors before the helper-ready window elapsed. It may still be booting or may have failed silently; check logs_read(source='editor', include_details=true) and retry."
+		"no_helper":
+			message = "The running game has no _mcp_game_helper autoload, so game-side tools cannot connect. If this is a headless or custom-main-loop project, use editor_screenshot(source='viewport') where applicable. Otherwise, re-enable the plugin and relaunch the game."
+		"launching":
+			message = "The game is still starting (%.1fs elapsed); the Godot AI game helper has not registered yet. Retry shortly." % (float(status.get("elapsed_msec", 0)) / 1000.0)
+		"stopped":
+			message = "The game is not running. Start the project and retry the game-side tool."
+		_:
+			message = "The game-side tool could not confirm the game is live (status=%s). Check logs_read(source='editor', include_details=true) and retry." % state
+	var err := ErrorCodes.make(code, message)
+	var inner: Dictionary = err.get("error", {})
+	inner["data"] = data
+	err["error"] = inner
+	return err
+
+
+func _recent_editor_errors_since(cursor: int) -> Dictionary:
+	var out: Array[Dictionary] = []
+	var truncated := false
+	if _editor_log_buffer == null:
+		return {"errors": out, "truncated": false, "scope": "none"}
+	var captured: Dictionary = _editor_log_buffer.get_since(maxi(0, cursor), -1)
+	truncated = bool(captured.get("truncated", false))
+	for raw_entry in captured.get("entries", []):
+		var compact := _compact_editor_error(raw_entry)
+		if compact.is_empty():
+			continue
+		out.append(compact)
+		if out.size() >= 5:
+			break
+	if not out.is_empty():
+		return {"errors": out, "truncated": truncated, "scope": "run"}
+
+	for raw_entry in _reversed_entries(_editor_log_buffer.get_recent(McpEditorLogBuffer.MAX_LINES)):
+		var compact := _compact_editor_error(raw_entry, true)
+		if compact.is_empty():
+			continue
+		out.append(compact)
+		if out.size() >= 5:
+			break
+	if not out.is_empty():
+		return {"errors": out, "truncated": false, "scope": "retained_recent"}
+	return {"errors": out, "truncated": false, "scope": "none"}
+
+
+func _compact_editor_error(raw_entry: Variant, fallback_recent: bool = false) -> Dictionary:
+	if not raw_entry is Dictionary:
+		return {}
+	var entry := raw_entry as Dictionary
+	if str(entry.get("level", "info")) != "error":
+		return {}
+	var path := str(entry.get("path", ""))
+	if fallback_recent and _is_diagnostic_noise_path(path):
+		return {}
+	var compact := {
+		"source": "editor",
+		"level": "error",
+		"text": str(entry.get("text", "")),
+		"path": path,
+		"line": int(entry.get("line", 0)),
+		"function": str(entry.get("function", "")),
+	}
+	if entry.has("details"):
+		compact["details"] = entry["details"].duplicate(true)
+	return compact
+
+
+func _is_diagnostic_noise_path(path: String) -> bool:
+	return path.begins_with("res://addons/godot_ai/") or path.begins_with("res://tests/")
+
+
+func _reversed_entries(entries: Array[Dictionary]) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for i in range(entries.size() - 1, -1, -1):
+		out.append(entries[i])
+	return out
+
+
+func _format_editor_error_summary(entry: Dictionary) -> String:
+	var text := str(entry.get("text", "editor error"))
+	var path := str(entry.get("path", ""))
+	var line := int(entry.get("line", 0))
+	if not path.is_empty() and line > 0:
+		return "%s (%s:%d)" % [text, path, line]
+	if not path.is_empty():
+		return "%s (%s)" % [text, path]
+	return text
 
 
 func _capture(message: String, data: Array, session_id: int) -> bool:
@@ -296,8 +410,8 @@ func _wait_then_send(
 	while not is_game_capture_ready() and Time.get_ticks_msec() < deadline:
 		await tree.process_frame
 	if not is_game_capture_ready():
-		_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR,
-			"Game-side autoload never registered its debugger capture within %ds. Is the game actually running? Check Project Settings → Autoload for _mcp_game_helper." % int(GAME_READY_WAIT_SEC))
+		_send_error_response(connection, request_id,
+			_explain_not_live(get_game_status(-1, GAME_READY_WAIT_SEC), ErrorCodes.INTERNAL_ERROR))
 		return
 	_send_take_screenshot(tree, request_id, max_resolution, connection, timeout_sec)
 
@@ -391,16 +505,23 @@ func _on_timeout(request_id: String) -> void:
 	var connection: McpConnection = pending.connection
 	if connection == null or not is_instance_valid(connection):
 		return
-	_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR,
-		"Game screenshot timed out. The running game must include the _mcp_game_helper autoload (added automatically when the plugin is enabled — check Project Settings → Autoload). If the autoload is missing, re-enable the plugin and relaunch the game. For headless or custom-main-loop builds, use source='viewport' instead.")
+	var status := get_game_status(-1, GAME_READY_WAIT_SEC)
+	var err := ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
+		"Game screenshot timed out after reaching the game helper. The game may be busy or unable to render a frame. Check logs_read(source='game') and retry.")
+	if status.get("status", "") != "live":
+		err = _explain_not_live(status, ErrorCodes.INTERNAL_ERROR)
+	_send_error_response(connection, request_id, err)
 	if _log_buffer:
 		_log_buffer.log("[debug] !! screenshot timeout (%s)" % request_id)
 
 
 func _send_error(connection: McpConnection, request_id: String, code: String, message: String) -> void:
+	_send_error_response(connection, request_id, ErrorCodes.make(code, message))
+
+
+func _send_error_response(connection: McpConnection, request_id: String, err: Dictionary) -> void:
 	if connection == null or not is_instance_valid(connection):
 		return
-	var err := ErrorCodes.make(code, message)
 	connection.send_deferred_response(request_id, err)
 
 
@@ -481,8 +602,8 @@ func _wait_then_eval(
 		## but the game-side capture didn't register within the short wait. Fast
 		## and caller-actionable; classifying it apart from the opaque 10s hang
 		## keeps the INTERNAL_ERROR telemetry bucket meaning "the eval truly hung".
-		_send_error(connection, request_id, ErrorCodes.EVAL_GAME_NOT_READY,
-			"Game-side capture didn't register within %ds. The play session is already running, so the game is most likely still booting — wait a moment and retry. If it persists, the _mcp_game_helper autoload is missing or disabled (Project Settings → Autoload; added automatically when the plugin is enabled), or the game uses a custom main loop." % int(EVAL_READY_WAIT_SEC))
+		_send_error_response(connection, request_id,
+			_explain_not_live(get_game_status(-1, EVAL_READY_WAIT_SEC), ErrorCodes.EVAL_GAME_NOT_READY))
 		return
 	_send_eval(tree, code, request_id, connection, timeout_sec)
 
@@ -738,8 +859,8 @@ func _wait_then_game_command(
 	while not is_game_capture_ready() and Time.get_ticks_msec() < deadline:
 		await tree.process_frame
 	if not is_game_capture_ready():
-		_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR,
-			"Game-side autoload never registered its debugger capture within %ds. Is the game actually running?" % int(GAME_READY_WAIT_SEC))
+		_send_error_response(connection, request_id,
+			_explain_not_live(get_game_status(-1, GAME_READY_WAIT_SEC), ErrorCodes.INTERNAL_ERROR))
 		return
 	_send_game_command(tree, op, params, request_id, connection, timeout_sec)
 

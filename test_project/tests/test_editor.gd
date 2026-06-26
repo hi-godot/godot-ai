@@ -1825,6 +1825,125 @@ func test_debugger_plugin_game_status_reports_no_helper_when_not_expected() -> v
 	assert_eq(status.editor_log_cursor, 7)
 
 
+func test_debugger_plugin_explain_not_live_includes_run_scoped_editor_errors() -> void:
+	var editor_buf := McpEditorLogBuffer.new()
+	var cursor := editor_buf.appended_total()
+	editor_buf.append("error", "Parse Error: Expected expression", "res://broken.gd", 5, "")
+	var plugin := McpDebuggerPlugin.new(null, null, editor_buf)
+	plugin.begin_game_run(cursor, true)
+	var after_window := plugin._game_run_started_msec + int(McpDebuggerPlugin.EVAL_READY_WAIT_SEC * 1000.0)
+	var status := plugin.get_game_status(after_window, McpDebuggerPlugin.EVAL_READY_WAIT_SEC)
+
+	var err := plugin._explain_not_live(status, ErrorCodes.EVAL_GAME_NOT_READY)
+
+	assert_eq(err.error.code, ErrorCodes.EVAL_GAME_NOT_READY)
+	assert_contains(err.error.message, "failed to load or crashed")
+	assert_contains(err.error.message, "Parse Error: Expected expression")
+	assert_contains(err.error.message, "res://broken.gd:5")
+	assert_contains(err.error.message, "logs_read(source='editor'")
+	assert_eq(err.error.data.recent_errors.size(), 1)
+	assert_eq(err.error.data.recent_errors[0].path, "res://broken.gd")
+	assert_eq(err.error.data.recent_errors[0].line, 5)
+	assert_eq(err.error.data.recent_errors_scope, "run")
+	assert_eq(err.error.data.recent_errors_may_predate_run, false)
+	assert_eq(err.error.data.game_status.status, "not_live")
+
+
+func test_debugger_plugin_explain_not_live_without_error_stays_soft() -> void:
+	var editor_buf := McpEditorLogBuffer.new()
+	var plugin := McpDebuggerPlugin.new(null, null, editor_buf)
+	plugin.begin_game_run(editor_buf.appended_total(), true)
+	var after_window := plugin._game_run_started_msec + int(McpDebuggerPlugin.GAME_READY_WAIT_SEC * 1000.0)
+	var status := plugin.get_game_status(after_window, McpDebuggerPlugin.GAME_READY_WAIT_SEC)
+
+	var err := plugin._explain_not_live(status, ErrorCodes.INTERNAL_ERROR)
+
+	assert_contains(err.error.message, "not responding")
+	assert_contains(err.error.message, "reported no load errors")
+	assert_false(err.error.message.contains("crashed"), "no correlated error must not claim a crash")
+	assert_eq(err.error.data.recent_errors.size(), 0)
+	assert_eq(err.error.data.recent_errors_scope, "none")
+
+
+func test_debugger_plugin_explain_not_live_surfaces_retained_editor_error_softly() -> void:
+	var editor_buf := McpEditorLogBuffer.new()
+	editor_buf.append("error", "Parse Error: Expected expression", "res://broken_before_run.gd", 9, "")
+	var plugin := McpDebuggerPlugin.new(null, null, editor_buf)
+	plugin.begin_game_run(editor_buf.appended_total(), true)
+	var after_window := plugin._game_run_started_msec + int(McpDebuggerPlugin.GAME_READY_WAIT_SEC * 1000.0)
+	var status := plugin.get_game_status(after_window, McpDebuggerPlugin.GAME_READY_WAIT_SEC)
+
+	var err := plugin._explain_not_live(status, ErrorCodes.INTERNAL_ERROR)
+
+	assert_contains(err.error.message, "not responding")
+	assert_contains(err.error.message, "may be related")
+	assert_contains(err.error.message, "may predate this run")
+	assert_contains(err.error.message, "res://broken_before_run.gd:9")
+	assert_false(err.error.message.contains("failed to load or crashed"), "retained errors must not claim run causation")
+	assert_eq(err.error.data.recent_errors.size(), 1)
+	assert_eq(err.error.data.recent_errors[0].path, "res://broken_before_run.gd")
+	assert_eq(err.error.data.recent_errors_scope, "retained_recent")
+	assert_eq(err.error.data.recent_errors_may_predate_run, true)
+
+
+func test_debugger_plugin_explain_not_live_ignores_retained_test_errors() -> void:
+	var editor_buf := McpEditorLogBuffer.new()
+	editor_buf.append("error", "Parse Error: Expected conditional expression", "res://tests/test_runner.gd", 86, "")
+	var plugin := McpDebuggerPlugin.new(null, null, editor_buf)
+	plugin.begin_game_run(editor_buf.appended_total(), true)
+	var after_window := plugin._game_run_started_msec + int(McpDebuggerPlugin.GAME_READY_WAIT_SEC * 1000.0)
+	var status := plugin.get_game_status(after_window, McpDebuggerPlugin.GAME_READY_WAIT_SEC)
+
+	var err := plugin._explain_not_live(status, ErrorCodes.INTERNAL_ERROR)
+
+	assert_contains(err.error.message, "reported no load errors")
+	assert_eq(err.error.data.recent_errors.size(), 0)
+	assert_eq(err.error.data.recent_errors_scope, "none")
+
+
+func test_debugger_plugin_explain_not_live_preserves_no_helper_guidance() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin.begin_game_run(0, false)
+	var after_window := plugin._game_run_started_msec + int(McpDebuggerPlugin.GAME_READY_WAIT_SEC * 1000.0)
+	var status := plugin.get_game_status(after_window, McpDebuggerPlugin.GAME_READY_WAIT_SEC)
+
+	var err := plugin._explain_not_live(status, ErrorCodes.INTERNAL_ERROR)
+
+	assert_contains(err.error.message, "_mcp_game_helper")
+	assert_contains(err.error.message, "source='viewport'")
+	assert_false(err.error.message.contains("failed to load"), "no-helper projects must not be framed as load failures")
+	assert_eq(err.error.data.game_status.status, "no_helper")
+
+
+func test_debugger_plugin_explain_not_live_launching_asks_to_retry() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin.begin_game_run(0, true)
+	var status := plugin.get_game_status(plugin._game_run_started_msec, McpDebuggerPlugin.GAME_READY_WAIT_SEC)
+
+	var err := plugin._explain_not_live(status, ErrorCodes.INTERNAL_ERROR)
+
+	assert_contains(err.error.message, "still starting")
+	assert_contains(err.error.message, "Retry shortly")
+	assert_eq(err.error.data.game_status.status, "launching")
+
+
+func test_debugger_plugin_explain_not_live_marks_truncated_editor_errors() -> void:
+	var editor_buf := McpEditorLogBuffer.new()
+	var cursor := 0
+	for i in range(McpEditorLogBuffer.MAX_LINES + 2):
+		editor_buf.append("error", "Parse Error %d" % i, "res://broken_%d.gd" % i, i + 1, "")
+	var plugin := McpDebuggerPlugin.new(null, null, editor_buf)
+	plugin.begin_game_run(cursor, true)
+	var after_window := plugin._game_run_started_msec + int(McpDebuggerPlugin.GAME_READY_WAIT_SEC * 1000.0)
+	var status := plugin.get_game_status(after_window, McpDebuggerPlugin.GAME_READY_WAIT_SEC)
+
+	var err := plugin._explain_not_live(status, ErrorCodes.INTERNAL_ERROR)
+
+	assert_eq(err.error.data.recent_errors_truncated, true)
+	assert_contains(err.error.message, "may be truncated")
+	assert_eq(err.error.data.recent_errors.size(), 5, "recent errors are capped")
+
+
 func test_debugger_plugin_ignores_hello_from_stale_session() -> void:
 	var game_buf := McpGameLogBuffer.new()
 	var plugin := McpDebuggerPlugin.new(null, game_buf)
