@@ -93,9 +93,10 @@ def test_dock_dispatches_configure_and_remove_to_worker_thread() -> None:
     # The dispatch funnel must exist and route the click into a worker.
     assert "func _dispatch_client_action(" in dock_source
     assert "Thread.new()" in dock_source
-    # The deferred apply lives on main; the worker only does the
-    # blocking call and a call_deferred handoff.
-    assert 'call_deferred("_apply_client_action_result"' in dock_source
+    # The apply still lives on main, but completion is reaped from
+    # `_process` instead of trusting a worker-thread call_deferred handoff.
+    assert "func _poll_completed_client_action_threads(" in dock_source
+    assert 'call_deferred("_apply_client_action_result"' not in dock_source
     assert "func _run_client_action_worker(" in dock_source
     # The two button handlers should NOT call McpClientConfigurator
     # directly — that would re-introduce the main-thread block. They

@@ -148,21 +148,17 @@ static var _orphaned_client_status_refresh_threads: Array[Thread] = []
 
 ## Per-row worker state for Configure / Remove. Issue #239: shelling out
 ## to a hung CLI on main hangs the editor. We dispatch each click to its
-## own thread (one slot per client) and apply the result via call_deferred
-## once the subprocess returns or the wall-clock budget in McpCliExec
-## kicks in. The buttons stay disabled while the slot is busy so the user
-## can't queue a re-click on the same row.
+## own thread (one slot per client), then `_process` reaps completed workers
+## and applies returned payloads on main. The buttons stay disabled while
+## the slot is busy so the user can't queue a re-click on the same row.
 ##
 ## Per-client (not single-slot) so Configure-all can fan out — the
 ## workers are independent, only the row UI is shared, and McpCliExec
 ## bounds the wall-clock for each.
 ##
-## No orphan-thread list (unlike the refresh worker): action threads
-## never get abandoned mid-flight. McpCliExec's wall-clock budget caps
-## the worst case at ~10s, so the `_exit_tree` / `McpUpdateManager`
-## install-time drain blocks briefly and finishes — there's no path that
-## "gives up" on an action thread the way `_abandon_client_status_refresh_thread`
-## does for the refresh worker.
+## A watchdog can abandon a slot when a worker fails to report completion.
+## The thread object is retained in `_orphaned_client_action_threads` until
+## it finishes so GDScript does not destroy a live Thread object.
 var _client_action_threads: Dictionary = {}
 var _client_action_generations: Dictionary = {}
 var _client_action_started_msec: Dictionary = {}
@@ -246,6 +242,8 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	_prune_orphaned_client_status_refresh_threads()
 	_prune_orphaned_client_action_threads()
+	_poll_completed_client_status_refresh_thread()
+	_poll_completed_client_action_threads()
 	_check_client_status_refresh_timeout()
 	_check_client_action_timeouts()
 	if _connection == null:
@@ -321,10 +319,9 @@ func _drain_client_action_workers() -> void:
 	## teardown still blocks because GDScript's Thread API has no kill/timeout
 	## primitive and destroying a live Thread corrupts the VM.
 	##
-	## Generation-bumped per-row so any pending `call_deferred(
-	## "_apply_client_action_result")` from a worker that finished after we
-	## started draining detects the generation mismatch and short-circuits
-	## without touching freed UI state.
+	## Generation-bumped per-row so any result from a worker that finished
+	## after we started draining detects the generation mismatch and
+	## short-circuits without touching freed UI state.
 	##
 	## After draining, restore the row UI for any in-flight rows: bare
 	## `_client_action_threads.clear()` would leave the dock stuck showing
@@ -1645,18 +1642,51 @@ func _dispatch_client_action(client_id: String, action: String) -> void:
 		_refresh_clients_summary()
 
 
-func _run_client_action_worker(client_id: String, action: String, server_url: String, generation: int) -> void:
+func _run_client_action_worker(client_id: String, action: String, server_url: String, generation: int) -> Dictionary:
 	var result: Dictionary
 	if action == "remove":
 		result = ClientConfigurator.remove(client_id, server_url)
 	else:
 		result = ClientConfigurator.configure(client_id, server_url)
-	if _refresh_state != ClientRefreshStateScript.SHUTTING_DOWN:
-		call_deferred("_apply_client_action_result", client_id, action, result, generation)
+	return {
+		"client_id": client_id,
+		"action": action,
+		"result": result,
+		"generation": generation,
+	}
+
+
+func _poll_completed_client_action_threads() -> void:
+	for client_id in _client_action_threads.keys():
+		var thread: Thread = _client_action_threads[client_id]
+		if thread == null or thread.is_alive():
+			continue
+		var payload: Variant = thread.wait_to_finish()
+		_client_action_threads[client_id] = null
+		if payload is Dictionary:
+			var data := payload as Dictionary
+			var result: Dictionary = data.get("result", {})
+			_apply_client_action_result(
+				String(data.get("client_id", client_id)),
+				String(data.get("action", _client_action_names.get(client_id, "configure"))),
+				result,
+				int(data.get("generation", _client_action_generations.get(client_id, 0)))
+			)
+		else:
+			_apply_client_action_result(
+				String(client_id),
+				String(_client_action_names.get(client_id, "configure")),
+				{"status": "error", "message": "worker returned no result"},
+				int(_client_action_generations.get(client_id, 0))
+			)
 
 
 func _apply_client_action_result(client_id: String, action: String, result: Dictionary, generation: int) -> void:
 	if int(_client_action_generations.get(client_id, 0)) != generation:
+		if _client_action_threads.get(client_id, null) == null:
+			_client_action_threads.erase(client_id)
+			_client_action_started_msec.erase(client_id)
+			_client_action_names.erase(client_id)
 		return
 	if _refresh_state == ClientRefreshStateScript.SHUTTING_DOWN:
 		return
@@ -1664,9 +1694,9 @@ func _apply_client_action_result(client_id: String, action: String, result: Dict
 		var t: Thread = _client_action_threads[client_id]
 		if t != null:
 			t.wait_to_finish()
-		_client_action_threads.erase(client_id)
-		_client_action_started_msec.erase(client_id)
-		_client_action_names.erase(client_id)
+	_client_action_threads.erase(client_id)
+	_client_action_started_msec.erase(client_id)
+	_client_action_names.erase(client_id)
 	_finalize_action_buttons(client_id)
 	if _server_blocks_client_health():
 		_apply_row_status(client_id, Client.Status.ERROR, _server_blocked_client_message())
@@ -2256,8 +2286,8 @@ func _warm_strategy_bytecode() -> void:
 
 func _begin_client_status_refresh_run() -> int:
 	## Marks a refresh as starting and returns the new generation token.
-	## Generation is bumped here (not at completion) so that a worker callback
-	## arriving after `_abandon_client_status_refresh_thread` or `_exit_tree`
+	## Generation is bumped here (not at completion) so that a worker result
+	## reaped after `_abandon_client_status_refresh_thread` or `_exit_tree`
 	## fires can be detected as stale via generation mismatch.
 	_refresh_state = ClientRefreshStateScript.RUNNING
 	_client_status_refresh_pending = false
@@ -2270,7 +2300,7 @@ func _begin_client_status_refresh_run() -> int:
 
 func _finalize_completed_refresh() -> void:
 	## Stamps cooldown and clears in-flight state. Called at the end of every
-	## refresh that successfully applied results — the worker callback path
+	## refresh that successfully applied results — the worker reaping path
 	## and the no-CLI fast path in `_perform_initial_client_status_refresh`.
 	_last_client_status_refresh_completed_msec = Time.get_ticks_msec()
 	if _refresh_state != ClientRefreshStateScript.SHUTTING_DOWN:
@@ -2397,7 +2427,7 @@ func _retry_deferred_client_status_refresh() -> void:
 		_request_client_status_refresh(force)
 
 
-func _run_client_status_refresh_worker(client_probes: Array[Dictionary], server_url: String, generation: int) -> void:
+func _run_client_status_refresh_worker(client_probes: Array[Dictionary], server_url: String, generation: int) -> Dictionary:
 	var results: Dictionary = {}
 	for probe in client_probes:
 		var client_id := String(probe.get("id", ""))
@@ -2414,8 +2444,25 @@ func _run_client_status_refresh_worker(client_probes: Array[Dictionary], server_
 			"installed": installed,
 			"error_msg": details.get("error_msg", ""),
 		}
-	if _refresh_state != ClientRefreshStateScript.SHUTTING_DOWN:
-		call_deferred("_apply_client_status_refresh_results", results, generation)
+	return {"results": results, "generation": generation}
+
+
+func _poll_completed_client_status_refresh_thread() -> void:
+	if _client_status_refresh_thread == null:
+		return
+	if _client_status_refresh_thread.is_alive():
+		return
+	var payload: Variant = _client_status_refresh_thread.wait_to_finish()
+	_client_status_refresh_thread = null
+	if payload is Dictionary:
+		var data := payload as Dictionary
+		var results: Dictionary = data.get("results", {})
+		_apply_client_status_refresh_results(
+			results,
+			int(data.get("generation", _client_status_refresh_generation))
+		)
+	else:
+		_apply_client_status_refresh_results({}, _client_status_refresh_generation)
 
 
 func _apply_client_status_refresh_results(results: Dictionary, generation: int) -> void:

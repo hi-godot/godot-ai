@@ -69,6 +69,10 @@ static func _finished_thread_noop() -> void:
 	pass
 
 
+static func _finished_thread_payload(payload: Dictionary) -> Dictionary:
+	return payload
+
+
 var _dock: Node
 
 
@@ -890,7 +894,7 @@ func test_dispatch_client_action_noop_when_slot_already_in_flight() -> void:
 	## Double-click guard: a second click while the first worker is still
 	## running must not start a second thread on the same row. Without
 	## this, the row's button/label state would race between the two
-	## workers' deferred callbacks.
+	## workers' completion payloads.
 	_dock._build_ui()
 	var any_id := _first_client_id()
 	if any_id.is_empty():
@@ -905,6 +909,86 @@ func test_dispatch_client_action_noop_when_slot_already_in_flight() -> void:
 	assert_eq(_dock._client_action_threads[any_id], sentinel,
 		"Dispatch must leave the existing slot untouched while in flight")
 	_dock._client_action_threads.erase(any_id)
+
+
+func test_completed_action_thread_is_polled_and_applied() -> void:
+	## Regression for the dock showing "Configure did not report completion"
+	## even though the worker finished and the config file landed. The main
+	## thread must reap finished action workers directly instead of relying on
+	## a worker-thread deferred callback.
+	_dock._build_ui()
+	var any_id := _first_client_id()
+	if any_id.is_empty():
+		skip("No clients registered")
+		return
+	_dock._set_row_action_in_flight(any_id, "configure")
+	_dock._client_action_generations[any_id] = 12
+	_dock._client_action_started_msec[any_id] = Time.get_ticks_msec()
+	_dock._client_action_names[any_id] = "configure"
+	var payload := {
+		"client_id": any_id,
+		"action": "configure",
+		"result": {"status": "ok"},
+		"generation": 12,
+	}
+	var thread := Thread.new()
+	var err := thread.start(Callable(self, "_finished_thread_payload").bind(payload))
+	assert_eq(err, OK, "Completed action fixture thread should start")
+	while thread.is_alive():
+		OS.delay_msec(1)
+	_dock._client_action_threads[any_id] = thread
+
+	_dock._poll_completed_client_action_threads()
+
+	var row: Dictionary = _dock._client_rows[any_id]
+	assert_false(_dock._client_action_threads.has(any_id),
+		"Polling must clear the completed action slot")
+	assert_eq(row.get("status"), McpClient.Status.CONFIGURED,
+		"Completed configure payload must repaint the row as configured")
+	assert_contains(_dock._clients_summary_label.text, "1 /",
+		"Summary should reconcile as soon as the completed action is reaped")
+
+
+func test_completed_status_refresh_thread_is_polled_and_applied() -> void:
+	## A completed status worker with a missed callback used to strand the
+	## dock in "(checking...)" with stale row statuses. Reaping the Thread
+	## return value from `_process` must apply the snapshot and finalize the
+	## refresh state.
+	_dock._build_ui()
+	var any_id := _first_client_id()
+	if any_id.is_empty():
+		skip("No clients registered")
+		return
+	_dock._client_status_refresh_generation = 21
+	_dock._refresh_state = McpClientRefreshState.RUNNING
+	var payload := {
+		"generation": 21,
+		"results": {
+			any_id: {
+				"status": McpClient.Status.CONFIGURED,
+				"installed": true,
+				"error_msg": "",
+			},
+		},
+	}
+	var thread := Thread.new()
+	var err := thread.start(Callable(self, "_finished_thread_payload").bind(payload))
+	assert_eq(err, OK, "Completed status fixture thread should start")
+	while thread.is_alive():
+		OS.delay_msec(1)
+	_dock._client_status_refresh_thread = thread
+
+	_dock._poll_completed_client_status_refresh_thread()
+
+	var row: Dictionary = _dock._client_rows[any_id]
+	assert_eq(_dock._client_status_refresh_thread, null,
+		"Polling must clear the completed status refresh thread")
+	assert_eq(_dock._refresh_state, McpClientRefreshState.IDLE,
+		"Completed status refresh should finalize back to idle")
+	assert_eq(row.get("status"), McpClient.Status.CONFIGURED,
+		"Status refresh payload must repaint the row")
+	assert_false(_dock._clients_summary_label.text.contains("checking"),
+		"Summary must drop the checking badge after applying the payload")
 
 
 func test_apply_status_refresh_results_skips_rows_with_in_flight_action() -> void:
@@ -941,8 +1025,7 @@ func test_drain_client_action_workers_clears_threads_and_bumps_generation() -> v
 	## `_drain_dock_workers`) before extracting the release zip, same
 	## reason as the refresh worker drain — a worker mid-call into a
 	## half-overwritten script SIGABRTs the editor. The drain bumps
-	## generation per-row so any pending `call_deferred(
-	## "_apply_client_action_result")` from a worker that finished after
+	## generation per-row so any result from a worker that finished after
 	## the drain detects the mismatch and short-circuits before touching
 	## restored UI state.
 	_dock._client_action_threads["sentinel-id"] = null
@@ -951,7 +1034,7 @@ func test_drain_client_action_workers_clears_threads_and_bumps_generation() -> v
 	assert_true(_dock._client_action_threads.is_empty(),
 		"Drain must empty the action-thread map so a follow-up dispatch starts fresh")
 	assert_eq(int(_dock._client_action_generations.get("sentinel-id", 0)), 8,
-		"Drain must bump generation so any late call_deferred from the drained worker is rejected as stale")
+		"Drain must bump generation so any late result from the drained worker is rejected as stale")
 
 
 func test_drain_client_action_workers_restores_in_flight_row_buttons() -> void:
