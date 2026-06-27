@@ -385,18 +385,31 @@ def find_plugin_version() -> str:
 
 
 def terminate_proc(proc: subprocess.Popen | None, label: str) -> None:
-    """SIGTERM (or terminate on Windows) then escalate to kill on timeout."""
+    """SIGTERM (or terminate on Windows) then escalate to kill on timeout.
+
+    Resilient to the child exiting between our `poll()` and the signal: that
+    race makes `send_signal`/`terminate`/`kill` raise `ProcessLookupError`
+    (a subclass of OSError), which — since this runs from a `finally` block —
+    would turn an otherwise-passing smoke into a failure. Reap after `kill()`
+    too, so the child doesn't linger as a zombie."""
     if proc is None or proc.poll() is not None:
         return
     print(f"terminating {label} pid={proc.pid}")
-    if platform.system() == "Windows":
-        proc.terminate()
-    else:
-        proc.send_signal(signal.SIGTERM)
     try:
+        if platform.system() == "Windows":
+            proc.terminate()
+        else:
+            proc.send_signal(signal.SIGTERM)
         proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        try:
+            proc.kill()
+            proc.wait(timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    except OSError:
+        # Already exited between poll() and the signal — nothing to reap.
+        pass
 
 
 def dump_failure(
