@@ -55,6 +55,7 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
   - `serve-this-worktree` / `open-godot-here` — point dev server / editor at the current worktree
   - `local-self-update-smoke` — interactive local fixture for self-update changes
   - `ci-start-server`, `ci-godot-tests`, `ci-reload-test`, `ci-quit-test`, `ci-check-gdscript` — CI scripts
+  - `ci-stale-server-smoke` — live cross-OS port-8000 conflict smoke. `--mode stale` (default) plants a godot-ai server simulator and asserts the recoverable kill+respawn path; `--mode foreign` plants a non-godot-ai listener and asserts the terminal, non-recoverable INCOMPATIBLE path (no kill, suggested free port logged). Drives the `stale-server-smoke` and `foreign-server-smoke` CI jobs.
   - `ci-find-regression-range` — helper for identifying CI regression windows
 
 ## Key conventions
