@@ -233,15 +233,16 @@ static func _instantiate_resource(type_str: String) -> Variant:
 		if entry.get("class", "") == type_str:
 			var script_path: String = entry.get("path", "")
 			var scr: Variant = load(script_path)
-			if not (scr is Script):
-				return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to load script class %s from %s" % [type_str, script_path])
 			# Reject non-Resource script classes BEFORE constructing them:
 			# scr.new() runs _init(), and an @tool class_name extending a
 			# non-RefCounted type (e.g. Node) would otherwise build — and leak —
 			# an orphan instance this path never frees. get_instance_base_type()
 			# resolves to the native base, so multi-level custom Resource
 			# hierarchies (B extends A extends Resource) still pass.
-			var base_type: StringName = scr.get_instance_base_type()
+			var base_or_err: Variant = _script_base_type_or_error(scr, type_str, script_path)
+			if base_or_err is Dictionary:
+				return base_or_err
+			var base_type: StringName = base_or_err
 			if not ClassDB.is_parent_class(base_type, "Resource"):
 				return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s is not a Resource type (extends %s)" % [type_str, base_type])
 			if not scr.can_instantiate():
@@ -264,9 +265,17 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary) ->
 				if prop.get("usage", 0) & PROPERTY_USAGE_EDITOR:
 					valid.append(prop.name)
 			valid.sort()
+			# Name the script's class_name (e.g. MyTestResource) rather than the
+			# native base (Resource) so the hint names the type the agent created,
+			# and point at the real MCP verb — resource_manage(op="get_info") now
+			# answers for project class_name Resources too.
+			var type_label := res.get_class()
+			var res_script: Variant = res.get_script()
+			if res_script is Script and not String(res_script.get_global_name()).is_empty():
+				type_label = String(res_script.get_global_name())
 			var err := ErrorCodes.make(
 				ErrorCodes.PROPERTY_NOT_ON_CLASS,
-				"Property '%s' not found on %s. Call resource_get_info('%s') to list available properties." % [key, res.get_class(), res.get_class()]
+				"Property '%s' not found on %s. Call resource_manage(op=\"get_info\", params={\"type\": \"%s\"}) to list available properties." % [key, type_label, type_label]
 			)
 			err["error"]["data"] = {"valid_properties": valid}
 			return err
@@ -384,6 +393,12 @@ func get_resource_info(params: Dictionary) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: type")
 
 	if not ClassDB.class_exists(type_str):
+		# Project class_name Resources aren't in ClassDB; resolve them through the
+		# global script-class registry so get_info answers for the same custom
+		# types resource_create can make. Read-only — never instantiates.
+		var custom_info: Variant = _custom_resource_info(type_str)
+		if custom_info != null:
+			return custom_info
 		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Unknown resource type: %s" % type_str)
 	if ClassDB.is_parent_class(type_str, "Node"):
 		return ErrorCodes.make(
@@ -419,3 +434,82 @@ func get_resource_info(params: Dictionary) -> Dictionary:
 		data["concrete_subclasses"] = class_info.concrete_inheritors
 
 	return {"data": data}
+
+
+## Resolve a loaded global-class script to its native base type, or an error if
+## the script failed to load (not a Script) or to compile (empty base type).
+## Shared by the create and get_info custom-Resource paths so both report a
+## compile failure rather than a misleading "is not a Resource type (extends )".
+static func _script_base_type_or_error(scr: Variant, type_str: String, script_path: String) -> Variant:
+	if not (scr is Script):
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to load script class %s from %s" % [type_str, script_path])
+	var base_type: StringName = scr.get_instance_base_type()
+	if String(base_type).is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "%s failed to compile or parse (script %s)" % [type_str, script_path])
+	return base_type
+
+
+## get_info for a project `class_name` Resource (not in ClassDB). Returns an info
+## dict, an error dict (for a class_name whose native base is not a Resource), or
+## null if `type_str` is not a registered global class. Read-only: resolves
+## properties from the script + its native base WITHOUT instantiating (no _init()).
+static func _custom_resource_info(type_str: String) -> Variant:
+	for entry in ProjectSettings.get_global_class_list():
+		if entry.get("class", "") != type_str:
+			continue
+		var script_path: String = entry.get("path", "")
+		var scr: Variant = load(script_path)
+		var base_or_err: Variant = _script_base_type_or_error(scr, type_str, script_path)
+		if base_or_err is Dictionary:
+			return base_or_err
+		var base_type: StringName = base_or_err
+		if not ClassDB.is_parent_class(base_type, "Resource"):
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s is not a Resource type (extends %s)" % [type_str, base_type])
+		var can_instantiate: bool = scr.can_instantiate()
+		# Inherited (native) properties come from the engine base via ClassDB...
+		var class_info := ClassIntrospection.build(String(base_type), {
+			"sections": ["properties"],
+			"include_inherited": true,
+			"limit": 0,
+		})
+		var props: Array = []
+		for native_prop in class_info.properties:
+			props.append(native_prop)
+		# ...and the script's own (and inherited script) exported properties come
+		# from the Script itself, so we never construct the resource. A real
+		# default isn't available without instantiating, so script props carry an
+		# explicit null — keeping one uniform key set across the array (native
+		# props carry their real default).
+		for raw_prop in scr.get_script_property_list():
+			var prop: Dictionary = raw_prop
+			var usage := int(prop.get("usage", 0))
+			if not (usage & PROPERTY_USAGE_EDITOR):
+				continue
+			props.append({
+				"name": str(prop.get("name", "")),
+				"type": type_string(int(prop.get("type", TYPE_NIL))),
+				"class_name": str(prop.get("class_name", "")),
+				"hint": int(prop.get("hint", PROPERTY_HINT_NONE)),
+				"hint_string": str(prop.get("hint_string", "")),
+				"usage": usage,
+				"default": null,
+			})
+		props.sort_custom(func(a, b): return a.name < b.name)
+		# parent_class is the immediate script parent when there is one (so a
+		# multi-level chain B -> A -> Resource reports A), else the native base.
+		var parent_name := String(base_type)
+		var base_script: Variant = scr.get_base_script()
+		if base_script is Script and not String(base_script.get_global_name()).is_empty():
+			parent_name = String(base_script.get_global_name())
+		return {"data": {
+			"type": type_str,
+			"parent_class": parent_name,
+			"can_instantiate": can_instantiate,
+			# is_abstract reflects real abstractness (the @abstract annotation),
+			# NOT editor-instantiability — a non-@tool concrete Resource has
+			# can_instantiate()==false in-editor but is not abstract.
+			"is_abstract": scr.is_abstract(),
+			"properties": props,
+			"property_count": props.size(),
+		}}
+	return null
