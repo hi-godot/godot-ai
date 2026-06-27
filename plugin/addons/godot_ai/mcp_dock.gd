@@ -40,6 +40,10 @@ const LogViewerScript := preload("res://addons/godot_ai/dock_panels/log_viewer.g
 const PortPickerPanelScript := preload("res://addons/godot_ai/dock_panels/port_picker_panel.gd")
 
 const DEV_MODE_SETTING := "godot_ai/dev_mode"
+## "Change the port + reconfigure your clients" guide. Surfaced from the crash
+## panel when a foreign process holds the HTTP port — the one piece of recovery
+## (per-client config rewrite) that doesn't fit in the inline crash body.
+const PORT_CONFLICT_DOCS := "https://github.com/hi-godot/godot-ai/blob/main/docs/port-conflicts.md"
 const CLIENT_STATUS_REFRESH_COOLDOWN_MSEC := 15 * 1000
 const CLIENT_STATUS_REFRESH_TIMEOUT_MSEC := 30 * 1000
 const CLIENT_ACTION_TIMEOUT_MSEC := 30 * 1000
@@ -195,6 +199,11 @@ var _crash_panel: VBoxContainer
 var _crash_output: RichTextLabel
 var _crash_restart_btn: Button
 var _crash_reload_btn: Button
+## Help link — visible only for the genuinely-foreign-occupant INCOMPATIBLE
+## case (no `can_recover_incompatible` proof). The inline body names a free
+## port; this button carries the per-client reconfigure steps that don't fit
+## inline. See `PORT_CONFLICT_DOCS` and `_update_crash_panel`.
+var _crash_docs_btn: Button
 ## Port-picker escape hatch — visible inside the crash panel when the root
 ## cause is port contention (PORT_EXCLUDED or FOREIGN_PORT). The dock writes
 ## the EditorSetting and reloads the plugin in response to the panel's
@@ -547,6 +556,13 @@ func _build_ui() -> void:
 	_crash_reload_btn.tooltip_text = "Re-run the spawn after fixing the underlying issue"
 	_crash_reload_btn.pressed.connect(_on_reload_plugin)
 	_crash_panel.add_child(_crash_reload_btn)
+
+	_crash_docs_btn = Button.new()
+	_crash_docs_btn.text = "How to change the port"
+	_crash_docs_btn.tooltip_text = "Open the guide: change godot_ai/http_port and reconfigure your MCP clients"
+	_crash_docs_btn.visible = false
+	_crash_docs_btn.pressed.connect(func(): OS.shell_open(PORT_CONFLICT_DOCS))
+	_crash_panel.add_child(_crash_docs_btn)
 
 	_crash_panel.add_child(HSeparator.new())
 	add_child(_crash_panel)
@@ -940,6 +956,15 @@ func _update_crash_panel(server_status: Dictionary) -> void:
 			not show_recovery_restart
 			and state != ServerStateScript.INCOMPATIBLE
 		)
+	## Docs link only for the genuinely-foreign occupant: a recoverable
+	## (older godot-ai) server gets Restart Server instead, and the inline
+	## body already names a free port — the link carries the per-client
+	## reconfigure steps that don't fit inline.
+	if _crash_docs_btn != null:
+		_crash_docs_btn.visible = (
+			state == ServerStateScript.INCOMPATIBLE
+			and not bool(server_status.get("can_recover_incompatible", false))
+		)
 
 	var port_picker_visible := (
 		state == ServerStateScript.PORT_EXCLUDED
@@ -969,9 +994,16 @@ static func _crash_body_for_state(state: int, server_status: Dictionary = {}) ->
 				if not message.is_empty():
 					return "%s Click Restart Server below to replace it with godot-ai v%s." % [message, expected]
 				return "Port %d is occupied by an older godot-ai server. Click Restart Server below to replace it with godot-ai v%s." % [port, expected]
+			## Genuinely foreign occupant (no recovery proof). Name a concrete
+			## free port so the user doesn't have to hunt for one, and let the
+			## crash panel's "How to change the port" link carry the per-client
+			## reconfigure steps. `suggest_free_port` already routes through the
+			## Windows reservation table, so the named port won't itself fail
+			## with WinError 10013.
+			var hint := _free_port_hint(port)
 			if not message.is_empty():
-				return message
-			return "Port %d is occupied by an incompatible server. Stop it or change both HTTP and WS ports." % port
+				return "%s %s" % [message, hint]
+			return "Port %d is occupied by an incompatible server. %s" % [port, hint]
 		ServerStateScript.FOREIGN_PORT:
 			return "Another process is already bound to port %d. Pick a free port or stop the other process." % port
 		ServerStateScript.CRASHED:
@@ -987,6 +1019,15 @@ static func _crash_body_for_state(state: int, server_status: Dictionary = {}) ->
 			return "No godot-ai server found. Install `uv` via the Setup panel above, or run `pip install godot-ai`."
 		_:
 			return ""
+
+
+## One sentence naming a concrete free port for the user to switch to. Routed
+## through `suggest_free_port` so the suggestion clears Windows' winnat
+## reservation table (no point suggesting a port that 10013s on bind). The
+## per-client reconfigure steps live behind the crash panel's docs link.
+static func _free_port_hint(port: int) -> String:
+	var free_port := ClientConfigurator.suggest_free_port(port + 1)
+	return "Port %d is free — set `godot_ai/http_port` in Editor Settings, then update your client config (How to change the port, below)." % free_port
 
 
 ## Build the mixed-state banner. Hidden until `_refresh_mixed_state_banner`

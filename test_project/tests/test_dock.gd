@@ -1085,6 +1085,61 @@ func test_incompatible_server_hides_http_only_port_picker() -> void:
 	assert_false(_dock._port_picker_panel.visible, "HTTP-only picker must stay hidden")
 
 
+func test_foreign_incompatible_body_names_a_concrete_free_port() -> void:
+	## Issue #607 cheap version: the foreign-occupant crash body should hand
+	## the user a concrete free port (reservation-aware on Windows) and point
+	## them at Editor Settings + the client reconfigure, instead of leaving
+	## them to hunt for a port themselves.
+	var port := McpClientConfigurator.http_port()
+	var free_port := McpClientConfigurator.suggest_free_port(port + 1)
+	var body := McpDockScript._crash_body_for_state(
+		McpServerState.INCOMPATIBLE,
+		{"message": "Port %d is occupied by another process." % port},
+	)
+	assert_contains(body, "Port %d is free" % free_port,
+		"foreign-occupant body must name a concrete free port")
+	assert_contains(body, "godot_ai/http_port",
+		"foreign-occupant body must point at the Editor Setting to change")
+
+
+func test_recoverable_incompatible_body_keeps_restart_copy() -> void:
+	## A recoverable (older godot-ai) occupant must NOT be told to flee to a
+	## free port — reclaiming the port via Restart Server is the better path,
+	## so the free-port hint stays out of that branch.
+	var body := McpDockScript._crash_body_for_state(
+		McpServerState.INCOMPATIBLE,
+		{"can_recover_incompatible": true, "expected_version": "2.8.0"},
+	)
+	assert_contains(body, "Restart Server", "recoverable body must keep the restart guidance")
+	assert_false(body.contains("is free"), "recoverable body must not push a free-port switch")
+
+
+func test_foreign_incompatible_shows_docs_link_button() -> void:
+	## The "How to change the port" docs link carries the per-client
+	## reconfigure steps that don't fit inline. It belongs only to the
+	## genuinely-foreign case (no recovery proof).
+	_dock._build_ui()
+	_dock._update_crash_panel({
+		"state": McpServerState.INCOMPATIBLE,
+		"message": "Port 8000 is occupied by another process.",
+	})
+	assert_true(_dock._crash_docs_btn.visible,
+		"foreign-occupant case must surface the reconfigure docs link")
+
+
+func test_recoverable_incompatible_hides_docs_link_button() -> void:
+	## A recoverable godot-ai occupant gets Restart Server, not the
+	## change-the-port docs link.
+	_dock._build_ui()
+	_dock._update_crash_panel({
+		"state": McpServerState.INCOMPATIBLE,
+		"can_recover_incompatible": true,
+		"message": "Port 8000 is occupied by godot-ai server v1.2.10",
+	})
+	assert_false(_dock._crash_docs_btn.visible,
+		"recoverable case keeps Restart Server, not the docs link")
+
+
 # --- Signal-emit contracts on the audit-v2 #360 extracted subpanels ---
 # These pin the new panel boundary: panels emit; dock owns side effects.
 
