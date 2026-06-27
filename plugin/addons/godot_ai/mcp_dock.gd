@@ -43,7 +43,11 @@ const DEV_MODE_SETTING := "godot_ai/dev_mode"
 ## "Change the port + reconfigure your clients" guide. Surfaced from the crash
 ## panel when a foreign process holds the HTTP port — the one piece of recovery
 ## (per-client config rewrite) that doesn't fit in the inline crash body.
-const PORT_CONFLICT_DOCS := "https://github.com/hi-godot/godot-ai/blob/main/docs/port-conflicts.md"
+## Resolved against the installed plugin version at click time (see
+## `_port_conflict_docs_url`) so a shipped build opens the guide as it shipped,
+## not tip-of-main, which may have drifted from that build's UI.
+const PORT_CONFLICT_DOCS_PATH := "docs/port-conflicts.md"
+const REPO_BLOB_BASE := "https://github.com/hi-godot/godot-ai/blob"
 const CLIENT_STATUS_REFRESH_COOLDOWN_MSEC := 15 * 1000
 const CLIENT_STATUS_REFRESH_TIMEOUT_MSEC := 30 * 1000
 const CLIENT_ACTION_TIMEOUT_MSEC := 30 * 1000
@@ -561,7 +565,7 @@ func _build_ui() -> void:
 	_crash_docs_btn.text = "How to change the port"
 	_crash_docs_btn.tooltip_text = "Open the guide: change godot_ai/http_port and reconfigure your MCP clients"
 	_crash_docs_btn.visible = false
-	_crash_docs_btn.pressed.connect(func(): OS.shell_open(PORT_CONFLICT_DOCS))
+	_crash_docs_btn.pressed.connect(func(): OS.shell_open(_port_conflict_docs_url()))
 	_crash_panel.add_child(_crash_docs_btn)
 
 	_crash_panel.add_child(HSeparator.new())
@@ -1028,6 +1032,17 @@ static func _crash_body_for_state(state: int, server_status: Dictionary = {}) ->
 static func _free_port_hint(port: int) -> String:
 	var free_port := ClientConfigurator.suggest_free_port(port + 1)
 	return "Port %d is free — set `godot_ai/http_port` in Editor Settings, then update your client config (How to change the port, below)." % free_port
+
+
+## URL for the port-conflict guide, pinned to the release tag that matches the
+## installed plugin version (releases are tagged `v<version>`). The crash-panel
+## button only exists in builds that ship `docs/port-conflicts.md`, so the
+## versioned ref always resolves — and a shipped build never points users at a
+## tip-of-main guide that has drifted from its own UI.
+static func _port_conflict_docs_url() -> String:
+	var version := ClientConfigurator.get_plugin_version()
+	var git_ref := ("v%s" % version) if not version.is_empty() else "main"
+	return "%s/%s/%s" % [REPO_BLOB_BASE, git_ref, PORT_CONFLICT_DOCS_PATH]
 
 
 ## Build the mixed-state banner. Hidden until `_refresh_mixed_state_banner`

@@ -1127,6 +1127,21 @@ func test_foreign_incompatible_shows_docs_link_button() -> void:
 		"foreign-occupant case must surface the reconfigure docs link")
 
 
+func test_port_conflict_docs_url_is_pinned_to_installed_version() -> void:
+	## The docs button must open the guide as it shipped, not tip-of-main —
+	## so the URL is pinned to the release tag (`v<version>`) matching the
+	## installed plugin version. Guards against a regression back to a bare
+	## blob/main link that drifts away from older builds' UI.
+	var url := McpDockScript._port_conflict_docs_url()
+	var version := McpClientConfigurator.get_plugin_version()
+	assert_contains(url, "/blob/v%s/" % version,
+		"docs URL must pin to the installed plugin version's release tag")
+	assert_contains(url, McpDockScript.PORT_CONFLICT_DOCS_PATH,
+		"docs URL must point at the port-conflict guide")
+	assert_false(url.contains("/blob/main/"),
+		"docs URL must not hard-link to tip-of-main")
+
+
 func test_recoverable_incompatible_hides_docs_link_button() -> void:
 	## A recoverable godot-ai occupant gets Restart Server, not the
 	## change-the-port docs link.
