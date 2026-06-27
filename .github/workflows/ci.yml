@@ -290,6 +290,71 @@ jobs:
           echo "===== godot-import.log (last 200 lines) ====="
           tail -n 200 godot-import.log || echo "(log not found)"
 
+  # Mirror image of stale-server-smoke: verifies the plugin's NON-recoverable
+  # path when port 8000 is held by a genuinely foreign (non-godot-ai) process.
+  # It gets no ownership proof, so it must land in terminal INCOMPATIBLE with
+  # can_recover_incompatible == false, log a suggested free port, and make NO
+  # kill attempt — leaving the foreign occupant alive. Covered today only by
+  # mocked GDScript unit tests (test_dock.gd); this drives the real upstream
+  # classification in CI. Separate job (not a step in stale-server-smoke) so
+  # the stale run's respawned port-8000 server can't bleed into this scenario.
+  foreign-server-smoke:
+    name: Foreign server smoke / ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux
+          - os: macos-latest
+            label: macOS
+          - os: windows-latest
+            label: Windows
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Build plugin link
+        shell: bash
+        run: bash script/verify-worktree
+
+      - uses: chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789 # v2
+        with:
+          version: 4.7.0
+          use-dotnet: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Import and validate GDScript
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          godot --headless --path test_project --import > godot-import.log 2>&1 || true
+          bash script/ci-check-gdscript godot-import.log
+
+      - name: Run foreign-server smoke
+        shell: bash
+        timeout-minutes: 3
+        run: python script/ci-stale-server-smoke --mode foreign --log-dir .
+
+      - name: Dump editor log on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "===== godot-foreign-smoke.log (last 500 lines) ====="
+          tail -n 500 godot-foreign-smoke.log || echo "(log not found)"
+          echo "===== godot-import.log (last 200 lines) ====="
+          tail -n 200 godot-import.log || echo "(log not found)"
+
   # Separate job from godot-tests: the capture smoke test needs a real
   # rendering driver (null RenderingDevice in --headless produces empty
   # framebuffers) and a display server. Linux uses xvfb-run; macOS and

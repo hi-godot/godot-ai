@@ -300,6 +300,15 @@ func _set_incompatible_server(live: Dictionary, expected_version: String, port: 
 	var proof_name := str(proof.get("proof", ""))
 	_can_recover_incompatible = not proof_name.is_empty()
 	print("MCP | proof: %s" % (proof_name if _can_recover_incompatible else "(none)"))
+	if not _can_recover_incompatible:
+		## Non-recoverable: a foreign / unprovable occupant holds the port and
+		## we have no ownership proof, so we must NOT kill it — surface a
+		## concrete free port the user can switch to instead (the same hint
+		## the dock crash body renders). Logging it to the editor output also
+		## lets `ci-stale-server-smoke --mode foreign` assert this upstream
+		## classification from CI. Reservation-aware on Windows.
+		var suggested := ClientConfigurator.suggest_free_port(port + 1)
+		print("MCP | port %d occupant not recoverable (no ownership proof); suggested free port %d (set godot_ai/http_port)" % [port, suggested])
 	_host._refresh_dock_client_statuses()
 
 
