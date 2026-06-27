@@ -19,25 +19,33 @@ second half: changing the port and pointing your MCP clients at the new one.
 > older godot-ai server it *can* reclaim — click that rather than changing the
 > port. This guide is only for the foreign-process case.
 
-## 1. Pick a free port
+## 1. Pick free ports
 
-The crash body already suggests one (e.g. `8001`). On Windows that suggestion
-is checked against the Hyper-V / WSL2 / Docker reservation table, so it won't
-itself fail with `WinError 10013`. You can use the suggested port or choose
-your own free port.
+The plugin uses **two** ports: HTTP (`8000`, the one your MCP clients talk to)
+and WebSocket (`9500`, used internally between the server and the editor). The
+crash body suggests a free value for each (e.g. HTTP `8001`, WS `9501`). On
+Windows those suggestions are checked against the Hyper-V / WSL2 / Docker
+reservation table, so they won't themselves fail with `WinError 10013`. You can
+use the suggested ports or choose your own free ones.
 
-## 2. Change `godot_ai/http_port` in Editor Settings
+If only port `8000` is taken, you technically only need to move the HTTP port —
+but the incompatible-server case that lands you here can hold both, so changing
+both settings is the reliable fix.
+
+## 2. Change `godot_ai/http_port` and `godot_ai/ws_port` in Editor Settings
 
 1. In the Godot editor, open **Editor → Editor Settings**.
-2. Search for `godot_ai/http_port`.
-3. Set it to the free port from step 1 (e.g. `8001`).
+2. Search for `godot_ai/http_port` and set it to the free HTTP port from step 1
+   (e.g. `8001`).
+3. Search for `godot_ai/ws_port` and set it to the free WS port from step 1
+   (e.g. `9501`).
 4. Reload the plugin (toggle it off/on in **Project → Project Settings →
    Plugins**, or restart the editor).
 
-> **Note:** `godot_ai/http_port` is an **Editor Setting**, not a project
-> setting — it is stored per editor install, so the change applies to *every*
-> project you open with this editor. If you only hit the conflict on one
-> machine, remember to revert it later if the foreign process goes away.
+> **Note:** both are **Editor Settings**, not project settings — they are
+> stored per editor install, so the change applies to *every* project you open
+> with this editor. If you only hit the conflict on one machine, remember to
+> revert them later if the foreign process goes away.
 
 ## 3. Reconfigure your MCP clients
 
@@ -65,6 +73,7 @@ and format.
 
 ## Reverting
 
-If the foreign process is gone and you want `8000` back, set
-`godot_ai/http_port` back to `8000` (or clear the override) in Editor Settings,
-reload the plugin, and re-run **Configure all** to point your clients back.
+If the foreign process is gone and you want the defaults back, set
+`godot_ai/http_port` back to `8000` and `godot_ai/ws_port` back to `9500` (or
+clear the overrides) in Editor Settings, reload the plugin, and re-run
+**Configure all** to point your clients back.

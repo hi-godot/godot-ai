@@ -1085,21 +1085,29 @@ func test_incompatible_server_hides_http_only_port_picker() -> void:
 	assert_false(_dock._port_picker_panel.visible, "HTTP-only picker must stay hidden")
 
 
-func test_foreign_incompatible_body_names_a_concrete_free_port() -> void:
+func test_foreign_incompatible_body_names_concrete_free_ports() -> void:
 	## Issue #607 cheap version: the foreign-occupant crash body should hand
-	## the user a concrete free port (reservation-aware on Windows) and point
+	## the user concrete free ports (reservation-aware on Windows) and point
 	## them at Editor Settings + the client reconfigure, instead of leaving
-	## them to hunt for a port themselves.
-	var port := McpClientConfigurator.http_port()
-	var free_port := McpClientConfigurator.suggest_free_port(port + 1)
+	## them to hunt for a port themselves. Names BOTH http and ws: this branch
+	## also fires for an incompatible godot-ai server that commonly holds both
+	## ports, so suggesting only http would leave the new server unable to
+	## bind ws.
+	var http_port := McpClientConfigurator.http_port()
+	var free_http := McpClientConfigurator.suggest_free_port(http_port + 1)
+	var free_ws := McpClientConfigurator.suggest_free_port(McpClientConfigurator.ws_port() + 1)
 	var body := McpDockScript._crash_body_for_state(
 		McpServerState.INCOMPATIBLE,
-		{"message": "Port %d is occupied by another process." % port},
+		{"message": "Port %d is occupied by another process." % http_port},
 	)
-	assert_contains(body, "Port %d is free" % free_port,
-		"foreign-occupant body must name a concrete free port")
+	assert_contains(body, "%d (HTTP)" % free_http,
+		"foreign-occupant body must name a concrete free HTTP port")
+	assert_contains(body, "%d (WS)" % free_ws,
+		"foreign-occupant body must name a concrete free WS port")
 	assert_contains(body, "godot_ai/http_port",
-		"foreign-occupant body must point at the Editor Setting to change")
+		"foreign-occupant body must point at the HTTP Editor Setting to change")
+	assert_contains(body, "godot_ai/ws_port",
+		"foreign-occupant body must point at the WS Editor Setting too")
 
 
 func test_recoverable_incompatible_body_keeps_restart_copy() -> void:

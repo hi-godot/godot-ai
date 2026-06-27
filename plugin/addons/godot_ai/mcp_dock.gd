@@ -1025,13 +1025,18 @@ static func _crash_body_for_state(state: int, server_status: Dictionary = {}) ->
 			return ""
 
 
-## One sentence naming a concrete free port for the user to switch to. Routed
-## through `suggest_free_port` so the suggestion clears Windows' winnat
-## reservation table (no point suggesting a port that 10013s on bind). The
-## per-client reconfigure steps live behind the crash panel's docs link.
+## One sentence naming concrete free ports for the user to switch to. Names
+## BOTH http and ws: this branch also fires for an incompatible godot-ai
+## server we can't prove we own, which commonly holds both ports — moving only
+## http would then leave the new server unable to bind ws. Both suggestions are
+## routed through `suggest_free_port` so they clear Windows' winnat reservation
+## table (no point suggesting a port that 10013s on bind). Only the http port
+## reaches client configs; the ws port is server↔plugin, hence the wording.
+## The per-client reconfigure steps live behind the crash panel's docs link.
 static func _free_port_hint(port: int) -> String:
-	var free_port := ClientConfigurator.suggest_free_port(port + 1)
-	return "Port %d is free — set `godot_ai/http_port` in Editor Settings, then update your client config (How to change the port, below)." % free_port
+	var free_http := ClientConfigurator.suggest_free_port(port + 1)
+	var free_ws := ClientConfigurator.suggest_free_port(ClientConfigurator.ws_port() + 1)
+	return "Ports %d (HTTP) and %d (WS) are free — set `godot_ai/http_port` and `godot_ai/ws_port` in Editor Settings, then update your client config with the new HTTP port (How to change the port, below)." % [free_http, free_ws]
 
 
 ## URL for the port-conflict guide, pinned to the release tag that matches the
