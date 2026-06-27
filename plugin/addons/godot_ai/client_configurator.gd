@@ -38,6 +38,11 @@ const DEFAULT_WS_PORT := 9500
 const STARTUP_TRACE_ENV := "GODOT_AI_STARTUP_TRACE"
 const MIN_PORT := 1024
 const MAX_PORT := 65535
+## Cap on `can_bind_local_port` probes per `suggest_free_port` call so a
+## pathological run of occupied ports can't stall the (cold-path) caller.
+## 64 localhost binds are sub-millisecond; finding a free port realistically
+## takes one or two probes, so this only bounds the worst case.
+const SUGGEST_PORT_MAX_PROBES := 64
 const SETTING_WS_PORT := "godot_ai/ws_port"
 const SETTING_STARTUP_TRACE := "godot_ai/log_startup_timing"
 const _DISCOVERY_TIMEOUT_MS := 3000
@@ -144,19 +149,24 @@ static func excluded_domains() -> String:
 ## log line. Falls back to the clamped candidate if nothing in the window
 ## clears both checks (caller surfaces it as a best-effort hint; the user can
 ## retry or pick another). Best-effort by nature: a TOCTOU window remains
-## between the probe and the caller actually binding the port.
+## between the probe and the caller actually binding the port. The bind probe
+## is bounded to `SUGGEST_PORT_MAX_PROBES` attempts so this cold path can't
+## stall on a pathological run of occupied ports.
 static func suggest_free_port(start: int, span: int = 2048) -> int:
 	var candidate := clampi(start, MIN_PORT, MAX_PORT - span + 1)
 	var limit := mini(candidate + span - 1, MAX_PORT)
 	var p := candidate
-	while p <= limit:
+	var probes := 0
+	while p <= limit and probes < SUGGEST_PORT_MAX_PROBES:
 		## Jump past a whole Windows-reserved range in one step (no-op on
 		## POSIX: returns `p` unchanged), so we don't probe port-by-port
-		## through the large adjacent ranges those services reserve.
+		## through the large adjacent ranges those services reserve. The
+		## jump itself runs no bind probes, so it doesn't count against the cap.
 		var not_reserved := WindowsPortReservation.suggest_non_excluded_port(p, limit - p + 1, MAX_PORT)
 		if not_reserved < p or not_reserved > limit:
 			break
 		p = not_reserved
+		probes += 1
 		if PortResolver.can_bind_local_port(p):
 			return p
 		p += 1
