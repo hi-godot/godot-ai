@@ -445,6 +445,8 @@ func test_get_resource_info_custom_class_non_resource_is_wrong_type() -> void:
 	McpToolNodeFixture.init_count = 0
 	var result := _handler.get_resource_info({"type": "McpToolNodeFixture"})
 	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "not a Resource type",
+		"custom get_info Node-base rejection must name the type mismatch, not just the code")
 	assert_eq(McpToolNodeFixture.init_count, 0,
 		"non-Resource class must be rejected before construction")
 
@@ -735,8 +737,10 @@ func test_instantiate_resource_non_instantiable_project_class_is_wrong_type() ->
 	var nontool := load("res://tests/mcp_non_tool_resource_fixture.gd") as Script
 	assert_false(nontool.can_instantiate(),
 		"fixture precondition: non-@tool script must be non-instantiable in editor context")
-	assert_is_error(ResourceHandler._instantiate_resource("McpNonToolResource"),
-		ErrorCodes.WRONG_TYPE)
+	var result: Variant = ResourceHandler._instantiate_resource("McpNonToolResource")
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result["error"]["message"], "@tool",
+		"non-@tool rejection must point at the actionable @tool remediation")
 
 
 func test_instantiate_resource_tool_node_class_rejected_before_construction() -> void:
@@ -752,10 +756,36 @@ func test_instantiate_resource_tool_node_class_rejected_before_construction() ->
 	assert_true(tool_node.can_instantiate(),
 		"fixture precondition: @tool script must be instantiable, so rejection must be pre-construction")
 	McpToolNodeFixture.init_count = 0
-	assert_is_error(ResourceHandler._instantiate_resource("McpToolNodeFixture"),
-		ErrorCodes.WRONG_TYPE)
+	var result: Variant = ResourceHandler._instantiate_resource("McpToolNodeFixture")
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result["error"]["message"], "not a Resource type",
+		"Node-base rejection must name the type mismatch, not just the code")
 	assert_eq(McpToolNodeFixture.init_count, 0,
 		"_init must NOT run: the script must be rejected before scr.new()")
+
+
+func test_instantiate_resource_custom_class_with_required_init_arg_rejected() -> void:
+	# A concrete @tool custom Resource whose _init() REQUIRES an argument:
+	# can_instantiate() is true, so without a pre-construction guard scr.new()
+	# (called with no args) raises mid-handler and aborts — the call null-cascades
+	# into a generic "malformed result" error instead of a clean rejection.
+	# _instantiate_resource must reject it as WRONG_TYPE BEFORE scr.new(), and
+	# without running _init (no side-effect), mirroring the abstract / non-Resource
+	# guards. Covers only the statically-detectable required-arg case; a _init that
+	# runs but throws still falls through to the dispatcher's generic catch.
+	# Precondition: the fixture IS instantiable, so the WRONG_TYPE can only come
+	# from the arg-count guard, not from can_instantiate().
+	var scr := load("res://tests/mcp_init_arg_fixture.gd") as Script
+	assert_true(scr.can_instantiate(),
+		"fixture precondition: @tool script is instantiable, so rejection must be the arg-count guard")
+	McpInitArgResource.init_count = 0
+	var result: Variant = ResourceHandler._instantiate_resource("McpInitArgResource")
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_eq(McpInitArgResource.init_count, 0,
+		"_init must NOT run: the script must be rejected before scr.new()")
+	if result is Dictionary:
+		assert_contains(result.error.message, "_init",
+			"message should name the _init-requires-arguments cause")
 
 
 func test_apply_properties_nested_failure_names_the_property() -> void:

@@ -247,6 +247,19 @@ static func _instantiate_resource(type_str: String) -> Variant:
 				return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s is not a Resource type (extends %s)" % [type_str, base_type])
 			if not scr.can_instantiate():
 				return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s cannot be instantiated in the editor (abstract, or a non-@tool script — add @tool to instantiate it here)" % type_str)
+			# Reject scripts whose _init() requires arguments BEFORE scr.new():
+			# scr.new() passes no args, so a required-arg _init raises and aborts
+			# this handler mid-call, null-cascading into a generic "malformed
+			# result" error instead of a clean rejection. get_script_method_list()
+			# reports the effective (incl. inherited) _init; required args =
+			# args - default_args. Statically detectable only — a _init that runs
+			# but throws still falls through to scr.new() and the dispatcher catch.
+			for method in scr.get_script_method_list():
+				if method.get("name", "") == "_init":
+					var required_args: int = (method.get("args", []) as Array).size() - (method.get("default_args", []) as Array).size()
+					if required_args > 0:
+						return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s cannot be instantiated: its _init() requires arguments" % type_str)
+					break
 			return scr.new()
 	return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Unknown resource type: %s" % type_str)
 
