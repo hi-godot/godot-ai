@@ -69,6 +69,7 @@ var _status_icon: ColorRect
 var _status_label: Label
 var _client_grid: VBoxContainer
 var _client_configure_all_btn: Button
+var _client_empty_cta_btn: Button
 var _clients_summary_label: Label
 var _clients_window: Window
 var _dev_mode_toggle: CheckButton
@@ -685,6 +686,14 @@ func _build_ui() -> void:
 	add_child(clients_header_row)
 	add_child(clients_actions)
 
+	_client_empty_cta_btn = Button.new()
+	_client_empty_cta_btn.text = "Configure an AI client ->"
+	_client_empty_cta_btn.tooltip_text = "Open the Clients tab to configure an AI coding client for this Godot AI server."
+	_client_empty_cta_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_client_empty_cta_btn.visible = false
+	_client_empty_cta_btn.pressed.connect(_on_open_clients_window)
+	add_child(_client_empty_cta_btn)
+
 	# Drift banner — hidden until a sweep finds at least one mismatched client.
 	_drift_banner = VBoxContainer.new()
 	_drift_banner.add_theme_constant_override("separation", 4)
@@ -860,7 +869,7 @@ func _build_client_row(client_id: String) -> void:
 # --- Status updates ---
 
 func _update_status() -> void:
-	var connected: bool = _connection.is_connected
+	var connected: bool = _connection != null and _connection.is_connected
 	## During plugin self-update there's a brief window where this dock
 	## script is already the new version (Godot hot-reloads scripts on
 	## file change) but `_plugin` is still the old `EditorPlugin` instance
@@ -887,7 +896,7 @@ func _update_status() -> void:
 		status_text = "Restarting server..."
 		status_color = COLOR_AMBER
 	elif connected:
-		status_text = "Connected"
+		status_text = _connected_status_text()
 		status_color = Color.GREEN
 	elif state == ServerStateScript.CRASHED:
 		var exit_ms: int = server_status.get("exit_ms", 0)
@@ -1623,6 +1632,30 @@ func _update_dev_section_buttons() -> void:
 		_dev_stop_btn.tooltip_text = stop_state["tooltip"]
 
 
+func _configured_client_count() -> int:
+	var configured := 0
+	for client_id in _client_rows:
+		var status: Client.Status = _client_rows[client_id].get("status", Client.Status.NOT_CONFIGURED)
+		if status == Client.Status.CONFIGURED:
+			configured += 1
+	return configured
+
+
+func _client_status_refresh_has_completed() -> bool:
+	return _last_client_status_refresh_completed_msec > 0
+
+
+func _connected_status_text() -> String:
+	var configured := _configured_client_count()
+	if configured == 0:
+		if not _client_status_refresh_has_completed():
+			return "Server connected · checking AI client configuration"
+		return "Server connected · no AI client configured"
+	if configured == 1:
+		return "Server connected · 1 AI client configured"
+	return "Server connected · %d AI clients configured" % configured
+
+
 func _on_install_uv() -> void:
 	match OS.get_name():
 		"Windows":
@@ -2159,7 +2192,10 @@ func _refresh_clients_summary() -> void:
 	_clients_summary_label.text = text
 	if _client_configure_all_btn != null:
 		_client_configure_all_btn.disabled = ClientRefreshStateScript.should_disable_client_actions(_refresh_state)
+	if _client_empty_cta_btn != null:
+		_client_empty_cta_btn.visible = configured == 0 and _client_status_refresh_has_completed()
 	_refresh_drift_banner(mismatched_ids)
+	_update_status()
 
 
 func _show_manual_command_for(client_id: String) -> void:

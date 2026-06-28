@@ -65,6 +65,11 @@ class _RefreshCountingDock extends McpDockScript:
 		action_completion_refreshes += 1
 
 
+class _ConnectionStub:
+	var is_connected := true
+	var server_version := ""
+
+
 static func _finished_thread_noop() -> void:
 	pass
 
@@ -156,6 +161,86 @@ func test_clients_header_and_actions_use_narrow_layout() -> void:
 	assert_true(tabs != null, "Clients & Tools window should contain a tab container")
 	assert_eq(tabs.get_tab_title(0), "Clients")
 	assert_eq(tabs.get_tab_title(1), "Tools")
+
+
+func test_connected_status_summarizes_client_readiness() -> void:
+	_dock._build_ui()
+	_dock._connection = _ConnectionStub.new()
+	_dock._last_client_status_refresh_completed_msec = 0
+
+	_dock._refresh_clients_summary()
+	assert_eq(
+		_dock._status_label.text,
+		"Server connected · checking AI client configuration",
+		"Connected status should not claim no clients before the initial status sweep completes",
+	)
+
+	_dock._last_client_status_refresh_completed_msec = Time.get_ticks_msec()
+	_dock._refresh_clients_summary()
+	assert_eq(
+		_dock._status_label.text,
+		"Server connected · no AI client configured",
+		"Connected status should tell first-run users the AI-client setup is not done",
+	)
+
+	var any_id := _first_client_id()
+	if any_id.is_empty():
+		skip("No clients registered")
+		return
+	_dock._apply_row_status(any_id, McpClient.Status.CONFIGURED)
+	_dock._refresh_clients_summary()
+	assert_eq(
+		_dock._status_label.text,
+		"Server connected · 1 AI client configured",
+		"Connected status should summarize configured AI clients once setup has started",
+	)
+
+	var ids := McpClientConfigurator.client_ids()
+	if ids.size() < 2:
+		skip("Need at least two clients registered")
+		return
+	_dock._apply_row_status(ids[1], McpClient.Status.CONFIGURED)
+	_dock._refresh_clients_summary()
+	assert_eq(
+		_dock._status_label.text,
+		"Server connected · 2 AI clients configured",
+		"Connected status should pluralize the configured-client count",
+	)
+
+
+func test_empty_client_cta_visible_only_until_a_client_is_configured() -> void:
+	_dock._build_ui()
+	_dock._last_client_status_refresh_completed_msec = 0
+	_dock._refresh_clients_summary()
+	assert_false(
+		_dock._client_empty_cta_btn.visible,
+		"CTA should stay hidden until the initial client status sweep proves there are no configured clients",
+	)
+
+	_dock._last_client_status_refresh_completed_msec = Time.get_ticks_msec()
+	_dock._refresh_clients_summary()
+	assert_true(
+		_dock._client_empty_cta_btn.visible,
+		"First-run dock should surface a direct configure-client CTA",
+	)
+
+	var any_id := _first_client_id()
+	if any_id.is_empty():
+		skip("No clients registered")
+		return
+	_dock._apply_row_status(any_id, McpClient.Status.CONFIGURED)
+	_dock._refresh_clients_summary()
+	assert_false(
+		_dock._client_empty_cta_btn.visible,
+		"CTA should collapse once at least one AI client is configured",
+	)
+
+	_dock._apply_row_status(any_id, McpClient.Status.NOT_CONFIGURED)
+	_dock._refresh_clients_summary()
+	assert_true(
+		_dock._client_empty_cta_btn.visible,
+		"CTA should reappear when the last configured AI client is removed",
+	)
 
 
 func test_drift_banner_hidden_when_no_mismatched_clients() -> void:
