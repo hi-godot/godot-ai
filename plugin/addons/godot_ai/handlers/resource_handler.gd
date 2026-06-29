@@ -260,7 +260,10 @@ static func _instantiate_resource(type_str: String) -> Variant:
 					if required_args > 0:
 						return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s cannot be instantiated: its _init() requires arguments" % type_str)
 					break
-			return scr.new()
+			var made: Variant = scr.new()
+			if made == null or not (made is Resource):
+				return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s as a Resource" % type_str)
+			return made
 	return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Unknown resource type: %s" % type_str)
 
 
