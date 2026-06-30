@@ -386,6 +386,18 @@ func test_set_property_color_rejects_vector3_shaped_dict() -> void:
 	assert_true(coerced is Dictionary, "Wrong-shape dict must flow through unchanged so caller's type check fires")
 
 
+func test_coerce_value_color_rejects_unparseable_string() -> void:
+	## "Color(1,1,1,1)" isn't a named or hex color; Color(String) would silently
+	## return black. It must flow through unchanged so the caller's type check
+	## fires instead of writing black — while valid named/hex strings still coerce.
+	var bad = NodeHandler._coerce_value("Color(1, 1, 1, 1)", TYPE_COLOR)
+	assert_true(bad is String, "Unparseable color string must flow through unchanged, not become black")
+	var hex = NodeHandler._coerce_value("#ff4400", TYPE_COLOR)
+	assert_true(hex is Color, "hex string must still coerce")
+	assert_ne(hex, Color(0, 0, 0, 1), "valid hex must parse to its color, not black")
+	assert_true(NodeHandler._coerce_value("red", TYPE_COLOR) is Color, "named color must still coerce")
+
+
 # ----- #191 — non-dict inputs to compound targets must error loudly -----
 
 func test_set_property_vector3_rejects_array_input() -> void:

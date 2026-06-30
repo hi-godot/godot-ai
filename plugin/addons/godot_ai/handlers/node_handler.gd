@@ -706,7 +706,15 @@ static func _coerce_value(value: Variant, target_type: int) -> Variant:
 			if value is Dictionary and value.has_all(COLOR_KEYS):
 				return Color(value["r"], value["g"], value["b"], value.get("a", 1.0))
 			if value is String:
-				return Color(value)
+				# Color(String) silently returns black for an unparseable string
+				# (e.g. "Color(1,1,1,1)" or a typo). Validate with the two-sentinel
+				# from_string idiom (see theme_handler/material_values); on failure
+				# fall through so the value stays a String and _check_coerced flags
+				# it as an error instead of writing black.
+				var col_a := Color.from_string(value, Color(0, 0, 0, 0))
+				var col_b := Color.from_string(value, Color(1, 1, 1, 1))
+				if col_a == col_b:
+					return col_a
 		TYPE_BOOL:
 			if value is float or value is int:
 				return bool(value)
