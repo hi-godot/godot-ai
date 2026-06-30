@@ -220,6 +220,44 @@ func test_create_script_overwrite_omits_cleanup_hint() -> void:
 	DirAccess.remove_absolute(path)
 
 
+func test_create_script_emits_scan_required_for_unregistered_class_name() -> void:
+	## A newly-written class_name isn't in the global class table until a
+	## filesystem scan runs (update_file doesn't register it), so create_script
+	## flags it so headless callers know to follow up with op="scan". The unique
+	## name guarantees it isn't already registered on a clean checkout.
+	var path := "res://tests/_mcp_scan_hint_probe.gd"
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	var content := "@tool\nclass_name _McpScanHintProbe\nextends Resource\n"
+	var result := _handler.create_script({"path": path, "content": content})
+	assert_has_key(result, "data")
+	assert_eq(result.data.get("class_name", ""), "_McpScanHintProbe")
+	assert_eq(result.data.get("class_registration", ""), "scan_required")
+	assert_true(result.data.has("class_registration_hint"), "should include a hint")
+	DirAccess.remove_absolute(path)
+	if FileAccess.file_exists(path + ".uid"):
+		DirAccess.remove_absolute(path + ".uid")
+
+
+func test_create_script_omits_scan_required_for_invalid_class_name_script() -> void:
+	## A script that fails to parse can't register its class via a scan, so the
+	## hint must be suppressed in favour of the parse-error diagnostics — pointing
+	## at op="scan" would steer the caller away from the real fix.
+	var path := "res://tests/_mcp_scan_hint_invalid.gd"
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	var content := "@tool\nclass_name _McpScanHintInvalid\nextends Resource\nfunc _bad():\n\tif\n"
+	var result := _handler.create_script({"path": path, "content": content})
+	assert_has_key(result, "data")
+	assert_false(
+		result.data.has("class_registration"),
+		"no scan_required hint when the script failed to parse"
+	)
+	DirAccess.remove_absolute(path)
+	if FileAccess.file_exists(path + ".uid"):
+		DirAccess.remove_absolute(path + ".uid")
+
+
 func test_create_script_missing_path() -> void:
 	var result := _handler.create_script({"content": "extends Node\n"})
 	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)

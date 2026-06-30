@@ -174,3 +174,26 @@ func test_reimport_rejects_traversal_path() -> void:
 	assert_eq(result.data.reimported_count, 0)
 	assert_eq(result.data.not_found_count, 1)
 	assert_contains(result.data.not_found[0], "..")
+
+
+# ----- scan_filesystem -----
+
+func test_scan_filesystem_sync_shape_and_coalesces_when_latch_set() -> void:
+	## The test handler has no _connection, so scan_filesystem takes the
+	## synchronous fallback. Pre-set the single-flight latch so the fallback
+	## coalesces (was_already_scanning=true) instead of kicking a real editor
+	## scan mid-suite — this also asserts the documented response shape, which
+	## must match the deferred path's keys. The deferred settle path itself is
+	## covered by the Python tests + live verification.
+	FilesystemHandler._scan_in_flight = true
+	var result := _handler.scan_filesystem({})
+	FilesystemHandler._scan_in_flight = false
+	assert_has_key(result, "data")
+	assert_eq(result.data.scan_settle, "not_waited")
+	assert_true(result.data.was_already_scanning, "latch set → coalesced, no new scan() kicked")
+	assert_true(result.data.has("global_class_count"), "shape: global_class_count present")
+	assert_true(
+		result.data.has("global_classes_registered_delta"),
+		"shape: delta present in both paths"
+	)
+	assert_false(result.data.undoable)

@@ -25,11 +25,18 @@ async def filesystem_reimport(runtime: DirectRuntime, paths: list[str]) -> dict:
 
 
 async def filesystem_scan(runtime: DirectRuntime) -> dict:
-    # No require_writable: a scan is a refresh, and we want it usable even while
-    # the editor reports "importing" (a scan already in flight) — the plugin's
-    # handler is single-flight and just awaits the in-progress scan in that case.
-    # A full scan can exceed the default command timeout on large projects; the
-    # plugin caps its own wait at 28s, so allow headroom over that here.
+    """Force a full editor filesystem scan and wait for it to settle.
+
+    Registers ``class_name`` scripts added since the last scan into the global
+    class table — the headless equivalent of the editor regaining window focus.
+
+    Deliberately not ``require_writable``-gated: a scan is a refresh and must
+    run even while the editor reports ``"importing"`` (a scan already in
+    flight), where the plugin's single-flight handler simply awaits the running
+    scan. A full scan can exceed the default command timeout on large projects,
+    and the plugin caps its own wait at 28s, so a 35s command timeout leaves
+    headroom.
+    """
     return await runtime.send_command("scan_filesystem", {}, timeout=35.0)
 
 

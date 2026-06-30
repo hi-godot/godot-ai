@@ -14,6 +14,17 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const _SCAN_START_GRACE_MSEC := 750
 const _SCAN_SETTLE_MAX_MSEC := 28000
 
+## Shared single-flight latch for scan_filesystem. `is_scanning()` alone can't
+## enforce single-flight: `EditorFileSystem.scan()` doesn't flip `is_scanning()`
+## for a frame or two (hence _SCAN_START_GRACE_MSEC), so a second request landing
+## in that window would observe `false` and stack another scan() — the exact
+## stacked-worker SIGABRT this op exists to avoid (dsarno/godot#6). The latch is
+## set before the first scan() and cleared when its settle coroutine finishes;
+## concurrent requests coalesce onto the running scan instead of starting one.
+## `static` so it's shared across handler instances; it resets on plugin reload
+## (script re-parse), which self-heals any latch orphaned by a mid-await teardown.
+static var _scan_in_flight := false
+
 var _connection: McpConnection
 
 
@@ -151,8 +162,10 @@ func scan_filesystem(params: Dictionary) -> Dictionary:
 
 	# Synchronous fallback: batch_execute (no request_id) and unit-test contexts
 	# (no connection) can't await, so kick a single-flight scan and return
-	# immediately without the settle confirmation.
-	var already := efs.is_scanning()
+	# immediately without the settle confirmation. Respect the latch so we don't
+	# stack onto a deferred scan; don't set it (there's no coroutine here to
+	# clear it — the brief is_scanning() window covers the rest).
+	var already := _scan_in_flight or efs.is_scanning()
 	if not already:
 		efs.scan()
 	return {
@@ -161,6 +174,9 @@ func scan_filesystem(params: Dictionary) -> Dictionary:
 			"scan_settle": "not_waited",
 			"was_already_scanning": already,
 			"global_class_count": ProjectSettings.get_global_class_list().size(),
+			# Present in both paths for a consistent response shape; the sync
+			# path doesn't await, so it can't measure a delta.
+			"global_classes_registered_delta": 0,
 			"undoable": false,
 			"reason": "Filesystem scan is an editor operation",
 		}
@@ -182,19 +198,22 @@ static func _finish_scan_deferred(
 	if tree == null:
 		return
 	var classes_before := ProjectSettings.get_global_class_list().size()
-	# Single-flight: never stack a second scan() onto an in-progress one — that
-	# is exactly what stacks the global-class WorkerThreadPool tasks that can
-	# SIGABRT (dsarno/godot#6, see the write_file comment). If a scan is already
-	# running we just await it.
-	var already_scanning := efs.is_scanning()
-	if not already_scanning:
+	# Single-flight via the shared `_scan_in_flight` latch (NOT is_scanning(),
+	# which lags scan() by a frame or two — see the latch declaration). Only the
+	# request that sets the latch calls scan(); concurrent requests coalesce and
+	# just await the running scan. This is what actually prevents the stacked
+	# scan() SIGABRT (dsarno/godot#6), even within the start-grace window.
+	var was_already_scanning := _scan_in_flight or efs.is_scanning()
+	var we_started := not was_already_scanning
+	if we_started:
+		_scan_in_flight = true
 		efs.scan()
 	# Hand back a frame so _dispatch() registers this request as deferred before
 	# the coroutine can push a reply (mirrors _finish_create_script_deferred).
 	await tree.process_frame
 	var deadline_ms := Time.get_ticks_msec() + _SCAN_SETTLE_MAX_MSEC
 	var start_grace_ms := Time.get_ticks_msec() + _SCAN_START_GRACE_MSEC
-	var saw_scanning := already_scanning
+	var saw_scanning := efs.is_scanning()
 	while Time.get_ticks_msec() < deadline_ms:
 		if efs.is_scanning():
 			saw_scanning = true
@@ -203,6 +222,10 @@ static func _finish_scan_deferred(
 			# within the grace window (a no-op scan because nothing changed).
 			break
 		await tree.process_frame
+	# Clear the latch in all paths (no try/finally in GDScript): do it before the
+	# is_instance_valid early-return so a freed connection can't orphan it.
+	if we_started:
+		_scan_in_flight = false
 	if not is_instance_valid(connection):
 		return
 	var completed := not efs.is_scanning()
@@ -211,7 +234,7 @@ static func _finish_scan_deferred(
 		"data": {
 			"scan_completed": completed,
 			"scan_settle": "settled" if completed else "timeout",
-			"was_already_scanning": already_scanning,
+			"was_already_scanning": was_already_scanning,
 			"global_class_count": classes_after,
 			"global_classes_registered_delta": classes_after - classes_before,
 			"undoable": false,

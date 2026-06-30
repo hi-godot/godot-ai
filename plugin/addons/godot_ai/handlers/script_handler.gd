@@ -71,8 +71,15 @@ func create_script(params: Dictionary) -> Dictionary:
 	# instead of hitting a confusing "Unknown type" / "Unknown resource type" on
 	# the very next call. We don't scan here — a scan() per create is the exact
 	# SIGABRT race documented below; the explicit op is single-flight.
+	# Skip the hint when the script failed to parse: a scan won't register a
+	# class from a broken script, so pointing at op="scan" would steer the caller
+	# away from the real fix (the parse error already attached above).
 	var declared_class := _extract_class_name(content)
-	if not declared_class.is_empty() and not _class_name_registered(declared_class):
+	if (
+		not declared_class.is_empty()
+		and not _script_has_error_diagnostics(data)
+		and not _class_name_registered(declared_class)
+	):
 		data["class_name"] = declared_class
 		data["class_registration"] = "scan_required"
 		data["class_registration_hint"] = (
@@ -163,16 +170,33 @@ static func _finish_create_script_deferred(
 
 
 ## Extract the `class_name` a script declares, or "" if none. A cheap line scan
-## (no full parse) for create_script's "scan_required" hint.
+## (no full parse) for create_script's "scan_required" hint. Stops at the first
+## space/tab or comma so all three valid forms yield just the name:
+## `class_name Foo`, `class_name Foo extends Bar`, and the icon form
+## `class_name Foo, "res://icon.svg"`.
 static func _extract_class_name(content: String) -> String:
 	for raw_line in content.split("\n"):
 		var line := raw_line.strip_edges()
 		if line.begins_with("class_name "):
 			var rest := line.substr(11).strip_edges()
-			# Handle the one-line `class_name Foo extends Bar` form: first token.
-			var space_idx := rest.find(" ")
-			return rest.substr(0, space_idx) if space_idx >= 0 else rest
+			var cut := rest.length()
+			for i in rest.length():
+				var ch := rest[i]
+				if ch == " " or ch == "\t" or ch == ",":
+					cut = i
+					break
+			return rest.substr(0, cut)
 	return ""
+
+
+## True if create_script's diagnostics captured a parse error for this script.
+## Used to suppress the "scan_required" hint when the class can't register
+## anyway — see create_script.
+static func _script_has_error_diagnostics(data: Dictionary) -> bool:
+	for diag in data.get("diagnostics", []):
+		if diag is Dictionary and diag.get("level", "") == "error":
+			return true
+	return false
 
 
 ## True if `cn` is already usable as a type — an engine built-in (ClassDB) or an
