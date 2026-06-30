@@ -252,7 +252,12 @@ func test_create_script_emits_scan_required_for_unregistered_class_name() -> voi
 	assert_has_key(result, "data")
 	assert_eq(result.data.get("class_name", ""), probe)
 	assert_eq(result.data.get("class_registration", ""), "scan_required")
-	assert_true(result.data.has("class_registration_hint"), "should include a hint")
+	# Assert the hint names the actual recovery op, not just that some hint
+	# exists — a stale/mistyped op name should fail this test.
+	assert_contains(
+		result.data.get("class_registration_hint", ""),
+		"filesystem_manage(op=\"scan\")"
+	)
 	DirAccess.remove_absolute(path)
 	if FileAccess.file_exists(path + ".uid"):
 		DirAccess.remove_absolute(path + ".uid")
