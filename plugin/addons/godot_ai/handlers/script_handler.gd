@@ -63,6 +63,26 @@ func create_script(params: Dictionary) -> Dictionary:
 	}
 	_attach_gdscript_diagnostics(data, path, content)
 
+	# A freshly-declared `class_name` is NOT in the global class table until a
+	# filesystem scan runs — update_file() below registers the file with the
+	# resource pipeline but not the class registry (see the scan() comment).
+	# Surface that precisely (only when the class isn't already registered) so a
+	# headless caller knows to follow up with filesystem_manage(op="scan")
+	# instead of hitting a confusing "Unknown type" / "Unknown resource type" on
+	# the very next call. We don't scan here — a scan() per create is the exact
+	# SIGABRT race documented below; the explicit op is single-flight.
+	var declared_class := _extract_class_name(content)
+	if not declared_class.is_empty() and not _class_name_registered(declared_class):
+		data["class_name"] = declared_class
+		data["class_registration"] = "scan_required"
+		data["class_registration_hint"] = (
+			"New class_name '%s' isn't in the global class table yet. " % declared_class
+			+ "Call filesystem_manage(op=\"scan\") if it won't resolve on the next "
+			+ "call (e.g. resource_manage op=\"create\", or used as a type in another "
+			+ "script). The editor also registers it on its next filesystem scan or "
+			+ "when its window regains focus."
+		)
+
 	# Register just this file with the editor instead of a full recursive
 	# scan(). A scan() per write stacks `update_scripts_classes` /
 	# `update_script_paths_documentation` WorkerThreadPool tasks under concurrent
@@ -140,6 +160,31 @@ static func _finish_create_script_deferred(
 	payload["import_settle"] = "settled" if settled else "timeout"
 	payload["import_pending"] = not settled
 	connection.send_deferred_response(request_id, {"data": payload})
+
+
+## Extract the `class_name` a script declares, or "" if none. A cheap line scan
+## (no full parse) for create_script's "scan_required" hint.
+static func _extract_class_name(content: String) -> String:
+	for raw_line in content.split("\n"):
+		var line := raw_line.strip_edges()
+		if line.begins_with("class_name "):
+			var rest := line.substr(11).strip_edges()
+			# Handle the one-line `class_name Foo extends Bar` form: first token.
+			var space_idx := rest.find(" ")
+			return rest.substr(0, space_idx) if space_idx >= 0 else rest
+	return ""
+
+
+## True if `cn` is already usable as a type — an engine built-in (ClassDB) or an
+## already-registered project global class. A brand-new class_name returns false
+## until a filesystem scan registers it.
+static func _class_name_registered(cn: String) -> bool:
+	if ClassDB.class_exists(cn):
+		return true
+	for entry in ProjectSettings.get_global_class_list():
+		if entry.get("class", "") == cn:
+			return true
+	return false
 
 
 func read_script(params: Dictionary) -> Dictionary:

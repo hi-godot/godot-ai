@@ -5,6 +5,21 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 ## Handles file read/write operations and reimport within the Godot project.
 
+## Bounds for the deferred scan wait. `write_file`/`reimport` register single
+## files with `update_file()` (cheap, no global-class rebuild); `scan_filesystem`
+## is the heavier, explicit "rebuild the class registry" path agents call after
+## adding `class_name` scripts headlessly (no window focus to trigger it).
+## Kept under the dispatcher's "scan_filesystem" deferred timeout (30s) so we
+## always send a real reply before a DEFERRED_TIMEOUT is synthesised.
+const _SCAN_START_GRACE_MSEC := 750
+const _SCAN_SETTLE_MAX_MSEC := 28000
+
+var _connection: McpConnection
+
+
+func _init(connection: McpConnection = null) -> void:
+	_connection = connection
+
 
 func read_file(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
@@ -110,3 +125,96 @@ func reimport(params: Dictionary) -> Dictionary:
 			"reason": "Reimport is a file system operation",
 		}
 	}
+
+
+## Force a full EditorFileSystem scan and wait for it to settle. This is the
+## headless equivalent of the editor regaining window focus: `update_file()`
+## (used by write_file/reimport/script_create) registers a single file with the
+## resource pipeline but does NOT rebuild the global `class_name` table, so a
+## freshly-created `class_name MyThing extends Resource` stays invisible to
+## `ClassDB`/`ProjectSettings.get_global_class_list()` until a scan runs. Agents
+## driving the editor without focus call this once after a batch of script
+## creates to make new types instantiable/referenceable. See issue #83.
+func scan_filesystem(params: Dictionary) -> Dictionary:
+	var efs := EditorInterface.get_resource_filesystem()
+	if efs == null:
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "EditorFileSystem not available")
+
+	var request_id: String = params.get("_request_id", "")
+	# Async path: a scan can't be awaited on the calling frame without freezing
+	# the editor, so hand control back to the dispatcher (DEFERRED_RESPONSE) and
+	# push the real reply from a static coroutine once the scan settles — by
+	# which point new class_names are registered.
+	if _connection != null and not request_id.is_empty():
+		_finish_scan_deferred(_connection, request_id, efs)
+		return McpDispatcher.DEFERRED_RESPONSE
+
+	# Synchronous fallback: batch_execute (no request_id) and unit-test contexts
+	# (no connection) can't await, so kick a single-flight scan and return
+	# immediately without the settle confirmation.
+	var already := efs.is_scanning()
+	if not already:
+		efs.scan()
+	return {
+		"data": {
+			"scan_completed": false,
+			"scan_settle": "not_waited",
+			"was_already_scanning": already,
+			"global_class_count": ProjectSettings.get_global_class_list().size(),
+			"undoable": false,
+			"reason": "Filesystem scan is an editor operation",
+		}
+	}
+
+
+## `static` is load-bearing for the same reason as ScriptHandler's deferred
+## finish: the coroutine must outlive the handler RefCounted, which can be freed
+## mid-await (e.g. an editor_reload_plugin fired during the scan). Parameterise
+## everything; reference no instance state.
+static func _finish_scan_deferred(
+	connection: McpConnection,
+	request_id: String,
+	efs: EditorFileSystem,
+) -> void:
+	if not is_instance_valid(connection):
+		return
+	var tree := connection.get_tree()
+	if tree == null:
+		return
+	var classes_before := ProjectSettings.get_global_class_list().size()
+	# Single-flight: never stack a second scan() onto an in-progress one — that
+	# is exactly what stacks the global-class WorkerThreadPool tasks that can
+	# SIGABRT (dsarno/godot#6, see the write_file comment). If a scan is already
+	# running we just await it.
+	var already_scanning := efs.is_scanning()
+	if not already_scanning:
+		efs.scan()
+	# Hand back a frame so _dispatch() registers this request as deferred before
+	# the coroutine can push a reply (mirrors _finish_create_script_deferred).
+	await tree.process_frame
+	var deadline_ms := Time.get_ticks_msec() + _SCAN_SETTLE_MAX_MSEC
+	var start_grace_ms := Time.get_ticks_msec() + _SCAN_START_GRACE_MSEC
+	var saw_scanning := already_scanning
+	while Time.get_ticks_msec() < deadline_ms:
+		if efs.is_scanning():
+			saw_scanning = true
+		elif saw_scanning or Time.get_ticks_msec() > start_grace_ms:
+			# Either the scan ran and finished, or it never flipped is_scanning()
+			# within the grace window (a no-op scan because nothing changed).
+			break
+		await tree.process_frame
+	if not is_instance_valid(connection):
+		return
+	var completed := not efs.is_scanning()
+	var classes_after := ProjectSettings.get_global_class_list().size()
+	connection.send_deferred_response(request_id, {
+		"data": {
+			"scan_completed": completed,
+			"scan_settle": "settled" if completed else "timeout",
+			"was_already_scanning": already_scanning,
+			"global_class_count": classes_after,
+			"global_classes_registered_delta": classes_after - classes_before,
+			"undoable": false,
+			"reason": "Filesystem scan is an editor operation",
+		}
+	})

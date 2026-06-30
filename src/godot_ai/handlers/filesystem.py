@@ -24,6 +24,15 @@ async def filesystem_reimport(runtime: DirectRuntime, paths: list[str]) -> dict:
     return await runtime.send_command("reimport", {"paths": paths})
 
 
+async def filesystem_scan(runtime: DirectRuntime) -> dict:
+    # No require_writable: a scan is a refresh, and we want it usable even while
+    # the editor reports "importing" (a scan already in flight) — the plugin's
+    # handler is single-flight and just awaits the in-progress scan in that case.
+    # A full scan can exceed the default command timeout on large projects; the
+    # plugin caps its own wait at 28s, so allow headroom over that here.
+    return await runtime.send_command("scan_filesystem", {}, timeout=35.0)
+
+
 async def filesystem_search(
     runtime: DirectRuntime,
     name: str = "",

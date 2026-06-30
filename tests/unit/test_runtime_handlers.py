@@ -564,6 +564,15 @@ class StubClient:
                 "not_found_count": 0,
                 "undoable": False,
             }
+        if command == "scan_filesystem":
+            return {
+                "scan_completed": True,
+                "scan_settle": "settled",
+                "was_already_scanning": False,
+                "global_class_count": 7,
+                "global_classes_registered_delta": 1,
+                "undoable": False,
+            }
         if command == "list_signals":
             return {
                 "path": params.get("path", ""),
@@ -3155,6 +3164,45 @@ async def test_import_reimport_handler():
     assert result["reimported_count"] == 2
     assert result["reimported"] == ["res://icon.png", "res://logo.png"]
     assert client.calls[-1]["params"] == {"paths": ["res://icon.png", "res://logo.png"]}
+
+
+async def test_filesystem_scan_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await filesystem_handlers.filesystem_scan(runtime)
+    assert result["scan_completed"] is True
+    assert result["global_classes_registered_delta"] == 1
+    last = client.calls[-1]
+    assert last["command"] == "scan_filesystem"
+    assert last["params"] == {}
+    # A full scan can exceed the default 5s command timeout; the handler must
+    # request a longer budget than the plugin's 28s internal settle cap.
+    assert last["timeout"] == 35.0
+
+
+async def test_filesystem_scan_runs_while_importing():
+    # op="scan" must be issuable even when the active session reports
+    # "importing" (a scan already in flight). The handler deliberately skips
+    # require_writable so the single-flight plugin path can await the running
+    # scan — gating it on readiness like writes do would reject op="scan"
+    # exactly when it's most needed.
+    from godot_ai.godot_client.client import GodotCommandError
+
+    client = StubClient()
+    client.live_readiness = "importing"
+    session = _make_session("importing-1", readiness="importing")
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+
+    # scan passes straight through to the plugin...
+    result = await filesystem_handlers.filesystem_scan(runtime)
+    assert result["scan_completed"] is True
+    assert client.calls[-1]["command"] == "scan_filesystem"
+
+    # ...while a write op (reimport) on the identical importing session is gated.
+    with pytest.raises(GodotCommandError):
+        await filesystem_handlers.filesystem_reimport(runtime, paths=["res://a.png"])
 
 
 async def test_filesystem_search_handler_empty_params():

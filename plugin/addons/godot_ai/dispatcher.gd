@@ -20,6 +20,7 @@ const DEFERRED_TIMEOUT_MS_BY_COMMAND := {
 	"take_screenshot": 30000,
 	"game_eval": 15000,
 	"game_command": 15000,
+	"scan_filesystem": 30000,
 }
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const FuzzySuggestions := preload("res://addons/godot_ai/utils/fuzzy_suggestions.gd")
