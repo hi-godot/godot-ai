@@ -217,6 +217,25 @@ static func _validate_resource_class(type_str: String) -> Variant:
 	return null
 
 
+## Build the "Unknown resource type" error with a steer toward op="scan". A type
+## that reaches here is neither an engine built-in (ClassDB) nor a registered
+## project class (the global script-class registry). In an agent-driven workflow
+## the most common cause is a `class_name` script just made via script_create
+## that isn't registered yet — the global class table only rebuilds on a
+## filesystem scan (normally an editor-focus event). Point the caller at the one
+## cheap call that fixes that, so it doesn't fall back to a full plugin reload.
+## See #614 for the headless scan op.
+static func _unknown_resource_type_error(type_str: String) -> Dictionary:
+	return ErrorCodes.make(
+		ErrorCodes.VALUE_OUT_OF_RANGE,
+		(
+			"Unknown resource type: %s — not an engine built-in or a registered project class. "
+			+ "If you just created it with script_create, the global class table is stale until a "
+			+ "scan: call filesystem_manage(op=\"scan\"), then retry. Otherwise check the spelling."
+		) % type_str
+	)
+
+
 ## Resolve a resource type name to a fresh instance. Handles engine built-ins
 ## (ClassDB) and project `class_name` Resources (the global script-class
 ## registry). Returns a Resource on success, or an error dict on failure.
@@ -264,7 +283,7 @@ static func _instantiate_resource(type_str: String) -> Variant:
 			if made == null or not (made is Resource):
 				return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s as a Resource" % type_str)
 			return made
-	return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Unknown resource type: %s" % type_str)
+	return _unknown_resource_type_error(type_str)
 
 
 ## Apply a dict of property values to a freshly-instantiated Resource,
@@ -415,7 +434,7 @@ func get_resource_info(params: Dictionary) -> Dictionary:
 		var custom_info: Variant = _custom_resource_info(type_str)
 		if custom_info != null:
 			return custom_info
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Unknown resource type: %s" % type_str)
+		return _unknown_resource_type_error(type_str)
 	if ClassDB.is_parent_class(type_str, "Node"):
 		return ErrorCodes.make(
 			ErrorCodes.WRONG_TYPE,

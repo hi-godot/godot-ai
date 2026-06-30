@@ -198,6 +198,9 @@ func test_create_resource_unknown_class() -> void:
 	})
 	assert_is_error(result)
 	assert_contains(result.error.message, "Unknown")
+	# Steer agents to the one cheap recovery for a just-created class_name
+	# instead of a full plugin reload (#614).
+	assert_contains(result.error.message, "filesystem_manage(op=\"scan\")")
 
 
 func test_create_resource_node_class_redirects_to_create_node() -> void:
@@ -328,6 +331,7 @@ func test_get_resource_info_unknown_type() -> void:
 	var result := _handler.get_resource_info({"type": "DefinitelyNotAClass_xyz"})
 	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
 	assert_contains(result.error.message, "Unknown resource type")
+	assert_contains(result.error.message, "filesystem_manage(op=\"scan\")")
 
 
 func test_get_resource_info_non_resource_type() -> void:
@@ -689,8 +693,9 @@ func test_instantiate_resource_custom_class_name() -> void:
 
 
 func test_instantiate_resource_unknown_type_errors() -> void:
-	assert_is_error(ResourceHandler._instantiate_resource("NotARealType_xyz"),
-		ErrorCodes.VALUE_OUT_OF_RANGE)
+	var result = ResourceHandler._instantiate_resource("NotARealType_xyz")
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(result.error.message, "filesystem_manage(op=\"scan\")")
 
 
 func test_create_resource_custom_class_to_file() -> void:
