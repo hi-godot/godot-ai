@@ -220,18 +220,37 @@ func test_create_script_overwrite_omits_cleanup_hint() -> void:
 	DirAccess.remove_absolute(path)
 
 
+func test_extract_class_name_handles_all_forms() -> void:
+	## Deterministic coverage of the parser behind the scan_required hint,
+	## including the icon form `class_name Foo, "res://icon.svg"` which must yield
+	## just "Foo" (and a script with no class_name yields "").
+	assert_eq(ScriptHandler._extract_class_name("class_name Foo\nextends Node\n"), "Foo")
+	assert_eq(ScriptHandler._extract_class_name("class_name Foo extends Node\n"), "Foo")
+	assert_eq(
+		ScriptHandler._extract_class_name("@tool\nclass_name Foo, \"res://icon.svg\"\nextends Resource\n"),
+		"Foo"
+	)
+	assert_eq(ScriptHandler._extract_class_name("extends Node\nvar x := 1\n"), "")
+
+
 func test_create_script_emits_scan_required_for_unregistered_class_name() -> void:
-	## A newly-written class_name isn't in the global class table until a
-	## filesystem scan runs (update_file doesn't register it), so create_script
-	## flags it so headless callers know to follow up with op="scan". The unique
-	## name guarantees it isn't already registered on a clean checkout.
+	## A newly-written class_name isn't in the global class table until a scan
+	## (update_file doesn't register it), so create_script flags it for headless
+	## callers. Guard against re-run contamination: once created in a persistent
+	## editor the class stays globally registered, which both suppresses the hint
+	## and makes re-creating it a parse error ("hides a global script class") —
+	## skip rather than fail there; a fresh CI editor always runs it.
+	var probe := "_McpScanReqProbe"
+	if ScriptHandler._class_name_registered(probe):
+		skip("%s already globally registered (re-run in a persistent editor)" % probe)
+		return
 	var path := "res://tests/_mcp_scan_hint_probe.gd"
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)
-	var content := "@tool\nclass_name _McpScanHintProbe\nextends Resource\n"
+	var content := "@tool\nclass_name %s\nextends Resource\n" % probe
 	var result := _handler.create_script({"path": path, "content": content})
 	assert_has_key(result, "data")
-	assert_eq(result.data.get("class_name", ""), "_McpScanHintProbe")
+	assert_eq(result.data.get("class_name", ""), probe)
 	assert_eq(result.data.get("class_registration", ""), "scan_required")
 	assert_true(result.data.has("class_registration_hint"), "should include a hint")
 	DirAccess.remove_absolute(path)
@@ -246,7 +265,11 @@ func test_create_script_omits_scan_required_for_invalid_class_name_script() -> v
 	var path := "res://tests/_mcp_scan_hint_invalid.gd"
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)
-	var content := "@tool\nclass_name _McpScanHintInvalid\nextends Resource\nfunc _bad():\n\tif\n"
+	var content := "@tool\nclass_name _McpScanHintInvalid\nextends Resource\n\nfunc _bad() -> void:\n\tif\n\tpass\n"
+	# The invalid `if` deliberately fails to parse; whitelist that SCRIPT ERROR
+	# so the framework doesn't abort the test (same pattern as the diagnostics
+	# tests above).
+	_expect_invalid_if_parse_errors()
 	var result := _handler.create_script({"path": path, "content": content})
 	assert_has_key(result, "data")
 	assert_false(
