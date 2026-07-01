@@ -269,11 +269,7 @@ func _collect_deferred_timeouts() -> Array[Dictionary]:
 
 
 func _stamp_error_watermark(response: Dictionary) -> void:
-	if _surfaced_error_tracker == null:
-		return
-	if not _surfaced_error_tracker.has_method("watermark"):
-		return
-	response["error_watermark"] = _surfaced_error_tracker.watermark()
+	McpSurfacedErrorTracker.stamp_watermark(response, _surfaced_error_tracker)
 
 
 static func _capture_compact_backtrace(max_frames: int = 8) -> String:

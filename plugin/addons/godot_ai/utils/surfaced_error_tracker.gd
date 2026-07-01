@@ -10,6 +10,7 @@ extends RefCounted
 ## dispatcher stamps a watermark on each response envelope.
 
 const MAX_PROMOTED_DEBUGGER_ENTRIES := 500
+const MAX_SUPPRESSED_DEBUGGER_KEYS := 5000
 const DEBUGGER_REFRESH_MIN_INTERVAL_MS := 250
 const DEBUGGER_SCAN_AFTER_STOP_MS := 5000
 
@@ -71,6 +72,14 @@ func watermark(force_debugger_scan: bool = false) -> Dictionary:
 	}
 
 
+static func stamp_watermark(response: Dictionary, tracker) -> void:
+	if tracker == null:
+		return
+	if not tracker.has_method("watermark"):
+		return
+	response["error_watermark"] = tracker.watermark()
+
+
 func debugger_promoted_total(force_debugger_scan: bool = true) -> int:
 	refresh_debugger_errors(force_debugger_scan)
 	return _debugger_promoted_total
@@ -79,12 +88,17 @@ func debugger_promoted_total(force_debugger_scan: bool = true) -> int:
 func collect_editor_log_entries() -> Array[Dictionary]:
 	refresh_debugger_errors(true)
 	var entries: Array[Dictionary] = []
+	var seen_keys: Dictionary = {}
 	if _editor_log_buffer != null:
 		for entry in _editor_log_buffer.get_range(0, _editor_log_buffer.total_count()):
+			seen_keys[_log_entry_key(entry)] = true
 			entries.append(entry)
 	for entry in read_debugger_error_entries():
-		if not _has_equivalent_log_entry(entries, entry):
-			entries.append(entry)
+		var key := _log_entry_key(entry)
+		if seen_keys.has(key):
+			continue
+		seen_keys[key] = true
+		entries.append(entry)
 	return entries
 
 
@@ -116,10 +130,14 @@ func retained_recent_editor_entries() -> Array[Dictionary]:
 
 func read_debugger_error_entries() -> Array[Dictionary]:
 	var entries: Array[Dictionary] = []
+	var seen_keys: Dictionary = {}
 	for tree in locate_debugger_error_trees():
 		for entry in entries_from_debugger_error_tree(tree):
-			if not _has_equivalent_log_entry(entries, entry):
-				entries.append(entry)
+			var key := _log_entry_key(entry)
+			if seen_keys.has(key):
+				continue
+			seen_keys[key] = true
+			entries.append(entry)
 	return entries
 
 
@@ -289,14 +307,6 @@ static func _function_from_frame_text(text: String) -> String:
 	return fn
 
 
-static func _has_equivalent_log_entry(entries: Array[Dictionary], candidate: Dictionary) -> bool:
-	var key := _log_entry_key(candidate)
-	for entry in entries:
-		if _log_entry_key(entry) == key:
-			return true
-	return false
-
-
 static func _log_entry_key(entry: Dictionary) -> String:
 	return "%s|%s|%s|%s" % [
 		str(entry.get("level", "")),
@@ -319,7 +329,7 @@ func _trim_promoted_debugger_entries() -> void:
 		_promoted_debugger_keys.erase(key)
 		_suppressed_debugger_keys[key] = true
 		_suppressed_debugger_key_order.append(key)
-	while _suppressed_debugger_key_order.size() > MAX_PROMOTED_DEBUGGER_ENTRIES:
+	while _suppressed_debugger_key_order.size() > MAX_SUPPRESSED_DEBUGGER_KEYS:
 		_suppressed_debugger_keys.erase(_suppressed_debugger_key_order.pop_front())
 	if _promoted_debugger_entries.is_empty():
 		_oldest_retained_debugger_sequence = _debugger_promoted_total + 1

@@ -152,7 +152,6 @@ class TestCommandRoundTrip:
 
         assert "new_errors_since_last_call" not in first
         session = harness.registry.get("err-baseline")
-        assert session.error_watermark_seen is True
         assert session.error_watermark["debugger_promoted"] == 1
         await plugin.close()
 
@@ -238,6 +237,45 @@ class TestCommandRoundTrip:
         assert "new_errors_since_last_call" not in first
         assert "new_errors_since_last_call" not in second
         assert third["new_errors_since_last_call"] == 1
+        await plugin.close()
+
+    async def test_error_watermark_missing_key_retains_prior_baseline(self, harness):
+        plugin = await harness.connect_plugin(session_id="err-missing-key")
+        client = GodotClient(harness.server, harness.registry)
+
+        async def mock_handler():
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 1},
+                error_watermark={"debugger_promoted": 4, "game_error_warn": 1},
+            )
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 2},
+                error_watermark={"game_error_warn": 2},
+            )
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 3},
+                error_watermark={"debugger_promoted": 5},
+            )
+
+        handler_task = asyncio.create_task(mock_handler())
+        first = await client.send("get_editor_state")
+        second = await client.send("get_editor_state")
+        third = await client.send("get_editor_state")
+        await handler_task
+
+        assert "new_errors_since_last_call" not in first
+        assert second["new_errors_since_last_call"] == 1
+        assert third["new_errors_since_last_call"] == 1
+        assert harness.registry.get("err-missing-key").error_watermark == {
+            "debugger_promoted": 5,
+            "game_error_warn": 2,
+        }
         await plugin.close()
 
     async def test_command_with_params(self, harness):

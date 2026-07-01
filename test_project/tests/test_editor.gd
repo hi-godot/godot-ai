@@ -1449,6 +1449,11 @@ func test_surfaced_error_tracker_caps_promoted_debugger_entries() -> void:
 	assert_true(captured.truncated, "Trimmed debugger entries should be reported as truncated")
 	assert_eq(captured.entries.size(), McpSurfacedErrorTracker.MAX_PROMOTED_DEBUGGER_ENTRIES)
 	assert_eq(captured.entries[0].text, "Synthetic Error 5")
+	assert_eq(
+		tracker.watermark(true).debugger_promoted,
+		McpSurfacedErrorTracker.MAX_PROMOTED_DEBUGGER_ENTRIES + 7,
+		"Trimmed but still-visible debugger rows must not be promoted again",
+	)
 	tree.free()
 
 

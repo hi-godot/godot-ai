@@ -462,11 +462,7 @@ static func _make_backpressure_error(
 
 
 func _stamp_error_watermark(response: Dictionary) -> void:
-	if surfaced_error_tracker == null:
-		return
-	if not surfaced_error_tracker.has_method("watermark"):
-		return
-	response["error_watermark"] = surfaced_error_tracker.watermark()
+	McpSurfacedErrorTracker.stamp_watermark(response, surfaced_error_tracker)
 
 
 ## Build a human-readable session ID of form "<slug>@<4hex>" from the project path.
