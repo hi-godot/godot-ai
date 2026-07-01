@@ -126,7 +126,7 @@ url = "http://127.0.0.1:8000/mcp"
 enabled = true
 ```
 
-**Antigravity** (`~/.gemini/antigravity/mcp_config.json`)
+**Antigravity** (`~/.gemini/config/mcp_config.json`)
 
 ```json
 {
