@@ -189,4 +189,16 @@ class GodotClient:
                 data=error.data if error else {},
             )
 
+        if response.new_errors_since_last_call > 0:
+            data = dict(response.data)
+            count = response.new_errors_since_last_call
+            data["new_errors_since_last_call"] = count
+            plural = "s" if count != 1 else ""
+            data["new_errors_hint"] = (
+                f"{count} new GDScript error{plural} since your last call. "
+                "Inspect with logs_read(source='editor', include_details=true) "
+                "and/or logs_read(source='game', include_details=true)."
+            )
+            return data
+
         return response.data

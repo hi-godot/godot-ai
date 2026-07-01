@@ -780,6 +780,19 @@ func test_game_log_buffer_unknown_level_coerces_to_info() -> void:
 	assert_eq(entries[0].level, "info", "Unknown level should coerce to info")
 
 
+func test_game_log_buffer_error_warn_total_ignores_info_and_resets_per_run() -> void:
+	var buf := McpGameLogBuffer.new()
+	buf.append("info", "ready")
+	buf.append("warn", "careful")
+	buf.append("error", "boom")
+	assert_eq(buf.error_warn_total(), 2)
+	buf.clear_for_new_run()
+	assert_eq(buf.error_warn_total(), 0, "new game runs start a fresh error watermark")
+	buf.append("info", "chatty print")
+	buf.append("error", "new run boom")
+	assert_eq(buf.error_warn_total(), 1)
+
+
 func test_game_log_buffer_preserves_details() -> void:
 	var buf := McpGameLogBuffer.new()
 	buf.append("error", "boom", {
@@ -1396,6 +1409,31 @@ func test_get_logs_source_editor_reads_debugger_errors_tree() -> void:
 	assert_eq(result.data.lines[0].function, "GDScript::reload")
 	assert_eq(result.data.lines[1].level, "error")
 	assert_eq(result.data.lines[1].path, "res://scripts/broken.gd")
+
+
+func test_surfaced_error_tracker_promotes_debugger_rows_into_watermark() -> void:
+	var tree := _make_debugger_errors_tree()
+	var tracker := McpSurfacedErrorTracker.new(null, null, tree)
+	var watermark := tracker.watermark()
+	assert_eq(watermark.editor_ring, 0)
+	assert_eq(watermark.debugger_promoted, 2)
+	assert_eq(watermark.game_error_warn, 0)
+	var second := tracker.watermark()
+	assert_eq(second.debugger_promoted, 2, "same visible rows must not double-count")
+	tree.free()
+
+
+func test_surfaced_error_tracker_editor_entries_since_includes_debugger_only_rows() -> void:
+	var tree := _make_debugger_errors_tree()
+	var tracker := McpSurfacedErrorTracker.new(null, null, tree)
+	var baseline := 0
+	var captured := tracker.editor_entries_since(0, baseline)
+	assert_eq(captured.entries.size(), 2)
+	assert_eq(captured.entries[1].text, "Parse Error: Expected statement")
+	baseline = tracker.debugger_promoted_total()
+	var after_baseline := tracker.editor_entries_since(0, baseline)
+	assert_eq(after_baseline.entries.size(), 0)
+	tree.free()
 
 
 func test_get_logs_source_editor_details_include_debugger_errors_children() -> void:

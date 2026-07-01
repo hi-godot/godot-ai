@@ -1,0 +1,278 @@
+@tool
+class_name McpSurfacedErrorTracker
+extends RefCounted
+
+## Central source for "errors the agent should know exist".
+##
+## Editor log cursors only cover McpEditorLogBuffer. Runtime errors from the
+## game subprocess can land solely in the Debugger Errors tab, so this tracker
+## promotes visible Debugger-tab rows into a monotonic sequence before the
+## dispatcher stamps a watermark on each response envelope.
+
+var _editor_log_buffer: McpEditorLogBuffer
+var _game_log_buffer: McpGameLogBuffer
+var _debugger_errors_root: Node
+var _debugger_search_root_cache: Node
+var _promoted_debugger_keys: Dictionary = {}
+var _promoted_debugger_entries: Array[Dictionary] = []
+var _debugger_promoted_total := 0
+
+
+func _init(editor_log_buffer: McpEditorLogBuffer = null, game_log_buffer: McpGameLogBuffer = null, debugger_errors_root: Node = null) -> void:
+	_editor_log_buffer = editor_log_buffer
+	_game_log_buffer = game_log_buffer
+	_debugger_errors_root = debugger_errors_root
+
+
+func refresh_debugger_errors() -> void:
+	for entry in _read_debugger_error_entries():
+		var key := _log_entry_key(entry)
+		if _promoted_debugger_keys.has(key):
+			continue
+		_promoted_debugger_keys[key] = true
+		var promoted := entry.duplicate(true)
+		_debugger_promoted_total += 1
+		promoted["_debugger_sequence"] = _debugger_promoted_total
+		_promoted_debugger_entries.append(promoted)
+
+
+func watermark() -> Dictionary:
+	refresh_debugger_errors()
+	return {
+		"editor_ring": _editor_log_buffer.appended_total() if _editor_log_buffer != null else 0,
+		"debugger_promoted": _debugger_promoted_total,
+		"game_error_warn": _game_log_buffer.error_warn_total() if _game_log_buffer != null else 0,
+	}
+
+
+func debugger_promoted_total() -> int:
+	refresh_debugger_errors()
+	return _debugger_promoted_total
+
+
+func collect_editor_log_entries() -> Array[Dictionary]:
+	refresh_debugger_errors()
+	var entries: Array[Dictionary] = []
+	if _editor_log_buffer != null:
+		for entry in _editor_log_buffer.get_range(0, _editor_log_buffer.total_count()):
+			entries.append(entry)
+	for entry in _read_debugger_error_entries():
+		if not _has_equivalent_log_entry(entries, entry):
+			entries.append(entry)
+	return entries
+
+
+func editor_entries_since(editor_cursor: int, debugger_cursor: int) -> Dictionary:
+	refresh_debugger_errors()
+	var entries: Array[Dictionary] = []
+	var truncated := false
+	if _editor_log_buffer != null:
+		var captured: Dictionary = _editor_log_buffer.get_since(maxi(0, editor_cursor), -1)
+		truncated = bool(captured.get("truncated", false))
+		for entry in captured.get("entries", []):
+			entries.append(entry)
+	for entry in _promoted_debugger_entries:
+		if int(entry.get("_debugger_sequence", 0)) > debugger_cursor:
+			entries.append(entry)
+	return {
+		"entries": entries,
+		"truncated": truncated,
+	}
+
+
+func retained_recent_editor_entries() -> Array[Dictionary]:
+	var entries := collect_editor_log_entries()
+	entries.reverse()
+	return entries
+
+
+func _read_debugger_error_entries() -> Array[Dictionary]:
+	var entries: Array[Dictionary] = []
+	for tree in _locate_debugger_error_trees():
+		for entry in _entries_from_debugger_error_tree(tree):
+			if not _has_equivalent_log_entry(entries, entry):
+				entries.append(entry)
+	return entries
+
+
+func _locate_debugger_error_trees() -> Array[Tree]:
+	var trees: Array[Tree] = []
+	var root: Node = _debugger_errors_root
+	if root == null:
+		root = _debugger_search_root()
+	if root == null:
+		return trees
+	_collect_debugger_error_trees(root, trees)
+	return trees
+
+
+func _debugger_search_root() -> Node:
+	if is_instance_valid(_debugger_search_root_cache):
+		return _debugger_search_root_cache
+	_debugger_search_root_cache = null
+	var base := EditorInterface.get_base_control()
+	if base == null:
+		return null
+	_debugger_search_root_cache = _find_first_of_class(base, "EditorDebuggerNode")
+	if _debugger_search_root_cache == null:
+		return base
+	return _debugger_search_root_cache
+
+
+static func _find_first_of_class(node: Node, klass: String) -> Node:
+	if node.get_class() == klass:
+		return node
+	for child in node.get_children():
+		var found := _find_first_of_class(child, klass)
+		if found != null:
+			return found
+	return null
+
+
+static func _collect_debugger_error_trees(node: Node, out: Array[Tree]) -> void:
+	if node is Tree and _tree_has_debugger_errors(node as Tree):
+		out.append(node as Tree)
+	for child in node.get_children():
+		if child is Node:
+			_collect_debugger_error_trees(child as Node, out)
+
+
+static func _tree_has_debugger_errors(tree: Tree) -> bool:
+	var root := tree.get_root()
+	if root == null:
+		return false
+	var item := root.get_first_child()
+	while item != null:
+		if _is_debugger_error_item(item):
+			return true
+		item = item.get_next()
+	return false
+
+
+static func _entries_from_debugger_error_tree(tree: Tree) -> Array[Dictionary]:
+	var entries: Array[Dictionary] = []
+	var root := tree.get_root()
+	if root == null:
+		return entries
+	var item := root.get_first_child()
+	while item != null:
+		if _is_debugger_error_item(item):
+			entries.append(_entry_from_debugger_error_item(item))
+		item = item.get_next()
+	return entries
+
+
+static func _entry_from_debugger_error_item(item: TreeItem) -> Dictionary:
+	var title := item.get_text(1)
+	var loc := _location_from_metadata(item.get_metadata(0))
+	var function := _function_from_title(title)
+	return {
+		"source": "editor",
+		"level": "warn" if item.has_meta("_is_warning") else "error",
+		"text": title,
+		"path": str(loc.get("path", "")),
+		"line": int(loc.get("line", 0)),
+		"function": function,
+		"details": _details_from_debugger_error_item(item, loc, function),
+	}
+
+
+static func _details_from_debugger_error_item(item: TreeItem, loc: Dictionary, function: String) -> Dictionary:
+	var children: Array[Dictionary] = []
+	var child := item.get_first_child()
+	while child != null:
+		var child_loc := _location_from_metadata(child.get_metadata(0))
+		children.append({
+			"label": child.get_text(0),
+			"text": child.get_text(1),
+			"path": str(child_loc.get("path", "")),
+			"line": int(child_loc.get("line", 0)),
+		})
+		child = child.get_next()
+	return {
+		"debugger_tab": "Errors",
+		"time": item.get_text(0),
+		"message": item.get_text(1),
+		"error_type_name": "warning" if item.has_meta("_is_warning") else "error",
+		"source": {
+			"path": str(loc.get("path", "")),
+			"line": int(loc.get("line", 0)),
+			"function": function,
+		},
+		"resolved": {
+			"path": str(loc.get("path", "")),
+			"line": int(loc.get("line", 0)),
+			"function": function,
+		},
+		"children": children,
+		"frames": _frames_from_error_children(children),
+	}
+
+
+static func _is_debugger_error_item(item: TreeItem) -> bool:
+	return item.has_meta("_is_warning") or item.has_meta("_is_error")
+
+
+static func _frames_from_error_children(children: Array[Dictionary]) -> Array[Dictionary]:
+	var start := -1
+	for i in children.size():
+		if str(children[i].label).contains("Stack Trace"):
+			start = i
+			break
+	if start < 0:
+		for i in children.size():
+			if str(children[i].label).is_empty() and not str(children[i].path).is_empty():
+				start = maxi(i - 1, 0)
+				break
+	if start < 0:
+		return []
+	var frames: Array[Dictionary] = []
+	for i in range(start, children.size()):
+		if str(children[i].path).is_empty():
+			continue
+		frames.append({
+			"path": children[i].path,
+			"line": children[i].line,
+			"function": _function_from_frame_text(children[i].text),
+		})
+	return frames
+
+
+static func _location_from_metadata(meta: Variant) -> Dictionary:
+	if meta is Array and meta.size() >= 2:
+		return {"path": str(meta[0]), "line": int(meta[1])}
+	return {"path": "", "line": 0}
+
+
+static func _function_from_title(title: String) -> String:
+	var colon := title.find(": ")
+	if colon <= 0:
+		return ""
+	return title.substr(0, colon)
+
+
+static func _function_from_frame_text(text: String) -> String:
+	var marker := text.find(" @ ")
+	if marker < 0:
+		return ""
+	var fn := text.substr(marker + 3).strip_edges()
+	if fn.ends_with("()"):
+		fn = fn.substr(0, fn.length() - 2)
+	return fn
+
+
+static func _has_equivalent_log_entry(entries: Array[Dictionary], candidate: Dictionary) -> bool:
+	var key := _log_entry_key(candidate)
+	for entry in entries:
+		if _log_entry_key(entry) == key:
+			return true
+	return false
+
+
+static func _log_entry_key(entry: Dictionary) -> String:
+	return "%s|%s|%s|%s" % [
+		str(entry.get("level", "")),
+		str(entry.get("text", "")),
+		str(entry.get("path", "")),
+		str(entry.get("line", 0)),
+	]

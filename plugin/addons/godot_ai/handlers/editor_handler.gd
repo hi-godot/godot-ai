@@ -15,15 +15,19 @@ var _game_log_buffer: McpGameLogBuffer
 var _editor_log_buffer: McpEditorLogBuffer
 var _debugger_errors_root: Node
 var _debugger_search_root_cache: Node
+var _surfaced_error_tracker
 
 
-func _init(log_buffer: McpLogBuffer, connection: McpConnection = null, debugger_plugin: McpDebuggerPlugin = null, game_log_buffer: McpGameLogBuffer = null, editor_log_buffer: McpEditorLogBuffer = null, debugger_errors_root: Node = null) -> void:
+func _init(log_buffer: McpLogBuffer, connection: McpConnection = null, debugger_plugin: McpDebuggerPlugin = null, game_log_buffer: McpGameLogBuffer = null, editor_log_buffer: McpEditorLogBuffer = null, debugger_errors_root: Node = null, surfaced_error_tracker = null) -> void:
 	_log_buffer = log_buffer
 	_connection = connection
 	_debugger_plugin = debugger_plugin
 	_game_log_buffer = game_log_buffer
 	_editor_log_buffer = editor_log_buffer
 	_debugger_errors_root = debugger_errors_root
+	_surfaced_error_tracker = surfaced_error_tracker
+	if _surfaced_error_tracker == null:
+		_surfaced_error_tracker = McpSurfacedErrorTracker.new(_editor_log_buffer, _game_log_buffer, _debugger_errors_root)
 
 
 func get_editor_state(_params: Dictionary) -> Dictionary:
@@ -296,14 +300,7 @@ func _entries_for_response(entries: Array[Dictionary], include_details: bool) ->
 
 
 func _collect_editor_log_entries() -> Array[Dictionary]:
-	var entries: Array[Dictionary] = []
-	if _editor_log_buffer != null:
-		for entry in _editor_log_buffer.get_range(0, _editor_log_buffer.total_count()):
-			entries.append(entry)
-	for entry in _read_debugger_error_entries():
-		if not _has_equivalent_log_entry(entries, entry):
-			entries.append(entry)
-	return entries
+	return _surfaced_error_tracker.collect_editor_log_entries()
 
 
 func _read_debugger_error_entries() -> Array[Dictionary]:

@@ -48,6 +48,7 @@ class MockGodotPlugin:
         data: dict,
         status: str = "ok",
         readiness: str | None = None,
+        error_watermark: dict[str, int] | None = None,
     ) -> None:
         msg: dict = {"request_id": request_id, "status": status, "data": data}
         ## Mirror the real plugin: every dispatcher response carries a live
@@ -55,6 +56,8 @@ class MockGodotPlugin:
         ## simulate an old plugin pre-dating the per-envelope self-heal.
         if readiness is not None:
             msg["readiness"] = readiness
+        if error_watermark is not None:
+            msg["error_watermark"] = error_watermark
         await self.ws.send(json.dumps(msg))
 
     async def send_error(

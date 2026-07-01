@@ -8,6 +8,18 @@ const ProjectHandler := preload("res://addons/godot_ai/handlers/project_handler.
 ## that catches handlers returning malformed results (null, empty dict,
 ## or dicts missing both "data" and "error" keys).
 
+class _FakeErrorTracker:
+	extends RefCounted
+	var calls := 0
+
+	func watermark() -> Dictionary:
+		calls += 1
+		return {
+			"editor_ring": 1,
+			"debugger_promoted": 2,
+			"game_error_warn": 3,
+		}
+
 
 func suite_name() -> String:
 	return "dispatcher"
@@ -273,6 +285,22 @@ func test_tick_stamps_envelope_readiness_on_success_response() -> void:
 	)
 
 
+func test_tick_stamps_error_watermark_on_success_response() -> void:
+	var tracker := _FakeErrorTracker.new()
+	var d := McpDispatcher.new(McpLogBuffer.new(), tracker)
+	d.mcp_logging = false
+	d.register("ok_cmd", func(_p): return {"data": {"value": 1}})
+	d.enqueue({"request_id": "req-ew-ok", "command": "ok_cmd", "params": {}})
+
+	var responses := d.tick(100.0)
+	assert_eq(responses.size(), 1)
+	assert_has_key(responses[0], "error_watermark")
+	assert_eq(responses[0].error_watermark.editor_ring, 1)
+	assert_eq(responses[0].error_watermark.debugger_promoted, 2)
+	assert_eq(responses[0].error_watermark.game_error_warn, 3)
+	assert_eq(tracker.calls, 1)
+
+
 func test_tick_stamps_envelope_readiness_on_handler_error_response() -> void:
 	## Error replies must also self-heal the cache. Otherwise an agent
 	## retrying a recoverable error sees the stale "playing" cache and
@@ -287,6 +315,20 @@ func test_tick_stamps_envelope_readiness_on_handler_error_response() -> void:
 	assert_eq(responses.size(), 1)
 	assert_is_error(responses[0], ErrorCodes.NODE_NOT_FOUND)
 	assert_has_key(responses[0], "readiness")
+
+
+func test_tick_stamps_error_watermark_on_handler_error_response() -> void:
+	var tracker := _FakeErrorTracker.new()
+	var d := McpDispatcher.new(McpLogBuffer.new(), tracker)
+	d.mcp_logging = false
+	d.register("bad_cmd", func(_p):
+		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, "no such node"))
+	d.enqueue({"request_id": "req-ew-err", "command": "bad_cmd", "params": {}})
+
+	var responses := d.tick(100.0)
+	assert_eq(responses.size(), 1)
+	assert_is_error(responses[0], ErrorCodes.NODE_NOT_FOUND)
+	assert_eq(responses[0].error_watermark.game_error_warn, 3)
 
 
 func test_tick_stamps_envelope_readiness_on_deferred_timeout_response() -> void:
@@ -308,3 +350,22 @@ func test_tick_stamps_envelope_readiness_on_deferred_timeout_response() -> void:
 	assert_eq(responses.size(), 1)
 	assert_is_error(responses[0], ErrorCodes.DEFERRED_TIMEOUT)
 	assert_has_key(responses[0], "readiness")
+
+
+func test_tick_stamps_error_watermark_on_deferred_timeout_response() -> void:
+	var tracker := _FakeErrorTracker.new()
+	var d := McpDispatcher.new(McpLogBuffer.new(), tracker)
+	d.mcp_logging = false
+	d.deferred_timeout_overrides_ms["never_replies"] = 1
+	d.register("never_replies", func(_p): return McpDispatcher.DEFERRED_RESPONSE)
+	d.enqueue({"request_id": "req-ew-defer", "command": "never_replies", "params": {}})
+
+	d.tick(100.0)
+	var responses: Array[Dictionary] = []
+	var started := Time.get_ticks_msec()
+	while responses.is_empty() and Time.get_ticks_msec() - started < 100:
+		responses = d.tick(100.0)
+
+	assert_eq(responses.size(), 1)
+	assert_is_error(responses[0], ErrorCodes.DEFERRED_TIMEOUT)
+	assert_eq(responses[0].error_watermark.debugger_promoted, 2)

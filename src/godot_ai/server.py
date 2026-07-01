@@ -257,7 +257,9 @@ def create_server(
             "  godot://test/results\n\n"
             "Always connect to an editor session first (session_activate or "
             'session_manage(op="list")). Write operations require session readiness; '
-            "check editor_state if a call is rejected as 'not writable'."
+            "check editor_state if a call is rejected as 'not writable'. After driving a "
+            "running game, check logs_read(source='editor' or 'game', include_details=true) "
+            "before declaring a feature verified."
         ),
         lifespan=_lifespan,
     )

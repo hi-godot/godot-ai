@@ -77,6 +77,34 @@ class TestCommandResponse:
         assert parsed.request_id == "abc123"
         assert parsed.data == {"version": "4.4"}
 
+    def test_error_watermark_is_optional_for_old_plugins(self):
+        resp = CommandResponse(
+            request_id="abc123",
+            status="ok",
+            data={},
+        )
+        assert resp.error_watermark is None
+        assert resp.new_errors_since_last_call == 0
+
+    def test_error_watermark_parses_from_new_plugins(self):
+        parsed = CommandResponse.model_validate(
+            {
+                "request_id": "abc123",
+                "status": "ok",
+                "data": {},
+                "error_watermark": {
+                    "editor_ring": 1,
+                    "debugger_promoted": 2,
+                    "game_error_warn": 3,
+                },
+            }
+        )
+        assert parsed.error_watermark == {
+            "editor_ring": 1,
+            "debugger_promoted": 2,
+            "game_error_warn": 3,
+        }
+
 
 class TestHandshakeMessage:
     def test_defaults(self):

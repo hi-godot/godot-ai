@@ -65,6 +65,7 @@ const EVAL_PROBE_INTERVAL_SEC := 0.35
 var _log_buffer: McpLogBuffer
 var _game_log_buffer: McpGameLogBuffer
 var _editor_log_buffer: McpEditorLogBuffer
+var _surfaced_error_tracker
 
 ## Pending request_id -> {connection, timer, timeout_callable}.
 ## We retain the bound timeout lambda so `_clear_pending` can disconnect
@@ -83,14 +84,16 @@ var _game_session_id := -1
 var _game_run_active := false
 var _game_run_started_msec := 0
 var _game_run_started_editor_cursor := 0
+var _game_run_started_debugger_cursor := 0
 var _game_helper_expected := true
 signal game_ready
 
 
-func _init(log_buffer: McpLogBuffer = null, game_log_buffer: McpGameLogBuffer = null, editor_log_buffer: McpEditorLogBuffer = null) -> void:
+func _init(log_buffer: McpLogBuffer = null, game_log_buffer: McpGameLogBuffer = null, editor_log_buffer: McpEditorLogBuffer = null, surfaced_error_tracker = null) -> void:
 	_log_buffer = log_buffer
 	_game_log_buffer = game_log_buffer
 	_editor_log_buffer = editor_log_buffer
+	_surfaced_error_tracker = surfaced_error_tracker
 
 
 func _has_capture(prefix: String) -> bool:
@@ -120,6 +123,7 @@ func begin_game_run(editor_log_cursor: int = 0, helper_expected: bool = true) ->
 	_game_session_id = -1
 	_game_run_started_msec = Time.get_ticks_msec()
 	_game_run_started_editor_cursor = maxi(0, editor_log_cursor)
+	_game_run_started_debugger_cursor = _surfaced_error_tracker.debugger_promoted_total() if _surfaced_error_tracker != null else 0
 	_game_helper_expected = helper_expected
 	var run_id := ""
 	if _game_log_buffer:
@@ -224,6 +228,28 @@ func recent_editor_errors_since(cursor: int) -> Dictionary:
 func _recent_editor_errors_since(cursor: int) -> Dictionary:
 	var out: Array[Dictionary] = []
 	var truncated := false
+	if _surfaced_error_tracker != null:
+		var captured_by_tracker: Dictionary = _surfaced_error_tracker.editor_entries_since(maxi(0, cursor), _game_run_started_debugger_cursor)
+		truncated = bool(captured_by_tracker.get("truncated", false))
+		for raw_entry in captured_by_tracker.get("entries", []):
+			var compact := _compact_editor_error(raw_entry)
+			if compact.is_empty():
+				continue
+			out.append(compact)
+			if out.size() >= 5:
+				break
+		if not out.is_empty():
+			return {"errors": out, "truncated": truncated, "scope": "run"}
+		for raw_entry in _surfaced_error_tracker.retained_recent_editor_entries():
+			var compact := _compact_editor_error(raw_entry, true)
+			if compact.is_empty():
+				continue
+			out.append(compact)
+			if out.size() >= 5:
+				break
+		if not out.is_empty():
+			return {"errors": out, "truncated": false, "scope": "retained_recent"}
+		return {"errors": out, "truncated": false, "scope": "none"}
 	if _editor_log_buffer == null:
 		return {"errors": out, "truncated": false, "scope": "none"}
 	var captured: Dictionary = _editor_log_buffer.get_since(maxi(0, cursor), -1)

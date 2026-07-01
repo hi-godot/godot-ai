@@ -225,6 +225,10 @@ class GodotWebSocketServer:
                 ## existing event-driven path still applies.
                 if response.readiness is not None and live is not None:
                     sync_readiness_for_session(live, response.readiness)
+                if response.error_watermark is not None and live is not None:
+                    response.new_errors_since_last_call = _sync_error_watermark_for_session(
+                        live, response.error_watermark
+                    )
                 future = self._pending.pop(response.request_id, None)
                 if future and not future.done():
                     future.set_result(response)
@@ -320,3 +324,29 @@ class GodotWebSocketServer:
             )
         finally:
             self._pending.pop(request.request_id, None)
+
+
+def _sync_error_watermark_for_session(session: Session, value: dict[str, int]) -> int:
+    """Update a session's error watermark and return newly observed errors.
+
+    Watermark components reset independently: game error/warn count resets on a
+    new run, while editor/debugger counters are session-scoped. A decrease is
+    therefore treated as a reset and the current component value is counted as
+    new only when it is above zero.
+    """
+
+    new_total = 0
+    normalized: dict[str, int] = {}
+    for key, raw_current in value.items():
+        try:
+            current = max(0, int(raw_current))
+        except (TypeError, ValueError):
+            continue
+        previous = max(0, int(session.error_watermark.get(key, 0)))
+        if current >= previous:
+            new_total += current - previous
+        else:
+            new_total += current
+        normalized[key] = current
+    session.error_watermark = normalized
+    return new_total
