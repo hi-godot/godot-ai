@@ -162,6 +162,26 @@ The plugin starts or reuses the Python server, connects over WebSocket, and expo
 </details>
 
 <details>
+<summary><strong>Remote / LAN access (<code>--allow-host</code>)</strong></summary>
+
+The MCP server binds to `127.0.0.1` by default. To reach it from another
+machine on your network (e.g. a remote coding agent), pass `--allow-host`
+with a CIDR or bare IP when launching the server:
+
+```bash
+godot-ai --allow-host 192.168.1.0/24
+```
+
+This binds the HTTP transport off loopback and gates every request on the
+real (unforgeable) socket peer address, so only hosts inside the named
+range(s) get in — DNS-rebinding defenses (Origin / Host / Sec-Fetch-Site
+checks) stay active. The plugin's WebSocket bridge to the editor always
+stays loopback-only since it's unauthenticated. Only name ranges you trust;
+prefer an SSH tunnel or Tailscale on untrusted networks.
+
+</details>
+
+<details>
 <summary><strong>Windows: <code>uvx mcp-proxy</code> won't start (<code>pywin32</code> install fails)</strong></summary>
 
 Symptom (in your MCP client's server log):
