@@ -166,7 +166,8 @@ The plugin starts or reuses the Python server, connects over WebSocket, and expo
 
 The MCP server binds to `127.0.0.1` by default. To reach it from another
 machine on your network (e.g. a remote coding agent), pass `--allow-host`
-with a CIDR or bare IP when launching the server:
+with one or more CIDRs or bare IPs (repeat the flag or comma-separate
+values) when launching the server:
 
 ```bash
 godot-ai --allow-host 192.168.1.0/24
