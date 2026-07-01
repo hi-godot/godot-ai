@@ -432,6 +432,20 @@ jobs:
         run: godot --path test_project --editor &
 
       - name: Run capture smoke test
-        timeout-minutes: 5
+        ## Covers the worst case of the script's internal ceilings: 120s
+        ## session wait + 180s capture-ready wait + 120s capture budget.
+        timeout-minutes: 10
         shell: bash
+        env:
+          ## Stream output as it happens — a killed/timed-out step otherwise
+          ## loses the buffered attempt log entirely.
+          PYTHONUNBUFFERED: "1"
         run: python script/ci-game-capture-smoke
+
+      - name: Upload capture diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: capture-smoke-diag-${{ matrix.label }}
+          path: capture-smoke-diag/
+          if-no-files-found: ignore

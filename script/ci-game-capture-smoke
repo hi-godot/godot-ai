@@ -9,14 +9,25 @@ streamable-HTTP transport:
   1. wait for the plugin's WebSocket session to register
   2. open res://capture_smoke.tscn (four colored quadrants)
   3. run the project in that scene
-  4. poll editor_state until is_playing=true, then settle for a beat
-  5. call editor_screenshot(source="game")
-  6. decode the returned PNG, sample the centre of each quadrant
-  7. assert each sample matches red / green / blue / white within tolerance
-  8. stop the project
+  4. poll editor_state until is_playing=true AND game_capture_ready=true
+  5. capture-and-check loop until CAPTURE_BUDGET_SEC elapses:
+     call editor_screenshot(source="game"), decode the returned PNG,
+     sample the centre of each quadrant, and pass when every sample
+     matches red / green / blue / white within tolerance
+  6. stop the project
 
-Exits non-zero on any failure — each assertion prints a diagnostic line so
-CI logs show exactly which quadrant drifted.
+The retry loop (not a fixed settle sleep) is deliberate: on GitHub's
+GPU-less paravirtualized macOS runners the game subprocess presents its
+first real frame nondeterministically late, so a single early capture
+either times out inside the bridge or reads back the pre-first-draw
+clear-color framebuffer (a uniform RGB(77,77,77) image). Polling until a
+correct frame arrives makes the test deterministic on slow runners while
+a genuine capture regression still fails every attempt until the budget
+expires.
+
+Exits non-zero on failure — each attempt prints per-quadrant diagnostics,
+and the final failure writes the last captured PNG plus an attempt log to
+CAPTURE_DIAG_DIR (default capture-smoke-diag/) for CI artifact upload.
 
 The core capture path is independent of Godot's render backend, but only
 returns game pixels when Godot can actually rasterise — on a headless
@@ -57,6 +68,15 @@ QUADRANTS = [
 ## the framebuffer's linear → sRGB conversion. 40/255 easily covers that
 ## while still catching "returned editor UI instead of game pixels".
 COLOR_TOLERANCE = 40
+## Total wall-clock budget for the capture-and-check retry loop, and the
+## pause between attempts. Sized against the macOS runner evidence: first
+## presents have been observed lagging tens of seconds behind the helper's
+## boot beacon.
+CAPTURE_BUDGET_SEC = float(os.environ.get("CAPTURE_BUDGET_SEC", "120"))
+CAPTURE_RETRY_DELAY_SEC = 2.0
+## Where the final-failure artifacts (last PNG + attempt log) land; CI
+## uploads this directory when the job fails.
+DIAG_DIR = os.environ.get("CAPTURE_DIAG_DIR", "capture-smoke-diag")
 
 
 def _post(session_id: str | None, body: dict, timeout: float = 10.0) -> dict:
@@ -150,7 +170,11 @@ def _wait_for_godot_session(session_id: str, timeout: float = 120.0) -> None:
     raise RuntimeError(f"Godot session never registered; last err: {last_err}")
 
 
-def _wait_for_game_capture_ready(session_id: str, timeout: float = 60.0) -> None:
+## 180s, not 60: run 28326896176 (macOS) showed the game subprocess taking
+## over a minute to boot far enough to register its capture on a
+## paravirtualized runner. The poll exits the moment it's ready, so the
+## ceiling only costs time when something is genuinely wrong.
+def _wait_for_game_capture_ready(session_id: str, timeout: float = 180.0) -> None:
     ## is_playing flips when the editor *spawns* the game subprocess; it does
     ## NOT imply the game's _mcp_game_helper autoload has reached _ready() and
     ## registered its EngineDebugger "mcp" capture. Sending take_screenshot
@@ -215,6 +239,103 @@ def _dump_diagnostics(session_id: str) -> None:
         print(f"[diag] logs_read failed: {exc}")
 
 
+def _capture_attempt(session_id: str, request_id: int) -> tuple[list[str], bytes | None]:
+    """One capture-and-check pass. Returns (failures, png_bytes).
+
+    An empty failures list means the frame passed every quadrant check.
+    Bridge errors (screenshot timeouts, not-live replies) come back as
+    failure strings rather than raising so the caller's retry loop treats
+    them the same as a blank frame — on slow runners they are the same
+    underlying condition (first present hasn't happened yet).
+    """
+    ## Fetch metadata (include_image=False) first: this is the easiest
+    ## way to assert the capture actually succeeded on the plugin side.
+    ## 40s HTTP timeout: an error reply can legitimately take up to the
+    ## editor's 20s ready-wait + 8s reply timer; a 20s socket timeout
+    ## would swallow the actionable error body.
+    meta = _tool_call(
+        session_id,
+        "editor_screenshot",
+        {"source": "game", "include_image": False, "max_resolution": 0},
+        request_id,
+        timeout=40,
+    )
+    if "source" in meta and meta["source"] != "game":
+        return ([f"metadata source mismatch: {meta}"], None)
+    if meta.get("error"):
+        return ([f"editor_screenshot returned error: {meta['error']}"], None)
+
+    ## For the image bytes, go back to the raw server response for the
+    ## include_image=True call: the transport puts an image content
+    ## block alongside the text block, base64-encoded.
+    body = {
+        "jsonrpc": "2.0",
+        "id": request_id + 1,
+        "method": "tools/call",
+        "params": {
+            "name": "editor_screenshot",
+            "arguments": {"source": "game", "include_image": True, "max_resolution": 0},
+        },
+    }
+    resp = _post(session_id, body, timeout=40)
+    raw = resp.get("_raw", "")
+    image_b64: str | None = None
+    for line in raw.splitlines():
+        if not line.startswith("data: "):
+            continue
+        data = json.loads(line[6:])
+        for block in data.get("result", {}).get("content", []):
+            if block.get("type") == "image" and block.get("mimeType", "").startswith("image/"):
+                image_b64 = block.get("data")
+                break
+        if image_b64:
+            break
+    if not image_b64:
+        return ([f"no image block in response; raw: {raw[:500]}"], None)
+
+    png = base64.b64decode(image_b64)
+    img = Image.open(io.BytesIO(png)).convert("RGB")
+    print(f"Got PNG {img.width}x{img.height} ({len(png)} bytes)")
+
+    if img.width < 64 or img.height < 64:
+        return ([f"image too small to sample: {img.width}x{img.height}"], png)
+
+    failures: list[str] = []
+    samples: list[tuple[int, int, int]] = []
+    for label, fx, fy, expected in QUADRANTS:
+        x = int(img.width * fx)
+        y = int(img.height * fy)
+        actual = img.getpixel((x, y))
+        samples.append(actual)
+        match = _within_tolerance(actual, expected)
+        symbol = "OK" if match else "FAIL"
+        print(f"  [{symbol}] {label:>6} @ ({x}, {y}): got {actual}, expected ~{expected}")
+        if not match:
+            failures.append(f"{label} at ({x}, {y}): got {actual}, expected {expected}")
+
+    if failures and len(set(samples)) == 1:
+        ## All four quadrants identical: the game presented a frame but the
+        ## scene hasn't drawn yet (Godot's clear color) — the signature
+        ## pre-first-present blank, worth naming in the log.
+        failures.append(
+            f"frame is uniform {samples[0]} — likely captured before the scene's first draw"
+        )
+    return (failures, png)
+
+
+def _write_diag_artifacts(attempt_log: list[str], last_png: bytes | None) -> None:
+    try:
+        os.makedirs(DIAG_DIR, exist_ok=True)
+        with open(os.path.join(DIAG_DIR, "attempts.log"), "w", encoding="utf-8") as fh:
+            fh.write("\n".join(attempt_log) + "\n")
+        if last_png:
+            with open(os.path.join(DIAG_DIR, "last-capture.png"), "wb") as fh:
+                fh.write(last_png)
+        print(f"Diagnostics written to {DIAG_DIR}/", file=sys.stderr)
+    except OSError as exc:
+        print(f"(diag) failed to write artifacts: {exc}", file=sys.stderr)
+
+
 def main() -> int:
     print(f"Connecting to MCP server at {SERVER_URL}")
     session_id = _initialize_session()
@@ -235,75 +356,44 @@ def main() -> int:
     try:
         _wait_for_game_capture_ready(session_id)
 
-        print("Capturing source='game'")
-        ## Fetch metadata (include_image=False) first: this is the easiest
-        ## way to assert the capture actually succeeded on the plugin side.
-        meta = _tool_call(
-            session_id,
-            "editor_screenshot",
-            {"source": "game", "include_image": False, "max_resolution": 0},
-            13,
-            timeout=20,
-        )
-        if "source" in meta and meta["source"] != "game":
-            raise RuntimeError(f"Metadata source mismatch: {meta}")
-        if meta.get("error"):
-            raise RuntimeError(f"editor_screenshot returned error: {meta}")
-
-        ## For the image bytes, go back to the raw server response for the
-        ## include_image=True call: the transport puts an image content
-        ## block alongside the text block, base64-encoded.
-        body = {
-            "jsonrpc": "2.0",
-            "id": 14,
-            "method": "tools/call",
-            "params": {
-                "name": "editor_screenshot",
-                "arguments": {"source": "game", "include_image": True, "max_resolution": 0},
-            },
-        }
-        resp = _post(session_id, body, timeout=20)
-        raw = resp.get("_raw", "")
-        image_b64: str | None = None
-        for line in raw.splitlines():
-            if not line.startswith("data: "):
-                continue
-            data = json.loads(line[6:])
-            for block in data.get("result", {}).get("content", []):
-                if block.get("type") == "image" and block.get("mimeType", "").startswith("image/"):
-                    image_b64 = block.get("data")
-                    break
-            if image_b64:
+        deadline = time.monotonic() + CAPTURE_BUDGET_SEC
+        attempt = 0
+        attempt_log: list[str] = []
+        last_failures: list[str] = []
+        last_png: bytes | None = None
+        while True:
+            attempt += 1
+            print(f"Capturing source='game' (attempt {attempt})")
+            try:
+                failures, png = _capture_attempt(session_id, 100 + attempt * 10)
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                failures, png = ([f"transport error: {exc}"], None)
+            if not failures:
+                print(f"\nCapture smoke test PASSED (attempt {attempt})")
+                return 0
+            last_failures = failures
+            if png:
+                last_png = png
+            summary = "; ".join(failures)
+            attempt_log.append(f"attempt {attempt}: {summary}")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 break
-        if not image_b64:
-            raise RuntimeError(f"No image block in response. Raw: {raw[:500]}")
+            print(
+                f"Attempt {attempt} not clean ({summary}); "
+                f"{remaining:.0f}s of budget left, retrying"
+            )
+            time.sleep(min(CAPTURE_RETRY_DELAY_SEC, max(0.0, remaining)))
 
-        png = base64.b64decode(image_b64)
-        img = Image.open(io.BytesIO(png)).convert("RGB")
-        print(f"Got PNG {img.width}x{img.height} ({len(png)} bytes)")
-
-        if img.width < 64 or img.height < 64:
-            raise RuntimeError(f"Image too small to sample: {img.width}x{img.height}")
-
-        failures: list[str] = []
-        for label, fx, fy, expected in QUADRANTS:
-            x = int(img.width * fx)
-            y = int(img.height * fy)
-            actual = img.getpixel((x, y))
-            match = _within_tolerance(actual, expected)
-            symbol = "OK" if match else "FAIL"
-            print(f"  [{symbol}] {label:>6} @ ({x}, {y}): got {actual}, expected ~{expected}")
-            if not match:
-                failures.append(f"{label} at ({x}, {y}): got {actual}, expected {expected}")
-
-        if failures:
-            print("\nCapture smoke test FAILED:")
-            for f in failures:
-                print(f"  - {f}")
-            return 1
-
-        print("\nCapture smoke test PASSED")
-        return 0
+        print(
+            f"\nCapture smoke test FAILED after {attempt} attempts "
+            f"over {CAPTURE_BUDGET_SEC:.0f}s:"
+        )
+        for f in last_failures:
+            print(f"  - {f}")
+        _dump_diagnostics(session_id)
+        _write_diag_artifacts(attempt_log, last_png)
+        return 1
     except Exception:
         print("\nCapture smoke test raised — dumping diagnostics:", file=sys.stderr)
         _dump_diagnostics(session_id)

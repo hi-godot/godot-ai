@@ -23,6 +23,19 @@ const CAPTURE_PREFIX := "mcp"
 ## Cap per-frame flush so a runaway print loop can't blow the debugger's
 ## packet budget in a single send. Surplus stays queued for the next frame.
 const FLUSH_BATCH_LIMIT := 200
+## How long take_screenshot waits for the game's first real presentation
+## before reading the viewport texture back. The "mcp" capture registers in
+## this autoload's _ready(), which runs BEFORE the main scene enters the tree
+## and before the renderer has presented anything — so a request arriving
+## right after mcp:hello would otherwise read back the clear-color
+## framebuffer (observed as a uniform RGB(77,77,77) PNG on GitHub's
+## GPU-less paravirtualized macOS runners, where the first present lags
+## seconds behind boot). MUST stay below the editor-side reply timer
+## (DEFAULT_TIMEOUT_SEC = 8.0 in debugger/mcp_debugger_plugin.gd) so a
+## game that genuinely can't render falls through to the existing
+## texture/image error replies before the editor gives up with its
+## generic timeout.
+const FIRST_FRAME_WAIT_SEC := 6.0
 
 const LoggerLoader := preload("res://addons/godot_ai/runtime/logger_loader.gd")
 
@@ -141,10 +154,24 @@ func _handle_take_screenshot(data: Array) -> void:
 	var request_id: String = data[0] if data.size() > 0 else ""
 	var max_resolution: int = int(data[1]) if data.size() > 1 else 0
 
-	var viewport := get_tree().root
+	var tree := get_tree()
+	var viewport := tree.root if tree != null else null
 	if viewport == null:
 		_reply_error(request_id, "No game root viewport available")
 		return
+
+	## Wait (bounded — see FIRST_FRAME_WAIT_SEC) until the main scene is in
+	## the tree and at least one frame has been drawn after this request, so
+	## the readback never precedes the first real present. Past the deadline,
+	## fall through anyway: current_scene stays null under a custom main
+	## loop, and frames_drawn never advances in a render-less game — both
+	## are handled by the texture/image error replies below.
+	var deadline := Time.get_ticks_msec() + int(FIRST_FRAME_WAIT_SEC * 1000.0)
+	while tree.current_scene == null and Time.get_ticks_msec() < deadline:
+		await tree.process_frame
+	var frames_at_request := Engine.get_frames_drawn()
+	while Engine.get_frames_drawn() <= frames_at_request and Time.get_ticks_msec() < deadline:
+		await tree.process_frame
 
 	var texture := viewport.get_texture()
 	if texture == null:
