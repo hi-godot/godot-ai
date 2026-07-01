@@ -123,7 +123,11 @@ func begin_game_run(editor_log_cursor: int = 0, helper_expected: bool = true) ->
 	_game_session_id = -1
 	_game_run_started_msec = Time.get_ticks_msec()
 	_game_run_started_editor_cursor = maxi(0, editor_log_cursor)
-	_game_run_started_debugger_cursor = _surfaced_error_tracker.debugger_promoted_total() if _surfaced_error_tracker != null else 0
+	if _surfaced_error_tracker != null:
+		_surfaced_error_tracker.note_game_run_started()
+		_game_run_started_debugger_cursor = _surfaced_error_tracker.debugger_promoted_total()
+	else:
+		_game_run_started_debugger_cursor = 0
 	_game_helper_expected = helper_expected
 	var run_id := ""
 	if _game_log_buffer:
@@ -140,6 +144,8 @@ func end_game_run() -> void:
 	_game_ready = false
 	_ready_run_token = -1
 	_game_session_id = -1
+	if _surfaced_error_tracker != null:
+		_surfaced_error_tracker.note_game_run_stopped()
 
 
 func is_game_capture_ready() -> bool:

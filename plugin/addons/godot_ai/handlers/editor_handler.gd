@@ -14,7 +14,6 @@ var _debugger_plugin: McpDebuggerPlugin
 var _game_log_buffer: McpGameLogBuffer
 var _editor_log_buffer: McpEditorLogBuffer
 var _debugger_errors_root: Node
-var _debugger_search_root_cache: Node
 var _surfaced_error_tracker
 
 
@@ -303,223 +302,12 @@ func _collect_editor_log_entries() -> Array[Dictionary]:
 	return _surfaced_error_tracker.collect_editor_log_entries()
 
 
-func _read_debugger_error_entries() -> Array[Dictionary]:
-	var entries: Array[Dictionary] = []
-	for tree in _locate_debugger_error_trees():
-		for entry in _entries_from_debugger_error_tree(tree):
-			if not _has_equivalent_log_entry(entries, entry):
-				entries.append(entry)
-	return entries
-
-
-func _locate_debugger_error_trees() -> Array[Tree]:
-	var trees: Array[Tree] = []
-	if _debugger_plugin == null and _debugger_errors_root == null:
-		return trees
-	var root: Node = _debugger_errors_root
-	if root == null:
-		root = _debugger_search_root()
-	if root == null:
-		return trees
-	_collect_debugger_error_trees(root, trees)
-	return trees
-
-
-func _debugger_search_root() -> Node:
-	## logs_read is a polling tool, so per-call discovery must not recurse the
-	## entire editor UI. EditorDebuggerNode is the bottom-panel container that
-	## owns every ScriptEditorDebugger session tab and lives for the editor's
-	## lifetime — find it once from the base control, then scan only its
-	## subtree on later calls. The error Trees themselves can't be cached:
-	## they are identified by their content, and an emptied tree is
-	## indistinguishable from any other Tree.
-	if is_instance_valid(_debugger_search_root_cache):
-		return _debugger_search_root_cache
-	_debugger_search_root_cache = null
-	var base := EditorInterface.get_base_control()
-	if base == null:
-		return null
-	_debugger_search_root_cache = _find_first_of_class(base, "EditorDebuggerNode")
-	if _debugger_search_root_cache == null:
-		return base
-	return _debugger_search_root_cache
-
-
-static func _find_first_of_class(node: Node, klass: String) -> Node:
-	if node.get_class() == klass:
-		return node
-	for child in node.get_children():
-		var found := _find_first_of_class(child, klass)
-		if found != null:
-			return found
-	return null
-
-
-static func _collect_debugger_error_trees(node: Node, out: Array[Tree]) -> void:
-	if node is Tree and _tree_has_debugger_errors(node as Tree):
-		out.append(node as Tree)
-	for child in node.get_children():
-		if child is Node:
-			_collect_debugger_error_trees(child as Node, out)
-
-
-static func _tree_has_debugger_errors(tree: Tree) -> bool:
-	var root := tree.get_root()
-	if root == null:
-		return false
-	var item := root.get_first_child()
-	while item != null:
-		if _is_debugger_error_item(item):
-			return true
-		item = item.get_next()
-	return false
-
-
-static func _entries_from_debugger_error_tree(tree: Tree) -> Array[Dictionary]:
-	var entries: Array[Dictionary] = []
-	var root := tree.get_root()
-	if root == null:
-		return entries
-	var item := root.get_first_child()
-	while item != null:
-		if _is_debugger_error_item(item):
-			entries.append(_entry_from_debugger_error_item(item))
-		item = item.get_next()
-	return entries
-
-
-static func _entry_from_debugger_error_item(item: TreeItem) -> Dictionary:
-	var title := item.get_text(1)
-	var loc := _location_from_metadata(item.get_metadata(0))
-	var function := _function_from_title(title)
-	return {
-		"source": "editor",
-		"level": "warn" if item.has_meta("_is_warning") else "error",
-		"text": title,
-		"path": str(loc.get("path", "")),
-		"line": int(loc.get("line", 0)),
-		"function": function,
-		"details": _details_from_debugger_error_item(item, loc, function),
-	}
-
-
-static func _details_from_debugger_error_item(item: TreeItem, loc: Dictionary, function: String) -> Dictionary:
-	var children: Array[Dictionary] = []
-	var child := item.get_first_child()
-	while child != null:
-		var child_loc := _location_from_metadata(child.get_metadata(0))
-		children.append({
-			"label": child.get_text(0),
-			"text": child.get_text(1),
-			"path": str(child_loc.get("path", "")),
-			"line": int(child_loc.get("line", 0)),
-		})
-		child = child.get_next()
-	return {
-		"debugger_tab": "Errors",
-		"time": item.get_text(0),
-		"message": item.get_text(1),
-		"error_type_name": "warning" if item.has_meta("_is_warning") else "error",
-		"source": {
-			"path": str(loc.get("path", "")),
-			"line": int(loc.get("line", 0)),
-			"function": function,
-		},
-		"resolved": {
-			"path": str(loc.get("path", "")),
-			"line": int(loc.get("line", 0)),
-			"function": function,
-		},
-		"children": children,
-		"frames": _frames_from_error_children(children),
-	}
-
-
-static func _is_debugger_error_item(item: TreeItem) -> bool:
-	return item.has_meta("_is_warning") or item.has_meta("_is_error")
-
-
-## ScriptEditorDebugger lays out an error item's children flat, in order: an
-## optional "<X Error>" row, one "<X Source>" row, then one row per stack
-## frame. Only frame 0 carries the "<Stack Trace>" label (TTR-translated);
-## later frames have an empty label. Every frame row carries [path, line]
-## metadata, but so can the Error/Source rows, so metadata alone can't
-## identify frames — the frame run has to be found first.
-static func _frames_from_error_children(children: Array[Dictionary]) -> Array[Dictionary]:
-	var start := -1
-	for i in children.size():
-		if str(children[i].label).contains("Stack Trace"):
-			start = i
-			break
-	if start < 0:
-		## Non-English editor locale: the "<Stack Trace>" label is translated.
-		## Frames past the first are the only rows with an empty label and a
-		## real location; back up one row to recover the labeled first frame
-		## (rows before the frame run always have a non-empty label).
-		for i in children.size():
-			if str(children[i].label).is_empty() and not str(children[i].path).is_empty():
-				start = maxi(i - 1, 0)
-				break
-	if start < 0:
-		return []
-	var frames: Array[Dictionary] = []
-	for i in range(start, children.size()):
-		if str(children[i].path).is_empty():
-			continue
-		frames.append({
-			"path": children[i].path,
-			"line": children[i].line,
-			"function": _function_from_frame_text(children[i].text),
-		})
-	return frames
-
-
-static func _location_from_metadata(meta: Variant) -> Dictionary:
-	if meta is Array and meta.size() >= 2:
-		return {"path": str(meta[0]), "line": int(meta[1])}
-	return {"path": "", "line": 0}
-
-
-static func _function_from_title(title: String) -> String:
-	var colon := title.find(": ")
-	if colon <= 0:
-		return ""
-	return title.substr(0, colon)
-
-
-static func _function_from_frame_text(text: String) -> String:
-	var marker := text.find(" @ ")
-	if marker < 0:
-		return ""
-	var fn := text.substr(marker + 3).strip_edges()
-	if fn.ends_with("()"):
-		fn = fn.substr(0, fn.length() - 2)
-	return fn
-
-
 static func _slice_entries(entries: Array[Dictionary], offset: int, count: int) -> Array[Dictionary]:
 	var page: Array[Dictionary] = []
 	var stop := mini(entries.size(), offset + count)
 	for i in range(mini(offset, entries.size()), stop):
 		page.append(entries[i])
 	return page
-
-
-static func _has_equivalent_log_entry(entries: Array[Dictionary], candidate: Dictionary) -> bool:
-	var key := _log_entry_key(candidate)
-	for entry in entries:
-		if _log_entry_key(entry) == key:
-			return true
-	return false
-
-
-static func _log_entry_key(entry: Dictionary) -> String:
-	return "%s|%s|%s|%s" % [
-		str(entry.get("level", "")),
-		str(entry.get("text", "")),
-		str(entry.get("path", "")),
-		str(entry.get("line", 0)),
-	]
 
 
 ## Map of human-readable monitor names to Performance.Monitor enum values.
@@ -1067,8 +855,8 @@ func clear_logs(params: Dictionary) -> Dictionary:
 
 func _clear_debugger_error_trees() -> int:
 	var cleared := 0
-	for tree in _locate_debugger_error_trees():
-		cleared += _entries_from_debugger_error_tree(tree).size()
+	for tree in _surfaced_error_tracker.locate_debugger_error_trees():
+		cleared += McpSurfacedErrorTracker.entries_from_debugger_error_tree(tree).size()
 		if not _press_debugger_clear_button(tree):
 			## No Clear button near this tree (synthetic roots in tests).
 			## A raw clear is acceptable there; the real panel always routes

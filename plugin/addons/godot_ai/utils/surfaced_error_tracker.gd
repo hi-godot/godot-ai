@@ -9,13 +9,23 @@ extends RefCounted
 ## promotes visible Debugger-tab rows into a monotonic sequence before the
 ## dispatcher stamps a watermark on each response envelope.
 
+const MAX_PROMOTED_DEBUGGER_ENTRIES := 500
+const DEBUGGER_REFRESH_MIN_INTERVAL_MS := 250
+const DEBUGGER_SCAN_AFTER_STOP_MS := 5000
+
 var _editor_log_buffer: McpEditorLogBuffer
 var _game_log_buffer: McpGameLogBuffer
 var _debugger_errors_root: Node
 var _debugger_search_root_cache: Node
 var _promoted_debugger_keys: Dictionary = {}
 var _promoted_debugger_entries: Array[Dictionary] = []
+var _suppressed_debugger_keys: Dictionary = {}
+var _suppressed_debugger_key_order: Array[String] = []
 var _debugger_promoted_total := 0
+var _oldest_retained_debugger_sequence := 1
+var _last_debugger_refresh_msec := -DEBUGGER_REFRESH_MIN_INTERVAL_MS
+var _debugger_scan_active := false
+var _debugger_scan_until_msec := 0
 
 
 func _init(editor_log_buffer: McpEditorLogBuffer = null, game_log_buffer: McpGameLogBuffer = null, debugger_errors_root: Node = null) -> void:
@@ -24,20 +34,36 @@ func _init(editor_log_buffer: McpEditorLogBuffer = null, game_log_buffer: McpGam
 	_debugger_errors_root = debugger_errors_root
 
 
-func refresh_debugger_errors() -> void:
-	for entry in _read_debugger_error_entries():
+func note_game_run_started() -> void:
+	_debugger_scan_active = true
+	_debugger_scan_until_msec = 0
+	refresh_debugger_errors(true)
+
+
+func note_game_run_stopped() -> void:
+	_debugger_scan_active = false
+	_debugger_scan_until_msec = Time.get_ticks_msec() + DEBUGGER_SCAN_AFTER_STOP_MS
+
+
+func refresh_debugger_errors(force: bool = true) -> void:
+	var now := Time.get_ticks_msec()
+	if not force and not _should_scan_debugger_for_cached_watermark(now):
+		return
+	_last_debugger_refresh_msec = now
+	for entry in read_debugger_error_entries():
 		var key := _log_entry_key(entry)
-		if _promoted_debugger_keys.has(key):
+		if _promoted_debugger_keys.has(key) or _suppressed_debugger_keys.has(key):
 			continue
 		_promoted_debugger_keys[key] = true
 		var promoted := entry.duplicate(true)
 		_debugger_promoted_total += 1
 		promoted["_debugger_sequence"] = _debugger_promoted_total
 		_promoted_debugger_entries.append(promoted)
+	_trim_promoted_debugger_entries()
 
 
-func watermark() -> Dictionary:
-	refresh_debugger_errors()
+func watermark(force_debugger_scan: bool = false) -> Dictionary:
+	refresh_debugger_errors(force_debugger_scan)
 	return {
 		"editor_ring": _editor_log_buffer.appended_total() if _editor_log_buffer != null else 0,
 		"debugger_promoted": _debugger_promoted_total,
@@ -45,25 +71,25 @@ func watermark() -> Dictionary:
 	}
 
 
-func debugger_promoted_total() -> int:
-	refresh_debugger_errors()
+func debugger_promoted_total(force_debugger_scan: bool = true) -> int:
+	refresh_debugger_errors(force_debugger_scan)
 	return _debugger_promoted_total
 
 
 func collect_editor_log_entries() -> Array[Dictionary]:
-	refresh_debugger_errors()
+	refresh_debugger_errors(true)
 	var entries: Array[Dictionary] = []
 	if _editor_log_buffer != null:
 		for entry in _editor_log_buffer.get_range(0, _editor_log_buffer.total_count()):
 			entries.append(entry)
-	for entry in _read_debugger_error_entries():
+	for entry in read_debugger_error_entries():
 		if not _has_equivalent_log_entry(entries, entry):
 			entries.append(entry)
 	return entries
 
 
 func editor_entries_since(editor_cursor: int, debugger_cursor: int) -> Dictionary:
-	refresh_debugger_errors()
+	refresh_debugger_errors(true)
 	var entries: Array[Dictionary] = []
 	var truncated := false
 	if _editor_log_buffer != null:
@@ -71,6 +97,8 @@ func editor_entries_since(editor_cursor: int, debugger_cursor: int) -> Dictionar
 		truncated = bool(captured.get("truncated", false))
 		for entry in captured.get("entries", []):
 			entries.append(entry)
+	if debugger_cursor < _oldest_retained_debugger_sequence - 1:
+		truncated = true
 	for entry in _promoted_debugger_entries:
 		if int(entry.get("_debugger_sequence", 0)) > debugger_cursor:
 			entries.append(entry)
@@ -86,16 +114,16 @@ func retained_recent_editor_entries() -> Array[Dictionary]:
 	return entries
 
 
-func _read_debugger_error_entries() -> Array[Dictionary]:
+func read_debugger_error_entries() -> Array[Dictionary]:
 	var entries: Array[Dictionary] = []
-	for tree in _locate_debugger_error_trees():
-		for entry in _entries_from_debugger_error_tree(tree):
+	for tree in locate_debugger_error_trees():
+		for entry in entries_from_debugger_error_tree(tree):
 			if not _has_equivalent_log_entry(entries, entry):
 				entries.append(entry)
 	return entries
 
 
-func _locate_debugger_error_trees() -> Array[Tree]:
+func locate_debugger_error_trees() -> Array[Tree]:
 	var trees: Array[Tree] = []
 	var root: Node = _debugger_errors_root
 	if root == null:
@@ -149,7 +177,7 @@ static func _tree_has_debugger_errors(tree: Tree) -> bool:
 	return false
 
 
-static func _entries_from_debugger_error_tree(tree: Tree) -> Array[Dictionary]:
+static func entries_from_debugger_error_tree(tree: Tree) -> Array[Dictionary]:
 	var entries: Array[Dictionary] = []
 	var root := tree.get_root()
 	if root == null:
@@ -276,3 +304,24 @@ static func _log_entry_key(entry: Dictionary) -> String:
 		str(entry.get("path", "")),
 		str(entry.get("line", 0)),
 	]
+
+
+func _should_scan_debugger_for_cached_watermark(now_msec: int) -> bool:
+	if not _debugger_scan_active and now_msec > _debugger_scan_until_msec:
+		return false
+	return now_msec - _last_debugger_refresh_msec >= DEBUGGER_REFRESH_MIN_INTERVAL_MS
+
+
+func _trim_promoted_debugger_entries() -> void:
+	while _promoted_debugger_entries.size() > MAX_PROMOTED_DEBUGGER_ENTRIES:
+		var removed: Dictionary = _promoted_debugger_entries.pop_front()
+		var key := _log_entry_key(removed)
+		_promoted_debugger_keys.erase(key)
+		_suppressed_debugger_keys[key] = true
+		_suppressed_debugger_key_order.append(key)
+	while _suppressed_debugger_key_order.size() > MAX_PROMOTED_DEBUGGER_ENTRIES:
+		_suppressed_debugger_keys.erase(_suppressed_debugger_key_order.pop_front())
+	if _promoted_debugger_entries.is_empty():
+		_oldest_retained_debugger_sequence = _debugger_promoted_total + 1
+	else:
+		_oldest_retained_debugger_sequence = int(_promoted_debugger_entries[0].get("_debugger_sequence", 1))

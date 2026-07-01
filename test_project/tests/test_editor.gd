@@ -1414,11 +1414,13 @@ func test_get_logs_source_editor_reads_debugger_errors_tree() -> void:
 func test_surfaced_error_tracker_promotes_debugger_rows_into_watermark() -> void:
 	var tree := _make_debugger_errors_tree()
 	var tracker := McpSurfacedErrorTracker.new(null, null, tree)
-	var watermark := tracker.watermark()
+	var cached := tracker.watermark()
+	assert_eq(cached.debugger_promoted, 0, "Inactive dispatch watermarks must be cheap cached reads")
+	var watermark := tracker.watermark(true)
 	assert_eq(watermark.editor_ring, 0)
 	assert_eq(watermark.debugger_promoted, 2)
 	assert_eq(watermark.game_error_warn, 0)
-	var second := tracker.watermark()
+	var second := tracker.watermark(true)
 	assert_eq(second.debugger_promoted, 2, "same visible rows must not double-count")
 	tree.free()
 
@@ -1433,6 +1435,20 @@ func test_surfaced_error_tracker_editor_entries_since_includes_debugger_only_row
 	baseline = tracker.debugger_promoted_total()
 	var after_baseline := tracker.editor_entries_since(0, baseline)
 	assert_eq(after_baseline.entries.size(), 0)
+	tree.free()
+
+
+func test_surfaced_error_tracker_caps_promoted_debugger_entries() -> void:
+	var tree := _make_debugger_errors_tree()
+	var root := tree.get_root()
+	for i in range(McpSurfacedErrorTracker.MAX_PROMOTED_DEBUGGER_ENTRIES + 5):
+		_append_debugger_error(root, i)
+	var tracker := McpSurfacedErrorTracker.new(null, null, tree)
+	assert_eq(tracker.watermark(true).debugger_promoted, McpSurfacedErrorTracker.MAX_PROMOTED_DEBUGGER_ENTRIES + 7)
+	var captured := tracker.editor_entries_since(0, 0)
+	assert_true(captured.truncated, "Trimmed debugger entries should be reported as truncated")
+	assert_eq(captured.entries.size(), McpSurfacedErrorTracker.MAX_PROMOTED_DEBUGGER_ENTRIES)
+	assert_eq(captured.entries[0].text, "Synthetic Error 5")
 	tree.free()
 
 
@@ -1653,6 +1669,14 @@ func _make_debugger_errors_tree() -> Tree:
 	error.set_text(1, "Parse Error: Expected statement")
 	error.set_metadata(0, ["res://scripts/broken.gd", 12])
 	return tree
+
+
+func _append_debugger_error(root: TreeItem, index: int) -> void:
+	var error := root.get_tree().create_item(root)
+	error.set_meta("_is_error", true)
+	error.set_text(0, "0:00:01:%03d" % index)
+	error.set_text(1, "Synthetic Error %d" % index)
+	error.set_metadata(0, ["res://scripts/generated_%d.gd" % index, index + 1])
 
 
 func test_log_backtrace_resolve_error_preserves_all_frames() -> void:

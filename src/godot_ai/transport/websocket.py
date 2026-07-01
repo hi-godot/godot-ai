@@ -348,5 +348,9 @@ def _sync_error_watermark_for_session(session: Session, value: dict[str, int]) -
         else:
             new_total += current
         normalized[key] = current
+    if not session.error_watermark_seen:
+        session.error_watermark = normalized
+        session.error_watermark_seen = True
+        return 0
     session.error_watermark = normalized
     return new_total
