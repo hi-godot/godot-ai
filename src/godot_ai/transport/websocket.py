@@ -335,22 +335,24 @@ def _sync_error_watermark_for_session(session: Session, value: dict[str, int]) -
     new only when it is above zero.
     """
 
-    new_total = 0
     normalized: dict[str, int] = {}
     for key, raw_current in value.items():
         try:
             current = max(0, int(raw_current))
         except (TypeError, ValueError):
             continue
-        previous = max(0, int(session.error_watermark.get(key, 0)))
-        if current >= previous:
-            new_total += current - previous
-        else:
-            new_total += current
         normalized[key] = current
+
     if not session.error_watermark_seen:
-        session.error_watermark = normalized
         session.error_watermark_seen = True
-        return 0
+        new_total = 0
+    else:
+        new_total = 0
+        for key, current in normalized.items():
+            previous = max(0, int(session.error_watermark.get(key, 0)))
+            if current >= previous:
+                new_total += current - previous
+            else:
+                new_total += current
     session.error_watermark = normalized
     return new_total
