@@ -140,6 +140,7 @@ class TestCommandRoundTrip:
                 cmd["request_id"],
                 {"ok": 1},
                 error_watermark={
+                    "run_seq": 1,
                     "editor_ring": 0,
                     "debugger_promoted": 1,
                     "game_error_warn": 0,
@@ -165,6 +166,7 @@ class TestCommandRoundTrip:
                 cmd["request_id"],
                 {"ok": 1},
                 error_watermark={
+                    "run_seq": 1,
                     "editor_ring": 0,
                     "debugger_promoted": 1,
                     "game_error_warn": 0,
@@ -175,6 +177,7 @@ class TestCommandRoundTrip:
                 cmd["request_id"],
                 {"ok": 2},
                 error_watermark={
+                    "run_seq": 1,
                     "editor_ring": 0,
                     "debugger_promoted": 2,
                     "game_error_warn": 0,
@@ -185,6 +188,7 @@ class TestCommandRoundTrip:
                 cmd["request_id"],
                 {"ok": 3},
                 error_watermark={
+                    "run_seq": 1,
                     "editor_ring": 0,
                     "debugger_promoted": 2,
                     "game_error_warn": 0,
@@ -213,19 +217,19 @@ class TestCommandRoundTrip:
             await plugin.send_response(
                 cmd["request_id"],
                 {"ok": 1},
-                error_watermark={"game_error_warn": 3},
+                error_watermark={"run_seq": 1, "game_error_warn": 3},
             )
             cmd = await plugin.recv_command()
             await plugin.send_response(
                 cmd["request_id"],
                 {"ok": 2},
-                error_watermark={"game_error_warn": 3},
+                error_watermark={"run_seq": 1, "game_error_warn": 3},
             )
             cmd = await plugin.recv_command()
             await plugin.send_response(
                 cmd["request_id"],
                 {"ok": 3},
-                error_watermark={"game_error_warn": 1},
+                error_watermark={"run_seq": 1, "game_error_warn": 1},
             )
 
         handler_task = asyncio.create_task(mock_handler())
@@ -248,19 +252,19 @@ class TestCommandRoundTrip:
             await plugin.send_response(
                 cmd["request_id"],
                 {"ok": 1},
-                error_watermark={"debugger_promoted": 4, "game_error_warn": 1},
+                error_watermark={"run_seq": 1, "debugger_promoted": 4, "game_error_warn": 1},
             )
             cmd = await plugin.recv_command()
             await plugin.send_response(
                 cmd["request_id"],
                 {"ok": 2},
-                error_watermark={"game_error_warn": 2},
+                error_watermark={"run_seq": 1, "game_error_warn": 2},
             )
             cmd = await plugin.recv_command()
             await plugin.send_response(
                 cmd["request_id"],
                 {"ok": 3},
-                error_watermark={"debugger_promoted": 5},
+                error_watermark={"run_seq": 1, "debugger_promoted": 5},
             )
 
         handler_task = asyncio.create_task(mock_handler())
@@ -273,9 +277,116 @@ class TestCommandRoundTrip:
         assert second["new_errors_since_last_call"] == 1
         assert third["new_errors_since_last_call"] == 1
         assert harness.registry.get("err-missing-key").error_watermark == {
+            "run_seq": 1,
             "debugger_promoted": 5,
             "game_error_warn": 2,
         }
+        await plugin.close()
+
+    async def test_error_watermark_run_boundary_counts_reaccumulated_game_errors(self, harness):
+        plugin = await harness.connect_plugin(session_id="err-run-seq")
+        client = GodotClient(harness.server, harness.registry)
+
+        async def mock_handler():
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 1},
+                error_watermark={"run_seq": 1, "game_error_warn": 3},
+            )
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 2},
+                error_watermark={"run_seq": 2, "game_error_warn": 3},
+            )
+
+        handler_task = asyncio.create_task(mock_handler())
+        first = await client.send("get_editor_state")
+        second = await client.send("get_editor_state")
+        await handler_task
+
+        assert "new_errors_since_last_call" not in first
+        assert second["new_errors_since_last_call"] == 3
+        await plugin.close()
+
+    async def test_error_watermark_error_response_accumulates_until_success(self, harness):
+        plugin = await harness.connect_plugin(session_id="err-accumulate")
+        client = GodotClient(harness.server, harness.registry)
+
+        async def mock_handler():
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 1},
+                error_watermark={"run_seq": 1, "debugger_promoted": 0},
+            )
+            cmd = await plugin.recv_command()
+            await plugin.send_error(
+                cmd["request_id"],
+                "BROKEN",
+                "broken",
+                error_watermark={"run_seq": 1, "debugger_promoted": 2},
+            )
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 3},
+                error_watermark={"run_seq": 1, "debugger_promoted": 2},
+            )
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 4},
+                error_watermark={"run_seq": 1, "debugger_promoted": 2},
+            )
+
+        handler_task = asyncio.create_task(mock_handler())
+        first = await client.send("get_editor_state")
+        with pytest.raises(GodotCommandError):
+            await client.send("get_editor_state")
+        third = await client.send("get_editor_state")
+        fourth = await client.send("get_editor_state")
+        await handler_task
+
+        assert "new_errors_since_last_call" not in first
+        assert third["new_errors_since_last_call"] == 2
+        assert "new_errors_since_last_call" not in fourth
+        await plugin.close()
+
+    async def test_error_watermark_probe_success_does_not_consume_pending_hint(self, harness):
+        plugin = await harness.connect_plugin(session_id="err-probe")
+        client = GodotClient(harness.server, harness.registry)
+
+        async def mock_handler():
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 1},
+                error_watermark={"run_seq": 1, "debugger_promoted": 0},
+            )
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 2},
+                error_watermark={"run_seq": 1, "debugger_promoted": 2},
+            )
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 3},
+                error_watermark={"run_seq": 1, "debugger_promoted": 2},
+            )
+
+        handler_task = asyncio.create_task(mock_handler())
+        first = await client.send("get_editor_state")
+        probe = await client.send("get_editor_state", surface_error_hints=False)
+        third = await client.send("get_editor_state")
+        await handler_task
+
+        assert "new_errors_since_last_call" not in first
+        assert "new_errors_since_last_call" not in probe
+        assert third["new_errors_since_last_call"] == 2
         await plugin.close()
 
     async def test_command_with_params(self, harness):

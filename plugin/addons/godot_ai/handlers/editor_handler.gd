@@ -854,37 +854,7 @@ func clear_logs(params: Dictionary) -> Dictionary:
 
 
 func _clear_debugger_error_trees() -> int:
-	var cleared := 0
-	for tree in _surfaced_error_tracker.locate_debugger_error_trees():
-		cleared += McpSurfacedErrorTracker.entries_from_debugger_error_tree(tree).size()
-		if not _press_debugger_clear_button(tree):
-			## No Clear button near this tree (synthetic roots in tests).
-			## A raw clear is acceptable there; the real panel always routes
-			## through the button below.
-			tree.clear()
-	return cleared
-
-
-## Clear via ScriptEditorDebugger's own Clear button so the engine runs
-## _clear_errors_list() — clearing the Tree directly leaves error_count/
-## warning_count, the "Errors (N)" tab badge, the errors_cleared signal, and
-## the toolbar button states out of sync with the emptied tree. The button is
-## identified by its pressed-connection target, not its (translated) label.
-static func _press_debugger_clear_button(tree: Tree) -> bool:
-	var parent := tree.get_parent()
-	if parent == null:
-		return false
-	var stack: Array[Node] = [parent]
-	while not stack.is_empty():
-		var node: Node = stack.pop_back()
-		if node is BaseButton:
-			for conn in node.get_signal_connection_list("pressed"):
-				if str(conn.get("callable", "")).contains("_clear_errors_list"):
-					node.emit_signal("pressed")
-					return true
-		for child in node.get_children():
-			stack.push_back(child)
-	return false
+	return _surfaced_error_tracker.clear_debugger_error_trees()
 
 
 func reload_plugin(_params: Dictionary) -> Dictionary:

@@ -120,6 +120,7 @@ class GodotClient:
         params: dict[str, Any] | None = None,
         session_id: str | None = None,
         timeout: float = 5.0,
+        surface_error_hints: bool = True,
     ) -> dict[str, Any]:
         """Send a command to a Godot session and return the response data.
 
@@ -189,9 +190,13 @@ class GodotClient:
                 data=error.data if error else {},
             )
 
-        if response.new_errors_since_last_call > 0:
+        live_session = self.registry.get(session_id)
+        pending_new_errors = live_session.pending_new_errors if live_session else 0
+        if surface_error_hints and pending_new_errors > 0:
             data = dict(response.data)
-            count = response.new_errors_since_last_call
+            count = pending_new_errors
+            if live_session:
+                live_session.pending_new_errors = 0
             data["new_errors_since_last_call"] = count
             plural = "s" if count != 1 else ""
             data["new_errors_hint"] = (

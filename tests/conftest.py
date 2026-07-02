@@ -67,6 +67,7 @@ class MockGodotPlugin:
         message: str,
         data: dict | None = None,
         readiness: str | None = None,
+        error_watermark: dict[str, int] | None = None,
     ) -> None:
         msg: dict = {
             "request_id": request_id,
@@ -76,6 +77,8 @@ class MockGodotPlugin:
         }
         if readiness is not None:
             msg["readiness"] = readiness
+        if error_watermark is not None:
+            msg["error_watermark"] = error_watermark
         await self.ws.send(json.dumps(msg))
 
     async def send_event(self, event: str, data: dict) -> None:

@@ -121,7 +121,11 @@ async def require_writable_async(runtime: "DirectRuntime") -> None:
         return  # cache says writable — fast path, no probe
 
     try:
-        result = await runtime.send_command("get_editor_state", timeout=2.0)
+        result = await runtime.send_command(
+            "get_editor_state",
+            timeout=2.0,
+            surface_error_hints=False,
+        )
         sync_readiness_for_session(session, result.get("readiness"))
     except Exception:
         ## Probe failed (timeout, disconnect, plugin error). Fall through

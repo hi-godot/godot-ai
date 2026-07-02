@@ -110,12 +110,24 @@ func _has_capture(prefix: String) -> bool:
 ## plugin.gd's _enter_tree logs "plugin loaded", and ci-reload-test
 ## asserts "plugin loaded" is the first line after a plugin reload.
 func _setup_session(session_id: int) -> void:
-	_game_ready = false
-	_ready_run_token = -1
+	if EditorInterface.is_playing_scene() and not _game_run_active:
+		_begin_game_run_tracking(_editor_log_cursor(), true, true, false)
+	else:
+		_game_ready = false
+		_ready_run_token = -1
 	_game_session_id = session_id
 
 
 func begin_game_run(editor_log_cursor: int = 0, helper_expected: bool = true) -> void:
+	_begin_game_run_tracking(editor_log_cursor, helper_expected, true, true)
+
+
+func _begin_game_run_tracking(
+	editor_log_cursor: int = 0,
+	helper_expected: bool = true,
+	rotate_game_log: bool = true,
+	sticky_debugger_scan: bool = true,
+) -> void:
 	_game_run_token += 1
 	_game_run_active = true
 	_game_ready = false
@@ -124,19 +136,23 @@ func begin_game_run(editor_log_cursor: int = 0, helper_expected: bool = true) ->
 	_game_run_started_msec = Time.get_ticks_msec()
 	_game_run_started_editor_cursor = maxi(0, editor_log_cursor)
 	if _surfaced_error_tracker != null:
-		_surfaced_error_tracker.note_game_run_started()
+		_surfaced_error_tracker.note_game_run_started(sticky_debugger_scan)
 		_game_run_started_debugger_cursor = _surfaced_error_tracker.debugger_promoted_total()
 	else:
 		_game_run_started_debugger_cursor = 0
 	_game_helper_expected = helper_expected
 	var run_id := ""
-	if _game_log_buffer:
+	if _game_log_buffer and rotate_game_log:
 		run_id = _game_log_buffer.clear_for_new_run()
 	if _log_buffer:
 		var log_text := "[debug] game capture pending run token %d" % _game_run_token
 		if not run_id.is_empty():
 			log_text += " (run %s)" % run_id
 		_log_buffer.log(log_text)
+
+
+func _editor_log_cursor() -> int:
+	return _editor_log_buffer.appended_total() if _editor_log_buffer != null else 0
 
 
 func end_game_run() -> void:
@@ -235,7 +251,11 @@ func _recent_editor_errors_since(cursor: int) -> Dictionary:
 	var out: Array[Dictionary] = []
 	var truncated := false
 	if _surfaced_error_tracker != null:
-		var captured_by_tracker: Dictionary = _surfaced_error_tracker.editor_entries_since(maxi(0, cursor), _game_run_started_debugger_cursor)
+		var captured_by_tracker: Dictionary = _surfaced_error_tracker.editor_entries_since(
+			maxi(0, cursor),
+			_game_run_started_debugger_cursor,
+			false,
+		)
 		truncated = bool(captured_by_tracker.get("truncated", false))
 		for raw_entry in captured_by_tracker.get("entries", []):
 			var compact := _compact_editor_error(raw_entry)

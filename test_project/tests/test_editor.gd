@@ -786,11 +786,15 @@ func test_game_log_buffer_error_warn_total_ignores_info_and_resets_per_run() -> 
 	buf.append("warn", "careful")
 	buf.append("error", "boom")
 	assert_eq(buf.error_warn_total(), 2)
+	assert_eq(buf.error_total(), 1)
 	buf.clear_for_new_run()
 	assert_eq(buf.error_warn_total(), 0, "new game runs start a fresh error watermark")
+	assert_eq(buf.error_total(), 0, "new game runs start a fresh error-only watermark")
 	buf.append("info", "chatty print")
+	buf.append("warn", "new run warning")
 	buf.append("error", "new run boom")
-	assert_eq(buf.error_warn_total(), 1)
+	assert_eq(buf.error_warn_total(), 2)
+	assert_eq(buf.error_total(), 1)
 
 
 func test_game_log_buffer_preserves_details() -> void:
@@ -1146,6 +1150,8 @@ func test_editor_log_buffer_append_and_get_range() -> void:
 	assert_eq(entries[1].level, "warn")
 	assert_eq(entries[1].function, "_ready")
 	assert_eq(buf.total_count(), 2)
+	assert_eq(buf.appended_total(), 2)
+	assert_eq(buf.error_appended_total(), 1)
 
 
 func test_editor_log_buffer_unknown_level_coerces_to_info() -> void:
@@ -1265,6 +1271,7 @@ func test_editor_log_buffer_clear_resets_retained_counts_but_preserves_cursor() 
 	assert_eq(buf.total_count(), 0)
 	assert_eq(buf.dropped_count(), 0)
 	assert_eq(buf.appended_total(), cursor, "clear() must not reset the cursor")
+	assert_eq(buf.error_appended_total(), 0, "clear() resets the retained error watermark")
 
 
 func test_editor_log_buffer_get_since_reports_clear_truncation() -> void:
@@ -1418,10 +1425,10 @@ func test_surfaced_error_tracker_promotes_debugger_rows_into_watermark() -> void
 	assert_eq(cached.debugger_promoted, 0, "Inactive dispatch watermarks must be cheap cached reads")
 	var watermark := tracker.watermark(true)
 	assert_eq(watermark.editor_ring, 0)
-	assert_eq(watermark.debugger_promoted, 2)
+	assert_eq(watermark.debugger_promoted, 1)
 	assert_eq(watermark.game_error_warn, 0)
 	var second := tracker.watermark(true)
-	assert_eq(second.debugger_promoted, 2, "same visible rows must not double-count")
+	assert_eq(second.debugger_promoted, 1, "same visible rows must not double-count")
 	tree.free()
 
 
@@ -1430,11 +1437,47 @@ func test_surfaced_error_tracker_editor_entries_since_includes_debugger_only_row
 	var tracker := McpSurfacedErrorTracker.new(null, null, tree)
 	var baseline := 0
 	var captured := tracker.editor_entries_since(0, baseline)
-	assert_eq(captured.entries.size(), 2)
-	assert_eq(captured.entries[1].text, "Parse Error: Expected statement")
+	assert_eq(captured.entries.size(), 1)
+	assert_eq(captured.entries[0].text, "Parse Error: Expected statement")
 	baseline = tracker.debugger_promoted_total()
 	var after_baseline := tracker.editor_entries_since(0, baseline)
 	assert_eq(after_baseline.entries.size(), 0)
+	tree.free()
+
+
+func test_surfaced_error_tracker_run_start_repromotes_recurring_debugger_error() -> void:
+	var tree := _make_debugger_errors_tree()
+	var tracker := McpSurfacedErrorTracker.new(null, null, tree)
+	var first := tracker.watermark(true)
+	assert_eq(first.run_seq, 0)
+	assert_eq(first.debugger_promoted, 1)
+	tracker.note_game_run_started(false)
+	var root := tree.create_item()
+	var error := tree.create_item(root)
+	error.set_meta("_is_error", true)
+	error.set_text(0, "0:00:01:000")
+	error.set_text(1, "Parse Error: Expected statement")
+	error.set_metadata(0, ["res://scripts/broken.gd", 12])
+	var second := tracker.watermark(true)
+	assert_eq(second.run_seq, 1)
+	assert_eq(second.debugger_promoted, 2, "same error can promote again after run-start clears stale rows")
+	tree.free()
+
+
+func test_surfaced_error_tracker_watermark_ignores_warnings() -> void:
+	var editor_buf := McpEditorLogBuffer.new()
+	editor_buf.append("warn", "save warning", "res://warn.gd", 2)
+	editor_buf.append("error", "parse error", "res://broken.gd", 4)
+	var game_buf := McpGameLogBuffer.new()
+	game_buf.clear_for_new_run()
+	game_buf.append("warn", "runtime warning")
+	game_buf.append("error", "runtime error")
+	var tree := _make_debugger_errors_tree()
+	var tracker := McpSurfacedErrorTracker.new(editor_buf, game_buf, tree)
+	var watermark := tracker.watermark(true)
+	assert_eq(watermark.editor_ring, 1)
+	assert_eq(watermark.game_error_warn, 1)
+	assert_eq(watermark.debugger_promoted, 1)
 	tree.free()
 
 
@@ -1444,14 +1487,14 @@ func test_surfaced_error_tracker_caps_promoted_debugger_entries() -> void:
 	for i in range(McpSurfacedErrorTracker.MAX_PROMOTED_DEBUGGER_ENTRIES + 5):
 		_append_debugger_error(root, i)
 	var tracker := McpSurfacedErrorTracker.new(null, null, tree)
-	assert_eq(tracker.watermark(true).debugger_promoted, McpSurfacedErrorTracker.MAX_PROMOTED_DEBUGGER_ENTRIES + 7)
+	assert_eq(tracker.watermark(true).debugger_promoted, McpSurfacedErrorTracker.MAX_PROMOTED_DEBUGGER_ENTRIES + 6)
 	var captured := tracker.editor_entries_since(0, 0)
 	assert_true(captured.truncated, "Trimmed debugger entries should be reported as truncated")
 	assert_eq(captured.entries.size(), McpSurfacedErrorTracker.MAX_PROMOTED_DEBUGGER_ENTRIES)
 	assert_eq(captured.entries[0].text, "Synthetic Error 5")
 	assert_eq(
 		tracker.watermark(true).debugger_promoted,
-		McpSurfacedErrorTracker.MAX_PROMOTED_DEBUGGER_ENTRIES + 7,
+		McpSurfacedErrorTracker.MAX_PROMOTED_DEBUGGER_ENTRIES + 6,
 		"Trimmed but still-visible debugger rows must not be promoted again",
 	)
 	tree.free()

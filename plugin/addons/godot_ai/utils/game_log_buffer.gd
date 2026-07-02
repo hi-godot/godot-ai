@@ -18,6 +18,7 @@ const MAX_LINES := 2000
 var _run_id := ""
 var _run_seq := 0
 var _error_warn_total := 0
+var _error_total := 0
 
 
 func _init() -> void:
@@ -37,6 +38,8 @@ func append(level: String, text: String, details: Dictionary = {}) -> void:
 	_append_entry(entry)
 	if coerced_level in ["warn", "error"]:
 		_error_warn_total += 1
+	if coerced_level == "error":
+		_error_total += 1
 
 
 ## Rotate the run identifier without dropping buffered entries. Called at
@@ -46,6 +49,7 @@ func append(level: String, text: String, details: Dictionary = {}) -> void:
 func clear_for_new_run() -> String:
 	_run_id = _generate_run_id()
 	_error_warn_total = 0
+	_error_total = 0
 	return _run_id
 
 
@@ -55,6 +59,10 @@ func run_id() -> String:
 
 func error_warn_total() -> int:
 	return _error_warn_total
+
+
+func error_total() -> int:
+	return _error_total
 
 
 func get_run_range(run_id: String, offset: int, count: int) -> Array[Dictionary]:

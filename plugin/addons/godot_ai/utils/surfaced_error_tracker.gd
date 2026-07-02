@@ -14,8 +14,8 @@ const MAX_SUPPRESSED_DEBUGGER_KEYS := 5000
 const DEBUGGER_REFRESH_MIN_INTERVAL_MS := 250
 const DEBUGGER_SCAN_AFTER_STOP_MS := 5000
 
-var _editor_log_buffer: McpEditorLogBuffer
-var _game_log_buffer: McpGameLogBuffer
+var _editor_log_buffer
+var _game_log_buffer
 var _debugger_errors_root: Node
 var _debugger_search_root_cache: Node
 var _promoted_debugger_keys: Dictionary = {}
@@ -23,21 +23,29 @@ var _promoted_debugger_entries: Array[Dictionary] = []
 var _suppressed_debugger_keys: Dictionary = {}
 var _suppressed_debugger_key_order: Array[String] = []
 var _debugger_promoted_total := 0
+var _run_seq := 0
 var _oldest_retained_debugger_sequence := 1
 var _last_debugger_refresh_msec := -DEBUGGER_REFRESH_MIN_INTERVAL_MS
 var _debugger_scan_active := false
 var _debugger_scan_until_msec := 0
 
 
-func _init(editor_log_buffer: McpEditorLogBuffer = null, game_log_buffer: McpGameLogBuffer = null, debugger_errors_root: Node = null) -> void:
+func _init(editor_log_buffer = null, game_log_buffer = null, debugger_errors_root: Node = null) -> void:
 	_editor_log_buffer = editor_log_buffer
 	_game_log_buffer = game_log_buffer
 	_debugger_errors_root = debugger_errors_root
 
 
-func note_game_run_started() -> void:
-	_debugger_scan_active = true
+func note_game_run_started(sticky_scan: bool = true) -> void:
+	_run_seq += 1
+	clear_debugger_error_trees()
+	_promoted_debugger_keys.clear()
+	_suppressed_debugger_keys.clear()
+	_suppressed_debugger_key_order.clear()
+	_debugger_scan_active = sticky_scan
 	_debugger_scan_until_msec = 0
+	if not sticky_scan:
+		_debugger_scan_until_msec = Time.get_ticks_msec() + DEBUGGER_SCAN_AFTER_STOP_MS
 	refresh_debugger_errors(true)
 
 
@@ -52,6 +60,8 @@ func refresh_debugger_errors(force: bool = true) -> void:
 		return
 	_last_debugger_refresh_msec = now
 	for entry in read_debugger_error_entries():
+		if str(entry.get("level", "")) != "error":
+			continue
 		var key := _log_entry_key(entry)
 		if _promoted_debugger_keys.has(key) or _suppressed_debugger_keys.has(key):
 			continue
@@ -66,9 +76,10 @@ func refresh_debugger_errors(force: bool = true) -> void:
 func watermark(force_debugger_scan: bool = false) -> Dictionary:
 	refresh_debugger_errors(force_debugger_scan)
 	return {
-		"editor_ring": _editor_log_buffer.appended_total() if _editor_log_buffer != null else 0,
+		"run_seq": _run_seq,
+		"editor_ring": _error_appended_total(),
 		"debugger_promoted": _debugger_promoted_total,
-		"game_error_warn": _game_log_buffer.error_warn_total() if _game_log_buffer != null else 0,
+		"game_error_warn": _game_error_total(),
 	}
 
 
@@ -102,20 +113,27 @@ func collect_editor_log_entries() -> Array[Dictionary]:
 	return entries
 
 
-func editor_entries_since(editor_cursor: int, debugger_cursor: int) -> Dictionary:
-	refresh_debugger_errors(true)
+func editor_entries_since(editor_cursor: int, debugger_cursor: int, force_debugger_scan: bool = true) -> Dictionary:
+	refresh_debugger_errors(force_debugger_scan)
 	var entries: Array[Dictionary] = []
+	var seen_keys: Dictionary = {}
 	var truncated := false
 	if _editor_log_buffer != null:
 		var captured: Dictionary = _editor_log_buffer.get_since(maxi(0, editor_cursor), -1)
 		truncated = bool(captured.get("truncated", false))
 		for entry in captured.get("entries", []):
+			seen_keys[_log_entry_key(entry)] = true
 			entries.append(entry)
 	if debugger_cursor < _oldest_retained_debugger_sequence - 1:
 		truncated = true
 	for entry in _promoted_debugger_entries:
-		if int(entry.get("_debugger_sequence", 0)) > debugger_cursor:
-			entries.append(entry)
+		if int(entry.get("_debugger_sequence", 0)) <= debugger_cursor:
+			continue
+		var key := _log_entry_key(entry)
+		if seen_keys.has(key):
+			continue
+		seen_keys[key] = true
+		entries.append(entry)
 	return {
 		"entries": entries,
 		"truncated": truncated,
@@ -123,8 +141,19 @@ func editor_entries_since(editor_cursor: int, debugger_cursor: int) -> Dictionar
 
 
 func retained_recent_editor_entries() -> Array[Dictionary]:
-	var entries := collect_editor_log_entries()
-	entries.reverse()
+	var entries: Array[Dictionary] = []
+	var seen_keys: Dictionary = {}
+	if _editor_log_buffer != null:
+		entries = _editor_log_buffer.get_recent(_editor_log_buffer.total_count())
+		entries.reverse()
+		for entry in entries:
+			seen_keys[_log_entry_key(entry)] = true
+	for entry in collect_editor_log_entries():
+		var key := _log_entry_key(entry)
+		if seen_keys.has(key):
+			continue
+		seen_keys[key] = true
+		entries.append(entry)
 	return entries
 
 
@@ -150,6 +179,16 @@ func locate_debugger_error_trees() -> Array[Tree]:
 		return trees
 	_collect_debugger_error_trees(root, trees)
 	return trees
+
+
+func clear_debugger_error_trees() -> int:
+	var cleared := 0
+	for tree in locate_debugger_error_trees():
+		cleared += entries_from_debugger_error_tree(tree).size()
+		if not _press_debugger_clear_button(tree):
+			## Synthetic roots in tests do not have Godot's Clear button.
+			tree.clear()
+	return cleared
 
 
 func _debugger_search_root() -> Node:
@@ -192,6 +231,23 @@ static func _tree_has_debugger_errors(tree: Tree) -> bool:
 		if _is_debugger_error_item(item):
 			return true
 		item = item.get_next()
+	return false
+
+
+static func _press_debugger_clear_button(tree: Tree) -> bool:
+	var parent := tree.get_parent()
+	if parent == null:
+		return false
+	var stack: Array[Node] = [parent]
+	while not stack.is_empty():
+		var node: Node = stack.pop_back()
+		if node is BaseButton:
+			for conn in node.get_signal_connection_list("pressed"):
+				if str(conn.get("callable", "")).contains("_clear_errors_list"):
+					node.emit_signal("pressed")
+					return true
+		for child in node.get_children():
+			stack.push_back(child)
 	return false
 
 
@@ -314,6 +370,24 @@ static func _log_entry_key(entry: Dictionary) -> String:
 		str(entry.get("path", "")),
 		str(entry.get("line", 0)),
 	]
+
+
+func _error_appended_total() -> int:
+	if _editor_log_buffer == null:
+		return 0
+	if _editor_log_buffer.has_method("error_appended_total"):
+		return int(_editor_log_buffer.call("error_appended_total"))
+	return int(_editor_log_buffer.appended_total())
+
+
+func _game_error_total() -> int:
+	if _game_log_buffer == null:
+		return 0
+	if _game_log_buffer.has_method("error_total"):
+		return int(_game_log_buffer.call("error_total"))
+	if _game_log_buffer.has_method("error_warn_total"):
+		return int(_game_log_buffer.call("error_warn_total"))
+	return 0
 
 
 func _should_scan_debugger_for_cached_watermark(now_msec: int) -> bool:

@@ -26,6 +26,7 @@ extends McpStructuredLogRing
 const MAX_LINES := 500
 
 var _mutex := Mutex.new()
+var _error_appended_total := 0
 
 
 func _init() -> void:
@@ -33,9 +34,10 @@ func _init() -> void:
 
 
 func append(level: String, text: String, path: String = "", line: int = 0, function: String = "", details: Dictionary = {}) -> void:
+	var coerced_level := _coerce_level(level)
 	var entry := {
 		"source": "editor",
-		"level": _coerce_level(level),
+		"level": coerced_level,
 		"text": text,
 		"path": path,
 		"line": line,
@@ -45,6 +47,8 @@ func append(level: String, text: String, path: String = "", line: int = 0, funct
 		entry["details"] = details.duplicate(true)
 	_mutex.lock()
 	_append_entry(entry)
+	if coerced_level == "error":
+		_error_appended_total += 1
 	_mutex.unlock()
 
 
@@ -96,9 +100,17 @@ func appended_total() -> int:
 	return n
 
 
+func error_appended_total() -> int:
+	_mutex.lock()
+	var n := _error_appended_total
+	_mutex.unlock()
+	return n
+
+
 func clear() -> int:
 	_mutex.lock()
 	var n := _total_count_unlocked()
 	_clear_storage()
+	_error_appended_total = 0
 	_mutex.unlock()
 	return n

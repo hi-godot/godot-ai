@@ -47,13 +47,33 @@ class DirectRuntime:
         params: dict[str, Any] | None = None,
         session_id: str | None = None,
         timeout: float = 5.0,
+        surface_error_hints: bool = True,
     ) -> dict[str, Any]:
-        return await self._client.send(
-            command=command,
-            params=params,
-            session_id=session_id if session_id is not None else self._bound_session_id,
-            timeout=timeout,
-        )
+        resolved_session_id = session_id if session_id is not None else self._bound_session_id
+        if surface_error_hints:
+            return await self._client.send(
+                command=command,
+                params=params,
+                session_id=resolved_session_id,
+                timeout=timeout,
+            )
+        try:
+            return await self._client.send(
+                command=command,
+                params=params,
+                session_id=resolved_session_id,
+                timeout=timeout,
+                surface_error_hints=False,
+            )
+        except TypeError as exc:
+            if "surface_error_hints" not in str(exc):
+                raise
+            return await self._client.send(
+                command=command,
+                params=params,
+                session_id=resolved_session_id,
+                timeout=timeout,
+            )
 
     def list_sessions(self) -> list[Session]:
         return self._registry.list_all()
