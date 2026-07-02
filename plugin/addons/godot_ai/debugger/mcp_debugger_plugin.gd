@@ -82,6 +82,7 @@ var _game_run_token := 0
 var _ready_run_token := -1
 var _game_session_id := -1
 var _game_run_active := false
+var _manual_run_armed := false
 var _game_run_started_msec := 0
 var _game_run_started_editor_cursor := 0
 var _game_run_started_debugger_cursor := 0
@@ -110,8 +111,9 @@ func _has_capture(prefix: String) -> bool:
 ## plugin.gd's _enter_tree logs "plugin loaded", and ci-reload-test
 ## asserts "plugin loaded" is the first line after a plugin reload.
 func _setup_session(session_id: int) -> void:
+	_connect_session_stopped(session_id)
 	if EditorInterface.is_playing_scene() and not _game_run_active:
-		_begin_game_run_tracking(_editor_log_cursor(), true, true, false)
+		_begin_game_run_tracking(_editor_log_cursor(), true, true, true, true, true)
 	else:
 		_game_ready = false
 		_ready_run_token = -1
@@ -127,9 +129,12 @@ func _begin_game_run_tracking(
 	helper_expected: bool = true,
 	rotate_game_log: bool = true,
 	sticky_debugger_scan: bool = true,
+	quiet: bool = false,
+	manual_armed: bool = false,
 ) -> void:
 	_game_run_token += 1
 	_game_run_active = true
+	_manual_run_armed = manual_armed
 	_game_ready = false
 	_ready_run_token = -1
 	_game_session_id = -1
@@ -144,7 +149,7 @@ func _begin_game_run_tracking(
 	var run_id := ""
 	if _game_log_buffer and rotate_game_log:
 		run_id = _game_log_buffer.clear_for_new_run()
-	if _log_buffer:
+	if _log_buffer and not quiet:
 		var log_text := "[debug] game capture pending run token %d" % _game_run_token
 		if not run_id.is_empty():
 			log_text += " (run %s)" % run_id
@@ -157,11 +162,29 @@ func _editor_log_cursor() -> int:
 
 func end_game_run() -> void:
 	_game_run_active = false
+	_manual_run_armed = false
 	_game_ready = false
 	_ready_run_token = -1
 	_game_session_id = -1
 	if _surfaced_error_tracker != null:
 		_surfaced_error_tracker.note_game_run_stopped()
+
+
+func _connect_session_stopped(session_id: int) -> void:
+	var session = get_session(session_id)
+	if session == null:
+		return
+	var stopped := Callable(self, "_on_debugger_session_stopped").bind(session_id)
+	if not session.stopped.is_connected(stopped):
+		session.stopped.connect(stopped)
+
+
+func _on_debugger_session_stopped(session_id: int) -> void:
+	if not _manual_run_armed:
+		return
+	if _game_session_id != -1 and session_id != _game_session_id:
+		return
+	end_game_run()
 
 
 func is_game_capture_ready() -> bool:

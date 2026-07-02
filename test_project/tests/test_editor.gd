@@ -1452,15 +1452,26 @@ func test_surfaced_error_tracker_run_start_repromotes_recurring_debugger_error()
 	assert_eq(first.run_seq, 0)
 	assert_eq(first.debugger_promoted, 1)
 	tracker.note_game_run_started(false)
-	var root := tree.create_item()
-	var error := tree.create_item(root)
-	error.set_meta("_is_error", true)
-	error.set_text(0, "0:00:01:000")
-	error.set_text(1, "Parse Error: Expected statement")
-	error.set_metadata(0, ["res://scripts/broken.gd", 12])
+	assert_eq(McpSurfacedErrorTracker.entries_from_debugger_error_tree(tree).size(), 2)
+	var unchanged := tracker.watermark(true)
+	assert_eq(unchanged.run_seq, 1)
+	assert_eq(unchanged.debugger_promoted, 1, "unchanged visible rows must not re-promote across a run boundary")
+	_append_duplicate_parse_error(tree.get_root())
 	var second := tracker.watermark(true)
 	assert_eq(second.run_seq, 1)
-	assert_eq(second.debugger_promoted, 2, "same error can promote again after run-start clears stale rows")
+	assert_eq(second.debugger_promoted, 2, "a new identical row should promote as a recurrence")
+	tree.free()
+
+
+func test_surfaced_error_tracker_user_clear_then_recurrence_promotes() -> void:
+	var tree := _make_debugger_errors_tree()
+	var tracker := McpSurfacedErrorTracker.new(null, null, tree)
+	assert_eq(tracker.watermark(true).debugger_promoted, 1)
+	tree.clear()
+	tracker.watermark(true)
+	var root := tree.create_item()
+	_append_duplicate_parse_error(root)
+	assert_eq(tracker.watermark(true).debugger_promoted, 2)
 	tree.free()
 
 
@@ -1725,6 +1736,14 @@ func _append_debugger_error(root: TreeItem, index: int) -> void:
 	error.set_text(0, "0:00:01:%03d" % index)
 	error.set_text(1, "Synthetic Error %d" % index)
 	error.set_metadata(0, ["res://scripts/generated_%d.gd" % index, index + 1])
+
+
+func _append_duplicate_parse_error(root: TreeItem) -> void:
+	var error := root.get_tree().create_item(root)
+	error.set_meta("_is_error", true)
+	error.set_text(0, "0:00:01:000")
+	error.set_text(1, "Parse Error: Expected statement")
+	error.set_metadata(0, ["res://scripts/broken.gd", 12])
 
 
 func test_log_backtrace_resolve_error_preserves_all_frames() -> void:
@@ -2229,6 +2248,31 @@ func test_debugger_plugin_ignores_hello_from_stale_session() -> void:
 	plugin._capture("mcp:hello", [], 22)
 	assert_true(plugin.is_game_capture_ready(), "hello from current session should ready capture")
 	assert_eq(game_buf.run_id(), run_id, "current hello confirms the existing run identity")
+
+
+func test_debugger_plugin_manual_run_stop_rearms_next_session() -> void:
+	var log_buf := McpLogBuffer.new()
+	var tracker := McpSurfacedErrorTracker.new()
+	var plugin := McpDebuggerPlugin.new(log_buf, McpGameLogBuffer.new(), McpEditorLogBuffer.new(), tracker)
+	plugin._begin_game_run_tracking(10, true, true, true, true, true)
+	plugin._game_session_id = 11
+	assert_eq(plugin.get_game_status().active, true)
+	assert_eq(plugin.get_game_status().run_token, 1)
+	assert_eq(log_buf.total_count(), 0, "manual _setup_session arming must stay quiet for reload tests")
+	assert_eq(tracker._debugger_scan_active, true, "manual runs should use sticky scanning until stopped")
+
+	plugin._on_debugger_session_stopped(12)
+	assert_eq(plugin.get_game_status().active, true, "stale session stop must not end the active run")
+	plugin._on_debugger_session_stopped(11)
+	assert_eq(plugin.get_game_status().status, "stopped")
+	assert_eq(tracker._debugger_scan_active, false)
+
+	plugin._begin_game_run_tracking(20, true, true, true, true, true)
+	plugin._game_session_id = 22
+	assert_eq(plugin.get_game_status().active, true)
+	assert_eq(plugin.get_game_status().run_token, 2)
+	assert_eq(plugin.get_game_status().editor_log_cursor, 20)
+	assert_eq(tracker._debugger_scan_active, true)
 
 
 func test_debugger_plugin_log_batch_no_buffer_is_safe() -> void:

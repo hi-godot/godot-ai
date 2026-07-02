@@ -327,10 +327,11 @@ class GodotWebSocketServer:
 def _sync_error_watermark_for_session(session: Session, value: dict[str, int]) -> int:
     """Update a session's error watermark and return newly observed errors.
 
-    Watermark components reset independently: game error/warn count resets on a
-    new run, while editor/debugger counters are session-scoped. A decrease is
-    therefore treated as a reset and the current component value is counted as
-    new only when it is above zero.
+    Watermark components reset independently. When run_seq advances, the
+    per-run game component is counted in full because the server may never
+    observe its zero between stop/start. Editor and debugger components remain
+    session-scoped monotonic deltas; a decrease is treated as a reset and the
+    current component value is counted when above zero.
     """
 
     updates: dict[str, int] = {}

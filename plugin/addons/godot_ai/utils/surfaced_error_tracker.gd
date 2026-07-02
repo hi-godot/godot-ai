@@ -10,7 +10,7 @@ extends RefCounted
 ## dispatcher stamps a watermark on each response envelope.
 
 const MAX_PROMOTED_DEBUGGER_ENTRIES := 500
-const MAX_SUPPRESSED_DEBUGGER_KEYS := 5000
+const MAX_PROMOTED_DEBUGGER_KEYS := 5000
 const DEBUGGER_REFRESH_MIN_INTERVAL_MS := 250
 const DEBUGGER_SCAN_AFTER_STOP_MS := 5000
 
@@ -19,9 +19,8 @@ var _game_log_buffer
 var _debugger_errors_root: Node
 var _debugger_search_root_cache: Node
 var _promoted_debugger_keys: Dictionary = {}
+var _promoted_debugger_key_order: Array[String] = []
 var _promoted_debugger_entries: Array[Dictionary] = []
-var _suppressed_debugger_keys: Dictionary = {}
-var _suppressed_debugger_key_order: Array[String] = []
 var _debugger_promoted_total := 0
 var _run_seq := 0
 var _oldest_retained_debugger_sequence := 1
@@ -38,10 +37,6 @@ func _init(editor_log_buffer = null, game_log_buffer = null, debugger_errors_roo
 
 func note_game_run_started(sticky_scan: bool = true) -> void:
 	_run_seq += 1
-	clear_debugger_error_trees()
-	_promoted_debugger_keys.clear()
-	_suppressed_debugger_keys.clear()
-	_suppressed_debugger_key_order.clear()
 	_debugger_scan_active = sticky_scan
 	_debugger_scan_until_msec = 0
 	if not sticky_scan:
@@ -59,18 +54,39 @@ func refresh_debugger_errors(force: bool = true) -> void:
 	if not force and not _should_scan_debugger_for_cached_watermark(now):
 		return
 	_last_debugger_refresh_msec = now
-	for entry in read_debugger_error_entries():
+	var current_by_key: Dictionary = {}
+	for entry in _raw_debugger_error_entries():
 		if str(entry.get("level", "")) != "error":
 			continue
 		var key := _log_entry_key(entry)
-		if _promoted_debugger_keys.has(key) or _suppressed_debugger_keys.has(key):
+		var info: Dictionary = current_by_key.get(key, {"count": 0, "entry": entry})
+		info["count"] = int(info.get("count", 0)) + 1
+		current_by_key[key] = info
+	for key in _promoted_debugger_keys.keys():
+		if not current_by_key.has(key):
+			_promoted_debugger_keys[key] = 0
+	for key in current_by_key.keys():
+		var info: Dictionary = current_by_key[key]
+		var current := int(info.get("count", 0))
+		var stored := int(_promoted_debugger_keys.get(key, 0))
+		if current < stored:
+			_promoted_debugger_keys[key] = current
 			continue
-		_promoted_debugger_keys[key] = true
-		var promoted := entry.duplicate(true)
-		_debugger_promoted_total += 1
+		if current == stored:
+			continue
+		if not _promoted_debugger_keys.has(key):
+			_promoted_debugger_key_order.append(key)
+		_promoted_debugger_keys[key] = current
+		_debugger_promoted_total += current - stored
+		var source_entry: Dictionary = info.get("entry", {})
+		var promoted := source_entry.duplicate(true)
+		promoted["_debugger_key"] = key
+		promoted["_debugger_occurrences"] = current
 		promoted["_debugger_sequence"] = _debugger_promoted_total
+		_remove_promoted_debugger_entry(key)
 		_promoted_debugger_entries.append(promoted)
 	_trim_promoted_debugger_entries()
+	_trim_promoted_debugger_key_counts()
 
 
 func watermark(force_debugger_scan: bool = false) -> Dictionary:
@@ -141,6 +157,10 @@ func editor_entries_since(editor_cursor: int, debugger_cursor: int, force_debugg
 
 
 func retained_recent_editor_entries() -> Array[Dictionary]:
+	## There is no shared timestamp across the editor logger ring and Godot's
+	## Debugger Errors tree. Preserve the pre-PR fallback contract: newest
+	## buffered editor entries first, then debugger-only rows that were not in
+	## the ring, so stale Debugger rows cannot outrank newer ring entries.
 	var entries: Array[Dictionary] = []
 	var seen_keys: Dictionary = {}
 	if _editor_log_buffer != null:
@@ -160,13 +180,12 @@ func retained_recent_editor_entries() -> Array[Dictionary]:
 func read_debugger_error_entries() -> Array[Dictionary]:
 	var entries: Array[Dictionary] = []
 	var seen_keys: Dictionary = {}
-	for tree in locate_debugger_error_trees():
-		for entry in entries_from_debugger_error_tree(tree):
-			var key := _log_entry_key(entry)
-			if seen_keys.has(key):
-				continue
-			seen_keys[key] = true
-			entries.append(entry)
+	for entry in _raw_debugger_error_entries():
+		var key := _log_entry_key(entry)
+		if seen_keys.has(key):
+			continue
+		seen_keys[key] = true
+		entries.append(entry)
 	return entries
 
 
@@ -377,7 +396,7 @@ func _error_appended_total() -> int:
 		return 0
 	if _editor_log_buffer.has_method("error_appended_total"):
 		return int(_editor_log_buffer.call("error_appended_total"))
-	return int(_editor_log_buffer.appended_total())
+	return 0
 
 
 func _game_error_total() -> int:
@@ -385,8 +404,6 @@ func _game_error_total() -> int:
 		return 0
 	if _game_log_buffer.has_method("error_total"):
 		return int(_game_log_buffer.call("error_total"))
-	if _game_log_buffer.has_method("error_warn_total"):
-		return int(_game_log_buffer.call("error_warn_total"))
 	return 0
 
 
@@ -398,14 +415,28 @@ func _should_scan_debugger_for_cached_watermark(now_msec: int) -> bool:
 
 func _trim_promoted_debugger_entries() -> void:
 	while _promoted_debugger_entries.size() > MAX_PROMOTED_DEBUGGER_ENTRIES:
-		var removed: Dictionary = _promoted_debugger_entries.pop_front()
-		var key := _log_entry_key(removed)
-		_promoted_debugger_keys.erase(key)
-		_suppressed_debugger_keys[key] = true
-		_suppressed_debugger_key_order.append(key)
-	while _suppressed_debugger_key_order.size() > MAX_SUPPRESSED_DEBUGGER_KEYS:
-		_suppressed_debugger_keys.erase(_suppressed_debugger_key_order.pop_front())
+		_promoted_debugger_entries.pop_front()
 	if _promoted_debugger_entries.is_empty():
 		_oldest_retained_debugger_sequence = _debugger_promoted_total + 1
 	else:
 		_oldest_retained_debugger_sequence = int(_promoted_debugger_entries[0].get("_debugger_sequence", 1))
+
+
+func _trim_promoted_debugger_key_counts() -> void:
+	while _promoted_debugger_key_order.size() > MAX_PROMOTED_DEBUGGER_KEYS:
+		var key := _promoted_debugger_key_order.pop_front()
+		_promoted_debugger_keys.erase(key)
+
+
+func _remove_promoted_debugger_entry(key: String) -> void:
+	for i in range(_promoted_debugger_entries.size() - 1, -1, -1):
+		if str(_promoted_debugger_entries[i].get("_debugger_key", "")) == key:
+			_promoted_debugger_entries.remove_at(i)
+			return
+
+
+func _raw_debugger_error_entries() -> Array[Dictionary]:
+	var entries: Array[Dictionary] = []
+	for tree in locate_debugger_error_trees():
+		entries.append_array(entries_from_debugger_error_tree(tree))
+	return entries

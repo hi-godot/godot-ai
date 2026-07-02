@@ -50,30 +50,13 @@ class DirectRuntime:
         surface_error_hints: bool = True,
     ) -> dict[str, Any]:
         resolved_session_id = session_id if session_id is not None else self._bound_session_id
-        if surface_error_hints:
-            return await self._client.send(
-                command=command,
-                params=params,
-                session_id=resolved_session_id,
-                timeout=timeout,
-            )
-        try:
-            return await self._client.send(
-                command=command,
-                params=params,
-                session_id=resolved_session_id,
-                timeout=timeout,
-                surface_error_hints=False,
-            )
-        except TypeError as exc:
-            if "surface_error_hints" not in str(exc):
-                raise
-            return await self._client.send(
-                command=command,
-                params=params,
-                session_id=resolved_session_id,
-                timeout=timeout,
-            )
+        return await self._client.send(
+            command=command,
+            params=params,
+            session_id=resolved_session_id,
+            timeout=timeout,
+            surface_error_hints=surface_error_hints,
+        )
 
     def list_sessions(self) -> list[Session]:
         return self._registry.list_all()

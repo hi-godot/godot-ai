@@ -56,6 +56,7 @@ class StubClient:
         params: dict | None = None,
         session_id: str | None = None,
         timeout: float = 5.0,
+        surface_error_hints: bool = True,
     ) -> dict:
         self.calls.append(
             {
@@ -63,6 +64,7 @@ class StubClient:
                 "params": params,
                 "session_id": session_id,
                 "timeout": timeout,
+                "surface_error_hints": surface_error_hints,
             }
         )
         if command == "quit_editor":
@@ -1217,6 +1219,7 @@ class ReloadStubClient:
         params: dict | None = None,
         session_id: str | None = None,
         timeout: float = 5.0,
+        surface_error_hints: bool = True,
     ) -> dict:
         self.calls.append(
             {
@@ -1224,6 +1227,7 @@ class ReloadStubClient:
                 "params": params,
                 "session_id": session_id,
                 "timeout": timeout,
+                "surface_error_hints": surface_error_hints,
             }
         )
         if command == "reload_plugin":
@@ -1491,7 +1495,9 @@ async def test_logs_read_handler_plugin_normalizes_structured_payload():
     ## the public Python API still returns the legacy [str] shape for that
     ## source so existing callers don't shift.
     class StructuredPluginClient(StubClient):
-        async def send(self, command, params=None, session_id=None, timeout=5.0):
+        async def send(
+            self, command, params=None, session_id=None, timeout=5.0, surface_error_hints=True
+        ):
             self.calls.append(
                 {
                     "command": command,
@@ -3444,7 +3450,9 @@ async def test_project_stop_handler_passes_through_idempotent_payload():
     """
 
     class IdempotentStopClient(StubClient):
-        async def send(self, command, params=None, session_id=None, timeout=5.0):
+        async def send(
+            self, command, params=None, session_id=None, timeout=5.0, surface_error_hints=True
+        ):
             self.calls.append({"command": command, "params": params})
             return {
                 "stopped": True,
@@ -3464,7 +3472,9 @@ async def test_project_run_handler_passes_through_already_running_payload():
     """Idempotent-run path (was_already_running=true) flows through unchanged."""
 
     class AlreadyRunningClient(StubClient):
-        async def send(self, command, params=None, session_id=None, timeout=5.0):
+        async def send(
+            self, command, params=None, session_id=None, timeout=5.0, surface_error_hints=True
+        ):
             self.calls.append({"command": command, "params": params})
             return {
                 "mode": (params or {}).get("mode", "main"),
@@ -3646,7 +3656,9 @@ async def test_editor_screenshot_handler_custom_angles():
 
 async def test_editor_screenshot_handler_view_target_not_found_single():
     class NotFoundClient:
-        async def send(self, command, params=None, session_id=None, timeout=5.0):
+        async def send(
+            self, command, params=None, session_id=None, timeout=5.0, surface_error_hints=True
+        ):
             return {
                 "source": "viewport",
                 "width": 1,
@@ -3670,7 +3682,9 @@ async def test_editor_screenshot_handler_view_target_not_found_single():
 
 async def test_editor_screenshot_handler_view_target_not_found_coverage():
     class NotFoundCoverageClient:
-        async def send(self, command, params=None, session_id=None, timeout=5.0):
+        async def send(
+            self, command, params=None, session_id=None, timeout=5.0, surface_error_hints=True
+        ):
             return {
                 "source": "viewport",
                 "view_target": params["view_target"],
@@ -3745,7 +3759,9 @@ async def test_editor_screenshot_handler_relays_viewport_not_3d_error():
     from godot_ai.godot_client.client import GodotCommandError
 
     class ViewportNot3DClient:
-        async def send(self, command, params=None, session_id=None, timeout=5.0):
+        async def send(
+            self, command, params=None, session_id=None, timeout=5.0, surface_error_hints=True
+        ):
             raise GodotCommandError(
                 code="EDITOR_NOT_READY",
                 message=(
@@ -3781,7 +3797,9 @@ async def test_editor_screenshot_handler_relays_viewport_empty_error():
     from godot_ai.godot_client.client import GodotCommandError
 
     class ViewportEmptyClient:
-        async def send(self, command, params=None, session_id=None, timeout=5.0):
+        async def send(
+            self, command, params=None, session_id=None, timeout=5.0, surface_error_hints=True
+        ):
             raise GodotCommandError(
                 code="EDITOR_NOT_READY",
                 message="Captured an empty image from viewport.",
@@ -4590,7 +4608,9 @@ def _make_stop_project_runtime(
     from godot_ai.sessions.registry import Session
 
     class ReadinessAfterStub(StubClient):
-        async def send(self, command, params=None, session_id=None, timeout=5.0):
+        async def send(
+            self, command, params=None, session_id=None, timeout=5.0, surface_error_hints=True
+        ):
             self.calls.append({"command": command, "params": params})
             return {"stopped": True, "undoable": False, "readiness_after": readiness_after}
 
