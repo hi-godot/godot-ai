@@ -124,13 +124,10 @@ func clear_pending_download() -> void:
 	_latest_checksum_url = ""
 
 
-## True when the running Godot can self-update in place. Godot < 4.4 takes
-## the `_install_zip_inline` extract-then-restart path, and that engine's
-## stricter `GDScript::reload()` (`!p_keep_state && has_instances` ->
-## `ERR_ALREADY_IN_USE`) turns the extract-over-live-scripts into a reload
-## error flood plus a SIGSEGV in `EditorDockManager::remove_dock` /
-## `SceneTree::finalize` on the restart/quit (#475). So on < 4.4 we don't
-## run the in-editor pipeline at all — the user updates manually.
+## True when the running Godot is within the supported self-update floor.
+## The next compatibility-breaking release requires Godot 4.5 APIs/classes
+## in always-loaded scripts, so engines below 4.5 must not be offered a
+## one-click update into that release.
 ## Guards `major` too so a future Godot 5.x (minor 0) isn't misclassified.
 func _can_self_update() -> bool:
 	var v := Engine.get_version_info()
@@ -138,49 +135,45 @@ func _can_self_update() -> bool:
 
 
 ## Pure version predicate, split out so it's testable without faking the
-## running engine. In-editor self-update needs Godot >= 4.4.
+## running engine. In-editor self-update needs Godot >= 4.5.
 static func _version_can_self_update(major: int, minor: int) -> bool:
+	return major > 4 or (major == 4 and minor >= 5)
+
+
+## Runner-backed reload is available on Godot 4.4+, but the public
+## self-update gate may be stricter when the next release raises the floor.
+static func _version_supports_runner_reload(major: int, minor: int) -> bool:
 	return major > 4 or (major == 4 and minor >= 4)
 
 
-## Banner guidance for the gated (< 4.4) path. Shown up-front at check time
-## (with the available version) and again on click, so the user understands
-## the manual-update flow before they press anything. Single source of truth
-## so check-time and click-time text never drift.
+## Banner guidance for the gated (< 4.5) path. Shown up-front at check time
+## so users know this is the last compatible plugin for their editor.
 static func _manual_update_label(version: String) -> String:
-	var prefix := "Update available"
+	var release_noun := "release"
+	var suffix := ""
 	if not version.is_empty():
-		prefix = "Update v%s available" % version
+		release_noun = "version"
+		suffix = " (latest: v%s)" % version
 	return (
-		prefix
-		+ " — in-editor update needs Godot 4.4+. Open the download page, then "
-		+ "replace addons/godot_ai/ manually and relaunch."
+		"This is the last Godot AI %s for this Godot%s. " % [release_noun, suffix]
+		+ "Upgrade to Godot 4.5+ to keep receiving updates."
 	)
 
 
-## Driven by the dock's Update button. On Godot < 4.4 (see `_can_self_update`)
-## the in-editor install is disabled — we open the release page for a manual
-## download instead, never entering the extract pipeline that crashes those
-## engines. With no resolved download URL — either the check never completed,
-## or the release didn't ship a matching asset — also falls back to opening
-## the release page. Otherwise kicks off the download → extract → reload
-## pipeline.
+## Driven by the dock's Update button. On Godot < 4.5 (see `_can_self_update`)
+## the in-editor install is disabled so users cannot install an incompatible
+## latest release. With no resolved download URL — either the check never
+## completed, or the release didn't ship a matching asset — falls back to
+## opening the release page. Otherwise kicks off the download → extract →
+## reload pipeline.
 func start_install() -> void:
 	if not _can_self_update():
-		## Only claim success + lock the button if the browser actually opened.
-		## On failure (no handler, headless) keep the button enabled so the
-		## user can retry. Either way, leave the version-bearing guidance label
-		## from check time in place — don't re-emit label_text.
-		if OS.shell_open(RELEASES_PAGE) == OK:
-			install_state_changed.emit({
-				"button_text": "Opened download page",
-				"button_disabled": true,
-			})
-		else:
-			install_state_changed.emit({
-				"button_text": "Couldn't open browser — retry",
-				"button_disabled": false,
-			})
+		install_state_changed.emit({
+			"button_text": "Upgrade Godot",
+			"button_disabled": true,
+			"label_text": _manual_update_label(""),
+			"banner_visible": true,
+		})
 		return
 
 	if _latest_download_url.is_empty():
@@ -355,17 +348,20 @@ func _on_update_check_completed(
 	var parsed := parse_releases_response(result, response_code, body)
 	if not bool(parsed.get("has_update", false)):
 		return
+	## On engines below the next support floor, do not arm the download URL
+	## or emit a normal update offer. A later 4.5+-only `latest` release would
+	## otherwise let 4.4 users install a plugin their editor cannot parse.
+	if not _can_self_update():
+		install_state_changed.emit({
+			"button_text": "Upgrade Godot",
+			"button_disabled": true,
+			"label_text": _manual_update_label(String(parsed.get("version", ""))),
+			"banner_visible": true,
+		})
+		return
 	_latest_download_url = String(parsed.get("download_url", ""))
 	_latest_checksum_url = String(parsed.get("checksum_url", ""))
 	update_check_completed.emit(parsed)
-	## On engines that can't self-update (Godot < 4.4, #475), surface the
-	## full manual-update guidance AND relabel the button up-front — before
-	## any click — so the user knows what the button does and why.
-	if not _can_self_update():
-		install_state_changed.emit({
-			"button_text": "Open download page",
-			"label_text": _manual_update_label(String(parsed.get("version", ""))),
-		})
 
 
 func _on_download_completed(
@@ -526,11 +522,10 @@ func _install_zip() -> void:
 		_plugin != null
 		and _plugin.has_method("install_downloaded_update")
 	)
-	## Same major-aware predicate as the _can_self_update() gate, so a future
-	## Godot 5.x (minor 0) takes the runner path the gate promised — not the
-	## pre-4.4 inline extract. A bare `minor >= 4` here would route 5.0 to the
-	## crash-prone inline path even though the gate let it in.
-	if _version_can_self_update(int(version.get("major", 0)), int(version.get("minor", 0))) and has_runner:
+	## Runner support starts at 4.4 even though the public self-update offer is
+	## currently gated at 4.5. Keep this separate so bypassed/internal install
+	## paths do not accidentally send a 4.4 editor through the inline fallback.
+	if _version_supports_runner_reload(int(version.get("major", 0)), int(version.get("minor", 0))) and has_runner:
 		install_state_changed.emit({"button_text": "Reloading..."})
 		## Runner takes over: plugin tears down, runner extracts + scans +
 		## re-enables. `install_downloaded_update` calls
@@ -610,7 +605,7 @@ func _install_zip_inline(version: Dictionary) -> void:
 	if _plugin != null and _plugin.has_method("prepare_for_update_reload"):
 		_plugin.prepare_for_update_reload()
 
-	if _version_can_self_update(int(version.get("major", 0)), int(version.get("minor", 0))):
+	if _version_supports_runner_reload(int(version.get("major", 0)), int(version.get("minor", 0))):
 		install_state_changed.emit({"button_text": "Scanning..."})
 		## Filesystem scan must complete before plugin reload — otherwise
 		## plugin.gd re-parses against a ClassDB that hasn't seen the new

@@ -25,9 +25,11 @@ func suite_name() -> String:
 
 # ---- _version_can_self_update (pure / static, #475 gate) ---------------
 
-func test_version_can_self_update_false_below_4_4() -> void:
-	## Godot < 4.4 takes the extract-then-restart path that crashes (#475),
-	## so the in-editor self-update is gated off on those engines.
+func test_version_can_self_update_false_below_4_5() -> void:
+	## Godot < 4.5 must not self-update into releases that require the
+	## 4.5 Logger API at parse time.
+	assert_false(McpUpdateManagerScript._version_can_self_update(4, 4),
+		"4.4 must be gated once the next plugin release requires Godot 4.5+")
 	assert_false(McpUpdateManagerScript._version_can_self_update(4, 3),
 		"4.3 must be gated (in-editor self-update disabled)")
 	assert_false(McpUpdateManagerScript._version_can_self_update(4, 0),
@@ -36,31 +38,43 @@ func test_version_can_self_update_false_below_4_4() -> void:
 		"a hypothetical 3.x must be gated")
 
 
-func test_version_can_self_update_true_at_and_above_4_4() -> void:
-	assert_true(McpUpdateManagerScript._version_can_self_update(4, 4),
-		"4.4 is the first engine that can self-update in place")
+func test_version_can_self_update_true_at_and_above_4_5() -> void:
+	assert_true(McpUpdateManagerScript._version_can_self_update(4, 5),
+		"4.5 is the first engine that can self-update in place")
 	assert_true(McpUpdateManagerScript._version_can_self_update(4, 6),
 		"4.6 can self-update")
 	assert_true(McpUpdateManagerScript._version_can_self_update(5, 0),
 		"a future 5.0 (minor 0) must not be misclassified by the minor check")
 
 
+func test_runner_reload_support_stays_available_on_4_4() -> void:
+	## The transitional release suppresses the public update offer on 4.4,
+	## but runner reload support itself still starts at 4.4. Keep these
+	## predicates separate so internal/bypassed install paths do not route
+	## 4.4 through the legacy inline fallback.
+	assert_true(McpUpdateManagerScript._version_supports_runner_reload(4, 4),
+		"4.4 supports runner-backed reloads")
+	assert_false(McpUpdateManagerScript._version_supports_runner_reload(4, 3),
+		"4.3 still uses the inline fallback")
+	assert_true(McpUpdateManagerScript._version_supports_runner_reload(5, 0),
+		"future majors must not be misclassified by the minor check")
+
+
 func test_manual_update_label_includes_version_and_guidance() -> void:
-	## Shown up-front on < 4.4 (before any click) so the user understands the
-	## manual-update flow. Must name the version and the 4.4+ requirement.
+	## Shown up-front on < 4.5 so the user understands they need a newer
+	## editor before installing the latest plugin.
 	var with_v := McpUpdateManagerScript._manual_update_label("2.5.7")
 	assert_contains(with_v, "2.5.7", "label must name the available version")
-	assert_contains(with_v, "Godot 4.4+", "label must state the engine requirement")
-	assert_contains(with_v, "addons/godot_ai/", "label must point at the manual-swap path")
+	assert_contains(with_v, "Godot 4.5+", "label must state the engine requirement")
+	assert_contains(with_v, "last Godot AI version", "label must say updates are gated")
 
 
 func test_manual_update_label_omits_version_when_unknown() -> void:
-	## On the click path the version isn't re-threaded; the label degrades to
-	## a generic "Update available" without a stray "v" token.
+	## On the click path the version isn't re-threaded; the label still gives
+	## floor guidance without a stray "v" token.
 	var no_v := McpUpdateManagerScript._manual_update_label("")
-	assert_contains(no_v, "Update available", "generic label must still lead with 'Update available'")
 	assert_false(no_v.contains(" v"), "no version token when version is empty")
-	assert_contains(no_v, "Godot 4.4+", "label must still state the engine requirement")
+	assert_contains(no_v, "Godot 4.5+", "label must still state the engine requirement")
 
 
 # ---- _is_safe_zip_addon_file (pure / static, #522) --------------------
@@ -389,6 +403,72 @@ func test_install_in_flight_default_false() -> void:
 	var manager = McpUpdateManagerScript.new()
 	assert_false(manager.is_install_in_flight(),
 		"A fresh manager must default to is_install_in_flight() == false")
+	manager.free()
+
+
+# ---- Godot floor update gate -------------------------------------------
+
+class _NoSelfUpdateManager extends McpUpdateManagerScript:
+	func _can_self_update() -> bool:
+		return false
+
+
+func test_update_check_below_floor_does_not_arm_download() -> void:
+	## A 4.4 editor must not cache the latest ZIP URL or emit the normal
+	## update offer. Otherwise one click can install the 4.5+-only release.
+	var manager = _NoSelfUpdateManager.new()
+	var body := _make_body(_make_release_payload("v999.0.0"))
+	var states: Array = []
+	var update_results: Array = []
+	manager.install_state_changed.connect(func(state: Dictionary) -> void:
+		states.append(state)
+	)
+	manager.update_check_completed.connect(func(result: Dictionary) -> void:
+		update_results.append(result)
+	)
+
+	manager._on_update_check_completed(HTTPRequest.RESULT_SUCCESS, 200, [], body)
+
+	assert_eq(update_results.size(), 0,
+		"below-floor update checks must not emit the normal update offer")
+	assert_eq(manager._latest_download_url, "",
+		"below-floor update checks must not arm the ZIP download URL")
+	assert_eq(manager._latest_checksum_url, "",
+		"below-floor update checks must not arm the checksum URL")
+	assert_eq(states.size(), 1,
+		"below-floor update checks must emit one guidance banner state")
+	var state: Dictionary = states[0]
+	assert_eq(String(state.get("button_text", "")), "Upgrade Godot",
+		"below-floor banner must make the required action clear")
+	assert_eq(bool(state.get("button_disabled", false)), true,
+		"below-floor update button must be disabled")
+	assert_eq(bool(state.get("banner_visible", false)), true,
+		"below-floor guidance must keep the banner visible")
+	assert_contains(String(state.get("label_text", "")), "Godot 4.5+",
+		"below-floor guidance must state the new engine floor")
+	manager.free()
+
+
+func test_start_install_below_floor_only_repaints_guidance() -> void:
+	## If a stale UI path calls start_install anyway, keep it inside the
+	## guidance state rather than opening the browser or entering install.
+	var manager = _NoSelfUpdateManager.new()
+	var states: Array = []
+	manager.install_state_changed.connect(func(state: Dictionary) -> void:
+		states.append(state)
+	)
+
+	manager.start_install()
+
+	assert_eq(states.size(), 1,
+		"below-floor start_install must emit guidance exactly once")
+	var state: Dictionary = states[0]
+	assert_eq(String(state.get("button_text", "")), "Upgrade Godot",
+		"below-floor click path must keep the action as Godot upgrade")
+	assert_eq(bool(state.get("button_disabled", false)), true,
+		"below-floor click path must keep the button disabled")
+	assert_contains(String(state.get("label_text", "")), "Godot 4.5+",
+		"below-floor click path must restate the engine requirement")
 	manager.free()
 
 
