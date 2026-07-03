@@ -5,7 +5,7 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
 const ScriptHandler := preload("res://addons/godot_ai/handlers/script_handler.gd")
-const _LoggerLoader := preload("res://addons/godot_ai/runtime/logger_loader.gd")
+const EditorLogger := preload("res://addons/godot_ai/runtime/editor_logger.gd")
 
 ## Tests for ScriptHandler — script creation, reading, attach/detach, and symbol inspection.
 
@@ -14,6 +14,15 @@ const INVALID_IF_PARSE_ERROR := "Parse Error: Expected conditional expression af
 var _handler: ScriptHandler
 var _undo_redo: EditorUndoRedoManager
 var _attached_shared_logger = null
+
+
+class _FallbackDiagnosticsScriptHandler extends ScriptHandler:
+	func _capture_gdscript_load_diagnostics(_path: String) -> Dictionary:
+		return {
+			"diagnostics": [],
+			"diagnostics_detail": "none",
+			"diagnostics_status": "checked",
+		}
 
 const TEST_SCRIPT_PATH := "res://tests/_mcp_test_script.gd"
 const TEST_SCRIPT_CONTENT := """class_name _McpTestScript
@@ -89,8 +98,6 @@ func test_create_script_basic() -> void:
 
 
 func test_create_script_reports_log_capture_diagnostics_with_real_line() -> void:
-	if skip_on_godot_lt("4.5", "Logger subclass only exists on Godot 4.5+"):
-		return
 	var path := "res://tests/_mcp_test_invalid_create.gd"
 	var content := "extends Node\n\nfunc _ready() -> void:\n\tif\n\tpass\n"
 	_expect_invalid_if_parse_errors()
@@ -132,43 +139,16 @@ func test_create_script_validation_does_not_pollute_shared_editor_log() -> void:
 	DirAccess.remove_absolute(path)
 
 
-func test_create_script_reports_fallback_diagnostics_without_logger() -> void:
-	if ClassDB.class_exists("Logger"):
-		skip("Fallback branch is exercised on Godot versions without Logger")
-		return
-	var path := "res://tests/_mcp_test_invalid_create_no_logger.gd"
-	var content := "extends Node\n\nfunc _ready() -> void:\n\tif\n\tpass\n"
-	var result := _handler.create_script({"path": path, "content": content})
-	assert_has_key(result, "data")
-	assert_eq(result.data.diagnostics_scope, "this_file")
-	assert_eq(result.data.diagnostics_status, "checked")
-	assert_eq(result.data.diagnostics_detail, "fallback")
-	assert_gt(result.data.diagnostics.size(), 0)
-	assert_eq(result.data.diagnostics[0].path, path)
-	assert_eq(result.data.diagnostics[0].line, 5)
-	assert_eq(result.data.diagnostics[0].details.fallback_line, true)
-	DirAccess.remove_absolute(path)
-
-
 func _attach_shared_editor_logger(buffer: McpEditorLogBuffer) -> bool:
 	_detach_shared_editor_logger()
-	if skip_on_godot_lt("4.5", "Logger subclass only exists on Godot 4.5+"):
-		return false
-	if not OS.has_method("add_logger") or not OS.has_method("remove_logger"):
-		skip("Logger API is unavailable")
-		return false
-	var logger_script := _LoggerLoader.build(_LoggerLoader.EDITOR_LOGGER_PATH)
-	assert_true(logger_script != null, "Editor logger script should compile on Godot 4.5+")
-	if logger_script == null:
-		return false
-	_attached_shared_logger = logger_script.new(buffer)
-	OS.call("add_logger", _attached_shared_logger)
+	_attached_shared_logger = EditorLogger.new(buffer)
+	OS.add_logger(_attached_shared_logger)
 	return true
 
 
 func _detach_shared_editor_logger() -> void:
-	if _attached_shared_logger != null and OS.has_method("remove_logger"):
-		OS.call("remove_logger", _attached_shared_logger)
+	if _attached_shared_logger != null:
+		OS.remove_logger(_attached_shared_logger)
 	_attached_shared_logger = null
 
 
@@ -347,8 +327,6 @@ func test_patch_script_basic() -> void:
 
 
 func test_patch_script_reports_log_capture_diagnostics_with_real_line() -> void:
-	if skip_on_godot_lt("4.5", "Logger subclass only exists on Godot 4.5+"):
-		return
 	var path := "res://tests/_mcp_test_invalid_patch.gd"
 	var original := "extends Node\n\nfunc _ready() -> void:\n\tpass\n\tprint(\"after\")\n"
 	var file := FileAccess.open(path, FileAccess.WRITE)
@@ -411,16 +389,15 @@ func test_patch_script_validation_does_not_pollute_shared_editor_log() -> void:
 
 
 func test_patch_script_reports_fallback_diagnostics_without_logger() -> void:
-	if ClassDB.class_exists("Logger"):
-		skip("Fallback branch is exercised on Godot versions without Logger")
-		return
 	var path := "res://tests/_mcp_test_invalid_patch_no_logger.gd"
 	var original := "extends Node\n\nfunc _ready() -> void:\n\tpass\n\tprint(\"after\")\n"
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	file.store_string(original)
 	file.close()
 
-	var result := _handler.patch_script({
+	_expect_invalid_if_parse_errors()
+	var fallback_handler := _FallbackDiagnosticsScriptHandler.new(_undo_redo)
+	var result := fallback_handler.patch_script({
 		"path": path,
 		"old_text": "pass",
 		"new_text": "if",

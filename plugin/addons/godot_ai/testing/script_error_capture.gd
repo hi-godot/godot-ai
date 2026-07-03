@@ -3,9 +3,7 @@ extends Logger
 
 ## Captures GDScript runtime errors emitted while a test is running.
 ##
-## Deliberately no class_name: this script is compiled dynamically by
-## script_error_capture_loader.gd only when Logger exists. It lives in a
-## `.gdignore`d folder so older Godot editor scans never parse `extends Logger`.
+## Deliberately no class_name: this is an internal test helper.
 ##
 ## Only ERROR_TYPE_SCRIPT is captured. push_error(), push_warning(), and
 ## engine-internal ERR_FAIL_* checks are often valid negative-path assertions and

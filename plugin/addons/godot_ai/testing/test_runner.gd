@@ -5,17 +5,17 @@ extends RefCounted
 ## Lightweight test runner for MCP plugin tests. Discovers test_* methods
 ## on McpTestSuite instances, runs them, and collects structured results.
 
-const ScriptErrorCaptureLoader := preload("res://addons/godot_ai/testing/script_error_capture_loader.gd")
+const ScriptErrorCapture := preload("res://addons/godot_ai/testing/script_error_capture.gd")
 
 var _results: Array[Dictionary] = []
 var _last_run_ms: int = 0
-var _script_error_capture: Object = null
+var _script_error_capture: ScriptErrorCapture = null
 var _capture_registered := false
 
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_PREDELETE and _capture_registered and _script_error_capture != null:
-		OS.call("remove_logger", _script_error_capture)
+		OS.remove_logger(_script_error_capture)
 		_capture_registered = false
 
 
@@ -173,10 +173,10 @@ func _register_capture() -> void:
 	if _capture_registered:
 		return
 	if _script_error_capture == null:
-		_script_error_capture = ScriptErrorCaptureLoader.build()
+		_script_error_capture = ScriptErrorCapture.new()
 	if _script_error_capture == null:
 		return
-	OS.call("add_logger", _script_error_capture)
+	OS.add_logger(_script_error_capture)
 	_capture_registered = true
 
 
@@ -186,19 +186,19 @@ func _unregister_capture() -> void:
 	if _script_error_capture == null:
 		_capture_registered = false
 		return
-	OS.call("remove_logger", _script_error_capture)
+	OS.remove_logger(_script_error_capture)
 	_capture_registered = false
 
 
 func _begin_script_error_capture() -> void:
 	if _script_error_capture != null and _capture_registered:
-		_script_error_capture.call("begin_capture")
+		_script_error_capture.begin_capture()
 
 
 func _end_script_error_capture() -> PackedStringArray:
 	if _script_error_capture == null or not _capture_registered:
 		return PackedStringArray()
-	return _script_error_capture.call("end_capture") as PackedStringArray
+	return _script_error_capture.end_capture()
 
 
 static func _edited_scene_root() -> Node:

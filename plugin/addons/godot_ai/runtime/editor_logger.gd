@@ -3,20 +3,12 @@ extends Logger
 
 ## Editor-process Logger subclass.
 ##
-## NOTE: deliberately no `class_name` — `extends Logger` requires the Logger
-## class which Godot only exposes from 4.5+. This file lives in the
-## `.gdignore`'d `runtime/loggers/` folder so Godot's editor filesystem scan
-## skips it entirely — on Godot < 4.5 it is never parsed, so it emits no
-## "Could not find base class Logger" error (it used to, before #475's
-## follow-up). plugin.gd builds it from source at runtime via
-## `logger_loader.gd` and only calls OS.add_logger() after gating on
-## ClassDB.class_exists("Logger"), so the `extends Logger` parse only ever
-## happens on 4.5+ where it resolves. Registered from plugin.gd::_enter_tree
+## NOTE: deliberately no `class_name`. Registered from plugin.gd::_enter_tree
 ## so we can intercept editor-process script errors — parse errors, @tool
-## runtime errors, EditorPlugin errors, push_error/push_warning — and
-## surface them via `logs_read(source="editor")`. Without this, the LLM
-## sees nothing in `logs_read` while the same errors show in red lines in
-## Godot's Output panel.
+## runtime errors, EditorPlugin errors, push_error/push_warning — and surface
+## them via `logs_read(source="editor")`. Without this, the LLM sees nothing
+## in `logs_read` while the same errors show in red lines in Godot's Output
+## panel.
 ##
 ## Why only `_log_error` and not `_log_message`:
 ## `_log_message(msg, error)` covers print() and printerr(), which is the
@@ -34,17 +26,13 @@ extends Logger
 const ADDON_PATH_MARKER := "/addons/godot_ai/"
 
 ## Resolve McpLogBacktrace by path, not by the `McpLogBacktrace` class_name.
-## This script is compiled from source at runtime by logger_loader.gd; a bare
-## class_name reference depends on the global class-name table being populated
+## A bare class_name reference depends on the global class-name table being populated
 ## at compile time, which isn't guaranteed on a cold editor enable mid-scan.
 ## `const preload` resolves at compile time independent of the registry —
 ## matches game_logger.gd's deliberate choice for the same reason.
 const _LogBacktrace := preload("res://addons/godot_ai/utils/log_backtrace.gd")
 
-## McpEditorLogBuffer — untyped because this script is loaded dynamically and
-## McpEditorLogBuffer's class_name isn't yet registered on the parser at the
-## time `extends Logger` resolves. Constructor-injected so the hot path
-## doesn't need a per-call null check.
+## Constructor-injected so the hot path doesn't need a per-call null check.
 var _buffer
 
 

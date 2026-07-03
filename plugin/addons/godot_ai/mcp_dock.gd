@@ -583,7 +583,7 @@ func _build_ui() -> void:
 	_update_label = Label.new()
 	_update_label.add_theme_font_size_override("font_size", 15)
 	_update_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3))
-	## Wrap long banner text (e.g. the < 4.4 manual-update guidance) instead
+	## Wrap long banner text (e.g. the < 4.5 support-floor guidance) instead
 	## of letting a single line stretch the whole dock wide. The dock is a
 	## fixed-width side panel, so constrain horizontally and wrap.
 	_update_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -2733,6 +2733,5 @@ func _on_install_state_changed(state: Dictionary) -> void:
 	if state.has("banner_visible") and _update_banner != null:
 		_update_banner.visible = bool(state["banner_visible"])
 	if String(state.get("outcome", "")) == "success" and _update_label != null:
-		## Visual confirmation for the pre-4.4 "Updated! Restart the editor."
-		## terminal state — the only outcome the manager paints green for.
+		## Visual confirmation for successful terminal update states.
 		_update_label.add_theme_color_override("font_color", Color.GREEN)

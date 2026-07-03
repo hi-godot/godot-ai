@@ -15,10 +15,7 @@ extends McpTestSuite
 ##   3. mcp_debugger_plugin.gd — editor-side _on_eval_compiled /
 ##      _on_eval_runtime_error / _clear_pending for the eval flow.
 ##
-## game_logger extends Logger (Godot 4.5+), so the logger/helper tests gate on
-## ClassDB.class_exists("Logger") and skip on older engines.
-
-const _LoggerLoader := preload("res://addons/godot_ai/runtime/logger_loader.gd")
+const GameLogger := preload("res://addons/godot_ai/runtime/game_logger.gd")
 const GameHelper := preload("res://addons/godot_ai/runtime/game_helper.gd")
 const StubBacktrace := preload("res://addons/godot_ai/testing/stub_backtrace.gd")
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
@@ -33,9 +30,7 @@ func suite_name() -> String:
 
 
 func _build_game_logger():
-	var script := _LoggerLoader.build(_LoggerLoader.GAME_LOGGER_PATH)
-	assert_true(script != null, "game_logger.gd should compile on Godot 4.5+")
-	return script.new() if script != null else null
+	return GameLogger.new()
 
 
 ## Fresh (out-of-tree) game_helper with a fresh logger attached, so _process
@@ -67,12 +62,7 @@ func _log_script_error(logger, fn: String, msg := "kaboom") -> void:
 # --- game_logger: script-error ring + token lookup ---
 
 func test_script_error_increments_seq_and_stores_text() -> void:
-	if not ClassDB.class_exists("Logger"):
-		skip("Logger class requires Godot 4.5+")
-		return
 	var logger = _build_game_logger()
-	if logger == null:
-		return
 	assert_eq(logger.script_error_seq(), 0, "counter starts at zero")
 	logger._log_error(
 		"_run", "res://eval.gd", 10,
@@ -86,12 +76,7 @@ func test_script_error_increments_seq_and_stores_text() -> void:
 
 
 func test_script_error_text_prefers_backtrace_frame() -> void:
-	if not ClassDB.class_exists("Logger"):
-		skip("Logger class requires Godot 4.5+")
-		return
 	var logger = _build_game_logger()
-	if logger == null:
-		return
 	## A real runtime error reports the engine call site in file/line but the
 	## user frame in script_backtraces[0]; the user frame must win.
 	logger._log_error(
@@ -104,12 +89,7 @@ func test_script_error_text_prefers_backtrace_frame() -> void:
 
 
 func test_push_error_does_not_bump_script_seq() -> void:
-	if not ClassDB.class_exists("Logger"):
-		skip("Logger class requires Godot 4.5+")
-		return
 	var logger = _build_game_logger()
-	if logger == null:
-		return
 	## push_error("x") arrives as type 0 with the message in `code`.
 	logger._log_error("_run", "res://eval.gd", 5, "x", "", false, _ERROR, [])
 	assert_eq(logger.script_error_seq(), 0,
@@ -117,24 +97,14 @@ func test_push_error_does_not_bump_script_seq() -> void:
 
 
 func test_push_warning_does_not_bump_script_seq() -> void:
-	if not ClassDB.class_exists("Logger"):
-		skip("Logger class requires Godot 4.5+")
-		return
 	var logger = _build_game_logger()
-	if logger == null:
-		return
 	logger._log_error("_run", "res://eval.gd", 5, "deprecated", "", false, _WARNING, [])
 	assert_eq(logger.script_error_seq(), 0,
 		"push_warning (type 1) must NOT bump the script-error counter")
 
 
 func test_find_script_error_since_matches_function_token() -> void:
-	if not ClassDB.class_exists("Logger"):
-		skip("Logger class requires Godot 4.5+")
-		return
 	var logger = _build_game_logger()
-	if logger == null:
-		return
 	_log_script_error(logger, "_mcp_run_9", "boom")
 	assert_contains(logger.find_script_error_since(0, "_mcp_run_9"), "boom",
 		"finds an error whose backtrace contains the queried function")
@@ -143,12 +113,7 @@ func test_find_script_error_since_matches_function_token() -> void:
 
 
 func test_find_script_error_since_respects_baseline() -> void:
-	if not ClassDB.class_exists("Logger"):
-		skip("Logger class requires Godot 4.5+")
-		return
 	var logger = _build_game_logger()
-	if logger == null:
-		return
 	_log_script_error(logger, "_mcp_run_9", "boom")  # seq -> 1
 	assert_eq(logger.find_script_error_since(1, "_mcp_run_9"), "",
 		"errors at/below the baseline seq are excluded")
@@ -159,9 +124,6 @@ func test_find_script_error_since_respects_baseline() -> void:
 # --- game_helper: per-request token-correlated reporting ---
 
 func test_try_report_fires_after_matching_runtime_error() -> void:
-	if not ClassDB.class_exists("Logger"):
-		skip("Logger class requires Godot 4.5+")
-		return
 	var pair := _build_helper_with_logger()
 	var helper: Node = pair[0]
 	var logger = pair[1]
@@ -177,9 +139,6 @@ func test_try_report_fires_after_matching_runtime_error() -> void:
 
 
 func test_try_report_ignores_unrelated_game_error() -> void:
-	if not ClassDB.class_exists("Logger"):
-		skip("Logger class requires Godot 4.5+")
-		return
 	## P2a: a runtime error from the game's own code (different function) while
 	## the eval is in flight must NOT fail the eval.
 	var pair := _build_helper_with_logger()
@@ -194,9 +153,6 @@ func test_try_report_ignores_unrelated_game_error() -> void:
 
 
 func test_try_report_isolates_overlapping_evals() -> void:
-	if not ClassDB.class_exists("Logger"):
-		skip("Logger class requires Godot 4.5+")
-		return
 	## P2b: two evals in flight; only one raises a runtime error. The other
 	## must be unaffected.
 	var pair := _build_helper_with_logger()
@@ -215,9 +171,6 @@ func test_try_report_isolates_overlapping_evals() -> void:
 
 
 func test_try_report_ignores_push_error_even_from_eval() -> void:
-	if not ClassDB.class_exists("Logger"):
-		skip("Logger class requires Godot 4.5+")
-		return
 	var pair := _build_helper_with_logger()
 	var helper: Node = pair[0]
 	var logger = pair[1]
@@ -233,9 +186,6 @@ func test_try_report_ignores_push_error_even_from_eval() -> void:
 
 
 func test_handle_eval_check_reports_matching_request() -> void:
-	if not ClassDB.class_exists("Logger"):
-		skip("Logger class requires Godot 4.5+")
-		return
 	var pair := _build_helper_with_logger()
 	var helper: Node = pair[0]
 	var logger = pair[1]
@@ -248,9 +198,6 @@ func test_handle_eval_check_reports_matching_request() -> void:
 
 
 func test_handle_eval_check_ignores_other_request() -> void:
-	if not ClassDB.class_exists("Logger"):
-		skip("Logger class requires Godot 4.5+")
-		return
 	var pair := _build_helper_with_logger()
 	var helper: Node = pair[0]
 	var logger = pair[1]

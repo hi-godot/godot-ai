@@ -124,14 +124,14 @@ func skip_suite(reason: String) -> void:
 
 
 ## Mark the current test as skipped when the running Godot is older than
-## `min_version` (a "major.minor" string like "4.4"). Use for tests that
+## `min_version` (a "major.minor" string like "4.6"). Use for tests that
 ## exercise an engine API or behavior that only exists on newer Godot.
 ## Returns true when the test was skipped, so callers can `return` from
 ## the test body.
 ##
 ## Example:
-##     func test_uses_44_only_api() -> void:
-##         if skip_on_godot_lt("4.4", "Engine.capture_script_backtraces is 4.4+"):
+##     func test_uses_46_only_api() -> void:
+##         if skip_on_godot_lt("4.6", "example API requires Godot 4.6+"):
 ##             return
 ##         ...
 func skip_on_godot_lt(min_version: String, reason: String = "") -> bool:

@@ -3,17 +3,10 @@ extends Logger
 
 ## Game-process Logger subclass.
 ##
-## NOTE: deliberately no `class_name` — `extends Logger` requires the Logger
-## class which Godot only exposes from 4.5+. This file lives in the
-## `.gdignore`'d `runtime/loggers/` folder so Godot's editor filesystem scan
-## skips it entirely — on Godot < 4.5 it is never parsed, so it emits no
-## "Could not find base class Logger" error (it used to, before #475's
-## follow-up). game_helper.gd builds it from source at runtime via
-## `logger_loader.gd` and only calls OS.add_logger() after gating on
-## ClassDB.class_exists("Logger"). Registered from inside the running game
-## so we can intercept print(), printerr(), push_error(), and
-## push_warning() and ferry them back to the editor over the
-## EngineDebugger channel — the same bridge PR #76 uses for screenshots.
+## NOTE: deliberately no `class_name`. Registered from inside the running
+## game so we can intercept print(), printerr(), push_error(), and
+## push_warning() and ferry them back to the editor over the EngineDebugger
+## channel — the same bridge PR #76 uses for screenshots.
 ##
 ## Logger virtuals can be called from any thread (e.g. async loaders push
 ## errors off the main thread). We accumulate into _pending under a Mutex

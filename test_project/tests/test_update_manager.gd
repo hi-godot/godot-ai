@@ -29,7 +29,7 @@ func test_version_can_self_update_false_below_4_5() -> void:
 	## Godot < 4.5 must not self-update into releases that require the
 	## 4.5 Logger API at parse time.
 	assert_false(McpUpdateManagerScript._version_can_self_update(4, 4),
-		"4.4 must be gated once the next plugin release requires Godot 4.5+")
+		"4.4 must be gated once the plugin requires Godot 4.5+")
 	assert_false(McpUpdateManagerScript._version_can_self_update(4, 3),
 		"4.3 must be gated (in-editor self-update disabled)")
 	assert_false(McpUpdateManagerScript._version_can_self_update(4, 0),
@@ -47,19 +47,6 @@ func test_version_can_self_update_true_at_and_above_4_5() -> void:
 		"a future 5.0 (minor 0) must not be misclassified by the minor check")
 
 
-func test_runner_reload_support_stays_available_on_4_4() -> void:
-	## The transitional release suppresses the public update offer on 4.4,
-	## but runner reload support itself still starts at 4.4. Keep these
-	## predicates separate so internal/bypassed install paths do not route
-	## 4.4 through the legacy inline fallback.
-	assert_true(McpUpdateManagerScript._version_supports_runner_reload(4, 4),
-		"4.4 supports runner-backed reloads")
-	assert_false(McpUpdateManagerScript._version_supports_runner_reload(4, 3),
-		"4.3 still uses the inline fallback")
-	assert_true(McpUpdateManagerScript._version_supports_runner_reload(5, 0),
-		"future majors must not be misclassified by the minor check")
-
-
 func test_manual_update_label_includes_version_and_guidance() -> void:
 	## Shown up-front on < 4.5 so the user understands they need a newer
 	## editor before installing the latest plugin.
@@ -75,42 +62,6 @@ func test_manual_update_label_omits_version_when_unknown() -> void:
 	var no_v := McpUpdateManagerScript._manual_update_label("")
 	assert_false(no_v.contains(" v"), "no version token when version is empty")
 	assert_contains(no_v, "Godot 4.5+", "label must still state the engine requirement")
-
-
-# ---- _is_safe_zip_addon_file (pure / static, #522) --------------------
-
-func test_safe_zip_addon_file_accepts_normal_entries() -> void:
-	## The inline (pre-4.4) extract path validates every entry with the same
-	## guard the runner enforces, so ordinary addon files must pass.
-	assert_true(
-		McpUpdateManagerScript._is_safe_zip_addon_file("addons/godot_ai/plugin.gd"),
-		"a top-level addon file must be accepted")
-	assert_true(
-		McpUpdateManagerScript._is_safe_zip_addon_file("addons/godot_ai/utils/settings.gd"),
-		"a nested addon file must be accepted")
-
-
-func test_safe_zip_addon_file_rejects_traversal_and_escapes() -> void:
-	## These are exactly the shapes the prefix-only check used to let through
-	## onto a path_join + write (#522).
-	assert_false(
-		McpUpdateManagerScript._is_safe_zip_addon_file("addons/godot_ai/../../evil.gd"),
-		"`..` segments must be rejected — they escape the addon dir")
-	assert_false(
-		McpUpdateManagerScript._is_safe_zip_addon_file("/etc/passwd"),
-		"absolute paths must be rejected")
-	assert_false(
-		McpUpdateManagerScript._is_safe_zip_addon_file("addons/godot_ai/foo\\..\\bar.gd"),
-		"backslashes must be rejected (Windows-style traversal)")
-	assert_false(
-		McpUpdateManagerScript._is_safe_zip_addon_file("addons/other/file.gd"),
-		"entries outside addons/godot_ai/ must be rejected")
-	assert_false(
-		McpUpdateManagerScript._is_safe_zip_addon_file("addons/godot_ai/"),
-		"the bare prefix (dir entry) must be rejected as a file")
-	assert_false(
-		McpUpdateManagerScript._is_safe_zip_addon_file("addons/godot_ai/a//b.gd"),
-		"empty path segments must be rejected")
 
 
 # ---- _is_trusted_download_url (pure / static, #523) -------------------
@@ -502,8 +453,12 @@ class _DrainRecordingDock extends Node:
 		action_drain_calls += 1
 
 
+class _NoRunnerPlugin extends Node:
+	pass
+
+
 func test_install_zip_drains_dock_workers_and_hands_off_to_plugin() -> void:
-	## In a 4.4+ editor with a runner-capable plugin, the manager must:
+	## In a 4.5+ editor with a runner-capable plugin, the manager must:
 	##   1. Set _install_in_flight = true so dock spawn paths gate.
 	##   2. Drain the dock's two worker pools (refresh + action) BEFORE
 	##      handing off to the plugin — otherwise a worker mid-call into
@@ -513,10 +468,6 @@ func test_install_zip_drains_dock_workers_and_hands_off_to_plugin() -> void:
 	##      paths + the dock as the source_dock argument (the plugin uses
 	##      that to detach the visible dock before extracting).
 	## Skip on older Godot — the runner path is gated on minor >= 4.
-	var version := Engine.get_version_info()
-	if int(version.get("minor", 0)) < 4:
-		skip("Runner-based handoff requires Godot 4.4+")
-		return
 	## Symlink check is independent of the mode override and aborts the
 	## install before the drain runs. In a dev checkout
 	## `test_project/addons/godot_ai` is a symlink, so this test is
@@ -558,6 +509,62 @@ func test_install_zip_drains_dock_workers_and_hands_off_to_plugin() -> void:
 		"Manager's UPDATE_TEMP_DIR path must match plugin handoff arg")
 	assert_true(args.get("source_dock") == dock,
 		"Plugin must receive the dock reference so it can detach the docked control")
+
+
+func test_install_zip_missing_runner_cleans_staged_update_artifacts() -> void:
+	## If an old/invalid plugin object reaches the install path without the
+	## reload runner method, the manager must not leave the downloaded ZIP or
+	## temp dir behind for a later click to reuse accidentally.
+	if McpClientConfigurator.addons_dir_is_symlink():
+		skip("Skipping missing-runner cleanup test in a symlinked dev checkout")
+		return
+
+	var global_dir := ProjectSettings.globalize_path(McpUpdateManagerScript.UPDATE_TEMP_DIR)
+	var global_zip := ProjectSettings.globalize_path(McpUpdateManagerScript.UPDATE_TEMP_ZIP)
+	DirAccess.make_dir_recursive_absolute(global_dir)
+	var f := FileAccess.open(global_zip, FileAccess.WRITE)
+	assert_true(f != null, "Seed update zip must open for write")
+	f.store_string("staged update payload")
+	f.close()
+	assert_true(FileAccess.file_exists(global_zip),
+		"Seed update zip must exist before _install_zip")
+
+	var plugin := _NoRunnerPlugin.new()
+	var dock := _DrainRecordingDock.new()
+	var manager = McpUpdateManagerScript.new()
+	manager.setup(plugin, dock)
+	var captured_states: Array = []
+	manager.install_state_changed.connect(func(state: Dictionary) -> void:
+		captured_states.append(state)
+	)
+
+	manager._install_zip()
+
+	var was_in_flight := manager.is_install_in_flight()
+	var refresh_calls := dock.refresh_drain_calls
+	var action_calls := dock.action_drain_calls
+
+	manager.free()
+	dock.free()
+	plugin.free()
+
+	assert_false(was_in_flight,
+		"missing-runner path must clear is_install_in_flight")
+	assert_eq(refresh_calls, 1,
+		"missing-runner path still drains refresh workers before deciding")
+	assert_eq(action_calls, 1,
+		"missing-runner path still drains action workers before deciding")
+	assert_false(FileAccess.file_exists(global_zip),
+		"missing-runner path must delete the staged update ZIP")
+	assert_false(DirAccess.dir_exists_absolute(global_dir),
+		"missing-runner path must remove the empty update temp dir")
+	assert_eq(captured_states.size(), 1,
+		"missing-runner path must emit one install_state_changed event")
+	var state: Dictionary = captured_states[0]
+	assert_eq(String(state.get("button_text", "")), "Reload runner missing",
+		"missing-runner path must report the reload-runner failure")
+	assert_eq(bool(state.get("button_disabled", true)), false,
+		"missing-runner path must leave the update button enabled for retry")
 
 
 func test_install_zip_aborts_on_symlinked_addons_dir() -> void:

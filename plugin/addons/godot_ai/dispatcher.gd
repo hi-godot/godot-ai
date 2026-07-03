@@ -273,15 +273,10 @@ func _stamp_error_watermark(response: Dictionary) -> void:
 
 
 static func _capture_compact_backtrace(max_frames: int = 8) -> String:
-	# Use Engine.call() instead of a direct Engine.capture_script_backtraces()
-	# reference: the method is Godot 4.4+, and 4.3's GDScript parser type-checks
-	# the static call against GDScriptNativeClass at parse time and rejects the
-	# whole script even when guarded by has_method() at runtime.
-	if Engine.has_method("capture_script_backtraces"):
-		var traces: Array = Engine.call("capture_script_backtraces", false)
-		for bt in traces:
-			if bt != null and not bt.is_empty():
-				return _trim_backtrace_string(bt.format(0, 2), max_frames)
+	var traces: Array = Engine.capture_script_backtraces(false)
+	for bt in traces:
+		if bt != null and not bt.is_empty():
+			return _trim_backtrace_string(bt.format(0, 2), max_frames)
 	return _format_stack_frames(get_stack(), max_frames)
 
 

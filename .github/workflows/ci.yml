@@ -144,14 +144,12 @@ jobs:
           - os: windows-latest
             label: Windows
             godot-version: "4.7.0"
-          ## 4.3 Linux canary — README advertises "Godot 4.3+" support and
-          ## #476's parse-cascade regression went unnoticed for 24 days
-          ## because every CI run was on the primary engine. Phase 1 of #477:
-          ## one cheap Linux canary to catch the same class of regression in future.
-          ## Phase 2 (full 3-OS 4.3 coverage) is deferred.
+          ## 4.5 Linux canary: README advertises Godot 4.5+ support,
+          ## so keep one cheap Linux row at the floor to catch parse-cascade
+          ## regressions that can stay hidden on the primary engine.
           - os: ubuntu-latest
-            label: Linux (Godot 4.3)
-            godot-version: "4.3.0"
+            label: Linux (Godot 4.5)
+            godot-version: "4.5.0"
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -203,14 +201,6 @@ jobs:
       - name: Reload smoke test
         shell: bash
         timeout-minutes: 2
-        ## On the 4.3 canary, skip only the post-churn test_run step:
-        ## GDScript exec is slow enough on 4.3 that the suite outruns
-        ## mcp_call's 30s curl timeout, even though the 10 reload
-        ## iterations themselves all pass. The reload-churn mechanism
-        ## is the regression class this smoke guards, so the canary
-        ## still has value.
-        env:
-          SKIP_POSTCHURN_TEST_RUN: ${{ matrix.godot-version == '4.3.0' && '1' || '0' }}
         run: bash script/ci-reload-test
 
       - name: Quit smoke test

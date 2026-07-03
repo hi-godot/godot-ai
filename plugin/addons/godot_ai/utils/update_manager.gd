@@ -125,9 +125,8 @@ func clear_pending_download() -> void:
 
 
 ## True when the running Godot is within the supported self-update floor.
-## The next compatibility-breaking release requires Godot 4.5 APIs/classes
-## in always-loaded scripts, so engines below 4.5 must not be offered a
-## one-click update into that release.
+## Godot < 4.5 must not be offered a one-click update to a release whose
+## always-loaded scripts depend on 4.5 APIs/classes.
 ## Guards `major` too so a future Godot 5.x (minor 0) isn't misclassified.
 func _can_self_update() -> bool:
 	var v := Engine.get_version_info()
@@ -140,14 +139,8 @@ static func _version_can_self_update(major: int, minor: int) -> bool:
 	return major > 4 or (major == 4 and minor >= 5)
 
 
-## Runner-backed reload is available on Godot 4.4+, but the public
-## self-update gate may be stricter when the next release raises the floor.
-static func _version_supports_runner_reload(major: int, minor: int) -> bool:
-	return major > 4 or (major == 4 and minor >= 4)
-
-
-## Banner guidance for the gated (< 4.5) path. Shown up-front at check time
-## so users know this is the last compatible plugin for their editor.
+## Banner guidance for engines below the support floor. Shown up-front at
+## check time so those users do not install an incompatible latest release.
 static func _manual_update_label(version: String) -> String:
 	var release_noun := "release"
 	var suffix := ""
@@ -159,13 +152,10 @@ static func _manual_update_label(version: String) -> String:
 		+ "Upgrade to Godot 4.5+ to keep receiving updates."
 	)
 
-
-## Driven by the dock's Update button. On Godot < 4.5 (see `_can_self_update`)
+## Driven by the dock's Update button. On Godot < 4.5 (see _can_self_update)
 ## the in-editor install is disabled so users cannot install an incompatible
-## latest release. With no resolved download URL — either the check never
-## completed, or the release didn't ship a matching asset — falls back to
-## opening the release page. Otherwise kicks off the download → extract →
-## reload pipeline.
+## latest release. With no resolved download URL, falls back to opening the
+## release page. Otherwise kicks off the download -> extract -> reload pipeline.
 func start_install() -> void:
 	if not _can_self_update():
 		install_state_changed.emit({
@@ -224,7 +214,6 @@ func start_install() -> void:
 			"button_text": "Request failed",
 			"button_disabled": false,
 		})
-
 
 ## Consulted by the dock's spawn paths (focus-in refresh, manual button,
 ## deferred initial refresh) — true while plugin scripts are being
@@ -348,9 +337,6 @@ func _on_update_check_completed(
 	var parsed := parse_releases_response(result, response_code, body)
 	if not bool(parsed.get("has_update", false)):
 		return
-	## On engines below the next support floor, do not arm the download URL
-	## or emit a normal update offer. A later 4.5+-only `latest` release would
-	## otherwise let 4.4 users install a plugin their editor cannot parse.
 	if not _can_self_update():
 		install_state_changed.emit({
 			"button_text": "Upgrade Godot",
@@ -511,164 +497,32 @@ func _install_zip() -> void:
 		return
 
 	## Drain in-flight workers + block new ones BEFORE any disk write.
-	## Without this, focus-in landing in the extract→reload window spawns
+	## Without this, focus-in landing in the extract -> reload window spawns
 	## a worker that walks into a partially-overwritten script and
 	## SIGABRTs in `GDScriptFunction::call`.
 	_install_in_flight = true
 	_drain_dock_workers()
 
-	var version := Engine.get_version_info()
 	var has_runner: bool = (
 		_plugin != null
 		and _plugin.has_method("install_downloaded_update")
 	)
-	## Runner support starts at 4.4 even though the public self-update offer is
-	## currently gated at 4.5. Keep this separate so bypassed/internal install
-	## paths do not accidentally send a 4.4 editor through the inline fallback.
-	if _version_supports_runner_reload(int(version.get("major", 0)), int(version.get("minor", 0))) and has_runner:
+	if has_runner:
 		install_state_changed.emit({"button_text": "Reloading..."})
 		## Runner takes over: plugin tears down, runner extracts + scans +
 		## re-enables. `install_downloaded_update` calls
 		## `prepare_for_update_reload()` internally (kills the server,
-		## resets the spawn guard) — see plugin.gd::install_downloaded_update.
+		## resets the spawn guard) - see plugin.gd::install_downloaded_update.
 		_plugin.install_downloaded_update(UPDATE_TEMP_ZIP, UPDATE_TEMP_DIR, _dock)
 		return
 
-	_install_zip_inline(version)
-
-
-func _install_zip_inline(version: Dictionary) -> void:
-	## Pre-4.4 fallback. EditorInterface.set_plugin_enabled off/on is
-	## re-entry-unsafe on older Godot; we extract in-process and ask the
-	## user to restart.
-	var zip_path := ProjectSettings.globalize_path(UPDATE_TEMP_ZIP)
-	var install_base := ProjectSettings.globalize_path("res://")
-
-	var reader := ZIPReader.new()
-	if reader.open(zip_path) != OK:
-		_install_in_flight = false
-		install_state_changed.emit({
-			"button_text": "Extract failed",
-			"button_disabled": false,
-		})
-		return
-
-	var files := reader.get_files()
-	for file_path in files:
-		if not file_path.begins_with("addons/godot_ai/"):
-			continue
-		## Skip zip dir entries; parent dirs are created from each validated
-		## file's base dir below — the same shape the runner uses. Creating a
-		## dir from an unvalidated entry would itself be a traversal hole.
-		if file_path.ends_with("/"):
-			continue
-		## Reject path-traversal / absolute / backslash entries BEFORE any
-		## path_join + write. The modern runner enforces this via
-		## `update_reload_runner.gd::_is_safe_zip_addon_file`; the pre-4.4
-		## inline path used to gate only on the `addons/godot_ai/` prefix, so
-		## `addons/godot_ai/../../evil.gd` escaped the addon dir. This guard
-		## closes that gap so the weaker path runs the same checks. See #522.
-		if not _is_safe_zip_addon_file(file_path):
-			_abort_inline_install(reader, "unsafe zip path: %s" % file_path)
-			return
-		var dir := file_path.get_base_dir()
-		DirAccess.make_dir_recursive_absolute(install_base.path_join(dir))
-		var content := reader.read_file(file_path)
-		var target := install_base.path_join(file_path)
-		var f := FileAccess.open(target, FileAccess.WRITE)
-		## Unlike the runner (tmp+rename+per-file backup+rollback), this pre-4.4
-		## path writes directly over live files and can't roll back. It used to
-		## skip a null open and ignore store_buffer errors silently, leaving a
-		## partially-overwritten addons tree while still telling the user to
-		## restart onto it. Check both error surfaces and abort loudly instead.
-		## See #524.
-		if f == null:
-			_abort_inline_install(
-				reader,
-				"could not open %s for write (error %d)" % [target, FileAccess.get_open_error()],
-			)
-			return
-		f.store_buffer(content)
-		var write_error := f.get_error()
-		f.close()
-		if write_error != OK:
-			_abort_inline_install(reader, "write error %d for %s" % [write_error, target])
-			return
-
-	reader.close()
-
-	DirAccess.remove_absolute(zip_path)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(UPDATE_TEMP_ZIP))
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(UPDATE_TEMP_DIR))
-
-	## Kill the old server before the reload so the re-enabled plugin spawns
-	## a fresh one against the new plugin version (#132).
-	if _plugin != null and _plugin.has_method("prepare_for_update_reload"):
-		_plugin.prepare_for_update_reload()
-
-	if _version_supports_runner_reload(int(version.get("major", 0)), int(version.get("minor", 0))):
-		install_state_changed.emit({"button_text": "Scanning..."})
-		## Filesystem scan must complete before plugin reload — otherwise
-		## plugin.gd re-parses against a ClassDB that hasn't seen the new
-		## files yet, parse errors, dock tears down silently. See #127.
-		var fs := EditorInterface.get_resource_filesystem()
-		if fs != null:
-			fs.filesystem_changed.connect(
-				_on_filesystem_scanned_for_update, CONNECT_ONE_SHOT
-			)
-			fs.scan()
-		else:
-			_reload_after_update.call_deferred()
-	else:
-		## Pre-4.4: no plugin reload; refreshes resume on the old dock
-		## instance until the user restarts.
-		_install_in_flight = false
-		install_state_changed.emit({
-			"button_text": "Restart editor to apply",
-			"button_disabled": true,
-			"label_text": "Updated! Restart the editor.",
-			"outcome": "success",
-		})
-
-
-## Abort the inline (pre-4.4) extract on a path-safety or write failure.
-## Closes the ZIP reader, drops the in-flight gate so dock spawn paths
-## un-block, and surfaces the failure loudly: this path has no rollback, so
-## the addons tree may be partially overwritten and the user must reinstall
-## from the download page rather than relaunch onto a half-written plugin.
-## See #522 / #524.
-func _abort_inline_install(reader: ZIPReader, reason: String) -> void:
-	reader.close()
 	_install_in_flight = false
-	push_error(
-		"MCP | self-update extract failed: %s. addons/godot_ai/ may be"
-		% reason
-		+ " partially updated — reinstall the plugin from the download page"
-		+ " before relaunching."
-	)
-	print("MCP | self-update extract aborted: %s" % reason)
 	install_state_changed.emit({
-		"button_text": "Extract failed — reinstall",
+		"button_text": "Reload runner missing",
 		"button_disabled": false,
 	})
-
-
-## Mirror of `update_reload_runner.gd::_is_safe_zip_addon_file`. Rejects any
-## entry that could escape `addons/godot_ai/` — absolute paths, backslashes,
-## and `.`/`..`/empty path segments — before it reaches a `path_join` + write
-## on the inline (pre-4.4) extract path, which has no rollback. Static so the
-## guard is unit-testable without instancing the manager. See #522.
-static func _is_safe_zip_addon_file(file_path: String) -> bool:
-	if file_path.is_absolute_path() or file_path.contains("\\"):
-		return false
-	if not file_path.begins_with("addons/godot_ai/"):
-		return false
-	var rel_path := file_path.trim_prefix("addons/godot_ai/")
-	if rel_path.is_empty() or rel_path.ends_with("/"):
-		return false
-	for segment in rel_path.split("/", true):
-		if segment.is_empty() or segment == "." or segment == "..":
-			return false
-	return true
 
 
 func _on_filesystem_scanned_for_update() -> void:

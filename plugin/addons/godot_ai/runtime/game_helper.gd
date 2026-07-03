@@ -37,12 +37,11 @@ const FLUSH_BATCH_LIMIT := 200
 ## generic timeout.
 const FIRST_FRAME_WAIT_SEC := 6.0
 
-const LoggerLoader := preload("res://addons/godot_ai/runtime/logger_loader.gd")
+const GameLogger := preload("res://addons/godot_ai/runtime/game_logger.gd")
 
 var _registered := false
-## Untyped because the McpGameLogger script is loaded dynamically (it
-## extends Logger, which only exists in Godot 4.5+).
-var _logger
+## Captures game-process print, warning, and error output for the editor.
+var _logger: Logger
 var _logger_attached := false
 ## Entries drained from the logger but not yet sent over the debugger
 ## channel. Holds the tail of one drain() so we can bleed it out across
@@ -77,17 +76,10 @@ func _ready() -> void:
 	_registered = true
 	## Capture print() / printerr() / push_error() / push_warning() and
 	## ferry them to the editor in mcp:log_batch messages flushed from
-	## _process. Logger subclassing was added in Godot 4.5 — gate on
-	## ClassDB so the rest of the helper still loads on older engines.
-	## game_logger.gd lives in the `.gdignore`'d runtime/loggers/ folder so
-	## it never parse-errors during a < 4.5 editor scan; LoggerLoader
-	## compiles it from source at runtime, only past this gate.
-	if ClassDB.class_exists("Logger") and OS.has_method("add_logger"):
-		var logger_script := LoggerLoader.build(LoggerLoader.GAME_LOGGER_PATH)
-		if logger_script != null:
-			_logger = logger_script.new()
-			OS.call("add_logger", _logger)
-			_logger_attached = true
+	## _process.
+	_logger = GameLogger.new()
+	OS.add_logger(_logger)
+	_logger_attached = true
 	## Routed to the editor's Output panel via Godot's remote-stdout
 	## forwarder — handy when diagnosing why capture timed out.
 	print("[godot_ai game_helper] registered mcp capture (debugger active=%s, logger=%s)"
@@ -122,16 +114,16 @@ func _exit_tree() -> void:
 	if _registered:
 		EngineDebugger.unregister_message_capture(CAPTURE_PREFIX)
 		_registered = false
-	if _logger_attached and _logger != null and OS.has_method("remove_logger"):
-		OS.call("remove_logger", _logger)
+	if _logger_attached and _logger != null:
+		OS.remove_logger(_logger)
 		_logger_attached = false
 		_logger = null
 
 
 ## Dispatched for messages prefixed "mcp:" on the debugger channel.
-## Different Godot versions pass either the tail ("take_screenshot") or the
-## full message ("mcp:take_screenshot") to the capture callable — accept
-## both forms so this works across 4.2/4.3/4.4/4.5.
+## Godot passes the full message ("mcp:take_screenshot") to the capture
+## callable; trim defensively so tests can still call the helper with either
+## form.
 func _on_debug_message(message: String, data: Array) -> bool:
 	var action := message.trim_prefix("mcp:")
 	match action:

@@ -23,11 +23,9 @@ else
 fi
 
 # Check for parse errors in the import output. This is strict on every
-# Godot version: the `extends Logger` scripts that used to parse-error on
-# < 4.5 now live in the `.gdignore`'d runtime/loggers/ folder (built from
-# source at runtime by logger_loader.gd), so a clean scan has zero parse
-# errors on 4.3 too. No version-specific allowlist needed — any
-# SCRIPT ERROR / Parse Error here is a real failure.
+# supported Godot version, including the 4.5 canary. Logger-backed scripts
+# are parsed normally now, so any SCRIPT ERROR / Parse Error here is a real
+# failure.
 ERRORS=$(grep -ciE "SCRIPT ERROR|Parse Error|Failed to load script" "$IMPORT_LOG" 2>/dev/null || true)
 ERRORS="${ERRORS:-0}"
 

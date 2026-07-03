@@ -285,11 +285,6 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
     handoff_idx = install_block.find("install_downloaded_update")
     symlink_return_idx = install_block.find("addons_dir_is_symlink()")
 
-    inline_block = get_func_block(
-        manager_source, "func _install_zip_inline(version: Dictionary) -> void:"
-    )
-    first_write_idx = inline_block.find("f.store_buffer(content)")
-
     assert flag_set_idx > 0, (
         "_install_zip must set `_install_in_flight = true` before "
         "extracting plugin files. Without this, focus-in during extract "
@@ -300,10 +295,6 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
         "plugin files. Already-running workers crash on the same overwrite "
         "if not joined first."
     )
-    assert first_write_idx > 0, (
-        "Test fixture broken: could not locate the extract-write site "
-        "(`f.store_buffer(content)`) inside `_install_zip_inline`."
-    )
     assert symlink_return_idx > 0, "Test fixture broken: could not locate the symlink-safety check."
 
     assert symlink_return_idx < flag_set_idx, (
@@ -312,7 +303,7 @@ def test_install_update_drains_workers_and_blocks_spawning_before_extract() -> N
         "dev-checkout path."
     )
     assert drain_idx < handoff_idx, (
-        "The Godot 4.4+ runner-based path must hand off to the runner after "
+        "The runner-based path must hand off to the runner after "
         "the worker drain. The runner disables the old plugin before "
         "extraction so plugin-owned instances do not hot-reload in place."
     )
