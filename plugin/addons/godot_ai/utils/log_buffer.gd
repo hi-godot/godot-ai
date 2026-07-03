@@ -26,9 +26,13 @@ var _total_logged: int = 0
 var enabled := true
 
 
-func log(msg: String) -> void:
+## `echo=false` records the line into the ring (so the dock's log panel shows
+## it) without printing to the Godot console. Used for high-frequency
+## machine-driven lines like readiness flips, which spammed the console of
+## every install (#626) — filesystem scans toggle readiness on each import.
+func log(msg: String, echo: bool = true) -> void:
 	var line := "MCP | %s" % msg
-	if enabled and console_echo:
+	if enabled and console_echo and echo:
 		print(line)
 	_lines.append(line)
 	if _lines.size() > MAX_LINES:

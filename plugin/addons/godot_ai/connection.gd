@@ -362,7 +362,11 @@ func _check_state_changes() -> void:
 		if send_event("readiness_changed", {"readiness": readiness}):
 			_last_readiness = readiness
 			if log_buffer:
-				log_buffer.log("[event] readiness -> %s" % readiness)
+				## echo=false: readiness flips on every filesystem scan
+				## (each import cycles importing -> ready), so echoing to
+				## console spams every install during normal editing (#626).
+				## The line stays in the ring for the dock's log panel.
+				log_buffer.log("[event] readiness -> %s" % readiness, false)
 
 
 func _get_current_scene_path() -> String:

@@ -1133,10 +1133,17 @@ func _apply_mixed_state_banner_diagnostic(diag: Dictionary) -> void:
 
 
 ## Signal handler for the extracted LogViewer — the panel owns its own
-## display visibility, the dock owns dispatcher logging routing.
+## display visibility, the dock owns logging routing. Routes to BOTH the
+## dispatcher (gates [recv]/[send] recording) and the log buffer's console
+## echo — the connection logs [event]/[defer] lines directly to the buffer,
+## bypassing the dispatcher, so gating only `mcp_logging` left the console
+## spamming with the toggle off (#626). Ring recording is unaffected, so
+## the dock's log panel keeps working while the console stays quiet.
 func _on_log_logging_enabled_changed(enabled: bool) -> void:
 	if _connection and _connection.dispatcher:
 		_connection.dispatcher.mcp_logging = enabled
+	if _log_buffer != null:
+		_log_buffer.enabled = enabled
 
 
 ## Signal handler for the extracted PortPickerPanel — the panel range-validates

@@ -215,6 +215,10 @@ func _enter_tree() -> void:
 	_startup_trace_phase("settings_registered")
 
 	_log_buffer = LogBuffer.new()
+	## Apply the persisted dock "Log" toggle before anything logs through the
+	## buffer. Without this the choice only took effect after a manual toggle
+	## and reset to noisy on every editor restart (#626).
+	_log_buffer.enabled = McpSettings.mcp_logging_enabled()
 	_start_server()
 	_startup_trace_phase("server_start")
 
@@ -223,6 +227,7 @@ func _enter_tree() -> void:
 	_surfaced_error_tracker = SurfacedErrorTracker.new(_editor_log_buffer, _game_log_buffer)
 	_attach_editor_logger()
 	_dispatcher = Dispatcher.new(_log_buffer, _surfaced_error_tracker)
+	_dispatcher.mcp_logging = _log_buffer.enabled
 	_startup_trace_phase("core_objects")
 
 	_connection = Connection.new()

@@ -13,6 +13,9 @@ const SETTING_HTTP_PORT := "godot_ai/http_port"
 ## Comma-separated list of tool domains excluded from the server at spawn time.
 const SETTING_EXCLUDED_DOMAINS := "godot_ai/excluded_domains"
 const SETTING_TELEMETRY_ENABLED := "godot_ai/telemetry_enabled"
+## Whether MCP log lines echo to the Godot console (dock "Log" toggle).
+## The dock's ring-buffer log panel keeps recording regardless.
+const SETTING_MCP_LOGGING := "godot_ai/mcp_logging"
 
 
 ## Returns true if the string value is truthy
@@ -37,3 +40,21 @@ static func telemetry_enabled() -> bool:
 	if es != null and es.has_setting(SETTING_TELEMETRY_ENABLED):
 		return bool(es.get_setting(SETTING_TELEMETRY_ENABLED))
 	return true
+
+
+## Returns whether MCP log lines should echo to the Godot console. Read at
+## plugin startup (to apply the persisted choice to the log buffer and
+## dispatcher) and by the dock's LogViewer toggle for its initial state.
+## Defaults to true when the user has never touched the toggle.
+static func mcp_logging_enabled() -> bool:
+	var es := EditorInterface.get_editor_settings()
+	if es != null and es.has_setting(SETTING_MCP_LOGGING):
+		return bool(es.get_setting(SETTING_MCP_LOGGING))
+	return true
+
+
+## Persist the dock "Log" toggle so the choice survives editor restarts (#626).
+static func set_mcp_logging_enabled(enabled: bool) -> void:
+	var es := EditorInterface.get_editor_settings()
+	if es != null:
+		es.set_setting(SETTING_MCP_LOGGING, enabled)

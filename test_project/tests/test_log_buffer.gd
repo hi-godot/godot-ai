@@ -35,6 +35,24 @@ func test_log_records_to_ring_when_echo_muted() -> void:
 	assert_true(String(recent[-1]).ends_with("quiet line b"), "last line preserved verbatim")
 
 
+func test_echo_false_still_records_to_ring() -> void:
+	## Per-line echo opt-out (#626): readiness flips log with echo=false so
+	## they never print to the console, but the dock's log panel must still
+	## see them — ring recording is unconditional.
+	var prev: bool = McpLogBufferScript.console_echo
+	McpLogBufferScript.console_echo = false
+	var buffer = McpLogBufferScript.new()
+	buffer.log("[event] readiness -> importing", false)
+	McpLogBufferScript.console_echo = prev
+
+	assert_eq(buffer.total_logged(), 1, "echo=false line still recorded to ring")
+	var recent: Array = buffer.get_recent(1)
+	assert_true(
+		String(recent[0]).ends_with("[event] readiness -> importing"),
+		"quiet line preserved verbatim in ring"
+	)
+
+
 func test_per_instance_enabled_gates_recording_independently() -> void:
 	## `enabled` gates the console print per instance; recording still happens.
 	var prev: bool = McpLogBufferScript.console_echo

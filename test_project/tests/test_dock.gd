@@ -1306,11 +1306,13 @@ func test_port_picker_panel_skips_emit_for_out_of_range_port() -> void:
 
 
 func test_log_viewer_emits_logging_enabled_changed_on_toggle() -> void:
-	## The dock routes this signal to `_connection.dispatcher.mcp_logging`.
-	## If LogViewer stops emitting, MCP request/response logging silently
-	## stays whatever it was — easy to regress, hard to spot.
+	## The dock routes this signal to `_connection.dispatcher.mcp_logging`
+	## and the buffer's console echo. If LogViewer stops emitting, MCP
+	## request/response logging silently stays whatever it was — easy to
+	## regress, hard to spot.
 	## Instantiate in isolation to keep the test focused on the panel's
 	## emit contract (and consistent with the port-picker tests above).
+	var prev_setting := _save_mcp_logging_setting()
 	var panel := LogViewerScript.new()
 	panel.setup(null)  # buffer not exercised — only signal emission is under test
 	var spy := _LogToggleSpy.new()
@@ -1320,6 +1322,73 @@ func test_log_viewer_emits_logging_enabled_changed_on_toggle() -> void:
 	assert_eq(spy.captured, [false, true] as Array[bool],
 		"toggle must emit each state change exactly once, in order")
 	panel.free()
+	_restore_mcp_logging_setting(prev_setting)
+
+
+func test_log_viewer_toggle_persists_across_rebuilds() -> void:
+	## #626: the toggle was hardcoded `button_pressed = true` on every build,
+	## so a disabled log setting reset to enabled on each editor restart. The
+	## panel must write the EditorSetting on toggle and read it back on build.
+	var prev_setting := _save_mcp_logging_setting()
+	var panel := LogViewerScript.new()
+	panel.setup(null)
+	panel._on_log_toggled(false)
+	var es := EditorInterface.get_editor_settings()
+	assert_true(es.has_setting(McpSettings.SETTING_MCP_LOGGING),
+		"toggle must persist to EditorSettings")
+	assert_eq(bool(es.get_setting(McpSettings.SETTING_MCP_LOGGING)), false,
+		"persisted value must track the toggle")
+
+	## A freshly built panel (≈ next editor session) restores the choice.
+	var rebuilt := LogViewerScript.new()
+	rebuilt.setup(null)
+	assert_eq(rebuilt._log_toggle.button_pressed, false,
+		"rebuilt panel must restore the persisted (off) state")
+	assert_eq(rebuilt._log_display.visible, false,
+		"display visibility must match the restored state")
+
+	panel.free()
+	rebuilt.free()
+	_restore_mcp_logging_setting(prev_setting)
+
+
+func test_dock_log_toggle_mutes_buffer_console_echo() -> void:
+	## #626: the dock only routed the toggle to `dispatcher.mcp_logging`,
+	## which gates [recv]/[send] lines — connection-level [event]/[defer]
+	## lines log straight to the buffer and kept echoing to the console with
+	## logging off. The dock must also gate the buffer's console echo, while
+	## ring recording stays on so the dock's log panel keeps working.
+	var dock := McpDockScript.new()
+	var buffer := McpLogBuffer.new()
+	dock._log_buffer = buffer
+	dock._on_log_logging_enabled_changed(false)
+	assert_eq(buffer.enabled, false, "toggle off must mute buffer console echo")
+	var prev_echo: bool = McpLogBuffer.console_echo
+	McpLogBuffer.console_echo = false
+	buffer.log("[event] readiness -> importing")
+	McpLogBuffer.console_echo = prev_echo
+	assert_eq(buffer.total_logged(), 1,
+		"ring must keep recording while console echo is muted")
+	dock._on_log_logging_enabled_changed(true)
+	assert_eq(buffer.enabled, true, "toggle on must restore buffer console echo")
+	dock.free()
+
+
+## Save/restore helpers so tests that drive the (now persisted) log toggle
+## don't clobber the user's actual EditorSetting.
+func _save_mcp_logging_setting() -> Dictionary:
+	var es := EditorInterface.get_editor_settings()
+	if es.has_setting(McpSettings.SETTING_MCP_LOGGING):
+		return {"had": true, "value": es.get_setting(McpSettings.SETTING_MCP_LOGGING)}
+	return {"had": false}
+
+
+func _restore_mcp_logging_setting(prev: Dictionary) -> void:
+	var es := EditorInterface.get_editor_settings()
+	if prev.get("had", false):
+		es.set_setting(McpSettings.SETTING_MCP_LOGGING, prev.get("value"))
+	else:
+		es.erase(McpSettings.SETTING_MCP_LOGGING)
 
 
 func test_log_viewer_tick_recovers_from_buffer_clear() -> void:
