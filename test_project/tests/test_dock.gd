@@ -1361,8 +1361,13 @@ func test_dock_log_toggle_mutes_buffer_console_echo() -> void:
 	var dock := McpDockScript.new()
 	var buffer := McpLogBuffer.new()
 	dock._log_buffer = buffer
+	var conn := McpConnection.new()
+	conn.dispatcher = McpDispatcher.new(buffer)
+	dock._connection = conn
 	dock._on_log_logging_enabled_changed(false)
 	assert_eq(buffer.enabled, false, "toggle off must mute buffer console echo")
+	assert_eq(conn.dispatcher.mcp_logging, false,
+		"toggle off must also gate dispatcher [recv]/[send] logging")
 	var prev_echo: bool = McpLogBuffer.console_echo
 	McpLogBuffer.console_echo = false
 	buffer.log("[event] readiness -> importing")
@@ -1371,6 +1376,9 @@ func test_dock_log_toggle_mutes_buffer_console_echo() -> void:
 		"ring must keep recording while console echo is muted")
 	dock._on_log_logging_enabled_changed(true)
 	assert_eq(buffer.enabled, true, "toggle on must restore buffer console echo")
+	assert_eq(conn.dispatcher.mcp_logging, true,
+		"toggle on must restore dispatcher [recv]/[send] logging")
+	conn.free()
 	dock.free()
 
 
