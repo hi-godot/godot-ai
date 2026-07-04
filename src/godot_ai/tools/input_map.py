@@ -31,7 +31,10 @@ Ops:
         Idempotently create or persist an input action. If the action exists
         in live InputMap or in project.godot, the existing state is preserved.
   • remove_action(action)
-        Remove an action and all its event bindings.
+        Remove an action and all its event bindings. Also removes actions
+        persisted in project.godot but not loaded in the live InputMap
+        (``loaded_in_input_map: false`` in ``list``), e.g. actions created
+        by a previous editor session.
   • bind_event(action, event_type, keycode="", ctrl=False, alt=False,
                 shift=False, meta=False, button=None, axis=None,
                 axis_value=1.0)

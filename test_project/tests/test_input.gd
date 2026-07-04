@@ -181,6 +181,34 @@ func test_remove_action_not_found() -> void:
 	assert_is_error(result)
 
 
+func test_remove_action_loaded_and_persisted() -> void:
+	_handler.ensure_action({"action": TEST_ACTION})
+	assert_true(InputMap.has_action(TEST_ACTION), "precondition: action loaded")
+	assert_true(ProjectSettings.has_setting("input/" + TEST_ACTION), "precondition: action persisted")
+
+	var result := _handler.remove_action({"action": TEST_ACTION})
+	assert_has_key(result, "data")
+	assert_eq(result.data.removed, true)
+	assert_eq(result.data.was_loaded, true)
+	assert_false(InputMap.has_action(TEST_ACTION), "action must leave InputMap")
+	assert_false(ProjectSettings.has_setting("input/" + TEST_ACTION), "action must leave project.godot")
+
+
+func test_remove_action_persisted_but_not_loaded() -> void:
+	## #632: actions persisted by a previous editor session are in
+	## project.godot but not in this process's InputMap. remove_action
+	## must still clear them instead of erroring VALUE_OUT_OF_RANGE.
+	var key := "input/" + TEST_ACTION
+	ProjectSettings.set_setting(key, {"deadzone": 0.5, "events": []})
+	assert_false(InputMap.has_action(TEST_ACTION), "precondition: not in live InputMap")
+
+	var result := _handler.remove_action({"action": TEST_ACTION})
+	assert_has_key(result, "data")
+	assert_eq(result.data.removed, true)
+	assert_eq(result.data.was_loaded, false)
+	assert_false(ProjectSettings.has_setting(key), "persisted setting must be cleared")
+
+
 # ----- bind_event -----
 
 func test_bind_event_missing_params() -> void:

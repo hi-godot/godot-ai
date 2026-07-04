@@ -129,23 +129,31 @@ func remove_action(params: Dictionary) -> Dictionary:
 	if action.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: action")
 
-	if not InputMap.has_action(action):
+	var key := "input/%s" % action
+	var was_loaded := InputMap.has_action(action)
+	var old_setting = ProjectSettings.get_setting(key) if ProjectSettings.has_setting(key) else null
+
+	## An action can live in the editor process's InputMap, in project.godot,
+	## or both. Actions persisted by a previous editor session exist only on
+	## disk (`loaded_in_input_map: false` in list_actions) — those must still
+	## be removable. #632
+	if not was_loaded and old_setting == null:
 		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Action '%s' not found" % action)
 
-	var key := "input/%s" % action
-	var old_setting = ProjectSettings.get_setting(key) if ProjectSettings.has_setting(key) else null
-	InputMap.erase_action(action)
+	if was_loaded:
+		InputMap.erase_action(action)
 
 	if old_setting != null:
 		ProjectSettings.clear(key)
 		var err := ProjectSettings.save()
 		if err != OK:
-			var dz: float = old_setting.get("deadzone", 0.5) if old_setting is Dictionary else 0.5
-			InputMap.add_action(action, dz)
-			if old_setting is Dictionary:
-				for ev in old_setting.get("events", []):
-					if ev is InputEvent:
-						InputMap.action_add_event(action, ev)
+			if was_loaded:
+				var dz: float = old_setting.get("deadzone", 0.5) if old_setting is Dictionary else 0.5
+				InputMap.add_action(action, dz)
+				if old_setting is Dictionary:
+					for ev in old_setting.get("events", []):
+						if ev is InputEvent:
+							InputMap.action_add_event(action, ev)
 			ProjectSettings.set_setting(key, old_setting)
 			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
 				"Failed to save project settings while removing action '%s': %s (error %d)" % [action, error_string(err), err])
@@ -154,6 +162,7 @@ func remove_action(params: Dictionary) -> Dictionary:
 		"data": {
 			"action": action,
 			"removed": true,
+			"was_loaded": was_loaded,
 			"undoable": false,
 			"reason": "Input actions are saved to project.godot",
 		}
