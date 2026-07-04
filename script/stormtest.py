@@ -962,7 +962,14 @@ def report():
     s = _lat_stats(all_lat)
     if s["n"]:
         print(f"  latency (ms)     : p50={s['p50']} p95={s['p95']} max={s['max']} avg={s['avg']}")
-    verdict = "EDITOR ALIVE" if (not ABORTED[0] or M["ok"]) else "EDITOR DEAD/UNREACHABLE"
+    # Verdict keys off STOP[0] as it stands at report() time, which is the
+    # authoritative end-of-run liveness signal — NOT any prior success. In
+    # concurrent mode the final liveness probe in main() sets STOP[0]=False
+    # when the editor answers editor_state (True if it can't be reached); in
+    # isolated mode STOP[0] is left False unless a path aborted. A mid-run
+    # abort that the editor recovered from still reads ALIVE (correct — it is
+    # alive now); the ABORTED line below explains any truncation separately.
+    verdict = "EDITOR ALIVE" if not STOP[0] else "EDITOR DEAD/UNREACHABLE"
     print(f"  final verdict    : {verdict}")
     if ABORTED[0]:
         print("  (run aborted early — see the 'stormtest aborting:' reason above)")
