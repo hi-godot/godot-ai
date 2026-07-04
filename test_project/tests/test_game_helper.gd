@@ -197,6 +197,9 @@ func test_input_mouse_position_absent_falls_back() -> void:
 func test_input_mouse_position_malformed_array_rejected() -> void:
 	var r: Dictionary = _helper.call("_resolve_mouse_position", [1.0, 2.0, 3.0])
 	assert_true(r.has("error"), "3-element array must be rejected, not silently substituted")
+	## A rejection must NOT also hand back a fallback position — otherwise a
+	## regression could silently substitute cursor coords despite the error.
+	assert_false(r.has("position"), "rejected input must not carry a fallback position")
 
 
 func test_input_mouse_position_wrong_type_rejected() -> void:
@@ -205,3 +208,4 @@ func test_input_mouse_position_wrong_type_rejected() -> void:
 	## caller bugs.
 	var r: Dictionary = _helper.call("_resolve_mouse_position", 42.0)
 	assert_true(r.has("error"), "scalar position must be rejected")
+	assert_false(r.has("position"), "rejected input must not carry a fallback position")
