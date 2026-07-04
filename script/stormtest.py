@@ -117,8 +117,20 @@ REPORT_JSON = os.environ.get(
     "SS_REPORT", os.path.join(tempfile.gettempdir(), "stormtest_report.json")
 )
 START = [0.0]
-STOP = [False]  # set by signal handler / fatal server loss
+STOP = [False]  # set by signal handler / fatal server loss / normal teardown
+# ABORTED distinguishes an early failure abort from STOP being set by the
+# normal end-of-run teardown (the `finally` in main). Only the former should
+# print "aborted — see reason above"; a clean run also has STOP set.
+ABORTED = [False]
 ROOT_PATH = ["/Root"]  # resolved after scratch-scene creation
+
+
+def _abort(reason: str) -> None:
+    """Flip STOP + ABORTED and log why. Every early-exit failure path routes
+    through here so a truncated run always states its cause (#634)."""
+    print(f"  !!! stormtest aborting: {reason}")
+    STOP[0] = True
+    ABORTED[0] = True
 
 
 def _pct(vals: list[float], p: float) -> float:
@@ -157,6 +169,7 @@ def flush_report_json():
         "reload_recovery_s": [round(x, 1) for x in M["reload_recovery_s"]],
         "reconnects": M["reconnects"],
         "stopped": STOP[0],
+        "aborted": ABORTED[0],
         "overall_latency_ms": _lat_stats(all_lat),
         "err_codes": dict(M["err_codes"].most_common()),
         "per_op": {
@@ -324,7 +337,7 @@ async def op_logs(w: Worker):
         "logs_read",
         {
             "count": random.choice([10, 50]),
-            "source": random.choice(["plugin", "editor", "combined"]),
+            "source": random.choice(["plugin", "editor", "all"]),
         },
     )
 
@@ -643,7 +656,7 @@ async def op_input_map(w: Worker):
             {"op": "add_action", "params": {"action": action}},
             op_label="input_map_manage.add_action",
         )
-        params = {"action": action, "event_type": "key", "key": "A"}
+        params = {"action": action, "event_type": "key", "keycode": "A"}
     elif op == "remove_action":
         params = {"action": action}
     else:
@@ -714,7 +727,10 @@ OPS = (
 
 async def worker_loop(w: Worker):
     if not await w.connect():
-        STOP[0] = True
+        _abort(
+            f"worker {w.wi} could not reach the editor on initial connect — "
+            f"is it running with the plugin enabled?"
+        )
         return
     await w.ensure_container()
     for wave in range(WAVES):
@@ -737,7 +753,11 @@ async def worker_loop(w: Worker):
                     M["reconnects"] += 1
                     ok = await w.connect()
                     if not ok:
-                        STOP[0] = True
+                        _abort(
+                            f"worker {w.wi} reconnect failed after a CONNECTION "
+                            f"error (wave {wave}) — server did not return within "
+                            f"the reconnect window"
+                        )
                         break
                     w.nodes.clear()  # scene may have reset after reload
                     await w.ensure_container()
@@ -765,11 +785,10 @@ async def do_reload(w: Worker):
     ok = await w.connect()
     M["reload_recovery_s"].append(time.monotonic() - t_reload)
     if not ok:
-        print(
-            "  [chaos] !!! server did not come back after reload "
-            "(managed server likely killed by reload). Aborting."
+        _abort(
+            "server did not come back after a chaos-worker reload "
+            "(managed server likely killed by the reload)"
         )
-        STOP[0] = True
         return
     M["reloads_survived"] += 1
     # reload may have reset the edited scene off our scratch scene — reopen it
@@ -811,8 +830,7 @@ async def run_isolated_reload() -> None:
     )
     w = Worker(0)
     if not await w.connect():
-        print("  could not reach the editor — is it running with the plugin enabled?")
-        STOP[0] = True
+        _abort("could not reach the editor — is it running with the plugin enabled?")
         return
 
     for i in range(ISOLATED_ITERS):
@@ -836,11 +854,11 @@ async def run_isolated_reload() -> None:
         ok = await w.connect()
         dt = time.monotonic() - t0
         if not ok:
-            print(
-                f"      !!! editor did not return within {RECONNECT_TIMEOUT}s — "
-                "reload NOT survived (managed server likely killed by the reload)"
+            _abort(
+                f"editor did not return within {RECONNECT_TIMEOUT}s of an "
+                f"isolated reload — reload NOT survived (managed server likely "
+                f"killed by the reload)"
             )
-            STOP[0] = True
             break
         after = await _active_session_id(w)
         M["reloads_survived"] += 1
@@ -875,8 +893,10 @@ async def health_monitor():
             if misses == 1:
                 print("  [health] editor not answering (reload window?) ...")
             if misses >= int(RECONNECT_TIMEOUT / 3) + 1:
-                print("  [health] !!! editor unreachable too long — presumed DEAD. Aborting.")
-                STOP[0] = True
+                _abort(
+                    f"health monitor: editor unreachable for ~{misses * 3}s "
+                    f"(> reconnect window) — presumed DEAD"
+                )
                 return
 
 
@@ -942,10 +962,10 @@ def report():
     s = _lat_stats(all_lat)
     if s["n"]:
         print(f"  latency (ms)     : p50={s['p50']} p95={s['p95']} max={s['max']} avg={s['avg']}")
-    verdict = "EDITOR ALIVE" if (not STOP[0] or M["ok"]) else "EDITOR DEAD/UNREACHABLE"
+    verdict = "EDITOR ALIVE" if (not ABORTED[0] or M["ok"]) else "EDITOR DEAD/UNREACHABLE"
     print(f"  final verdict    : {verdict}")
-    if STOP[0]:
-        print("  (STOP was set — see log above for why)")
+    if ABORTED[0]:
+        print("  (run aborted early — see the 'stormtest aborting:' reason above)")
     print("\n  error codes:")
     for code, n in M["err_codes"].most_common():
         print(f"    {n:6d}  {code}")
