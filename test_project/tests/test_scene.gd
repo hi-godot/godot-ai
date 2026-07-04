@@ -196,6 +196,23 @@ func test_open_scene_nonexistent() -> void:
 	assert_is_error(result)
 
 
+func test_open_scene_already_current_reports_switched() -> void:
+	## #633: opening the scene that is already edited must not go through the
+	## async switch path — it replies immediately with switched=true. This is
+	## also the only open_scene success path testable synchronously (opening a
+	## different scene triggers UI that blocks the test runner).
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null or scene_root.scene_file_path.is_empty():
+		skip("No saved scene open")
+		return
+	var current := scene_root.scene_file_path
+	var result := _handler.open_scene({"path": current})
+	assert_has_key(result, "data")
+	assert_eq(result.data.switched, true, "already-current open is switched")
+	assert_eq(result.data.settle, "already_current")
+	assert_eq(result.data.previous_scene_path, current)
+
+
 # ----- save_scene / save_scene_as (validation only — save triggers modal dialog) -----
 
 func test_save_scene_never_saved_returns_actionable_validation_error() -> void:

@@ -79,6 +79,12 @@ def register_scene_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None
         authority and the editor should discard the open in-memory copy and
         re-read the scene from disk.
 
+        The reply is sent only after the editor has actually switched to the
+        requested scene (``switched: true``), so follow-up writes are safe
+        immediately. ``switched: false`` with ``settle: "timeout"`` means the
+        switch had not landed within the wait window — re-check
+        ``editor_state`` before writing.
+
         Args:
             path: File path of the scene to open (e.g. "res://main.tscn").
             force_reload: Re-read the scene from disk even when it is already

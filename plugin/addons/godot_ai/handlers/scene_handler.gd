@@ -143,6 +143,13 @@ func create_scene(params: Dictionary) -> Dictionary:
 	}
 
 
+## How long open_scene waits for the editor to actually switch to the
+## requested scene before replying switched=false. Tab switches normally land
+## within a few frames; keep this under the dispatcher's 4500 ms deferred
+## default so the coroutine always answers before DEFERRED_TIMEOUT fires.
+const _OPEN_SETTLE_MAX_MSEC := 3000
+
+
 ## Open an existing scene by file path.
 func open_scene(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
@@ -159,23 +166,78 @@ func open_scene(params: Dictionary) -> Dictionary:
 
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var current_path := scene_root.scene_file_path if scene_root else ""
-	var reloaded_from_disk := false
+	var payload := {
+		"path": path,
+		"force_reload": force_reload,
+		"reloaded_from_disk": false,
+		"previous_scene_path": current_path,
+		"undoable": false,
+		"reason": "Scene navigation cannot be undone via editor undo",
+	}
+
+	if current_path == path and not force_reload:
+		## Already the edited scene — nothing switches, reply immediately.
+		payload["switched"] = true
+		payload["settle"] = "already_current"
+		return {"data": payload}
+
 	if force_reload and current_path == path:
 		EditorInterface.reload_scene_from_path(path)
-		reloaded_from_disk = true
+		payload["reloaded_from_disk"] = true
 	else:
 		EditorInterface.open_scene_from_path(path)
 
-	return {
-		"data": {
-			"path": path,
-			"force_reload": force_reload,
-			"reloaded_from_disk": reloaded_from_disk,
-			"previous_scene_path": current_path,
-			"undoable": false,
-			"reason": "Scene navigation cannot be undone via editor undo",
-		}
-	}
+	## The tab switch completes asynchronously; replying now lets an immediate
+	## follow-up write land on the PREVIOUS scene (#633 — a scene_save issued
+	## right after open_scene saved the old scene). Defer the reply until the
+	## edited scene actually is `path`, so success means "the editor is now
+	## editing the scene you asked for".
+	var request_id: String = params.get("_request_id", "")
+	if _connection != null and not request_id.is_empty():
+		_finish_open_scene_deferred(_connection, request_id, path, payload)
+		return McpDispatcher.DEFERRED_RESPONSE
+
+	## Synchronous fallback (batch_execute and unit-test contexts can't await):
+	## preserve the old reply-immediately behavior, flagged as not waited on.
+	payload["switched"] = false
+	payload["settle"] = "not_waited"
+	return {"data": payload}
+
+
+## `static` is load-bearing (same reason as FilesystemHandler's deferred scan
+## finish): the coroutine must outlive this RefCounted handler, which can be
+## freed mid-await by an editor_reload_plugin. Parameterise everything;
+## reference no instance state.
+static func _finish_open_scene_deferred(
+	connection: McpConnection,
+	request_id: String,
+	path: String,
+	payload: Dictionary,
+) -> void:
+	if not is_instance_valid(connection):
+		return
+	var tree := connection.get_tree()
+	if tree == null:
+		return
+	# Hand back a frame so _dispatch() registers this request as deferred
+	# before the coroutine can push a reply.
+	await tree.process_frame
+	var deadline_ms := Time.get_ticks_msec() + _OPEN_SETTLE_MAX_MSEC
+	while Time.get_ticks_msec() < deadline_ms:
+		var root := EditorInterface.get_edited_scene_root()
+		if root != null and root.scene_file_path == path:
+			if not is_instance_valid(connection):
+				return
+			payload["switched"] = true
+			payload["settle"] = "settled"
+			connection.send_deferred_response(request_id, {"data": payload})
+			return
+		await tree.process_frame
+	if not is_instance_valid(connection):
+		return
+	payload["switched"] = false
+	payload["settle"] = "timeout"
+	connection.send_deferred_response(request_id, {"data": payload})
 
 
 ## Save the currently edited scene.
