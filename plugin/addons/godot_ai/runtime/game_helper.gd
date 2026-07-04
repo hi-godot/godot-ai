@@ -479,7 +479,10 @@ func _game_input_key(params: Dictionary) -> Dictionary:
 
 func _game_input_mouse(params: Dictionary) -> Dictionary:
 	var event := str(params.get("event", "button"))
-	var pos := _dict_to_vector2(params.get("position", {}))
+	var pos_result := _resolve_mouse_position(params.get("position"))
+	if pos_result.has("error"):
+		return {"sent": false, "event": event, "error": pos_result.error}
+	var pos: Vector2 = pos_result.position
 	match event:
 		"motion":
 			var motion := InputEventMouseMotion.new()
@@ -565,6 +568,29 @@ func _dict_to_vector2(value: Variant) -> Vector2:
 			return fallback
 		return Vector2(float(value.get("x", fallback.x)), float(value.get("y", fallback.y)))
 	return fallback
+
+
+## Resolve a mouse-position param. Absent (null/missing) falls back to the
+## live cursor position — a deliberate default. A present but wrong-shaped
+## value is rejected instead of silently substituting the cursor, which
+## previously hid caller bugs (#635). Accepts a {x, y} dict or an [x, y]
+## array; returns {position: Vector2} or {error: String}.
+func _resolve_mouse_position(value: Variant) -> Dictionary:
+	var viewport := get_viewport()
+	var fallback := viewport.get_mouse_position() if viewport != null else Vector2.ZERO
+	if value == null:
+		return {"position": fallback}
+	if value is Dictionary:
+		var dict: Dictionary = value
+		if dict.is_empty() or (not dict.has("x") and not dict.has("y")):
+			return {"position": fallback}
+		return {"position": Vector2(float(dict.get("x", fallback.x)), float(dict.get("y", fallback.y)))}
+	if value is Array:
+		var arr: Array = value
+		if arr.size() != 2:
+			return {"error": "position array must be [x, y] (got %d elements)" % arr.size()}
+		return {"position": Vector2(float(arr[0]), float(arr[1]))}
+	return {"error": "position must be a {x, y} object or [x, y] array (got %s)" % type_string(typeof(value))}
 
 
 func _mouse_button_index(name: String) -> int:

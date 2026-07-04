@@ -28,6 +28,9 @@ Ops:
         Send a key press/release to the running game.
   - input_mouse(event, position=None, button="left", pressed=True)
         Send a mouse motion or button event. event: "motion" | "button".
+        position is a {x, y} object or [x, y] array; omit it to use the
+        game's current cursor position. A present but malformed position is
+        rejected rather than silently falling back to the cursor.
   - input_gamepad(device=0, control="button", index=0, pressed=True, value=0.0)
         Send a joypad button or axis event. control: "button" | "axis".
   - input_action(action, pressed=True, strength=1.0)

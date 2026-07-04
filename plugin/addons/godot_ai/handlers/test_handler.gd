@@ -40,7 +40,30 @@ func run_tests(params: Dictionary) -> Dictionary:
 	var results := _runner.run_suites(suites, suite_filter, test_filter, ctx, verbose, exclude_test_filter)
 	if not discovery.errors.is_empty():
 		results["load_errors"] = discovery.errors
+	_annotate_edited_scene(results)
 	return {"data": results}
+
+
+## Many suites assume the project's main scene is the edited scene (they read
+## /Main/... nodes directly). Running with another scene open produces a flood
+## of phantom failures that look like real regressions. Surface the edited
+## scene and a warning when it differs from run/main_scene so the failures are
+## attributable at a glance instead of costing a debugging round (#635).
+func _annotate_edited_scene(results: Dictionary) -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var edited := scene_root.scene_file_path if scene_root else ""
+	results["edited_scene"] = edited
+	var main_scene := str(ProjectSettings.get_setting("application/run/main_scene", ""))
+	if main_scene.is_empty() or edited == main_scene:
+		return
+	if int(results.get("failed", 0)) <= 0:
+		return
+	results["scene_warning"] = (
+		"Edited scene is '%s' but the project main scene is '%s'. Many suites "
+		% [edited if not edited.is_empty() else "<none>", main_scene]
+		+ "assume the main scene is open and will report phantom failures "
+		+ "otherwise. If these failures are unexpected, scene_open('%s') and re-run." % main_scene
+	)
 
 
 func get_test_results(params: Dictionary) -> Dictionary:

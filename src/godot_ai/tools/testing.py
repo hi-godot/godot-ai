@@ -42,6 +42,12 @@ def register_testing_tools(mcp: FastMCP) -> None:
         suite names, duration) plus failures only. verbose=True includes
         every individual test result.
 
+        The response includes ``edited_scene`` (the scene currently open in
+        the editor). Many suites assume the project's main scene is open; if
+        it is not and there are failures, the response also carries a
+        ``scene_warning`` — open the main scene (``scene_open``) and re-run
+        before treating those failures as real.
+
         Args:
             suite: Run only the named suite (e.g. "scene", "node", "editor").
                 Empty runs all suites.

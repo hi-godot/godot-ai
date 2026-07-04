@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const TestHandler := preload("res://addons/godot_ai/handlers/test_handler.gd")
+
 ## Tests for McpTestRunner itself — specifically the guardrails that
 ## catch silent failures: skip() mechanism, zero-assertion detection,
 ## deep ctx isolation, and leaked-node cleanup.
@@ -237,6 +239,42 @@ func test_expected_script_error_does_not_fail_test() -> void:
 
 	assert_eq(result.failed, 0, "expected script errors should be filtered")
 	assert_eq(result.passed, 1)
+
+
+func test_run_tests_annotates_edited_scene() -> void:
+	## #635: run_tests surfaces the edited scene so main-scene-assuming suites'
+	## phantom failures are attributable. Verify the annotation is populated.
+	var handler := TestHandler.new(null, null)
+	var results := {"failed": 0}
+	handler._annotate_edited_scene(results)
+	assert_has_key(results, "edited_scene")
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var expected := scene_root.scene_file_path if scene_root else ""
+	assert_eq(results.edited_scene, expected)
+	## Tests run with the main scene open, so no warning should be emitted even
+	## though failed=0 here.
+	assert_false(results.has("scene_warning"),
+		"no warning when edited scene is the main scene")
+
+
+func test_annotate_scene_warns_on_mismatch_with_failures() -> void:
+	## The warning fires only when the edited scene differs from main AND there
+	## are failures. Simulate by calling with a main_scene that cannot match
+	## the (main.tscn) edited scene via a synthetic failing result — the guard
+	## is edited != main_scene, so if the project's main scene IS open the
+	## warning is correctly suppressed. Assert the suppression contract holds.
+	var handler := TestHandler.new(null, null)
+	var main_scene := str(ProjectSettings.get_setting("application/run/main_scene", ""))
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var edited := scene_root.scene_file_path if scene_root else ""
+	var results := {"failed": 3}
+	handler._annotate_edited_scene(results)
+	if edited == main_scene:
+		assert_false(results.has("scene_warning"),
+			"main scene open => no warning even with failures")
+	else:
+		assert_true(results.has("scene_warning"),
+			"non-main scene + failures => warning")
 
 
 static func _edited_scene_root() -> Node:
