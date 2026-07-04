@@ -166,6 +166,11 @@ func open_scene(params: Dictionary) -> Dictionary:
 
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var current_path := scene_root.scene_file_path if scene_root else ""
+	## Instance id of the root at call time. A completed open OR reload always
+	## replaces the edited-scene root with a NEW instance, so this is the
+	## reliable completion signal — unlike scene_file_path, which is unchanged
+	## across a force_reload of the already-open scene (#633 review).
+	var prev_root_id := scene_root.get_instance_id() if scene_root else 0
 	var payload := {
 		"path": path,
 		"force_reload": force_reload,
@@ -190,11 +195,11 @@ func open_scene(params: Dictionary) -> Dictionary:
 	## The tab switch completes asynchronously; replying now lets an immediate
 	## follow-up write land on the PREVIOUS scene (#633 — a scene_save issued
 	## right after open_scene saved the old scene). Defer the reply until the
-	## edited scene actually is `path`, so success means "the editor is now
-	## editing the scene you asked for".
+	## edited scene actually is `path` AND its root is a fresh instance, so
+	## success means "the editor is now editing the (re)loaded scene".
 	var request_id: String = params.get("_request_id", "")
 	if _connection != null and not request_id.is_empty():
-		_finish_open_scene_deferred(_connection, request_id, path, payload)
+		_finish_open_scene_deferred(_connection, request_id, path, prev_root_id, payload)
 		return McpDispatcher.DEFERRED_RESPONSE
 
 	## Synchronous fallback (batch_execute and unit-test contexts can't await):
@@ -212,6 +217,7 @@ static func _finish_open_scene_deferred(
 	connection: McpConnection,
 	request_id: String,
 	path: String,
+	prev_root_id: int,
 	payload: Dictionary,
 ) -> void:
 	if not is_instance_valid(connection):
@@ -225,7 +231,11 @@ static func _finish_open_scene_deferred(
 	var deadline_ms := Time.get_ticks_msec() + _OPEN_SETTLE_MAX_MSEC
 	while Time.get_ticks_msec() < deadline_ms:
 		var root := EditorInterface.get_edited_scene_root()
-		if root != null and root.scene_file_path == path:
+		# Require BOTH the target path AND a fresh root instance: a
+		# force_reload keeps scene_file_path == path across the reload, so the
+		# instance swap is what proves the (re)load actually completed rather
+		# than the coroutine settling on the stale pre-reload root.
+		if root != null and root.scene_file_path == path and root.get_instance_id() != prev_root_id:
 			if not is_instance_valid(connection):
 				return
 			payload["switched"] = true

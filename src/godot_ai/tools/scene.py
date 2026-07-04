@@ -82,8 +82,10 @@ def register_scene_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None
         The reply is sent only after the editor has actually switched to the
         requested scene (``switched: true``), so follow-up writes are safe
         immediately. ``switched: false`` with ``settle: "timeout"`` means the
-        switch had not landed within the wait window — re-check
-        ``editor_state`` before writing.
+        switch had not landed within the wait window. In synchronous contexts
+        (e.g. inside ``batch_execute``) the reply returns immediately with
+        ``switched: false`` and ``settle: "not_waited"``. In both of those
+        cases, re-check ``editor_state`` before issuing follow-up writes.
 
         Args:
             path: File path of the scene to open (e.g. "res://main.tscn").
