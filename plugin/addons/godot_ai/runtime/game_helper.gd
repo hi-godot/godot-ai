@@ -236,6 +236,8 @@ func _handle_game_command(data: Array) -> void:
 			result = _game_input_mouse(json.data)
 		"input_gamepad":
 			result = _game_input_gamepad(json.data)
+		"input_action":
+			result = _game_input_action(json.data)
 		"input_state":
 			result = _game_input_state(json.data)
 		_:
@@ -521,6 +523,27 @@ func _game_input_gamepad(params: Dictionary) -> Dictionary:
 			Input.parse_input_event(axis)
 			return {"sent": true, "control": "axis", "device": device, "index": axis.axis, "value": axis.axis_value}
 	return {"sent": false, "error": "Invalid gamepad control: %s" % control}
+
+
+func _game_input_action(params: Dictionary) -> Dictionary:
+	var action := str(params.get("action", ""))
+	if action.is_empty():
+		return {"sent": false, "error": "Missing action"}
+	if not InputMap.has_action(action):
+		return {"sent": false, "action": action, "error": "Unknown action: %s" % action}
+	var pressed := bool(params.get("pressed", true))
+	var strength := clampf(float(params.get("strength", 1.0)), 0.0, 1.0)
+	if pressed:
+		Input.action_press(action, strength)
+	else:
+		Input.action_release(action)
+	return {
+		"sent": true,
+		"action": action,
+		"pressed": pressed,
+		"strength": strength,
+		"delivery": "action_state",
+	}
 
 
 func _game_input_state(params: Dictionary) -> Dictionary:

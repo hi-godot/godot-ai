@@ -106,6 +106,19 @@ async def game_input_gamepad(
     return await _game_command(runtime, "input_gamepad", params)
 
 
+async def game_input_action(
+    runtime: DirectRuntime,
+    action: str,
+    pressed: bool = True,
+    strength: float = 1.0,
+) -> dict:
+    return await _game_command(
+        runtime,
+        "input_action",
+        {"action": action, "pressed": pressed, "strength": strength},
+    )
+
+
 async def game_input_state(
     runtime: DirectRuntime,
     actions: list[str] | None = None,

@@ -738,6 +738,14 @@ class StubClient:
                 "deadzone": params.get("deadzone", 0.5),
                 "undoable": False,
             }
+        if command == "ensure_action":
+            return {
+                "action": params.get("action", ""),
+                "deadzone": params.get("deadzone", 0.5),
+                "already_exists": True,
+                "persisted": True,
+                "undoable": False,
+            }
         if command == "remove_action":
             return {
                 "action": params.get("action", ""),
@@ -751,6 +759,16 @@ class StubClient:
                     "type": params.get("event_type", ""),
                     "keycode": params.get("keycode", ""),
                 },
+                "undoable": False,
+            }
+        if command == "ensure_binding":
+            return {
+                "action": params.get("action", ""),
+                "event": {
+                    "type": params.get("event_type", ""),
+                    "keycode": params.get("keycode", ""),
+                },
+                "already_bound": True,
                 "undoable": False,
             }
         if command == "take_screenshot":
@@ -1635,6 +1653,18 @@ async def test_game_input_gamepad_axis_sends_value_not_pressed():
     assert "pressed" not in params
 
 
+async def test_game_input_action_sends_game_command():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+
+    await game_handlers.game_input_action(runtime, action="shoot", pressed=True, strength=0.75)
+
+    assert client.calls[-1]["params"] == {
+        "op": "input_action",
+        "params": {"action": "shoot", "pressed": True, "strength": 0.75},
+    }
+
+
 async def test_game_input_state_sends_game_command():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
@@ -2104,6 +2134,21 @@ async def test_scene_open_handler():
     result = await scene_handlers.scene_open(runtime, path="res://main.tscn")
     assert result["path"] == "res://main.tscn"
     assert client.calls[-1]["params"] == {"path": "res://main.tscn"}
+
+
+async def test_scene_open_force_reload_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await scene_handlers.scene_open(
+        runtime,
+        path="res://main.tscn",
+        force_reload=True,
+    )
+    assert result["path"] == "res://main.tscn"
+    assert client.calls[-1]["params"] == {
+        "path": "res://main.tscn",
+        "force_reload": True,
+    }
 
 
 async def test_scene_save_handler():
@@ -3340,6 +3385,17 @@ async def test_input_map_add_action_handler():
     assert client.calls[-1]["command"] == "add_action"
 
 
+async def test_input_map_ensure_action_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await input_map_handlers.input_map_ensure_action(
+        runtime, action="jump", deadzone=0.3
+    )
+    assert result["action"] == "jump"
+    assert result["deadzone"] == 0.3
+    assert client.calls[-1]["command"] == "ensure_action"
+
+
 async def test_input_map_remove_action_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
@@ -3358,6 +3414,19 @@ async def test_input_map_bind_event_handler():
     assert result["action"] == "jump"
     assert result["event"]["type"] == "key"
     assert client.calls[-1]["command"] == "bind_event"
+    assert client.calls[-1]["params"]["keycode"] == "Space"
+
+
+async def test_input_map_ensure_binding_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await input_map_handlers.input_map_ensure_binding(
+        runtime, action="jump", event_type="key", keycode="Space"
+    )
+    assert result["action"] == "jump"
+    assert result["event"]["type"] == "key"
+    assert client.calls[-1]["command"] == "ensure_binding"
+    assert client.calls[-1]["params"]["deadzone"] == 0.5
     assert client.calls[-1]["params"]["keycode"] == "Space"
 
 

@@ -27,6 +27,9 @@ Ops:
         threshold; values outside this range are rejected with
         ``VALUE_OUT_OF_RANGE``. Typical values are 0.2-0.5; leave the
         default 0.5 unless you have a reason. Not a key-repeat delay.
+  • ensure_action(action, deadzone=0.5)
+        Idempotently create or persist an input action. If the action exists
+        in live InputMap or in project.godot, the existing state is preserved.
   • remove_action(action)
         Remove an action and all its event bindings.
   • bind_event(action, event_type, keycode="", ctrl=False, alt=False,
@@ -46,6 +49,8 @@ Ops:
             (e.g. 0=A/Cross, 1=B/Circle).
           - ``joy_axis``: ``axis`` is the ``JoyAxis`` index and
             ``axis_value`` is the direction/value, usually -1.0 or 1.0.
+  • ensure_binding(action, event_type, ...)
+        Idempotently ensure the action exists and has the requested binding.
 """
 
 
@@ -57,8 +62,10 @@ def register_input_map_tools(mcp: FastMCP) -> None:
         ops={
             "list": input_map_handlers.input_map_list,
             "add_action": input_map_handlers.input_map_add_action,
+            "ensure_action": input_map_handlers.input_map_ensure_action,
             "remove_action": input_map_handlers.input_map_remove_action,
             "bind_event": input_map_handlers.input_map_bind_event,
+            "ensure_binding": input_map_handlers.input_map_ensure_binding,
         },
         read_resource_forms={
             "list": "godot://input_map",

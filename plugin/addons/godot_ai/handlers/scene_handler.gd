@@ -146,6 +146,7 @@ func create_scene(params: Dictionary) -> Dictionary:
 ## Open an existing scene by file path.
 func open_scene(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
+	var force_reload: bool = params.get("force_reload", false)
 	if path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
@@ -156,11 +157,21 @@ func open_scene(params: Dictionary) -> Dictionary:
 	if not ResourceLoader.exists(path):
 		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Scene not found: %s" % path)
 
-	EditorInterface.open_scene_from_path(path)
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var current_path := scene_root.scene_file_path if scene_root else ""
+	var reloaded_from_disk := false
+	if force_reload and current_path == path:
+		EditorInterface.reload_scene_from_path(path)
+		reloaded_from_disk = true
+	else:
+		EditorInterface.open_scene_from_path(path)
 
 	return {
 		"data": {
 			"path": path,
+			"force_reload": force_reload,
+			"reloaded_from_disk": reloaded_from_disk,
+			"previous_scene_path": current_path,
 			"undoable": false,
 			"reason": "Scene navigation cannot be undone via editor undo",
 		}

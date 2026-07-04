@@ -124,6 +124,51 @@ func test_add_action_accepts_boundary_deadzones() -> void:
 	_handler.remove_action({"action": TEST_ACTION})
 
 
+# ----- ensure_action / ensure_binding -----
+
+func test_ensure_action_persists_requested_deadzone_for_new_action() -> void:
+	var result := _handler.ensure_action({"action": TEST_ACTION, "deadzone": 0.3})
+	assert_has_key(result, "data")
+	assert_true(abs(float(result.data.deadzone) - 0.3) < 0.001)
+
+	var setting = ProjectSettings.get_setting("input/%s" % TEST_ACTION)
+	assert_true(setting is Dictionary)
+	assert_true(abs(float(setting.get("deadzone", -1.0)) - 0.3) < 0.001)
+	assert_true(abs(InputMap.action_get_deadzone(TEST_ACTION) - 0.3) < 0.001)
+
+	_handler.remove_action({"action": TEST_ACTION})
+
+
+func test_ensure_binding_rejects_deadzone_above_one() -> void:
+	var result := _handler.ensure_binding({
+		"action": TEST_ACTION,
+		"event_type": "key",
+		"keycode": "Space",
+		"deadzone": 1.5,
+	})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_false(InputMap.has_action(TEST_ACTION), "Action must not be created on validation failure")
+
+
+func test_ensure_binding_matches_existing_physical_key_binding() -> void:
+	InputMap.add_action(TEST_ACTION, 0.5)
+	var physical_event := InputEventKey.new()
+	physical_event.physical_keycode = KEY_SPACE
+	physical_event.device = -1
+	InputMap.action_add_event(TEST_ACTION, physical_event)
+
+	var result := _handler.ensure_binding({
+		"action": TEST_ACTION,
+		"event_type": "key",
+		"keycode": "Space",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.already_bound, true)
+	assert_eq(InputMap.action_get_events(TEST_ACTION).size(), 1)
+
+	_handler.remove_action({"action": TEST_ACTION})
+
+
 # ----- remove_action -----
 
 func test_remove_action_missing_name() -> void:

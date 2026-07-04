@@ -35,9 +35,16 @@ async def scene_create(
     return await runtime.send_command("create_scene", params)
 
 
-async def scene_open(runtime: DirectRuntime, path: str) -> dict:
+async def scene_open(
+    runtime: DirectRuntime,
+    path: str,
+    force_reload: bool = False,
+) -> dict:
     await require_writable_async(runtime)
-    return await runtime.send_command("open_scene", {"path": path})
+    params: dict = {"path": path}
+    if force_reload:
+        params["force_reload"] = True
+    return await runtime.send_command("open_scene", params)
 
 
 async def scene_save(runtime: DirectRuntime) -> dict:

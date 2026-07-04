@@ -27,6 +27,18 @@ async def input_map_add_action(
     )
 
 
+async def input_map_ensure_action(
+    runtime: DirectRuntime,
+    action: str,
+    deadzone: float = 0.5,
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "ensure_action",
+        {"action": action, "deadzone": deadzone},
+    )
+
+
 async def input_map_remove_action(runtime: DirectRuntime, action: str) -> dict:
     await require_writable_async(runtime)
     return await runtime.send_command("remove_action", {"action": action})
@@ -42,3 +54,20 @@ async def input_map_bind_event(
     params: dict[str, Any] = {"action": action, "event_type": event_type}
     params.update(kwargs)
     return await runtime.send_command("bind_event", params)
+
+
+async def input_map_ensure_binding(
+    runtime: DirectRuntime,
+    action: str,
+    event_type: str,
+    deadzone: float = 0.5,
+    **kwargs: Any,
+) -> dict:
+    await require_writable_async(runtime)
+    params: dict[str, Any] = {
+        "action": action,
+        "event_type": event_type,
+        "deadzone": deadzone,
+    }
+    params.update(kwargs)
+    return await runtime.send_command("ensure_binding", params)

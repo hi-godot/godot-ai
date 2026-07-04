@@ -30,6 +30,8 @@ Ops:
         Send a mouse motion or button event. event: "motion" | "button".
   - input_gamepad(device=0, control="button", index=0, pressed=True, value=0.0)
         Send a joypad button or axis event. control: "button" | "axis".
+  - input_action(action, pressed=True, strength=1.0)
+        Set a project action's pressed state directly in the running game.
   - input_state(actions=None)
         Read current action pressed states. Empty actions = all project actions."""
 
@@ -46,6 +48,7 @@ def register_game_tools(mcp: FastMCP) -> None:
             "input_key": game_handlers.game_input_key,
             "input_mouse": game_handlers.game_input_mouse,
             "input_gamepad": game_handlers.game_input_gamepad,
+            "input_action": game_handlers.game_input_action,
             "input_state": game_handlers.game_input_state,
         },
         read_resource_forms={
@@ -55,6 +58,7 @@ def register_game_tools(mcp: FastMCP) -> None:
             "input_key": None,
             "input_mouse": None,
             "input_gamepad": None,
+            "input_action": None,
             "input_state": None,
         },
     )

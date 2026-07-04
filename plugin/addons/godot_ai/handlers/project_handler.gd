@@ -228,6 +228,7 @@ func _run_project_response(base_data: Dictionary, decision: Dictionary) -> Dicti
 	data["recent_errors_scope"] = decision.get("recent_errors_scope", "none")
 	data["recent_errors_may_predate_run"] = decision.get("recent_errors_may_predate_run", false)
 	data["recent_errors_truncated"] = decision.get("recent_errors_truncated", false)
+	data.merge(McpDebuggerPlugin.split_errors_by_scope(data["recent_errors"], data["recent_errors_scope"]), true)
 	return {"data": data}
 
 

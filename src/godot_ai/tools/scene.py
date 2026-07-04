@@ -65,20 +65,28 @@ def register_scene_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None
         return
 
     @mcp.tool(meta=DEFER_META)
-    async def scene_open(ctx: Context, path: str, session_id: str = "") -> dict:
+    async def scene_open(
+        ctx: Context,
+        path: str,
+        force_reload: bool = False,
+        session_id: str = "",
+    ) -> dict:
         """Open an existing scene file (.tscn) in the editor.
 
         If ``path`` is already the currently edited scene this is a no-op
         — the in-memory state (including any unsaved MCP mutations) is
-        preserved. To force a re-read from disk, ``scene_open`` a different
-        scene first or save & reload manually.
+        preserved. Pass ``force_reload=True`` when the file on disk is the
+        authority and the editor should discard the open in-memory copy and
+        re-read the scene from disk.
 
         Args:
             path: File path of the scene to open (e.g. "res://main.tscn").
+            force_reload: Re-read the scene from disk even when it is already
+                open. This discards unsaved in-memory edits to that scene.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
-        return await scene_handlers.scene_open(runtime, path=path)
+        return await scene_handlers.scene_open(runtime, path=path, force_reload=force_reload)
 
     @mcp.tool(meta=DEFER_META)
     async def scene_save(ctx: Context, session_id: str = "") -> dict:

@@ -240,6 +240,7 @@ func _explain_not_live(status: Dictionary, code: String = ErrorCodes.INTERNAL_ER
 		"recent_errors_may_predate_run": recent_errors_scope == "retained_recent",
 		"recent_errors_truncated": truncated,
 	}
+	data.merge(split_errors_by_scope(recent_errors, recent_errors_scope), true)
 	var message := ""
 	match state:
 		"not_live":
@@ -264,6 +265,19 @@ func _explain_not_live(status: Dictionary, code: String = ErrorCodes.INTERNAL_ER
 	inner["data"] = data
 	err["error"] = inner
 	return err
+
+
+static func split_errors_by_scope(recent_errors: Array, scope: String) -> Dictionary:
+	var current_run_errors: Array = []
+	var retained_errors: Array = []
+	if scope == "run":
+		current_run_errors = recent_errors
+	elif scope == "retained_recent":
+		retained_errors = recent_errors
+	return {
+		"current_run_errors": current_run_errors,
+		"retained_errors": retained_errors,
+	}
 
 
 func recent_editor_errors_since(cursor: int) -> Dictionary:

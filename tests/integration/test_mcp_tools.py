@@ -233,6 +233,35 @@ class TestSceneOpenTool:
         assert result.data["path"] == "res://levels/world.tscn"
         assert result.data["undoable"] is False
 
+    async def test_open_scene_force_reload(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "open_scene"
+            assert cmd["params"] == {
+                "path": "res://levels/world.tscn",
+                "force_reload": True,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://levels/world.tscn",
+                    "force_reload": True,
+                    "reloaded_from_disk": True,
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "scene_open",
+            {"path": "res://levels/world.tscn", "force_reload": True},
+        )
+        await task
+
+        assert result.data["reloaded_from_disk"] is True
+
 
 # ---------------------------------------------------------------------------
 # scene_save
@@ -2786,6 +2815,66 @@ class TestInputMapAddActionTool:
         assert result.data["action"] == "attack"
 
 
+class TestInputMapEnsureActionTool:
+    async def test_ensure_action(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "ensure_action"
+            assert cmd["params"] == {"action": "attack", "deadzone": 0.5}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "action": "attack",
+                    "deadzone": 0.5,
+                    "already_exists": True,
+                    "persisted": True,
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "input_map_manage", {"op": "ensure_action", "params": {"action": "attack"}}
+        )
+        await task
+
+        assert result.data["persisted"] is True
+
+    async def test_ensure_action_creates_missing_action(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "ensure_action"
+            assert cmd["params"] == {"action": "dash", "deadzone": 0.25}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "action": "dash",
+                    "deadzone": 0.25,
+                    "created": True,
+                    "already_exists": False,
+                    "loaded_in_input_map": True,
+                    "persisted": True,
+                    "undoable": False,
+                    "reason": "Input actions are saved to project.godot",
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "input_map_manage",
+            {"op": "ensure_action", "params": {"action": "dash", "deadzone": 0.25}},
+        )
+        await task
+
+        assert result.data["created"] is True
+        assert result.data["already_exists"] is False
+        assert result.data["persisted"] is True
+
+
 class TestInputMapRemoveActionTool:
     async def test_remove_action(self, mcp_stack):
         client, plugin = mcp_stack
@@ -2906,6 +2995,39 @@ class TestInputMapBindEventTool:
 
         assert result.data["event"]["type"] == "mouse_button"
         assert result.data["event"]["button"] == 1
+
+
+class TestInputMapEnsureBindingTool:
+    async def test_ensure_binding(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "ensure_binding"
+            assert cmd["params"]["action"] == "shoot"
+            assert cmd["params"]["event_type"] == "mouse_button"
+            assert cmd["params"]["button"] == 1
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "action": "shoot",
+                    "event": {"type": "mouse_button", "button": 1},
+                    "already_bound": True,
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "input_map_manage",
+            {
+                "op": "ensure_binding",
+                "params": {"action": "shoot", "event_type": "mouse_button", "button": 1},
+            },
+        )
+        await task
+
+        assert result.data["already_bound"] is True
 
 
 # ---------------------------------------------------------------------------

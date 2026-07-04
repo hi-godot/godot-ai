@@ -305,6 +305,46 @@ func test_run_project_response_carries_liveness_shape() -> void:
 	assert_has_key(response.data, "recent_errors")
 
 
+func test_run_project_response_splits_run_scoped_errors() -> void:
+	var base := _handler._run_project_base_data(
+		"main",
+		"",
+		true,
+		false,
+		"Play/stop is a runtime action"
+	)
+	var err := {"text": "Parse Error: Fresh", "path": "res://fresh.gd", "line": 3}
+	var decision := _handler._run_project_liveness_decision(
+		_run_status("not_live", 3000),
+		_errors_info([err], "run")
+	)
+	var response := _handler._run_project_response(base, decision)
+
+	assert_eq(response.data.recent_errors_scope, "run")
+	assert_eq(response.data.current_run_errors, [err])
+	assert_eq(response.data.retained_errors, [])
+
+
+func test_run_project_response_splits_retained_errors() -> void:
+	var base := _handler._run_project_base_data(
+		"main",
+		"",
+		true,
+		false,
+		"Play/stop is a runtime action"
+	)
+	var err := {"text": "Parse Error: Old", "path": "res://old.gd", "line": 2}
+	var decision := _handler._run_project_liveness_decision(
+		_run_status("not_live", 3000),
+		_errors_info([err], "retained_recent")
+	)
+	var response := _handler._run_project_response(base, decision)
+
+	assert_eq(response.data.recent_errors_scope, "retained_recent")
+	assert_eq(response.data.current_run_errors, [])
+	assert_eq(response.data.retained_errors, [err])
+
+
 func test_run_project_response_carries_liveness_shape_when_already_running() -> void:
 	var base := _handler._run_project_base_data(
 		"main",
