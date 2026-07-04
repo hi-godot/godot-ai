@@ -75,6 +75,13 @@ func _ready() -> void:
 	## handshake completes; the capture sits until a message arrives.
 	EngineDebugger.register_message_capture(CAPTURE_PREFIX, _on_debug_message)
 	_registered = true
+	## Keep the game ticking at full speed even when its window is backgrounded
+	## behind the editor. Otherwise Godot's idle throttle slows the frame loop to a
+	## crawl and MCP game_eval awaits (create_timer / process_frame) stall or hit the
+	## deadline. (macOS App Nap is OS-level and can't be fully disabled from script,
+	## so this greatly reduces — but may not 100% eliminate — occluded-window slowdown.)
+	OS.low_processor_usage_mode = false
+	Engine.max_fps = 0
 	## Capture print() / printerr() / push_error() / push_warning() and
 	## ferry them to the editor in mcp:log_batch messages flushed from
 	## _process. Logger subclassing was added in Godot 4.5 — gate on
