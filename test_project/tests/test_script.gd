@@ -122,8 +122,7 @@ func test_create_script_reports_log_capture_diagnostics_with_real_line() -> void
 
 func test_create_script_validation_does_not_pollute_shared_editor_log() -> void:
 	var shared_buf := McpEditorLogBuffer.new()
-	if not _attach_shared_editor_logger(shared_buf):
-		return
+	_attach_shared_editor_logger(shared_buf)
 	var path := "res://tests/_mcp_test_invalid_create_shared_log.gd"
 	var content := "extends Node\n\nfunc _ready() -> void:\n\tif\n\tpass\n"
 	var cursor := shared_buf.appended_total()
@@ -139,11 +138,10 @@ func test_create_script_validation_does_not_pollute_shared_editor_log() -> void:
 	DirAccess.remove_absolute(path)
 
 
-func _attach_shared_editor_logger(buffer: McpEditorLogBuffer) -> bool:
+func _attach_shared_editor_logger(buffer: McpEditorLogBuffer) -> void:
 	_detach_shared_editor_logger()
 	_attached_shared_logger = EditorLogger.new(buffer)
 	OS.add_logger(_attached_shared_logger)
-	return true
 
 
 func _detach_shared_editor_logger() -> void:
@@ -363,8 +361,7 @@ func test_patch_script_reports_log_capture_diagnostics_with_real_line() -> void:
 
 func test_patch_script_validation_does_not_pollute_shared_editor_log() -> void:
 	var shared_buf := McpEditorLogBuffer.new()
-	if not _attach_shared_editor_logger(shared_buf):
-		return
+	_attach_shared_editor_logger(shared_buf)
 	var path := "res://tests/_mcp_test_invalid_patch_shared_log.gd"
 	var original := "extends Node\n\nfunc _ready() -> void:\n\tpass\n\tprint(\"after\")\n"
 	var file := FileAccess.open(path, FileAccess.WRITE)
