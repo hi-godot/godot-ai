@@ -30,7 +30,11 @@ func run_tests(params: Dictionary) -> Dictionary:
 				discovery.errors.size(),
 				", ".join(discovery.errors),
 			]
-		return {"data": {"error": msg, "total": 0, "load_errors": discovery.errors}}
+		var no_suites := {"error": msg, "total": 0, "load_errors": discovery.errors}
+		## Keep the edited_scene annotation on the no-suites error payload too,
+		## so the response contract is consistent across every return path.
+		_annotate_edited_scene(no_suites)
+		return {"data": no_suites}
 
 	var ctx := {
 		"undo_redo": _undo_redo,
