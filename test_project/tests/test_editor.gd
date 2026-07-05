@@ -1104,6 +1104,32 @@ func test_get_logs_source_game_no_editor_errors_hint_without_tracked_run() -> vo
 	empty_tree.free()
 
 
+func test_get_logs_source_game_no_editor_errors_hint_for_stale_run_reads() -> void:
+	## A since_run_id read of a PRIOR run must not carry the current run's
+	## editor errors — the hint interprets the run being read.
+	var game_buf := McpGameLogBuffer.new()
+	var previous_id := game_buf.clear_for_new_run()
+	game_buf.append("info", "previous run line")
+	var editor_buf := McpEditorLogBuffer.new()
+	var empty_tree := Tree.new()
+	empty_tree.create_item()
+	var tracker := McpSurfacedErrorTracker.new(editor_buf, game_buf, empty_tree)
+	var plugin := McpDebuggerPlugin.new(null, game_buf, editor_buf, tracker)
+	plugin.begin_game_run(editor_buf.appended_total(), true)
+	editor_buf.append("error", "Parse Error: Expected expression", "res://broken.gd", 4, "GDScript::reload")
+	plugin._capture("mcp:hello", [], -1)
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, plugin, game_buf, editor_buf, null, tracker)
+
+	var current := handler.get_logs({"source": "game", "count": 10})
+	var previous := handler.get_logs({"source": "game", "since_run_id": previous_id, "count": 10})
+
+	assert_eq(current.data.editor_errors_count, 1, "current-run read keeps the hint")
+	assert_true(previous.data.stale_run_id)
+	assert_false(previous.data.has("editor_errors_hint"), "prior-run read must not carry the current run's errors")
+	assert_false(previous.data.has("editor_errors_count"))
+	empty_tree.free()
+
+
 func test_get_logs_source_game_no_editor_errors_hint_for_pre_run_errors() -> void:
 	var game_buf := McpGameLogBuffer.new()
 	var editor_buf := McpEditorLogBuffer.new()

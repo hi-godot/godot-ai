@@ -377,14 +377,7 @@ func _reversed_entries(entries: Array[Dictionary]) -> Array[Dictionary]:
 
 
 func _format_editor_error_summary(entry: Dictionary) -> String:
-	var text := str(entry.get("text", "editor error"))
-	var path := str(entry.get("path", ""))
-	var line := int(entry.get("line", 0))
-	if not path.is_empty() and line > 0:
-		return "%s (%s:%d)" % [text, path, line]
-	if not path.is_empty():
-		return "%s (%s)" % [text, path]
-	return text
+	return McpSurfacedErrorTracker.format_editor_error_summary(entry)
 
 
 func _capture(message: String, data: Array, session_id: int) -> bool:

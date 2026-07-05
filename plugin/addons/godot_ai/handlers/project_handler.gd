@@ -331,14 +331,7 @@ func _run_project_liveness_decision(status: Dictionary, errors_info: Dictionary 
 
 
 func _format_editor_error_summary(entry: Dictionary) -> String:
-	var text := str(entry.get("text", "editor error"))
-	var path := str(entry.get("path", ""))
-	var line := int(entry.get("line", 0))
-	if not path.is_empty() and line > 0:
-		return "%s (%s:%d)" % [text, path, line]
-	if not path.is_empty():
-		return "%s (%s)" % [text, path]
-	return text
+	return McpSurfacedErrorTracker.format_editor_error_summary(entry)
 
 
 func stop_project(params: Dictionary) -> Dictionary:

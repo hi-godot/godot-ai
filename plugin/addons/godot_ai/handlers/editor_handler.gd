@@ -180,13 +180,20 @@ func _get_game_logs(count: int, offset: int, include_details: bool, since_run_id
 func _merge_editor_errors_hint(data: Dictionary, game_status: Dictionary) -> void:
 	if _debugger_plugin == null:
 		return
+	## A since_run_id read of a prior run must not carry the CURRENT run's
+	## editor errors — the hint interprets the run being read.
+	if bool(data.get("stale_run_id", false)):
+		return
 	## run_token == 0 means no tracked run ever started this session; the
 	## run-start cursor would be 0 and every retained editor error would be
 	## misattributed to "this run".
 	if int(game_status.get("run_token", 0)) <= 0:
 		return
+	## One-shot read — force the scan so rows that landed after the last
+	## gated scan (and before the deferred timers fire) make the FIRST
+	## logs_read(source='game') response, not just a later one.
 	var errors_info: Dictionary = _debugger_plugin.recent_editor_errors_since(
-		int(game_status.get("editor_log_cursor", 0)))
+		int(game_status.get("editor_log_cursor", 0)), true)
 	if str(errors_info.get("scope", "none")) != "run":
 		return
 	var errors: Array = errors_info.get("errors", [])
@@ -200,14 +207,7 @@ func _merge_editor_errors_hint(data: Dictionary, game_status: Dictionary) -> voi
 
 
 func _format_editor_error_summary(entry: Dictionary) -> String:
-	var text := str(entry.get("text", "editor error"))
-	var path := str(entry.get("path", ""))
-	var line := int(entry.get("line", 0))
-	if not path.is_empty() and line > 0:
-		return "%s (%s:%d)" % [text, path, line]
-	if not path.is_empty():
-		return "%s (%s)" % [text, path]
-	return text
+	return McpSurfacedErrorTracker.format_editor_error_summary(entry)
 
 
 func _get_editor_logs(count: int, offset: int, include_details: bool, has_since_cursor: bool = false, since_cursor: int = 0) -> Dictionary:

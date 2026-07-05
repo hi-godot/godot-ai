@@ -421,6 +421,20 @@ static func _function_from_frame_text(text: String) -> String:
 	return fn
 
 
+## Shared one-line rendering of a compact editor-error entry for messages and
+## hints ("text (path:line)"). Single home so the debugger plugin, project
+## handler, and editor handler can't drift apart.
+static func format_editor_error_summary(entry: Dictionary) -> String:
+	var text := str(entry.get("text", "editor error"))
+	var path := str(entry.get("path", ""))
+	var line := int(entry.get("line", 0))
+	if not path.is_empty() and line > 0:
+		return "%s (%s:%d)" % [text, path, line]
+	if not path.is_empty():
+		return "%s (%s)" % [text, path]
+	return text
+
+
 static func _log_entry_key(entry: Dictionary) -> String:
 	return "%s|%s|%s|%s" % [
 		str(entry.get("level", "")),
