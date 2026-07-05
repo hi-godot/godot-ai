@@ -153,23 +153,61 @@ func _get_game_logs(count: int, offset: int, include_details: bool, since_run_id
 	var stale_run_id := not since_run_id.is_empty() and since_run_id != current_run_id
 	var run_page := _game_log_buffer.get_run_page(target_run_id, offset, count)
 	var page := _entries_for_response(run_page.get("entries", []), include_details)
-	return {
-		"data": {
-			"source": "game",
-			"lines": page,
-			"total_count": int(run_page.get("total_count", 0)),
-			"returned_count": page.size(),
-			"offset": offset,
-			"run_id": target_run_id,
-			"current_run_id": current_run_id,
-			"is_running": session_active,
-			"helper_live": helper_live,
-			"session_active": session_active,
-			"game_status": game_status,
-			"dropped_count": _game_log_buffer.dropped_count(),
-			"stale_run_id": stale_run_id,
-		}
+	var data := {
+		"source": "game",
+		"lines": page,
+		"total_count": int(run_page.get("total_count", 0)),
+		"returned_count": page.size(),
+		"offset": offset,
+		"run_id": target_run_id,
+		"current_run_id": current_run_id,
+		"is_running": session_active,
+		"helper_live": helper_live,
+		"session_active": session_active,
+		"game_status": game_status,
+		"dropped_count": _game_log_buffer.dropped_count(),
+		"stale_run_id": stale_run_id,
 	}
+	_merge_editor_errors_hint(data, game_status)
+	return {"data": data}
+
+
+## #641: boot-time parse errors happen while autoload scripts compile — before
+## the game helper's logger attaches via OS.add_logger — so they can NEVER
+## appear in the game buffer. They surface only through the editor scope
+## (Errors-tab rows + editor logger). Cross-reference them here so an
+## empty/clean game log is not mistaken for a clean launch.
+func _merge_editor_errors_hint(data: Dictionary, game_status: Dictionary) -> void:
+	if _debugger_plugin == null:
+		return
+	## run_token == 0 means no tracked run ever started this session; the
+	## run-start cursor would be 0 and every retained editor error would be
+	## misattributed to "this run".
+	if int(game_status.get("run_token", 0)) <= 0:
+		return
+	var errors_info: Dictionary = _debugger_plugin.recent_editor_errors_since(
+		int(game_status.get("editor_log_cursor", 0)))
+	if str(errors_info.get("scope", "none")) != "run":
+		return
+	var errors: Array = errors_info.get("errors", [])
+	if errors.is_empty():
+		return
+	data["editor_errors_count"] = errors.size()
+	data["editor_errors_hint"] = (
+		"%d editor-side error%s from this run (first: %s) missing from the game log — boot-time parse/load errors occur before the game helper's logger attaches. Read logs_read(source='editor', include_details=true)."
+		% [errors.size(), "s" if errors.size() != 1 else "", _format_editor_error_summary(errors[0])]
+	)
+
+
+func _format_editor_error_summary(entry: Dictionary) -> String:
+	var text := str(entry.get("text", "editor error"))
+	var path := str(entry.get("path", ""))
+	var line := int(entry.get("line", 0))
+	if not path.is_empty() and line > 0:
+		return "%s (%s:%d)" % [text, path, line]
+	if not path.is_empty():
+		return "%s (%s)" % [text, path]
+	return text
 
 
 func _get_editor_logs(count: int, offset: int, include_details: bool, has_since_cursor: bool = false, since_cursor: int = 0) -> Dictionary:

@@ -13,6 +13,11 @@ const MAX_PROMOTED_DEBUGGER_ENTRIES := 500
 const MAX_PROMOTED_DEBUGGER_KEYS := 5000
 const DEBUGGER_REFRESH_MIN_INTERVAL_MS := 250
 const DEBUGGER_SCAN_AFTER_STOP_MS := 5000
+## #641: delays for the self-scheduled forced scans armed on run stop (and on
+## game-helper hello, via McpDebuggerPlugin). Two ticks: an early one for rows
+## the remote debugger delivers right around the event, and a late one past
+## Godot's per-frame Errors-tab insertion throttle for error floods.
+const DEFERRED_SCAN_DELAYS_SEC: Array[float] = [1.0, 5.0]
 
 var _editor_log_buffer
 var _game_log_buffer
@@ -27,6 +32,7 @@ var _oldest_retained_debugger_sequence := 1
 var _last_debugger_refresh_msec := -DEBUGGER_REFRESH_MIN_INTERVAL_MS
 var _debugger_scan_active := false
 var _debugger_scan_until_msec := 0
+var _deferred_scans_scheduled_total := 0
 
 
 func _init(editor_log_buffer = null, game_log_buffer = null, debugger_errors_root: Node = null) -> void:
@@ -47,6 +53,33 @@ func note_game_run_started(sticky_scan: bool = true) -> void:
 func note_game_run_stopped() -> void:
 	_debugger_scan_active = false
 	_debugger_scan_until_msec = Time.get_ticks_msec() + DEBUGGER_SCAN_AFTER_STOP_MS
+	schedule_deferred_scans()
+
+
+## #641: promotion into the watermark used to depend on a tool call arriving
+## while the scan gate was open (run active, or within DEBUGGER_SCAN_AFTER_STOP_MS
+## of stop). Boot parse errors that landed in the Errors tab with no tool call
+## in that window were never promoted, so the agent never got the
+## new_errors_since_last_call hint. These editor-side timers force a scan
+## regardless of tool-call cadence; the next stamped response then carries the
+## already-promoted count even after the gate closes. Scans are content-keyed
+## and idempotent, so a timer firing after an unrelated new run is harmless.
+func schedule_deferred_scans(delays: Array = DEFERRED_SCAN_DELAYS_SEC) -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		return
+	for delay in delays:
+		var timer := tree.create_timer(maxf(0.05, float(delay)))
+		timer.timeout.connect(_on_deferred_scan_timeout)
+		_deferred_scans_scheduled_total += 1
+
+
+func deferred_scans_scheduled_total() -> int:
+	return _deferred_scans_scheduled_total
+
+
+func _on_deferred_scan_timeout() -> void:
+	refresh_debugger_errors(true)
 
 
 func refresh_debugger_errors(force: bool = true) -> void:
@@ -192,6 +225,12 @@ func read_debugger_error_entries() -> Array[Dictionary]:
 func locate_debugger_error_trees() -> Array[Tree]:
 	var trees: Array[Tree] = []
 	var root: Node = _debugger_errors_root
+	## #641: a deferred-scan timer can outlive an injected root (tests,
+	## teardown). A freed root must not fall through to the live editor UI —
+	## that would promote unrelated real errors into a tracker scoped to the
+	## dead root — so treat it as "nothing to scan".
+	if root != null and not is_instance_valid(root):
+		return trees
 	if root == null:
 		root = _debugger_search_root()
 	if root == null:

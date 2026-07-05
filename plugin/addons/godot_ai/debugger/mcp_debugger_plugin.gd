@@ -280,18 +280,22 @@ static func split_errors_by_scope(recent_errors: Array, scope: String) -> Dictio
 	}
 
 
-func recent_editor_errors_since(cursor: int) -> Dictionary:
-	return _recent_editor_errors_since(cursor)
+## `force_debugger_scan` bypasses the tracker's scan gate for one read. Keep it
+## false on per-frame polling paths (the run-liveness loop) — a forced scan
+## walks the Debugger dock UI — and pass true only for one-shot reads that must
+## see rows which landed after the last gated scan (#641).
+func recent_editor_errors_since(cursor: int, force_debugger_scan: bool = false) -> Dictionary:
+	return _recent_editor_errors_since(cursor, force_debugger_scan)
 
 
-func _recent_editor_errors_since(cursor: int) -> Dictionary:
+func _recent_editor_errors_since(cursor: int, force_debugger_scan: bool = false) -> Dictionary:
 	var out: Array[Dictionary] = []
 	var truncated := false
 	if _surfaced_error_tracker != null:
 		var captured_by_tracker: Dictionary = _surfaced_error_tracker.editor_entries_since(
 			maxi(0, cursor),
 			_game_run_started_debugger_cursor,
-			false,
+			force_debugger_scan,
 		)
 		truncated = bool(captured_by_tracker.get("truncated", false))
 		for raw_entry in captured_by_tracker.get("entries", []):
@@ -411,6 +415,13 @@ func _capture(message: String, data: Array, session_id: int) -> bool:
 			_game_ready = true
 			_ready_run_token = _game_run_token
 			game_ready.emit()
+			## #641: boot-time parse errors race the hello beacon — both ride
+			## the same debugger channel, and the editor inserts Errors-tab
+			## rows with a per-frame throttle, so rows can land moments after
+			## the run is declared live. Arm forced scans so those rows get
+			## promoted into the watermark even if no tool call follows.
+			if _surfaced_error_tracker != null:
+				_surfaced_error_tracker.schedule_deferred_scans()
 			if _log_buffer:
 				if _game_log_buffer:
 					_log_buffer.log("[debug] <- mcp:hello from game_helper (run %s)" % _game_log_buffer.run_id())

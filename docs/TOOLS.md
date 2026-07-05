@@ -72,6 +72,13 @@ one. There is no single `source="game"` call that returns every retained game
 line across all runs; consumers that need history should retain run ids and
 query each run explicitly.
 
+Boot-time parse/load errors happen while autoload scripts compile — before the
+game helper's logger attaches — so they can never appear in `source="game"`.
+When editor-side errors were recorded during the current run, the game-scope
+response adds `editor_errors_count` and `editor_errors_hint` pointing at
+`logs_read(source="editor", include_details=true)`; a clean game log carrying
+that hint means the run lost scripts, not that the launch was clean (#641).
+
 Game and combined log responses also include `game_status`, `helper_live`, and
 `session_active`; the top-level booleans mirror `game_status.helper_live` and
 `game_status.session_active`. For compatibility, `is_running` is retained as an

@@ -188,7 +188,9 @@ func _run_project_current_liveness_response(base_data: Dictionary) -> Dictionary
 	if _debugger_plugin == null:
 		return {"data": base_data}
 	var status: Dictionary = _debugger_plugin.get_game_status(-1, RUN_READY_WAIT_SEC)
-	var errors_info: Dictionary = _debugger_plugin.recent_editor_errors_since(int(status.get("editor_log_cursor", 0)))
+	## One-shot read — force a Debugger-tab scan so boot errors that landed
+	## after the last gated scan are in this response (#641).
+	var errors_info: Dictionary = _debugger_plugin.recent_editor_errors_since(int(status.get("editor_log_cursor", 0)), true)
 	return _run_project_response(base_data, _run_project_liveness_decision(status, errors_info))
 
 
@@ -210,6 +212,14 @@ func _finish_run_project_deferred(request_id: String, base_data: Dictionary) -> 
 		var decision := _run_project_liveness_decision(status, errors_info)
 		if not bool(decision.get("resolve", false)):
 			continue
+		## #641: the loop above polls with gated (cheap) scans; boot parse
+		## errors can land in the Errors tab in the same frames the run goes
+		## live. Re-gather once with a forced scan before replying so the
+		## response reports them instead of leaving them to a later
+		## logs_read. Rebuilding the decision with strictly-more errors can
+		## only keep it resolved (errors never un-resolve a decision).
+		errors_info = _debugger_plugin.recent_editor_errors_since(int(status.get("editor_log_cursor", 0)), true)
+		decision = _run_project_liveness_decision(status, errors_info)
 		_connection.send_deferred_response(request_id, _run_project_response(base_data, decision))
 		return
 
@@ -236,6 +246,12 @@ func _run_project_already_running_message(decision: Dictionary) -> String:
 	var state := str(decision.get("liveness_status", "unknown"))
 	match state:
 		"live":
+			var live_errors: Array = decision.get("recent_errors", [])
+			if not live_errors.is_empty() and str(decision.get("recent_errors_scope", "none")) == "run":
+				return (
+					"Project was already running; the Godot AI game helper is live, but %d editor error%s surfaced during this run (first: %s). Check logs_read(source='editor', include_details=true)."
+					% [live_errors.size(), "s" if live_errors.size() != 1 else "", _format_editor_error_summary(live_errors[0])]
+				)
 			return "Project was already running; the Godot AI game helper is live."
 		"not_live":
 			var errors: Array = decision.get("recent_errors", [])
@@ -276,7 +292,20 @@ func _run_project_liveness_decision(status: Dictionary, errors_info: Dictionary 
 	}
 	if state == "live":
 		decision["resolve"] = true
-		decision["message"] = "Game launched and the Godot AI game helper is live."
+		if correlated_error:
+			## #641: "live" only means the helper autoload registered — scripts
+			## can still have failed to parse or load during boot (a broken
+			## node script does not stop the game from running). Surface those
+			## errors in the success message so agents don't read a clean
+			## launch into a run that silently lost scripts.
+			decision["message"] = (
+				"Game launched and the Godot AI game helper is live, but %d editor error%s surfaced during startup (first: %s) — likely a script that failed to parse or load. Check logs_read(source='editor', include_details=true)."
+				% [recent_errors.size(), "s" if recent_errors.size() != 1 else "", _format_editor_error_summary(recent_errors[0])]
+			)
+			if truncated:
+				decision["message"] += " Editor logs since this run may be truncated; showing retained errors."
+		else:
+			decision["message"] = "Game launched and the Godot AI game helper is live."
 	elif correlated_error:
 		decision["resolve"] = true
 		decision["liveness_status"] = "not_live"

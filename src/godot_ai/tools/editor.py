@@ -104,6 +104,12 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
           session_active, dropped_count, stale_run_id. helper_live and
           session_active mirror the same fields inside game_status; is_running
           is retained as a compatibility alias of session_active.
+          Boot-time parse/load errors fire before the game helper's logger
+          attaches, so they are NEVER in this buffer; when editor-side errors
+          were recorded during the current run the response adds
+          ``editor_errors_count`` and ``editor_errors_hint`` pointing at
+          source="editor" — treat a clean game log carrying that hint as a
+          run that lost scripts, not a clean launch.
         - "editor": editor-process script errors and the Debugger dock's
           visible Errors-tab rows — parse errors, GDScript reload warnings,
           @tool/EditorPlugin runtime errors, push_error/push_warning.
