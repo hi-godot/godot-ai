@@ -67,6 +67,8 @@ var _plugin: EditorPlugin
 var _redock_btn: Button
 var _status_icon: ColorRect
 var _status_label: Label
+var _body_scroll: ScrollContainer
+var _body: VBoxContainer
 var _client_grid: VBoxContainer
 var _client_configure_all_btn: Button
 var _client_empty_cta_btn: Button
@@ -524,6 +526,18 @@ func _build_ui() -> void:
 	_install_label.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_install_label)
 
+	_body_scroll = ScrollContainer.new()
+	_body_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_body_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_body_scroll.custom_minimum_size = Vector2(0, 48)
+	_body_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	add_child(_body_scroll)
+
+	_body = VBoxContainer.new()
+	_body.add_theme_constant_override("separation", 8)
+	_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_body_scroll.add_child(_body)
+
 	# --- Spawn-failure panel (shown when `_start_server` reports a non-OK
 	# state via `get_server_status`). One body paragraph + the matching
 	# action; the top status label already carries the state headline.
@@ -570,7 +584,7 @@ func _build_ui() -> void:
 	_crash_panel.add_child(_crash_docs_btn)
 
 	_crash_panel.add_child(HSeparator.new())
-	add_child(_crash_panel)
+	_body.add_child(_crash_panel)
 
 	_build_mixed_state_banner()
 	_refresh_mixed_state_banner()
@@ -608,20 +622,20 @@ func _build_ui() -> void:
 	_update_banner.add_child(update_btn_row)
 	_update_banner.add_child(HSeparator.new())
 
-	add_child(_update_banner)
+	_body.add_child(_update_banner)
 
 	if _update_manager == null:
 		_update_manager = UpdateManagerScript.new()
 		_update_manager.setup(_plugin, self)
 		_update_manager.update_check_completed.connect(_on_update_check_result)
 		_update_manager.install_state_changed.connect(_on_install_state_changed)
-		add_child(_update_manager)
+		_body.add_child(_update_manager)
 	_update_manager.check_for_updates.call_deferred()
 
 	# --- Dev-only connection extras (server label + reload button) ---
 	_dev_section = VBoxContainer.new()
 	_dev_section.add_theme_constant_override("separation", 6)
-	add_child(_dev_section)
+	_body.add_child(_dev_section)
 
 	_server_label = Label.new()
 	_server_label.add_theme_color_override("font_color", COLOR_MUTED)
@@ -643,7 +657,7 @@ func _build_ui() -> void:
 	# --- Setup section (dev-only or when uv missing) ---
 	_setup_section = VBoxContainer.new()
 	_setup_section.add_theme_constant_override("separation", 6)
-	add_child(_setup_section)
+	_body.add_child(_setup_section)
 
 	_setup_section.add_child(HSeparator.new())
 	_setup_section.add_child(_make_header("Setup"))
@@ -651,7 +665,7 @@ func _build_ui() -> void:
 	_setup_container.add_theme_constant_override("separation", 6)
 	_setup_section.add_child(_setup_container)
 
-	add_child(HSeparator.new())
+	_body.add_child(HSeparator.new())
 
 	# --- Clients ---
 	var clients_header_row := HBoxContainer.new()
@@ -683,8 +697,8 @@ func _build_ui() -> void:
 	clients_open_btn.pressed.connect(_on_open_clients_window)
 	clients_actions.add_child(clients_open_btn)
 
-	add_child(clients_header_row)
-	add_child(clients_actions)
+	_body.add_child(clients_header_row)
+	_body.add_child(clients_actions)
 
 	_client_empty_cta_btn = Button.new()
 	_client_empty_cta_btn.text = "Configure an AI client ->"
@@ -692,7 +706,7 @@ func _build_ui() -> void:
 	_client_empty_cta_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_client_empty_cta_btn.visible = false
 	_client_empty_cta_btn.pressed.connect(_on_open_clients_window)
-	add_child(_client_empty_cta_btn)
+	_body.add_child(_client_empty_cta_btn)
 
 	# Drift banner — hidden until a sweep finds at least one mismatched client.
 	_drift_banner = VBoxContainer.new()
@@ -708,7 +722,7 @@ func _build_ui() -> void:
 	drift_btn.tooltip_text = "Re-run Configure on every client whose stored URL doesn't match the current server URL."
 	drift_btn.pressed.connect(_on_reconfigure_mismatched)
 	_drift_banner.add_child(drift_btn)
-	add_child(_drift_banner)
+	_body.add_child(_drift_banner)
 
 	_clients_window = Window.new()
 	_clients_window.title = "Godot AI"
@@ -757,7 +771,7 @@ func _build_ui() -> void:
 
 	_build_tools_tab(tabs)
 
-	add_child(HSeparator.new())
+	_body.add_child(HSeparator.new())
 
 	# --- Dev mode toggle (always visible) ---
 	var dev_toggle_row := HBoxContainer.new()
@@ -770,13 +784,13 @@ func _build_ui() -> void:
 	_dev_mode_toggle.button_pressed = _load_dev_mode()
 	_dev_mode_toggle.toggled.connect(_on_dev_mode_toggled)
 	dev_toggle_row.add_child(_dev_mode_toggle)
-	add_child(dev_toggle_row)
+	_body.add_child(dev_toggle_row)
 
 	# --- Log section (dev-only) ---
 	_log_viewer = LogViewerScript.new()
 	_log_viewer.setup(_log_buffer)
 	_log_viewer.logging_enabled_changed.connect(_on_log_logging_enabled_changed)
-	add_child(_log_viewer)
+	_body.add_child(_log_viewer)
 
 	# Apply initial dev-mode visibility
 	_apply_dev_mode_visibility()
@@ -1095,7 +1109,7 @@ func _build_mixed_state_banner() -> void:
 	_mixed_state_banner.add_child(_mixed_state_rescan_btn)
 
 	_mixed_state_banner.add_child(HSeparator.new())
-	add_child(_mixed_state_banner)
+	_body.add_child(_mixed_state_banner)
 
 
 func _refresh_mixed_state_banner(force: bool = false) -> void:

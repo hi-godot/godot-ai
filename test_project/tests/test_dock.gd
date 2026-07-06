@@ -139,11 +139,20 @@ func test_clients_header_and_actions_use_narrow_layout() -> void:
 		TextServer.OVERRUN_TRIM_ELLIPSIS,
 		"Summary count should use ellipsis overrun")
 
-	var header_idx := _dock.get_children().find(clients_header_row)
-	assert_gt(header_idx, -1, "Clients header row should be a direct dock child")
-	assert_true(header_idx + 1 < _dock.get_child_count(),
+	assert_true(_dock._body_scroll is ScrollContainer,
+		"Scrollable body should keep lower dock rows from forcing minimum height")
+	assert_eq(_dock._body_scroll.horizontal_scroll_mode, ScrollContainer.SCROLL_MODE_DISABLED,
+		"Dock body should wrap horizontally instead of showing a sideways scrollbar")
+	assert_true(_dock._body is VBoxContainer,
+		"Dock body should own regular rows while status/install stay pinned")
+	assert_true(clients_header_row.get_parent() == _dock._body,
+		"Clients header row should live inside the scrollable dock body")
+
+	var header_idx := _dock._body.get_children().find(clients_header_row)
+	assert_gt(header_idx, -1, "Clients header row should be a scroll-body child")
+	assert_true(header_idx + 1 < _dock._body.get_child_count(),
 		"Clients actions row should follow the header row")
-	var clients_actions := _dock.get_child(header_idx + 1)
+	var clients_actions := _dock._body.get_child(header_idx + 1)
 	assert_true(clients_actions is HFlowContainer,
 		"Client actions should wrap in an HFlowContainer")
 	var actions_flow := clients_actions as HFlowContainer

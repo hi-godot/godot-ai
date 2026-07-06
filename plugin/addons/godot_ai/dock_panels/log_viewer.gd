@@ -43,7 +43,6 @@ func setup(log_buffer: McpLogBuffer) -> void:
 
 
 func _build_ui() -> void:
-	size_flags_vertical = Control.SIZE_EXPAND_FILL
 	add_child(HSeparator.new())
 
 	var log_header_row := HBoxContainer.new()
@@ -62,8 +61,7 @@ func _build_ui() -> void:
 	add_child(log_header_row)
 
 	_log_display = RichTextLabel.new()
-	_log_display.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_log_display.custom_minimum_size = Vector2(0, 120)
+	_log_display.custom_minimum_size = Vector2(0, 80)
 	_log_display.scroll_following = true
 	_log_display.bbcode_enabled = false
 	_log_display.selection_enabled = true
