@@ -462,6 +462,45 @@ class TestLogsReadTool:
         assert data["lines"] == []
         assert data["run_id"] == "rNEW"
 
+    async def test_since_run_id_forwarded_and_retained_run_returned(self, mcp_stack):
+        client, plugin = mcp_stack
+        retained = [
+            {"source": "game", "level": "info", "text": "old run line", "run_id": "rOLD"},
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_logs"
+            ## The whole prior-run feature hinges on this param reaching
+            ## the plugin — it used to be dropped here (see #642 smoke).
+            assert cmd["params"]["since_run_id"] == "rOLD"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "source": "game",
+                    "lines": retained,
+                    "total_count": 1,
+                    "returned_count": 1,
+                    "offset": 0,
+                    "run_id": "rOLD",
+                    "current_run_id": "rNEW",
+                    "is_running": False,
+                    "dropped_count": 0,
+                    "stale_run_id": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("logs_read", {"source": "game", "since_run_id": "rOLD"})
+        await task
+
+        data = result.data
+        assert data["lines"] == retained
+        assert data["total_count"] == 1
+        assert data["run_id"] == "rOLD"
+        assert data["current_run_id"] == "rNEW"
+        assert data["stale_run_id"] is True
+
     async def test_source_editor_returns_structured_script_errors(self, mcp_stack):
         client, plugin = mcp_stack
         entries = [

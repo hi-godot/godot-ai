@@ -49,6 +49,9 @@ class StubClient:
         ## the cached value (otherwise the probe heals the cache and the
         ## write incorrectly slips through).
         self.live_readiness: str = "ready"
+        ## Plugins before get_run_page ignore since_run_id and serve the
+        ## current run; tests flip this to exercise that fallback.
+        self.game_supports_since_run_id: bool = True
 
     async def send(
         self,
@@ -76,8 +79,21 @@ class StubClient:
             if source == "game":
                 req_offset = int(params_dict.get("offset", 0))
                 req_count = int(params_dict.get("count", 50))
+                ## Mirror the plugin's get_run_page: the ring retains
+                ## prior-run lines keyed by run_id, and the requested run
+                ## is echoed back as `run_id` (unknown ids page empty).
+                current_run_id = "rstub"
+                retained_runs = {
+                    "rstub": [f"game {i}" for i in range(5)],
+                    "rprev": ["prev 0", "prev 1"],
+                }
+                since_run_id = str(params_dict.get("since_run_id") or "")
+                if not self.game_supports_since_run_id:
+                    since_run_id = ""
+                target_run_id = since_run_id or current_run_id
                 all_entries = [
-                    {"source": "game", "level": "info", "text": f"game {i}"} for i in range(5)
+                    {"source": "game", "level": "info", "text": text}
+                    for text in retained_runs.get(target_run_id, [])
                 ]
                 if include_details:
                     for entry in all_entries:
@@ -91,16 +107,23 @@ class StubClient:
                             "frames": [],
                         }
                 page = all_entries[req_offset : req_offset + req_count]
-                return {
+                response = {
                     "source": "game",
                     "lines": page,
                     "total_count": len(all_entries),
                     "returned_count": len(page),
                     "offset": req_offset,
-                    "run_id": "rstub",
+                    "run_id": target_run_id,
+                    "current_run_id": current_run_id,
                     "is_running": True,
                     "dropped_count": 0,
+                    "stale_run_id": bool(since_run_id) and since_run_id != current_run_id,
                 }
+                if not self.game_supports_since_run_id:
+                    ## Old plugins predate these keys entirely.
+                    del response["current_run_id"]
+                    del response["stale_run_id"]
+                return response
             if source == "editor":
                 req_offset = int(params_dict.get("offset", 0))
                 req_count = int(params_dict.get("count", 50))
@@ -1382,8 +1405,53 @@ async def test_logs_read_handler_source_game_passes_through():
     assert result["stale_run_id"] is False
 
 
-async def test_logs_read_handler_since_run_id_stale_returns_empty():
+async def test_logs_read_handler_since_run_id_returns_retained_run():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+
+    result = await editor_handlers.logs_read(runtime, source="game", since_run_id="rprev")
+
+    ## The param must reach the plugin — dropping it here is what made
+    ## retained prior-run reads unreachable through MCP.
+    assert client.calls[-1]["params"]["since_run_id"] == "rprev"
+    assert [entry["text"] for entry in result["lines"]] == ["prev 0", "prev 1"]
+    assert result["total_count"] == 2
+    assert result["run_id"] == "rprev"
+    assert result["current_run_id"] == "rstub"
+    assert result["stale_run_id"] is True
+
+
+async def test_logs_read_handler_since_run_id_matching_current_run_not_stale():
     runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
+
+    result = await editor_handlers.logs_read(runtime, source="game", since_run_id="rstub")
+
+    assert result["stale_run_id"] is False
+    assert result["run_id"] == "rstub"
+    assert result["total_count"] == 5
+
+
+async def test_logs_read_handler_since_run_id_unknown_run_returns_empty_stale():
+    runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
+
+    result = await editor_handlers.logs_read(runtime, source="game", since_run_id="r-evicted")
+
+    assert result["stale_run_id"] is True
+    assert result["lines"] == []
+    assert result["total_count"] == 0
+    ## The plugin echoes the requested id; the caller learns the current
+    ## run from current_run_id.
+    assert result["run_id"] == "r-evicted"
+    assert result["current_run_id"] == "rstub"
+
+
+async def test_logs_read_handler_since_run_id_old_plugin_falls_back_to_stale_shape():
+    ## Plugins that predate get_run_page ignore since_run_id and serve the
+    ## current run under the current run_id. The handler must not mislabel
+    ## those lines as the requested run.
+    client = StubClient()
+    client.game_supports_since_run_id = False
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
 
     result = await editor_handlers.logs_read(runtime, source="game", since_run_id="r-old")
 

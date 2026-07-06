@@ -234,6 +234,11 @@ async def logs_read(
     ## ring buffer's run_id, dropped_count, and is_running stay
     ## authoritative on the editor side.
     params = {"count": count, "offset": offset, "source": source}
+    if source == "game" and since_run_id:
+        ## The plugin resolves since_run_id against its retained ring
+        ## (get_run_page), returning the prior run's lines with
+        ## stale_run_id=true when the id is no longer current.
+        params["since_run_id"] = since_run_id
     if source == "editor" and since_cursor is not None:
         params["since_cursor"] = since_cursor
     if include_details:
@@ -244,9 +249,10 @@ async def logs_read(
     )
     run_id = result.get("run_id", "")
     if since_run_id and run_id and run_id != since_run_id:
-        ## A new game run has started since the caller's last poll —
-        ## tell them to reset their cursor instead of returning stale
-        ## lines from the previous play session.
+        ## The plugin echoes the requested run id back as `run_id` when it
+        ## honors since_run_id, so a mismatch means an older plugin ignored
+        ## the param and served the current run. Return the empty stale
+        ## shape rather than mislabeling current-run lines as the old run.
         return {
             "source": source,
             "lines": [],
@@ -273,9 +279,10 @@ async def logs_read(
         "run_id": run_id,
         "is_running": result.get("is_running", False),
         "dropped_count": result.get("dropped_count", 0),
-        "stale_run_id": False,
+        "stale_run_id": bool(result.get("stale_run_id", False)),
     }
     for key in (
+        "current_run_id",
         "cursor",
         "oldest_cursor",
         "next_cursor",
