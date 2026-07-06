@@ -1392,6 +1392,50 @@ async def test_logs_read_handler_since_run_id_stale_returns_empty():
     assert result["run_id"] == "rstub"
 
 
+async def test_logs_read_handler_game_forwards_editor_error_hint_fields():
+    class HintingClient(StubClient):
+        async def send(
+            self,
+            command: str,
+            params: dict | None = None,
+            session_id: str | None = None,
+            timeout: float = 5.0,
+            surface_error_hints: bool = True,
+        ) -> dict:
+            result = await super().send(
+                command, params, session_id, timeout, surface_error_hints
+            )
+            if command == "get_logs" and (params or {}).get("source") == "game":
+                result = dict(result)
+                result["current_run_id"] = "rstub"
+                result["helper_live"] = True
+                result["session_active"] = True
+                result["game_status"] = {"status": "live", "run_token": 3}
+                result["editor_errors_count"] = 2
+                result["editor_errors_hint"] = (
+                    "2 editor-side errors from this run (first: Parse Error: "
+                    "Expected parameter name. (res://boom.gd:3)) missing from "
+                    "the game log — boot-time parse/load errors occur before "
+                    "the game helper's logger attaches. Read "
+                    "logs_read(source='editor', include_details=true)."
+                )
+            return result
+
+    runtime = DirectRuntime(registry=SessionRegistry(), client=HintingClient())
+
+    result = await editor_handlers.logs_read(runtime, source="game")
+
+    ## #641/#642: the plugin's cross-scope hint (and liveness context) must
+    ## survive the python response reshaping — a clean game log carrying the
+    ## hint is the only signal that boot-time scripts failed to parse.
+    assert result["editor_errors_count"] == 2
+    assert "res://boom.gd" in result["editor_errors_hint"]
+    assert result["current_run_id"] == "rstub"
+    assert result["helper_live"] is True
+    assert result["session_active"] is True
+    assert result["game_status"]["status"] == "live"
+
+
 async def test_logs_read_handler_source_all_returns_structured():
     runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
 

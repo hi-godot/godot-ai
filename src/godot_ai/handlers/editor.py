@@ -281,6 +281,12 @@ async def logs_read(
         "next_cursor",
         "appended_total",
         "truncated",
+        "current_run_id",
+        "helper_live",
+        "session_active",
+        "game_status",
+        "editor_errors_count",
+        "editor_errors_hint",
     ):
         if key in result:
             response[key] = result[key]

@@ -170,6 +170,19 @@ func end_game_run() -> void:
 		_surfaced_error_tracker.note_game_run_stopped()
 
 
+## Authoritative fallback for runs whose debugger `stopped` signal never
+## fired or was never connected: the editor's play state falling to stopped
+## means the game process is gone. A game that exits on its own
+## (get_tree().quit(), crash) has no MCP stop op to run the bookkeeping, and
+## without this game_status stayed "live" until the next run (#642 smoke).
+## Called on the playing→stopped edge only, so the pre-play launch window
+## (run tracking begun, is_playing_scene() not yet true) is never clipped.
+func note_editor_play_stopped() -> void:
+	if not _game_run_active:
+		return
+	end_game_run()
+
+
 func _connect_session_stopped(session_id: int) -> void:
 	var session = get_session(session_id)
 	if session == null:
@@ -180,9 +193,15 @@ func _connect_session_stopped(session_id: int) -> void:
 
 
 func _on_debugger_session_stopped(session_id: int) -> void:
-	if not _manual_run_armed:
-		return
 	if _game_session_id != -1 and session_id != _game_session_id:
+		return
+	## MCP-started runs normally end via project_manage(op="stop"), but a game
+	## that exits on its own (get_tree().quit(), crash) emits only this signal.
+	## Without ending the run here, game_status stays "live" until the next
+	## run's bookkeeping rewrites it (#642 live smoke). Before the game session
+	## attaches (_game_session_id == -1) only manual runs may end on this
+	## signal — a foreign session's stop must not cancel a launching MCP run.
+	if not _manual_run_armed and _game_session_id == -1:
 		return
 	end_game_run()
 

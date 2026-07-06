@@ -2382,6 +2382,56 @@ func test_debugger_plugin_manual_run_stop_rearms_next_session() -> void:
 	assert_eq(tracker._debugger_scan_active, true)
 
 
+func test_debugger_plugin_mcp_run_self_quit_ends_run() -> void:
+	## #642 live smoke: an MCP-started game that exits on its own
+	## (get_tree().quit(), crash) emits only the debugger session's stopped
+	## signal — no stop op performs the bookkeeping, and game_status stayed
+	## "live" until the next run rewrote it.
+	var tracker := McpSurfacedErrorTracker.new()
+	var plugin := McpDebuggerPlugin.new(
+		McpLogBuffer.new(), McpGameLogBuffer.new(), McpEditorLogBuffer.new(), tracker)
+	plugin.begin_game_run(0, true)
+	plugin._setup_session(31)
+	plugin._capture("mcp:hello", [], 31)
+	assert_eq(plugin.get_game_status().active, true)
+
+	plugin._on_debugger_session_stopped(30)
+	assert_eq(plugin.get_game_status().active, true,
+		"foreign session stop must not end the MCP run")
+	plugin._on_debugger_session_stopped(31)
+	assert_eq(plugin.get_game_status().status, "stopped",
+		"self-quit must end MCP run bookkeeping")
+	assert_eq(tracker._debugger_scan_active, false)
+
+	## Pre-attach window: no game session yet, so a foreign session's stop
+	## must not cancel a launching MCP run.
+	plugin.begin_game_run(0, true)
+	assert_eq(plugin.get_game_status().active, true)
+	plugin._on_debugger_session_stopped(31)
+	assert_eq(plugin.get_game_status().active, true,
+		"stop signal before the game session attaches must be ignored for MCP runs")
+
+
+func test_debugger_plugin_note_editor_play_stopped_ends_run() -> void:
+	## Fallback for self-quit when the session stopped signal never fires:
+	## the connection's play-state poll reports the playing→stopped edge.
+	var plugin := McpDebuggerPlugin.new(
+		McpLogBuffer.new(), McpGameLogBuffer.new(), McpEditorLogBuffer.new(),
+		McpSurfacedErrorTracker.new())
+	plugin.begin_game_run(0, true)
+	plugin._setup_session(51)
+	plugin._capture("mcp:hello", [], 51)
+	assert_eq(plugin.get_game_status().status, "live")
+
+	plugin.note_editor_play_stopped()
+	assert_eq(plugin.get_game_status().status, "stopped",
+		"play-state edge must end run bookkeeping for self-quit games")
+
+	plugin.note_editor_play_stopped()
+	assert_eq(plugin.get_game_status().status, "stopped",
+		"repeat edge with no active run is a no-op")
+
+
 func test_debugger_plugin_log_batch_no_buffer_is_safe() -> void:
 	## Plugin started without a game buffer should silently no-op on
 	## log batches rather than crash — defensive for partial init.
