@@ -49,6 +49,11 @@ var server_version := ""
 var dispatcher
 var log_buffer
 var surfaced_error_tracker
+## Set by plugin.gd. Lets the per-frame play-state poll end game-run
+## bookkeeping when the game exits on its own (self-quit, crash) — the
+## debugger session's stopped signal is not reliably connected, and no MCP
+## stop op runs in that path (#642).
+var debugger_plugin
 ## Set by plugin.gd when the HTTP port is occupied by an incompatible or
 ## unverified server. Keeping the Connection node alive lets handlers and the
 ## dock share one object, but no WebSocket is opened to the wrong server.
@@ -90,6 +95,10 @@ func _process(delta: float) -> void:
 	if pause_processing:
 		return
 	_peer.poll()
+	## Run-stop bookkeeping must not wait behind the socket-state machine:
+	## if the game stops while disconnected, the first command drained on
+	## reconnect would still observe stale "live" state (PR #642 review).
+	_check_game_run_play_state(EditorInterface.is_playing_scene())
 
 	match _peer.get_ready_state():
 		WebSocketPeer.STATE_OPEN:
@@ -322,10 +331,15 @@ func _hook_editor_signals() -> void:
 	EditorInterface.get_editor_settings()  # ensure interface is ready
 	_last_scene_path = _get_current_scene_path()
 	_last_play_state = EditorInterface.is_playing_scene()
+	_last_play_state_for_run = _last_play_state
 
 
 var _last_scene_path := ""
 var _last_play_state := false
+## Separate edge tracker for game-run bookkeeping: _last_play_state only
+## advances when the play_state_changed event sends successfully, but ending
+## run tracking must not depend on the websocket being up.
+var _last_play_state_for_run := false
 var _last_readiness := ""
 
 
@@ -367,6 +381,17 @@ func _check_state_changes() -> void:
 				## console spams every install during normal editing (#626).
 				## The line stays in the ring for the dock's log panel.
 				log_buffer.log("[event] readiness -> %s" % readiness, false)
+
+
+## Playing→stopped edge for game-run bookkeeping. Runs every process tick
+## (any socket state) so a self-quit game's run ends even while the
+## transport is down or reconnecting.
+func _check_game_run_play_state(playing: bool) -> void:
+	if playing == _last_play_state_for_run:
+		return
+	if not playing and debugger_plugin != null:
+		debugger_plugin.note_editor_play_stopped()
+	_last_play_state_for_run = playing
 
 
 func _get_current_scene_path() -> String:

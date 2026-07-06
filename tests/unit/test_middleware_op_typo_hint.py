@@ -7,6 +7,7 @@ from typing import Literal
 
 import pytest
 from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from mcp.types import CallToolRequestParams
 from pydantic import TypeAdapter, ValidationError
 
@@ -118,6 +119,43 @@ class TestHintOpTypoOnManage:
         )
         with pytest.raises(ValidationError):
             await mw.on_call_tool(ctx, await _raise_call_next(exc))
+
+    async def test_rewrites_op_typo_wrapped_in_fastmcp_validation_error(self, register_node_manage):
+        ## fastmcp 3.4.3 (fastmcp #4128) stopped propagating pydantic's
+        ## ValidationError raw: FunctionTool re-raises it as fastmcp's own
+        ## ValidationError with the pydantic error as __cause__. The hint
+        ## must survive that wrapping regardless of installed fastmcp.
+        mw = HintOpTypoOnManage()
+        pydantic_exc = _make_op_validation_error("get_childen", register_node_manage)
+        wrapped = FastMCPValidationError(str(pydantic_exc))
+        wrapped.__cause__ = pydantic_exc
+        ctx = _FakeContext(
+            message=CallToolRequestParams(
+                name="node_manage",
+                arguments={"op": "get_childen", "params": {"path": "/Main"}},
+            )
+        )
+        with pytest.raises(ToolError) as info:
+            await mw.on_call_tool(ctx, await _raise_call_next(wrapped))
+
+        msg = str(info.value)
+        assert "'get_childen'" in msg
+        assert "did you mean" in msg.lower()
+        assert "'get_children'" in msg
+
+    async def test_passes_through_fastmcp_validation_error_without_pydantic_cause(
+        self, register_node_manage
+    ):
+        ## A fastmcp ValidationError that does NOT wrap a pydantic error
+        ## (e.g. output-schema validation) carries nothing the hint builder
+        ## can inspect — re-raise it untouched.
+        mw = HintOpTypoOnManage()
+        bare = FastMCPValidationError("output failed validation")
+        ctx = _FakeContext(
+            message=CallToolRequestParams(name="node_manage", arguments={"op": "delete"})
+        )
+        with pytest.raises(FastMCPValidationError, match="output failed validation"):
+            await mw.on_call_tool(ctx, await _raise_call_next(bare))
 
     async def test_passes_through_non_op_validation_errors(self, register_node_manage):
         ## A literal_error on a different field (e.g. a typed param value)

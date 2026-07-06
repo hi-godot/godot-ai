@@ -208,6 +208,93 @@ class TestCommandRoundTrip:
         assert harness.registry.get("err-watermark").error_watermark["debugger_promoted"] == 2
         await plugin.close()
 
+    async def test_error_watermark_overlapping_game_and_debugger_count_once(self, harness):
+        ## A push_error in a helper-live run lands in the game log buffer AND
+        ## as a Debugger Errors-tab row. Both components advance by 1; the
+        ## agent must be told about 1 new error, not 2 (#642 live smoke).
+        plugin = await harness.connect_plugin(session_id="err-overlap")
+        client = GodotClient(harness.server, harness.registry)
+
+        async def mock_handler():
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 1},
+                error_watermark={
+                    "run_seq": 1,
+                    "editor_ring": 0,
+                    "debugger_promoted": 0,
+                    "game_error_warn": 0,
+                },
+            )
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 2},
+                error_watermark={
+                    "run_seq": 1,
+                    "editor_ring": 0,
+                    "debugger_promoted": 1,
+                    "game_error_warn": 1,
+                },
+            )
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 3},
+                error_watermark={
+                    "run_seq": 1,
+                    "editor_ring": 2,
+                    "debugger_promoted": 2,
+                    "game_error_warn": 1,
+                },
+            )
+
+        handler_task = asyncio.create_task(mock_handler())
+        first = await client.send("get_editor_state")
+        second = await client.send("get_editor_state")
+        third = await client.send("get_editor_state")
+        await handler_task
+
+        assert "new_errors_since_last_call" not in first
+        ## One physical error seen through two overlapping views.
+        assert second["new_errors_since_last_call"] == 1
+        ## Editor-process errors are an independent stream: 2 editor + 1
+        ## debugger-only advance = 3.
+        assert third["new_errors_since_last_call"] == 3
+        await plugin.close()
+
+    async def test_error_watermark_first_game_component_on_new_run_counts_full(self, harness):
+        ## A watermark that never carried game_error_warn (older plugin, or a
+        ## session that never ran a game) reports it for the first time on an
+        ## ADVANCED run: the per-run component has no baseline to diff
+        ## against, so it counts in full rather than baselining silently.
+        plugin = await harness.connect_plugin(session_id="err-first-game")
+        client = GodotClient(harness.server, harness.registry)
+
+        async def mock_handler():
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 1},
+                error_watermark={"run_seq": 1, "editor_ring": 0},
+            )
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 2},
+                error_watermark={"run_seq": 2, "editor_ring": 0, "game_error_warn": 2},
+            )
+
+        handler_task = asyncio.create_task(mock_handler())
+        first = await client.send("get_editor_state")
+        second = await client.send("get_editor_state")
+        await handler_task
+
+        assert "new_errors_since_last_call" not in first
+        assert second["new_errors_since_last_call"] == 2
+        await plugin.close()
+
     async def test_error_watermark_component_reset_counts_current_value(self, harness):
         plugin = await harness.connect_plugin(session_id="err-reset")
         client = GodotClient(harness.server, harness.registry)

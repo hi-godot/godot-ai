@@ -72,6 +72,13 @@ one. There is no single `source="game"` call that returns every retained game
 line across all runs; consumers that need history should retain run ids and
 query each run explicitly.
 
+Boot-time parse/load errors happen while autoload scripts compile — before the
+game helper's logger attaches — so they can never appear in `source="game"`.
+When editor-side errors were recorded during the current run, the game-scope
+response adds `editor_errors_count` and `editor_errors_hint` pointing at
+`logs_read(source="editor", include_details=true)`; a clean game log carrying
+that hint means the run lost scripts, not that the launch was clean (#641).
+
 Game and combined log responses also include `game_status`, `helper_live`, and
 `session_active`; the top-level booleans mirror `game_status.helper_live` and
 `game_status.session_active`. For compatibility, `is_running` is retained as an
@@ -101,6 +108,18 @@ and are not included in `since_cursor` responses.
 clear the Debugger dock's visible Errors-tab rows (routed through the panel's
 own Clear path so the tab badge and counters reset). The Errors panel is
 user-facing UI, so the default leaves it untouched.
+
+When new GDScript errors are observed since a client's previous call — from
+the editor logger, the game log buffer, or Debugger Errors-tab rows promoted
+by the run/stop deferred scans (#641) — the next tool response carries
+`new_errors_since_last_call` (int) and `new_errors_hint` (text pointing at
+`logs_read(source="editor"|"game", include_details=true)`). The count is of
+distinct new errors: a running game's script error reaches the server through
+both the game log buffer and the Errors tab, and those overlapping views are
+deduplicated rather than summed. The stamp is delivered exactly once and is
+consumed by that delivery — treat it as a doorbell, then read the logs; do not
+poll for it to repeat. It can appear on any tool's response, including
+`logs_read` itself.
 
 `script_create` and `script_patch` validate written `.gd` content before the
 editor import step and include per-write diagnostics in their response:

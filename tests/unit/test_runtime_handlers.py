@@ -1483,6 +1483,98 @@ async def test_logs_read_handler_stale_fallback_preserves_current_run_id():
     assert result["current_run_id"] == "rNEW"
 
 
+class StampingClient(StubClient):
+    """Simulates GodotClient.send merging the consumed error-watermark
+    stamp into the raw command result (client.py does this exactly once
+    per pending batch)."""
+
+    async def send(
+        self,
+        command: str,
+        params: dict | None = None,
+        session_id: str | None = None,
+        timeout: float = 5.0,
+        surface_error_hints: bool = True,
+    ) -> dict:
+        result = await super().send(command, params, session_id, timeout, surface_error_hints)
+        if command == "get_logs":
+            result = dict(result)
+            result["new_errors_since_last_call"] = 3
+            result["new_errors_hint"] = (
+                "3 new GDScript errors since your last call. Inspect with "
+                "logs_read(source='editor', include_details=true) and/or "
+                "logs_read(source='game', include_details=true)."
+            )
+        return result
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expect_stale"),
+    [
+        ({"source": "plugin"}, False),
+        ({"source": "game"}, False),
+        ({"source": "editor"}, False),
+        ({"source": "game", "since_run_id": "r-old"}, True),
+    ],
+)
+async def test_logs_read_handler_preserves_error_watermark_stamp(kwargs, expect_stale):
+    ## The client consumes Session.pending_new_errors into the raw result
+    ## exactly once; every logs_read rebuild branch must re-attach it or the
+    ## single delivery is destroyed (#641 silent-drop class — an agent whose
+    ## first call after a broken launch is logs_read would never see it).
+    runtime = DirectRuntime(registry=SessionRegistry(), client=StampingClient())
+
+    result = await editor_handlers.logs_read(runtime, **kwargs)
+
+    assert result["new_errors_since_last_call"] == 3
+    assert "logs_read(source='editor'" in result["new_errors_hint"]
+    assert result.get("stale_run_id", False) is expect_stale
+
+
+async def test_logs_read_handler_game_forwards_editor_error_hint_fields():
+    class HintingClient(StubClient):
+        async def send(
+            self,
+            command: str,
+            params: dict | None = None,
+            session_id: str | None = None,
+            timeout: float = 5.0,
+            surface_error_hints: bool = True,
+        ) -> dict:
+            result = await super().send(
+                command, params, session_id, timeout, surface_error_hints
+            )
+            if command == "get_logs" and (params or {}).get("source") == "game":
+                result = dict(result)
+                result["current_run_id"] = "rstub"
+                result["helper_live"] = True
+                result["session_active"] = True
+                result["game_status"] = {"status": "live", "run_token": 3}
+                result["editor_errors_count"] = 2
+                result["editor_errors_hint"] = (
+                    "2 editor-side errors from this run (first: Parse Error: "
+                    "Expected parameter name. (res://boom.gd:3)) missing from "
+                    "the game log — boot-time parse/load errors occur before "
+                    "the game helper's logger attaches. Read "
+                    "logs_read(source='editor', include_details=true)."
+                )
+            return result
+
+    runtime = DirectRuntime(registry=SessionRegistry(), client=HintingClient())
+
+    result = await editor_handlers.logs_read(runtime, source="game")
+
+    ## #641/#642: the plugin's cross-scope hint (and liveness context) must
+    ## survive the python response reshaping — a clean game log carrying the
+    ## hint is the only signal that boot-time scripts failed to parse.
+    assert result["editor_errors_count"] == 2
+    assert "res://boom.gd" in result["editor_errors_hint"]
+    assert result["current_run_id"] == "rstub"
+    assert result["helper_live"] is True
+    assert result["session_active"] is True
+    assert result["game_status"]["status"] == "live"
+
+
 async def test_logs_read_handler_source_all_returns_structured():
     runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
 

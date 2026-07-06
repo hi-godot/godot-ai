@@ -233,6 +233,7 @@ func _enter_tree() -> void:
 
 	_debugger_plugin = DebuggerPlugin.new(_log_buffer, _game_log_buffer, _editor_log_buffer, _surfaced_error_tracker)
 	add_debugger_plugin(_debugger_plugin)
+	_connection.debugger_plugin = _debugger_plugin
 	_ensure_game_helper_autoload()
 
 	var editor_handler := EditorHandler.new(_log_buffer, _connection, _debugger_plugin, _game_log_buffer, _editor_log_buffer, null, _surfaced_error_tracker)

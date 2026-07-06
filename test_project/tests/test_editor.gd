@@ -1063,6 +1063,91 @@ func test_get_logs_source_game_live_run_counts_as_running() -> void:
 	assert_eq(result.data.lines[0].run_id, current_id)
 
 
+func test_get_logs_source_game_cross_references_run_scoped_editor_errors() -> void:
+	## #641: boot parse errors fire before the game helper's logger attaches,
+	## so they can never be in the game buffer. A game-scope read must point
+	## at the editor scope instead of presenting a clean-looking log.
+	var game_buf := McpGameLogBuffer.new()
+	var editor_buf := McpEditorLogBuffer.new()
+	var empty_tree := Tree.new()
+	empty_tree.create_item()
+	var tracker := McpSurfacedErrorTracker.new(editor_buf, game_buf, empty_tree)
+	var plugin := McpDebuggerPlugin.new(null, game_buf, editor_buf, tracker)
+	plugin.begin_game_run(editor_buf.appended_total(), true)
+	editor_buf.append("error", "Parse Error: Expected expression", "res://broken.gd", 4, "GDScript::reload")
+	plugin._capture("mcp:hello", [], -1)
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, plugin, game_buf, editor_buf, null, tracker)
+
+	var result := handler.get_logs({"source": "game", "count": 10})
+
+	assert_eq(result.data.lines.size(), 0, "the boot error must NOT be in the game buffer")
+	assert_eq(result.data.editor_errors_count, 1)
+	assert_contains(result.data.editor_errors_hint, "res://broken.gd:4")
+	assert_contains(result.data.editor_errors_hint, "logs_read(source='editor'")
+	empty_tree.free()
+
+
+func test_get_logs_source_game_no_editor_errors_hint_without_tracked_run() -> void:
+	var game_buf := McpGameLogBuffer.new()
+	var editor_buf := McpEditorLogBuffer.new()
+	editor_buf.append("error", "Parse Error: Old", "res://old.gd", 2, "")
+	var empty_tree := Tree.new()
+	empty_tree.create_item()
+	var tracker := McpSurfacedErrorTracker.new(editor_buf, game_buf, empty_tree)
+	var plugin := McpDebuggerPlugin.new(null, game_buf, editor_buf, tracker)
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, plugin, game_buf, editor_buf, null, tracker)
+
+	var result := handler.get_logs({"source": "game", "count": 10})
+
+	assert_false(result.data.has("editor_errors_hint"), "no run ever started — retained errors must not be attributed to a run")
+	assert_false(result.data.has("editor_errors_count"))
+	empty_tree.free()
+
+
+func test_get_logs_source_game_no_editor_errors_hint_for_stale_run_reads() -> void:
+	## A since_run_id read of a PRIOR run must not carry the current run's
+	## editor errors — the hint interprets the run being read.
+	var game_buf := McpGameLogBuffer.new()
+	var previous_id := game_buf.clear_for_new_run()
+	game_buf.append("info", "previous run line")
+	var editor_buf := McpEditorLogBuffer.new()
+	var empty_tree := Tree.new()
+	empty_tree.create_item()
+	var tracker := McpSurfacedErrorTracker.new(editor_buf, game_buf, empty_tree)
+	var plugin := McpDebuggerPlugin.new(null, game_buf, editor_buf, tracker)
+	plugin.begin_game_run(editor_buf.appended_total(), true)
+	editor_buf.append("error", "Parse Error: Expected expression", "res://broken.gd", 4, "GDScript::reload")
+	plugin._capture("mcp:hello", [], -1)
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, plugin, game_buf, editor_buf, null, tracker)
+
+	var current := handler.get_logs({"source": "game", "count": 10})
+	var previous := handler.get_logs({"source": "game", "since_run_id": previous_id, "count": 10})
+
+	assert_eq(current.data.editor_errors_count, 1, "current-run read keeps the hint")
+	assert_true(previous.data.stale_run_id)
+	assert_false(previous.data.has("editor_errors_hint"), "prior-run read must not carry the current run's errors")
+	assert_false(previous.data.has("editor_errors_count"))
+	empty_tree.free()
+
+
+func test_get_logs_source_game_no_editor_errors_hint_for_pre_run_errors() -> void:
+	var game_buf := McpGameLogBuffer.new()
+	var editor_buf := McpEditorLogBuffer.new()
+	editor_buf.append("error", "Parse Error: Old", "res://old.gd", 2, "")
+	var empty_tree := Tree.new()
+	empty_tree.create_item()
+	var tracker := McpSurfacedErrorTracker.new(editor_buf, game_buf, empty_tree)
+	var plugin := McpDebuggerPlugin.new(null, game_buf, editor_buf, tracker)
+	plugin.begin_game_run(editor_buf.appended_total(), true)
+	plugin._capture("mcp:hello", [], -1)
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, plugin, game_buf, editor_buf, null, tracker)
+
+	var result := handler.get_logs({"source": "game", "count": 10})
+
+	assert_false(result.data.has("editor_errors_hint"), "errors from before the run must not be pinned on this run")
+	empty_tree.free()
+
+
 func test_get_logs_include_details_returns_buffered_metadata() -> void:
 	var game_buf := McpGameLogBuffer.new()
 	game_buf.append("error", "game boom", {
@@ -1510,6 +1595,61 @@ func test_surfaced_error_tracker_caps_promoted_debugger_entries() -> void:
 		tracker.watermark(true).debugger_promoted,
 		McpSurfacedErrorTracker.MAX_PROMOTED_DEBUGGER_ENTRIES + 6,
 		"Trimmed but still-visible debugger rows must not be promoted again",
+	)
+	tree.free()
+
+
+func test_surfaced_error_tracker_deferred_scan_promotes_with_gate_closed() -> void:
+	## #641: a fresh tracker's scan gate is closed (no active run, stop window
+	## expired), so gated watermark stamps must not promote — but the
+	## timer-driven forced scan must, so the next stamped response carries the
+	## count without any tool call having landed inside the gate window.
+	var tree := _make_debugger_errors_tree()
+	var tracker := McpSurfacedErrorTracker.new(null, null, tree)
+	assert_eq(tracker.watermark().debugger_promoted, 0, "gated stamp must stay a cheap cached read")
+	tracker._on_deferred_scan_timeout()
+	assert_eq(tracker.watermark().debugger_promoted, 1, "deferred scan must promote visible rows past the gate")
+	tree.free()
+
+
+func test_surfaced_error_tracker_run_stop_schedules_deferred_scans() -> void:
+	var tree := _make_debugger_errors_tree()
+	var tracker := McpSurfacedErrorTracker.new(null, null, tree)
+	assert_eq(tracker.deferred_scans_scheduled_total(), 0)
+	tracker.note_game_run_stopped()
+	assert_eq(
+		tracker.deferred_scans_scheduled_total(),
+		McpSurfacedErrorTracker.DEFERRED_SCAN_DELAYS_SEC.size(),
+		"run stop must arm one forced scan per configured delay",
+	)
+	tree.free()
+
+
+func test_surfaced_error_tracker_deferred_scan_survives_freed_root() -> void:
+	## Deferred-scan timers can outlive an injected debugger root. A freed
+	## root must scan as "nothing visible" — not crash, and not fall through
+	## to the live editor UI.
+	var tree := _make_debugger_errors_tree()
+	var tracker := McpSurfacedErrorTracker.new(null, null, tree)
+	assert_eq(tracker.watermark(true).debugger_promoted, 1)
+	tree.free()
+	tracker._on_deferred_scan_timeout()
+	assert_eq(tracker.watermark().debugger_promoted, 1, "freed root must not change promoted counts")
+	assert_eq(tracker.read_debugger_error_entries().size(), 0)
+
+
+func test_debugger_plugin_hello_schedules_deferred_scans() -> void:
+	var game_buf := McpGameLogBuffer.new()
+	var tree := _make_debugger_errors_tree()
+	var tracker := McpSurfacedErrorTracker.new(null, game_buf, tree)
+	var plugin := McpDebuggerPlugin.new(null, game_buf, null, tracker)
+	plugin.begin_game_run(0, true)
+	var scheduled_before := tracker.deferred_scans_scheduled_total()
+	plugin._capture("mcp:hello", [], -1)
+	assert_eq(
+		tracker.deferred_scans_scheduled_total() - scheduled_before,
+		McpSurfacedErrorTracker.DEFERRED_SCAN_DELAYS_SEC.size(),
+		"hello must arm forced scans for boot errors racing the beacon",
 	)
 	tree.free()
 
@@ -2240,6 +2380,56 @@ func test_debugger_plugin_manual_run_stop_rearms_next_session() -> void:
 	assert_eq(plugin.get_game_status().run_token, 2)
 	assert_eq(plugin.get_game_status().editor_log_cursor, 20)
 	assert_eq(tracker._debugger_scan_active, true)
+
+
+func test_debugger_plugin_mcp_run_self_quit_ends_run() -> void:
+	## #642 live smoke: an MCP-started game that exits on its own
+	## (get_tree().quit(), crash) emits only the debugger session's stopped
+	## signal — no stop op performs the bookkeeping, and game_status stayed
+	## "live" until the next run rewrote it.
+	var tracker := McpSurfacedErrorTracker.new()
+	var plugin := McpDebuggerPlugin.new(
+		McpLogBuffer.new(), McpGameLogBuffer.new(), McpEditorLogBuffer.new(), tracker)
+	plugin.begin_game_run(0, true)
+	plugin._setup_session(31)
+	plugin._capture("mcp:hello", [], 31)
+	assert_eq(plugin.get_game_status().active, true)
+
+	plugin._on_debugger_session_stopped(30)
+	assert_eq(plugin.get_game_status().active, true,
+		"foreign session stop must not end the MCP run")
+	plugin._on_debugger_session_stopped(31)
+	assert_eq(plugin.get_game_status().status, "stopped",
+		"self-quit must end MCP run bookkeeping")
+	assert_eq(tracker._debugger_scan_active, false)
+
+	## Pre-attach window: no game session yet, so a foreign session's stop
+	## must not cancel a launching MCP run.
+	plugin.begin_game_run(0, true)
+	assert_eq(plugin.get_game_status().active, true)
+	plugin._on_debugger_session_stopped(31)
+	assert_eq(plugin.get_game_status().active, true,
+		"stop signal before the game session attaches must be ignored for MCP runs")
+
+
+func test_debugger_plugin_note_editor_play_stopped_ends_run() -> void:
+	## Fallback for self-quit when the session stopped signal never fires:
+	## the connection's play-state poll reports the playing→stopped edge.
+	var plugin := McpDebuggerPlugin.new(
+		McpLogBuffer.new(), McpGameLogBuffer.new(), McpEditorLogBuffer.new(),
+		McpSurfacedErrorTracker.new())
+	plugin.begin_game_run(0, true)
+	plugin._setup_session(51)
+	plugin._capture("mcp:hello", [], 51)
+	assert_eq(plugin.get_game_status().status, "live")
+
+	plugin.note_editor_play_stopped()
+	assert_eq(plugin.get_game_status().status, "stopped",
+		"play-state edge must end run bookkeeping for self-quit games")
+
+	plugin.note_editor_play_stopped()
+	assert_eq(plugin.get_game_status().status, "stopped",
+		"repeat edge with no active run is a no-op")
 
 
 func test_debugger_plugin_log_batch_no_buffer_is_safe() -> void:

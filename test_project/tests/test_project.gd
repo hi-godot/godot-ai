@@ -226,6 +226,47 @@ func test_run_project_liveness_decision_live_short_circuits() -> void:
 	assert_contains(decision.message, "live")
 
 
+func test_run_project_liveness_decision_live_reports_run_scoped_boot_errors() -> void:
+	## #641: "live" only means the helper registered — a broken node script
+	## still parse-fails during boot without stopping the game. The success
+	## message must surface those errors, not read as a clean launch.
+	var err := {"text": "Parse Error: Expected expression", "path": "res://broken.gd", "line": 4}
+	var decision := _handler._run_project_liveness_decision(
+		_run_status("live", 100),
+		_errors_info([err], "run")
+	)
+	assert_eq(decision.resolve, true)
+	assert_eq(decision.liveness_status, "live")
+	assert_contains(decision.message, "live")
+	assert_contains(decision.message, "res://broken.gd:4")
+	assert_contains(decision.message, "logs_read(source='editor'")
+	assert_eq(decision.recent_errors.size(), 1)
+	assert_eq(decision.recent_errors_scope, "run")
+
+
+func test_run_project_liveness_decision_live_ignores_retained_errors_in_message() -> void:
+	var err := {"text": "Parse Error: Old", "path": "res://old.gd", "line": 2}
+	var decision := _handler._run_project_liveness_decision(
+		_run_status("live", 100),
+		_errors_info([err], "retained_recent")
+	)
+	assert_eq(decision.resolve, true)
+	assert_eq(decision.liveness_status, "live")
+	assert_false(decision.message.contains("res://old.gd"), "errors that may predate the run must not taint the live message")
+
+
+func test_run_project_already_running_live_message_reports_run_scoped_errors() -> void:
+	var err := {"text": "Parse Error: Expected expression", "path": "res://broken.gd", "line": 4}
+	var decision := _handler._run_project_liveness_decision(
+		_run_status("live", 100),
+		_errors_info([err], "run")
+	)
+	var message := _handler._run_project_already_running_message(decision)
+	assert_contains(message, "already running")
+	assert_contains(message, "res://broken.gd:4")
+	assert_contains(message, "logs_read(source='editor'")
+
+
 func test_run_project_liveness_decision_run_scoped_error_short_circuits() -> void:
 	var err := {"text": "Parse Error: Expected expression", "path": "res://broken.gd", "line": 4}
 	var decision := _handler._run_project_liveness_decision(

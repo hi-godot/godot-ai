@@ -331,11 +331,13 @@ def _sync_error_watermark_for_session(session: Session, value: dict[str, int]) -
     per-run game component is counted in full because the server may never
     observe its zero between stop/start. Editor and debugger components remain
     session-scoped monotonic deltas; a decrease is treated as a reset and the
-    current component value is counted when above zero.
+    current component value is counted when above zero. The debugger and game
+    components overlap (both observe the running game's script errors), so
+    their deltas are combined with max(), not summed.
     """
 
     updates: dict[str, int] = {}
-    new_total = 0
+    deltas: dict[str, int] = {}
     incoming_run_seq = _normalized_watermark_int(value.get("run_seq"))
     previous_run_seq = max(0, int(session.error_watermark.get("run_seq", 0)))
     run_advanced = (
@@ -355,13 +357,21 @@ def _sync_error_watermark_for_session(session: Session, value: dict[str, int]) -
         if previous is not None:
             previous_int = max(0, int(previous))
             if run_advanced and key == "game_error_warn":
-                new_total += current
+                deltas[key] = current
             elif current >= previous_int:
-                new_total += current - previous_int
+                deltas[key] = current - previous_int
             else:
-                new_total += current
+                deltas[key] = current
         elif run_advanced and key == "game_error_warn":
-            new_total += current
+            deltas[key] = current
+    ## A running game's script errors surface twice: in the game log buffer
+    ## (game_error_warn) and as Debugger Errors-tab rows (debugger_promoted).
+    ## Those are alternate views of the same error stream — summing them
+    ## reports 2 for every push_error once the #641 deferred scans promote
+    ## rows reliably. Take the larger of the two overlapping views; only
+    ## editor-process components accumulate independently.
+    overlap = max(deltas.pop("debugger_promoted", 0), deltas.pop("game_error_warn", 0))
+    new_total = overlap + sum(deltas.values())
     session.error_watermark.update(updates)
     session.pending_new_errors += new_total
     return new_total

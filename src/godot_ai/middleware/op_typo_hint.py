@@ -19,6 +19,12 @@ candidate ops up in ``MANAGE_TOOL_OPS`` (the same registry that built the
 with a ``difflib.get_close_matches``-derived "Did you mean: ..." hint. The
 schema itself is unchanged, so tool-search-aware clients still see the
 full ``Literal`` enum.
+
+Two propagation shapes must be handled: through fastmcp 3.4.2, the raw
+``pydantic.ValidationError`` flows up through the middleware chain; from
+3.4.3 (fastmcp #4128), ``FunctionTool`` wraps it in fastmcp's own
+``ValidationError`` with the pydantic error as ``__cause__``. Both shapes
+are unwrapped to the same pydantic error before building the hint.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ import difflib
 import logging
 
 from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.base import ToolResult
 from mcp.types import CallToolRequestParams
@@ -45,11 +52,14 @@ class HintOpTypoOnManage(Middleware):
     ) -> ToolResult:
         try:
             return await call_next(context)
-        except ValidationError as exc:
+        except (ValidationError, FastMCPValidationError) as exc:
+            pydantic_exc = exc if isinstance(exc, ValidationError) else exc.__cause__
+            if not isinstance(pydantic_exc, ValidationError):
+                raise
             candidates = MANAGE_TOOL_OPS.get(context.message.name)
             if candidates is None:
                 raise
-            hint = _build_hint(exc, context.message.arguments, candidates)
+            hint = _build_hint(pydantic_exc, context.message.arguments, candidates)
             if hint is None:
                 raise
             logger.debug("Rewrote op typo error on %s: %s", context.message.name, hint)

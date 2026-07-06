@@ -228,7 +228,9 @@ async def logs_read(
                 flat.append(str(entry.get("text", "")))
             else:
                 flat.append(str(entry))
-        return paginate(flat, offset, count, key="lines")
+        response = paginate(flat, offset, count, key="lines")
+        _forward_error_watermark_stamp(result, response)
+        return response
 
     ## game / editor / all: ask the plugin to apply offset+count itself so the
     ## ring buffer's run_id, dropped_count, and is_running stay
@@ -268,6 +270,7 @@ async def logs_read(
         }
         if "current_run_id" in result:
             stale["current_run_id"] = result["current_run_id"]
+        _forward_error_watermark_stamp(result, stale)
         return stale
     lines = result.get("lines", [])
     total = int(result.get("total_count", len(lines)))
@@ -291,10 +294,32 @@ async def logs_read(
         "next_cursor",
         "appended_total",
         "truncated",
+        "current_run_id",
+        "helper_live",
+        "session_active",
+        "game_status",
+        "editor_errors_count",
+        "editor_errors_hint",
     ):
         if key in result:
             response[key] = result[key]
+    _forward_error_watermark_stamp(result, response)
     return response
+
+
+def _forward_error_watermark_stamp(result: dict, response: dict) -> None:
+    """Carry the client-injected error-watermark hint through a rebuild.
+
+    ``GodotClient.send`` consumes ``Session.pending_new_errors`` into the raw
+    command result exactly once. A handler that rebuilds its response instead
+    of passing the result through must re-attach the stamp, or the one
+    delivery is silently destroyed — the #641 failure mode (an agent whose
+    first call after a broken launch is ``logs_read`` would never learn
+    errors happened).
+    """
+    for key in ("new_errors_since_last_call", "new_errors_hint"):
+        if key in result:
+            response[key] = result[key]
 
 
 async def editor_reload_plugin(runtime: DirectRuntime) -> dict:
