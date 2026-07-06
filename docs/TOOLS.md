@@ -52,7 +52,16 @@ if a run-scoped parse/load error appeared, the response names it and points to
 game launched but this project has no `_mcp_game_helper` autoload, as with some
 headless/custom-main-loop setups: `helper_live=false` while
 `session_active=true`. `"launching"` is a soft "not live yet" state and can
-reconcile on a later `editor_state` poll.
+reconcile on a later `editor_state` poll. `"break"` means the game process is
+parked in a remote-debugger break: during boot this is a GDScript parse/load
+error (`GDScriptLanguage::debug_break_parse`) that freezes the game before the
+helper can register and before any error record reaches the Errors tab, the
+editor Logger, or the game log (#645). The plugin synthesizes an error record
+from the debugger break (reason + Stack Trace frames) so the `project_run`
+response names the failing script, and `game_status.break` carries `{reason,
+can_debug, pre_live}`. The run cannot continue on its own — call
+`project_manage(op="stop")`, fix the error, and relaunch. `helper_live=false`,
+`session_active=true` while at a break.
 
 `editor_state` includes the same `game_status` object in addition to the legacy
 `is_playing` boolean and `game_capture_ready`. It also mirrors
@@ -84,7 +93,7 @@ Game and combined log responses also include `game_status`, `helper_live`, and
 `game_status.session_active`. For compatibility, `is_running` is retained as an
 alias of `session_active`; it is no longer raw editor play-state. Both are `false` for
 `game_status.status` of `"not_live"` or `"stopped"`, and `true` for `"live"`,
-`"launching"`, or `"no_helper"`. This lets a parse/load failure that leaves the
+`"launching"`, `"break"`, or `"no_helper"`. This lets a parse/load failure that leaves the
 editor play button active report as not running, while a legitimate headless or
 custom-main-loop project without `_mcp_game_helper` remains active with
 `helper_live=false`, `session_active=true`, and

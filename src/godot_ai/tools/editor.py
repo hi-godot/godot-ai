@@ -68,6 +68,10 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         (status not in {"not_live", "stopped"}) mirrored from the same fields
         inside ``game_status``. ``is_playing`` remains raw editor play-state;
         use ``game_status.status`` for liveness decisions.
+        ``game_status.status="break"`` means the game process is parked in a
+        remote-debugger break (boot-time parse errors do this before the game
+        helper registers); it will not resume on its own — call
+        ``project_manage(op="stop")``.
 
         Args:
             session_id: Optional Godot session to target. Empty = active session.

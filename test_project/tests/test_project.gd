@@ -291,6 +291,67 @@ func test_run_project_liveness_decision_retained_error_does_not_short_circuit_la
 	assert_eq(decision.recent_errors_may_predate_run, true)
 
 
+func _break_status(elapsed_msec: int, pre_live: bool = true, reason: String = "Parser Error: Expected parameter name.") -> Dictionary:
+	var status := _run_status("break", elapsed_msec)
+	status["break"] = {"reason": reason, "can_debug": not pre_live, "pre_live": pre_live}
+	return status
+
+
+func test_run_project_liveness_decision_break_waits_for_record_inside_window() -> void:
+	## #645: the synthesized break record lands a moment after the break signal
+	## (stack frames arrive async) — hold the reply so it can name the script.
+	var decision := _handler._run_project_liveness_decision(_break_status(800), _errors_info())
+	assert_eq(decision.resolve, false)
+	assert_eq(decision.liveness_status, "break")
+	assert_contains(decision.message, "frozen at a debugger break")
+
+
+func test_run_project_liveness_decision_break_with_record_resolves() -> void:
+	var err := {"text": "Parser Error: Expected parameter name.", "path": "res://smoke_broken.gd", "line": 2}
+	var decision := _handler._run_project_liveness_decision(
+		_break_status(1200),
+		_errors_info([err], "run")
+	)
+	assert_eq(decision.resolve, true)
+	assert_eq(decision.liveness_status, "break")
+	assert_contains(decision.message, "frozen at a debugger break")
+	assert_contains(decision.message, "res://smoke_broken.gd:2")
+	assert_contains(decision.message, "project_manage(op='stop')")
+	assert_contains(decision.message, "logs_read(source='editor'")
+	assert_eq(decision.recent_errors_scope, "run")
+
+
+func test_run_project_liveness_decision_break_falls_back_to_reason_after_window() -> void:
+	var decision := _handler._run_project_liveness_decision(_break_status(3000), _errors_info())
+	assert_eq(decision.resolve, true)
+	assert_eq(decision.liveness_status, "break")
+	assert_contains(decision.message, "Parser Error: Expected parameter name.")
+	assert_contains(decision.message, "project_manage(op='stop')")
+
+
+func test_run_project_liveness_decision_post_live_break_resolves_softly() -> void:
+	var decision := _handler._run_project_liveness_decision(
+		_break_status(500, false, "Breakpoint"),
+		_errors_info()
+	)
+	assert_eq(decision.resolve, true)
+	assert_contains(decision.message, "paused at a debugger break")
+	assert_false(decision.message.contains("cannot continue"), "post-live breaks are resumable and must not be framed as boot failures")
+
+
+func test_run_project_already_running_break_message_instructs_stop() -> void:
+	var err := {"text": "Parser Error: Expected parameter name.", "path": "res://smoke_broken.gd", "line": 2}
+	var decision := _handler._run_project_liveness_decision(
+		_break_status(1200),
+		_errors_info([err], "run")
+	)
+	var message := _handler._run_project_already_running_message(decision)
+	assert_contains(message, "already running")
+	assert_contains(message, "parked at a debugger break")
+	assert_contains(message, "res://smoke_broken.gd:2")
+	assert_contains(message, "project_manage(op='stop')")
+
+
 func test_run_project_liveness_decision_not_live_without_errors_is_soft() -> void:
 	var decision := _handler._run_project_liveness_decision(_run_status("not_live", 3000), _errors_info())
 	assert_eq(decision.resolve, true)

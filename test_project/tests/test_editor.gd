@@ -2342,6 +2342,217 @@ func test_debugger_plugin_explain_not_live_marks_truncated_editor_errors() -> vo
 	assert_eq(err.error.data.recent_errors.size(), 5, "recent errors are capped")
 
 
+# ----- boot-time debugger breaks (issue #645) -----
+
+func test_debugger_plugin_break_pre_live_reports_status_break() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin.begin_game_run(0, true)
+	plugin.note_debug_break(false, "Parser Error: Expected parameter name.")
+	var status := plugin.get_game_status(plugin._game_run_started_msec)
+	assert_eq(status.status, "break")
+	assert_eq(status.helper_live, false)
+	assert_eq(status.session_active, true, "a parked game still holds an attached debugger session")
+	assert_eq(status["break"].reason, "Parser Error: Expected parameter name.")
+	assert_eq(status["break"].pre_live, true)
+	assert_eq(status["break"].can_debug, false)
+
+
+func test_debugger_plugin_break_takes_precedence_over_live() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin.begin_game_run(0, true)
+	plugin._capture("mcp:hello", [], -1)
+	assert_eq(plugin.get_game_status().status, "live")
+	plugin.note_debug_break(true, "Breakpoint")
+	var status := plugin.get_game_status()
+	assert_eq(status.status, "break", "a frozen game cannot service game tools even after the helper registered")
+	assert_eq(status["break"].pre_live, false)
+	assert_eq(status["break"].can_debug, true)
+
+
+func test_debugger_plugin_break_signal_notices_merge_reason() -> void:
+	## The session-level breaked signal lands first with no reason text; the
+	## ScriptEditorDebugger signal follows with the reason. Both notices must
+	## merge into one break instead of the later one resetting state.
+	var plugin := McpDebuggerPlugin.new()
+	plugin.begin_game_run(0, true)
+	plugin.note_debug_break(false, "")
+	assert_eq(plugin.get_game_status(plugin._game_run_started_msec).status, "break")
+	plugin.note_debug_break(false, "Parser Error: Expected parameter name.")
+	var status := plugin.get_game_status(plugin._game_run_started_msec)
+	assert_eq(status["break"].reason, "Parser Error: Expected parameter name.")
+	assert_eq(status["break"].pre_live, true, "the merged notice must keep the first notice's pre-live scope")
+
+
+func test_debugger_plugin_break_synthesizes_run_scoped_record() -> void:
+	var empty_tree := Tree.new()
+	empty_tree.create_item()
+	var tracker := McpSurfacedErrorTracker.new(null, null, empty_tree)
+	var plugin := McpDebuggerPlugin.new(null, null, null, tracker)
+	plugin.begin_game_run(0, true)
+	plugin.note_debug_break(false, "Parser Error: Expected parameter name.")
+	var frames: Array[Dictionary] = [{"path": "res://smoke_broken.gd", "line": 2, "function": ""}]
+	plugin.synthesize_break_error_record(frames)
+
+	var errors_info: Dictionary = plugin.recent_editor_errors_since(0)
+	assert_eq(errors_info.scope, "run", "the synthesized break record must be run-scoped")
+	assert_eq(errors_info.errors.size(), 1)
+	assert_eq(errors_info.errors[0].text, "Parser Error: Expected parameter name.")
+	assert_eq(errors_info.errors[0].path, "res://smoke_broken.gd")
+	assert_eq(errors_info.errors[0].line, 2)
+	assert_eq(errors_info.errors[0].details.frames.size(), 1)
+
+	plugin.synthesize_break_error_record(frames)
+	assert_eq(plugin.recent_editor_errors_since(0).errors.size(), 1, "a break synthesizes at most one record")
+	empty_tree.free()
+
+
+func test_debugger_plugin_break_record_without_frames_keeps_reason() -> void:
+	var empty_tree := Tree.new()
+	empty_tree.create_item()
+	var tracker := McpSurfacedErrorTracker.new(null, null, empty_tree)
+	var plugin := McpDebuggerPlugin.new(null, null, null, tracker)
+	plugin.begin_game_run(0, true)
+	plugin.note_debug_break(false, "Parser Error: Expected parameter name.")
+	plugin.synthesize_break_error_record([] as Array[Dictionary])
+	var errors_info: Dictionary = plugin.recent_editor_errors_since(0)
+	assert_eq(errors_info.errors.size(), 1, "a failed stack scrape must still record the break reason")
+	assert_eq(errors_info.errors[0].text, "Parser Error: Expected parameter name.")
+	assert_eq(errors_info.errors[0].path, "")
+	empty_tree.free()
+
+
+func test_debugger_plugin_post_live_break_does_not_arm_synthesis() -> void:
+	var empty_tree := Tree.new()
+	empty_tree.create_item()
+	var tracker := McpSurfacedErrorTracker.new(null, null, empty_tree)
+	var plugin := McpDebuggerPlugin.new(null, null, null, tracker)
+	plugin.begin_game_run(0, true)
+	plugin._capture("mcp:hello", [], -1)
+	plugin.note_debug_break(true, "Breakpoint")
+	assert_eq(plugin._break_pre_live, false)
+	assert_eq(plugin.recent_editor_errors_since(0).errors.size(), 0, "a resumable post-live break is not a boot failure record")
+	empty_tree.free()
+
+
+func test_debugger_plugin_break_cleared_on_run_end_and_continue() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin.begin_game_run(0, true)
+	plugin.note_debug_break(false, "Parser Error: X")
+	assert_eq(plugin.get_game_status(plugin._game_run_started_msec).status, "break")
+	plugin._on_debugger_session_continued(0)
+	assert_eq(plugin.get_game_status(plugin._game_run_started_msec).status, "launching", "continue must clear the break state")
+
+	plugin.note_debug_break(false, "Parser Error: X")
+	plugin.end_game_run()
+	assert_eq(plugin.get_game_status().status, "stopped")
+	assert_eq(plugin._break_active, false)
+
+	plugin.note_debug_break(false, "stale break with no run")
+	plugin.begin_game_run(0, true)
+	assert_eq(plugin.get_game_status(plugin._game_run_started_msec).status, "launching", "a new run must not inherit stale break state")
+
+
+func test_debugger_plugin_script_debugger_breaked_relay() -> void:
+	## reallydid=false is Godot's "left the break" notification (debug_exit).
+	var plugin := McpDebuggerPlugin.new()
+	plugin.begin_game_run(0, true)
+	plugin._on_script_debugger_breaked(true, false, "Parser Error: Expected parameter name.", true)
+	var status := plugin.get_game_status(plugin._game_run_started_msec)
+	assert_eq(status.status, "break")
+	assert_eq(status["break"].reason, "Parser Error: Expected parameter name.")
+	plugin._on_script_debugger_breaked(false, false, "", false)
+	assert_eq(plugin.get_game_status(plugin._game_run_started_msec).status, "launching")
+
+
+func test_debugger_plugin_explain_not_live_break_instructs_stop() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin.begin_game_run(0, true)
+	plugin.note_debug_break(false, "Parser Error: Expected parameter name.")
+	var status := plugin.get_game_status(plugin._game_run_started_msec)
+
+	var err := plugin._explain_not_live(status, ErrorCodes.INTERNAL_ERROR)
+
+	assert_contains(err.error.message, "frozen at a debugger break")
+	assert_contains(err.error.message, "Parser Error: Expected parameter name.")
+	assert_contains(err.error.message, "project_manage(op='stop')")
+	assert_eq(err.error.data.game_status.status, "break")
+
+
+func test_debugger_plugin_explain_not_live_post_live_break_suggests_resume() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin.begin_game_run(0, true)
+	plugin._capture("mcp:hello", [], -1)
+	plugin.note_debug_break(true, "Breakpoint")
+	var status := plugin.get_game_status()
+
+	var err := plugin._explain_not_live(status, ErrorCodes.INTERNAL_ERROR)
+
+	assert_contains(err.error.message, "paused at a debugger break")
+	assert_contains(err.error.message, "Resume")
+	assert_false(err.error.message.contains("cannot become live"), "post-live breaks are resumable, not boot failures")
+
+
+func test_get_logs_source_editor_includes_synthetic_break_record() -> void:
+	## #645: run/game responses point at logs_read(source="editor") for the
+	## break record — it must actually be there despite having no Errors-tab
+	## row or Logger entry behind it.
+	var empty_tree := Tree.new()
+	empty_tree.create_item()
+	var tracker := McpSurfacedErrorTracker.new(null, null, empty_tree)
+	var plugin := McpDebuggerPlugin.new(null, null, null, tracker)
+	plugin.begin_game_run(0, true)
+	plugin.note_debug_break(false, "Parser Error: Expected parameter name.")
+	var frames: Array[Dictionary] = [{"path": "res://smoke_broken.gd", "line": 2, "function": ""}]
+	plugin.synthesize_break_error_record(frames)
+	var handler := EditorHandler.new(McpLogBuffer.new(), null, plugin, null, null, null, tracker)
+
+	var result := handler.get_logs({"source": "editor", "count": 10, "include_details": true})
+
+	assert_eq(result.data.lines.size(), 1)
+	assert_eq(result.data.lines[0].text, "Parser Error: Expected parameter name.")
+	assert_eq(result.data.lines[0].path, "res://smoke_broken.gd")
+	assert_eq(result.data.lines[0].line, 2)
+	assert_eq(result.data.lines[0].details.frames.size(), 1)
+	assert_false(result.data.lines[0].has("_debugger_key"), "promotion bookkeeping must not leak into responses")
+	assert_false(result.data.lines[0].has("_debugger_synthetic"), "promotion bookkeeping must not leak into responses")
+	empty_tree.free()
+
+
+func test_surfaced_error_tracker_record_synthetic_error_promotes_and_repromotes() -> void:
+	var empty_tree := Tree.new()
+	empty_tree.create_item()
+	var tracker := McpSurfacedErrorTracker.new(null, null, empty_tree)
+	var entry := {
+		"source": "editor",
+		"level": "error",
+		"text": "Parser Error: Expected parameter name.",
+		"path": "res://smoke_broken.gd",
+		"line": 2,
+		"function": "",
+	}
+	tracker.record_synthetic_error(entry)
+	assert_eq(tracker.watermark(true).debugger_promoted, 1)
+	var captured := tracker.editor_entries_since(0, 0)
+	assert_eq(captured.entries.size(), 1)
+	assert_eq(captured.entries[0].text, "Parser Error: Expected parameter name.")
+
+	## A forced scan reconciles against the (empty) live tab; the synthetic
+	## record must survive it without eviction or double-counting.
+	tracker.refresh_debugger_errors(true)
+	assert_eq(tracker.watermark(true).debugger_promoted, 1)
+	assert_eq(tracker.editor_entries_since(0, 0).entries.size(), 1)
+
+	## The same failure on a later run re-promotes with a fresh sequence, so
+	## the new run's cursor still sees it as run-scoped.
+	tracker.note_game_run_started(true)
+	var cursor := tracker.debugger_promoted_total()
+	tracker.record_synthetic_error(entry)
+	assert_eq(tracker.watermark(true).debugger_promoted, 2)
+	var second_run := tracker.editor_entries_since(0, cursor)
+	assert_eq(second_run.entries.size(), 1, "re-recorded break must be visible past the prior run's cursor")
+	empty_tree.free()
+
+
 func test_debugger_plugin_ignores_hello_from_stale_session() -> void:
 	var game_buf := McpGameLogBuffer.new()
 	var plugin := McpDebuggerPlugin.new(null, game_buf)

@@ -261,6 +261,11 @@ func _run_project_already_running_message(decision: Dictionary) -> String:
 			if not errors.is_empty():
 				return "Project was already running but is not responding. A recent editor error may be related, but may predate this run: %s. Check logs_read(source='editor', include_details=true)." % _format_editor_error_summary(errors[0])
 			return "Project was already running but did not become live before the helper-ready window elapsed. Check logs_read(source='editor', include_details=true) and poll editor_state."
+		"break":
+			var break_errors: Array = decision.get("recent_errors", [])
+			if not break_errors.is_empty() and str(decision.get("recent_errors_scope", "none")) == "run":
+				return "Project was already running but the game is parked at a debugger break: %s. Call project_manage(op='stop') to end the run, fix the error, and relaunch." % _format_editor_error_summary(break_errors[0])
+			return "Project was already running but the game is parked at a debugger break. Call project_manage(op='stop') to end the run; the break reason is in the editor's Debugger panel."
 		"no_helper":
 			return "Project was already running, but no _mcp_game_helper autoload is expected. Headless or custom-main-loop projects cannot confirm helper liveness."
 		"launching":
@@ -306,6 +311,28 @@ func _run_project_liveness_decision(status: Dictionary, errors_info: Dictionary 
 				decision["message"] += " Editor logs since this run may be truncated; showing retained errors."
 		else:
 			decision["message"] = "Game launched and the Godot AI game helper is live."
+	elif state == "break":
+		## #645: the game process is parked in a remote-debugger break. A
+		## boot-time parse error (GDScriptLanguage::debug_break_parse) produces
+		## no Errors-tab row, no Logger entry, and no game-log line — the
+		## synthesized break record is the only evidence, and it lands a
+		## moment after the break signal (stack frames arrive async). Wait for
+		## it (correlated_error) before resolving; the ready window is the
+		## fallback if synthesis never lands.
+		var break_info: Dictionary = status.get("break", {})
+		var break_reason := str(break_info.get("reason", ""))
+		decision["resolve"] = correlated_error or elapsed_msec >= ready_wait_msec
+		if bool(break_info.get("pre_live", true)):
+			var summary := break_reason
+			if correlated_error:
+				summary = _format_editor_error_summary(recent_errors[0])
+			if summary.is_empty():
+				summary = "script parse/load error (reason not captured)"
+			decision["message"] = "Game hit a script error during startup and is frozen at a debugger break before the Godot AI game helper registered: %s. The run cannot continue; call project_manage(op='stop'), fix the error, and relaunch. Check logs_read(source='editor', include_details=true)." % summary
+		else:
+			var reason_suffix := (": %s" % break_reason) if not break_reason.is_empty() else ""
+			decision["resolve"] = true
+			decision["message"] = "Game is paused at a debugger break%s. Resume it from the editor's Debugger panel or call project_manage(op='stop')." % reason_suffix
 	elif correlated_error:
 		decision["resolve"] = true
 		decision["liveness_status"] = "not_live"

@@ -66,7 +66,14 @@ def register_project_tools(mcp: FastMCP) -> None:
         with some headless/custom-main-loop setups (helper_live=false,
         session_active=true); ``"stopped"`` means playback stopped or never
         became active before liveness could be confirmed (helper_live=false,
-        session_active=false). Poll ``editor_state`` to see late transitions.
+        session_active=false); ``"break"`` means the game process is parked in
+        a remote-debugger break — during boot this is a GDScript parse/load
+        error that froze the game before the helper could register, and the
+        response names the failing script when captured
+        (``game_status.break`` = ``{reason, can_debug, pre_live}``). A game at
+        a break cannot continue on its own: call ``project_manage(op="stop")``,
+        fix the error, and relaunch. Poll ``editor_state`` to see late
+        transitions.
 
         Args:
             mode: "main" | "current" | "custom". Default "main".

@@ -122,6 +122,33 @@ func refresh_debugger_errors(force: bool = true) -> void:
 	_trim_promoted_debugger_key_counts()
 
 
+## #645: promote an error record that has no Errors-tab row to scrape — e.g. a
+## boot-time parse error that parked the game in a remote-debugger break before
+## any surface got a record. The entry joins the same promoted sequence as
+## scraped Debugger rows, so run-scoping (editor_entries_since), the retained
+## fallback, and the response watermark all see it with no extra plumbing.
+## Re-recording the same key later (the same script still broken on the next
+## run) re-promotes it with a fresh sequence, mirroring how re-appearing
+## Errors-tab rows behave; scan reconciliation zeroes the key's count once the
+## break ends since the row never exists in the live tab.
+func record_synthetic_error(entry: Dictionary) -> void:
+	var key := _log_entry_key(entry)
+	var occurrences := int(_promoted_debugger_keys.get(key, 0)) + 1
+	if not _promoted_debugger_keys.has(key):
+		_promoted_debugger_key_order.append(key)
+	_promoted_debugger_keys[key] = occurrences
+	_debugger_promoted_total += 1
+	var promoted := entry.duplicate(true)
+	promoted["_debugger_key"] = key
+	promoted["_debugger_occurrences"] = occurrences
+	promoted["_debugger_sequence"] = _debugger_promoted_total
+	promoted["_debugger_synthetic"] = true
+	_remove_promoted_debugger_entry(key)
+	_promoted_debugger_entries.append(promoted)
+	_trim_promoted_debugger_entries()
+	_trim_promoted_debugger_key_counts()
+
+
 func watermark(force_debugger_scan: bool = false) -> Dictionary:
 	refresh_debugger_errors(force_debugger_scan)
 	return {
@@ -159,7 +186,25 @@ func collect_editor_log_entries() -> Array[Dictionary]:
 			continue
 		seen_keys[key] = true
 		entries.append(entry)
+	## #645: synthesized break records have no live Errors-tab row to scrape —
+	## merge them from the promoted list so logs_read(source="editor") shows
+	## the record that run/game responses point at.
+	for entry in _promoted_debugger_entries:
+		if not bool(entry.get("_debugger_synthetic", false)):
+			continue
+		var key := _log_entry_key(entry)
+		if seen_keys.has(key):
+			continue
+		seen_keys[key] = true
+		entries.append(_strip_promotion_bookkeeping(entry))
 	return entries
+
+
+static func _strip_promotion_bookkeeping(entry: Dictionary) -> Dictionary:
+	var clean := entry.duplicate(true)
+	for key in ["_debugger_key", "_debugger_occurrences", "_debugger_sequence", "_debugger_synthetic"]:
+		clean.erase(key)
+	return clean
 
 
 func editor_entries_since(editor_cursor: int, debugger_cursor: int, force_debugger_scan: bool = true) -> Dictionary:
