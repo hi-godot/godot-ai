@@ -64,6 +64,17 @@ class HintOpTypoOnManage(Middleware):
                 raise
             logger.debug("Rewrote op typo error on %s: %s", context.message.name, hint)
             raise ToolError(hint) from exc
+        except ToolError as exc:
+            candidates = MANAGE_TOOL_OPS.get(context.message.name)
+            if candidates is None:
+                raise
+            hint = _build_hint_from_tool_error(exc, context.message.arguments, candidates)
+            if hint is None:
+                raise
+            logger.debug(
+                "Rewrote wrapped op typo error on %s: %s", context.message.name, hint
+            )
+            raise ToolError(hint) from exc
 
 
 def _build_hint(
@@ -86,6 +97,20 @@ def _build_hint(
     if err.get("type") != "literal_error" or err.get("loc") != ("op",):
         return None
 
+    return _build_hint_for_raw_op(arguments, candidates)
+
+
+def _build_hint_from_tool_error(
+    exc: ToolError, arguments: dict | None, candidates: tuple[str, ...]
+) -> str | None:
+    """Return a hint when FastMCP wraps the op ``ValidationError`` as ToolError."""
+    message = str(exc)
+    if "literal_error" not in message or "\nop\n" not in message:
+        return None
+    return _build_hint_for_raw_op(arguments, candidates)
+
+
+def _build_hint_for_raw_op(arguments: dict | None, candidates: tuple[str, ...]) -> str:
     raw_op = arguments.get("op") if isinstance(arguments, dict) else None
     valid_list = ", ".join(repr(c) for c in candidates)
 

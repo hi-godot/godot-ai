@@ -6,10 +6,9 @@ The shape mirrors `batch_execute`'s `(command, params)` ergonomic and
 keeps the tool count small for clients with hard tool-count caps that
 ignore Anthropic's `defer_loading` hint.
 
-Each registered tool exposes `Literal["op_a", "op_b", ...]` for `op`,
-so MCP clients with schema-driven autocomplete still see every valid
-verb. Unknown ops surface as a structured error with fuzzy
-`data.suggestions`.
+Each registered tool exposes an enum in the `op` JSON schema, so MCP
+clients with schema-driven autocomplete still see every valid verb.
+Unknown ops surface as a structured error with fuzzy `data.suggestions`.
 
 Op handlers are registered as bare callables: each entry in ``ops`` is a
 shared handler function (sync or async) accepting ``runtime`` plus the
@@ -25,9 +24,10 @@ import inspect
 import json
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping, MutableSequence, Sequence
 from types import UnionType
-from typing import Annotated, Any, Literal, Union, get_args, get_origin, get_type_hints
+from typing import Annotated, Any, Union, get_args, get_origin, get_type_hints
 
 from fastmcp import Context, FastMCP
+from pydantic import Field
 
 from godot_ai.godot_client.client import GodotCommandError
 from godot_ai.protocol.errors import ErrorCode
@@ -60,10 +60,10 @@ MANAGE_TOOL_RESOURCE_FORMS: dict[str, dict[str, str | None]] = {}
 
 
 @functools.cache
-def _op_literal_for(op_names: frozenset[str]) -> Any:
+def _op_schema_type_for(op_names: frozenset[str]) -> Any:
     ## Sort because the cache key is a frozenset (orderless); a stable arg
-    ## order keeps Pydantic's "Input should be …" error message consistent.
-    return Literal[tuple(sorted(op_names))]  # type: ignore[valid-type]
+    ## order keeps the exposed JSON-schema enum deterministic.
+    return Annotated[str, Field(json_schema_extra={"enum": list(sorted(op_names))})]
 
 
 def register_manage_tool(
@@ -127,7 +127,7 @@ def register_manage_tool(
     MANAGE_TOOL_RESOURCE_FORMS[tool_name] = (
         dict(read_resource_forms) if read_resource_forms is not None else {}
     )
-    op_literal = _op_literal_for(frozenset(ops.keys()))
+    op_schema_type = _op_schema_type_for(frozenset(ops.keys()))
 
     async def manage(ctx: Context, op, params=None, session_id="") -> dict:
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -139,13 +139,15 @@ def register_manage_tool(
             params=params,
         )
 
-    ## ``from __future__ import annotations`` would stringify ``op_literal``
-    ## and pydantic resolves forward refs against module globals — where the
-    ## local Literal does not exist. Setting ``__annotations__`` post-hoc
-    ## with real type objects bypasses that resolution path.
+    ## ``from __future__ import annotations`` would stringify local type
+    ## objects; pydantic resolves forward refs against module globals.
+    ## Setting ``__annotations__`` post-hoc with real type objects bypasses
+    ## that resolution path. ``op_schema_type`` preserves the schema enum
+    ## while validating as ``str`` so unknown ops reach ``dispatch_manage_op``
+    ## and get structured fuzzy suggestions.
     manage.__annotations__ = {
         "ctx": Context,
-        "op": op_literal,
+        "op": op_schema_type,
         "params": dict[str, Any] | None,
         "session_id": str,
         "return": dict,

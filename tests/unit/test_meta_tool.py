@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, get_args
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -14,7 +14,7 @@ from godot_ai.tools._meta_tool import (
     MANAGE_TOOL_HANDLERS,
     MANAGE_TOOL_OPS,
     MANAGE_TOOL_RESOURCE_FORMS,
-    _op_literal_for,
+    _op_schema_type_for,
     dispatch_manage_op,
     register_manage_tool,
 )
@@ -50,7 +50,7 @@ def _restore_registries():
 
 
 @pytest.mark.asyncio
-async def test_register_exposes_op_literal_in_schema():
+async def test_register_exposes_op_enum_in_schema():
     mcp = FastMCP("test")
     register_manage_tool(
         mcp,
@@ -149,24 +149,26 @@ def test_register_accepts_resource_form_with_uri_and_waiver():
 # ---------------------------------------------------------------------------
 
 
-def test_op_literal_for_returns_same_object_for_equal_op_sets():
+def test_op_schema_type_for_returns_same_object_for_equal_op_sets():
     ## Two registrations with the same op names — even in different insertion
-    ## orders — must share one Literal so Pydantic doesn't rebuild equivalent
+    ## orders — must share one schema type so Pydantic doesn't rebuild equivalent
     ## schema fragments per domain.
-    a = _op_literal_for(frozenset({"create", "delete", "rename"}))
-    b = _op_literal_for(frozenset({"rename", "create", "delete"}))
+    a = _op_schema_type_for(frozenset({"create", "delete", "rename"}))
+    b = _op_schema_type_for(frozenset({"rename", "create", "delete"}))
     assert a is b
 
 
-def test_op_literal_for_returns_distinct_object_for_different_op_sets():
-    a = _op_literal_for(frozenset({"create", "delete"}))
-    b = _op_literal_for(frozenset({"create", "delete", "rename"}))
+def test_op_schema_type_for_returns_distinct_object_for_different_op_sets():
+    a = _op_schema_type_for(frozenset({"create", "delete"}))
+    b = _op_schema_type_for(frozenset({"create", "delete", "rename"}))
     assert a is not b
 
 
-def test_op_literal_for_args_are_sorted_for_determinism():
-    literal = _op_literal_for(frozenset({"zeta", "alpha", "mu"}))
-    assert get_args(literal) == ("alpha", "mu", "zeta")
+def test_op_schema_type_for_enum_is_sorted_for_determinism():
+    from pydantic import TypeAdapter
+
+    schema_type = _op_schema_type_for(frozenset({"zeta", "alpha", "mu"}))
+    assert TypeAdapter(schema_type).json_schema()["enum"] == ["alpha", "mu", "zeta"]
 
 
 # ---------------------------------------------------------------------------

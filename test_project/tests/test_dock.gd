@@ -163,7 +163,7 @@ func test_clients_header_and_actions_use_narrow_layout() -> void:
 	assert_eq(tabs.get_tab_title(1), "Tools")
 
 
-func test_connected_status_summarizes_client_readiness() -> void:
+func test_connected_status_stays_compact_across_client_readiness() -> void:
 	_dock._build_ui()
 	_dock._connection = _ConnectionStub.new()
 	_dock._last_client_status_refresh_completed_msec = 0
@@ -171,16 +171,16 @@ func test_connected_status_summarizes_client_readiness() -> void:
 	_dock._refresh_clients_summary()
 	assert_eq(
 		_dock._status_label.text,
-		"Server connected · checking AI client configuration",
-		"Connected status should not claim no clients before the initial status sweep completes",
+		"Server connected",
+		"Connected status should stay compact before the initial status sweep completes",
 	)
 
 	_dock._last_client_status_refresh_completed_msec = Time.get_ticks_msec()
 	_dock._refresh_clients_summary()
 	assert_eq(
 		_dock._status_label.text,
-		"Server connected · no AI client configured",
-		"Connected status should tell first-run users the AI-client setup is not done",
+		"Server connected",
+		"Connected status should stay compact when no AI clients are configured",
 	)
 
 	var any_id := _first_client_id()
@@ -191,8 +191,8 @@ func test_connected_status_summarizes_client_readiness() -> void:
 	_dock._refresh_clients_summary()
 	assert_eq(
 		_dock._status_label.text,
-		"Server connected · 1 AI client configured",
-		"Connected status should summarize configured AI clients once setup has started",
+		"Server connected",
+		"Connected status should stay compact once setup has started",
 	)
 
 	var ids := McpClientConfigurator.client_ids()
@@ -203,8 +203,8 @@ func test_connected_status_summarizes_client_readiness() -> void:
 	_dock._refresh_clients_summary()
 	assert_eq(
 		_dock._status_label.text,
-		"Server connected · 2 AI clients configured",
-		"Connected status should pluralize the configured-client count",
+		"Server connected",
+		"Connected status should stay compact with multiple configured AI clients",
 	)
 
 
@@ -1484,6 +1484,33 @@ func test_log_viewer_tick_keeps_painting_after_buffer_caps_at_max_lines() -> voi
 
 
 # --- Dev-section primary + stop buttons ---------------------------------
+
+func test_uv_version_display_hides_trailing_build_metadata() -> void:
+	var full_version := "uv-tool-uvx 0.5.9 (0652800cb 2024-12-13)"
+	assert_eq(
+		McpDockScript._compact_uv_version_text(full_version),
+		"uv-tool-uvx 0.5.9",
+		"Setup's uv row should hide trailing build metadata from the visible value",
+	)
+	assert_eq(
+		McpDockScript._compact_uv_version_text("uvx 0.5.9"),
+		"uvx 0.5.9",
+		"Setup's uv row should leave already-compact versions unchanged",
+	)
+
+	var row: HBoxContainer = _dock._make_status_row(
+		"uv",
+		McpDockScript._compact_uv_version_text(full_version),
+		Color.GREEN,
+		full_version
+	)
+	var value := row.get_child(1) as Label
+	assert_eq(value.text, "uv-tool-uvx 0.5.9",
+		"Visible uv row value should stay compact")
+	assert_eq(value.tooltip_text, full_version,
+		"Full uv version details should remain available as tooltip text")
+	row.free()
+
 
 func test_dev_buttons_rendered_in_dev_checkout() -> void:
 	## Dev checkout's Setup section gets the primary "Restart Dev Server"

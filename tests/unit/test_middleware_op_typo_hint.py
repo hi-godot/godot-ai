@@ -87,6 +87,28 @@ class TestHintOpTypoOnManage:
         assert "'delete'" in msg
         assert "'rename'" in msg
 
+    async def test_rewrites_fastmcp_wrapped_op_typo_tool_error(self, register_node_manage):
+        mw = HintOpTypoOnManage()
+        exc = ToolError(
+            "1 validation error for call[node_manage]\n"
+            "op\n"
+            "  Input should be 'get_children', 'delete', 'rename' or 'duplicate' "
+            "[type=literal_error, input_value='get_childen', input_type=str]"
+        )
+        ctx = _FakeContext(
+            message=CallToolRequestParams(
+                name="node_manage",
+                arguments={"op": "get_childen", "params": {"path": "/Main"}},
+            )
+        )
+        with pytest.raises(ToolError) as info:
+            await mw.on_call_tool(ctx, await _raise_call_next(exc))
+
+        msg = str(info.value)
+        assert "'get_childen'" in msg
+        assert "did you mean" in msg.lower()
+        assert "'get_children'" in msg
+
     async def test_falls_back_to_valid_list_when_no_close_match(self):
         ops = ("create", "delete")
         MANAGE_TOOL_OPS["thing_manage"] = ops
