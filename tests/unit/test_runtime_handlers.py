@@ -1458,6 +1458,29 @@ async def test_logs_read_handler_since_run_id_old_plugin_falls_back_to_stale_sha
     assert result["stale_run_id"] is True
     assert result["lines"] == []
     assert result["run_id"] == "rstub"
+    assert "current_run_id" not in result
+
+
+async def test_logs_read_handler_stale_fallback_preserves_current_run_id():
+    ## If a plugin ever reports current_run_id while still mismatching the
+    ## requested run, the stale shape must carry it so callers can resync.
+    class MismatchingClient(StubClient):
+        async def send(self, command, params=None, **kwargs):
+            result = await super().send(command, params, **kwargs)
+            if command == "get_logs" and (params or {}).get("source") == "game":
+                result = dict(result)
+                result["run_id"] = "rNEW"
+                result["current_run_id"] = "rNEW"
+            return result
+
+    runtime = DirectRuntime(registry=SessionRegistry(), client=MismatchingClient())
+
+    result = await editor_handlers.logs_read(runtime, source="game", since_run_id="r-old")
+
+    assert result["stale_run_id"] is True
+    assert result["lines"] == []
+    assert result["run_id"] == "rNEW"
+    assert result["current_run_id"] == "rNEW"
 
 
 async def test_logs_read_handler_source_all_returns_structured():

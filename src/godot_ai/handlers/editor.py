@@ -253,7 +253,7 @@ async def logs_read(
         ## honors since_run_id, so a mismatch means an older plugin ignored
         ## the param and served the current run. Return the empty stale
         ## shape rather than mislabeling current-run lines as the old run.
-        return {
+        stale = {
             "source": source,
             "lines": [],
             "total_count": 0,
@@ -266,6 +266,9 @@ async def logs_read(
             "dropped_count": result.get("dropped_count", 0),
             "stale_run_id": True,
         }
+        if "current_run_id" in result:
+            stale["current_run_id"] = result["current_run_id"]
+        return stale
     lines = result.get("lines", [])
     total = int(result.get("total_count", len(lines)))
     response = {
