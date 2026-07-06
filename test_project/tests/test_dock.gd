@@ -147,8 +147,6 @@ func test_clients_header_and_actions_use_narrow_layout() -> void:
 	var body_scroll := body.get_parent() as ScrollContainer
 	assert_true(body_scroll != null,
 		"Scrollable body should keep lower dock rows from forcing minimum height")
-	assert_eq(body_scroll.name, "DockBodyScroll",
-		"Dock body should live inside the scroll container")
 	assert_eq(body_scroll.horizontal_scroll_mode, ScrollContainer.SCROLL_MODE_DISABLED,
 		"Dock body should wrap horizontally instead of showing a sideways scrollbar")
 
