@@ -59,6 +59,22 @@ async def _ok_call_next(_context):
     return "ok"
 
 
+def _node_manage_typo_context():
+    return _FakeContext(
+        message=CallToolRequestParams(
+            name="node_manage",
+            arguments={"op": "get_childen", "params": {"path": "/Main"}},
+        )
+    )
+
+
+def _assert_get_children_hint(exc: BaseException) -> None:
+    msg = str(exc)
+    assert "'get_childen'" in msg
+    assert "did you mean" in msg.lower()
+    assert "'get_children'" in msg
+
+
 class TestHintOpTypoOnManage:
     async def test_passes_through_when_handler_succeeds(self, register_node_manage):
         mw = HintOpTypoOnManage()
@@ -79,13 +95,10 @@ class TestHintOpTypoOnManage:
         with pytest.raises(ToolError) as info:
             await mw.on_call_tool(ctx, await _raise_call_next(exc))
 
-        msg = str(info.value)
-        assert "'get_childen'" in msg
-        assert "did you mean" in msg.lower()
-        assert "'get_children'" in msg
+        _assert_get_children_hint(info.value)
         ## The hint should keep the full valid-op list for the agent.
-        assert "'delete'" in msg
-        assert "'rename'" in msg
+        assert "'delete'" in str(info.value)
+        assert "'rename'" in str(info.value)
 
     async def test_rewrites_fastmcp_validation_error_with_pydantic_cause(
         self, register_node_manage
@@ -96,19 +109,31 @@ class TestHintOpTypoOnManage:
             raise FastMCPValidationError(str(pydantic_exc)) from pydantic_exc
         except FastMCPValidationError as exc:
             fastmcp_exc = exc
-        ctx = _FakeContext(
-            message=CallToolRequestParams(
-                name="node_manage",
-                arguments={"op": "get_childen", "params": {"path": "/Main"}},
-            )
-        )
         with pytest.raises(ToolError) as info:
-            await mw.on_call_tool(ctx, await _raise_call_next(fastmcp_exc))
+            await mw.on_call_tool(
+                _node_manage_typo_context(), await _raise_call_next(fastmcp_exc)
+            )
 
-        msg = str(info.value)
-        assert "'get_childen'" in msg
-        assert "did you mean" in msg.lower()
-        assert "'get_children'" in msg
+        _assert_get_children_hint(info.value)
+
+    async def test_rewrites_fastmcp_validation_error_with_pydantic_context(
+        self, register_node_manage
+    ):
+        mw = HintOpTypoOnManage()
+        pydantic_exc = _make_op_validation_error("get_childen", register_node_manage)
+        try:
+            raise pydantic_exc
+        except ValidationError:
+            try:
+                raise FastMCPValidationError(str(pydantic_exc))
+            except FastMCPValidationError as exc:
+                fastmcp_exc = exc
+        with pytest.raises(ToolError) as info:
+            await mw.on_call_tool(
+                _node_manage_typo_context(), await _raise_call_next(fastmcp_exc)
+            )
+
+        _assert_get_children_hint(info.value)
 
     async def test_rewrites_fastmcp_wrapped_op_typo_tool_error(self, register_node_manage):
         mw = HintOpTypoOnManage()
@@ -118,19 +143,127 @@ class TestHintOpTypoOnManage:
             "  Input should be 'get_children', 'delete', 'rename' or 'duplicate' "
             "[type=literal_error, input_value='get_childen', input_type=str]"
         )
+        with pytest.raises(ToolError) as info:
+            await mw.on_call_tool(_node_manage_typo_context(), await _raise_call_next(exc))
+
+        _assert_get_children_hint(info.value)
+
+    async def test_rewrites_tool_error_with_fastmcp_validation_cause(
+        self, register_node_manage
+    ):
+        mw = HintOpTypoOnManage()
+        pydantic_exc = _make_op_validation_error("get_childen", register_node_manage)
+        try:
+            raise FastMCPValidationError(str(pydantic_exc)) from pydantic_exc
+        except FastMCPValidationError as fastmcp_exc:
+            try:
+                raise ToolError(str(fastmcp_exc)) from fastmcp_exc
+            except ToolError as exc:
+                tool_exc = exc
+        with pytest.raises(ToolError) as info:
+            await mw.on_call_tool(
+                _node_manage_typo_context(), await _raise_call_next(tool_exc)
+            )
+
+        _assert_get_children_hint(info.value)
+
+    async def test_rewrites_tool_error_with_pydantic_cause(self, register_node_manage):
+        mw = HintOpTypoOnManage()
+        pydantic_exc = _make_op_validation_error("get_childen", register_node_manage)
+        try:
+            raise ToolError(str(pydantic_exc)) from pydantic_exc
+        except ToolError as exc:
+            tool_exc = exc
+        with pytest.raises(ToolError) as info:
+            await mw.on_call_tool(
+                _node_manage_typo_context(), await _raise_call_next(tool_exc)
+            )
+
+        _assert_get_children_hint(info.value)
+
+    async def test_rewrites_tool_error_with_pydantic_context(self, register_node_manage):
+        mw = HintOpTypoOnManage()
+        pydantic_exc = _make_op_validation_error("get_childen", register_node_manage)
+        try:
+            raise pydantic_exc
+        except ValidationError:
+            try:
+                raise ToolError(str(pydantic_exc))
+            except ToolError as exc:
+                tool_exc = exc
+        with pytest.raises(ToolError) as info:
+            await mw.on_call_tool(
+                _node_manage_typo_context(), await _raise_call_next(tool_exc)
+            )
+
+        _assert_get_children_hint(info.value)
+
+    async def test_rewrites_tool_error_with_fastmcp_validation_context(
+        self, register_node_manage
+    ):
+        mw = HintOpTypoOnManage()
+        pydantic_exc = _make_op_validation_error("get_childen", register_node_manage)
+        fastmcp_exc = FastMCPValidationError(str(pydantic_exc))
+        fastmcp_exc.__cause__ = pydantic_exc
+        try:
+            raise fastmcp_exc
+        except FastMCPValidationError:
+            try:
+                raise ToolError(str(fastmcp_exc))
+            except ToolError as exc:
+                tool_exc = exc
+        with pytest.raises(ToolError) as info:
+            await mw.on_call_tool(
+                _node_manage_typo_context(), await _raise_call_next(tool_exc)
+            )
+
+        _assert_get_children_hint(info.value)
+
+    async def test_preserves_tool_error_with_non_validation_text(self, register_node_manage):
+        mw = HintOpTypoOnManage()
+        exc = ToolError("")
+        with pytest.raises(ToolError) as info:
+            await mw.on_call_tool(_node_manage_typo_context(), await _raise_call_next(exc))
+
+        assert info.value is exc
+
+    async def test_preserves_tool_error_for_unregistered_tool(self, register_node_manage):
+        mw = HintOpTypoOnManage()
+        exc = ToolError(
+            "1 validation error for call[other_manage]\n"
+            "op\n"
+            "  Input should be 'x' [type=literal_error, input_value='y', input_type=str]"
+        )
         ctx = _FakeContext(
             message=CallToolRequestParams(
-                name="node_manage",
-                arguments={"op": "get_childen", "params": {"path": "/Main"}},
+                name="other_manage",
+                arguments={"op": "y", "params": {}},
             )
         )
         with pytest.raises(ToolError) as info:
             await mw.on_call_tool(ctx, await _raise_call_next(exc))
 
-        msg = str(info.value)
-        assert "'get_childen'" in msg
-        assert "did you mean" in msg.lower()
-        assert "'get_children'" in msg
+        assert info.value is exc
+
+    async def test_preserves_tool_error_for_literal_error_on_other_field(
+        self, register_node_manage
+    ):
+        mw = HintOpTypoOnManage()
+        exc = ToolError(
+            "1 validation error for call[node_manage]\n"
+            "params\n"
+            "  Input should be 'dict' [type=literal_error, input_value='bad', input_type=str]"
+        )
+        ctx = _FakeContext(
+            message=CallToolRequestParams(
+                name="node_manage",
+                arguments={"op": "get_childen", "params": "bad"},
+            )
+        )
+        with pytest.raises(ToolError) as info:
+            await mw.on_call_tool(ctx, await _raise_call_next(exc))
+
+        assert info.value is exc
 
     async def test_preserves_wrapped_tool_error_with_multiple_validation_issues(
         self, register_node_manage
@@ -192,29 +325,6 @@ class TestHintOpTypoOnManage:
         )
         with pytest.raises(ValidationError):
             await mw.on_call_tool(ctx, await _raise_call_next(exc))
-
-    async def test_rewrites_op_typo_wrapped_in_fastmcp_validation_error(self, register_node_manage):
-        ## fastmcp 3.4.3 (fastmcp #4128) stopped propagating pydantic's
-        ## ValidationError raw: FunctionTool re-raises it as fastmcp's own
-        ## ValidationError with the pydantic error as __cause__. The hint
-        ## must survive that wrapping regardless of installed fastmcp.
-        mw = HintOpTypoOnManage()
-        pydantic_exc = _make_op_validation_error("get_childen", register_node_manage)
-        wrapped = FastMCPValidationError(str(pydantic_exc))
-        wrapped.__cause__ = pydantic_exc
-        ctx = _FakeContext(
-            message=CallToolRequestParams(
-                name="node_manage",
-                arguments={"op": "get_childen", "params": {"path": "/Main"}},
-            )
-        )
-        with pytest.raises(ToolError) as info:
-            await mw.on_call_tool(ctx, await _raise_call_next(wrapped))
-
-        msg = str(info.value)
-        assert "'get_childen'" in msg
-        assert "did you mean" in msg.lower()
-        assert "'get_children'" in msg
 
     async def test_passes_through_fastmcp_validation_error_without_pydantic_cause(
         self, register_node_manage
