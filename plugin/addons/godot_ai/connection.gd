@@ -95,6 +95,10 @@ func _process(delta: float) -> void:
 	if pause_processing:
 		return
 	_peer.poll()
+	## Run-stop bookkeeping must not wait behind the socket-state machine:
+	## if the game stops while disconnected, the first command drained on
+	## reconnect would still observe stale "live" state (PR #642 review).
+	_check_game_run_play_state(EditorInterface.is_playing_scene())
 
 	match _peer.get_ready_state():
 		WebSocketPeer.STATE_OPEN:
@@ -360,11 +364,6 @@ func _check_state_changes() -> void:
 				log_buffer.log("[event] scene_changed -> %s" % scene_path)
 
 	var playing := EditorInterface.is_playing_scene()
-	if playing != _last_play_state_for_run:
-		if not playing and debugger_plugin != null:
-			debugger_plugin.note_editor_play_stopped()
-		_last_play_state_for_run = playing
-
 	if playing != _last_play_state:
 		var state := "playing" if playing else "stopped"
 		if send_event("play_state_changed", {"play_state": state}):
@@ -382,6 +381,17 @@ func _check_state_changes() -> void:
 				## console spams every install during normal editing (#626).
 				## The line stays in the ring for the dock's log panel.
 				log_buffer.log("[event] readiness -> %s" % readiness, false)
+
+
+## Playing→stopped edge for game-run bookkeeping. Runs every process tick
+## (any socket state) so a self-quit game's run ends even while the
+## transport is down or reconnecting.
+func _check_game_run_play_state(playing: bool) -> void:
+	if playing == _last_play_state_for_run:
+		return
+	if not playing and debugger_plugin != null:
+		debugger_plugin.note_editor_play_stopped()
+	_last_play_state_for_run = playing
 
 
 func _get_current_scene_path() -> String:
