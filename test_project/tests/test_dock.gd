@@ -144,11 +144,13 @@ func test_clients_header_and_actions_use_narrow_layout() -> void:
 		"Scrollable body should keep lower dock rows from forcing minimum height")
 	assert_eq(body_scroll.horizontal_scroll_mode, ScrollContainer.SCROLL_MODE_DISABLED,
 		"Dock body should wrap horizontally instead of showing a sideways scrollbar")
-	var body := body_scroll.find_child("DockBody", false, false) as VBoxContainer
+	var body := clients_header_row.get_parent() as VBoxContainer
 	assert_true(body != null,
 		"Dock body should own regular rows while status/install stay pinned")
-	assert_true(clients_header_row.get_parent() == body,
+	assert_eq(body.name, "DockBody",
 		"Clients header row should live inside the scrollable dock body")
+	assert_true(body.get_parent() == body_scroll,
+		"Dock body should live inside the scroll container")
 
 	var header_idx := body.get_children().find(clients_header_row)
 	assert_gt(header_idx, -1, "Clients header row should be a scroll-body child")
