@@ -24,10 +24,9 @@ import inspect
 import json
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping, MutableSequence, Sequence
 from types import UnionType
-from typing import Annotated, Any, Union, get_args, get_origin, get_type_hints
+from typing import Annotated, Any, Literal, Union, get_args, get_origin, get_type_hints
 
 from fastmcp import Context, FastMCP
-from pydantic import Field
 
 from godot_ai.godot_client.client import GodotCommandError
 from godot_ai.protocol.errors import ErrorCode
@@ -63,7 +62,7 @@ MANAGE_TOOL_RESOURCE_FORMS: dict[str, dict[str, str | None]] = {}
 def _op_schema_type_for(op_names: frozenset[str]) -> Any:
     ## Sort because the cache key is a frozenset (orderless); a stable arg
     ## order keeps the exposed JSON-schema enum deterministic.
-    return Annotated[str, Field(json_schema_extra={"enum": list(sorted(op_names))})]
+    return Literal[tuple(sorted(op_names))]
 
 
 def register_manage_tool(
@@ -142,9 +141,8 @@ def register_manage_tool(
     ## ``from __future__ import annotations`` would stringify local type
     ## objects; pydantic resolves forward refs against module globals.
     ## Setting ``__annotations__`` post-hoc with real type objects bypasses
-    ## that resolution path. ``op_schema_type`` preserves the schema enum
-    ## while validating as ``str`` so unknown ops reach ``dispatch_manage_op``
-    ## and get structured fuzzy suggestions.
+    ## that resolution path. ``op_schema_type`` is a generated ``Literal`` so
+    ## FastMCP exposes the enum and validates op values at the schema boundary.
     manage.__annotations__ = {
         "ctx": Context,
         "op": op_schema_type,

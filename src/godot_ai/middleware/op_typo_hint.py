@@ -37,7 +37,7 @@ from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.base import ToolResult
 from mcp.types import CallToolRequestParams
-from pydantic import ValidationError
+from pydantic import ValidationError as PydanticValidationError
 
 from godot_ai.tools._meta_tool import MANAGE_TOOL_OPS
 
@@ -52,14 +52,13 @@ class HintOpTypoOnManage(Middleware):
     ) -> ToolResult:
         try:
             return await call_next(context)
-        except (ValidationError, FastMCPValidationError) as exc:
-            pydantic_exc = exc if isinstance(exc, ValidationError) else exc.__cause__
-            if not isinstance(pydantic_exc, ValidationError):
-                raise
+        except (PydanticValidationError, FastMCPValidationError) as exc:
             candidates = MANAGE_TOOL_OPS.get(context.message.name)
             if candidates is None:
                 raise
-            hint = _build_hint(pydantic_exc, context.message.arguments, candidates)
+            hint = _build_hint_from_validation_error(
+                exc, context.message.arguments, candidates
+            )
             if hint is None:
                 raise
             logger.debug("Rewrote op typo error on %s: %s", context.message.name, hint)
@@ -78,7 +77,7 @@ class HintOpTypoOnManage(Middleware):
 
 
 def _build_hint(
-    exc: ValidationError, arguments: dict | None, candidates: tuple[str, ...]
+    exc: PydanticValidationError, arguments: dict | None, candidates: tuple[str, ...]
 ) -> str | None:
     """Return a ``Did you mean`` message for an op literal_error, else None.
 
@@ -100,14 +99,51 @@ def _build_hint(
     return _build_hint_for_raw_op(arguments, candidates)
 
 
+def _build_hint_from_validation_error(
+    exc: PydanticValidationError | FastMCPValidationError,
+    arguments: dict | None,
+    candidates: tuple[str, ...],
+) -> str | None:
+    if isinstance(exc, PydanticValidationError):
+        return _build_hint(exc, arguments, candidates)
+    cause = exc.__cause__
+    if isinstance(cause, PydanticValidationError):
+        return _build_hint(cause, arguments, candidates)
+    context = exc.__context__
+    if isinstance(context, PydanticValidationError):
+        return _build_hint(context, arguments, candidates)
+    return None
+
+
 def _build_hint_from_tool_error(
     exc: ToolError, arguments: dict | None, candidates: tuple[str, ...]
 ) -> str | None:
     """Return a hint when FastMCP wraps the op ``ValidationError`` as ToolError."""
+    cause = exc.__cause__
+    if isinstance(cause, PydanticValidationError):
+        return _build_hint(cause, arguments, candidates)
+    if isinstance(cause, FastMCPValidationError):
+        return _build_hint_from_validation_error(cause, arguments, candidates)
+    context = exc.__context__
+    if isinstance(context, PydanticValidationError):
+        return _build_hint(context, arguments, candidates)
+    if isinstance(context, FastMCPValidationError):
+        return _build_hint_from_validation_error(context, arguments, candidates)
+
     message = str(exc)
-    if "literal_error" not in message or "\nop\n" not in message:
+    if not _looks_like_single_op_literal_error(message):
         return None
     return _build_hint_for_raw_op(arguments, candidates)
+
+
+def _looks_like_single_op_literal_error(message: str) -> bool:
+    lines = message.splitlines()
+    if not lines or not lines[0].startswith("1 validation error "):
+        return False
+    loc_lines = [line for line in lines[1:] if line and not line[:1].isspace()]
+    if loc_lines != ["op"]:
+        return False
+    return "type=literal_error" in message
 
 
 def _build_hint_for_raw_op(arguments: dict | None, candidates: tuple[str, ...]) -> str:

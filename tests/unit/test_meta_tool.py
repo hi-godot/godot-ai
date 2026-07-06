@@ -171,6 +171,16 @@ def test_op_schema_type_for_enum_is_sorted_for_determinism():
     assert TypeAdapter(schema_type).json_schema()["enum"] == ["alpha", "mu", "zeta"]
 
 
+def test_op_schema_type_for_rejects_unknown_ops_at_runtime():
+    from pydantic import TypeAdapter, ValidationError
+
+    schema_type = _op_schema_type_for(frozenset({"create", "delete"}))
+    adapter = TypeAdapter(schema_type)
+    assert adapter.validate_python("create") == "create"
+    with pytest.raises(ValidationError):
+        adapter.validate_python("rename")
+
+
 # ---------------------------------------------------------------------------
 # Dispatch — happy path. Handlers are invoked as ``handler(runtime, **params)``,
 # so test handlers accept the same keyword args the dispatcher unpacks.

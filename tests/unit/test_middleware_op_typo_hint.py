@@ -87,6 +87,29 @@ class TestHintOpTypoOnManage:
         assert "'delete'" in msg
         assert "'rename'" in msg
 
+    async def test_rewrites_fastmcp_validation_error_with_pydantic_cause(
+        self, register_node_manage
+    ):
+        mw = HintOpTypoOnManage()
+        pydantic_exc = _make_op_validation_error("get_childen", register_node_manage)
+        try:
+            raise FastMCPValidationError(str(pydantic_exc)) from pydantic_exc
+        except FastMCPValidationError as exc:
+            fastmcp_exc = exc
+        ctx = _FakeContext(
+            message=CallToolRequestParams(
+                name="node_manage",
+                arguments={"op": "get_childen", "params": {"path": "/Main"}},
+            )
+        )
+        with pytest.raises(ToolError) as info:
+            await mw.on_call_tool(ctx, await _raise_call_next(fastmcp_exc))
+
+        msg = str(info.value)
+        assert "'get_childen'" in msg
+        assert "did you mean" in msg.lower()
+        assert "'get_children'" in msg
+
     async def test_rewrites_fastmcp_wrapped_op_typo_tool_error(self, register_node_manage):
         mw = HintOpTypoOnManage()
         exc = ToolError(
@@ -108,6 +131,34 @@ class TestHintOpTypoOnManage:
         assert "'get_childen'" in msg
         assert "did you mean" in msg.lower()
         assert "'get_children'" in msg
+
+    async def test_preserves_wrapped_tool_error_with_multiple_validation_issues(
+        self, register_node_manage
+    ):
+        mw = HintOpTypoOnManage()
+        exc = ToolError(
+            "2 validation errors for call[node_manage]\n"
+            "op\n"
+            "  Input should be 'get_children', 'delete', 'rename' or 'duplicate' "
+            "[type=literal_error, input_value='get_childen', input_type=str]\n"
+            "params\n"
+            "  Input should be a valid dictionary [type=dict_type, "
+            "input_value='not-a-dict', input_type=str]"
+        )
+        ctx = _FakeContext(
+            message=CallToolRequestParams(
+                name="node_manage",
+                arguments={"op": "get_childen", "params": "not-a-dict"},
+            )
+        )
+        with pytest.raises(ToolError) as info:
+            await mw.on_call_tool(ctx, await _raise_call_next(exc))
+
+        assert info.value is exc
+        msg = str(info.value)
+        assert "2 validation errors" in msg
+        assert "params" in msg
+        assert "did you mean" not in msg.lower()
 
     async def test_falls_back_to_valid_list_when_no_close_match(self):
         ops = ("create", "delete")
