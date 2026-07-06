@@ -109,6 +109,18 @@ clear the Debugger dock's visible Errors-tab rows (routed through the panel's
 own Clear path so the tab badge and counters reset). The Errors panel is
 user-facing UI, so the default leaves it untouched.
 
+When new GDScript errors are observed since a client's previous call — from
+the editor logger, the game log buffer, or Debugger Errors-tab rows promoted
+by the run/stop deferred scans (#641) — the next tool response carries
+`new_errors_since_last_call` (int) and `new_errors_hint` (text pointing at
+`logs_read(source="editor"|"game", include_details=true)`). The count is of
+distinct new errors: a running game's script error reaches the server through
+both the game log buffer and the Errors tab, and those overlapping views are
+deduplicated rather than summed. The stamp is delivered exactly once and is
+consumed by that delivery — treat it as a doorbell, then read the logs; do not
+poll for it to repeat. It can appear on any tool's response, including
+`logs_read` itself.
+
 `script_create` and `script_patch` validate written `.gd` content before the
 editor import step and include per-write diagnostics in their response:
 `diagnostics` (array of structured editor-style entries), `diagnostics_scope`
