@@ -352,6 +352,21 @@ func test_run_project_already_running_break_message_instructs_stop() -> void:
 	assert_contains(message, "project_manage(op='stop')")
 
 
+func test_run_project_already_running_break_message_labels_retained_errors() -> void:
+	## Parity with the "not_live" already-running case: a retained error is
+	## still worth naming, with the may-predate caveat, instead of dropping it.
+	var err := {"text": "Parse Error: Old", "path": "res://old.gd", "line": 2}
+	var decision := _handler._run_project_liveness_decision(
+		_break_status(1200),
+		_errors_info([err], "retained_recent")
+	)
+	var message := _handler._run_project_already_running_message(decision)
+	assert_contains(message, "parked at a debugger break")
+	assert_contains(message, "may predate this run")
+	assert_contains(message, "res://old.gd:2")
+	assert_contains(message, "project_manage(op='stop')")
+
+
 func test_run_project_liveness_decision_not_live_without_errors_is_soft() -> void:
 	var decision := _handler._run_project_liveness_decision(_run_status("not_live", 3000), _errors_info())
 	assert_eq(decision.resolve, true)

@@ -265,6 +265,8 @@ func _run_project_already_running_message(decision: Dictionary) -> String:
 			var break_errors: Array = decision.get("recent_errors", [])
 			if not break_errors.is_empty() and str(decision.get("recent_errors_scope", "none")) == "run":
 				return "Project was already running but the game is parked at a debugger break: %s. Call project_manage(op='stop') to end the run, fix the error, and relaunch." % _format_editor_error_summary(break_errors[0])
+			if not break_errors.is_empty():
+				return "Project was already running but the game is parked at a debugger break. A recent editor error may be related, but may predate this run: %s. Call project_manage(op='stop') to end the run." % _format_editor_error_summary(break_errors[0])
 			return "Project was already running but the game is parked at a debugger break. Call project_manage(op='stop') to end the run; the break reason is in the editor's Debugger panel."
 		"no_helper":
 			return "Project was already running, but no _mcp_game_helper autoload is expected. Headless or custom-main-loop projects cannot confirm helper liveness."
@@ -321,8 +323,8 @@ func _run_project_liveness_decision(status: Dictionary, errors_info: Dictionary 
 		## fallback if synthesis never lands.
 		var break_info: Dictionary = status.get("break", {})
 		var break_reason := str(break_info.get("reason", ""))
-		decision["resolve"] = correlated_error or elapsed_msec >= ready_wait_msec
 		if bool(break_info.get("pre_live", true)):
+			decision["resolve"] = correlated_error or elapsed_msec >= ready_wait_msec
 			var summary := break_reason
 			if correlated_error:
 				summary = _format_editor_error_summary(recent_errors[0])
