@@ -527,6 +527,7 @@ func _build_ui() -> void:
 	add_child(_install_label)
 
 	_body_scroll = ScrollContainer.new()
+	_body_scroll.name = "DockBodyScroll"
 	_body_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_body_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_body_scroll.custom_minimum_size = Vector2(0, 48)
@@ -534,6 +535,7 @@ func _build_ui() -> void:
 	add_child(_body_scroll)
 
 	_body = VBoxContainer.new()
+	_body.name = "DockBody"
 	_body.add_theme_constant_override("separation", 8)
 	_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_body_scroll.add_child(_body)
