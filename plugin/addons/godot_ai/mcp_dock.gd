@@ -95,7 +95,7 @@ var _telemetry_pending_enabled: bool = true
 var _telemetry_saved_enabled: bool = true
 
 ## Per-client UI handles, keyed by client id. Each entry holds the row's
-## status dot, configure button, remove button, manual-command panel + text.
+## status dot, configure/remove buttons, config-file buttons, and manual panel.
 var _client_rows: Dictionary = {}
 
 # Drift banner — surfaced near the Clients section when one or more clients
@@ -727,7 +727,7 @@ func _build_ui() -> void:
 	_body.add_child(_drift_banner)
 
 	_clients_window = Window.new()
-	_clients_window.title = "Godot AI"
+	_clients_window.title = "Godot AI Settings"
 	## `Vector2i * float` yields Vector2; wrap the result back to Vector2i.
 	_clients_window.min_size = Vector2i(Vector2(560, 460) * EditorInterface.get_editor_scale())
 	_clients_window.visible = false
@@ -847,6 +847,21 @@ func _build_client_row(client_id: String) -> void:
 	remove_btn.pressed.connect(_on_remove_client.bind(client_id))
 	row.add_child(remove_btn)
 
+	var config_path := ClientConfigurator.config_path(client_id)
+	var open_config_btn := Button.new()
+	_apply_editor_icon(open_config_btn, "ExternalLink", "Open")
+	open_config_btn.custom_minimum_size = Vector2(28, 28)
+	open_config_btn.visible = not config_path.is_empty()
+	open_config_btn.pressed.connect(_on_open_config_file.bind(client_id))
+	row.add_child(open_config_btn)
+
+	var reveal_btn := Button.new()
+	_apply_editor_icon(reveal_btn, "Folder", "Reveal")
+	reveal_btn.custom_minimum_size = Vector2(28, 28)
+	reveal_btn.visible = not config_path.is_empty()
+	reveal_btn.pressed.connect(_on_reveal_config_folder.bind(client_id))
+	row.add_child(reveal_btn)
+
 	_client_grid.add_child(row)
 
 	var manual_panel := VBoxContainer.new()
@@ -877,9 +892,20 @@ func _build_client_row(client_id: String) -> void:
 		"name_label": name_label,
 		"configure_btn": configure_btn,
 		"remove_btn": remove_btn,
+		"open_config_btn": open_config_btn,
+		"reveal_btn": reveal_btn,
+		"config_path": config_path,
 		"manual_panel": manual_panel,
 		"manual_text": manual_text,
 	}
+	_refresh_client_config_file_buttons(client_id)
+
+
+func _apply_editor_icon(button: Button, icon_name: String, fallback_text: String) -> void:
+	if has_theme_icon(icon_name, "EditorIcons"):
+		button.icon = get_theme_icon(icon_name, "EditorIcons")
+	else:
+		button.text = fallback_text
 
 
 # --- Status updates ---
@@ -2246,6 +2272,37 @@ func _on_copy_manual_command(client_id: String) -> void:
 	DisplayServer.clipboard_set(row["manual_text"].text)
 
 
+func _on_open_config_file(client_id: String) -> void:
+	var path := _client_config_path_for_row(client_id)
+	if path.is_empty():
+		return
+	if FileAccess.file_exists(path):
+		OS.shell_open(path)
+		return
+	_reveal_config_folder(path)
+
+
+func _on_reveal_config_folder(client_id: String) -> void:
+	var path := _client_config_path_for_row(client_id)
+	if path.is_empty():
+		return
+	_reveal_config_folder(path)
+
+
+func _client_config_path_for_row(client_id: String) -> String:
+	var row: Dictionary = _client_rows.get(client_id, {})
+	if row.is_empty():
+		return ""
+	return String(row.get("config_path", ""))
+
+
+func _reveal_config_folder(path: String) -> void:
+	var dir := path.get_base_dir()
+	if dir.is_empty():
+		return
+	OS.shell_open(dir)
+
+
 func _refresh_all_client_statuses() -> void:
 	## Compatibility wrapper for older explicit call sites. Treat this as a manual
 	## refresh: it bypasses focus-in cooldown but still runs probes off the editor
@@ -2698,6 +2755,7 @@ func _apply_row_status(
 	var remove_btn: Button = row["remove_btn"]
 	var name_label: Label = row["name_label"]
 	var base_name := ClientConfigurator.client_display_name(client_id)
+	_refresh_client_config_file_buttons(client_id)
 	match status:
 		Client.Status.CONFIGURED:
 			dot.color = Color.GREEN
@@ -2722,6 +2780,26 @@ func _apply_row_status(
 			configure_btn.text = "Retry"
 			remove_btn.visible = false
 			name_label.text = "%s — %s" % [base_name, error_msg] if not error_msg.is_empty() else base_name
+
+
+func _refresh_client_config_file_buttons(client_id: String) -> void:
+	var row: Dictionary = _client_rows.get(client_id, {})
+	if row.is_empty():
+		return
+	var config_path := String(row.get("config_path", ""))
+	var has_path := not config_path.is_empty()
+	var open_config_btn: Button = row["open_config_btn"]
+	var reveal_btn: Button = row["reveal_btn"]
+	open_config_btn.visible = has_path
+	reveal_btn.visible = has_path
+	open_config_btn.disabled = not has_path
+	reveal_btn.disabled = not has_path
+	if has_path:
+		open_config_btn.tooltip_text = "Open config file:\n%s" % config_path
+		reveal_btn.tooltip_text = "Reveal in folder:\n%s" % config_path.get_base_dir()
+	else:
+		open_config_btn.tooltip_text = ""
+		reveal_btn.tooltip_text = ""
 
 
 # --- Update check & self-update ---

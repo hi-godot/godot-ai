@@ -366,6 +366,11 @@ static func manual_command(id: String) -> String:
 	return ManualCommand.build(client, SERVER_NAME, http_url(), client.resolved_config_path())
 
 
+static func config_path(id: String) -> String:
+	var client := ClientRegistry.get_by_id(id)
+	return client.resolved_config_path() if client != null else ""
+
+
 static func is_installed(id: String) -> bool:
 	var client := ClientRegistry.get_by_id(id)
 	return client != null and client.is_installed()

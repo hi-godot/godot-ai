@@ -77,6 +77,29 @@ func test_every_client_has_required_fields() -> void:
 			assert_gt(client.toml_body_template.size(), 0, "%s toml client missing toml_body_template" % client.id)
 
 
+func test_config_path_facade_matches_client_descriptors() -> void:
+	for client in McpClientRegistry.all():
+		assert_eq(
+			McpClientConfigurator.config_path(client.id),
+			client.resolved_config_path(),
+			"%s config_path facade must mirror resolved_config_path" % client.id
+		)
+
+
+func test_config_path_facade_handles_unknown_and_file_clients() -> void:
+	assert_eq(McpClientConfigurator.config_path("__missing_client__"), "")
+	var cursor_path := McpClientConfigurator.config_path("cursor")
+	assert_false(cursor_path.is_empty(), "Cursor should expose a JSON config file path")
+	assert_true(cursor_path.ends_with("mcp.json"), "Cursor config should resolve to mcp.json, got %s" % cursor_path)
+
+
+func test_config_path_facade_returns_empty_for_pure_cli_client() -> void:
+	var client := McpClientRegistry.get_by_id("kimi_code")
+	assert_true(client != null, "kimi_code must remain registered as a pure CLI client")
+	assert_eq(client.config_type, "cli")
+	assert_eq(McpClientConfigurator.config_path("kimi_code"), "")
+
+
 func test_descriptors_are_data_only() -> void:
 	## #229 race-surface guard: every shipped descriptor must be pure data.
 	## A worker thread walking a Callable on a hot-reloadable per-client `.gd`

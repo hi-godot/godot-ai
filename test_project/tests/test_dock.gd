@@ -166,8 +166,8 @@ func test_clients_header_and_actions_use_narrow_layout() -> void:
 	var expected: Array[String] = ["Refresh", "Clients & Tools"]
 	assert_eq(button_texts, expected,
 		"Client action buttons should stay compact and keep their handlers")
-	assert_eq(_dock._clients_window.title, "Godot AI",
-		"Clients & Tools window should use the product context as its title")
+	assert_eq(_dock._clients_window.title, "Godot AI Settings",
+		"Clients & Tools window should title the settings surface with product context")
 	var tabs := _dock._clients_window.get_child(0) as TabContainer
 	assert_true(tabs != null, "Clients & Tools window should contain a tab container")
 	assert_eq(tabs.get_tab_title(0), "Clients")
@@ -406,6 +406,35 @@ func test_apply_row_status_renders_mismatch_as_amber_with_url_hint() -> void:
 		"Mismatched row must label itself so the user reads it as drift")
 	assert_eq((row["configure_btn"] as Button).text, "Reconfigure",
 		"Mismatched rows offer the same Reconfigure action as the banner")
+
+
+func test_client_rows_show_config_file_buttons_only_for_file_clients() -> void:
+	_dock._build_ui()
+	var file_id := "cursor"
+	if not _dock._client_rows.has(file_id):
+		skip("Cursor client not registered")
+		return
+	var file_row: Dictionary = _dock._client_rows[file_id]
+	var file_path := McpClientConfigurator.config_path(file_id)
+	assert_false(file_path.is_empty(), "Cursor should expose a config path")
+	assert_eq(String(file_row.get("config_path", "")), file_path)
+	assert_true((file_row["open_config_btn"] as Button).visible,
+		"File-based clients must show Open config file")
+	assert_true((file_row["reveal_btn"] as Button).visible,
+		"File-based clients must show Reveal in folder")
+	assert_contains((file_row["open_config_btn"] as Button).tooltip_text, file_path,
+		"Open tooltip should carry the full path without widening the row")
+
+	var cli_id := "kimi_code"
+	if not _dock._client_rows.has(cli_id):
+		skip("Pure CLI client not registered")
+		return
+	var cli_row: Dictionary = _dock._client_rows[cli_id]
+	assert_eq(String(cli_row.get("config_path", "")), "")
+	assert_false((cli_row["open_config_btn"] as Button).visible,
+		"Pure CLI clients should not show a dead Open config file button")
+	assert_false((cli_row["reveal_btn"] as Button).visible,
+		"Pure CLI clients should not show a dead Reveal in folder button")
 
 
 func test_incompatible_server_marks_clients_unhealthy() -> void:
