@@ -9,18 +9,29 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 
 ## Return a clean path relative to the scene root (e.g. /Main/Camera3D).
-## Returns "" when `node` is not the scene root or a descendant of it —
-## without the ancestry guard, get_path_to() returns an empty NodePath that
-## concatenates into a plausible-looking but invalid "/Main/".
+## Returns "" when `node` is not the scene root or a descendant of it.
+##
+## Single upward walk from `node` to `scene_root`, collecting names as we go.
+## The pre-PR version paid two O(depth) walks per node — `is_ancestor_of()`
+## (node -> root) to guard against get_path_to() emitting a "../"-style path
+## for non-descendants, then `get_path_to()` (root -> node) again. Walking up
+## once both validates ancestry (did we reach scene_root before the tree top?)
+## and builds the relative segments, halving the per-node cost on hot reads
+## like find_nodes / get_children with no change to the output or the guard.
 static func from_node(node: Node, scene_root: Node) -> String:
 	if scene_root == null or node == null:
 		return ""
 	if node == scene_root:
 		return "/" + scene_root.name
-	if not scene_root.is_ancestor_of(node):
-		return ""
-	var relative := scene_root.get_path_to(node)
-	return "/" + scene_root.name + "/" + str(relative)
+	var segments: Array[String] = []
+	var current := node
+	while current != null and current != scene_root:
+		segments.append(str(current.name))
+		current = current.get_parent()
+	if current != scene_root:
+		return ""  # walked off the top without hitting scene_root: not a descendant
+	segments.reverse()
+	return "/" + scene_root.name + "/" + "/".join(segments)
 
 
 ## Resolve a clean scene path like "/Main/Camera3D" to the actual node.
