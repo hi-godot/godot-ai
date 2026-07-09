@@ -2269,12 +2269,52 @@ async def test_logs_resource_data_handler():
 
 
 async def test_scene_get_hierarchy_handler():
-    runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
+    ## StubClient returns the OLD plugin shape (full node list, no `has_more`),
+    ## so the handler falls back to slicing server-side — the mixed
+    ## new-server/old-plugin path.
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     result = await scene_handlers.scene_get_hierarchy(runtime, depth=5, offset=0, limit=2)
-    assert result["root"] == "Main"
     assert len(result["nodes"]) == 2
     assert result["total_count"] == 3
     assert result["has_more"] is True
+    ## offset/limit are forwarded to the plugin even though this old stub
+    ## ignores them.
+    assert client.calls[-1]["params"] == {"depth": 5, "offset": 0, "limit": 2}
+
+
+class _PaginatingSceneClient:
+    """Stub plugin that paginates server-side and stamps `has_more`."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    async def send(self, command, params=None, session_id=None, timeout=5.0, **_):
+        self.calls.append({"command": command, "params": params})
+        p = params or {}
+        off = int(p.get("offset", 0))
+        lim = int(p.get("limit", 0))
+        all_nodes = [{"name": f"Node{i}", "type": "Node3D"} for i in range(5)]
+        page = all_nodes[off:] if lim <= 0 else all_nodes[off : off + lim]
+        return {
+            "nodes": page,
+            "total_count": len(all_nodes),
+            "offset": off,
+            "limit": lim,
+            "has_more": lim > 0 and off + lim < len(all_nodes),
+        }
+
+
+async def test_scene_get_hierarchy_passthrough_when_plugin_paginates():
+    ## A plugin that already paginated must not be sliced again.
+    runtime = DirectRuntime(registry=SessionRegistry(), client=_PaginatingSceneClient())
+    result = await scene_handlers.scene_get_hierarchy(runtime, depth=5, offset=1, limit=2)
+    assert [n["name"] for n in result["nodes"]] == ["Node1", "Node2"]
+    assert result["total_count"] == 5
+    assert result["offset"] == 1
+    assert result["limit"] == 2
+    assert result["has_more"] is True
+    assert "root" not in result
 
 
 async def test_scene_get_roots_handler():

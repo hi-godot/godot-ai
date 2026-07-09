@@ -16,13 +16,38 @@ func _init(connection: McpConnection = null) -> void:
 
 func get_scene_tree(params: Dictionary) -> Dictionary:
 	var max_depth: int = params.get("depth", 10)
+	var offset: int = maxi(0, int(params.get("offset", 0)))
+	# limit <= 0 means "no limit" (the hierarchy resource reads the whole tree);
+	# the scene_get_hierarchy tool passes an explicit positive limit. Paginating
+	# here — rather than walking + serializing the full tree and slicing on the
+	# Python side — means only the requested window builds node dicts and clean
+	# scene paths, and only the window crosses the WebSocket.
+	var limit: int = int(params.get("limit", 0))
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
-		return {"data": {"nodes": [], "message": "No scene open"}}
+		return {"data": {
+			"nodes": [],
+			"total_count": 0,
+			"offset": offset,
+			"limit": limit,
+			"has_more": false,
+			"message": "No scene open",
+		}}
 
 	var nodes: Array[Dictionary] = []
-	_walk_tree(scene_root, nodes, 0, max_depth, scene_root)
-	return {"data": {"nodes": nodes, "total_count": nodes.size()}}
+	# index_ref[0] is the running DFS index shared across the recursion (Arrays
+	# pass by reference in GDScript). The walk still visits every node to get an
+	# accurate total_count, but only materializes those inside the window.
+	var index_ref: Array[int] = [0]
+	_walk_tree(scene_root, nodes, 0, max_depth, scene_root, offset, limit, index_ref)
+	var total: int = index_ref[0]
+	return {"data": {
+		"nodes": nodes,
+		"total_count": total,
+		"offset": offset,
+		"limit": limit,
+		"has_more": limit > 0 and offset + limit < total,
+	}}
 
 
 func get_open_scenes(_params: Dictionary) -> Dictionary:
@@ -357,14 +382,21 @@ func _save_current_scene_as(path: String) -> void:
 	EditorInterface.save_scene_as(path)
 
 
-func _walk_tree(node: Node, out: Array[Dictionary], depth: int, max_depth: int, scene_root: Node) -> void:
+func _walk_tree(node: Node, out: Array[Dictionary], depth: int, max_depth: int, scene_root: Node, offset: int, limit: int, index_ref: Array[int]) -> void:
 	if depth > max_depth:
 		return
-	out.append({
-		"name": node.name,
-		"type": node.get_class(),
-		"path": McpScenePath.from_node(node, scene_root),
-		"children_count": node.get_child_count(),
-	})
+	var idx: int = index_ref[0]
+	index_ref[0] = idx + 1
+	# Materialize only nodes inside the [offset, offset+limit) window. Outside
+	# it we still recurse (to count total_count) but skip the per-node dict and
+	# the O(depth) scene-path build — the actual cost this pagination avoids.
+	var in_window := idx >= offset and (limit <= 0 or idx < offset + limit)
+	if in_window:
+		out.append({
+			"name": node.name,
+			"type": node.get_class(),
+			"path": McpScenePath.from_node(node, scene_root),
+			"children_count": node.get_child_count(),
+		})
 	for child in node.get_children():
-		_walk_tree(child, out, depth + 1, max_depth, scene_root)
+		_walk_tree(child, out, depth + 1, max_depth, scene_root, offset, limit, index_ref)

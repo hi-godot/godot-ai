@@ -150,5 +150,8 @@ class TestMcpVerificationWorkflows:
         await _bounded(task)
 
         assert opened.data["path"] == "res://levels/arena.tscn"
-        assert hierarchy.data["root"] == "Arena"
+        ## The readback's first (root) node is the arena scene root. (The old
+        ## `data["root"]` field was a dead passthrough — the real plugin never
+        ## sent it — so verify the loaded scene via the actual node list.)
+        assert hierarchy.data["nodes"][0]["name"] == "Arena"
         assert any(node["name"] == "PlayerSpawn" for node in hierarchy.data["nodes"])

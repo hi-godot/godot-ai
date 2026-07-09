@@ -62,6 +62,44 @@ func test_scene_tree_returns_data() -> void:
 	assert_has_key(result.data, "total_count")
 
 
+func test_scene_tree_no_limit_returns_all() -> void:
+	var result := _handler.get_scene_tree({"depth": 10})
+	## No limit -> full tree, has_more false, nodes count equals total_count.
+	assert_eq(result.data.nodes.size(), result.data.total_count)
+	assert_false(result.data.has_more, "Unlimited read has nothing more")
+	assert_eq(result.data.offset, 0)
+
+
+func test_scene_tree_limit_windows_nodes_and_reports_total() -> void:
+	var full := _handler.get_scene_tree({"depth": 10})
+	var total: int = full.data.total_count
+	assert_gt(total, 2, "test scene needs >2 nodes to exercise paging")
+	var page := _handler.get_scene_tree({"depth": 10, "limit": 2})
+	assert_eq(page.data.nodes.size(), 2, "limit caps the returned window")
+	## total_count reflects the whole tree, not the returned window.
+	assert_eq(page.data.total_count, total)
+	assert_eq(page.data.limit, 2)
+	assert_true(page.data.has_more, "More nodes remain past a 2-node window")
+
+
+func test_scene_tree_offset_skips_leading_nodes() -> void:
+	var full := _handler.get_scene_tree({"depth": 10})
+	## DFS order is stable, so offset 1 drops the root and starts at its first
+	## walked descendant.
+	var offset_page := _handler.get_scene_tree({"depth": 10, "offset": 1, "limit": 1})
+	assert_eq(offset_page.data.nodes.size(), 1)
+	assert_eq(offset_page.data.offset, 1)
+	assert_eq(offset_page.data.nodes[0].name, full.data.nodes[1].name)
+
+
+func test_scene_tree_offset_past_end_returns_empty_window() -> void:
+	var full := _handler.get_scene_tree({"depth": 10})
+	var beyond := _handler.get_scene_tree({"depth": 10, "offset": full.data.total_count + 5, "limit": 10})
+	assert_eq(beyond.data.nodes.size(), 0, "offset past the end yields no nodes")
+	assert_eq(beyond.data.total_count, full.data.total_count, "total_count still reflects the full tree")
+	assert_false(beyond.data.has_more)
+
+
 func test_scene_tree_root_is_main() -> void:
 	var result := _handler.get_scene_tree({"depth": 10})
 	var nodes: Array = result.data.nodes

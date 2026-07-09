@@ -13,9 +13,18 @@ async def scene_get_hierarchy(
     offset: int = 0,
     limit: int = 100,
 ) -> dict:
-    result = await runtime.send_command("get_scene_tree", {"depth": depth})
-    nodes = result.get("nodes", [])
-    return {"root": result.get("root", ""), **paginate(nodes, offset, limit, key="nodes")}
+    result = await runtime.send_command(
+        "get_scene_tree", {"depth": depth, "offset": offset, "limit": limit}
+    )
+    ## Newer plugins paginate server-side (only the window is walked into node
+    ## dicts and shipped) and stamp `has_more`; pass their result straight
+    ## through. Older plugins — and version-skewed installs — ignore the
+    ## offset/limit params and return the full node list without pagination
+    ## metadata, so fall back to slicing here. This keeps a mixed
+    ## new-server/old-plugin pair correct.
+    if "has_more" in result:
+        return result
+    return paginate(result.get("nodes", []), offset, limit, key="nodes")
 
 
 async def scene_get_roots(runtime: DirectRuntime) -> dict:
