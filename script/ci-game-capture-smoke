@@ -411,12 +411,18 @@ def main() -> int:
     _tool_call(session_id, "scene_open", {"path": SCENE_PATH}, 10)
     time.sleep(1)
 
-    print("Running project (current scene)")
-    _tool_call(session_id, "project_run", {"mode": "current"}, 11, timeout=20)
-
     attempt_log: list[str] = []
     last_png: bytes | None = None
     try:
+        print("Running project (current scene)")
+        ## 60s, not 20 (#673): the reply waits on the editor spawning a
+        ## whole game process under a software rasterizer, and a busy
+        ## runner has blown a 20s socket margin. The ready-poll below
+        ## exits the moment the game is up, so the higher ceiling costs
+        ## nothing on healthy runs. Inside the try so a timeout here
+        ## still dumps diagnostics and writes the diag artifacts.
+        _tool_call(session_id, "project_run", {"mode": "current"}, 11, timeout=60)
+
         _wait_for_game_capture_ready(session_id, history=attempt_log)
 
         deadline = time.monotonic() + CAPTURE_BUDGET_SEC
