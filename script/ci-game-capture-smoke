@@ -44,6 +44,7 @@ import json
 import os
 import sys
 import time
+import traceback
 import urllib.error
 import urllib.request
 
@@ -77,6 +78,12 @@ CAPTURE_RETRY_DELAY_SEC = 2.0
 ## Where the final-failure artifacts (last PNG + attempt log) land; CI
 ## uploads this directory when the job fails.
 DIAG_DIR = os.environ.get("CAPTURE_DIAG_DIR", "capture-smoke-diag")
+## How long the editor's WS session may stay unreachable mid-wait before
+## the ready-poll gives up. The plugin auto-reconnects after transient
+## drops, so a brief outage is tolerated; a persistent one means the
+## editor bridge is gone and the remaining minutes of ready-wait can only
+## end in a misleading "never registered" timeout (#675).
+SESSION_LOSS_GRACE_SEC = 45.0
 
 
 def _post(session_id: str | None, body: dict, timeout: float = 10.0) -> dict:
@@ -174,7 +181,9 @@ def _wait_for_godot_session(session_id: str, timeout: float = 120.0) -> None:
 ## over a minute to boot far enough to register its capture on a
 ## paravirtualized runner. The poll exits the moment it's ready, so the
 ## ceiling only costs time when something is genuinely wrong.
-def _wait_for_game_capture_ready(session_id: str, timeout: float = 180.0) -> None:
+def _wait_for_game_capture_ready(
+    session_id: str, timeout: float = 180.0, history: list[str] | None = None
+) -> None:
     ## is_playing flips when the editor *spawns* the game subprocess; it does
     ## NOT imply the game's _mcp_game_helper autoload has reached _ready() and
     ## registered its EngineDebugger "mcp" capture. Sending take_screenshot
@@ -185,14 +194,66 @@ def _wait_for_game_capture_ready(session_id: str, timeout: float = 180.0) -> Non
     ## game_capture_ready is the editor-side mirror of the game-side
     ## "mcp:hello" boot beacon — it flips true exactly when the capture
     ## handler is wired up, so polling it is the deterministic replacement.
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        state = _tool_call(session_id, "editor_state", {}, 100)
-        if state.get("is_playing") and state.get("game_capture_ready"):
-            print(f"Game capture ready (readiness={state.get('readiness')})")
+    ##
+    ## Each observed state change is printed and appended to `history` so a
+    ## failed wait leaves a timeline in the diag artifacts (#675: this path
+    ## used to raise with zero evidence of what the editor reported). A
+    ## persistently unreachable session fails fast with an honest message
+    ## instead of burning the rest of the timeout — in the #675 run the
+    ## editor's WS session dropped mid-wait and the "never registered"
+    ## timeout pointed away from the real problem.
+    start = time.monotonic()
+    deadline = start + timeout
+    lost_since: float | None = None
+    last_note = ""
+    last_logged_at = start
+
+    def _note(note: str) -> None:
+        nonlocal last_note, last_logged_at
+        now = time.monotonic()
+        if note == last_note and now - last_logged_at < 30.0:
             return
+        line = f"[ready-wait +{now - start:.1f}s] {note}"
+        print(line)
+        if history is not None:
+            history.append(line)
+        last_note = note
+        last_logged_at = now
+
+    while time.monotonic() < deadline:
+        try:
+            state = _tool_call(session_id, "editor_state", {}, 100)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            state = {"error": {"code": "TRANSPORT_ERROR", "message": str(exc)}}
+        err = state.get("error")
+        if err:
+            code = err.get("code", "?") if isinstance(err, dict) else str(err)
+            now = time.monotonic()
+            if lost_since is None:
+                lost_since = now
+            _note(f"editor_state failing: {code}")
+            if now - lost_since > SESSION_LOSS_GRACE_SEC:
+                raise RuntimeError(
+                    "Editor session lost while waiting for game capture: "
+                    f"editor_state has failed with {code} for "
+                    f"{now - lost_since:.0f}s straight — the editor<->server "
+                    "bridge dropped, not a slow game boot"
+                )
+        else:
+            lost_since = None
+            if state.get("is_playing") and state.get("game_capture_ready"):
+                print(f"Game capture ready (readiness={state.get('readiness')})")
+                return
+            _note(
+                f"is_playing={state.get('is_playing')} "
+                f"game_capture_ready={state.get('game_capture_ready')} "
+                f"readiness={state.get('readiness')}"
+            )
         time.sleep(0.5)
-    raise RuntimeError("Game subprocess never registered its mcp capture")
+    raise RuntimeError(
+        "Game subprocess never registered its mcp capture within "
+        f"{timeout:.0f}s (last observed: {last_note or 'nothing'})"
+    )
 
 
 def _within_tolerance(a: tuple[int, int, int], b: tuple[int, int, int]) -> bool:
@@ -353,14 +414,14 @@ def main() -> int:
     print("Running project (current scene)")
     _tool_call(session_id, "project_run", {"mode": "current"}, 11, timeout=20)
 
+    attempt_log: list[str] = []
+    last_png: bytes | None = None
     try:
-        _wait_for_game_capture_ready(session_id)
+        _wait_for_game_capture_ready(session_id, history=attempt_log)
 
         deadline = time.monotonic() + CAPTURE_BUDGET_SEC
         attempt = 0
-        attempt_log: list[str] = []
         last_failures: list[str] = []
-        last_png: bytes | None = None
         while True:
             attempt += 1
             print(f"Capturing source='game' (attempt {attempt})")
@@ -397,6 +458,12 @@ def main() -> int:
     except Exception:
         print("\nCapture smoke test raised — dumping diagnostics:", file=sys.stderr)
         _dump_diagnostics(session_id)
+        ## This path used to exit without touching DIAG_DIR, so a
+        ## ready-wait failure uploaded no artifacts at all (#675). Write
+        ## whatever timeline exists plus the traceback.
+        attempt_log.append("")
+        attempt_log.append(traceback.format_exc().rstrip())
+        _write_diag_artifacts(attempt_log, last_png)
         raise
     finally:
         try:

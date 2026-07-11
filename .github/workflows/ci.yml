@@ -392,13 +392,21 @@ jobs:
       ## Godot 4.7 on the headless Windows runner fails with
       ## "Required Vulkan instance extension VK_KHR_surface not found"
       ## because the runner has no GPU/Vulkan driver. Install Mesa's
-      ## lavapipe software Vulkan ICD from mesa-dist-win and point the
-      ## Vulkan loader at it (VK_DRIVER_FILES; VK_ICD_FILENAMES kept for
-      ## older loaders). Release is pinned for reproducibility. Every
-      ## setup failure exits non-zero — no silent fallback to the broken
-      ## no-ICD state. NOTE (#586): this can only be truly verified by a
-      ## Windows CI run; if 4.7 capture still fails there, suspect the
-      ## surface/swapchain path rather than the ICD install itself.
+      ## lavapipe software Vulkan ICD from mesa-dist-win. Release is
+      ## pinned for reproducibility. Every setup failure exits non-zero —
+      ## no silent fallback to the broken no-ICD state.
+      ##
+      ## Registration is via the HKLM registry, not just env vars (#675):
+      ## the Vulkan loader silently discards VK_DRIVER_FILES /
+      ## VK_ICD_FILENAMES in elevated processes, and GitHub's Windows
+      ## runner executes jobs elevated — job logs from #675 show both a
+      ## passing and a failing run hitting the VK_KHR_surface error and
+      ## falling back to the D3D12 Microsoft Basic Render Driver with the
+      ## env vars set correctly. HKLM\SOFTWARE\Khronos\Vulkan\Drivers is
+      ## the loader's system-wide discovery path and is honored regardless
+      ## of integrity level. The env vars are kept as a belt-and-braces
+      ## for any non-elevated child. The "Report rendering driver" step
+      ## below surfaces which driver actually engaged on every run.
       - name: Install software Vulkan driver (Mesa lavapipe)
         if: matrix.os == 'windows-latest'
         shell: pwsh
@@ -416,9 +424,12 @@ jobs:
           $dll = Join-Path $dest "x64\vulkan_lvp.dll"
           if (-not (Test-Path $icd)) { throw "lavapipe ICD manifest not found: $icd" }
           if (-not (Test-Path $dll)) { throw "lavapipe driver DLL not found: $dll" }
+          $reg = "HKLM:\SOFTWARE\Khronos\Vulkan\Drivers"
+          New-Item -Path $reg -Force | Out-Null
+          New-ItemProperty -Path $reg -Name $icd -Value 0 -PropertyType DWord -Force | Out-Null
           "VK_DRIVER_FILES=$icd" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "VK_ICD_FILENAMES=$icd" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "Installed lavapipe ICD: $icd"
+          Write-Host "Installed lavapipe ICD: $icd (registered in $reg)"
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -441,17 +452,50 @@ jobs:
           godot --headless --path test_project --import > godot-import.log 2>&1 || true
           bash script/ci-check-gdscript godot-import.log
 
+      ## Editor output goes to godot-editor.log (mirroring the godot-tests
+      ## jobs) so a failed run keeps the boot/driver evidence — before #675
+      ## the smoke job's editor output was only interleaved into whichever
+      ## step happened to be running, and a stalled run left no artifact.
       - name: Start Godot editor (Linux / xvfb)
         if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           xvfb-run -a --server-args="-screen 0 1280x720x24" \
-            godot --rendering-driver opengl3 --path test_project --editor &
+            godot --rendering-driver opengl3 --path test_project --editor \
+            > godot-editor.log 2>&1 &
 
       - name: Start Godot editor (windowed)
         if: matrix.os != 'ubuntu-latest'
         shell: bash
-        run: godot --path test_project --editor &
+        run: godot --path test_project --editor > godot-editor.log 2>&1 &
+
+      ## Surface which rendering driver actually engaged, pass or fail.
+      ## On Windows this is the canary for the #661 lavapipe path: if the
+      ## editor fell back to the D3D12 Microsoft Basic Render Driver the
+      ## software path is in play (slow enough to flake — #675), so warn
+      ## loudly. A warning rather than a failure: the smoke has passed on
+      ## the fallback driver, so don't turn a working (if fragile) run
+      ## into a hard outage. Promote to a hard check once lavapipe is
+      ## confirmed engaging on the runner.
+      - name: Report rendering driver
+        shell: bash
+        run: |
+          pattern='Vulkan [0-9]|D3D12 |Metal [0-9]|OpenGL API'
+          for _ in $(seq 1 60); do
+            if grep -qE "$pattern" godot-editor.log 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          driver_line=$(grep -m1 -E "$pattern" godot-editor.log 2>/dev/null || true)
+          if [ -z "$driver_line" ]; then
+            echo "::warning title=No rendering driver detected::godot-editor.log has no driver line after 60s — editor may not have booted"
+            exit 0
+          fi
+          echo "Rendering driver: $driver_line"
+          if echo "$driver_line" | grep -q "Microsoft Basic Render Driver"; then
+            echo "::warning title=lavapipe did not engage::Editor fell back to the D3D12 Microsoft Basic Render Driver (#675) — the Mesa lavapipe ICD was not picked up, and the software D3D12 path is slow enough to flake"
+          fi
 
       - name: Run capture smoke test
         ## Covers the worst case of the script's internal ceilings: 120s
@@ -464,10 +508,21 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: python script/ci-game-capture-smoke
 
+      - name: Dump Godot editor log on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "===== godot-editor.log (last 500 lines) ====="
+          tail -n 500 godot-editor.log || echo "(log not found)"
+          echo "===== godot-import.log (last 200 lines) ====="
+          tail -n 200 godot-import.log || echo "(log not found)"
+
       - name: Upload capture diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: capture-smoke-diag-${{ matrix.label }}
-          path: capture-smoke-diag/
+          path: |
+            capture-smoke-diag/
+            godot-editor.log
           if-no-files-found: ignore
