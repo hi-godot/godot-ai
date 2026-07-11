@@ -45,7 +45,7 @@ from urllib.parse import urlparse
 import httpx
 
 from godot_ai import __version__ as _PACKAGE_VERSION
-from godot_ai.protocol.errors import ErrorCode
+from godot_ai.protocol.errors import EditorNotReadySubCode, ErrorCode
 
 logger = logging.getLogger("godot-ai-telemetry")
 
@@ -557,6 +557,7 @@ def record_tool_usage(
     *,
     sub_action: str | None = None,
     session_id: str | None = None,
+    error_sub_code: str | None = None,
 ) -> None:
     data: dict[str, Any] = {
         "tool_name": tool_name,
@@ -567,6 +568,11 @@ def record_tool_usage(
         data["sub_action"] = _truncate(sub_action, 64)
     if error:
         data["error"] = _truncate(error, 200)
+    ## #651 stage 1: separate field, not a mutation of ``error`` — dashboards
+    ## key on the exact EDITOR_NOT_READY string, so the sub-code must ride
+    ## alongside it rather than replace it.
+    if error_sub_code:
+        data["error_sub_code"] = _truncate(error_sub_code, 64)
     record_telemetry(RecordType.TOOL_EXECUTION, data, session_id=session_id)
 
 
@@ -696,6 +702,26 @@ def _safe_exception_category(exc: Exception) -> str:
     return exc.__class__.__name__
 
 
+def _safe_error_sub_code(exc: Exception) -> str | None:
+    """Return ``data.sub_code`` from a GodotCommandError, allowlisted.
+
+    #651 stage 1: EDITOR_NOT_READY carries the concrete editor state in
+    ``data.sub_code`` so telemetry can attribute the opaque bucket per
+    state. Only known ``EditorNotReadySubCode`` values pass — ``data`` is
+    plugin-provided, and arbitrary strings could leak project details the
+    same way exception messages can (see ``_safe_exception_category``).
+    """
+    if exc.__class__.__name__ != "GodotCommandError":
+        return None
+    data = getattr(exc, "data", None)
+    if not isinstance(data, dict):
+        return None
+    sub_code = data.get("sub_code")
+    if isinstance(sub_code, str) and sub_code in {m.value for m in EditorNotReadySubCode}:
+        return sub_code
+    return None
+
+
 def _instrument(
     func: Callable[..., Any],
     *,
@@ -708,12 +734,25 @@ def _instrument(
     extract_sub_action = _build_sub_action_extractor(func)
 
     def _emit(
-        start: float, success: bool, sub: str | None, sid: str | None, err: str | None
+        start: float,
+        success: bool,
+        sub: str | None,
+        sid: str | None,
+        err: str | None,
+        err_sub_code: str | None = None,
     ) -> None:
         duration_ms = (time.perf_counter() - start) * 1000.0
         try:
             if kind == "tool":
-                record(name, success, duration_ms, err, sub_action=sub, session_id=sid)
+                record(
+                    name,
+                    success,
+                    duration_ms,
+                    err,
+                    sub_action=sub,
+                    session_id=sid,
+                    error_sub_code=err_sub_code,
+                )
             else:
                 record(name, success, duration_ms, err, session_id=sid)
         except Exception:  # noqa: BLE001  ## never let telemetry break the caller
@@ -733,7 +772,7 @@ def _instrument(
                 return result
             except Exception as exc:
                 err = _safe_exception_category(exc)
-                _emit(start, False, sub, sid, err)
+                _emit(start, False, sub, sid, err, _safe_error_sub_code(exc))
                 raise
 
         _expose_wrapped_surface(_async_wrapper, func)
@@ -751,7 +790,7 @@ def _instrument(
             return result
         except Exception as exc:
             err = _safe_exception_category(exc)
-            _emit(start, False, sub, sid, err)
+            _emit(start, False, sub, sid, err, _safe_error_sub_code(exc))
             raise
 
     _expose_wrapped_surface(_sync_wrapper, func)

@@ -64,10 +64,46 @@ const VALUE_OUT_OF_RANGE := "VALUE_OUT_OF_RANGE"
 const WRONG_TYPE := "WRONG_TYPE"
 const MISSING_REQUIRED_PARAM := "MISSING_REQUIRED_PARAM"
 
+## #651 stage 1: EDITOR_NOT_READY sub-codes. These travel in
+## `error.data.sub_code`, NEVER as the top-level `error.code` — existing
+## callers and dashboards key on EDITOR_NOT_READY, so the top-level code is
+## frozen. Each sub-code names the concrete editor state at rejection time,
+## limited to states EditorInterface/EditorFileSystem can report
+## deterministically. States we cannot observe (script compilation,
+## resource reload, modal dialogs) intentionally get NO sub-code: a bare
+## EDITOR_NOT_READY stays the honest fallback rather than a guessed label.
+## Keep in sync with protocol/errors.py::EditorNotReadySubCode — enforced
+## by tests/unit/test_editor_not_ready_hint_contract.py.
+const SUB_EDITOR_IMPORTING := "EDITOR_IMPORTING"
+const SUB_EDITOR_PLAYING := "EDITOR_PLAYING"
+const SUB_EDITOR_NO_SCENE := "EDITOR_NO_SCENE"
+const SUB_EDITOR_GAME_NOT_RUNNING := "EDITOR_GAME_NOT_RUNNING"
+const SUB_EDITOR_VIEWPORT_UNAVAILABLE := "EDITOR_VIEWPORT_UNAVAILABLE"
+const SUB_EDITOR_VIEWPORT_NOT_3D := "EDITOR_VIEWPORT_NOT_3D"
+const SUB_EDITOR_VIEWPORT_EMPTY := "EDITOR_VIEWPORT_EMPTY"
+const SUB_EDITOR_UNAVAILABLE := "EDITOR_UNAVAILABLE"
+
 
 ## Build a standard error response dictionary.
 static func make(code: String, message: String) -> Dictionary:
 	return {"status": "error", "error": {"code": code, "message": message}}
+
+
+## Build an EDITOR_NOT_READY error carrying the #651 stage-1 attribution
+## payload: `data.sub_code` + `retryable` + `hint`. Mirrors the shape
+## scene_path.gd::require_edited_scene established (editor_state/retryable/
+## hint). `hint` may be empty when `message` already IS the recovery hint —
+## the server's GodotCommandError string-appends every data key, so
+## duplicating the message into data would double the agent-visible text.
+static func make_not_ready(
+	sub_code: String, message: String, retryable: bool, hint: String = ""
+) -> Dictionary:
+	var err := make(EDITOR_NOT_READY, message)
+	var data := {"sub_code": sub_code, "retryable": retryable}
+	if not hint.is_empty():
+		data["hint"] = hint
+	err["error"]["data"] = data
+	return err
 
 
 ## Return a NEW error dict with the original code and a prefixed message.

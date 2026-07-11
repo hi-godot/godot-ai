@@ -234,6 +234,21 @@ func test_game_command_not_playing() -> void:
 	var handler := EditorHandler.new(McpLogBuffer.new(), McpConnection.new(), plugin)
 	var result := handler.game_command({"op": "get_scene_tree"})
 	assert_is_error(result, ErrorCodes.EDITOR_NOT_READY)
+	## #651 stage 1: attribute the block to its concrete state.
+	assert_eq(result.error.data.sub_code, ErrorCodes.SUB_EDITOR_GAME_NOT_RUNNING)
+	assert_eq(result.error.data.retryable, false)
+	assert_contains(result.error.data.hint, "project_run")
+
+
+func test_game_eval_not_playing_carries_sub_code() -> void:
+	## Same gate as game_command — the harness editor is never playing
+	## while the suite runs, so this exercises the real branch.
+	var plugin := McpDebuggerPlugin.new()
+	var handler := EditorHandler.new(McpLogBuffer.new(), McpConnection.new(), plugin)
+	var result := handler.game_eval({"code": "return 1"})
+	assert_is_error(result, ErrorCodes.EDITOR_NOT_READY)
+	assert_eq(result.error.data.sub_code, ErrorCodes.SUB_EDITOR_GAME_NOT_RUNNING)
+	assert_eq(result.error.data.retryable, false)
 
 
 func test_debugger_plugin_game_command_response_unknown_request() -> void:
@@ -259,6 +274,10 @@ func test_viewport_precheck_rejects_node2d_root() -> void:
 	root.free()
 	assert_is_error(result, ErrorCodes.EDITOR_NOT_READY)
 	assert_has_key(result.error, "data")
+	## #651 stage 1: sub-code names the state; editor_state stays for
+	## pre-#651 consumers.
+	assert_eq(result.error.data.sub_code, ErrorCodes.SUB_EDITOR_VIEWPORT_NOT_3D)
+	assert_eq(result.error.data.retryable, false)
 	assert_eq(result.error.data.editor_state, "viewport_not_3d")
 	assert_eq(result.error.data.scene_root_type, "Node2D")
 	## The message must mention the 2D nature, cinematic alternative, and
@@ -344,6 +363,10 @@ func test_viewport_precheck_walks_deep_descendants() -> void:
 func test_viewport_precheck_rejects_null_scene() -> void:
 	var result := EditorHandler.viewport_screenshot_precheck(null)
 	assert_is_error(result, ErrorCodes.EDITOR_NOT_READY)
+	## #651 stage 1: the honest state for a null root is "no scene", not
+	## "scene lacks 3D content" — the sub-code is relabeled while
+	## editor_state keeps the pre-#651 value for existing consumers.
+	assert_eq(result.error.data.sub_code, ErrorCodes.SUB_EDITOR_NO_SCENE)
 	assert_eq(result.error.data.editor_state, "viewport_not_3d")
 	assert_eq(result.error.data.scene_root_type, "")
 	assert_contains(result.error.message, "no scene is open")

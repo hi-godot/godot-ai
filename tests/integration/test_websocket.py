@@ -602,6 +602,39 @@ class TestErrors:
         assert exc_info.value.data["candidates"] == candidates
         await plugin.close()
 
+    async def test_editor_not_ready_sub_code_passes_through_envelope(self, harness):
+        """#651 stage 1: a plugin-side EDITOR_NOT_READY carrying the
+        attribution payload (data.sub_code + retryable + hint) must reach
+        the caller intact — top-level code unchanged for existing
+        dashboards, sub-code visible both structurally and in str(exc)
+        for clients that only see the serialized error."""
+        plugin = await harness.connect_plugin()
+        client = GodotClient(harness.server, harness.registry)
+
+        async def mock_handler():
+            cmd = await plugin.recv_command()
+            await plugin.send_error(
+                cmd["request_id"],
+                "EDITOR_NOT_READY",
+                "Game is not running — start the project first",
+                data={
+                    "sub_code": "EDITOR_GAME_NOT_RUNNING",
+                    "retryable": False,
+                    "hint": "Start the game with project_run, then retry.",
+                },
+            )
+
+        handler_task = asyncio.create_task(mock_handler())
+        with pytest.raises(GodotCommandError) as exc_info:
+            await client.send("game_eval")
+        await handler_task
+
+        assert exc_info.value.code == "EDITOR_NOT_READY"
+        assert exc_info.value.data["sub_code"] == "EDITOR_GAME_NOT_RUNNING"
+        assert exc_info.value.data["retryable"] is False
+        assert "sub_code=EDITOR_GAME_NOT_RUNNING" in str(exc_info.value)
+        await plugin.close()
+
     async def test_send_to_no_active_session_raises(self, harness):
         client = GodotClient(harness.server, harness.registry)
         with pytest.raises(GodotCommandError) as exc_info:
@@ -1225,6 +1258,8 @@ class TestEditorStateSelfHeal:
             with pytest.raises(GodotCommandError) as exc_info:
                 await scene_handlers.scene_save(runtime)
             assert exc_info.value.code == "EDITOR_NOT_READY"
+            # #651 stage 1: the gate attributes the block to its sub-code.
+            assert exc_info.value.data["sub_code"] == "EDITOR_PLAYING"
         finally:
             await asyncio.wait_for(task, timeout=2.0)
             await plugin.close()
@@ -1336,6 +1371,8 @@ class TestResponseEnvelopeReadinessSelfHeal:
             with pytest.raises(GodotCommandError) as exc_info:
                 await scene_handlers.scene_save(runtime)
             assert exc_info.value.code == "EDITOR_NOT_READY"
+            # #651 stage 1: the gate attributes the block to its sub-code.
+            assert exc_info.value.data["sub_code"] == "EDITOR_PLAYING"
         finally:
             await asyncio.wait_for(task, timeout=2.0)
             await plugin.close()

@@ -56,7 +56,9 @@ func preset_fade(params: Dictionary) -> Dictionary:
 
 	var handler = _h()
 	if handler == null:
-		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_UNAVAILABLE,
+			"AnimationHandler not available", false)
 	var resolved: Dictionary = handler._resolve_player(player_path)
 	if resolved.has("error"):
 		return resolved
@@ -154,7 +156,9 @@ func preset_slide(params: Dictionary) -> Dictionary:
 
 	var handler = _h()
 	if handler == null:
-		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_UNAVAILABLE,
+			"AnimationHandler not available", false)
 	var resolved: Dictionary = handler._resolve_player(player_path)
 	if resolved.has("error"):
 		return resolved
@@ -254,7 +258,9 @@ func preset_shake(params: Dictionary) -> Dictionary:
 
 	var handler = _h()
 	if handler == null:
-		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_UNAVAILABLE,
+			"AnimationHandler not available", false)
 	var resolved: Dictionary = handler._resolve_player(player_path)
 	if resolved.has("error"):
 		return resolved
@@ -368,7 +374,9 @@ func preset_pulse(params: Dictionary) -> Dictionary:
 
 	var handler = _h()
 	if handler == null:
-		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_UNAVAILABLE,
+			"AnimationHandler not available", false)
 	var resolved: Dictionary = handler._resolve_player(player_path)
 	if resolved.has("error"):
 		return resolved

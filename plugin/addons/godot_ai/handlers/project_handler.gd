@@ -435,7 +435,9 @@ func search_filesystem(params: Dictionary) -> Dictionary:
 
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs == null:
-		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "EditorFileSystem not available")
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_UNAVAILABLE,
+			"EditorFileSystem not available", false)
 
 	var results: Array[Dictionary] = []
 	_scan_directory(efs.get_filesystem(), name_filter, type_filter, path_filter, results)

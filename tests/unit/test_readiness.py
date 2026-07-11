@@ -204,6 +204,9 @@ async def test_require_writable_async_rejects_importing_after_probe_confirms():
         await require_writable_async(runtime)
     assert exc_info.value.code == ErrorCode.EDITOR_NOT_READY
     data = exc_info.value.data
+    # #651 stage 1: the sub-code names the blocking state so telemetry can
+    # attribute the formerly opaque bucket. Top-level code stays frozen.
+    assert data["sub_code"] == "EDITOR_IMPORTING"
     assert data["editor_state"] == "importing"
     assert data["retryable"] is True
     # The hint must be an explicit, action-oriented instruction so AI callers
@@ -214,6 +217,7 @@ async def test_require_writable_async_rejects_importing_after_probe_confirms():
     # clients that only see str(exc) can still distinguish retryable cases.
     assert "retryable=True" in str(exc_info.value)
     assert "editor_state=importing" in str(exc_info.value)
+    assert "sub_code=EDITOR_IMPORTING" in str(exc_info.value)
     assert client.probe_calls == 1
 
 
@@ -228,6 +232,7 @@ async def test_require_writable_async_rejects_playing_after_probe_confirms():
     # string alone.
     assert 'project_manage(op="stop")' in exc_info.value.message
     data = exc_info.value.data
+    assert data["sub_code"] == "EDITOR_PLAYING"
     assert data["editor_state"] == "playing"
     assert data["retryable"] is False
     # Hint must name the exact recovery call — this is the F-EDITOR-NOT-READY-
@@ -251,6 +256,7 @@ async def test_require_writable_async_probe_failure_falls_back_to_cached_value()
         await require_writable_async(runtime)
     assert exc_info.value.code == ErrorCode.EDITOR_NOT_READY
     data = exc_info.value.data
+    assert data["sub_code"] == "EDITOR_PLAYING"
     assert data["editor_state"] == "playing"
     assert data["retryable"] is False
     assert 'project_manage(op="stop")' in data["hint"]

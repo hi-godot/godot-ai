@@ -83,6 +83,7 @@ static func require_edited_scene(expected_scene_file: String) -> Dictionary:
 		# this payload because there's no useful caller hint to give.
 		var err := ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "No scene open")
 		err["error"]["data"] = {
+			"sub_code": ErrorCodes.SUB_EDITOR_NO_SCENE,
 			"editor_state": "no_scene",
 			"retryable": false,
 			"hint": (

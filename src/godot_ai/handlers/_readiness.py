@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from godot_ai.protocol.errors import ErrorCode
+from godot_ai.protocol.errors import EditorNotReadySubCode, ErrorCode
 from godot_ai.sessions.registry import Session
 
 if TYPE_CHECKING:
@@ -36,6 +36,14 @@ _READINESS_INFO: dict[str, tuple[str, bool, str]] = {
             "(or wait for the user to stop the game) before retrying writes."
         ),
     ),
+}
+
+## #651 stage 1: attribute each blocking readiness state to an
+## EDITOR_NOT_READY sub-code (carried in ``data.sub_code``; top-level code
+## unchanged) so telemetry can split the opaque bucket per state.
+_READINESS_SUB_CODE: dict[str, EditorNotReadySubCode] = {
+    "importing": EditorNotReadySubCode.EDITOR_IMPORTING,
+    "playing": EditorNotReadySubCode.EDITOR_PLAYING,
 }
 
 # Every readiness value the plugin can emit. Derived from the blocking-state
@@ -149,12 +157,19 @@ def _enforce_blocking_state(session: "Session | None") -> None:
     from godot_ai.godot_client.client import GodotCommandError
 
     message, retryable, hint = info
+    ## ``sub_code`` first so it leads the agent-visible ``[k=v, ...]``
+    ## suffix that GodotCommandError builds from data. ``editor_state``
+    ## stays for callers/tests that key on the pre-#651 payload shape.
+    data: dict[str, object] = {
+        "editor_state": session.readiness,
+        "retryable": retryable,
+        "hint": hint,
+    }
+    sub_code = _READINESS_SUB_CODE.get(session.readiness)
+    if sub_code is not None:
+        data = {"sub_code": sub_code.value, **data}
     raise GodotCommandError(
         code=ErrorCode.EDITOR_NOT_READY,
         message=message,
-        data={
-            "editor_state": session.readiness,
-            "retryable": retryable,
-            "hint": hint,
-        },
+        data=data,
     )

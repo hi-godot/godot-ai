@@ -38,3 +38,28 @@ class ErrorCode(StrEnum):
     VALUE_OUT_OF_RANGE = "VALUE_OUT_OF_RANGE"
     WRONG_TYPE = "WRONG_TYPE"
     MISSING_REQUIRED_PARAM = "MISSING_REQUIRED_PARAM"
+
+
+class EditorNotReadySubCode(StrEnum):
+    """#651 stage 1: sub-codes carried in ``error.data.sub_code`` on
+    EDITOR_NOT_READY errors.
+
+    Never emitted as a top-level ``error.code`` — existing callers and
+    dashboards key on EDITOR_NOT_READY, so the top-level code is frozen.
+    Each value names the concrete editor state at rejection time, limited
+    to what EditorInterface/EditorFileSystem report deterministically.
+    Undetectable busy states (script compilation, resource reload, modal
+    dialogs) intentionally have no sub-code — a bare EDITOR_NOT_READY with
+    no ``data.sub_code`` is the honest fallback, not a guessed label.
+    Keep in sync with utils/error_codes.gd ``SUB_*`` constants — enforced
+    by tests/unit/test_editor_not_ready_hint_contract.py.
+    """
+
+    EDITOR_IMPORTING = "EDITOR_IMPORTING"
+    EDITOR_PLAYING = "EDITOR_PLAYING"
+    EDITOR_NO_SCENE = "EDITOR_NO_SCENE"
+    EDITOR_GAME_NOT_RUNNING = "EDITOR_GAME_NOT_RUNNING"
+    EDITOR_VIEWPORT_UNAVAILABLE = "EDITOR_VIEWPORT_UNAVAILABLE"
+    EDITOR_VIEWPORT_NOT_3D = "EDITOR_VIEWPORT_NOT_3D"
+    EDITOR_VIEWPORT_EMPTY = "EDITOR_VIEWPORT_EMPTY"
+    EDITOR_UNAVAILABLE = "EDITOR_UNAVAILABLE"

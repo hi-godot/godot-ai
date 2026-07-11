@@ -109,7 +109,9 @@ func reimport(params: Dictionary) -> Dictionary:
 
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs == null:
-		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "EditorFileSystem not available")
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_UNAVAILABLE,
+			"EditorFileSystem not available", false)
 
 	var reimported: Array[String] = []
 	var not_found: Array[String] = []
@@ -149,7 +151,9 @@ func reimport(params: Dictionary) -> Dictionary:
 func scan_filesystem(params: Dictionary) -> Dictionary:
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs == null:
-		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "EditorFileSystem not available")
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_UNAVAILABLE,
+			"EditorFileSystem not available", false)
 
 	var request_id: String = params.get("_request_id", "")
 	# Async path: a scan can't be awaited on the calling frame without freezing

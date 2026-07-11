@@ -34,7 +34,15 @@ _CONST_RE = re.compile(r'^\s*const\s+([A-Z_]+)\s*:=\s*"([A-Z_]+)"\s*$', re.MULTI
 @functools.cache
 def _parse_gdscript_codes() -> dict[str, str]:
     text = ERROR_CODES_GD.read_text(encoding="utf-8")
-    return dict(_CONST_RE.findall(text))
+    ## `SUB_`-prefixed constants are the #651 EDITOR_NOT_READY sub-code
+    ## vocabulary — they travel in `error.data.sub_code`, never as the
+    ## top-level `error.code`, so they're deliberately absent from
+    ## ErrorCode. Their own GDScript↔Python sync (against
+    ## EditorNotReadySubCode) is enforced by
+    ## test_editor_not_ready_hint_contract.py.
+    return {
+        name: value for name, value in _CONST_RE.findall(text) if not name.startswith("SUB_")
+    }
 
 
 def test_gdscript_codes_parsed_non_empty() -> None:

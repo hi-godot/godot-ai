@@ -425,7 +425,9 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 		"viewport":
 			viewport = EditorInterface.get_editor_viewport_3d()
 			if viewport == null:
-				return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "No 3D viewport available")
+				return ErrorCodes.make_not_ready(
+					ErrorCodes.SUB_EDITOR_VIEWPORT_UNAVAILABLE,
+					"No 3D viewport available", false)
 			## The 3D viewport's texture is empty when the edited scene
 			## has no Node3D content (2D-only scene, or no scene open),
 			## and the empty-image guard further down used to surface
@@ -457,11 +459,15 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 		"viewport_2d":
 			viewport = EditorInterface.get_editor_viewport_2d()
 			if viewport == null:
-				return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "No 2D viewport available")
+				return ErrorCodes.make_not_ready(
+					ErrorCodes.SUB_EDITOR_VIEWPORT_UNAVAILABLE,
+					"No 2D viewport available", false)
 			var scene_root_2d := EditorInterface.get_edited_scene_root()
 			if scene_root_2d == null:
-				return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY,
-					"No scene open — open a scene first")
+				return ErrorCodes.make_not_ready(
+					ErrorCodes.SUB_EDITOR_NO_SCENE,
+					"No scene open — open a scene first", false,
+					"Call scene_open with a scene path (e.g. \"res://main.tscn\") first.")
 			if not view_target.is_empty() or coverage or custom_elevation != null or custom_azimuth != null or custom_fov != null:
 				return ErrorCodes.make(
 					ErrorCodes.INVALID_PARAMS,
@@ -514,7 +520,9 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 
 		var cam := viewport.get_camera_3d()
 		if cam == null:
-			return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "No camera in 3D viewport")
+			return ErrorCodes.make_not_ready(
+				ErrorCodes.SUB_EDITOR_VIEWPORT_UNAVAILABLE,
+				"No camera in 3D viewport", false)
 
 		## Merge AABBs from all targets
 		var combined_aabb := _get_visual_aabb(targets[0])
@@ -718,10 +726,15 @@ func _take_cinematic_screenshot(max_resolution: int) -> Dictionary:
 ## without driving the editor.
 static func viewport_screenshot_precheck(scene_root: Node) -> Dictionary:
 	if scene_root == null:
-		return _make_viewport_not_3d_error(
+		var no_scene_err := _make_viewport_not_3d_error(
 			"",
 			"The editor 3D viewport is empty because no scene is open. Open a scene with `scene_open` first."
 		)
+		## The honest state here is "no scene", not "scene lacks 3D content"
+		## — relabel the sub-code so telemetry doesn't conflate the two.
+		## `editor_state` stays "viewport_not_3d" for pre-#651 consumers.
+		no_scene_err["error"]["data"]["sub_code"] = ErrorCodes.SUB_EDITOR_NO_SCENE
+		return no_scene_err
 	## A scene with any Node3D content — root or descendant — has
 	## something the 3D viewport can render. Walking the tree (rather
 	## than only checking the root type) avoids a false reject on the
@@ -771,11 +784,10 @@ static func _make_viewport_not_3d_error(scene_root_type: String, hint: String) -
 	## `hint` becomes `error.message`; not duplicated into `data` because
 	## `GodotCommandError`'s string form already appends every `data` key
 	## as a suffix on the agent-visible error.
-	var err := ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, hint)
-	err["error"]["data"] = {
-		"editor_state": "viewport_not_3d",
-		"scene_root_type": scene_root_type,
-	}
+	var err := ErrorCodes.make_not_ready(
+		ErrorCodes.SUB_EDITOR_VIEWPORT_NOT_3D, hint, false)
+	err["error"]["data"]["editor_state"] = "viewport_not_3d"
+	err["error"]["data"]["scene_root_type"] = scene_root_type
 	return err
 
 
@@ -783,11 +795,13 @@ static func _make_viewport_not_3d_error(scene_root_type: String, hint: String) -
 ## back empty — headless rendering, a freshly opened editor whose 3D
 ## viewport hasn't drawn a frame, or a SubViewport that lost its target.
 static func _empty_image_error(source: String, hint: String) -> Dictionary:
-	var err := ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, hint)
-	err["error"]["data"] = {
-		"editor_state": "viewport_empty",
-		"source": source,
-	}
+	## retryable=false: an empty capture is usually headless mode, where a
+	## retry loops forever — the not-yet-drawn-frame case is transient but
+	## indistinguishable from here, so don't invite a retry loop.
+	var err := ErrorCodes.make_not_ready(
+		ErrorCodes.SUB_EDITOR_VIEWPORT_EMPTY, hint, false)
+	err["error"]["data"]["editor_state"] = "viewport_empty"
+	err["error"]["data"]["source"] = source
 	return err
 
 
@@ -967,8 +981,10 @@ func game_eval(params: Dictionary) -> Dictionary:
 			"Debugger bridge unavailable — plugin may not be fully initialised")
 
 	if not EditorInterface.is_playing_scene():
-		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY,
-			"Game is not running — start the project first")
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_GAME_NOT_RUNNING,
+			"Game is not running — start the project first", false,
+			"Start the game with project_run (or wait for the user to run it), then retry.")
 
 	var request_id: String = params.get("_request_id", "")
 	if request_id.is_empty():
@@ -989,8 +1005,10 @@ func game_command(params: Dictionary) -> Dictionary:
 			"Debugger bridge unavailable — plugin may not be fully initialised")
 
 	if not EditorInterface.is_playing_scene():
-		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY,
-			"Game is not running — start the project first")
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_GAME_NOT_RUNNING,
+			"Game is not running — start the project first", false,
+			"Start the game with project_run (or wait for the user to run it), then retry.")
 
 	var request_id: String = params.get("_request_id", "")
 	if request_id.is_empty():

@@ -66,7 +66,9 @@ func list_animations(params: Dictionary) -> Dictionary:
 
 	var handler = _h()
 	if handler == null:
-		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_UNAVAILABLE,
+			"AnimationHandler not available", false)
 	var resolved: Dictionary = handler._resolve_player_read(player_path)
 	if resolved.has("error"):
 		return resolved
@@ -109,7 +111,9 @@ func get_animation(params: Dictionary) -> Dictionary:
 
 	var handler = _h()
 	if handler == null:
-		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_UNAVAILABLE,
+			"AnimationHandler not available", false)
 	var resolved: Dictionary = handler._resolve_player_read(player_path)
 	if resolved.has("error"):
 		return resolved
@@ -168,7 +172,9 @@ func validate_animation(params: Dictionary) -> Dictionary:
 
 	var handler = _h()
 	if handler == null:
-		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "AnimationHandler not available")
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_UNAVAILABLE,
+			"AnimationHandler not available", false)
 	var resolved: Dictionary = handler._resolve_player_read(player_path)
 	if resolved.has("error"):
 		return resolved
