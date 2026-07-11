@@ -26,6 +26,17 @@ class ErrorCode(StrEnum):
     # this fast (~3s), caller-actionable failure stops being counted as the
     # opaque "eval hung" 10s timeout. Keep in sync with utils/error_codes.gd.
     EVAL_GAME_NOT_READY = "EVAL_GAME_NOT_READY"
+    # #518: the eval genuinely never finished inside the timeout ladder (hung
+    # await caught by the game-side 8s deadline, or no game reply at all by the
+    # editor-side 10s backstop). Carved out of INTERNAL_ERROR so the "eval code
+    # never finished" failure stops reading as an internal fault. Keep in sync
+    # with utils/error_codes.gd.
+    EVAL_HUNG = "EVAL_HUNG"
+    # #518: the eval finished but its serialized result exceeds what the
+    # debugger + WebSocket pipeline can carry (the debugger TCP peer silently
+    # drops messages over ~8 MiB, which previously surfaced as a phantom 10s
+    # "hang"). Keep in sync with utils/error_codes.gd.
+    EVAL_RESULT_TOO_LARGE = "EVAL_RESULT_TOO_LARGE"
     ## audit-v2 #21 (issue #365): finer-grained codes carved out of the
     ## 471 INVALID_PARAMS sites so agents can distinguish recoverable
     ## input errors from structural ones. INVALID_PARAMS stays for

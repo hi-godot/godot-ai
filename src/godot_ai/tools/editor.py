@@ -42,10 +42,13 @@ Ops:
         'await' so user code can await internally. Errors return fast and
         actionable: EVAL_COMPILE_ERROR for a syntax/parse error,
         EVAL_RUNTIME_ERROR (with the real message + line) for a runtime
-        error; EVAL_GAME_NOT_READY if the game isn't ready yet — still
-        launching (retry once it's up) or the _mcp_game_helper autoload is
-        missing/disabled; a genuine infinite loop / never-firing await still
-        times out. 'await' only progresses while the game window is focused."""
+        error; EVAL_GAME_NOT_READY if the game can't service evals — still
+        launching (retry once it's up), the _mcp_game_helper autoload is
+        missing/disabled, or the game is parked in a debugger break (stop
+        and relaunch); EVAL_HUNG for a genuine infinite loop / never-firing
+        await; EVAL_RESULT_TOO_LARGE if the returned value serializes past
+        the debugger channel's capacity (return a smaller slice). 'await'
+        only progresses while the game window is focused."""
 
 
 def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:

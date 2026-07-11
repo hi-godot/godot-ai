@@ -921,10 +921,11 @@ func _clear_pending(request_id: String) -> void:
 ## Editor-side fallback timer for game_eval. MUST stay above the game-side
 ## EVAL_TIMEOUT_SEC (8.0) in runtime/game_helper.gd and below the dispatcher's
 ## game_eval budget (15000 ms) in dispatcher.gd — i.e. game 8s < editor 10s <
-## dispatcher 15s. This timer only fires when the game never replies at all,
-## and its message (the timeout_callable below) is intentionally generic. Drop
-## timeout_sec at/below 8s and it pre-empts the game's actionable "Eval
-## exceeded 8s" message — see the TIMEOUT ORDERING note on EVAL_TIMEOUT_SEC.
+## dispatcher 15s. This timer only fires when the game never replies at all;
+## _on_eval_timeout then attributes the failure (game not live vs never-acked
+## vs started-and-hung, #518). Drop timeout_sec at/below 8s and it pre-empts
+## the game's more specific "Eval exceeded 8s" message — see the TIMEOUT
+## ORDERING note on EVAL_TIMEOUT_SEC.
 ##
 ## #500: the *not-ready* path adds EVAL_READY_WAIT_SEC (3s) on top of this 10s
 ## backstop. That sum (13s) must also stay below the dispatcher/server 15s
@@ -1003,18 +1004,7 @@ func _send_eval(
 		return
 
 	var timer: SceneTreeTimer = tree.create_timer(timeout_sec)
-	var timeout_callable := func() -> void:
-		var pending_entry = _pending.get(request_id)
-		if pending_entry == null:
-			return
-		_clear_pending(request_id)
-		var conn: McpConnection = pending_entry.connection
-		if conn == null or not is_instance_valid(conn):
-			return
-		_send_error(conn, request_id, ErrorCodes.INTERNAL_ERROR,
-			"Game eval compiled and started running but never returned within %.0fs — the code is likely stuck in an infinite loop or awaiting a signal/timer that never fires. Check logs_read(source='game')." % timeout_sec)
-		if _log_buffer:
-			_log_buffer.log("[debug] !! eval timeout (%s)" % request_id)
+	var timeout_callable := func() -> void: _on_eval_timeout(request_id, timeout_sec)
 	timer.timeout.connect(timeout_callable)
 
 	## #490: arm the compile-grace timer. _on_eval_grace concludes a parse error
@@ -1038,6 +1028,57 @@ func _send_eval(
 	session.send_message("mcp:eval", [request_id, code])
 	if _log_buffer:
 		_log_buffer.log("[debug] -> mcp:eval (%s)" % request_id)
+
+
+## #518: the 10s editor-side backstop fired — the game never replied at all.
+## Attribute the failure instead of emitting a one-size-fits-all INTERNAL_ERROR:
+##
+## - game not live anymore (parked in a debugger break, stopped, crashed):
+##   the eval couldn't run/finish for a *game-state* reason. Reply with the
+##   same caller-actionable EVAL_GAME_NOT_READY + `_explain_not_live` payload
+##   the pre-hello break path already uses — a break freezes the game's idle
+##   loop, so any awaiting eval parks here even though sync evals still work.
+## - game live but never acked the eval: its main thread never serviced the
+##   debugger message (long frame/load, CPU-bound prior eval, or a
+##   backgrounded window whose idle loop is frozen).
+## - game live, acked, compiled: the eval genuinely started and never
+##   finished, and the game couldn't even self-report via its own 8s guard
+##   (which needs a ticking idle loop) — hung await, CPU-bound loop, or a
+##   reply the debugger channel dropped.
+##
+## The live branches reply EVAL_HUNG: the eval code never finished. That code
+## plus the game-side 8s guard (also EVAL_HUNG, via mcp:eval_error's code
+## element) empties the former INTERNAL_ERROR bucket on this path.
+func _on_eval_timeout(request_id: String, timeout_sec: float) -> void:
+	var pending_entry = _pending.get(request_id)
+	if pending_entry == null:
+		return
+	_clear_pending(request_id)
+	var conn: McpConnection = pending_entry.connection
+	if conn == null or not is_instance_valid(conn):
+		return
+	var status := get_game_status(-1, EVAL_READY_WAIT_SEC)
+	if str(status.get("status", "")) != "live":
+		_send_error_response(conn, request_id,
+			_explain_not_live(status, ErrorCodes.EVAL_GAME_NOT_READY))
+		if _log_buffer:
+			_log_buffer.log("[debug] !! eval timeout, game not live (%s, status=%s)"
+				% [request_id, str(status.get("status", ""))])
+		return
+	var message: String
+	if not bool(pending_entry.get("acked", false)):
+		message = ("Game eval was sent but the game never picked it up within %.0fs — "
+			+ "its main thread is busy or frozen (a long frame/load, a CPU-bound "
+			+ "prior eval, or a backgrounded game window whose loop is throttled). "
+			+ "Check logs_read(source='game') and retry.") % timeout_sec
+	else:
+		message = ("Game eval compiled and started running but never returned within "
+			+ "%.0fs — the code is likely stuck in an infinite loop or awaiting a "
+			+ "signal/timer that never fires (a backgrounded game window also freezes "
+			+ "awaits). Check logs_read(source='game').") % timeout_sec
+	_send_error(conn, request_id, ErrorCodes.EVAL_HUNG, message)
+	if _log_buffer:
+		_log_buffer.log("[debug] !! eval timeout (%s)" % request_id)
 
 
 func _on_eval_response(data: Array) -> void:
@@ -1067,6 +1108,17 @@ func _on_eval_response(data: Array) -> void:
 		_log_buffer.log("[debug] <- mcp:eval_response (%s)" % request_id)
 
 
+## #518: codes the game side may attach as mcp:eval_error's optional third
+## payload element. Allowlisted so a game process can't mint arbitrary
+## top-level error codes over the debugger channel; anything else (including
+## the legacy two-element payload from an older game helper mid-update)
+## falls back to INTERNAL_ERROR exactly as before.
+const _GAME_EVAL_ERROR_CODES: Array[String] = [
+	ErrorCodes.EVAL_HUNG,
+	ErrorCodes.EVAL_RESULT_TOO_LARGE,
+]
+
+
 func _on_eval_error(data: Array) -> void:
 	if data.size() < 2:
 		return
@@ -1079,7 +1131,10 @@ func _on_eval_error(data: Array) -> void:
 	var connection: McpConnection = pending_entry.connection
 	if connection == null or not is_instance_valid(connection):
 		return
-	_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR, message)
+	var code := ErrorCodes.INTERNAL_ERROR
+	if data.size() > 2 and str(data[2]) in _GAME_EVAL_ERROR_CODES:
+		code = str(data[2])
+	_send_error(connection, request_id, code, message)
 	if _log_buffer:
 		_log_buffer.log("[debug] <- mcp:eval_error (%s): %s" % [request_id, message])
 

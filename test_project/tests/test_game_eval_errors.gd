@@ -365,4 +365,154 @@ func test_send_eval_without_active_session_replies_game_not_ready() -> void:
 	assert_eq(conn.captured.size(), 1, "exactly one deferred reply is sent")
 	assert_eq(conn.captured[0]["payload"]["error"]["code"], ErrorCodes.EVAL_GAME_NOT_READY,
 		"no active debugger session replies with EVAL_GAME_NOT_READY, not INTERNAL_ERROR")
+
+
+# --- #518: EVAL_HUNG / EVAL_RESULT_TOO_LARGE classification ---
+
+func test_on_eval_error_maps_allowlisted_code() -> void:
+	## The game side attaches a code as mcp:eval_error's optional third payload
+	## element (its 8s deadline sends EVAL_HUNG); the editor maps it through.
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	var rid := "rid-eval-hung"
+	plugin._pending[rid] = {"connection": conn}
+	plugin._on_eval_error([rid, "Eval exceeded 8s and was aborted", ErrorCodes.EVAL_HUNG])
+	assert_eq(conn.captured.size(), 1, "one deferred reply")
+	assert_eq(conn.captured[0]["payload"]["error"]["code"], ErrorCodes.EVAL_HUNG,
+		"the game-supplied EVAL_HUNG code is mapped through to the reply")
+	conn.free()
+
+
+func test_on_eval_error_legacy_payload_stays_internal_error() -> void:
+	## A two-element payload (older game helper mid-update) keeps today's
+	## INTERNAL_ERROR fallback — no crash, no behavior change.
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	var rid := "rid-eval-legacy"
+	plugin._pending[rid] = {"connection": conn}
+	plugin._on_eval_error([rid, "No code provided"])
+	assert_eq(conn.captured[0]["payload"]["error"]["code"], ErrorCodes.INTERNAL_ERROR,
+		"a code-less eval_error payload falls back to INTERNAL_ERROR")
+	conn.free()
+
+
+func test_on_eval_error_rejects_unknown_code() -> void:
+	## The allowlist keeps a game process from minting arbitrary top-level
+	## codes over the debugger channel.
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	var rid := "rid-eval-badcode"
+	plugin._pending[rid] = {"connection": conn}
+	plugin._on_eval_error([rid, "boom", "TOTALLY_MADE_UP"])
+	assert_eq(conn.captured[0]["payload"]["error"]["code"], ErrorCodes.INTERNAL_ERROR,
+		"an unknown code in the eval_error payload falls back to INTERNAL_ERROR")
+	conn.free()
+
+
+## Flip a bare plugin's flags so get_game_status() reports "live", the state
+## the backstop's EVAL_HUNG branch requires.
+func _mark_game_live(plugin: McpDebuggerPlugin) -> void:
+	plugin._game_run_active = true
+	plugin._game_ready = true
+	plugin._ready_run_token = plugin._game_run_token
+
+
+func test_eval_timeout_replies_eval_hung_when_game_live() -> void:
+	## #518: the 10s backstop on a live game replies EVAL_HUNG (the eval code
+	## never finished), not the opaque INTERNAL_ERROR the telemetry bucket
+	## used to hide behind.
+	var plugin := McpDebuggerPlugin.new()
+	_mark_game_live(plugin)
+	var conn := _StubConnection.new()
+	var rid := "rid-timeout-live"
+	plugin._pending[rid] = {"connection": conn, "acked": true, "compiled": true}
+	plugin._on_eval_timeout(rid, 10.0)
+	assert_false(plugin._pending.has(rid), "the timeout clears the pending entry")
+	assert_eq(conn.captured.size(), 1, "one deferred reply")
+	var payload: Dictionary = conn.captured[0]["payload"]
+	assert_eq(payload["error"]["code"], ErrorCodes.EVAL_HUNG,
+		"a live-game eval timeout replies EVAL_HUNG")
+	assert_contains(payload["error"]["message"], "never returned",
+		"the acked+compiled branch says the eval started and never returned")
+	conn.free()
+
+
+func test_eval_timeout_unacked_names_unserviced_eval() -> void:
+	## Never acked = the game's main thread never serviced the eval message —
+	## a different failure than an eval that started and hung, and the message
+	## says so (still EVAL_HUNG so telemetry counts one bucket).
+	var plugin := McpDebuggerPlugin.new()
+	_mark_game_live(plugin)
+	var conn := _StubConnection.new()
+	var rid := "rid-timeout-noack"
+	plugin._pending[rid] = {"connection": conn, "acked": false, "compiled": false}
+	plugin._on_eval_timeout(rid, 10.0)
+	var payload: Dictionary = conn.captured[0]["payload"]
+	assert_eq(payload["error"]["code"], ErrorCodes.EVAL_HUNG,
+		"an unserviced eval still lands in the EVAL_HUNG bucket")
+	assert_contains(payload["error"]["message"], "never picked it up",
+		"the un-acked branch names the unserviced-message failure")
+	conn.free()
+
+
+func test_eval_timeout_replies_not_ready_when_game_in_break() -> void:
+	## #518: a game parked in a debugger break freezes its idle loop, so any
+	## awaiting eval rides to the backstop. The plugin already tracks the break
+	## (#645); the timeout must attribute it instead of claiming the eval hung.
+	var plugin := McpDebuggerPlugin.new()
+	_mark_game_live(plugin)
+	plugin.note_debug_break(false, "Invalid call. Nonexistent function 'foo' in base 'Nil'.")
+	var conn := _StubConnection.new()
+	var rid := "rid-timeout-break"
+	plugin._pending[rid] = {"connection": conn, "acked": true, "compiled": true}
+	plugin._on_eval_timeout(rid, 10.0)
+	var payload: Dictionary = conn.captured[0]["payload"]
+	assert_eq(payload["error"]["code"], ErrorCodes.EVAL_GAME_NOT_READY,
+		"a break-parked game replies EVAL_GAME_NOT_READY, not a phantom hang")
+	assert_contains(payload["error"]["message"], "debugger break",
+		"the break state is named in the message")
+	conn.free()
+
+
+func test_eval_timeout_unknown_request_no_crash() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin._on_eval_timeout("unknown-id", 10.0)
+	assert_true(true, "a timeout for an already-resolved request is a no-op")
+
+
+func test_reply_eval_error_records_code_element() -> void:
+	## Game side: _reply_eval_error appends the optional code as the third
+	## payload element (recorded via the testing seam — EngineDebugger is
+	## inactive in the editor test harness).
+	var helper: Node = GameHelper.new()
+	helper._reply_eval_error("rid-code", "Eval exceeded 8s", ErrorCodes.EVAL_HUNG)
+	assert_eq(helper._last_eval_reply.get("kind"), "error")
+	assert_eq(helper._last_eval_reply.get("code"), ErrorCodes.EVAL_HUNG,
+		"the code rides with the eval_error reply")
+	helper.free()
+
+
+func test_reply_eval_response_normal_value_is_response() -> void:
+	var helper: Node = GameHelper.new()
+	helper._reply_eval_response("rid-normal", 42)
+	assert_eq(helper._last_eval_reply.get("kind"), "response",
+		"a small result replies mcp:eval_response as before")
+	helper.free()
+
+
+func test_reply_eval_response_oversized_sends_too_large_error() -> void:
+	## #518: a result bigger than the debugger channel can carry must fail
+	## fast game-side with EVAL_RESULT_TOO_LARGE — previously the debugger
+	## peer dropped the reply silently and the request rode to the 10s
+	## backstop as a phantom hang.
+	var helper: Node = GameHelper.new()
+	var oversized := "x".repeat(GameHelper.EVAL_RESULT_MAX_BYTES + 1024)
+	helper._reply_eval_response("rid-huge", oversized)
+	assert_eq(helper._last_eval_reply.get("kind"), "error",
+		"an oversized result replies with an error, not a doomed response")
+	assert_eq(helper._last_eval_reply.get("code"), ErrorCodes.EVAL_RESULT_TOO_LARGE,
+		"the oversized result carries EVAL_RESULT_TOO_LARGE")
+	assert_contains(str(helper._last_eval_reply.get("message")), "too large",
+		"the message names the failure and the byte count")
+	helper.free()
 	conn.free()

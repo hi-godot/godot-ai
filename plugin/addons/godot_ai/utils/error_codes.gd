@@ -38,6 +38,19 @@ const EVAL_RUNTIME_ERROR := "EVAL_RUNTIME_ERROR"
 ## errors. NOT a hang: it fires fast (~3s) and is caller-actionable (let the game
 ## finish booting and retry, or check the autoload is enabled).
 const EVAL_GAME_NOT_READY := "EVAL_GAME_NOT_READY"
+## #518: the eval genuinely never finished inside the timeout ladder — the
+## game-side 8s deadline aborted a hung await, or the editor-side 10s backstop
+## fired because the game never replied at all (CPU-bound loop, frozen /
+## backgrounded idle loop). Carved out of INTERNAL_ERROR — the last big
+## still-unlabeled bucket from #487/#488 — so "your eval code never finished"
+## stops reading as an internal fault in telemetry and agent-facing errors.
+const EVAL_HUNG := "EVAL_HUNG"
+## #518: the eval completed but its serialized result is too large for the
+## debugger + WebSocket pipeline. Without this the reply is dropped silently
+## (the debugger TCP peer discards messages over ~8 MiB) and the request rides
+## to the 10s backstop as a phantom "hang". Failing fast game-side with the
+## real byte count makes the failure actionable (return a smaller slice).
+const EVAL_RESULT_TOO_LARGE := "EVAL_RESULT_TOO_LARGE"
 ## audit-v2 #21 (issue #365): finer-grained codes carved out of the 471
 ## INVALID_PARAMS sites so agents can distinguish recoverable input
 ## errors from structural ones. INVALID_PARAMS stays for genuinely

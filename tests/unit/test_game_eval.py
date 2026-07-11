@@ -74,6 +74,12 @@ def test_eval_error_codes_exist():
     # #518: the play-session-up-but-capture-not-ready race, carved out of
     # INTERNAL_ERROR so it stops being counted as a genuine eval hang.
     assert ErrorCode.EVAL_GAME_NOT_READY == "EVAL_GAME_NOT_READY"
+    # #518: the eval code itself never finished (hung await / infinite loop),
+    # aborted by the game's 8s deadline or the editor's 10s backstop.
+    assert ErrorCode.EVAL_HUNG == "EVAL_HUNG"
+    # #518: the eval finished but its serialized result exceeds what the
+    # debugger channel can deliver; failed fast instead of a phantom hang.
+    assert ErrorCode.EVAL_RESULT_TOO_LARGE == "EVAL_RESULT_TOO_LARGE"
 
 
 class _RaisingGameEvalClient:
@@ -101,6 +107,30 @@ async def test_game_eval_propagates_compile_error_code():
     with pytest.raises(GodotCommandError) as exc:
         await editor_handlers.game_eval(runtime, code="return 1 +")
     assert exc.value.code == ErrorCode.EVAL_COMPILE_ERROR
+
+
+@pytest.mark.asyncio
+async def test_game_eval_propagates_hung_error_code():
+    client = _RaisingGameEvalClient(
+        ErrorCode.EVAL_HUNG,
+        "Eval exceeded 8s and was aborted — the code likely awaits something that never completes",
+    )
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    with pytest.raises(GodotCommandError) as exc:
+        await editor_handlers.game_eval(runtime, code="await get_tree().create_timer(999).timeout")
+    assert exc.value.code == ErrorCode.EVAL_HUNG
+
+
+@pytest.mark.asyncio
+async def test_game_eval_propagates_result_too_large_code():
+    client = _RaisingGameEvalClient(
+        ErrorCode.EVAL_RESULT_TOO_LARGE,
+        "Eval result too large to return (10000213 bytes serialized, limit 6291456).",
+    )
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    with pytest.raises(GodotCommandError) as exc:
+        await editor_handlers.game_eval(runtime, code="return 'x'.repeat(10_000_000)")
+    assert exc.value.code == ErrorCode.EVAL_RESULT_TOO_LARGE
 
 
 @pytest.mark.asyncio
