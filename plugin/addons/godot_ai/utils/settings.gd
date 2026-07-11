@@ -13,6 +13,9 @@ const SETTING_HTTP_PORT := "godot_ai/http_port"
 ## Comma-separated list of tool domains excluded from the server at spawn time.
 const SETTING_EXCLUDED_DOMAINS := "godot_ai/excluded_domains"
 const SETTING_TELEMETRY_ENABLED := "godot_ai/telemetry_enabled"
+## Comma-separated CIDRs / bare IPs passed to the server as `--allow-host`
+## at spawn time (#507, server core #421). Empty means loopback-only.
+const SETTING_ALLOW_HOSTS := "godot_ai/allow_remote_hosts"
 ## Whether MCP log lines echo to the Godot console (dock "Log" toggle).
 ## The dock's ring-buffer log panel keeps recording regardless.
 const SETTING_MCP_LOGGING := "godot_ai/mcp_logging"

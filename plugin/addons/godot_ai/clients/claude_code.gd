@@ -22,3 +22,11 @@ func _init() -> void:
 	path_template = {"unix": "~/.claude.json", "windows": "~/.claude.json"}
 	server_key_path = PackedStringArray(["mcpServers"])
 	entry_extra_fields = {"type": "http"}
+	## Documented: $CLAUDE_CONFIG_DIR relocates Claude Code's config home,
+	## including .claude.json ($CLAUDE_CONFIG_DIR/.claude.json). The preferred
+	## CLI path needs no help — the spawned `claude` binary inherits the
+	## editor's environment and resolves the dir itself — but the JSON
+	## fallback above would otherwise write ~/.claude.json that a relocated
+	## install never reads (#617).
+	config_home_env = "CLAUDE_CONFIG_DIR"
+	config_home_env_subpath = ".claude.json"

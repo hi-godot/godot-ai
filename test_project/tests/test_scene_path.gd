@@ -118,6 +118,21 @@ func test_resolve_nested_descendant() -> void:
 	root.queue_free()
 
 
+# ----- resolve: bare "/" root alias (issue #624) -----
+
+func test_resolve_bare_slash_returns_scene_root() -> void:
+	## "/" is the most natural first guess for "the scene root" and is
+	## unambiguous (there is exactly one edited-scene root). Pre-#624 it fell
+	## through to get_node_or_null("/") → null, costing a round trip.
+	var root := _make_tree()
+	assert_eq(McpScenePath.resolve("/", root), root)
+	root.queue_free()
+
+
+func test_resolve_bare_slash_null_root_returns_null() -> void:
+	assert_eq(McpScenePath.resolve("/", null), null)
+
+
 # ----- resolve: /root/<scene_root_name> alias (issue #71) -----
 
 func test_resolve_root_alias_with_scene_name_returns_scene_root() -> void:

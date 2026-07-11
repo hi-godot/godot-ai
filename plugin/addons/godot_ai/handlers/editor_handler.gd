@@ -695,6 +695,12 @@ func _take_cinematic_screenshot(max_resolution: int) -> Dictionary:
 	## global_transform is resolved against the ancestor Node3D chain, so it
 	## must be set after parenting — otherwise the camera ends up at origin.
 	cam.global_transform = scene_camera.global_transform
+	## NOTIFICATION_TRANSFORM_CHANGED is delivered deferred (next frame's
+	## flush_transform_notifications), but force_draw renders immediately —
+	## without this flush the RenderingServer still has the identity
+	## transform pushed at ENTER_WORLD and the capture shows only sky
+	## instead of the camera's actual view (issue #650).
+	cam.force_update_transform()
 
 	RenderingServer.force_draw(false)
 	var image: Image = sub_vp.get_texture().get_image()

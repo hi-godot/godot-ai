@@ -46,6 +46,11 @@ var _server_actual_name: String = ""
 
 ## Diagnostic + recovery flags surfaced to the dock via `get_status()`.
 var _server_status_message: String = ""
+## #647: when a post-crash probe pins the failure on a specific port held
+## by a foreign process, this names that port (HTTP or WS) so the dock's
+## status line and port-picker gating don't blame the wrong one. Zero when
+## no conflict was diagnosed.
+var _conflict_port: int = 0
 var _can_recover_incompatible: bool = false
 var _connection_blocked: bool = false
 
@@ -88,6 +93,7 @@ func get_status_dict() -> Dictionary:
 		"message": _server_status_message,
 		"can_recover_incompatible": _can_recover_incompatible,
 		"connection_blocked": _connection_blocked,
+		"conflict_port": _conflict_port,
 	}
 
 
@@ -410,6 +416,19 @@ func _set_owner_pid_env() -> bool:
 	return true
 
 
+## Mark the next OS.create_process as plugin-spawned so the server arms its
+## session-idle self-terminate backstop (#498): with zero editor sessions for
+## a grace window, it exits on its own. Unlike the owner-PID reaper this is
+## pure session-count on the server side, so it is set on EVERY platform —
+## including Windows, where owner-PID is skipped; this marker is what finally
+## gives Windows orphan coverage (#497). Same env-channel rationale and same
+## tight scoping as _set_owner_pid_env: callers unset it right after spawning
+## so a later manually-started dev server can never inherit it and idle-kill
+## itself.
+func _set_plugin_spawned_env() -> void:
+	OS.set_environment("GODOT_AI_PLUGIN_SPAWNED", "1")
+
+
 ## Branch table (recorded version is the "is this ours?" signal — uvx
 ## launcher PIDs go stale; #135/#137):
 ##   port free                                -> spawn fresh, record PID
@@ -425,6 +444,7 @@ func start_server() -> void:
 		return
 
 	_refresh_retried = false
+	_conflict_port = 0
 
 	var port := ClientConfigurator.http_port()
 	var ws_port := ClientConfigurator.ws_port()
@@ -557,12 +577,14 @@ func start_server() -> void:
 	## process-liveness/self-shutdown isn't live-validated yet). The server
 	## gates on this too.
 	var owner_env_set := _set_owner_pid_env()
+	_set_plugin_spawned_env()
 
 	_server_pid = OS.create_process(cmd, args)
 	var spawned_pid := int(_server_pid)
 
 	if owner_env_set:
 		OS.unset_environment("GODOT_AI_OWNER_PID")
+	OS.unset_environment("GODOT_AI_PLUGIN_SPAWNED")
 
 	## Restore PYTHONPATH immediately — the spawned child has already
 	## copied the env, so the editor's own process state returns to
@@ -615,6 +637,26 @@ func check_server_health() -> void:
 		_server_pid = real_pid
 	elif not PortResolver.pid_alive(spawn_pid):
 		if elapsed >= int(_host.SPAWN_GRACE_MS) and not McpServerStateScript.is_terminal_diagnosis(_server_state):
+			## #647: the server died inside the grace window. If a foreign
+			## (non-godot-ai) process holds the HTTP or WS port, the server
+			## exited fast with its "port already in use" stderr message and
+			## EXIT_PORT_IN_USE — but we can't read the child's stderr, so
+			## re-probe the ports and surface FOREIGN_PORT with an actionable
+			## message instead of a bare CRASHED pointing at the output log.
+			## Checked before the --refresh retry: respawning against an
+			## occupied port can only fail the same way.
+			var conflict := _diagnose_spawn_port_conflict()
+			if not conflict.is_empty():
+				_server_exit_ms = elapsed
+				_server_status_message = str(conflict.get("message", ""))
+				_conflict_port = int(conflict.get("port", 0))
+				set_terminal_diagnosis(McpServerStateScript.FOREIGN_PORT)
+				disarm_version_check()
+				_host._update_process_enabled()
+				_host._log_buffer.log(str(_server_status_message))
+				push_warning("MCP | %s" % _server_status_message)
+				_host._stop_server_watch()
+				return
 			if bool(_host._should_retry_with_refresh()):
 				_refresh_retried = true
 				respawn_with_refresh()
@@ -629,6 +671,38 @@ func check_server_health() -> void:
 	if elapsed >= int(_host.SERVER_WATCH_MS):
 		## Survived startup — mid-session crashes surface via WebSocket disconnect.
 		_host._stop_server_watch()
+
+
+## #647: post-crash port-conflict probe. Returns `{}` when no foreign
+## conflict is detected (fall through to the CRASHED / retry path), or
+## `{"message": String, "port": int}` when the HTTP or WS port is held by
+## a process we can't identify as godot-ai. An occupant that *does*
+## identify as godot-ai is deliberately not diagnosed here — that's the
+## stale-server / adoption territory handled by the next `start_server`
+## walk, not a foreign conflict.
+func _diagnose_spawn_port_conflict() -> Dictionary:
+	var http_port := ClientConfigurator.http_port()
+	if bool(_host._is_port_in_use(http_port)):
+		var live: Dictionary = _host._probe_live_server_status_for_port(http_port)
+		if _live_status_identifies_godot_ai(live):
+			return {}
+		return {
+			"message": (
+				"Port %d is in use by another application. Stop it or change "
+				+ "the port in Editor Settings (godot_ai/http_port)."
+			) % http_port,
+			"port": http_port,
+		}
+	var ws_port := int(_host._resolved_ws_port)
+	if ws_port > 0 and bool(_host._is_port_in_use(ws_port)):
+		return {
+			"message": (
+				"WebSocket port %d is in use by another application. Stop it "
+				+ "or change the port in Editor Settings (godot_ai/ws_port)."
+			) % ws_port,
+			"port": ws_port,
+		}
+	return {}
 
 
 ## Retry the spawn with uvx `--refresh` prepended (PyPI index can lag a
@@ -648,9 +722,11 @@ func respawn_with_refresh() -> void:
 	## Set owner PID for THIS spawn too (don't rely on it lingering from
 	## start_server) — and unset right after, same scoping as start_server.
 	var owner_env_set := _set_owner_pid_env()
+	_set_plugin_spawned_env()
 	_server_pid = OS.create_process(cmd, args)
 	if owner_env_set:
 		OS.unset_environment("GODOT_AI_OWNER_PID")
+	OS.unset_environment("GODOT_AI_PLUGIN_SPAWNED")
 	if injected_telemetry_env:
 		OS.unset_environment("GODOT_AI_DISABLE_TELEMETRY")
 	var spawn_pid := int(_server_pid)
@@ -842,6 +918,7 @@ func recover_incompatible_server() -> bool:
 	transition_state(McpServerStateScript.STOPPED)
 	_connection_blocked = false
 	_server_status_message = ""
+	_conflict_port = 0
 	_server_actual_version = ""
 	_server_actual_name = ""
 	_can_recover_incompatible = false

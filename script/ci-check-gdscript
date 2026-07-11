@@ -16,10 +16,31 @@ PROJECT_DIR="${PROJECT_DIR:-test_project}"
 
 if [ "${1:-}" != "" ] && [ -f "$1" ]; then
   IMPORT_LOG="$1"
+  # Same false-pass class as the self-run guard below: an empty provided
+  # log means the import never actually produced output (e.g. the binary
+  # was missing when the caller ran it) — grep finding 0 errors in an
+  # empty file is not a validation.
+  if [ ! -s "$IMPORT_LOG" ]; then
+    echo "Provided import log is empty; cannot confirm GDScript validation ran" >&2
+    exit 1
+  fi
 else
+  # Guard against a false pass: if the godot binary is missing, the import
+  # command fails, the log stays empty, the grep finds no errors, and the
+  # script would report success without having validated anything.
+  if ! command -v godot >/dev/null 2>&1; then
+    echo "godot binary not found on PATH — cannot validate GDScript" >&2
+    exit 1
+  fi
   echo "Running GDScript validation via --import..."
   IMPORT_LOG=$(mktemp)
   godot --headless --path "$PROJECT_DIR" --import > "$IMPORT_LOG" 2>&1 || true
+  # An empty import log means the import run produced no output at all —
+  # treat that as a failure rather than silently passing.
+  if [ ! -s "$IMPORT_LOG" ]; then
+    echo "Godot --import produced no output; cannot confirm GDScript validation ran" >&2
+    exit 1
+  fi
 fi
 
 # Check for parse errors in the import output. This is strict on every

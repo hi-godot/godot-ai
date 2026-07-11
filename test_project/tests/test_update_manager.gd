@@ -64,16 +64,63 @@ func test_manual_update_label_omits_version_when_unknown() -> void:
 	assert_contains(no_v, "Godot 4.5+", "label must still state the engine requirement")
 
 
-# ---- _is_trusted_download_url (pure / static, #523) -------------------
+# ---- _is_trusted_download_url (pure / static, #523 + #599) ------------
 
-func test_trusted_download_url_accepts_github_hosts() -> void:
+func test_trusted_download_url_accepts_repo_release_assets() -> void:
 	assert_true(
 		McpUpdateManagerScript._is_trusted_download_url(TEST_ASSET_URL),
-		"a normal github.com release asset URL must be trusted")
+		"a normal github.com hi-godot/godot-ai release asset URL must be trusted")
+	assert_true(
+		McpUpdateManagerScript._is_trusted_download_url(TEST_ASSET_URL + ".sha256"),
+		"the .sha256 sidecar on the repo release path must be trusted")
 	assert_true(
 		McpUpdateManagerScript._is_trusted_download_url(
-			"https://objects.githubusercontent.com/github-production-release/x.zip"),
-		"the githubusercontent redirect target host must be trusted")
+			"https://objects.githubusercontent.com/github-production-release-asset-2e65be/1234/x.zip"),
+		"the githubusercontent redirect target's release-asset key namespace must be trusted")
+
+
+func test_trusted_download_url_rejects_dot_segment_traversal() -> void:
+	## #599 review: dot-segments pass a raw prefix test but normalize
+	## server-side to a different repo. Encoded variants must fail too.
+	var bad := [
+		"https://github.com/hi-godot/godot-ai/releases/download/../../evil/releases/download/v1/x.zip",
+		"https://github.com/hi-godot/godot-ai/releases/download/v1/..%2f..%2fevil.zip",
+		"https://github.com/hi-godot/godot-ai/releases/download/%2e%2e/evil/x.zip",
+		"https://github.com/hi-godot/godot-ai/releases/download/v1/x%5c..%5cevil.zip",
+	]
+	for url in bad:
+		assert_false(McpUpdateManager._is_trusted_download_url(url),
+			"dot-segment/encoded traversal must be rejected: %s" % url)
+
+
+func test_trusted_download_url_rejects_wrong_repo_on_trusted_host() -> void:
+	## #599: a trusted GitHub host alone is not enough — the URL must be a
+	## hi-godot/godot-ai release asset. A tampered API response pointing at
+	## another repo's release (attacker-controlled ZIP + matching .sha256 on
+	## the same trusted host) must be refused.
+	assert_false(
+		McpUpdateManagerScript._is_trusted_download_url(
+			"https://github.com/evil-org/godot-ai/releases/download/v999.0.0/godot-ai-plugin.zip"),
+		"a release asset of another owner on github.com must be rejected")
+	assert_false(
+		McpUpdateManagerScript._is_trusted_download_url(
+			"https://github.com/hi-godot/other-repo/releases/download/v999.0.0/godot-ai-plugin.zip"),
+		"a release asset of another hi-godot repo must be rejected")
+	assert_false(
+		McpUpdateManagerScript._is_trusted_download_url(
+			"https://github.com/evil-org/x/releases/download/v1/godot-ai-plugin.zip.sha256"),
+		"a wrong-repo checksum sidecar URL must be rejected")
+	assert_false(
+		McpUpdateManagerScript._is_trusted_download_url(
+			"https://github.com/hi-godot/godot-ai/archive/refs/heads/main.zip"),
+		"a non-release-asset path on the right repo must be rejected")
+	assert_false(
+		McpUpdateManagerScript._is_trusted_download_url(
+			"https://objects.githubusercontent.com/some-other-namespace/x.zip"),
+		"a non-release-asset object key on the CDN host must be rejected")
+	assert_false(
+		McpUpdateManagerScript._is_trusted_download_url("https://github.com"),
+		"a bare trusted host with no path must be rejected")
 
 
 func test_trusted_download_url_rejects_untrusted_and_insecure() -> void:
@@ -156,6 +203,93 @@ func test_parse_sha256_digest_matches_fileaccess_hash() -> void:
 
 	assert_eq(parsed, real,
 		"parsed sidecar digest must match FileAccess.get_sha256 (the verify compare)")
+
+
+# ---- _verify_then_install URL scoping (#599) ---------------------------
+
+func test_verify_refuses_wrong_repo_checksum_url() -> void:
+	## A checksum sidecar URL on a trusted GitHub host but pointing at a
+	## different repo's release is a tamper signal — the verify step must
+	## refuse (and drop the staged ZIP) rather than fetch an attacker-
+	## published digest that would trivially match an attacker ZIP.
+	var global_dir := ProjectSettings.globalize_path(McpUpdateManagerScript.UPDATE_TEMP_DIR)
+	var global_zip := ProjectSettings.globalize_path(McpUpdateManagerScript.UPDATE_TEMP_ZIP)
+	DirAccess.make_dir_recursive_absolute(global_dir)
+	var f := FileAccess.open(global_zip, FileAccess.WRITE)
+	assert_true(f != null, "Seed staged zip must open for write")
+	f.store_string("staged update payload")
+	f.close()
+
+	var manager = McpUpdateManagerScript.new()
+	manager._latest_checksum_url = (
+		"https://github.com/evil-org/godot-ai/releases/download/v999.0.0/"
+		+ "godot-ai-plugin.zip.sha256"
+	)
+	var states: Array = []
+	manager.install_state_changed.connect(func(state: Dictionary) -> void:
+		states.append(state)
+	)
+
+	manager._verify_then_install()
+
+	var zip_still_staged := FileAccess.file_exists(global_zip)
+	manager.free()
+	DirAccess.remove_absolute(global_zip)
+	DirAccess.remove_absolute(global_dir)
+
+	assert_false(zip_still_staged,
+		"wrong-repo checksum URL must drop the staged ZIP before install")
+	assert_eq(states.size(), 1,
+		"wrong-repo checksum URL must emit exactly one failure state")
+	var state: Dictionary = states[0]
+	assert_contains(String(state.get("button_text", "")), "Verification failed",
+		"wrong-repo checksum URL must paint the verification-failed button")
+	assert_eq(bool(state.get("button_disabled", true)), false,
+		"verification failure must leave the button enabled for retry")
+
+
+func test_checksum_match_on_repo_release_proceeds_to_install() -> void:
+	## Happy path: staged ZIP whose FileAccess.get_sha256 matches the digest
+	## in the (trusted, repo-scoped) sidecar body must proceed to install —
+	## the manager paints "Installing..." and does NOT delete the staged ZIP
+	## (only _fail_verification does that).
+	var global_dir := ProjectSettings.globalize_path(McpUpdateManagerScript.UPDATE_TEMP_DIR)
+	var global_zip := ProjectSettings.globalize_path(McpUpdateManagerScript.UPDATE_TEMP_ZIP)
+	DirAccess.make_dir_recursive_absolute(global_dir)
+	var f := FileAccess.open(global_zip, FileAccess.WRITE)
+	assert_true(f != null, "Seed staged zip must open for write")
+	f.store_string("staged update payload for checksum match")
+	f.close()
+	var digest := FileAccess.get_sha256(global_zip).to_lower()
+	var sidecar_body := ("%s  godot-ai-plugin.zip\n" % digest).to_utf8_buffer()
+
+	var manager = McpUpdateManagerScript.new()
+	manager._latest_checksum_url = TEST_ASSET_URL + ".sha256"
+	assert_true(
+		McpUpdateManagerScript._is_trusted_download_url(manager._latest_checksum_url),
+		"Seed: the repo-scoped sidecar URL must pass the trust guard")
+	var states: Array = []
+	manager.install_state_changed.connect(func(state: Dictionary) -> void:
+		states.append(state)
+	)
+
+	## Drive the verify completion directly; _install_zip runs via
+	## call_deferred, which never fires for a manager freed within the test,
+	## so assert on the synchronous evidence of the install handoff.
+	manager._on_checksum_completed(HTTPRequest.RESULT_SUCCESS, 200, [], sidecar_body)
+
+	var zip_still_staged := FileAccess.file_exists(global_zip)
+	manager.free()
+	DirAccess.remove_absolute(global_zip)
+	DirAccess.remove_absolute(global_dir)
+
+	assert_true(zip_still_staged,
+		"a matching digest must keep the staged ZIP for the install step")
+	assert_eq(states.size(), 1,
+		"a matching digest must emit exactly one state before install")
+	var state: Dictionary = states[0]
+	assert_eq(String(state.get("button_text", "")), "Installing...",
+		"a matching digest must advance the pipeline to Installing...")
 
 
 # ---- parse_releases_response (pure / static) ---------------------------

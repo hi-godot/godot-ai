@@ -8,6 +8,10 @@ func _init() -> void:
 	config_type = "toml"
 	doc_url = "https://openai.com/index/codex/"
 	path_template = {"unix": "~/.codex/config.toml", "windows": "$USERPROFILE/.codex/config.toml"}
+	## Documented: when $CODEX_HOME is set, Codex reads config.toml directly
+	## from it instead of ~/.codex (#617).
+	config_home_env = "CODEX_HOME"
+	config_home_env_subpath = "config.toml"
 	toml_section_path = PackedStringArray(["mcp_servers", "godot-ai"])
 	# Older Codex builds used the unquoted form with underscore-substituted ids.
 	toml_legacy_section_aliases = PackedStringArray(["mcp_servers.godot_ai"])

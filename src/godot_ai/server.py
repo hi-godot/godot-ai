@@ -25,7 +25,15 @@ from godot_ai.middleware import (
     PreserveGodotCommandErrorData,
     StripClientWrapperKwargs,
 )
-from godot_ai.orphan_reaper import poll_seconds_from_env, should_arm_reaper, watch_owner
+from godot_ai.orphan_reaper import (
+    boot_grace_from_env,
+    idle_grace_from_env,
+    poll_seconds_from_env,
+    should_arm_idle_exit,
+    should_arm_reaper,
+    watch_idle,
+    watch_owner,
+)
 from godot_ai.resources.classes import register_class_resources
 from godot_ai.resources.editor import register_editor_resources
 from godot_ai.resources.library import register_library_resources
@@ -150,6 +158,24 @@ def create_server(
                 owner_pid,
             )
 
+        ## Idle self-terminate backstop (#498). Runs ALONGSIDE the owner-PID
+        ## watchdog, not instead of it: pure session-count + monotonic-clock, so
+        ## it also covers Windows (where should_arm_reaper is False — #497) and
+        ## any path where the owner pid didn't survive env plumbing. Arms only
+        ## for plugin-spawned servers (GODOT_AI_PLUGIN_SPAWNED marker or owner
+        ## pid); manual dev servers, CI, and --reload runs are never idle-killed.
+        idle_task: asyncio.Task | None = None
+        if should_arm_idle_exit(owner_pid):
+            idle_task = asyncio.create_task(
+                watch_idle(
+                    lambda: len(registry.list_all()),
+                    poll_seconds=poll_seconds_from_env(),
+                    boot_grace_seconds=boot_grace_from_env(),
+                    idle_grace_seconds=idle_grace_from_env(),
+                )
+            )
+            logger.info("Idle self-terminate backstop armed for plugin-spawned server")
+
         ## Defer initial telemetry off the lifespan start tick — mirrors
         ## unity-mcp's 1s stdio-handshake guard so the first POST never
         ## races the MCP protocol's own startup chatter. Scheduled via
@@ -183,6 +209,12 @@ def create_server(
                 reaper_task.cancel()
                 try:
                     await reaper_task
+                except (asyncio.CancelledError, OSError):
+                    pass
+            if idle_task is not None:
+                idle_task.cancel()
+                try:
+                    await idle_task
                 except (asyncio.CancelledError, OSError):
                     pass
             ws_task.cancel()

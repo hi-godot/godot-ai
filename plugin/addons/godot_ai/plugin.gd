@@ -1270,6 +1270,15 @@ static func _build_server_flags(port: int, ws_port: int) -> Array[String]:
 	if not excluded.is_empty():
 		flags.append("--exclude-domains")
 		flags.append(excluded)
+	## LAN opt-in (#507, server core #421): pass `--allow-host` only when the
+	## developer-mode Settings tab named at least one CIDR / bare IP. Skipping
+	## the empty case keeps the default spawn byte-for-byte identical and
+	## compatible with older servers that don't know the flag — same pattern
+	## as `--exclude-domains` above.
+	var allow_hosts := ClientConfigurator.allow_hosts()
+	if not allow_hosts.is_empty():
+		flags.append("--allow-host")
+		flags.append(allow_hosts)
 	return flags
 
 

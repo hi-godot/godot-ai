@@ -10,7 +10,14 @@ import sys
 import pytest
 
 from godot_ai import orphan_reaper
-from godot_ai.orphan_reaper import pid_alive, should_arm_reaper, watch_owner
+from godot_ai.orphan_reaper import (
+    DEFAULT_IDLE_GRACE_SECONDS,
+    pid_alive,
+    should_arm_idle_exit,
+    should_arm_reaper,
+    watch_idle,
+    watch_owner,
+)
 
 POSIX_ONLY_PID_ALIVE = pytest.mark.skipif(
     sys.platform.startswith("win"),
@@ -163,3 +170,202 @@ async def test_grace_recheck_prevents_reap_on_transient_zero():
     with pytest.raises(asyncio.CancelledError):
         await task
     assert calls == [], "must not reap when a transient zero recovers within the grace window"
+
+
+## ---- Idle self-terminate backstop (#498 / #497) -------------------------
+
+
+@pytest.fixture
+def _clean_idle_env(monkeypatch):
+    for name in (
+        orphan_reaper.PLUGIN_SPAWNED_ENV,
+        orphan_reaper.NO_IDLE_EXIT_ENV,
+        orphan_reaper.BOOT_GRACE_ENV,
+        orphan_reaper.IDLE_GRACE_ENV,
+        "GODOT_AI_DEV_TRANSPORT",
+        "GODOT_AI_OWNER_PID",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    return monkeypatch
+
+
+def test_idle_exit_not_armed_without_marker(_clean_idle_env):
+    ## Manual dev servers / CI have neither the marker nor an owner pid — they
+    ## must NEVER be idle-killed (#498's hard constraint).
+    assert should_arm_idle_exit(None) is False
+    assert should_arm_idle_exit(0) is False
+
+
+def test_idle_exit_armed_by_plugin_spawned_marker(_clean_idle_env):
+    _clean_idle_env.setenv(orphan_reaper.PLUGIN_SPAWNED_ENV, "1")
+    assert should_arm_idle_exit(None) is True
+
+
+def test_idle_exit_armed_by_owner_pid(_clean_idle_env):
+    ## Older plugin builds that predate the marker still plumb an owner pid;
+    ## that is proof enough of a plugin spawn.
+    assert should_arm_idle_exit(4242) is True
+
+
+def test_idle_exit_armed_on_windows(_clean_idle_env):
+    ## Unlike should_arm_reaper there is NO platform gate — this is the #497
+    ## Windows orphan coverage.
+    _clean_idle_env.setattr(orphan_reaper.sys, "platform", "win32")
+    _clean_idle_env.setenv(orphan_reaper.PLUGIN_SPAWNED_ENV, "1")
+    assert should_arm_idle_exit(None) is True
+
+
+def test_idle_exit_opt_out_disables(_clean_idle_env):
+    _clean_idle_env.setenv(orphan_reaper.PLUGIN_SPAWNED_ENV, "1")
+    _clean_idle_env.setenv(orphan_reaper.NO_IDLE_EXIT_ENV, "1")
+    assert should_arm_idle_exit(4242) is False
+    ## Falsey opt-out value does not disable.
+    _clean_idle_env.setenv(orphan_reaper.NO_IDLE_EXIT_ENV, "0")
+    assert should_arm_idle_exit(4242) is True
+
+
+def test_idle_exit_disabled_in_reload_mode(_clean_idle_env):
+    ## --reload dev runs export GODOT_AI_DEV_TRANSPORT for the uvicorn worker;
+    ## an idle reloading server is a dev convenience, not an orphan.
+    _clean_idle_env.setenv(orphan_reaper.PLUGIN_SPAWNED_ENV, "1")
+    _clean_idle_env.setenv("GODOT_AI_DEV_TRANSPORT", "streamable-http")
+    assert should_arm_idle_exit(4242) is False
+
+
+def test_idle_grace_env_defaults_and_fallbacks(_clean_idle_env):
+    assert orphan_reaper.boot_grace_from_env() == DEFAULT_IDLE_GRACE_SECONDS
+    assert orphan_reaper.idle_grace_from_env() == DEFAULT_IDLE_GRACE_SECONDS
+    _clean_idle_env.setenv(orphan_reaper.BOOT_GRACE_ENV, "7.5")
+    _clean_idle_env.setenv(orphan_reaper.IDLE_GRACE_ENV, "9")
+    assert orphan_reaper.boot_grace_from_env() == 7.5
+    assert orphan_reaper.idle_grace_from_env() == 9.0
+    ## Malformed / non-positive values must never become an instant kill.
+    _clean_idle_env.setenv(orphan_reaper.BOOT_GRACE_ENV, "banana")
+    _clean_idle_env.setenv(orphan_reaper.IDLE_GRACE_ENV, "-3")
+    assert orphan_reaper.boot_grace_from_env() == DEFAULT_IDLE_GRACE_SECONDS
+    assert orphan_reaper.idle_grace_from_env() == DEFAULT_IDLE_GRACE_SECONDS
+
+
+class _FakeClock:
+    """Monotonic fake advanced by the test, so no real sleeps beyond the
+    sub-millisecond asyncio poll ticks."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def test_idle_exits_after_boot_grace_with_no_session_ever():
+    calls: list[bool] = []
+    clock = _FakeClock()
+
+    def session_count() -> int:
+        clock.now += 4.0  # each poll "takes" 4s on the fake clock
+        return 0
+
+    await asyncio.wait_for(
+        watch_idle(
+            session_count,
+            poll_seconds=0.001,
+            boot_grace_seconds=10.0,
+            idle_grace_seconds=1000.0,
+            clock=clock,
+            shutdown=lambda: calls.append(True),
+        ),
+        timeout=2.0,
+    )
+    assert calls == [True]
+    assert clock.now >= 10.0, "must not exit before the boot grace elapses"
+
+
+async def test_idle_boot_grace_honored_before_expiry():
+    ## Clock advances but stays inside the boot grace — no shutdown.
+    calls: list[bool] = []
+    clock = _FakeClock()
+
+    def session_count() -> int:
+        clock.now = min(clock.now + 1.0, 9.0)  # never reaches the 10s grace
+        return 0
+
+    task = asyncio.create_task(
+        watch_idle(
+            session_count,
+            poll_seconds=0.001,
+            boot_grace_seconds=10.0,
+            idle_grace_seconds=10.0,
+            clock=clock,
+            shutdown=lambda: calls.append(True),
+        )
+    )
+    await asyncio.sleep(0.05)  # many poll cycles
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert calls == []
+
+
+async def test_idle_clock_resets_on_session_connect_and_starts_on_disconnect():
+    ## Sessions connected well past the boot grace, then disconnect: the exit
+    ## must come one idle grace after the LAST poll that saw a session, not
+    ## relative to boot.
+    calls: list[bool] = []
+    clock = _FakeClock()
+    state = {"last_seen": None}
+
+    def auto_advancing_clock() -> float:
+        clock.now += 5.0  # each poll "takes" 5s on the fake clock
+        return clock.now
+
+    def session_count() -> int:
+        if clock.now < 100.0:  # connected far beyond the 10s boot grace
+            state["last_seen"] = clock.now
+            return 1
+        return 0
+
+    await asyncio.wait_for(
+        watch_idle(
+            session_count,
+            poll_seconds=0.001,
+            boot_grace_seconds=10.0,
+            idle_grace_seconds=30.0,
+            clock=auto_advancing_clock,
+            shutdown=lambda: calls.append(True),
+        ),
+        timeout=2.0,
+    )
+    assert calls == [True]
+    ## Connected phase outlived the boot grace many times over without a reap,
+    ## and the exit happened only after a full idle grace after the last poll
+    ## that observed a session (watch_idle's documented disconnect anchor).
+    assert state["last_seen"] is not None
+    assert clock.now - state["last_seen"] >= 30.0
+
+
+async def test_idle_transient_zero_dip_does_not_exit():
+    ## Plugin-reload reconnect gap: one zero-session poll inside the grace,
+    ## then the session is back. Must not exit.
+    calls: list[bool] = []
+    clock = _FakeClock()
+    counts = iter([1, 1, 0])  # transient dip, then 1 forever
+
+    def session_count() -> int:
+        clock.now += 1.0
+        return next(counts, 1)
+
+    task = asyncio.create_task(
+        watch_idle(
+            session_count,
+            poll_seconds=0.001,
+            boot_grace_seconds=10.0,
+            idle_grace_seconds=10.0,
+            clock=clock,
+            shutdown=lambda: calls.append(True),
+        )
+    )
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert calls == []

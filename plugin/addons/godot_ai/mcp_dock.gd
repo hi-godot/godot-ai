@@ -94,6 +94,19 @@ var _telemetry_toggle: CheckButton
 var _telemetry_pending_enabled: bool = true
 var _telemetry_saved_enabled: bool = true
 
+# Settings tab (secondary window, Tab 3) — LAN opt-in (#507). Developer-
+# mode-gated "Allow remote hosts (CIDR)" field whose value feeds
+# `--allow-host` at server spawn (see plugin.gd::_build_server_flags).
+# The LineEdit's live text is the pending state; `_allow_hosts_saved`
+# mirrors the persisted EditorSetting, same pending/saved shape as the
+# Tools tab above.
+var _allow_hosts_section: VBoxContainer
+var _allow_hosts_dev_gate_label: Label
+var _allow_hosts_edit: LineEdit
+var _allow_hosts_hint: Label
+var _allow_hosts_apply_btn: Button
+var _allow_hosts_saved: String = ""
+
 ## Per-client UI handles, keyed by client id. Each entry holds the row's
 ## status dot, configure/remove buttons, config-file buttons, and manual panel.
 var _client_rows: Dictionary = {}
@@ -734,10 +747,11 @@ func _build_ui() -> void:
 	_clients_window.close_requested.connect(_on_clients_window_close_requested)
 	add_child(_clients_window)
 
-	## Two-tab secondary window: Clients (existing per-client rows) and Tools
-	## (domain-exclusion checkboxes for clients that cap total tool count,
-	## like Antigravity at 100). Adding a third tab is one more _build_*_tab
-	## call and a set_tab_title line — no surgery on the rest of the window.
+	## Tabbed secondary window: Clients (per-client rows), Tools (domain-
+	## exclusion checkboxes for clients that cap total tool count, like
+	## Antigravity at 100), and Settings (allow-host LAN opt-in, #507).
+	## Adding another tab is one more _build_*_tab call — no surgery on the
+	## rest of the window.
 	var tabs := TabContainer.new()
 	tabs.anchor_right = 1.0
 	tabs.anchor_bottom = 1.0
@@ -772,6 +786,7 @@ func _build_ui() -> void:
 		_build_client_row(client_id)
 
 	_build_tools_tab(tabs)
+	_build_settings_tab(tabs)
 
 	_body.add_child(HSeparator.new())
 
@@ -951,7 +966,12 @@ func _update_status() -> void:
 		status_text = "Incompatible server on port %d" % ClientConfigurator.http_port()
 		status_color = Color.RED
 	elif state == ServerStateScript.FOREIGN_PORT:
-		status_text = "Port %d held by another process" % ClientConfigurator.http_port()
+		## #647: the post-crash probe names the actual conflicting port
+		## (HTTP or WS) — don't blame port 8000 when 9500 is the occupant.
+		var conflict_port: int = int(server_status.get("conflict_port", 0))
+		if conflict_port <= 0:
+			conflict_port = ClientConfigurator.http_port()
+		status_text = "Port %d held by another process" % conflict_port
 		status_color = Color.RED
 	elif state == ServerStateScript.NO_COMMAND:
 		status_text = "No server command found"
@@ -1021,9 +1041,14 @@ func _update_crash_panel(server_status: Dictionary) -> void:
 			and not bool(server_status.get("can_recover_incompatible", false))
 		)
 
+	## #647: the quick picker only moves `godot_ai/http_port`, so hide it
+	## when the diagnosed conflict is on the WebSocket port — the crash
+	## body already points at `godot_ai/ws_port` in Editor Settings.
+	var conflict_port := int(server_status.get("conflict_port", 0))
+	var http_conflict := conflict_port <= 0 or conflict_port == ClientConfigurator.http_port()
 	var port_picker_visible := (
 		state == ServerStateScript.PORT_EXCLUDED
-		or state == ServerStateScript.FOREIGN_PORT
+		or (state == ServerStateScript.FOREIGN_PORT and http_conflict)
 	)
 	_port_picker_panel.visible = port_picker_visible
 	if port_picker_visible:
@@ -1060,6 +1085,12 @@ static func _crash_body_for_state(state: int, server_status: Dictionary = {}) ->
 				return "%s %s" % [message, hint]
 			return "Port %d is occupied by an incompatible server. %s" % [port, hint]
 		ServerStateScript.FOREIGN_PORT:
+			## #647: prefer the lifecycle's diagnosis (it names the right
+			## port — HTTP vs WS — and the Editor Setting to change) over
+			## the generic HTTP-port fallback.
+			var foreign_message := str(server_status.get("message", ""))
+			if not foreign_message.is_empty():
+				return foreign_message
 			return "Another process is already bound to port %d. Pick a free port or stop the other process." % port
 		ServerStateScript.CRASHED:
 			## Both spawn attempts failed on the uvx tier — almost always
@@ -1303,6 +1334,9 @@ func _apply_dev_mode_visibility() -> void:
 	_dev_section.visible = dev
 	if _log_viewer != null:
 		_log_viewer.visible = dev
+	## Settings tab's allow-host controls are dev-gated too (#507) — same
+	## single source of truth as the sections above.
+	_apply_allow_hosts_dev_gate(dev)
 
 	# Setup section: visible in dev mode, OR in user mode when uv is missing
 	# (so users can install uv from the dock).
@@ -1945,7 +1979,11 @@ func _on_open_clients_window() -> void:
 
 
 func _settings_are_dirty() -> bool:
-	return _tools_pending_excluded != _tools_saved_excluded or _telemetry_pending_enabled != _telemetry_saved_enabled
+	return (
+		_tools_pending_excluded != _tools_saved_excluded
+		or _telemetry_pending_enabled != _telemetry_saved_enabled
+		or _allow_hosts_is_dirty()
+	)
 
 
 func _on_clients_window_close_requested() -> void:
@@ -2079,9 +2117,12 @@ func _build_tools_tab(tabs: TabContainer) -> void:
 
 	_tools_close_confirm = ConfirmationDialog.new()
 	_tools_close_confirm.title = "Discard unapplied changes?"
+	## Generic wording: _settings_are_dirty() covers domain toggles, the
+	## telemetry switch, AND the Settings tab's allow-host field (#507) —
+	## the old "checked/unchecked domains" text misled non-domain edits.
 	_tools_close_confirm.dialog_text = (
-		"You've checked/unchecked domains but haven't clicked Apply.\n"
-		+ "Close the window and discard those changes?"
+		"You have unapplied changes in this window.\n"
+		+ "Close it and discard those changes?"
 	)
 	_tools_close_confirm.ok_button_text = "Discard"
 	_tools_close_confirm.confirmed.connect(_on_tools_discard_confirmed)
@@ -2147,6 +2188,9 @@ func _reset_tools_pending_from_setting() -> void:
 	## Also reset telemetry pending state from the persisted setting.
 	if _telemetry_toggle != null:
 		_load_telemetry_setting()
+	## And the Settings tab's allow-host field (#507) — same window-open /
+	## discard-confirm re-sync contract as the tools checkboxes.
+	_reset_allow_hosts_from_setting()
 
 
 func _on_tools_domain_toggled(pressed: bool, domain_id: String) -> void:
@@ -2216,6 +2260,155 @@ func _on_tools_discard_confirmed() -> void:
 	_refresh_tools_ui_state()
 	if _clients_window != null:
 		_clients_window.hide()
+
+
+# --- Settings tab (allow-host LAN opt-in, #507) ---
+
+func _build_settings_tab(tabs: TabContainer) -> void:
+	## Tab 3 — settings-style controls that don't fit Clients or Tools.
+	## Currently houses the developer-mode-gated `--allow-host` LAN opt-in.
+	## Rendered once on dock construction, mirroring `_build_tools_tab`;
+	## `_reset_allow_hosts_from_setting()` re-syncs the field each time the
+	## window opens (via `_reset_tools_pending_from_setting`).
+	var settings_tab := VBoxContainer.new()
+	settings_tab.add_theme_constant_override("separation", 8)
+	var settings_margin := _build_margin_container()
+	settings_margin.name = "Settings"
+	settings_margin.add_child(settings_tab)
+	tabs.add_child(settings_margin)
+
+	## Shown in place of the gated controls when developer mode is off —
+	## same gate the dev section uses (see `_apply_dev_mode_visibility`).
+	_allow_hosts_dev_gate_label = Label.new()
+	_allow_hosts_dev_gate_label.text = (
+		"Enable Developer mode (bottom of the dock) to edit remote-access settings."
+	)
+	_allow_hosts_dev_gate_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_allow_hosts_dev_gate_label.add_theme_color_override("font_color", COLOR_MUTED)
+	_allow_hosts_dev_gate_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	settings_tab.add_child(_allow_hosts_dev_gate_label)
+
+	_allow_hosts_section = VBoxContainer.new()
+	_allow_hosts_section.add_theme_constant_override("separation", 6)
+	settings_tab.add_child(_allow_hosts_section)
+
+	_allow_hosts_section.add_child(_make_header("Allow remote hosts (CIDR)"))
+
+	var intro := Label.new()
+	intro.text = (
+		"Comma-separated CIDRs or bare IPs (e.g. 192.168.1.0/24, 10.0.0.5). "
+		+ "When non-empty, the server binds off loopback and accepts MCP "
+		+ "connections from these ranges (--allow-host)."
+	)
+	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	intro.add_theme_color_override("font_color", COLOR_MUTED)
+	intro.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_allow_hosts_section.add_child(intro)
+
+	## Warning banner — the DNS-rebinding guard is widened to every machine
+	## in the named ranges, so make the user name a network they trust
+	## instead of offering a blanket "expose everything" toggle (#507).
+	var warning := Label.new()
+	warning.text = (
+		"Warning: every machine in these ranges can drive this Godot editor, "
+		+ "and the DNS-rebinding guard's Host allowlist is widened to match. "
+		+ "Only name networks you trust. On untrusted or shared networks, "
+		+ "prefer an SSH tunnel or Tailscale instead of exposing the port."
+	)
+	warning.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	warning.add_theme_color_override("font_color", COLOR_AMBER)
+	warning.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_allow_hosts_section.add_child(warning)
+
+	_allow_hosts_edit = LineEdit.new()
+	_allow_hosts_edit.placeholder_text = "e.g. 192.168.1.0/24, 10.0.0.5 — empty = loopback only"
+	_allow_hosts_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_allow_hosts_edit.text_changed.connect(_on_allow_hosts_text_changed)
+	_allow_hosts_section.add_child(_allow_hosts_edit)
+
+	_allow_hosts_hint = Label.new()
+	_allow_hosts_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_allow_hosts_hint.add_theme_color_override("font_color", Color.RED)
+	_allow_hosts_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_allow_hosts_hint.visible = false
+	_allow_hosts_section.add_child(_allow_hosts_hint)
+
+	_allow_hosts_apply_btn = Button.new()
+	_allow_hosts_apply_btn.text = "Apply and Restart Server"
+	_allow_hosts_apply_btn.tooltip_text = (
+		"Save the allowlist to Editor Settings and reload the plugin so the "
+		+ "server respawns with --allow-host. Clear the field and Apply to "
+		+ "return to loopback-only."
+	)
+	_allow_hosts_apply_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_allow_hosts_apply_btn.pressed.connect(_on_allow_hosts_apply)
+	_allow_hosts_section.add_child(_allow_hosts_apply_btn)
+
+	_reset_allow_hosts_from_setting()
+	## Apply the current dev-mode gate — `_build_ui` runs
+	## `_apply_dev_mode_visibility()` after all tabs are built, but keep this
+	## self-consistent for any future caller that builds the tab alone.
+	_apply_allow_hosts_dev_gate(_dev_mode_toggle != null and _dev_mode_toggle.button_pressed)
+
+
+func _apply_allow_hosts_dev_gate(dev: bool) -> void:
+	if _allow_hosts_section != null:
+		_allow_hosts_section.visible = dev
+	if _allow_hosts_dev_gate_label != null:
+		_allow_hosts_dev_gate_label.visible = not dev
+
+
+func _reset_allow_hosts_from_setting() -> void:
+	_allow_hosts_saved = ClientConfigurator.allow_hosts()
+	if _allow_hosts_edit == null:
+		return
+	_allow_hosts_edit.text = _allow_hosts_saved
+	_refresh_allow_hosts_ui_state()
+
+
+func _allow_hosts_is_dirty() -> bool:
+	if _allow_hosts_edit == null:
+		return false
+	return McpAllowHosts.normalize(_allow_hosts_edit.text) != _allow_hosts_saved
+
+
+func _on_allow_hosts_text_changed(_new_text: String) -> void:
+	_refresh_allow_hosts_ui_state()
+
+
+func _refresh_allow_hosts_ui_state() -> void:
+	if _allow_hosts_edit == null or _allow_hosts_apply_btn == null:
+		return
+	var invalid := McpAllowHosts.invalid_tokens(_allow_hosts_edit.text)
+	if invalid.is_empty():
+		_allow_hosts_hint.visible = false
+	else:
+		## Name the accepted syntax in the hint — matches the server's
+		## `parse_allow_hosts` (CIDR / bare IP, comma-separated).
+		_allow_hosts_hint.text = (
+			"Invalid entries (must be a CIDR like 192.168.1.0/24 or a bare IP, comma-separated): %s"
+			% ", ".join(invalid)
+		)
+		_allow_hosts_hint.visible = true
+	_allow_hosts_apply_btn.disabled = not _allow_hosts_is_dirty() or not invalid.is_empty()
+
+
+func _on_allow_hosts_apply() -> void:
+	if _allow_hosts_edit == null:
+		return
+	var normalized := McpAllowHosts.normalize(_allow_hosts_edit.text)
+	if not McpAllowHosts.invalid_tokens(normalized).is_empty():
+		return
+	var es := EditorInterface.get_editor_settings()
+	if es != null:
+		es.set_setting(McpSettings.SETTING_ALLOW_HOSTS, normalized)
+	_allow_hosts_saved = normalized
+	_allow_hosts_edit.text = normalized
+	_refresh_allow_hosts_ui_state()
+	## Plugin reload respawns the server with the new `--allow-host` flag
+	## (see `plugin.gd::_build_server_flags`). Mirrors the Tools-tab Apply
+	## and port-change flows.
+	_on_reload_plugin()
 
 
 func _refresh_clients_summary() -> void:

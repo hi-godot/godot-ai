@@ -138,6 +138,19 @@ static func excluded_domains() -> String:
 	return ",".join(parts)
 
 
+## Read the `godot_ai/allow_remote_hosts` EditorSetting as a canonicalized
+## comma-separated list of CIDRs / bare IPs (#507). Returns "" when the
+## setting is missing or empty — callers skip appending `--allow-host` in
+## that case so spawns stay byte-for-byte identical to the loopback-only
+## default (and compatible with pre-#421 servers). Mirrors
+## `excluded_domains()` above.
+static func allow_hosts() -> String:
+	var es := EditorInterface.get_editor_settings()
+	if es == null or not es.has_setting(McpSettings.SETTING_ALLOW_HOSTS):
+		return ""
+	return McpAllowHosts.normalize(str(es.get_setting(McpSettings.SETTING_ALLOW_HOSTS)))
+
+
 ## Suggest a port the caller can actually switch to. Walks
 ## `candidate`..`candidate+span-1` and returns the first port that is both
 ## (a) NOT inside a Windows winnat reservation range (Hyper-V / WSL2 / Docker
@@ -363,7 +376,17 @@ static func manual_command(id: String) -> String:
 	var client := ClientRegistry.get_by_id(id)
 	if client == null:
 		return ""
-	return ManualCommand.build(client, SERVER_NAME, http_url(), client.resolved_config_path())
+	var cmd := ManualCommand.build(client, SERVER_NAME, http_url(), client.resolved_config_path())
+	if cmd.is_empty():
+		return cmd
+	## #507: when the allow-host opt-in names a non-loopback range, also
+	## surface the LAN URL so the user can copy-paste the right address into
+	## a remote agent. Informational only — configure/remove still WRITE the
+	## loopback URL above; nothing about the config-file contract changes.
+	var note := McpAllowHosts.lan_url_note(allow_hosts(), IP.get_local_addresses(), http_port())
+	if not note.is_empty():
+		cmd += "\n\n" + note
+	return cmd
 
 
 static func config_path(id: String) -> String:

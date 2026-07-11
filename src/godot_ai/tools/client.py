@@ -9,7 +9,7 @@ from godot_ai.tools._meta_tool import register_manage_tool
 
 _DESCRIPTION = """\
 Configure AI clients to use this Godot AI MCP server. Writes / removes
-client config files (Claude Code, Codex, Antigravity, Cursor, Windsurf,
+client config files (Claude Code, Codex, Antigravity, Cursor, Devin Desktop (Windsurf),
 Zed, etc.).
 
 Ops:

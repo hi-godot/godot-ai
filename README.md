@@ -82,7 +82,7 @@ covers:
 <details>
 <summary><strong>…and 16+ more clients</strong></summary>
 
-Codex, Cursor, Windsurf, VS Code, VS Code Insiders, Zed, Gemini CLI, Cline,
+Codex, Cursor, Devin Desktop (formerly Windsurf), VS Code, VS Code Insiders, Zed, Gemini CLI, Cline,
 Kilo Code, Roo Code, Kiro, Trae, Cherry Studio, OpenCode, Qwen Code,
 Kimi Code.
 

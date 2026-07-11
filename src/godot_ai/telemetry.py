@@ -109,23 +109,38 @@ class TelemetryRecord:
     milestone: MilestoneType | None = None
 
 
-def hash_session_id(session_id: str | None) -> str:
+def hash_session_id(session_id: str | None, *, salt: str = "") -> str:
     """Make a session id safe to ship: hash the slug, keep the twin suffix.
 
     Godot-AI session ids look like ``<slug>@<4hex>`` where ``<slug>`` is
     derived from the project directory name (potentially identifying:
-    ``secret-game-prototype@a3f2``). We sha256 the slug and keep the first
-    8 hex chars, preserving per-project stability without leaking the
-    name. Sessions without an ``@`` (legacy or absent) hash as a whole.
-    Empty / ``None`` returns ``""`` so callers can pass through raw values.
+    ``secret-game-prototype@a3f2``). We sha256 the salt-prefixed slug and
+    keep the first 8 hex chars, preserving per-install per-project
+    stability without leaking the name. Sessions without an ``@`` (legacy
+    or absent) hash as a whole. Empty / ``None`` returns ``""`` so callers
+    can pass through raw values.
+
+    ``salt`` should be the local ``customer_uuid`` (issue #529): an
+    unsalted truncated hash of a project name is dictionary-reversible
+    and — worse — identical across installations, enabling cross-user
+    correlation of common project names. Salting with the per-install
+    UUID kills both while keeping the hash stable for a given install +
+    project. NOTE: introducing the salt intentionally changes every
+    existing project hash fleet-wide — a one-time aggregation
+    discontinuity in the telemetry backend, accepted cost of the privacy
+    fix. Callers with no UUID available may pass ``salt=""`` (falls back
+    to the legacy unsalted digest).
     """
     if not session_id:
         return ""
+
+    def _digest(text: str) -> str:
+        return hashlib.sha256((salt + text).encode("utf-8", errors="replace")).hexdigest()[:8]
+
     if "@" in session_id:
         slug, _, suffix = session_id.rpartition("@")
-        digest = hashlib.sha256(slug.encode("utf-8", errors="replace")).hexdigest()[:8]
-        return f"{digest}@{suffix}"
-    return hashlib.sha256(session_id.encode("utf-8", errors="replace")).hexdigest()[:8]
+        return f"{_digest(slug)}@{suffix}"
+    return _digest(session_id)
 
 
 class TelemetryConfig:
@@ -158,6 +173,10 @@ class TelemetryConfig:
         ## allow_loopback must be resolved before _resolve_endpoint(), which
         ## reads it to decide whether to accept http://127.0.0.1 endpoints.
         self.allow_loopback = self._env_truthy("GODOT_AI_TELEMETRY_ALLOW_LOOPBACK")
+        ## Escape hatch for issue #532: plain http:// to a non-loopback
+        ## host ships customer_uuid + usage data in cleartext, so it is
+        ## rejected unless the operator explicitly opts in.
+        self.allow_insecure_http = self._env_truthy("GODOT_AI_TELEMETRY_ALLOW_INSECURE_HTTP")
         self.endpoint = self._resolve_endpoint()
         self.timeout = self._resolve_timeout()
 
@@ -222,10 +241,23 @@ class TelemetryConfig:
         if not parsed.netloc:
             return False
         host = (parsed.hostname or "").lower()
-        if host in ("localhost", "127.0.0.1", "::1") and not self.allow_loopback:
+        is_loopback = host in ("localhost", "127.0.0.1", "::1")
+        if is_loopback and not self.allow_loopback:
             ## Loopback is rejected unless the operator explicitly opts in.
             ## Self-hosters and the local-sink smoke flow set
             ## GODOT_AI_TELEMETRY_ALLOW_LOOPBACK=1.
+            return False
+        if parsed.scheme == "http" and not is_loopback and not self.allow_insecure_http:
+            ## Cleartext http to a real network host would ship the
+            ## customer_uuid and usage data unencrypted (issue #532).
+            ## Loopback http stays fine (never leaves the machine);
+            ## anything else requires the explicit escape hatch
+            ## GODOT_AI_TELEMETRY_ALLOW_INSECURE_HTTP=1.
+            logger.warning(
+                "Telemetry endpoint %r uses plain http to a non-loopback host; "
+                "use https or set GODOT_AI_TELEMETRY_ALLOW_INSECURE_HTTP=1",
+                candidate,
+            )
             return False
         return True
 
@@ -357,7 +389,13 @@ class TelemetryCollector:
             record_type=record_type,
             timestamp=time.time(),
             customer_uuid=self._customer_uuid or "unknown",
-            session_id=hash_session_id(session_id) if session_id else "",
+            ## Salt with the per-install customer_uuid (issue #529). The
+            ## uuid is always loaded before any record on an enabled
+            ## collector; the "" fallback (legacy unsalted digest) is
+            ## defensive only.
+            session_id=(
+                hash_session_id(session_id, salt=self._customer_uuid or "") if session_id else ""
+            ),
             data=data,
             milestone=milestone,
         )

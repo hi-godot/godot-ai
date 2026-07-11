@@ -1430,3 +1430,98 @@ class TestResponseEnvelopeReadinessSelfHeal:
         finally:
             await asyncio.wait_for(task, timeout=2.0)
             await plugin.close()
+
+
+# ---------------------------------------------------------------------------
+# Malformed-frame resilience (#526)
+# ---------------------------------------------------------------------------
+
+
+class TestMalformedFrameResilience:
+    """A single garbled frame must not tear down the editor session (#526).
+
+    Before the fix, a non-JSON frame or a command response failing Pydantic
+    validation raised out of the per-message loop into the catch-all, and the
+    finally block unregistered the session — one bad frame dropped the whole
+    editor↔server bridge.
+    """
+
+    async def test_non_json_frame_is_skipped_and_session_survives(self, harness):
+        plugin = await harness.connect_plugin(session_id="bad-frame")
+
+        await plugin.ws.send("this is not json {")
+        await asyncio.sleep(0.1)
+        assert harness.registry.get("bad-frame") is not None, (
+            "one non-JSON frame must not unregister the session"
+        )
+
+        ## Subsequent commands still round-trip over the surviving connection.
+        client = GodotClient(harness.server, harness.registry)
+
+        async def mock_handler():
+            cmd = await plugin.recv_command()
+            await plugin.send_response(cmd["request_id"], {"version": "4.4.1"})
+
+        handler_task = asyncio.create_task(mock_handler())
+        result = await client.send("get_editor_state")
+        await handler_task
+        assert result == {"version": "4.4.1"}
+        await plugin.close()
+
+    async def test_non_object_json_frame_is_skipped_and_session_survives(self, harness):
+        ## Valid JSON that isn't an object (`[]`, `42`) reaches `.get()` and
+        ## would raise AttributeError through the catch-all without the
+        ## isinstance guard (#526 Copilot follow-up).
+        plugin = await harness.connect_plugin(session_id="non-obj-frame")
+
+        await plugin.ws.send("[]")
+        await plugin.ws.send("42")
+        await asyncio.sleep(0.1)
+        assert harness.registry.get("non-obj-frame") is not None, (
+            "non-object JSON frames must not unregister the session"
+        )
+        await plugin.close()
+
+    async def test_invalid_command_response_is_skipped_and_session_survives(self, harness):
+        plugin = await harness.connect_plugin(session_id="bad-response")
+
+        ## Not an event and fails CommandResponse validation (no request_id,
+        ## bad status type).
+        await plugin.ws.send(json.dumps({"status": 42, "data": "nope"}))
+        await asyncio.sleep(0.1)
+        assert harness.registry.get("bad-response") is not None, (
+            "one invalid command response must not unregister the session"
+        )
+
+        client = GodotClient(harness.server, harness.registry)
+
+        async def mock_handler():
+            cmd = await plugin.recv_command()
+            await plugin.send_response(cmd["request_id"], {"ok": True})
+
+        handler_task = asyncio.create_task(mock_handler())
+        result = await client.send("get_editor_state")
+        await handler_task
+        assert result == {"ok": True}
+        await plugin.close()
+
+    async def test_invalid_response_with_request_id_fails_pending_fast(self, harness):
+        """A malformed frame that names a pending request_id fails that
+        future immediately with a clear error instead of leaving the caller
+        to hit its timeout — and the session still survives."""
+        plugin = await harness.connect_plugin(session_id="bad-corr")
+        client = GodotClient(harness.server, harness.registry)
+
+        async def mock_handler():
+            cmd = await plugin.recv_command()
+            ## Correct request_id, but `status` has the wrong type so
+            ## CommandResponse validation fails.
+            await plugin.ws.send(json.dumps({"request_id": cmd["request_id"], "status": 42}))
+
+        handler_task = asyncio.create_task(mock_handler())
+        with pytest.raises(ConnectionError, match="Malformed response"):
+            await client.send("get_editor_state", timeout=5.0)
+        await handler_task
+
+        assert harness.registry.get("bad-corr") is not None
+        await plugin.close()

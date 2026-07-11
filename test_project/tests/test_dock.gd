@@ -788,6 +788,23 @@ func test_crashed_body_mentions_pypi_propagation_on_uvx_tier() -> void:
 		assert_contains(body, "output log", "Non-uvx body should still point at Godot's traceback")
 
 
+func test_foreign_port_body_prefers_lifecycle_message() -> void:
+	## #647: when the post-crash probe diagnosed which port a foreign
+	## process holds, the crash body must render that message verbatim
+	## (it names the right port and Editor Setting) instead of the
+	## generic HTTP-port fallback.
+	var message := "WebSocket port 9500 is in use by another application. Stop it or change the port in Editor Settings (godot_ai/ws_port)."
+	var body := McpDockScript._crash_body_for_state(
+		McpServerState.FOREIGN_PORT, {"message": message}
+	)
+	assert_eq(body, message)
+
+
+func test_foreign_port_body_without_message_keeps_generic_fallback() -> void:
+	var body := McpDockScript._crash_body_for_state(McpServerState.FOREIGN_PORT)
+	assert_contains(body, "Another process is already bound to port")
+
+
 # --- Configure / Remove run off-thread (issue #239) ----------------------
 
 func _first_client_id() -> String:

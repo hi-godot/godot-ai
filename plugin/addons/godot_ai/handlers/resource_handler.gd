@@ -288,10 +288,24 @@ static func _instantiate_resource(type_str: String) -> Variant:
 	return _unknown_resource_type_error(type_str)
 
 
+## Maximum nesting depth for the {"__class__": ...} sub-resource shortcut.
+## Caller-supplied dicts recurse through _apply_resource_properties; without a
+## cap a deeply nested payload overflows the GDScript call stack and crashes
+## the editor (#536). 32 is far beyond any legitimate sub-resource chain.
+const MAX_NESTED_RESOURCE_DEPTH := 32
+
+
 ## Apply a dict of property values to a freshly-instantiated Resource,
 ## reusing NodeHandler's coercion so Vector3/Color/etc. dicts land typed.
 ## Returns null on success or an error dict on failure.
-static func _apply_resource_properties(res: Resource, properties: Dictionary) -> Variant:
+## `depth` is internal recursion bookkeeping for the nested {"__class__": ...}
+## shortcut — external callers use the default of 0.
+static func _apply_resource_properties(res: Resource, properties: Dictionary, depth: int = 0) -> Variant:
+	if depth > MAX_NESTED_RESOURCE_DEPTH:
+		return ErrorCodes.make(
+			ErrorCodes.INVALID_PARAMS,
+			"Nested resource properties exceed the maximum depth of %d — flatten the {\"__class__\": ...} nesting or create the deep sub-resources in separate calls" % MAX_NESTED_RESOURCE_DEPTH
+		)
 	var prop_types := {}
 	for prop in res.get_property_list():
 		prop_types[prop.name] = prop.get("type", TYPE_NIL)
@@ -352,7 +366,7 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary) ->
 			var remaining: Dictionary = (v as Dictionary).duplicate()
 			remaining.erase("__class__")
 			if not remaining.is_empty():
-				var nested_err := _apply_resource_properties(sub_res, remaining)
+				var nested_err := _apply_resource_properties(sub_res, remaining, depth + 1)
 				if nested_err != null:
 					return nested_err
 			v = sub_res

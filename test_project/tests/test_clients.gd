@@ -62,6 +62,28 @@ func test_registry_ids_are_unique() -> void:
 	assert_gt(seen.size(), 0)
 
 
+func test_windsurf_rebrand_to_devin_desktop() -> void:
+	## #623: Windsurf was rebranded to Devin Desktop by Cognition (June 2026).
+	## The registry id must stay "windsurf" (stable key for configured-status
+	## lookups) and the config path is unchanged — migrated installs keep
+	## ~/.codeium/windsurf/mcp_config.json. Only the display name and docs
+	## URL changed. Pin the exact path templates so base-path drift (not
+	## just a suffix change) fails loudly.
+	var client := McpClientRegistry.get_by_id("windsurf")
+	assert_true(client != null, "windsurf id must remain registered after #623 rebrand")
+	assert_eq(client.display_name, "Devin Desktop (Windsurf)")
+	assert_eq(
+		String(client.path_template.get("unix", "")),
+		"~/.codeium/windsurf/mcp_config.json",
+		"windsurf unix config path must stay exactly ~/.codeium/windsurf/mcp_config.json (#623)"
+	)
+	assert_eq(
+		String(client.path_template.get("windows", "")),
+		"$USERPROFILE/.codeium/windsurf/mcp_config.json",
+		"windsurf windows config path must stay exactly $USERPROFILE/.codeium/windsurf/mcp_config.json (#623)"
+	)
+
+
 func test_every_client_has_required_fields() -> void:
 	for client in McpClientRegistry.all():
 		assert_true(not client.id.is_empty(), "Client missing id: %s" % client)
@@ -709,6 +731,120 @@ func test_path_template_xdg_fallback() -> void:
 	var resolved := McpPathTemplate.expand("$XDG_CONFIG_HOME/foo")
 	# Either uses XDG_CONFIG_HOME if set, or falls back to ~/.config
 	assert_true(resolved.ends_with("/foo"))
+
+
+# ----- config-home env override (#617) -----
+
+const TEST_CFG_HOME_ENV := "GODOT_AI_TEST_CFG_HOME"
+
+
+func _make_env_override_toml_client(default_path: String) -> McpClient:
+	var c := _make_test_toml_client(default_path)
+	c.config_home_env = TEST_CFG_HOME_ENV
+	c.config_home_env_subpath = "config.toml"
+	return c
+
+
+func test_config_home_env_overrides_path_template() -> void:
+	var default_path := _scratch_dir.path_join("env_default/config.toml")
+	var client := _make_env_override_toml_client(default_path)
+	var prior_env := OS.get_environment(TEST_CFG_HOME_ENV)
+	var env_home := _scratch_dir.path_join("env_home")
+	OS.set_environment(TEST_CFG_HOME_ENV, env_home)
+	var resolved := client.resolved_config_path()
+	if prior_env.is_empty():
+		OS.unset_environment(TEST_CFG_HOME_ENV)
+	else:
+		OS.set_environment(TEST_CFG_HOME_ENV, prior_env)
+	assert_eq(resolved, env_home.path_join("config.toml"), "env var should override path_template")
+
+
+func test_config_home_env_unset_falls_back_to_path_template() -> void:
+	var default_path := _scratch_dir.path_join("env_default/config.toml")
+	var client := _make_env_override_toml_client(default_path)
+	var prior_env := OS.get_environment(TEST_CFG_HOME_ENV)
+	OS.unset_environment(TEST_CFG_HOME_ENV)
+	var resolved_unset := client.resolved_config_path()
+	# Empty / whitespace-only value must also fall back — an exported-but-blank
+	# var means "not relocated".
+	OS.set_environment(TEST_CFG_HOME_ENV, "   ")
+	var resolved_blank := client.resolved_config_path()
+	if prior_env.is_empty():
+		OS.unset_environment(TEST_CFG_HOME_ENV)
+	else:
+		OS.set_environment(TEST_CFG_HOME_ENV, prior_env)
+	assert_eq(resolved_unset, default_path, "unset env var should fall back to path_template")
+	assert_eq(resolved_blank, default_path, "blank env var should fall back to path_template")
+
+
+func test_config_home_override_requires_both_fields() -> void:
+	var default_path := _scratch_dir.path_join("env_default/config.toml")
+	var client := _make_test_toml_client(default_path)
+	client.config_home_env = TEST_CFG_HOME_ENV
+	# subpath left empty → no override even when the env var is set.
+	var prior_env := OS.get_environment(TEST_CFG_HOME_ENV)
+	OS.set_environment(TEST_CFG_HOME_ENV, _scratch_dir.path_join("env_home"))
+	var resolved := client.resolved_config_path()
+	var override := client.config_home_override()
+	if prior_env.is_empty():
+		OS.unset_environment(TEST_CFG_HOME_ENV)
+	else:
+		OS.set_environment(TEST_CFG_HOME_ENV, prior_env)
+	assert_eq(override, "", "missing subpath must disable the override")
+	assert_eq(resolved, default_path, "missing subpath must fall back to path_template")
+
+
+func test_config_home_env_configure_and_drift_use_override() -> void:
+	## End-to-end: with the env var set, Configure writes to the env-var
+	## location, drift detection reads it back from there, and Remove cleans
+	## it up — the path_template default is never touched.
+	var default_path := _scratch_dir.path_join("env_default_untouched.toml")
+	_remove_if_exists(default_path)
+	var client := _make_env_override_toml_client(default_path)
+	var env_home := _scratch_dir.path_join("env_home_e2e")
+	DirAccess.make_dir_recursive_absolute(env_home)
+	var env_path := env_home.path_join("config.toml")
+	_remove_if_exists(env_path)
+	var prior_env := OS.get_environment(TEST_CFG_HOME_ENV)
+	OS.set_environment(TEST_CFG_HOME_ENV, env_home)
+
+	var result := McpTomlStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	var wrote_env := FileAccess.file_exists(env_path)
+	var wrote_default := FileAccess.file_exists(default_path)
+	var status := McpTomlStrategy.check_status(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	var drift := McpTomlStrategy.check_status(client, "godot-ai", "http://127.0.0.1:9000/mcp")
+	var installed := client.is_installed()
+	var removed := McpTomlStrategy.remove(client, "godot-ai")
+	var post_remove := McpTomlStrategy.check_status(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+
+	if prior_env.is_empty():
+		OS.unset_environment(TEST_CFG_HOME_ENV)
+	else:
+		OS.set_environment(TEST_CFG_HOME_ENV, prior_env)
+	_remove_if_exists(env_path)
+
+	assert_eq(result.get("status"), "ok")
+	assert_true(wrote_env, "Configure must write the env-var location")
+	assert_false(wrote_default, "Configure must not touch the path_template default")
+	assert_eq(status, McpClient.Status.CONFIGURED)
+	assert_eq(drift, McpClient.Status.CONFIGURED_MISMATCH, "URL drift must be detected at the overridden path")
+	assert_true(installed, "config existing at the env-var location must count as installed")
+	assert_eq(removed.get("status"), "ok")
+	assert_eq(post_remove, McpClient.Status.NOT_CONFIGURED)
+
+
+func test_codex_declares_codex_home_override() -> void:
+	var client := McpClientRegistry.get_by_id("codex")
+	assert_true(client != null, "codex must be registered")
+	assert_eq(client.config_home_env, "CODEX_HOME")
+	assert_eq(client.config_home_env_subpath, "config.toml", "config.toml lives directly in $CODEX_HOME")
+
+
+func test_claude_code_declares_claude_config_dir_override() -> void:
+	var client := McpClientRegistry.get_by_id("claude_code")
+	assert_true(client != null, "claude_code must be registered")
+	assert_eq(client.config_home_env, "CLAUDE_CONFIG_DIR")
+	assert_eq(client.config_home_env_subpath, ".claude.json")
 
 
 # ----- JSON strategy round-trip -----
@@ -1459,6 +1595,96 @@ func test_atomic_write_preserves_existing_file_when_swap_fails() -> void:
 	assert_eq(got, orig, "original bytes must be recovered from .backup")
 	# Cleanup
 	DirAccess.remove_absolute(backup_path)
+
+
+# ----- atomic write: concurrency + symlink targets (#534) -----
+
+## List leftover files in _scratch_dir whose name starts with `prefix` — used
+## to prove no temp staging file (fixed or PID-suffixed) lingers after a write.
+func _leftover_tmp_files(prefix: String) -> Array[String]:
+	var out: Array[String] = []
+	for f in DirAccess.get_files_at(_scratch_dir):
+		if f.begins_with(prefix):
+			out.append(f)
+	return out
+
+
+func test_atomic_write_leaves_no_stale_tmp_of_any_name() -> void:
+	## #534: the temp name is now PID-suffixed. Whatever the exact name, no
+	## staging file starting with "<file>.tmp" may survive a successful write.
+	var path := _scratch_dir.path_join("pid_tmp.txt")
+	assert_true(McpAtomicWrite.write(path, "hello"))
+	var leftovers := _leftover_tmp_files("pid_tmp.txt.tmp")
+	assert_eq(leftovers.size(), 0, "no .tmp staging file may linger: %s" % str(leftovers))
+
+
+func test_atomic_write_leaves_no_stale_tmp_after_failed_write() -> void:
+	## #534 review follow-up: the PID-suffixed staging file must also be
+	## cleaned up when the write FAILS (destination is a directory, so the
+	## rename and the copy fallback both reject) — otherwise a regression
+	## could accumulate ".tmp.<pid>" files invisibly.
+	var dir_dest := _scratch_dir.path_join("tmp_fail_dir.txt")
+	DirAccess.make_dir_recursive_absolute(dir_dest)
+	assert_false(
+		McpAtomicWrite.write(dir_dest, "content"),
+		"writing over a directory must fail",
+	)
+	var leftovers := _leftover_tmp_files("tmp_fail_dir.txt.tmp")
+	assert_eq(leftovers.size(), 0, "no .tmp staging file may linger after a failed write: %s" % str(leftovers))
+
+
+func test_atomic_write_does_not_use_fixed_tmp_name() -> void:
+	## #534: two editors clicking Configure at once must not interleave bytes
+	## on a shared "<path>.tmp". Prove the fixed name is no longer the staging
+	## path by parking an unwritable obstacle (a directory) at it — the write
+	## must still succeed because it stages elsewhere (PID-suffixed).
+	var path := _scratch_dir.path_join("no_fixed_tmp.txt")
+	var fixed_tmp := path + ".tmp"
+	DirAccess.make_dir_recursive_absolute(fixed_tmp)
+
+	assert_true(
+		McpAtomicWrite.write(path, "content"),
+		"write must succeed even when '<path>.tmp' is occupied — the staging name must be process-unique",
+	)
+	var rf := FileAccess.open(path, FileAccess.READ)
+	var got := rf.get_as_text()
+	rf.close()
+	assert_eq(got, "content")
+	# Cleanup — the obstacle dir is outside suite_teardown's flat-file sweep.
+	DirAccess.remove_absolute(fixed_tmp)
+
+
+func test_atomic_write_preserves_symlinked_target() -> void:
+	## #534: stow/chezmoi users symlink their configs. A rename over the link
+	## path would replace the LINK with a regular file, detaching the config
+	## from the dotfile repo. The write must land through the link into the
+	## real target, leaving the symlink intact.
+	if OS.get_name() == "Windows":
+		skip("creating POSIX symlinks is not portable on Windows")
+		return
+	var target := _scratch_dir.path_join("symlink_real_target.json")
+	var link := _scratch_dir.path_join("symlink_config.json")
+	var tf := FileAccess.open(target, FileAccess.WRITE)
+	tf.store_string("old")
+	tf.close()
+	DirAccess.remove_absolute(link)
+	# Godot has no symlink-create API; shell out. Skip if ln isn't usable.
+	var rc := OS.execute("ln", ["-s", target, link])
+	var da := DirAccess.open(_scratch_dir)
+	if rc != 0 or da == null or not da.is_link(link):
+		skip("could not create a symlink on this platform")
+		return
+
+	assert_true(McpAtomicWrite.write(link, "new via link"))
+
+	assert_true(da.is_link(link), "the symlink must survive the atomic write — issue #534")
+	var rf := FileAccess.open(target, FileAccess.READ)
+	var got := rf.get_as_text()
+	rf.close()
+	assert_eq(got, "new via link", "the new bytes must land in the symlink's real target")
+	# Cleanup (the .backup lands next to the resolved target).
+	DirAccess.remove_absolute(target + ".backup")
+	DirAccess.remove_absolute(link)
 
 
 # ----- atomic write: permission preservation (#297 finding TC-1) -----

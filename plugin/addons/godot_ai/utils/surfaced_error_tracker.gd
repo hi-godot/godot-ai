@@ -18,12 +18,20 @@ const DEBUGGER_SCAN_AFTER_STOP_MS := 5000
 ## the remote debugger delivers right around the event, and a late one past
 ## Godot's per-frame Errors-tab insertion throttle for error floods.
 const DEFERRED_SCAN_DELAYS_SEC: Array[float] = [1.0, 5.0]
+## #635: cap on accounted per-key row-time signatures. The live Errors tab is
+## itself bounded, so this only guards a pathological flood of same-keyed rows
+## with distinct time texts; past the cap the set resets to the current scan.
+const MAX_ACCOUNTED_ROW_TIMES_PER_KEY := 512
 
 var _editor_log_buffer
 var _game_log_buffer
 var _debugger_errors_root: Node
 var _debugger_search_root_cache: Node
 var _promoted_debugger_keys: Dictionary = {}
+## #635: per-key set of Errors-tab row time texts already promoted, so a row
+## observed after a clear+repopulate that no scan saw as empty still counts as
+## new (see the re-promotion comment in refresh_debugger_errors).
+var _promoted_debugger_row_times: Dictionary = {}
 var _promoted_debugger_key_order: Array[String] = []
 var _promoted_debugger_entries: Array[Dictionary] = []
 var _debugger_promoted_total := 0
@@ -92,8 +100,11 @@ func refresh_debugger_errors(force: bool = true) -> void:
 		if str(entry.get("level", "")) != "error":
 			continue
 		var key := _log_entry_key(entry)
-		var info: Dictionary = current_by_key.get(key, {"count": 0, "entry": entry})
+		var info: Dictionary = current_by_key.get(key, {"count": 0, "entry": entry, "times": {}})
 		info["count"] = int(info.get("count", 0)) + 1
+		var time_text := _row_time_text(entry)
+		if not time_text.is_empty():
+			(info["times"] as Dictionary)[time_text] = true
 		current_by_key[key] = info
 	for key in _promoted_debugger_keys.keys():
 		if not current_by_key.has(key):
@@ -102,15 +113,31 @@ func refresh_debugger_errors(force: bool = true) -> void:
 		var info: Dictionary = current_by_key[key]
 		var current := int(info.get("count", 0))
 		var stored := int(_promoted_debugger_keys.get(key, 0))
-		if current < stored:
-			_promoted_debugger_keys[key] = current
-			continue
-		if current == stored:
+		## #635: a count increase alone misses rows observed after a run
+		## boundary. Godot clears the Errors tab at run start; when the new run
+		## re-fires an error identical to one promoted before the clear, and no
+		## scan happened to observe the tab empty in between, the per-key count
+		## never dips — so the row kept its pre-run sequence and run-scoping
+		## (editor_entries_since against the run-start cursor) misclassified an
+		## in-run error as retained_recent. Each Errors-tab row carries its own
+		## time text; an unaccounted (key, time) signature is a row we have not
+		## promoted yet, so it earns a fresh sequence even at an equal or lower
+		## count. Boundary condition: rows with an empty time text, or a
+		## repopulated row whose time text is byte-identical to a pre-clear row,
+		## fall back to count-only dedup and can still be missed.
+		var unseen_times := _unaccounted_row_times(key, info.get("times", {}))
+		var delta := current - stored
+		if delta <= 0 and not unseen_times.is_empty():
+			delta = mini(unseen_times.size(), current)
+		if delta <= 0:
+			if current != stored:
+				_promoted_debugger_keys[key] = current
 			continue
 		if not _promoted_debugger_keys.has(key):
 			_promoted_debugger_key_order.append(key)
 		_promoted_debugger_keys[key] = current
-		_debugger_promoted_total += current - stored
+		_account_row_times(key, info.get("times", {}))
+		_debugger_promoted_total += delta
 		var source_entry: Dictionary = info.get("entry", {})
 		var promoted := source_entry.duplicate(true)
 		promoted["_debugger_key"] = key
@@ -524,6 +551,43 @@ func _trim_promoted_debugger_key_counts() -> void:
 	while _promoted_debugger_key_order.size() > MAX_PROMOTED_DEBUGGER_KEYS:
 		var key := _promoted_debugger_key_order.pop_front()
 		_promoted_debugger_keys.erase(key)
+		_promoted_debugger_row_times.erase(key)
+
+
+## #635: per-row time text from a scraped Errors-tab entry (column 0 of the
+## row, carried in details.time). Empty when the entry has no details — e.g.
+## synthetic records — which keeps those on count-only dedup.
+static func _row_time_text(entry: Dictionary) -> String:
+	var details: Variant = entry.get("details", {})
+	if details is Dictionary:
+		return str((details as Dictionary).get("time", ""))
+	return ""
+
+
+func _unaccounted_row_times(key: String, times: Dictionary) -> Array:
+	var accounted: Dictionary = _promoted_debugger_row_times.get(key, {})
+	var unseen := []
+	for time_text in times.keys():
+		if not accounted.has(time_text):
+			unseen.append(time_text)
+	return unseen
+
+
+func _account_row_times(key: String, times: Dictionary) -> void:
+	if times.is_empty():
+		return
+	var accounted: Dictionary = _promoted_debugger_row_times.get(key, {})
+	for time_text in times.keys():
+		accounted[time_text] = true
+	## Enforce the bound AFTER merging: a pre-merge `>` check let the set
+	## reach the cap and keep growing (and a batch of new times could jump
+	## past it). Past the cap, reset to just this scan's times — the live
+	## Errors tab is itself bounded, so this only fires under a pathological
+	## same-key flood, where "recent scan only" is an acceptable memory of
+	## what was promoted (worst case: a re-observed ancient row re-promotes).
+	if accounted.size() > MAX_ACCOUNTED_ROW_TIMES_PER_KEY:
+		accounted = times.duplicate()
+	_promoted_debugger_row_times[key] = accounted
 
 
 func _remove_promoted_debugger_entry(key: String) -> void:

@@ -366,11 +366,12 @@ jobs:
             godot-version: "4.7.0"
           - os: windows-latest
             label: Windows
-            ## Godot 4.7's Windows game subprocess requires a Vulkan
-            ## surface that the headless GitHub runner does not provide
-            ## (VK_KHR_surface missing). Keep Windows capture on 4.6.2
-            ## until CI has a software Vulkan/OpenGL fallback.
-            godot-version: "4.6.2"
+            ## Godot 4.7's Windows game subprocess requires a working
+            ## Vulkan ICD that the headless GitHub runner's GPU-less
+            ## graphics stack does not provide (VK_KHR_surface missing).
+            ## The "Install software Vulkan driver" step below installs
+            ## Mesa lavapipe so 4.7 can run — see #586.
+            godot-version: "4.7.0"
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -387,6 +388,37 @@ jobs:
       - name: Install xvfb
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      ## Godot 4.7 on the headless Windows runner fails with
+      ## "Required Vulkan instance extension VK_KHR_surface not found"
+      ## because the runner has no GPU/Vulkan driver. Install Mesa's
+      ## lavapipe software Vulkan ICD from mesa-dist-win and point the
+      ## Vulkan loader at it (VK_DRIVER_FILES; VK_ICD_FILENAMES kept for
+      ## older loaders). Release is pinned for reproducibility. Every
+      ## setup failure exits non-zero — no silent fallback to the broken
+      ## no-ICD state. NOTE (#586): this can only be truly verified by a
+      ## Windows CI run; if 4.7 capture still fails there, suspect the
+      ## surface/swapchain path rather than the ICD install itself.
+      - name: Install software Vulkan driver (Mesa lavapipe)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        env:
+          MESA_VERSION: "26.1.3"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://github.com/pal1000/mesa-dist-win/releases/download/$env:MESA_VERSION/mesa3d-$env:MESA_VERSION-release-msvc.7z"
+          $archive = "$env:RUNNER_TEMP\mesa3d.7z"
+          $dest = "$env:RUNNER_TEMP\mesa3d"
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          7z x $archive "-o$dest" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7z extraction of mesa-dist-win failed" }
+          $icd = Join-Path $dest "x64\lvp_icd.x86_64.json"
+          $dll = Join-Path $dest "x64\vulkan_lvp.dll"
+          if (-not (Test-Path $icd)) { throw "lavapipe ICD manifest not found: $icd" }
+          if (-not (Test-Path $dll)) { throw "lavapipe driver DLL not found: $dll" }
+          "VK_DRIVER_FILES=$icd" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "VK_ICD_FILENAMES=$icd" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Installed lavapipe ICD: $icd"
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6

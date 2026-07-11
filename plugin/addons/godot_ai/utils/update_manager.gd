@@ -34,20 +34,29 @@ const UPDATE_TEMP_DIR := "user://godot_ai_update/"
 const UPDATE_TEMP_ZIP := "user://godot_ai_update/update.zip"
 const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")
 
-## Hosts the self-update download is allowed to come from. The download URL
-## is taken verbatim from the GitHub Releases API's `browser_download_url`,
-## so before fetching we pin it to https on a GitHub-owned host — a tampered
-## or unexpected API response can't then point the in-editor updater at an
-## arbitrary origin. (HTTPRequest follows the github.com -> githubusercontent
-## redirect internally; this validates the entry point. Release-side checksum
-## / provenance verification of the downloaded bytes remains tracked in #523.)
-const _TRUSTED_DOWNLOAD_HOSTS := [
-	"github.com",
-	"www.github.com",
-	"api.github.com",
-	"objects.githubusercontent.com",
-	"release-assets.githubusercontent.com",
-]
+## Host -> required path prefix for self-update downloads (ZIP and checksum
+## sidecar). The URLs are taken verbatim from the GitHub Releases API's
+## `browser_download_url`, so before fetching we pin them to https on a
+## GitHub-owned host AND to this repo's release-asset path (#599) — a
+## tampered or unexpected API response can't point the in-editor updater at
+## an arbitrary origin, nor at a release asset of a *different* repo on a
+## trusted host.
+##
+## In practice `browser_download_url` is always the
+## `https://github.com/hi-godot/godot-ai/releases/download/<tag>/<asset>`
+## shape; HTTPRequest then follows the github.com -> *.githubusercontent.com
+## redirect internally (this guard validates the entry point, not each hop).
+## The CDN hosts are kept as defense-in-depth should the API ever hand back
+## a direct CDN URL — their object keys carry the repo *id*, not the repo
+## name, so the tightest checkable prefix there is the release-asset key
+## namespace.
+const _TRUSTED_DOWNLOAD_PATH_PREFIXES := {
+	"github.com": "/hi-godot/godot-ai/releases/download/",
+	"www.github.com": "/hi-godot/godot-ai/releases/download/",
+	"api.github.com": "/repos/hi-godot/godot-ai/releases/assets/",
+	"objects.githubusercontent.com": "/github-production-release-asset-",
+	"release-assets.githubusercontent.com": "/github-production-release-asset-",
+}
 
 ## Emitted after `check_for_updates()` resolves a newer remote version.
 ## Payload mirrors the Dictionary returned by `parse_releases_response`:
@@ -170,10 +179,10 @@ func start_install() -> void:
 		OS.shell_open(RELEASES_PAGE)
 		return
 
-	## Pin the resolved asset URL to https on a GitHub host before fetching.
-	## Fall back to the release page (a user-driven browser download) rather
-	## than pulling an executable plugin payload from an unexpected origin.
-	## See #523.
+	## Pin the resolved asset URL to https on a GitHub host AND to this
+	## repo's release-asset path before fetching (#523, #599). Fall back to
+	## the release page (a user-driven browser download) rather than pulling
+	## an executable plugin payload from an unexpected origin.
 	if not _is_trusted_download_url(_latest_download_url):
 		push_error(
 			"MCP | refusing self-update download from untrusted URL: %s"
@@ -286,12 +295,15 @@ static func parse_releases_response(
 	return out
 
 
-## True only for an `https://` URL whose host is one of
-## `_TRUSTED_DOWNLOAD_HOSTS`. Parses the authority by hand (GDScript has no
-## URL parser): strips userinfo via the LAST `@` so a spoof like
-## `https://github.com@evil.com/...` resolves to `evil.com` (rejected), and
-## strips any `:port`. Static so the guard is unit-testable without
-## instancing the manager.
+## True only for an `https://` URL whose host is a key of
+## `_TRUSTED_DOWNLOAD_PATH_PREFIXES` AND whose path starts with that host's
+## required prefix — trusted host alone is not enough; the URL must be a
+## hi-godot/godot-ai release asset (#599). Parses the authority by hand
+## (GDScript has no URL parser): strips userinfo via the LAST `@` so a spoof
+## like `https://github.com@evil.com/...` resolves to `evil.com` (rejected),
+## and strips any `:port`. The path is compared case-sensitively (GitHub
+## release paths are case-sensitive). Static so the guard is unit-testable
+## without instancing the manager.
 static func _is_trusted_download_url(url: String) -> bool:
 	const SCHEME := "https://"
 	if not url.begins_with(SCHEME):
@@ -300,9 +312,11 @@ static func _is_trusted_download_url(url: String) -> bool:
 		return false
 	var rest := url.substr(SCHEME.length())
 	var authority := rest
+	var path := ""
 	var slash := rest.find("/")
 	if slash >= 0:
 		authority = rest.substr(0, slash)
+		path = rest.substr(slash)
 	## Host is everything after the LAST '@' (userinfo precedes it).
 	var at := authority.rfind("@")
 	if at >= 0:
@@ -310,7 +324,19 @@ static func _is_trusted_download_url(url: String) -> bool:
 	var colon := authority.find(":")
 	if colon >= 0:
 		authority = authority.substr(0, colon)
-	return authority.to_lower() in _TRUSTED_DOWNLOAD_HOSTS
+	var host := authority.to_lower()
+	if not _TRUSTED_DOWNLOAD_PATH_PREFIXES.has(host):
+		return false
+	## Reject dot-segments (and their percent-encoded forms) anywhere in the
+	## path: "/hi-godot/godot-ai/releases/download/../../evil/..." passes a
+	## raw string-prefix test but normalizes server-side to a different repo,
+	## defeating the scoping (#599 review). Also reject percent-encoded
+	## slashes, which some servers decode before routing.
+	var lower_path := path.to_lower()
+	for needle in ["/../", "/..", "%2e", "%2f", "%5c"]:
+		if lower_path.contains(needle):
+			return false
+	return path.begins_with(String(_TRUSTED_DOWNLOAD_PATH_PREFIXES[host]))
 
 
 static func _is_newer(remote: String, local: String) -> bool:
@@ -380,8 +406,12 @@ func _on_download_completed(
 ## object) can't be installed over live plugin code. Releases published
 ## without a `.sha256` sidecar (older versions) install without this check —
 ## verify-if-present rather than hard-fail, so existing releases stay
-## updatable; the host pin still applies to the download itself.
+## updatable; the host + repo-path pin still applies to the download itself.
+## Removing this legacy bypass (making verification mandatory) is tracked in
+## #599 and is gated on all supported update targets publishing `.sha256`
+## sidecars — a release-policy question, not a code change here.
 func _verify_then_install() -> void:
+	## Legacy bypass — see #599 before removing.
 	if _latest_checksum_url.is_empty():
 		print("MCP | no checksum published for this release; skipping integrity verification")
 		install_state_changed.emit({"button_text": "Installing..."})
@@ -389,9 +419,10 @@ func _verify_then_install() -> void:
 		return
 
 	## A present-but-untrusted checksum URL is a tamper signal, not a
-	## backward-compat case — refuse rather than silently skip.
+	## backward-compat case — refuse rather than silently skip. Trusted
+	## means a GitHub host AND this repo's release-asset path (#599).
 	if not _is_trusted_download_url(_latest_checksum_url):
-		_fail_verification("checksum URL is not a trusted GitHub host")
+		_fail_verification("checksum URL is not a trusted hi-godot/godot-ai release asset")
 		return
 
 	install_state_changed.emit({"button_text": "Verifying..."})

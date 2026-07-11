@@ -10,11 +10,14 @@ goes, and how to opt out. All telemetry code is open source and lives in
 
 - **Anonymous**: a randomly generated UUID per installation. No account,
   no email, no machine fingerprint beyond OS / Python version.
-- **Hashed session ids**: Godot AI session ids include a project-directory
-  slug (e.g. `secret-game-prototype@a3f2`). Before any event leaves the
-  process, the slug is replaced with the first 8 hex chars of its sha256
-  — `3f1a8b22@a3f2`. The slug-derived hash is stable per project but
-  doesn't leak the directory name.
+- **Salted, hashed session ids**: Godot AI session ids include a
+  project-directory slug (e.g. `secret-game-prototype@a3f2`). Before any
+  event leaves the process, the slug is replaced with the first 8 hex
+  chars of `sha256(customer_uuid + slug)` — `3f1a8b22@a3f2`. Salting with
+  the per-installation UUID means the hash is stable per project on a
+  given install, but the same project name produces different hashes on
+  different installations — so hashes can't be correlated across users or
+  reversed with a dictionary of common project names.
 - **Non-blocking**: events go through a bounded in-process queue and a
   single daemon worker. Telemetry failures never propagate to tool
   callers.
@@ -122,7 +125,9 @@ export GODOT_AI_TELEMETRY_ENDPOINT=http://127.0.0.1:7777/
 ```
 
 Only `http://` and `https://` schemes are accepted; localhost is rejected
-unless `GODOT_AI_TELEMETRY_ALLOW_LOOPBACK=1` is also set. An invalid
+unless `GODOT_AI_TELEMETRY_ALLOW_LOOPBACK=1` is also set. Plain `http://`
+to a non-loopback host is rejected (it would ship telemetry in cleartext)
+unless `GODOT_AI_TELEMETRY_ALLOW_INSECURE_HTTP=1` is set. An invalid
 override does **not** silently fall back to the baked-in default — it
 disables sending and emits a warning, so a misconfigured self-host
 can't accidentally ship events to the maintainers' endpoint.

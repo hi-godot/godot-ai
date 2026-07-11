@@ -731,6 +731,48 @@ func test_apply_properties_nested_custom_class_name_instantiates_sub_resource() 
 		assert_eq((host.sub as MyTestResource).label, "child")
 
 
+## Build a {"__class__": "MyTestResource", "sub": {...}} chain `levels` deep.
+func _nested_class_payload(levels: int) -> Dictionary:
+	var payload := {"__class__": "MyTestResource"}
+	for i in levels - 1:
+		payload = {"__class__": "MyTestResource", "sub": payload}
+	return payload
+
+
+# ----- regression #536: nested __class__ recursion must be depth-capped -----
+
+func test_apply_properties_rejects_nesting_beyond_depth_cap() -> void:
+	# A caller-supplied payload nested past MAX_NESTED_RESOURCE_DEPTH must be
+	# rejected with a clean structured error — not overflow the GDScript call
+	# stack and crash the editor, and not silently truncate the chain.
+	var host := MyTestResource.new()
+	var over_cap := ResourceHandler.MAX_NESTED_RESOURCE_DEPTH + 8
+	var err: Variant = ResourceHandler._apply_resource_properties(host, {
+		"sub": _nested_class_payload(over_cap),
+	})
+	assert_true(err is Dictionary, "over-deep nesting must return an error dict; got: %s" % str(err))
+	assert_is_error(err, ErrorCodes.INVALID_PARAMS)
+	assert_contains(
+		err.error.message,
+		str(ResourceHandler.MAX_NESTED_RESOURCE_DEPTH),
+		"the error must name the depth limit so the caller can adapt",
+	)
+
+
+func test_apply_properties_accepts_reasonable_nesting_depth() -> void:
+	# The cap must not reject legitimate multi-level sub-resource chains.
+	var host := MyTestResource.new()
+	var err: Variant = ResourceHandler._apply_resource_properties(host, {
+		"sub": _nested_class_payload(8),
+	})
+	assert_true(err == null, "8-level nesting should apply cleanly; got: %s" % str(err))
+	# Walk the chain to confirm every level actually instantiated.
+	var cursor: Resource = host
+	for i in 8:
+		assert_true(cursor.sub is MyTestResource, "level %d must be a MyTestResource" % (i + 1))
+		cursor = cursor.sub
+
+
 func test_instantiate_resource_non_instantiable_project_class_is_wrong_type() -> void:
 	# A project class_name whose can_instantiate() is false (here a non-@tool
 	# script, non-instantiable in the editor) must return WRONG_TYPE — mirroring

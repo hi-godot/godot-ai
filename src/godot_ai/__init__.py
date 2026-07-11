@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import os
+import socket
+import sys
 import tomllib
 from collections.abc import Sequence
 from importlib.metadata import PackageNotFoundError
@@ -38,6 +41,69 @@ def _resolve_version(package_file: str | Path) -> str:
 
 
 __version__ = _resolve_version(__file__)
+
+
+## #647: distinctive exit code for "a port we need is held by another
+## process" — mirrors Linux's EADDRINUSE errno so it reads naturally in
+## logs, and is distinguishable from uvicorn's generic exit(1) so the Godot
+## plugin (and CI) can recognize a port conflict from the exit alone.
+EXIT_PORT_IN_USE = 98
+
+
+def _is_eaddrinuse(exc: OSError) -> bool:
+    ## #647: POSIX raises errno.EADDRINUSE (48 macOS / 98 Linux). Windows
+    ## surfaces WSAEADDRINUSE 10048 — usually mapped onto errno.EADDRINUSE
+    ## by CPython, but check winerror and the raw value too so no platform
+    ## variant slips through to a generic traceback.
+    return (
+        exc.errno == errno.EADDRINUSE
+        or exc.errno == 10048
+        or getattr(exc, "winerror", None) == 10048
+    )
+
+
+def preflight_check_port(port: int, *, label: str, setting: str, host: str = "127.0.0.1") -> None:
+    """Exit with a distinctive stderr message + exit code when `port` is taken.
+
+    #647: when a foreign process (e.g. a docker container) already owns the
+    HTTP or WebSocket port, uvicorn/websockets fail with an opaque bind error
+    (or, for the WS port, a warning that leaves the server half-alive). Probe
+    the bind up front and fail fast with a message humans can act on and an
+    exit code (EXIT_PORT_IN_USE) the Godot plugin can recognize.
+
+    Ports that fail to bind for other reasons (EACCES, Windows winnat
+    exclusion ranges) keep their existing downstream failure modes.
+    """
+    ## --allow-host can resolve an IPv6 bind host ("::") via
+    ## bind_host_for_networks(); an AF_INET socket can't bind those, so pick
+    ## the family from the host (Copilot review on #647's PR).
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        if os.name != "nt":
+            ## Mirror uvicorn/websockets SO_REUSEADDR so a just-stopped
+            ## server's TIME_WAIT socket doesn't false-positive as a
+            ## foreign occupant. Skipped on Windows, where SO_REUSEADDR
+            ## means "hijack the active listener".
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, port))
+        except OSError as exc:
+            if _is_eaddrinuse(exc):
+                print(
+                    f"godot-ai: {label} port {port} is already in use by another "
+                    f"process. Stop it or change the port ({setting} in Godot "
+                    "Editor Settings).",
+                    file=sys.stderr,
+                )
+                raise SystemExit(EXIT_PORT_IN_USE) from exc
+            ## Any other bind failure (EACCES, EADDRNOTAVAIL, winnat
+            ## exclusion ranges, exotic address families) is NOT the
+            ## condition this preflight exists to catch — let the real
+            ## server startup produce its existing failure mode instead
+            ## of the probe inventing a new earlier crash.
+    finally:
+        sock.close()
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -138,6 +204,19 @@ def main(argv: Sequence[str] | None = None) -> None:
         import fastmcp
 
         fastmcp.settings.host = bind_host_for_networks(allow_host_networks)
+
+    ## #647: fail fast — with a recognizable message and exit code — when a
+    ## foreign process holds a port we need, instead of uvicorn's opaque bind
+    ## error (HTTP) or the half-alive warn-and-continue (WS). Scoped to the
+    ## HTTP transports, i.e. the plugin-managed / dev-server spawn paths;
+    ## stdio keeps the existing tolerate-WS-conflict behavior so a stdio
+    ## client can still use non-Godot tools next to a running editor server.
+    if args.transport in ("sse", "streamable-http"):
+        http_host = (
+            bind_host_for_networks(allow_host_networks) if allow_host_networks else "127.0.0.1"
+        )
+        preflight_check_port(args.port, label="HTTP", setting="godot_ai/http_port", host=http_host)
+        preflight_check_port(args.ws_port, label="WebSocket", setting="godot_ai/ws_port")
 
     from godot_ai.runtime_info import install_pid_file
 

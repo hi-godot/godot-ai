@@ -30,6 +30,7 @@ def clean_env(monkeypatch) -> None:
         "GODOT_AI_TELEMETRY_ENDPOINT",
         "GODOT_AI_TELEMETRY_TIMEOUT",
         "GODOT_AI_TELEMETRY_ALLOW_LOOPBACK",
+        "GODOT_AI_TELEMETRY_ALLOW_INSECURE_HTTP",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -67,6 +68,21 @@ class TestHashSessionId:
         result = tel.hash_session_id("legacy-session")
         assert "@" not in result
         assert len(result) == 8
+
+    def test_salt_changes_hash_across_uuids(self) -> None:
+        """Issue #529: the same slug must hash differently per install."""
+        a = tel.hash_session_id("common-project@1111", salt="uuid-a")
+        b = tel.hash_session_id("common-project@1111", salt="uuid-b")
+        assert a != b
+        assert a.endswith("@1111") and b.endswith("@1111")
+
+    def test_salt_stable_for_same_uuid_and_slug(self) -> None:
+        a = tel.hash_session_id("common-project@1111", salt="uuid-a")
+        b = tel.hash_session_id("common-project@1111", salt="uuid-a")
+        assert a == b
+
+    def test_salted_differs_from_unsalted(self) -> None:
+        assert tel.hash_session_id("proj@1111", salt="uuid-a") != tel.hash_session_id("proj@1111")
 
 
 # --- TelemetryConfig -----------------------------------------------------
@@ -132,6 +148,28 @@ class TestTelemetryConfig:
         monkeypatch.setenv("GODOT_AI_TELEMETRY_ENDPOINT", "http://127.0.0.1:7777")
         monkeypatch.setenv("GODOT_AI_TELEMETRY_ALLOW_LOOPBACK", "1")
         assert tel.TelemetryConfig().endpoint == "http://127.0.0.1:7777"
+
+    def test_rejects_plain_http_non_loopback(
+        self, monkeypatch, clean_env, isolated_data_dir
+    ) -> None:
+        """Issue #532: cleartext http to a real host must be rejected."""
+        monkeypatch.setenv("GODOT_AI_TELEMETRY_ENDPOINT", "http://telemetry.example.com/events")
+        assert tel.TelemetryConfig().endpoint == ""
+
+    def test_allows_plain_http_with_insecure_flag(
+        self, monkeypatch, clean_env, isolated_data_dir
+    ) -> None:
+        monkeypatch.setenv("GODOT_AI_TELEMETRY_ENDPOINT", "http://telemetry.example.com/events")
+        monkeypatch.setenv("GODOT_AI_TELEMETRY_ALLOW_INSECURE_HTTP", "1")
+        assert tel.TelemetryConfig().endpoint == "http://telemetry.example.com/events"
+
+    def test_loopback_http_still_allowed_with_loopback_flag(
+        self, monkeypatch, clean_env, isolated_data_dir
+    ) -> None:
+        """Loopback http needs only the loopback flag, not the insecure one."""
+        monkeypatch.setenv("GODOT_AI_TELEMETRY_ENDPOINT", "http://localhost:7777/")
+        monkeypatch.setenv("GODOT_AI_TELEMETRY_ALLOW_LOOPBACK", "1")
+        assert tel.TelemetryConfig().endpoint == "http://localhost:7777/"
 
     def test_default_timeout(self, clean_env, isolated_data_dir) -> None:
         assert tel.TelemetryConfig().timeout == tel.TelemetryConfig.DEFAULT_TIMEOUT
@@ -251,6 +289,12 @@ class TestTelemetryCollector:
         assert sent
         assert sent[0].session_id.endswith("@a3f2")
         assert "secret-game" not in sent[0].session_id
+        ## The record path salts with the install's customer_uuid (#529):
+        ## the shipped hash must not equal the unsalted digest.
+        assert sent[0].session_id == tel.hash_session_id(
+            "secret-game@a3f2", salt=collector._customer_uuid
+        )
+        assert sent[0].session_id != tel.hash_session_id("secret-game@a3f2")
         collector.shutdown()
 
     def test_milestone_idempotent(self, clean_env, isolated_data_dir) -> None:

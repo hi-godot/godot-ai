@@ -1574,6 +1574,51 @@ func test_surfaced_error_tracker_run_start_repromotes_recurring_debugger_error()
 	tree.free()
 
 
+func test_surfaced_error_tracker_repromotes_row_reobserved_across_unscanned_clear() -> void:
+	## #635: Godot clears the Errors tab at run start; when the new run
+	## re-fires an error identical to a pre-run row and no scan observes the
+	## tab empty in between, the per-key count never dips. The per-row time
+	## signature must still earn the row a fresh sequence so the new run's
+	## cursor classifies it as run-scoped instead of retained_recent.
+	var tree := _make_debugger_errors_tree()
+	var tracker := McpSurfacedErrorTracker.new(null, null, tree)
+	assert_eq(tracker.watermark(true).debugger_promoted, 1)
+	tracker.note_game_run_started(true)
+	var cursor := tracker.debugger_promoted_total()
+	## Clear + identical repopulate (new row time) with no intermediate scan.
+	tree.clear()
+	var root := tree.create_item()
+	_append_duplicate_parse_error(root)
+	assert_eq(tracker.watermark(true).debugger_promoted, 2, "a re-observed row must promote with a fresh sequence")
+	var captured := tracker.editor_entries_since(0, cursor)
+	assert_eq(captured.entries.size(), 1, "the re-observed row must be visible past the run-start cursor")
+	assert_eq(captured.entries[0].text, "Parse Error: Expected statement")
+	assert_eq(tracker.watermark(true).debugger_promoted, 2, "an unchanged repopulated row must not double-count")
+	tree.free()
+
+
+func test_debugger_plugin_in_run_error_after_unscanned_clear_is_run_scoped() -> void:
+	## #635 end-to-end: a push_error early in a fresh run whose Errors-tab row
+	## matches a pre-run row (tab cleared and repopulated between scans) must
+	## come back as scope "run" / current_run_errors, not retained_recent.
+	var tree := _make_debugger_errors_tree()
+	var tracker := McpSurfacedErrorTracker.new(null, null, tree)
+	assert_eq(tracker.watermark(true).debugger_promoted, 1)
+	var plugin := McpDebuggerPlugin.new(null, null, null, tracker)
+	plugin.begin_game_run(0, true)
+	tree.clear()
+	var root := tree.create_item()
+	_append_duplicate_parse_error(root)
+	var errors_info: Dictionary = plugin.recent_editor_errors_since(0, true)
+	assert_eq(errors_info.scope, "run", "an in-run re-observed error must be run-scoped")
+	assert_eq(errors_info.errors.size(), 1)
+	assert_eq(errors_info.errors[0].text, "Parse Error: Expected statement")
+	var split := McpDebuggerPlugin.split_errors_by_scope(errors_info.errors, errors_info.scope)
+	assert_eq(split.current_run_errors.size(), 1, "run-scoped errors must land in current_run_errors")
+	assert_eq(split.retained_errors.size(), 0)
+	tree.free()
+
+
 func test_surfaced_error_tracker_user_clear_then_recurrence_promotes() -> void:
 	var tree := _make_debugger_errors_tree()
 	var tracker := McpSurfacedErrorTracker.new(null, null, tree)

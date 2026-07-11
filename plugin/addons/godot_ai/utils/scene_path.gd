@@ -42,6 +42,13 @@ static func resolve(scene_path: String, scene_root: Node) -> Node:
 	if scene_root == null:
 		return null
 
+	## Bare "/" alias: the most natural first guess for "the scene root".
+	## There is exactly one edited-scene root, so the alias is unambiguous;
+	## without it, "/" falls through to get_node_or_null("/") → null and
+	## every call costs the agent a NODE_NOT_FOUND round trip (issue #624).
+	if scene_path == "/":
+		return scene_root
+
 	## /root/<scene_root_name>[/...] alias: strip the /root prefix and recurse.
 	## Match the scene root by name explicitly so we don't capture editor-
 	## internal paths that legitimately live under /root.

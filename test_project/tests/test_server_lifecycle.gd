@@ -308,6 +308,77 @@ func test_check_server_health_short_circuits_when_pid_zero() -> void:
 	assert_eq(stops, 1)
 
 
+# ----- #647: post-crash foreign-port-conflict diagnosis ----------------
+
+func test_diagnose_spawn_port_conflict_flags_foreign_http_occupant() -> void:
+	var host := _ManagerHostStub.new()
+	host.port_in_use = true
+	host.live_status = {"name": "", "version": "", "ws_port": 0, "status_code": 0}
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	var conflict: Dictionary = manager._diagnose_spawn_port_conflict()
+	host.free()
+
+	assert_has_key(conflict, "message")
+	var http_port := McpClientConfigurator.http_port()
+	assert_eq(int(conflict.get("port", 0)), http_port)
+	assert_contains(str(conflict.get("message", "")), "Port %d is in use by another application" % http_port)
+	assert_contains(str(conflict.get("message", "")), "godot_ai/http_port")
+
+
+func test_diagnose_spawn_port_conflict_ignores_godot_ai_occupant() -> void:
+	## A port holder that identifies as godot-ai is stale-server /
+	## adoption territory, not a foreign conflict — the CRASHED / retry
+	## path must keep handling it. See #647.
+	var host := _ManagerHostStub.new()
+	host.port_in_use = true
+	host.live_status = {"name": "godot-ai", "version": "1.0.0", "ws_port": 9500, "status_code": 200}
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	var conflict: Dictionary = manager._diagnose_spawn_port_conflict()
+	host.free()
+
+	assert_true(conflict.is_empty(), "godot-ai occupant must not be diagnosed as foreign")
+
+
+func test_diagnose_spawn_port_conflict_flags_foreign_ws_occupant() -> void:
+	var host := _ManagerHostStub.new()
+	## First probe (HTTP port) free, second (WS port) occupied.
+	host.port_in_use_sequence = [false, true] as Array[bool]
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	var conflict: Dictionary = manager._diagnose_spawn_port_conflict()
+	var ws_port := int(GodotAiPlugin._resolved_ws_port)
+	host.free()
+
+	assert_has_key(conflict, "message")
+	assert_eq(int(conflict.get("port", 0)), ws_port)
+	assert_contains(str(conflict.get("message", "")), "WebSocket port %d is in use" % ws_port)
+	assert_contains(str(conflict.get("message", "")), "godot_ai/ws_port")
+
+
+func test_diagnose_spawn_port_conflict_empty_when_ports_free() -> void:
+	var host := _ManagerHostStub.new()
+	host.port_in_use = false
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	var conflict: Dictionary = manager._diagnose_spawn_port_conflict()
+	host.free()
+
+	assert_true(conflict.is_empty(), "no conflict expected when both ports are free")
+
+
+func test_status_dict_carries_conflict_port() -> void:
+	var host := _ManagerHostStub.new()
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._conflict_port = 9500
+
+	var status: Dictionary = manager.get_status_dict()
+	host.free()
+
+	assert_eq(int(status.get("conflict_port", 0)), 9500)
+
+
 func test_start_server_short_circuits_on_static_guard() -> void:
 	GodotAiPlugin._server_started_this_session = true
 	var host := _ManagerHostStub.new()

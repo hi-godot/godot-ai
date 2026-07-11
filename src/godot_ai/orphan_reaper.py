@@ -19,6 +19,12 @@ sessions are again zero) reaps it.
 Servers started without ``--owner-pid`` (CI's ci-start-server, manual
 ``--reload`` dev runs, ``uvx`` one-shots) never enable the watchdog and behave
 exactly as before.
+
+Alongside the owner-PID watchdog, ``watch_idle`` implements the session-idle
+self-terminate backstop (#498): a plugin-spawned server with zero connected
+sessions for a full grace window exits on its own. Being pure session-count +
+monotonic-clock, it also runs on Windows, where the owner-PID reaper is
+disabled — the first orphan coverage there (#497).
 """
 
 from __future__ import annotations
@@ -28,12 +34,99 @@ import logging
 import os
 import signal
 import sys
+import time
 from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_POLL_SECONDS = 5.0
 POLL_SECONDS_ENV = "GODOT_AI_REAPER_POLL_SECONDS"
+
+## ---- Idle self-terminate backstop (#498; Windows coverage for #497) ----
+##
+## The owner-PID watchdog above is POSIX-only and depends on the editor PID
+## surviving env plumbing. The idle backstop is a second, independent line of
+## defense: a plugin-spawned server that has had ZERO connected editor sessions
+## for a full grace window exits on its own. It needs no process probing at
+## all — just the session registry count and a monotonic clock — so it works
+## identically on Windows, where the owner-PID reaper is disabled.
+
+## Marker set by the plugin (server_lifecycle.gd) around OS.create_process,
+## exactly like GODOT_AI_OWNER_PID. Only plugin-spawned servers may idle-exit;
+## manually launched dev servers (`python -m godot_ai`, serve-this-worktree)
+## never see this marker and are never idle-killed.
+PLUGIN_SPAWNED_ENV = "GODOT_AI_PLUGIN_SPAWNED"
+
+## Opt-out escape hatch: a user who wants a plugin-spawned server to outlive
+## all editors (e.g. debugging the server itself) sets this truthy.
+NO_IDLE_EXIT_ENV = "GODOT_AI_NO_IDLE_EXIT"
+
+## Grace before the FIRST-ever session connects (server boot → plugin
+## handshake), and grace after the LAST session disconnects. The observed
+## plugin-reload reconnect gap is ~6s; 120s is a wide safety margin over that
+## while still reclaiming a truly orphaned server within minutes.
+DEFAULT_IDLE_GRACE_SECONDS = 120.0
+BOOT_GRACE_ENV = "GODOT_AI_IDLE_BOOT_GRACE_SECONDS"
+IDLE_GRACE_ENV = "GODOT_AI_IDLE_GRACE_SECONDS"
+
+## Set by asgi.run_with_reload for the uvicorn reload supervisor + worker.
+## Duplicated string (not imported from godot_ai.asgi) to keep this module
+## free of the uvicorn/fastmcp import chain.
+_DEV_TRANSPORT_ENV = "GODOT_AI_DEV_TRANSPORT"
+
+
+def _env_truthy(name: str) -> bool:
+    ## Same truthiness contract as telemetry's opt-out vars ("1"/"true"/...).
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _grace_from_env(name: str) -> float:
+    """Grace window in seconds from ``name``, defaulting to 120s.
+
+    Malformed or non-positive values fall back to the default — a bad env var
+    must never turn the backstop into an instant kill.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return DEFAULT_IDLE_GRACE_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_IDLE_GRACE_SECONDS
+    return value if value > 0 else DEFAULT_IDLE_GRACE_SECONDS
+
+
+def boot_grace_from_env() -> float:
+    return _grace_from_env(BOOT_GRACE_ENV)
+
+
+def idle_grace_from_env() -> float:
+    return _grace_from_env(IDLE_GRACE_ENV)
+
+
+def should_arm_idle_exit(owner_pid: int | None) -> bool:
+    """Whether the idle self-terminate backstop (#498) should run.
+
+    Arms only for plugin-spawned servers: either the explicit
+    ``GODOT_AI_PLUGIN_SPAWNED`` marker is present (set by server_lifecycle.gd on
+    every platform, including Windows where owner-PID is skipped — that's the
+    #497 coverage), or an owner pid was plumbed through (older plugin builds
+    that predate the marker). Never arms for:
+
+    - manual dev servers / CI (neither marker nor owner pid in the env);
+    - ``--reload`` dev runs (detected via the reload runner's
+      ``GODOT_AI_DEV_TRANSPORT`` env, inherited by uvicorn's reload worker) —
+      an idle reloading server is a dev convenience, not an orphan;
+    - explicit opt-out via ``GODOT_AI_NO_IDLE_EXIT``.
+
+    Unlike ``should_arm_reaper`` there is no Windows gate: this path does no
+    process probing, only session counts + monotonic time.
+    """
+    if _env_truthy(NO_IDLE_EXIT_ENV):
+        return False
+    if os.environ.get(_DEV_TRANSPORT_ENV, "").strip():
+        return False
+    return _env_truthy(PLUGIN_SPAWNED_ENV) or bool(owner_pid and owner_pid > 0)
 
 
 def poll_seconds_from_env() -> float:
@@ -116,8 +209,18 @@ def _request_self_shutdown() -> None:
     SIGTERM is what uvicorn / the FastMCP HTTP runner already handle as a
     graceful shutdown (drain + lifespan teardown), so this reuses the exact
     path a ``kill <pid>`` from the plugin would trigger — no abrupt exit.
+
+    On Windows (reachable via the idle backstop, #498/#497 — the owner-PID
+    reaper stays POSIX-only) ``os.kill(pid, SIGTERM)`` would be
+    ``TerminateProcess`` — an abrupt kill that skips lifespan teardown. Use
+    ``signal.raise_signal`` there instead: it invokes uvicorn's installed
+    Python-level SIGTERM handler in-process, giving the same graceful
+    drain; with no handler installed the default disposition still exits.
     """
-    os.kill(os.getpid(), signal.SIGTERM)
+    if sys.platform.startswith("win"):
+        signal.raise_signal(signal.SIGTERM)
+    else:
+        os.kill(os.getpid(), signal.SIGTERM)
 
 
 async def watch_owner(
@@ -159,6 +262,61 @@ async def watch_owner(
             "Owner editor pid %d is gone and no sessions are connected; "
             "shutting down orphaned server.",
             owner_pid,
+        )
+        shutdown()
+        return
+
+
+async def watch_idle(
+    session_count: Callable[[], int],
+    *,
+    poll_seconds: float = DEFAULT_POLL_SECONDS,
+    boot_grace_seconds: float = DEFAULT_IDLE_GRACE_SECONDS,
+    idle_grace_seconds: float = DEFAULT_IDLE_GRACE_SECONDS,
+    clock: Callable[[], float] = time.monotonic,
+    shutdown: Callable[[], None] = _request_self_shutdown,
+) -> None:
+    """Exit once ZERO sessions have been connected for a full grace window.
+
+    The idle self-terminate backstop from #498 (and the Windows orphan story
+    for #497). Runs alongside — never instead of — the owner-PID watchdog:
+    owner-PID reaps fast when the editor demonstrably died; this backstop
+    reaps eventually with no process probing at all, so it also covers
+    platforms/paths where owner-PID can't run.
+
+    Two windows, both measured on the injectable monotonic ``clock``:
+
+    - boot grace (``boot_grace_seconds``): from task start until the
+      first-ever session connects. Covers a spawn whose editor dies before
+      the plugin's WebSocket handshake lands.
+    - idle grace (``idle_grace_seconds``): restarts every poll that observes
+      a live session, so it effectively measures time since the last
+      disconnect. Sized well above the ~6s plugin-reload reconnect gap, so a
+      reload's brief zero-session dip can never trigger an exit.
+
+    Runs until it triggers a shutdown or is cancelled on lifespan teardown.
+    """
+    idle_since = clock()
+    ever_connected = False
+    while True:
+        await asyncio.sleep(poll_seconds)
+        now = clock()
+        if session_count() > 0:
+            ever_connected = True
+            ## Restart the idle window at the last poll that saw a session —
+            ## the true disconnect happened somewhere in the following poll
+            ## interval, so this under-counts idle time by at most one poll.
+            idle_since = now
+            continue
+        grace = idle_grace_seconds if ever_connected else boot_grace_seconds
+        if now - idle_since < grace:
+            continue
+        logger.info(
+            "No editor session for %.0fs (%s grace %.0fs); "
+            "idle backstop shutting down plugin-spawned server.",
+            now - idle_since,
+            "idle" if ever_connected else "boot",
+            grace,
         )
         shutdown()
         return

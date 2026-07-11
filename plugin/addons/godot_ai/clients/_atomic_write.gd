@@ -15,6 +15,11 @@ extends RefCounted
 
 
 static func write(path: String, content: String) -> bool:
+	# If the target is a symlink (stow/chezmoi-managed dotfiles), rename-over
+	# would replace the LINK with a regular file, silently detaching the
+	# config from the user's dotfile repo (#534). Resolve the link chain and
+	# write to the real target so the symlink survives.
+	path = _resolve_symlink_target(path)
 	var dir_path := path.get_base_dir()
 	if not DirAccess.dir_exists_absolute(dir_path):
 		if DirAccess.make_dir_recursive_absolute(dir_path) != OK:
@@ -32,7 +37,11 @@ static func write(path: String, content: String) -> bool:
 	var had_original := FileAccess.file_exists(path)
 	var target_mode := _resolve_target_mode(path, had_original)
 
-	var tmp_path := path + ".tmp"
+	# Suffix the temp name with this process's PID so two editors writing the
+	# same config concurrently (both clicking Configure) can't interleave
+	# bytes on a shared fixed ".tmp" path (#534). Each process stages its own
+	# temp file; the final rename remains the atomic commit point.
+	var tmp_path := "%s.tmp.%d" % [path, OS.get_process_id()]
 	var file := FileAccess.open(tmp_path, FileAccess.WRITE)
 	if file == null:
 		return false
@@ -116,6 +125,32 @@ static func write(path: String, content: String) -> bool:
 	# backup we couldn't take.)
 	DirAccess.remove_absolute(tmp_path)
 	return false
+
+
+## Follow a symlink chain at `path` and return the final real target, so the
+## temp+rename lands on the linked-to file instead of replacing the link.
+##
+## Best-effort by design: DirAccess.is_link()/read_link() are only implemented
+## on platforms with POSIX symlinks (Linux/macOS; on Windows and other
+## platforms is_link() returns false), and opening the parent dir can fail for
+## exotic paths. In every "can't tell" case we return `path` unchanged, which
+## is exactly the pre-#534 behavior — never worse, symlink-preserving where
+## the engine lets us detect one.
+static func _resolve_symlink_target(path: String) -> String:
+	var resolved := path
+	# Bounded hops so a symlink cycle can't loop us forever.
+	for _hop in 8:
+		var base_dir := resolved.get_base_dir()
+		var da := DirAccess.open(base_dir)
+		if da == null or not da.is_link(resolved):
+			return resolved
+		var target := da.read_link(resolved)
+		if target.is_empty():
+			return resolved
+		if target.is_relative_path():
+			target = base_dir.path_join(target)
+		resolved = target.simplify_path()
+	return resolved
 
 
 static func _resolve_target_mode(path: String, had_original: bool) -> int:
