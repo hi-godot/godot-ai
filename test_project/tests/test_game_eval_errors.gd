@@ -515,4 +515,3 @@ func test_reply_eval_response_oversized_sends_too_large_error() -> void:
 	assert_contains(str(helper._last_eval_reply.get("message")), "too large",
 		"the message names the failure and the byte count")
 	helper.free()
-	conn.free()
