@@ -632,6 +632,7 @@ class TestErrors:
         assert exc_info.value.code == "EDITOR_NOT_READY"
         assert exc_info.value.data["sub_code"] == "EDITOR_GAME_NOT_RUNNING"
         assert exc_info.value.data["retryable"] is False
+        assert exc_info.value.data["hint"] == "Start the game with project_run, then retry."
         assert "sub_code=EDITOR_GAME_NOT_RUNNING" in str(exc_info.value)
         await plugin.close()
 

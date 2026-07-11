@@ -117,6 +117,39 @@ class TestTelemetryToolSync:
         assert rec.data["error"] == "EDITOR_NOT_READY"
         assert rec.data["error_sub_code"] == "EDITOR_IMPORTING"
 
+    def test_sub_code_extraction_tolerates_non_dict_data(self) -> None:
+        """_safe_error_sub_code duck-types on the class NAME (mirroring
+        _safe_exception_category), so a foreign GodotCommandError whose
+        ``data`` isn't a dict must be handled, not assumed normalized."""
+
+        class GodotCommandError(Exception):  # noqa: N818 — deliberate name collision
+            code = "EDITOR_NOT_READY"
+            data = None
+
+        assert tel._safe_error_sub_code(GodotCommandError()) is None
+
+    def test_sub_code_ignored_on_other_error_codes(self, isolated_collector) -> None:
+        """A non-EDITOR_NOT_READY error carrying a stray data.sub_code
+        (plugin bug / copy-paste) must not mis-attribute its telemetry row —
+        sub-codes are the EDITOR_NOT_READY family's vocabulary only."""
+        _, sent = isolated_collector
+
+        @tel.telemetry_tool("my_tool")
+        def my_tool() -> None:
+            raise GodotCommandError(
+                code="NODE_NOT_FOUND",
+                message="Node not found: /Main/Missing",
+                data={"sub_code": "EDITOR_PLAYING"},
+            )
+
+        with pytest.raises(GodotCommandError):
+            my_tool()
+        _wait_for(sent, 1)
+
+        rec = sent[0]
+        assert rec.data["error"] == "NODE_NOT_FOUND"
+        assert "error_sub_code" not in rec.data
+
     def test_unknown_sub_code_is_not_recorded(self, isolated_collector) -> None:
         """data is plugin-provided — only allowlisted EditorNotReadySubCode
         values may reach telemetry, so a hijacked/typo'd sub_code (or one

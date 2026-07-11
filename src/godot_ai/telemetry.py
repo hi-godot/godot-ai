@@ -713,6 +713,13 @@ def _safe_error_sub_code(exc: Exception) -> str | None:
     """
     if exc.__class__.__name__ != "GodotCommandError":
         return None
+    ## Scope to EDITOR_NOT_READY: sub-codes are that family's vocabulary,
+    ## and a different code carrying a stray ``data.sub_code`` (plugin bug,
+    ## handler copy-paste) must not mis-attribute its telemetry row.
+    code = getattr(exc, "code", None)
+    code_value = code.value if isinstance(code, ErrorCode) else code
+    if code_value != ErrorCode.EDITOR_NOT_READY.value:
+        return None
     data = getattr(exc, "data", None)
     if not isinstance(data, dict):
         return None
