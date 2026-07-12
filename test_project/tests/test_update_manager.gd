@@ -240,6 +240,8 @@ func test_verify_refuses_missing_checksum_sidecar() -> void:
 	var state: Dictionary = states[0]
 	assert_contains(String(state.get("button_text", "")), "Verification failed",
 		"a missing checksum sidecar must paint the verification-failed button")
+	assert_eq(bool(state.get("button_disabled", true)), false,
+		"a missing checksum sidecar must leave the button enabled for retry")
 
 
 func test_verify_refuses_wrong_repo_checksum_url() -> void:
