@@ -203,6 +203,15 @@ class SmokeError(RuntimeError):
     pass
 
 
+# connect_ex speaks WSA on Windows: a free port refuses with
+# WSAECONNREFUSED (10061), not the POSIX ECONNREFUSED value — comparing
+# against errno.ECONNREFUSED alone made every free port read as occupied
+# and stalled the pre-plant drain to its timeout on Windows CI.
+_REFUSED_ERRNOS = frozenset(
+    {errno.ECONNREFUSED, getattr(errno, "WSAECONNREFUSED", 10061)}
+)
+
+
 def port_in_use(port: int) -> bool:
     """True when something is bound on 127.0.0.1:`port`. Only a prompt
     connection-refused proves the port free — a timeout or any other error
@@ -215,7 +224,7 @@ def port_in_use(port: int) -> bool:
             return True
     if err == 0:
         return True
-    return err != errno.ECONNREFUSED
+    return err not in _REFUSED_ERRNOS
 
 
 def drain_leftover_servers(timeout_s: float = 150.0) -> None:
