@@ -124,6 +124,12 @@ static func startup_trace_enabled() -> bool:
 ## "" when the setting is missing or resolves to an empty set — callers can
 ## skip appending the flag in that case so older servers that don't know
 ## `--exclude-domains` don't see an empty argument.
+##
+## Unknown domain names (e.g. a domain removed since the setting was last
+## written) are dropped here, at the single chokepoint both the startup
+## flag builder (plugin.gd) and the dock display read — the server's
+## `parse_exclude_list` hard-fails on unknown names, so a stale setting
+## would otherwise block server startup.
 static func excluded_domains() -> String:
 	var es := EditorInterface.get_editor_settings()
 	if es == null or not es.has_setting(McpSettings.SETTING_EXCLUDED_DOMAINS):
@@ -132,8 +138,11 @@ static func excluded_domains() -> String:
 	var parts := PackedStringArray()
 	for p in raw.split(","):
 		var t := p.strip_edges()
-		if not t.is_empty() and parts.find(t) == -1:
-			parts.append(t)
+		if t.is_empty() or parts.find(t) != -1:
+			continue
+		if not McpToolCatalog.is_excludable_domain(t):
+			continue
+		parts.append(t)
 	parts.sort()
 	return ",".join(parts)
 
@@ -427,7 +436,7 @@ const MODE_OVERRIDE_SETTING := "godot_ai/mode_override"
 
 
 static func mode_override() -> String:
-	# 1. EditorSetting wins — the user explicitly chose via the dock dropdown.
+	# 1. EditorSetting wins — the user explicitly set it via Editor Settings.
 	#    Guarded on `Engine.is_editor_hint()` so this is a no-op when the
 	#    plugin code runs inside the game subprocess (where EditorInterface
 	#    isn't available). See CLAUDE.md "Game-side code: gate on

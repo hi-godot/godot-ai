@@ -1735,3 +1735,19 @@ func test_primary_btn_shows_restarting_state_during_dispatch() -> void:
 		"Once the flag clears, primary label reverts")
 	assert_false(post_disabled,
 		"Cleared flag with managed server still up must re-enable the primary")
+
+
+func test_tool_catalog_is_excludable_domain_filters_unknown_names() -> void:
+	## The startup path (ClientConfigurator.excluded_domains) drops names
+	## McpToolCatalog doesn't know so a stale setting can't reach the
+	## server's --exclude-domains, whose parse_exclude_list hard-fails.
+	assert_true(McpToolCatalog.is_excludable_domain("audio"),
+		"a real domain must be excludable")
+	assert_true(McpToolCatalog.is_excludable_domain("tileset"),
+		"a recently-added domain must be excludable")
+	assert_false(McpToolCatalog.is_excludable_domain("session"),
+		"session is core-only and never excludable")
+	assert_false(McpToolCatalog.is_excludable_domain("bogus_removed_domain"),
+		"a name no longer in the catalog must be rejected")
+	assert_false(McpToolCatalog.is_excludable_domain(""),
+		"empty is not a domain")

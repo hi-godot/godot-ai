@@ -234,7 +234,7 @@ def create_server(
         "Godot AI",
         instructions=(
             "Production-grade Godot MCP server with persistent editor integration.\n\n"
-            "Tool surface — ~18 named verbs + per-domain `<domain>_manage` rollups:\n\n"
+            "Tool surface — 19 named verbs + per-domain `<domain>_manage` rollups:\n\n"
             "Core named verbs (always loaded — common reads + high-traffic writes):\n"
             "  editor_state                      — readiness, version, current scene\n"
             "  scene_get_hierarchy               — paginated scene tree walk\n"

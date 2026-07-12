@@ -64,6 +64,17 @@ const DOMAINS := [
 ]
 
 
+## Whether `id` is a real, excludable domain in this plugin version. Used to
+## drop stale names (e.g. a domain removed since the setting was written) so
+## they never reach the server's `--exclude-domains`, whose `parse_exclude_list`
+## hard-fails on unknown names.
+static func is_excludable_domain(id: String) -> bool:
+	for d in DOMAINS:
+		if d["id"] == id:
+			return true
+	return false
+
+
 ## Total tool count when no domains are excluded. Used for the "Enabled: N / M"
 ## readout in the Tools tab without looping the catalog on every repaint.
 static func total_tool_count() -> int:

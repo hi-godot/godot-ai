@@ -43,8 +43,8 @@ def _parse_gdscript_allowlist() -> frozenset[str]:
         "so the allowlist contract stays enforced."
     )
     names = frozenset(_NAME_RE.findall(match.group("body")))
-    ## Vacuity guard: an empty parse would make the equality below
-    ## trivially comparable against a bug, not against the real list.
+    # Vacuity guard: an empty parse would make the equality below
+    # trivially comparable against a bug, not against the real list.
     assert names, "Parsed an empty _ALLOWED_EVENTS block — regex drift?"
     return names
 
