@@ -1069,7 +1069,7 @@ func test_recover_incompatible_returns_false_and_leaves_state_when_port_remains_
 	plugin.listener_pids = [24680] as Array[int]
 	plugin.live_status = {"name": "godot-ai", "version": "1.2.10", "ws_port": 9500, "status_code": 200}
 
-	var ok := plugin.recover_incompatible_server()
+	var ok: bool = await plugin.recover_incompatible_server()
 	var status := plugin.get_server_status()
 	var killed := plugin.killed_targets.duplicate()
 	var clear_calls := plugin.cleared_record_calls

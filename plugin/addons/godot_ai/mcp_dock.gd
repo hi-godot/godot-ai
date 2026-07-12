@@ -1462,7 +1462,7 @@ func _on_restart_stale_server() -> void:
 	_last_rendered_server_text = ""
 	_refresh_server_version_label()
 	if not is_inside_tree():
-		_dispatch_stale_server_restart()
+		await _dispatch_stale_server_restart()
 		_server_restart_in_progress = false
 		_last_rendered_server_text = ""
 		_refresh_server_version_label()
@@ -1472,7 +1472,7 @@ func _on_restart_stale_server() -> void:
 
 func _restart_stale_server_after_feedback() -> void:
 	await get_tree().create_timer(0.15).timeout
-	if not _dispatch_stale_server_restart():
+	if not await _dispatch_stale_server_restart():
 		_server_restart_in_progress = false
 		_last_rendered_server_text = ""
 		_refresh_server_version_label()
@@ -1488,7 +1488,9 @@ func _dispatch_stale_server_restart() -> bool:
 	)
 	if int(status.get("state", ServerStateScript.UNINITIALIZED)) == ServerStateScript.INCOMPATIBLE:
 		if _plugin.has_method("recover_incompatible_server"):
-			return bool(_plugin.recover_incompatible_server())
+			## Coroutine in production (#678): recovery reports success only
+			## after the respawn walk completes and the connection unblocks.
+			return bool(await _plugin.recover_incompatible_server())
 	elif _plugin.has_method("force_restart_server"):
 		_plugin.force_restart_server()
 		return true

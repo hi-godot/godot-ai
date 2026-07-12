@@ -429,8 +429,8 @@ func _enter_tree() -> void:
 		_telemetry.record_dock_startup()
 		_flush_pending_self_update_telemetry()
 		_telemetry.flush_pending_plugin_reload()
-	var startup_path: String = str(_lifecycle.get_startup_path())
-	_startup_trace_finish(startup_path if not startup_path.is_empty() else "loaded")
+	## The startup-trace 'done' line is stamped by _start_server after the
+	## (possibly suspended) walk completes — not here (#682 review).
 
 
 ## Public wrapper around the dev-server-toggle telemetry emit. Lets the
@@ -693,17 +693,28 @@ func _startup_trace_finish(path: String) -> void:
 	if not _startup_trace_enabled:
 		return
 	var now := Time.get_ticks_msec()
+	## Same lock as _startup_trace_count — a worker probe may still be
+	## bumping counters while this reads/writes the shared dictionary.
+	_startup_trace_mutex.lock()
 	_startup_trace_counters["netsh"] = (
 		WindowsPortReservation.netsh_query_count() - _startup_trace_netsh_start_count
 	)
+	var counters_snapshot: Dictionary = _startup_trace_counters.duplicate()
+	_startup_trace_mutex.unlock()
 	print(
 		"MCP startup trace | done path=%s total_ms=%d counters=%s"
-		% [path, now - _startup_trace_start_ms, str(_startup_trace_counters)]
+		% [path, now - _startup_trace_start_ms, str(counters_snapshot)]
 	)
 
 
 func _start_server() -> void:
-	_lifecycle.start_server()
+	await _lifecycle.start_server()
+	## The walk may have suspended (#678), so this line — not _enter_tree's
+	## tail — is where the real startup outcome is known. Stamp the trace
+	## 'done' here so the contended-port path and duration stay honest
+	## instead of reporting a placeholder before the walk finished.
+	var startup_path: String = str(_lifecycle.get_startup_path())
+	_startup_trace_finish(startup_path if not startup_path.is_empty() else "loaded")
 
 
 ## Test-fixture shim — characterization tests in test_plugin_lifecycle
@@ -1568,7 +1579,11 @@ func _resume_connection_after_recovery() -> void:
 
 
 func recover_incompatible_server() -> bool:
-	if not _lifecycle.recover_incompatible_server():
+	## `await` because the manager's recovery is a coroutine in production
+	## (#678): `_resume_connection_after_recovery` gates on the post-walk
+	## state, so it must not run until the respawn walk has completed. With
+	## `defer_blocking_work` off this completes synchronously.
+	if not await _lifecycle.recover_incompatible_server():
 		return false
 	_resume_connection_after_recovery()
 	return true

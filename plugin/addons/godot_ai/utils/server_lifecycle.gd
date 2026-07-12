@@ -1070,7 +1070,11 @@ func recover_incompatible_server() -> bool:
 	_can_recover_incompatible = false
 	_host._server_started_this_session = false
 	_server_pid = -1
-	start_server()
+	## Await the respawn walk: the plugin gates its connection unblock on
+	## the post-walk state (SPAWNING/READY), so returning true while the
+	## walk is still suspended would leave the connection blocked forever
+	## after a successful recovery click (#682 review).
+	await start_server()
 	return true
 
 
