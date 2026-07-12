@@ -846,3 +846,66 @@ func test_apply_properties_nested_failure_names_the_property() -> void:
 	assert_true(err is Dictionary, "expected an error dict; got: %s" % str(err))
 	if err is Dictionary:
 		assert_contains(err["error"]["message"], "for property 'sub'")
+
+# ----- _apply_resource_properties: typed Array[T] slots (#612 stage 1) -----
+
+## Build a scripted Resource with typed-array exports — the exact shape of
+## the #612 repro (custom Resources are where typed-array exports are the
+## dominant idiom).
+func _make_typed_array_resource() -> Resource:
+	var script := GDScript.new()
+	script.source_code = "\n".join([
+		"@tool",
+		"extends Resource",
+		"@export var items: Array[int] = []",
+		"@export var labels: Array[String] = []",
+		"@export var tints: Array[Color] = []",
+	])
+	script.reload()
+	return script.new()
+
+
+func test_apply_resource_properties_fills_typed_int_array() -> void:
+	## The literal #612 repro: {"items": [1, 2, 3]} used to return success
+	## while the slot silently stayed [].
+	var res := _make_typed_array_resource()
+	var err: Variant = ResourceHandler._apply_resource_properties(res, {"items": [1, 2, 3]})
+	assert_eq(err, null, "typed Array[int] write must succeed")
+	var stored: Variant = res.get("items")
+	assert_eq((stored as Array).size(), 3, "all elements must land — no silent drop")
+	assert_eq(stored[0], 1)
+	assert_eq(stored[2], 3)
+	assert_true((stored as Array).is_typed(), "the slot must keep its typing")
+
+
+func test_apply_resource_properties_typed_string_and_color_arrays() -> void:
+	var res := _make_typed_array_resource()
+	var err: Variant = ResourceHandler._apply_resource_properties(res, {
+		"labels": ["a", "b"],
+		"tints": [{"r": 1, "g": 0, "b": 0}, "#0000ff"],
+	})
+	assert_eq(err, null, "typed String/Color array writes must succeed")
+	assert_eq((res.get("labels") as Array).size(), 2)
+	assert_eq(res.get("labels")[1], "b")
+	var tints: Variant = res.get("tints")
+	assert_true(tints[0] is Color, "dict element must land as Color")
+	assert_eq(tints[1], Color("#0000ff"))
+
+
+func test_apply_resource_properties_typed_array_error_names_property_and_index() -> void:
+	var res := _make_typed_array_resource()
+	var err: Variant = ResourceHandler._apply_resource_properties(res, {"items": [1, "two"]})
+	assert_is_error(err, ErrorCodes.WRONG_TYPE)
+	assert_contains(err.error.message, "Property 'items'",
+		"the error must name the property")
+	assert_contains(err.error.message, "element 1",
+		"the error must name the offending element index")
+	assert_eq((res.get("items") as Array).size(), 0, "slot must stay untouched on error")
+
+
+func test_apply_resource_properties_typed_array_rejects_non_list() -> void:
+	var res := _make_typed_array_resource()
+	var err: Variant = ResourceHandler._apply_resource_properties(res, {"items": "1,2,3"})
+	assert_is_error(err, ErrorCodes.WRONG_TYPE)
+	assert_contains(err.error.message, "Array[int]", "the error must name the typed slot")
+	assert_eq((res.get("items") as Array).size(), 0)

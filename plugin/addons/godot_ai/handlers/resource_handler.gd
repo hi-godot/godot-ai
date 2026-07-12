@@ -371,13 +371,25 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary, de
 					return nested_err
 			v = sub_res
 		else:
-			v = NodeHandler._coerce_value(v, target_type)
-			## Mirror set_property's coerce check: wrong-shape dicts (#123) and
-			## non-dict inputs that don't land as the target compound Variant
-			## (#191) both error here instead of writing zero-filled Variants.
-			var coerce_err := NodeHandler._check_coerced(v, target_type, "Property '%s'" % key)
-			if coerce_err != null:
-				return coerce_err
+			var slot_value: Variant = res.get(key)
+			if target_type == TYPE_ARRAY and slot_value is Array and (slot_value as Array).is_typed():
+				## Typed Array[T] slot (#612): mirror set_property's dispatch —
+				## the generic passthrough would hand an untyped Array to the
+				## typed setter, which drops it silently while we report success.
+				var typed_out: Variant = NodeHandler._coerce_typed_array(
+					v, slot_value, "Property '%s'" % key
+				)
+				if typed_out is Dictionary:
+					return typed_out
+				v = typed_out
+			else:
+				v = NodeHandler._coerce_value(v, target_type)
+				## Mirror set_property's coerce check: wrong-shape dicts (#123) and
+				## non-dict inputs that don't land as the target compound Variant
+				## (#191) both error here instead of writing zero-filled Variants.
+				var coerce_err := NodeHandler._check_coerced(v, target_type, "Property '%s'" % key)
+				if coerce_err != null:
+					return coerce_err
 		res.set(key, v)
 	return null
 

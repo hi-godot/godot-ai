@@ -251,6 +251,16 @@ func set_property(params: Dictionary) -> Dictionary:
 				return apply_err
 		value = res
 		instantiated_resource = true
+	elif target_type == TYPE_ARRAY and old_value is Array and (old_value as Array).is_typed():
+		## Typed Array[T] slot (#612): the generic TYPE_ARRAY passthrough
+		## hands an untyped Array to Godot's typed setter, which rejects it
+		## wholesale and leaves the slot at its default — with success still
+		## reported. Route through the element-aware coercer instead; errors
+		## name the offending element index.
+		var typed_out: Variant = _coerce_typed_array(value, old_value)
+		if typed_out is Dictionary:
+			return typed_out
+		value = typed_out
 	else:
 		value = _coerce_value(value, target_type)
 		## Refuse any value that didn't land as the target compound Variant
@@ -885,6 +895,81 @@ static func _coerce_value(value: Variant, target_type: int) -> Variant:
 		# PackedByteArray intentionally unhandled — needs design decision
 		# (base64 string vs. raw int list); JSON has no native byte type.
 	return value
+
+
+## Fill a typed `Array[T]` slot from a JSON list (#612 stage 1: value-element
+## types). `slot_value` is the property's current typed Array — Godot's getter
+## returns the (possibly empty) typed container, which carries the element
+## type, so no PROPERTY_HINT_TYPE_STRING parsing is needed. Elements coerce
+## one at a time through the existing `_coerce_value` / `_check_coerced`
+## pair, then bulk-move via `Array.assign()` with a post-assign size check,
+## so a wrong element can never silently drop the write: it errors naming
+## the element index. Returns the filled typed Array on success, or a
+## `make(...)`-shaped error Dictionary (callers discriminate on
+## `result is Dictionary` — a successful result is always an Array).
+##
+## Object elements (Array[Texture2D], Array[MyResource], ...) are #612
+## stage 2 — refused loudly here rather than left to the generic
+## passthrough that silently dropped them.
+static func _coerce_typed_array(value: Variant, slot_value: Array, prefix: String = "") -> Variant:
+	var elem_label := _typed_array_element_label(slot_value)
+	if not (value is Array):
+		var err := ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"Cannot write %s to a typed Array[%s] property; expected a list" % [
+				type_string(typeof(value)), elem_label,
+			],
+		)
+		return ErrorCodes.prefix_message(err, prefix)
+	var elem_type := slot_value.get_typed_builtin()
+	if elem_type == TYPE_OBJECT:
+		var obj_err := ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"Writing elements into a typed Array[%s] property is not supported yet (#612 stage 2 covers Object elements); assign the elements individually in the editor for now" % elem_label,
+		)
+		return ErrorCodes.prefix_message(obj_err, prefix)
+	var staging: Array = []
+	var in_list: Array = value
+	for i in in_list.size():
+		var elem_prefix := ("element %d" % i) if prefix.is_empty() else "%s element %d" % [prefix, i]
+		var coerced: Variant = _coerce_value(in_list[i], elem_type)
+		var elem_err := _check_coerced(coerced, elem_type, elem_prefix)
+		if elem_err != null:
+			return elem_err
+		if coerced == null:
+			var null_err := ErrorCodes.make(
+				ErrorCodes.WRONG_TYPE,
+				"%s: cannot store null in Array[%s]" % [elem_prefix, elem_label],
+			)
+			return ErrorCodes.prefix_message(null_err, prefix)
+		staging.append(coerced)
+	var out := slot_value.duplicate()
+	out.clear()
+	out.assign(staging)
+	if out.size() != staging.size():
+		## Backstop for element shapes `_check_coerced` waves through but the
+		## typed container still rejects — `assign` loud-rejects and leaves a
+		## short array, which without this check would be a partial write.
+		var assign_err := ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"Array[%s] element conversion failed during assign (%d of %d elements landed)" % [
+				elem_label, out.size(), staging.size(),
+			],
+		)
+		return ErrorCodes.prefix_message(assign_err, prefix)
+	return out
+
+
+## "int" / "Vector3" / "Texture2D" / "MyItemData" — element-type name of a
+## typed Array slot, for error messages.
+static func _typed_array_element_label(slot_value: Array) -> String:
+	if slot_value.get_typed_builtin() == TYPE_OBJECT:
+		var cls := String(slot_value.get_typed_class_name())
+		var script: Variant = slot_value.get_typed_script()
+		if script is Script and not String((script as Script).get_global_name()).is_empty():
+			cls = String((script as Script).get_global_name())
+		return cls if not cls.is_empty() else "Object"
+	return type_string(slot_value.get_typed_builtin())
 
 
 func get_node_properties(params: Dictionary) -> Dictionary:

@@ -1831,3 +1831,195 @@ func test_set_property_transform2d_lands() -> void:
 	assert_true(editor_undo(_undo_redo), "undo create should succeed")
 
 
+
+# ----- set_property: typed Array[T] slots (#612 stage 1) -----
+
+## Attach a @tool script with typed-array exports to a fresh probe node
+## created through the handler (so undo cleanup mirrors the other
+## set_property tests). Returns the live node.
+func _make_typed_array_probe(probe_name: String) -> Node:
+	_handler.create_node({"type": "Node", "name": probe_name, "parent_path": "/Main"})
+	var node := EditorInterface.get_edited_scene_root().get_node(probe_name)
+	var script := GDScript.new()
+	script.source_code = "\n".join([
+		"@tool",
+		"extends Node",
+		"@export var ints: Array[int] = []",
+		"@export var strings: Array[String] = []",
+		"@export var vectors: Array[Vector3] = []",
+		"@export var colors: Array[Color] = []",
+		"@export var nested: Array[Array] = []",
+		"@export var textures: Array[Texture2D] = []",
+	])
+	script.reload()
+	node.set_script(script)
+	return node
+
+
+## Undo the probe's create action (set_property failures commit nothing, so
+## error-path tests only need this single undo).
+func _free_typed_array_probe(sets_to_undo: int) -> void:
+	for i in sets_to_undo:
+		assert_true(editor_undo(_undo_redo), "undo set should succeed")
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
+
+
+func test_set_property_typed_int_array_roundtrip() -> void:
+	## The #612 headline case: a JSON list into an Array[int] slot used to be
+	## silently dropped (slot stayed []) while the call reported success.
+	var node := _make_typed_array_probe("_McpTypedInts")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedInts",
+		"property": "ints",
+		"value": [1, 2, 3],
+	})
+	assert_has_key(result, "data")
+	var stored: Variant = node.get("ints")
+	assert_true(stored is Array, "ints must read back as an Array")
+	assert_eq((stored as Array).size(), 3, "all elements must land — no silent drop")
+	assert_eq(stored[0], 1)
+	assert_eq(stored[2], 3)
+	assert_true((stored as Array).is_typed(), "the slot must keep its typing")
+	_free_typed_array_probe(1)
+
+
+func test_set_property_typed_int_array_coerces_json_floats() -> void:
+	## JSON numbers arrive as floats; whole floats must land as ints.
+	var node := _make_typed_array_probe("_McpTypedIntFloats")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedIntFloats",
+		"property": "ints",
+		"value": [1.0, 2.0],
+	})
+	assert_has_key(result, "data")
+	var stored: Variant = node.get("ints")
+	assert_eq((stored as Array).size(), 2)
+	assert_true(stored[0] is int, "JSON float must coerce to the int element type")
+	assert_eq(stored[1], 2)
+	_free_typed_array_probe(1)
+
+
+func test_set_property_typed_vector3_array_coerces_dicts() -> void:
+	## Struct elements go through the same dict->Variant coercion as scalar
+	## slots; assert on the stored Variant, not the count (AGENTS.md).
+	var node := _make_typed_array_probe("_McpTypedVecs")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedVecs",
+		"property": "vectors",
+		"value": [{"x": 1, "y": 2, "z": 3}, {"x": 4, "y": 5, "z": 6}],
+	})
+	assert_has_key(result, "data")
+	var stored: Variant = node.get("vectors")
+	assert_eq((stored as Array).size(), 2)
+	assert_true(stored[0] is Vector3, "dict element must land as Vector3, not Dictionary")
+	assert_eq(stored[1], Vector3(4, 5, 6))
+	_free_typed_array_probe(1)
+
+
+func test_set_property_typed_color_array_accepts_dicts_and_names() -> void:
+	var node := _make_typed_array_probe("_McpTypedColors")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedColors",
+		"property": "colors",
+		"value": [{"r": 1, "g": 0, "b": 0}, "#00ff00"],
+	})
+	assert_has_key(result, "data")
+	var stored: Variant = node.get("colors")
+	assert_eq((stored as Array).size(), 2)
+	assert_true(stored[0] is Color, "dict element must land as Color")
+	assert_eq(stored[1], Color("#00ff00"))
+	_free_typed_array_probe(1)
+
+
+func test_set_property_typed_color_array_rejects_bogus_color_string() -> void:
+	## Color("zznothex") silently returns black on the scalar path history
+	## (#612 rider) — the typed-array path must clean-error instead.
+	var node := _make_typed_array_probe("_McpTypedBadColor")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedBadColor",
+		"property": "colors",
+		"value": ["#ff0000", "zznothex"],
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "element 1",
+		"the error must name the offending element index")
+	assert_eq((node.get("colors") as Array).size(), 0, "nothing may be written on error")
+	_free_typed_array_probe(0)
+
+
+func test_set_property_typed_nested_array_roundtrip() -> void:
+	var node := _make_typed_array_probe("_McpTypedNested")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedNested",
+		"property": "nested",
+		"value": [[1, 2], [3]],
+	})
+	assert_has_key(result, "data")
+	var stored: Variant = node.get("nested")
+	assert_eq((stored as Array).size(), 2)
+	assert_true(stored[0] is Array)
+	assert_eq(stored[0][1], 2)
+	_free_typed_array_probe(1)
+
+
+func test_set_property_typed_array_mixed_elements_error_names_index() -> void:
+	## Wrong/mixed elements clean-error naming the index — never a partial
+	## or silent write (#612 maintainer decision).
+	var node := _make_typed_array_probe("_McpTypedMixed")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedMixed",
+		"property": "ints",
+		"value": [1, "two", 3],
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "element 1",
+		"the error must name the offending element index")
+	assert_eq((node.get("ints") as Array).size(), 0, "slot must stay untouched on error")
+	_free_typed_array_probe(0)
+
+
+func test_set_property_typed_array_non_list_value_errors() -> void:
+	var node := _make_typed_array_probe("_McpTypedNonList")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedNonList",
+		"property": "ints",
+		"value": 5,
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "Array[int]",
+		"the error must name the typed slot")
+	assert_eq((node.get("ints") as Array).size(), 0)
+	_free_typed_array_probe(0)
+
+
+func test_set_property_typed_object_array_refuses_loudly() -> void:
+	## Object elements are #612 stage 2 — until then the write must REFUSE,
+	## not silently drop like the old generic passthrough did.
+	var node := _make_typed_array_probe("_McpTypedObjects")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedObjects",
+		"property": "textures",
+		"value": ["res://icon.svg"],
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "not supported yet",
+		"stage-2 deferral must be loud, not a silent drop")
+	assert_eq((node.get("textures") as Array).size(), 0)
+	_free_typed_array_probe(0)
+
+
+func test_set_property_typed_array_undo_restores_previous_value() -> void:
+	var node := _make_typed_array_probe("_McpTypedUndo")
+	var first := _handler.set_property({
+		"path": "/Main/_McpTypedUndo", "property": "ints", "value": [7],
+	})
+	assert_has_key(first, "data")
+	var second := _handler.set_property({
+		"path": "/Main/_McpTypedUndo", "property": "ints", "value": [8, 9],
+	})
+	assert_has_key(second, "data")
+	assert_true(editor_undo(_undo_redo), "undo second set should succeed")
+	var stored: Variant = node.get("ints")
+	assert_eq((stored as Array).size(), 1, "undo must restore the previous array")
+	assert_eq(stored[0], 7)
+	_free_typed_array_probe(1)
