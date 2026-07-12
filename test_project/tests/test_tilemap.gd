@@ -102,6 +102,12 @@ func test_tilemap_set_and_get_cells() -> void:
 	assert_eq(cells.data.cells[0].x, 2)
 	assert_eq(cells.data.cells[0].y, 3)
 
+	## Read the payload back from the engine: position alone doesn't prove
+	## source_id/atlas coords were stored (the core of set_cell's contract).
+	var layer: TileMapLayer = ctx.layer
+	assert_eq(layer.get_cell_source_id(Vector2i(2, 3)), 0)
+	assert_true(layer.get_cell_atlas_coords(Vector2i(2, 3)) == Vector2i(0, 0), "atlas coords should round-trip")
+
 
 func test_tilemap_clear_is_undoable() -> void:
 	var ctx := _create_layer("_McpTileLayerB")

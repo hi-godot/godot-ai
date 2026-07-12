@@ -188,6 +188,11 @@ func test_delete_node_basic() -> void:
 	var result := _handler.delete_node({"path": "/Main/_McpTestDelete"})
 	assert_has_key(result, "data")
 	assert_true(result.data.undoable, "Delete should be undoable")
+	## Read back from the scene: the response alone can't prove the commit
+	## actually removed the node.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var survivor := scene_root.find_child("_McpTestDelete", true, false)
+	assert_true(survivor == null, "Node should actually be gone from the scene tree")
 
 
 func test_delete_node_scene_root() -> void:

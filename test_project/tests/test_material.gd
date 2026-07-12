@@ -361,6 +361,12 @@ func test_assign_material_to_mesh() -> void:
 	assert_true(result.data.undoable)
 	assert_eq(result.data.property, "material_override")
 	assert_eq(result.data.material_created, false)
+	## Read back from the node: the response fields are computed before
+	## commit_action, so only the stored override proves the assign landed.
+	var gi := node as GeometryInstance3D
+	assert_true(gi != null and gi.material_override != null, "material_override should actually be set on the node")
+	if gi != null and gi.material_override != null:
+		assert_eq(gi.material_override.resource_path, TEST_MATERIAL_PATH)
 	_remove_node(node)
 
 

@@ -73,7 +73,10 @@ func run_suite(suite: McpTestSuite, test_filter: String = "", exclude_test_filte
 			})
 			continue
 
-		if suite._skipped:
+		## A failed assertion always wins over a later skip(): a test that
+		## fails and then hits a skip-guard must report the failure, not
+		## park itself as green-skipped.
+		if suite._skipped and not suite._failed:
 			_results.append({
 				"suite": name,
 				"test": method_name,

@@ -219,10 +219,22 @@ content = json.loads(sys.stdin.read())
 failed = content.get('failed', -1)
 passed = content.get('passed', 0)
 skipped = content.get('skipped', 0)
+load_errors = content.get('load_errors', []) or []
 if failed != 0:
     print(f'FAIL: {failed} test(s) failed after reload churn (passed={passed})')
     for f in content.get('failures', []):
         print(f'  FAIL: {f[\"suite\"]}.{f[\"test\"]}: {f[\"message\"]}')
+    sys.exit(1)
+## Same guards as ci-godot-tests: silent test-loss must not slip past the
+## post-churn re-run either — a reload that breaks suite discovery would
+## otherwise pass with failed=0.
+if load_errors:
+    print(f'FAIL: {len(load_errors)} test file(s) failed to load after reload churn:')
+    for le in load_errors:
+        print(f'  - {le}')
+    sys.exit(1)
+if passed + skipped == 0:
+    print('FAIL: No tests ran after reload churn — plugin may not have reconnected')
     sys.exit(1)
 print(f'Post-churn test suite OK: {passed} passed, {failed} failed, {skipped} skipped')
 "
