@@ -15,8 +15,9 @@ Ops:
         Read a text file at a ``res://`` path. Returns content, size,
         line_count.
   • write_text(path, content="")
-        Create or overwrite a text file. Triggers an editor filesystem
-        scan. Newly-created files include ``data.cleanup.rm`` for transient
+        Create or overwrite a text file. Updates the editor filesystem
+        entry for that one file (single-file update, not a full scan).
+        Newly-created files include ``data.cleanup.rm`` for transient
         smoke tests; overwrite omits the field.
   • reimport(paths)
         Force-reimport the listed files via ``EditorFileSystem.update_file``.

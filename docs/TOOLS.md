@@ -1,6 +1,6 @@
 # Available Tools
 
-Godot AI exposes ~41 MCP tools — ~18 high-traffic verbs as named tools, plus
+Godot AI exposes ~43 MCP tools — 19 high-traffic verbs as named tools, plus
 one rolled-up `<domain>_manage` per domain that takes `op="..."` + a `params`
 dict. The rollup pattern keeps the tool count well below the 100-tool caps
 some clients enforce while still exposing every action.
@@ -31,7 +31,7 @@ not the MCP tool names.
 | `test_run` | Run GDScript test suites in the editor |
 | `logs_read` | Read plugin / game / editor / combined log buffers. `source="editor"` surfaces parse errors, GDScript reload warnings, @tool/EditorPlugin runtime errors, push_error/push_warning, and visible Debugger dock Errors-tab rows — use this when the editor's Output or Debugger Errors panel shows red/yellow rows |
 | `editor_screenshot` | Capture editor viewport, cinematic camera, or running game framebuffer |
-| `editor_reload_plugin` | Reload the plugin and wait for reconnect (server must be external) |
+| `editor_reload_plugin` | Reload the plugin and wait for reconnect (works with external and plugin-managed servers) |
 | `animation_create` | Create an Animation clip (auto-creates AnimationPlayer + library if missing) |
 
 `logs_read` also accepts `include_details=true` for `source="editor"`,
@@ -175,12 +175,14 @@ Calls take the form:
 | `input_map_manage` | `list`, `add_action`, `ensure_action`, `remove_action`, `bind_event`, `ensure_binding` |
 | `game_manage` | `get_scene_tree`, `get_node_info`, `get_ui_elements`, `input_key`, `input_mouse`, `input_gamepad`, `input_action`, `input_state` |
 | `autoload_manage` | `list`, `add`, `remove` |
-| `filesystem_manage` | `read_text`, `write_text`, `reimport`, `search` |
+| `filesystem_manage` | `read_text`, `write_text`, `reimport`, `scan`, `search` |
 | `theme_manage` | `create`, `set_color`, `set_constant`, `set_font_size`, `set_stylebox_flat`, `apply` |
 | `ui_manage` | `set_anchor_preset`, `set_text`, `build_layout`, `draw_recipe` |
 | `resource_manage` | `search`, `load`, `assign`, `get_info`, `create`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `gradient_texture_create`, `noise_texture_create` |
 | `api_manage` | `get_class` |
 | `client_manage` | `status`, `configure`, `remove` |
+| `tilemap_manage` | `tilemap_set_cell`, `tilemap_set_cells_rect`, `tilemap_clear`, `tilemap_get_cells` |
+| `tileset_manage` | `tileset_get_atlas_tiles`, `tileset_get_atlas_image` |
 
 `api_manage(op="get_class")` inspects Godot API/ClassDB metadata for a class
 without creating an instance. By default it returns direct class members only,

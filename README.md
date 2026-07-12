@@ -9,7 +9,7 @@
 [![Godot Asset Library](https://img.shields.io/badge/Godot-Asset%20Library-478cbf?logo=godotengine&logoColor=white)](https://godotengine.org/asset-library/asset/5050)
 [![Discord](https://img.shields.io/badge/Discord-Join%20chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/FDZ5fr2QkP)
 
-**Connect MCP clients directly to a live Godot editor** via the [Model Context Protocol](https://modelcontextprotocol.io/introduction). Over **120 ops across ~41 MCP tools** ([full list](docs/TOOLS.md)) let AI assistants (Claude Code, Codex, Antigravity, etc.) build scenes, edit nodes and scripts, wire signals, and configure UI, materials, animations, particles, cameras, and environments.
+**Connect MCP clients directly to a live Godot editor** via the [Model Context Protocol](https://modelcontextprotocol.io/introduction). Over **120 ops across ~43 MCP tools** ([full list](docs/TOOLS.md)) let AI assistants (Claude Code, Codex, Antigravity, etc.) build scenes, edit nodes and scripts, wire signals, and configure UI, materials, animations, particles, cameras, and environments.
 
 > 🎉 **Now on the [Godot Asset Library](https://godotengine.org/asset-library/asset/5050) and the [new Godot Asset Store](https://store.godotengine.org/asset/dlight/godot-ai/)** — one-click install from Godot's **AssetLib** tab. You'll still need [uv](https://docs.astral.sh/uv/) for the Python server (see [Quick Start](#quick-start)).
 
@@ -107,7 +107,7 @@ snippet.
 
 ---
 
-**Tools and resources:** see [docs/TOOLS.md](docs/TOOLS.md) for the full list of 120+ MCP tools and resources, grouped by domain.
+**Tools and resources:** see [docs/TOOLS.md](docs/TOOLS.md) for the full tool, op, and resource list (~43 tools exposing 120+ ops, plus read-only `godot://` resources), grouped by domain.
 
 <details>
 <summary><strong>Manual Client Configuration</strong></summary>
@@ -208,7 +208,7 @@ package in the resolution order, not the actual lock holder.
    server children, while the `.pyd` is briefly unmapped. See
    [`plugin/addons/godot_ai/utils/uv_cache_cleanup.gd`](plugin/addons/godot_ai/utils/uv_cache_cleanup.gd).
 2. **Auto-configure now writes `UV_LINK_MODE=copy` into the bridged
-   entry's `env` block** for every uvx-bridge client (Claude Desktop, Zed),
+   entry's `env` block** for every uvx-bridge client (currently Claude Desktop),
    telling uv to copy shared C extensions instead of hard-linking them.
    That removes the reverse race where an MCP client spawns `uvx mcp-proxy`
    *while* a server child still holds the `.pyd`. Existing entries written
@@ -230,7 +230,7 @@ The shape `client_configure` writes for Claude Desktop is now:
 ```
 
 If you've already hit the lock on an older config, click **Configure**
-on the affected uvx-bridge client (Claude Desktop *or* Zed) in the
+on the affected uvx-bridge client (Claude Desktop) in the
 godot-ai dock to rewrite the entry with the env pin, then quit and
 reopen that client. If the lock persists (rare — pre-existing orphans
 the cache sweeper couldn't reach), kill stray `python.exe` children

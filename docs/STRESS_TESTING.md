@@ -1,7 +1,7 @@
 # Stress testing — `script/stormtest.py`
 
 `stormtest` is a concurrency + reload stress harness. It opens many MCP client
-connections at once and fires rapid, randomized tool calls across **every**
+connections at once and fires rapid, randomized tool calls across **most**
 domain at a live Godot editor, periodically triggering `editor_reload_plugin`
 mid-run. It is not a correctness test — it answers two questions:
 
@@ -18,8 +18,8 @@ under load and across the disable→extract→enable reload window.
 - **N parallel workers**, each its own `fastmcp.Client` connection (default 8).
 - Workers route to the **active session** (empty `session_id`), so when a
   reload rotates the session id they automatically follow the new one.
-- **Reads dominate** the op mix (like real traffic); **writes exercise every
-  domain** — node/scene/script/batch/material/theme/resource/camera/particle/
+- **Reads dominate** the op mix (like real traffic); **writes exercise most
+  domains** — node/scene/script/batch/material/theme/resource/camera/particle/
   audio/animation/input_map/signal/filesystem.
 - Each worker namespaces its writes under `<scene_root>/wN/...` so workers
   hammer one shared edited scene without colliding on node paths.
@@ -138,6 +138,7 @@ server reliably survive the reload is tracked in
 | `SS_RECONNECT_TIMEOUT` | 30 | seconds to wait for the server to return after a reload |
 | `SS_CLOSE_TIMEOUT` | 5 | hard cap (s) on client teardown so a dead-server socket can't wedge the loop |
 | `SS_NO_REEXEC` | _(unset)_ | set to skip the auto re-exec into the project `.venv` (run under the current interpreter as-is) |
+| `SS_CALL_TIMEOUT` | 20 | per-call hard cap (s) — shapes every latency number in the report |
 | `SS_URL` | `http://127.0.0.1:8000/mcp` | target MCP endpoint |
 | `SS_REPORT` | `<platform temp dir>/stormtest_report.json` | where to write the JSON snapshot (temp dir via `tempfile.gettempdir()`; `%TEMP%` on Windows) |
 

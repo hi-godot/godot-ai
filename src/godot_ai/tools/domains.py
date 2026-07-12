@@ -69,9 +69,10 @@ CORE_TOOLS: tuple[str, ...] = (
     "node_get_properties",
 )
 
-## Domains the user can toggle off. `session` has no non-core tools, so
-## excluding it would be a no-op; we reject it up front so an accidental
-## `--exclude-domains session` doesn't silently do nothing.
+## Domains the user can toggle off. `session` hosts the core
+## `session_activate` plus the `session_manage` rollup that routes every
+## multi-editor workflow; excluding it is rejected up front so session
+## routing can't be dropped by an accidental `--exclude-domains session`.
 EXCLUDABLE_DOMAINS: frozenset[str] = frozenset(DOMAINS) - {"session"}
 
 

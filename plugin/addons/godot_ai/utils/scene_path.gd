@@ -86,8 +86,9 @@ static func require_edited_scene(expected_scene_file: String) -> Dictionary:
 		# three recoverable editor *states* (playing / importing / no_scene)
 		# — the EDITOR_NOT_READY paths an AI caller can act on. Other
 		# EDITOR_NOT_READY callsites describing internal-state failures
-		# ("EditorFileSystem not available" etc.) intentionally don't carry
-		# this payload because there's no useful caller hint to give.
+		# ("EditorFileSystem not available" etc.) carry sub_code + retryable
+		# via ErrorCodes.make_not_ready (#651 stage 1) but intentionally
+		# omit the hint — there's no useful caller action to name.
 		var err := ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "No scene open")
 		err["error"]["data"] = {
 			"sub_code": ErrorCodes.SUB_EDITOR_NO_SCENE,

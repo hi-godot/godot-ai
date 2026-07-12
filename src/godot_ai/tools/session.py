@@ -42,8 +42,9 @@ def register_session_tools(mcp: FastMCP, *, include_non_core: bool = True) -> No
         an error listing the candidates.
 
         Args:
-            session_id: An exact session id (e.g. UUID from ``session_manage``
-                with op="list") OR a substring hint like a project folder name
+            session_id: An exact session id (``<project-slug>@<4hex>``, e.g.
+                ``my_game@a3f2``, from ``session_manage`` with op="list")
+                OR a substring hint like a project folder name
                 ("test_project", "my_game").
         """
         runtime = DirectRuntime.from_context(ctx)

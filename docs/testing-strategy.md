@@ -72,7 +72,7 @@ Built-in guardrails:
 - **Zero-assertion detection**: the runner flags any test that completes with 0 assertions as a failure. This catches tests that silently `return` early (e.g. when `scene_root == null`) without exercising any logic.
 - **Resilient discovery**: if a `.gd` file fails to parse (duplicate methods, syntax errors, wrong base class), the remaining suites still load and run. Failing files are reported in `load_errors` with a reason string.
 - **Suite isolation**: each suite receives a fresh `ctx.duplicate()` so `suite_setup()` mutations cannot leak between suites.
-- **CI static check**: `script/ci-check-gdscript` runs `godot --check-only` against every `.gd` file before the editor test run, catching parse errors at the gate.
+- **CI static check**: `script/ci-check-gdscript` scans a single `godot --headless --import` run's log for `SCRIPT ERROR` / `Parse Error` lines before the editor test run, catching parse errors at the gate (it fails rather than passes when the import log is empty or the binary is missing).
 
 ### End-to-end and release-smoke tests
 
@@ -127,7 +127,7 @@ If a tool has undo semantics, readiness constraints, or cross-session behavior, 
 
 The CI stack should exercise at least four tiers:
 
-- Python unit and integration tests (3 OS x 2 Python versions)
+- Python unit and integration tests (deliberately Linux-only, 2 Python versions — the server is pure-async with no platform-specific code; real OS regressions are caught by the release-smoke and godot-tests jobs on all 3 OSes)
 - Godot-side editor test suites (3 OS @ Godot 4.7.0 + a Linux Godot 4.5 canary, via `chickensoft-games/setup-godot@v2` on GitHub Actions runners) — **headless**; no rendering. The 4.5 canary guards the documented-minimum engine against the parse-cascade class of regression (#476). Tests that depend on future newer-engine behavior can still use `McpTestSuite.skip_on_godot_lt(...)`.
 - release-surface smoke, especially install and packaging paths once distribution work is active (3 OS)
 - local interactive self-update smoke for update/reload/extract changes (`script/local-self-update-smoke`)

@@ -23,7 +23,7 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
 
 - `src/godot_ai/` — Python MCP server (FastMCP v3)
   - `server.py` — entrypoint, lifespan, tool registration, `--exclude-domains` support
-  - `tools/` — MCP tool modules (session, editor, scene, node, project, script, resource, api, filesystem, signal, autoload, input_map, game, testing, batch, client, ui, theme, animation, material, particle, camera, audio) + `_meta_tool.py` (`register_manage_tool` rollup factory)
+  - `tools/` — MCP tool modules (session, editor, scene, node, project, script, resource, api, filesystem, signal, autoload, input_map, game, testing, batch, client, ui, theme, animation, material, particle, camera, audio, tilemap, tileset) + `_meta_tool.py` (`register_manage_tool` rollup factory)
   - `resources/` — `godot://...` read-only URIs (sessions, editor, project, nodes, classes, scripts, scenes, library)
   - `middleware/` — `PreserveGodotCommandErrorData`, `StripClientWrapperKwargs`, `ParseStringifiedParams`, `HintOpTypoOnManage` (registration order is load-bearing — see the docstring above the `mcp.add_middleware(...)` calls in `server.py` and `tests/unit/test_server_middleware_order.py`)
   - `handlers/` — shared sync handlers using `DirectRuntime`; `_readiness.py` gates writes
@@ -37,7 +37,7 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
   - `connection.gd` — WebSocket client, reconnection, `send_deferred_response`
   - `dispatcher.gd` — command routing with frame budget; `DEFERRED_RESPONSE` sentinel
   - `handlers/` — scene, node, editor, project, client, script, resource, filesystem, signal, autoload, input, test, batch, ui, theme, animation (+ values/presets), material (+ values/presets), particle (+ values/presets), camera, audio, environment, texture, curve, physics_shape, control_draw_recipe
-  - `clients/` — descriptor + strategy system (`_base`, `_registry`, `_json_strategy`, `_toml_strategy`, `_cli_strategy`, `_atomic_write`, `_cli_finder`, `_path_template`, `_manual_command`) and 19 client descriptors
+  - `clients/` — descriptor + strategy system (`_base`, `_registry`, `_json_strategy`, `_toml_strategy`, `_cli_strategy`, `_cli_exec`, `_atomic_write`, `_cli_finder`, `_path_template`, `_manual_command`) and 19 client descriptors
   - `runtime/game_helper.gd` — game-side autoload that ferries logs back to the editor (`logs_read source=game`)
   - `testing/` — McpTestRunner + McpTestSuite framework
   - `utils/` — scene_path, error_codes, log_buffer
@@ -54,7 +54,7 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
   - `setup-dev` / `setup-dev.ps1` / `verify-worktree` — dev environment + worktree health
   - `serve-this-worktree` / `open-godot-here` — point dev server / editor at the current worktree
   - `local-self-update-smoke` — interactive local fixture for self-update changes
-  - `ci-start-server`, `ci-godot-tests`, `ci-reload-test`, `ci-quit-test`, `ci-check-gdscript` — CI scripts
+  - `ci-start-server`, `ci-godot-tests`, `ci-reload-test`, `ci-quit-test`, `ci-check-gdscript`, `ci-game-capture-smoke` — CI scripts
   - `ci-stale-server-smoke` — live cross-OS port-8000 conflict smoke. `--mode stale` (default) plants a godot-ai server simulator and asserts the recoverable kill+respawn path; `--mode foreign` plants a non-godot-ai listener and asserts the terminal, non-recoverable INCOMPATIBLE path (no kill, suggested free port logged). Drives the `stale-server-smoke` and `foreign-server-smoke` CI jobs.
   - `ci-find-regression-range` — helper for identifying CI regression windows
 
@@ -70,11 +70,11 @@ AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebS
 - **MCP logging**: Plugin prints `MCP | [recv] command(params)` / `MCP | [send] command -> ok` to Godot console. Controlled by the dock's "Log" toggle, persisted via EditorSetting `godot_ai/mcp_logging` (routes to the dispatcher `mcp_logging` var and `McpLogBuffer.enabled` console echo). High-frequency `[event] readiness -> ...` lines record to the ring buffer only (`log(msg, echo=false)`) and never echo to the console (#626).
 - **Tool surface — ~18 named verbs + per-domain `<domain>_manage` rollups**: To stay under hard tool-count caps in clients that ignore Anthropic's `defer_loading` (Antigravity, etc.), each domain exposes one rolled-up MCP tool that takes `op="<verb>"` + a `params` dict, alongside the high-traffic verbs as named tools. Schema-aware clients still see every `op` because `register_manage_tool` in `src/godot_ai/tools/_meta_tool.py` builds a dynamic `Literal[...]` enum. Core tools (`editor_state`, `scene_get_hierarchy`, `node_get_properties`, `session_activate`) stay non-deferred; named non-core verbs and every `<domain>_manage` rollup are tagged `meta={"defer_loading": True}` for tool-search-aware clients. Plugin command names (over WebSocket) are independent — the MCP tool `editor_reload_plugin` dispatches the plugin command `reload_plugin`. See `docs/TOOLS.md` for the full op map.
 - **Tool resources alongside tools**: Read-only `godot://...` URIs mirror the most-used reads (`godot://node/{path}/properties`, `godot://script/{path}`, `godot://materials`, …). Resources don't count against tool caps; tool forms are the fallback for clients that don't surface resources, and the only path that supports per-call `session_id` pinning. When a tool has a resource counterpart, its description appends `Resource form: godot://...` so aware clients can route the cheap reads through the URI.
-- **`batch_execute` uses plugin command names, not MCP tool names**: The MCP tool `node_create` dispatches the plugin command `create_node`. Inside `batch_execute`'s `commands[].command` field, use the plugin name (`create_node`), not the MCP name (`node_create`). Inside a `<domain>_manage` op, the same rule applies — `node_manage(op="delete", params={...})` delegates to the plugin's `delete_node`, not `node_delete`. The Python handlers in `src/godot_ai/handlers/` are the authoritative map — each handler calls `runtime.send_command("<plugin_cmd>", ...)`. When `batch_execute` receives an unknown plugin command, the GDScript dispatcher returns `INVALID_PARAMS` with fuzzy `data.suggestions`. Inside a `<domain>_manage` rollup, op-name validation happens earlier — at the FastMCP/Pydantic schema boundary, since `op` is typed `Literal[...]` of the registered op names. A misspelling like `theme_manage(op="set_colour")` surfaces as a Pydantic `literal_error` whose message lists the valid alternatives ("Input should be 'create', 'set_color', …"), not a structured `data.suggestions` payload. The meta-tool's own `difflib`-based fallback in `dispatch_manage_op` only fires when the call somehow bypasses Pydantic (e.g. a future internal direct-dispatch caller).
+- **`batch_execute` uses plugin command names, not MCP tool names**: The MCP tool `node_create` dispatches the plugin command `create_node`. Inside `batch_execute`'s `commands[].command` field, use the plugin name (`create_node`), not the MCP name (`node_create`). Inside a `<domain>_manage` op, the same rule applies — `node_manage(op="delete", params={...})` delegates to the plugin's `delete_node`, not `node_delete`. The Python handlers in `src/godot_ai/handlers/` are the authoritative map — each handler calls `runtime.send_command("<plugin_cmd>", ...)`. When `batch_execute` receives an unknown plugin command, the GDScript batch handler returns `UNKNOWN_COMMAND` with fuzzy `data.suggestions`. Inside a `<domain>_manage` rollup, op-name validation happens earlier — at the FastMCP/Pydantic schema boundary, since `op` is typed `Literal[...]` of the registered op names. A misspelling like `theme_manage(op="set_colour")` surfaces as a Pydantic `literal_error` whose message lists the valid alternatives ("Input should be 'create', 'set_color', …"), not a structured `data.suggestions` payload. The meta-tool's own `difflib`-based fallback in `dispatch_manage_op` only fires when the call somehow bypasses Pydantic (e.g. a future internal direct-dispatch caller).
 - **Session IDs**: format is `<project-slug>@<4hex>` (e.g. `godot-ai@a3f2`). The slug is derived from the project directory name so agents can recognize which editor they're targeting; the hex suffix disambiguates same-project twins. Server treats the ID as an opaque key.
 - **Per-call session routing**: every Godot-talking tool accepts an optional `session_id` parameter. Empty (the default) resolves to the global active session. When supplied, that single call targets that session — `require_writable` and every handler inside the call see the pinned session, not the active one. Use this when multiple AI clients share one MCP server. For `<domain>_manage` rollups, `session_id` is a sibling of `op` and `params` (top-level), *not* nested inside `params`. Resources (`godot://...`) still resolve via the active session.
 - **FastMCP middleware order is load-bearing**: `src/godot_ai/server.py` registers, in this order, `PreserveGodotCommandErrorData → StripClientWrapperKwargs → ParseStringifiedParams → HintOpTypoOnManage`. FastMCP composes the chain via `reversed(self.middleware)`, so first-added is **outermost** (sees response last) and last-added is **innermost** (sees response first). The four positions are reasoned out in the docstring above the `mcp.add_middleware(...)` calls in `server.py`; the order is locked by `tests/unit/test_server_middleware_order.py`. Adding new middleware: read that docstring, decide the position, update both the docstring and the test in lockstep.
-- **Telemetry is wrap-once at server build time**: `src/godot_ai/server.py` calls `install_fastmcp_wraps(mcp)` right after constructing the FastMCP instance and before any `register_<domain>_tools(mcp)`. That call replaces `mcp.tool` / `mcp.resource` with auto-instrumenting versions, so every tool and resource (including the `<domain>_manage` rollups, whose `op` arg is captured as `sub_action`) gets one `tool_execution` / `resource_retrieval` record per call automatically. Adding a new tool, resource, or rollup op needs **no telemetry call**. Opt-out is `GODOT_AI_DISABLE_TELEMETRY=true` (also accepts `DISABLE_TELEMETRY=true`). The endpoint is configured via `GODOT_AI_TELEMETRY_ENDPOINT`; if unset, the collector runs and persists `customer_uuid` but never sends. Session-id slugs are sha256-hashed before leaving the process so project directory names don't leak. Plugin-side events (dock startup, self-update outcome) ride the existing `send_event("plugin_event", …)` channel; the names allowlist lives in both `plugin/addons/godot_ai/telemetry.gd` and `src/godot_ai/transport/websocket.py::_PLUGIN_EVENT_NAMES` — keep them in sync. Full reference: `docs/TELEMETRY.md`.
+- **Telemetry is wrap-once at server build time**: `src/godot_ai/server.py` calls `install_fastmcp_wraps(mcp)` right after constructing the FastMCP instance and before any `register_<domain>_tools(mcp)`. That call replaces `mcp.tool` / `mcp.resource` with auto-instrumenting versions, so every tool and resource (including the `<domain>_manage` rollups, whose `op` arg is captured as `sub_action`) gets one `tool_execution` / `resource_retrieval` record per call automatically. Adding a new tool, resource, or rollup op needs **no telemetry call**. Opt-out is `GODOT_AI_DISABLE_TELEMETRY=true` (also accepts `DISABLE_TELEMETRY=true`). The endpoint is configured via `GODOT_AI_TELEMETRY_ENDPOINT`; if unset, a baked-in production default endpoint is used, so telemetry sends by default — the only way to prevent sends is the opt-out env var. Session-id slugs are sha256-hashed before leaving the process so project directory names don't leak. Plugin-side events (dock startup, self-update outcome) ride the existing `send_event("plugin_event", …)` channel; the names allowlist lives in both `plugin/addons/godot_ai/telemetry.gd` and `src/godot_ai/transport/websocket.py::_PLUGIN_EVENT_NAMES` — keep them in sync. Full reference: `docs/TELEMETRY.md`.
 
 ### Published `class_name` compatibility
 
@@ -198,12 +198,12 @@ This uses `src/godot_ai/asgi.py` to run uvicorn with its factory reload path. Uv
 ### Server discovery (3-tier)
 
 1. `.venv/bin/python -m godot_ai` — dev checkout (venv near project)
-2. `uvx --from godot-ai~=VERSION godot-ai` — user install (PyPI via uvx)
+2. `uvx --from godot-ai==VERSION godot-ai` — user install (PyPI via uvx, exact version pin)
 3. `godot-ai` CLI — system install fallback
 
 ### Plugin reload
 
-The `editor_reload_plugin` MCP tool triggers a live plugin reload inside Godot (`EditorInterface.set_plugin_enabled` off/on). Requires the server to be running externally (not managed by the plugin). The Python handler waits for the new session via `SessionRegistry.wait_for_session()`.
+The `editor_reload_plugin` MCP tool triggers a live plugin reload inside Godot (`EditorInterface.set_plugin_enabled` off/on). It works with both an externally-run server and the plugin-managed server (the handler special-cases the plugin-managed path, where the reload tears down and respawns the server process). The Python handler waits for the new session via `SessionRegistry.wait_for_session()`.
 
 The Godot dock also has a **Start/Stop Dev Server** button for convenience (visible in developer mode).
 
@@ -223,11 +223,11 @@ The server process is intentionally prepared for reload, not left untouched: `pr
 
 In dev checkouts the check is skipped: `is_dev_checkout()` detects a nearby `.venv` and short-circuits to avoid offering a path that would overwrite tracked source (the addons dir is a symlink into `plugin/`). Three override knobs let you exercise the update flow without leaving the repo (resolved in priority order):
 
-1. **Dock dropdown** (`Mode override` in the dev-section of the MCP dock) — visible when `Developer mode` is on. Persists via EditorSetting `godot_ai/mode_override`. Choices: `Auto` / `Force user` / `Force dev`. Changing the dropdown immediately re-runs the update check so you can flip to "Force user" and watch the yellow banner appear in the same frame.
-2. **`GODOT_AI_MODE` env var** — fallback for CLI launches and CI. Values: `user` / `dev`. Only takes effect when the dock dropdown is `Auto` (the UI selection always wins).
+1. **EditorSetting `godot_ai/mode_override`** — set it manually via Editor > Editor Settings (there is currently no dock UI that writes it). Values: empty/absent (auto) / `user` / `dev`, read by `client_configurator.gd::mode_override()`.
+2. **`GODOT_AI_MODE` env var** — fallback for CLI launches and CI. Values: `user` / `dev`. Only takes effect when the EditorSetting is unset (the setting always wins).
 3. Neither set → the `.venv`-proximity heuristic runs as before.
 
-When either override reports `user`, the yellow update banner's label includes `(forced)` so testers don't forget they're in override mode.
+When either override reports `user`, the yellow update banner's label includes `(forced)` (the `forced` hint in `update_manager.gd`'s banner payload) so testers don't forget they're in override mode.
 
 `_install_update` keeps a physical data-safety guard (`addons_dir_is_symlink()`) independent of the mode override: even in forced-user mode the self-install bails if `res://addons/godot_ai` is a symlink. To actually test the end-to-end extract path, unpack a release zip over a plain-directory copy of the addons dir (or test from a standalone project outside the dev tree).
 
@@ -265,7 +265,7 @@ The harness creates a disposable project with a physical addon copy, stages a sy
 
 ### Python tests
 ```bash
-pytest -v                    # 903 unit + integration tests
+pytest -v                    # ~1300 unit + integration tests
 ```
 
 ### Godot-side tests
@@ -281,7 +281,7 @@ Test suites extend `McpTestSuite` (assertion methods: `assert_true`, `assert_eq`
 
 ### Stress / load testing — `script/stormtest.py`
 
-`stormtest` opens many concurrent MCP clients and fires rapid, randomized tool calls across **every** domain at a live editor, with periodic `editor_reload_plugin` churn mixed in. It's a robustness test, not a correctness test: it answers "does the editor + plugin + WebSocket dispatcher + server survive sustained concurrent abuse and reload cycles without crashing?" and surfaces per-tool latency/error hot-spots. Use it after changes to the dispatcher, transport, readiness gating, session routing, or the reload/handoff path. Full reference: `docs/STRESS_TESTING.md`.
+`stormtest` opens many concurrent MCP clients and fires rapid, randomized tool calls across most tool domains at a live editor, with periodic `editor_reload_plugin` churn mixed in. It's a robustness test, not a correctness test: it answers "does the editor + plugin + WebSocket dispatcher + server survive sustained concurrent abuse and reload cycles without crashing?" and surfaces per-tool latency/error hot-spots. Use it after changes to the dispatcher, transport, readiness gating, session routing, or the reload/handoff path. Full reference: `docs/STRESS_TESTING.md`.
 
 ```bash
 .venv/bin/python script/stormtest.py                       # ≈ 1000 calls, with reload churn
@@ -292,7 +292,7 @@ SS_URL=http://127.0.0.1:8010/mcp .venv/bin/python script/stormtest.py  # target 
 
 To stress a *branch's* code (plugin + server), point a Godot editor at that worktree's `test_project/` and serve its `src/` via `script/serve-this-worktree` (external server, so `editor_reload_plugin` exercises reload without killing the server), then run stormtest against it. A full JSON snapshot lands in `$TMPDIR/stormtest_report.json` (override with `SS_REPORT`), flushed every few seconds so a crash/kill still leaves data. A small `EDITOR_NOT_READY` / `NODE_NOT_FOUND` / `CONNECTION` error rate is expected noise under concurrency + reloads — watch instead for the process dying, a reload that never recovers, or one op with pathological error/latency.
 
-On Windows, a reads-dominant run (`SS_RELOAD=0`) works, but **reload churn (`SS_RELOAD=1`, the default) currently wedges the harness** and the external-server mitigation doesn't apply (`serve-this-worktree` is bash-only; a hand-started external `--reload` server gets killed by the reload). The editor itself survives reloads — only the harness hangs. Use `.venv\Scripts\python.exe` and note `$TMPDIR` is `%TEMP%`. See the "Windows / cross-platform notes" callout in `docs/STRESS_TESTING.md` (issues #513 / #514; resilience tracked in #509).
+On Windows, a reads-dominant run (`SS_RELOAD=0`) works, but **reload churn (`SS_RELOAD=1`, the default) currently wedges the harness**. `script/serve-this-worktree.ps1` provides the external-server flow on Windows (thin wrapper over the cross-platform `script/serve_worktree.py`, see #509/#514). The editor itself survives reloads — only the harness hangs. Use `.venv\Scripts\python.exe` and note `$TMPDIR` is `%TEMP%`. See the "Windows / cross-platform notes" callout in `docs/STRESS_TESTING.md` (issues #513 / #514; resilience tracked in #509).
 
 **Guardrails built into the test runner:**
 - **Zero-assertion detection**: Tests that complete with 0 assertions are flagged as failures ("Test completed with 0 assertions — likely skipped its logic"). This catches tests that silently `return` before asserting anything.
@@ -305,7 +305,7 @@ A test that passes for the wrong reason is worse than a missing test: it ships a
 
 - **Bare `return` in a test body**. Every `return` in a `test_*` function must be preceded by either an `assert_*` call (for a real failure) or `skip("reason")` (for an environment precondition that can't be met). A silent `return` passes with zero assertions — the runner guardrail catches this now, but the failure message ("0 assertions") is noisier than a targeted `skip()` that reports *why* the test couldn't run.
 - **Counts instead of stored Variants**. Asserting `track_count == 1` or `child_count > 0` says nothing about the stored value. For mutation tools that take JSON dicts (Color, Vector2, Vector3, keyframe values), read back via `track_get_key_value`, `mi.mesh`, `mat.gravity`, etc. and assert `value is Color` / `value is Vector3`. See "Value coercion" in the "Write tools must be undoable" section above.
-- **`get_theme_*` (non-`_override`) getters**. Reading a theme value via `get_theme_color(...)` falls back through the theme chain — a broken `add_theme_color_override` will silently resolve to the default, passing the assertion. Always use `get_theme_color_override`, `get_theme_constant_override`, `get_theme_font_size_override`, `get_theme_stylebox_override` in override tests.
+- **Bare `get_theme_*` getters in override tests**. Reading a theme value via `get_theme_color(...)` alone falls back through the theme chain — a broken `add_theme_color_override` will silently resolve to the default, passing the assertion. Godot 4.6 removed the `get_theme_*_override` getters, so the honest pattern is now: assert `has_theme_color_override(...)` (or the constant/font-size/stylebox variant) FIRST, then read the value with the regular getter — the override presence check is what prevents the fallback from masking a bug. `test_ui.gd::test_build_layout_theme_override_*` are the reference pattern.
 - **`assert_has_key` without a follow-up value check**. Presence of `"data"` in a response says nothing about correctness. Every `assert_has_key(result, "data")` should be paired with at least one `assert_eq` / `assert_true` on a field inside `result.data`.
 - **`editor_undo()` / `editor_redo()` without checking the return**. The helper returns `bool` — `false` means the undo silently no-oped. For tests that assert post-undo state, capture `var did_undo := editor_undo(_undo_redo); assert_true(did_undo, "undo should succeed")` before asserting the rolled-back value.
 - **Bare `except: pass` in Python tests**. Swallowing exceptions can let a half-failed operation still pass the downstream assertion. Catch specific exceptions, and if you truly want to ignore a cleanup failure, log it.
@@ -394,7 +394,7 @@ The MCP tool surface is shaped to satisfy two pressures at once:
 1. **Anthropic tool-search clients** (`tool_search_tool_bm25_20251119` / `tool_search_tool_regex_20251119`) — non-core tools are tagged `meta={"defer_loading": True}` so the client only loads schemas it searches for.
 2. **Tool-count caps in non-search clients** (Antigravity, etc., that ignore `defer_loading` and refuse to start past ~40 tools) — long-tail verbs collapse into per-domain `<domain>_manage` rollups (`op="<verb>"` + `params` dict). Schema-aware clients still see every op via the dynamic `Literal[...]` enum built by `register_manage_tool` in `tools/_meta_tool.py`.
 
-Result: ~41 MCP tools (4 core + 15 named verbs + 22 rollups), down from a flat surface that crossed 100. Plugin command names over WebSocket stay independent — they're documented in `tool_catalog.gd` and unchanged by the rollup refactor.
+Result: ~43 MCP tools (4 core + 15 named verbs + 24 rollups), down from a flat surface that crossed 100. Plugin command names over WebSocket stay independent — they're documented in `tool_catalog.gd` and unchanged by the rollup refactor.
 
 - All tools follow `domain_action` namespacing — no ambiguous prefixes
 - Core tools loaded upfront (no `meta=`): `editor_state`, `scene_get_hierarchy`, `node_get_properties`, `session_activate`
@@ -419,7 +419,7 @@ Use those sources when you need the current inventory. Keep this guide focused o
 
 ## Plugin command vs MCP tool names
 
-The plugin (GDScript) uses short command names over WebSocket (`run_tests`, `reload_plugin`, `reimport`, `set_selection`, `search_filesystem`, `get_performance_monitors`, `create_node`, `set_property`, `delete_node`, etc.). These are internal — see `plugin.gd::_register_handlers` and `tool_catalog.gd` for the authoritative list. They are independent of the MCP tool names. The Python handler in `src/godot_ai/handlers/<domain>.py` is the authoritative MCP-name → plugin-command map.
+The plugin (GDScript) uses short command names over WebSocket (`run_tests`, `reload_plugin`, `reimport`, `set_selection`, `search_filesystem`, `get_performance_monitors`, `create_node`, `set_property`, `delete_node`, etc.). These are internal — `plugin.gd::_register_handlers` is the authoritative list (`tool_catalog.gd` mirrors the MCP tool surface, not the plugin command names). They are independent of the MCP tool names. The Python handler in `src/godot_ai/handlers/<domain>.py` is the authoritative MCP-name → plugin-command map.
 
 When using `batch_execute`'s `commands[].command` field, use the **plugin command name** (`create_node`, `set_property`) — not the MCP tool name (`node_create`, `node_set_property`). The same rule applies inside a `<domain>_manage` op (`node_manage(op="delete", ...)` delegates to the plugin's `delete_node`, not `node_delete`).
 
@@ -435,7 +435,7 @@ When using `batch_execute`'s `commands[].command` field, use the **plugin comman
    - **Long-tail verb (default)** → add it to the `ops={}` dict for the existing `register_manage_tool(...)` call. The `<domain>_manage` rollup picks it up automatically; the meta-tool helper handles `session_id` extraction, JSON-string param coercion, and unknown-op error suggestions. No new tool registration needed.
 5. Update `tool_catalog.gd` to mirror the new tool list — `tests/unit/test_tool_domains.py` will fail with a paste-over-ready diff if you forget.
 6. Update the tool-surface blurb in `server.py` `instructions=` if the new verb is named (rollups are listed by tool, not by op).
-7. For write tools: add `require_writable(runtime)` call at the top of the Python handler.
+7. For write tools: add an `await require_writable_async(runtime)` call at the top of the Python handler.
 8. Write a description with natural-language keywords a user would search for (e.g. `screenshot`, `keybinding`, `asset`) alongside the Godot term. For ops inside a rollup, edit the `_DESCRIPTION` block of the domain's tool file so the rolled-up tool's docstring stays exhaustive.
 9. **Consider a resource form**: pure reads with no `session_id` filtering benefit from a matching `godot://...` resource (or template) in `src/godot_ai/resources/`. The tool form remains for `session_id`-pinned reads; clients that surface resources prefer the URI. When you add a resource form, append `Resource form: godot://...` to the tool's description so aware clients can route reads through the URI.
 10. Add tests: handler unit test, Python integration test, AND GDScript test in `test_project/tests/`. Migrate any integration tests for an existing verb when you move it under a rollup — the form changes from `client.call_tool("domain_verb", {...})` to `client.call_tool("domain_manage", {"op": "verb", "params": {...}, "session_id": ...})`.
@@ -443,14 +443,14 @@ When using `batch_execute`'s `commands[].command` field, use the **plugin comman
 ## Python conventions
 
 - Handlers: `return await runtime.send_command("command_name", params)` — don't handle errors.
-- Write handlers: call `require_writable(runtime)` before sending commands (from `handlers/_readiness.py`).
+- Write handlers: `await require_writable_async(runtime)` before sending commands (from `handlers/_readiness.py`).
 - Tools create `DirectRuntime.from_context(ctx)` and delegate to handlers.
 - Error codes in `protocol/errors.py` — keep in sync with `utils/error_codes.gd`.
 - Lint: `ruff check src/ tests/` — Format: `ruff format src/ tests/`.
 
 ## Deferred responses (tools whose reply flows out-of-band)
 
-The dispatcher runs handlers synchronously and auto-sends one response per command. For work whose reply arrives over a different channel — currently only `editor_screenshot(source="game")`, which waits on Godot's editor-debugger bus to ferry a PNG back from the game process — use the deferred pattern:
+The dispatcher runs handlers synchronously and auto-sends one response per command. For work whose reply arrives over a different channel or spans frames — the game-bus tools (`editor_screenshot(source="game")`, `game_eval`, `game_command`) plus multi-frame editor work in the scene, script, filesystem, and project handlers — use the deferred pattern:
 
 - Return `McpDispatcher.DEFERRED_RESPONSE` (a `{"_deferred": true}` sentinel dict). `tick()` skips auto-sending for these. `_call_handler` recognises it alongside `data` / `error` so the sentinel doesn't trip the malformed-result guard.
 - Read the incoming request id from `params["_request_id"]`. The dispatcher injects it on a **duplicated** params dict so the original queued command isn't mutated. Hand it off to whatever async source will produce the reply.
@@ -507,7 +507,7 @@ JSON dicts like `{"r":1,"g":0,"b":0,"a":1}` only become `Color` / `Vector2` / `V
 
 GDScript tests that just assert `track_count == 1` will pass even when coercion is broken. **Always read back via `track_get_key_value(idx, k)` and assert `value is Color` / `value is Vector3` / etc.** `test_animation.gd` `test_add_property_track_coerces_vector3_dict` is the reference pattern. The same rule applies to any future handler that takes JSON values intended to land as typed Variants in the scene.
 
-Same principle for theme override pseudo-properties on Controls: use `get_theme_color_override`, `get_theme_constant_override`, `get_theme_font_size_override`, `get_theme_stylebox_override` in tests — **not** the fallback `get_theme_color` getters — so a broken override silently resolving via the theme fallback can't mask a bug. `test_ui.gd` `test_build_layout_theme_override_*` are the reference pattern.
+Same principle for theme override pseudo-properties on Controls: assert `has_theme_color_override` (or constant/font-size/stylebox variant) before reading the value back with the regular getter — Godot 4.6 removed `get_theme_*_override`, and the presence check is what stops a broken override from silently resolving via the theme fallback. `test_ui.gd` `test_build_layout_theme_override_*` are the reference pattern.
 
 ### Additional GDScript conventions
 

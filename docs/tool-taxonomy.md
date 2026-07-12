@@ -141,9 +141,7 @@ Read-heavy state should often be exposed as resources instead of tools:
 - `godot://selection/current`
 - `godot://project/info`
 - `godot://project/settings`
-- `godot://autoloads`
-- `godot://input-map`
-- `godot://filesystem/index`
+- `godot://input_map`
 - `godot://logs/recent`
 
 ---
@@ -167,7 +165,7 @@ These are the tools that move the project from "functional prototype" toward "re
 - `particles.*` — GPU+CPU 2D+3D shipped with 7 presets; auto-default billboard draw material so color_ramp renders out of the box
 - `shader.*` — still pending; today shaders are authored via `filesystem_write_text` + `material_set_shader_param`
 - `physics.*` helpers — `physics_shape_autofit` op (under `resource_manage`) derives a Shape2D/Shape3D from a target node's bounds; layer/mask/body helpers still pending
-- light `tilemap.*` — pending
+- light `tilemap.*` — shipped (#622): `tilemap_manage` (set_cell / set_cells_rect / clear / get_cells) + `tileset_manage` (atlas tiles / atlas image)
 - light `navigation.*` — pending
 
 These matter, but they should come after the project can already run, inspect, and safely iterate.

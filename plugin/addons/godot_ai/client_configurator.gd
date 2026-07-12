@@ -424,9 +424,10 @@ static func get_plugin_version() -> String:
 ## e.g. after unpacking a release zip into `test_project/`).
 ##
 ## Two ways to set it, resolved in priority order:
-##   1. EditorSettings → `godot_ai/mode_override` — UI dropdown in the dock,
-##      persists per-editor-install. Wins over the env var so a UI action
-##      always takes effect without relaunching the editor.
+##   1. EditorSettings → `godot_ai/mode_override` — set manually via
+##      Editor Settings (no dock UI writes it today); persists
+##      per-editor-install and wins over the env var so an editor-side
+##      choice always takes effect without relaunching.
 ##   2. Env var `GODOT_AI_MODE` — useful for CLI launches and CI.
 const MODE_OVERRIDE_ENV := "GODOT_AI_MODE"
 const MODE_OVERRIDE_SETTING := "godot_ai/mode_override"

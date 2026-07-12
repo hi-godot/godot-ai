@@ -84,7 +84,7 @@ plugin/addons/godot_ai/
 │   ├── physics_shape_handler.gd, control_draw_recipe_handler.gd
 │   ├── *_values.gd / *_presets.gd  ## per-domain enum coercion + preset libraries
 │   └── _param_validators.gd, _property_errors.gd  ## shared utilities (Mcp* class_name)
-├── clients/                     ## descriptor + strategy system for 18 IDE configs
+├── clients/                     ## descriptor + strategy system for 19 IDE configs
 │   ├── _base.gd, _registry.gd
 │   ├── _json_strategy.gd, _toml_strategy.gd, _cli_strategy.gd
 │   ├── _atomic_write.gd, _cli_finder.gd, _cli_exec.gd
