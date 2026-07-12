@@ -221,7 +221,7 @@ func test_verify_refuses_missing_checksum_sidecar() -> void:
 
 	var manager = McpUpdateManagerScript.new()
 	manager._latest_checksum_url = ""
-	var states: Array = []
+	var states: Array[Dictionary] = []
 	manager.install_state_changed.connect(func(state: Dictionary) -> void:
 		states.append(state)
 	)
@@ -260,7 +260,7 @@ func test_verify_refuses_wrong_repo_checksum_url() -> void:
 		"https://github.com/evil-org/godot-ai/releases/download/v999.0.0/"
 		+ "godot-ai-plugin.zip.sha256"
 	)
-	var states: Array = []
+	var states: Array[Dictionary] = []
 	manager.install_state_changed.connect(func(state: Dictionary) -> void:
 		states.append(state)
 	)
@@ -303,7 +303,7 @@ func test_checksum_match_on_repo_release_proceeds_to_install() -> void:
 	assert_true(
 		McpUpdateManagerScript._is_trusted_download_url(manager._latest_checksum_url),
 		"Seed: the repo-scoped sidecar URL must pass the trust guard")
-	var states: Array = []
+	var states: Array[Dictionary] = []
 	manager.install_state_changed.connect(func(state: Dictionary) -> void:
 		states.append(state)
 	)
@@ -538,8 +538,8 @@ func test_update_check_below_floor_does_not_arm_download() -> void:
 	## update offer. Otherwise one click can install the 4.5+-only release.
 	var manager = _NoSelfUpdateManager.new()
 	var body := _make_body(_make_release_payload("v999.0.0"))
-	var states: Array = []
-	var update_results: Array = []
+	var states: Array[Dictionary] = []
+	var update_results: Array[Dictionary] = []
 	manager.install_state_changed.connect(func(state: Dictionary) -> void:
 		states.append(state)
 	)
@@ -573,7 +573,7 @@ func test_start_install_below_floor_only_repaints_guidance() -> void:
 	## If a stale UI path calls start_install anyway, keep it inside the
 	## guidance state rather than opening the browser or entering install.
 	var manager = _NoSelfUpdateManager.new()
-	var states: Array = []
+	var states: Array[Dictionary] = []
 	manager.install_state_changed.connect(func(state: Dictionary) -> void:
 		states.append(state)
 	)

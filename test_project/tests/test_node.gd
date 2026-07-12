@@ -1992,6 +1992,28 @@ func test_set_property_typed_array_non_list_value_errors() -> void:
 	_free_typed_array_probe(0)
 
 
+func test_set_property_typed_object_array_clears_with_empty_list() -> void:
+	## An empty list carries no elements to coerce, so it must be allowed to
+	## CLEAR an Object-element typed array even while writing elements is
+	## stage-2 (#682 review finding).
+	var node := _make_typed_array_probe("_McpTypedObjClear")
+	var live: Array = node.get("textures")
+	live.append(ImageTexture.new())
+	assert_eq((node.get("textures") as Array).size(), 1, "seed texture must be present")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedObjClear",
+		"property": "textures",
+		"value": [],
+	})
+	assert_has_key(result, "data")
+	var stored: Variant = node.get("textures")
+	assert_eq((stored as Array).size(), 0, "empty list must clear the slot")
+	assert_true((stored as Array).is_typed(), "the slot must keep its typing")
+	assert_true(editor_undo(_undo_redo), "undo clear should succeed")
+	assert_eq((node.get("textures") as Array).size(), 1, "undo must restore the seeded element")
+	_free_typed_array_probe(0)
+
+
 func test_set_property_typed_object_array_refuses_loudly() -> void:
 	## Object elements are #612 stage 2 — until then the write must REFUSE,
 	## not silently drop like the old generic passthrough did.

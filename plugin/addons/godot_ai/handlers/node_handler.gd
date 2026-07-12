@@ -922,7 +922,9 @@ static func _coerce_typed_array(value: Variant, slot_value: Array, prefix: Strin
 		)
 		return ErrorCodes.prefix_message(err, prefix)
 	var elem_type := slot_value.get_typed_builtin()
-	if elem_type == TYPE_OBJECT:
+	## An empty list has no elements to coerce, so it may clear the slot even
+	## when the element type is stage-2 territory (PR #682 review).
+	if elem_type == TYPE_OBJECT and not (value as Array).is_empty():
 		var obj_err := ErrorCodes.make(
 			ErrorCodes.WRONG_TYPE,
 			"Writing elements into a typed Array[%s] property is not supported yet (#612 stage 2 covers Object elements); assign the elements individually in the editor for now" % elem_label,
