@@ -641,7 +641,7 @@ func test_strong_recovery_kills_pidfile_listener_when_port_frees() -> void:
 	plugin.branded_pids = [11111] as Array[int]
 	plugin.port_in_use_sequence = [false] as Array[bool]
 
-	var ok := plugin._recover_strong_port_occupant(TEST_PORT, 0.1)
+	var ok: bool = await plugin._recover_strong_port_occupant(TEST_PORT, 0.1)
 	var killed := plugin.killed_targets.duplicate()
 	var waited_calls := plugin.waited_calls
 	var clear_calls := plugin.cleared_record_calls
@@ -661,7 +661,7 @@ func test_strong_recovery_preserves_state_when_port_stays_held() -> void:
 	plugin.branded_pids = [11111] as Array[int]
 	plugin.port_in_use_sequence = [true] as Array[bool]
 
-	var ok := plugin._recover_strong_port_occupant(TEST_PORT, 0.1)
+	var ok: bool = await plugin._recover_strong_port_occupant(TEST_PORT, 0.1)
 	var killed := plugin.killed_targets.duplicate()
 	var waited_calls := plugin.waited_calls
 	var clear_calls := plugin.cleared_record_calls
@@ -678,7 +678,7 @@ func test_strong_recovery_rejects_status_name_only() -> void:
 	plugin.listener_pids = [13579] as Array[int]
 	plugin.live_status = {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
 
-	var ok := plugin._recover_strong_port_occupant(TEST_PORT, 0.1)
+	var ok: bool = await plugin._recover_strong_port_occupant(TEST_PORT, 0.1)
 	var killed := plugin.killed_targets.duplicate()
 	var waited_calls := plugin.waited_calls
 	var clear_calls := plugin.cleared_record_calls
@@ -1416,7 +1416,7 @@ func test_recover_strong_port_occupant_threads_live_to_proof() -> void:
 	plugin.port_in_use_sequence = [false] as Array[bool]
 	var caller_live := {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
 
-	var ok := plugin._recover_strong_port_occupant(TEST_PORT, 0.1, caller_live)
+	var ok: bool = await plugin._recover_strong_port_occupant(TEST_PORT, 0.1, caller_live)
 	var probe_calls := plugin.probe_calls
 	plugin.free()
 

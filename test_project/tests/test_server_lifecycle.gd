@@ -140,7 +140,7 @@ func test_recover_returns_false_with_no_proof() -> void:
 	var host := _ManagerHostStub.new()
 	var manager := McpServerLifecycleManagerScript.new(host)
 
-	var ok := manager.recover_strong_port_occupant(TEST_PORT, 0.1)
+	var ok: bool = await manager.recover_strong_port_occupant(TEST_PORT, 0.1)
 	var killed := host.killed_targets.duplicate()
 	host.free()
 
@@ -159,7 +159,7 @@ func test_recover_kills_and_clears_when_port_frees() -> void:
 	host.port_in_use_sequence = [false] as Array[bool]
 	var manager := McpServerLifecycleManagerScript.new(host)
 
-	var ok := manager.recover_strong_port_occupant(TEST_PORT, 0.1)
+	var ok: bool = await manager.recover_strong_port_occupant(TEST_PORT, 0.1)
 	host.free()
 
 	assert_true(ok)
@@ -176,7 +176,7 @@ func test_recover_preserves_record_when_port_held() -> void:
 	host.port_in_use_sequence = [true] as Array[bool]
 	var manager := McpServerLifecycleManagerScript.new(host)
 
-	var ok := manager.recover_strong_port_occupant(TEST_PORT, 0.1)
+	var ok: bool = await manager.recover_strong_port_occupant(TEST_PORT, 0.1)
 	var cleared := host.cleared_record_calls
 	host.free()
 
@@ -530,3 +530,66 @@ func test_inject_when_env_present_but_falsey_and_setting_disabled() -> void:
 
 	assert_true(injected, "a falsey DISABLE_TELEMETRY must not suppress the UI opt-out")
 	assert_true(env_present, "GODOT_AI_DISABLE_TELEMETRY must be injected for the spawn")
+
+
+# ----- #678 async startup plumbing --------------------------------------
+
+func test_run_blocking_inline_by_default() -> void:
+	## With defer_blocking_work off (the default every unit test relies on)
+	## the work runs inline and the surrounding coroutines never suspend —
+	## call-then-assert keeps working.
+	var host := _ManagerHostStub.new()
+	var manager := McpServerLifecycleManagerScript.new(host)
+	assert_false(manager.defer_blocking_work,
+		"synchronous behavior must be the default (tests depend on it)")
+	## `await` is a pass-through here: inline mode never suspends.
+	var value: Variant = await manager._run_blocking(func() -> Variant: return 42)
+	host.free()
+	assert_eq(value, 42, "inline _run_blocking must return the work's value")
+
+
+func test_start_server_reentrancy_guard() -> void:
+	## Startup is a coroutine in production, so a second start_server can
+	## arrive mid-flight — it must be a no-op, not a second walk.
+	var host := _ManagerHostStub.new()
+	host.port_in_use = true
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._start_in_flight = true
+	manager.start_server()
+	var state := manager.get_state()
+	host.free()
+	assert_eq(state, McpServerState.UNINITIALIZED,
+		"an in-flight start must block a second walk from mutating state")
+
+
+func test_stop_server_invalidates_async_generation() -> void:
+	## stop_server (and therefore _exit_tree / update-reload prep) must
+	## cancel in-flight async startup work so a suspended start_server
+	## can't resurrect state after teardown began.
+	var host := _ManagerHostStub.new()
+	var manager := McpServerLifecycleManagerScript.new(host)
+	var before := int(manager._async_generation)
+	manager.stop_server()
+	var after := int(manager._async_generation)
+	var stale := manager._async_stale(before)
+	host.free()
+	assert_eq(after, before + 1, "stop_server must bump the async generation")
+	assert_true(stale, "work captured before stop_server must read as stale")
+
+
+func test_proof_helper_honors_record_override() -> void:
+	## #678: when the proof helper runs on a worker thread it must not read
+	## EditorSettings — the caller injects the record snapshot instead.
+	var host := _ManagerHostStub.new()
+	host.listener_pids = [4242]
+	host.alive_pids = [4242]
+	host.branded_pids = [4242]
+	## The stub's internal record would NOT match; the override must win.
+	host.managed_record = {"pid": 0, "version": "", "ws_port": 0}
+	var proof: Dictionary = host._evaluate_strong_port_occupant_proof(
+		TEST_PORT, {"name": ""}, {"pid": 4242, "version": "9.9.9", "ws_port": 0}
+	)
+	host.free()
+	assert_eq(str(proof.get("proof", "")), "managed_record",
+		"the injected record snapshot must drive the managed_record proof tier")
+	assert_eq(proof.get("pids", []), [4242])

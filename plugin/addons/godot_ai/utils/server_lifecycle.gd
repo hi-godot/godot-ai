@@ -72,9 +72,53 @@ var _startup_path: String = McpStartupPathScript.UNSET
 ## stub it out.
 var _version_check
 
+## #678: when true, the blocking primitives on the startup path (port
+## scrapes, per-PID brand shells, the HTTP status probe, kill + port-drain
+## waits) run on a WorkerThreadPool thread while the main thread keeps
+## pumping frames — the editor stays responsive during plugin init/reload
+## on a contended port; the dock panel just arrives a beat later. The
+## plugin enables this in production. Default false: unit tests (and any
+## legacy caller) keep the historical fully-synchronous behavior, where
+## the startup coroutines never actually suspend and call-then-assert
+## still works.
+var defer_blocking_work: bool = false
+
+## Cancellation for in-flight async startup work: bumped by `stop_server`
+## (and therefore by `_exit_tree` and update-reload prep), checked after
+## every await so a suspended `start_server` can't resurrect state — or
+## spawn a server — after teardown started.
+var _async_generation: int = 0
+
+## Re-entrancy guard: with startup a coroutine, a second `start_server`
+## call (respawn watch, dock button) can land mid-flight.
+var _start_in_flight: bool = false
+
 
 func _init(host) -> void:
 	_host = host
+
+
+## Run `work` off the main thread and suspend until it completes (#678).
+## Falls back to inline execution when `defer_blocking_work` is off, or
+## when no SceneTree is available to pump frames against.
+func _run_blocking(work: Callable) -> Variant:
+	if not defer_blocking_work:
+		return work.call()
+	var tree := Engine.get_main_loop()
+	if not (tree is SceneTree):
+		return work.call()
+	var result: Array = [null]
+	var task_id := WorkerThreadPool.add_task(func() -> void:
+		result[0] = work.call()
+	)
+	while not WorkerThreadPool.is_task_completed(task_id):
+		await (tree as SceneTree).process_frame
+	WorkerThreadPool.wait_for_task_completion(task_id)
+	return result[0]
+
+
+func _async_stale(generation: int) -> bool:
+	return generation != _async_generation
 
 
 # ---- Public state accessors --------------------------------------------
@@ -435,7 +479,21 @@ func _set_plugin_spawned_env() -> void:
 ##   port in use, record matches + live ok   -> adopt port owner (heals PID)
 ##   port in use, record drifts              -> kill owner + respawn
 ##   port in use, no verified live match     -> block adoption + warn
+##
+## #678: this is a coroutine in production (`defer_blocking_work`) — the
+## port scrapes, status probes, and kill-drain waits run off the main
+## thread and the state machine resumes between frames, so the editor
+## stays responsive when the port is contended. With the flag off (unit
+## tests) nothing suspends and the call completes synchronously.
 func start_server() -> void:
+	if _start_in_flight:
+		return
+	_start_in_flight = true
+	await _start_server_impl(_async_generation)
+	_start_in_flight = false
+
+
+func _start_server_impl(async_gen: int) -> void:
 	if _host._server_started_this_session:
 		## Static flag persists across disable/enable cycles in one editor
 		## session — re-entrant spawn guard for plugin-reload-during-update.
@@ -451,7 +509,12 @@ func start_server() -> void:
 	var current_version := _expected_server_version()
 	_server_expected_version = current_version
 
-	if bool(_host._is_port_in_use(port)):
+	var port_in_use := bool(await _run_blocking(func() -> Variant:
+		return _host._is_port_in_use(port)
+	))
+	if _async_stale(async_gen):
+		return
+	if port_in_use:
 		var record: Dictionary = _host._read_managed_server_record()
 		var record_version := str(record.get("version", ""))
 		var record_ws_port := int(record.get("ws_port", 0))
@@ -462,7 +525,11 @@ func start_server() -> void:
 			int(_host._resolve_ws_port())
 		))
 		ws_port = int(_host._resolved_ws_port)
-		var live: Dictionary = _host._probe_live_server_status_for_port(port)
+		var live: Dictionary = await _run_blocking(func() -> Variant:
+			return _host._probe_live_server_status_for_port(port)
+		)
+		if _async_stale(async_gen):
+			return
 		var live_version := str(_host._verified_status_version(live))
 		var live_ws_port := int(_host._verified_status_ws_port(live))
 		var compatibility: Dictionary = _server_status_compatibility(
@@ -494,9 +561,16 @@ func start_server() -> void:
 				% [record_version, current_version])
 		## Forward `live` so the recovery proof helper reuses our snapshot.
 		## The kill invalidates it, so the failure arm re-probes below.
-		if not recover_strong_port_occupant(port, 3.0, live):
+		var recovered: bool = await recover_strong_port_occupant(port, 3.0, live)
+		if _async_stale(async_gen):
+			return
+		if not recovered:
 			_host._server_started_this_session = true
-			var post_recovery_live: Dictionary = _host._probe_live_server_status_for_port(port)
+			var post_recovery_live: Dictionary = await _run_blocking(func() -> Variant:
+				return _host._probe_live_server_status_for_port(port)
+			)
+			if _async_stale(async_gen):
+				return
 			_set_incompatible_server(post_recovery_live, current_version, port)
 			_startup_path = McpStartupPathScript.INCOMPATIBLE
 			push_warning(str(_server_status_message))
@@ -508,7 +582,13 @@ func start_server() -> void:
 	ws_port = _host._resolved_ws_port
 
 	_host._startup_trace_count("server_command_discovery")
-	var server_cmd := ClientConfigurator.get_server_command()
+	## CLI-finder discovery shells out (which/where, login shell) on cache
+	## misses — the same #238/#239 family the dock already runs off-thread.
+	var server_cmd: Array = await _run_blocking(func() -> Variant:
+		return ClientConfigurator.get_server_command()
+	)
+	if _async_stale(async_gen):
+		return
 	if server_cmd.is_empty():
 		set_terminal_diagnosis(McpServerStateScript.NO_COMMAND)
 		_startup_path = McpStartupPathScript.NO_COMMAND
@@ -786,19 +866,36 @@ static func _compatible_adoption_log_message(
 ## re-probe a port the caller already probed. The kill invalidates the
 ## snapshot — callers MUST re-probe before consuming live-status data
 ## after this returns.
+##
+## #678: coroutine in production — the proof evaluation (port scrapes +
+## per-PID brand shells) and the kill + port-drain wait run off the main
+## thread. The EditorSettings record is read on the main thread up front
+## and injected into the proof helper; record/pid-file clears stay on the
+## main thread after the awaits.
 func recover_strong_port_occupant(port: int, wait_s: float, pre_kill_live: Dictionary = {}) -> bool:
-	var proof: Dictionary = _host._evaluate_strong_port_occupant_proof(port, pre_kill_live)
+	var async_gen := _async_generation
+	var record: Dictionary = _host._read_managed_server_record()
+	var proof: Dictionary = await _run_blocking(func() -> Variant:
+		return _host._evaluate_strong_port_occupant_proof(port, pre_kill_live, record)
+	)
+	if _async_stale(async_gen):
+		return false
 	var targets: Array[int] = []
 	targets.assign(proof.get("pids", []))
 	if targets.is_empty():
 		return false
 
 	print("MCP | strong proof: %s" % str(proof.get("proof", "")))
-	var killed: Array = _host._kill_processes_and_windows_spawn_children(targets)
-	if not killed.is_empty():
-		print("MCP | killed pids %s on port %d" % [str(killed), port])
-	_host._wait_for_port_free(port, wait_s)
-	if bool(_host._is_port_in_use(port)):
+	var freed := bool(await _run_blocking(func() -> Variant:
+		var killed: Array = _host._kill_processes_and_windows_spawn_children(targets)
+		if not killed.is_empty():
+			print("MCP | killed pids %s on port %d" % [str(killed), port])
+		_host._wait_for_port_free(port, wait_s)
+		return not bool(_host._is_port_in_use(port))
+	))
+	if _async_stale(async_gen):
+		return false
+	if not freed:
 		return false
 
 	_host._clear_managed_server_record()
@@ -807,6 +904,9 @@ func recover_strong_port_occupant(port: int, wait_s: float, pre_kill_live: Dicti
 
 
 func stop_server() -> void:
+	## Cancel any in-flight async startup (#678): a suspended start_server
+	## resuming after teardown must not resurrect state or spawn a server.
+	_async_generation += 1
 	_host._stop_server_watch()
 	if int(_server_pid) <= 0:
 		transition_state(McpServerStateScript.STOPPED)
