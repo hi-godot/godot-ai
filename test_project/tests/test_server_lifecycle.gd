@@ -593,3 +593,24 @@ func test_proof_helper_honors_record_override() -> void:
 	assert_eq(str(proof.get("proof", "")), "managed_record",
 		"the injected record snapshot must drive the managed_record proof tier")
 	assert_eq(proof.get("pids", []), [4242])
+
+
+func test_force_restart_reset_invalidates_async_generation_and_guard() -> void:
+	## #682 review: the one-shot kill-and-restart paths must cancel an
+	## in-flight contended-port walk AND release the re-entrancy guard —
+	## otherwise the dock's explicit restart is silently swallowed while
+	## the stale walk resumes against post-kill reality.
+	var host := _ManagerHostStub.new()
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._start_in_flight = true
+	var before := int(manager._async_generation)
+	manager.reset_for_force_restart()
+	var after := int(manager._async_generation)
+	var stale := manager._async_stale(before)
+	var guard_released: bool = not manager._start_in_flight
+	host.free()
+	assert_eq(after, before + 1,
+		"reset_for_force_restart must bump the async generation")
+	assert_true(stale, "the in-flight walk must read as stale after the reset")
+	assert_true(guard_released,
+		"the follow-up start_server must not be swallowed by the stale walk's guard")

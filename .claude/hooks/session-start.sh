@@ -61,9 +61,10 @@ else
   echo "[godot-ai session-start] reusing cached Godot at $GODOT_BIN"
 fi
 
-# Drop superseded cache entries: the pre-#672 unversioned path and any
-# godot-<other-version> binaries left behind by earlier pins.
-find "$GODOT_CACHE" -maxdepth 1 -type f \( -name 'godot' -o -name 'godot-*' \) \
+# Drop superseded cache entries: the pre-#672 unversioned path, any
+# godot-<other-version> binaries left behind by earlier pins, and a
+# leftover godot.zip from an interrupted download.
+find "$GODOT_CACHE" -maxdepth 1 -type f \( -name 'godot' -o -name 'godot-*' -o -name 'godot.zip' \) \
   ! -name "godot-${GODOT_VERSION}" -delete 2>/dev/null || true
 
 mkdir -p "$HOME/.local/bin"

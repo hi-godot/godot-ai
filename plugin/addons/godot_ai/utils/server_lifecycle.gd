@@ -127,6 +127,20 @@ func _async_stale(generation: int) -> bool:
 	return generation != _async_generation
 
 
+## Cancel any in-flight async startup walk AND release the re-entrancy
+## guard so the very next `start_server()` call walks fresh (#682 review).
+## Every one-shot kill-and-restart path must call this before its
+## follow-up start: without the generation bump the suspended walk
+## resumes against post-kill reality (stale live-status snapshots), and
+## without releasing the guard the follow-up start is silently swallowed.
+## The cancelled walk unwinds via its post-await staleness checks and
+## must NOT clear the guard itself — a newer walk may already own it
+## (see the generation check in `start_server`).
+func _invalidate_async_startup() -> void:
+	_async_generation += 1
+	_start_in_flight = false
+
+
 # ---- Public state accessors --------------------------------------------
 
 func get_state() -> int:
@@ -495,8 +509,18 @@ func start_server() -> void:
 	if _start_in_flight:
 		return
 	_start_in_flight = true
-	await _start_server_impl(_async_generation)
-	_start_in_flight = false
+	var gen := _async_generation
+	await _start_server_impl(gen)
+	## Only release the guard if this walk is still the current one — a
+	## cancelled (stale) walk unwinding here must not clobber the guard a
+	## newer walk armed after `_invalidate_async_startup`.
+	if gen == _async_generation:
+		_start_in_flight = false
+		## The walk suspends now (#678), so the caller-side trace phase
+		## stamps the first suspension; stamp completion here to keep the
+		## old contended-port cost visible in startup traces (#682 review).
+		if is_instance_valid(_host):
+			_host._startup_trace_phase("server_start_walk_complete")
 
 
 func _start_server_impl(async_gen: int) -> void:
@@ -515,8 +539,11 @@ func _start_server_impl(async_gen: int) -> void:
 	var current_version := _expected_server_version()
 	_server_expected_version = current_version
 
+	## The worker closures re-check the host: the plugin can be freed while
+	## a bounded shell probe is still running, and the generation check only
+	## protects state after resume, not calls inside the task (#682 review).
 	var port_in_use := bool(await _run_blocking(func() -> Variant:
-		return _host._is_port_in_use(port)
+		return is_instance_valid(_host) and _host._is_port_in_use(port)
 	))
 	if _async_stale(async_gen):
 		return
@@ -532,6 +559,8 @@ func _start_server_impl(async_gen: int) -> void:
 		))
 		ws_port = int(_host._resolved_ws_port)
 		var live: Dictionary = await _run_blocking(func() -> Variant:
+			if not is_instance_valid(_host):
+				return {}
 			return _host._probe_live_server_status_for_port(port)
 		)
 		if _async_stale(async_gen):
@@ -573,6 +602,8 @@ func _start_server_impl(async_gen: int) -> void:
 		if not recovered:
 			_host._server_started_this_session = true
 			var post_recovery_live: Dictionary = await _run_blocking(func() -> Variant:
+				if not is_instance_valid(_host):
+					return {}
 				return _host._probe_live_server_status_for_port(port)
 			)
 			if _async_stale(async_gen):
@@ -882,6 +913,8 @@ func recover_strong_port_occupant(port: int, wait_s: float, pre_kill_live: Dicti
 	var async_gen := _async_generation
 	var record: Dictionary = _host._read_managed_server_record()
 	var proof: Dictionary = await _run_blocking(func() -> Variant:
+		if not is_instance_valid(_host):
+			return {"proof": "", "pids": []}
 		return _host._evaluate_strong_port_occupant_proof(port, pre_kill_live, record)
 	)
 	if _async_stale(async_gen):
@@ -893,6 +926,8 @@ func recover_strong_port_occupant(port: int, wait_s: float, pre_kill_live: Dicti
 
 	print("MCP | strong proof: %s" % str(proof.get("proof", "")))
 	var freed := bool(await _run_blocking(func() -> Variant:
+		if not is_instance_valid(_host):
+			return false
 		var killed: Array = _host._kill_processes_and_windows_spawn_children(targets)
 		if not killed.is_empty():
 			print("MCP | killed pids %s on port %d" % [str(killed), port])
@@ -912,7 +947,7 @@ func recover_strong_port_occupant(port: int, wait_s: float, pre_kill_live: Dicti
 func stop_server() -> void:
 	## Cancel any in-flight async startup (#678): a suspended start_server
 	## resuming after teardown must not resurrect state or spawn a server.
-	_async_generation += 1
+	_invalidate_async_startup()
 	_host._stop_server_watch()
 	if int(_server_pid) <= 0:
 		transition_state(McpServerStateScript.STOPPED)
@@ -1005,6 +1040,11 @@ func recover_incompatible_server() -> bool:
 		return false
 	print("MCP | proof: %s" % str(proof.get("proof", "")))
 
+	## Committed to the kill: cancel any suspended contended-port walk so
+	## it can't resume against pre-kill data, and release the guard so the
+	## respawn at the bottom isn't silently swallowed (#682 review).
+	_invalidate_async_startup()
+
 	## Move into STOPPING so the post-kill respawn passes the
 	## first-writer-wins guards.
 	transition_state(McpServerStateScript.STOPPING)
@@ -1052,6 +1092,10 @@ func has_managed_server() -> bool:
 ## the pid-file, and resets the spawn guard so the follow-up
 ## `start_server()` walks the spawn arm.
 func reset_for_force_restart() -> void:
+	## The user's explicit restart takes over: cancel any suspended
+	## contended-port walk and release the re-entrancy guard so the
+	## follow-up start isn't silently swallowed (#682 review).
+	_invalidate_async_startup()
 	_host._clear_managed_server_record()
 	_host._clear_pid_file()
 	_host._server_started_this_session = false

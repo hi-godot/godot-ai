@@ -216,7 +216,13 @@ def port_in_use(port: int) -> bool:
     Windows where SO_REUSEADDR means "hijack the active listener". Only
     EADDRINUSE counts as occupied — any other bind failure (EACCES, winnat
     exclusion ranges) is not a drainable occupant, and the plant will surface
-    its own honest failure for those."""
+    its own honest failure for those.
+
+    Known Windows residual: without SO_REUSEADDR, server-side TIME_WAIT
+    sockets (connections the previous run's server closed first) also
+    bind-fail EADDRINUSE, and Windows' TIME_WAIT default (~4 min) exceeds
+    the 150s drain timeout. If the Windows smoke ever flakes on
+    "port(s) still occupied" with occupant "unknown", look here first."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         if os.name != "nt":
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
