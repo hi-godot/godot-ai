@@ -186,6 +186,7 @@ Or in cmd: `mklink /J test_project\addons\godot_ai ..\..\plugin\addons\godot_ai`
 The plugin manages the server process:
 - On startup, plugin checks if port 8000 is already in use. If yes, uses existing server. If no, spawns `.venv/bin/python -m godot_ai --transport streamable-http --port 8000`.
 - The plugin prefers the local `.venv` over system-installed `godot-ai` so dev checkouts always use source code.
+- **Adoption transfers end-of-life, not just management (#669)**: when the plugin adopts an externally started server (CI's `script/ci-start-server`, a hand-started dev server without `--owner-pid`), a clean editor exit tears that server down via `_exit_tree → stop_server` — the same as for a plugin-spawned server. A "keep one server running, restart the editor around it" dev loop therefore loses the server on the first editor exit (and the next editor spawns a *managed* server, silently degrading a `--reload` workflow). To keep a long-lived `--reload` server across editor restarts, run it on a non-default port the plugin won't adopt, or restart it after each editor exit.
 - In `--headless` / headless-display launches, the plugin returns early and does not start/adopt the server, open a WebSocket, add the dock, attach loggers, register the debugger plugin, instantiate handlers, or write the game-helper autoload. Set `GODOT_AI_ALLOW_HEADLESS=1` only for intentional headless MCP sessions such as CI handler tests.
 
 For Python auto-reload during dev (no need to touch Godot):

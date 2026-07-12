@@ -148,7 +148,12 @@ def main(argv: Sequence[str] | None = None) -> None:
             "server self-terminates if that editor dies (crash / hard-kill with "
             "no clean stop_server) and no other editor has adopted it, so a "
             "detached server can't orphan onto the port. Omitted for externally "
-            "managed servers (CI, manual --reload)."
+            "managed servers (CI, manual --reload). Note: omitting it does NOT "
+            "exempt the server from editor lifecycle teardown — an editor that "
+            "adopts this server owns its end-of-life and will stop it on clean "
+            "editor exit (see #669). To keep a long-lived dev server across "
+            "editor restarts, run it on a non-default port the plugin won't "
+            "adopt."
         ),
     )
     parser.add_argument(

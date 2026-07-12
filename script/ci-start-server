@@ -2,6 +2,12 @@
 # Start the MCP server and wait for it to be ready.
 # Usage: ci-start-server [python-command]
 # Default python command: python
+#
+# Adoption-teardown contract (#669): a Godot editor that finds this server on
+# port 8000 ADOPTS it — and the adopter owns teardown, so a clean editor exit
+# stops this server too. That's fine in CI (editor and server die together at
+# job end), but don't reuse this script for a long-lived local dev server you
+# expect to survive editor restarts.
 set -euo pipefail
 source "$(dirname "$0")/_ci_env.sh"
 
