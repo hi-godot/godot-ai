@@ -11,9 +11,12 @@ HEADERS=(-H "Content-Type: application/json" -H "Accept: application/json, text/
 # Wait for Godot plugin to connect (session_manage(op="list") returns count > 0)
 echo "Waiting for Godot plugin to connect..."
 for i in $(seq 1 60); do
+  # `|| true` neutralizes the pipeline status under `set -euo pipefail`:
+  # a down server (curl exit 7) or a missing header (grep exit 1) must fall
+  # through to the empty-SESSION_ID retry below, not abort the script (#668).
   SESSION_ID=$(curl -si "$SERVER_URL" -X POST "${HEADERS[@]}" \
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"1.0"}}}' \
-    2>&1 | grep -i 'mcp-session-id' | tr -d '\r' | awk '{print $2}')
+    2>&1 | grep -i 'mcp-session-id' | tr -d '\r' | awk '{print $2}' || true)
 
   if [ -z "$SESSION_ID" ]; then
     sleep 2
@@ -22,11 +25,11 @@ for i in $(seq 1 60); do
 
   curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
     -H "Mcp-Session-Id: $SESSION_ID" \
-    -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' > /dev/null
+    -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' > /dev/null || true
 
   SESSIONS=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
     -H "Mcp-Session-Id: $SESSION_ID" \
-    -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session_manage","arguments":{"op":"list"}}}')
+    -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session_manage","arguments":{"op":"list"}}}' || true)
 
   if echo "$SESSIONS" | grep -q '"count":'; then
     COUNT=$(echo "$SESSIONS" | python3 -c "
