@@ -84,7 +84,11 @@ if curl -sf -o /dev/null -X POST \
   echo "[godot-ai session-start] MCP server already running on :8000"
 else
   echo "[godot-ai session-start] launching headless Godot editor (plugin auto-spawns MCP server on :8000)..."
-  nohup "$GODOT_BIN" --headless --path test_project --editor \
+  # GODOT_AI_ALLOW_HEADLESS=1 is required: without it the plugin disables
+  # itself in --headless launches (plugin.gd::_mcp_disabled_for_headless)
+  # and the promised MCP server never spawns. A web session driving MCP
+  # tools is exactly the intentional-headless case AGENTS.md carves out.
+  nohup env GODOT_AI_ALLOW_HEADLESS=1 "$GODOT_BIN" --headless --path test_project --editor \
     > /tmp/godot-editor.log 2>&1 &
   disown
 fi
