@@ -61,3 +61,35 @@ def test_godot_ai_middleware_registered_in_documented_order() -> None:
         "update EXPECTED_ORDER here in lockstep — the order is load-bearing "
         "(see the rationale block in server.py)."
     )
+
+
+def test_every_godot_ai_middleware_is_covered_by_the_order_lock() -> None:
+    """A new godot_ai middleware must be added to EXPECTED_ORDER.
+
+    The order test above filters ``mcp.middleware`` down to the classes in
+    ``EXPECTED_ORDER``, so a *fifth* godot_ai middleware registered at any
+    position would be invisible to it — the order lock would keep passing
+    while an undocumented middleware sits in the (load-bearing) chain.
+    This test closes that hole: anything registered from the godot_ai
+    package must appear in EXPECTED_ORDER, forcing the docstring and the
+    lock to be updated in lockstep with the registration.
+    """
+    mcp = create_server()
+    ours = {
+        type(m)
+        for m in mcp.middleware
+        if type(m).__module__.startswith("godot_ai")
+    }
+    uncovered = ours - set(EXPECTED_ORDER)
+    assert not uncovered, (
+        "godot_ai middleware registered but missing from EXPECTED_ORDER: "
+        f"{sorted(c.__name__ for c in uncovered)}. Decide its position "
+        "(read the rationale docstring in server.py), then update the "
+        "docstring and EXPECTED_ORDER together."
+    )
+    ## And the lock must not name classes that are no longer registered.
+    missing = set(EXPECTED_ORDER) - ours
+    assert not missing, (
+        "EXPECTED_ORDER names middleware that is no longer registered: "
+        f"{sorted(c.__name__ for c in missing)}."
+    )

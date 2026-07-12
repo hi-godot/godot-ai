@@ -22,6 +22,14 @@ const CORE_TOOLS := [
 	"session_activate",
 ]
 
+## Non-core tools that live in a NON-excludable domain (only `session`
+## today), so they appear in no DOMAINS row yet are always registered.
+## Counted alongside CORE_TOOLS so the dock's totals match the real
+## server surface.
+const ALWAYS_ON_TOOLS := [
+	"session_manage",
+]
+
 ## Ordered list of user-toggleable domains. Each entry:
 ##   id:    matches the name passed to `--exclude-domains`
 ##   label: human-friendly display (same as id for now, kept separate so
@@ -59,7 +67,7 @@ const DOMAINS := [
 ## Total tool count when no domains are excluded. Used for the "Enabled: N / M"
 ## readout in the Tools tab without looping the catalog on every repaint.
 static func total_tool_count() -> int:
-	var n := CORE_TOOLS.size()
+	var n := CORE_TOOLS.size() + ALWAYS_ON_TOOLS.size()
 	for d in DOMAINS:
 		n += int(d["count"])
 	return n
@@ -67,7 +75,7 @@ static func total_tool_count() -> int:
 
 ## Tool count remaining after excluding the given set of domain ids.
 static func enabled_tool_count(excluded: PackedStringArray) -> int:
-	var n := CORE_TOOLS.size()
+	var n := CORE_TOOLS.size() + ALWAYS_ON_TOOLS.size()
 	for d in DOMAINS:
 		if excluded.find(d["id"]) == -1:
 			n += int(d["count"])

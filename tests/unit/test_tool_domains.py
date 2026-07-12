@@ -87,8 +87,9 @@ def test_parse_rejects_unknown_names():
 
 
 def test_parse_rejects_core_only_session_domain():
-    ## `session` is all-core — excluding it is a no-op. Hard-fail so users
-    ## don't assume they trimmed something they didn't.
+    ## `session` hosts core session_activate plus the session_manage
+    ## rollup that routes multi-editor workflows — excluding it is
+    ## rejected so session routing can't be dropped by accident.
     with pytest.raises(ValueError, match="session"):
         parse_exclude_list("session")
 
@@ -107,9 +108,10 @@ def test_excludable_domains_excludes_session_only():
 
 
 def test_create_server_full_registration_matches_domain_count():
-    ## Sanity: total tools equal core (5) + sum of non-core-per-domain.
-    ## The exact number (125) will drift as tools are added; the relationship
-    ## between exclusion and tool count is what we pin.
+    ## Sanity: every core tool is present in a full registration. The exact
+    ## total will drift as tools are added; the relationship between
+    ## exclusion and tool count is what we pin (and the catalog-equality
+    ## test below pins the full surface against tool_catalog.gd).
     full = set(_list_tools(create_server()))
     assert set(CORE_TOOLS) <= full
 
@@ -211,3 +213,37 @@ def test_gdscript_catalog_matches_python_registration():
             f"  Actually registered: {expected}\n"
             f"  Fix: update tool_catalog.gd"
         )
+
+
+def _parse_gd_always_on() -> list[str]:
+    text = _CATALOG_GD.read_text(encoding="utf-8")
+    match = re.search(r"const ALWAYS_ON_TOOLS := \[(.*?)\]", text, re.DOTALL)
+    assert match, "ALWAYS_ON_TOOLS block not found in tool_catalog.gd"
+    return re.findall(r'"([^"]+)"', match.group(1))
+
+
+def test_gdscript_catalog_covers_the_entire_tool_surface():
+    """CORE + ALWAYS_ON + per-domain lists must equal full registration.
+
+    The per-domain comparison above walks EXCLUDABLE_DOMAINS only, so a
+    non-core tool registered in a NON-excludable domain (session_manage
+    was the first) is structurally invisible to it: absent from every
+    catalog row, never diffed, and the dock silently undercounts. This
+    equality check makes any such tool fail loudly until it's added to
+    ALWAYS_ON_TOOLS (or its domain becomes excludable).
+    """
+    gd_core, gd_domains = _parse_gd_catalog()
+    always_on = _parse_gd_always_on()
+    catalog_union = set(gd_core) | set(always_on)
+    for tools in gd_domains.values():
+        catalog_union |= set(tools)
+    full = set(_list_tools(create_server()))
+    missing = full - catalog_union
+    extra = catalog_union - full
+    assert not missing and not extra, (
+        "tool_catalog.gd does not cover the registered tool surface.\n"
+        f"  registered but absent from the catalog: {sorted(missing)}\n"
+        f"  in the catalog but not registered: {sorted(extra)}\n"
+        "Fix: update CORE_TOOLS / ALWAYS_ON_TOOLS / DOMAINS in "
+        "tool_catalog.gd."
+    )
