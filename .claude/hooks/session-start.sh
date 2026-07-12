@@ -24,9 +24,14 @@ fi
 
 cd "$CLAUDE_PROJECT_DIR"
 
-GODOT_VERSION="4.6.2"
+# Keep in step with ci.yml (godot-version: "4.7.0" — the chickensoft action
+# wants 3-part semver; the Godot release tag/asset uses the 2-part form) and
+# test_project/project.godot (config/features "4.7"). See #672.
+GODOT_VERSION="4.7"
 GODOT_CACHE="$HOME/.cache/godot-ai"
-GODOT_BIN="$GODOT_CACHE/godot"
+# Version-keyed binary path: bumping GODOT_VERSION invalidates the cache, so
+# warm containers can't keep serving a stale engine after a version bump.
+GODOT_BIN="$GODOT_CACHE/godot-${GODOT_VERSION}"
 GODOT_ZIP="Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
 GODOT_EXE="Godot_v${GODOT_VERSION}-stable_linux.x86_64"
 GODOT_URL="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/${GODOT_ZIP}"
@@ -37,7 +42,17 @@ script/setup-dev
 if [ ! -x "$GODOT_BIN" ]; then
   echo "[godot-ai session-start] downloading Godot ${GODOT_VERSION}..."
   mkdir -p "$GODOT_CACHE"
-  curl -fsSL -o "$GODOT_CACHE/godot.zip" "$GODOT_URL"
+  if ! curl -fsSL -o "$GODOT_CACHE/godot.zip" "$GODOT_URL"; then
+    cat >&2 <<EOF
+[godot-ai session-start] ERROR: could not download Godot ${GODOT_VERSION} from
+  $GODOT_URL
+If this is a 403, the session's environment network policy is blocking
+github.com/godotengine release downloads (out-of-scope repo). Allow that
+domain/repo in the environment's network policy, or pre-seed the binary at
+$GODOT_BIN. Godot-dependent MCP tools will be unavailable this session.
+EOF
+    exit 1
+  fi
   unzip -q -o "$GODOT_CACHE/godot.zip" -d "$GODOT_CACHE"
   mv "$GODOT_CACHE/${GODOT_EXE}" "$GODOT_BIN"
   chmod +x "$GODOT_BIN"
@@ -45,6 +60,11 @@ if [ ! -x "$GODOT_BIN" ]; then
 else
   echo "[godot-ai session-start] reusing cached Godot at $GODOT_BIN"
 fi
+
+# Drop superseded cache entries: the pre-#672 unversioned path and any
+# godot-<other-version> binaries left behind by earlier pins.
+find "$GODOT_CACHE" -maxdepth 1 -type f \( -name 'godot' -o -name 'godot-*' \) \
+  ! -name "godot-${GODOT_VERSION}" -delete 2>/dev/null || true
 
 mkdir -p "$HOME/.local/bin"
 ln -sf "$GODOT_BIN" "$HOME/.local/bin/godot"
