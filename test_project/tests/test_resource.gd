@@ -909,3 +909,16 @@ func test_apply_resource_properties_typed_array_rejects_non_list() -> void:
 	assert_is_error(err, ErrorCodes.WRONG_TYPE)
 	assert_contains(err.error.message, "Array[int]", "the error must name the typed slot")
 	assert_eq((res.get("items") as Array).size(), 0)
+
+
+func test_apply_resource_properties_typed_array_null_element_prefixes_once() -> void:
+	## PR #682 review: the null-element error used to stamp the property
+	## context twice ("Property 'items': Property 'items' element 0: ...").
+	var res := _make_typed_array_resource()
+	var err: Variant = ResourceHandler._apply_resource_properties(res, {"items": [null]})
+	assert_is_error(err, ErrorCodes.WRONG_TYPE)
+	var msg := str(err.error.message)
+	assert_contains(msg, "element 0", "the error must name the offending element index")
+	assert_contains(msg, "cannot store null", "the error must name the null cause")
+	assert_eq(msg.count("Property 'items'"), 1,
+		"the property context must be stamped exactly once")

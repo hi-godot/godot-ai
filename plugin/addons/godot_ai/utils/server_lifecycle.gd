@@ -101,20 +101,26 @@ func _init(host) -> void:
 ## Run `work` off the main thread and suspend until it completes (#678).
 ## Falls back to inline execution when `defer_blocking_work` is off, or
 ## when no SceneTree is available to pump frames against.
+##
+## Uses a dedicated Thread (the dock's #238/#239 worker pattern) rather
+## than WorkerThreadPool: `wait_to_finish()` hands the return value back
+## without a shared mutable container, and this plugin has already seen
+## WorkerThreadPool tasks SIGABRT under concurrency (see the notes in
+## script_handler.gd / filesystem_handler.gd). `wait_to_finish` after
+## `is_alive()` goes false joins an already-dead thread, so it never
+## blocks the main thread.
 func _run_blocking(work: Callable) -> Variant:
 	if not defer_blocking_work:
 		return work.call()
 	var tree := Engine.get_main_loop()
 	if not (tree is SceneTree):
 		return work.call()
-	var result: Array = [null]
-	var task_id := WorkerThreadPool.add_task(func() -> void:
-		result[0] = work.call()
-	)
-	while not WorkerThreadPool.is_task_completed(task_id):
+	var thread := Thread.new()
+	if thread.start(work) != OK:
+		return work.call()
+	while thread.is_alive():
 		await (tree as SceneTree).process_frame
-	WorkerThreadPool.wait_for_task_completion(task_id)
-	return result[0]
+	return thread.wait_to_finish()
 
 
 func _async_stale(generation: int) -> bool:

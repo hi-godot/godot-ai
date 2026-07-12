@@ -939,11 +939,14 @@ static func _coerce_typed_array(value: Variant, slot_value: Array, prefix: Strin
 		if elem_err != null:
 			return elem_err
 		if coerced == null:
+			## Prefix with `elem_prefix` (which already folds in `prefix`),
+			## not `prefix` again — the latter double-stamped the property
+			## context (PR #682 review).
 			var null_err := ErrorCodes.make(
 				ErrorCodes.WRONG_TYPE,
-				"%s: cannot store null in Array[%s]" % [elem_prefix, elem_label],
+				"cannot store null in Array[%s]" % elem_label,
 			)
-			return ErrorCodes.prefix_message(null_err, prefix)
+			return ErrorCodes.prefix_message(null_err, elem_prefix)
 		staging.append(coerced)
 	var out := slot_value.duplicate()
 	out.clear()
