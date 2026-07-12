@@ -31,16 +31,27 @@ and test_dock.gd mock all OS interactions, and `script/manual-orphan-test`
 exercises the real kill path but is a manual operator helper. This script runs
 the real per-OS classification + kill / cmdline-brand machinery in CI on every
 OS, so a regression is caught before merge.
+
+Windows bind nuance (#679): both planted occupants bind `127.0.0.1`
+EXPLICITLY, and that is load-bearing. Windows (no `SO_EXCLUSIVEADDRUSE` on
+either side) allows a specific-address `127.0.0.1` bind to coexist with a
+foreign process's wildcard `0.0.0.0` bind on the same port — so a squatter
+bound to the wildcard address does NOT produce a conflict: the plugin's server
+binds loopback alongside it and startup proceeds normally. Only a loopback
+squatter reproduces the conflict path on Windows. Keep the planted listeners
+on `127.0.0.1`, and bind loopback explicitly in any manual repro too.
 """
 
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import platform
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -123,7 +134,9 @@ class FastBindServer(ThreadingHTTPServer):
 
 
 # Bind FIRST so the "listening" print isn't a lie — the smoke polls
-# /godot-ai/status immediately after seeing it.
+# /godot-ai/status immediately after seeing it. Loopback EXPLICITLY, not
+# the wildcard address: on Windows a 0.0.0.0 bind coexists with the
+# plugin's 127.0.0.1 bind and no conflict ever materializes (#679).
 server = FastBindServer(("127.0.0.1", args.port), H)
 print(f"stale-sim pid={os.getpid()} listening on :{args.port}", flush=True)
 server.serve_forever()
@@ -172,7 +185,9 @@ class FastBindServer(ThreadingHTTPServer):
 
 
 # Bind FIRST so the "listening" print isn't a lie — the smoke polls the port
-# immediately after seeing it.
+# immediately after seeing it. Loopback EXPLICITLY, not the wildcard
+# address: on Windows a 0.0.0.0 bind coexists with the plugin's 127.0.0.1
+# bind and the conflict path is never exercised (#679).
 server = FastBindServer(("127.0.0.1", args.port), H)
 print(f"foreign-sim pid={os.getpid()} listening on :{args.port}", flush=True)
 server.serve_forever()
@@ -186,6 +201,67 @@ KILL_GUARD_WINDOW = 8.0
 
 class SmokeError(RuntimeError):
     pass
+
+
+def port_in_use(port: int) -> bool:
+    """True when something is bound on 127.0.0.1:`port`. Only a prompt
+    connection-refused proves the port free — a timeout or any other error
+    (e.g. a listener with a full backlog) conservatively counts as in use."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1.0)
+        try:
+            err = s.connect_ex(("127.0.0.1", port))
+        except OSError:
+            return True
+    if err == 0:
+        return True
+    return err != errno.ECONNREFUSED
+
+
+def drain_leftover_servers(timeout_s: float = 150.0) -> None:
+    """Wait until the HTTP and WS ports are actually free before planting the
+    sim/listener (#671). A run started right after a previous run can race that
+    run's plugin-spawned server: it lingers in its orphan-reap window (owner-pid
+    poll ~5s, idle grace up to 120s) and, if still bound when our editor starts,
+    gets *adopted* as a live compatible godot-ai server — so the planted
+    occupant is never diagnosed and the mode's assertions can't match.
+
+    We only wait — never kill. The leftover is marked plugin-spawned with a
+    dead owner, so its own reaper takes it down; a genuinely foreign occupant
+    that never frees the port is a real environment problem the operator has to
+    resolve, and gets a clear failure here instead of a confusing one later."""
+    deadline = time.monotonic() + timeout_s
+    reported = False
+    while time.monotonic() < deadline:
+        busy = [p for p in (PORT, WS_PORT) if port_in_use(p)]
+        if not busy:
+            if reported:
+                print("drain: ports are free, continuing")
+            return
+        if not reported:
+            reported = True
+            occupant = "unknown"
+            try:
+                with urllib.request.urlopen(STATUS_URL, timeout=2) as r:
+                    payload = json.loads(r.read().decode())
+                    occupant = (
+                        f"godot-ai v{extract_version(payload)} "
+                        f"(likely a previous run's server in its reap window)"
+                    )
+            except (urllib.error.URLError, ConnectionError, TimeoutError, ValueError):
+                pass
+            print(
+                f"drain: port(s) {busy} still occupied by {occupant}; "
+                f"waiting up to {timeout_s:.0f}s for them to free..."
+            )
+        time.sleep(1.0)
+    busy = [p for p in (PORT, WS_PORT) if port_in_use(p)]
+    if busy:
+        raise SmokeError(
+            f"port(s) {busy} still occupied after {timeout_s:.0f}s pre-plant "
+            f"drain; refusing to run — the smoke would race the occupant "
+            f"instead of testing the planted one (#671)"
+        )
 
 
 def discover_user_dir(godot: str) -> Path:
@@ -690,6 +766,10 @@ def main() -> int:
     # the plugin false ownership proof over a port it does not actually own.
     if pidfile.exists():
         pidfile.unlink()
+
+    # Pre-plant drain: back-to-back runs (stale then foreign) can otherwise
+    # cross-contaminate via the previous run's server reap window (#671).
+    drain_leftover_servers()
 
     if args.mode == "foreign":
         return run_foreign_smoke(godot, plugin_version, user_dir, pidfile, log_dir, args.timeout)
