@@ -203,28 +203,32 @@ class SmokeError(RuntimeError):
     pass
 
 
-# connect_ex speaks WSA on Windows: a free port refuses with
-# WSAECONNREFUSED (10061), not the POSIX ECONNREFUSED value — comparing
-# against errno.ECONNREFUSED alone made every free port read as occupied
-# and stalled the pre-plant drain to its timeout on Windows CI.
-_REFUSED_ERRNOS = frozenset(
-    {errno.ECONNREFUSED, getattr(errno, "WSAECONNREFUSED", 10061)}
-)
-
-
 def port_in_use(port: int) -> bool:
-    """True when something is bound on 127.0.0.1:`port`. Only a prompt
-    connection-refused proves the port free — a timeout or any other error
-    (e.g. a listener with a full backlog) conservatively counts as in use."""
+    """True when something is bound on 127.0.0.1:`port`, probed by BINDING —
+    the exact operation the planted sim/listener will perform. Connect-based
+    probing is unusable here: GitHub's Windows runners silently drop SYNs to
+    closed loopback ports (no RST), so a connect probe can never distinguish
+    free from occupied and the drain stalls to its timeout (#682 CI).
+
+    Mirrors `preflight_check_port` in src/godot_ai/__init__.py: SO_REUSEADDR
+    on POSIX so a just-freed port's TIME_WAIT connections don't read as an
+    occupant (the sim's HTTPServer sets allow_reuse_address too), skipped on
+    Windows where SO_REUSEADDR means "hijack the active listener". Only
+    EADDRINUSE counts as occupied — any other bind failure (EACCES, winnat
+    exclusion ranges) is not a drainable occupant, and the plant will surface
+    its own honest failure for those."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(1.0)
+        if os.name != "nt":
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            err = s.connect_ex(("127.0.0.1", port))
-        except OSError:
-            return True
-    if err == 0:
-        return True
-    return err not in _REFUSED_ERRNOS
+            s.bind(("127.0.0.1", port))
+        except OSError as exc:
+            return (
+                exc.errno == errno.EADDRINUSE
+                or exc.errno == 10048
+                or getattr(exc, "winerror", None) == 10048
+            )
+    return False
 
 
 def drain_leftover_servers(timeout_s: float = 150.0) -> None:
