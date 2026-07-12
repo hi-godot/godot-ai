@@ -79,9 +79,10 @@ var _http_request: HTTPRequest
 var _download_request: HTTPRequest
 var _verify_request: HTTPRequest
 var _latest_download_url: String = ""
-## URL of the `godot-ai-plugin.zip.sha256` sidecar asset, when the release
-## ships one. Used to verify the downloaded archive's integrity before extract
-## (#523). Empty for older releases published without a checksum sidecar.
+## URL of the `godot-ai-plugin.zip.sha256` sidecar asset. Used to verify the
+## downloaded archive's integrity before extract (#523). Verification is
+## mandatory (#599): when a release ships no sidecar this stays empty and
+## `_verify_then_install` refuses the install.
 var _latest_checksum_url: String = ""
 
 ## Set for the duration of `_install_zip` — extract-overwrite of plugin
@@ -403,19 +404,18 @@ func _on_download_completed(
 ## Gate the extract on a SHA-256 match against the release's checksum sidecar.
 ## TLS + host pinning already constrain where the bytes came from; this
 ## verifies the bytes themselves so a tampered asset (or a compromised CDN
-## object) can't be installed over live plugin code. Releases published
-## without a `.sha256` sidecar (older versions) install without this check —
-## verify-if-present rather than hard-fail, so existing releases stay
-## updatable; the host + repo-path pin still applies to the download itself.
-## Removing this legacy bypass (making verification mandatory) is tracked in
-## #599 and is gated on all supported update targets publishing `.sha256`
-## sidecars — a release-policy question, not a code change here.
+## object) can't be installed over live plugin code. Verification is
+## MANDATORY (#599): a release published without a `.sha256` sidecar —
+## mistake or tamper — refuses to install rather than silently downgrading
+## to an unverified install. This is safe because self-update only ever
+## verifies the *next* download, and every release since #523 publishes the
+## sidecar (release.yml), so no supported update target lacks one.
 func _verify_then_install() -> void:
-	## Legacy bypass — see #599 before removing.
 	if _latest_checksum_url.is_empty():
-		print("MCP | no checksum published for this release; skipping integrity verification")
-		install_state_changed.emit({"button_text": "Installing..."})
-		_install_zip()
+		_fail_verification(
+			"release published no godot-ai-plugin.zip.sha256 sidecar; "
+			+ "refusing unverified install (#599)"
+		)
 		return
 
 	## A present-but-untrusted checksum URL is a tamper signal, not a
