@@ -614,3 +614,23 @@ func test_force_restart_reset_invalidates_async_generation_and_guard() -> void:
 	assert_true(stale, "the in-flight walk must read as stale after the reset")
 	assert_true(guard_released,
 		"the follow-up start_server must not be swallowed by the stale walk's guard")
+
+
+func test_invalidate_async_startup_joins_in_flight_worker() -> void:
+	## macOS reload-churn wedge (post-#682 main CI): _exit_tree could free
+	## the plugin while a walk's worker thread was still executing one of
+	## its methods — use-after-free on the worker. Invalidation (run by
+	## stop_server before the plugin frees) must JOIN the worker first.
+	var host := _ManagerHostStub.new()
+	var manager := McpServerLifecycleManagerScript.new(host)
+	var thread := Thread.new()
+	thread.start(func() -> void: OS.delay_msec(150))
+	manager._active_blocking_thread = thread
+	manager._invalidate_async_startup()
+	var alive_after := thread.is_alive()
+	var slot_cleared: bool = manager._active_blocking_thread == null
+	host.free()
+	assert_false(alive_after,
+		"invalidation must join the in-flight worker before returning")
+	assert_true(slot_cleared,
+		"invalidation must take ownership of the thread slot so the stale walk cannot double-join")

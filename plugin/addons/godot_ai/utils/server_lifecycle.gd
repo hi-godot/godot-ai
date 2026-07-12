@@ -98,6 +98,15 @@ func _init(host) -> void:
 	_host = host
 
 
+## The worker thread of the walk's current `_run_blocking` call, while it
+## runs. `_invalidate_async_startup` JOINS it (bounded by the blocking
+## op's own timeout) so no worker can still be executing a plugin method
+## when `_exit_tree` frees the plugin — a mid-call free is use-after-free
+## on the worker, which wedged the editor on macOS during rapid reload
+## churn (main CI, post-#682). Null when no blocking work is in flight.
+var _active_blocking_thread: Thread = null
+
+
 ## Run `work` off the main thread and suspend until it completes (#678).
 ## Falls back to inline execution when `defer_blocking_work` is off, or
 ## when no SceneTree is available to pump frames against.
@@ -109,6 +118,12 @@ func _init(host) -> void:
 ## script_handler.gd / filesystem_handler.gd). `wait_to_finish` after
 ## `is_alive()` goes false joins an already-dead thread, so it never
 ## blocks the main thread.
+##
+## Returns null (without joining) when `_invalidate_async_startup` took
+## ownership of the thread mid-flight — the walk is stale at that point
+## and must bail at its next staleness check, so callers assign the
+## result to an untyped local BEFORE the staleness check (a typed
+## assignment would trip on the null first).
 func _run_blocking(work: Callable) -> Variant:
 	if not defer_blocking_work:
 		return work.call()
@@ -118,8 +133,17 @@ func _run_blocking(work: Callable) -> Variant:
 	var thread := Thread.new()
 	if thread.start(work) != OK:
 		return work.call()
+	_active_blocking_thread = thread
 	while thread.is_alive():
 		await (tree as SceneTree).process_frame
+		if _active_blocking_thread != thread:
+			## Teardown/invalidation already joined this thread; the
+			## result belongs to a cancelled walk. All resumes and joins
+			## happen on the main thread, so this check cannot race.
+			return null
+	if _active_blocking_thread != thread:
+		return null
+	_active_blocking_thread = null
 	return thread.wait_to_finish()
 
 
@@ -136,9 +160,19 @@ func _async_stale(generation: int) -> bool:
 ## The cancelled walk unwinds via its post-await staleness checks and
 ## must NOT clear the guard itself — a newer walk may already own it
 ## (see the generation check in `start_server`).
+##
+## Also JOINS the walk's in-flight worker thread (bounded by that op's
+## own timeout: lsof/netstat scrape, ≤800ms status probe, or kill +
+## port-drain wait). `stop_server` runs this from `_exit_tree`, so once
+## it returns no worker thread can still be executing a method of the
+## plugin that is about to be freed — the macOS reload-churn wedge.
 func _invalidate_async_startup() -> void:
 	_async_generation += 1
 	_start_in_flight = false
+	var thread := _active_blocking_thread
+	_active_blocking_thread = null
+	if thread != null:
+		thread.wait_to_finish()
 
 
 # ---- Public state accessors --------------------------------------------
@@ -516,11 +550,12 @@ func start_server() -> void:
 	## newer walk armed after `_invalidate_async_startup`.
 	if gen == _async_generation:
 		_start_in_flight = false
-		## The walk suspends now (#678), so the caller-side trace phase
-		## stamps the first suspension; stamp completion here to keep the
-		## old contended-port cost visible in startup traces (#682 review).
-		if is_instance_valid(_host):
-			_host._startup_trace_phase("server_start_walk_complete")
+		## Walk-completion continuation lives HERE — on the RefCounted
+		## manager, kept alive by its own suspended state — never on the
+		## plugin: resuming a coroutine of a freed Node errors out, and
+		## reload churn frees plugin instances while walks are suspended.
+		if is_instance_valid(_host) and _host.has_method("_finish_startup_trace_after_walk"):
+			_host._finish_startup_trace_after_walk()
 
 
 func _start_server_impl(async_gen: int) -> void:
@@ -558,13 +593,16 @@ func _start_server_impl(async_gen: int) -> void:
 			int(_host._resolve_ws_port())
 		))
 		ws_port = int(_host._resolved_ws_port)
-		var live: Dictionary = await _run_blocking(func() -> Variant:
+		## Untyped first: a cancelled walk gets null back (see _run_blocking)
+		## and must reach the staleness check before any typed cast.
+		var live_result: Variant = await _run_blocking(func() -> Variant:
 			if not is_instance_valid(_host):
 				return {}
 			return _host._probe_live_server_status_for_port(port)
 		)
 		if _async_stale(async_gen):
 			return
+		var live: Dictionary = live_result
 		var live_version := str(_host._verified_status_version(live))
 		var live_ws_port := int(_host._verified_status_ws_port(live))
 		var compatibility: Dictionary = _server_status_compatibility(
@@ -601,13 +639,14 @@ func _start_server_impl(async_gen: int) -> void:
 			return
 		if not recovered:
 			_host._server_started_this_session = true
-			var post_recovery_live: Dictionary = await _run_blocking(func() -> Variant:
+			var post_recovery_result: Variant = await _run_blocking(func() -> Variant:
 				if not is_instance_valid(_host):
 					return {}
 				return _host._probe_live_server_status_for_port(port)
 			)
 			if _async_stale(async_gen):
 				return
+			var post_recovery_live: Dictionary = post_recovery_result
 			_set_incompatible_server(post_recovery_live, current_version, port)
 			_startup_path = McpStartupPathScript.INCOMPATIBLE
 			push_warning(str(_server_status_message))
@@ -621,11 +660,12 @@ func _start_server_impl(async_gen: int) -> void:
 	_host._startup_trace_count("server_command_discovery")
 	## CLI-finder discovery shells out (which/where, login shell) on cache
 	## misses — the same #238/#239 family the dock already runs off-thread.
-	var server_cmd: Array = await _run_blocking(func() -> Variant:
+	var server_cmd_result: Variant = await _run_blocking(func() -> Variant:
 		return ClientConfigurator.get_server_command()
 	)
 	if _async_stale(async_gen):
 		return
+	var server_cmd: Array = server_cmd_result
 	if server_cmd.is_empty():
 		set_terminal_diagnosis(McpServerStateScript.NO_COMMAND)
 		_startup_path = McpStartupPathScript.NO_COMMAND
@@ -912,13 +952,14 @@ static func _compatible_adoption_log_message(
 func recover_strong_port_occupant(port: int, wait_s: float, pre_kill_live: Dictionary = {}) -> bool:
 	var async_gen := _async_generation
 	var record: Dictionary = _host._read_managed_server_record()
-	var proof: Dictionary = await _run_blocking(func() -> Variant:
+	var proof_result: Variant = await _run_blocking(func() -> Variant:
 		if not is_instance_valid(_host):
 			return {"proof": "", "pids": []}
 		return _host._evaluate_strong_port_occupant_proof(port, pre_kill_live, record)
 	)
 	if _async_stale(async_gen):
 		return false
+	var proof: Dictionary = proof_result
 	var targets: Array[int] = []
 	targets.assign(proof.get("pids", []))
 	if targets.is_empty():

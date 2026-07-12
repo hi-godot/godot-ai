@@ -708,11 +708,20 @@ func _startup_trace_finish(path: String) -> void:
 
 
 func _start_server() -> void:
-	await _lifecycle.start_server()
-	## The walk may have suspended (#678), so this line — not _enter_tree's
-	## tail — is where the real startup outcome is known. Stamp the trace
-	## 'done' here so the contended-port path and duration stay honest
-	## instead of reporting a placeholder before the walk finished.
+	## Fire-and-forget: the walk is a coroutine in production (#678). Its
+	## completion continuation must NOT live in this method — a reload can
+	## free this plugin while the walk is suspended, and resuming a freed
+	## Node's coroutine errors out. The manager calls
+	## `_finish_startup_trace_after_walk` on walk completion instead,
+	## guarded by is_instance_valid.
+	_lifecycle.start_server()
+
+
+## Called by the lifecycle manager when the (possibly suspended) startup
+## walk completes — the point where the real startup outcome is known, so
+## the trace 'done' line reports the true contended-port path and duration
+## instead of a pre-walk placeholder (#682 review).
+func _finish_startup_trace_after_walk() -> void:
 	var startup_path: String = str(_lifecycle.get_startup_path())
 	_startup_trace_finish(startup_path if not startup_path.is_empty() else "loaded")
 
