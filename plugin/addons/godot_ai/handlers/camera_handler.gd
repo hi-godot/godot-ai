@@ -204,13 +204,6 @@ func _logical_current_camera(scene_root: Node, type_str: String = "") -> Node:
 	return null
 
 
-func _is_logical_current(scene_root: Node, cam: Node) -> bool:
-	if scene_root == null or cam == null:
-		return false
-	var logical := _logical_current_camera(scene_root, _camera_type_str(cam))
-	return logical != null and logical == cam
-
-
 # Public introspection for tests that need to distinguish "handler has a
 # logical marker" from "handler is falling back to engine state". `get_camera`
 # / `list_cameras` both use `_resolve_current` which falls through to

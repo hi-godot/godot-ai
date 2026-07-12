@@ -230,13 +230,6 @@ static func check_status(id: String) -> Client.Status:
 	return _dispatch_check_status(client, http_url())
 
 
-static func check_status_for_url(id: String, url: String) -> Client.Status:
-	var client := ClientRegistry.get_by_id(id)
-	if client == null:
-		return Client.Status.NOT_CONFIGURED
-	return _dispatch_check_status(client, url)
-
-
 static func check_status_for_url_with_cli_path(id: String, url: String, cli_path: String) -> Client.Status:
 	return check_status_details_for_url_with_cli_path(id, url, cli_path).get("status", Client.Status.NOT_CONFIGURED)
 

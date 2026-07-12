@@ -36,11 +36,6 @@ class CommandResponse(BaseModel):
     ## command. Components may reset independently (game run rotation), so the
     ## server compares per key and treats decreases as a reset baseline.
     error_watermark: dict[str, int] | None = None
-    ## Server-internal compatibility field. Newer code accumulates observed
-    ## deltas on Session.pending_new_errors and consumes them only when a
-    ## user-facing success response can surface the hint.
-    new_errors_since_last_call: int = 0
-
 
 class ErrorDetail(BaseModel):
     """Structured error information from the plugin."""

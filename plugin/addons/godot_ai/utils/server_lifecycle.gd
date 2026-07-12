@@ -267,10 +267,6 @@ func arm_adoption_watch() -> void:
 	)
 
 
-func disarm_adoption_watch() -> void:
-	_adoption_watch_deadline_ms = 0
-
-
 func tick_adoption_watch(now_msec: int) -> void:
 	if _adoption_watch_deadline_ms > 0 and now_msec >= _adoption_watch_deadline_ms:
 		_adoption_watch_deadline_ms = 0

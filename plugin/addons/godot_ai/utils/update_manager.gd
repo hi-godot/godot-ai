@@ -556,11 +556,6 @@ func _install_zip() -> void:
 	})
 
 
-func _on_filesystem_scanned_for_update() -> void:
-	install_state_changed.emit({"button_text": "Reloading..."})
-	_reload_after_update.call_deferred()
-
-
 func _reload_after_update() -> void:
 	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", false)
 	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", true)

@@ -84,7 +84,6 @@ class TestCommandResponse:
             data={},
         )
         assert resp.error_watermark is None
-        assert resp.new_errors_since_last_call == 0
 
     def test_error_watermark_parses_from_new_plugins(self):
         parsed = CommandResponse.model_validate(

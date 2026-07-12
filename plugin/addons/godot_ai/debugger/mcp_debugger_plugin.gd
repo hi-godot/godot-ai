@@ -109,7 +109,6 @@ var _break_record_synthesized := false
 ## record carrying the break reason.
 const BREAK_FRAME_SCRAPE_DELAYS_SEC: Array[float] = [0.5, 2.0]
 
-signal game_ready
 
 
 func _init(log_buffer: McpLogBuffer = null, game_log_buffer: McpGameLogBuffer = null, editor_log_buffer: McpEditorLogBuffer = null, surfaced_error_tracker = null) -> void:
@@ -666,7 +665,6 @@ func _capture(message: String, data: Array, session_id: int) -> bool:
 			## drop our message silently.
 			_game_ready = true
 			_ready_run_token = _game_run_token
-			game_ready.emit()
 			## #641: boot-time parse errors race the hello beacon — both ride
 			## the same debugger channel, and the editor inserts Errors-tab
 			## rows with a per-frame throttle, so rows can land moments after

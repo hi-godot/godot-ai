@@ -288,15 +288,6 @@ func _capture_gdscript_load_diagnostics(path: String) -> Dictionary:
 	return capture
 
 
-static func _empty_diagnostics_capture() -> Dictionary:
-	return {
-		"diagnostics": [],
-		"diagnostics_detail": "none",
-		"diagnostics_scope": "this_file",
-		"diagnostics_status": "checked",
-	}
-
-
 static func _fallback_gdscript_diagnostic(path: String, error_code: int, content: String) -> Dictionary:
 	var line := _fallback_gdscript_error_line(content)
 	return {

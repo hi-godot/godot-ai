@@ -112,16 +112,6 @@ func tick(now_msec: int) -> bool:
 	return false
 
 
-## Invoked when `_on_connection_established` notices that we transitioned
-## out of FOREIGN_PORT — the server may yet prove itself compatible.
-## Re-arming is idempotent: if already active, no-op; otherwise the
-## caller's connection + last-known expected version are reused.
-func rearm_for_foreign_port_recovery(connection) -> void:
-	if _active:
-		return
-	arm(connection, _expected_version)
-
-
 func _complete_with_version(version: String) -> void:
 	_active = false
 	_deadline_ms = 0

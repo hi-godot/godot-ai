@@ -48,10 +48,6 @@ func clear() -> void:
 	_surfaced_error_tracker = null
 
 
-func set_surfaced_error_tracker(surfaced_error_tracker) -> void:
-	_surfaced_error_tracker = surfaced_error_tracker
-
-
 ## Invoke a registered handler directly by name. Returns the handler's raw
 ## response dict (no request_id or status wrapping). Returns an UNKNOWN_COMMAND
 ## error dict if the command is not registered. Used by batch_execute.

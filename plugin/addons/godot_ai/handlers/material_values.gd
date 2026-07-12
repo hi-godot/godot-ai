@@ -124,35 +124,6 @@ static func parse_vector2(value: Variant) -> Variant:
 	return null
 
 
-## Parse a {stops: [{time, color}]} gradient dict into a Gradient resource.
-static func parse_gradient(value: Variant) -> Variant:
-	if value is Gradient:
-		return value
-	if not (value is Dictionary):
-		return null
-	var d: Dictionary = value
-	if not d.has("stops"):
-		return null
-	var stops_array = d.get("stops")
-	if not (stops_array is Array):
-		return null
-	var offsets: PackedFloat32Array = PackedFloat32Array()
-	var colors: PackedColorArray = PackedColorArray()
-	for stop in stops_array:
-		if not (stop is Dictionary):
-			return null
-		var t := float(stop.get("time", 0.0))
-		var c = parse_color(stop.get("color"))
-		if c == null:
-			return null
-		offsets.append(t)
-		colors.append(c)
-	var grad := Gradient.new()
-	grad.offsets = offsets
-	grad.colors = colors
-	return grad
-
-
 ## Load a Texture2D from a res:// / uid:// / user:// path (validate_loadable_path).
 ## Returns null on failure (including a path that fails confinement / traversal).
 static func load_texture(path: String) -> Texture2D:

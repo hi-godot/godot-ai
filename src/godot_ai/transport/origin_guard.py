@@ -382,7 +382,7 @@ async def _send_forbidden(send: Send) -> None:
     await send({"type": "http.response.body", "body": FORBIDDEN_BODY, "more_body": False})
 
 
-def make_websocket_request_guard(allowed_networks: Sequence[IPNetwork] | None = None):
+def make_websocket_request_guard():
     """Return a ``process_request`` hook for ``websockets.asyncio.server.serve``.
 
     The hook fires before the WebSocket upgrade. When the real peer
@@ -390,12 +390,13 @@ def make_websocket_request_guard(allowed_networks: Sequence[IPNetwork] | None = 
     HTTP 403 via ``connection.respond(...)``; returning that response from
     ``process_request`` aborts the upgrade without ever creating a Session.
 
-    ``allowed_networks`` (the ``--allow-host`` opt-in, #421) gates the
-    unforgeable peer address (``remote_address``) and widens the Host
-    allowlist identically to the HTTP middleware, so the two transports
-    never diverge.
+    The WebSocket transport deliberately stays loopback-only even when
+    ``--allow-host`` (#421) widens the HTTP transport: the Godot plugin
+    always connects from the same machine, so there is nothing to widen.
+    ``networks`` is pinned to ``None`` (loopback-only) and kept as a local
+    so the shared helpers read the same as the HTTP middleware.
     """
-    networks = list(allowed_networks) if allowed_networks else None
+    networks = None
 
     async def guard(connection, request):
         ## Use ``get_all`` so a smuggled duplicate (two ``Host:`` lines)

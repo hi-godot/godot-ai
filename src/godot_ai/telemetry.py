@@ -197,8 +197,6 @@ class TelemetryConfig:
         else:
             self._cleanup_local_files()
 
-        self.session_id = str(uuid.uuid4())
-
     # --- env helpers -----------------------------------------------------
 
     @staticmethod

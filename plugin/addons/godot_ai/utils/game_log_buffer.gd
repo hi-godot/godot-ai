@@ -69,10 +69,6 @@ func get_run_range(run_id: String, offset: int, count: int) -> Array[Dictionary]
 	return get_run_page(run_id, offset, count).entries
 
 
-func run_total_count(run_id: String) -> int:
-	return int(get_run_page(run_id, 0, 0).total_count)
-
-
 func get_run_page(run_id: String, offset: int, count: int) -> Dictionary:
 	var entries := _entries_for_run(run_id)
 	var start := mini(maxi(0, offset), entries.size())
