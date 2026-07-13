@@ -395,6 +395,44 @@ async def test_dispatch_scalar_pin_unwraps_annotated_params():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_scalar_pin_survives_get_type_hints_failure():
+    """One unresolvable forward ref makes get_type_hints fail for the WHOLE
+    handler ({} hints), which used to silently disable every pin on it. The
+    dispatch loop now falls back to the raw signature annotation (mirroring
+    _coerce_stringified_json_values), so a param annotated with a real type
+    object keeps its pin even when a sibling annotation is broken.
+    """
+
+    async def sized(rt, count=0, broken=None):
+        del rt, broken
+        return {"count": count}
+
+    ## A real type object for `count`, an unresolvable string for `broken` —
+    ## get_type_hints raises NameError and returns nothing for either.
+    sized.__annotations__ = {"count": int, "broken": "NoSuchTypeAnywhere"}
+
+    with pytest.raises(GodotCommandError) as exc:
+        await dispatch_manage_op(
+            ops={"go": sized},
+            tool_name="x_manage",
+            runtime=None,
+            op="go",
+            params={"count": "not-an-int"},
+        )
+    assert exc.value.code == ErrorCode.INVALID_PARAMS
+    assert exc.value.data["param"] == "count"
+
+    result = await dispatch_manage_op(
+        ops={"go": sized},
+        tool_name="x_manage",
+        runtime=None,
+        op="go",
+        params={"count": 3},
+    )
+    assert result == {"count": 3}
+
+
+@pytest.mark.asyncio
 async def test_dispatch_scalar_pin_rejects_container_for_str():
     async def named(rt, name: str):
         del rt

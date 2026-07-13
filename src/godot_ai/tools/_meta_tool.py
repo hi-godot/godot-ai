@@ -422,9 +422,20 @@ async def dispatch_manage_op(
     ## a str belongs) used to surface as an opaque plugin-side crash. Check
     ## here, where the cached type hints already exist, and fail with a
     ## param-naming INVALID_PARAMS the agent can self-correct from.
-    _, type_hints = _handler_meta(handler)
+    signature, type_hints = _handler_meta(handler)
     for key, value in call_params.items():
-        allowed = _scalar_annotation_types(type_hints.get(key, inspect.Parameter.empty))
+        annotation = type_hints.get(key, inspect.Parameter.empty)
+        if annotation is inspect.Parameter.empty and signature is not None:
+            ## get_type_hints fails wholesale (one unresolvable forward ref
+            ## poisons every hint) — fall back to the raw signature
+            ## annotation, same as _coerce_stringified_json_values, so a
+            ## param annotated with a real type object keeps its pin. A
+            ## PEP 563 stringified annotation lands here as a string, which
+            ## matches no scalar type and leaves the pin off, as before.
+            parameter = signature.parameters.get(key)
+            if parameter is not None:
+                annotation = parameter.annotation
+        allowed = _scalar_annotation_types(annotation)
         if allowed is None:
             continue
         expected = _scalar_mismatch_label(value, allowed)
