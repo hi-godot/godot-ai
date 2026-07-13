@@ -90,6 +90,7 @@ async def material_apply_to_node(
     params: dict[str, Any] | None = None,
     slot: str = "override",
     save_to: str = "",
+    overwrite: bool = False,
 ) -> dict:
     await require_writable_async(runtime)
     payload: dict[str, Any] = {
@@ -100,6 +101,7 @@ async def material_apply_to_node(
     }
     if save_to:
         payload["save_to"] = save_to
+        payload["overwrite"] = overwrite
     return await runtime.send_command("material_apply_to_node", payload)
 
 

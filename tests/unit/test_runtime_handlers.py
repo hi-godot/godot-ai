@@ -1541,9 +1541,7 @@ async def test_logs_read_handler_game_forwards_editor_error_hint_fields():
             timeout: float = 5.0,
             surface_error_hints: bool = True,
         ) -> dict:
-            result = await super().send(
-                command, params, session_id, timeout, surface_error_hints
-            )
+            result = await super().send(command, params, session_id, timeout, surface_error_hints)
             if command == "get_logs" and (params or {}).get("source") == "game":
                 result = dict(result)
                 result["current_run_id"] = "rstub"
@@ -3571,9 +3569,7 @@ async def test_input_map_add_action_handler():
 async def test_input_map_ensure_action_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    result = await input_map_handlers.input_map_ensure_action(
-        runtime, action="jump", deadzone=0.3
-    )
+    result = await input_map_handlers.input_map_ensure_action(runtime, action="jump", deadzone=0.3)
     assert result["action"] == "jump"
     assert result["deadzone"] == 0.3
     assert client.calls[-1]["command"] == "ensure_action"
@@ -5063,6 +5059,31 @@ async def test_material_apply_to_node_forwards_save_to():
     )
     sent = client.calls[-1]["params"]
     assert sent["save_to"] == "res://materials/my_mat.tres"
+
+
+async def test_material_apply_to_node_forwards_overwrite_with_save_to():
+    ## #685: overwrite defaults to False and travels only alongside save_to —
+    ## the plugin's clobber guard keys on it, so an inline apply (no save_to)
+    ## must not carry the flag at all.
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await material_handlers.material_apply_to_node(
+        runtime,
+        node_path="/Main/Box",
+        save_to="res://materials/my_mat.tres",
+    )
+    assert client.calls[-1]["params"]["overwrite"] is False
+
+    await material_handlers.material_apply_to_node(
+        runtime,
+        node_path="/Main/Box",
+        save_to="res://materials/my_mat.tres",
+        overwrite=True,
+    )
+    assert client.calls[-1]["params"]["overwrite"] is True
+
+    await material_handlers.material_apply_to_node(runtime, node_path="/Main/Box")
+    assert "overwrite" not in client.calls[-1]["params"]
 
 
 async def test_material_apply_preset_handler():

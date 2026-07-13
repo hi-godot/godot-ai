@@ -35,9 +35,10 @@ Ops:
         "surface_<N>" | "canvas" | "process". When create_if_missing=True
         and no resource_path, makes an inline material of `type`.
   • apply_to_node(node_path, type="standard", params=None, slot="override",
-                   save_to="")
+                   save_to="", overwrite=False)
         High-level: build + set params + assign in one undo.
-        save_to optionally persists to disk.
+        save_to optionally persists to disk; errors if the file already
+        exists unless overwrite=True.
   • apply_preset(preset, path="", node_path="", overrides=None)
         Curated looks: metal, glass, emissive, unlit, matte, ceramic.
         path saves to disk; node_path assigns to a node; overrides merge.

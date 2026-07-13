@@ -536,6 +536,51 @@ func test_apply_to_node_with_save_to() -> void:
 	_remove_node(node)
 
 
+func test_apply_to_node_save_to_refuses_existing_file_without_overwrite() -> void:
+	# #685: save_to must not silently clobber an existing .tres — undo only
+	# restores the node's slot assignment, never the file contents.
+	_make_material(TEST_MATERIAL_PATH_2)
+	var before := FileAccess.get_file_as_bytes(TEST_MATERIAL_PATH_2)
+	var node := _add_mesh_node("TestApplyNoClobber") as Node
+	if node == null:
+		assert_true(false, "No scene root — is a scene open?")
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var result := _handler.apply_to_node({
+		"node_path": McpScenePath.from_node(node, scene_root),
+		"type": "standard",
+		"save_to": TEST_MATERIAL_PATH_2,
+	})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_true(
+		result.error.message.contains("overwrite=true"),
+		"Error should name the overwrite escape hatch"
+	)
+	var after := FileAccess.get_file_as_bytes(TEST_MATERIAL_PATH_2)
+	assert_eq(after, before, "Refused save must leave the existing file untouched")
+	_remove_node(node)
+
+
+func test_apply_to_node_save_to_overwrites_with_flag() -> void:
+	_make_material(TEST_MATERIAL_PATH_2)
+	var node := _add_mesh_node("TestApplyOverwrite") as Node
+	if node == null:
+		assert_true(false, "No scene root — is a scene open?")
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var result := _handler.apply_to_node({
+		"node_path": McpScenePath.from_node(node, scene_root),
+		"type": "standard",
+		"params": {"metallic": 0.5},
+		"save_to": TEST_MATERIAL_PATH_2,
+		"overwrite": true,
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.saved_to, TEST_MATERIAL_PATH_2)
+	assert_true(result.data.overwritten, "Response should report the overwrite")
+	_remove_node(node)
+
+
 # ============================================================================
 # material_apply_preset
 # ============================================================================

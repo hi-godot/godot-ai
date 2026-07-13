@@ -473,10 +473,22 @@ func apply_to_node(params: Dictionary) -> Dictionary:
 
 	var save_to: String = params.get("save_to", "")
 	var saved := false
+	var overwritten := false
 	if not save_to.is_empty():
 		var save_err_validation := _validate_material_path(save_to, "save_to", true)
 		if save_err_validation != null:
 			return save_err_validation
+		# Same clobber guard as create_material/apply_preset: agents reuse
+		# names like res://materials/metal.tres, and a silent save here
+		# destroys a hand-authored file that undo can't restore (undo only
+		# reverts the node's slot assignment, not file contents). See #685.
+		var existed_before := FileAccess.file_exists(save_to)
+		if existed_before and not params.get("overwrite", false):
+			return ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS,
+				"Material already exists at %s (pass overwrite=true to replace)" % save_to
+			)
+		overwritten = existed_before
 		var dir_path := save_to.get_base_dir()
 		var mkdir_err := DirAccess.make_dir_recursive_absolute(dir_path)
 		if mkdir_err != OK and mkdir_err != ERR_ALREADY_EXISTS:
@@ -513,6 +525,7 @@ func apply_to_node(params: Dictionary) -> Dictionary:
 			"applied_params": applied,
 			"material_created": true,
 			"saved_to": save_to if saved else "",
+			"overwritten": overwritten,
 			"undoable": true,
 		}
 	}
