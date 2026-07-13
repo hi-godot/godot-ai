@@ -153,7 +153,7 @@ func run_project(params: Dictionary) -> Dictionary:
 	)
 	var request_id: String = params.get("_request_id", "")
 	if _connection != null and _debugger_plugin != null and not request_id.is_empty():
-		_finish_run_project_deferred(request_id, base_data)
+		_finish_run_project_deferred(request_id, base_data, _connection, _debugger_plugin)
 		return McpDispatcher.DEFERRED_RESPONSE
 
 	return _run_project_current_liveness_response(base_data)
@@ -167,7 +167,7 @@ func _game_helper_autoload_expected() -> bool:
 	return ProjectSettings.has_setting("autoload/_mcp_game_helper")
 
 
-func _run_project_base_data(
+static func _run_project_base_data(
 	mode: String,
 	scene: String,
 	autosave: bool,
@@ -194,21 +194,30 @@ func _run_project_current_liveness_response(base_data: Dictionary) -> Dictionary
 	return _run_project_response(base_data, _run_project_liveness_decision(status, errors_info))
 
 
-func _finish_run_project_deferred(request_id: String, base_data: Dictionary) -> void:
-	var tree := _connection.get_tree()
+## `static` is load-bearing (#712, same rationale as the script/filesystem
+## handlers and editor_handler._do_reload_plugin): this coroutine awaits
+## across frames, and a plugin reload frees this RefCounted handler
+## mid-await — resuming an instance coroutine on a freed object errors.
+## `connection` and `debugger_plugin` are parameterized explicitly and
+## re-validated after every await; the response is dropped silently when
+## either died (the server's command timeout surfaces the failure).
+static func _finish_run_project_deferred(
+	request_id: String, base_data: Dictionary, connection, debugger_plugin
+) -> void:
+	var tree: SceneTree = connection.get_tree()
 	while true:
 		await tree.process_frame
-		if not is_instance_valid(_connection):
+		if not is_instance_valid(connection) or not is_instance_valid(debugger_plugin):
 			return
-		var pre_status: Dictionary = _debugger_plugin.get_game_status(-1, RUN_READY_WAIT_SEC)
+		var pre_status: Dictionary = debugger_plugin.get_game_status(-1, RUN_READY_WAIT_SEC)
 		if (
 			not EditorInterface.is_playing_scene()
 			and int(pre_status.get("elapsed_msec", 0)) > 100
 			and str(pre_status.get("status", "stopped")) == "launching"
 		):
-			_debugger_plugin.end_game_run()
-		var status: Dictionary = _debugger_plugin.get_game_status(-1, RUN_READY_WAIT_SEC)
-		var errors_info: Dictionary = _debugger_plugin.recent_editor_errors_since(int(status.get("editor_log_cursor", 0)))
+			debugger_plugin.end_game_run()
+		var status: Dictionary = debugger_plugin.get_game_status(-1, RUN_READY_WAIT_SEC)
+		var errors_info: Dictionary = debugger_plugin.recent_editor_errors_since(int(status.get("editor_log_cursor", 0)))
 		var decision := _run_project_liveness_decision(status, errors_info)
 		if not bool(decision.get("resolve", false)):
 			continue
@@ -218,13 +227,13 @@ func _finish_run_project_deferred(request_id: String, base_data: Dictionary) -> 
 		## response reports them instead of leaving them to a later
 		## logs_read. Rebuilding the decision with strictly-more errors can
 		## only keep it resolved (errors never un-resolve a decision).
-		errors_info = _debugger_plugin.recent_editor_errors_since(int(status.get("editor_log_cursor", 0)), true)
+		errors_info = debugger_plugin.recent_editor_errors_since(int(status.get("editor_log_cursor", 0)), true)
 		decision = _run_project_liveness_decision(status, errors_info)
-		_connection.send_deferred_response(request_id, _run_project_response(base_data, decision))
+		connection.send_deferred_response(request_id, _run_project_response(base_data, decision))
 		return
 
 
-func _run_project_response(base_data: Dictionary, decision: Dictionary) -> Dictionary:
+static func _run_project_response(base_data: Dictionary, decision: Dictionary) -> Dictionary:
 	var data := base_data.duplicate(true)
 	var game_status: Dictionary = decision.get("game_status", {})
 	data["game_status"] = game_status
@@ -242,7 +251,7 @@ func _run_project_response(base_data: Dictionary, decision: Dictionary) -> Dicti
 	return {"data": data}
 
 
-func _run_project_already_running_message(decision: Dictionary) -> String:
+static func _run_project_already_running_message(decision: Dictionary) -> String:
 	var state := str(decision.get("liveness_status", "unknown"))
 	match state:
 		"live":
@@ -278,7 +287,10 @@ func _run_project_already_running_message(decision: Dictionary) -> String:
 			return "Project was already running; current liveness status is %s." % state
 
 
-func _run_project_liveness_decision(status: Dictionary, errors_info: Dictionary = {}) -> Dictionary:
+## Static (with the rest of the deferred-finisher chain) so the #712
+## load-bearing-static coroutines above can call it after their owner
+## handler was freed. Uses no instance state.
+static func _run_project_liveness_decision(status: Dictionary, errors_info: Dictionary = {}) -> Dictionary:
 	var enriched_status := McpDebuggerPlugin.with_liveness_flags(status)
 	var state := str(status.get("status", "stopped"))
 	var recent_errors: Array = errors_info.get("errors", [])
@@ -359,7 +371,7 @@ func _run_project_liveness_decision(status: Dictionary, errors_info: Dictionary 
 	return decision
 
 
-func _format_editor_error_summary(entry: Dictionary) -> String:
+static func _format_editor_error_summary(entry: Dictionary) -> String:
 	return McpSurfacedErrorTracker.format_editor_error_summary(entry)
 
 
@@ -388,7 +400,7 @@ func stop_project(params: Dictionary) -> Dictionary:
 	# the server poll for the event. Issue #29.
 	var request_id: String = params.get("_request_id", "")
 	if _connection != null and not request_id.is_empty():
-		_finish_stop_project_deferred(request_id)
+		_finish_stop_project_deferred(request_id, _connection)
 		return McpDispatcher.DEFERRED_RESPONSE
 
 	# Fallback for contexts without a connection (e.g. batch_execute via
@@ -403,18 +415,19 @@ func stop_project(params: Dictionary) -> Dictionary:
 	}
 
 
-func _finish_stop_project_deferred(request_id: String) -> void:
-	# Wait two frames so Godot can tick the stop-play state change. After this
-	# is_playing_scene() reflects truth and get_readiness() is authoritative.
-	# If the plugin tears down (_exit_tree frees _connection) during the await,
-	# is_instance_valid() goes false and we drop the response silently — the
-	# server's 5s request timeout will surface the failure to the caller.
-	var tree := _connection.get_tree()
+# Wait two frames so Godot can tick the stop-play state change. After this
+# is_playing_scene() reflects truth and get_readiness() is authoritative.
+# If the plugin tears down (_exit_tree frees _connection) during the await,
+# is_instance_valid() goes false and we drop the response silently — the
+# server's 5s request timeout will surface the failure to the caller.
+# `static` is load-bearing (#712): see _finish_run_project_deferred.
+static func _finish_stop_project_deferred(request_id: String, connection) -> void:
+	var tree: SceneTree = connection.get_tree()
 	await tree.process_frame
 	await tree.process_frame
-	if not is_instance_valid(_connection):
+	if not is_instance_valid(connection):
 		return
-	_connection.send_deferred_response(request_id, {
+	connection.send_deferred_response(request_id, {
 		"data": {
 			"stopped": true,
 			"was_running": true,

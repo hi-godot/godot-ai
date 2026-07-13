@@ -248,6 +248,9 @@ func _enter_tree() -> void:
 	if _ws_auth_token.is_empty():
 		_ws_auth_token = str(_read_managed_server_record().get("ws_token", ""))
 	_connection.auth_token = _ws_auth_token
+	## Pause-depth restore boundary (#712): the dispatcher rebalances any
+	## pause_processing level a crashed handler leaked.
+	_dispatcher.pause_target = _connection
 	_connection.connect_blocked = _lifecycle.is_connection_blocked()
 	_connection.connect_block_reason = _lifecycle.get_status_dict().get("message", "")
 	if (

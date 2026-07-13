@@ -212,6 +212,11 @@ func _clear_on_disconnect() -> void:
 	_packet_spillover_total = 0
 	if dispatcher:
 		dispatcher.clear_deferred_responses()
+		## Queued-but-unexecuted commands from the dead connection must not
+		## run under the next one (#712): their requester's futures were
+		## already failed server-side, so executing them after reconnect is
+		## an uncorrelatable surprise write.
+		dispatcher.clear_command_queue()
 
 
 ## Full pre-free cleanup for plugin unload: stop _process, close the

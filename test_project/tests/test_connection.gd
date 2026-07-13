@@ -187,6 +187,29 @@ func test_disconnect_clears_pending_deferred_responses() -> void:
 	conn.free()
 
 
+func test_disconnect_clears_queued_commands() -> void:
+	## #712: commands queued by the dead connection must not execute under
+	## the next one — the requester's futures were already failed
+	## server-side, so a mutation landing after reconnect is an
+	## uncorrelatable surprise write.
+	var conn := McpConnection.new()
+	var dispatcher := McpDispatcher.new(McpLogBuffer.new())
+	dispatcher.mcp_logging = false
+	var executed: Array = []
+	dispatcher.register("mutate", func(_p):
+		executed.append(true)
+		return {"data": {}})
+	dispatcher.enqueue({"request_id": "req-stale", "command": "mutate", "params": {}})
+
+	conn.dispatcher = dispatcher
+	conn._clear_on_disconnect()
+
+	var responses := dispatcher.tick(100.0)
+	assert_eq(executed.size(), 0, "queued command must not run after disconnect")
+	assert_eq(responses.size(), 0, "no responses should be produced for cleared commands")
+	conn.free()
+
+
 func test_send_event_reports_unsent_when_disconnected() -> void:
 	var conn := McpConnection.new()
 	assert_false(

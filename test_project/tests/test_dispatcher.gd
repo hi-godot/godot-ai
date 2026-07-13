@@ -388,3 +388,63 @@ func test_dispatch_direct_strips_reserved_request_id_key() -> void:
 	assert_eq(seen[0].get("x"), 1)
 	assert_true(caller_params.has("_request_id"),
 		"stripping must not mutate the caller's dict")
+
+
+# ----- pause-depth restore on handler crash (#712) -----
+
+## Stand-in for McpConnection's pause surface: the dispatcher only reads
+## pause_depth() and calls resume() to rebalance.
+class _PauseTargetStub extends RefCounted:
+	var depth := 0
+	func pause_depth() -> int:
+		return depth
+	func pause() -> void:
+		depth += 1
+	func resume() -> void:
+		depth = maxi(0, depth - 1)
+
+
+func test_crashed_handler_leaked_pause_is_restored() -> void:
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	var target := _PauseTargetStub.new()
+	d.pause_target = target
+	## Simulates a handler that paused, then crashed before resuming —
+	## GDScript swallows the error and the dispatcher sees a malformed
+	## (empty) result. Without the boundary restore the transport would
+	## stay paused forever.
+	d.register("crashy_pauser", func(_p):
+		target.pause()
+		return {})
+	var result := d.dispatch_direct("crashy_pauser", {})
+	assert_is_error(result, ErrorCodes.INTERNAL_ERROR)
+	assert_eq(target.depth, 0, "leaked pause level must be restored at the call boundary")
+
+
+func test_pause_restore_preserves_outer_depth() -> void:
+	## Only the handler's OWN leaked levels are unwound — a pre-existing
+	## outer pause (e.g. batch_execute inside a paused save) must survive.
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	var target := _PauseTargetStub.new()
+	target.depth = 1
+	d.pause_target = target
+	d.register("crashy_pauser", func(_p):
+		target.pause()
+		return {})
+	d.dispatch_direct("crashy_pauser", {})
+	assert_eq(target.depth, 1, "restore must stop at the pre-call depth, not zero")
+
+
+func test_balanced_handler_is_untouched_by_pause_restore() -> void:
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	var target := _PauseTargetStub.new()
+	d.pause_target = target
+	d.register("balanced", func(_p):
+		target.pause()
+		target.resume()
+		return {"data": {"ok": true}})
+	var result := d.dispatch_direct("balanced", {})
+	assert_has_key(result, "data")
+	assert_eq(target.depth, 0)

@@ -10,6 +10,13 @@ var _handlers: Dictionary = {}  # command_name -> Callable
 var _pending_deferred: Dictionary = {}  # request_id -> {command, started_ms, timeout_ms}
 var _log_buffer
 var _surfaced_error_tracker
+## The McpConnection whose pause_processing handlers flip around unsafe
+## editor operations (#288 guard). Set by plugin.gd; untyped to honor the
+## self-update field-storage policy. When set, _call_handler restores the
+## pause depth a crashed handler left unbalanced (#712) — without this a
+## single handler crash inside a pause window freezes the transport
+## forever (pause has no watchdog or disconnect reset by design).
+var pause_target
 var mcp_logging := true
 var deferred_timeout_overrides_ms: Dictionary = {}
 
@@ -46,6 +53,17 @@ func clear() -> void:
 	_pending_deferred.clear()
 	_log_buffer = null
 	_surfaced_error_tracker = null
+	pause_target = null
+
+
+## Drop queued-but-unexecuted commands. Called by the connection on
+## disconnect (#712): commands queued by the previous connection must not
+## execute under the next one — the requester is gone, its in-flight
+## futures were already failed server-side, and a mutation landing after
+## reconnect is a surprise write nobody can correlate. Deferred bookkeeping
+## has its own reset (clear_deferred_responses).
+func clear_command_queue() -> void:
+	_command_queue.clear()
 
 
 ## Invoke a registered handler directly by name. Returns the handler's raw
@@ -195,7 +213,23 @@ const _MALFORMED_ARGS_MAX := 400
 
 
 func _call_handler(command: String, params: Dictionary) -> Dictionary:
+	## #712: a handler that crashes between pause_processing = true and its
+	## matching false leaves the pause depth unbalanced — GDScript swallows
+	## the error, the dispatcher reports "malformed result", and the
+	## transport stays paused FOREVER (no watchdog, no disconnect reset).
+	## Restore balance at this boundary: the depth a handler leaves behind
+	## must equal the depth it started with.
+	var pause_depth_before: int = pause_target.pause_depth() if pause_target != null else 0
 	var result: Dictionary = _handlers[command].call(params)
+	if pause_target != null and pause_target.pause_depth() > pause_depth_before:
+		var leaked: int = pause_target.pause_depth() - pause_depth_before
+		while pause_target.pause_depth() > pause_depth_before:
+			pause_target.resume()
+		if mcp_logging and _log_buffer != null:
+			_log_buffer.log(
+				"[error] %s leaked %d pause_processing level(s) — restored (handler crash?)"
+				% [command, leaked]
+			)
 	## Handlers must return {"data": ...} on success or {"error": ...} on failure.
 	## Anything else (null, empty, missing keys) means the handler crashed
 	## mid-call — GDScript swallows the error and returns an empty dict.
