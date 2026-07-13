@@ -118,19 +118,9 @@ func create_scene(params: Dictionary) -> Dictionary:
 		root_name = path.get_file().get_basename()
 	root.name = root_name
 
-	var packed := PackedScene.new()
-	packed.pack(root)
-	root.free()
-
-	# Captured BEFORE the save below overwrites the file — see
-	# McpResourceIO.ensure_uid's doc comment.
-	var prior_uid := ResourceLoader.get_resource_uid(path) if FileAccess.file_exists(path) else ResourceUID.INVALID_ID
-
 	if _connection:
 		_connection.pause_processing = true
-	var err := ResourceSaver.save(packed, path)
-	if err == OK:
-		err = McpResourceIO.ensure_uid(path, prior_uid)
+	var err := _pack_and_save_with_uid(root, path)
 	if err == OK:
 		EditorInterface.open_scene_from_path(path)
 	if _connection:
@@ -148,6 +138,29 @@ func create_scene(params: Dictionary) -> Dictionary:
 			"reason": "Scene creation involves file system operations",
 		}
 	}
+
+
+## Pack `root` and save it to `path`, embedding a fresh uid or preserving the
+## one `path` already had — the exact save sequence `create_scene` runs,
+## minus the `pause_processing` guard (the caller owns that, since it also
+## needs to bracket `open_scene_from_path`) and minus opening the scene
+## (switching the editor's active scene isn't safe inside the shared test
+## runner, so tests call this directly instead of going through
+## `create_scene` end-to-end). Frees `root`. Returns `OK`, or the first
+## `Error` encountered.
+func _pack_and_save_with_uid(root: Node, path: String) -> Error:
+	var packed := PackedScene.new()
+	packed.pack(root)
+	root.free()
+
+	# Captured BEFORE the save below overwrites the file — see
+	# McpResourceIO.ensure_uid's doc comment.
+	var prior_uid := ResourceLoader.get_resource_uid(path) if FileAccess.file_exists(path) else ResourceUID.INVALID_ID
+
+	var err := ResourceSaver.save(packed, path)
+	if err == OK:
+		err = McpResourceIO.ensure_uid(path, prior_uid)
+	return err
 
 
 ## How long open_scene waits for the editor to actually switch to the
