@@ -198,9 +198,22 @@ jobs:
           # Self-check against the public key EMBEDDED IN THE PLUGIN SOURCE,
           # not a key derived from the secret — a rotated/mismatched secret
           # must fail the release here, not in every user's editor at
-          # install time.
-          awk '/BEGIN PUBLIC KEY/,/END PUBLIC KEY/' \
-            plugin/addons/godot_ai/utils/update_manager.gd > embedded_public_key.pem
+          # install time. The BEGIN marker shares its source line with the
+          # GDScript const assignment (`const ... := """-----BEGIN...`), so
+          # strip everything before the marker or openssl refuses the file.
+          sed -n '/-----BEGIN PUBLIC KEY-----/,/-----END PUBLIC KEY-----/p' \
+            plugin/addons/godot_ai/utils/update_manager.gd \
+            | sed 's/^.*-----BEGIN PUBLIC KEY-----/-----BEGIN PUBLIC KEY-----/' \
+            > embedded_public_key.pem
+          # Guard the extraction itself: a refactor that moves/renames the
+          # const must fail here with a clear message, not as an opaque
+          # dgst error.
+          if ! openssl pkey -pubin -in embedded_public_key.pem -noout 2>/dev/null; then
+            echo "ERROR: could not extract a parseable public key PEM from" >&2
+            echo "plugin/addons/godot_ai/utils/update_manager.gd" >&2
+            echo "(RELEASE_SIGNING_PUBLIC_KEY_PEM const moved or reformatted?)" >&2
+            exit 1
+          fi
           openssl dgst -sha256 -verify embedded_public_key.pem \
             -signature godot-ai-plugin.zip.sha256.sig godot-ai-plugin.zip.sha256
           rm -f embedded_public_key.pem
