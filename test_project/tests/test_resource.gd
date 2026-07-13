@@ -861,6 +861,7 @@ func _make_typed_array_resource() -> Resource:
 		"@export var labels: Array[String] = []",
 		"@export var tints: Array[Color] = []",
 		"@export var textures: Array[Texture2D] = []",
+		"@export var scores: Dictionary[String, int] = {}",
 	])
 	script.reload()
 	return script.new()
@@ -934,6 +935,28 @@ func test_apply_resource_properties_object_element_wrong_class_errors() -> void:
 	assert_contains(err.error.message, "element 0",
 		"the error must name the offending element index")
 	assert_eq((res.get("textures") as Array).size(), 0, "slot must stay untouched on error")
+
+
+func test_apply_resource_properties_fills_typed_dictionary() -> void:
+	## #612 stage 3 through the resource entry point.
+	var res := _make_typed_array_resource()
+	var err: Variant = ResourceHandler._apply_resource_properties(res, {"scores": {"a": 1}})
+	assert_eq(err, null, "typed Dictionary[String, int] write must succeed")
+	var stored: Variant = res.get("scores")
+	assert_eq((stored as Dictionary).size(), 1)
+	assert_eq(stored["a"], 1)
+	assert_true((stored as Dictionary).is_typed(), "the slot must keep its typing")
+
+
+func test_apply_resource_properties_typed_dictionary_error_names_property_and_key() -> void:
+	var res := _make_typed_array_resource()
+	var err: Variant = ResourceHandler._apply_resource_properties(res, {"scores": {"a": "one"}})
+	assert_is_error(err, ErrorCodes.WRONG_TYPE)
+	assert_contains(err.error.message, "Property 'scores'",
+		"the error must name the property")
+	assert_contains(err.error.message, 'key "a"',
+		"the error must name the offending key")
+	assert_eq((res.get("scores") as Dictionary).size(), 0, "slot must stay untouched on error")
 
 
 func test_apply_resource_properties_typed_array_rejects_non_list() -> void:

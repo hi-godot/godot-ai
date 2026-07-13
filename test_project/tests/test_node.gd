@@ -1937,6 +1937,9 @@ func _make_typed_array_probe(probe_name: String) -> Node:
 		"@export var nested: Array[Array] = []",
 		"@export var textures: Array[Texture2D] = []",
 		"@export var meshes: Array[Mesh] = []",
+		"@export var scores: Dictionary[String, int] = {}",
+		"@export var by_id: Dictionary[int, String] = {}",
+		"@export var mesh_map: Dictionary[String, Mesh] = {}",
 	])
 	script.reload()
 	node.set_script(script)
@@ -2229,6 +2232,180 @@ func test_set_property_typed_object_array_unconvertible_element_errors() -> void
 		"the error must name the offending element index")
 	assert_eq((node.get("textures") as Array).size(), 0)
 	_free_typed_array_probe(0)
+
+
+# ----- set_property: typed Dictionary[K, V] slots (#612 stage 3) -----
+
+func test_set_property_typed_dictionary_roundtrip() -> void:
+	## The Dictionary half of the #612 repro: {"a": 1} into a
+	## Dictionary[String, int] slot used to be silently dropped.
+	var node := _make_typed_array_probe("_McpTypedDict")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedDict",
+		"property": "scores",
+		"value": {"a": 1, "b": 2},
+	})
+	assert_has_key(result, "data")
+	var stored: Variant = node.get("scores")
+	assert_true(stored is Dictionary, "scores must read back as a Dictionary")
+	assert_eq((stored as Dictionary).size(), 2, "all entries must land — no silent drop")
+	assert_eq(stored["a"], 1)
+	assert_eq(stored["b"], 2)
+	assert_true((stored as Dictionary).is_typed(), "the slot must keep its typing")
+	_free_typed_array_probe(1)
+
+
+func test_set_property_typed_dictionary_coerces_int_keys() -> void:
+	## JSON object keys are always strings; a Dictionary[int, V] slot must
+	## parse exact int strings and store real int keys.
+	var node := _make_typed_array_probe("_McpTypedDictIntKeys")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedDictIntKeys",
+		"property": "by_id",
+		"value": {"3": "three", "7": "seven"},
+	})
+	assert_has_key(result, "data")
+	var stored: Variant = node.get("by_id")
+	assert_eq((stored as Dictionary).size(), 2)
+	assert_true((stored as Dictionary).has(3), "key must land as int 3, not String")
+	assert_eq(stored[7], "seven")
+	_free_typed_array_probe(1)
+
+
+func test_set_property_typed_dictionary_bad_int_key_errors() -> void:
+	var node := _make_typed_array_probe("_McpTypedDictBadKey")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedDictBadKey",
+		"property": "by_id",
+		"value": {"3": "ok", "abc": "nope"},
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, 'key "abc"',
+		"the error must name the offending key")
+	assert_eq((node.get("by_id") as Dictionary).size(), 0, "nothing may be written on error")
+	_free_typed_array_probe(0)
+
+
+func test_set_property_typed_dictionary_colliding_keys_error() -> void:
+	## "1" and "01" both coerce to int 1 — landing one of them silently
+	## would be the exact data-loss shape this issue exists to kill.
+	var node := _make_typed_array_probe("_McpTypedDictCollide")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedDictCollide",
+		"property": "by_id",
+		"value": {"1": "a", "01": "b"},
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "collide",
+		"key collisions after coercion must refuse, not drop an entry")
+	assert_eq((node.get("by_id") as Dictionary).size(), 0)
+	_free_typed_array_probe(0)
+
+
+func test_set_property_typed_dictionary_wrong_value_errors_names_key() -> void:
+	var node := _make_typed_array_probe("_McpTypedDictBadValue")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedDictBadValue",
+		"property": "scores",
+		"value": {"a": 1, "b": "two"},
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, 'key "b"',
+		"the error must name the offending key")
+	assert_eq((node.get("scores") as Dictionary).size(), 0, "slot must stay untouched on error")
+	_free_typed_array_probe(0)
+
+
+func test_set_property_typed_dictionary_object_values() -> void:
+	## Object values take the stage-2 element coercion: __class__ dicts
+	## instantiate, and wrong-class values error naming the key.
+	var node := _make_typed_array_probe("_McpTypedDictObjVals")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedDictObjVals",
+		"property": "mesh_map",
+		"value": {"box": {"__class__": "BoxMesh", "size": {"x": 2, "y": 2, "z": 2}}},
+	})
+	assert_has_key(result, "data")
+	var stored: Variant = node.get("mesh_map")
+	assert_eq((stored as Dictionary).size(), 1)
+	assert_true(stored["box"] is BoxMesh, "__class__ value must instantiate")
+	assert_eq((stored["box"] as BoxMesh).size, Vector3(2, 2, 2))
+	_free_typed_array_probe(1)
+
+
+func test_set_property_typed_dictionary_wrong_class_value_errors() -> void:
+	var node := _make_typed_array_probe("_McpTypedDictWrongClass")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedDictWrongClass",
+		"property": "mesh_map",
+		"value": {"tex": {"__class__": "GradientTexture2D"}},
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, 'key "tex"',
+		"the error must name the offending key")
+	assert_contains(result.error.message, "Mesh",
+		"the error must name the expected value class")
+	assert_eq((node.get("mesh_map") as Dictionary).size(), 0)
+	_free_typed_array_probe(0)
+
+
+func test_set_property_typed_dictionary_null_object_value_allowed() -> void:
+	var node := _make_typed_array_probe("_McpTypedDictNullObj")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedDictNullObj",
+		"property": "mesh_map",
+		"value": {"empty": null},
+	})
+	assert_has_key(result, "data")
+	var stored: Variant = node.get("mesh_map")
+	assert_eq((stored as Dictionary).size(), 1)
+	assert_eq(stored["empty"], null)
+	_free_typed_array_probe(1)
+
+
+func test_set_property_typed_dictionary_null_scalar_value_errors() -> void:
+	var node := _make_typed_array_probe("_McpTypedDictNullScalar")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedDictNullScalar",
+		"property": "scores",
+		"value": {"a": null},
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, 'key "a"',
+		"the error must name the offending key")
+	assert_eq((node.get("scores") as Dictionary).size(), 0)
+	_free_typed_array_probe(0)
+
+
+func test_set_property_typed_dictionary_non_object_value_errors() -> void:
+	var node := _make_typed_array_probe("_McpTypedDictNonObj")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedDictNonObj",
+		"property": "scores",
+		"value": [1, 2],
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "Dictionary[String, int]",
+		"the error must name the typed slot")
+	assert_eq((node.get("scores") as Dictionary).size(), 0)
+	_free_typed_array_probe(0)
+
+
+func test_set_property_typed_dictionary_undo_restores_previous_value() -> void:
+	var node := _make_typed_array_probe("_McpTypedDictUndo")
+	var first := _handler.set_property({
+		"path": "/Main/_McpTypedDictUndo", "property": "scores", "value": {"a": 7},
+	})
+	assert_has_key(first, "data")
+	var second := _handler.set_property({
+		"path": "/Main/_McpTypedDictUndo", "property": "scores", "value": {"b": 8},
+	})
+	assert_has_key(second, "data")
+	assert_true(editor_undo(_undo_redo), "undo second set should succeed")
+	var stored: Variant = node.get("scores")
+	assert_eq((stored as Dictionary).size(), 1, "undo must restore the previous dictionary")
+	assert_eq(stored["a"], 7)
+	_free_typed_array_probe(1)
 
 
 func test_set_property_typed_array_undo_restores_previous_value() -> void:

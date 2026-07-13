@@ -382,6 +382,19 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary, de
 				if typed_out is Dictionary:
 					return typed_out
 				v = typed_out
+			elif (
+				target_type == TYPE_DICTIONARY
+				and slot_value is Dictionary
+				and (slot_value as Dictionary).is_typed()
+			):
+				## Typed Dictionary[K, V] slot (#612 stage 3): success is a
+				## typed duplicate of the slot; the error envelope is untyped.
+				var typed_dict_out: Dictionary = NodeHandler._coerce_typed_dictionary(
+					v, slot_value, "Property '%s'" % key
+				)
+				if not typed_dict_out.is_typed():
+					return typed_dict_out
+				v = typed_dict_out
 			else:
 				v = NodeHandler._coerce_value(v, target_type)
 				## Mirror set_property's coerce check: wrong-shape dicts (#123) and

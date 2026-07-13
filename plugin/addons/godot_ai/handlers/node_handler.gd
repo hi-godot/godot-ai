@@ -261,6 +261,20 @@ func set_property(params: Dictionary) -> Dictionary:
 		if typed_out is Dictionary:
 			return typed_out
 		value = typed_out
+	elif (
+		target_type == TYPE_DICTIONARY
+		and old_value is Dictionary
+		and (old_value as Dictionary).is_typed()
+	):
+		## Typed Dictionary[K, V] slot (#612 stage 3) — same silent-drop
+		## family as typed arrays. A successful result is always a TYPED
+		## Dictionary (a cleared duplicate of the slot), while the error
+		## envelope is an untyped {"error": ...} — that's the discriminator
+		## (a legit payload could contain an "error" key; typedness can't lie).
+		var typed_dict_out: Dictionary = _coerce_typed_dictionary(value, old_value)
+		if not typed_dict_out.is_typed():
+			return typed_dict_out
+		value = typed_dict_out
 	else:
 		value = _coerce_value(value, target_type)
 		## Refuse any value that didn't land as the target compound Variant
@@ -981,11 +995,7 @@ static func _coerce_typed_array(value: Variant, slot_value: Array, prefix: Strin
 ## typed Array slot, for error messages.
 static func _typed_array_element_label(slot_value: Array) -> String:
 	if slot_value.get_typed_builtin() == TYPE_OBJECT:
-		var cls := String(slot_value.get_typed_class_name())
-		var script: Variant = slot_value.get_typed_script()
-		if script is Script and not String((script as Script).get_global_name()).is_empty():
-			cls = String((script as Script).get_global_name())
-		return cls if not cls.is_empty() else "Object"
+		return _object_type_label(slot_value.get_typed_class_name(), slot_value.get_typed_script())
 	return type_string(slot_value.get_typed_builtin())
 
 
@@ -1051,11 +1061,171 @@ static func _coerce_object_element(elem: Variant, elem_prefix: String) -> Varian
 ## otherwise. Checked per element so a wrong-class Resource errors naming
 ## the index instead of being rejected wholesale by `Array.assign()`.
 static func _object_element_conforms(elem: Object, slot_value: Array) -> bool:
-	var script: Variant = slot_value.get_typed_script()
+	return _object_conforms(elem, slot_value.get_typed_class_name(), slot_value.get_typed_script())
+
+
+## Shared class/script conformance predicate for typed Array elements and
+## typed Dictionary values (#612 stages 2–3).
+static func _object_conforms(elem: Object, cls_name: StringName, script: Variant) -> bool:
 	if script is Script:
 		return is_instance_of(elem, script)
-	var cls := String(slot_value.get_typed_class_name())
+	var cls := String(cls_name)
 	return cls.is_empty() or elem.is_class(cls)
+
+
+## Fill a typed `Dictionary[K, V]` slot from a JSON object (#612 stage 3).
+## `slot_value` is the property's current typed Dictionary — the getter
+## returns the (possibly empty) typed container carrying both constraint
+## sides. Keys coerce via `_coerce_typed_dict_key` (JSON object keys are
+## always Strings, so int/float/StringName key slots parse the string and
+## fail closed on anything inexact); values mirror the typed-array element
+## rules — object values through `_coerce_object_element` + conformance,
+## everything else through `_coerce_value`/`_check_coerced`. Never partial:
+## any bad key or value errors naming the key and nothing is written.
+##
+## Returns the filled TYPED Dictionary on success or an UNTYPED
+## `make(...)`-shaped error Dictionary — callers discriminate on
+## `is_typed()`, since a success result is always a duplicate of the typed
+## slot and error envelopes are plain dicts.
+static func _coerce_typed_dictionary(
+	value: Variant, slot_value: Dictionary, prefix: String = ""
+) -> Dictionary:
+	var label := _typed_dictionary_label(slot_value)
+	if not (value is Dictionary):
+		var err := ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"Cannot write %s to a typed %s property; expected an object" % [
+				type_string(typeof(value)), label,
+			],
+		)
+		return ErrorCodes.prefix_message(err, prefix)
+	var key_type := slot_value.get_typed_key_builtin() if slot_value.is_typed_key() else TYPE_NIL
+	var value_type := (
+		slot_value.get_typed_value_builtin() if slot_value.is_typed_value() else TYPE_NIL
+	)
+	var out := slot_value.duplicate()
+	out.clear()
+	var in_dict: Dictionary = value
+	for raw_key in in_dict.keys():
+		var key_prefix := (
+			'key "%s"' % str(raw_key) if prefix.is_empty()
+			else '%s key "%s"' % [prefix, str(raw_key)]
+		)
+		var key: Variant = _coerce_typed_dict_key(raw_key, key_type, label, key_prefix)
+		if key is Dictionary:
+			## Scalar-only key coercion never returns a legit Dictionary key,
+			## so a Dictionary here is unambiguously the error envelope.
+			return key
+		var raw_value: Variant = in_dict[raw_key]
+		var coerced: Variant
+		if value_type == TYPE_NIL:
+			## Untyped value side (e.g. Dictionary[String, Variant]).
+			coerced = raw_value
+		elif value_type == TYPE_OBJECT:
+			coerced = _coerce_object_element(raw_value, key_prefix)
+			if coerced is Dictionary:
+				return coerced
+			if coerced != null and not _object_conforms(
+				coerced,
+				slot_value.get_typed_value_class_name(),
+				slot_value.get_typed_value_script(),
+			):
+				var conform_err := ErrorCodes.make(
+					ErrorCodes.WRONG_TYPE,
+					"value is %s, which is not a %s" % [
+						(coerced as Object).get_class(),
+						_object_type_label(
+							slot_value.get_typed_value_class_name(),
+							slot_value.get_typed_value_script(),
+						),
+					],
+				)
+				return ErrorCodes.prefix_message(conform_err, key_prefix)
+		else:
+			coerced = _coerce_value(raw_value, value_type)
+			var value_err := _check_coerced(coerced, value_type, key_prefix)
+			if value_err != null:
+				return value_err
+			if coerced == null:
+				var null_err := ErrorCodes.make(
+					ErrorCodes.WRONG_TYPE,
+					"cannot store null as a %s value" % label,
+				)
+				return ErrorCodes.prefix_message(null_err, key_prefix)
+		out[key] = coerced
+	if out.size() != in_dict.size():
+		## Two input keys collapsing onto one coerced key ("1" and "01" both
+		## parse to int 1) would silently lose an entry — refuse instead.
+		var collide_err := ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"%s keys collide after coercion (%d of %d entries landed)" % [
+				label, out.size(), in_dict.size(),
+			],
+		)
+		return ErrorCodes.prefix_message(collide_err, prefix)
+	return out
+
+
+## Coerce one JSON-object key onto a typed Dictionary's key slot. JSON keys
+## are always Strings, so int/float/StringName key types accept exactly the
+## strings that parse cleanly; everything else fails closed naming the key.
+## Object/compound key types are unreachable from JSON and refuse loudly.
+static func _coerce_typed_dict_key(
+	raw_key: Variant, key_type: int, label: String, key_prefix: String
+) -> Variant:
+	if key_type == TYPE_NIL or typeof(raw_key) == key_type:
+		return raw_key
+	if raw_key is String:
+		var key_str := raw_key as String
+		match key_type:
+			TYPE_STRING_NAME:
+				return StringName(key_str)
+			TYPE_INT:
+				if key_str.is_valid_int():
+					return int(key_str)
+			TYPE_FLOAT:
+				if key_str.is_valid_float():
+					return float(key_str)
+	elif raw_key is float and key_type == TYPE_INT and is_equal_approx(raw_key, roundf(raw_key)):
+		## Whole JSON numbers arrive as floats through some non-JSON callers.
+		return int(raw_key)
+	var err := ErrorCodes.make(
+		ErrorCodes.WRONG_TYPE,
+		"cannot use %s as a %s key" % [type_string(typeof(raw_key)), label],
+	)
+	return ErrorCodes.prefix_message(err, key_prefix)
+
+
+## "Dictionary[String, int]" / "Dictionary[int, Texture2D]" — for error
+## messages. Untyped sides read as Variant.
+static func _typed_dictionary_label(slot_value: Dictionary) -> String:
+	var key_label := "Variant"
+	if slot_value.is_typed_key():
+		key_label = (
+			_object_type_label(
+				slot_value.get_typed_key_class_name(), slot_value.get_typed_key_script()
+			)
+			if slot_value.get_typed_key_builtin() == TYPE_OBJECT
+			else type_string(slot_value.get_typed_key_builtin())
+		)
+	var value_label := "Variant"
+	if slot_value.is_typed_value():
+		value_label = (
+			_object_type_label(
+				slot_value.get_typed_value_class_name(), slot_value.get_typed_value_script()
+			)
+			if slot_value.get_typed_value_builtin() == TYPE_OBJECT
+			else type_string(slot_value.get_typed_value_builtin())
+		)
+	return "Dictionary[%s, %s]" % [key_label, value_label]
+
+
+## Class/script display name for an object-typed constraint side.
+static func _object_type_label(cls_name: StringName, script: Variant) -> String:
+	var cls := String(cls_name)
+	if script is Script and not String((script as Script).get_global_name()).is_empty():
+		cls = String((script as Script).get_global_name())
+	return cls if not cls.is_empty() else "Object"
 
 
 func get_node_properties(params: Dictionary) -> Dictionary:
