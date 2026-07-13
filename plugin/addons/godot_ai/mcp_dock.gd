@@ -991,6 +991,12 @@ func _update_status() -> void:
 	var changed: bool = connected != _last_connected or status_text != _last_status_text
 	if not changed:
 		return
+	if connected and not _last_connected:
+		## #739: the server just came up. If the startup uv probe failed
+		## (the reporter's screenshot: green "Server connected" beside a
+		## red "uv: not found" row), the failure was transient — re-probe
+		## now instead of pinning the red row for the whole session.
+		_reprobe_uv_if_negative()
 	_last_connected = connected
 	_last_status_text = status_text
 	_status_icon.color = status_color
@@ -1330,6 +1336,8 @@ func _on_dev_mode_toggled(enabled: bool) -> void:
 
 
 func _apply_dev_mode_visibility() -> void:
+	if _dev_mode_toggle == null:
+		return  ## dock UI not built yet (unit tests, teardown window)
 	var dev := _dev_mode_toggle.button_pressed
 	_dev_section.visible = dev
 	if _log_viewer != null:
@@ -1498,6 +1506,24 @@ func _dispatch_stale_server_restart() -> bool:
 
 
 # --- Setup section ---
+
+## #739: a `uvx --version` probe that failed once at editor startup used
+## to pin "uv: not found" for the whole session — the Install-uv click
+## was the only invalidation path, so the fix users discovered was
+## re-clicking Install on every launch. Re-probe on events that suggest
+## the failure was transient (server-connect transition, manual Refresh).
+## No-op once uv has been found, so this costs nothing in the healthy
+## steady state; when uv is genuinely absent, the re-probe is a fast
+## negative (CliFinder's well-known-dir walk plus one bounded `where`).
+## Runs on the main thread like the initial probe — same wall-clock
+## bound, and the triggering events are rare (once per connect / click).
+func _reprobe_uv_if_negative() -> void:
+	if not ClientConfigurator.uv_probe_negative():
+		return
+	ClientConfigurator.invalidate_uv_detection()
+	_refresh_setup_status()
+	_apply_dev_mode_visibility()
+
 
 func _refresh_setup_status() -> void:
 	if _setup_container == null:
@@ -1756,12 +1782,11 @@ func _on_install_uv() -> void:
 	## Drop the cached uvx path AND the cached `uvx --version` so the
 	## next `_refresh_setup_status` finds and reads the freshly-installed
 	## binary instead of returning the pre-install "not found" result.
-	## Routing through the configurator here matters on Windows, where
-	## the CLI-finder cache key is `uvx.exe` — invalidating just `"uvx"`
+	## Routing through the configurator matters on Windows, where the
+	## CLI-finder cache key is `uvx.exe` — invalidating just `"uvx"`
 	## would leave the cache stale and the dock would keep showing
 	## "uv: not found" for the rest of the session.
-	ClientConfigurator.invalidate_uvx_cli_cache()
-	ClientConfigurator.invalidate_uv_version_cache()
+	ClientConfigurator.invalidate_uv_detection()
 	_refresh_setup_status.call_deferred()
 
 
@@ -1946,6 +1971,9 @@ func _finalize_action_buttons(client_id: String) -> void:
 
 
 func _on_refresh_clients_pressed() -> void:
+	## Explicit user action — also give a failed uv probe another chance
+	## (#739), mirroring how the same click already re-sweeps client CLIs.
+	_reprobe_uv_if_negative()
 	_request_client_status_refresh(true)
 
 

@@ -678,6 +678,26 @@ static func invalidate_uv_version_cache() -> void:
 	_uv_version_cache = ""
 
 
+## True when a probe has run this session and came back empty — i.e. the
+## dock is currently rendering "uv: not found". Lets callers decide when
+## a re-probe is worth paying for (server-connect transition, manual
+## Refresh) without ever re-probing once uv has been found.
+static func uv_probe_negative() -> bool:
+	return _uv_version_searched and _uv_version_cache.is_empty()
+
+
+## Drop both uv caches — the resolved uvx path AND the cached
+## `uvx --version` output — so the next check_uv_version() re-runs the
+## full detection. #739: a probe that fails once at editor startup
+## (contended spawn, cold Defender scan, stale PATH under a
+## Steam-launched editor) used to pin "uv: not found" for the whole
+## session; the Install-uv click was the only invalidation path. Callers
+## invoke this on events that suggest the failure was transient.
+static func invalidate_uv_detection() -> void:
+	invalidate_uvx_cli_cache()
+	invalidate_uv_version_cache()
+
+
 static var _venv_python_cache: String = ""
 static var _venv_python_searched: bool = false
 ## #678 worker threads write this cache while main-thread callers read
