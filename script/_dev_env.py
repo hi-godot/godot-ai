@@ -249,15 +249,22 @@ def _pid_cmdline(pid: int) -> str:
     """Best-effort command line for ``pid`` ("<unknown>" when unreadable)."""
     try:
         if os.name == "nt":
+            ## Get-CimInstance, not wmic: WMIC is uninstalled by default from
+            ## Windows 11 25H2 onward, so the legacy spelling would degrade
+            ## every lookup there to "<unknown>".
             out = subprocess.run(
-                ["wmic", "process", "where", f"ProcessId={pid}", "get", "CommandLine"],
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=5,
                 check=False,
-            ).stdout
-            lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
-            return lines[1] if len(lines) > 1 else "<unknown>"
+            ).stdout.strip()
+            return out or "<unknown>"
         out = subprocess.run(
             ["ps", "-o", "args=", "-p", str(pid)],
             capture_output=True,
@@ -285,7 +292,15 @@ def free_port(port: int) -> None:
         ## is brand-blind, and on a dev box the listener can be an unrelated
         ## service that happens to sit on the port. The command line gives
         ## the developer a fighting chance to notice before data is lost.
-        print(f"  killing pid {pid}: {_pid_cmdline(pid)}")
+        cmdline = _pid_cmdline(pid)
+        ## The cmdline lookup can take seconds (PowerShell start on Windows)
+        ## — long enough for the listener to exit and the OS to recycle the
+        ## pid. Re-confirm the pid still owns the port right before the
+        ## signal so a recycled pid never gets a stray kill.
+        if pid not in _listener_pids(port):
+            print(f"  pid {pid} released port {port} on its own; skipping kill")
+            continue
+        print(f"  killing pid {pid}: {cmdline}")
         _kill_pid(pid)
     # Give the socket a moment to release before the caller binds it.
     deadline = time.monotonic() + 3.0
