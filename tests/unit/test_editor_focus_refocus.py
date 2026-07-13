@@ -551,14 +551,25 @@ def test_check_uv_version_caches_for_session() -> None:
 
     dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
     install_block = get_func_block(dock_source, "func _on_install_uv() -> void:")
-    assert "ClientConfigurator.invalidate_uvx_cli_cache()" in install_block, (
-        "_on_install_uv must invalidate the CLI-path cache via the "
-        "configurator helper (which knows the OS-specific binary name). "
-        'A direct `CliFinder.invalidate("uvx")` would leave the '
-        "Windows cache stale — Windows caches under `uvx.exe`."
+    assert "ClientConfigurator.invalidate_uv_detection()" in install_block, (
+        "_on_install_uv must invalidate uv detection via the configurator "
+        "helper (which knows the OS-specific binary name). A direct "
+        '`CliFinder.invalidate("uvx")` would leave the Windows cache '
+        "stale — Windows caches under `uvx.exe`."
     )
-    assert "ClientConfigurator.invalidate_uv_version_cache()" in install_block, (
-        "_on_install_uv must invalidate the version cache too — without "
+
+    # #739: the combined invalidator must clear BOTH caches — the resolved
+    # uvx path and the cached `uvx --version` output. Dropping only one
+    # leaves the dock pinned on the stale half (path cache alone -> the old
+    # "not found" version string survives; version cache alone -> the old
+    # empty path survives).
+    detection_block = get_func_block(source, "static func invalidate_uv_detection() -> void:")
+    assert "invalidate_uvx_cli_cache()" in detection_block, (
+        "invalidate_uv_detection must drop the CLI-path cache via the "
+        "OS-aware helper so the uvx binary is re-resolved."
+    )
+    assert "invalidate_uv_version_cache()" in detection_block, (
+        "invalidate_uv_detection must drop the version cache too — without "
         "this, the dock's setup status keeps showing 'uv: not found' "
         "after a successful install."
     )
