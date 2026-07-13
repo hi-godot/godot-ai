@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from godot_ai.godot_client.client import GodotCommandError
@@ -275,3 +277,26 @@ async def test_require_writable_async_probe_handles_unknown_state_gracefully():
         await require_writable_async(runtime)
     assert client.probe_calls == 1
     assert session.readiness == "playing"
+
+
+def test_known_readiness_matches_plugin_get_readiness_source():
+    """Cross-language parity: KNOWN_READINESS must mirror the actual
+    return literals of connection.gd::get_readiness — not another Python
+    constant. The previous docstring cited get_readiness as the source of
+    truth but never read it (audit backlog: Python-vs-Python tautology)."""
+    from pathlib import Path
+
+    from tests.unit._gdscript_text import get_func_block
+
+    connection_gd = (
+        Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godot_ai" / "connection.gd"
+    )
+    source = connection_gd.read_text(encoding="utf-8")
+    block = get_func_block(source, "static func get_readiness() -> String:")
+    emitted = set(re.findall(r'return "(\w+)"', block))
+    assert emitted, "no return literals parsed from get_readiness — check the block extraction"
+    assert emitted == set(KNOWN_READINESS), (
+        f"connection.gd::get_readiness and Python KNOWN_READINESS drifted: "
+        f"gd-only={sorted(emitted - set(KNOWN_READINESS))}, "
+        f"py-only={sorted(set(KNOWN_READINESS) - emitted)}"
+    )

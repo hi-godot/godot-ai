@@ -61,7 +61,17 @@ def test_gdscript_sub_code_constants_match_python_enum() -> None:
     added only on the GDScript side would be silently dropped from
     attribution."""
     source = (PLUGIN_ROOT / "utils" / "error_codes.gd").read_text(encoding="utf-8")
-    gd_sub_codes = set(re.findall(r'const SUB_\w+ := "(\w+)"', source))
+    ## Whitespace/annotation-tolerant (mirrors test_error_code_parity's
+    ## _CONST_RE): `const X := "v"`, `const X: String = "v"`, and
+    ## `const X = "v"` all match, so a sub-code added in any legal
+    ## declaration style can't silently vanish from this parity check.
+    gd_sub_codes = set(
+        re.findall(
+            r'^\s*const\s+SUB_\w+\s*(?::\s*String\s*)?:?=\s*"(\w+)"',
+            source,
+            re.MULTILINE,
+        )
+    )
     py_sub_codes = {member.value for member in EditorNotReadySubCode}
     assert gd_sub_codes == py_sub_codes, (
         f"GDScript SUB_* constants and EditorNotReadySubCode drifted: "
