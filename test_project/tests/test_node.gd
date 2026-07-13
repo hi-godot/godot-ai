@@ -405,24 +405,39 @@ func test_coerce_value_color_rejects_unparseable_string() -> void:
 
 # ----- #191 — non-dict inputs to compound targets must error loudly -----
 
-func test_set_property_vector3_rejects_array_input() -> void:
-	## Issue #191: passing [x,y,z] to a Vector3 property used to flow
-	## through _coerce_value unchanged and Godot default-constructed
-	## Vector3.ZERO via add_do_property. Must now reject and leave the
-	## property untouched.
+func test_set_property_vector3_accepts_exact_array_input() -> void:
+	## #714 canonical shapes: [x,y,z] is now a valid Vector3 spelling (the
+	## superset decision) — the #191 silent-zero hazard is covered by the
+	## STRICT variant below (wrong length still rejects, never zero-fills).
 	_handler.create_node({"type": "Node3D", "name": "_McpTestArrV3", "parent_path": "/Main"})
 	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestArrV3") as Node3D
-	var original := node.position
 
 	var result := _handler.set_property({
 		"path": "/Main/_McpTestArrV3",
 		"property": "position",
-		"value": [5, 5, 5],
+		"value": [5, 6, 7],
+	})
+	assert_has_key(result, "data")
+	assert_eq(node.position, Vector3(5, 6, 7), "array shape must store the supplied components")
+	assert_true(editor_undo(_undo_redo), "undo set should succeed")
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
+
+
+func test_set_property_vector3_rejects_wrong_length_array() -> void:
+	## The #191 guard, restated for the array shape: a wrong-length array
+	## must reject loudly and leave the property untouched — never
+	## zero-fill.
+	_handler.create_node({"type": "Node3D", "name": "_McpTestArrV3b", "parent_path": "/Main"})
+	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestArrV3b") as Node3D
+	var original := node.position
+
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestArrV3b",
+		"property": "position",
+		"value": [5, 5],
 	})
 	assert_is_error(result)
 	assert_contains(result.error.message, "Vector3")
-	## Read back the stored Variant — the silent-zero failure mode would
-	## leave the node at (0,0,0) even though the response said "error".
 	assert_eq(node.position, original, "Position must be unchanged after rejected array coerce")
 	assert_true(editor_undo(_undo_redo), "undo create should succeed")
 
@@ -445,37 +460,36 @@ func test_set_property_vector3_rejects_json_string_input() -> void:
 	assert_true(editor_undo(_undo_redo), "undo create should succeed")
 
 
-func test_set_property_vector2_rejects_array_input() -> void:
-	## Symmetric guard for Vector2.
+func test_set_property_vector2_accepts_exact_array_input() -> void:
+	## #714 canonical shapes: [x,y] is a valid Vector2 spelling now.
 	_handler.create_node({"type": "Sprite2D", "name": "_McpTestArrV2", "parent_path": "/Main"})
 	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestArrV2") as Sprite2D
-	var original := node.position
 
 	var result := _handler.set_property({
 		"path": "/Main/_McpTestArrV2",
 		"property": "position",
 		"value": [1, 2],
 	})
-	assert_is_error(result)
-	assert_contains(result.error.message, "Vector2")
-	assert_eq(node.position, original, "Position must be unchanged after rejected array coerce")
+	assert_has_key(result, "data")
+	assert_eq(node.position, Vector2(1, 2))
+	assert_true(editor_undo(_undo_redo), "undo set should succeed")
 	assert_true(editor_undo(_undo_redo), "undo create should succeed")
 
 
-func test_set_property_color_rejects_array_input() -> void:
-	## Symmetric guard for Color.
+func test_set_property_color_accepts_exact_array_input() -> void:
+	## #714 canonical shapes: [r,g,b(,a)] is a valid Color spelling now;
+	## a wrong-length array still rejects (see the strict vector variant).
 	_handler.create_node({"type": "Sprite2D", "name": "_McpTestArrColor", "parent_path": "/Main"})
 	var node := EditorInterface.get_edited_scene_root().get_node("_McpTestArrColor") as Sprite2D
-	var original := node.modulate
 
 	var result := _handler.set_property({
 		"path": "/Main/_McpTestArrColor",
 		"property": "modulate",
 		"value": [1, 0, 0, 1],
 	})
-	assert_is_error(result)
-	assert_contains(result.error.message, "Color")
-	assert_eq(node.modulate, original, "Modulate must be unchanged after rejected array coerce")
+	assert_has_key(result, "data")
+	assert_eq(node.modulate, Color(1, 0, 0, 1))
+	assert_true(editor_undo(_undo_redo), "undo set should succeed")
 	assert_true(editor_undo(_undo_redo), "undo create should succeed")
 
 

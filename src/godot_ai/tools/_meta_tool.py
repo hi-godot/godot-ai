@@ -180,6 +180,12 @@ def _json_container_kinds(annotation: Any) -> set[str]:
         for arg in args:
             if arg is type(None):
                 continue
+            ## A str-accepting arm means a JSON-shaped string is a legitimate
+            ## literal value for this param (#714) — never decode. Eagerly
+            ## parsing `list[str] | str` would mangle e.g. a text payload
+            ## that happens to start with "[" or "{".
+            if arg is str or (isinstance(arg, type) and issubclass(arg, str)):
+                return set()
             kinds.update(_json_container_kinds(arg))
         return kinds
 
@@ -209,6 +215,61 @@ def _handler_meta(handler: OpHandler) -> tuple[inspect.Signature | None, dict[st
     except (NameError, TypeError, ValueError):
         type_hints = {}
     return (signature, type_hints)
+
+
+## Scalar pins enforced Python-side before dispatch (#714). Only exact
+## str/bool/int/float annotations (plus Optional/unions of those) are
+## enforced — Any/unannotated/container params stay with
+## _coerce_stringified_json_values and the GDScript handler's own checks.
+def _scalar_annotation_types(annotation: Any) -> tuple[type, ...] | None:
+    if annotation in (inspect.Parameter.empty, Any, object):
+        return None
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+    if origin is Annotated:
+        return _scalar_annotation_types(args[0]) if args else None
+    if origin in (Union, UnionType):
+        allowed: list[type] = []
+        for arg in args:
+            if arg is type(None):
+                allowed.append(type(None))
+                continue
+            sub = _scalar_annotation_types(arg)
+            if sub is None:
+                return None
+            allowed.extend(sub)
+        return tuple(allowed)
+    if annotation in (str, bool, int, float):
+        return (annotation,)
+    return None
+
+
+def _scalar_mismatch_label(value: Any, allowed: tuple[type, ...]) -> str | None:
+    """None when ``value`` satisfies one of ``allowed``; else the expected label.
+
+    bool is checked before int (bool subclasses int — a bare ``True`` must
+    not satisfy an ``int`` pin, that's the classic type confusion this
+    guards). An ``int`` satisfies a ``float`` pin: JSON has one number type
+    and ``1`` for a float slot is legitimate.
+    """
+    for t in allowed:
+        if t is type(None):
+            if value is None:
+                return None
+        elif t is bool:
+            if isinstance(value, bool):
+                return None
+        elif t is int:
+            if isinstance(value, int) and not isinstance(value, bool):
+                return None
+        elif t is float:
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return None
+        elif t is str:
+            if isinstance(value, str):
+                return None
+    names = sorted({"None" if t is type(None) else t.__name__ for t in allowed})
+    return " | ".join(names)
 
 
 def _expected_json_label(kinds: set[str]) -> str:
@@ -356,11 +417,35 @@ async def dispatch_manage_op(
         op=op,
     )
 
+    ## Scalar type pins (#714): 28 of 30 GDScript handlers skip
+    ## McpParamValidators, so a bool where an int belongs (or a dict where
+    ## a str belongs) used to surface as an opaque plugin-side crash. Check
+    ## here, where the cached type hints already exist, and fail with a
+    ## param-naming INVALID_PARAMS the agent can self-correct from.
+    _, type_hints = _handler_meta(handler)
+    for key, value in call_params.items():
+        allowed = _scalar_annotation_types(type_hints.get(key, inspect.Parameter.empty))
+        if allowed is None:
+            continue
+        expected = _scalar_mismatch_label(value, allowed)
+        if expected is not None:
+            raise GodotCommandError(
+                code=ErrorCode.INVALID_PARAMS,
+                message=(
+                    f"{tool_name}.{op}: param {key!r} must be {expected}, "
+                    f"got {type(value).__name__}"
+                ),
+                data={
+                    "tool": tool_name,
+                    "op": op,
+                    "param": key,
+                    "expected": expected,
+                    "received_type": type(value).__name__,
+                },
+            )
+
     try:
         result = handler(runtime, **call_params)
-        if inspect.isawaitable(result):
-            result = await result
-        return result
     except TypeError as exc:
         ## When a caller passes a key the handler doesn't accept (a common LLM
         ## failure mode: invented kwargs like ``force=True`` on ``stop``,
@@ -413,3 +498,13 @@ async def dispatch_manage_op(
                 "unexpected": unexpected,
             },
         ) from exc
+
+    ## Outside the try (#714): the TypeError catch above exists for BINDING
+    ## errors (unexpected/missing kwargs). Awaiting here keeps a genuine
+    ## TypeError bug inside an async handler body propagating as the
+    ## internal error it is, instead of being misreported as INVALID_PARAMS
+    ## blaming the caller's params. (Sync handler bodies remain inseparable
+    ## from binding — Python raises both at the same call site.)
+    if inspect.isawaitable(result):
+        result = await result
+    return result

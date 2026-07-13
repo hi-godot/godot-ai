@@ -706,25 +706,23 @@ static func _check_dict_coerce_failed(value: Variant, target_type: int) -> Varia
 ## `dict.get(key, 0)` defaults silently zero-filled missing axes.
 static func _coerce_value(value: Variant, target_type: int) -> Variant:
 	match target_type:
+		## Vector2/Vector3/Color route through the canonical strict parser
+		## (#714): same dict/array/string shapes as every other handler, and
+		## non-numeric components fall through (returning the original
+		## value) so _check_coerced flags them instead of crashing a typed
+		## constructor or silently writing black/zeros.
 		TYPE_VECTOR2:
-			if value is Dictionary and value.has_all(VECTOR2_KEYS):
-				return Vector2(value["x"], value["y"])
+			var v2 = McpJsonValues.parse_vector2(value)
+			if v2 != null:
+				return v2
 		TYPE_VECTOR3:
-			if value is Dictionary and value.has_all(VECTOR3_KEYS):
-				return Vector3(value["x"], value["y"], value["z"])
+			var v3 = McpJsonValues.parse_vector3(value)
+			if v3 != null:
+				return v3
 		TYPE_COLOR:
-			if value is Dictionary and value.has_all(COLOR_KEYS):
-				return Color(value["r"], value["g"], value["b"], value.get("a", 1.0))
-			if value is String:
-				# Color(String) silently returns black for an unparseable string
-				# (e.g. "Color(1,1,1,1)" or a typo). Validate with the two-sentinel
-				# from_string idiom (see theme_handler/material_values); on failure
-				# fall through so the value stays a String and _check_coerced flags
-				# it as an error instead of writing black.
-				var col_a := Color.from_string(value, Color(0, 0, 0, 0))
-				var col_b := Color.from_string(value, Color(1, 1, 1, 1))
-				if col_a == col_b:
-					return col_a
+			var col = McpJsonValues.parse_color(value)
+			if col != null:
+				return col
 		TYPE_BOOL:
 			if value is float or value is int:
 				return bool(value)

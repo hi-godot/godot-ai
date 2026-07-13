@@ -245,6 +245,10 @@ func read_script(params: Dictionary) -> Dictionary:
 	}
 
 
+## Instance (not static) despite using no instance state: tests stub
+## `_capture_gdscript_load_diagnostics` via subclass override, and static
+## calls bind lexically — see test_script.gd. filesystem_handler shares
+## this by instantiating a bare ScriptHandler (#714).
 func _attach_gdscript_diagnostics(data: Dictionary, path: String, content: String) -> void:
 	var validation := _validate_gdscript_source(content)
 	var diagnostics: Array = []

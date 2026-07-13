@@ -77,51 +77,19 @@ static func resolve_enum(property: String, value: Variant) -> Variant:
 	return null
 
 
-## Parse a color from Color, "#rrggbb", "#rrggbbaa", named (red/blue/...) or dict.
-## Returns null if the input cannot be parsed.
+## Parse a color from Color, "#rrggbb(aa)", named string, {r,g,b[,a]} dict,
+## or [r,g,b(,a)] array. Delegates to the canonical parser (#714); returns
+## null if the input cannot be parsed.
 static func parse_color(value: Variant) -> Variant:
-	if value is Color:
-		return value
-	if value is String:
-		var s: String = value
-		var sentinel_a := Color(0, 0, 0, 0)
-		var sentinel_b := Color(1, 1, 1, 1)
-		var a := Color.from_string(s, sentinel_a)
-		var b := Color.from_string(s, sentinel_b)
-		if a != b:
-			return null
-		return a
-	if value is Dictionary:
-		var d: Dictionary = value
-		if d.has("r") and d.has("g") and d.has("b"):
-			return Color(float(d.r), float(d.g), float(d.b), float(d.get("a", 1.0)))
-	if value is Array and value.size() >= 3:
-		var arr: Array = value
-		var alpha := float(arr[3]) if arr.size() >= 4 else 1.0
-		return Color(float(arr[0]), float(arr[1]), float(arr[2]), alpha)
-	return null
+	return McpJsonValues.parse_color(value)
 
 
 static func parse_vector3(value: Variant) -> Variant:
-	if value is Vector3:
-		return value
-	if value is Dictionary:
-		var d: Dictionary = value
-		return Vector3(float(d.get("x", 0)), float(d.get("y", 0)), float(d.get("z", 0)))
-	if value is Array and value.size() >= 3:
-		return Vector3(float(value[0]), float(value[1]), float(value[2]))
-	return null
+	return McpJsonValues.parse_vector3(value)
 
 
 static func parse_vector2(value: Variant) -> Variant:
-	if value is Vector2:
-		return value
-	if value is Dictionary:
-		var d: Dictionary = value
-		return Vector2(float(d.get("x", 0)), float(d.get("y", 0)))
-	if value is Array and value.size() >= 2:
-		return Vector2(float(value[0]), float(value[1]))
-	return null
+	return McpJsonValues.parse_vector2(value)
 
 
 ## Load a Texture2D from a res:// / uid:// / user:// path (validate_loadable_path).

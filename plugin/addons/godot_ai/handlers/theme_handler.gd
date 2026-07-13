@@ -459,25 +459,11 @@ static func _validate_res_path(path: String, required_suffix: String, param_name
 
 ## Parse a color from Color, "#rrggbb", "#rrggbbaa", named (red/blue/...) or dict.
 ## Returns null if the input cannot be parsed.
+## Delegates to the canonical parser (#714) — gains [r,g,b(,a)] array
+## support and strict key/component checking, same shapes as every other
+## color-accepting handler.
 static func _parse_color(value: Variant) -> Variant:
-	if value is Color:
-		return value
-	if value is String:
-		var s: String = value
-		# Color.from_string returns the default on parse failure, so call it twice
-		# with distinct sentinels — if both agree, parsing succeeded.
-		var sentinel_a := Color(0, 0, 0, 0)
-		var sentinel_b := Color(1, 1, 1, 1)
-		var a := Color.from_string(s, sentinel_a)
-		var b := Color.from_string(s, sentinel_b)
-		if a != b:
-			return null
-		return a
-	if value is Dictionary:
-		var d: Dictionary = value
-		if d.has("r") and d.has("g") and d.has("b"):
-			return Color(float(d.r), float(d.g), float(d.b), float(d.get("a", 1.0)))
-	return null
+	return McpJsonValues.parse_color(value)
 
 
 static func _serialize_value(value: Variant) -> Variant:

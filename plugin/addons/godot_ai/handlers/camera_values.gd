@@ -56,27 +56,16 @@ static func enum_keys(property: String) -> Array:
 
 
 static func parse_vector2(value: Variant) -> Variant:
-	if value is Vector2:
-		return value
-	if value is Dictionary:
-		var d: Dictionary = value
-		return Vector2(float(d.get("x", 0)), float(d.get("y", 0)))
-	if value is Array and value.size() >= 2:
-		return Vector2(float(value[0]), float(value[1]))
+	## Camera-specific sugar kept from the pre-#714 copy: a bare number is
+	## a uniform zoom, splatted to both axes. Everything else goes through
+	## the canonical strict parser.
 	if value is int or value is float:
 		return Vector2(float(value), float(value))
-	return null
+	return McpJsonValues.parse_vector2(value)
 
 
 static func parse_vector3(value: Variant) -> Variant:
-	if value is Vector3:
-		return value
-	if value is Dictionary:
-		var d: Dictionary = value
-		return Vector3(float(d.get("x", 0)), float(d.get("y", 0)), float(d.get("z", 0)))
-	if value is Array and value.size() >= 3:
-		return Vector3(float(value[0]), float(value[1]), float(value[2]))
-	return null
+	return McpJsonValues.parse_vector3(value)
 
 
 ## Coerce a JSON-shaped value for a camera property against the declared type.

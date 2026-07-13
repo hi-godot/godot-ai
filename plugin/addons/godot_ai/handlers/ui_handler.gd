@@ -459,19 +459,11 @@ func _apply_property(node: Node, prop: String, value: Variant) -> Variant:
 static func _coerce_for_type(value: Variant, prop_type: int) -> Dictionary:
 	match prop_type:
 		TYPE_COLOR:
-			if value is Color:
-				return {"ok": true, "value": value}
-			if value is String:
-				var a := Color.from_string(value, Color(0, 0, 0, 0))
-				var b := Color.from_string(value, Color(1, 1, 1, 1))
-				if a == b:
-					return {"ok": true, "value": a}
-				return {"ok": false}
-			if value is Dictionary and value.has("r") and value.has("g") and value.has("b"):
-				return {
-					"ok": true,
-					"value": Color(float(value.r), float(value.g), float(value.b), float(value.get("a", 1.0))),
-				}
+			## Canonical parser (#714): adds [r,g,b(,a)] array support and
+			## strict key/component checking, same shapes everywhere.
+			var parsed_color = McpJsonValues.parse_color(value)
+			if parsed_color != null:
+				return {"ok": true, "value": parsed_color}
 			return {"ok": false}
 		TYPE_VECTOR2:
 			if value is Vector2:

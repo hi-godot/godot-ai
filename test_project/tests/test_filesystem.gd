@@ -91,6 +91,54 @@ func test_write_file_basic() -> void:
 	assert_eq(result.data.cleanup.rm, [path])
 
 
+func test_write_file_gd_attaches_parse_diagnostics() -> void:
+	## #714: a .gd written through the filesystem tool gets the same parse
+	## diagnostics create_script attaches — a broken script must not
+	## report plain success.
+	var path := "res://tests/_mcp_test_written_broken.gd"
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	## Same allowance count as test_script's _expect_invalid_if_parse_errors:
+	## the validation reload + capture load each emit the parse error, and
+	## Godot 4.7 adds one more logger-visible copy.
+	expect_script_error_containing("Expected parameter name")
+	expect_script_error_containing("Expected parameter name")
+	expect_script_error_containing("Expected parameter name")
+	var result := _handler.write_file({"path": path, "content": "func broken(:\n\tpass\n"})
+	assert_has_key(result, "data")
+	assert_has_key(result.data, "diagnostics")
+	assert_gt(result.data.diagnostics.size(), 0, "broken .gd must surface at least one diagnostic")
+	assert_eq(result.data.diagnostics_scope, "this_file")
+	DirAccess.remove_absolute(path)
+	## Tell the editor filesystem the broken file is gone — leaving the
+	## record behind makes later scans re-emit its parse error into other
+	## suites' capture windows.
+	var efs := EditorInterface.get_resource_filesystem()
+	if efs != null:
+		efs.update_file(path)
+
+
+func test_write_file_gd_clean_script_reports_empty_diagnostics() -> void:
+	var path := "res://tests/_mcp_test_written_clean.gd"
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	var result := _handler.write_file({"path": path, "content": "extends Node\n"})
+	assert_has_key(result, "data")
+	assert_has_key(result.data, "diagnostics")
+	assert_eq(result.data.diagnostics.size(), 0, "clean .gd must report zero diagnostics")
+	DirAccess.remove_absolute(path)
+
+
+func test_write_file_non_gd_has_no_diagnostics_field() -> void:
+	var path := "res://tests/_mcp_test_written_plain.txt"
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	var result := _handler.write_file({"path": path, "content": "hello"})
+	assert_has_key(result, "data")
+	assert_false(result.data.has("diagnostics"), "non-.gd writes should stay diagnostics-free")
+	DirAccess.remove_absolute(path)
+
+
 func test_write_file_overwrite_omits_cleanup_hint() -> void:
 	## Second write to the same path is an overwrite; dropping a cleanup hint
 	## on overwrite would invite callers to rm files they already had.

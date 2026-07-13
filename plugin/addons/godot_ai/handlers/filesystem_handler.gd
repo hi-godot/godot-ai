@@ -2,6 +2,7 @@
 extends RefCounted
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const ScriptHandler := preload("res://addons/godot_ai/handlers/script_handler.gd")
 
 ## Handles file read/write operations and reimport within the Godot project.
 
@@ -104,6 +105,14 @@ func write_file(params: Dictionary) -> Dictionary:
 		"undoable": false,
 		"reason": "File system operations cannot be undone via editor undo",
 	}
+	## A .gd written through the filesystem tool used to skip the parse
+	## diagnostics create_script attaches (#714) — the agent's broken
+	## script reported plain success and the parse error surfaced only in
+	## later editor logs. Same shared check, same response fields. A bare
+	## ScriptHandler works here: the diagnostics path touches no instance
+	## state (it stays an instance method only for test stubbing).
+	if path.ends_with(".gd"):
+		ScriptHandler.new(null)._attach_gdscript_diagnostics(data, path, content)
 	McpResourceIO.attach_cleanup_hint(data, existed_before, [path])
 	return {"data": data}
 
