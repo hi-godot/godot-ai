@@ -118,7 +118,12 @@ static func save_to_disk(
 			ErrorCodes.INTERNAL_ERROR,
 			"Failed to save %s to %s: %s" % [label, resource_path, error_string(save_err)]
 		)
-	ensure_uid(resource_path, prior_uid)
+	var uid_err := ensure_uid(resource_path, prior_uid)
+	if uid_err != OK:
+		return ErrorCodes.make(
+			ErrorCodes.INTERNAL_ERROR,
+			"%s saved to %s but failed to write its uid: %s" % [label, resource_path, error_string(uid_err)]
+		)
 
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs != null:
@@ -151,9 +156,9 @@ static func guarded_save(res: Resource, resource_path: String, pause_target: Mcp
 	var save_err := ResourceSaver.save(res, resource_path)
 	if pause_target != null:
 		pause_target.pause_processing = false
-	if save_err == OK:
-		ensure_uid(resource_path, prior_uid)
-	return save_err
+	if save_err != OK:
+		return save_err
+	return ensure_uid(resource_path, prior_uid)
 
 
 ## Make `resource_path` carry a stable uid after a successful
@@ -168,11 +173,15 @@ static func guarded_save(res: Resource, resource_path: String, pause_target: Mcp
 ## for a brand-new path). Reusing the prior id — instead of always minting a
 ## fresh one — keeps any `uid://...` references elsewhere in the project
 ## resolving to the same file.
-static func ensure_uid(resource_path: String, prior_uid: int) -> void:
+##
+## Returns the `Error` from `ResourceSaver.set_uid()` so callers can surface a
+## uid-write failure instead of silently reporting success on a file that
+## didn't end up with the uid it was supposed to get.
+static func ensure_uid(resource_path: String, prior_uid: int) -> Error:
 	var id := prior_uid
 	if id == ResourceUID.INVALID_ID:
 		id = ResourceUID.create_id()
-	ResourceSaver.set_uid(resource_path, id)
+	return ResourceSaver.set_uid(resource_path, id)
 
 
 ## Attach a `cleanup.rm` hint listing `paths` to `data` — only when the call

@@ -130,8 +130,9 @@ func create_scene(params: Dictionary) -> Dictionary:
 		_connection.pause_processing = true
 	var err := ResourceSaver.save(packed, path)
 	if err == OK:
-		McpResourceIO.ensure_uid(path, prior_uid)
-	EditorInterface.open_scene_from_path(path)
+		err = McpResourceIO.ensure_uid(path, prior_uid)
+	if err == OK:
+		EditorInterface.open_scene_from_path(path)
 	if _connection:
 		_connection.pause_processing = false
 

@@ -184,6 +184,48 @@ func test_create_scene_rejects_project_godot_overwrite() -> void:
 	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
 
 
+func test_create_scene_embeds_and_preserves_uid() -> void:
+	## #737 regression. Deliberately does NOT call _handler.create_scene()
+	## with a real path — per this section's header comment, a full create
+	## switches the editor's active scene and isn't safe inside the shared
+	## test runner. Instead exercises the identical
+	## pack -> ResourceSaver.save -> McpResourceIO.ensure_uid sequence
+	## create_scene runs, standalone, so a regression in uid embedding or
+	## preservation-across-overwrite is still caught. create_scene's own
+	## wiring of this sequence was verified live against a running editor
+	## (scene_manage(op="create"), then a same-path recreate) during
+	## development of this fix.
+	var out_path := "res://tests/_mcp_test_uid_scene.tscn"
+	if FileAccess.file_exists(out_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(out_path))
+
+	var root := Node3D.new()
+	root.name = "UidProbeRoot"
+	var packed := PackedScene.new()
+	packed.pack(root)
+	root.free()
+
+	assert_eq(ResourceSaver.save(packed, out_path), OK)
+	assert_eq(McpResourceIO.ensure_uid(out_path, ResourceUID.INVALID_ID), OK)
+	var original_uid := ResourceLoader.get_resource_uid(out_path)
+	assert_true(original_uid != ResourceUID.INVALID_ID, "freshly created scene must carry a uid")
+
+	# Recreate at the same path — mirrors create_scene being pointed at an
+	# existing scene path — and confirm the original uid survives.
+	var root2 := Node3D.new()
+	root2.name = "UidProbeRootV2"
+	var packed2 := PackedScene.new()
+	packed2.pack(root2)
+	root2.free()
+	var prior_uid := ResourceLoader.get_resource_uid(out_path)
+	assert_eq(ResourceSaver.save(packed2, out_path), OK)
+	assert_eq(McpResourceIO.ensure_uid(out_path, prior_uid), OK)
+	assert_eq(ResourceLoader.get_resource_uid(out_path), original_uid,
+		"overwriting a scene at the same path must preserve its original uid")
+
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(out_path))
+
+
 # ----- open_scene (validation only — opening scenes triggers UI that blocks test runner) -----
 
 func test_open_scene_missing_path() -> void:
