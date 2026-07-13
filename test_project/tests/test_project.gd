@@ -61,6 +61,12 @@ func test_set_project_setting_roundtrip() -> void:
 	assert_eq(result.data.value, "_McpTestName")
 	assert_has_key(result.data, "old_value")
 
+	## Actually round-trip: read the STORED setting back, don't trust the
+	## handler's echo of its own input.
+	var readback := _handler.get_project_setting({"key": "application/config/name"})
+	assert_eq(readback.data.value, "_McpTestName",
+		"stored setting must reflect the write, not just the response echo")
+
 	## Restore
 	_handler.set_project_setting({"key": "application/config/name", "value": old_name})
 

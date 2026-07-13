@@ -756,6 +756,7 @@ func test_follow_2d_target_not_node2d() -> void:
 		return
 	var r := _create("FollowBad", "2d")
 	if r.is_empty():
+		assert_true(false, "camera create failed")
 		return
 	# Make a plain Node (not Node2D).
 	var plain := Node.new()

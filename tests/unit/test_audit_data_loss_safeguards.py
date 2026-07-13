@@ -62,7 +62,10 @@ def test_runner_tracks_paths_written_for_cross_batch_rollback() -> None:
 def test_install_zip_paths_returns_install_status_and_drives_rollback() -> None:
     source = RUNNER_PATH.read_text(encoding="utf-8")
     paths_block = get_func_block(source, "func _install_zip_paths(")
-    assert "-> int:" in source[: source.index(paths_block) + len(paths_block)]
+    assert "-> int:" in paths_block[: paths_block.index(":", paths_block.index("->")) + 1], (
+        "return type must be declared on the target function's own "
+        "signature, not anywhere in the file before it"
+    )
     assert "InstallStatus.OK" in paths_block, (
         "Function must signal success via the typed enum, not bare `true`."
     )
@@ -80,7 +83,11 @@ def test_install_zip_paths_returns_install_status_and_drives_rollback() -> None:
 def test_install_zip_file_returns_dictionary_record_with_backup_metadata() -> None:
     source = RUNNER_PATH.read_text(encoding="utf-8")
     install_block = get_func_block(source, "func _install_zip_file(")
-    assert "-> Dictionary:" in source[: source.index(install_block) + len(install_block)]
+    sig_end = install_block.index(":", install_block.index("->"))
+    assert "-> Dictionary:" in install_block[: sig_end + 1], (
+        "return type must be declared on the target function's own "
+        "signature, not anywhere in the file before it"
+    )
     # Backup is taken via COPY (not rename) so the original stays in place
     # if the swap that follows fails. Pin the COPY semantics specifically.
     assert "DirAccess.copy_absolute(target_path, backup_path)" in install_block, (
@@ -114,7 +121,11 @@ def test_install_zip_file_does_not_remove_target_before_rename_attempt() -> None
 def test_rollback_returns_failed_mixed_when_any_restore_fails() -> None:
     source = RUNNER_PATH.read_text(encoding="utf-8")
     rollback_block = get_func_block(source, "func _rollback_paths_written(")
-    assert "-> int:" in source[: source.index(rollback_block) + len(rollback_block)]
+    sig_end = rollback_block.index(":", rollback_block.index("->"))
+    assert "-> int:" in rollback_block[: sig_end + 1], (
+        "return type must be declared on the target function's own "
+        "signature, not anywhere in the file before it"
+    )
     assert "InstallStatus.FAILED_MIXED" in rollback_block, (
         "Rollback must surface FAILED_MIXED when a restore step fails so "
         "the caller knows not to re-enable the plugin against a mixed tree."

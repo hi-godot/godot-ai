@@ -64,7 +64,9 @@ mcp_call_or_die() {
 echo "Initializing MCP session..."
 SESSION_ID=$(curl -si "$SERVER_URL" -X POST "${HEADERS[@]}" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci-reload","version":"1.0"}}}' \
-  2>&1 | grep -i 'mcp-session-id' | tr -d '\r' | awk '{print $2}')
+  2>&1 | grep -i 'mcp-session-id' | tr -d '\r' | awk '{print $2}' || true)
+  # `|| true`: under pipefail a header miss would abort the script instead of
+  # falling through to the empty-SESSION_ID check below (#668).
 
 if [ -z "$SESSION_ID" ]; then
   echo "ERROR: Could not initialize MCP session"

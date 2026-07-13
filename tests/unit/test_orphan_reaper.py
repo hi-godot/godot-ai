@@ -369,3 +369,59 @@ async def test_idle_transient_zero_dip_does_not_exit():
     with pytest.raises(asyncio.CancelledError):
         await task
     assert calls == []
+
+
+# ----- pid_alive conservative errno branches (audit backlog) -----
+
+
+@POSIX_ONLY_PID_ALIVE
+def test_pid_alive_true_on_permission_error(monkeypatch):
+    """Exists-but-foreign (EPERM) must read as alive — never-wrong-reap."""
+
+    def _raise(_pid, _sig):
+        raise PermissionError
+
+    monkeypatch.setattr(orphan_reaper.os, "kill", _raise)
+    assert orphan_reaper.pid_alive(12345) is True
+
+
+@POSIX_ONLY_PID_ALIVE
+def test_pid_alive_true_on_unexpected_oserror(monkeypatch):
+    """Unknown errno must be conservative (treat as alive), not reap."""
+    import errno
+
+    def _raise(_pid, _sig):
+        raise OSError(errno.EINVAL, "unexpected")
+
+    monkeypatch.setattr(orphan_reaper.os, "kill", _raise)
+    assert orphan_reaper.pid_alive(12345) is True
+
+
+# ----- _request_self_shutdown (audit backlog: zero coverage) -----
+
+
+def test_request_self_shutdown_posix_signals_own_pid(monkeypatch):
+    monkeypatch.setattr(orphan_reaper.sys, "platform", "linux")
+    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(orphan_reaper.os, "kill", lambda pid, sig: calls.append((pid, sig)))
+    orphan_reaper._request_self_shutdown()
+    import signal as _signal
+
+    assert calls == [(os.getpid(), _signal.SIGTERM)]
+
+
+def test_request_self_shutdown_windows_raises_signal_in_process(monkeypatch):
+    """Windows must use raise_signal (graceful in-process handler), never
+    os.kill, which is TerminateProcess there and skips lifespan teardown."""
+    monkeypatch.setattr(orphan_reaper.sys, "platform", "win32")
+    raised: list[int] = []
+    monkeypatch.setattr(orphan_reaper.signal, "raise_signal", lambda sig: raised.append(sig))
+
+    def _forbidden(*_a):
+        raise AssertionError("os.kill must not be used on Windows")
+
+    monkeypatch.setattr(orphan_reaper.os, "kill", _forbidden)
+    orphan_reaper._request_self_shutdown()
+    import signal as _signal
+
+    assert raised == [_signal.SIGTERM]

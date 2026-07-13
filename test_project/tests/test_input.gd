@@ -118,9 +118,15 @@ func test_add_action_rejects_deadzone_above_one() -> void:
 func test_add_action_accepts_boundary_deadzones() -> void:
 	var result := _handler.add_action({"action": TEST_ACTION, "deadzone": 0.0})
 	assert_has_key(result, "data")
+	assert_true(InputMap.has_action(TEST_ACTION), "action must actually be registered")
+	assert_true(abs(InputMap.action_get_deadzone(TEST_ACTION) - 0.0) < 0.001,
+		"boundary deadzone 0.0 must be STORED, not just accepted")
 	_handler.remove_action({"action": TEST_ACTION})
 	result = _handler.add_action({"action": TEST_ACTION, "deadzone": 1.0})
 	assert_has_key(result, "data")
+	assert_true(InputMap.has_action(TEST_ACTION), "action must actually be registered")
+	assert_true(abs(InputMap.action_get_deadzone(TEST_ACTION) - 1.0) < 0.001,
+		"boundary deadzone 1.0 must be STORED, not just accepted")
 	_handler.remove_action({"action": TEST_ACTION})
 
 
