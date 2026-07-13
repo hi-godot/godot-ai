@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -1360,6 +1361,33 @@ async def test_direct_runtime_unbound_preserves_active_routing():
     assert client.calls[-1]["session_id"] is None
 
 
+class _LifespanCtxStub:
+    """Quacks like fastmcp.Context for from_context: only lifespan_context is read."""
+
+    def __init__(self, lifespan_context):
+        self.lifespan_context = lifespan_context
+
+
+def test_direct_runtime_from_context_reads_public_lifespan_accessor():
+    registry = SessionRegistry()
+    registry.register(_make_session("a"))
+    registry.set_active("a")
+    app_context = SimpleNamespace(registry=registry, client=StubClient())
+
+    runtime = DirectRuntime.from_context(_LifespanCtxStub(app_context), session_id="a")
+
+    assert runtime.get_active_session().session_id == "a"
+
+
+@pytest.mark.parametrize("absent", [None, {}], ids=["none", "empty-dict"])
+def test_direct_runtime_from_context_rejects_absent_lifespan(absent):
+    ## fastmcp's public lifespan_context reports "lifespan never ran" as None
+    ## or an empty dict (never our AppContext shape) — both must raise, like
+    ## the old private-attribute None check did.
+    with pytest.raises(RuntimeError, match="lifespan context is not available"):
+        DirectRuntime.from_context(_LifespanCtxStub(absent))
+
+
 async def test_logs_read_handler_uses_runtime_and_paginates():
     runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
 
@@ -1541,9 +1569,7 @@ async def test_logs_read_handler_game_forwards_editor_error_hint_fields():
             timeout: float = 5.0,
             surface_error_hints: bool = True,
         ) -> dict:
-            result = await super().send(
-                command, params, session_id, timeout, surface_error_hints
-            )
+            result = await super().send(command, params, session_id, timeout, surface_error_hints)
             if command == "get_logs" and (params or {}).get("source") == "game":
                 result = dict(result)
                 result["current_run_id"] = "rstub"
@@ -3571,9 +3597,7 @@ async def test_input_map_add_action_handler():
 async def test_input_map_ensure_action_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    result = await input_map_handlers.input_map_ensure_action(
-        runtime, action="jump", deadzone=0.3
-    )
+    result = await input_map_handlers.input_map_ensure_action(runtime, action="jump", deadzone=0.3)
     assert result["action"] == "jump"
     assert result["deadzone"] == 0.3
     assert client.calls[-1]["command"] == "ensure_action"
