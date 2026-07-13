@@ -739,7 +739,10 @@ static func find_worktree_src_dir(start_dir: String) -> String:
 ## PATH tiers plus its per-exe cache, and this drops the private
 ## `_pick_best_path` cross-class reach (#711).
 static func _find_system_install() -> String:
-	var names: Array[String] = (
-		["godot-ai.exe", "godot-ai"] if OS.get_name() == "Windows" else ["godot-ai"]
-	)
+	## Built with append, not a ternary of untyped literals — assigning a
+	## ternary's Array to Array[String] is a runtime error on newer Godot
+	## builds (same idiom as _uvx_cli_names above).
+	var names: Array[String] = ["godot-ai"]
+	if OS.get_name() == "Windows":
+		names.push_front("godot-ai.exe")
 	return CliFinder.find(names)
