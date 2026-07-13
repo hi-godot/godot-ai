@@ -12,4 +12,3 @@ func _init() -> void:
 	}
 	server_key_path = PackedStringArray(["mcpServers"])
 	entry_url_field = "httpUrl"
-	detect_paths = PackedStringArray(path_template.values())

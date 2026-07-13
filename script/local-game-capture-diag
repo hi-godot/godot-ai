@@ -118,7 +118,16 @@ def _wait_for_session(url: str, sid: str, timeout: float = 15.0) -> dict:
     deadline = time.monotonic() + timeout
     last: dict = {}
     while time.monotonic() < deadline:
-        last = _tool_call(url, sid, "session_manage", {"op": "list"}, 2)
+        ## A server that died mid-diagnosis used to surface as a raw urllib
+        ## traceback here — the one failure mode a DIAGNOSTIC script must
+        ## turn into a diagnosis instead (#716 audit note).
+        try:
+            last = _tool_call(url, sid, "session_manage", {"op": "list"}, 2)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise RuntimeError(
+                f"Server at {url} stopped answering while waiting for a Godot "
+                f"session ({exc}). Is the dev server still running?"
+            ) from exc
         if last.get("count", 0) > 0:
             return last
         time.sleep(1.0)
@@ -238,7 +247,13 @@ def _wait_for_capture_ready(url: str, sid: str, timeout: float = 30.0) -> dict:
     deadline = time.monotonic() + timeout
     last: dict = {}
     while time.monotonic() < deadline:
-        last = _tool_call(url, sid, "editor_state", {}, 200)
+        try:
+            last = _tool_call(url, sid, "editor_state", {}, 200)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise RuntimeError(
+                f"Server at {url} stopped answering while polling editor_state "
+                f"({exc}). Is the dev server still running?"
+            ) from exc
         if last.get("is_playing") and last.get("game_capture_ready"):
             return last
         time.sleep(0.5)

@@ -8,4 +8,3 @@ func _init() -> void:
 	config_type = "json"
 	path_template = {"unix": "~/.cursor/mcp.json", "windows": "$USERPROFILE/.cursor/mcp.json"}
 	server_key_path = PackedStringArray(["mcpServers"])
-	detect_paths = PackedStringArray(path_template.values())

@@ -1079,10 +1079,11 @@ class TestDnsRebindingGuard:
         await ws.send(json.dumps(handshake))
         await asyncio.sleep(0.05)
         ## Drain the ack so it doesn't pollute later asserts.
+        ## Mandatory (#716) — see conftest's connect_plugin.
         try:
-            await asyncio.wait_for(ws.recv(), timeout=0.5)
+            await asyncio.wait_for(ws.recv(), timeout=2.0)
         except asyncio.TimeoutError:
-            pass
+            pytest.fail("no handshake_ack within 2s — the ack contract is mandatory")
         assert harness.registry.get("origin-loopback") is not None
         await ws.close()
 
@@ -1128,10 +1129,11 @@ class TestDnsRebindingGuard:
         }
         await ws.send(json.dumps(handshake))
         await asyncio.sleep(0.05)
+        ## Mandatory ack drain (#716) — see conftest's connect_plugin.
         try:
-            await asyncio.wait_for(ws.recv(), timeout=0.5)
+            await asyncio.wait_for(ws.recv(), timeout=2.0)
         except asyncio.TimeoutError:
-            pass
+            pytest.fail("no handshake_ack within 2s — the ack contract is mandatory")
         assert harness.registry.get("ipv6-loopback") is not None
         await ws.close()
 

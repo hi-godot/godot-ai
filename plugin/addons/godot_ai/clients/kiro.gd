@@ -13,4 +13,3 @@ func _init() -> void:
 	server_key_path = PackedStringArray(["mcpServers"])
 	## `disabled` is user-state — preserved across reconfigure.
 	entry_initial_fields = {"disabled": false}
-	detect_paths = PackedStringArray(path_template.values())

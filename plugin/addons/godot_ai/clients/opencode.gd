@@ -17,4 +17,3 @@ func _init() -> void:
 	entry_extra_fields = {"type": "remote"}
 	## `enabled` is user-state (they may have toggled the server off).
 	entry_initial_fields = {"enabled": true}
-	detect_paths = PackedStringArray(path_template.values())

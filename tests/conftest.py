@@ -128,13 +128,16 @@ class ServerHarness:
         # Give the server a moment to process the handshake
         await asyncio.sleep(0.05)
         ## Drain the server's handshake_ack so it doesn't pollute the first
-        ## `recv_command()` call in tests that don't care about the ack.
+        ## `recv_command()` call. The ack is MANDATORY (#716): swallowing the
+        ## timeout made the contract optional in every test but the one
+        ## dedicated negative test, so a server that silently stopped
+        ## acking would keep the whole suite green.
         try:
-            ack_raw = await asyncio.wait_for(ws.recv(), timeout=0.5)
-            ack = json.loads(ack_raw)
-            assert ack.get("type") == "handshake_ack", f"expected handshake_ack, got {ack!r}"
+            ack_raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
         except asyncio.TimeoutError:
-            pass
+            pytest.fail("no handshake_ack within 2s — the ack contract is mandatory")
+        ack = json.loads(ack_raw)
+        assert ack.get("type") == "handshake_ack", f"expected handshake_ack, got {ack!r}"
         return MockGodotPlugin(ws=ws, session_id=session_id)
 
 
@@ -160,12 +163,13 @@ async def mcp_stack():
         await ws.send(json.dumps(handshake))
         await asyncio.sleep(0.05)
         ## Drain handshake_ack so it doesn't pollute tests' first recv.
+        ## Mandatory, same rationale as connect_plugin above (#716).
         try:
-            ack_raw = await asyncio.wait_for(ws.recv(), timeout=0.5)
-            ack = json.loads(ack_raw)
-            assert ack.get("type") == "handshake_ack", f"expected handshake_ack, got {ack!r}"
+            ack_raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
         except asyncio.TimeoutError:
-            pass
+            pytest.fail("no handshake_ack within 2s — the ack contract is mandatory")
+        ack = json.loads(ack_raw)
+        assert ack.get("type") == "handshake_ack", f"expected handshake_ack, got {ack!r}"
         plugin = MockGodotPlugin(ws=ws, session_id="mcp-test")
         yield client, plugin
         await plugin.close()

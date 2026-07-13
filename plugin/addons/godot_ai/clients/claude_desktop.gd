@@ -20,4 +20,3 @@ func _init() -> void:
 	## verifier ALSO accepts a future url-style entry (Claude Desktop has
 	## been tolerant of both forms since the npx→uvx bridge migration).
 	entry_uvx_bridge = McpClient.UvxBridge.FLAT
-	detect_paths = PackedStringArray(path_template.values())

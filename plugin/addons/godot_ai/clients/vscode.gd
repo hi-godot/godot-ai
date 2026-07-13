@@ -16,4 +16,3 @@ func _init() -> void:
 	}
 	server_key_path = PackedStringArray(["servers"])
 	entry_extra_fields = {"type": "http"}
-	detect_paths = PackedStringArray(path_template.values())

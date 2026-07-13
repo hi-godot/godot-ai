@@ -245,6 +245,31 @@ def _kill_pid(pid: int) -> None:
         pass
 
 
+def _pid_cmdline(pid: int) -> str:
+    """Best-effort command line for ``pid`` ("<unknown>" when unreadable)."""
+    try:
+        if os.name == "nt":
+            out = subprocess.run(
+                ["wmic", "process", "where", f"ProcessId={pid}", "get", "CommandLine"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            ).stdout
+            lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+            return lines[1] if len(lines) > 1 else "<unknown>"
+        out = subprocess.run(
+            ["ps", "-o", "args=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        ).stdout.strip()
+        return out or "<unknown>"
+    except (OSError, subprocess.SubprocessError):
+        return "<unknown>"
+
+
 def free_port(port: int) -> None:
     """Best-effort: stop any process currently listening on ``port``.
 
@@ -256,6 +281,11 @@ def free_port(port: int) -> None:
         return
     print(f"Stopping existing listener on port {port}")
     for pid in _listener_pids(port):
+        ## Name what we're about to terminate (#716 audit note): this kill
+        ## is brand-blind, and on a dev box the listener can be an unrelated
+        ## service that happens to sit on the port. The command line gives
+        ## the developer a fighting chance to notice before data is lost.
+        print(f"  killing pid {pid}: {_pid_cmdline(pid)}")
         _kill_pid(pid)
     # Give the socket a moment to release before the caller binds it.
     deadline = time.monotonic() + 3.0

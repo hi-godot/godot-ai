@@ -830,31 +830,17 @@ func _find_current_camera_3d(root: Node) -> Camera3D:
 
 
 func _finalize_image(image: Image, source: String, max_resolution: int) -> Dictionary:
-	var original_width := image.get_width()
-	var original_height := image.get_height()
-
-	if max_resolution > 0:
-		var longest := maxi(original_width, original_height)
-		if longest > max_resolution:
-			var scale := float(max_resolution) / float(longest)
-			## Clamp to 1px min: extreme aspect ratios at very small max_resolution
-			## could otherwise compute a zero dimension and crash image.resize().
-			var new_w := maxi(1, int(original_width * scale))
-			var new_h := maxi(1, int(original_height * scale))
-			image.resize(new_w, new_h, Image.INTERPOLATE_LANCZOS)
-
-	var img_bytes := image.save_png_to_buffer()
-	var base64_str := Marshalls.raw_to_base64(img_bytes)
-
+	## Shared with the game-process copy in runtime/game_helper.gd (#716).
+	var encoded := McpScreenshotEncode.downscale_and_encode(image, max_resolution)
 	return {
 		"data": {
 			"source": source,
-			"width": image.get_width(),
-			"height": image.get_height(),
-			"original_width": original_width,
-			"original_height": original_height,
+			"width": encoded.width,
+			"height": encoded.height,
+			"original_width": encoded.original_width,
+			"original_height": encoded.original_height,
 			"format": "png",
-			"image_base64": base64_str,
+			"image_base64": encoded.base64,
 		}
 	}
 

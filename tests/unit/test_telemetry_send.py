@@ -254,7 +254,9 @@ class TestConvenienceHelpers:
         long = "x" * 1000
         tel.record_failure("scene_save", long, {"path": "res://x.tscn"})
         self._wait(sent)
-        assert len(sent[0].data["error"]) == 500
+        ## 64, not 500 (#716): the param is a short category token; anything
+        ## longer (a pasted exception string) is deliberately mangled.
+        assert len(sent[0].data["error"]) == 64
         assert sent[0].data["path"] == "res://x.tscn"
 
     def test_record_tool_usage_no_sub_action_no_error(self, clean_env, isolated_data_dir) -> None:

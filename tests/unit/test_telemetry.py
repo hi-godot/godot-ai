@@ -305,6 +305,9 @@ class TestTelemetryCollector:
 
         assert collector.record_milestone(tel.MilestoneType.FIRST_STARTUP) is True
         assert collector.record_milestone(tel.MilestoneType.FIRST_STARTUP) is False
+        ## Persistence now happens on the worker thread (#716) — join the
+        ## queue so the file is flushed before reading it back.
+        collector._queue.join()
         ## On-disk milestones file must reflect exactly one entry.
         on_disk = json.loads(collector.config.milestones_file.read_text(encoding="utf-8"))
         assert "first_startup" in on_disk

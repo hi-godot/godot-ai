@@ -12,4 +12,3 @@ func _init() -> void:
 		"linux": "$XDG_CONFIG_HOME/Trae/User/mcp.json",
 	}
 	server_key_path = PackedStringArray(["mcpServers"])
-	detect_paths = PackedStringArray(path_template.values())

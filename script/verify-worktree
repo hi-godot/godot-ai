@@ -96,7 +96,18 @@ case "${OS:-}${OSTYPE:-}" in
         fi
         ;;
     *)
-        rm -rf "$link" 2>/dev/null || true
+        # Move a real (non-symlink) directory aside instead of deleting it —
+        # the post-checkout hook runs this automatically, and a user's local
+        # plugin edits in a plain-copy addons dir must not be silently
+        # destroyed (#716 audit note). A dangling/wrong symlink is still
+        # just removed.
+        if [ -d "$link" ] && [ ! -L "$link" ]; then
+            stale="$link.stale.$(date +%Y%m%d%H%M%S)"
+            yellow "[warn] $link was a real directory, not a symlink — moved to $stale (delete it once you've confirmed nothing in it matters)."
+            mv "$link" "$stale"
+        else
+            rm -rf "$link" 2>/dev/null || true
+        fi
         if ln -s "../../plugin/addons/godot_ai" "$link"; then
             green "[ok] Created $link as a symlink."
             exit 0

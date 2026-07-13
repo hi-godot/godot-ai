@@ -25,4 +25,3 @@ func _init() -> void:
 	## split, the Configure-All-Mismatched sweep silently wipes the user's
 	## auto-approval list every time the type pin or URL drifts.
 	entry_initial_fields = {"disabled": false, "alwaysAllow": []}
-	detect_paths = PackedStringArray(path_template.values())

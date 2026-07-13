@@ -25,4 +25,3 @@ func _init() -> void:
 	## entry off, or auto-approved specific tools). Seed on first Configure
 	## but preserve across reconfigure — see `entry_initial_fields` in `_base.gd`.
 	entry_initial_fields = {"disabled": false, "autoApprove": []}
-	detect_paths = PackedStringArray(path_template.values())

@@ -15,4 +15,3 @@ func _init() -> void:
 		"windows": "$APPDATA/Zed/settings.json",
 	}
 	server_key_path = PackedStringArray(["context_servers"])
-	detect_paths = PackedStringArray(path_template.values())

@@ -3893,12 +3893,12 @@ class TestPerCallSessionRouting:
         await ws.send(json.dumps(handshake))
         await asyncio.sleep(0.05)
         ## Drain handshake_ack so respond_* helpers' first recv lands on a
-        ## real command, not the ack.
+        ## real command, not the ack. Mandatory (#716) — see conftest.
         try:
-            ack_raw = await asyncio.wait_for(ws.recv(), timeout=0.5)
-            assert json.loads(ack_raw).get("type") == "handshake_ack"
+            ack_raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
         except asyncio.TimeoutError:
-            pass
+            pytest.fail("no handshake_ack within 2s — the ack contract is mandatory")
+        assert json.loads(ack_raw).get("type") == "handshake_ack"
         return MockGodotPlugin(ws=ws, session_id=session_id)
 
     async def test_session_id_routes_to_specific_session(self, mcp_stack):

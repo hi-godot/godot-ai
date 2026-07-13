@@ -16,4 +16,3 @@ func _init() -> void:
 	## `isActive` is user-state (they may have toggled the server off in the UI).
 	## Seed on first Configure but preserve across reconfigure.
 	entry_initial_fields = {"isActive": true}
-	detect_paths = PackedStringArray(path_template.values())
