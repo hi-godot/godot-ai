@@ -747,7 +747,13 @@ func test_can_recover_incompatible_server_requires_state_and_recovery_proof() ->
 	plugin.live_status = {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
 
 	assert_false(plugin.can_recover_incompatible_server(), "OK state must not expose recovery")
+	## #712: the recovery verdict is latched by _set_incompatible_server's
+	## off-thread proof, not re-probed on every dock poll — flipping the
+	## state alone must not expose recovery.
 	plugin._lifecycle._server_state = McpServerState.INCOMPATIBLE
+	assert_false(plugin.can_recover_incompatible_server(),
+		"state alone must not expose recovery without a latched proof")
+	plugin._set_incompatible_server(plugin.live_status, "9.9.9", TEST_PORT)
 	assert_true(plugin.can_recover_incompatible_server(), "status-name proof should allow clicked recovery")
 	plugin.free()
 
@@ -1081,7 +1087,9 @@ func test_incompatible_transition_refreshes_dock_client_statuses() -> void:
 	dock.free()
 	plugin.free()
 
-	assert_eq(calls, 1, "late incompatible transition must resweep dock client status")
+	## Two sweeps since #712: one when the diagnosis latches (conservative
+	## not-recoverable default), one when the off-thread proof verdict lands.
+	assert_eq(calls, 2, "late incompatible transition must resweep dock client status")
 
 
 func test_incompatible_status_exposes_actual_name_and_recovery_flag() -> void:
@@ -1215,6 +1223,11 @@ func test_recover_incompatible_returns_false_and_leaves_state_when_port_remains_
 	plugin._lifecycle._connection_blocked = true
 	plugin.port_in_use = true
 	plugin.listener_pids = [24680] as Array[int]
+	## The recovery kill re-checks each target's brand at kill time since
+	## #712 moved it off-thread (verify_brand=true, #686) — the target must
+	## be alive and branded for the stub kill to accept it.
+	plugin.alive_pids = [24680] as Array[int]
+	plugin.branded_pids = [24680] as Array[int]
 	plugin.live_status = {"name": "godot-ai", "version": "1.2.10", "ws_port": 9500, "status_code": 200}
 
 	var ok: bool = await plugin.recover_incompatible_server()

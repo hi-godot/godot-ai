@@ -1218,11 +1218,15 @@ func _evaluate_strong_port_occupant_proof(port: int, live: Dictionary = {}, reco
 	return result
 
 
-## See `_evaluate_strong_port_occupant_proof` for the `live` contract.
-## Threads `live` through the strong-proof delegate so neither helper
-## probes when the caller already knows the port-owner status.
-func _evaluate_recovery_port_occupant_proof(port: int, live: Dictionary = {}) -> Dictionary:
-	var proof := _evaluate_strong_port_occupant_proof(port, live)
+## See `_evaluate_strong_port_occupant_proof` for the `live` and
+## `record_override` contracts. Threads both through the strong-proof
+## delegate so neither helper probes when the caller already knows the
+## port-owner status, and so callers running this on a worker thread
+## (#712) can inject the EditorSettings record read on the main thread.
+func _evaluate_recovery_port_occupant_proof(
+	port: int, live: Dictionary = {}, record_override: Dictionary = {}
+) -> Dictionary:
+	var proof := _evaluate_strong_port_occupant_proof(port, live, record_override)
 	if not str(proof.get("proof", "")).is_empty():
 		return proof
 

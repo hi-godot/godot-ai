@@ -381,6 +381,18 @@ func _set_incompatible_server(live: Dictionary, expected_version: String, port: 
 	## the dock to re-sweep client rows so they don't show stale green.
 	## Threads the caller's `live` snapshot through the recovery proof
 	## helper so we don't double-probe the port (~500ms each).
+	##
+	## Coroutine (#712): the recovery-proof evaluation (port scrapes +
+	## per-PID brand shells) and the free-port bind probes run via
+	## `_run_blocking` — these fire in exactly the contended/crashed
+	## scenarios #678 de-blocked, so they must not stall the main thread
+	## either. Everything user-visible (status message, connection block,
+	## version-check disarm) is latched synchronously before the first
+	## await; only the recovery verdict and the suggested-port diagnostic
+	## arrive with the worker. Sync callers (handshake verdicts, the
+	## force-restart failure arm) fire-and-forget the tail; the startup
+	## walk awaits it so `_run_blocking`'s single-active-worker tracking
+	## keeps one owner at a time.
 	transition_state(McpServerStateScript.INCOMPATIBLE)
 	_connection_blocked = true
 	_server_expected_version = expected_version
@@ -389,19 +401,10 @@ func _set_incompatible_server(live: Dictionary, expected_version: String, port: 
 	_server_status_message = _incompatible_server_message(
 		live, expected_version, port, int(_host._resolved_ws_port)
 	)
-	var proof: Dictionary = _host._evaluate_recovery_port_occupant_proof(port, live)
-	var proof_name := str(proof.get("proof", ""))
-	_can_recover_incompatible = not proof_name.is_empty()
-	print("MCP | proof: %s" % (proof_name if _can_recover_incompatible else "(none)"))
-	if not _can_recover_incompatible:
-		## Non-recoverable: a foreign / unprovable occupant holds the port and
-		## we have no ownership proof, so we must NOT kill it — surface a
-		## concrete free port the user can switch to instead (the same hint
-		## the dock crash body renders). Logging it to the editor output also
-		## lets `ci-stale-server-smoke --mode foreign` assert this upstream
-		## classification from CI. Reservation-aware on Windows.
-		var suggested := ClientConfigurator.suggest_free_port(port + 1)
-		print("MCP | port %d occupant not recoverable (no ownership proof); suggested free port %d (set godot_ai/http_port)" % [port, suggested])
+	## Conservative default until the off-thread proof lands: the dock
+	## paints "not recoverable" rather than offering a kill we have not
+	## yet proven ownership for.
+	_can_recover_incompatible = false
 	_host._refresh_dock_client_statuses()
 	## Propagate the verdict to the live connection (#691). Pre-#678 the
 	## startup walk finished synchronously before `_connection` existed, so
@@ -419,6 +422,40 @@ func _set_incompatible_server(live: Dictionary, expected_version: String, port: 
 		_host._connection.disconnect_from_server()
 	disarm_version_check()
 	_host._update_process_enabled()
+
+	## Off-thread recovery proof (#712), mirroring recover_strong_port_occupant:
+	## the EditorSettings record is read on the main thread up front and
+	## injected as record_override — EditorSettings is main-thread-only.
+	var async_gen := _async_generation
+	var record: Dictionary = _host._read_managed_server_record()
+	var proof_result: Variant = await _run_blocking(func() -> Variant:
+		if not is_instance_valid(_host):
+			return {"proof": "", "pids": []}
+		return _host._evaluate_recovery_port_occupant_proof(port, live, record)
+	)
+	if _async_stale(async_gen):
+		return
+	var proof: Dictionary = proof_result
+	var proof_name := str(proof.get("proof", ""))
+	_can_recover_incompatible = not proof_name.is_empty()
+	print("MCP | proof: %s" % (proof_name if _can_recover_incompatible else "(none)"))
+	if not _can_recover_incompatible:
+		## Non-recoverable: a foreign / unprovable occupant holds the port and
+		## we have no ownership proof, so we must NOT kill it — surface a
+		## concrete free port the user can switch to instead (the same hint
+		## the dock crash body renders). Logging it to the editor output also
+		## lets `ci-stale-server-smoke --mode foreign` assert this upstream
+		## classification from CI. Reservation-aware on Windows; the bind
+		## probes behind suggest_free_port also run off-thread (#712).
+		var suggested_result: Variant = await _run_blocking(func() -> Variant:
+			return ClientConfigurator.suggest_free_port(port + 1)
+		)
+		if _async_stale(async_gen):
+			return
+		print("MCP | port %d occupant not recoverable (no ownership proof); suggested free port %d (set godot_ai/http_port)" % [port, int(suggested_result)])
+	## Second sweep so the dock's recovery affordance reflects the verdict
+	## that just landed.
+	_host._refresh_dock_client_statuses()
 
 
 static func _incompatible_server_message(
@@ -664,7 +701,14 @@ func _start_server_impl(async_gen: int) -> void:
 			if _async_stale(async_gen):
 				return
 			var post_recovery_live: Dictionary = post_recovery_result
-			_set_incompatible_server(post_recovery_live, current_version, port)
+			## Awaited (#712): the diagnosis tail runs its own _run_blocking
+			## proof, and the walk must stay the single owner of the
+			## active-worker slot until that lands. The status message is
+			## latched before the tail's first await, so the push_warning
+			## below reads the final text either way.
+			await _set_incompatible_server(post_recovery_live, current_version, port)
+			if _async_stale(async_gen):
+				return
 			_startup_path = McpStartupPathScript.INCOMPATIBLE
 			push_warning(str(_server_status_message))
 			return
@@ -1124,17 +1168,24 @@ func prepare_for_update_reload() -> void:
 # ---- Recovery click ----------------------------------------------------
 
 ## Returns true when a pure-state probe says recovery is allowed:
-## current state is INCOMPATIBLE, the port is still held, and we have
-## proof of ownership over the occupant. Pure-state in the sense that
-## nothing is killed — that's `recover_incompatible_server`.
+## current state is INCOMPATIBLE, the port is still held, and the
+## incompatible diagnosis latched an ownership proof. Pure-state in the
+## sense that nothing is killed — that's `recover_incompatible_server`.
+##
+## Consults the `_can_recover_incompatible` verdict that
+## `_set_incompatible_server` computed off-thread instead of re-running
+## the proof's port scrapes + per-PID brand shells on the main thread
+## (#712): the dock polls this on refresh, and
+## `recover_incompatible_server` re-proves at kill time anyway, so a
+## stale latch can never kill an unproven occupant — worst case is a
+## recovery click that comes back false. The port liveness re-check is
+## a single local bind probe, cheap enough to stay synchronous.
 func can_recover_incompatible_server() -> bool:
 	if _server_state != McpServerStateScript.INCOMPATIBLE:
 		return false
-	var port := ClientConfigurator.http_port()
-	if not bool(_host._is_port_in_use(port)):
+	if not _can_recover_incompatible:
 		return false
-	var proof: Dictionary = _host._evaluate_recovery_port_occupant_proof(port)
-	return not str(proof.get("proof", "")).is_empty()
+	return bool(_host._is_port_in_use(ClientConfigurator.http_port()))
 
 
 func recover_incompatible_server() -> bool:
@@ -1142,26 +1193,51 @@ func recover_incompatible_server() -> bool:
 		return false
 
 	var port := ClientConfigurator.http_port()
-	var proof: Dictionary = _host._evaluate_recovery_port_occupant_proof(port)
+	## Cancel any suspended contended-port walk BEFORE the off-thread proof
+	## (#712): `_run_blocking` tracks a single active worker for the
+	## teardown join, so starting ours while another walk's worker is alive
+	## would orphan that thread from the join guarantee. This also releases
+	## the guard so the respawn at the bottom isn't silently swallowed
+	## (#682 review). The user's recovery click owns the flow from here.
+	_invalidate_async_startup()
+	var async_gen := _async_generation
+	## EditorSettings record read on the main thread, injected so the
+	## worker never touches EditorSettings (#712, mirroring
+	## recover_strong_port_occupant).
+	var record: Dictionary = _host._read_managed_server_record()
+	var proof_result: Variant = await _run_blocking(func() -> Variant:
+		if not is_instance_valid(_host):
+			return {"proof": "", "pids": []}
+		return _host._evaluate_recovery_port_occupant_proof(port, {}, record)
+	)
+	if _async_stale(async_gen):
+		return false
+	var proof: Dictionary = proof_result
 	var targets: Array[int] = []
 	targets.assign(proof.get("pids", []))
 	if targets.is_empty():
 		return false
 	print("MCP | proof: %s" % str(proof.get("proof", "")))
 
-	## Committed to the kill: cancel any suspended contended-port walk so
-	## it can't resume against pre-kill data, and release the guard so the
-	## respawn at the bottom isn't silently swallowed (#682 review).
-	_invalidate_async_startup()
-
 	## Move into STOPPING so the post-kill respawn passes the
 	## first-writer-wins guards.
 	transition_state(McpServerStateScript.STOPPING)
-	var killed: Array = _host._kill_processes_and_windows_spawn_children(targets)
-	if not killed.is_empty():
-		print("MCP | killed pids %s on port %d" % [str(killed), port])
-	_host._wait_for_port_free(port, 5.0)
-	if _host._is_port_in_use(port):
+	var freed_result: Variant = await _run_blocking(func() -> Variant:
+		if not is_instance_valid(_host):
+			return false
+		## verify_brand=true: the proof above ran in a separate
+		## _run_blocking task with main-thread frames in between — re-check
+		## each target at kill time so a PID recycled inside that gap isn't
+		## killed (#686, mirroring recover_strong_port_occupant).
+		var killed: Array = _host._kill_processes_and_windows_spawn_children(targets, true)
+		if not killed.is_empty():
+			print("MCP | killed pids %s on port %d" % [str(killed), port])
+		_host._wait_for_port_free(port, 5.0)
+		return not bool(_host._is_port_in_use(port))
+	)
+	if _async_stale(async_gen):
+		return false
+	if not bool(freed_result):
 		## Kill failed; re-latch INCOMPATIBLE so the dock keeps the
 		## diagnostic UI.
 		transition_state(McpServerStateScript.INCOMPATIBLE)
