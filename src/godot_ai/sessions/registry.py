@@ -130,7 +130,7 @@ class SessionRegistry:
                     ## for MCP clients.
                     "godot_version": _safe_version_token(session.godot_version),
                     "plugin_version": _safe_version_token(session.plugin_version),
-                    "protocol_version": _safe_version_token(session.protocol_version),
+                    "protocol_version": _safe_version_token(str(session.protocol_version)),
                     "server_launch_mode": _safe_version_token(session.server_launch_mode),
                     "session_count": len(self._sessions),
                 },

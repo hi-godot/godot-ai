@@ -323,6 +323,11 @@ class TestHandshakeTelemetrySanitization:
         )
         assert captured["data"]["godot_version"] == "invalid"
         assert captured["data"]["plugin_version"] == "2.9.1"
+        ## protocol_version is an int on Session — it must be stringified
+        ## before sanitizing, not blanket-flagged as invalid.
+        assert captured["data"]["protocol_version"] == str(
+            registry.get("probe@1234").protocol_version
+        )
 
     def test_normal_version_strings_pass_through(self, monkeypatch):
         captured = {}
@@ -340,3 +345,7 @@ class TestHandshakeTelemetrySanitization:
             )
         )
         assert captured["data"]["godot_version"] == "4.7.0-stable (official)"
+        assert captured["data"]["protocol_version"] == str(
+            registry.get("probe@5678").protocol_version
+        )
+        assert captured["data"]["server_launch_mode"] != "invalid"

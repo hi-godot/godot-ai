@@ -238,6 +238,10 @@ def extract_release_zip_to_addon(zip_path: Path, addon_dir: Path) -> None:
             rel = name[len("addons/godot_ai/") :]
             if not rel:
                 continue
+            ## Directory entries end with "/" and nothing is written for
+            ## them — file entries' parent mkdir below covers the tree.
+            if member.is_dir():
+                continue
             ## Same containment the plugin's own update runner enforces:
             ## refuse traversal/absolute/backslash entries instead of
             ## writing wherever a hostile zip points (audit backlog).
@@ -249,9 +253,10 @@ def extract_release_zip_to_addon(zip_path: Path, addon_dir: Path) -> None:
             ):
                 raise RuntimeError(f"unsafe zip entry refused: {name!r}")
             dest = addon_dir / rel
-            if member.is_dir():
-                dest.mkdir(parents=True, exist_ok=True)
-                continue
+            ## Belt-and-suspenders resolved-path net (mirrors
+            ## tests/integration/_self_update_fixture.py).
+            if not dest.resolve().is_relative_to(addon_dir.resolve()):
+                raise RuntimeError(f"unsafe zip entry refused: {name!r}")
             dest.parent.mkdir(parents=True, exist_ok=True)
             with zf.open(member) as src, open(dest, "wb") as out:
                 shutil.copyfileobj(src, out)
