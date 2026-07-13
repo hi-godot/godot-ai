@@ -8,6 +8,20 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 ## path-vs-resource_path param validation that every resource-authoring
 ## handler needs. Extracted to remove 4-way duplication across
 ## resource_handler, environment_handler, texture_handler, and curve_handler.
+## Also home to the shared write-a-text-file path + deferred import-settle
+## completion used by both script_handler.create_script and
+## filesystem_handler.write_file (#714).
+
+# Bounded settle window for `ResourceLoader.exists(path)` after a fresh text
+# write registers with the filesystem, so an agent calling
+# create_script/write_file -> attach_script back-to-back doesn't race the
+# editor's import pipeline (#261, extended to write_file by #714). Polled once
+# per frame, with an elapsed-time cap below the dispatcher's deferred timeouts
+# for both commands. If import is still not visible at the cap, we still
+# return committed data instead of letting the already-written file surface
+# as DEFERRED_TIMEOUT.
+const IMPORT_SETTLE_MAX_FRAMES := 300
+const IMPORT_SETTLE_MAX_MSEC := 3500
 
 
 ## Validate that exactly one of {path, resource_path} is provided.
@@ -145,3 +159,83 @@ static func attach_cleanup_hint(data: Dictionary, existed_before: bool, paths: A
 	if existed_before:
 		return
 	data["cleanup"] = {"rm": paths}
+
+
+## Shared write-a-text-file path (#714): parent-directory mkdir, write +
+## flush with an explicit error check so a truncated write (disk full,
+## permission flip mid-write) surfaces as an error instead of plain success.
+## Deliberately does NOT call `EditorFileSystem.update_file()` — callers
+## register the file themselves after assembling their response fields, so
+## the registration comment (the dsarno/godot#6 scan-stacking rationale)
+## stays next to the call. Returns null on success or an error dict ready
+## to return from the handler.
+static func write_text_to_disk(path: String, content: String) -> Variant:
+	var dir_path := path.get_base_dir()
+	if not DirAccess.dir_exists_absolute(dir_path):
+		var err := DirAccess.make_dir_recursive_absolute(dir_path)
+		if err != OK:
+			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
+
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to open file for writing: %s" % path)
+
+	file.store_string(content)
+	file.flush()
+	var write_err := file.get_error()
+	file.close()
+	if write_err != OK:
+		return ErrorCodes.make(
+			ErrorCodes.INTERNAL_ERROR,
+			"Write failed for %s (%s); file may be truncated" % [path, error_string(write_err)]
+		)
+	return null
+
+
+# `static` is load-bearing: the deferred completion captures no `self`, so the
+# coroutine survives even if the calling handler RefCounted is freed mid-await.
+# Under concurrent create storms with editor_reload_plugin fired during the
+# burst, an instance-method coroutine is otherwise GC'd between `await` and
+# resume, producing "Resumed function ... after await, but class instance is
+# gone" errors and dropping the response. Keep this function static and
+# parameterise everything it needs explicitly — do not reference instance
+# state. Shared by create_script and write_file's fresh-`.gd` path (#714).
+static func finish_text_write_deferred(
+	connection: McpConnection,
+	request_id: String,
+	path: String,
+	data: Dictionary,
+) -> void:
+	if not is_instance_valid(connection):
+		return
+	var tree := connection.get_tree()
+	if tree == null:
+		return
+	var deadline_ms := Time.get_ticks_msec() + IMPORT_SETTLE_MAX_MSEC
+	# Let _dispatch() return DEFERRED_RESPONSE and register the request before
+	# this coroutine can send a committed result. ResourceLoader.exists(path)
+	# may already be true on fast imports; without this handoff the connection
+	# treats the response as late/unregistered and drops it, then the dispatcher
+	# times out a file that was already written (#324). The deadline starts
+	# before this await so a slow handoff frame is counted against the bounded
+	# settle window.
+	await tree.process_frame
+	var frames := 0
+	while (
+		frames < IMPORT_SETTLE_MAX_FRAMES
+		and Time.get_ticks_msec() < deadline_ms
+		and not ResourceLoader.exists(path)
+	):
+		await tree.process_frame
+		frames += 1
+	# If the plugin tears down (_exit_tree frees the connection) during the
+	# await, is_instance_valid() goes false and we drop the response silently —
+	# the server's request timeout will surface the failure to the caller.
+	if not is_instance_valid(connection):
+		return
+	var payload := data.duplicate()
+	var settled := ResourceLoader.exists(path)
+	payload["import_settled"] = settled
+	payload["import_settle"] = "settled" if settled else "timeout"
+	payload["import_pending"] = not settled
+	connection.send_deferred_response(request_id, {"data": payload})

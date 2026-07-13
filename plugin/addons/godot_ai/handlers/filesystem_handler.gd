@@ -68,28 +68,13 @@ func write_file(params: Dictionary) -> Dictionary:
 	if path_err != null:
 		return path_err
 
-	# Ensure parent directory exists
-	var dir_path := path.get_base_dir()
-	if not DirAccess.dir_exists_absolute(dir_path):
-		var err := DirAccess.make_dir_recursive_absolute(dir_path)
-		if err != OK:
-			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
-
 	var existed_before := FileAccess.file_exists(path)
 
-	var file := FileAccess.open(path, FileAccess.WRITE)
-	if file == null:
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to open file for writing: %s" % path)
-
-	file.store_string(content)
-	file.flush()
-	var write_err := file.get_error()
-	file.close()
-	if write_err != OK:
-		return ErrorCodes.make(
-			ErrorCodes.INTERNAL_ERROR,
-			"Write failed for %s (%s); file may be truncated" % [path, error_string(write_err)]
-		)
+	# Shared write path (#714): parent mkdir + write/flush + explicit error
+	# check live on McpResourceIO so this can't drift from create_script.
+	var write_failure: Variant = McpResourceIO.write_text_to_disk(path, content)
+	if write_failure != null:
+		return write_failure
 
 	# Single-file register, not a full scan() — a scan() per write stacks
 	# filesystem WorkerThreadPool tasks under concurrent writes and can SIGABRT
@@ -105,15 +90,35 @@ func write_file(params: Dictionary) -> Dictionary:
 		"undoable": false,
 		"reason": "File system operations cannot be undone via editor undo",
 	}
+	var is_gdscript := path.ends_with(".gd")
 	## A .gd written through the filesystem tool used to skip the parse
 	## diagnostics create_script attaches (#714) — the agent's broken
 	## script reported plain success and the parse error surfaced only in
 	## later editor logs. Same shared check, same response fields. A bare
 	## ScriptHandler works here: the diagnostics path touches no instance
 	## state (it stays an instance method only for test stubbing).
-	if path.ends_with(".gd"):
+	if is_gdscript:
 		ScriptHandler.new(null)._attach_gdscript_diagnostics(data, path, content)
+		data["committed"] = true
+		data["import_settled"] = existed_before
+		data["import_settle"] = "already_known" if existed_before else "not_waited"
 	McpResourceIO.attach_cleanup_hint(data, existed_before, [path])
+
+	## Fresh `.gd` writes take create_script's import-settle deferral (#714,
+	## #261): reply only once ResourceLoader can see the new resource (or the
+	## bounded window elapses), so write_file -> script_attach back-to-back
+	## can't 404 on the not-yet-imported script. This CHANGES write_file's
+	## response timing for that case — the reply lands up to
+	## McpResourceIO.IMPORT_SETTLE_MAX_MSEC later instead of immediately.
+	## Scoped to .gd: ResourceLoader never learns plain text files, so an
+	## unconditional wait would burn the full window on every fresh .txt.
+	## Overwrites, batch_execute (no request_id) and unit-test contexts (no
+	## connection) keep the synchronous reply.
+	var request_id: String = params.get("_request_id", "")
+	if is_gdscript and not existed_before and _connection != null and not request_id.is_empty():
+		McpResourceIO.finish_text_write_deferred(_connection, request_id, path, data)
+		return McpDispatcher.DEFERRED_RESPONSE
+
 	return {"data": data}
 
 
@@ -229,7 +234,7 @@ static func _finish_scan_deferred(
 		_scan_in_flight = true
 		efs.scan()
 	# Hand back a frame so _dispatch() registers this request as deferred before
-	# the coroutine can push a reply (mirrors _finish_create_script_deferred).
+	# the coroutine can push a reply (mirrors McpResourceIO.finish_text_write_deferred).
 	await tree.process_frame
 	var deadline_ms := Time.get_ticks_msec() + _SCAN_SETTLE_MAX_MSEC
 	var start_grace_ms := Time.get_ticks_msec() + _SCAN_START_GRACE_MSEC

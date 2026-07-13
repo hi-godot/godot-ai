@@ -139,6 +139,50 @@ func test_write_file_non_gd_has_no_diagnostics_field() -> void:
 	DirAccess.remove_absolute(path)
 
 
+func test_write_file_fresh_gd_reports_import_settle_fields() -> void:
+	## #714: fresh .gd writes share create_script's import-settle contract.
+	## In this unit context (no connection) the sync fallback replies
+	## immediately with the not_waited marker; production defers until
+	## ResourceLoader sees the resource (see McpResourceIO).
+	var path := "res://tests/_mcp_test_written_settle.gd"
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	var result := _handler.write_file({"path": path, "content": "extends Node\n"})
+	assert_has_key(result, "data")
+	assert_eq(result.data.committed, true)
+	assert_eq(result.data.import_settled, false)
+	assert_eq(result.data.import_settle, "not_waited")
+	DirAccess.remove_absolute(path)
+
+
+func test_write_file_overwrite_gd_reports_already_known() -> void:
+	## Overwrites reply synchronously — ResourceLoader already knows the
+	## resource, so there is no import to wait for (#714).
+	var path := "res://tests/_mcp_test_written_settle_overwrite.gd"
+	var first := _handler.write_file({"path": path, "content": "extends Node\n"})
+	assert_has_key(first, "data")
+	var second := _handler.write_file({"path": path, "content": "extends Node\n# v2\n"})
+	assert_has_key(second, "data")
+	assert_eq(second.data.import_settled, true)
+	assert_eq(second.data.import_settle, "already_known")
+	DirAccess.remove_absolute(path)
+
+
+func test_write_file_non_gd_has_no_import_settle_fields() -> void:
+	## ResourceLoader never learns plain text files — claiming settle
+	## semantics for them would be a lie, and deferring would burn the full
+	## settle window on every fresh .txt (#714).
+	var path := "res://tests/_mcp_test_written_plain_settle.txt"
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	var result := _handler.write_file({"path": path, "content": "hello"})
+	assert_has_key(result, "data")
+	assert_false(result.data.has("import_settle"), "non-.gd writes carry no settle contract")
+	assert_false(result.data.has("import_settled"), "non-.gd writes carry no settle contract")
+	assert_false(result.data.has("committed"), "committed is part of the .gd settle contract")
+	DirAccess.remove_absolute(path)
+
+
 func test_write_file_overwrite_omits_cleanup_hint() -> void:
 	## Second write to the same path is an overwrite; dropping a cleanup hint
 	## on overwrite would invite callers to rm files they already had.

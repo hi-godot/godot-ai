@@ -23,6 +23,9 @@ var deferred_timeout_overrides_ms: Dictionary = {}
 const DEFAULT_DEFERRED_TIMEOUT_MS := 4500
 const DEFERRED_TIMEOUT_MS_BY_COMMAND := {
 	"create_script": 4500,
+	## Fresh-`.gd` writes defer through the same import-settle window as
+	## create_script (#714) — same headroom over IMPORT_SETTLE_MAX_MSEC.
+	"write_file": 4500,
 	"stop_project": 4500,
 	"run_project": 6000,
 	"take_screenshot": 30000,

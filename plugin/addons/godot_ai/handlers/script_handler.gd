@@ -10,15 +10,9 @@ const ValidationLogger := preload("res://addons/godot_ai/runtime/validation_logg
 var _undo_redo: EditorUndoRedoManager
 var _connection: McpConnection
 
-# Bounded settle window for `ResourceLoader.exists(path)` after `scan()` so
-# that an agent calling create_script -> attach_script back-to-back doesn't
-# race the editor's import pipeline (#261). Polled once per frame, with an
-# elapsed-time cap below the dispatcher's create_script deferred timeout. If
-# import is still not visible at the cap, we still return committed=true
-# instead of letting the already-written file surface as DEFERRED_TIMEOUT.
-const _IMPORT_SETTLE_MAX_FRAMES := 300
-const _IMPORT_SETTLE_MAX_MSEC := 3500
-
+# The bounded import-settle window and the deferred completion coroutine
+# live on McpResourceIO since #714 — write_file's fresh-`.gd` path shares
+# them, so create_script and write_file can't drift apart again (#261).
 
 func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null) -> void:
 	_undo_redo = undo_redo
@@ -36,28 +30,13 @@ func create_script(params: Dictionary) -> Dictionary:
 	if not path.ends_with(".gd"):
 		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Path must end with .gd")
 
-	# Ensure parent directory exists
-	var dir_path := path.get_base_dir()
-	if not DirAccess.dir_exists_absolute(dir_path):
-		var err := DirAccess.make_dir_recursive_absolute(dir_path)
-		if err != OK:
-			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
-
 	var existed_before := FileAccess.file_exists(path)
 
-	var file := FileAccess.open(path, FileAccess.WRITE)
-	if file == null:
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to open file for writing: %s" % path)
-
-	file.store_string(content)
-	file.flush()
-	var write_err := file.get_error()
-	file.close()
-	if write_err != OK:
-		return ErrorCodes.make(
-			ErrorCodes.INTERNAL_ERROR,
-			"Write failed for %s (%s); file may be truncated" % [path, error_string(write_err)]
-		)
+	# Shared write path (#714): parent mkdir + write/flush + explicit error
+	# check live on McpResourceIO so write_file can't drift from this again.
+	var write_failure: Variant = McpResourceIO.write_text_to_disk(path, content)
+	if write_failure != null:
+		return write_failure
 
 	var data := {
 		"path": path,
@@ -119,61 +98,12 @@ func create_script(params: Dictionary) -> Dictionary:
 	# overwrite the resource was already known to ResourceLoader, so reply now.
 	var request_id: String = params.get("_request_id", "")
 	if not existed_before and _connection != null and not request_id.is_empty():
-		_finish_create_script_deferred(_connection, request_id, path, data)
+		McpResourceIO.finish_text_write_deferred(_connection, request_id, path, data)
 		return McpDispatcher.DEFERRED_RESPONSE
 
 	# Synchronous fallback: batch_execute (no request_id) and unit-test contexts
 	# (no connection) get the immediate reply that the previous behaviour gave.
 	return {"data": data}
-
-
-# `static` is load-bearing: the deferred completion captures no `self`, so the
-# coroutine survives even if the ScriptHandler RefCounted is freed mid-await.
-# Under concurrent script_create storms with editor_reload_plugin fired during
-# the burst, the handler instance is otherwise GC'd between `await` and resume,
-# producing "Resumed function '_finish_create_script_deferred()' after await,
-# but class instance is gone" errors and dropping the response. Keep this
-# function static and parameterise everything it needs explicitly — do not
-# reference instance state.
-static func _finish_create_script_deferred(
-	connection: McpConnection,
-	request_id: String,
-	path: String,
-	data: Dictionary,
-) -> void:
-	if not is_instance_valid(connection):
-		return
-	var tree := connection.get_tree()
-	if tree == null:
-		return
-	var deadline_ms := Time.get_ticks_msec() + _IMPORT_SETTLE_MAX_MSEC
-	# Let _dispatch() return DEFERRED_RESPONSE and register the request before
-	# this coroutine can send a committed result. ResourceLoader.exists(path)
-	# may already be true on fast imports; without this handoff the connection
-	# treats the response as late/unregistered and drops it, then the dispatcher
-	# times out a file that was already written (#324). The deadline starts
-	# before this await so a slow handoff frame is counted against the bounded
-	# settle window.
-	await tree.process_frame
-	var frames := 0
-	while (
-		frames < _IMPORT_SETTLE_MAX_FRAMES
-		and Time.get_ticks_msec() < deadline_ms
-		and not ResourceLoader.exists(path)
-	):
-		await tree.process_frame
-		frames += 1
-	# If the plugin tears down (_exit_tree frees the connection) during the
-	# await, is_instance_valid() goes false and we drop the response silently —
-	# the server's request timeout will surface the failure to the caller.
-	if not is_instance_valid(connection):
-		return
-	var payload := data.duplicate()
-	var settled := ResourceLoader.exists(path)
-	payload["import_settled"] = settled
-	payload["import_settle"] = "settled" if settled else "timeout"
-	payload["import_pending"] = not settled
-	connection.send_deferred_response(request_id, {"data": payload})
 
 
 ## Extract the `class_name` a script declares, or "" if none. A cheap line scan
@@ -371,18 +301,12 @@ func patch_script(params: Dictionary) -> Dictionary:
 		new_content = content.substr(0, idx) + new_text + content.substr(idx + old_text.length())
 		replacements = 1
 
-	var write := FileAccess.open(path, FileAccess.WRITE)
-	if write == null:
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to open file for writing: %s" % path)
-	write.store_string(new_content)
-	write.flush()
-	var write_err := write.get_error()
-	write.close()
-	if write_err != OK:
-		return ErrorCodes.make(
-			ErrorCodes.INTERNAL_ERROR,
-			"Write failed for %s (%s); file may be truncated" % [path, error_string(write_err)]
-		)
+	# Shared write path (#714). No import-settle deferral here: the file
+	# already exists, so ResourceLoader knows it and there is no scan to wait
+	# for — same rationale as create_script's overwrite arm.
+	var write_failure: Variant = McpResourceIO.write_text_to_disk(path, new_content)
+	if write_failure != null:
+		return write_failure
 
 	var data := {
 		"path": path,
