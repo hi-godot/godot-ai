@@ -232,3 +232,25 @@ class TestBoundedStates:
         assert cb.check_open("flappy") is not None, (
             "an open circuit is not stale and must survive the eviction pass"
         )
+
+    def test_oldest_windows_halved_when_nothing_is_stale(
+        self, cb: EditorBridgeCircuitBreaker, clock: _FakeClock
+    ) -> None:
+        ## Flood of distinct ids all tripped to open with *recent* windows:
+        ## the stale pass frees nothing, so the fallback must halve the map
+        ## by oldest window rather than let it grow past the bound.
+        for i in range(cb._MAX_STATES):
+            for _ in range(5):
+                cb.record_failure(f"sess-{i}", kind="TimeoutError")
+            clock.advance(0.001)  # windows stay far inside max_open_ms
+        cb.record_failure("newcomer", kind="TimeoutError")
+        assert len(cb._states) <= cb._MAX_STATES
+        assert cb.snapshot("newcomer")["consecutive_failures"] == 1
+        oldest = cb.snapshot("sess-0")
+        newest = cb.snapshot(f"sess-{cb._MAX_STATES - 1}")
+        assert oldest == {"consecutive_failures": 0, "circuit_open": False}, (
+            "the oldest-window entry should be evicted first"
+        )
+        assert newest["consecutive_failures"] == 5, (
+            "the newest-window entries should survive the halving"
+        )
