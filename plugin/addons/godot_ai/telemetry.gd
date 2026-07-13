@@ -146,12 +146,6 @@ func _send_one(name: String, data: Dictionary) -> void:
 func record_dock_startup(extra: Dictionary = {}) -> void:
 	record_event("dock_startup", extra)
 
-func record_plugin_reload(success: bool, error: String = "") -> void:
-	var data := {"success": success}
-	if error != "":
-		data["error"] = error.substr(0, 200)
-	record_event("plugin_reload", data)
-
 func record_self_update(
 	status: String,
 	from_version: String = "",
@@ -172,7 +166,12 @@ func record_dev_server_toggle(action: String) -> void:
 
 
 ## Drain a pending ``plugin_reload`` event written by the previous
-## instance before it disabled itself.
+## instance before it disabled itself. Pending events are currently
+## always success=true — ``record_pending_plugin_reload`` above is the
+## only writer and hardcodes it (a reload that fails never reaches the
+## flush anyway; there is no new instance to drain the key). The
+## error/success parsing below stays tolerant for forward compat with
+## a writer that records failures.
 func flush_pending_plugin_reload() -> void:
 	var parsed = _drain_editor_setting_dict(PENDING_PLUGIN_RELOAD_KEY)
 	if parsed == null:

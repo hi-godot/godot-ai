@@ -440,7 +440,13 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 				return precheck
 		"game":
 			if not EditorInterface.is_playing_scene():
-				return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Game is not running — use source='viewport' or start the project first")
+				## Same editor state as game_eval/game_command's gate below —
+				## same EDITOR_NOT_READY shape, not INVALID_PARAMS (the params
+				## were fine; the editor just isn't in the required state).
+				return ErrorCodes.make_not_ready(
+					ErrorCodes.SUB_EDITOR_GAME_NOT_RUNNING,
+					"Game is not running — start the project first", false,
+					"Use source='viewport' for the editor viewport, or start the game with project_run and retry.")
 			## The game is always a separate OS process (embedded mode just
 			## reparents its window into the editor). Reach the framebuffer
 			## via the debugger channel: the `_mcp_game_helper` autoload

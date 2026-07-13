@@ -219,7 +219,11 @@ func test_screenshot_invalid_source() -> void:
 
 func test_screenshot_game_not_playing() -> void:
 	var result := _handler.take_screenshot({"source": "game"})
-	assert_is_error(result)
+	## Same shape as game_eval/game_command's gate: EDITOR_NOT_READY with
+	## the GAME_NOT_RUNNING sub-code, not INVALID_PARAMS — the params were
+	## fine, the editor just isn't in the required state.
+	assert_is_error(result, ErrorCodes.EDITOR_NOT_READY)
+	assert_eq(result.error.data.sub_code, ErrorCodes.SUB_EDITOR_GAME_NOT_RUNNING)
 
 
 # ----- game_command -----

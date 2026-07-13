@@ -286,14 +286,6 @@ class TestModuleSingleton:
         tel.reset_telemetry()  # already reset by fixture
         tel.reset_telemetry()  # must not raise
 
-    def test_is_telemetry_enabled_reflects_config(
-        self, monkeypatch, clean_env, isolated_data_dir
-    ) -> None:
-        assert tel.is_telemetry_enabled() is True
-        tel.reset_telemetry()
-        monkeypatch.setenv("GODOT_AI_DISABLE_TELEMETRY", "true")
-        assert tel.is_telemetry_enabled() is False
-
 
 # --- decorator edges ----------------------------------------------------
 

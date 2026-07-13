@@ -365,20 +365,6 @@ class TestTelemetryCollector:
 
 
 class TestPublicHelpers:
-    def test_is_telemetry_enabled_does_not_construct_collector(
-        self, monkeypatch, clean_env, isolated_data_dir: Path
-    ) -> None:
-        """``is_telemetry_enabled()`` is a pure env check by design — the
-        opt-out contract is that no collector / disk side effect happens
-        just from asking."""
-        assert tel._collector is None  # singleton not created yet
-        assert tel.is_telemetry_enabled() is True
-        assert tel._collector is None  # still not created
-        ## And the env-override path returns False without creating one.
-        monkeypatch.setenv("GODOT_AI_DISABLE_TELEMETRY", "1")
-        assert tel.is_telemetry_enabled() is False
-        assert tel._collector is None
-
     def test_shutdown_if_initialized_noop_when_no_collector(
         self, clean_env, isolated_data_dir: Path
     ) -> None:

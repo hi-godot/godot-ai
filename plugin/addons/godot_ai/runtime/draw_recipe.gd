@@ -1,7 +1,7 @@
 @tool
 extends Control
 
-## Runtime helper attached by control_draw_recipe and pattern_corner_brackets.
+## Runtime helper attached by control_draw_recipe.
 ## Reads an array of op dicts from node metadata under key "_ops" and dispatches
 ## each to a CanvasItem draw call in _draw(). The ops list is set by the handler
 ## via set_meta; this script is deterministic — re-setting meta + queue_redraw
@@ -84,24 +84,3 @@ func _draw() -> void:
 					int(op.get("font_size", 16)),
 					op.color
 				)
-			"corner_brackets":
-				# Synthesized op used by pattern_corner_brackets. Draws 8 line
-				# segments at the four corners of self.size, so brackets track
-				# parent resizes. Emitted by PatternHandler, not control_draw_recipe.
-				var L := float(op.get("length", 18.0))
-				var T := float(op.get("thickness", 2.0))
-				var c: Color = op.color
-				var w := size.x
-				var h := size.y
-				# Top-left
-				draw_line(Vector2(0, 0), Vector2(L, 0), c, T)
-				draw_line(Vector2(0, 0), Vector2(0, L), c, T)
-				# Top-right
-				draw_line(Vector2(w, 0), Vector2(w - L, 0), c, T)
-				draw_line(Vector2(w, 0), Vector2(w, L), c, T)
-				# Bottom-left
-				draw_line(Vector2(0, h), Vector2(L, h), c, T)
-				draw_line(Vector2(0, h), Vector2(0, h - L), c, T)
-				# Bottom-right
-				draw_line(Vector2(w, h), Vector2(w - L, h), c, T)
-				draw_line(Vector2(w, h), Vector2(w, h - L), c, T)

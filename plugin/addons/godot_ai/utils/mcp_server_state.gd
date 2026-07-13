@@ -106,13 +106,6 @@ static func is_terminal_diagnosis(state: int) -> bool:
 	)
 
 
-## True only for READY. Other "ok-ish" states (SPAWNING) are still in
-## flight; READY is the only state where the plugin can treat the server
-## as fully healthy.
-static func is_healthy(state: int) -> bool:
-	return state == READY
-
-
 ## True when the dock should consider the server unsuitable for client
 ## health checks (incompatible tool surface). Currently just INCOMPATIBLE
 ## — FOREIGN_PORT is transitional and may resolve to READY if the

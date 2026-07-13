@@ -7,7 +7,6 @@ class ErrorCode(StrEnum):
     # Kept for Python API compatibility; missing pinned sessions now emit
     # PLUGIN_DISCONNECTED with data.reason == "session_not_found".
     SESSION_NOT_FOUND = "SESSION_NOT_FOUND"
-    COMMAND_TIMEOUT = "COMMAND_TIMEOUT"
     EDITED_SCENE_MISMATCH = "EDITED_SCENE_MISMATCH"
     EDITOR_NOT_READY = "EDITOR_NOT_READY"
     INVALID_PARAMS = "INVALID_PARAMS"

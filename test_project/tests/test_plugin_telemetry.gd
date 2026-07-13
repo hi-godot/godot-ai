@@ -169,21 +169,6 @@ func test_record_dev_server_toggle_emits_event() -> void:
 	assert_eq(conn.sent[1]["data"]["data"]["action"], "stop")
 
 
-func test_record_plugin_reload_emits_event() -> void:
-	var conn := StubConnection.new()
-	conn.is_connected = true
-	var t := Telemetry.new(conn)
-	t._test_set_state(conn, false)
-
-	t.record_plugin_reload(true)
-	t.record_plugin_reload(false, "could not re-enable")
-
-	assert_eq(conn.sent.size(), 2)
-	assert_eq(conn.sent[0]["data"]["data"]["success"], true)
-	assert_eq(conn.sent[1]["data"]["data"]["success"], false)
-	assert_eq(conn.sent[1]["data"]["data"]["error"], "could not re-enable")
-
-
 func test_buffered_events_flush_when_connection_signal_fires() -> void:
 	## Regression: ``record_dock_startup`` runs from ``plugin._enter_tree``
 	## *before* the WebSocket reaches OPEN. Without subscribing to

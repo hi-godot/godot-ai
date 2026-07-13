@@ -17,11 +17,6 @@ const MANAGED_SERVER_VERSION_SETTING := "godot_ai/managed_server_version"
 const MANAGED_SERVER_WS_PORT_SETTING := "godot_ai/managed_server_ws_port"
 const UPDATE_RELOAD_RUNNER_SCRIPT := preload("res://addons/godot_ai/update_reload_runner.gd")
 
-## Preloaded so `_stop_server` / `force_restart_server` have a local script
-## dependency for the cleanup helper. See utils/uv_cache_cleanup.gd for what
-## this does and why it lives next to the server-stop hot path.
-const UvCacheCleanup := preload("res://addons/godot_ai/utils/uv_cache_cleanup.gd")
-
 ## Server lifecycle + port discovery extracted from this file (#297 PR 5).
 ## State enums + version-check seam extracted in PR 6 (#297). Plugin.gd
 ## keeps thin shims so the dock and characterization tests see an
@@ -30,7 +25,6 @@ const UvCacheCleanup := preload("res://addons/godot_ai/utils/uv_cache_cleanup.gd
 const ServerLifecycleManager := preload("res://addons/godot_ai/utils/server_lifecycle.gd")
 const PortResolver := preload("res://addons/godot_ai/utils/port_resolver.gd")
 const ServerStateScript := preload("res://addons/godot_ai/utils/mcp_server_state.gd")
-const StartupPathScript := preload("res://addons/godot_ai/utils/mcp_startup_path.gd")
 
 ## Plugin-class scripts used by this file. The script-local preload aliases
 ## are ordinary dependency shorthand and keep construction sites compact.

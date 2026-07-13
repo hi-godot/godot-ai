@@ -329,8 +329,7 @@ class GodotWebSocketServer:
                     if not future.done():
                         future.set_exception(
                             ConnectionError(
-                                f"Session {session_id} disconnected while the "
-                                "command was in flight"
+                                f"Session {session_id} disconnected while the command was in flight"
                             )
                         )
 
@@ -418,8 +417,12 @@ class GodotWebSocketServer:
             self._pending.pop(request.request_id, None)
 
 
-def _sync_error_watermark_for_session(session: Session, value: dict[str, int]) -> int:
-    """Update a session's error watermark and return newly observed errors.
+def _sync_error_watermark_for_session(session: Session, value: dict[str, int]) -> None:
+    """Fold a plugin-stamped watermark into the session's error counters.
+
+    Side effects only: updates ``session.error_watermark`` to the incoming
+    component values and adds the newly observed error count to
+    ``session.pending_new_errors``.
 
     Watermark components reset independently. When run_seq advances, the
     per-run game component is counted in full because the server may never
@@ -468,7 +471,6 @@ def _sync_error_watermark_for_session(session: Session, value: dict[str, int]) -
     new_total = overlap + sum(deltas.values())
     session.error_watermark.update(updates)
     session.pending_new_errors += new_total
-    return new_total
 
 
 def _normalized_watermark_int(value: object) -> int | None:

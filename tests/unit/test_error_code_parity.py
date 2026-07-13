@@ -7,8 +7,8 @@ forwarded string still works at runtime but agents and tests that match on
 `ErrorCode.X` silently miss it. Tracked as #297 audit finding #12.
 
 The contract is one-way: GDScript ⊆ Python. Python carries server-only codes
-(COMMAND_TIMEOUT, PLUGIN_DISCONNECTED) the plugin never emits; that asymmetry
-is intentional.
+(e.g. PLUGIN_DISCONNECTED, emitted by the transport on connection loss) the
+plugin never emits; that asymmetry is intentional.
 """
 
 from __future__ import annotations
@@ -40,9 +40,7 @@ def _parse_gdscript_codes() -> dict[str, str]:
     ## ErrorCode. Their own GDScript↔Python sync (against
     ## EditorNotReadySubCode) is enforced by
     ## test_editor_not_ready_hint_contract.py.
-    return {
-        name: value for name, value in _CONST_RE.findall(text) if not name.startswith("SUB_")
-    }
+    return {name: value for name, value in _CONST_RE.findall(text) if not name.startswith("SUB_")}
 
 
 def test_gdscript_codes_parsed_non_empty() -> None:

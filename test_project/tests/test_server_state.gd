@@ -51,12 +51,6 @@ func test_is_terminal_diagnosis_excludes_non_diagnostic_states() -> void:
 			"%s must not be terminal" % McpServerState.name_of(non_terminal))
 
 
-func test_is_healthy_only_for_ready() -> void:
-	assert_true(McpServerState.is_healthy(McpServerState.READY))
-	assert_false(McpServerState.is_healthy(McpServerState.SPAWNING))
-	assert_false(McpServerState.is_healthy(McpServerState.UNINITIALIZED))
-
-
 func test_blocks_client_health_only_for_incompatible() -> void:
 	## Dock's `_server_blocks_client_health` gates the client-row red state
 	## on this — narrowing it to only INCOMPATIBLE keeps SPAWNING / FOREIGN_PORT

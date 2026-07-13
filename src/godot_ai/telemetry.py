@@ -61,7 +61,6 @@ __all__ = [
     "TelemetryRecord",
     "get_telemetry",
     "hash_session_id",
-    "is_telemetry_enabled",
     "record_failure",
     "record_latency",
     "record_milestone",
@@ -577,16 +576,6 @@ def record_telemetry(
 
 def record_milestone(milestone: MilestoneType, data: dict[str, Any] | None = None) -> bool:
     return get_telemetry().record_milestone(milestone, data)
-
-
-def is_telemetry_enabled() -> bool:
-    """Pure env check — never instantiates the collector.
-
-    Callers may want to check the opt-out flag without paying for
-    collector construction (which generates a UUID and creates the data
-    directory).
-    """
-    return not TelemetryConfig._is_disabled_via_env()
 
 
 def _truncate(value: Any, limit: int) -> str:
