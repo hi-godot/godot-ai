@@ -560,3 +560,55 @@ func test_clear_on_disconnect_resets_spillover_counter() -> void:
 
 	assert_eq(conn._packet_spillover_total, 0, "disconnect must reset the spillover counter")
 	conn.free()
+
+
+# ----- inbound command-frame validation -----
+
+func _make_conn_with_dispatcher() -> Array:
+	var conn := McpConnection.new()
+	var dispatcher := McpDispatcher.new(McpLogBuffer.new())
+	dispatcher.mcp_logging = false
+	conn.dispatcher = dispatcher
+	return [conn, dispatcher]
+
+
+func test_handle_message_enqueues_well_formed_command_frame() -> void:
+	var pair := _make_conn_with_dispatcher()
+	var conn: McpConnection = pair[0]
+	var dispatcher: McpDispatcher = pair[1]
+	conn._handle_message('{"request_id": "r1", "command": "noop", "params": {}}')
+	conn._handle_message('{"request_id": "r2", "command": "noop"}')
+	assert_eq(dispatcher._command_queue.size(), 2,
+		"well-formed frames (params optional) must be enqueued")
+	conn.free()
+
+
+func test_handle_message_drops_non_string_request_id() -> void:
+	var pair := _make_conn_with_dispatcher()
+	var conn: McpConnection = pair[0]
+	var dispatcher: McpDispatcher = pair[1]
+	conn._handle_message('{"request_id": 5, "command": "noop", "params": {}}')
+	assert_eq(dispatcher._command_queue.size(), 0,
+		"a non-String request_id would wedge the dispatcher's typed cast")
+	conn.free()
+
+
+func test_handle_message_drops_non_string_command() -> void:
+	var pair := _make_conn_with_dispatcher()
+	var conn: McpConnection = pair[0]
+	var dispatcher: McpDispatcher = pair[1]
+	conn._handle_message('{"request_id": "r1", "command": {"nested": true}}')
+	assert_eq(dispatcher._command_queue.size(), 0,
+		"a non-String command would wedge the dispatcher's typed cast")
+	conn.free()
+
+
+func test_handle_message_drops_non_dict_params() -> void:
+	var pair := _make_conn_with_dispatcher()
+	var conn: McpConnection = pair[0]
+	var dispatcher: McpDispatcher = pair[1]
+	conn._handle_message('{"request_id": "r1", "command": "noop", "params": [1, 2]}')
+	conn._handle_message('{"request_id": "r2", "command": "noop", "params": "str"}')
+	assert_eq(dispatcher._command_queue.size(), 0,
+		"non-Dictionary params would wedge the dispatcher's typed cast")
+	conn.free()

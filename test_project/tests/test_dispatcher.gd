@@ -367,3 +367,23 @@ func test_tick_stamps_error_watermark_on_deferred_timeout_response() -> void:
 	assert_eq(responses.size(), 1)
 	assert_is_error(responses[0], ErrorCodes.DEFERRED_TIMEOUT)
 	assert_eq(responses[0].error_watermark.debugger_promoted, 2)
+
+
+# ----- reserved-key stripping (dispatch_direct) -----
+
+func test_dispatch_direct_strips_reserved_request_id_key() -> void:
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	var seen: Array = []
+	d.register("capture_params", func(p: Dictionary) -> Dictionary:
+		seen.append(p.duplicate())
+		return {"data": {"ok": true}})
+	var caller_params := {"_request_id": "hijack", "x": 1}
+	var result := d.dispatch_direct("capture_params", caller_params)
+	assert_has_key(result, "data")
+	assert_eq(seen.size(), 1)
+	assert_true(not seen[0].has("_request_id"),
+		"reserved key must be stripped before the handler sees params")
+	assert_eq(seen[0].get("x"), 1)
+	assert_true(caller_params.has("_request_id"),
+		"stripping must not mutate the caller's dict")

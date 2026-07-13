@@ -54,6 +54,15 @@ func clear() -> void:
 func dispatch_direct(command: String, params: Dictionary) -> Dictionary:
 	if not _handlers.has(command):
 		return ErrorCodes.make(ErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
+	## Strip the reserved deferred-reply key: only _dispatch may thread it.
+	## A caller-supplied _request_id (e.g. inside a batch_execute
+	## sub-command's params) would flip a deferred-capable handler into
+	## deferred mode against a request id the dispatcher never registered —
+	## the direct caller would get the DEFERRED sentinel instead of a result
+	## and the out-of-band reply would be dropped as expired.
+	if params.has("_request_id"):
+		params = params.duplicate()
+		params.erase("_request_id")
 	return _call_handler(command, params)
 
 

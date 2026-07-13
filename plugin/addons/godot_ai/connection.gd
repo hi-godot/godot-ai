@@ -299,8 +299,29 @@ func _handle_message(raw: String) -> void:
 		server_version = str(parsed.get("server_version", ""))
 		return
 	if parsed.has("request_id") and parsed.has("command"):
-		if dispatcher:
-			dispatcher.enqueue(parsed)
+		if (
+			parsed.get("request_id") is String
+			and parsed.get("command") is String
+			and (not parsed.has("params") or parsed.get("params") is Dictionary)
+		):
+			if dispatcher:
+				dispatcher.enqueue(parsed)
+			return
+		## Never enqueue a malformed command frame: the dispatcher's typed
+		## casts would error on the queue head every tick, wedging every
+		## later command behind it. Reply with an error when the request_id
+		## is usable so the server's pending future resolves instead of
+		## waiting out the full command timeout.
+		push_warning("MCP: dropping malformed command frame (request_id/command must be String, params a Dictionary)")
+		var rid: Variant = parsed.get("request_id")
+		if rid is String and not String(rid).is_empty():
+			var response := ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS,
+				"Malformed command frame: request_id/command must be strings and params a dict"
+			)
+			response["request_id"] = rid
+			response["readiness"] = get_readiness()
+			_send_json(response)
 
 
 ## Send a state event to the server (not a command response).

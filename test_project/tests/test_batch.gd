@@ -207,3 +207,41 @@ func test_real_multi_step_success() -> void:
 	var ur := _undo_for_scene(scene_root)
 	ur.undo()
 	ur.undo()
+
+
+# ----- pre-validation: params type, batch cap, reserved keys -----
+
+func test_batch_rejects_non_dict_params_without_executing() -> void:
+	var result := _handler.batch_execute({"commands": [
+		{"command": "_ok_pure"},
+		{"command": "_ok_pure", "params": "nope"},
+	]})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "commands[1].params")
+	assert_eq(_call_log.size(), 0,
+		"pre-validation failure must execute nothing (all-or-nothing)")
+
+
+func test_batch_rejects_over_cap_without_executing() -> void:
+	var commands: Array = []
+	for i in range(BatchHandler.MAX_BATCH_COMMANDS + 1):
+		commands.append({"command": "_ok_pure"})
+	var result := _handler.batch_execute({"commands": commands})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(result.error.message, "batch cap")
+	assert_eq(_call_log.size(), 0, "an over-cap batch must execute nothing")
+
+
+func test_batch_sub_command_cannot_carry_reserved_request_id() -> void:
+	var seen: Array = []
+	_dispatcher.register("_capture_params", func(p: Dictionary) -> Dictionary:
+		seen.append(p.duplicate())
+		return {"data": {"undoable": false}})
+	var result := _handler.batch_execute({"commands": [
+		{"command": "_capture_params", "params": {"_request_id": "hijack", "x": 1}},
+	]})
+	assert_has_key(result, "data")
+	assert_eq(seen.size(), 1)
+	assert_true(not seen[0].has("_request_id"),
+		"dispatch_direct must strip the reserved deferred-reply key")
+	assert_eq(seen[0].get("x"), 1)

@@ -9,6 +9,12 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 const FORBIDDEN_SUBCOMMANDS := ["batch_execute"]
 
+## The whole batch executes synchronously inside one dispatcher tick,
+## outside the 4ms frame budget — an unbounded array freezes the editor
+## for the batch's full duration. 500 is far above any legitimate scene
+## edit while keeping worst-case stalls in check.
+const MAX_BATCH_COMMANDS := 500
+
 var _dispatcher: McpDispatcher
 var _undo_redo: EditorUndoRedoManager
 
@@ -24,6 +30,11 @@ func batch_execute(params: Dictionary) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "commands must be a list")
 	if commands.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "commands must not be empty")
+	if commands.size() > MAX_BATCH_COMMANDS:
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"commands exceeds the %d-command batch cap (got %d) — split into multiple batches" % [MAX_BATCH_COMMANDS, commands.size()]
+		)
 
 	var undo: bool = params.get("undo", true)
 
@@ -38,6 +49,12 @@ func batch_execute(params: Dictionary) -> Dictionary:
 			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "commands[%d]: '%s' is not allowed as a sub-command" % [idx, cmd_name])
 		if not _dispatcher.has_command(cmd_name):
 			return _unknown_command_error(idx, cmd_name)
+		## Pre-validate params type: the execution loop's typed Dictionary
+		## local would hard-error on a non-dict mid-batch, aborting AFTER
+		## earlier mutations committed. Catching it here keeps the
+		## all-or-nothing contract for malformed input.
+		if typeof(item.get("params", {})) != TYPE_DICTIONARY:
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "commands[%d].params must be a dict" % idx)
 
 	var results: Array = []
 	var succeeded := 0
