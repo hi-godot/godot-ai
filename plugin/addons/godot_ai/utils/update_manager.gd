@@ -332,6 +332,14 @@ static func _is_trusted_download_url(url: String) -> bool:
 	var host := authority.to_lower()
 	if not _TRUSTED_DOWNLOAD_PATH_PREFIXES.has(host):
 		return false
+	## Scope the checks below to the path proper (#713): direct CDN asset
+	## URLs carry signed query params (X-Amz-Credential=...%2F...) whose
+	## legitimate %2F tokens made every CDN prefix unreachable when the
+	## needle scan covered the query string. Routing is decided by the
+	## path, so the query is safe to ignore.
+	var qmark := path.find("?")
+	if qmark >= 0:
+		path = path.substr(0, qmark)
 	## Reject dot-segments (and their percent-encoded forms) anywhere in the
 	## path: "/hi-godot/godot-ai/releases/download/../../evil/..." passes a
 	## raw string-prefix test but normalizes server-side to a different repo,
@@ -393,6 +401,11 @@ func _on_download_completed(
 
 	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
 		print("MCP | update download failed: result=%d code=%d" % [result, response_code])
+		## Failure parity with _fail_verification (#713): HTTPRequest's
+		## download_file mode leaves whatever partial/error bytes it wrote
+		## staged at UPDATE_TEMP_ZIP — drop them so no later step can ever
+		## pick up a half-downloaded archive.
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(UPDATE_TEMP_ZIP))
 		install_state_changed.emit({
 			"button_text": "Download failed (%d)" % response_code,
 			"button_disabled": false,

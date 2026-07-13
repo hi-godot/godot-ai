@@ -123,6 +123,41 @@ func test_trusted_download_url_rejects_wrong_repo_on_trusted_host() -> void:
 		"a bare trusted host with no path must be rejected")
 
 
+func test_trusted_download_url_accepts_cdn_url_with_signed_query() -> void:
+	## #713: direct CDN asset URLs carry S3-signed query params whose
+	## legitimate %2F tokens (in X-Amz-Credential) previously tripped the
+	## encoded-slash needle scan, making every CDN prefix unreachable. The
+	## needle scan must cover only the path proper.
+	assert_true(
+		McpUpdateManagerScript._is_trusted_download_url(
+			"https://objects.githubusercontent.com/github-production-release-asset-2e65be/1234/x.zip"
+			+ "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+			+ "&X-Amz-Credential=AKIA%2F20260713%2Fus-east-1%2Fs3%2Faws4_request"
+			+ "&X-Amz-Signature=deadbeef"),
+		"a CDN release-asset URL with a signed query string must be trusted")
+	assert_true(
+		McpUpdateManagerScript._is_trusted_download_url(
+			TEST_ASSET_URL + "?foo=..%2f.."),
+		"encoded slashes in the query (not the path) must not trip the scan")
+
+
+func test_trusted_download_url_still_rejects_bad_path_despite_query() -> void:
+	## Splitting the query off must not open a path-side hole: dot-segments
+	## and encoded slashes IN THE PATH stay rejected with a query present.
+	assert_false(
+		McpUpdateManagerScript._is_trusted_download_url(
+			"https://github.com/hi-godot/godot-ai/releases/download/../../evil/x.zip?sig=ok"),
+		"path traversal must stay rejected when a query string is present")
+	assert_false(
+		McpUpdateManagerScript._is_trusted_download_url(
+			"https://github.com/hi-godot/godot-ai/releases/download/v1/..%2fevil.zip?sig=ok"),
+		"encoded slash in the path must stay rejected when a query is present")
+	assert_false(
+		McpUpdateManagerScript._is_trusted_download_url(
+			"https://github.com/evil-org/godot-ai/releases/download/v1/x.zip?sig=ok"),
+		"wrong-repo path must stay rejected when a query is present")
+
+
 func test_trusted_download_url_rejects_untrusted_and_insecure() -> void:
 	assert_false(
 		McpUpdateManagerScript._is_trusted_download_url(
@@ -203,6 +238,45 @@ func test_parse_sha256_digest_matches_fileaccess_hash() -> void:
 
 	assert_eq(parsed, real,
 		"parsed sidecar digest must match FileAccess.get_sha256 (the verify compare)")
+
+
+# ---- download-failure staged-zip cleanup (#713) -------------------------
+
+func test_download_failure_drops_staged_zip() -> void:
+	## HTTPRequest's download_file mode writes whatever bytes arrived (an
+	## error page, a truncated body) to UPDATE_TEMP_ZIP even on failure.
+	## The failure branch must drop them — same guarantee _fail_verification
+	## states — so no later step can pick up a half-downloaded archive.
+	var global_dir := ProjectSettings.globalize_path(McpUpdateManagerScript.UPDATE_TEMP_DIR)
+	var global_zip := ProjectSettings.globalize_path(McpUpdateManagerScript.UPDATE_TEMP_ZIP)
+	DirAccess.make_dir_recursive_absolute(global_dir)
+	var f := FileAccess.open(global_zip, FileAccess.WRITE)
+	assert_true(f != null, "Seed staged zip must open for write")
+	f.store_string("partial download bytes")
+	f.close()
+
+	var manager = McpUpdateManagerScript.new()
+	var states: Array[Dictionary] = []
+	manager.install_state_changed.connect(func(state: Dictionary) -> void:
+		states.append(state)
+	)
+
+	manager._on_download_completed(HTTPRequest.RESULT_CANT_CONNECT, 0, [], PackedByteArray())
+
+	var zip_still_staged := FileAccess.file_exists(global_zip)
+	manager.free()
+	DirAccess.remove_absolute(global_zip)
+	DirAccess.remove_absolute(global_dir)
+
+	assert_false(zip_still_staged,
+		"a failed download must not leave partial bytes staged at UPDATE_TEMP_ZIP")
+	assert_eq(states.size(), 1,
+		"a failed download must emit exactly one failure state")
+	var state: Dictionary = states[0]
+	assert_contains(String(state.get("button_text", "")), "Download failed",
+		"a failed download must paint the download-failed button")
+	assert_eq(bool(state.get("button_disabled", true)), false,
+		"a failed download must leave the button enabled for retry")
 
 
 # ---- _verify_then_install mandatory verification (#599) ----------------

@@ -287,6 +287,88 @@ func test_finalize_install_success_clears_backups() -> void:
 	runner.free()
 
 
+# ----- _is_safe_zip_addon_file rejection matrix (#713) -----
+
+
+func test_zip_sanitizer_accepts_normal_addon_entries() -> void:
+	var runner = _new_runner()
+	assert_true(runner._is_safe_zip_addon_file("addons/godot_ai/plugin.cfg"),
+		"a plain addon file entry must be accepted")
+	assert_true(runner._is_safe_zip_addon_file("addons/godot_ai/utils/settings.gd"),
+		"a nested addon file entry must be accepted")
+	assert_true(runner._is_safe_zip_addon_file("addons/godot_ai/a.b.c.txt"),
+		"dots inside a filename (not dot-segments) must be accepted")
+	runner.free()
+
+
+func test_zip_sanitizer_rejects_traversal_and_absolute_paths() -> void:
+	## Tier-1 S2: these are the containment guarantees the extractor relies
+	## on before writing zip bytes over live plugin code. Previously pinned
+	## only indirectly via the Python fixtures — this is the direct matrix.
+	var runner = _new_runner()
+	var bad := [
+		"/etc/passwd",
+		"/addons/godot_ai/plugin.gd",
+		"C:/evil/plugin.gd",
+		"addons\\godot_ai\\plugin.gd",
+		"addons/godot_ai/..\\evil.gd",
+		"addons/godot_ai/../../evil.gd",
+		"addons/godot_ai/sub/../../../evil.gd",
+		"addons/godot_ai/./plugin.gd",
+		"addons/godot_ai/..",
+		"addons/godot_ai//double_slash.gd",
+		"addons/other_addon/file.gd",
+		"not_addons/godot_ai/file.gd",
+		"addons/godot_ai/",
+		"addons/godot_ai/sub/",
+		"",
+	]
+	for entry in bad:
+		assert_false(runner._is_safe_zip_addon_file(entry),
+			"unsafe zip entry must be rejected: %s" % entry)
+	runner.free()
+
+
+func test_zip_sanitizer_rejects_reserved_install_suffixes() -> void:
+	## A zip entry named like the runner's own staging/backup machinery
+	## would collide with the temp file `_install_zip_file` writes, or be
+	## overwritten/deleted along with the rollback snapshots — corrupting
+	## the rollback set protecting this very install (#713).
+	var runner = _new_runner()
+	var reserved := [
+		"addons/godot_ai/plugin.gd" + UpdateReloadRunner.INSTALL_BACKUP_SUFFIX,
+		"addons/godot_ai/plugin.gd" + UpdateReloadRunner.TEMP_FILE_SUFFIX,
+		"addons/godot_ai/sub/x.gd" + UpdateReloadRunner.INSTALL_BACKUP_SUFFIX,
+		"addons/godot_ai/sub/x.gd" + UpdateReloadRunner.TEMP_FILE_SUFFIX,
+	]
+	for entry in reserved:
+		assert_false(runner._is_safe_zip_addon_file(entry),
+			"reserved install-machinery suffix must be rejected: %s" % entry)
+	runner.free()
+
+
+func test_manifest_rejects_zip_with_reserved_suffix_entry() -> void:
+	## End-to-end through _read_update_manifest: a release-shaped zip that
+	## also smuggles a *.update_backup entry must be refused outright.
+	var zip_path := _scratch_dir.path_join("update_reserved_suffix.zip")
+	_stage_release_zip(
+		zip_path,
+		{
+			"addons/godot_ai/plugin.cfg": "[plugin]\nname=\"Godot AI\"\n",
+			"addons/godot_ai/plugin.gd": "extends EditorPlugin\n",
+			"addons/godot_ai/plugin.gd.update_backup": "stale backup payload\n",
+		},
+	)
+
+	var runner = _new_runner()
+	runner._zip_path = zip_path
+	assert_false(
+		runner._read_update_manifest(),
+		"a zip smuggling a reserved-suffix entry must be rejected",
+	)
+	runner.free()
+
+
 # ----- _install_zip_file end-to-end -----
 
 

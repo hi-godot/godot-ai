@@ -326,6 +326,13 @@ func _is_safe_zip_addon_file(file_path: String) -> bool:
 	var rel_path := file_path.trim_prefix(ZIP_ADDON_PREFIX)
 	if rel_path.is_empty() or rel_path.ends_with("/"):
 		return false
+	## Reserved install-machinery suffixes (#713): an entry named like the
+	## runner's own staging/backup files would collide with the temp file
+	## `_install_zip_file` writes, or overwrite / later be deleted with the
+	## rollback snapshots `_finalize_install_success` cleans up — corrupting
+	## the very rollback set protecting this install.
+	if rel_path.ends_with(TEMP_FILE_SUFFIX) or rel_path.ends_with(INSTALL_BACKUP_SUFFIX):
+		return false
 	for segment in rel_path.split("/", true):
 		if segment.is_empty() or segment == "." or segment == "..":
 			return false
