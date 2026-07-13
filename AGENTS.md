@@ -555,6 +555,10 @@ New features don't ship without tests. Regressions are caught before they merge.
 
 When you encounter a failing test or bug — even one that predates your changes — fix it. Never dismiss a failure as "pre-existing" or "unrelated" and move on. The only exception is a massive architectural issue that would derail the current task; in that case, record a follow-up issue, task, or handoff note. But if you can fix it in a few minutes, just fix it.
 
+## Audit follow-up work
+
+A whole-codebase audit's Tier-1 cleanup merged as PR #684. The remaining work — issues #685–#691 plus a 115-item backlog — is tracked in [docs/audit-tier2-plan.md](docs/audit-tier2-plan.md). When picking up any of it, follow that file's workflow: one PR per theme, the full test gauntlet before every commit, verify each finding against current code before touching anything, and ask the maintainer before the flagged design decisions.
+
 ## Godot version support (4.5+)
 
 The plugin supports **Godot 4.5+** (4.7+ recommended). 4.5 is exercised by a CI canary (`Godot tests / Linux (Godot 4.5)` in `ci.yml`, pinned to `4.5.0`) so the parse-cascade class of regression cannot recur unnoticed at the documented floor.
