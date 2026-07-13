@@ -66,6 +66,16 @@ static func write(path: String, content: String) -> bool:
 	# which preserves it.
 	_apply_mode(tmp_path, target_mode)
 
+	# Verify the staged temp actually landed on disk before either commit path
+	# (rename or the copy-fallback below) trusts it. The copy-fallback path
+	# already guards this (_written_size_matches at line ~95 below) — under
+	# disk-full/quota a truncated rename would otherwise "succeed" and the
+	# caller would treat a corrupt config as correctly written while the
+	# `.backup` (not yet taken) holds nothing to recover from.
+	if not _written_size_matches(tmp_path, content):
+		DirAccess.remove_absolute(tmp_path)
+		return false
+
 	# Best-effort: snapshot the prior file before we touch the target so we
 	# can restore on a failed swap. The backup is also kept on success as a
 	# one-shot rollback aid for the user — give it the same (preserved) mode

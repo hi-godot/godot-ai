@@ -1597,6 +1597,44 @@ func test_atomic_write_preserves_existing_file_when_swap_fails() -> void:
 	DirAccess.remove_absolute(backup_path)
 
 
+# ----- atomic write: staged-temp size verification (#687 finding 3) -----
+#
+# _written_size_matches is the same integrity gate the copy-fallback path
+# (line ~95) already enforced; write() now calls it on the staged temp file
+# too, before either commit path (rename or copy-fallback) trusts it. Actually
+# forcing FileAccess to report a false "success" on a truncated write requires
+# OS-level fault injection (disk-full/quota) that isn't portable or
+# deterministic in CI — the same limitation noted on the analogous
+# update_reload_runner.gd:378 write-verification gap. These tests pin the
+# helper's exact contract directly instead.
+
+func test_written_size_matches_true_for_exact_content() -> void:
+	var path := _scratch_dir.path_join("size_match_ok.txt")
+	var content := "exact byte match"
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(content)
+	f.flush()
+	f.close()
+	assert_true(McpAtomicWrite._written_size_matches(path, content))
+
+
+func test_written_size_matches_false_for_truncated_content() -> void:
+	## Simulates the disk-full/quota failure shape: the temp file on disk has
+	## fewer bytes than the content that was supposed to be written.
+	var path := _scratch_dir.path_join("size_match_truncated.txt")
+	var full_content := "this content did not fully land on disk"
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(full_content.substr(0, 10))  # only the first 10 bytes "landed"
+	f.flush()
+	f.close()
+	assert_false(McpAtomicWrite._written_size_matches(path, full_content))
+
+
+func test_written_size_matches_false_for_missing_file() -> void:
+	var path := _scratch_dir.path_join("size_match_missing.txt")
+	assert_false(McpAtomicWrite._written_size_matches(path, "anything"))
+
+
 # ----- atomic write: concurrency + symlink targets (#534) -----
 
 ## List leftover files in _scratch_dir whose name starts with `prefix` — used

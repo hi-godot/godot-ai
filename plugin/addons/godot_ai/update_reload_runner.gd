@@ -374,13 +374,25 @@ func _install_zip_file(
 			FileAccess.get_open_error(),
 		])
 		return {}
-	f.store_buffer(content)
+	## store_buffer only reports a short write via its bool return — it does
+	## NOT set the last-error state get_error() reads — and the write is
+	## stdio-buffered, so disk-full can surface only at close(). Check both
+	## signals, then verify the bytes actually landed on disk before trusting
+	## this temp file: a truncated file renamed over a live plugin script (or
+	## project.godot) parse-error-cascades the next enable with no rollback.
+	var stored := f.store_buffer(content)
 	var write_error := f.get_error()
 	f.close()
-	if write_error != OK:
-		print("MCP | update extract failed: write error %d for %s" % [
+	var on_disk_size := -1
+	if stored and write_error == OK:
+		on_disk_size = FileAccess.get_file_as_bytes(temp_path).size()
+	if not stored or write_error != OK or on_disk_size != content.size():
+		print("MCP | update extract failed: write error %d for %s (stored=%s, on_disk_size=%d, expected=%d)" % [
 			write_error,
 			temp_path,
+			stored,
+			on_disk_size,
+			content.size(),
 		])
 		DirAccess.remove_absolute(temp_path)
 		return {}
