@@ -3878,7 +3878,7 @@ class TestBatchExecuteTool:
 class TestPerCallSessionRouting:
     async def _connect_second_plugin(self, session_id: str, readiness: str = "ready"):
         """Connect a second mock plugin to the same MCP stack server."""
-        from tests.conftest import MockGodotPlugin
+        from tests.conftest import MockGodotPlugin, drain_handshake_ack
 
         ws = await websockets.connect("ws://127.0.0.1:19502")
         handshake = {
@@ -3894,11 +3894,7 @@ class TestPerCallSessionRouting:
         await asyncio.sleep(0.05)
         ## Drain handshake_ack so respond_* helpers' first recv lands on a
         ## real command, not the ack. Mandatory (#716) — see conftest.
-        try:
-            ack_raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
-        except asyncio.TimeoutError:
-            pytest.fail("no handshake_ack within 2s — the ack contract is mandatory")
-        assert json.loads(ack_raw).get("type") == "handshake_ack"
+        await drain_handshake_ack(ws)
         return MockGodotPlugin(ws=ws, session_id=session_id)
 
     async def test_session_id_routes_to_specific_session(self, mcp_stack):

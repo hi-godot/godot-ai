@@ -33,6 +33,7 @@ import logging
 import os
 import platform
 import queue
+import re
 import sys
 import threading
 import time
@@ -682,13 +683,16 @@ def record_failure(
 
     ``error_category`` is a category ("disk_full", "timeout"), not free-form
     error text — the payload ships to shared telemetry, and raw exception
-    strings can embed user paths / project names. The 64-char truncation
-    matches the sub_code convention and makes a pasted exception obviously
-    mangled rather than silently exfiltrated (#716 audit note).
+    strings can embed user paths / project names. Characters outside the
+    token alphabet ([A-Za-z0-9_.-]) are replaced with "_" and the result is
+    truncated to 64 chars (the sub_code convention), so a pasted exception
+    or path arrives obviously mangled rather than silently exfiltrated
+    (#716 audit note). Note "/" is NOT in the alphabet: path separators are
+    the clearest leak signal, so they get mangled too.
     """
     data: dict[str, Any] = {
         "component": component,
-        "error": _truncate(error_category, 64),
+        "error": _truncate(re.sub(r"[^A-Za-z0-9_.-]", "_", error_category), 64),
     }
     if metadata:
         data.update(metadata)
