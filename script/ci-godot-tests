@@ -103,14 +103,21 @@ SCENE_OPEN_RESULT=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
 echo "$SCENE_OPEN_RESULT" | python3 -c "
 import json, sys
 raw = sys.stdin.read()
+saw_data_line = False
 for line in raw.split('\n'):
     if line.startswith('data: '):
+        saw_data_line = True
         data = json.loads(line[6:])
         result = data.get('result', {})
         if result.get('isError'):
             print('ERROR: scene_open failed:', json.dumps(result)[:500])
             sys.exit(1)
         break
+if not saw_data_line:
+    # Fail closed: an empty/non-SSE response is exactly the server-hiccup
+    # case this gate exists to catch — falling off the end must not pass.
+    print('ERROR: scene_open returned no SSE data line:', raw[:300])
+    sys.exit(1)
 " || { echo "ERROR: could not open main.tscn — aborting before a hollow run"; exit 1; }
 sleep 2
 
