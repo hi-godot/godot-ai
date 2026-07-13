@@ -17,7 +17,9 @@ func list_signals(params: Dictionary) -> Dictionary:
 	var path_type_err = McpParamValidators.require_string("path", path_value)
 	if path_type_err != null:
 		return path_type_err
-	var path: String = path_value
+	## String(...) conversion: require_string accepts StringName too, and
+	## a bare typed assignment from StringName would defeat the guard.
+	var path: String = String(path_value)
 	if path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
