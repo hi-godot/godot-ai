@@ -109,15 +109,44 @@ static func _register_bool_setting(es: EditorSettings, key: String, default_valu
 
 
 static func startup_trace_enabled() -> bool:
-	## env_lookup for the same worker-thread reason as mode_override (#691).
+	## env_lookup + _editor_setting_lookup for the same worker-thread
+	## reason as mode_override (#691).
 	var raw := McpPathTemplate.env_lookup(STARTUP_TRACE_ENV).strip_edges().to_lower()
 	if raw == "1" or raw == "true" or raw == "yes" or raw == "on":
 		return true
-	if Engine.is_editor_hint():
-		var es := EditorInterface.get_editor_settings()
-		if es != null and es.has_setting(SETTING_STARTUP_TRACE):
-			return bool(es.get_setting(SETTING_STARTUP_TRACE))
+	var setting: Variant = _editor_setting_lookup(SETTING_STARTUP_TRACE)
+	if setting != null:
+		return bool(setting)
 	return false
+
+
+## #691: EditorSettings counterpart of McpPathTemplate.env_lookup. The #678
+## startup walk's discovery worker reaches mode_override() (via
+## get_server_command) and EditorInterface / EditorSettings are not
+## thread-safe objects. Main thread: live read + mutex-guarded snapshot
+## refresh. Worker thread: snapshot only — a never-warmed key reads as
+## null (unset), never a live EditorInterface call. Warmed alongside the
+## env snapshot in warm_env_snapshot(), which runs on the main thread
+## before any worker dispatch.
+static var _setting_snapshot := {}
+static var _setting_snapshot_mutex := Mutex.new()
+
+
+static func _editor_setting_lookup(key: String) -> Variant:
+	if OS.get_thread_caller_id() == OS.get_main_thread_id():
+		var live: Variant = null
+		if Engine.is_editor_hint():
+			var es := EditorInterface.get_editor_settings()
+			if es != null and es.has_setting(key):
+				live = es.get_setting(key)
+		_setting_snapshot_mutex.lock()
+		_setting_snapshot[key] = live
+		_setting_snapshot_mutex.unlock()
+		return live
+	_setting_snapshot_mutex.lock()
+	var cached: Variant = _setting_snapshot.get(key, null)
+	_setting_snapshot_mutex.unlock()
+	return cached
 
 
 ## Read the `godot_ai/excluded_domains` EditorSetting as a canonicalized
@@ -266,8 +295,10 @@ static func check_status_details_for_url_with_cli_path(id: String, url: String, 
 ## the base vars plus every descriptor-declared `config_home_env`
 ## (CLAUDE_CONFIG_DIR, CODEX_HOME, …), so worker-thread config-path
 ## resolution never calls OS.get_environment concurrently with the spawn
-## window's setenv/unsetenv. Idempotent; called from plugin _enter_tree and
-## before each dock worker dispatch.
+## window's setenv/unsetenv. Also warms the EditorSettings snapshot for
+## the mode/trace overrides so worker-thread mode_override() /
+## startup_trace_enabled() never touch EditorInterface. Idempotent;
+## called from plugin _enter_tree and before each dock worker dispatch.
 static func warm_env_snapshot() -> void:
 	var extras := PackedStringArray()
 	for id in client_ids():
@@ -275,6 +306,8 @@ static func warm_env_snapshot() -> void:
 		if client != null and not client.config_home_env.is_empty():
 			extras.append(client.config_home_env)
 	McpPathTemplate.warm_env_snapshot(extras)
+	_editor_setting_lookup(MODE_OVERRIDE_SETTING)
+	_editor_setting_lookup(SETTING_STARTUP_TRACE)
 
 
 static func client_status_probe_snapshot(id: String) -> Dictionary:
@@ -453,19 +486,18 @@ const MODE_OVERRIDE_SETTING := "godot_ai/mode_override"
 
 static func mode_override() -> String:
 	# 1. EditorSetting wins — the user explicitly set it via Editor Settings.
-	#    Guarded on `Engine.is_editor_hint()` so this is a no-op when the
-	#    plugin code runs inside the game subprocess (where EditorInterface
-	#    isn't available). See CLAUDE.md "Game-side code: gate on
-	#    Engine.is_editor_hint(), not OS.has_feature("editor")".
-	if Engine.is_editor_hint():
-		var es := EditorInterface.get_editor_settings()
-		if es != null and es.has_setting(MODE_OVERRIDE_SETTING):
-			var setting_val := str(es.get_setting(MODE_OVERRIDE_SETTING)).strip_edges().to_lower()
-			if setting_val == "dev" or setting_val == "user":
-				return setting_val
-	# 2. Env var fallback. env_lookup, not OS.get_environment: this runs on
-	#    the #678 startup walk's discovery worker and must not race a
-	#    main-thread setenv/unsetenv window (#691).
+	#    _editor_setting_lookup handles the `Engine.is_editor_hint()` gate
+	#    (no-op in the game subprocess; see CLAUDE.md "Game-side code") and
+	#    serves worker threads from a main-thread-warmed snapshot — this
+	#    runs on the #678 startup walk's discovery worker, and
+	#    EditorInterface/EditorSettings are not thread-safe (#691).
+	var setting: Variant = _editor_setting_lookup(MODE_OVERRIDE_SETTING)
+	if setting != null:
+		var setting_val := str(setting).strip_edges().to_lower()
+		if setting_val == "dev" or setting_val == "user":
+			return setting_val
+	# 2. Env var fallback. env_lookup, not OS.get_environment: same
+	#    worker-thread reason (#691).
 	var raw := McpPathTemplate.env_lookup(MODE_OVERRIDE_ENV).strip_edges().to_lower()
 	if raw == "dev" or raw == "user":
 		return raw

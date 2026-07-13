@@ -43,8 +43,11 @@ const _BASE_ENV_VARS: Array[String] = [
 
 ## Thread-safe env read (#691). Main thread: live read + snapshot refresh.
 ## Worker thread: snapshot only, so it can never race a main-thread
-## setenv/unsetenv. A worker read of a never-warmed var falls back to the
-## pre-#691 direct read — keep vars out of that path by warming them.
+## setenv/unsetenv. A worker read of a never-warmed var returns "" — the
+## same value an unset var reads as — never a live OS.get_environment,
+## which would reintroduce the race for exactly the vars nobody thought
+## to warm. Missing warm-up degrades resolution; it must not touch the
+## process-global environment off-main.
 static func env_lookup(name: String) -> String:
 	if OS.get_thread_caller_id() == OS.get_main_thread_id():
 		var live := OS.get_environment(name)
@@ -57,7 +60,7 @@ static func env_lookup(name: String) -> String:
 	_env_snapshot_mutex.unlock()
 	if cached != null:
 		return str(cached)
-	return OS.get_environment(name)
+	return ""
 
 
 ## Main-thread pre-warm so subsequent worker reads never touch the real
