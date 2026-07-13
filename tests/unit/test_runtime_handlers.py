@@ -1388,6 +1388,14 @@ def test_direct_runtime_from_context_rejects_absent_lifespan(absent):
         DirectRuntime.from_context(_LifespanCtxStub(absent))
 
 
+def test_direct_runtime_from_context_rejects_context_without_accessor():
+    ## A Context-like object with no lifespan_context attribute at all (an
+    ## API change, or something that merely resembles Context) must surface
+    ## as the same stable RuntimeError, not an AttributeError.
+    with pytest.raises(RuntimeError, match="lifespan context is not available"):
+        DirectRuntime.from_context(object())
+
+
 async def test_logs_read_handler_uses_runtime_and_paginates():
     runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
 
