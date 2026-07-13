@@ -299,3 +299,44 @@ class TestWaitForSession:
         assert {session.session_id for session in reg.list_all()} == {"a", "b"}
         assert len(reg) == 2
         assert reg._session_waiters == []
+
+
+class TestHandshakeTelemetrySanitization:
+    """Audit backlog: handshake-supplied version strings ride into
+    telemetry verbatim otherwise — any local process can connect and
+    stuff arbitrary text into them (see AGENTS.md WS trust boundary)."""
+
+    def test_hostile_version_strings_are_sanitized_in_telemetry(self, monkeypatch):
+        captured = {}
+
+        def _capture(record_type, data, session_id=None):
+            captured["data"] = data
+
+        monkeypatch.setattr("godot_ai.sessions.registry.record_telemetry", _capture)
+        registry = SessionRegistry()
+        registry.register(
+            _make_session(
+                session_id="probe@1234",
+                godot_version="4.7\nX-Injected: gotcha " + "A" * 200,
+                plugin_version="2.9.1",
+            )
+        )
+        assert captured["data"]["godot_version"] == "invalid"
+        assert captured["data"]["plugin_version"] == "2.9.1"
+
+    def test_normal_version_strings_pass_through(self, monkeypatch):
+        captured = {}
+
+        def _capture(record_type, data, session_id=None):
+            captured["data"] = data
+
+        monkeypatch.setattr("godot_ai.sessions.registry.record_telemetry", _capture)
+        registry = SessionRegistry()
+        registry.register(
+            _make_session(
+                session_id="probe@5678",
+                godot_version="4.7.0-stable (official)",
+                plugin_version="2.9.1",
+            )
+        )
+        assert captured["data"]["godot_version"] == "4.7.0-stable (official)"

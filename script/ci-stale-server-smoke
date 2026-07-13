@@ -159,6 +159,10 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import TCPServer
 
+# Mirror script/_ci_env.sh: smoke-run editors/servers must not send
+# telemetry from CI (audit backlog). setdefault keeps explicit overrides.
+os.environ.setdefault("GODOT_AI_DISABLE_TELEMETRY", "true")
+
 ap = argparse.ArgumentParser()
 ap.add_argument("--port", type=int, default=8000)
 args, _ = ap.parse_known_args()

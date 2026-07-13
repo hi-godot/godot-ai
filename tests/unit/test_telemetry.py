@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 
@@ -425,3 +426,46 @@ class TestPublicHelpers:
         while not sent and time.monotonic() < deadline:
             time.sleep(0.02)
         assert sent and sent[0].data["after_restart"] is True
+
+
+class TestCustomerUuidValidation:
+    """Audit backlog: uuid file content must be validated, and a
+    regenerated uuid must be PERSISTED so the install converges on one
+    stable identity (the old empty-file branch re-minted every start)."""
+
+    def test_malformed_uuid_file_regenerates_and_persists(
+        self, clean_env, isolated_data_dir
+    ) -> None:
+        uuid_file = isolated_data_dir / "customer_uuid.txt"
+        uuid_file.write_text("not-a-uuid; drop table installs")
+        collector = tel.TelemetryCollector()
+        try:
+            stored = uuid_file.read_text(encoding="utf-8").strip()
+            assert stored == collector._customer_uuid
+            uuid.UUID(stored)  # must now be a real UUID
+            assert "drop table" not in stored
+        finally:
+            collector.shutdown()
+
+    def test_empty_uuid_file_regenerates_and_persists(self, clean_env, isolated_data_dir) -> None:
+        uuid_file = isolated_data_dir / "customer_uuid.txt"
+        uuid_file.write_text("")
+        collector = tel.TelemetryCollector()
+        try:
+            stored = uuid_file.read_text(encoding="utf-8").strip()
+            assert stored, "regenerated uuid must be written back"
+            assert stored == collector._customer_uuid
+            uuid.UUID(stored)
+        finally:
+            collector.shutdown()
+
+    def test_valid_uuid_file_is_preserved(self, clean_env, isolated_data_dir) -> None:
+        uuid_file = isolated_data_dir / "customer_uuid.txt"
+        fixed = str(uuid.uuid4())
+        uuid_file.write_text(fixed)
+        collector = tel.TelemetryCollector()
+        try:
+            assert collector._customer_uuid == fixed
+            assert uuid_file.read_text(encoding="utf-8").strip() == fixed
+        finally:
+            collector.shutdown()

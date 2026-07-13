@@ -21,7 +21,11 @@ import tempfile
 import time
 import urllib.request
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+
+# The fixture editor auto-spawns a real MCP server; neither may send
+# telemetry from a local smoke run (audit backlog).
+os.environ.setdefault("GODOT_AI_DISABLE_TELEMETRY", "true")
 
 ROOT = Path(__file__).resolve().parent.parent
 PLUGIN_ROOT = ROOT / "plugin" / "addons" / "godot_ai"
@@ -234,6 +238,16 @@ def extract_release_zip_to_addon(zip_path: Path, addon_dir: Path) -> None:
             rel = name[len("addons/godot_ai/") :]
             if not rel:
                 continue
+            ## Same containment the plugin's own update runner enforces:
+            ## refuse traversal/absolute/backslash entries instead of
+            ## writing wherever a hostile zip points (audit backlog).
+            segments = rel.split("/")
+            if (
+                "\\" in rel
+                or PurePosixPath(rel).is_absolute()
+                or any(seg in ("", ".", "..") for seg in segments)
+            ):
+                raise RuntimeError(f"unsafe zip entry refused: {name!r}")
             dest = addon_dir / rel
             if member.is_dir():
                 dest.mkdir(parents=True, exist_ok=True)

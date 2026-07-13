@@ -50,6 +50,10 @@ import urllib.request
 
 from PIL import Image
 
+# Mirror script/_ci_env.sh: smoke-run editors/servers must not send
+# telemetry from CI (audit backlog). setdefault keeps explicit overrides.
+os.environ.setdefault("GODOT_AI_DISABLE_TELEMETRY", "true")
+
 SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://127.0.0.1:8000/mcp")
 HEADERS = {
     "Content-Type": "application/json",

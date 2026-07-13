@@ -24,6 +24,10 @@ fi
 
 cd "$CLAUDE_PROJECT_DIR"
 
+# Headless web-session editors/servers must not inject fake install/update
+# events into production telemetry (audit backlog; mirrors script/_ci_env.sh).
+export GODOT_AI_DISABLE_TELEMETRY=true
+
 # Keep in step with ci.yml (godot-version: "4.7.0" — the chickensoft action
 # wants 3-part semver; the Godot release tag/asset uses the 2-part form) and
 # test_project/project.godot (config/features "4.7"). See #672.

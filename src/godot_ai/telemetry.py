@@ -336,11 +336,18 @@ class TelemetryCollector:
 
     def _load_persistent_data(self) -> None:
         try:
+            raw = ""
             if self.config.uuid_file.exists():
-                self._customer_uuid = self.config.uuid_file.read_text(
-                    encoding="utf-8"
-                ).strip() or str(uuid.uuid4())
-            else:
+                raw = self.config.uuid_file.read_text(encoding="utf-8").strip()
+            try:
+                ## Validate instead of trusting file content verbatim; also
+                ## canonicalizes case. Empty/missing raises ValueError too.
+                self._customer_uuid = str(uuid.UUID(raw))
+            except ValueError:
+                ## Missing, empty, or malformed: mint a fresh id and PERSIST
+                ## it — the old empty-file branch regenerated a new uuid on
+                ## every start without ever writing it back, so the install
+                ## never converged on one stable identity.
                 self._customer_uuid = str(uuid.uuid4())
                 try:
                     self.config.uuid_file.write_text(self._customer_uuid, encoding="utf-8")

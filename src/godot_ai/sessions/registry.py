@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import cached_property
@@ -17,6 +18,20 @@ from godot_ai.telemetry import (
 )
 
 logger = logging.getLogger(__name__)
+
+## Handshake fields ride into telemetry verbatim otherwise — any local
+## process can connect (see AGENTS.md WS trust boundary) and stuff
+## arbitrary text into godot_version/plugin_version/etc. Mirror the
+## version-token shape the rest of telemetry expects; anything else is
+## replaced wholesale rather than truncated so the collector can count
+## the anomaly without storing attacker-controlled text.
+_VERSION_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._+()-]{0,63}$")
+
+
+def _safe_version_token(value: str) -> str:
+    if isinstance(value, str) and _VERSION_TOKEN_RE.match(value):
+        return value
+    return "invalid"
 
 
 @dataclass
@@ -110,10 +125,13 @@ class SessionRegistry:
                 RecordType.GODOT_CONNECTION,
                 {
                     "event": "connected",
-                    "godot_version": session.godot_version,
-                    "plugin_version": session.plugin_version,
-                    "protocol_version": session.protocol_version,
-                    "server_launch_mode": session.server_launch_mode,
+                    ## Handshake-supplied strings are sanitized for the
+                    ## telemetry payload only; Session fields stay verbatim
+                    ## for MCP clients.
+                    "godot_version": _safe_version_token(session.godot_version),
+                    "plugin_version": _safe_version_token(session.plugin_version),
+                    "protocol_version": _safe_version_token(session.protocol_version),
+                    "server_launch_mode": _safe_version_token(session.server_launch_mode),
                     "session_count": len(self._sessions),
                 },
                 session_id=session.session_id,

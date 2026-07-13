@@ -37,6 +37,11 @@ dependencies = [
     "fastmcp>=3.0.0,!=3.3.*,<3.5.0",
     "websockets>=13.0",
     "pydantic>=2.0",
+    # asgi.py imports these directly; declare them instead of relying on
+    # them arriving transitively through fastmcp (audit backlog). Floors
+    # match the mcp SDK's own minimums — resolution is unchanged.
+    "uvicorn>=0.23",
+    "starlette>=0.27",
 ]
 
 [project.urls]
