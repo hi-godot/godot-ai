@@ -81,7 +81,14 @@ func write_file(params: Dictionary) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to open file for writing: %s" % path)
 
 	file.store_string(content)
+	file.flush()
+	var write_err := file.get_error()
 	file.close()
+	if write_err != OK:
+		return ErrorCodes.make(
+			ErrorCodes.INTERNAL_ERROR,
+			"Write failed for %s (error %d); file may be truncated" % [path, write_err]
+		)
 
 	# Single-file register, not a full scan() — a scan() per write stacks
 	# filesystem WorkerThreadPool tasks under concurrent writes and can SIGABRT

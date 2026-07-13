@@ -167,6 +167,36 @@ func test_write_rejects_override_cfg() -> void:
 	assert_contains(err, "override.cfg")
 
 
+func test_write_rejects_own_plugin_tree() -> void:
+	## #689: overwriting the currently-loaded plugin's own scripts (plus the
+	## immediate reimport every write path triggers) can crash the editor or
+	## corrupt the installed plugin so the next enable fails to resolve scripts.
+	var err := McpPathValidator.validate_resource_path("res://addons/godot_ai/plugin.gd", true)
+	assert_false(err.is_empty(), "writing res://addons/godot_ai/plugin.gd must be rejected")
+	assert_contains(err, "addons/godot_ai")
+
+
+func test_write_rejects_own_plugin_tree_nested() -> void:
+	var err := McpPathValidator.validate_resource_path("res://addons/godot_ai/handlers/node_handler.gd", true)
+	assert_false(err.is_empty(), "writing nested under res://addons/godot_ai/ must be rejected")
+
+
+func test_read_allows_own_plugin_tree() -> void:
+	## for_write defaults to false — reading the plugin's own source (e.g. to
+	## inspect it) must not be blocked.
+	assert_eq(McpPathValidator.validate_resource_path("res://addons/godot_ai/plugin.gd"), "")
+
+
+func test_write_allows_other_addons() -> void:
+	## The block is scoped to the godot_ai plugin's own tree, not every addon.
+	assert_eq(McpPathValidator.validate_resource_path("res://addons/some_other_plugin/plugin.gd", true), "")
+
+
+func test_write_blocklist_is_case_insensitive_for_own_plugin_tree() -> void:
+	var err := McpPathValidator.validate_resource_path("res://Addons/Godot_AI/plugin.gd", true)
+	assert_false(err.is_empty(), "case-variant spelling of addons/godot_ai must still be rejected")
+
+
 func test_write_blocklist_is_case_insensitive() -> void:
 	## macOS/Windows default filesystems are case-insensitive, so a case-variant
 	## spelling resolves to the same protected file and must be refused.

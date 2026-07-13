@@ -140,9 +140,16 @@ static func _reject_sensitive_write(path: String) -> String:
 		return "Refusing to write res://override.cfg (startup config override)"
 	# Reject the `.godot/` editor-metadata dir at any depth. Split drops empty
 	# segments so a trailing slash can't hide a segment from the check.
-	for segment in path.trim_prefix("res://").split("/", false):
+	var segments := path.trim_prefix("res://").split("/", false)
+	for segment in segments:
 		if segment.to_lower() == ".godot":
 			return "Refusing to write under res://.godot/ (editor metadata)"
+	# Reject the currently-loaded plugin's own tree. Overwriting a live plugin
+	# script (plus the update_file() reimport every write path triggers) can
+	# crash the editor the same way an in-flight self-update save can, or
+	# corrupt the installed plugin so the next enable fails to resolve scripts.
+	if segments.size() >= 2 and segments[0].to_lower() == "addons" and segments[1].to_lower() == "godot_ai":
+		return "Refusing to write under res://addons/godot_ai/ (overwriting the loaded plugin can crash the editor)"
 	return ""
 
 
