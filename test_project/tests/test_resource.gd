@@ -860,6 +860,7 @@ func _make_typed_array_resource() -> Resource:
 		"@export var items: Array[int] = []",
 		"@export var labels: Array[String] = []",
 		"@export var tints: Array[Color] = []",
+		"@export var textures: Array[Texture2D] = []",
 	])
 	script.reload()
 	return script.new()
@@ -901,6 +902,38 @@ func test_apply_resource_properties_typed_array_error_names_property_and_index()
 	assert_contains(err.error.message, "element 1",
 		"the error must name the offending element index")
 	assert_eq((res.get("items") as Array).size(), 0, "slot must stay untouched on error")
+
+
+func test_apply_resource_properties_fills_object_element_array() -> void:
+	## #612 stage 2 through the resource entry point — the custom-Resource
+	## Array[Texture2D] idiom the issue calls the dominant case. The test
+	## project ships no image assets, so stage a .tres texture to load from.
+	var tex_path := "res://tests/_mcp_stage2_res_texture.tres"
+	assert_eq(ResourceSaver.save(GradientTexture2D.new(), tex_path), OK,
+		"seed texture must save")
+	var res := _make_typed_array_resource()
+	var err: Variant = ResourceHandler._apply_resource_properties(res, {
+		"textures": [tex_path],
+	})
+	var stored: Variant = res.get("textures")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(tex_path))
+	var efs := EditorInterface.get_resource_filesystem()
+	if efs != null:
+		efs.update_file(tex_path)
+	assert_eq(err, null, "typed Array[Texture2D] write must succeed")
+	assert_eq((stored as Array).size(), 1)
+	assert_true(stored[0] is Texture2D, "res:// element must load as Texture2D")
+
+
+func test_apply_resource_properties_object_element_wrong_class_errors() -> void:
+	var res := _make_typed_array_resource()
+	var err: Variant = ResourceHandler._apply_resource_properties(res, {
+		"textures": [{"__class__": "BoxMesh"}],
+	})
+	assert_is_error(err, ErrorCodes.WRONG_TYPE)
+	assert_contains(err.error.message, "element 0",
+		"the error must name the offending element index")
+	assert_eq((res.get("textures") as Array).size(), 0, "slot must stay untouched on error")
 
 
 func test_apply_resource_properties_typed_array_rejects_non_list() -> void:

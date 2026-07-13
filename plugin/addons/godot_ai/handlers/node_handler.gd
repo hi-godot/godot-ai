@@ -906,9 +906,12 @@ static func _coerce_value(value: Variant, target_type: int) -> Variant:
 ## `make(...)`-shaped error Dictionary (callers discriminate on
 ## `result is Dictionary` — a successful result is always an Array).
 ##
-## Object elements (Array[Texture2D], Array[MyResource], ...) are #612
-## stage 2 — refused loudly here rather than left to the generic
-## passthrough that silently dropped them.
+## Object elements (Array[Texture2D], Array[MyResource], ...) coerce per
+## element through `_coerce_object_element` (#612 stage 2), mirroring the
+## single-slot TYPE_OBJECT paths: res:// strings load, {"__class__": ...}
+## instantiates, and each landed element is conformance-checked against the
+## slot's element class/script so a wrong-class Resource errors naming the
+## index instead of being rejected wholesale by `assign`.
 static func _coerce_typed_array(value: Variant, slot_value: Array, prefix: String = "") -> Variant:
 	var elem_label := _typed_array_element_label(slot_value)
 	if not (value is Array):
@@ -920,31 +923,42 @@ static func _coerce_typed_array(value: Variant, slot_value: Array, prefix: Strin
 		)
 		return ErrorCodes.prefix_message(err, prefix)
 	var elem_type := slot_value.get_typed_builtin()
-	## An empty list has no elements to coerce, so it may clear the slot even
-	## when the element type is stage-2 territory (PR #682 review).
-	if elem_type == TYPE_OBJECT and not (value as Array).is_empty():
-		var obj_err := ErrorCodes.make(
-			ErrorCodes.WRONG_TYPE,
-			"Writing elements into a typed Array[%s] property is not supported yet (#612 stage 2 covers Object elements); assign the elements individually in the editor for now" % elem_label,
-		)
-		return ErrorCodes.prefix_message(obj_err, prefix)
 	var staging: Array = []
 	var in_list: Array = value
 	for i in in_list.size():
 		var elem_prefix := ("element %d" % i) if prefix.is_empty() else "%s element %d" % [prefix, i]
-		var coerced: Variant = _coerce_value(in_list[i], elem_type)
-		var elem_err := _check_coerced(coerced, elem_type, elem_prefix)
-		if elem_err != null:
-			return elem_err
-		if coerced == null:
-			## Prefix with `elem_prefix` (which already folds in `prefix`),
-			## not `prefix` again — the latter double-stamped the property
-			## context (PR #682 review).
-			var null_err := ErrorCodes.make(
-				ErrorCodes.WRONG_TYPE,
-				"cannot store null in Array[%s]" % elem_label,
-			)
-			return ErrorCodes.prefix_message(null_err, elem_prefix)
+		var coerced: Variant
+		if elem_type == TYPE_OBJECT:
+			coerced = _coerce_object_element(in_list[i], elem_prefix)
+			if coerced is Dictionary:
+				## Object elements are never legit Dictionaries (a dict input
+				## is either {"__class__"} — consumed above — or an error), so
+				## a Dictionary return is unambiguously the error envelope.
+				return coerced
+			if coerced != null and not _object_element_conforms(coerced, slot_value):
+				var conform_err := ErrorCodes.make(
+					ErrorCodes.WRONG_TYPE,
+					"element is %s, which is not a %s" % [
+						(coerced as Object).get_class(), elem_label,
+					],
+				)
+				return ErrorCodes.prefix_message(conform_err, elem_prefix)
+		else:
+			coerced = _coerce_value(in_list[i], elem_type)
+			var elem_err := _check_coerced(coerced, elem_type, elem_prefix)
+			if elem_err != null:
+				return elem_err
+			if coerced == null:
+				## Prefix with `elem_prefix` (which already folds in `prefix`),
+				## not `prefix` again — the latter double-stamped the property
+				## context (PR #682 review). Object arrays allow null entries
+				## (Godot typed object arrays store null); value-type arrays
+				## don't.
+				var null_err := ErrorCodes.make(
+					ErrorCodes.WRONG_TYPE,
+					"cannot store null in Array[%s]" % elem_label,
+				)
+				return ErrorCodes.prefix_message(null_err, elem_prefix)
 		staging.append(coerced)
 	var out := slot_value.duplicate()
 	out.clear()
@@ -973,6 +987,75 @@ static func _typed_array_element_label(slot_value: Array) -> String:
 			cls = String((script as Script).get_global_name())
 		return cls if not cls.is_empty() else "Object"
 	return type_string(slot_value.get_typed_builtin())
+
+
+## Coerce one element of an object-typed Array (#612 stage 2). Mirrors the
+## single-slot TYPE_OBJECT paths in set_property: a res:// path string loads
+## the Resource; {"__class__": "X", ...} (including the #206 stringified
+## form) instantiates via ResourceHandler and applies the remaining keys;
+## "" / null store a null entry (typed object arrays allow them). Returns
+## the Object (or null), or a make(...)-shaped error Dictionary with
+## `elem_prefix` already folded in.
+static func _coerce_object_element(elem: Variant, elem_prefix: String) -> Variant:
+	if elem == null:
+		return null
+	if elem is Object:
+		return elem
+	if elem is String and (elem as String).begins_with("{"):
+		var json := JSON.new()
+		if json.parse(elem) == OK and json.data is Dictionary and (json.data as Dictionary).has("__class__"):
+			elem = json.data
+	if elem is String:
+		if String(elem).is_empty():
+			return null
+		var path_err = McpPathValidator.loadable_error(elem, "value")
+		if path_err != null:
+			return ErrorCodes.prefix_message(path_err, elem_prefix)
+		if not ResourceLoader.exists(elem):
+			return ErrorCodes.prefix_message(
+				ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Resource not found: %s" % elem),
+				elem_prefix,
+			)
+		var loaded := ResourceLoader.load(elem)
+		if loaded == null:
+			return ErrorCodes.prefix_message(
+				ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Resource not found: %s" % elem),
+				elem_prefix,
+			)
+		return loaded
+	if elem is Dictionary and (elem as Dictionary).has("__class__"):
+		var type_str: String = (elem as Dictionary).get("__class__", "")
+		var made := ResourceHandler._instantiate_resource(type_str)
+		if made is Dictionary:
+			return ErrorCodes.prefix_message(made, elem_prefix)
+		var res: Resource = made
+		var remaining: Dictionary = (elem as Dictionary).duplicate()
+		remaining.erase("__class__")
+		if not remaining.is_empty():
+			var apply_err: Variant = ResourceHandler._apply_resource_properties(res, remaining)
+			if apply_err != null:
+				return ErrorCodes.prefix_message(apply_err, elem_prefix)
+		return res
+	return ErrorCodes.prefix_message(
+		ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			'cannot convert %s to an Object element; pass a res:// path or {"__class__": ...}'
+			% type_string(typeof(elem)),
+		),
+		elem_prefix,
+	)
+
+
+## True when `elem` satisfies the object-typed slot's element constraint —
+## script type when the slot is Array[MyScriptClass], native class
+## otherwise. Checked per element so a wrong-class Resource errors naming
+## the index instead of being rejected wholesale by `Array.assign()`.
+static func _object_element_conforms(elem: Object, slot_value: Array) -> bool:
+	var script: Variant = slot_value.get_typed_script()
+	if script is Script:
+		return is_instance_of(elem, script)
+	var cls := String(slot_value.get_typed_class_name())
+	return cls.is_empty() or elem.is_class(cls)
 
 
 func get_node_properties(params: Dictionary) -> Dictionary:

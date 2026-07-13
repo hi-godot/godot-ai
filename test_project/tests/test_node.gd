@@ -1936,6 +1936,7 @@ func _make_typed_array_probe(probe_name: String) -> Node:
 		"@export var colors: Array[Color] = []",
 		"@export var nested: Array[Array] = []",
 		"@export var textures: Array[Texture2D] = []",
+		"@export var meshes: Array[Mesh] = []",
 	])
 	script.reload()
 	node.set_script(script)
@@ -2100,18 +2101,132 @@ func test_set_property_typed_object_array_clears_with_empty_list() -> void:
 	_free_typed_array_probe(0)
 
 
-func test_set_property_typed_object_array_refuses_loudly() -> void:
-	## Object elements are #612 stage 2 — until then the write must REFUSE,
-	## not silently drop like the old generic passthrough did.
+# ----- set_property: object-element typed arrays (#612 stage 2) -----
+
+const _STAGE2_TEX_PATH := "res://tests/_mcp_stage2_texture.tres"
+
+
+## The test project ships no image assets, so stage-2 path-element tests
+## save (and afterwards remove) a real Texture2D .tres to load from.
+func _stage2_texture_path() -> String:
+	if not FileAccess.file_exists(_STAGE2_TEX_PATH):
+		var tex := GradientTexture2D.new()
+		assert_eq(ResourceSaver.save(tex, _STAGE2_TEX_PATH), OK,
+			"seed texture must save")
+	return _STAGE2_TEX_PATH
+
+
+func _cleanup_stage2_texture() -> void:
+	if FileAccess.file_exists(_STAGE2_TEX_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(_STAGE2_TEX_PATH))
+		var efs := EditorInterface.get_resource_filesystem()
+		if efs != null:
+			efs.update_file(_STAGE2_TEX_PATH)
+
+
+func test_set_property_typed_object_array_loads_resource_paths() -> void:
+	## Stage 2 headline: res:// path elements load into Array[Texture2D] —
+	## previously refused loudly, before that silently dropped.
 	var node := _make_typed_array_probe("_McpTypedObjects")
 	var result := _handler.set_property({
 		"path": "/Main/_McpTypedObjects",
 		"property": "textures",
-		"value": ["res://icon.svg"],
+		"value": [_stage2_texture_path()],
+	})
+	assert_has_key(result, "data")
+	var stored: Variant = node.get("textures")
+	assert_eq((stored as Array).size(), 1, "the loaded element must land")
+	assert_true(stored[0] is Texture2D, "res:// element must load as Texture2D")
+	assert_true((stored as Array).is_typed(), "the slot must keep its typing")
+	_free_typed_array_probe(1)
+	_cleanup_stage2_texture()
+
+
+func test_set_property_typed_object_array_instantiates_class_dicts() -> void:
+	## {"__class__": ...} elements instantiate + apply remaining keys, the
+	## same shortcut single Object slots support.
+	var node := _make_typed_array_probe("_McpTypedObjMeshes")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedObjMeshes",
+		"property": "meshes",
+		"value": [
+			{"__class__": "BoxMesh", "size": {"x": 2, "y": 2, "z": 2}},
+			{"__class__": "SphereMesh"},
+		],
+	})
+	assert_has_key(result, "data")
+	var stored: Variant = node.get("meshes")
+	assert_eq((stored as Array).size(), 2)
+	assert_true(stored[0] is BoxMesh, "__class__ element must instantiate")
+	assert_eq((stored[0] as BoxMesh).size, Vector3(2, 2, 2),
+		"remaining __class__ keys must apply as properties")
+	assert_true(stored[1] is SphereMesh)
+	_free_typed_array_probe(1)
+
+
+func test_set_property_typed_object_array_wrong_class_errors_names_index() -> void:
+	## A BoxMesh is a Resource but not a Texture2D — the conformance check
+	## must error naming the element index, not let assign() reject the
+	## whole write with a generic message (or worse, partially land it).
+	var node := _make_typed_array_probe("_McpTypedObjWrongClass")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedObjWrongClass",
+		"property": "textures",
+		"value": [{"__class__": "BoxMesh"}],
 	})
 	assert_is_error(result, ErrorCodes.WRONG_TYPE)
-	assert_contains(result.error.message, "not supported yet",
-		"stage-2 deferral must be loud, not a silent drop")
+	assert_contains(result.error.message, "element 0",
+		"the error must name the offending element index")
+	assert_contains(result.error.message, "Texture2D",
+		"the error must name the expected element class")
+	assert_eq((node.get("textures") as Array).size(), 0, "slot must stay untouched on error")
+	_free_typed_array_probe(0)
+
+
+func test_set_property_typed_object_array_allows_null_entries() -> void:
+	## Godot's object-typed arrays store null entries; null and "" elements
+	## mirror the single-slot clear semantics instead of erroring.
+	var node := _make_typed_array_probe("_McpTypedObjNulls")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedObjNulls",
+		"property": "textures",
+		"value": [null, _stage2_texture_path(), ""],
+	})
+	assert_has_key(result, "data")
+	var stored: Variant = node.get("textures")
+	assert_eq((stored as Array).size(), 3)
+	assert_eq(stored[0], null)
+	assert_true(stored[1] is Texture2D)
+	assert_eq(stored[2], null)
+	_free_typed_array_probe(1)
+	_cleanup_stage2_texture()
+
+
+func test_set_property_typed_object_array_missing_path_errors_names_index() -> void:
+	var node := _make_typed_array_probe("_McpTypedObjMissing")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedObjMissing",
+		"property": "textures",
+		"value": [_stage2_texture_path(), "res://does_not_exist.png"],
+	})
+	assert_is_error(result, ErrorCodes.RESOURCE_NOT_FOUND)
+	assert_contains(result.error.message, "element 1",
+		"the error must name the offending element index")
+	assert_eq((node.get("textures") as Array).size(), 0, "slot must stay untouched on error")
+	_free_typed_array_probe(0)
+	_cleanup_stage2_texture()
+
+
+func test_set_property_typed_object_array_unconvertible_element_errors() -> void:
+	var node := _make_typed_array_probe("_McpTypedObjBad")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTypedObjBad",
+		"property": "textures",
+		"value": [42],
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "element 0",
+		"the error must name the offending element index")
 	assert_eq((node.get("textures") as Array).size(), 0)
 	_free_typed_array_probe(0)
 
