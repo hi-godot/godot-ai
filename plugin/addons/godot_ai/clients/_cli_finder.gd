@@ -80,7 +80,10 @@ static func _resolve(exe_name: String) -> String:
 
 	# 2. Login shell lookup (Unix only)
 	if not is_windows:
-		var shell := OS.get_environment("SHELL")
+		## env_lookup, not OS.get_environment: CLI resolution runs on dock
+		## worker threads (configure/remove actions) and must not race the
+		## spawn window's setenv/unsetenv (#691).
+		var shell := McpPathTemplate.env_lookup("SHELL")
 		if shell.is_empty():
 			shell = "/bin/bash"
 		var stripped := exe_name.trim_suffix(".exe")
@@ -141,9 +144,11 @@ static func _pick_best_path(lines: PackedStringArray) -> String:
 
 
 static func _well_known_dirs() -> Array[String]:
-	var home := OS.get_environment("HOME")
+	## env_lookup, not OS.get_environment — see _resolve()'s worker-thread
+	## note (#691).
+	var home := McpPathTemplate.env_lookup("HOME")
 	if home.is_empty():
-		home = OS.get_environment("USERPROFILE")
+		home = McpPathTemplate.env_lookup("USERPROFILE")
 	match OS.get_name():
 		"macOS":
 			return [
@@ -154,8 +159,8 @@ static func _well_known_dirs() -> Array[String]:
 				"/usr/local/bin",
 			]
 		"Windows":
-			var local := OS.get_environment("LOCALAPPDATA")
-			var prog := OS.get_environment("ProgramFiles")
+			var local := McpPathTemplate.env_lookup("LOCALAPPDATA")
+			var prog := McpPathTemplate.env_lookup("ProgramFiles")
 			var paths: Array[String] = []
 			if not home.is_empty():
 				paths.append(home.path_join(".claude/local"))

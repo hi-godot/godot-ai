@@ -323,12 +323,10 @@ func handle_server_version_verified(expected_version: String, version: String) -
 		_host._update_process_enabled()
 		return
 	var live := {"version": version, "status_code": 200, "name": "godot-ai"}
+	## Connection propagation + version-check disarm + process re-evaluation
+	## all live inside _set_incompatible_server now (#691) so the startup-walk
+	## recovery-failure and force-restart-failure paths get them too.
 	_set_incompatible_server(live, expected, ClientConfigurator.http_port())
-	if _host._connection != null:
-		_host._connection.connect_blocked = true
-		_host._connection.connect_block_reason = _server_status_message
-		_host._connection.disconnect_from_server()
-	_host._update_process_enabled()
 
 
 func handle_server_version_unverified(expected_version: String) -> void:
@@ -336,11 +334,6 @@ func handle_server_version_unverified(expected_version: String) -> void:
 	_server_expected_version = expected
 	var live := {"version": "", "status_code": 0, "error": "missing_handshake_ack"}
 	_set_incompatible_server(live, expected, ClientConfigurator.http_port())
-	if _host._connection != null:
-		_host._connection.connect_blocked = true
-		_host._connection.connect_block_reason = _server_status_message
-		_host._connection.disconnect_from_server()
-	_host._update_process_enabled()
 
 
 # ---- Compatibility / version helpers (pure) ---------------------------
@@ -410,6 +403,22 @@ func _set_incompatible_server(live: Dictionary, expected_version: String, port: 
 		var suggested := ClientConfigurator.suggest_free_port(port + 1)
 		print("MCP | port %d occupant not recoverable (no ownership proof); suggested free port %d (set godot_ai/http_port)" % [port, suggested])
 	_host._refresh_dock_client_statuses()
+	## Propagate the verdict to the live connection (#691). Pre-#678 the
+	## startup walk finished synchronously before `_connection` existed, so
+	## plugin.gd captured the INCOMPATIBLE verdict when constructing it.
+	## Post-#678 the walk suspends at its first `_run_blocking` and the
+	## plugin snapshots the pre-walk defaults (`connect_blocked=false`) — so
+	## a verdict landing later (startup-walk recovery failure, handshake
+	## mismatch, force-restart failure) must reach the connection here, or
+	## it keeps dialing the WS port forever. Also disarm the version check:
+	## the diagnosis already landed, so leaving the check armed keeps
+	## per-frame `_process` on for the plugin's whole lifetime.
+	if _host._connection != null:
+		_host._connection.connect_blocked = true
+		_host._connection.connect_block_reason = _server_status_message
+		_host._connection.disconnect_from_server()
+	disarm_version_check()
+	_host._update_process_enabled()
 
 
 static func _incompatible_server_message(
@@ -687,6 +696,23 @@ func _start_server_impl(async_gen: int) -> void:
 		push_warning("MCP | port %d is reserved by Windows (Hyper-V / WSL2 / Docker)" % port)
 		return
 
+	## ---- Spawn-time env-mutation window (#691) -------------------------
+	## From here to the post-spawn unsets below, the editor's process-global
+	## environment is mutated around OS.create_process (which has no
+	## per-child env parameter). Two invariants keep this safe:
+	## 1. The window is SYNCHRONOUS main-thread code — no `await` between
+	##    the first setenv and the last unsetenv — and worker dispatch also
+	##    only happens on the main thread, so no new worker can start inside
+	##    the window.
+	## 2. Already-running workers never call OS.get_environment: every env
+	##    read reachable from a worker (path templates, config_home_override,
+	##    CLI finder, mode_override/startup-trace) routes through
+	##    McpPathTemplate.env_lookup, which serves worker threads from a
+	##    main-thread-warmed snapshot. A concurrent glibc getenv during
+	##    setenv can return a freed pointer — process-fatal.
+	## Residual (accepted): a worker's own OS.execute child (CLI status
+	## probe) launched while this window is open inherits the temp vars —
+	## rare, and tame next to the crash class above.
 	var injected_telemetry_env := _inject_telemetry_env()
 
 	## PYTHONPATH handling for dev checkouts: when the editor is launched

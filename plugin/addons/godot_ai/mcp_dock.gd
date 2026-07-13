@@ -1811,6 +1811,10 @@ func _dispatch_client_action(client_id: String, action: String) -> void:
 	## `_perform_initial_client_status_refresh` and
 	## `_request_client_status_refresh`.
 	var server_url := ClientConfigurator.http_url()
+	## #691: refresh the env snapshot on main before this worker starts —
+	## configure/remove resolve CLI + config paths off-thread and must not
+	## race a concurrent spawn window's setenv/unsetenv.
+	ClientConfigurator.warm_env_snapshot()
 	var generation := int(_client_action_generations.get(client_id, 0)) + 1
 	_client_action_generations[client_id] = generation
 	var thread := Thread.new()
@@ -2668,6 +2672,10 @@ func _warm_strategy_bytecode() -> void:
 		JsonStrategy.verify_entry(any_client, {}, "")
 	TomlStrategy.format_body(PackedStringArray(), "")
 	CliStrategy.format_args(PackedStringArray(), "", "")
+	## #691: refresh the env snapshot on main before the worker starts, so
+	## its config-path expansions read the snapshot instead of racing a
+	## concurrent spawn window's setenv/unsetenv.
+	ClientConfigurator.warm_env_snapshot()
 
 
 func _begin_client_status_refresh_run() -> int:

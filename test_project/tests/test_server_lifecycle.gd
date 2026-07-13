@@ -184,6 +184,66 @@ func test_recover_preserves_record_when_port_held() -> void:
 	assert_eq(cleared, 0)
 
 
+# ----- _set_incompatible_server connection propagation (#691) ----------
+
+func test_set_incompatible_server_propagates_to_live_connection() -> void:
+	## Post-#678 the startup walk suspends before plugin.gd constructs
+	## _connection, so an INCOMPATIBLE verdict landing later (recovery
+	## failure, force-restart failure) must reach the live connection from
+	## _set_incompatible_server itself — otherwise it keeps dialing the WS
+	## port forever with the dock showing INCOMPATIBLE.
+	var host := _ManagerHostStub.new()
+	var conn := McpConnection.new()
+	host._connection = conn
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	var live := {"name": "godot-ai", "version": "0.0.1", "ws_port": 9500, "status_code": 200}
+	manager._set_incompatible_server(live, "9.9.9", TEST_PORT)
+	var blocked := conn.connect_blocked
+	var reason := conn.connect_block_reason
+	var status_message := str(manager._server_status_message)
+	conn.free()
+	host.free()
+
+	assert_true(blocked, "verdict must flip connect_blocked on the live connection")
+	assert_false(reason.is_empty(), "block reason must carry the diagnosis")
+	assert_eq(reason, status_message, "connection reason must match the manager's message")
+
+
+func test_set_incompatible_server_disarms_version_check() -> void:
+	## Leaving the version check armed after the diagnosis keeps per-frame
+	## _process on for the plugin's whole lifetime (#691).
+	var host := _ManagerHostStub.new()
+	var manager := McpServerLifecycleManagerScript.new(host)
+	var conn := McpConnection.new()
+	manager.arm_version_check(conn, "9.9.9")
+	assert_true(manager.is_awaiting_server_version(), "precondition: check armed")
+
+	var live := {"name": "godot-ai", "version": "0.0.1", "ws_port": 9500, "status_code": 200}
+	manager._set_incompatible_server(live, "9.9.9", TEST_PORT)
+	var still_awaiting: bool = manager.is_awaiting_server_version()
+	conn.free()
+	host.free()
+
+	assert_false(still_awaiting,
+		"_set_incompatible_server must disarm the version check")
+
+
+func test_set_incompatible_server_tolerates_missing_connection() -> void:
+	## Pre-connection verdicts (startup walk before plugin.gd builds
+	## _connection, unit-test hosts) must not crash on the null connection.
+	var host := _ManagerHostStub.new()
+	host._connection = null
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	var live := {"name": "godot-ai", "version": "0.0.1", "ws_port": 9500, "status_code": 200}
+	manager._set_incompatible_server(live, "9.9.9", TEST_PORT)
+	var state := manager.get_state()
+	host.free()
+
+	assert_eq(state, McpServerState.INCOMPATIBLE)
+
+
 # ----- adopt_compatible_server -----------------------------------------
 
 func test_adopt_managed_when_versions_match() -> void:

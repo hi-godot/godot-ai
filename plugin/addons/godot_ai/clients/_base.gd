@@ -148,7 +148,9 @@ func resolved_config_path() -> String:
 func config_home_override() -> String:
 	if config_home_env.is_empty() or config_home_env_subpath.is_empty():
 		return ""
-	var home := OS.get_environment(config_home_env).strip_edges()
+	## env_lookup, not OS.get_environment: this runs on dock worker threads,
+	## which must not race the spawn window's setenv/unsetenv (#691).
+	var home := McpPathTemplate.env_lookup(config_home_env).strip_edges()
 	if home.is_empty():
 		return ""
 	# Expand a leading ~ so `CODEX_HOME=~/codex-alt` behaves like the shell.

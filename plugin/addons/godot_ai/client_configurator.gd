@@ -109,7 +109,8 @@ static func _register_bool_setting(es: EditorSettings, key: String, default_valu
 
 
 static func startup_trace_enabled() -> bool:
-	var raw := OS.get_environment(STARTUP_TRACE_ENV).strip_edges().to_lower()
+	## env_lookup for the same worker-thread reason as mode_override (#691).
+	var raw := McpPathTemplate.env_lookup(STARTUP_TRACE_ENV).strip_edges().to_lower()
 	if raw == "1" or raw == "true" or raw == "yes" or raw == "on":
 		return true
 	if Engine.is_editor_hint():
@@ -259,6 +260,21 @@ static func check_status_details_for_url_with_cli_path(id: String, url: String, 
 	if client.config_type == "cli" and cli_path.is_empty() and not client.has_json_fallback():
 		return {"status": Client.Status.NOT_CONFIGURED, "error_msg": ""}
 	return _dispatch_check_status_with_cli_path_details(client, url, cli_path)
+
+
+## #691: main-thread pre-warm of McpPathTemplate's env snapshot, covering
+## the base vars plus every descriptor-declared `config_home_env`
+## (CLAUDE_CONFIG_DIR, CODEX_HOME, …), so worker-thread config-path
+## resolution never calls OS.get_environment concurrently with the spawn
+## window's setenv/unsetenv. Idempotent; called from plugin _enter_tree and
+## before each dock worker dispatch.
+static func warm_env_snapshot() -> void:
+	var extras := PackedStringArray()
+	for id in client_ids():
+		var client := ClientRegistry.get_by_id(String(id))
+		if client != null and not client.config_home_env.is_empty():
+			extras.append(client.config_home_env)
+	McpPathTemplate.warm_env_snapshot(extras)
 
 
 static func client_status_probe_snapshot(id: String) -> Dictionary:
@@ -447,8 +463,10 @@ static func mode_override() -> String:
 			var setting_val := str(es.get_setting(MODE_OVERRIDE_SETTING)).strip_edges().to_lower()
 			if setting_val == "dev" or setting_val == "user":
 				return setting_val
-	# 2. Env var fallback.
-	var raw := OS.get_environment(MODE_OVERRIDE_ENV).strip_edges().to_lower()
+	# 2. Env var fallback. env_lookup, not OS.get_environment: this runs on
+	#    the #678 startup walk's discovery worker and must not race a
+	#    main-thread setenv/unsetenv window (#691).
+	var raw := McpPathTemplate.env_lookup(MODE_OVERRIDE_ENV).strip_edges().to_lower()
 	if raw == "dev" or raw == "user":
 		return raw
 	return ""

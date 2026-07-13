@@ -204,6 +204,13 @@ func _enter_tree() -> void:
 	ClientConfigurator.ensure_settings_registered()
 	_startup_trace_phase("settings_registered")
 
+	## #691: pre-warm the env snapshot on the main thread before any worker
+	## exists, so worker-thread env reads (dock refresh/action workers, the
+	## #678 startup walk's discovery worker) serve from the snapshot and can
+	## never race the spawn window's setenv/unsetenv around
+	## OS.create_process.
+	ClientConfigurator.warm_env_snapshot()
+
 	_log_buffer = LogBuffer.new()
 	## Apply the persisted dock "Log" toggle before anything logs through the
 	## buffer. Without this the choice only took effect after a manual toggle
