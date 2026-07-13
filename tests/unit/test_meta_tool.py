@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -358,6 +358,40 @@ async def test_dispatch_scalar_pin_accepts_valid_scalars():
         params={"name": "a", "count": 3, "ratio": 2, "flag": True, "maybe": None},
     )
     assert result == {"name": "a", "count": 3, "ratio": 2, "flag": True, "maybe": None}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_scalar_pin_unwraps_annotated_params():
+    """Annotated[int, ...] params get the same pin as bare int.
+
+    Annotated must be importable at module scope: with stringified
+    annotations (PEP 563), get_type_hints resolves names against module
+    globals, and an unresolvable annotation silently disables the pin.
+    """
+
+    async def sized(rt, count: Annotated[int, "node count"]):
+        del rt
+        return {"count": count}
+
+    with pytest.raises(GodotCommandError) as exc:
+        await dispatch_manage_op(
+            ops={"go": sized},
+            tool_name="x_manage",
+            runtime=None,
+            op="go",
+            params={"count": "3"},
+        )
+    assert exc.value.code == ErrorCode.INVALID_PARAMS
+    assert exc.value.data["param"] == "count"
+
+    result = await dispatch_manage_op(
+        ops={"go": sized},
+        tool_name="x_manage",
+        runtime=None,
+        op="go",
+        params={"count": 3},
+    )
+    assert result == {"count": 3}
 
 
 @pytest.mark.asyncio

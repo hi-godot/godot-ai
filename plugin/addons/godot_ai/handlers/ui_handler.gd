@@ -466,12 +466,12 @@ static func _coerce_for_type(value: Variant, prop_type: int) -> Dictionary:
 				return {"ok": true, "value": parsed_color}
 			return {"ok": false}
 		TYPE_VECTOR2:
-			if value is Vector2:
-				return {"ok": true, "value": value}
-			if value is Dictionary and value.has("x") and value.has("y"):
-				return {"ok": true, "value": Vector2(float(value.x), float(value.y))}
-			if value is Array and value.size() == 2:
-				return {"ok": true, "value": Vector2(float(value[0]), float(value[1]))}
+			## Same canonical parser as TYPE_COLOR (CodeRabbit review):
+			## keeping the inline copy here would re-introduce exactly the
+			## permissive-vs-strict drift this PR removes elsewhere.
+			var parsed_v2 = McpJsonValues.parse_vector2(value)
+			if parsed_v2 != null:
+				return {"ok": true, "value": parsed_v2}
 			return {"ok": false}
 		TYPE_VECTOR2I:
 			if value is Vector2i:
