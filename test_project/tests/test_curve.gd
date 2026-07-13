@@ -426,6 +426,10 @@ func test_set_points_2d_non_dict_position_is_rejected() -> void:
 
 
 func test_set_points_unknown_property_enriches_error() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
 	var result := _handler.set_points({
 		"points": [{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 1.0}],
 		"path": "/Main/Camera3D",

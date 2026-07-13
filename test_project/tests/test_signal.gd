@@ -462,3 +462,5 @@ func test_list_signals_rejects_non_string_path() -> void:
 	var result := _handler.list_signals({"path": 5})
 	assert_is_error(result, ErrorCodes.WRONG_TYPE)
 	assert_contains(result.error.message, "path")
+	assert_contains(result.error.message, "int",
+		"require_string reports the offending param's got-type")

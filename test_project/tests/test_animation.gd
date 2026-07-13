@@ -2190,8 +2190,9 @@ func test_auto_create_player_missing_parent_is_node_not_found() -> void:
 	if scene_root == null:
 		skip("No scene root — is a scene open?")
 		return
+	var missing_player_path := "/%s/NoSuchParentNode/AutoPlayerProbe" % scene_root.name
 	var result := _handler.create_simple({
-		"player_path": "/%s/NoSuchParentNode/AutoPlayerProbe" % scene_root.name,
+		"player_path": missing_player_path,
 		"name": "probe",
 		"tweens": [
 			{"target": ".", "property": "position",
@@ -2201,3 +2202,5 @@ func test_auto_create_player_missing_parent_is_node_not_found() -> void:
 	})
 	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)
 	assert_contains(result.error.message, "Cannot auto-create AnimationPlayer")
+	assert_contains(result.error.message, missing_player_path,
+		"error must name the failing player_path")
