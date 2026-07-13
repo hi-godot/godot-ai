@@ -35,6 +35,12 @@ var _peer := WebSocketPeer.new()
 ## server spawn. Reconnects reuse this cached value so they keep dialing the
 ## same port the Python server was asked to bind.
 var ws_port := ClientConfigurator.DEFAULT_WS_PORT
+## Per-launch handshake auth token (#690). Set by plugin.gd from the value
+## it generated for the server spawn (also persisted in the managed-server
+## editor-settings record so a reloaded plugin instance adopting the same
+## server keeps sending it). Empty means "don't send the field" — servers
+## we didn't spawn (dev servers, older servers) have no token to match.
+var auth_token := ""
 var _url := ""
 var _connected := false
 var _reconnect_attempt := 0
@@ -285,7 +291,13 @@ func _log_blocked_notice_once() -> void:
 
 func _send_handshake() -> void:
 	_last_readiness = get_readiness()
-	_send_json({
+	_send_json(_build_handshake())
+
+
+## Split from _send_handshake so tests can assert the payload shape
+## without a live WebSocket peer.
+func _build_handshake() -> Dictionary:
+	var payload := {
 		"type": "handshake",
 		"session_id": _session_id,
 		"godot_version": Engine.get_version_info().get("string", "unknown"),
@@ -295,7 +307,12 @@ func _send_handshake() -> void:
 		"readiness": _last_readiness,
 		"editor_pid": OS.get_process_id(),
 		"server_launch_mode": ClientConfigurator.get_server_launch_mode(),
-	})
+	}
+	## Omit rather than send "" — the server treats an ABSENT token as a
+	## compat-accepted older plugin, but a PRESENT wrong one as hostile.
+	if not auth_token.is_empty():
+		payload["auth_token"] = auth_token
+	return payload
 
 
 func _handle_message(raw: String) -> void:

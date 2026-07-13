@@ -62,6 +62,7 @@ class CommandResponse(BaseModel):
     ## server compares per key and treats decreases as a reset baseline.
     error_watermark: dict[str, int] | None = None
 
+
 class ErrorDetail(BaseModel):
     """Structured error information from the plugin."""
 
@@ -92,6 +93,13 @@ class HandshakeMessage(BaseModel):
     ## server — distinguishable from a live detection that returned
     ## "unknown" only by plugin_version.
     server_launch_mode: str = "unknown"
+    ## Per-launch WS auth token (#690). The spawning plugin generates it,
+    ## passes it to the server via the GODOT_AI_WS_TOKEN spawn env, and
+    ## echoes it here. None from older plugins and from editors adopting a
+    ## server they didn't spawn — both accepted (compat gate); only a
+    ## PRESENT-but-wrong token is rejected. Bounded like session_id so an
+    ## untrusted peer can't stuff an unbounded string into the handshake.
+    auth_token: str | None = Field(default=None, max_length=128)
 
 
 ## State events emitted by the plugin's _check_state_changes() poller. Each

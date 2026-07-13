@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import hmac
 import json
 import logging
 import re
@@ -36,6 +37,10 @@ DEFAULT_PORT = 9500
 ## 4001 to flag a handshake rejected for duplicate session_id so a debugging
 ## peer can distinguish it from a normal close.
 _CLOSE_CODE_DUPLICATE_SESSION = 4001
+## Handshake carried an auth token that doesn't match this server launch's
+## token (#690). Only ever sent when the server was launched with
+## GODOT_AI_WS_TOKEN; tokenless handshakes are accepted for compat.
+_CLOSE_CODE_AUTH_TOKEN_MISMATCH = 4003
 
 ## Allowlist of plugin-emitted telemetry event names. Drop everything else
 ## silently; the plugin and server lists must stay in sync. Plugin-side
@@ -102,9 +107,23 @@ def _sanitized_plugin_event_data(name: str, data: dict[str, Any]) -> dict[str, A
 class GodotWebSocketServer:
     """Accepts connections from Godot editor plugins and routes commands."""
 
-    def __init__(self, registry: SessionRegistry, port: int = DEFAULT_PORT):
+    def __init__(
+        self,
+        registry: SessionRegistry,
+        port: int = DEFAULT_PORT,
+        auth_token: str | None = None,
+    ):
         self.registry = registry
         self.port = port
+        ## Per-launch handshake auth token (#690). The spawning plugin
+        ## generates it and hands it to us via the GODOT_AI_WS_TOKEN spawn
+        ## env; a handshake carrying a DIFFERENT token is rejected. A
+        ## handshake carrying no token is still accepted — older plugins
+        ## and editors adopting a server they didn't spawn have no token,
+        ## and the field is attacker-omittable anyway, so this is defense
+        ## in depth on top of loopback-only binding (see AGENTS.md's WS
+        ## trust-boundary note), not an authentication boundary.
+        self._auth_token = auth_token or None
         ## request_id -> (owner session_id, future). The session id is part
         ## of the entry (#690) so (a) a disconnect can immediately fail that
         ## session's in-flight futures instead of leaving callers to wait
@@ -153,6 +172,22 @@ class GodotWebSocketServer:
             raw = await asyncio.wait_for(ws.recv(), timeout=10.0)
             data = json.loads(raw)
             handshake = HandshakeMessage.model_validate(data)
+
+            ## #690: when this launch has a token, a handshake carrying a
+            ## DIFFERENT one is a peer reading someone else's (or a stale)
+            ## secret — reject before registering. Absent tokens pass: see
+            ## __init__'s note on why this is compat-gated defense in depth.
+            if self._auth_token is not None and handshake.auth_token is not None:
+                if not hmac.compare_digest(handshake.auth_token, self._auth_token):
+                    logger.warning(
+                        "Rejecting handshake for session %s: auth token mismatch",
+                        handshake.session_id,
+                    )
+                    await ws.close(
+                        code=_CLOSE_CODE_AUTH_TOKEN_MISMATCH,
+                        reason="auth token mismatch",
+                    )
+                    return
 
             ## Reject duplicate session_id while the first peer is live —
             ## otherwise the second handshake silently overwrites the
@@ -329,8 +364,7 @@ class GodotWebSocketServer:
                     if not future.done():
                         future.set_exception(
                             ConnectionError(
-                                f"Session {session_id} disconnected while the "
-                                "command was in flight"
+                                f"Session {session_id} disconnected while the command was in flight"
                             )
                         )
 

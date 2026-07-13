@@ -107,6 +107,7 @@ class ServerHarness:
         readiness: str = "ready",
         editor_pid: int = 0,
         server_launch_mode: str | None = None,
+        auth_token: str | None = None,
     ) -> MockGodotPlugin:
         ws = await websockets.connect(f"ws://127.0.0.1:{self.port}")
         handshake = {
@@ -124,6 +125,10 @@ class ServerHarness:
         ## legacy ("falls through to 'unknown'") and explicit paths.
         if server_launch_mode is not None:
             handshake["server_launch_mode"] = server_launch_mode
+        ## Same absent-vs-present distinction for the #690 auth token: the
+        ## plugin omits the field entirely when it has no token.
+        if auth_token is not None:
+            handshake["auth_token"] = auth_token
         await ws.send(json.dumps(handshake))
         # Give the server a moment to process the handshake
         await asyncio.sleep(0.05)

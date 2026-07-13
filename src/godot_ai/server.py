@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from collections.abc import AsyncIterator, Iterable, Sequence
 from contextlib import asynccontextmanager
@@ -130,7 +131,15 @@ def create_server(
         ## (#421): it's the local editor↔server bridge, not a remote surface.
         ## See GodotWebSocketServer.start for the rationale (LAN exposure +
         ## Windows IPv6-only breakage).
-        ws_server = GodotWebSocketServer(registry, port=ws_port)
+        ## #690: the spawning plugin hands us a per-launch handshake auth
+        ## token via env (same channel as GODOT_AI_OWNER_PID). Absent for
+        ## manually-started dev/CI servers, which then accept tokenless
+        ## handshakes — see GodotWebSocketServer.__init__.
+        ws_server = GodotWebSocketServer(
+            registry,
+            port=ws_port,
+            auth_token=os.environ.get("GODOT_AI_WS_TOKEN") or None,
+        )
         client = GodotClient(ws_server, registry)
 
         ws_task = asyncio.create_task(ws_server.start())

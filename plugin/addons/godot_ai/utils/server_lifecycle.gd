@@ -532,6 +532,18 @@ func _set_plugin_spawned_env() -> void:
 	OS.set_environment("GODOT_AI_PLUGIN_SPAWNED", "1")
 
 
+## Generate a fresh per-launch WS handshake auth token (#690) and stage it
+## in the env for the next OS.create_process, same channel and same tight
+## scoping as _set_owner_pid_env (callers unset right after spawning — the
+## secret must not linger in the editor env). The caller hands the returned
+## token to the host on successful spawn so the connection echoes it in the
+## handshake and the managed-server record persists it across reloads.
+func _set_ws_token_env() -> String:
+	var token := Crypto.new().generate_random_bytes(32).hex_encode()
+	OS.set_environment("GODOT_AI_WS_TOKEN", token)
+	return token
+
+
 ## Branch table (recorded version is the "is this ours?" signal — uvx
 ## launcher PIDs go stale; #135/#137):
 ##   port free                                -> spawn fresh, record PID
@@ -757,6 +769,7 @@ func _start_server_impl(async_gen: int) -> void:
 	## gates on this too.
 	var owner_env_set := _set_owner_pid_env()
 	_set_plugin_spawned_env()
+	var ws_token := _set_ws_token_env()
 
 	_server_pid = OS.create_process(cmd, args)
 	var spawned_pid := int(_server_pid)
@@ -764,6 +777,7 @@ func _start_server_impl(async_gen: int) -> void:
 	if owner_env_set:
 		OS.unset_environment("GODOT_AI_OWNER_PID")
 	OS.unset_environment("GODOT_AI_PLUGIN_SPAWNED")
+	OS.unset_environment("GODOT_AI_WS_TOKEN")
 
 	## Restore PYTHONPATH immediately — the spawned child has already
 	## copied the env, so the editor's own process state returns to
@@ -783,6 +797,10 @@ func _start_server_impl(async_gen: int) -> void:
 		_server_exit_ms = 0
 		_host._server_started_this_session = true
 		transition_state(McpServerStateScript.SPAWNING)
+		## The child copied the env, so this token is what the server will
+		## verify handshakes against — adopt it BEFORE writing the record
+		## (the record write persists _ws_auth_token).
+		_host._set_ws_auth_token(ws_token)
 		## Record the launcher PID so same-session
 		## prepare_for_update_reload has something to kill. The next
 		## editor start's adopt branch heals it to the real port owner.
@@ -902,10 +920,12 @@ func respawn_with_refresh() -> void:
 	## start_server) — and unset right after, same scoping as start_server.
 	var owner_env_set := _set_owner_pid_env()
 	_set_plugin_spawned_env()
+	var ws_token := _set_ws_token_env()
 	_server_pid = OS.create_process(cmd, args)
 	if owner_env_set:
 		OS.unset_environment("GODOT_AI_OWNER_PID")
 	OS.unset_environment("GODOT_AI_PLUGIN_SPAWNED")
+	OS.unset_environment("GODOT_AI_WS_TOKEN")
 	if injected_telemetry_env:
 		OS.unset_environment("GODOT_AI_DISABLE_TELEMETRY")
 	var spawn_pid := int(_server_pid)
@@ -913,6 +933,7 @@ func respawn_with_refresh() -> void:
 		_server_spawn_ms = Time.get_ticks_msec()
 		_server_exit_ms = 0
 		var current_version := _expected_server_version()
+		_host._set_ws_auth_token(ws_token)
 		_host._write_managed_server_record(spawn_pid, current_version)
 		print("MCP | retried server (PID %d, v%s): %s %s" % [spawn_pid, current_version, cmd, " ".join(args)])
 	else:
@@ -929,10 +950,18 @@ func adopt_compatible_server(record_version: String, current_version: String, ow
 	_server_actual_name = "godot-ai"
 	_can_recover_incompatible = false
 	if record_version == current_version and owner > 0:
+		## Managed adoption keeps the record's token (loaded into
+		## _ws_auth_token at plugin startup) — the running server was
+		## spawned with it and still verifies against it (#690).
 		_server_pid = owner
 		_host._write_managed_server_record(owner, current_version)
 		return McpAdoptionLabelScript.MANAGED
 	_server_pid = -1
+	## External server: we didn't spawn it and don't know its token (it
+	## most likely has none — dev servers aren't launched with one). Drop
+	## ours so the handshake omits the field instead of sending a stale
+	## token the server would reject.
+	_host._set_ws_auth_token("")
 	_host._clear_managed_server_record()
 	_host._clear_pid_file()
 	return McpAdoptionLabelScript.EXTERNAL

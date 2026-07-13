@@ -106,6 +106,9 @@ func teardown() -> void:
 			es.set_setting(GodotAiPlugin.MANAGED_SERVER_VERSION_SETTING, "")
 		if es.has_setting(GodotAiPlugin.MANAGED_SERVER_WS_PORT_SETTING):
 			es.set_setting(GodotAiPlugin.MANAGED_SERVER_WS_PORT_SETTING, 0)
+		if es.has_setting(GodotAiPlugin.MANAGED_SERVER_WS_TOKEN_SETTING):
+			es.set_setting(GodotAiPlugin.MANAGED_SERVER_WS_TOKEN_SETTING, "")
+	GodotAiPlugin._ws_auth_token = ""
 	if FileAccess.file_exists(GodotAiPlugin.SERVER_PID_FILE):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(GodotAiPlugin.SERVER_PID_FILE))
 
@@ -772,6 +775,47 @@ func test_external_compatible_adoption_clears_stale_managed_record() -> void:
 		"stale pid-file must be cleared with the stale record"
 	)
 	assert_false(can_restart, "external adoption must not authorize managed restart")
+
+
+func test_managed_record_round_trips_ws_token() -> void:
+	## #690: the per-launch WS auth token must survive plugin reload via the
+	## managed-server record, or the re-enabled instance would handshake
+	## tokenless against a server that still verifies the original token.
+	var plugin := GodotAiPlugin.new()
+	plugin._set_ws_auth_token("round-trip-secret")
+	plugin._write_managed_server_record(12345, "2.2.0")
+	var record := plugin._read_managed_server_record()
+	assert_eq(record.get("ws_token"), "round-trip-secret")
+	plugin._clear_managed_server_record()
+	var cleared := plugin._read_managed_server_record()
+	assert_eq(cleared.get("ws_token"), "", "clear must scrub the persisted token")
+	plugin.free()
+
+
+func test_set_ws_auth_token_syncs_connection_field() -> void:
+	var plugin := GodotAiPlugin.new()
+	var conn := McpConnection.new()
+	plugin._connection = conn
+	plugin._set_ws_auth_token("sync-me")
+	assert_eq(conn.auth_token, "sync-me", "connection must send what the record persists")
+	plugin._set_ws_auth_token("")
+	assert_eq(conn.auth_token, "", "clearing the token must clear the handshake field too")
+	plugin._connection = null
+	conn.free()
+	plugin.free()
+
+
+func test_external_compatible_adoption_drops_ws_token() -> void:
+	## An external server was not spawned by this editor: sending our stale
+	## token would be PRESENT-but-wrong and get the handshake rejected —
+	## the whole point of the absent-token compat path (#690).
+	var plugin := GodotAiPlugin.new()
+	plugin._set_ws_auth_token("stale-secret")
+	var owner_label := plugin._adopt_compatible_server("2.1.0", "2.2.0", 22222)
+	var token: String = GodotAiPlugin._ws_auth_token
+	plugin.free()
+	assert_eq(owner_label, "external")
+	assert_eq(token, "", "external adoption must drop the stale token")
 
 
 func test_external_compatible_adoption_log_reports_observed_owner() -> void:

@@ -589,8 +589,7 @@ class TestPendingFutureScoping:
             f"the 30s command timeout (took {elapsed:.1f}s)"
         )
         assert (
-            client.circuit_breaker.snapshot("dc-inflight")["last_failure_kind"]
-            == "ConnectionError"
+            client.circuit_breaker.snapshot("dc-inflight")["last_failure_kind"] == "ConnectionError"
         ), "the breaker must see a disconnect, not a timeout"
 
     async def test_disconnect_leaves_other_sessions_futures_pending(self, harness):
@@ -1224,6 +1223,90 @@ class TestDuplicateHandshake:
         second = await harness.connect_plugin(session_id="reconnect-1")
         assert harness.registry.get("reconnect-1") is not None
         await second.close()
+
+
+# ---------------------------------------------------------------------------
+# Per-launch handshake auth token (#690 finding 4)
+# ---------------------------------------------------------------------------
+
+
+class TestHandshakeAuthToken:
+    async def test_matching_token_is_accepted(self, harness):
+        harness.server._auth_token = "launch-secret"
+        plugin = await harness.connect_plugin(session_id="tok-ok", auth_token="launch-secret")
+        assert harness.registry.get("tok-ok") is not None
+        await plugin.close()
+
+    async def test_wrong_token_is_rejected_before_registration(self, harness):
+        harness.server._auth_token = "launch-secret"
+
+        ## Hand-roll the handshake — connect_plugin() would assert on the
+        ## missing ack; here the server must close us before any ack.
+        ws = await websockets.connect(f"ws://127.0.0.1:{harness.port}")
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "handshake",
+                    "session_id": "tok-bad",
+                    "godot_version": "4.4.1",
+                    "project_path": "/tmp/attacker",
+                    "plugin_version": "0.0.1",
+                    "protocol_version": 1,
+                    "auth_token": "not-the-secret",
+                }
+            )
+        )
+        with pytest.raises(websockets.ConnectionClosed) as exc_info:
+            await asyncio.wait_for(ws.recv(), timeout=2.0)
+        assert exc_info.value.rcvd.code == 4003
+        assert harness.registry.get("tok-bad") is None, "rejected peer must never register"
+
+    async def test_absent_token_is_accepted_for_compat(self, harness):
+        ## Older plugins and editors adopting a server they didn't spawn
+        ## have no token — the gate only rejects PRESENT-but-wrong tokens.
+        harness.server._auth_token = "launch-secret"
+        plugin = await harness.connect_plugin(session_id="tok-absent")
+        assert harness.registry.get("tok-absent") is not None
+        await plugin.close()
+
+    async def test_token_sent_to_tokenless_server_is_ignored(self, harness):
+        ## A plugin can carry a stale token from a previous managed server
+        ## while connecting to a manually-started (tokenless) dev server —
+        ## that must not lock it out.
+        assert harness.server._auth_token is None
+        plugin = await harness.connect_plugin(session_id="tok-stale", auth_token="stale-token")
+        assert harness.registry.get("tok-stale") is not None
+        await plugin.close()
+
+    async def test_env_token_reaches_enforcement_end_to_end(self, monkeypatch):
+        ## Pin the GODOT_AI_WS_TOKEN env-var name end to end: create_server
+        ## must hand the env token to the WS server, and a wrong-token
+        ## handshake against that server must be closed with 4003. A rename
+        ## on either side would silently drop enforcement and this test.
+        from fastmcp import Client
+
+        from godot_ai.server import create_server
+
+        monkeypatch.setenv("GODOT_AI_WS_TOKEN", "env-secret")
+        mcp = create_server(ws_port=19533)
+        async with Client(mcp):
+            ws = await websockets.connect("ws://127.0.0.1:19533")
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "handshake",
+                        "session_id": "env-tok-bad",
+                        "godot_version": "4.4.1",
+                        "project_path": "/tmp/attacker",
+                        "plugin_version": "0.0.1",
+                        "protocol_version": 1,
+                        "auth_token": "not-the-env-secret",
+                    }
+                )
+            )
+            with pytest.raises(websockets.ConnectionClosed) as exc_info:
+                await asyncio.wait_for(ws.recv(), timeout=2.0)
+            assert exc_info.value.rcvd.code == 4003
 
 
 # ---------------------------------------------------------------------------

@@ -86,6 +86,25 @@ func test_slugify_empty_returns_empty() -> void:
 # ack in `_handle_message` and stashes the version on `server_version`.
 
 
+func test_build_handshake_omits_auth_token_when_empty() -> void:
+	## #690: empty token means "we have no secret" (dev server, older
+	## server, external adoption) — the field must be ABSENT, not "", so
+	## the server takes the compat-accept path instead of comparing "".
+	var conn := McpConnection.new()
+	var payload := conn._build_handshake()
+	assert_false(payload.has("auth_token"), "empty token must omit the field entirely")
+	assert_eq(payload.get("type"), "handshake")
+	conn.free()
+
+
+func test_build_handshake_includes_auth_token_when_set() -> void:
+	var conn := McpConnection.new()
+	conn.auth_token = "per-launch-secret"
+	var payload := conn._build_handshake()
+	assert_eq(payload.get("auth_token"), "per-launch-secret")
+	conn.free()
+
+
 func test_handle_message_stores_server_version_from_ack() -> void:
 	var conn := McpConnection.new()
 	assert_eq(conn.server_version, "", "server_version defaults to empty")
