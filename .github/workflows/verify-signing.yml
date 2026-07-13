@@ -21,6 +21,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Defense-in-depth for a signing-adjacent workflow: don't leave the
+          # (read-only) GITHUB_TOKEN in .git/config.
+          persist-credentials: false
 
       - name: Sign synthetic payload and verify against embedded public key
         env:
@@ -31,6 +35,9 @@ jobs:
             exit 1
           fi
           key_file=$(mktemp)
+          # Guarantee key-material cleanup on every exit path, including the
+          # openssl failures below.
+          trap 'rm -f "$key_file"' EXIT
           printf '%s\n' "$RELEASE_SIGNING_KEY_PEM" > "$key_file"
           # The secret must be a parseable private key on its own — catches
           # missing BEGIN/END lines, truncation, or wrong-field paste errors.
@@ -38,7 +45,6 @@ jobs:
             echo "ERROR: RELEASE_SIGNING_KEY_PEM does not parse as a private key." >&2
             echo "It must be the COMPLETE PEM file, including the" >&2
             echo "-----BEGIN/END PRIVATE KEY----- lines." >&2
-            rm -f "$key_file"
             exit 1
           fi
           echo "synthetic release sidecar payload" > payload.txt
