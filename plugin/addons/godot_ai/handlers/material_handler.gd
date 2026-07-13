@@ -24,10 +24,12 @@ const _SUPPORTED_SUFFIXES := [".tres", ".material", ".res"]
 
 
 var _undo_redo: EditorUndoRedoManager
+var _connection: McpConnection
 
 
-func _init(undo_redo: EditorUndoRedoManager) -> void:
+func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null) -> void:
 	_undo_redo = undo_redo
+	_connection = connection
 
 
 # ============================================================================
@@ -85,7 +87,11 @@ func create_material(params: Dictionary) -> Dictionary:
 			"Failed to create directory: %s (error %d)" % [dir_path, mkdir_err]
 		)
 
+	if _connection:
+		_connection.pause_processing = true
 	var save_err := ResourceSaver.save(mat, path)
+	if _connection:
+		_connection.pause_processing = false
 	if save_err != OK:
 		return ErrorCodes.make(
 			ErrorCodes.INTERNAL_ERROR,
@@ -479,7 +485,11 @@ func apply_to_node(params: Dictionary) -> Dictionary:
 		var mkdir_err := DirAccess.make_dir_recursive_absolute(dir_path)
 		if mkdir_err != OK and mkdir_err != ERR_ALREADY_EXISTS:
 			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
+		if _connection:
+			_connection.pause_processing = true
 		var save_err := ResourceSaver.save(mat, save_to)
+		if _connection:
+			_connection.pause_processing = false
 		if save_err != OK:
 			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to save material to %s (error %d)" % [save_to, save_err])
 		var efs := EditorInterface.get_resource_filesystem()
@@ -588,7 +598,11 @@ func apply_preset(params: Dictionary) -> Dictionary:
 	if mkdir_err != OK and mkdir_err != ERR_ALREADY_EXISTS:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to create directory: %s" % dir_path)
 
+	if _connection:
+		_connection.pause_processing = true
 	var save_err := ResourceSaver.save(mat, path)
+	if _connection:
+		_connection.pause_processing = false
 	if save_err != OK:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to save material: %s" % path)
 
@@ -639,7 +653,11 @@ func _apply_param(mat_path: String, property: String, value: Variant, _is_shader
 	if mat == null:
 		return
 	mat.set(property, value)
+	if _connection:
+		_connection.pause_processing = true
 	ResourceSaver.save(mat, mat_path)
+	if _connection:
+		_connection.pause_processing = false
 
 
 func _apply_shader_param(mat_path: String, param_name: String, value: Variant) -> void:
@@ -647,7 +665,11 @@ func _apply_shader_param(mat_path: String, param_name: String, value: Variant) -
 	if mat == null or not (mat is ShaderMaterial):
 		return
 	(mat as ShaderMaterial).set_shader_parameter(param_name, value)
+	if _connection:
+		_connection.pause_processing = true
 	ResourceSaver.save(mat, mat_path)
+	if _connection:
+		_connection.pause_processing = false
 
 
 # ============================================================================

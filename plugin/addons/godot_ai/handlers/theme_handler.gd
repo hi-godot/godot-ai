@@ -14,10 +14,12 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const _COLOR_HINT := "expected hex #rrggbb, named color, or {r,g,b,a} dict"
 
 var _undo_redo: EditorUndoRedoManager
+var _connection: McpConnection
 
 
-func _init(undo_redo: EditorUndoRedoManager) -> void:
+func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null) -> void:
 	_undo_redo = undo_redo
+	_connection = connection
 
 
 # ============================================================================
@@ -52,7 +54,11 @@ func create_theme(params: Dictionary) -> Dictionary:
 		)
 
 	var theme := Theme.new()
+	if _connection:
+		_connection.pause_processing = true
 	var save_err := ResourceSaver.save(theme, path)
+	if _connection:
+		_connection.pause_processing = false
 	if save_err != OK:
 		return ErrorCodes.make(
 			ErrorCodes.INTERNAL_ERROR,
@@ -179,7 +185,11 @@ func _apply_scalar(theme_path: String, setter: Callable, name: String, class_nam
 		push_warning("MCP: Failed to load theme for undo/redo: %s" % theme_path)
 		return
 	setter.call(theme, name, class_name_param, value)
+	if _connection:
+		_connection.pause_processing = true
 	ResourceSaver.save(theme, theme_path)
+	if _connection:
+		_connection.pause_processing = false
 
 
 func _clear_scalar(theme_path: String, clearer: Callable, name: String, class_name_param: String) -> void:
@@ -188,7 +198,11 @@ func _clear_scalar(theme_path: String, clearer: Callable, name: String, class_na
 		push_warning("MCP: Failed to load theme for undo/redo: %s" % theme_path)
 		return
 	clearer.call(theme, name, class_name_param)
+	if _connection:
+		_connection.pause_processing = true
 	ResourceSaver.save(theme, theme_path)
+	if _connection:
+		_connection.pause_processing = false
 
 
 # ============================================================================
@@ -364,7 +378,11 @@ func _apply_stylebox(theme_path: String, name: String, class_name_param: String,
 		push_warning("MCP: Failed to load theme for undo/redo: %s" % theme_path)
 		return
 	theme.set_stylebox(name, class_name_param, sb)
+	if _connection:
+		_connection.pause_processing = true
 	ResourceSaver.save(theme, theme_path)
+	if _connection:
+		_connection.pause_processing = false
 
 
 func _clear_stylebox(theme_path: String, name: String, class_name_param: String) -> void:
@@ -373,7 +391,11 @@ func _clear_stylebox(theme_path: String, name: String, class_name_param: String)
 		push_warning("MCP: Failed to load theme for undo/redo: %s" % theme_path)
 		return
 	theme.clear_stylebox(name, class_name_param)
+	if _connection:
+		_connection.pause_processing = true
 	ResourceSaver.save(theme, theme_path)
+	if _connection:
+		_connection.pause_processing = false
 
 
 # ============================================================================

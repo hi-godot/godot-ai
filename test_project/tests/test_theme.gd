@@ -7,6 +7,20 @@ const ThemeHandler := preload("res://addons/godot_ai/handlers/theme_handler.gd")
 
 ## Tests for ThemeHandler — Theme resource authoring.
 
+## Records pause()/resume() calls without needing a live WebSocket — used to
+## verify the #288 reentrancy guard actually wraps ResourceSaver.save calls.
+class _SpyConnection extends McpConnection:
+	var pause_calls := 0
+	var resume_calls := 0
+
+	func pause() -> void:
+		pause_calls += 1
+		_pause_depth += 1
+
+	func resume() -> void:
+		resume_calls += 1
+		_pause_depth = maxi(0, _pause_depth - 1)
+
 var _handler: ThemeHandler
 var _undo_redo: EditorUndoRedoManager
 
@@ -454,3 +468,41 @@ func test_set_stylebox_flat_per_side_content_margin() -> void:
 	assert_eq(sb.content_margin_bottom, 8.0)
 	assert_eq(sb.content_margin_left, 8.0)
 	assert_eq(sb.content_margin_right, 8.0)
+
+
+# ----- #685: #288 reentrancy guard around ResourceSaver.save -----
+
+func test_create_theme_pauses_connection_around_save() -> void:
+	if FileAccess.file_exists(TEST_THEME_PATH):
+		DirAccess.remove_absolute(TEST_THEME_PATH)
+	var conn := _SpyConnection.new()
+	var handler := ThemeHandler.new(_undo_redo, conn)
+	var result := handler.create_theme({"path": TEST_THEME_PATH})
+	assert_has_key(result, "data")
+	assert_eq(conn.pause_calls, 1, "theme_create must pause connection processing around the save (#288)")
+	assert_eq(conn.resume_calls, 1, "theme_create must resume connection processing after the save")
+	assert_false(conn.pause_processing, "processing must not stay paused after save")
+	conn.free()
+
+
+func test_set_color_pauses_connection_around_undo_callable_save() -> void:
+	if FileAccess.file_exists(TEST_THEME_PATH):
+		DirAccess.remove_absolute(TEST_THEME_PATH)
+	var conn := _SpyConnection.new()
+	var handler := ThemeHandler.new(_undo_redo, conn)
+	handler.create_theme({"path": TEST_THEME_PATH})
+	# create_theme's own save already counted above; reset before exercising
+	# the do-callable path (_apply_scalar), which is a separate call site.
+	conn.pause_calls = 0
+	conn.resume_calls = 0
+	var result := handler.set_color({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Label",
+		"name": "font_color",
+		"value": "#e0e0ff",
+	})
+	assert_has_key(result, "data")
+	assert_eq(conn.pause_calls, 1, "_apply_scalar must pause connection processing around its save (#288)")
+	assert_eq(conn.resume_calls, 1, "_apply_scalar must resume connection processing after its save")
+	assert_false(conn.pause_processing)
+	conn.free()

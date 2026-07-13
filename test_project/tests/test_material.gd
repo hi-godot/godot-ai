@@ -11,6 +11,20 @@ const MaterialHandler := preload("res://addons/godot_ai/handlers/material_handle
 ## NOTE: GDScript tests must not call save_scene, scene_create, scene_open,
 ## quit_editor, or reload_plugin (see CLAUDE.md Known Issues).
 
+## Records pause()/resume() calls without needing a live WebSocket — used to
+## verify the #288 reentrancy guard actually wraps ResourceSaver.save calls.
+class _SpyConnection extends McpConnection:
+	var pause_calls := 0
+	var resume_calls := 0
+
+	func pause() -> void:
+		pause_calls += 1
+		_pause_depth += 1
+
+	func resume() -> void:
+		resume_calls += 1
+		_pause_depth = maxi(0, _pause_depth - 1)
+
 var _handler: MaterialHandler
 var _undo_redo: EditorUndoRedoManager
 
@@ -571,3 +585,40 @@ func test_apply_preset_with_overrides() -> void:
 	assert_true(abs(mat.metallic - 0.5) < 0.01)
 	assert_true(abs(mat.roughness - 0.9) < 0.01)
 	_remove_node(node)
+
+
+# ============================================================================
+# #685: #288 reentrancy guard around ResourceSaver.save
+# ============================================================================
+
+func test_create_material_pauses_connection_around_save() -> void:
+	_cleanup_file(TEST_MATERIAL_PATH)
+	var conn := _SpyConnection.new()
+	var handler := MaterialHandler.new(_undo_redo, conn)
+	var result := handler.create_material({"path": TEST_MATERIAL_PATH, "type": "standard"})
+	assert_has_key(result, "data")
+	assert_eq(conn.pause_calls, 1, "material_create must pause connection processing around the save (#288)")
+	assert_eq(conn.resume_calls, 1, "material_create must resume connection processing after the save")
+	assert_false(conn.pause_processing, "processing must not stay paused after save")
+	conn.free()
+
+
+func test_set_param_pauses_connection_around_undo_callable_save() -> void:
+	_cleanup_file(TEST_MATERIAL_PATH)
+	var conn := _SpyConnection.new()
+	var handler := MaterialHandler.new(_undo_redo, conn)
+	handler.create_material({"path": TEST_MATERIAL_PATH, "type": "standard"})
+	# create_material's own save already counted above; reset before
+	# exercising the do-callable path (_apply_param), a separate call site.
+	conn.pause_calls = 0
+	conn.resume_calls = 0
+	var result := handler.set_param({
+		"path": TEST_MATERIAL_PATH,
+		"param": "albedo_color",
+		"value": "#ff0000",
+	})
+	assert_has_key(result, "data")
+	assert_eq(conn.pause_calls, 1, "_apply_param must pause connection processing around its save (#288)")
+	assert_eq(conn.resume_calls, 1, "_apply_param must resume connection processing after its save")
+	assert_false(conn.pause_processing)
+	conn.free()
