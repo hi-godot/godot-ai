@@ -56,7 +56,7 @@ func create_script(params: Dictionary) -> Dictionary:
 	if write_err != OK:
 		return ErrorCodes.make(
 			ErrorCodes.INTERNAL_ERROR,
-			"Write failed for %s (error %d); file may be truncated" % [path, write_err]
+			"Write failed for %s (%s); file may be truncated" % [path, error_string(write_err)]
 		)
 
 	var data := {
@@ -377,7 +377,7 @@ func patch_script(params: Dictionary) -> Dictionary:
 	if write_err != OK:
 		return ErrorCodes.make(
 			ErrorCodes.INTERNAL_ERROR,
-			"Write failed for %s (error %d); file may be truncated" % [path, write_err]
+			"Write failed for %s (%s); file may be truncated" % [path, error_string(write_err)]
 		)
 
 	var data := {

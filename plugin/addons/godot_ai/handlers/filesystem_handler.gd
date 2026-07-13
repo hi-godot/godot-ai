@@ -87,7 +87,7 @@ func write_file(params: Dictionary) -> Dictionary:
 	if write_err != OK:
 		return ErrorCodes.make(
 			ErrorCodes.INTERNAL_ERROR,
-			"Write failed for %s (error %d); file may be truncated" % [path, write_err]
+			"Write failed for %s (%s); file may be truncated" % [path, error_string(write_err)]
 		)
 
 	# Single-file register, not a full scan() — a scan() per write stacks
