@@ -118,6 +118,22 @@ static func save_to_disk(
 	return {"data": data}
 
 
+## Save `res` to `resource_path` with the same `pause_processing` re-entrancy
+## guard as `save_to_disk` (see its doc for the #288 SIGSEGV background), for
+## call sites that need to pick their own error handling / overwrite policy
+## instead of `save_to_disk`'s full validate+mkdir+overwrite-guard bundle
+## (undo/redo callables reloading-mutating-resaving an existing resource,
+## `apply_to_node`'s inline-then-save branch). Returns the raw
+## `ResourceSaver.save` error code.
+static func guarded_save(res: Resource, resource_path: String, pause_target: McpConnection) -> int:
+	if pause_target != null:
+		pause_target.pause_processing = true
+	var save_err := ResourceSaver.save(res, resource_path)
+	if pause_target != null:
+		pause_target.pause_processing = false
+	return save_err
+
+
 ## Attach a `cleanup.rm` hint listing `paths` to `data` — only when the call
 ## just created a new file (`existed_before == false`). On overwrite the field
 ## is omitted because the caller already had the file on disk, and handing

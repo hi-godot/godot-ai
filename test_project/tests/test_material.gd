@@ -125,6 +125,57 @@ func test_create_overwrite_allowed() -> void:
 		"material file should still exist after overwrite")
 
 
+## Spy McpConnection that counts pause()/resume() calls instead of actually
+## touching WebSocket processing state — proves a handler routes its
+## ResourceSaver.save through the #288 reentrancy guard without needing a
+## live connection.
+class _PauseSpyConnection:
+	extends McpConnection
+	var pause_calls := 0
+	var resume_calls := 0
+
+	func pause() -> void:
+		pause_calls += 1
+		super()
+
+	func resume() -> void:
+		resume_calls += 1
+		super()
+
+
+func test_create_material_saves_through_pause_guard() -> void:
+	var spy := _PauseSpyConnection.new()
+	var handler := MaterialHandler.new(_undo_redo, spy)
+	_cleanup_file(TEST_MATERIAL_PATH)
+	var result := handler.create_material({"path": TEST_MATERIAL_PATH, "type": "standard"})
+	assert_has_key(result, "data")
+	assert_eq(spy.pause_calls, 1, "create_material's save must pause processing once (#288 guard)")
+	assert_eq(spy.resume_calls, 1, "create_material's save must resume processing once (#288 guard)")
+	assert_false(spy.pause_processing, "guard must not leave the connection paused")
+	spy.free()
+
+
+func test_apply_to_node_save_to_saves_through_pause_guard() -> void:
+	var spy := _PauseSpyConnection.new()
+	var handler := MaterialHandler.new(_undo_redo, spy)
+	_cleanup_file(TEST_MATERIAL_PATH)
+	var mesh := _add_mesh_node("_McpPauseGuardMesh")
+	if mesh == null:
+		skip("no open scene to attach a mesh node to")
+		spy.free()
+		return
+	var result := handler.apply_to_node({
+		"node_path": McpScenePath.from_node(mesh, EditorInterface.get_edited_scene_root()),
+		"type": "standard",
+		"save_to": TEST_MATERIAL_PATH,
+	})
+	assert_has_key(result, "data")
+	assert_eq(spy.pause_calls, 1, "apply_to_node's save_to branch must pause processing once (#288 guard)")
+	assert_eq(spy.resume_calls, 1, "apply_to_node's save_to branch must resume processing once (#288 guard)")
+	_remove_node(mesh)
+	spy.free()
+
+
 func test_create_shader_requires_shader_path() -> void:
 	_cleanup_file(TEST_MATERIAL_PATH)
 	var result := _handler.create_material({"path": TEST_MATERIAL_PATH, "type": "shader"})

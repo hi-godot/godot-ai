@@ -71,6 +71,57 @@ func test_create_theme_overwrite_allowed() -> void:
 		"theme file should still exist after overwrite")
 
 
+## Spy McpConnection that counts pause()/resume() calls instead of actually
+## touching WebSocket processing state — proves a handler routes its
+## ResourceSaver.save through the #288 reentrancy guard without needing a
+## live connection.
+class _PauseSpyConnection:
+	extends McpConnection
+	var pause_calls := 0
+	var resume_calls := 0
+
+	func pause() -> void:
+		pause_calls += 1
+		super()
+
+	func resume() -> void:
+		resume_calls += 1
+		super()
+
+
+func test_create_theme_saves_through_pause_guard() -> void:
+	var spy := _PauseSpyConnection.new()
+	var handler := ThemeHandler.new(_undo_redo, spy)
+	if FileAccess.file_exists(TEST_THEME_PATH):
+		DirAccess.remove_absolute(TEST_THEME_PATH)
+	var result := handler.create_theme({"path": TEST_THEME_PATH})
+	assert_has_key(result, "data")
+	assert_eq(spy.pause_calls, 1, "create_theme's save must pause processing once (#288 guard)")
+	assert_eq(spy.resume_calls, 1, "create_theme's save must resume processing once (#288 guard)")
+	assert_false(spy.pause_processing, "guard must not leave the connection paused")
+	spy.free()
+
+
+func test_set_color_undo_callable_saves_through_pause_guard() -> void:
+	var spy := _PauseSpyConnection.new()
+	var handler := ThemeHandler.new(_undo_redo, spy)
+	if FileAccess.file_exists(TEST_THEME_PATH):
+		DirAccess.remove_absolute(TEST_THEME_PATH)
+	handler.create_theme({"path": TEST_THEME_PATH})
+	spy.pause_calls = 0
+	spy.resume_calls = 0
+	var result := handler.set_color({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Label",
+		"name": "font_color",
+		"value": "#e0e0ff",
+	})
+	assert_has_key(result, "data")
+	assert_eq(spy.pause_calls, 1, "_apply_scalar's undo-callable save must pause processing once (#288 guard)")
+	assert_eq(spy.resume_calls, 1, "_apply_scalar's undo-callable save must resume processing once (#288 guard)")
+	spy.free()
+
+
 # ----- theme_set_color -----
 
 func test_theme_set_color_accepts_hex() -> void:
