@@ -182,6 +182,17 @@ func test_create_shader_requires_shader_path() -> void:
 	assert_is_error(result)
 
 
+func test_create_material_embeds_uid() -> void:
+	# #737: a bare ResourceSaver.save() (what guarded_save used before the fix)
+	# writes a .tres with no uid= at all, unlike Godot's own "New Resource"
+	# editor flow. create_material must come out matching the editor.
+	_cleanup_file(TEST_MATERIAL_PATH)
+	var result := _handler.create_material({"path": TEST_MATERIAL_PATH, "type": "standard"})
+	assert_has_key(result, "data")
+	var uid := ResourceLoader.get_resource_uid(TEST_MATERIAL_PATH)
+	assert_true(uid != ResourceUID.INVALID_ID, "freshly created material must carry a uid")
+
+
 # ============================================================================
 # material_set_param
 # ============================================================================
@@ -199,6 +210,25 @@ func test_set_param_color_hex() -> void:
 	var c: Color = mat.get("albedo_color")
 	assert_true(c is Color)
 	assert_true(abs(c.r - 1.0) < 0.01, "Red should be 1.0")
+
+
+func test_set_param_preserves_uid_across_resave() -> void:
+	# #737: set_param's undo-callable (_apply_param) loads the material,
+	# mutates a property, and resaves via McpResourceIO.guarded_save. Before
+	# the fix, a bare ResourceSaver.save() resave silently dropped whatever
+	# uid the file already had -- this must survive unchanged.
+	_make_material()
+	var original_uid := ResourceLoader.get_resource_uid(TEST_MATERIAL_PATH)
+	assert_true(original_uid != ResourceUID.INVALID_ID, "precondition: fresh material must have a uid")
+
+	var result := _handler.set_param({
+		"path": TEST_MATERIAL_PATH,
+		"param": "albedo_color",
+		"value": "#00ff00",
+	})
+	assert_has_key(result, "data")
+	var uid_after_resave := ResourceLoader.get_resource_uid(TEST_MATERIAL_PATH)
+	assert_eq(uid_after_resave, original_uid, "resaving an existing material must keep its original uid")
 
 
 func test_set_param_color_dict() -> void:

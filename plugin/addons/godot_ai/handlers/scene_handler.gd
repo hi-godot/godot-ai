@@ -122,9 +122,15 @@ func create_scene(params: Dictionary) -> Dictionary:
 	packed.pack(root)
 	root.free()
 
+	# Captured BEFORE the save below overwrites the file — see
+	# McpResourceIO.ensure_uid's doc comment.
+	var prior_uid := ResourceLoader.get_resource_uid(path) if FileAccess.file_exists(path) else ResourceUID.INVALID_ID
+
 	if _connection:
 		_connection.pause_processing = true
 	var err := ResourceSaver.save(packed, path)
+	if err == OK:
+		McpResourceIO.ensure_uid(path, prior_uid)
 	EditorInterface.open_scene_from_path(path)
 	if _connection:
 		_connection.pause_processing = false

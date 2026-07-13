@@ -554,6 +554,10 @@ func test_create_resource_saves_to_disk() -> void:
 	assert_true(loaded is BoxShape3D)
 	assert_true(loaded.size is Vector3)
 	assert_eq(loaded.size.x, 1.0)
+	# #737: a freshly-created resource must carry a uid, matching what
+	# Godot's own "New Resource" editor flow would have embedded.
+	assert_true(ResourceLoader.get_resource_uid(out_path) != ResourceUID.INVALID_ID,
+		"freshly created resource must carry a uid")
 	# Clean up.
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(out_path))
 
@@ -567,6 +571,8 @@ func test_create_resource_save_refuses_overwrite_without_flag() -> void:
 		"resource_path": out_path,
 	})
 	assert_has_key(first, "data")
+	var original_uid := ResourceLoader.get_resource_uid(out_path)
+	assert_true(original_uid != ResourceUID.INVALID_ID, "precondition: fresh resource must have a uid")
 	var second := _handler.create_resource({
 		"type": "BoxShape3D",
 		"resource_path": out_path,
@@ -582,6 +588,10 @@ func test_create_resource_save_refuses_overwrite_without_flag() -> void:
 	assert_true(third.data.overwritten)
 	# Overwrite must not emit a cleanup hint — the caller already had the file.
 	assert_false(third.data.has("cleanup"), "Overwrite must not emit a cleanup hint")
+	# #737: overwriting an existing resource must keep its original uid, not
+	# silently drop it (a bare ResourceSaver.save() resave used to strip it).
+	assert_eq(ResourceLoader.get_resource_uid(out_path), original_uid,
+		"overwrite must preserve the resource's original uid")
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(out_path))
 
 
