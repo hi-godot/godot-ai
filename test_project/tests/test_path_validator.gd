@@ -174,6 +174,38 @@ func test_write_blocklist_is_case_insensitive() -> void:
 	assert_false(McpPathValidator.validate_resource_path("res://.GODOT/uid_cache.bin", true).is_empty())
 
 
+func test_write_rejects_loaded_plugin_tree() -> void:
+	## Overwriting a currently-loaded plugin script (plus the immediate
+	## update_file() reimport) can SIGABRT the editor or corrupt the installed
+	## plugin so the next enable fails to resolve scripts (#689).
+	var err := McpPathValidator.validate_resource_path("res://addons/godot_ai/plugin.gd", true)
+	assert_false(err.is_empty(), "writing under res://addons/godot_ai/ must be rejected")
+	assert_contains(err, "addons/godot_ai")
+
+
+func test_write_rejects_loaded_plugin_tree_nested() -> void:
+	var err := McpPathValidator.validate_resource_path(
+		"res://addons/godot_ai/handlers/new_handler.gd", true
+	)
+	assert_false(err.is_empty(), "writing anywhere under res://addons/godot_ai/ must be rejected")
+
+
+func test_write_rejects_loaded_plugin_tree_case_insensitive() -> void:
+	assert_false(
+		McpPathValidator.validate_resource_path("res://Addons/Godot_AI/plugin.gd", true).is_empty()
+	)
+
+
+func test_write_allows_other_addons() -> void:
+	## Only this plugin's own tree is blocked — other addons remain writable.
+	assert_eq(McpPathValidator.validate_resource_path("res://addons/some_other_plugin/plugin.gd", true), "")
+
+
+func test_read_allows_plugin_tree() -> void:
+	## The block is write-only; reading the plugin's own source must still work.
+	assert_eq(McpPathValidator.validate_resource_path("res://addons/godot_ai/plugin.gd"), "")
+
+
 func test_loadable_accepts_uid() -> void:
 	## uid:// is an opaque resource id ResourceLoader resolves to an in-project
 	## resource — it cannot express traversal, so load handlers must accept it.

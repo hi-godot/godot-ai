@@ -139,6 +139,10 @@ func _resolve_atlas_source(params: Dictionary) -> Dictionary:
 			"'source_id' parameter is required"
 		)
 
+	var tileset_path_err = McpPathValidator.loadable_error(tileset_path, "tileset_path")
+	if tileset_path_err != null:
+		return tileset_path_err
+
 	if not ResourceLoader.exists(tileset_path):
 		return ErrorCodes.make(
 			ErrorCodes.RESOURCE_NOT_FOUND,

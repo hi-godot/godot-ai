@@ -50,7 +50,14 @@ func create_script(params: Dictionary) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to open file for writing: %s" % path)
 
 	file.store_string(content)
+	file.flush()
+	var write_err := file.get_error()
 	file.close()
+	if write_err != OK:
+		return ErrorCodes.make(
+			ErrorCodes.INTERNAL_ERROR,
+			"Write failed for %s (error %d); file may be truncated" % [path, write_err]
+		)
 
 	var data := {
 		"path": path,
@@ -364,7 +371,14 @@ func patch_script(params: Dictionary) -> Dictionary:
 	if write == null:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to open file for writing: %s" % path)
 	write.store_string(new_content)
+	write.flush()
+	var write_err := write.get_error()
 	write.close()
+	if write_err != OK:
+		return ErrorCodes.make(
+			ErrorCodes.INTERNAL_ERROR,
+			"Write failed for %s (error %d); file may be truncated" % [path, write_err]
+		)
 
 	var data := {
 		"path": path,

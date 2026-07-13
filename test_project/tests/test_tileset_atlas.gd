@@ -110,6 +110,21 @@ func test_nonexistent_path_returns_resource_not_found() -> void:
 	assert_contains(result.error.message, fake_path)
 
 
+func test_traversal_path_returns_value_out_of_range() -> void:
+	## #689: _resolve_atlas_source was the one resource-loading handler with
+	## zero McpPathValidator usage, so a res://../… traversal path (and raw
+	## absolute paths, which load() honors) reached ResourceLoader.exists /
+	## load() unchecked — the #347 info-disclosure surface every sibling
+	## handler already blocks.
+	var result := _handler.get_atlas_tiles({"tileset_path": "res://../etc/passwd", "source_id": 0})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+
+
+func test_traversal_path_rejected_before_load_atlas_image() -> void:
+	var result := _handler.get_atlas_image({"tileset_path": "res://../../etc/passwd", "source_id": 0})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+
+
 func test_wrong_type_resource_returns_wrong_type() -> void:
 	## A resource that is not a TileSet (plain Resource) → WRONG_TYPE
 	## Validates: Requirement 1.5
