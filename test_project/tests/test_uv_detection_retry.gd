@@ -147,12 +147,17 @@ func test_reprobe_invalidates_and_rerenders_when_negative() -> void:
 
 # ----- dock wiring: connect transition + Refresh click -----
 
+## Spies on _schedule_uv_reprobe (the deferred-dispatch seam) rather than
+## _reprobe_uv_if_negative: production defers the probe so paint-sensitive
+## callers never block on it, and a real call_deferred queued here would
+## fire after the test frees the dock — landing on a freed object and
+## polluting the runner's script-error capture.
 class _ReprobeSpyDock extends McpDockScript:
-	var reprobe_calls := 0
+	var reprobe_schedules := 0
 	var client_refresh_calls := 0
 
-	func _reprobe_uv_if_negative() -> void:
-		reprobe_calls += 1
+	func _schedule_uv_reprobe() -> void:
+		reprobe_schedules += 1
 
 	func _request_client_status_refresh(_force: bool = false) -> bool:
 		client_refresh_calls += 1
@@ -170,18 +175,18 @@ func test_update_status_reprobes_only_on_connect_transition() -> void:
 	dock._connection = _ConnectionStub.new()
 
 	dock._update_status()
-	assert_eq(dock.reprobe_calls, 1, "disconnected -> connected must reprobe")
+	assert_eq(dock.reprobe_schedules, 1, "disconnected -> connected must schedule a reprobe")
 
 	dock._update_status()
-	assert_eq(dock.reprobe_calls, 1, "steady connected state must not reprobe")
+	assert_eq(dock.reprobe_schedules, 1, "steady connected state must not reprobe")
 
 	dock._connection.is_connected = false
 	dock._update_status()
-	assert_eq(dock.reprobe_calls, 1, "disconnect must not reprobe")
+	assert_eq(dock.reprobe_schedules, 1, "disconnect must not reprobe")
 
 	dock._connection.is_connected = true
 	dock._update_status()
-	assert_eq(dock.reprobe_calls, 2, "reconnect must reprobe again")
+	assert_eq(dock.reprobe_schedules, 2, "reconnect must schedule a reprobe again")
 	dock.free()
 
 
@@ -190,6 +195,6 @@ func test_refresh_click_reprobes_uv() -> void:
 
 	dock._on_refresh_clients_pressed()
 
-	assert_eq(dock.reprobe_calls, 1, "manual Refresh must give uv another chance")
+	assert_eq(dock.reprobe_schedules, 1, "manual Refresh must give uv another chance")
 	assert_eq(dock.client_refresh_calls, 1, "client sweep must still run")
 	dock.free()
