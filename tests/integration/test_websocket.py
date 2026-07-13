@@ -1269,6 +1269,16 @@ class TestHandshakeAuthToken:
         assert harness.registry.get("tok-absent") is not None
         await plugin.close()
 
+    async def test_empty_string_token_is_treated_as_absent(self, harness):
+        ## A client that serializes auth_token: "" instead of omitting the
+        ## field carries no secret — it must ride the same compat path as
+        ## an absent token, not get 4003'd. Rejecting "" buys no security:
+        ## omitting the field is always accepted.
+        harness.server._auth_token = "launch-secret"
+        plugin = await harness.connect_plugin(session_id="tok-empty", auth_token="")
+        assert harness.registry.get("tok-empty") is not None
+        await plugin.close()
+
     async def test_token_sent_to_tokenless_server_is_ignored(self, harness):
         ## A plugin can carry a stale token from a previous managed server
         ## while connecting to a manually-started (tokenless) dev server —

@@ -177,7 +177,12 @@ class GodotWebSocketServer:
             ## DIFFERENT one is a peer reading someone else's (or a stale)
             ## secret — reject before registering. Absent tokens pass: see
             ## __init__'s note on why this is compat-gated defense in depth.
-            if self._auth_token is not None and handshake.auth_token is not None:
+            ## Truthiness, not `is not None`: an empty-string auth_token
+            ## means "no token" exactly like an omitted field (the plugin
+            ## omits when empty, but a client that serializes "" instead
+            ## must not be 4003'd — rejecting "" buys nothing when omitting
+            ## the field is always accepted).
+            if self._auth_token is not None and handshake.auth_token:
                 if not hmac.compare_digest(handshake.auth_token, self._auth_token):
                     logger.warning(
                         "Rejecting handshake for session %s: auth token mismatch",

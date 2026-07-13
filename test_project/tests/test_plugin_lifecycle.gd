@@ -789,6 +789,12 @@ func test_managed_record_round_trips_ws_token() -> void:
 	plugin._clear_managed_server_record()
 	var cleared := plugin._read_managed_server_record()
 	assert_eq(cleared.get("ws_token"), "", "clear must scrub the persisted token")
+	assert_eq(
+		GodotAiPlugin._ws_auth_token,
+		"",
+		"clear must scrub the in-memory token too — a surviving static would "
+		+ "send a stale present-but-wrong token on the next handshake"
+	)
 	plugin.free()
 
 

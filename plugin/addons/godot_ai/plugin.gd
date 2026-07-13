@@ -1548,6 +1548,13 @@ func _set_ws_auth_token(token: String) -> void:
 
 
 func _clear_managed_server_record() -> void:
+	## Drop the in-memory token together with the persisted one: a cleared
+	## record means "no managed server", and a surviving static would make
+	## the next handshake send a stale token — the exact present-but-wrong
+	## shape a newer spawned server rejects with 4003. (Runs before the
+	## es == null early return on purpose: the in-memory scrub must not
+	## depend on EditorSettings being available.)
+	_set_ws_auth_token("")
 	var es := EditorInterface.get_editor_settings()
 	if es == null:
 		return
