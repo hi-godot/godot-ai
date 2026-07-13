@@ -1149,7 +1149,7 @@ static func _coerce_typed_dictionary(
 			if coerced == null:
 				var null_err := ErrorCodes.make(
 					ErrorCodes.WRONG_TYPE,
-					"cannot store null as a %s value" % label,
+					"cannot store null as a %s value in %s" % [type_string(value_type), label],
 				)
 				return ErrorCodes.prefix_message(null_err, key_prefix)
 		out[key] = coerced
@@ -1186,7 +1186,15 @@ static func _coerce_typed_dict_key(
 			TYPE_FLOAT:
 				if key_str.is_valid_float():
 					return float(key_str)
-	elif raw_key is float and key_type == TYPE_INT and is_equal_approx(raw_key, roundf(raw_key)):
+		## String key that didn't parse: JSON object keys are ALWAYS strings,
+		## so blaming the String-ness would imply the caller could somehow
+		## send a non-string key — name the expected key type instead.
+		var parse_err := ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"key does not parse as %s (the %s key type)" % [type_string(key_type), label],
+		)
+		return ErrorCodes.prefix_message(parse_err, key_prefix)
+	if raw_key is float and key_type == TYPE_INT and is_equal_approx(raw_key, roundf(raw_key)):
 		## Whole JSON numbers arrive as floats through some non-JSON callers.
 		return int(raw_key)
 	var err := ErrorCodes.make(
