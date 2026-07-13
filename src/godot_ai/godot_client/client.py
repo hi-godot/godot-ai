@@ -14,6 +14,7 @@ from godot_ai.godot_client.session_diagnostics import (
     session_not_found_data,
     session_not_found_message,
 )
+from godot_ai.protocol.envelope import find_non_finite_float
 from godot_ai.protocol.errors import ErrorCode
 from godot_ai.sessions.registry import SessionRegistry
 from godot_ai.transport.websocket import GodotWebSocketServer
@@ -131,7 +132,25 @@ class GodotClient:
         Raises GodotCommandError(PLUGIN_DISCONNECTED) when the per-session
         transport circuit is open (death-spiral protection — see
         ``EditorBridgeCircuitBreaker``).
+        Raises GodotCommandError(INVALID_PARAMS) when params contain a
+        non-finite float — JSON cannot represent NaN/Infinity, and
+        ``model_dump_json`` would silently serialize it as null, corrupting
+        the value the plugin stores (#688).
         """
+        ## Rejected before session resolution: bad params are a caller error
+        ## regardless of editor state, and must not count as a transport
+        ## failure against the circuit breaker.
+        non_finite_path = find_non_finite_float(params) if params else None
+        if non_finite_path is not None:
+            raise GodotCommandError(
+                code=ErrorCode.INVALID_PARAMS,
+                message=(
+                    f"non-finite float in param '{non_finite_path}' — "
+                    "NaN/Infinity cannot be represented in JSON; send a finite "
+                    "number or omit the param"
+                ),
+            )
+
         ## Resolve the active session first so the circuit check below
         ## keys on a concrete session_id when possible. The no-session
         ## sentinel is only used when there genuinely is no session —

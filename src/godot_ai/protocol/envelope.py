@@ -2,10 +2,35 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
+
+
+def find_non_finite_float(value: Any, path: str = "params") -> str | None:
+    """Return the key path of the first non-finite float in a params tree.
+
+    NaN/Infinity are not representable in JSON: ``model_dump_json`` serializes
+    them as ``null``, so a write-tool param that went NaN upstream (physics
+    blowup, divide-by-zero position) would silently corrupt scene data while
+    the tool reports success (#688). Callers reject the command instead.
+    Returns ``None`` when every float in the tree is finite.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        return path
+    if isinstance(value, dict):
+        for key, item in value.items():
+            found = find_non_finite_float(item, f"{path}.{key}")
+            if found is not None:
+                return found
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            found = find_non_finite_float(item, f"{path}[{index}]")
+            if found is not None:
+                return found
+    return None
 
 
 class CommandRequest(BaseModel):
