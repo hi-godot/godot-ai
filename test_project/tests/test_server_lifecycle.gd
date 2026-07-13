@@ -57,13 +57,18 @@ class _ManagerHostStub extends GodotAiPlugin:
 			return bool(port_in_use_sequence.pop_front())
 		return port_in_use
 
-	func _kill_processes_and_windows_spawn_children(pids: Array[int]) -> Array[int]:
+	func _kill_processes_and_windows_spawn_children(pids: Array[int], verify_brand: bool = false) -> Array[int]:
+		var accepted: Array[int] = []
 		for pid in pids:
+			## Mirror production's kill-time re-check (#686) against the
+			## stub's alive/branded lists so tests can exercise the
+			## proof→kill TOCTOU gap.
+			if verify_brand and not (alive_pids.has(pid) and branded_pids.has(pid)):
+				continue
+			accepted.append(pid)
 			if not killed_targets.has(pid):
 				killed_targets.append(pid)
-		var killed: Array[int] = []
-		killed.assign(pids)
-		return killed
+		return accepted
 
 	func _wait_for_port_free(_port: int, _timeout_s: float) -> void:
 		pass
@@ -230,7 +235,10 @@ func test_stop_aggregates_launcher_pidfile_and_branded_listener_pids() -> void:
 	var host := _ManagerHostStub.new()
 	host.managed_pid_lookup = 22222
 	host.listener_pids = [33333] as Array[int]
-	host.branded_pids = [22222, 33333] as Array[int]
+	## The tracked PID is brand-gated at kill time too now (#686), so the
+	## live managed-server scenario seeds it alive + branded.
+	host.alive_pids = [11111] as Array[int]
+	host.branded_pids = [11111, 22222, 33333] as Array[int]
 	var manager := McpServerLifecycleManagerScript.new(host)
 	manager._server_pid = 11111
 
@@ -250,6 +258,8 @@ func test_stop_does_not_trust_unbranded_managed_pid_fallback() -> void:
 	var host := _ManagerHostStub.new()
 	host.managed_pid_lookup = 22222
 	host.listener_pids = [22222] as Array[int]
+	host.alive_pids = [11111] as Array[int]
+	host.branded_pids = [11111] as Array[int]
 	var manager := McpServerLifecycleManagerScript.new(host)
 	manager._server_pid = 11111
 
@@ -268,6 +278,8 @@ func test_stop_does_not_kill_unbranded_port_listeners() -> void:
 	## just because they share the configured HTTP port.
 	var host := _ManagerHostStub.new()
 	host.listener_pids = [33333] as Array[int]
+	host.alive_pids = [11111] as Array[int]
+	host.branded_pids = [11111] as Array[int]
 	var manager := McpServerLifecycleManagerScript.new(host)
 	manager._server_pid = 11111
 
@@ -278,6 +290,43 @@ func test_stop_does_not_kill_unbranded_port_listeners() -> void:
 	assert_eq(killed.size(), 1)
 	assert_true(killed.has(11111))
 	assert_false(killed.has(33333))
+
+
+func test_stop_does_not_kill_recycled_tracked_pid() -> void:
+	## #686: nothing clears `_server_pid` when the server dies mid-session
+	## (the health watch stops after SERVER_WATCH_MS). If the kernel
+	## recycled the PID to an unrelated process by the time the user quits
+	## Godot, stop_server must not kill it: the tracked seed is now gated on
+	## alive + branded like every other candidate.
+	var host := _ManagerHostStub.new()
+	host.alive_pids = [11111] as Array[int]
+	## Alive but NOT branded — the recycled-PID shape.
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 11111
+
+	manager.stop_server()
+	var killed := host.killed_targets.duplicate()
+	host.free()
+
+	assert_true(killed.is_empty(),
+		"a tracked PID that no longer passes the brand check must not be killed")
+
+
+func test_stop_does_not_kill_dead_tracked_pid() -> void:
+	## Dead tracked PID: branded lists can be stale too — a PID that is not
+	## alive must be skipped without OS.kill ever seeing it.
+	var host := _ManagerHostStub.new()
+	host.branded_pids = [11111] as Array[int]
+	## Not in alive_pids — the server crashed hours ago.
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 11111
+
+	manager.stop_server()
+	var killed := host.killed_targets.duplicate()
+	host.free()
+
+	assert_true(killed.is_empty(),
+		"a dead tracked PID must not be forwarded to the kill helper")
 
 
 func test_stop_invokes_finalize_for_record_cleanup() -> void:

@@ -1179,7 +1179,20 @@ func _evaluate_strong_port_occupant_proof(port: int, live: Dictionary = {}, reco
 		and not record_version.is_empty()
 		and str(current_live.get("version", "")) == record_version
 	):
-		return {"proof": "status_matches_record", "pids": listener_pids}
+		## Brand-check every listener before returning it as a kill target
+		## (#686): the /godot-ai/status match proves *a* godot-ai server owns
+		## the port, but `listener_pids` is a raw scrape that can include an
+		## unrelated process sharing the port number (e.g. a ::1-only
+		## listener lsof reports alongside our IPv4 one). The other two tiers
+		## brand-check every target (#525); this tier feeds the fully
+		## automatic start_server drift-kill path, so it must too.
+		var branded_listeners: Array[int] = []
+		for pid in listener_pids:
+			var listener_pid := int(pid)
+			if _pid_cmdline_is_godot_ai_for_proof(listener_pid):
+				branded_listeners.append(listener_pid)
+		if not branded_listeners.is_empty():
+			return {"proof": "status_matches_record", "pids": branded_listeners}
 
 	return result
 
@@ -1713,11 +1726,23 @@ func stop_dev_server() -> void:
 		print("MCP | stopped dev server on port %d" % port)
 
 
-func _kill_processes_and_windows_spawn_children(pids: Array[int]) -> Array[int]:
+## `verify_brand`: re-check `pid_alive` + the godot-ai cmdline brand
+## immediately before the kill (#686). Pass true when the proof that
+## nominated `pids` was evaluated in an earlier scheduling window (e.g.
+## `recover_strong_port_occupant`'s proof runs in one `_run_blocking` task
+## and the kill in a second, with main-thread frames in between) — a branded
+## target that exits in that gap can have its PID recycled to an innocent
+## process. Default false preserves the intentionally-unbranded call sites
+## (the dock's explicit-consent Restart button, orphan spawn workers whose
+## parent died so brand detection misses them).
+func _kill_processes_and_windows_spawn_children(pids: Array[int], verify_brand: bool = false) -> Array[int]:
 	var unique: Array[int] = []
 	for pid in pids:
-		if pid > 0 and not unique.has(pid):
-			unique.append(pid)
+		if pid <= 0 or unique.has(pid):
+			continue
+		if verify_brand and not (_pid_alive_for_proof(pid) and _pid_cmdline_is_godot_ai_for_proof(pid)):
+			continue
+		unique.append(pid)
 	if OS.get_name() == "Windows":
 		for child_pid in _find_windows_spawn_children(unique):
 			if not unique.has(child_pid):

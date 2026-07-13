@@ -965,7 +965,10 @@ func recover_strong_port_occupant(port: int, wait_s: float, pre_kill_live: Dicti
 	var freed := bool(await _run_blocking(func() -> Variant:
 		if not is_instance_valid(_host):
 			return false
-		var killed: Array = _host._kill_processes_and_windows_spawn_children(targets)
+		## verify_brand=true: the proof above ran in a separate _run_blocking
+		## task with main-thread frames in between — re-check each target at
+		## kill time so a PID recycled inside that gap isn't killed (#686).
+		var killed: Array = _host._kill_processes_and_windows_spawn_children(targets, true)
 		if not killed.is_empty():
 			print("MCP | killed pids %s on port %d" % [str(killed), port])
 		_host._wait_for_port_free(port, wait_s)
@@ -995,7 +998,21 @@ func stop_server() -> void:
 	## `OS.kill` is `TerminateProcess` which doesn't walk the child tree.
 	var port := ClientConfigurator.http_port()
 	var killed: Array = []
-	var candidates: Array[int] = [int(_server_pid)]
+	var candidates: Array[int] = []
+	## Re-verify the tracked PID at kill time (#686): nothing clears
+	## `_server_pid` when the server dies mid-session (`check_server_health`
+	## stops watching after SERVER_WATCH_MS), so hours later the kernel may
+	## have recycled this PID to an unrelated process. Every other candidate
+	## in this function is brand-gated; the tracked seed must be too. A false
+	## negative is fail-safe: the port stays held and the record is preserved,
+	## so the next start_server's drift branch retries the kill.
+	var tracked_pid := int(_server_pid)
+	if (
+		tracked_pid > 0
+		and _host._pid_alive_for_proof(tracked_pid)
+		and _host._pid_cmdline_is_godot_ai_for_proof(tracked_pid)
+	):
+		candidates.append(tracked_pid)
 	var real_pid := int(_host._find_managed_pid(port))
 	## Add the real Python PID only if it isn't already tracked and proves out
 	## as ours — re-appending an already-present PID just produces a duplicate
@@ -1158,8 +1175,20 @@ func force_restart_server() -> void:
 	## reloader parent AND a worker child — killing only one (or zero,
 	## if the single-pid parse fell over on multi-line lsof output) leaves
 	## the other holding the port past `_wait_for_port_free`'s window.
+	##
+	## Brand-gate each raw listener PID (#686): `can_restart_managed_server()`
+	## only proves we once managed *a* server, not that the port's current
+	## occupants are ours — an adopted server that exited on its own can be
+	## replaced on the port by an unrelated dev tool before the user clicks
+	## Restart. Unbranded PIDs fall through to `_set_incompatible_server`
+	## below instead of being killed.
 	transition_state(McpServerStateScript.STOPPING)
-	_host._kill_processes_and_windows_spawn_children(_host._find_all_pids_on_port(port))
+	var restart_targets: Array[int] = []
+	for pid in _host._find_all_pids_on_port(port):
+		var listener_pid := int(pid)
+		if _host._pid_cmdline_is_godot_ai_for_proof(listener_pid):
+			restart_targets.append(listener_pid)
+	_host._kill_processes_and_windows_spawn_children(restart_targets)
 	_host._wait_for_port_free(port, 5.0)
 	if _host._is_port_in_use(port):
 		## Kill failed; clean baseline for the follow-up

@@ -58,13 +58,18 @@ class _ProofPlugin extends GodotAiPlugin:
 			return bool(port_in_use_sequence.pop_front())
 		return port_in_use
 
-	func _kill_processes_and_windows_spawn_children(pids: Array[int]) -> Array[int]:
+	func _kill_processes_and_windows_spawn_children(pids: Array[int], verify_brand: bool = false) -> Array[int]:
+		var accepted: Array[int] = []
 		for pid in pids:
+			## Mirror production's kill-time re-check (#686) against the
+			## stub's alive/branded lists so tests can exercise the
+			## proof→kill TOCTOU gap.
+			if verify_brand and not (alive_pids.has(pid) and branded_pids.has(pid)):
+				continue
+			accepted.append(pid)
 			if not killed_targets.has(pid):
 				killed_targets.append(pid)
-		var killed: Array[int] = []
-		killed.assign(pids)
-		return killed
+		return accepted
 
 	func _wait_for_port_free(_port: int, _timeout_s: float) -> void:
 		waited_calls += 1
@@ -592,6 +597,9 @@ func test_legacy_pidfile_proof_rejects_unbranded_pidfile_pid() -> void:
 func test_strong_proof_accepts_status_matching_managed_record_version() -> void:
 	var plugin := _ProofPlugin.new()
 	plugin.listener_pids = [13579] as Array[int]
+	## The status tier now brand-checks each listener before nominating it
+	## as a kill target (#686) — a genuinely-ours occupant is branded.
+	plugin.branded_pids = [13579] as Array[int]
 	plugin.managed_record = {"pid": 0, "version": "2.1.0", "ws_port": 9500}
 	plugin.live_status = {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
 
@@ -602,6 +610,45 @@ func test_strong_proof_accepts_status_matching_managed_record_version() -> void:
 	var pids: Array[int] = []
 	pids.assign(proof.get("pids", []))
 	assert_eq(pids, [13579] as Array[int])
+
+
+func test_strong_proof_status_tier_filters_unbranded_listeners() -> void:
+	## #686: /godot-ai/status matching the record proves *a* godot-ai server
+	## owns the port, but the raw listener scrape can include an unrelated
+	## process sharing the port number (e.g. a ::1-only listener). Only
+	## branded PIDs may be nominated to the automatic drift-kill path.
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [13579, 24680] as Array[int]
+	plugin.branded_pids = [13579] as Array[int]
+	plugin.managed_record = {"pid": 0, "version": "2.1.0", "ws_port": 9500}
+	plugin.live_status = {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
+
+	var proof := plugin._evaluate_strong_port_occupant_proof(TEST_PORT)
+	plugin.free()
+
+	assert_eq(proof.get("proof", ""), "status_matches_record")
+	var pids: Array[int] = []
+	pids.assign(proof.get("pids", []))
+	assert_eq(pids, [13579] as Array[int],
+		"the unbranded co-listener must be filtered out of the kill list")
+
+
+func test_strong_proof_status_tier_requires_at_least_one_branded_listener() -> void:
+	var plugin := _ProofPlugin.new()
+	plugin.listener_pids = [24680] as Array[int]
+	## No branded PIDs at all: the tier must not fire, even though the
+	## status probe matched the record version.
+	plugin.managed_record = {"pid": 0, "version": "2.1.0", "ws_port": 9500}
+	plugin.live_status = {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
+
+	var proof := plugin._evaluate_strong_port_occupant_proof(TEST_PORT)
+	plugin.free()
+
+	assert_eq(proof.get("proof", ""), "")
+	var pids: Array[int] = []
+	pids.assign(proof.get("pids", []))
+	assert_true(pids.is_empty(),
+		"status-matches-record with zero branded listeners must not authorize a kill")
 
 
 func test_strong_proof_rejects_status_name_only() -> void:
@@ -1047,6 +1094,9 @@ func test_force_restart_preserves_record_when_port_remains_held() -> void:
 	var plugin := _ProofPlugin.new()
 	plugin.port_in_use = true
 	plugin.listener_pids = [24680] as Array[int]
+	## force_restart brand-gates each raw listener PID now (#686), so the
+	## kill-attempted-but-port-still-held scenario needs a branded occupant.
+	plugin.branded_pids = [24680] as Array[int]
 	plugin.managed_record = {"pid": 24680, "version": "old-managed-for-test", "ws_port": 9500}
 	plugin.live_status = {"name": "other-server", "version": "old-managed-for-test", "ws_port": 9500, "status_code": 200}
 
@@ -1059,6 +1109,54 @@ func test_force_restart_preserves_record_when_port_remains_held() -> void:
 	assert_eq(int(status.get("state", -1)), McpServerState.INCOMPATIBLE)
 	assert_eq(killed, [24680] as Array[int])
 	assert_eq(clear_calls, 0, "force restart must not clear ownership while the port is still held")
+
+
+func test_force_restart_does_not_kill_unbranded_port_occupant() -> void:
+	## #686: can_restart_managed_server() proves we once managed *a* server
+	## (stale record), not that the port's CURRENT occupant is ours. An
+	## adopted server that exited on its own can be replaced on the port by
+	## an unrelated dev tool before the user clicks Restart — that process
+	## must survive the click.
+	var plugin := _ProofPlugin.new()
+	plugin.port_in_use = true
+	plugin.listener_pids = [24680] as Array[int]
+	## 24680 is NOT branded — an unrelated tool that bound the port.
+	plugin.managed_record = {"pid": 0, "version": "old-managed-for-test", "ws_port": 9500}
+	plugin.live_status = {"name": "other-server", "version": "", "ws_port": 0, "status_code": 200}
+
+	plugin.force_restart_server()
+	var killed := plugin.killed_targets.duplicate()
+	plugin.free()
+
+	assert_true(killed.is_empty(),
+		"force restart must not kill an unbranded process that took over the port")
+
+
+## Overrides only the proof helpers, NOT the kill helper — so the
+## verify_brand test below exercises plugin.gd's production filter body.
+## Safe: every PID is filtered out before any OS.kill/taskkill runs.
+class _BrandFilterHost extends GodotAiPlugin:
+	func _pid_alive_for_proof(pid: int) -> bool:
+		return pid == 55555
+
+	func _pid_cmdline_is_godot_ai_for_proof(_pid: int) -> bool:
+		return false
+
+
+func test_kill_helper_verify_brand_filters_at_kill_time() -> void:
+	## #686: proof evaluation and the kill can run in separate scheduling
+	## windows (recover_strong_port_occupant's two _run_blocking tasks). A
+	## target that died — or lost its brand to PID recycling — inside that
+	## gap must be dropped by the kill helper itself when verify_brand is
+	## passed, before any signal is sent.
+	var plugin := _BrandFilterHost.new()
+	var killed := plugin._kill_processes_and_windows_spawn_children(
+		[55555, 66666] as Array[int], true
+	)
+	plugin.free()
+
+	assert_true(killed.is_empty(),
+		"alive-but-unbranded (55555) and dead (66666) targets must both be filtered")
 
 
 func test_recover_incompatible_returns_false_and_leaves_state_when_port_remains_held() -> void:
@@ -1361,6 +1459,7 @@ func test_dev_server_detection_accepts_branded_port_listener() -> void:
 func test_strong_proof_uses_provided_live_without_probing() -> void:
 	var plugin := _ProofPlugin.new()
 	plugin.listener_pids = [13579] as Array[int]
+	plugin.branded_pids = [13579] as Array[int]
 	plugin.managed_record = {"pid": 0, "version": "2.1.0", "ws_port": 9500}
 	var caller_live := {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
 
@@ -1375,6 +1474,7 @@ func test_strong_proof_uses_provided_live_without_probing() -> void:
 func test_strong_proof_probes_when_live_omitted() -> void:
 	var plugin := _ProofPlugin.new()
 	plugin.listener_pids = [13579] as Array[int]
+	plugin.branded_pids = [13579] as Array[int]
 	plugin.managed_record = {"pid": 0, "version": "2.1.0", "ws_port": 9500}
 	plugin.live_status = {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
 
@@ -1413,6 +1513,7 @@ func test_recover_strong_port_occupant_threads_live_to_proof() -> void:
 	plugin.listener_pids = [13579] as Array[int]
 	plugin.managed_record = {"pid": 13579, "version": "2.1.0", "ws_port": 9500}
 	plugin.alive_pids = [13579] as Array[int]
+	plugin.branded_pids = [13579] as Array[int]
 	plugin.port_in_use_sequence = [false] as Array[bool]
 	var caller_live := {"name": "godot-ai", "version": "2.1.0", "ws_port": 9500, "status_code": 200}
 
