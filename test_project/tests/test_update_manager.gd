@@ -286,10 +286,12 @@ func test_verify_refuses_wrong_repo_checksum_url() -> void:
 
 
 func test_checksum_match_on_repo_release_proceeds_to_install() -> void:
-	## Happy path: staged ZIP whose FileAccess.get_sha256 matches the digest
-	## in the (trusted, repo-scoped) sidecar body must proceed to install —
-	## the manager paints "Installing..." and does NOT delete the staged ZIP
-	## (only _fail_verification does that).
+	## Happy path (legacy pre-signing release: no signature URL armed, so
+	## the checksum verdict alone gates the install — #687): staged ZIP
+	## whose FileAccess.get_sha256 matches the digest in the (trusted,
+	## repo-scoped) sidecar body must proceed to install — the manager
+	## paints "Installing..." and does NOT delete the staged ZIP (only
+	## _fail_verification does that).
 	var global_dir := ProjectSettings.globalize_path(McpUpdateManagerScript.UPDATE_TEMP_DIR)
 	var global_zip := ProjectSettings.globalize_path(McpUpdateManagerScript.UPDATE_TEMP_ZIP)
 	DirAccess.make_dir_recursive_absolute(global_dir)
@@ -327,6 +329,204 @@ func test_checksum_match_on_repo_release_proceeds_to_install() -> void:
 	var state: Dictionary = states[0]
 	assert_eq(String(state.get("button_text", "")), "Installing...",
 		"a matching digest must advance the pipeline to Installing...")
+
+
+# ---- Release-signature verification (#687) ------------------------------
+
+func _sha256_of(bytes: PackedByteArray) -> PackedByteArray:
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	ctx.update(bytes)
+	return ctx.finish()
+
+
+func test_verify_sidecar_signature_accepts_valid_signature() -> void:
+	## Round-trip with a throwaway keypair: sign SHA-256(sidecar) the way
+	## release.yml's `openssl dgst -sha256 -sign` does (PKCS#1 v1.5), then
+	## verify through the exact helper `_on_signature_completed` calls.
+	var crypto := Crypto.new()
+	var key := crypto.generate_rsa(2048)
+	var pub_pem := key.save_to_string(true)
+	var sidecar := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  godot-ai-plugin.zip\n".to_utf8_buffer()
+	var signature := crypto.sign(HashingContext.HASH_SHA256, _sha256_of(sidecar), key)
+
+	assert_true(
+		McpUpdateManagerScript._verify_sidecar_signature(pub_pem, sidecar, signature),
+		"a signature produced over the sidecar's SHA-256 must verify")
+
+
+func test_verify_sidecar_signature_rejects_tampered_and_missing() -> void:
+	var crypto := Crypto.new()
+	var key := crypto.generate_rsa(2048)
+	var pub_pem := key.save_to_string(true)
+	var sidecar := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  godot-ai-plugin.zip\n".to_utf8_buffer()
+	var signature := crypto.sign(HashingContext.HASH_SHA256, _sha256_of(sidecar), key)
+
+	var tampered := sidecar.duplicate()
+	tampered[0] = tampered[0] ^ 0xFF
+	assert_false(
+		McpUpdateManagerScript._verify_sidecar_signature(pub_pem, tampered, signature),
+		"a signature must not verify over different sidecar bytes")
+
+	var other_key := crypto.generate_rsa(2048)
+	var forged := crypto.sign(HashingContext.HASH_SHA256, _sha256_of(sidecar), other_key)
+	assert_false(
+		McpUpdateManagerScript._verify_sidecar_signature(pub_pem, sidecar, forged),
+		"a signature from a different private key must not verify")
+
+	assert_false(
+		McpUpdateManagerScript._verify_sidecar_signature(pub_pem, sidecar, PackedByteArray()),
+		"an empty signature must not verify")
+	assert_false(
+		McpUpdateManagerScript._verify_sidecar_signature(pub_pem, PackedByteArray(), signature),
+		"empty sidecar bytes must not verify")
+	assert_false(
+		McpUpdateManagerScript._verify_sidecar_signature("not a pem", sidecar, signature),
+		"a malformed public key must fail closed, not crash or pass")
+
+
+func test_embedded_public_key_loads_as_rsa_public_key() -> void:
+	## The const must stay a loadable public-only PEM — a paste error here
+	## would brick signature verification for every user on the next release.
+	var key := CryptoKey.new()
+	assert_eq(
+		key.load_from_string(McpUpdateManagerScript.RELEASE_SIGNING_PUBLIC_KEY_PEM, true), OK,
+		"RELEASE_SIGNING_PUBLIC_KEY_PEM must load as a public key")
+	assert_true(key.is_public_only(),
+		"the embedded key must be public-only — never ship private material")
+
+
+func test_signature_required_gates_on_signing_era() -> void:
+	## Below the first signed release: legacy checksum-only path allowed.
+	## At/above it (every future release): a missing signature is a
+	## strip-attack signal and must hard-fail. Unknown fails closed.
+	assert_false(McpUpdateManagerScript._signature_required("2.9.2"),
+		"pre-signing releases must keep installing via the legacy path")
+	assert_false(McpUpdateManagerScript._signature_required("1.0.0"),
+		"old releases must keep installing via the legacy path")
+	assert_true(McpUpdateManagerScript._signature_required(
+		McpUpdateManagerScript.SIGNING_REQUIRED_FROM_VERSION),
+		"the first signing-era version must require a signature")
+	assert_true(McpUpdateManagerScript._signature_required("999.0.0"),
+		"future releases must require a signature")
+	assert_true(McpUpdateManagerScript._signature_required(""),
+		"an unknown remote version must fail closed")
+
+
+func test_verify_refuses_unsigned_signing_era_release() -> void:
+	## A release inside the signing era whose .sig asset is absent must be
+	## treated as stripped/tampered — hard fail, staged ZIP dropped. This is
+	## what stops an attacker who can rewrite release assets from simply
+	## deleting the signature to skip verification.
+	var global_dir := ProjectSettings.globalize_path(McpUpdateManagerScript.UPDATE_TEMP_DIR)
+	var global_zip := ProjectSettings.globalize_path(McpUpdateManagerScript.UPDATE_TEMP_ZIP)
+	DirAccess.make_dir_recursive_absolute(global_dir)
+	var f := FileAccess.open(global_zip, FileAccess.WRITE)
+	assert_true(f != null, "Seed staged zip must open for write")
+	f.store_string("staged update payload")
+	f.close()
+
+	var manager = McpUpdateManagerScript.new()
+	manager._latest_checksum_url = TEST_ASSET_URL + ".sha256"
+	manager._latest_signature_url = ""
+	manager._latest_remote_version = "999.0.0"
+	var states: Array[Dictionary] = []
+	manager.install_state_changed.connect(func(state: Dictionary) -> void:
+		states.append(state)
+	)
+
+	manager._verify_then_install()
+
+	var zip_still_staged := FileAccess.file_exists(global_zip)
+	manager.free()
+	DirAccess.remove_absolute(global_zip)
+	DirAccess.remove_absolute(global_dir)
+
+	assert_false(zip_still_staged,
+		"an unsigned signing-era release must drop the staged ZIP")
+	assert_eq(states.size(), 1,
+		"an unsigned signing-era release must emit exactly one failure state")
+	assert_contains(String(states[0].get("button_text", "")), "Verification failed",
+		"an unsigned signing-era release must paint the verification-failed button")
+
+
+func test_verify_refuses_wrong_repo_signature_url() -> void:
+	## A signature URL pointing at another repo's release asset is a tamper
+	## signal — refuse before fetching it.
+	var global_dir := ProjectSettings.globalize_path(McpUpdateManagerScript.UPDATE_TEMP_DIR)
+	var global_zip := ProjectSettings.globalize_path(McpUpdateManagerScript.UPDATE_TEMP_ZIP)
+	DirAccess.make_dir_recursive_absolute(global_dir)
+	var f := FileAccess.open(global_zip, FileAccess.WRITE)
+	assert_true(f != null, "Seed staged zip must open for write")
+	f.store_string("staged update payload")
+	f.close()
+
+	var manager = McpUpdateManagerScript.new()
+	manager._latest_checksum_url = TEST_ASSET_URL + ".sha256"
+	manager._latest_signature_url = (
+		"https://github.com/evil-org/godot-ai/releases/download/v999.0.0/"
+		+ "godot-ai-plugin.zip.sha256.sig"
+	)
+	manager._latest_remote_version = "999.0.0"
+	var states: Array[Dictionary] = []
+	manager.install_state_changed.connect(func(state: Dictionary) -> void:
+		states.append(state)
+	)
+
+	manager._verify_then_install()
+
+	var zip_still_staged := FileAccess.file_exists(global_zip)
+	manager.free()
+	DirAccess.remove_absolute(global_zip)
+	DirAccess.remove_absolute(global_dir)
+
+	assert_false(zip_still_staged,
+		"a wrong-repo signature URL must drop the staged ZIP")
+	assert_eq(states.size(), 1,
+		"a wrong-repo signature URL must emit exactly one failure state")
+	assert_contains(String(states[0].get("button_text", "")), "Verification failed",
+		"a wrong-repo signature URL must paint the verification-failed button")
+
+
+func test_bad_signature_bytes_fail_verification_and_drop_zip() -> void:
+	## Drive the signature-completion callback with bytes that cannot verify
+	## against the embedded release key — the hard-fail path an attacker
+	## hits after regenerating the sidecar for a tampered zip.
+	var global_dir := ProjectSettings.globalize_path(McpUpdateManagerScript.UPDATE_TEMP_DIR)
+	var global_zip := ProjectSettings.globalize_path(McpUpdateManagerScript.UPDATE_TEMP_ZIP)
+	DirAccess.make_dir_recursive_absolute(global_dir)
+	var f := FileAccess.open(global_zip, FileAccess.WRITE)
+	assert_true(f != null, "Seed staged zip must open for write")
+	f.store_string("staged update payload")
+	f.close()
+
+	var manager = McpUpdateManagerScript.new()
+	manager._latest_signature_url = TEST_ASSET_URL + ".sha256.sig"
+	manager._pending_sidecar_body = "digest  godot-ai-plugin.zip\n".to_utf8_buffer()
+	manager._pending_expected_digest = "0000000000000000000000000000000000000000000000000000000000000000"
+	var states: Array[Dictionary] = []
+	manager.install_state_changed.connect(func(state: Dictionary) -> void:
+		states.append(state)
+	)
+
+	manager._on_signature_completed(
+		HTTPRequest.RESULT_SUCCESS, 200, [], "not a real signature".to_utf8_buffer()
+	)
+
+	var zip_still_staged := FileAccess.file_exists(global_zip)
+	var pending_cleared: bool = manager._pending_sidecar_body.is_empty()
+	manager.free()
+	DirAccess.remove_absolute(global_zip)
+	DirAccess.remove_absolute(global_dir)
+
+	assert_false(zip_still_staged,
+		"a non-verifying signature must drop the staged ZIP, not install it")
+	assert_true(pending_cleared,
+		"failure must clear the held sidecar bytes")
+	assert_eq(states.size(), 1,
+		"a non-verifying signature must emit exactly one failure state")
+	assert_contains(String(states[0].get("button_text", "")), "Verification failed",
+		"a non-verifying signature must paint the verification-failed button")
 
 
 # ---- parse_releases_response (pure / static) ---------------------------
@@ -421,6 +621,68 @@ func test_parse_releases_response_captures_checksum_asset_url() -> void:
 		"zip asset URL must still resolve when a checksum sidecar is present")
 	assert_eq(String(result.get("checksum_url", "")), checksum_url,
 		"the .sha256 sidecar URL must be captured")
+
+
+func test_parse_releases_response_captures_signature_asset_url() -> void:
+	## Signing-era releases ship a `.sha256.sig` third asset (#687); its URL
+	## must surface so the installer can verify provenance before extract.
+	var checksum_url := TEST_ASSET_URL + ".sha256"
+	var signature_url := TEST_ASSET_URL + ".sha256.sig"
+	var body := _make_body(JSON.stringify({
+		"tag_name": "v999.0.0",
+		"assets": [
+			{"name": TEST_ASSET_NAME, "browser_download_url": TEST_ASSET_URL},
+			{"name": TEST_ASSET_NAME + ".sha256", "browser_download_url": checksum_url},
+			{"name": TEST_ASSET_NAME + ".sha256.sig", "browser_download_url": signature_url},
+		],
+	}))
+	var result := McpUpdateManagerScript.parse_releases_response(
+		HTTPRequest.RESULT_SUCCESS, 200, body
+	)
+	assert_eq(String(result.get("checksum_url", "")), checksum_url,
+		"the .sha256 sidecar URL must still be captured alongside the signature")
+	assert_eq(String(result.get("signature_url", "")), signature_url,
+		"the .sha256.sig signature URL must be captured")
+
+
+func test_parse_releases_response_signature_empty_when_absent() -> void:
+	## Pre-signing releases have no .sig asset — signature_url must stay
+	## empty; `_verify_then_install` decides legacy-vs-refuse from the
+	## remote version (#687).
+	var body := _make_body(_make_release_payload("v999.0.0"))
+	var result := McpUpdateManagerScript.parse_releases_response(
+		HTTPRequest.RESULT_SUCCESS, 200, body
+	)
+	assert_eq(String(result.get("signature_url", "")), "",
+		"no signature asset must yield an empty signature_url")
+
+
+func test_checksum_completed_with_signature_armed_defers_install() -> void:
+	## With a signature URL armed, a checksum download completing must NOT
+	## advance to Installing... — the digest is untrusted until the
+	## signature verdict. (In-tree, _fetch_signature would fire the HTTP
+	## request; out-of-tree it fails closed. Either way: no install.)
+	var manager = McpUpdateManagerScript.new()
+	manager._latest_signature_url = TEST_ASSET_URL + ".sha256.sig"
+	var digest := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	var states: Array[Dictionary] = []
+	manager.install_state_changed.connect(func(state: Dictionary) -> void:
+		states.append(state)
+	)
+
+	manager._on_checksum_completed(
+		HTTPRequest.RESULT_SUCCESS, 200, [],
+		("%s  godot-ai-plugin.zip\n" % digest).to_utf8_buffer()
+	)
+
+	var reached_install := false
+	for state in states:
+		if String(state.get("button_text", "")) == "Installing...":
+			reached_install = true
+	manager.free()
+
+	assert_false(reached_install,
+		"a signed release must never reach Installing... before the signature verdict")
 
 
 func test_parse_releases_response_checksum_empty_when_absent() -> void:

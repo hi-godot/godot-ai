@@ -34,6 +34,38 @@ const UPDATE_TEMP_DIR := "user://godot_ai_update/"
 const UPDATE_TEMP_ZIP := "user://godot_ai_update/update.zip"
 const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")
 
+## RSA-4096 public key for release-signature verification (#687). The paired
+## private key exists only in the GitHub Actions secret RELEASE_SIGNING_KEY_PEM
+## (plus the maintainer's offline backup) — deliberately outside the repo
+## token's scope, because the threat model is release-asset substitution by a
+## leaked token or compromised workflow, and a token that can rewrite assets
+## still cannot read secrets. Rotation requires shipping a new plugin release
+## embedding the new key (and bumping SIGNING_REQUIRED_FROM_VERSION past the
+## last release signed with the old one).
+const RELEASE_SIGNING_PUBLIC_KEY_PEM := """-----BEGIN PUBLIC KEY-----
+MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAr4OmbONFTONGFcXSUQ2p
+e54YaUhWDA75wxeDWhOc476vsdo53YnXEFT7EPr2hUKqeNxv++LqKOkFuAsxSNZy
+wBe6P1tmQA4Og6Ezv4CGnZdEj1uhlDJFK9ShQ29oWfC6bf/84625SvvBxZos2Br9
+yPKl7h5wzqDoeUSpv+f0ynTiC0i/HAUo/NQBlkgGwkomK2Fr3pP1VDxxq2xvgHSk
+lU6Qcomr9WjJxI+HkDN5tRPPn0pDrg6YFx2J18OfD8KIa/kMGxuXOcHlPyRYpjyu
+qTtg2oL0NyUIG+1TmJ3DcN4GlKC55eOrkfJ04vudS5pxdnUIFRmkGBXZLdaetoPc
+ixtlD4w6gi8KIH1CTG+/TtHP1KVdOogCWDcjRCAmMJPFZe6eEKXmGQUZDb9wfnbx
+h++XiVe5tq83BTLWmaFTy+fZbNo12uhNCNS1LJ42/yj+S1xvo0yMbkkNr1hIYk0P
+584XnBQeBSVJDf3667NZXaxnWv94K9zbb+1OvOvPwhbOdgi2Ymcw5QEOQIavtg86
+XLLcWzG+SJsycz1imikjv6sStWh8WHneKSTMq6A7V6PBj7oJyEJp10696BDw287k
+YlH+9VGqowPEMXpWX57wOBKiWb4K1kw1LfxjT8W1e/pcX9pJqiv0DkjTXUxo9CDG
+1X1+ZXBBR3MkGuFAOCjy0x8CAwEAAQ==
+-----END PUBLIC KEY-----
+"""
+
+## Every release at or above this version ships a signed sidecar
+## (release.yml hard-fails without the signing secret). At or above it, a
+## missing `.sha256.sig` asset is treated as tampering — an attacker who can
+## rewrite release assets could otherwise just strip the signature to skip
+## verification. Below it (releases published before signing existed), the
+## legacy checksum-only path still installs.
+const SIGNING_REQUIRED_FROM_VERSION := "2.9.3"
+
 ## Host -> required path prefix for self-update downloads (ZIP and checksum
 ## sidecar). The URLs are taken verbatim from the GitHub Releases API's
 ## `browser_download_url`, so before fetching we pin them to https on a
@@ -78,12 +110,26 @@ var _dock
 var _http_request: HTTPRequest
 var _download_request: HTTPRequest
 var _verify_request: HTTPRequest
+var _signature_request: HTTPRequest
 var _latest_download_url: String = ""
 ## URL of the `godot-ai-plugin.zip.sha256` sidecar asset. Used to verify the
 ## downloaded archive's integrity before extract (#523). Verification is
 ## mandatory (#599): when a release ships no sidecar this stays empty and
 ## `_verify_then_install` refuses the install.
 var _latest_checksum_url: String = ""
+## URL of the `godot-ai-plugin.zip.sha256.sig` signature asset (#687). Empty
+## on releases published before signing existed; `_verify_then_install`
+## refuses an empty URL once the remote version is inside the signing era
+## (see SIGNING_REQUIRED_FROM_VERSION).
+var _latest_signature_url: String = ""
+## Remote version from the last update check — drives the
+## signature-required compat gate in `_verify_then_install`.
+var _latest_remote_version: String = ""
+## Sidecar bytes + parsed digest held between the checksum download and the
+## signature verdict, so the signature is checked against exactly the bytes
+## the digest was parsed from.
+var _pending_sidecar_body := PackedByteArray()
+var _pending_expected_digest: String = ""
 
 ## Set for the duration of `_install_zip` — extract-overwrite of plugin
 ## scripts on disk would crash any worker mid-`GDScriptFunction::call`
@@ -136,6 +182,10 @@ func cancel_check() -> void:
 func clear_pending_download() -> void:
 	_latest_download_url = ""
 	_latest_checksum_url = ""
+	_latest_signature_url = ""
+	_latest_remote_version = ""
+	_pending_sidecar_body = PackedByteArray()
+	_pending_expected_digest = ""
 
 
 ## True when the running Godot is within the supported self-update floor.
@@ -246,6 +296,7 @@ func is_install_in_flight() -> bool:
 ##   label_text: String              ## "Update available: vX.Y.Z" + " (forced)"
 ##   download_url: String            ## matching `godot-ai-plugin.zip` asset URL
 ##   checksum_url: String            ## `godot-ai-plugin.zip.sha256` asset URL ("" if absent)
+##   signature_url: String           ## `godot-ai-plugin.zip.sha256.sig` asset URL ("" if absent)
 ##
 ## Static so tests drive it without instancing the manager.
 static func parse_releases_response(
@@ -258,6 +309,7 @@ static func parse_releases_response(
 		"label_text": "",
 		"download_url": "",
 		"checksum_url": "",
+		"signature_url": "",
 	}
 	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
 		return out
@@ -275,6 +327,7 @@ static func parse_releases_response(
 
 	var url := ""
 	var checksum_url := ""
+	var signature_url := ""
 	var assets: Array = json.get("assets", [])
 	for asset in assets:
 		var asset_dict: Dictionary = asset
@@ -283,6 +336,8 @@ static func parse_releases_response(
 			url = String(asset_dict.get("browser_download_url", ""))
 		elif asset_name == "godot-ai-plugin.zip.sha256":
 			checksum_url = String(asset_dict.get("browser_download_url", ""))
+		elif asset_name == "godot-ai-plugin.zip.sha256.sig":
+			signature_url = String(asset_dict.get("browser_download_url", ""))
 
 	var forced := ClientConfigurator.mode_override() == "user"
 	var label_text := "Update available: v%s" % remote_version
@@ -297,6 +352,7 @@ static func parse_releases_response(
 	out["label_text"] = label_text
 	out["download_url"] = url
 	out["checksum_url"] = checksum_url
+	out["signature_url"] = signature_url
 	return out
 
 
@@ -378,6 +434,8 @@ func _on_update_check_completed(
 		return
 	_latest_download_url = String(parsed.get("download_url", ""))
 	_latest_checksum_url = String(parsed.get("checksum_url", ""))
+	_latest_signature_url = String(parsed.get("signature_url", ""))
+	_latest_remote_version = String(parsed.get("version", ""))
 	update_check_completed.emit(parsed)
 
 
@@ -403,25 +461,29 @@ func _on_download_completed(
 	_verify_then_install.call_deferred()
 
 
-# ---- Integrity verification (#523) -------------------------------------
+# ---- Integrity verification (#523, #599, #687) --------------------------
 
-## Gate the extract on a SHA-256 match against the release's checksum sidecar.
-## TLS + host pinning already constrain where the bytes came from; this
-## verifies the bytes themselves, guarding against in-transit corruption and
-## single-object substitution (a tampered CDN edge, a partial/garbled
-## download). It is NOT protection against a compromised release: both
-## `download_url` and `checksum_url` come from the same GitHub Releases API
-## response over the same channel (`parse_releases_response`), so anyone able
-## to modify the release's assets (leaked repo token, compromised release
-## workflow) can regenerate the sidecar to match a tampered zip (#687
-## follow-up: signing the sidecar with a key outside the release workflow's
-## default token scope closes this gap; not yet implemented). Verification
-## is MANDATORY (#599): a release published without a `.sha256` sidecar —
-## mistake or tamper — refuses to install rather than silently downgrading
-## to an unverified install. This is safe because self-update only ever
-## verifies the *next* download, and every release since #523 publishes the
-## sidecar (release.yml), so no supported update target lacks one.
+## Gate the extract on (1) an RSA signature over the checksum sidecar and
+## (2) a SHA-256 match of the archive against that sidecar. TLS + host
+## pinning constrain where the bytes came from; the digest verifies the
+## bytes themselves (in-transit corruption, single-object substitution);
+## the signature verifies the digest's *provenance*. Both `download_url`
+## and `checksum_url` come from the same GitHub Releases API response over
+## the same channel, so anyone able to modify the release's assets (leaked
+## repo token, compromised release workflow) can regenerate the sidecar to
+## match a tampered zip — but cannot forge the `.sha256.sig` signature,
+## whose private key lives only in an Actions secret outside the repo
+## token's scope (#687).
+##
+## Verification is MANDATORY (#599): no `.sha256` sidecar — mistake or
+## tamper — refuses to install. The signature is mandatory for every
+## release at or above SIGNING_REQUIRED_FROM_VERSION: a missing signature
+## there is a strip-attack signal, not a compat case, and hard-fails. Only
+## releases predating signing take the legacy checksum-only path.
 func _verify_then_install() -> void:
+	_pending_sidecar_body = PackedByteArray()
+	_pending_expected_digest = ""
+
 	if _latest_checksum_url.is_empty():
 		_fail_verification(
 			"release published no godot-ai-plugin.zip.sha256 sidecar; "
@@ -434,6 +496,23 @@ func _verify_then_install() -> void:
 	## means a GitHub host AND this repo's release-asset path (#599).
 	if not _is_trusted_download_url(_latest_checksum_url):
 		_fail_verification("checksum URL is not a trusted hi-godot/godot-ai release asset")
+		return
+
+	if _latest_signature_url.is_empty():
+		if _signature_required(_latest_remote_version):
+			_fail_verification(
+				"release v%s ships no godot-ai-plugin.zip.sha256.sig signature. "
+				% _latest_remote_version
+				+ "Every release from v%s on is signed" % SIGNING_REQUIRED_FROM_VERSION
+				+ " — a missing signature means a stripped or tampered release (#687)"
+			)
+			return
+		print(
+			"MCP | self-update: release v%s predates signing; " % _latest_remote_version
+			+ "using legacy checksum-only verification (#687)"
+		)
+	elif not _is_trusted_download_url(_latest_signature_url):
+		_fail_verification("signature URL is not a trusted hi-godot/godot-ai release asset")
 		return
 
 	install_state_changed.emit({"button_text": "Verifying..."})
@@ -469,6 +548,68 @@ func _on_checksum_completed(
 		_fail_verification("malformed checksum file")
 		return
 
+	## Signature verification (when armed) runs over the exact sidecar bytes
+	## the digest was parsed from — hold both until the signature verdict.
+	if not _latest_signature_url.is_empty():
+		_pending_sidecar_body = body
+		_pending_expected_digest = expected
+		_fetch_signature()
+		return
+
+	## Legacy pre-signing release: `_verify_then_install` already gated this
+	## on the remote version predating SIGNING_REQUIRED_FROM_VERSION.
+	_finish_digest_check_and_install(expected)
+
+
+## Download the `.sha256.sig` release asset; `_on_signature_completed`
+## verifies it over the held sidecar bytes before the digest is trusted.
+func _fetch_signature() -> void:
+	if _signature_request != null:
+		_signature_request.queue_free()
+	_signature_request = HTTPRequest.new()
+	_signature_request.max_redirects = 10
+	_signature_request.request_completed.connect(_on_signature_completed)
+	add_child(_signature_request)
+	var err := _signature_request.request(_latest_signature_url)
+	if err != OK:
+		_signature_request.queue_free()
+		_signature_request = null
+		_fail_verification("could not request signature (error %d)" % err)
+
+
+func _on_signature_completed(
+	result: int,
+	response_code: int,
+	_headers: PackedStringArray,
+	body: PackedByteArray
+) -> void:
+	if _signature_request != null:
+		_signature_request.queue_free()
+		_signature_request = null
+
+	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
+		_fail_verification(
+			"signature download failed (result=%d code=%d)" % [result, response_code]
+		)
+		return
+
+	if not _verify_sidecar_signature(RELEASE_SIGNING_PUBLIC_KEY_PEM, _pending_sidecar_body, body):
+		_fail_verification(
+			"release signature does not verify against the embedded public key — "
+			+ "the checksum sidecar was not produced by the release pipeline (#687)"
+		)
+		return
+
+	print("MCP | self-update release signature verified (rsa-4096/sha256)")
+	_finish_digest_check_and_install(_pending_expected_digest)
+
+
+## Final gate shared by the signed and legacy paths: the staged archive's
+## SHA-256 must match the (now-trusted) sidecar digest before extract.
+func _finish_digest_check_and_install(expected: String) -> void:
+	_pending_sidecar_body = PackedByteArray()
+	_pending_expected_digest = ""
+
 	var zip_path := ProjectSettings.globalize_path(UPDATE_TEMP_ZIP)
 	var actual := FileAccess.get_sha256(zip_path).to_lower()
 	if actual.is_empty():
@@ -486,9 +627,44 @@ func _on_checksum_completed(
 	_install_zip.call_deferred()
 
 
+## True when `remote_version` falls inside the signing era — every release
+## at or above SIGNING_REQUIRED_FROM_VERSION ships a signed sidecar, so a
+## missing signature there must hard-fail rather than fall back to the
+## legacy checksum-only path. An empty/unknown version fails closed. Static
+## so it's unit-testable.
+static func _signature_required(remote_version: String) -> bool:
+	if remote_version.strip_edges().is_empty():
+		return true
+	return not _is_newer(SIGNING_REQUIRED_FROM_VERSION, remote_version)
+
+
+## PKCS#1 v1.5 RSA verification of `signature` over SHA-256(`sidecar`) —
+## the exact output of release.yml's `openssl dgst -sha256 -sign`. Takes
+## the PEM as a parameter (rather than reading the const) so tests can
+## exercise both verdicts with a generated throwaway keypair. Static so
+## it's unit-testable without instancing the manager.
+static func _verify_sidecar_signature(
+	public_key_pem: String, sidecar: PackedByteArray, signature: PackedByteArray
+) -> bool:
+	if sidecar.is_empty() or signature.is_empty():
+		return false
+	var key := CryptoKey.new()
+	if key.load_from_string(public_key_pem, true) != OK:
+		return false
+	var ctx := HashingContext.new()
+	if ctx.start(HashingContext.HASH_SHA256) != OK:
+		return false
+	ctx.update(sidecar)
+	var digest := ctx.finish()
+	var crypto := Crypto.new()
+	return crypto.verify(HashingContext.HASH_SHA256, digest, signature, key)
+
+
 ## Surface an integrity-check failure and drop the staged zip so the bad
 ## bytes can never reach the extract path. Keeps the button enabled for retry.
 func _fail_verification(reason: String) -> void:
+	_pending_sidecar_body = PackedByteArray()
+	_pending_expected_digest = ""
 	push_error(
 		"MCP | self-update integrity check failed: %s. The download was not installed."
 		% reason

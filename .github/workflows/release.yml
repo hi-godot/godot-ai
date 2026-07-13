@@ -170,12 +170,49 @@ jobs:
           sha256sum godot-ai-plugin.zip > godot-ai-plugin.zip.sha256
           cat godot-ai-plugin.zip.sha256
 
+      - name: Sign checksum sidecar
+        # RSA-4096 signature over the .sha256 sidecar (#687). The private key
+        # lives only in the RELEASE_SIGNING_KEY_PEM secret — outside the repo
+        # token's scope, so a leaked token that can rewrite release assets
+        # still can't forge a signature. The plugin verifies this signature
+        # against its embedded public key before trusting the digest
+        # (utils/update_manager.gd::_verify_sidecar_signature) and HARD-FAILS
+        # any release >= SIGNING_REQUIRED_FROM_VERSION that lacks it, so this
+        # step must fail the release loudly rather than skip when the secret
+        # is missing — an unsigned signing-era release would be uninstallable.
+        env:
+          RELEASE_SIGNING_KEY_PEM: ${{ secrets.RELEASE_SIGNING_KEY_PEM }}
+        run: |
+          if [ -z "$RELEASE_SIGNING_KEY_PEM" ]; then
+            echo "ERROR: RELEASE_SIGNING_KEY_PEM secret is not configured." >&2
+            echo "Releases must ship a signed .sha256 sidecar: the plugin's" >&2
+            echo "self-updater refuses unsigned releases at or above" >&2
+            echo "SIGNING_REQUIRED_FROM_VERSION (see #687)." >&2
+            exit 1
+          fi
+          key_file=$(mktemp)
+          printf '%s\n' "$RELEASE_SIGNING_KEY_PEM" > "$key_file"
+          openssl dgst -sha256 -sign "$key_file" \
+            -out godot-ai-plugin.zip.sha256.sig godot-ai-plugin.zip.sha256
+          rm -f "$key_file"
+          # Self-check against the public key EMBEDDED IN THE PLUGIN SOURCE,
+          # not a key derived from the secret — a rotated/mismatched secret
+          # must fail the release here, not in every user's editor at
+          # install time.
+          awk '/BEGIN PUBLIC KEY/,/END PUBLIC KEY/' \
+            plugin/addons/godot_ai/utils/update_manager.gd > embedded_public_key.pem
+          openssl dgst -sha256 -verify embedded_public_key.pem \
+            -signature godot-ai-plugin.zip.sha256.sig godot-ai-plugin.zip.sha256
+          rm -f embedded_public_key.pem
+          echo "Sidecar signed and verified against the plugin's embedded public key."
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
         with:
           files: |
             godot-ai-plugin.zip
             godot-ai-plugin.zip.sha256
+            godot-ai-plugin.zip.sha256.sig
           generate_release_notes: true
 
       - name: Post changelog to Discord
