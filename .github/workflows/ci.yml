@@ -208,6 +208,11 @@ jobs:
         timeout-minutes: 2
         run: bash script/ci-quit-test
 
+      - name: Export-strip smoke test
+        shell: bash
+        timeout-minutes: 5
+        run: GODOT_BIN=godot bash script/ci-export-strip-smoke
+
       - name: Dump Godot editor log on failure
         if: failure()
         shell: bash

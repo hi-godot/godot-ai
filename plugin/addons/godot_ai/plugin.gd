@@ -45,6 +45,7 @@ const EditorLogBuffer := preload("res://addons/godot_ai/utils/editor_log_buffer.
 const SurfacedErrorTracker := preload("res://addons/godot_ai/utils/surfaced_error_tracker.gd")
 const Dock := preload("res://addons/godot_ai/mcp_dock.gd")
 const DebuggerPlugin := preload("res://addons/godot_ai/debugger/mcp_debugger_plugin.gd")
+const ExportPlugin := preload("res://addons/godot_ai/export/mcp_export_plugin.gd")
 const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")
 const WindowsPortReservation := preload("res://addons/godot_ai/utils/windows_port_reservation.gd")
 
@@ -151,6 +152,7 @@ var _editor_logger: Logger
 var _dock
 var _handlers: Array = []  # prevent GC of RefCounted handlers
 var _debugger_plugin
+var _export_plugin
 ## Spawn / stop / adopt orchestration plus state machine; allocated in
 ## `_init` so test fixtures (which never enter the tree) can drive
 ## `_start_server`. Owns `_server_pid`, `_server_state`, the version-
@@ -191,6 +193,13 @@ func _enter_tree() -> void:
 	## it off until `_watch_for_adoption_confirmation` arms it, so the
 	## plugin has zero per-frame cost in the common case.
 	set_process(false)
+
+	## #740: register the export plugin BEFORE the headless guard so
+	## `godot --headless --export-*` runs strip the game-helper autoload
+	## from exported packs too — CI export pipelines are headless. The
+	## export plugin is inert outside exports: no server, no sockets.
+	_export_plugin = ExportPlugin.new()
+	add_export_plugin(_export_plugin)
 
 	if _mcp_disabled_for_headless_launch():
 		_headless_disabled = true
@@ -484,6 +493,12 @@ func _flush_pending_self_update_telemetry() -> void:
 
 
 func _exit_tree() -> void:
+	## Registered before the headless guard in _enter_tree, so it must be
+	## removed before the headless early-return here too.
+	if _export_plugin != null:
+		remove_export_plugin(_export_plugin)
+		_export_plugin = null
+
 	if _headless_disabled:
 		_server_started_this_session = false
 		_headless_disabled = false

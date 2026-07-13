@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# End-to-end check of the #740 export-strip EditorExportPlugin.
+#
+# Builds a throwaway Godot project with the plugin installed and the
+# `_mcp_game_helper` autoload registered (the state every real user
+# project is in), exports a real PCK twice — once with addons/* excluded
+# from the preset (the #740 reporter's setup) and once with everything
+# included — then boots each pack and asserts:
+#   1. the exported pack does NOT carry the autoload (probe prints <absent>)
+#   2. no "Failed to instantiate an autoload" error at game start
+#   3. the strip actually ran (plugin log line in export output)
+#   4. project.godot on disk still has the autoload after the export
+#      (the strip is in-memory only; restore leaves the project intact)
+#
+# Expects: GODOT_BIN (defaults to `godot` on PATH).
+set -euo pipefail
+
+GODOT_BIN=${GODOT_BIN:-godot}
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+FIXTURE="$WORK/fixture"
+mkdir -p "$FIXTURE/addons"
+# Copy (not symlink): Windows CI runners run this under Git Bash where
+# symlinks need special privileges.
+cp -R "$REPO_ROOT/plugin/addons/godot_ai" "$FIXTURE/addons/godot_ai"
+
+cat > "$FIXTURE/project.godot" <<'EOF'
+config_version=5
+
+[application]
+
+config/name="export_strip_smoke"
+run/main_scene="res://main.tscn"
+
+[autoload]
+
+_mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/godot_ai/plugin.cfg")
+EOF
+
+cat > "$FIXTURE/probe.gd" <<'EOF'
+extends Node
+
+func _ready() -> void:
+	var setting = ProjectSettings.get_setting("autoload/_mcp_game_helper", "<absent>")
+	print("PROBE autoload_setting=", setting)
+	print("PROBE helper_node_present=", get_tree().root.has_node("_mcp_game_helper"))
+	get_tree().quit(0)
+EOF
+
+cat > "$FIXTURE/main.tscn" <<'EOF'
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://probe.gd" id="1"]
+
+[node name="Main" type="Node"]
+script = ExtResource("1")
+EOF
+
+# Platform "Windows Desktop" has kept that exact name across all of 4.x
+# (unlike Linux, which renamed), and pack-only export needs no templates
+# on any host OS.
+cat > "$FIXTURE/export_presets.cfg" <<'EOF'
+[preset.0]
+
+name="strip-excluded"
+platform="Windows Desktop"
+runnable=true
+custom_features=""
+export_filter="all_resources"
+include_filter=""
+exclude_filter="addons/*"
+export_path="ignored.pck"
+encrypt_pck=false
+encrypt_directory=false
+
+[preset.0.options]
+
+binary_format/embed_pck=false
+
+[preset.1]
+
+name="strip-included"
+platform="Windows Desktop"
+runnable=true
+custom_features=""
+export_filter="all_resources"
+include_filter=""
+exclude_filter=""
+export_path="ignored.pck"
+encrypt_pck=false
+encrypt_directory=false
+
+[preset.1.options]
+
+binary_format/embed_pck=false
+EOF
+
+echo "==> Importing fixture project"
+"$GODOT_BIN" --headless --path "$FIXTURE" --import > "$WORK/import.log" 2>&1 || true
+if [ ! -d "$FIXTURE/.godot" ]; then
+  echo "FAIL: --import produced no .godot directory"
+  tail -50 "$WORK/import.log"
+  exit 1
+fi
+
+fail() {
+  echo "FAIL: $1"
+  shift
+  for f in "$@"; do
+    echo "----- $f (last 60 lines) -----"
+    tail -60 "$f" || true
+  done
+  exit 1
+}
+
+run_one() {
+  local preset="$1"
+  local pck="$WORK/$preset.pck"
+  local export_log="$WORK/$preset-export.log"
+  local run_log="$WORK/$preset-run.log"
+
+  echo "==> Exporting preset '$preset'"
+  "$GODOT_BIN" --headless --path "$FIXTURE" --export-pack "$preset" "$pck" > "$export_log" 2>&1 \
+    || fail "--export-pack '$preset' exited nonzero" "$export_log"
+  [ -f "$pck" ] || fail "no pack produced for '$preset'" "$export_log"
+
+  grep -q "MCP | export: stripping autoload/_mcp_game_helper" "$export_log" \
+    || fail "strip log line missing — export plugin did not run for '$preset'" "$export_log"
+
+  grep -q "_mcp_game_helper" "$FIXTURE/project.godot" \
+    || fail "project.godot lost the autoload after exporting '$preset'"
+
+  echo "==> Booting exported pack '$preset'"
+  # --quit-after is a frame-count backstop in case the probe never runs;
+  # the probe itself quits in _ready.
+  (cd "$WORK" && "$GODOT_BIN" --headless --main-pack "$pck" --quit-after 300 > "$run_log" 2>&1) || true
+
+  grep -q "PROBE autoload_setting=<absent>" "$run_log" \
+    || fail "exported pack '$preset' still carries the autoload setting (or probe never ran)" "$run_log"
+  grep -q "PROBE helper_node_present=false" "$run_log" \
+    || fail "game helper node instantiated in exported '$preset' build" "$run_log"
+  if grep -q "Failed to instantiate an autoload" "$run_log"; then
+    fail "dangling-autoload error in exported '$preset' build (the #740 symptom)" "$run_log"
+  fi
+  echo "    OK: '$preset' pack is clean"
+}
+
+run_one "strip-excluded"
+run_one "strip-included"
+
+echo "PASS: export-strip smoke (both presets)"
