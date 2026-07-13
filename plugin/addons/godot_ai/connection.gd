@@ -83,6 +83,12 @@ func _ready() -> void:
 	## Increase outbound buffer for large messages (e.g. screenshot base64).
 	## Default is 64 KB; screenshots can be several MB.
 	_peer.outbound_buffer_size = OUTBOUND_BUFFER_LIMIT_BYTES
+	## Symmetric inbound bump (#690): the server sends up to 4 MB
+	## (websocket.py max_size), but Godot's inbound default is 64 KB — a
+	## large script/text write or batch_execute payload used to overflow
+	## the peer buffer, drop the frame, and surface as an opaque 5s
+	## timeout + reconnect with no error naming the size.
+	_peer.inbound_buffer_size = OUTBOUND_BUFFER_LIMIT_BYTES
 	if connect_blocked:
 		_log_blocked_notice_once()
 		set_process(false)
@@ -228,6 +234,8 @@ func _attempt_reconnect() -> void:
 	## a quiet reconnect loop after the Python server restarts.
 	_peer = WebSocketPeer.new()
 	_peer.outbound_buffer_size = OUTBOUND_BUFFER_LIMIT_BYTES
+	## Keep the reconnect peer symmetric with _ready()'s (#690).
+	_peer.inbound_buffer_size = OUTBOUND_BUFFER_LIMIT_BYTES
 	_connect_to_server()
 
 

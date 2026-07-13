@@ -179,3 +179,56 @@ class TestValidation:
     def test_max_must_be_at_least_initial(self) -> None:
         with pytest.raises(ValueError, match="max_open_ms"):
             EditorBridgeCircuitBreaker(initial_open_ms=2000, max_open_ms=1000)
+
+
+class TestBoundedStates:
+    """#690: ``_states`` must stay bounded. ``session_id`` is caller-supplied
+    on every pinned call and a bad id's entry can never be cleared by
+    ``record_success`` (the send fails before ``send_command``), so a
+    long-running server would otherwise accumulate one dead entry per
+    distinct bad id ever attempted."""
+
+    def test_states_bounded_under_distinct_bad_ids(
+        self, cb: EditorBridgeCircuitBreaker, clock: _FakeClock
+    ) -> None:
+        for i in range(1000):
+            cb.record_failure(f"bad-{i}", kind="session_not_found")
+            clock.advance(60.0)  # each entry's window is long elapsed
+        assert len(cb._states) <= cb._MAX_STATES
+
+    def test_eviction_never_drops_no_session_key(
+        self, cb: EditorBridgeCircuitBreaker, clock: _FakeClock
+    ) -> None:
+        for _ in range(5):
+            cb.record_failure(None, kind="no_active_session")
+        assert cb.check_open(None) is not None
+        for i in range(1000):
+            cb.record_failure(f"bad-{i}", kind="session_not_found")
+            clock.advance(0.001)
+        assert cb.snapshot(None)["consecutive_failures"] >= 5, (
+            "the no-session sentinel must survive eviction"
+        )
+
+    def test_eviction_never_drops_the_key_being_recorded(
+        self, cb: EditorBridgeCircuitBreaker, clock: _FakeClock
+    ) -> None:
+        for i in range(cb._MAX_STATES + 10):
+            cb.record_failure(f"bad-{i}", kind="session_not_found")
+            clock.advance(0.001)
+        ## The most recent key must always have its state recorded even when
+        ## its insert triggered the eviction pass.
+        assert cb.snapshot(f"bad-{cb._MAX_STATES + 9}")["consecutive_failures"] == 1
+
+    def test_open_circuit_state_survives_stale_eviction(
+        self, cb: EditorBridgeCircuitBreaker, clock: _FakeClock
+    ) -> None:
+        ## An actively-open circuit (flapping editor) must not lose its
+        ## escalated backoff to an eviction triggered by unrelated bad ids.
+        for _ in range(5):
+            cb.record_failure("flappy", kind="TimeoutError")
+        assert cb.check_open("flappy") is not None
+        for i in range(cb._MAX_STATES + 10):
+            cb.record_failure(f"bad-{i}", kind="session_not_found")
+        assert cb.check_open("flappy") is not None, (
+            "an open circuit is not stale and must survive the eviction pass"
+        )

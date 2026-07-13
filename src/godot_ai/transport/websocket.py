@@ -105,7 +105,14 @@ class GodotWebSocketServer:
     def __init__(self, registry: SessionRegistry, port: int = DEFAULT_PORT):
         self.registry = registry
         self.port = port
-        self._pending: dict[str, asyncio.Future[CommandResponse]] = {}
+        ## request_id -> (owner session_id, future). The session id is part
+        ## of the entry (#690) so (a) a disconnect can immediately fail that
+        ## session's in-flight futures instead of leaving callers to wait
+        ## out their full per-command timeout, and (b) a response is only
+        ## ever resolved by the connection the command was sent to — a
+        ## hostile local session can't forge a reply to another session's
+        ## request_id (defense in depth on top of the uuid4 request ids).
+        self._pending: dict[str, tuple[str, asyncio.Future[CommandResponse]]] = {}
         self._connections: dict[str, ServerConnection] = {}
 
     async def start(self):
@@ -255,14 +262,19 @@ class GodotWebSocketServer:
                     ## timeout (#526).
                     request_id = data.get("request_id") if isinstance(data, dict) else None
                     if isinstance(request_id, str):
-                        pending = self._pending.pop(request_id, None)
-                        if pending and not pending.done():
-                            pending.set_exception(
-                                ConnectionError(
-                                    f"Malformed response from session {session_id} "
-                                    f"for request {request_id}"
+                        entry = self._pending.get(request_id)
+                        ## Session-scoped (#690): only the connection the
+                        ## command was sent to may fail its future.
+                        if entry is not None and entry[0] == session_id:
+                            self._pending.pop(request_id, None)
+                            pending = entry[1]
+                            if not pending.done():
+                                pending.set_exception(
+                                    ConnectionError(
+                                        f"Malformed response from session {session_id} "
+                                        f"for request {request_id}"
+                                    )
                                 )
-                            )
                     continue
                 ## Heal `Session.readiness` from every response envelope.
                 ## The plugin stamps live readiness onto its dispatcher
@@ -275,9 +287,25 @@ class GodotWebSocketServer:
                     sync_readiness_for_session(live, response.readiness)
                 if response.error_watermark is not None and live is not None:
                     _sync_error_watermark_for_session(live, response.error_watermark)
-                future = self._pending.pop(response.request_id, None)
-                if future and not future.done():
-                    future.set_result(response)
+                entry = self._pending.get(response.request_id)
+                if entry is not None:
+                    if entry[0] != session_id:
+                        ## Cross-session response injection (#690): the reply
+                        ## came from a different connection than the command
+                        ## was sent to. Leave the real session's future
+                        ## pending and drop the forged frame.
+                        logger.warning(
+                            "Dropping response for request %s from session %s — "
+                            "command was sent to session %s",
+                            response.request_id[:8],
+                            session_id[:8],
+                            entry[0][:8],
+                        )
+                    else:
+                        self._pending.pop(response.request_id, None)
+                        future = entry[1]
+                        if not future.done():
+                            future.set_result(response)
 
         except websockets.ConnectionClosed:
             logger.info("Session disconnected: %s", session_id)
@@ -287,6 +315,24 @@ class GodotWebSocketServer:
             if session_id:
                 self.registry.unregister(session_id)
                 self._connections.pop(session_id, None)
+                ## Fail this session's in-flight futures NOW (#690): a close
+                ## settles nothing by itself, so every in-flight command used
+                ## to wait out its full per-command timeout (120s for
+                ## test_run) after an editor crash / plugin reload — and the
+                ## circuit breaker recorded TimeoutError instead of a
+                ## disconnect, degrading death-spiral diagnostics.
+                for request_id, entry in list(self._pending.items()):
+                    if entry[0] != session_id:
+                        continue
+                    self._pending.pop(request_id, None)
+                    future = entry[1]
+                    if not future.done():
+                        future.set_exception(
+                            ConnectionError(
+                                f"Session {session_id} disconnected while the "
+                                "command was in flight"
+                            )
+                        )
 
     def _handle_event(self, session_id: str, data: dict) -> None:
         event = data.get("event", "")
@@ -355,7 +401,7 @@ class GodotWebSocketServer:
 
         request = CommandRequest(command=command, params=params or {})
         future: asyncio.Future[CommandResponse] = asyncio.get_running_loop().create_future()
-        self._pending[request.request_id] = future
+        self._pending[request.request_id] = (session_id, future)
 
         ## Always pop on exit — the response receiver in _handle_connection
         ## pops on the happy path, so this is a no-op there; on `ws.send`

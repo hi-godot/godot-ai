@@ -80,13 +80,50 @@ class EditorBridgeCircuitBreaker:
     def _key(session_id: str | None) -> str:
         return session_id if session_id else _NO_SESSION_KEY
 
+    ## Cap on tracked circuits (#690). ``session_id`` is caller-supplied on
+    ## every pinned call, and a state created for a bad id can never be
+    ## cleared by ``record_success`` (the send fails before ``send_command``),
+    ## so without a bound the map grows by one dead entry per distinct bad id
+    ## for the life of the server — plus stale counters that instantly
+    ## re-open the circuit if a recycled slug-based id recurs.
+    _MAX_STATES = 256
+
     def _state(self, session_id: str | None) -> _CircuitState:
         key = self._key(session_id)
         state = self._states.get(key)
         if state is None:
+            if len(self._states) >= self._MAX_STATES:
+                self._evict_stale_states(keep_key=key)
             state = _CircuitState(next_open_ms=self._initial_open_ms)
             self._states[key] = state
         return state
+
+    def _evict_stale_states(self, *, keep_key: str) -> None:
+        """Drop entries whose open window has long elapsed (#690).
+
+        Never evicts ``_NO_SESSION_KEY`` or ``keep_key``. "Long elapsed"
+        means the window ended at least ``max_open_ms`` ago — an entry
+        that recently closed may still belong to a flapping editor whose
+        escalated backoff we want to preserve. If nothing qualifies, drop
+        the entries with the oldest windows anyway so the map stays
+        bounded even under a flood of distinct bad ids.
+        """
+        now = self._time()
+        stale_cutoff = now - self._max_open_ms / 1000.0
+        for key in list(self._states):
+            if key == _NO_SESSION_KEY or key == keep_key:
+                continue
+            if self._states[key].open_until_monotonic < stale_cutoff:
+                self._states.pop(key, None)
+        if len(self._states) < self._MAX_STATES:
+            return
+        evictable = sorted(
+            (key for key in self._states if key != _NO_SESSION_KEY and key != keep_key),
+            key=lambda key: self._states[key].open_until_monotonic,
+        )
+        ## Halve the map so eviction is amortized, not per-insert.
+        for key in evictable[: max(1, self._MAX_STATES // 2)]:
+            self._states.pop(key, None)
 
     def check_open(self, session_id: str | None) -> int | None:
         """If the circuit is open for ``session_id``, return remaining ms.

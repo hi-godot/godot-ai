@@ -557,6 +557,92 @@ class TestCommandRoundTrip:
 
 
 # ---------------------------------------------------------------------------
+# Pending-future scoping (#690)
+# ---------------------------------------------------------------------------
+
+
+class TestPendingFutureScoping:
+    async def test_disconnect_fails_in_flight_command_immediately(self, harness):
+        """#690 finding 1: a connection close must fail that session's
+        in-flight futures NOW, not leave the caller to wait out its full
+        per-command timeout (120s for test_run) — and the failure must be a
+        ConnectionError, not a TimeoutError, so the circuit breaker records
+        a disconnect."""
+        plugin = await harness.connect_plugin(session_id="dc-inflight")
+        client = GodotClient(harness.server, harness.registry)
+
+        async def crash_mid_command():
+            await plugin.recv_command()
+            ## Editor "crashes" without ever replying.
+            await plugin.close()
+
+        crash_task = asyncio.create_task(crash_mid_command())
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        with pytest.raises(ConnectionError):
+            await client.send("run_tests", session_id="dc-inflight", timeout=30.0)
+        elapsed = loop.time() - started
+        await crash_task
+
+        assert elapsed < 5.0, (
+            f"disconnect must settle the pending future immediately, not after "
+            f"the 30s command timeout (took {elapsed:.1f}s)"
+        )
+        assert (
+            client.circuit_breaker.snapshot("dc-inflight")["last_failure_kind"]
+            == "ConnectionError"
+        ), "the breaker must see a disconnect, not a timeout"
+
+    async def test_disconnect_leaves_other_sessions_futures_pending(self, harness):
+        """Failing session A's futures on its disconnect must not touch
+        session B's in-flight command."""
+        plugin_a = await harness.connect_plugin(session_id="dc-a")
+        plugin_b = await harness.connect_plugin(session_id="dc-b")
+        client = GodotClient(harness.server, harness.registry)
+
+        async def respond_b_after_a_dies():
+            cmd = await plugin_b.recv_command()
+            ## A dies while B's command is in flight.
+            await plugin_a.close()
+            await asyncio.sleep(0.2)
+            await plugin_b.send_response(cmd["request_id"], {"survived": True})
+
+        handler = asyncio.create_task(respond_b_after_a_dies())
+        result = await client.send("get_editor_state", session_id="dc-b")
+        await handler
+
+        assert result == {"survived": True}
+        await plugin_b.close()
+
+    async def test_cross_session_response_injection_is_dropped(self, harness):
+        """#690 finding 3: a response for session A's request_id arriving on
+        session B's connection must be dropped — only the connection the
+        command was sent to may resolve its future."""
+        plugin_a = await harness.connect_plugin(session_id="inj-a")
+        plugin_b = await harness.connect_plugin(session_id="inj-b")
+        client = GodotClient(harness.server, harness.registry)
+
+        async def inject_then_answer():
+            cmd = await plugin_a.recv_command()
+            request_id = cmd["request_id"]
+            ## Hostile session B forges a reply to A's request.
+            await plugin_b.send_response(request_id, {"forged": True})
+            await asyncio.sleep(0.2)
+            ## The genuine session answers afterwards.
+            await plugin_a.send_response(request_id, {"forged": False})
+
+        handler = asyncio.create_task(inject_then_answer())
+        result = await client.send("get_editor_state", session_id="inj-a")
+        await handler
+
+        assert result == {"forged": False}, (
+            "the forged cross-session response must not resolve the future"
+        )
+        await plugin_a.close()
+        await plugin_b.close()
+
+
+# ---------------------------------------------------------------------------
 # Error handling
 # ---------------------------------------------------------------------------
 
