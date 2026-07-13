@@ -382,15 +382,15 @@ static func _dispatch_check_status_with_cli_path(client: Client, url: String, cl
 static func _dispatch_check_status_with_cli_path_details(client: Client, url: String, cli_path: String) -> Dictionary:
 	match client.config_type:
 		"json":
-			return {"status": JsonStrategy.check_status(client, SERVER_NAME, url), "error_msg": ""}
+			return JsonStrategy.check_status_details(client, SERVER_NAME, url)
 		"toml":
-			return {"status": TomlStrategy.check_status(client, SERVER_NAME, url), "error_msg": ""}
+			return TomlStrategy.check_status_details(client, SERVER_NAME, url)
 		"cli":
 			var resolved_cli := cli_path if not cli_path.is_empty() else CliStrategy.resolve_cli_path(client)
 			# #463: with no CLI binary, read the JSON fallback config so a
 			# fallback-configured entry reports CONFIGURED instead of red.
 			if resolved_cli.is_empty() and client.has_json_fallback():
-				return {"status": JsonStrategy.check_status(client, SERVER_NAME, url), "error_msg": ""}
+				return JsonStrategy.check_status_details(client, SERVER_NAME, url)
 			return CliStrategy.check_status_details(client, SERVER_NAME, url, resolved_cli)
 	return {"status": Client.Status.NOT_CONFIGURED, "error_msg": ""}
 
@@ -529,7 +529,13 @@ static func _is_symlink(path: String) -> bool:
 	if path.is_empty():
 		return false
 	var dir := DirAccess.open(path.get_base_dir())
-	return dir != null and dir.is_link(path)
+	if dir == null:
+		## This is a data-safety guard (a symlinked addons dir is a dev
+		## checkout self-update must never write through). When the path
+		## exists but its parent can't be opened, we can't PROVE it isn't
+		## a link — fail closed and treat it as one (#711).
+		return DirAccess.dir_exists_absolute(path) or FileAccess.file_exists(path)
+	return dir.is_link(path)
 
 
 ## `refresh` forces uvx to re-fetch PyPI index metadata on spawn — used by
@@ -728,14 +734,12 @@ static func find_worktree_src_dir(start_dir: String) -> String:
 	return ""
 
 
+## Delegates to McpCliFinder rather than shelling out to which/where
+## directly: the finder adds the well-known-install-dirs and login-shell
+## PATH tiers plus its per-exe cache, and this drops the private
+## `_pick_best_path` cross-class reach (#711).
 static func _find_system_install() -> String:
-	var cmd := "which" if OS.get_name() != "Windows" else "where"
-	var result := McpCliExec.run(cmd, ["godot-ai"], _DISCOVERY_TIMEOUT_MS, false)
-	if int(result.get("exit_code", -1)) == 0:
-		var lines := PackedStringArray(str(result.get("stdout", "")).split("\n"))
-		if lines.is_empty():
-			return ""
-		var found := CliFinder._pick_best_path(lines) if OS.get_name() == "Windows" else lines[0].strip_edges()
-		if not found.is_empty():
-			return found
-	return ""
+	var names: Array[String] = (
+		["godot-ai.exe", "godot-ai"] if OS.get_name() == "Windows" else ["godot-ai"]
+	)
+	return CliFinder.find(names)

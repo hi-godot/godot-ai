@@ -30,23 +30,34 @@ static func configure(client: McpClient, server_name: String, server_url: String
 
 
 static func check_status(client: McpClient, server_name: String, server_url: String) -> McpClient.Status:
+	return check_status_details(client, server_name, server_url).get("status", McpClient.Status.NOT_CONFIGURED)
+
+
+## Detailed variant feeding the dock's error_msg plumbing (#711): a config
+## file that EXISTS but can't be read or parsed is Status.ERROR carrying the
+## read/parse error, not NOT_CONFIGURED — the write path refuses to touch
+## such a file (see `_read_or_init`), so the status dot must say "broken
+## file", not "click Configure".
+static func check_status_details(client: McpClient, server_name: String, server_url: String) -> Dictionary:
 	var path := client.resolved_config_path()
 	if path.is_empty() or not FileAccess.file_exists(path):
-		return McpClient.Status.NOT_CONFIGURED
+		return {"status": McpClient.Status.NOT_CONFIGURED, "error_msg": ""}
 	var read := _read_or_init(path)
 	if not read["ok"]:
-		return McpClient.Status.NOT_CONFIGURED
+		return {"status": McpClient.Status.ERROR, "error_msg": String(read["error"])}
 	var config: Dictionary = read["data"]
 	var holder := _walk_path(config, client.server_key_path)
 	if not (holder is Dictionary) or not holder.has(server_name):
-		return McpClient.Status.NOT_CONFIGURED
+		return {"status": McpClient.Status.NOT_CONFIGURED, "error_msg": ""}
 	var entry = holder[server_name]
 	if not (entry is Dictionary):
-		return McpClient.Status.NOT_CONFIGURED
+		return {"status": McpClient.Status.NOT_CONFIGURED, "error_msg": ""}
 	## An entry under `server_name` exists — if the URL doesn't match,
 	## that's drift (the user changed the port and the client config is stale),
 	## not "never configured". The dock surfaces that as an amber banner.
-	return McpClient.Status.CONFIGURED if verify_entry(client, entry, server_url) else McpClient.Status.CONFIGURED_MISMATCH
+	if verify_entry(client, entry, server_url):
+		return {"status": McpClient.Status.CONFIGURED, "error_msg": ""}
+	return {"status": McpClient.Status.CONFIGURED_MISMATCH, "error_msg": ""}
 
 
 static func remove(client: McpClient, server_name: String) -> Dictionary:

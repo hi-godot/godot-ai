@@ -23,39 +23,67 @@ static func configure(client: McpClient, _server_name: String, server_url: Strin
 	var section := _find_section(lines, _all_headers(client))
 	var header := _primary_header(client)
 	var new_lines: Array[String] = [header]
-	for b in body:
-		new_lines.append(b)
+
+	if section.is_empty():
+		for b in body:
+			new_lines.append(b)
+		var output_fresh: Array[String] = []
+		output_fresh.append_array(lines)
+		if not output_fresh.is_empty() and not output_fresh[-1].strip_edges().is_empty():
+			output_fresh.append("")
+		output_fresh.append_array(new_lines)
+		if not McpAtomicWrite.write(path, "\n".join(output_fresh)):
+			return {"status": "error", "message": "Cannot write to %s" % path}
+		return {"status": "ok", "message": "%s configured (HTTP: %s)" % [client.display_name, server_url]}
+
+	## Reconfigure of an existing section — the TOML mirror of the JSON
+	## strategy's initial-vs-pinned split (#711): template lines carrying
+	## the {url} placeholder are PINS and always win (repointing is the
+	## whole point of reconfigure); placeholder-less template lines
+	## (`enabled = true`) are INITIAL values, written only when the user's
+	## section doesn't already set that key. User-added keys the template
+	## doesn't know and standalone comments are carried over verbatim.
+	var old_lines_by_key := _section_lines_by_key(lines, section)
+	for idx in range(body.size()):
+		var raw := String(client.toml_body_template[idx])
+		var key := _line_key(raw)
+		if raw.contains("{url}") or key.is_empty() or not old_lines_by_key.has(key):
+			new_lines.append(body[idx])
+		else:
+			new_lines.append(String(old_lines_by_key[key]))
+	new_lines.append_array(_preserved_section_lines(lines, section, body))
 
 	var output: Array[String] = []
-	if section.is_empty():
-		output.append_array(lines)
-		if not output.is_empty() and not output[-1].strip_edges().is_empty():
-			output.append("")
-		output.append_array(new_lines)
-	else:
-		output.append_array(_slice(lines, 0, section["start"]))
-		output.append_array(new_lines)
-		output.append_array(_slice(lines, section["end"], lines.size()))
+	output.append_array(_slice(lines, 0, section["start"]))
+	output.append_array(new_lines)
+	output.append_array(_slice(lines, section["end"], lines.size()))
 
 	if not McpAtomicWrite.write(path, "\n".join(output)):
 		return {"status": "error", "message": "Cannot write to %s" % path}
 	return {"status": "ok", "message": "%s configured (HTTP: %s)" % [client.display_name, server_url]}
 
 
-static func check_status(client: McpClient, _server_name: String, server_url: String) -> McpClient.Status:
+static func check_status(client: McpClient, server_name: String, server_url: String) -> McpClient.Status:
+	return check_status_details(client, server_name, server_url).get("status", McpClient.Status.NOT_CONFIGURED)
+
+
+## Detailed variant feeding the dock's error_msg plumbing (#711): a config
+## file that EXISTS but can't be read is Status.ERROR with the read error,
+## not NOT_CONFIGURED — conflating the two invites a "Configure" click that
+## the write path then refuses (or worse, clobbers state through).
+static func check_status_details(client: McpClient, _server_name: String, server_url: String) -> Dictionary:
 	var path := client.resolved_config_path()
 	if path.is_empty() or not FileAccess.file_exists(path):
-		return McpClient.Status.NOT_CONFIGURED
+		return {"status": McpClient.Status.NOT_CONFIGURED, "error_msg": ""}
 	var read := _read_or_init(path)
 	if not read["ok"]:
-		return McpClient.Status.NOT_CONFIGURED
+		return {"status": McpClient.Status.ERROR, "error_msg": String(read["error"])}
 	var lines: Array[String] = _split_lines(String(read["data"]))
 	var section := _find_section(lines, _all_headers(client))
 	if section.is_empty():
-		return McpClient.Status.NOT_CONFIGURED
+		return {"status": McpClient.Status.NOT_CONFIGURED, "error_msg": ""}
 
 	var configured_url := ""
-	var enabled := true
 	for i in range(section["start"] + 1, section["end"]):
 		var trimmed := lines[i].strip_edges()
 		if trimmed.begins_with("url ="):
@@ -63,13 +91,15 @@ static func check_status(client: McpClient, _server_name: String, server_url: St
 			var last := trimmed.rfind("\"")
 			if first >= 0 and last > first:
 				configured_url = trimmed.substr(first + 1, last - first - 1)
-		elif trimmed.begins_with("enabled ="):
-			enabled = trimmed.to_lower().find("false") < 0
-	## Section exists with our `SERVER_NAME` header — a URL mismatch (or a
-	## disabled entry) is drift, not "never configured". See `_base.gd`.
-	if configured_url != server_url or not enabled:
-		return McpClient.Status.CONFIGURED_MISMATCH
-	return McpClient.Status.CONFIGURED
+	## Section exists with our `SERVER_NAME` header — a URL mismatch is
+	## drift, not "never configured". See `_base.gd`. The `enabled` toggle
+	## is deliberately NOT drift (#711): it's user-mutable state (the JSON
+	## strategy's `entry_initial_fields` contract — the verifier ignores
+	## those keys entirely), and reconfigure preserves it, so counting it
+	## as mismatch would flag the user's own choice amber forever.
+	if configured_url != server_url:
+		return {"status": McpClient.Status.CONFIGURED_MISMATCH, "error_msg": ""}
+	return {"status": McpClient.Status.CONFIGURED, "error_msg": ""}
 
 
 static func remove(client: McpClient, _server_name: String) -> Dictionary:
@@ -115,6 +145,51 @@ static func format_body(template: PackedStringArray, server_url: String) -> Pack
 
 
 # --- helpers --------------------------------------------------------------
+
+## Map of `key -> full original line` for every key/value line in the
+## existing section body. Feeds the initial-vs-pinned split in configure().
+static func _section_lines_by_key(lines: Array[String], section: Dictionary) -> Dictionary:
+	var out := {}
+	for i in range(int(section["start"]) + 1, int(section["end"])):
+		var key := _line_key(lines[i].strip_edges())
+		if not key.is_empty() and not out.has(key):
+			out[key] = lines[i]
+	return out
+
+
+## Lines from the existing section body worth carrying over on reconfigure:
+## key/value lines whose key the template does NOT re-emit (user toggles
+## like `enabled = false`) and standalone comments. Blank lines are dropped
+## — the rewritten section is template body + carried lines. Template keys
+## are never carried (the whole point of reconfigure is repointing them).
+static func _preserved_section_lines(
+	lines: Array[String], section: Dictionary, body: PackedStringArray
+) -> Array[String]:
+	var template_keys := {}
+	for b in body:
+		var key := _line_key(String(b))
+		if not key.is_empty():
+			template_keys[key] = true
+	var out: Array[String] = []
+	for i in range(int(section["start"]) + 1, int(section["end"])):
+		var trimmed := lines[i].strip_edges()
+		if trimmed.is_empty():
+			continue
+		if trimmed.begins_with("#"):
+			out.append(lines[i])
+			continue
+		var key := _line_key(trimmed)
+		if not key.is_empty() and not template_keys.has(key):
+			out.append(lines[i])
+	return out
+
+
+## The bare key of a `key = value` line ("" when the line has no `=`).
+static func _line_key(line: String) -> String:
+	var eq := line.find("=")
+	if eq <= 0:
+		return ""
+	return line.substr(0, eq).strip_edges()
 
 ## Returns {"ok": true, "data": String} when the file is absent or readable,
 ## and {"ok": false, "error": String} when the file exists but cannot be

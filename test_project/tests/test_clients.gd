@@ -97,6 +97,20 @@ func test_every_client_has_required_fields() -> void:
 		elif client.config_type == "toml":
 			assert_gt(client.toml_section_path.size(), 0, "%s toml client missing toml_section_path" % client.id)
 			assert_gt(client.toml_body_template.size(), 0, "%s toml client missing toml_body_template" % client.id)
+			## #711: check_status parses a literal `url = "..."` line and
+			## configure's initial-vs-pinned split keys on the {url}
+			## placeholder — a template without that exact line shape would
+			## silently break both. Pin the contract per descriptor.
+			var has_url_line := false
+			for template_line in client.toml_body_template:
+				var line_text := String(template_line)
+				if line_text.strip_edges().begins_with("url =") and line_text.contains("{url}"):
+					has_url_line = true
+					break
+			assert_true(
+				has_url_line,
+				"%s toml_body_template must carry a `url = ...{url}...` line — check_status parses it" % client.id
+			)
 
 
 func test_config_path_facade_matches_client_descriptors() -> void:
@@ -1343,15 +1357,100 @@ func test_toml_strategy_distinguishes_missing_section_from_url_drift() -> void:
 		McpClient.Status.CONFIGURED_MISMATCH,
 	)
 
-	# Disabled section is also drift, not absence — the entry is there,
-	# the user just turned it off, and re-running Configure restores it.
+	# A disabled section is CONFIGURED, not drift (#711): `enabled` is
+	# user-mutable state under the JSON strategy's entry_initial_fields
+	# contract — the verifier ignores those keys, and reconfigure preserves
+	# them — so flagging the user's own toggle amber would nag forever and
+	# wedge configure's post-verify against the preserved value.
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	f.store_string("[mcp_servers.\"godot-ai\"]\nurl = \"http://127.0.0.1:8000/mcp\"\nenabled = false\n")
 	f.close()
 	assert_eq(
 		McpTomlStrategy.check_status(client, "godot-ai", "http://127.0.0.1:8000/mcp"),
-		McpClient.Status.CONFIGURED_MISMATCH,
+		McpClient.Status.CONFIGURED,
 	)
+
+
+func test_toml_reconfigure_preserves_user_mutable_state() -> void:
+	## #711: the TOML mirror of the JSON initial-vs-pinned split. On
+	## reconfigure of an existing section: {url}-bearing template lines are
+	## pinned (repointed), placeholder-less template lines (`enabled`) keep
+	## the user's value, and unknown user keys + comments survive verbatim.
+	var path := _scratch_dir.path_join("reconfigure_preserve.toml")
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(
+		"[mcp_servers.\"godot-ai\"]\n"
+		+ "url = \"http://127.0.0.1:9999/mcp\"\n"
+		+ "enabled = false\n"
+		+ "# user note: keep disabled until launch\n"
+		+ "startup_timeout_ms = 20000\n"
+	)
+	f.close()
+
+	var client := _make_test_toml_client(path)
+	var result := McpTomlStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	assert_eq(result.get("status"), "ok")
+
+	var content_file := FileAccess.open(path, FileAccess.READ)
+	var content := content_file.get_as_text()
+	content_file.close()
+	_remove_if_exists(path)
+	assert_contains(content, "url = \"http://127.0.0.1:8000/mcp\"", "pinned url line must repoint")
+	assert_false(content.contains("9999"), "old url must not survive the repoint")
+	assert_contains(content, "enabled = false", "user's enabled toggle must survive reconfigure")
+	assert_false(content.contains("enabled = true"), "template initial must not duplicate the preserved key")
+	assert_contains(content, "# user note: keep disabled until launch", "user comments must survive")
+	assert_contains(content, "startup_timeout_ms = 20000", "unknown user keys must survive")
+
+
+func test_toml_fresh_configure_writes_template_initials() -> void:
+	## Fresh section: no user state to preserve — the template body lands
+	## verbatim, including the `enabled = true` initial.
+	var path := _scratch_dir.path_join("fresh_initials.toml")
+	_remove_if_exists(path)
+	var client := _make_test_toml_client(path)
+	var result := McpTomlStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	assert_eq(result.get("status"), "ok")
+	var content_file := FileAccess.open(path, FileAccess.READ)
+	var content := content_file.get_as_text()
+	content_file.close()
+	_remove_if_exists(path)
+	assert_contains(content, "enabled = true")
+	assert_contains(content, "url = \"http://127.0.0.1:8000/mcp\"")
+
+
+func test_json_unparseable_config_reports_error_status() -> void:
+	## #711: an existing-but-broken config file is Status.ERROR carrying the
+	## parse error — NOT_CONFIGURED would invite a Configure click the write
+	## path then refuses.
+	var path := _scratch_dir.path_join("broken_config.json")
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string("{ this is not json")
+	f.close()
+	var client := _make_test_json_client(path)
+	var details := McpJsonStrategy.check_status_details(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	_remove_if_exists(path)
+	assert_eq(details.get("status"), McpClient.Status.ERROR)
+	assert_contains(String(details.get("error_msg", "")), "parse error", "error_msg must carry the parse diagnostic")
+
+
+func test_status_details_shape_for_missing_config() -> void:
+	## Both strategies return the {status, error_msg} shape the dock's
+	## refresh worker consumes — absent file is NOT_CONFIGURED with no error.
+	var missing := _scratch_dir.path_join("never_written.toml")
+	_remove_if_exists(missing)
+	var toml_details := McpTomlStrategy.check_status_details(
+		_make_test_toml_client(missing), "godot-ai", "http://127.0.0.1:8000/mcp"
+	)
+	assert_eq(toml_details.get("status"), McpClient.Status.NOT_CONFIGURED)
+	assert_eq(toml_details.get("error_msg"), "")
+	var missing_json := _scratch_dir.path_join("never_written.json")
+	_remove_if_exists(missing_json)
+	var json_details := McpJsonStrategy.check_status_details(
+		_make_test_json_client(missing_json), "godot-ai", "http://127.0.0.1:8000/mcp"
+	)
+	assert_eq(json_details.get("status"), McpClient.Status.NOT_CONFIGURED)
+	assert_eq(json_details.get("error_msg"), "")
 
 
 func test_toml_strategy_preserves_other_sections() -> void:
