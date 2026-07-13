@@ -1,0 +1,59 @@
+name: Verify signing secret
+
+# Manual end-to-end check of the release-signing chain (#687) WITHOUT cutting
+# a release: signs a synthetic payload with the RELEASE_SIGNING_KEY_PEM
+# secret and verifies it against the public key embedded in the plugin
+# source — the exact commands release.yml runs. Dispatch this after setting
+# or rotating the secret; a green run means the next tagged release will
+# sign successfully and ship updates the plugin can verify. Runs no build,
+# publishes nothing, needs no permissions.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GODOT_AI_DISABLE_TELEMETRY: "true"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Sign synthetic payload and verify against embedded public key
+        env:
+          RELEASE_SIGNING_KEY_PEM: ${{ secrets.RELEASE_SIGNING_KEY_PEM }}
+        run: |
+          if [ -z "$RELEASE_SIGNING_KEY_PEM" ]; then
+            echo "ERROR: RELEASE_SIGNING_KEY_PEM secret is not configured." >&2
+            exit 1
+          fi
+          key_file=$(mktemp)
+          printf '%s\n' "$RELEASE_SIGNING_KEY_PEM" > "$key_file"
+          # The secret must be a parseable private key on its own — catches
+          # missing BEGIN/END lines, truncation, or wrong-field paste errors.
+          if ! openssl pkey -in "$key_file" -noout 2>/dev/null; then
+            echo "ERROR: RELEASE_SIGNING_KEY_PEM does not parse as a private key." >&2
+            echo "It must be the COMPLETE PEM file, including the" >&2
+            echo "-----BEGIN/END PRIVATE KEY----- lines." >&2
+            rm -f "$key_file"
+            exit 1
+          fi
+          echo "synthetic release sidecar payload" > payload.txt
+          openssl dgst -sha256 -sign "$key_file" -out payload.sig payload.txt
+          rm -f "$key_file"
+          # Same extraction release.yml uses: the BEGIN marker shares its
+          # line with the GDScript const assignment, so strip the prefix.
+          sed -n '/-----BEGIN PUBLIC KEY-----/,/-----END PUBLIC KEY-----/p' \
+            plugin/addons/godot_ai/utils/update_manager.gd \
+            | sed 's/^.*-----BEGIN PUBLIC KEY-----/-----BEGIN PUBLIC KEY-----/' \
+            > embedded_public_key.pem
+          if ! openssl pkey -pubin -in embedded_public_key.pem -noout 2>/dev/null; then
+            echo "ERROR: could not extract a parseable public key from update_manager.gd" >&2
+            exit 1
+          fi
+          openssl dgst -sha256 -verify embedded_public_key.pem \
+            -signature payload.sig payload.txt
+          echo "OK: the stored secret signs payloads the plugin's embedded key verifies."
