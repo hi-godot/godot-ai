@@ -381,6 +381,7 @@ func test_dispatch_direct_strips_reserved_request_id_key() -> void:
 	var caller_params := {"_request_id": "hijack", "x": 1}
 	var result := d.dispatch_direct("capture_params", caller_params)
 	assert_has_key(result, "data")
+	assert_eq(result.data.ok, true, "handler should run normally and return its data")
 	assert_eq(seen.size(), 1)
 	assert_true(not seen[0].has("_request_id"),
 		"reserved key must be stripped before the handler sees params")

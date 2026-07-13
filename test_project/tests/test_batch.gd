@@ -241,6 +241,7 @@ func test_batch_sub_command_cannot_carry_reserved_request_id() -> void:
 		{"command": "_capture_params", "params": {"_request_id": "hijack", "x": 1}},
 	]})
 	assert_has_key(result, "data")
+	assert_eq(result.data.succeeded, 1, "the sub-command should execute normally")
 	assert_eq(seen.size(), 1)
 	assert_true(not seen[0].has("_request_id"),
 		"dispatch_direct must strip the reserved deferred-reply key")

@@ -321,6 +321,7 @@ func _handle_message(raw: String) -> void:
 			)
 			response["request_id"] = rid
 			response["readiness"] = get_readiness()
+			_stamp_error_watermark(response)
 			_send_json(response)
 
 
