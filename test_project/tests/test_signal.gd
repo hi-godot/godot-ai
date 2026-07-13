@@ -454,3 +454,11 @@ func test_disconnect_undo_preserves_runtime_only_connection() -> void:
 		src.disconnect("ready", callable)
 	src.free()
 	tgt.free()
+
+
+func test_list_signals_rejects_non_string_path() -> void:
+	## Parity with connect/disconnect: the typed `path: String` local used
+	## to hard-error on a non-string, crashing the handler mid-call.
+	var result := _handler.list_signals({"path": 5})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "path")

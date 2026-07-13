@@ -793,7 +793,8 @@ func follow_2d(params: Dictionary) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
 	var target := McpScenePath.resolve(target_path, scene_root)
 	if target == null:
-		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, "Target not found: %s" % target_path)
+		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND,
+			"target_path: %s" % McpScenePath.format_node_error(target_path, scene_root))
 	if not (target is Node2D) and target != scene_root:
 		return ErrorCodes.make(
 			ErrorCodes.WRONG_TYPE,

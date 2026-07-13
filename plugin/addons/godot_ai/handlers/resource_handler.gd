@@ -411,7 +411,7 @@ func _assign_created_resource(res: Resource, type_str: String, node_path: String
 	if not found:
 		return ErrorCodes.make(
 			ErrorCodes.PROPERTY_NOT_ON_CLASS,
-			"Property '%s' not found on %s" % [property, node.get_class()]
+			McpPropertyErrors.build_message(node, property)
 		)
 	if prop_type != TYPE_NIL and prop_type != TYPE_OBJECT:
 		return ErrorCodes.make(

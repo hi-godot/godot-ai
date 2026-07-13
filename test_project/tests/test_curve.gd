@@ -423,3 +423,14 @@ func test_set_points_2d_non_dict_position_is_rejected() -> void:
 	assert_contains(msg, "Curve2D points[0].position")
 	assert_contains(msg, "Vector2")
 	_remove_node(p)
+
+
+func test_set_points_unknown_property_enriches_error() -> void:
+	var result := _handler.set_points({
+		"points": [{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 1.0}],
+		"path": "/Main/Camera3D",
+		"property": "not_a_curve_prop",
+	})
+	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
+	assert_contains(result.error.message, "available:",
+		"property errors must use McpPropertyErrors.build_message enrichment")

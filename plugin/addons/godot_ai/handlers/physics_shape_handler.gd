@@ -60,7 +60,8 @@ func autofit(params: Dictionary) -> Dictionary:
 	else:
 		source = McpScenePath.resolve(source_path, scene_root)
 		if source == null:
-			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, "Source node not found: %s" % source_path)
+			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND,
+				"source_path: %s" % McpScenePath.format_node_error(source_path, scene_root))
 
 	var shape_type: String = params.get("shape_type", "box" if is_3d else "rectangle")
 	var type_map := _SHAPE_3D_CLASSES if is_3d else _SHAPE_2D_CLASSES

@@ -2181,3 +2181,23 @@ func test_preset_shake_accepts_scene_absolute_target() -> void:
 		"absolute target_path must convert to root_node-relative track path, got '%s'" % track_path)
 	_remove_node(player_path)
 	_remove_node(abs_target)
+
+
+func test_auto_create_player_missing_parent_is_node_not_found() -> void:
+	## Parity with the seven sibling parent resolutions: a missing parent
+	## is NODE_NOT_FOUND, not INVALID_PARAMS.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.create_simple({
+		"player_path": "/%s/NoSuchParentNode/AutoPlayerProbe" % scene_root.name,
+		"name": "probe",
+		"tweens": [
+			{"target": ".", "property": "position",
+			 "from": {"x": 0.0, "y": 0.0, "z": 0.0},
+			 "to": {"x": 1.0, "y": 0.0, "z": 0.0}, "duration": 0.5},
+		],
+	})
+	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)
+	assert_contains(result.error.message, "Cannot auto-create AnimationPlayer")

@@ -687,3 +687,20 @@ func test_find_symbols_rejects_traversal_path() -> void:
 	var result := _handler.find_symbols({"path": "res://../etc/passwd.gd"})
 	assert_is_error(result)
 	assert_contains(result.error.message, "..")
+
+
+func test_find_symbols_class_name_with_extends_tail() -> void:
+	## find_symbols' class_name parse drifted from _extract_class_name:
+	## `class_name Foo extends Bar` leaked the tail into the symbol name.
+	const CN_FORM_PATH := "res://tests/_mcp_cn_form_probe.gd"
+	var f := FileAccess.open(CN_FORM_PATH, FileAccess.WRITE)
+	if f == null:
+		assert_true(false, "could not write probe script")
+		return
+	f.store_string("class_name _McpCnFormProbe extends Node\n\nfunc noop() -> void:\n\tpass\n")
+	f.close()
+	var result := _handler.find_symbols({"path": CN_FORM_PATH})
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(CN_FORM_PATH))
+	assert_has_key(result, "data")
+	assert_eq(result.data.class_name, "_McpCnFormProbe",
+		"the `extends` tail must not leak into the class_name symbol")

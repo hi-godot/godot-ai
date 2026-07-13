@@ -622,3 +622,15 @@ func test_apply_preset_with_overrides() -> void:
 	assert_true(abs(mat.metallic - 0.5) < 0.01)
 	assert_true(abs(mat.roughness - 0.9) < 0.01)
 	_remove_node(node)
+
+
+func test_apply_preset_invalid_path_reported_before_overwrite() -> void:
+	## Order parity with create_material: a path that both EXISTS and is
+	## invalid must fail path validation, not the exists/overwrite check.
+	var result := _handler.apply_preset({
+		"preset": "metal",
+		"path": "res://project.godot",
+	})
+	assert_has_key(result, "error")
+	assert_false(str(result.error.message).contains("already exists"),
+		"invalid path must be reported as invalid, not as an overwrite conflict")

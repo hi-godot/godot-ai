@@ -232,3 +232,21 @@ func test_noise_saves_to_disk() -> void:
 	var loaded := ResourceLoader.load(out_path)
 	assert_true(loaded is NoiseTexture2D)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(out_path))
+
+
+func test_gradient_unknown_assign_property_enriches_error() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.create_gradient_texture({
+		"stops": [
+			{"offset": 0.0, "color": "#ff0000"},
+			{"offset": 1.0, "color": "#0000ff"},
+		],
+		"path": "/%s/Camera3D" % scene_root.name,
+		"property": "definitely_not_a_property",
+	})
+	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
+	assert_contains(result.error.message, "available:",
+		"assign-property errors must use McpPropertyErrors.build_message enrichment")

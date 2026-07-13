@@ -922,3 +922,18 @@ func test_apply_resource_properties_typed_array_null_element_prefixes_once() -> 
 	assert_contains(msg, "cannot store null", "the error must name the null cause")
 	assert_eq(msg.count("Property 'items'"), 1,
 		"the property context must be stamped exactly once")
+
+
+func test_create_resource_unknown_assign_property_enriches_error() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.create_resource({
+		"type": "BoxMesh",
+		"path": "/%s/Camera3D" % scene_root.name,
+		"property": "definitely_not_a_property",
+	})
+	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
+	assert_contains(result.error.message, "available:",
+		"assign-property errors must use McpPropertyErrors.build_message enrichment")

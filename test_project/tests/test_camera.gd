@@ -1051,3 +1051,18 @@ func _collect(node: Node, out: Array) -> void:
 		out.append(node)
 	for child in node.get_children():
 		_collect(child, out)
+
+
+func test_follow_2d_missing_target_uses_shared_node_error_format() -> void:
+	var r := _create("FollowCamNoTarget", "2d")
+	if r.is_empty():
+		assert_true(false, "camera create failed")
+		return
+	var result := _handler.follow_2d({
+		"camera_path": r.data.path,
+		"target_path": "/Main/NoSuchFollowTarget",
+	})
+	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)
+	assert_contains(result.error.message, "target_path:",
+		"target resolution must use the shared format_node_error output with param context")
+	assert_contains(result.error.message, "NoSuchFollowTarget")

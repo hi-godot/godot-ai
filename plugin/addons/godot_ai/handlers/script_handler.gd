@@ -499,9 +499,17 @@ func find_symbols(params: Dictionary) -> Dictionary:
 	for i in lines.size():
 		var line := lines[i].strip_edges()
 
-		# class_name
+		# class_name — same cut logic as _extract_class_name so the
+		# `extends Bar` / icon-form tails don't leak into the symbol name.
 		if line.begins_with("class_name "):
-			class_name_str = line.substr(11).strip_edges()
+			var cn_rest := line.substr(11).strip_edges()
+			var cn_cut := cn_rest.length()
+			for ci in cn_rest.length():
+				var cn_ch := cn_rest[ci]
+				if cn_ch == " " or cn_ch == "\t" or cn_ch == ",":
+					cn_cut = ci
+					break
+			class_name_str = cn_rest.substr(0, cn_cut)
 
 		# extends
 		if line.begins_with("extends "):

@@ -567,17 +567,19 @@ func apply_preset(params: Dictionary) -> Dictionary:
 			inline_result.data["reason"] = "Inline material assigned to node"
 		return inline_result
 
-	# Save-to-disk path.
+	# Save-to-disk path. Validate the path BEFORE the exists/overwrite
+	# check, matching create_material's order — an invalid path should
+	# always be reported as invalid, not as an overwrite conflict.
+	var path_err := _validate_material_path(path, "path", true)
+	if path_err != null:
+		return path_err
+
 	var existed_before := FileAccess.file_exists(path)
 	if existed_before and not params.get("overwrite", false):
 		return ErrorCodes.make(
 			ErrorCodes.INVALID_PARAMS,
 			"Material already exists at %s (pass overwrite=true to replace)" % path
 		)
-
-	var path_err := _validate_material_path(path, "path", true)
-	if path_err != null:
-		return path_err
 
 	var mat := _instantiate_material(type_str)
 	for prop_name in preset_params:
@@ -639,6 +641,7 @@ func apply_preset(params: Dictionary) -> Dictionary:
 func _apply_param(mat_path: String, property: String, value: Variant, _is_shader: bool) -> void:
 	var mat: Material = ResourceLoader.load(mat_path)
 	if mat == null:
+		push_warning("MCP: Failed to load material for undo/redo: %s" % mat_path)
 		return
 	mat.set(property, value)
 	McpResourceIO.guarded_save(mat, mat_path, _connection)
@@ -647,6 +650,7 @@ func _apply_param(mat_path: String, property: String, value: Variant, _is_shader
 func _apply_shader_param(mat_path: String, param_name: String, value: Variant) -> void:
 	var mat: Material = ResourceLoader.load(mat_path)
 	if mat == null or not (mat is ShaderMaterial):
+		push_warning("MCP: Failed to load shader material for undo/redo: %s" % mat_path)
 		return
 	(mat as ShaderMaterial).set_shader_parameter(param_name, value)
 	McpResourceIO.guarded_save(mat, mat_path, _connection)
