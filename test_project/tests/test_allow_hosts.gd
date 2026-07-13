@@ -171,3 +171,13 @@ func test_configurator_allow_hosts_normalizes_setting() -> void:
 		return
 	es.set_setting(McpSettings.SETTING_ALLOW_HOSTS, " 192.168.1.5 , 192.168.1.5 ")
 	assert_eq(McpClientConfigurator.allow_hosts(), "192.168.1.5")
+
+
+func test_signed_and_empty_prefixes_rejected() -> void:
+	## Parity with the server's parse_allow_hosts: ipaddress refuses
+	## explicit signs ("10.0.0.0/+8") and empty prefixes, but GDScript's
+	## is_valid_int accepts "+8" — the mirror must reject them too.
+	assert_false(McpAllowHosts.token_is_valid("10.0.0.0/+8"))
+	assert_false(McpAllowHosts.token_is_valid("10.0.0.0/-1"))
+	assert_false(McpAllowHosts.token_is_valid("10.0.0.0/"))
+	assert_true(McpAllowHosts.token_is_valid("10.0.0.0/8"))

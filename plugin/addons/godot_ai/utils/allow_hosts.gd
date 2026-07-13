@@ -45,6 +45,11 @@ static func token_is_valid(token: String) -> bool:
 	if slash != -1:
 		ip = t.substr(0, slash)
 		var prefix_text := t.substr(slash + 1)
+		## Explicit signs are rejected by the server's parse_allow_hosts
+		## (ipaddress refuses "10.0.0.0/+8"), but is_valid_int accepts
+		## them — keep the mirror honest.
+		if prefix_text.is_empty() or prefix_text.begins_with("+") or prefix_text.begins_with("-"):
+			return false
 		if not prefix_text.is_valid_int():
 			return false
 		prefix = int(prefix_text)

@@ -113,6 +113,12 @@ func _process(delta: float) -> void:
 				_reconnect_attempt = 0
 				log_buffer.log("connected to server")
 				_send_handshake()
+				## Reset the edge detectors so the next _check_state_changes
+				## tick re-emits any non-default scene/play state — the
+				## handshake carries readiness only, so without this a
+				## (re)connected server never learns the current scene.
+				_last_scene_path = ""
+				_last_play_state = false
 				connection_state_changed.emit(true)
 
 			_drain_inbound_packets(_peer)
@@ -181,6 +187,10 @@ func disconnect_from_server() -> void:
 	if _connected:
 		_peer.close(1000, "Plugin unloading")
 		_connected = false
+		## Pre-clearing _connected makes the STATE_CLOSED branch skip its
+		## _clear_on_disconnect() — run it here so deliberate closes don't
+		## leak the old server's version/deferred state into the next one.
+		_clear_on_disconnect()
 		connection_state_changed.emit(false)
 
 

@@ -1722,6 +1722,10 @@ func stop_dev_server() -> void:
 		# We have a managed server — use normal stop
 		_stop_server()
 		return
+	## A suspended startup walk holds pre-kill probe results; without this
+	## it can resume against the listener we are about to kill and adopt a
+	## dead server.
+	_lifecycle._invalidate_async_startup()
 	var port := ClientConfigurator.http_port()
 	var candidates: Array[int] = []
 	for pid in _find_all_pids_on_port(port):
@@ -1762,8 +1766,10 @@ func _kill_processes_and_windows_spawn_children(pids: Array[int], verify_brand: 
 			if exit_code == 0 or not _pid_alive(pid):
 				killed.append(pid)
 		else:
-			OS.kill(pid)
-			killed.append(pid)
+			## Mirror the Windows branch: only report the PID as killed if
+			## the kill succeeded or the process is verifiably gone.
+			if OS.kill(pid) == OK or not _pid_alive(pid):
+				killed.append(pid)
 	return killed
 
 

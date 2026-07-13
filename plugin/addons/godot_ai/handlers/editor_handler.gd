@@ -958,7 +958,11 @@ func reload_plugin(_params: Dictionary) -> Dictionary:
 ## fail with "Could not find type X" when new class_name scripts are on disk
 ## but not yet registered, leaving the plugin disabled with no recovery path
 ## short of killing the editor. See issue #83.
-func _do_reload_plugin() -> void:
+# `static` is load-bearing: the deferred coroutine captures no `self`, so
+# it survives even if the EditorHandler RefCounted is freed mid-await —
+# which is exactly what reload does to this handler's owner. An instance
+# coroutine here resumes on a freed object under reload churn.
+static func _do_reload_plugin() -> void:
 	var fs := EditorInterface.get_resource_filesystem()
 	fs.scan()
 	var tree := Engine.get_main_loop() as SceneTree

@@ -40,9 +40,11 @@ static func is_port_in_use_via_scrape(port: int) -> bool:
 	var output: Array = []
 	if OS.get_name() == "Windows":
 		var exit_code := OS.execute("netstat", ["-ano"], output, true)
-		if exit_code == 0 and output.size() > 0:
-			return parse_windows_netstat_listening(str(output[0]), port)
-		return false
+		if exit_code == 0 and output.size() > 0 and parse_windows_netstat_listening(str(output[0]), port):
+			return true
+		## Mirror find_all_pids_on_port's fallback: netstat can be absent
+		## or unparseable on stripped/locale-odd Windows installs.
+		return not find_listener_pids_windows(port).is_empty()
 	var exit_code := OS.execute("lsof", ["-ti:%d" % port, "-sTCP:LISTEN"], output, true)
 	return exit_code == 0 and output.size() > 0 and not output[0].strip_edges().is_empty()
 
@@ -176,7 +178,10 @@ static func parse_windows_netstat_pids(stdout: String, port: int) -> Array[int]:
 		var fields := split_on_whitespace(s)
 		if fields.size() < 5:  # proto, local, remote, state, pid
 			continue
-		if fields[3] != "LISTENING":
+		## Locale-independent listener signal (mirrors script/_dev_env.py):
+		## the state column is localized ("LISTENING"/"ABHÖREN"/"ÉCOUTE"...),
+		## but a listener's FOREIGN address is always the wildcard ":0".
+		if not fields[2].ends_with(":0"):
 			continue
 		if not fields[1].ends_with(port_suffix):
 			continue
@@ -256,6 +261,9 @@ static func pid_alive(pid: int) -> bool:
 
 ## Poll until the given port is no longer bound, or the timeout elapses.
 ## Used after `OS.kill` so we don't race the port-in-use check on rebind.
+## NOTE: plugin.gd::_wait_for_port_free (and _is_port_in_use) is a
+## deliberate line-for-line fork of this pair kept for _ProofPlugin
+## isolation — keep the two in sync when editing either.
 static func wait_for_port_free(port: int, timeout_s: float) -> void:
 	var deadline := Time.get_ticks_msec() + int(timeout_s * 1000.0)
 	while is_port_in_use(port):

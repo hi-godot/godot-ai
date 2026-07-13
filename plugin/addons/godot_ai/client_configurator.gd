@@ -667,13 +667,19 @@ static func invalidate_uv_version_cache() -> void:
 
 static var _venv_python_cache: String = ""
 static var _venv_python_searched: bool = false
+## #678 worker threads write this cache while main-thread callers read
+## it; same lock discipline as McpCliFinder (clients/_cli_finder.gd).
+static var _venv_mutex: Mutex = Mutex.new()
 
 
 static func _cached_venv_python() -> String:
+	_venv_mutex.lock()
 	if not _venv_python_searched:
 		_venv_python_cache = _find_venv_python()
 		_venv_python_searched = true
-	return _venv_python_cache
+	var cached := _venv_python_cache
+	_venv_mutex.unlock()
+	return cached
 
 
 static func _find_venv_python() -> String:

@@ -127,3 +127,21 @@ func test_windows_powershell_candidates_prefers_system32_path() -> void:
 	var candidates := McpPortResolver.windows_powershell_candidates()
 	assert_true(candidates.size() >= 3)
 	assert_true(candidates[0].ends_with("powershell.exe"))
+
+
+func test_netstat_parse_is_locale_independent() -> void:
+	## The state column is localized ("ABHÖREN", "ÉCOUTE", ...); the
+	## listener signal is the wildcard ":0" FOREIGN address, which is
+	## locale-independent (mirrors script/_dev_env.py).
+	var german := "  TCP  0.0.0.0:8000  0.0.0.0:0  ABHÖREN  4242\n"
+	var pids := McpPortResolver.parse_windows_netstat_pids(german, 8000)
+	assert_eq(pids.size(), 1, "localized state must still parse via the :0 foreign addr")
+	assert_eq(pids[0], 4242)
+
+
+func test_netstat_parse_still_skips_established_rows() -> void:
+	## An ESTABLISHED row's foreign address carries a real port — it must
+	## not be mistaken for a listener even when the local port matches.
+	var established := "  TCP  10.0.0.5:8000  10.0.0.9:51515  HERGESTELLT  777\n"
+	var pids := McpPortResolver.parse_windows_netstat_pids(established, 8000)
+	assert_eq(pids.size(), 0, "non-listener rows must be skipped regardless of locale")
