@@ -589,13 +589,13 @@ The preflight prints:
 
 These recipes assume the PR branch emits proof-tier log lines such as:
 
-    MCP | port 8000 in use, evaluating proof...
     MCP | strong proof: managed_record
     MCP | strong proof: pidfile_listener
-    MCP | proof: status_name
-    MCP | killed pids [...]
-    MCP | incompatible server detected
-    MCP | spawned managed server pid=...
+    MCP | proof: status_matches_record
+    MCP | killed pids [...] on port 8000
+    MCP | port 8000 occupant not recoverable (no ownership proof); suggested free port ...
+    MCP | started server (PID <pid>, v<version>): ...
+    MCP | stopped server (PID <pid>)
 
 The helper does not edit EditorSettings. Close Godot before manually editing
 editor_settings-4.6.tres or editor_settings-4.tres.

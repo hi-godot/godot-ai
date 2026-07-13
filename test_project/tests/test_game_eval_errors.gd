@@ -17,7 +17,7 @@ extends McpTestSuite
 ##
 const GameLogger := preload("res://addons/godot_ai/runtime/game_logger.gd")
 const GameHelper := preload("res://addons/godot_ai/runtime/game_helper.gd")
-const StubBacktrace := preload("res://addons/godot_ai/testing/stub_backtrace.gd")
+const StubBacktrace := preload("res://tests/stub_backtrace.gd")
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 const _SCRIPT_ERROR := 2  ## ERROR_TYPE_SCRIPT
@@ -70,7 +70,13 @@ func test_script_error_increments_seq_and_stores_text() -> void:
 		false, _SCRIPT_ERROR, [],
 	)
 	assert_eq(logger.script_error_seq(), 1, "a script-type error bumps the counter")
-	var text: String = logger.last_script_error_text()
+	## No backtrace on this error, so find_script_error_since can't see it
+	## (funcs comes from backtrace frames only) — observe the formatted
+	## text through drain(), the public path game_helper actually ferries.
+	var text := ""
+	for entry in logger.drain():
+		if String(entry[1]).contains("Nonexistent function"):
+			text = String(entry[1])
 	assert_contains(text, "Nonexistent function 'foo'", "stores the real error message")
 	assert_contains(text, "res://eval.gd:10 @ _run", "inlines the resolved source location")
 
@@ -84,7 +90,7 @@ func test_script_error_text_prefers_backtrace_frame() -> void:
 		false, _SCRIPT_ERROR, [StubBacktrace.new("res://user.gd", 99, "_run")],
 	)
 	assert_eq(logger.script_error_seq(), 1)
-	assert_contains(logger.last_script_error_text(), "res://user.gd:99 @ _run",
+	assert_contains(logger.find_script_error_since(0, "_run"), "res://user.gd:99 @ _run",
 		"resolves to the user backtrace frame, not the engine call site")
 
 

@@ -2613,7 +2613,7 @@ func _perform_initial_client_status_refresh() -> void:
 		return
 	if _client_rows.is_empty():
 		return
-	if _refresh_state == ClientRefreshStateScript.SHUTTING_DOWN:
+	if ClientRefreshStateScript.is_blocked_for_spawn(_refresh_state):
 		return
 	if _is_self_update_in_progress():
 		return
@@ -2728,7 +2728,7 @@ func _request_client_status_refresh(force: bool = false) -> bool:
 			_client_status_refresh_pending_force = _client_status_refresh_pending_force or force
 			_refresh_clients_summary()
 			return false
-	if _refresh_state == ClientRefreshStateScript.SHUTTING_DOWN:
+	if ClientRefreshStateScript.is_blocked_for_spawn(_refresh_state):
 		return false
 	if not force and _is_client_status_refresh_in_cooldown():
 		return false

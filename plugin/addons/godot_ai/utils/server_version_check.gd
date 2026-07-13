@@ -29,7 +29,7 @@ extends RefCounted
 ## `_connection` because `disarm()` releases it.
 
 ## How long to wait after the WebSocket opens before declaring the
-## handshake_ack overdue. Mirrors `plugin.gd::SERVER_HANDSHAKE_VERSION_TIMEOUT_MS`
+## handshake_ack overdue. This is the sole owner of the 5s budget
 ## — kept at this layer so the version-check seam is self-contained.
 const TIMEOUT_MS := 5 * 1000
 

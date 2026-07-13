@@ -28,10 +28,6 @@ window/size/viewport_width=1920
 window/size/viewport_height=1080
 window/stretch/mode="viewport"
 
-[dotnet]
-
-project/assembly_name="MCP Test Project"
-
 [editor_plugins]
 
 enabled=PackedStringArray("res://addons/godot_ai/plugin.cfg")

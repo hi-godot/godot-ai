@@ -6,7 +6,6 @@ func _init() -> void:
 	id = "cherry_studio"
 	display_name = "Cherry Studio"
 	config_type = "json"
-	doc_url = "https://docs.cherry-ai.com/advanced-basic/mcp"
 	path_template = {
 		"darwin": "~/Library/Application Support/CherryStudio/mcp_servers.json",
 		"windows": "$APPDATA/CherryStudio/mcp_servers.json",

@@ -179,7 +179,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         help=(
             "Comma-separated list of tool domains to drop from registration "
             "(e.g. 'audio,particle,theme'). Core tools (editor_state, "
-            "scene_get_hierarchy, node_get_properties, session_list, "
+            "scene_get_hierarchy, node_get_properties, "
             "session_activate) are always registered. Use this to fit under "
             "a client's hard tool-count cap (Antigravity limits to 100)."
         ),

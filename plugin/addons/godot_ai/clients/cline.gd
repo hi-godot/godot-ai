@@ -9,7 +9,6 @@ func _init() -> void:
 	id = "cline"
 	display_name = "Cline"
 	config_type = "json"
-	doc_url = "https://github.com/cline/cline"
 	path_template = {
 		"darwin": "~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
 		"windows": "$APPDATA/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",

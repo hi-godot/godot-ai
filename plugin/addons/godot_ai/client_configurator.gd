@@ -539,7 +539,7 @@ static func _is_symlink(path: String) -> bool:
 ## to go. See plugin.gd::_should_retry_with_refresh.
 static func get_server_command(refresh: bool = false) -> Array[String]:
 	## `mode_override() == "user"` skips the dev_venv tier even when a nearby
-	## .venv exists — the UI dropdown then becomes an actual workaround for
+	## .venv exists — the override then becomes an actual workaround for
 	## the "user venv misidentified as dev checkout" bug, not just a
 	## cosmetic relabel.
 	if mode_override() != "user":

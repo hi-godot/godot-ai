@@ -5,7 +5,7 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 const DiagnosticsCapture := preload("res://addons/godot_ai/utils/diagnostics_capture.gd")
 const EditorHandler := preload("res://addons/godot_ai/handlers/editor_handler.gd")
-const StubBacktrace := preload("res://addons/godot_ai/testing/stub_backtrace.gd")
+const StubBacktrace := preload("res://tests/stub_backtrace.gd")
 
 ## Tests for EditorHandler — editor state, selection, and logs.
 

@@ -9,7 +9,6 @@ func _init() -> void:
 	id = "vscode"
 	display_name = "VS Code"
 	config_type = "json"
-	doc_url = "https://code.visualstudio.com/docs/copilot/chat/mcp-servers"
 	path_template = {
 		"darwin": "~/Library/Application Support/Code/User/mcp.json",
 		"windows": "$APPDATA/Code/User/mcp.json",

@@ -39,7 +39,6 @@ static func status_label(status: McpClient.Status) -> String:
 var id: String = ""                              ## stable key, e.g. "cursor"
 var display_name: String = ""                    ## "Cursor"
 var config_type: String = ""                     ## "json" | "toml" | "cli"
-var doc_url: String = ""
 
 # JSON / TOML clients ------------------------------------------------------
 ## {"darwin": "~/...", "windows": "$APPDATA/...", "linux": "$XDG_CONFIG_HOME/..."}
@@ -114,7 +113,7 @@ var config_home_env_subpath: String = ""
 var cli_names: PackedStringArray = PackedStringArray()
 ## Argument templates with `{name}` and `{url}` tokens; the strategy
 ## substitutes them at call time. Tokens are matched verbatim — no escaping
-## semantics, no shell expansion. Today only `claude_code` populates these.
+## semantics, no shell expansion. Populated by CLI descriptors (`claude_code`, `kimi_code`).
 var cli_register_template: PackedStringArray = PackedStringArray()
 var cli_unregister_template: PackedStringArray = PackedStringArray()
 ## Args run to read current state; stdout is scanned for the server name and

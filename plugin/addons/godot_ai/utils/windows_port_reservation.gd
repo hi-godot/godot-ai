@@ -144,23 +144,3 @@ static func suggest_non_excluded_port_from_output(text: String, start: int, span
 			return p
 	return start
 
-
-## User-facing hint for the proactive port-reservation detection path —
-## rendered when `is_port_excluded(port)` returns true *before* we even
-## try to bind. Same copy as the post-crash WinError-10013 branch in
-## `hint_from_output` so the two entry points agree.
-static func port_excluded_hint(port: int) -> String:
-	return "Port %d is reserved by Windows (often Hyper-V / WSL2 / Docker Desktop). In an admin PowerShell: `net stop winnat; net start winnat`, then click Reconnect." % port
-
-
-## Scan captured server output for known failure signatures and return a
-## short, user-facing hint. Empty string means no match.
-static func hint_from_output(lines: PackedStringArray, port: int) -> String:
-	var joined := "\n".join(lines).to_lower()
-	if joined.find("winerror 10013") >= 0 or joined.find("forbidden by its access permissions") >= 0:
-		return port_excluded_hint(port)
-	if joined.find("errno 98") >= 0 or joined.find("winerror 10048") >= 0 or joined.find("address already in use") >= 0:
-		return "Port %d is already in use by another process. Stop the conflicting process, then click Reconnect." % port
-	if joined.find("modulenotfounderror") >= 0 or joined.find("no module named") >= 0:
-		return "The `godot-ai` Python package didn't load. Try `uv cache clean`, then Reconnect."
-	return ""

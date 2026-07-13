@@ -294,7 +294,6 @@ async def logs_read(
         "next_cursor",
         "appended_total",
         "truncated",
-        "current_run_id",
         "helper_live",
         "session_active",
         "game_status",

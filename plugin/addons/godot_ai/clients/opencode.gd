@@ -9,7 +9,6 @@ func _init() -> void:
 	id = "opencode"
 	display_name = "OpenCode"
 	config_type = "json"
-	doc_url = "https://opencode.ai/docs/mcp-servers"
 	path_template = {
 		"unix": "~/.config/opencode/opencode.json",
 		"windows": "$HOME/.config/opencode/opencode.json",

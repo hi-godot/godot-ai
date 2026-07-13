@@ -105,7 +105,8 @@ func setup(plugin, dock) -> void:
 ## Kick off the GitHub Releases API check. No-ops in dev checkouts —
 ## `addons/godot_ai/` is a symlink into canonical `plugin/` source there,
 ## and an extract would clobber tracked files (#116). `is_dev_checkout()`
-## honours the mode override (dock dropdown > GODOT_AI_MODE env), so
+## honours the mode override (EditorSetting `godot_ai/mode_override` >
+## `GODOT_AI_MODE` env), so
 ## testers can force `user` to exercise the AssetLib flow from a dev tree;
 ## `_install_zip` still gates on the physical symlink check so a forced-
 ## user mode can never clobber source.
@@ -119,16 +120,19 @@ func check_for_updates() -> void:
 	_http_request.request(RELEASES_URL, ["Accept: application/vnd.github+json"])
 
 
-## Cancel any in-flight check. The dock calls this before re-issuing a
-## check after a mode-override flip — without the cancel, `request()`
-## returns ERR_BUSY and the dropdown change silently fails to repaint.
+## Cancel any in-flight check so a follow-up check_for_updates() can't
+## hit ERR_BUSY on the shared HTTPRequest. No current dock caller — the
+## mode-override dropdown that used it was removed in #408; kept as
+## published API of the update flow.
 func cancel_check() -> void:
 	if _http_request != null:
 		_http_request.cancel_request()
 
 
-## Reset the cached download URL. The dock calls this on mode-override
-## flips so a fresh check paints over a clean banner.
+## Reset the cached download/checksum URLs so a fresh check paints over
+## a clean banner. No current production caller — the mode-override
+## dropdown that used it was removed in #408; kept for tests and any
+## future re-check path.
 func clear_pending_download() -> void:
 	_latest_download_url = ""
 	_latest_checksum_url = ""
@@ -283,7 +287,7 @@ static func parse_releases_response(
 	var forced := ClientConfigurator.mode_override() == "user"
 	var label_text := "Update available: v%s" % remote_version
 	if forced:
-		## Forced-user mode (dropdown or env) is the only way the banner
+		## Forced-user mode (EditorSetting or env) is the only way the banner
 		## lights up in a dev tree; suffix so the operator notices.
 		label_text += " (forced)"
 

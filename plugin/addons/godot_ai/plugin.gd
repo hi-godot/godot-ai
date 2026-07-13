@@ -103,7 +103,6 @@ const SERVER_WATCH_MS := 30 * 1000
 const SPAWN_GRACE_MS := 5 * 1000
 const SERVER_STATUS_PATH := "/godot-ai/status"
 const SERVER_STATUS_PROBE_TIMEOUT_MS := 800
-const SERVER_HANDSHAKE_VERSION_TIMEOUT_MS := 5 * 1000
 const STARTUP_TRACE_COUNTER_NAMES := [
 	"powershell",
 	"netstat",

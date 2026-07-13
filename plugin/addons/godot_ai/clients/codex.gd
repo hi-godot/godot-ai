@@ -6,7 +6,6 @@ func _init() -> void:
 	id = "codex"
 	display_name = "Codex"
 	config_type = "toml"
-	doc_url = "https://openai.com/index/codex/"
 	path_template = {"unix": "~/.codex/config.toml", "windows": "$USERPROFILE/.codex/config.toml"}
 	## Documented: when $CODEX_HOME is set, Codex reads config.toml directly
 	## from it instead of ~/.codex (#617).

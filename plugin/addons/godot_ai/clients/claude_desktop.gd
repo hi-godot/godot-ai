@@ -10,7 +10,6 @@ func _init() -> void:
 	id = "claude_desktop"
 	display_name = "Claude Desktop"
 	config_type = "json"
-	doc_url = "https://claude.ai/download"
 	path_template = {
 		"darwin": "~/Library/Application Support/Claude/claude_desktop_config.json",
 		"windows": "$APPDATA/Claude/claude_desktop_config.json",

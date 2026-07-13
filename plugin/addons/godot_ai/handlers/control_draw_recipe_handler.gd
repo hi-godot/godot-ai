@@ -83,13 +83,6 @@ func control_draw_recipe(params: Dictionary) -> Dictionary:
 	}
 
 
-## Populate a freshly-instantiated Control with the draw recipe in memory
-## (no undo action). Used by PR2's pattern_corner_brackets, which wraps the
-## node-add + set_script/set_meta in its own create_action.
-static func attach_recipe_to(node: Control, coerced_ops: Array) -> void:
-	node.set_script(DRAW_RECIPE_SCRIPT)
-	node.set_meta("_ops", coerced_ops)
-
 
 ## Validate and coerce every op dict. Returns {"ops": Array} or an error dict.
 func _coerce_ops(ops: Array) -> Dictionary:

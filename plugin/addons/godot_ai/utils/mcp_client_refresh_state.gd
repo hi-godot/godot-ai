@@ -66,7 +66,8 @@ static func should_disable_client_actions(state: int) -> bool:
 
 
 ## True when the dock should reject new refresh spawns. Used by the
-## focus-in / manual button / cooldown-timer entrypoints.
+## dock's two refresh-spawn guards (the deferred refresh entrypoint and
+## the status-refresh scheduler).
 static func is_blocked_for_spawn(state: int) -> bool:
 	return state == SHUTTING_DOWN
 

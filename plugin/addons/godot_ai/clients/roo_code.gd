@@ -6,7 +6,6 @@ func _init() -> void:
 	id = "roo_code"
 	display_name = "Roo Code"
 	config_type = "json"
-	doc_url = "https://docs.roocode.com/features/mcp/using-mcp-in-roo"
 	path_template = {
 		"darwin": "~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json",
 		"windows": "$APPDATA/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json",

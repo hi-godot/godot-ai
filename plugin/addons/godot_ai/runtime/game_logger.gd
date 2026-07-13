@@ -123,15 +123,6 @@ func script_error_seq() -> int:
 	return v
 
 
-## #490: text (with inlined path:line @ function) of the most recent
-## script-type runtime error, or "" if none seen this run.
-func last_script_error_text() -> String:
-	_mutex.lock()
-	var v: String = _recent_script_errors[-1]["text"] if not _recent_script_errors.is_empty() else ""
-	_mutex.unlock()
-	return v
-
-
 ## #490: text of the most recent script error with seq > since_seq whose
 ## backtrace includes `function_name`, or "" if none. Lets game_helper
 ## attribute a runtime error to the exact eval whose uniquely named wrapper
