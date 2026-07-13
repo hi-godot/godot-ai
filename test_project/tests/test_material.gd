@@ -543,7 +543,7 @@ func test_apply_to_node_save_to_refuses_existing_file_without_overwrite() -> voi
 	var before := FileAccess.get_file_as_bytes(TEST_MATERIAL_PATH_2)
 	var node := _add_mesh_node("TestApplyNoClobber") as Node
 	if node == null:
-		assert_true(false, "No scene root — is a scene open?")
+		skip("No scene root — is a scene open?")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.apply_to_node({
@@ -565,7 +565,7 @@ func test_apply_to_node_save_to_overwrites_with_flag() -> void:
 	_make_material(TEST_MATERIAL_PATH_2)
 	var node := _add_mesh_node("TestApplyOverwrite") as Node
 	if node == null:
-		assert_true(false, "No scene root — is a scene open?")
+		skip("No scene root — is a scene open?")
 		return
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var result := _handler.apply_to_node({
