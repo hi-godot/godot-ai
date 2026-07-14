@@ -2352,9 +2352,15 @@ async def test_current_scene_resource_data_handler():
 
 
 async def test_scene_hierarchy_resource_data_handler():
+    ## StubClient returns the old plugin shape (no pagination metadata); routing
+    ## the resource through scene_get_hierarchy normalizes it, so the resource
+    ## exposes the same shape regardless of plugin version.
     runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
     result = await scene_handlers.scene_hierarchy_resource_data(runtime)
     assert "nodes" in result
+    assert result["total_count"] == 3
+    assert result["has_more"] is False
+    assert "root" not in result
 
 
 async def test_scene_create_handler():

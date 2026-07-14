@@ -91,4 +91,8 @@ async def current_scene_resource_data(runtime: DirectRuntime) -> dict:
 
 
 async def scene_hierarchy_resource_data(runtime: DirectRuntime) -> dict:
-    return await runtime.send_command("get_scene_tree", {"depth": 10})
+    ## Route through scene_get_hierarchy (limit=0 => full tree) rather than
+    ## calling the plugin directly, so the resource returns the same paginated
+    ## shape (total_count/offset/limit/has_more) regardless of plugin version —
+    ## the old-plugin fallback normalizes it. (CodeRabbit)
+    return await scene_get_hierarchy(runtime, depth=10, offset=0, limit=0)
