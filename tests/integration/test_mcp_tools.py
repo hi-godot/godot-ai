@@ -1622,16 +1622,26 @@ class TestResourceReads:
         async def respond():
             cmd = await plugin.recv_command()
             assert cmd["command"] == "get_scene_tree"
+            ## Mirror the current plugin contract: paginated shape, no `root`.
             await plugin.send_response(
                 cmd["request_id"],
-                {"root": "Main", "nodes": [{"name": "Camera3D"}]},
+                {
+                    "nodes": [{"name": "Main"}, {"name": "Camera3D"}],
+                    "total_count": 2,
+                    "offset": 0,
+                    "limit": 0,
+                    "has_more": False,
+                },
             )
 
         task = asyncio.create_task(respond())
         result = await client.read_resource("godot://scene/hierarchy")
         await task
         data = json.loads(result[0].text)
-        assert data["root"] == "Main"
+        assert "root" not in data
+        assert data["nodes"][0]["name"] == "Main"
+        assert data["total_count"] == 2
+        assert data["has_more"] is False
 
 
 # ---------------------------------------------------------------------------

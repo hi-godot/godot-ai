@@ -2317,6 +2317,25 @@ async def test_scene_get_hierarchy_passthrough_when_plugin_paginates():
     assert "root" not in result
 
 
+async def test_scene_get_hierarchy_fallback_limit_zero_returns_all():
+    ## Old-plugin fallback must honor the plugin's `limit <= 0 = no limit`
+    ## contract, not paginate()'s empty-slice-on-zero-limit behavior.
+    runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
+    result = await scene_handlers.scene_get_hierarchy(runtime, depth=5, offset=0, limit=0)
+    assert len(result["nodes"]) == 3  # StubClient returns 3 nodes
+    assert result["total_count"] == 3
+    assert result["has_more"] is False
+
+
+async def test_scene_get_hierarchy_fallback_clamps_negative_offset():
+    ## A negative offset must clamp to 0 (matches the plugin's maxi(0, offset)),
+    ## not slice from the end the way Python's paginate would.
+    runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
+    result = await scene_handlers.scene_get_hierarchy(runtime, depth=5, offset=-5, limit=2)
+    assert result["offset"] == 0
+    assert [n["name"] for n in result["nodes"]] == ["Node0", "Node1"]
+
+
 async def test_scene_get_roots_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)

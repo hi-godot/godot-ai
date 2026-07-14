@@ -24,7 +24,22 @@ async def scene_get_hierarchy(
     ## new-server/old-plugin pair correct.
     if "has_more" in result:
         return result
-    return paginate(result.get("nodes", []), offset, limit, key="nodes")
+    ## Old-plugin fallback: slice here, but honor the same contract the plugin
+    ## does so a new-server/old-plugin pair matches a new/new pair — clamp a
+    ## negative offset to 0, and treat limit <= 0 as "no limit" (return
+    ## everything from offset) rather than paginate()'s empty-slice semantics.
+    nodes = result.get("nodes", [])
+    norm_offset = max(0, offset)
+    if limit <= 0:
+        page = nodes[norm_offset:]
+        return {
+            "nodes": page,
+            "total_count": len(nodes),
+            "offset": norm_offset,
+            "limit": limit,
+            "has_more": False,
+        }
+    return paginate(nodes, norm_offset, limit, key="nodes")
 
 
 async def scene_get_roots(runtime: DirectRuntime) -> dict:
