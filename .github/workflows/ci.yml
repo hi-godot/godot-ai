@@ -48,7 +48,10 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
 
+      # Keep these conditions complementary so every matrix cell runs pytest
+      # exactly once: with coverage on the Codecov cell, plain everywhere else.
       - name: Run tests
+        if: matrix.os != 'ubuntu-latest' || matrix.python-version != '3.13'
         run: pytest -v
 
       - name: Run tests with coverage
