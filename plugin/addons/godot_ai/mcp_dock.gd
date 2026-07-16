@@ -1005,6 +1005,12 @@ func _update_status() -> void:
 		## status-machine state is committed before the probe can block.
 		_schedule_uv_reprobe()
 
+	## Status transitions are exactly when "is the launch still settling?"
+	## can change (Starting server… -> connected / Disconnected / terminal
+	## diagnosis), so re-evaluate the Setup section's visibility here (#744).
+	## Cheap: runs only on `changed`, and the uv probe result is cached.
+	_apply_dev_mode_visibility()
+
 	_update_dev_section_buttons()
 
 
@@ -1350,10 +1356,44 @@ func _apply_dev_mode_visibility() -> void:
 	_apply_allow_hosts_dev_gate(dev)
 
 	# Setup section: visible in dev mode, OR in user mode when uv is missing
-	# (so users can install uv from the dock).
+	# (so users can install uv from the dock) — but not while the server
+	# launch is still settling (#744): mid-launch a red "uv: not found" row
+	# is usually a transient probe failure (#739) or irrelevant because the
+	# launch is succeeding via the .venv or system tiers. `_update_status`
+	# re-applies visibility on every status transition, so the section
+	# appears the moment the launch outcome makes it relevant.
 	var is_dev := ClientConfigurator.is_dev_checkout()
 	var uv_missing := not is_dev and ClientConfigurator.check_uv_version().is_empty()
-	_setup_section.visible = dev or uv_missing
+	_setup_section.visible = _setup_section_should_show(dev, uv_missing, _server_launch_pending())
+
+
+## Pure visibility decision for the Setup section (#744). Split out so the
+## truth table is unit-testable without faking the uv probe or a dev
+## checkout: dev toggle always shows the section; a missing uv only shows
+## it once the server launch has settled.
+static func _setup_section_should_show(
+	dev_toggle: bool, uv_missing: bool, launch_pending: bool
+) -> bool:
+	return dev_toggle or (uv_missing and not launch_pending)
+
+
+## True while the server launch outcome is still unknown: not connected,
+## no terminal diagnosis yet, and the startup grace window ("Starting
+## server…" in the status row) is still running. Mirrors the status-label
+## logic in `_update_status` so the Setup section and the amber status
+## text agree on what "still launching" means.
+func _server_launch_pending() -> bool:
+	if _last_connected:
+		return false
+	var server_status: Dictionary = (
+		_plugin.get_server_status()
+		if _plugin != null and _plugin.has_method("get_server_status")
+		else {}
+	)
+	var state: int = int(server_status.get("state", ServerStateScript.UNINITIALIZED))
+	if ServerStateScript.is_terminal_diagnosis(state):
+		return false
+	return Time.get_ticks_msec() < _startup_grace_until_msec
 
 
 # --- Button handlers ---

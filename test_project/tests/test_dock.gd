@@ -1611,6 +1611,60 @@ func test_dev_buttons_visibility_follows_dev_mode_toggle() -> void:
 		"dev toggle off must hide the Setup section, hiding both dev buttons")
 
 
+func test_setup_section_should_show_truth_table() -> void:
+	## #744: the Install-uv Setup section must not appear while the server
+	## launch is still settling — only dev mode, or uv missing once the
+	## launch outcome is known, shows it.
+	assert_true(McpDockScript._setup_section_should_show(true, false, false),
+		"Dev toggle alone must show the Setup section")
+	assert_true(McpDockScript._setup_section_should_show(true, true, true),
+		"Dev toggle must win even mid-launch")
+	assert_true(McpDockScript._setup_section_should_show(false, true, false),
+		"uv missing after the launch settled must show the section")
+	assert_false(McpDockScript._setup_section_should_show(false, true, true),
+		"uv missing mid-launch must NOT show the section (#744)")
+	assert_false(McpDockScript._setup_section_should_show(false, false, false),
+		"dev off + uv present must hide the section")
+
+
+func test_server_launch_pending_tracks_state_connection_and_grace() -> void:
+	var plugin := _RestartDispatchPlugin.new()
+	_dock._plugin = plugin
+	_dock._last_connected = false
+	_dock._startup_grace_until_msec = Time.get_ticks_msec() + 10_000
+
+	plugin.status = {"state": McpServerState.SPAWNING}
+	assert_true(_dock._server_launch_pending(),
+		"Spawning inside the grace window is a pending launch")
+
+	plugin.status = {"state": McpServerState.UNINITIALIZED}
+	assert_true(_dock._server_launch_pending(),
+		"Uninitialized inside the grace window is a pending launch")
+
+	plugin.status = {"state": McpServerState.CRASHED}
+	assert_false(_dock._server_launch_pending(),
+		"A terminal diagnosis settles the launch even inside grace")
+
+	plugin.status = {"state": McpServerState.NO_COMMAND}
+	assert_false(_dock._server_launch_pending(),
+		"NO_COMMAND settles the launch — that's exactly when Install uv helps")
+
+	plugin.status = {"state": McpServerState.SPAWNING}
+	_dock._last_connected = true
+	assert_false(_dock._server_launch_pending(),
+		"A committed connection settles the launch")
+
+	_dock._last_connected = false
+	_dock._startup_grace_until_msec = Time.get_ticks_msec() - 1
+	assert_false(_dock._server_launch_pending(),
+		"Grace expiry settles the launch (the status row shows Disconnected)")
+
+	## Reset shared-suite state so later tests see the defaults.
+	_dock._startup_grace_until_msec = 0
+	_dock._plugin = null
+	plugin.free()
+
+
 ## Mirrors `_seed_server_row` / `_cleanup_server_row`: stand up just enough
 ## of the dock for the per-frame button helpers to run without a full
 ## `_build_ui` pass.
