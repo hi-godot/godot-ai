@@ -1,0 +1,48 @@
+name: Star history chart
+
+## Regenerates the README's star-history chart (#750). GitHub restricted
+## detailed stargazer history to repo admins/collaborators, which broke
+## star-history.com's unauthenticated embed — so we render the chart
+## ourselves with the repo-scoped workflow token and commit the SVG.
+on:
+  workflow_dispatch:
+  schedule:
+    ## Weekly, Monday 06:20 UTC — off the top of the hour to dodge the
+    ## scheduled-workflow load spike.
+    - cron: "20 6 * * 1"
+
+permissions:
+  contents: write
+
+jobs:
+  update-chart:
+    runs-on: ubuntu-latest
+    ## Scheduled runs on forks would fail (no stargazer access) and spam.
+    if: github.repository == 'hi-godot/godot-ai'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+
+      - name: Generate chart
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ## Optional fallback: a collaborator PAT, only needed if GitHub
+          ## ever stops granting the workflow token stargazer access.
+          STAR_HISTORY_TOKEN: ${{ secrets.STAR_HISTORY_TOKEN }}
+        run: python script/generate-star-history --repo "$GITHUB_REPOSITORY"
+
+      - name: Commit updated chart
+        run: |
+          if git diff --quiet docs/images/star-history.svg; then
+            echo "chart unchanged, nothing to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/images/star-history.svg
+          git commit -m "chore: update star history chart [skip ci]"
+          git push

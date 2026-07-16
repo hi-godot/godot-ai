@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="700" height="360" viewBox="0 0 700 360" role="img" aria-label="Star history of hi-godot/godot-ai">
+  <title>Star history of hi-godot/godot-ai</title>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <text x="350.0" y="24" text-anchor="middle" font-size="16" font-weight="600" fill="#8b949e">hi-godot/godot-ai — GitHub stars over time</text>
+    <line x1="64" y1="312.0" x2="676" y2="312.0" stroke="#8b949e" stroke-opacity="0.25" stroke-width="1"/><text x="56" y="316.0" text-anchor="end" font-size="12" fill="#8b949e">0</text><line x1="64" y1="244.0" x2="676" y2="244.0" stroke="#8b949e" stroke-opacity="0.25" stroke-width="1"/><text x="56" y="248.0" text-anchor="end" font-size="12" fill="#8b949e">500</text><line x1="64" y1="176.0" x2="676" y2="176.0" stroke="#8b949e" stroke-opacity="0.25" stroke-width="1"/><text x="56" y="180.0" text-anchor="end" font-size="12" fill="#8b949e">1000</text><line x1="64" y1="108.0" x2="676" y2="108.0" stroke="#8b949e" stroke-opacity="0.25" stroke-width="1"/><text x="56" y="112.0" text-anchor="end" font-size="12" fill="#8b949e">1500</text><line x1="64" y1="40.0" x2="676" y2="40.0" stroke="#8b949e" stroke-opacity="0.25" stroke-width="1"/><text x="56" y="44.0" text-anchor="end" font-size="12" fill="#8b949e">2000</text>
+    <text x="64.0" y="332" text-anchor="start" font-size="12" fill="#8b949e">Apr 12, 2026</text><text x="218.6" y="332" text-anchor="middle" font-size="12" fill="#8b949e">May 06, 2026</text><text x="373.2" y="332" text-anchor="middle" font-size="12" fill="#8b949e">May 30, 2026</text><text x="521.4" y="332" text-anchor="middle" font-size="12" fill="#8b949e">Jun 22, 2026</text><text x="676.0" y="332" text-anchor="end" font-size="12" fill="#8b949e">Jul 16, 2026</text>
+    <polyline points="64.0,312.0 676.0,174.8" fill="none" stroke="#e8724c" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="676.0" cy="174.8" r="4" fill="#e8724c"/>
+    <text x="668.0" y="164.8" text-anchor="end" font-size="13" font-weight="600" fill="#e8724c">1009 ★</text>
+    <text x="676" y="352" text-anchor="end" font-size="10" fill="#8b949e" fill-opacity="0.7">updated 2026-07-16</text>
+  </g>
+</svg>

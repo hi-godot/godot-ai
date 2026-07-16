@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Generate a static star-history SVG chart for the README.
+
+GitHub restricted detailed stargazer history (the `starred_at` timestamps
+behind `Accept: application/vnd.github.star+json`) to repository admins and
+collaborators, which broke star-history.com's unauthenticated README embed
+(#750). This script regenerates the chart from the GitHub API using an
+authenticated token (the Actions `GITHUB_TOKEN` qualifies for its own repo)
+and writes a self-contained SVG that the README references as a normal
+committed file.
+
+Usage:
+    GITHUB_TOKEN=... script/generate-star-history [--repo owner/name] [--out path]
+    script/generate-star-history --seed "2026-04-12:0,2026-07-16:1009" --out path
+
+`--seed` renders a chart from explicit `date:count` points without touching
+the network — used to commit an initial chart and for offline testing.
+
+Stdlib only; no dependencies.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import urllib.error
+import urllib.request
+from datetime import date, datetime, timezone
+
+API_ROOT = "https://api.github.com"
+# The stargazers endpoint is capped at 400 pages (40k stars) by GitHub.
+MAX_PAGES = 400
+PER_PAGE = 100
+
+WIDTH = 700
+HEIGHT = 360
+MARGIN_LEFT = 64
+MARGIN_RIGHT = 24
+MARGIN_TOP = 40
+MARGIN_BOTTOM = 48
+# Mid-tone palette readable on both GitHub light and dark backgrounds.
+LINE_COLOR = "#e8724c"
+TEXT_COLOR = "#8b949e"
+GRID_COLOR = "#8b949e"
+
+
+def fetch_star_dates(repo: str, token: str) -> list[date]:
+    """Return the starred_at date of every stargazer, oldest first."""
+    dates: list[date] = []
+    for page in range(1, MAX_PAGES + 1):
+        url = f"{API_ROOT}/repos/{repo}/stargazers?per_page={PER_PAGE}&page={page}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github.star+json",
+                "Authorization": f"Bearer {token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                batch = json.load(resp)
+        except urllib.error.HTTPError as err:
+            if err.code in (401, 403, 404):
+                raise SystemExit(
+                    f"GitHub API returned {err.code} for {url}.\n"
+                    "Stargazer history requires repo-collaborator access. In CI, "
+                    "pass the workflow GITHUB_TOKEN; if GitHub stops granting it "
+                    "stargazer access, set a collaborator PAT as the "
+                    "STAR_HISTORY_TOKEN secret instead."
+                ) from err
+            raise
+        if not batch:
+            break
+        for entry in batch:
+            starred_at = entry.get("starred_at")
+            if starred_at:
+                dates.append(
+                    datetime.fromisoformat(starred_at.replace("Z", "+00:00")).date()
+                )
+        if len(batch) < PER_PAGE:
+            break
+    dates.sort()
+    return dates
+
+
+def cumulative_points(star_dates: list[date]) -> list[tuple[date, int]]:
+    """Collapse per-star dates into (date, cumulative_count) steps."""
+    points: list[tuple[date, int]] = []
+    count = 0
+    for day in star_dates:
+        count += 1
+        if points and points[-1][0] == day:
+            points[-1] = (day, count)
+        else:
+            points.append((day, count))
+    today = datetime.now(timezone.utc).date()
+    if points and points[-1][0] != today:
+        points.append((today, count))
+    return points
+
+
+def parse_seed(seed: str) -> list[tuple[date, int]]:
+    points = []
+    for chunk in seed.split(","):
+        day, _, count = chunk.strip().partition(":")
+        points.append((date.fromisoformat(day), int(count)))
+    return sorted(points)
+
+
+def _nice_ceiling(value: int) -> int:
+    """Round up to a tidy axis maximum (1/2/5 * 10^n)."""
+    if value <= 10:
+        return 10
+    magnitude = 1
+    while magnitude * 10 < value:
+        magnitude *= 10
+    for factor in (1, 2, 5, 10):
+        if factor * magnitude >= value:
+            return factor * magnitude
+    return 10 * magnitude
+
+
+def render_svg(points: list[tuple[date, int]], repo: str) -> str:
+    if len(points) < 2:
+        raise SystemExit("need at least 2 data points to draw a chart")
+
+    x0, x1 = points[0][0].toordinal(), points[-1][0].toordinal()
+    x_span = max(x1 - x0, 1)
+    y_max = _nice_ceiling(points[-1][1])
+    plot_w = WIDTH - MARGIN_LEFT - MARGIN_RIGHT
+    plot_h = HEIGHT - MARGIN_TOP - MARGIN_BOTTOM
+
+    def px(d: date) -> float:
+        return MARGIN_LEFT + (d.toordinal() - x0) / x_span * plot_w
+
+    def py(count: int) -> float:
+        return MARGIN_TOP + plot_h - (count / y_max) * plot_h
+
+    poly = " ".join(f"{px(d):.1f},{py(c):.1f}" for d, c in points)
+
+    # Four horizontal gridlines with y-axis labels.
+    grid_lines = []
+    for i in range(5):
+        value = round(y_max * i / 4)
+        y = py(value)
+        grid_lines.append(
+            f'<line x1="{MARGIN_LEFT}" y1="{y:.1f}" x2="{WIDTH - MARGIN_RIGHT}" '
+            f'y2="{y:.1f}" stroke="{GRID_COLOR}" stroke-opacity="0.25" stroke-width="1"/>'
+            f'<text x="{MARGIN_LEFT - 8}" y="{y + 4:.1f}" text-anchor="end" '
+            f'font-size="12" fill="{TEXT_COLOR}">{value}</text>'
+        )
+
+    # Up to five x-axis date labels, evenly spaced across the range.
+    x_labels = []
+    for i in range(5):
+        day = date.fromordinal(x0 + round(x_span * i / 4))
+        anchor = "start" if i == 0 else ("end" if i == 4 else "middle")
+        x_labels.append(
+            f'<text x="{px(day):.1f}" y="{HEIGHT - MARGIN_BOTTOM + 20}" '
+            f'text-anchor="{anchor}" font-size="12" fill="{TEXT_COLOR}">'
+            f"{day.strftime('%b %d, %Y')}</text>"
+        )
+
+    last_date, last_count = points[-1]
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    title = f"{repo} — GitHub stars over time"
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}"',
+        f' viewBox="0 0 {WIDTH} {HEIGHT}" role="img" aria-label="Star history of {repo}">\n',
+        f"  <title>Star history of {repo}</title>\n",
+        "  <g font-family=\"-apple-system, BlinkMacSystemFont, 'Segoe UI',"
+        ' Helvetica, Arial, sans-serif">\n',
+        f'    <text x="{WIDTH / 2}" y="24" text-anchor="middle" font-size="16"',
+        f' font-weight="600" fill="{TEXT_COLOR}">{title}</text>\n    ',
+        "".join(grid_lines),
+        "\n    ",
+        "".join(x_labels),
+        f'\n    <polyline points="{poly}" fill="none" stroke="{LINE_COLOR}"',
+        ' stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>\n',
+        f'    <circle cx="{px(last_date):.1f}" cy="{py(last_count):.1f}" r="4"',
+        f' fill="{LINE_COLOR}"/>\n',
+        f'    <text x="{px(last_date) - 8:.1f}" y="{py(last_count) - 10:.1f}"',
+        ' text-anchor="end" font-size="13" font-weight="600"',
+        f' fill="{LINE_COLOR}">{last_count} ★</text>\n',
+        f'    <text x="{WIDTH - MARGIN_RIGHT}" y="{HEIGHT - 8}" text-anchor="end"',
+        f' font-size="10" fill="{TEXT_COLOR}" fill-opacity="0.7">',
+        f"updated {generated}</text>\n",
+        "  </g>\n</svg>\n",
+    ]
+    return "".join(parts)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", default="hi-godot/godot-ai")
+    parser.add_argument("--out", default="docs/images/star-history.svg")
+    parser.add_argument(
+        "--seed",
+        help="comma-separated date:count points to render offline "
+        '(e.g. "2026-04-12:0,2026-07-16:1009")',
+    )
+    args = parser.parse_args()
+
+    if args.seed:
+        points = parse_seed(args.seed)
+    else:
+        token = os.environ.get("STAR_HISTORY_TOKEN") or os.environ.get("GITHUB_TOKEN")
+        if not token:
+            raise SystemExit("set GITHUB_TOKEN (or STAR_HISTORY_TOKEN), or use --seed")
+        star_dates = fetch_star_dates(args.repo, token)
+        if not star_dates:
+            raise SystemExit(f"no stargazer data returned for {args.repo}")
+        points = cumulative_points(star_dates)
+
+    svg = render_svg(points, args.repo)
+    with open(args.out, "w", encoding="utf-8") as fh:
+        fh.write(svg)
+    print(f"wrote {args.out} ({len(points)} points, {points[-1][1]} stars)")
+
+
+if __name__ == "__main__":
+    main()
