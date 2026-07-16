@@ -119,6 +119,7 @@ The install docs should explicitly cover:
 
 - Claude Code
 - Codex
+- Grok Build
 - at least one more MCP client
 
 ---

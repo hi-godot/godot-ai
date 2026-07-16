@@ -66,10 +66,11 @@ claude mcp remove godot-ai
 claude mcp add --scope user --transport http godot-ai http://127.0.0.1:8001/mcp
 ```
 
-For config-file clients (Codex, Antigravity, Cursor, …), edit the `url` /
-`serverUrl` field to match the new port. See the **Manual Client
+For config-file clients (Codex, Grok Build, Antigravity, Cursor, …), edit the
+`url` / `serverUrl` field to match the new port. See the **Manual Client
 Configuration** section in the [README](../README.md) for each client's file
-and format.
+and format. Grok Build uses `~/.grok/config.toml`
+(`[mcp_servers.godot-ai]`).
 
 ## Reverting
 

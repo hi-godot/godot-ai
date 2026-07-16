@@ -9,6 +9,7 @@ const _CLIENT_SCRIPTS := [
 	preload("res://addons/godot_ai/clients/claude_code.gd"),
 	preload("res://addons/godot_ai/clients/claude_desktop.gd"),
 	preload("res://addons/godot_ai/clients/codex.gd"),
+	preload("res://addons/godot_ai/clients/grok.gd"),
 	preload("res://addons/godot_ai/clients/antigravity.gd"),
 	preload("res://addons/godot_ai/clients/cursor.gd"),
 	preload("res://addons/godot_ai/clients/windsurf.gd"),

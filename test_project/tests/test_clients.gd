@@ -50,8 +50,23 @@ func test_registry_loads_all_clients() -> void:
 	var ids := McpClientRegistry.ids()
 	assert_gt(ids.size(), 10, "Expected at least 10 registered clients, got %d" % ids.size())
 	# Each existing client must remain registered for behaviour parity.
-	for required in ["claude_code", "claude_desktop", "codex", "antigravity", "zoo_code", "hermes"]:
+	for required in ["claude_code", "claude_desktop", "codex", "grok", "antigravity", "zoo_code", "hermes"]:
 		assert_true(McpClientRegistry.has_id(required), "Missing client: %s" % required)
+
+
+func test_grok_client_toml_descriptor() -> void:
+	var client := McpClientRegistry.get_by_id("grok")
+	assert_true(client != null, "grok client must be registered")
+	assert_eq(client.display_name, "Grok Build")
+	assert_eq(client.config_type, "toml")
+	assert_eq(
+		String(client.path_template.get("unix", "")),
+		"~/.grok/config.toml",
+		"Grok Build config path must be ~/.grok/config.toml"
+	)
+	assert_eq(client.toml_section_path.size(), 2)
+	assert_eq(String(client.toml_section_path[0]), "mcp_servers")
+	assert_eq(String(client.toml_section_path[1]), "godot-ai")
 
 
 func test_registry_ids_are_unique() -> void:
