@@ -54,6 +54,16 @@ func test_registry_loads_all_clients() -> void:
 		assert_true(McpClientRegistry.has_id(required), "Missing client: %s" % required)
 
 
+
+
+func test_pypi_pin_strips_local_build_metadata() -> void:
+	## PEP 440 local version tags must not be sent to uvx/PyPI.
+	assert_eq(McpClientConfigurator._pypi_pin_version("3.0.2+local.1"), "3.0.2")
+	assert_eq(McpClientConfigurator._pypi_pin_version("3.0.2+grok.2"), "3.0.2")
+	assert_eq(McpClientConfigurator._pypi_pin_version("3.0.2"), "3.0.2")
+	# Pre-release segments stay intact (only '+' local metadata is stripped).
+	assert_eq(McpClientConfigurator._pypi_pin_version("3.1.0-rc1"), "3.1.0-rc1")
+
 func test_registry_ids_are_unique() -> void:
 	var seen := {}
 	for id in McpClientRegistry.ids():
