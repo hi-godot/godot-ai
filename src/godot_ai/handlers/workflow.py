@@ -376,8 +376,7 @@ async def workflow_install_hints(runtime: DirectRuntime) -> dict:
                 "steps": [
                     "Create or edit ~/.grok/config.toml "
                     "(Windows: %USERPROFILE%\\.grok\\config.toml)",
-                    'Add: [mcp_servers.godot-ai] url = "http://127.0.0.1:8000/mcp" '
-                    "enabled = true",
+                    'Add: [mcp_servers.godot-ai] url = "http://127.0.0.1:8000/mcp" enabled = true',
                     "Ensure the Godot editor is running with the plugin so the server is up",
                 ],
             },
