@@ -77,6 +77,7 @@ from godot_ai.tools.theme import register_theme_tools
 from godot_ai.tools.tilemap import register_tilemap_tools
 from godot_ai.tools.tileset import register_tileset_tools
 from godot_ai.tools.ui import register_ui_tools
+from godot_ai.tools.workflow import register_workflow_tools
 from godot_ai.transport.origin_guard import IPNetwork, LocalhostOnlyHTTPMiddleware
 from godot_ai.transport.websocket import GodotWebSocketServer
 
@@ -291,7 +292,9 @@ def create_server(
             "                   physics_shape_autofit, gradient_texture_create,\n"
             "                   noise_texture_create\n"
             "  api_manage       get_class\n"
-            "  client_manage    status, configure, remove\n\n"
+            "  client_manage    status, configure, remove\n"
+            "  workflow_manage  modeling_guidance, asset_pipeline, screenshot_verify,\n"
+            "                   visual_qa, install_hints\n\n"
             "  tilemap_manage   tilemap_set_cell, tilemap_set_cells_rect,\n"
             "                   tilemap_clear, tilemap_get_cells\n"
             "  tileset_manage   tileset_get_atlas_tiles, tileset_get_atlas_image\n\n"
@@ -417,6 +420,8 @@ def create_server(
         register_input_map_tools(mcp)
     if "game" not in exclude:
         register_game_tools(mcp)
+    if "workflow" not in exclude:
+        register_workflow_tools(mcp)
     if "testing" not in exclude:
         register_testing_tools(mcp)
     if "batch" not in exclude:
