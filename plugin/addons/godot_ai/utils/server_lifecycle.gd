@@ -636,6 +636,29 @@ func _start_server_impl(async_gen: int) -> void:
 	))
 	if _async_stale(async_gen):
 		return
+	if not port_in_use:
+		## #745: after an editor crash the managed server keeps running, yet
+		## the bind probe can still say "free" (Windows lets a SO_REUSEADDR
+		## bind succeed over a live listener; the scrape fallback can fail
+		## transiently). The surviving pid-file is the tie-breaker: when it
+		## names a live, godot-ai-branded process AND the HTTP status probe
+		## on our port answers as a godot-ai server, treat the port as
+		## occupied so the adopt/recover branch below runs instead of
+		## blind-spawning a duplicate server. A dead/stale/foreign pid or an
+		## unresponsive port falls through to the normal spawn path
+		## unchanged.
+		var evidence_result: Variant = await _run_blocking(func() -> Variant:
+			if not is_instance_valid(_host):
+				return {}
+			if not _host._managed_server_evidence_alive():
+				return {}
+			return _host._probe_live_server_status_for_port(port)
+		)
+		if _async_stale(async_gen):
+			return
+		var evidence: Dictionary = evidence_result
+		if _live_status_identifies_godot_ai(evidence):
+			port_in_use = true
 	if port_in_use:
 		var record: Dictionary = _host._read_managed_server_record()
 		var record_version := str(record.get("version", ""))

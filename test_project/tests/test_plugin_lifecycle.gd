@@ -78,6 +78,17 @@ class _ProofPlugin extends GodotAiPlugin:
 		cleared_record_calls += 1
 
 
+## #745 crash-survivor tests: like _ProofPlugin, but also stubs
+## `_find_managed_pid` (whose real body reads the on-disk pid-file and
+## falls back to a live port scrape) so the adopt branch stays fully
+## faked.
+class _CrashSurvivorPlugin extends _ProofPlugin:
+	var managed_pid_result := 0
+
+	func _find_managed_pid(_port: int) -> int:
+		return managed_pid_result
+
+
 ## Test port high enough to almost never collide with real services and
 ## distinct from the plugin's configured http_port() so the stop-finalize tests
 ## don't interact with a developer's running managed server.
@@ -1102,6 +1113,58 @@ func test_incompatible_status_exposes_actual_name_and_recovery_flag() -> void:
 
 	assert_eq(status.get("actual_name", ""), "godot-ai")
 	assert_true(bool(status.get("can_recover_incompatible", false)))
+
+
+func test_managed_server_evidence_requires_live_branded_pidfile() -> void:
+	## #745: the evidence gate that lets startup second-guess a "port is
+	## free" bind probe. Every tier must hold or the gate stays closed —
+	## a stale or kernel-recycled PID must never count as evidence.
+	var plugin := _ProofPlugin.new()
+	plugin.pid_file_pid = 0
+	assert_false(plugin._managed_server_evidence_alive(),
+		"no pid-file must yield no evidence")
+	plugin.pid_file_pid = 44444
+	assert_false(plugin._managed_server_evidence_alive(),
+		"pid-file naming a dead process must yield no evidence")
+	plugin.alive_pids = [44444] as Array[int]
+	assert_false(plugin._managed_server_evidence_alive(),
+		"live but unbranded pid (kernel-recycled) must yield no evidence")
+	plugin.branded_pids = [44444] as Array[int]
+	assert_true(plugin._managed_server_evidence_alive(),
+		"live godot-ai-branded pid-file process is evidence")
+	plugin.free()
+
+
+func test_start_adopts_crash_survivor_when_bind_probe_reports_port_free() -> void:
+	## #745: an editor crash leaves the managed server running, but the
+	## bind probe can report the HTTP port as free (Windows SO_REUSEADDR
+	## bind-over-listener semantics; transient scrape failures). With the
+	## surviving pid-file naming a live branded process AND the HTTP
+	## status probe answering as a compatible godot-ai server, startup
+	## must route through the normal adopt path instead of blind-spawning
+	## a duplicate server.
+	var current := McpClientConfigurator.get_plugin_version()
+	var plugin := _CrashSurvivorPlugin.new()
+	plugin.port_in_use = false
+	plugin.pid_file_pid = 33333
+	plugin.alive_pids = [33333] as Array[int]
+	plugin.branded_pids = [33333] as Array[int]
+	plugin.managed_pid_result = 33333
+	plugin.managed_record = {"pid": 33333, "version": current, "ws_port": 9500}
+	plugin.live_status = {"name": "godot-ai", "version": current, "ws_port": 9500, "status_code": 200}
+
+	plugin._start_server()
+	var status := plugin.get_server_status()
+	var probe_calls: int = plugin.probe_calls
+	var server_pid: int = int(plugin._lifecycle._server_pid)
+	plugin.free()
+
+	assert_eq(int(status.get("state", -1)), McpServerState.READY,
+		"crash survivor answering the status probe must be adopted, not duplicated")
+	assert_true(probe_calls >= 1,
+		"the evidence path must confirm via the HTTP status probe before adopting")
+	assert_eq(server_pid, 33333,
+		"matching-version crash survivor must adopt as the managed server")
 
 
 func test_drift_kill_without_strong_targets_sets_incompatible_and_preserves_record() -> void:

@@ -1165,6 +1165,21 @@ func _find_managed_pid(port: int) -> int:
 	return _find_pid_on_port(port)
 
 
+## #745: after an editor crash the managed server keeps running, but the
+## bind probe can still report the HTTP port as free — Windows lets a
+## SO_REUSEADDR bind succeed straight over a live listener, and the OS
+## scrape fallback can fail transiently. The pid-file the server writes
+## via `--pid-file` survives the crash; when it names a live process
+## whose cmdline carries the godot-ai brand, a server is likely still
+## up. Liveness + brand only — the startup walk confirms with the HTTP
+## status probe before changing behavior, so a kernel-recycled PID can
+## never redirect startup on its own. Uses the `_for_proof` seams so
+## lifecycle tests can stub it without touching real processes.
+func _managed_server_evidence_alive() -> bool:
+	var pid := _read_pid_file_for_proof()
+	return pid > 0 and _pid_alive_for_proof(pid) and _pid_cmdline_is_godot_ai(pid)
+
+
 ## `live` is the result of a prior `_probe_live_server_status_for_port`
 ## call that the caller already has on hand. When non-empty it short-
 ## circuits the internal probe at the bottom of this helper, so a single
