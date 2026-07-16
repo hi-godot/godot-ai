@@ -69,6 +69,15 @@ func test_grok_client_toml_descriptor() -> void:
 	assert_eq(String(client.toml_section_path[1]), "godot-ai")
 
 
+func test_pypi_pin_strips_local_build_metadata() -> void:
+	## PEP 440 local version tags must not be sent to uvx/PyPI.
+	assert_eq(McpClientConfigurator._pypi_pin_version("3.0.2+local.1"), "3.0.2")
+	assert_eq(McpClientConfigurator._pypi_pin_version("3.0.2+grok.2"), "3.0.2")
+	assert_eq(McpClientConfigurator._pypi_pin_version("3.0.2"), "3.0.2")
+	## Pre-release segments stay intact (only '+' local metadata is stripped).
+	assert_eq(McpClientConfigurator._pypi_pin_version("3.1.0-rc1"), "3.1.0-rc1")
+
+
 func test_registry_ids_are_unique() -> void:
 	var seen := {}
 	for id in McpClientRegistry.ids():
