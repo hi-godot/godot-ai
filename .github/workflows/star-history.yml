@@ -37,12 +37,14 @@ jobs:
 
       - name: Commit updated chart
         run: |
-          if git diff --quiet docs/images/star-history.svg; then
+          ## Stage first so a brand-new (untracked) chart is detected too —
+          ## `git diff --quiet` alone ignores untracked files.
+          git add docs/images/star-history.svg
+          if git diff --staged --quiet -- docs/images/star-history.svg; then
             echo "chart unchanged, nothing to commit"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/images/star-history.svg
           git commit -m "chore: update star history chart [skip ci]"
           git push

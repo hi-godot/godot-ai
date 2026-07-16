@@ -140,7 +140,7 @@ def render_svg(points: list[tuple[date, int]], repo: str) -> str:
 
     poly = " ".join(f"{px(d):.1f},{py(c):.1f}" for d, c in points)
 
-    # Four horizontal gridlines with y-axis labels.
+    # Five horizontal gridlines (baseline + four intervals) with y-axis labels.
     grid_lines = []
     for i in range(5):
         value = round(y_max * i / 4)
