@@ -63,6 +63,18 @@ func test_pypi_pin_strips_local_build_metadata() -> void:
 	assert_eq(McpClientConfigurator._pypi_pin_version("3.0.2"), "3.0.2")
 	# Pre-release segments stay intact (only '+' local metadata is stripped).
 	assert_eq(McpClientConfigurator._pypi_pin_version("3.1.0-rc1"), "3.1.0-rc1")
+	assert_eq(McpClientConfigurator._pypi_pin_version("  1.2.3+dev  "), "1.2.3")
+
+
+func test_resolve_addons_realpath_non_empty() -> void:
+	## Always returns a usable absolute path for res://addons/godot_ai
+	## (logical path, or junction/symlink target when linked).
+	var path := McpClientConfigurator.resolve_addons_realpath()
+	assert_false(path.is_empty(), "resolve_addons_realpath must not be empty in test_project")
+	assert_true(
+		path.contains("godot_ai"),
+		"resolved path should name the godot_ai addons dir, got: %s" % path
+	)
 
 func test_registry_ids_are_unique() -> void:
 	var seen := {}
@@ -410,6 +422,32 @@ func test_find_venv_python_walks_up_from_nested_start_dir() -> void:
 	DirAccess.remove_absolute(deep)
 	DirAccess.remove_absolute(root.path_join("test_project/addons"))
 	DirAccess.remove_absolute(root.path_join("test_project"))
+	DirAccess.remove_absolute(root)
+
+
+func test_find_venv_python_walks_junction_plugin_layout() -> void:
+	## Junctioned plugins resolve to <repo>/plugin/addons/godot_ai (4 hops
+	## to checkout root). Guard the 8-hop walk still finds the checkout venv.
+	var root := _scratch_dir.path_join("junction_layout")
+	var deep := root.path_join("plugin/addons/godot_ai")
+	var venv_python := root.path_join(_venv_python_relpath())
+	DirAccess.make_dir_recursive_absolute(deep)
+	DirAccess.make_dir_recursive_absolute(venv_python.get_base_dir())
+	_touch_file(venv_python)
+	DirAccess.make_dir_recursive_absolute(root.path_join("src/godot_ai"))
+	assert_eq(
+		McpClientConfigurator._find_venv_python_in(deep),
+		venv_python,
+		"walk from plugin/addons/godot_ai must reach checkout .venv"
+	)
+	DirAccess.remove_absolute(venv_python)
+	DirAccess.remove_absolute(venv_python.get_base_dir())
+	DirAccess.remove_absolute(root.path_join(".venv"))
+	DirAccess.remove_absolute(root.path_join("src/godot_ai"))
+	DirAccess.remove_absolute(root.path_join("src"))
+	DirAccess.remove_absolute(deep)
+	DirAccess.remove_absolute(root.path_join("plugin/addons"))
+	DirAccess.remove_absolute(root.path_join("plugin"))
 	DirAccess.remove_absolute(root)
 
 

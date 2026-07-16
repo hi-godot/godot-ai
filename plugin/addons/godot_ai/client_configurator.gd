@@ -471,14 +471,13 @@ static func get_plugin_version() -> String:
 	return "0.0.1"
 
 
-## Strip local build metadata for PyPI pins: `3.0.2+grok.1` → `3.0.2`.
+## Strip PEP 440 local build metadata for PyPI pins: `3.0.2+local.1` → `3.0.2`.
+## Pre-release segments (`3.1.0-rc1`) are preserved — only `+…` is removed.
 static func _pypi_pin_version(version: String) -> String:
 	var v := version.strip_edges()
 	var plus := v.find("+")
 	if plus >= 0:
 		v = v.substr(0, plus)
-	## Also strip pre-release style local tags after a second hyphen segment
-	## that is clearly not a numeric patch (keep 3.0.2 as-is).
 	return v
 
 
