@@ -947,6 +947,9 @@ func _arm_server_version_check() -> void:
 
 
 func _update_process_enabled() -> void:
+	if _lifecycle == null:
+		set_process(false)
+		return
 	set_process(
 		_lifecycle.get_adoption_watch_deadline_ms() > 0
 		or _lifecycle.is_awaiting_server_version()
@@ -954,6 +957,12 @@ func _update_process_enabled() -> void:
 
 
 func _process(_delta: float) -> void:
+	## Guard: during script-reload / dual-plugin enable races `_lifecycle`
+	## can be null while process is still armed — spam would otherwise flood
+	## the Output dock every frame.
+	if _lifecycle == null:
+		set_process(false)
+		return
 	var now := Time.get_ticks_msec()
 	var version_check = _lifecycle.get_version_check()
 	if version_check != null:
