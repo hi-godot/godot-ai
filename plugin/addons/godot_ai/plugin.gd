@@ -1177,7 +1177,7 @@ func _find_managed_pid(port: int) -> int:
 ## lifecycle tests can stub it without touching real processes.
 func _managed_server_evidence_alive() -> bool:
 	var pid := _read_pid_file_for_proof()
-	return pid > 0 and _pid_alive_for_proof(pid) and _pid_cmdline_is_godot_ai(pid)
+	return pid > 0 and _pid_alive_for_proof(pid) and _pid_cmdline_is_godot_ai_for_proof(pid)
 
 
 ## `live` is the result of a prior `_probe_live_server_status_for_port`
