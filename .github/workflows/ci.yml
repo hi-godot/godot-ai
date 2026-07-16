@@ -33,7 +33,11 @@ jobs:
         # release-smoke and godot-tests jobs, which still run on all 3 OSes.
         # See issue #35 before restoring the full matrix.
         os: [ubuntu-latest]
-        python-version: ["3.11", "3.13"]
+        # 3.11 is the floor (requires-python >=3.11); 3.14 is the ceiling —
+        # uvx may select it for user installs, so a 3.14-only regression
+        # must fail CI before release (#746). 3.13 stays as the coverage/
+        # tooling default used by the other jobs.
+        python-version: ["3.11", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
