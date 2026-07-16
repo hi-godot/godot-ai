@@ -1439,6 +1439,32 @@ func test_process_self_disarms_after_deadline_without_connect() -> void:
 	assert_eq(deadline, 0, "_process must zero the deadline on timeout")
 
 
+func test_process_null_lifecycle_disarms_without_crash() -> void:
+	## Dual-plugin enable / script-reload races can leave `_lifecycle` null
+	## while process is still armed. Guard must disable process and return
+	## without dereferencing null (Output-dock spam).
+	var plugin := GodotAiPlugin.new()
+	plugin._lifecycle = null
+	plugin.set_process(true)
+	plugin._process(0.0)
+	var still_processing := plugin.is_processing()
+	plugin.free()
+	assert_false(still_processing, "_process with null lifecycle must set_process(false)")
+
+
+func test_update_process_enabled_null_lifecycle_disarms() -> void:
+	var plugin := GodotAiPlugin.new()
+	plugin._lifecycle = null
+	plugin.set_process(true)
+	plugin._update_process_enabled()
+	var still_processing := plugin.is_processing()
+	plugin.free()
+	assert_false(
+		still_processing,
+		"_update_process_enabled with null lifecycle must set_process(false)"
+	)
+
+
 # ----- lsof multi-pid parsing -----
 #
 # `_find_pid_on_port` / `_find_all_pids_on_port` drive the `force_restart_server`
