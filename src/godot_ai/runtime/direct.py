@@ -6,7 +6,7 @@ from typing import Any, Protocol
 
 from fastmcp import Context
 
-from godot_ai.godot_client.client import GodotClient
+from godot_ai.godot_client.client import GodotClient, HintPolicy
 from godot_ai.sessions.registry import Session, SessionRegistry
 
 
@@ -53,7 +53,7 @@ class DirectRuntime:
         params: dict[str, Any] | None = None,
         session_id: str | None = None,
         timeout: float = 5.0,
-        surface_error_hints: bool = True,
+        hint_policy: HintPolicy | None = None,
     ) -> dict[str, Any]:
         resolved_session_id = session_id if session_id is not None else self._bound_session_id
         return await self._client.send(
@@ -61,7 +61,7 @@ class DirectRuntime:
             params=params,
             session_id=resolved_session_id,
             timeout=timeout,
-            surface_error_hints=surface_error_hints,
+            hint_policy=hint_policy,
         )
 
     def list_sessions(self) -> list[Session]:

@@ -72,7 +72,7 @@ class _EditorStateClient:
         params: dict | None = None,
         session_id: str | None = None,
         timeout: float = 5.0,
-        surface_error_hints: bool = True,
+        hint_policy=None,
     ) -> dict:
         if command != "get_editor_state":
             raise AssertionError(f"unexpected command: {command}")

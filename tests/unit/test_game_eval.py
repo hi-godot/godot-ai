@@ -22,7 +22,7 @@ class _StubGameEvalClient:
         params: dict | None = None,
         session_id: str | None = None,
         timeout: float = 5.0,
-        surface_error_hints: bool = True,
+        hint_policy=None,
     ) -> dict:
         self.calls.append(
             {
@@ -95,7 +95,7 @@ class _RaisingGameEvalClient:
         params: dict | None = None,
         session_id: str | None = None,
         timeout: float = 5.0,
-        surface_error_hints: bool = True,
+        hint_policy=None,
     ) -> dict:
         raise GodotCommandError(code=self._code, message=self._message)
 

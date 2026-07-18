@@ -17,7 +17,7 @@ class StubClient:
         params=None,
         session_id=None,
         timeout=5.0,
-        surface_error_hints=True,
+        hint_policy=None,
     ):
         self.calls.append(
             {
@@ -25,7 +25,7 @@ class StubClient:
                 "params": params or {},
                 "session_id": session_id,
                 "timeout": timeout,
-                "surface_error_hints": surface_error_hints,
+                "hint_policy": hint_policy,
             }
         )
         if command == "take_screenshot":
@@ -224,9 +224,9 @@ async def test_tileset_get_atlas_tiles_returns_result_unchanged():
             params=None,
             session_id=None,
             timeout=5.0,
-            surface_error_hints=True,
+            hint_policy=None,
         ):
-            await super().send(command, params, session_id, timeout, surface_error_hints)
+            await super().send(command, params, session_id, timeout, hint_policy)
             return expected
 
     client = FixedClient()
@@ -301,9 +301,9 @@ async def test_tileset_get_atlas_image_returns_result_unchanged():
             params=None,
             session_id=None,
             timeout=5.0,
-            surface_error_hints=True,
+            hint_policy=None,
         ):
-            await super().send(command, params, session_id, timeout, surface_error_hints)
+            await super().send(command, params, session_id, timeout, hint_policy)
             return expected
 
     client = FixedClient()

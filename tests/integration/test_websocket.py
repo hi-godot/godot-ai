@@ -432,7 +432,7 @@ class TestCommandRoundTrip:
         handler_task = asyncio.create_task(mock_handler())
         first = await client.send("get_editor_state")
         with pytest.raises(GodotCommandError):
-            await client.send("get_editor_state")
+            await client.send("get_editor_state", hint_policy="discard")
         third = await client.send("get_editor_state")
         fourth = await client.send("get_editor_state")
         await handler_task
@@ -451,30 +451,102 @@ class TestCommandRoundTrip:
             await plugin.send_response(
                 cmd["request_id"],
                 {"ok": 1},
-                error_watermark={"run_seq": 1, "debugger_promoted": 0},
+                error_watermark={
+                    "run_seq": 1,
+                    "debugger_promoted": 0,
+                    "editor_ring_warn": 0,
+                },
             )
             cmd = await plugin.recv_command()
             await plugin.send_response(
                 cmd["request_id"],
                 {"ok": 2},
-                error_watermark={"run_seq": 1, "debugger_promoted": 2},
+                error_watermark={
+                    "run_seq": 1,
+                    "debugger_promoted": 2,
+                    "editor_ring_warn": 2,
+                },
             )
             cmd = await plugin.recv_command()
             await plugin.send_response(
                 cmd["request_id"],
                 {"ok": 3},
-                error_watermark={"run_seq": 1, "debugger_promoted": 2},
+                error_watermark={
+                    "run_seq": 1,
+                    "debugger_promoted": 2,
+                    "editor_ring_warn": 2,
+                },
             )
 
         handler_task = asyncio.create_task(mock_handler())
         first = await client.send("get_editor_state")
-        probe = await client.send("get_editor_state", surface_error_hints=False)
+        probe = await client.send("get_editor_state", hint_policy="retain")
         third = await client.send("get_editor_state")
         await handler_task
 
         assert "new_errors_since_last_call" not in first
         assert "new_errors_since_last_call" not in probe
+        assert "new_warnings_since_last_call" not in probe
         assert third["new_errors_since_last_call"] == 2
+        assert third["new_warnings_since_last_call"] == 2
+        await plugin.close()
+
+    async def test_error_watermark_discard_consumes_both_channels_without_backlog(
+        self, harness
+    ):
+        plugin = await harness.connect_plugin(session_id="err-discard")
+        client = GodotClient(
+            harness.server,
+            harness.registry,
+            default_hint_policy="discard",
+        )
+
+        async def mock_handler():
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 1},
+                error_watermark={
+                    "run_seq": 1,
+                    "debugger_promoted": 0,
+                    "editor_ring_warn": 0,
+                },
+            )
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 2},
+                error_watermark={
+                    "run_seq": 1,
+                    "debugger_promoted": 2,
+                    "editor_ring_warn": 3,
+                },
+            )
+            cmd = await plugin.recv_command()
+            await plugin.send_response(
+                cmd["request_id"],
+                {"ok": 3},
+                error_watermark={
+                    "run_seq": 1,
+                    "debugger_promoted": 2,
+                    "editor_ring_warn": 3,
+                },
+            )
+
+        handler_task = asyncio.create_task(mock_handler())
+        first = await client.send("get_editor_state")
+        discarded = await client.send("get_editor_state")
+        session = harness.registry.get("err-discard")
+        assert session.pending_new_errors == 0
+        assert session.pending_new_warnings == 0
+        surfaced = await client.send("get_editor_state", hint_policy="surface")
+        await handler_task
+
+        for result in (first, discarded, surfaced):
+            assert "new_errors_since_last_call" not in result
+            assert "new_errors_hint" not in result
+            assert "new_warnings_since_last_call" not in result
+            assert "new_warnings_hint" not in result
         await plugin.close()
 
     async def test_warning_watermark_advance_injects_warning_hint_once(self, harness):

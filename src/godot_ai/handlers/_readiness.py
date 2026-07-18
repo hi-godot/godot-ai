@@ -132,7 +132,7 @@ async def require_writable_async(runtime: "DirectRuntime") -> None:
         result = await runtime.send_command(
             "get_editor_state",
             timeout=2.0,
-            surface_error_hints=False,
+            hint_policy="retain",
         )
         sync_readiness_for_session(session, result.get("readiness"))
     except Exception:

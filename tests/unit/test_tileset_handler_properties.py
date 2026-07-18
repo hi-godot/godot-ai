@@ -39,7 +39,7 @@ class _FixedReturnClient:
         params: dict | None = None,
         session_id: str | None = None,
         timeout: float = 5.0,
-        surface_error_hints: bool = True,
+        hint_policy=None,
     ) -> dict:
         self.calls.append({"command": command, "params": params or {}})
         return self._return_value

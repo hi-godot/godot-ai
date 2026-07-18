@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+import os
+from typing import Any, Literal, TypeAlias
 
 from fastmcp.exceptions import FastMCPError
 
@@ -20,6 +21,24 @@ from godot_ai.sessions.registry import SessionRegistry
 from godot_ai.transport.websocket import GodotWebSocketServer
 
 logger = logging.getLogger(__name__)
+
+HintPolicy: TypeAlias = Literal["surface", "retain", "discard"]
+_HINT_POLICIES = frozenset({"surface", "retain", "discard"})
+
+
+def _default_hint_policy_from_env() -> HintPolicy:
+    value = os.getenv("GODOT_AI_SUPPRESS_DIAGNOSTIC_HINTS", "")
+    return "discard" if value.strip().lower() in {"1", "true"} else "surface"
+
+
+def _diagnostic_hint(kind: Literal["error", "warning"], count: int) -> str:
+    plural = "s" if count != 1 else ""
+    return (
+        f"{count} new GDScript {kind}{plural} since your last call. "
+        "If you are mid-way through a planned multi-file scaffold, finish the related "
+        'writes and run filesystem_manage(op="scan") before debugging; otherwise inspect '
+        "with logs_read(source='editor'|'game', include_details=true)."
+    )
 
 
 class GodotCommandError(FastMCPError):
@@ -52,9 +71,17 @@ class GodotClient:
         ws_server: GodotWebSocketServer,
         registry: SessionRegistry,
         circuit_breaker: EditorBridgeCircuitBreaker | None = None,
+        default_hint_policy: HintPolicy | None = None,
     ):
         self.ws_server = ws_server
         self.registry = registry
+        self.default_hint_policy = (
+            _default_hint_policy_from_env()
+            if default_hint_policy is None
+            else default_hint_policy
+        )
+        if self.default_hint_policy not in _HINT_POLICIES:
+            raise ValueError(f"Unknown diagnostic hint policy: {self.default_hint_policy!r}")
         ## F-006: stop death-spiral hot retries from melting the bridge.
         ## Defaults: 5 consecutive transport failures opens for 1s, doubles
         ## per re-open up to 30s. While open, the next call short-circuits
@@ -121,7 +148,7 @@ class GodotClient:
         params: dict[str, Any] | None = None,
         session_id: str | None = None,
         timeout: float = 5.0,
-        surface_error_hints: bool = True,
+        hint_policy: HintPolicy | None = None,
     ) -> dict[str, Any]:
         """Send a command to a Godot session and return the response data.
 
@@ -136,7 +163,14 @@ class GodotClient:
         non-finite float — JSON cannot represent NaN/Infinity, and
         ``model_dump_json`` would silently serialize it as null, corrupting
         the value the plugin stores (#688).
+        ``hint_policy=None`` uses the construction-time client default;
+        explicit ``surface``, ``retain``, or ``discard`` values override it
+        for this response's diagnostic counters.
         """
+        effective_hint_policy = self.default_hint_policy if hint_policy is None else hint_policy
+        if effective_hint_policy not in _HINT_POLICIES:
+            raise ValueError(f"Unknown diagnostic hint policy: {effective_hint_policy!r}")
+
         ## Rejected before session resolution: bad params are a caller error
         ## regardless of editor state, and must not count as a transport
         ## failure against the circuit breaker.
@@ -212,30 +246,30 @@ class GodotClient:
         live_session = self.registry.get(session_id)
         pending_new_errors = live_session.pending_new_errors if live_session else 0
         pending_new_warnings = live_session.pending_new_warnings if live_session else 0
-        if surface_error_hints and (pending_new_errors > 0 or pending_new_warnings > 0):
+
+        if effective_hint_policy == "discard":
+            if live_session:
+                live_session.pending_new_errors = 0
+                live_session.pending_new_warnings = 0
+            return response.data
+
+        if effective_hint_policy == "retain":
+            return response.data
+
+        if pending_new_errors > 0 or pending_new_warnings > 0:
             data = dict(response.data)
             if pending_new_errors > 0:
                 count = pending_new_errors
                 if live_session:
                     live_session.pending_new_errors = 0
                 data["new_errors_since_last_call"] = count
-                plural = "s" if count != 1 else ""
-                data["new_errors_hint"] = (
-                    f"{count} new GDScript error{plural} since your last call. "
-                    "Inspect with logs_read(source='editor', include_details=true) "
-                    "and/or logs_read(source='game', include_details=true)."
-                )
+                data["new_errors_hint"] = _diagnostic_hint("error", count)
             if pending_new_warnings > 0:
                 wcount = pending_new_warnings
                 if live_session:
                     live_session.pending_new_warnings = 0
                 data["new_warnings_since_last_call"] = wcount
-                wplural = "s" if wcount != 1 else ""
-                data["new_warnings_hint"] = (
-                    f"{wcount} new GDScript warning{wplural} since your last call. "
-                    "Inspect with logs_read(source='editor', include_details=true) "
-                    "and/or logs_read(source='game', include_details=true)."
-                )
+                data["new_warnings_hint"] = _diagnostic_hint("warning", wcount)
             return data
 
         return response.data

@@ -60,7 +60,7 @@ class StubClient:
         params: dict | None = None,
         session_id: str | None = None,
         timeout: float = 5.0,
-        surface_error_hints: bool = True,
+        hint_policy=None,
     ) -> dict:
         self.calls.append(
             {
@@ -68,7 +68,7 @@ class StubClient:
                 "params": params,
                 "session_id": session_id,
                 "timeout": timeout,
-                "surface_error_hints": surface_error_hints,
+                "hint_policy": hint_policy,
             }
         )
         if command == "quit_editor":
@@ -1261,7 +1261,7 @@ class ReloadStubClient:
         params: dict | None = None,
         session_id: str | None = None,
         timeout: float = 5.0,
-        surface_error_hints: bool = True,
+        hint_policy=None,
     ) -> dict:
         self.calls.append(
             {
@@ -1269,7 +1269,7 @@ class ReloadStubClient:
                 "params": params,
                 "session_id": session_id,
                 "timeout": timeout,
-                "surface_error_hints": surface_error_hints,
+                "hint_policy": hint_policy,
             }
         )
         if command == "reload_plugin":
@@ -1530,16 +1530,17 @@ class StampingClient(StubClient):
         params: dict | None = None,
         session_id: str | None = None,
         timeout: float = 5.0,
-        surface_error_hints: bool = True,
+        hint_policy=None,
     ) -> dict:
-        result = await super().send(command, params, session_id, timeout, surface_error_hints)
+        result = await super().send(command, params, session_id, timeout, hint_policy)
         if command == "get_logs":
             result = dict(result)
             result["new_errors_since_last_call"] = 3
             result["new_errors_hint"] = (
-                "3 new GDScript errors since your last call. Inspect with "
-                "logs_read(source='editor', include_details=true) and/or "
-                "logs_read(source='game', include_details=true)."
+                "3 new GDScript errors since your last call. If you are mid-way through "
+                "a planned multi-file scaffold, finish the related writes and run "
+                'filesystem_manage(op="scan") before debugging; otherwise inspect with '
+                "logs_read(source='editor'|'game', include_details=true)."
             )
         return result
 
@@ -1575,9 +1576,9 @@ async def test_logs_read_handler_game_forwards_editor_error_hint_fields():
             params: dict | None = None,
             session_id: str | None = None,
             timeout: float = 5.0,
-            surface_error_hints: bool = True,
+            hint_policy=None,
         ) -> dict:
-            result = await super().send(command, params, session_id, timeout, surface_error_hints)
+            result = await super().send(command, params, session_id, timeout, hint_policy)
             if command == "get_logs" and (params or {}).get("source") == "game":
                 result = dict(result)
                 result["current_run_id"] = "rstub"
@@ -1731,7 +1732,7 @@ async def test_logs_read_handler_plugin_normalizes_structured_payload():
     ## source so existing callers don't shift.
     class StructuredPluginClient(StubClient):
         async def send(
-            self, command, params=None, session_id=None, timeout=5.0, surface_error_hints=True
+            self, command, params=None, session_id=None, timeout=5.0, hint_policy=None
         ):
             self.calls.append(
                 {
@@ -3822,7 +3823,7 @@ async def test_project_stop_handler_passes_through_idempotent_payload():
 
     class IdempotentStopClient(StubClient):
         async def send(
-            self, command, params=None, session_id=None, timeout=5.0, surface_error_hints=True
+            self, command, params=None, session_id=None, timeout=5.0, hint_policy=None
         ):
             self.calls.append({"command": command, "params": params})
             return {
@@ -3844,7 +3845,7 @@ async def test_project_run_handler_passes_through_already_running_payload():
 
     class AlreadyRunningClient(StubClient):
         async def send(
-            self, command, params=None, session_id=None, timeout=5.0, surface_error_hints=True
+            self, command, params=None, session_id=None, timeout=5.0, hint_policy=None
         ):
             self.calls.append({"command": command, "params": params})
             return {
@@ -4028,7 +4029,7 @@ async def test_editor_screenshot_handler_custom_angles():
 async def test_editor_screenshot_handler_view_target_not_found_single():
     class NotFoundClient:
         async def send(
-            self, command, params=None, session_id=None, timeout=5.0, surface_error_hints=True
+            self, command, params=None, session_id=None, timeout=5.0, hint_policy=None
         ):
             return {
                 "source": "viewport",
@@ -4054,7 +4055,7 @@ async def test_editor_screenshot_handler_view_target_not_found_single():
 async def test_editor_screenshot_handler_view_target_not_found_coverage():
     class NotFoundCoverageClient:
         async def send(
-            self, command, params=None, session_id=None, timeout=5.0, surface_error_hints=True
+            self, command, params=None, session_id=None, timeout=5.0, hint_policy=None
         ):
             return {
                 "source": "viewport",
@@ -4131,7 +4132,7 @@ async def test_editor_screenshot_handler_relays_viewport_not_3d_error():
 
     class ViewportNot3DClient:
         async def send(
-            self, command, params=None, session_id=None, timeout=5.0, surface_error_hints=True
+            self, command, params=None, session_id=None, timeout=5.0, hint_policy=None
         ):
             raise GodotCommandError(
                 code="EDITOR_NOT_READY",
@@ -4169,7 +4170,7 @@ async def test_editor_screenshot_handler_relays_viewport_empty_error():
 
     class ViewportEmptyClient:
         async def send(
-            self, command, params=None, session_id=None, timeout=5.0, surface_error_hints=True
+            self, command, params=None, session_id=None, timeout=5.0, hint_policy=None
         ):
             raise GodotCommandError(
                 code="EDITOR_NOT_READY",
@@ -4980,7 +4981,7 @@ def _make_stop_project_runtime(
 
     class ReadinessAfterStub(StubClient):
         async def send(
-            self, command, params=None, session_id=None, timeout=5.0, surface_error_hints=True
+            self, command, params=None, session_id=None, timeout=5.0, hint_policy=None
         ):
             self.calls.append({"command": command, "params": params})
             return {"stopped": True, "undoable": False, "readiness_after": readiness_after}
