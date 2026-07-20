@@ -261,6 +261,20 @@ func test_run_project_liveness_decision_live_ignores_retained_errors_in_message(
 	assert_false(decision.message.contains("res://old.gd"), "errors that may predate the run must not taint the live message")
 
 
+func test_run_project_liveness_decision_live_clears_retained_errors() -> void:
+	## When the game is live and the error scope is "retained_recent",
+	## the decision must clear recent_errors so stale errors from
+	## previous runs don't appear in the response.
+	var err := {"text": "Parse Error: Old", "path": "res://old.gd", "line": 2}
+	var decision := _handler._run_project_liveness_decision(
+		_run_status("live", 100),
+		_errors_info([err], "retained_recent")
+	)
+	assert_eq(decision.recent_errors, [])
+	assert_eq(decision.recent_errors_scope, "none")
+	assert_eq(decision.recent_errors_may_predate_run, false)
+
+
 func test_run_project_already_running_live_message_reports_run_scoped_errors() -> void:
 	var err := {"text": "Parse Error: Expected expression", "path": "res://broken.gd", "line": 4}
 	var decision := _handler._run_project_liveness_decision(
