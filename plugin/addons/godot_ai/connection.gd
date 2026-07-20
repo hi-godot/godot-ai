@@ -45,6 +45,9 @@ var _url := ""
 var _connected := false
 var _reconnect_attempt := 0
 var _reconnect_timer := 0.0
+## One pre-OPEN failure diagnostic per WebSocketPeer. Without this guard the
+## CLOSED state is polled every frame and would flood the editor log.
+var _preopen_failure_logged_for_peer := false
 var _session_id := ""
 ## Godot-AI Python package version reported by the server in its `handshake_ack`
 ## reply. Empty until the ack lands. Older servers (pre-handshake_ack) leave
@@ -138,10 +141,29 @@ func _process(delta: float) -> void:
 		WebSocketPeer.STATE_CLOSED:
 			if _connected:
 				_connected = false
+				## This peer reached OPEN, so its one close diagnostic is the
+				## post-OPEN line below. Mark the peer consumed; otherwise a
+				## stale reconnect delay leaves it in CLOSED for another frame
+				## and the pre-OPEN branch emits a mislabeled duplicate.
+				_preopen_failure_logged_for_peer = true
 				_clear_on_disconnect()
 				var code := _peer.get_close_code()
-				log_buffer.log("disconnected (code %d)" % code)
+				var reason := _peer.get_close_reason()
+				log_buffer.log(_close_diagnostic(true, code, reason, _url))
 				connection_state_changed.emit(false)
+			elif not _preopen_failure_logged_for_peer:
+				_preopen_failure_logged_for_peer = true
+				## Initial failure is attempt 1 for diagnostics. Later failures
+				## follow the same first-five/each-tenth throttle as reconnect
+				## progress so a missing listener stays observable but bounded.
+				var failed_attempt := maxi(1, _reconnect_attempt)
+				if _should_log_reconnect_attempt(failed_attempt):
+					log_buffer.log(_close_diagnostic(
+						false,
+						_peer.get_close_code(),
+						_peer.get_close_reason(),
+						_url
+					))
 			_reconnect_timer -= delta
 			if _reconnect_timer <= 0.0:
 				_attempt_reconnect()
@@ -254,6 +276,7 @@ func _attempt_reconnect() -> void:
 	## reached STATE_CLOSED is terminal; reusing it can leave the editor stuck in
 	## a quiet reconnect loop after the Python server restarts.
 	_peer = WebSocketPeer.new()
+	_preopen_failure_logged_for_peer = false
 	_peer.outbound_buffer_size = OUTBOUND_BUFFER_LIMIT_BYTES
 	## Keep the reconnect peer symmetric with _ready()'s (#690).
 	_peer.inbound_buffer_size = OUTBOUND_BUFFER_LIMIT_BYTES
@@ -284,6 +307,21 @@ static func _should_log_reconnect_attempt(attempt_number: int) -> bool:
 		attempt_number <= RECONNECT_VERBOSE_ATTEMPTS
 		or attempt_number % RECONNECT_LOG_EVERY_N_ATTEMPTS == 0
 	)
+
+
+static func _close_diagnostic(
+	reached_open: bool,
+	code: int,
+	reason: String,
+	url: String
+) -> String:
+	var phase := "disconnected after OPEN" if reached_open else "connection failed before OPEN"
+	var reason_label := reason.strip_edges()
+	if reason_label.is_empty():
+		reason_label = "<none>"
+	else:
+		reason_label = reason_label.replace("\r", "\\r").replace("\n", "\\n")
+	return "%s (code %d, reason %s, url %s)" % [phase, code, reason_label, url]
 
 
 func _log_blocked_notice_once() -> void:

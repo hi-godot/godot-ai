@@ -255,12 +255,26 @@ func test_adopt_managed_when_versions_match() -> void:
 	var host := _ManagerHostStub.new()
 	var manager := McpServerLifecycleManagerScript.new(host)
 
-	var label := manager.adopt_compatible_server("2.2.0", "2.2.0", 12121)
+	var label := manager.adopt_compatible_server("2.2.0", "2.2.0", 12121, true)
 	var server_pid := int(manager._server_pid)
 	host.free()
 
 	assert_eq(label, McpAdoptionLabel.MANAGED)
 	assert_eq(server_pid, 12121)
+
+
+func test_adopt_external_when_matching_record_does_not_own_listener() -> void:
+	var host := _ManagerHostStub.new()
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	var label := manager.adopt_compatible_server("2.2.0", "2.2.0", 22222, false)
+	var cleared := host.cleared_record_calls
+	var server_pid := int(manager._server_pid)
+	host.free()
+
+	assert_eq(label, McpAdoptionLabel.EXTERNAL)
+	assert_eq(server_pid, -1)
+	assert_eq(cleared, 1)
 
 
 func test_adopt_external_when_record_drifts() -> void:

@@ -1953,6 +1953,38 @@ async def test_reload_plugin_handles_disconnect_before_ack_if_replacement_is_pre
     assert runtime.active_session_id == "new-after-timeout"
 
 
+async def test_reload_plugin_reports_structured_failure_when_replacement_never_connects(
+    monkeypatch,
+):
+    class NoReplacementClient:
+        def __init__(self, registry):
+            self.registry = registry
+
+        async def send(self, command, **_kwargs):
+            if command == "reload_plugin":
+                self.registry.unregister("old-session")
+                raise TimeoutError("disconnect during reload")
+            return {"status": "ok"}
+
+    monkeypatch.setattr(editor_handlers, "PLUGIN_RELOAD_RECONNECT_TIMEOUT_SEC", 0.01)
+    registry = SessionRegistry()
+    registry.register(_make_session("old-session"))
+    runtime = DirectRuntime(registry=registry, client=NoReplacementClient(registry))
+
+    with pytest.raises(GodotCommandError) as exc_info:
+        await editor_handlers.editor_reload_plugin(runtime)
+
+    error = exc_info.value
+    assert error.code == "PLUGIN_DISCONNECTED"
+    assert error.data["reason"] == "reload_timeout"
+    assert error.data["connected"] is False
+    assert error.data["retryable"] is False
+    assert error.data["old_session_id"] == "old-session"
+    assert error.data["project_path"] == "/tmp/test_project"
+    assert error.data["timeout_seconds"] == 0.01
+    assert error.data["diagnostics"]["check_sessions"] == "session_manage(op='list')"
+
+
 async def test_reload_plugin_raises_when_no_active_session():
     runtime = DirectRuntime(registry=SessionRegistry(), client=StubClient())
     with pytest.raises(GodotCommandError) as exc_info:

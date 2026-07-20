@@ -252,6 +252,58 @@ func test_reconnect_logging_throttles_later_attempts() -> void:
 	)
 
 
+func test_close_diagnostic_distinguishes_preopen_failure_and_reason() -> void:
+	var preopen := McpConnection._close_diagnostic(
+		false,
+		-1,
+		"",
+		"ws://127.0.0.1:9500"
+	)
+	assert_contains(preopen, "connection failed before OPEN")
+	assert_contains(preopen, "code -1")
+	assert_contains(preopen, "reason <none>")
+	assert_contains(preopen, "ws://127.0.0.1:9500")
+
+	var opened := McpConnection._close_diagnostic(
+		true,
+		4003,
+		"auth\nfailed",
+		"ws://127.0.0.1:9500"
+	)
+	assert_contains(opened, "disconnected after OPEN")
+	assert_contains(opened, "code 4003")
+	assert_contains(opened, "reason auth\\nfailed")
+
+
+func test_post_open_close_does_not_emit_preopen_duplicate() -> void:
+	## Regression for #764 review: a peer created by `_attempt_reconnect`
+	## retains a positive reconnect timer after reaching OPEN. On a later
+	## drop it therefore spends multiple frames in CLOSED before redialing.
+	## The first frame's post-OPEN diagnostic must consume the peer so the
+	## second frame cannot mislabel the same close as a pre-OPEN failure.
+	var conn := McpConnection.new()
+	var buffer := McpLogBuffer.new()
+	conn.log_buffer = buffer
+	conn._url = "ws://127.0.0.1:9500"
+	conn._connected = true
+	conn._reconnect_timer = 5.0
+	conn._preopen_failure_logged_for_peer = false
+
+	## The connection owns a real WebSocketPeer, currently CLOSED. Seed only
+	## the prior OPEN bookkeeping and drive the production state machine twice.
+	conn._process(0.0)
+	conn._process(0.0)
+
+	var lines := buffer.get_recent(10)
+	assert_eq(lines.size(), 1, "one CLOSED peer must emit exactly one diagnostic")
+	assert_contains(lines[0], "disconnected after OPEN")
+	assert_false(
+		lines[0].contains("connection failed before OPEN"),
+		"post-OPEN close must never be relabeled as a pre-OPEN failure"
+	)
+	conn.free()
+
+
 func test_blocked_connection_logs_once_and_stops_reconnect_loop() -> void:
 	## Regression from the stale-server live smoke: blocked adoption logged the
 	## actionable warning every reconnect tick because `_attempt_reconnect`

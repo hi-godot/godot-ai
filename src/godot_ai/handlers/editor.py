@@ -32,6 +32,7 @@ GAME_SCREENSHOT_TIMEOUT_SEC = 35.0
 ## before the plugin tears down our own process. Tests override this
 ## to 0 so they don't wait. See `editor_reload_plugin` below.
 PLUGIN_MANAGED_RELOAD_DELAY_SEC = 0.5
+PLUGIN_RELOAD_RECONNECT_TIMEOUT_SEC = 15.0
 
 ## Strong references to in-flight `_dispatch_reload_async` tasks. The
 ## event loop only holds weak references to tasks created via
@@ -368,12 +369,39 @@ async def editor_reload_plugin(runtime: DirectRuntime) -> dict:
     except (ConnectionError, TimeoutError) as exc:
         logger.debug("Expected disconnect during reload: %s", exc)
 
-    new_session = await runtime.wait_for_session(
-        exclude_id=old_id,
-        timeout=15.0,
-        known_ids=known_ids,
-        project_path=active.project_path,
-    )
+    try:
+        new_session = await runtime.wait_for_session(
+            exclude_id=old_id,
+            timeout=PLUGIN_RELOAD_RECONNECT_TIMEOUT_SEC,
+            known_ids=known_ids,
+            project_path=active.project_path,
+        )
+    except TimeoutError:
+        ## A reload that disabled the old bridge but never registered a
+        ## replacement is not success. Surface a stable protocol error instead
+        ## of leaking the registry's bare TimeoutError (#764).
+        raise GodotCommandError(
+            code=ErrorCode.PLUGIN_DISCONNECTED,
+            message=(
+                "Plugin reload disabled the previous editor bridge, but no "
+                "replacement session connected before the timeout"
+            ),
+            data={
+                "reason": "reload_timeout",
+                "connected": False,
+                "retryable": False,
+                "old_session_id": old_id,
+                "project_path": active.project_path,
+                "timeout_seconds": PLUGIN_RELOAD_RECONNECT_TIMEOUT_SEC,
+                "diagnostics": {
+                    "check_sessions": "session_manage(op='list')",
+                    "check_editor_logs": (
+                        "Inspect the Godot editor output for plugin startup "
+                        "and WebSocket listener errors."
+                    ),
+                },
+            },
+        ) from None
 
     runtime.set_active_session(new_session.session_id)
     return {

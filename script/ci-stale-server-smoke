@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Live smoke for the plugin's port-8000 conflict handling. Two mirror-image
-scenarios, selected by `--mode`:
+"""Live smoke for the plugin's port-8000 conflict handling. Three scenarios,
+selected by `--mode`:
 
 `--mode stale` (default) — *recoverable* path:
   Plants a synthetic godot-ai server simulator (different version) that brands
@@ -26,6 +26,16 @@ scenarios, selected by `--mode`:
        try to reclaim a port it can't prove it owns.
     4. Leaves the planted listener's PID alive.
 
+`--mode stale-compatible-reload` — *compatible but externally owned* path:
+  Starts a real current-version external godot-ai server, plants a matching-
+  version managed record naming a dead PID, and launches Godot headless. It
+  asserts the plugin:
+
+    1. Adopts the compatible server as external, never managed.
+    2. Reloads through MCP and registers a distinct replacement session.
+    3. Answers an editor-state probe through the replacement bridge.
+    4. Never kills/replaces the external server during teardown or reload.
+
 Backfills the automated coverage gap: the unit tests in test_plugin_lifecycle.gd
 and test_dock.gd mock all OS interactions, and `script/manual-orphan-test`
 exercises the real kill path but is a manual operator helper. This script runs
@@ -45,6 +55,7 @@ on `127.0.0.1`, and bind loopback explicitly in any manual repro too.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import errno
 import json
 import os
@@ -60,12 +71,15 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from fastmcp import Client
+
 ROOT = Path(__file__).resolve().parent.parent
 TEST_PROJECT = ROOT / "test_project"
 PORT = 8000
 WS_PORT = 9500
 STALE_VERSION = "0.0.0-stale"
 STATUS_URL = f"http://127.0.0.1:{PORT}/godot-ai/status"
+MCP_URL = f"http://127.0.0.1:{PORT}/mcp"
 EXPECTED_PROOF_NAMES = ("managed_record", "pidfile_listener", "status_matches_record")
 LOG_LINES_TIMEOUT = 60.0
 FRESH_STATUS_TIMEOUT = 30.0
@@ -76,6 +90,25 @@ extends SceneTree
 func _initialize() -> void:
 \tprint("USER_DATA_DIR=" + OS.get_user_data_dir())
 \tquit()
+'''
+
+
+MANAGED_RECORD_GD = '''\
+@tool
+extends EditorPlugin
+
+func _enter_tree() -> void:
+\tvar es := EditorInterface.get_editor_settings()
+\tif es == null:
+\t\tpush_error("MANAGED_RECORD_WRITE_FAILED: no EditorSettings")
+\t\tget_tree().quit(1)
+\t\treturn
+\tes.set_setting("godot_ai/managed_server_pid", __PID__)
+\tes.set_setting("godot_ai/managed_server_version", __VERSION__)
+\tes.set_setting("godot_ai/managed_server_ws_port", __WS_PORT__)
+\tes.set_setting("godot_ai/managed_server_ws_token", "")
+\tprint("MANAGED_RECORD_WRITTEN pid=__PID__ version=" + __VERSION__)
+\tget_tree().quit()
 '''
 
 
@@ -309,6 +342,89 @@ def discover_user_dir(godot: str) -> Path:
         )
     finally:
         helper.unlink(missing_ok=True)
+
+
+def write_managed_record(godot: str, pid: int, version: str, ws_port: int) -> None:
+    """Persist the exact EditorSettings ownership record the plugin reads.
+
+    Use a minimal temporary editor project so writing the global EditorSettings
+    does not load the godot-ai plugin and race the record plant. The helper
+    explicitly saves before exiting; this is the CI equivalent of a reused
+    EditorSettings profile carrying #759-shaped stale ownership into startup.
+    """
+    workdir = Path(tempfile.mkdtemp(prefix="managed-record-"))
+    try:
+        (workdir / "project.godot").write_text(
+            (
+                '[application]\nconfig/name="Managed Record Writer"\n\n'
+                '[editor_plugins]\n'
+                'enabled=PackedStringArray("res://addons/record_writer/plugin.cfg")\n'
+            ),
+            encoding="utf-8",
+        )
+        version_literal = json.dumps(version)
+        source = (
+            MANAGED_RECORD_GD
+            .replace("__PID__", str(pid))
+            .replace("__VERSION__", version_literal)
+            .replace("__WS_PORT__", str(ws_port))
+        )
+        addon = workdir / "addons" / "record_writer"
+        addon.mkdir(parents=True)
+        (addon / "plugin.cfg").write_text(
+            (
+                '[plugin]\n\n'
+                'name="Managed Record Writer"\n'
+                'description="CI-only EditorSettings record writer"\n'
+                'author="godot-ai CI"\n'
+                'version="1.0.0"\n'
+                'script="write_record.gd"\n'
+            ),
+            encoding="utf-8",
+        )
+        helper = addon / "write_record.gd"
+        helper.write_text(source, encoding="utf-8")
+        result = subprocess.run(
+            [
+                godot,
+                "--headless",
+                "--editor",
+                "--path",
+                str(workdir),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        if result.returncode != 0 or "MANAGED_RECORD_WRITTEN" not in result.stdout:
+            raise SmokeError(
+                "managed-record helper failed "
+                f"(exit {result.returncode}).\n"
+                f"--- stdout ---\n{result.stdout}\n"
+                f"--- stderr ---\n{result.stderr}"
+            )
+        print(f"managed record persisted: pid={pid}, version={version!r}, ws_port={ws_port}")
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def tool_payload(result: object) -> dict:
+    structured = getattr(result, "structured_content", None)
+    if isinstance(structured, dict):
+        return structured
+    data = getattr(result, "data", None)
+    if isinstance(data, dict):
+        return data
+    raise SmokeError(f"MCP tool returned no structured dictionary: {result!r}")
+
+
+async def reload_and_probe_external_server() -> tuple[dict, dict]:
+    """Reload through the real MCP surface, then probe the replacement bridge."""
+    async with Client(MCP_URL) as client:
+        reload_result = tool_payload(await client.call_tool("editor_reload_plugin", {}))
+        state_result = tool_payload(await client.call_tool("editor_state", {}))
+        return reload_result, state_result
 
 
 def write_sim(workdir: Path) -> Path:
@@ -751,18 +867,195 @@ def run_foreign_smoke(
             pidfile.unlink()
 
 
+def run_stale_compatible_reload_smoke(
+    godot: str,
+    plugin_version: str,
+    user_dir: Path,
+    pidfile: Path,
+    log_dir: Path,
+    timeout: float,
+) -> int:
+    """Regression for #759/#764's settings-record × reload ownership wedge."""
+    editor_log = log_dir / "godot-stale-compatible-reload-smoke.log"
+    external_log = log_dir / "stale-compatible-external-server.log"
+
+    external: subprocess.Popen | None = None
+    godot_proc: subprocess.Popen | None = None
+    external_log_fh = None
+    record_planted = False
+    try:
+        env = os.environ.copy()
+        env.setdefault("GODOT_AI_DISABLE_TELEMETRY", "true")
+        external_cmd = [
+            sys.executable,
+            "-m",
+            "godot_ai",
+            "--transport",
+            "streamable-http",
+            "--port",
+            str(PORT),
+            "--ws-port",
+            str(WS_PORT),
+        ]
+        print(f"starting current external server: {' '.join(external_cmd)}")
+        external_log_fh = external_log.open("wb")
+        external = subprocess.Popen(
+            external_cmd,
+            env=env,
+            stdout=external_log_fh,
+            stderr=subprocess.STDOUT,
+        )
+        print(f"external server pid={external.pid}, log={external_log}")
+
+        status = wait_for_status(plugin_version, timeout_s=30.0, sim=external)
+        print(f"current external status confirmed: {status}")
+
+        # Use a PID that verifiably existed and exited, avoiding magic PID
+        # assumptions across Windows/macOS/Linux. Starting it after the external
+        # server also prevents it from naming that already-running process.
+        dead_marker = subprocess.Popen([sys.executable, "-c", "pass"])
+        stale_pid = dead_marker.pid
+        dead_marker.wait(timeout=30)
+        write_managed_record(godot, stale_pid, plugin_version, WS_PORT)
+        record_planted = True
+
+        editor_log.write_text("", encoding="utf-8")
+        log_fh = editor_log.open("ab")
+        try:
+            godot_env = os.environ.copy()
+            godot_env["GODOT_AI_ALLOW_HEADLESS"] = "1"
+            godot_env.setdefault("GODOT_AI_DISABLE_TELEMETRY", "true")
+            godot_cmd = [godot, "--headless", "--path", str(TEST_PROJECT), "--editor"]
+            print(f"launching godot with stale matching record: {' '.join(godot_cmd)}")
+            godot_proc = subprocess.Popen(
+                godot_cmd,
+                env=godot_env,
+                stdout=log_fh,
+                stderr=log_fh,
+            )
+
+            adoption_needle = "MCP | adopted external server"
+            connected_needle = "MCP | connected to server"
+            matched = wait_for_log_lines(
+                editor_log,
+                [adoption_needle, connected_needle],
+                max(timeout, LOG_LINES_TIMEOUT),
+            )
+            print(f"saw: {matched[adoption_needle]!r}")
+            print(f"saw: {matched[connected_needle]!r}")
+
+            reload_result, state_result = asyncio.run(reload_and_probe_external_server())
+            print(f"reload result: {reload_result}")
+            print(
+                "replacement editor state: "
+                f"Godot {state_result.get('godot_version', '?')}, "
+                f"project={state_result.get('project_name', '?')}"
+            )
+
+            old_id = str(reload_result.get("old_session_id", ""))
+            new_id = str(reload_result.get("new_session_id", ""))
+            if reload_result.get("status") != "reloaded" or not old_id or not new_id:
+                raise SmokeError(
+                    "external reload did not return the complete reloaded shape: "
+                    f"{reload_result}"
+                )
+            if old_id == new_id:
+                raise SmokeError(f"reload reused the old session id: {old_id}")
+            if not state_result.get("godot_version"):
+                raise SmokeError(
+                    f"replacement editor_state is missing godot_version: {state_result}"
+                )
+
+            if not child_is_alive(external):
+                raise SmokeError(
+                    f"external server pid {external.pid} died during adoption/reload "
+                    f"(exit {external.returncode})"
+                )
+            surviving = wait_for_status(
+                plugin_version,
+                timeout_s=FRESH_STATUS_TIMEOUT,
+                sim=external,
+            )
+            print(f"external server survived reload with status: {surviving}")
+
+            text = editor_log.read_text(errors="replace")
+            forbidden = (
+                "MCP | adopted managed server",
+                "MCP | killed pids",
+                "MCP | stopped server",
+            )
+            hit = next((needle for needle in forbidden if needle in text), None)
+            if hit is not None:
+                raise SmokeError(
+                    f"compatible external server crossed the ownership boundary; "
+                    f"saw forbidden log line containing {hit!r}"
+                )
+        finally:
+            log_fh.close()
+
+        print("PASS: stale-compatible external reload smoke")
+        return 0
+    except Exception as e:
+        err = e if isinstance(e, SmokeError) else SmokeError(str(e))
+        dump_failure(err, external_log, "external server", user_dir, editor_log)
+        return 1
+    finally:
+        terminate_proc(godot_proc, "godot")
+        terminate_proc(external, "external server")
+        if external_log_fh is not None:
+            external_log_fh.close()
+        if record_planted:
+            try:
+                write_managed_record(godot, 0, "", 0)
+            except SmokeError as cleanup_error:
+                print(f"WARN: failed to clear managed record: {cleanup_error}", file=sys.stderr)
+        if pidfile.exists():
+            pidfile.unlink()
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
+    global TEST_PROJECT, PORT, WS_PORT, STATUS_URL, MCP_URL
+
+    # Keep CLI help ASCII-only: Windows' default cp1252 console encoding cannot
+    # print the Unicode arrows/dashes in the detailed module docstring.
+    ap = argparse.ArgumentParser(
+        description="Live smoke tests for godot-ai server ownership and reload handling."
+    )
     ap.add_argument(
         "--mode",
-        choices=("stale", "foreign"),
+        choices=("stale", "foreign", "stale-compatible-reload"),
         default="stale",
         help="stale: recoverable godot-ai occupant (kill+respawn). "
-             "foreign: non-godot-ai occupant (non-recoverable INCOMPATIBLE, no kill).",
+             "foreign: non-godot-ai occupant (non-recoverable INCOMPATIBLE, no kill). "
+             "stale-compatible-reload: matching-version dead record plus a live "
+             "external server (reload must preserve it).",
     )
     ap.add_argument("--log-dir", default=".", help="Where to write the editor + listener logs")
     ap.add_argument("--timeout", type=float, default=45.0)
+    ap.add_argument(
+        "--http-port",
+        type=int,
+        default=PORT,
+        help="HTTP port used by the planted server/listener (default: 8000)",
+    )
+    ap.add_argument(
+        "--ws-port",
+        type=int,
+        default=WS_PORT,
+        help="WebSocket port used by godot-ai modes (default: 9500)",
+    )
+    ap.add_argument(
+        "--project",
+        default=str(TEST_PROJECT),
+        help="Godot project whose enabled plugin is exercised",
+    )
     args = ap.parse_args()
+
+    PORT = args.http_port
+    WS_PORT = args.ws_port
+    TEST_PROJECT = Path(args.project).resolve()
+    STATUS_URL = f"http://127.0.0.1:{PORT}/godot-ai/status"
+    MCP_URL = f"http://127.0.0.1:{PORT}/mcp"
 
     log_dir = Path(args.log_dir).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -796,6 +1089,15 @@ def main() -> int:
 
     if args.mode == "foreign":
         return run_foreign_smoke(godot, plugin_version, user_dir, pidfile, log_dir, args.timeout)
+    if args.mode == "stale-compatible-reload":
+        return run_stale_compatible_reload_smoke(
+            godot,
+            plugin_version,
+            user_dir,
+            pidfile,
+            log_dir,
+            args.timeout,
+        )
     return run_stale_smoke(godot, plugin_version, user_dir, pidfile, log_dir, args.timeout)
 
 

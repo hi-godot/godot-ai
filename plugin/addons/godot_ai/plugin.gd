@@ -1612,8 +1612,18 @@ func prepare_for_update_reload() -> void:
 	_lifecycle.prepare_for_update_reload()
 
 
-func _adopt_compatible_server(record_version: String, current_version: String, owner: int) -> String:
-	return _lifecycle.adopt_compatible_server(record_version, current_version, owner)
+func _adopt_compatible_server(
+	record_version: String,
+	current_version: String,
+	owner: int,
+	record_owns_listener: bool = false
+) -> String:
+	return _lifecycle.adopt_compatible_server(
+		record_version,
+		current_version,
+		owner,
+		record_owns_listener
+	)
 
 
 static func _compatible_adoption_log_message(

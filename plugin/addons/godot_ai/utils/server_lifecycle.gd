@@ -692,8 +692,29 @@ func _start_server_impl(async_gen: int) -> void:
 			_server_actual_name = "godot-ai"
 			_server_actual_version = live_version
 			_can_recover_incompatible = false
-			var owner := int(_host._find_managed_pid(port))
-			var owner_label := adopt_compatible_server(record_version, current_version, owner)
+			## A matching version is compatibility evidence, not ownership
+			## evidence (#759/#764). A stale EditorSettings record can name a
+			## dead PID while an unrelated compatible server owns the port.
+			## Retain managed ownership only when the recorded PID is itself
+			## the live, branded listener.
+			var adoption_proof_result: Variant = await _run_blocking(func() -> Variant:
+				if not is_instance_valid(_host):
+					return {"proof": "", "pids": []}
+				return _host._evaluate_strong_port_occupant_proof(port, live, record)
+			)
+			if _async_stale(async_gen):
+				return
+			var adoption_proof: Dictionary = adoption_proof_result
+			var proof_pids: Array[int] = []
+			proof_pids.assign(adoption_proof.get("pids", []))
+			var owner := int(proof_pids[0]) if not proof_pids.is_empty() else 0
+			var record_owns_listener := str(adoption_proof.get("proof", "")) == "managed_record"
+			var owner_label := adopt_compatible_server(
+				record_version,
+				current_version,
+				owner,
+				record_owns_listener
+			)
 			_host._server_started_this_session = true
 			_startup_path = McpStartupPathScript.ADOPTED
 			transition_state(McpServerStateScript.READY)
@@ -899,6 +920,11 @@ func check_server_health() -> void:
 	var spawn_pid := int(_server_pid)
 	if real_pid > 0 and real_pid != spawn_pid and PortResolver.pid_alive(real_pid):
 		_server_pid = real_pid
+		## The spawn record initially contains the launcher PID so same-session
+		## teardown can kill it. Heal it as soon as the server publishes its
+		## authoritative PID; future adoption requires the recorded PID to be
+		## the actual live listener (#759).
+		_host._write_managed_server_record(real_pid, _expected_server_version())
 	elif not PortResolver.pid_alive(spawn_pid):
 		if elapsed >= int(_host.SPAWN_GRACE_MS) and not McpServerStateScript.is_terminal_diagnosis(_server_state):
 			## #647: the server died inside the grace window. If a foreign
@@ -1013,13 +1039,20 @@ func respawn_with_refresh() -> void:
 		_host._stop_server_watch()
 
 
-func adopt_compatible_server(record_version: String, current_version: String, owner: int) -> String:
+func adopt_compatible_server(
+	record_version: String,
+	current_version: String,
+	owner: int,
+	record_owns_listener: bool = false
+) -> String:
 	_server_actual_name = "godot-ai"
 	_can_recover_incompatible = false
-	if record_version == current_version and owner > 0:
+	if record_version == current_version and owner > 0 and record_owns_listener:
 		## Managed adoption keeps the record's token (loaded into
 		## _ws_auth_token at plugin startup) — the running server was
-		## spawned with it and still verifies against it (#690).
+		## spawned with it and still verifies against it (#690). Version
+		## equality alone is deliberately insufficient: the record must also
+		## identify the live branded listener (#759/#764).
 		_server_pid = owner
 		_host._write_managed_server_record(owner, current_version)
 		return McpAdoptionLabelScript.MANAGED

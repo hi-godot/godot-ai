@@ -292,6 +292,69 @@ jobs:
           echo "===== godot-import.log (last 200 lines) ====="
           tail -n 200 godot-import.log || echo "(log not found)"
 
+  # #759/#764 integration regression: a matching-version EditorSettings
+  # record naming a dead PID must not transfer teardown ownership to the
+  # compatible external server now occupying the port. Reload must preserve
+  # that server and reconnect through a distinct replacement editor session.
+  stale-compatible-reload-smoke:
+    name: Stale compatible reload smoke / ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux
+          - os: macos-latest
+            label: macOS
+          - os: windows-latest
+            label: Windows
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Build plugin link
+        shell: bash
+        run: bash script/verify-worktree
+
+      - uses: chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789 # v2
+        with:
+          version: 4.7.0
+          use-dotnet: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Import and validate GDScript
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          godot --headless --path test_project --import > godot-import.log 2>&1 || true
+          bash script/ci-check-gdscript godot-import.log
+
+      - name: Run stale-compatible reload smoke
+        shell: bash
+        timeout-minutes: 3
+        run: python script/ci-stale-server-smoke --mode stale-compatible-reload --log-dir .
+
+      - name: Dump editor and server logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "===== godot-stale-compatible-reload-smoke.log (last 500 lines) ====="
+          tail -n 500 godot-stale-compatible-reload-smoke.log || echo "(log not found)"
+          echo "===== stale-compatible-external-server.log (last 300 lines) ====="
+          tail -n 300 stale-compatible-external-server.log || echo "(log not found)"
+          echo "===== godot-import.log (last 200 lines) ====="
+          tail -n 200 godot-import.log || echo "(log not found)"
+
   # Mirror image of stale-server-smoke: verifies the plugin's NON-recoverable
   # path when port 8000 is held by a genuinely foreign (non-godot-ai) process.
   # It gets no ownership proof, so it must land in terminal INCOMPATIBLE with

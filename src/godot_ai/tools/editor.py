@@ -249,6 +249,9 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
           streamable-http --port 8000 --reload``): waits for the new
           session to register and returns
           ``{status: "reloaded", old_session_id, new_session_id}``.
+          If the old bridge disappears and no replacement registers
+          within 15 seconds, raises ``PLUGIN_DISCONNECTED`` with
+          ``data.reason == "reload_timeout"`` and recovery diagnostics.
 
         Args:
             session_id: Optional Godot session to target. Empty = active session.

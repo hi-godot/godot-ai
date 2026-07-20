@@ -78,10 +78,8 @@ class _ProofPlugin extends GodotAiPlugin:
 		cleared_record_calls += 1
 
 
-## #745 crash-survivor tests: like _ProofPlugin, but also stubs
-## `_find_managed_pid` (whose real body reads the on-disk pid-file and
-## falls back to a live port scrape) so the adopt branch stays fully
-## faked.
+## #745 crash-survivor tests: like _ProofPlugin, with the legacy
+## `_find_managed_pid` seam retained for characterization of older paths.
 class _CrashSurvivorPlugin extends _ProofPlugin:
 	var managed_pid_result := 0
 
@@ -973,11 +971,28 @@ func test_stale_ws_port_does_not_authorize_killing_external_server() -> void:
 	assert_false(can_restart, "external adoption must not authorize managed restart")
 
 
-func test_matching_compatible_adoption_keeps_managed_ownership() -> void:
+func test_matching_compatible_adoption_without_listener_proof_is_external() -> void:
+	## Regression for #759/#764: matching versions do not prove that a stale
+	## record's dead PID owns the compatible server currently on the port.
 	_seed_managed_record(11111, "2.2.0")
 	var plugin := GodotAiPlugin.new()
 
 	var owner_label := plugin._adopt_compatible_server("2.2.0", "2.2.0", 22222)
+	var can_restart := plugin.can_restart_managed_server()
+	var server_pid: int = int(plugin._lifecycle._server_pid)
+	plugin.free()
+
+	assert_eq(owner_label, "external")
+	assert_eq(server_pid, -1)
+	assert_eq(_read_record_version(), "", "unproven stale ownership must be cleared")
+	assert_false(can_restart, "unproven ownership must not authorize restart or teardown")
+
+
+func test_matching_compatible_adoption_keeps_proven_managed_ownership() -> void:
+	_seed_managed_record(22222, "2.2.0")
+	var plugin := GodotAiPlugin.new()
+
+	var owner_label := plugin._adopt_compatible_server("2.2.0", "2.2.0", 22222, true)
 	var can_restart := plugin.can_restart_managed_server()
 	var server_pid: int = int(plugin._lifecycle._server_pid)
 	plugin.free()
@@ -1147,6 +1162,7 @@ func test_start_adopts_crash_survivor_when_bind_probe_reports_port_free() -> voi
 	var plugin := _CrashSurvivorPlugin.new()
 	plugin.port_in_use = false
 	plugin.pid_file_pid = 33333
+	plugin.listener_pids = [33333] as Array[int]
 	plugin.alive_pids = [33333] as Array[int]
 	plugin.branded_pids = [33333] as Array[int]
 	plugin.managed_pid_result = 33333
@@ -1165,6 +1181,37 @@ func test_start_adopts_crash_survivor_when_bind_probe_reports_port_free() -> voi
 		"the evidence path must confirm via the HTTP status probe before adopting")
 	assert_eq(server_pid, 33333,
 		"matching-version crash survivor must adopt as the managed server")
+
+
+func test_start_matching_version_stale_pid_adopts_external_without_kill() -> void:
+	## #759/#764: a matching version on the status endpoint cannot transfer a
+	## dead record's ownership to the unrelated branded listener now on the
+	## port. Startup may connect to it, but teardown/reload must not kill it.
+	var current := McpClientConfigurator.get_plugin_version()
+	var plugin := _ProofPlugin.new()
+	plugin.port_in_use = true
+	plugin.listener_pids = [22222] as Array[int]
+	plugin.alive_pids = [22222] as Array[int]
+	plugin.branded_pids = [22222] as Array[int]
+	plugin.managed_record = {"pid": 11111, "version": current, "ws_port": 9500}
+	plugin.live_status = {
+		"name": "godot-ai",
+		"version": current,
+		"ws_port": 9500,
+		"status_code": 200,
+	}
+
+	plugin._start_server()
+	var status := plugin.get_server_status()
+	var server_pid := int(plugin._lifecycle._server_pid)
+	var killed := plugin.killed_targets.duplicate()
+	var clear_calls := plugin.cleared_record_calls
+	plugin.free()
+
+	assert_eq(int(status.get("state", -1)), McpServerState.READY)
+	assert_eq(server_pid, -1, "unrelated compatible listener must remain externally owned")
+	assert_true(killed.is_empty(), "compatible external adoption must never kill the listener")
+	assert_eq(clear_calls, 1, "stale ownership record must be cleared")
 
 
 func test_drift_kill_without_strong_targets_sets_incompatible_and_preserves_record() -> void:
