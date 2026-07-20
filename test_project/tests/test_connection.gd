@@ -304,6 +304,27 @@ func test_post_open_close_does_not_emit_preopen_duplicate() -> void:
 	conn.free()
 
 
+func test_deliberate_disconnect_emits_no_close_diagnostic() -> void:
+	## `disconnect_from_server` pre-clears `_connected` so deliberate closes
+	## stay silent. The CLOSED tick must not reinterpret that established peer
+	## as a failed pre-OPEN attempt, including server swaps where
+	## `connect_blocked` remains false.
+	var conn := McpConnection.new()
+	var buffer := McpLogBuffer.new()
+	conn.log_buffer = buffer
+	conn._url = "ws://127.0.0.1:9500"
+	conn._connected = true
+	conn._reconnect_timer = 5.0
+	conn._preopen_failure_logged_for_peer = false
+
+	conn.disconnect_from_server()
+	conn._process(0.0)
+	conn._process(0.0)
+
+	assert_eq(buffer.total_count(), 0, "deliberate post-OPEN close must stay silent")
+	conn.free()
+
+
 func test_blocked_connection_logs_once_and_stops_reconnect_loop() -> void:
 	## Regression from the stale-server live smoke: blocked adoption logged the
 	## actionable warning every reconnect tick because `_attempt_reconnect`

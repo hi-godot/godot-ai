@@ -103,6 +103,16 @@ func _enter_tree() -> void:
 \t\tpush_error("MANAGED_RECORD_WRITE_FAILED: no EditorSettings")
 \t\tget_tree().quit(1)
 \t\treturn
+\tif OS.has_environment("GODOT_AI_RECORD_READBACK"):
+\t\tvar record := {
+\t\t\t"pid": int(es.get_setting("godot_ai/managed_server_pid")),
+\t\t\t"version": str(es.get_setting("godot_ai/managed_server_version")),
+\t\t\t"ws_port": int(es.get_setting("godot_ai/managed_server_ws_port")),
+\t\t\t"ws_token": str(es.get_setting("godot_ai/managed_server_ws_token")),
+\t\t}
+\t\tprint("MANAGED_RECORD_READBACK " + JSON.stringify(record))
+\t\tget_tree().quit()
+\t\treturn
 \tes.set_setting("godot_ai/managed_server_pid", __PID__)
 \tes.set_setting("godot_ai/managed_server_version", __VERSION__)
 \tes.set_setting("godot_ai/managed_server_ws_port", __WS_PORT__)
@@ -348,9 +358,10 @@ def write_managed_record(godot: str, pid: int, version: str, ws_port: int) -> No
     """Persist the exact EditorSettings ownership record the plugin reads.
 
     Use a minimal temporary editor project so writing the global EditorSettings
-    does not load the godot-ai plugin and race the record plant. The helper
-    explicitly saves before exiting; this is the CI equivalent of a reused
-    EditorSettings profile carrying #759-shaped stale ownership into startup.
+    does not load the godot-ai plugin and race the record plant. After the
+    writer exits cleanly, a fresh editor process reads the record back through
+    the public API. This is the CI equivalent of a reused EditorSettings profile
+    carrying #759-shaped stale ownership into startup.
     """
     workdir = Path(tempfile.mkdtemp(prefix="managed-record-"))
     try:
@@ -384,14 +395,18 @@ def write_managed_record(godot: str, pid: int, version: str, ws_port: int) -> No
         )
         helper = addon / "write_record.gd"
         helper.write_text(source, encoding="utf-8")
+        command = [
+            godot,
+            "--headless",
+            "--editor",
+            "--path",
+            str(workdir),
+        ]
+        writer_env = os.environ.copy()
+        writer_env.pop("GODOT_AI_RECORD_READBACK", None)
         result = subprocess.run(
-            [
-                godot,
-                "--headless",
-                "--editor",
-                "--path",
-                str(workdir),
-            ],
+            command,
+            env=writer_env,
             capture_output=True,
             text=True,
             timeout=60,
@@ -403,6 +418,51 @@ def write_managed_record(godot: str, pid: int, version: str, ws_port: int) -> No
                 f"(exit {result.returncode}).\n"
                 f"--- stdout ---\n{result.stdout}\n"
                 f"--- stderr ---\n{result.stderr}"
+            )
+
+        # A successful writer marker alone is insufficient: if EditorSettings
+        # were not persisted, the adoption/reload smoke would still pass
+        # vacuously through the no-record external path. Read from a new editor
+        # process so every platform proves the exact #759-shaped record crossed
+        # the process boundary before the plugin under test starts.
+        readback_env = os.environ.copy()
+        readback_env["GODOT_AI_RECORD_READBACK"] = "1"
+        readback_result = subprocess.run(
+            command,
+            env=readback_env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        marker = "MANAGED_RECORD_READBACK "
+        marker_line = next(
+            (line for line in readback_result.stdout.splitlines() if line.startswith(marker)),
+            "",
+        )
+        if readback_result.returncode != 0 or not marker_line:
+            raise SmokeError(
+                "managed-record read-back helper failed "
+                f"(exit {readback_result.returncode}).\n"
+                f"--- stdout ---\n{readback_result.stdout}\n"
+                f"--- stderr ---\n{readback_result.stderr}"
+            )
+        try:
+            persisted = json.loads(marker_line[len(marker):])
+        except json.JSONDecodeError as exc:
+            raise SmokeError(
+                f"managed-record read-back emitted invalid JSON: {marker_line!r}"
+            ) from exc
+        expected = {
+            "pid": pid,
+            "version": version,
+            "ws_port": ws_port,
+            "ws_token": "",
+        }
+        if persisted != expected:
+            raise SmokeError(
+                "managed record did not persist across editor processes: "
+                f"expected {expected}, got {persisted}"
             )
         print(f"managed record persisted: pid={pid}, version={version!r}, ws_port={ws_port}")
     finally:

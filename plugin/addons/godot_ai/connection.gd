@@ -215,6 +215,10 @@ func disconnect_from_server() -> void:
 	if _connected:
 		_peer.close(1000, "Plugin unloading")
 		_connected = false
+		## This peer reached OPEN and is being closed deliberately, so neither
+		## the post-OPEN nor pre-OPEN close diagnostic applies. Consume its one
+		## diagnostic before the CLOSED tick observes the pre-cleared flag.
+		_preopen_failure_logged_for_peer = true
 		## Pre-clearing _connected makes the STATE_CLOSED branch skip its
 		## _clear_on_disconnect() — run it here so deliberate closes don't
 		## leak the old server's version/deferred state into the next one.
