@@ -6,8 +6,9 @@ docs/screenshot-testing.md once described ``source="viewport"`` as the editor's
 handler's accepted set so the two can't silently diverge again.
 
 The accepted set is parsed from the invalid-source error message in
-plugin/addons/godot_ai/handlers/editor_handler.gd — the one line the handler
-keeps in lockstep with its own ``match source:`` arms.
+plugin/addons/godot_ai/handlers/editor_handler.gd, and a companion test pins
+that message to the actual ``match source:`` dispatch arms — so a new arm
+added without updating the message (or the docs) fails loudly here.
 """
 
 from __future__ import annotations
@@ -42,6 +43,29 @@ def _handler_sources() -> frozenset[str]:
         "if its wording changed, update _INVALID_SOURCE_LINE_RE."
     )
     return frozenset(_QUOTED_TOKEN_RE.findall(match.group(1)))
+
+
+@functools.cache
+def _dispatch_arm_sources() -> frozenset[str]:
+    text = EDITOR_HANDLER_GD.read_text(encoding="utf-8")
+    block = get_func_block(text, "func take_screenshot(params: Dictionary) -> Dictionary:")
+    section = re.search(r"match source:\n(.*?)^\t\t_:", block, re.MULTILINE | re.DOTALL)
+    assert section, (
+        f"`match source:` dispatch (with a `_:` default arm) not found in "
+        f"take_screenshot in {EDITOR_HANDLER_GD}; update this parser."
+    )
+    return frozenset(re.findall(r'^\t\t"([a-z0-9_]+)":\s*$', section.group(1), re.MULTILINE))
+
+
+def test_error_message_stays_in_sync_with_dispatch_arms() -> None:
+    # The doc assertions below key off the invalid-source error message; this
+    # pins that message to the actual `match source:` arms so a new arm added
+    # without updating the message can't silently escape the doc guard.
+    assert _dispatch_arm_sources() == _handler_sources(), (
+        f"take_screenshot's match arms {sorted(_dispatch_arm_sources())} and its "
+        f"invalid-source error message {sorted(_handler_sources())} disagree; "
+        "update the error message, then re-align docs/screenshot-testing.md."
+    )
 
 
 def test_handler_sources_parsed_sanely() -> None:

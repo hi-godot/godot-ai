@@ -8,7 +8,7 @@ capture within 20s" timeouts.
 
 | Goal | `source` | Notes |
 |------|----------|-------|
-| Verify a 3D scene framing as the editor camera sees it | `viewport` (the default) | Captures the editor's **3D** viewport — no debugger bridge, no game subprocess. Requires Node3D content in the edited scene; a 2D-only scene (or no scene open) returns `EDITOR_NOT_READY` with a hint. Supports `view_target` / `coverage` / `elevation` / `azimuth` / `fov` reframing. |
+| Verify a 3D scene framing as the editor camera sees it | `viewport` (the default) | Captures the editor's **3D** viewport — no debugger bridge, no game subprocess. Requires Node3D content in the edited scene; a 2D-only scene (or no scene open) returns `EDITOR_NOT_READY` with a hint. Supports `view_target` reframing; `coverage` / `elevation` / `azimuth` / `fov` only take effect together with `view_target` (without it they are silently ignored). |
 | Verify a 2D scene as the editor shows it | `viewport_2d` | Captures the editor's **2D** viewport at its *current pan/zoom* — whatever is on screen in the 2D view. It has no framing parameters: `view_target`, `coverage`, `elevation`, `azimuth`, and `fov` are rejected with `INVALID_PARAMS`. |
 | Verify a running game's framebuffer (menus that exist at runtime, gameplay state, particle effects, runtime UI animations) | `game` | Requires the game subprocess + `_mcp_game_helper` autoload + a `project_run`-driven play cycle. |
 | Verify a specific `Camera3D` view without playing | `cinematic` | Renders the edited scene through its active `Camera3D` (no editor gizmos). Prefers a camera marked `current`, else the first `Camera3D` found; `NODE_NOT_FOUND` if the scene has none. |
