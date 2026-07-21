@@ -731,6 +731,7 @@ func test_spawn_fast_exit_readopts_live_godot_ai_survivor() -> void:
 	var killed := host.killed_targets.duplicate()
 	var stop_watch_calls := host.stop_watch_calls
 	var readopt_guard: bool = manager._readopt_after_spawn_exit_retried
+	var walk_pending: bool = manager._readopt_walk_pending
 	var token_after: String = GodotAiPlugin._ws_auth_token
 	host.free()
 	GodotAiPlugin._server_started_this_session = saved_guard
@@ -742,15 +743,18 @@ func test_spawn_fast_exit_readopts_live_godot_ai_survivor() -> void:
 	assert_true(killed.is_empty(), "re-adoption must not kill the survivor")
 	assert_true(stop_watch_calls >= 1, "the dead spawn's watch must stop")
 	assert_false(readopt_guard,
-		"the re-walk must reset the one-shot so a later walk keeps its budget")
+		"successful adoption must refresh the re-adopt budget (#805)")
+	assert_false(walk_pending,
+		"the triggered walk must consume the pending flag (#805)")
 	assert_eq(token_after, "",
 		"external re-adoption must drop the stale spawn token")
 
 
-func test_spawn_fast_exit_readopt_is_one_shot_per_walk() -> void:
-	## A consumed re-adopt budget must fall through to the legacy diagnosis
-	## (a godot-ai occupant is not a foreign conflict -> CRASHED) instead of
-	## re-walking forever.
+func test_spawn_fast_exit_latches_flapping_crash_when_budget_spent() -> void:
+	## #805 terminal bound: the budget was spent by an earlier fast exit and
+	## the triggered walk preserved it (see the walk-budget tests below), so
+	## a second fast exit against a live godot-ai occupant must latch a
+	## specific CRASHED diagnosis — never re-walk again.
 	var host := _ManagerHostStub.new()
 	host._log_buffer = McpLogBuffer.new()
 	host.port_in_use = true
@@ -764,12 +768,73 @@ func test_spawn_fast_exit_readopt_is_one_shot_per_walk() -> void:
 	var state := manager.get_state()
 	var exit_ms := int(manager._server_exit_ms)
 	var stop_watch_calls := host.stop_watch_calls
+	var probe_calls := host.probe_calls
+	var message: String = str(manager.get_status_dict().get("message", ""))
 	host.free()
 
 	assert_eq(state, McpServerState.CRASHED,
-		"second fast exit in one walk must latch CRASHED, not loop")
+		"a spent budget with a live godot-ai occupant must latch CRASHED, not loop")
 	assert_eq(exit_ms, 6000)
 	assert_eq(stop_watch_calls, 1)
+	assert_eq(probe_calls, 1, "the flapping latch must not trigger another walk or probe")
+	assert_contains(message, "another godot-ai server",
+		"the diagnosis must name the flapping occupant, not a generic crash")
+	assert_contains(message, "Reload Plugin",
+		"the diagnosis must point at the deliberate-retry action")
+
+
+func test_triggered_walk_preserves_readopt_budget() -> void:
+	## #805: a walk triggered by the re-adopt arm must NOT refresh the
+	## budget at its top — if it fails to adopt (here: the occupant turned
+	## incompatible by walk time) and later spawns fast-exit again, the
+	## flapping latch above must be reachable. Drives the REAL walk.
+	var saved_guard: bool = GodotAiPlugin._server_started_this_session
+	GodotAiPlugin._server_started_this_session = false
+	var host := _ManagerHostStub.new()
+	host._log_buffer = McpLogBuffer.new()
+	host._connection = null
+	host.port_in_use = true
+	host.live_status = {"name": "godot-ai", "version": "0.0.1", "ws_port": 9500, "status_code": 200}
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._readopt_after_spawn_exit_retried = true
+	manager._readopt_walk_pending = true
+
+	manager.start_server()
+	var state := manager.get_state()
+	var guard_after: bool = manager._readopt_after_spawn_exit_retried
+	var pending_after: bool = manager._readopt_walk_pending
+	host.free()
+	GodotAiPlugin._server_started_this_session = saved_guard
+
+	assert_eq(state, McpServerState.INCOMPATIBLE,
+		"fixture: the walk must terminate on the incompatible occupant, not spawn")
+	assert_true(guard_after,
+		"a re-adopt-triggered walk must preserve the spent budget (#805)")
+	assert_false(pending_after,
+		"the pending flag is one-shot: consumed by the walk it triggered")
+
+
+func test_fresh_walk_resets_readopt_budget() -> void:
+	## Complement of the preservation test: a user/plugin-initiated walk
+	## (no pending flag) refreshes the budget, so a deliberate Reload
+	## Plugin after the flapping latch gets a new re-adopt attempt.
+	var saved_guard: bool = GodotAiPlugin._server_started_this_session
+	GodotAiPlugin._server_started_this_session = false
+	var host := _ManagerHostStub.new()
+	host._log_buffer = McpLogBuffer.new()
+	host._connection = null
+	host.port_in_use = true
+	host.live_status = {"name": "godot-ai", "version": "0.0.1", "ws_port": 9500, "status_code": 200}
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._readopt_after_spawn_exit_retried = true
+
+	manager.start_server()
+	var guard_after: bool = manager._readopt_after_spawn_exit_retried
+	host.free()
+	GodotAiPlugin._server_started_this_session = saved_guard
+
+	assert_false(guard_after,
+		"a fresh walk must reset the re-adopt budget at its top")
 
 
 func test_spawn_fast_exit_foreign_occupant_reuses_probe_snapshot() -> void:

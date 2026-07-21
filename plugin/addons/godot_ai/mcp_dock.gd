@@ -1114,6 +1114,13 @@ static func _crash_body_for_state(state: int, server_status: Dictionary = {}) ->
 				return foreign_message
 			return "Another process is already bound to port %d. Pick a free port or stop the other process." % port
 		ServerStateScript.CRASHED:
+			## #805: a specific crash diagnosis from the lifecycle (e.g. the
+			## flapping-occupant latch) beats the generic launch-mode copy.
+			## Generic crash paths clear the message, so stale text from an
+			## earlier state can't leak in here.
+			var crash_message := str(server_status.get("message", ""))
+			if not crash_message.is_empty():
+				return crash_message
 			## Both spawn attempts failed on the uvx tier — stock releases:
 			## PyPI lag. Local builds (version with +metadata): almost always the
 			## dev venv was not found (unresolved junction/symlink) so uvx tried

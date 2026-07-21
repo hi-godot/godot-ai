@@ -788,6 +788,25 @@ func test_crashed_body_mentions_pypi_propagation_on_uvx_tier() -> void:
 		assert_contains(body, "output log", "Non-uvx body should still point at Godot's traceback")
 
 
+func test_crashed_body_prefers_lifecycle_message() -> void:
+	## #805: a specific crash diagnosis from the lifecycle (the flapping-
+	## occupant latch) must render verbatim instead of the generic
+	## launch-mode copy. Generic crash paths clear the message, so this
+	## preference can't surface stale text.
+	var message := "The spawned server keeps exiting while another godot-ai server answers on port 8000, and re-adoption was already attempted."
+	var body := McpDockScript._crash_body_for_state(
+		McpServerState.CRASHED, {"message": message}
+	)
+	assert_eq(body, message)
+
+
+func test_crashed_body_without_message_keeps_launch_mode_copy() -> void:
+	var body := McpDockScript._crash_body_for_state(McpServerState.CRASHED, {"message": ""})
+	assert_false(body.is_empty())
+	assert_false(body.contains("another godot-ai server"),
+		"an empty lifecycle message must fall back to the launch-mode copy")
+
+
 func test_foreign_port_body_prefers_lifecycle_message() -> void:
 	## #647: when the post-crash probe diagnosed which port a foreign
 	## process holds, the crash body must render that message verbatim
