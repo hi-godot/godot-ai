@@ -90,7 +90,7 @@ failure message.
 | Method | Behavior |
 |---|---|
 | `suite_name() -> String` | Override. Short suite id (e.g. `"scene"`), matched exactly by `test_run suite=...`. Default `"unnamed"`. |
-| `suite_setup(ctx: Dictionary) -> void` | Override. Runs once before the suite. `ctx` is `{"undo_redo": EditorUndoRedoManager, "log_buffer": McpLogBuffer}`; each suite gets a fresh duplicate, so mutations can't leak between suites. |
+| `suite_setup(ctx: Dictionary) -> void` | Override. Runs once before the suite. `ctx` is `{"undo_redo": EditorUndoRedoManager, "log_buffer": McpLogBuffer}`; each suite receives a fresh `ctx.duplicate(true)`, so Dictionary mutations can't leak between suites — but the contained Objects (the undo/redo manager, the log buffer) are shared editor references, so treat them as shared state. |
 | `setup() -> void` | Override. Runs before each test. |
 | `teardown() -> void` | Override. Runs after each test. |
 | `suite_teardown() -> void` | Override. Runs once after the suite. |
