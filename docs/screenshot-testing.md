@@ -8,13 +8,19 @@ capture within 20s" timeouts.
 
 | Goal | `source` | Notes |
 |------|----------|-------|
-| Verify in-editor UI / inspector / dock layout | `viewport` | Captures the editor's 2D view directly — no debugger bridge, always works. |
-| Verify a 3D scene framing as the editor camera sees it | `viewport` | Same path, no game subprocess required. |
+| Verify a 3D scene framing as the editor camera sees it | `viewport` (the default) | Captures the editor's **3D** viewport — no debugger bridge, no game subprocess. Requires Node3D content in the edited scene; a 2D-only scene (or no scene open) returns `EDITOR_NOT_READY` with a hint. Supports `view_target` / `coverage` / `elevation` / `azimuth` / `fov` reframing. |
+| Verify a 2D scene as the editor shows it | `viewport_2d` | Captures the editor's **2D** viewport at its *current pan/zoom* — whatever is on screen in the 2D view. It has no framing parameters: `view_target`, `coverage`, `elevation`, `azimuth`, and `fov` are rejected with `INVALID_PARAMS`. |
 | Verify a running game's framebuffer (menus that exist at runtime, gameplay state, particle effects, runtime UI animations) | `game` | Requires the game subprocess + `_mcp_game_helper` autoload + a `project_run`-driven play cycle. |
-| Verify a specific `Camera3D` view without playing | `cinematic` (where supported) | Doesn't require Play. |
+| Verify a specific `Camera3D` view without playing | `cinematic` | Renders the edited scene through its active `Camera3D` (no editor gizmos). Prefers a camera marked `current`, else the first `Camera3D` found; `NODE_NOT_FOUND` if the scene has none. |
 
-**Default to `viewport` when in doubt.** `source="game"` is only the right
-answer when the thing you want to see only exists in the *running* game.
+No source captures the editor UI itself — docks, the Inspector, and panel
+layout are not screenshot-able through this tool. `viewport` and
+`viewport_2d` capture the scene *content* shown in the editor's 3D/2D
+views, not the surrounding editor chrome.
+
+**Default to `viewport` for 3D scenes and `viewport_2d` for 2D scenes.**
+`source="game"` is only the right answer when the thing you want to see
+only exists in the *running* game.
 
 ## Recipe: testing a runtime UI option (e.g. main menu)
 
