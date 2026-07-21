@@ -1116,21 +1116,21 @@ static func _crash_body_for_state(state: int, server_status: Dictionary = {}) ->
 				var version := ClientConfigurator.get_plugin_version()
 				var pin := ClientConfigurator._pypi_pin_version(version)
 				if pin != version:
+					## `%` binds tighter than `+` in GDScript — format the fully
+					## concatenated string, never the last fragment alone.
 					return (
 						"The server exited before the WebSocket handshake. "
 						+ "Local plugin version is %s (PEP 440 local build metadata) — uvx pins PyPI godot-ai==%s. "
 						+ "If you need checkout-local server code, ensure addons/godot_ai resolves to your "
 						+ "dev tree (symlink/junction) with a `.venv`, or set GODOT_AI_VENV_PYTHON to that "
-						+ "python.exe, then Reload Plugin. Log should show 'MCP | using dev venv: ...'."
-						% [version, pin]
-					)
+						+ "venv's python binary, then Reload Plugin. Log should show 'MCP | using dev venv: ...'."
+					) % [version, pin]
 				return (
 					"The server exited before the WebSocket handshake, even after a `uvx --refresh` retry. "
 					+ "If this is a brand-new release, PyPI's index may still be propagating (~10 min). "
 					+ "Wait a moment and click Reload Plugin to retry, or check Godot's output log for Python's traceback. "
 					+ "Target: godot-ai==%s."
-					% pin
-				)
+				) % pin
 			return "The server exited before the WebSocket handshake. Check Godot's output log (bottom panel) for Python's traceback."
 		ServerStateScript.NO_COMMAND:
 			return "No godot-ai server found. Install `uv` via the Setup panel above, or run `pip install godot-ai`."

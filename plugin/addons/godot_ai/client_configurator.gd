@@ -758,8 +758,16 @@ static func resolve_addons_realpath() -> String:
 static func _find_venv_python() -> String:
 	## Optional hard override (junction edge cases / CI).
 	var env_py := McpPathTemplate.env_lookup("GODOT_AI_VENV_PYTHON").strip_edges()
-	if not env_py.is_empty() and FileAccess.file_exists(env_py):
-		return env_py
+	if not env_py.is_empty():
+		if FileAccess.file_exists(env_py):
+			return env_py
+		## An explicit override pointing nowhere is a misconfiguration the
+		## user needs to see — falling through silently would make the dev
+		## venv appear randomly ignored.
+		push_warning(
+			"godot-ai: GODOT_AI_VENV_PYTHON is set but no file exists at '%s'; ignoring override."
+			% env_py
+		)
 	## 1) Walk up from the open project (classic monorepo / test_project layout).
 	var from_project := _find_venv_python_in(
 		ProjectSettings.globalize_path("res://").rstrip("/").rstrip("\\")

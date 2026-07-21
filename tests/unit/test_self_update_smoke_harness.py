@@ -123,7 +123,8 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
     assert "extends McpSelfUpdateSmokeBase" in vnext_child
     assert "const DEFAULT_HTTP_PORT := 18000" in vnext_configurator
     assert 'const SELF_UPDATE_SMOKE_SERVER_VERSION := "2.2.0"' in vnext_configurator
-    # uvx pin: stock uses `version`; local-build builds use `_pypi_pin_version` → `pypi_version`.
+    # uvx pin: stock releases format with `version`; local builds go through
+    # `_pypi_pin_version` and format with `pypi_version`.
     assert (
         'godot-ai==%s" % version' in vnext_configurator
         or 'godot-ai==%s" % pypi_version' in vnext_configurator
