@@ -39,9 +39,8 @@ func get_scene_tree(params: Dictionary) -> Dictionary:
 	# pass by reference in GDScript). The walk still visits every node to get an
 	# accurate total_count, but only materializes those inside the window.
 	var index_ref: Array[int] = [0]
-	# Full reads thread clean paths down the DFS (see _walk_tree); seed the root's.
-	var root_path := ("/" + String(scene_root.name)) if limit <= 0 else ""
-	_walk_tree(scene_root, nodes, 0, max_depth, scene_root, offset, limit, index_ref, root_path)
+	# _walk_tree self-seeds the root's path for full reads; pass "" explicitly.
+	_walk_tree(scene_root, nodes, 0, max_depth, scene_root, offset, limit, index_ref, "")
 	var total: int = index_ref[0]
 	return {"data": {
 		"nodes": nodes,
@@ -384,7 +383,7 @@ func _save_current_scene_as(path: String) -> void:
 	EditorInterface.save_scene_as(path)
 
 
-func _walk_tree(node: Node, out: Array[Dictionary], depth: int, max_depth: int, scene_root: Node, offset: int, limit: int, index_ref: Array[int], node_path: String = "") -> void:
+func _walk_tree(node: Node, out: Array[Dictionary], depth: int, max_depth: int, scene_root: Node, offset: int, limit: int, index_ref: Array[int], node_path: String) -> void:
 	if depth > max_depth:
 		return
 	var idx: int = index_ref[0]
@@ -393,15 +392,21 @@ func _walk_tree(node: Node, out: Array[Dictionary], depth: int, max_depth: int, 
 	# it we still recurse (to count total_count) but skip the per-node dict.
 	#
 	# Path build strategy depends on the read shape (identical output either way):
-	#   * Full reads (limit <= 0, e.g. the godot://scene/hierarchy resource) thread
-	#     the parent's clean path down the DFS — each node's path is one O(1) concat
-	#     reusing the descent, instead of McpScenePath.from_node's two native walks
-	#     back up (is_ancestor_of + get_path_to). Benchmarked ~1.8x faster on a
-	#     ~1.5k-node tree, up to ~5x on deep chains.
-	#   * Paginated reads (limit > 0) keep from_node for just the windowed nodes:
-	#     threading would concatenate a path for every node (all are still visited
-	#     for total_count), which benchmarks ~20% slower for a small window.
-	var incremental := limit <= 0
+	#   * A whole-tree read (offset == 0 and limit <= 0 — the resource-style read
+	#     backing godot://scene/hierarchy) threads the parent's clean path down the
+	#     DFS: each node's path is one O(1) concat reusing the descent, instead of
+	#     McpScenePath.from_node's two native walks back up (is_ancestor_of +
+	#     get_path_to). Benchmarked ~1.8x faster on a ~1.5k-node tree, up to ~5x on
+	#     deep chains.
+	#   * Any windowed read (limit > 0, or an offset > 0 skip) keeps from_node for
+	#     just the emitted nodes: threading would concatenate a path for every node
+	#     visited for total_count, which benchmarks ~20% slower for a small window.
+	#
+	# `node_path` is self-seeded at the scene root below, so a caller cannot leave
+	# a full read unseeded (it has no default — pass "" for windowed reads).
+	var incremental := limit <= 0 and offset == 0
+	if incremental and node == scene_root:
+		node_path = "/" + String(scene_root.name)
 	var in_window := idx >= offset and (limit <= 0 or idx < offset + limit)
 	if in_window:
 		out.append({
