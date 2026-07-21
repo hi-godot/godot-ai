@@ -204,6 +204,12 @@ func test_headless_mcp_write_parse_failure_does_not_ring_watermark() -> void:
 	assert_eq(after.debugger_promoted, before.debugger_promoted,
 		"No Debugger Errors-tab row may be promoted for an MCP-written parse failure")
 	DirAccess.remove_absolute(path)
+	## Tell the editor filesystem the broken file is gone — this test asserted
+	## the path was registered, and leaving the record behind makes later scans
+	## re-emit its parse error into other suites' capture windows (same cleanup
+	## as test_filesystem.gd's parse-diagnostics test).
+	if efs != null:
+		efs.update_file(path)
 
 
 func _attach_shared_editor_logger(buffer: McpEditorLogBuffer) -> void:
