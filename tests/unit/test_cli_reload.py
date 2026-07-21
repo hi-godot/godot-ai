@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 from pathlib import Path
 
 import fastmcp
@@ -7,6 +8,23 @@ import pytest
 
 import godot_ai
 from godot_ai import asgi
+
+
+def _free_ports(count: int) -> list[int]:
+    """Distinct ephemeral ports that are free right now. ``main()``'s
+    preflight really binds the HTTP and WS ports, so hard-coded values
+    collide with whatever the local environment happens to run — a live
+    dev server on the 9500 default, a parallel test run, another editor
+    (#789). All sockets stay open until every port is allocated so the
+    OS can't hand the same port out twice."""
+    socks = [socket.socket() for _ in range(count)]
+    try:
+        for s in socks:
+            s.bind(("127.0.0.1", 0))
+        return [s.getsockname()[1] for s in socks]
+    finally:
+        for s in socks:
+            s.close()
 
 
 class StubServer:
@@ -188,18 +206,15 @@ def test_main_widens_http_bind_only_when_allow_host_set(monkeypatch):
     monkeypatch.setattr("godot_ai.server.create_server", lambda **kw: StubServer(app=None))
     monkeypatch.setattr(fastmcp.settings, "host", "127.0.0.1")
 
-    ## Non-default --ws-port: the preflight really binds the WS port, and
-    ## the default 9500 is held by any live dev-server/editor on this
-    ## machine — without the override the test fails on environment, not
-    ## code.
+    http_port, ws_port = _free_ports(2)
     godot_ai.main(
         [
             "--transport",
             "streamable-http",
             "--port",
-            "8123",
+            str(http_port),
             "--ws-port",
-            "9556",
+            str(ws_port),
             "--allow-host",
             "192.168.1.0/24",
         ]
@@ -213,8 +228,10 @@ def test_main_does_not_widen_bind_without_allow_host(monkeypatch):
     monkeypatch.setattr("godot_ai.server.create_server", lambda **kw: StubServer(app=None))
     monkeypatch.setattr(fastmcp.settings, "host", "127.0.0.1")
 
-    ## Non-default --ws-port for the same live-dev-server reason as above.
-    godot_ai.main(["--transport", "streamable-http", "--port", "8123", "--ws-port", "9557"])
+    http_port, ws_port = _free_ports(2)
+    godot_ai.main(
+        ["--transport", "streamable-http", "--port", str(http_port), "--ws-port", str(ws_port)]
+    )
     assert fastmcp.settings.host == "127.0.0.1"
 
 

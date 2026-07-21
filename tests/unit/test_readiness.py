@@ -320,6 +320,22 @@ async def test_require_writable_async_rejects_importing_after_hold_cap():
     assert fake.now == pytest.approx(_IMPORTING_HOLD_CAP_SECONDS)
 
 
+async def test_require_writable_async_hold_never_overshoots_cap(monkeypatch):
+    """When the cap isn't an exact multiple of the interval, the final
+    sleep is clamped so the hold ends exactly at the cap — never up to a
+    full interval past it (Copilot on #789)."""
+    from godot_ai.handlers import _readiness as readiness_gate
+
+    monkeypatch.setattr(readiness_gate, "_IMPORTING_HOLD_CAP_SECONDS", 0.8)
+    monkeypatch.setattr(readiness_gate, "_IMPORTING_HOLD_PROBE_INTERVAL_SECONDS", 0.5)
+    runtime, session, client, fake = _hold_runtime(["importing"])
+    with pytest.raises(GodotCommandError) as exc_info:
+        await require_writable_async(runtime, clock=fake.monotonic, sleep=fake.sleep)
+    assert exc_info.value.data["sub_code"] == "EDITOR_IMPORTING"
+    assert fake.sleeps == [0.5, pytest.approx(0.3)]
+    assert fake.now == pytest.approx(0.8), "hold must stop at the cap, not one interval past it"
+
+
 async def test_require_writable_async_hold_fails_fast_when_importing_turns_playing():
     """A state change mid-hold exits the loop immediately, and a
     non-importing blocking state raises without any further waiting —

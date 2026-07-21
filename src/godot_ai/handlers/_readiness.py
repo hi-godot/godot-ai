@@ -190,8 +190,11 @@ async def require_writable_async(
         ## write back for the caller to blind-retry. A failed initial
         ## probe skips the hold entirely: waiting can't fix a dead link.
         deadline = clock() + _IMPORTING_HOLD_CAP_SECONDS
-        while clock() < deadline:
-            await sleep(_IMPORTING_HOLD_PROBE_INTERVAL_SECONDS)
+        while (remaining := deadline - clock()) > 0:
+            ## Clamp the final sleep so the hold never overshoots the cap
+            ## when cap isn't an exact multiple of the interval — the last
+            ## re-probe then lands exactly at the deadline.
+            await sleep(min(_IMPORTING_HOLD_PROBE_INTERVAL_SECONDS, remaining))
             if not await _probe_readiness(runtime, session):
                 break
             if session.readiness != "importing":
