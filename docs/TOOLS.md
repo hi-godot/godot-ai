@@ -28,7 +28,7 @@ not the MCP tool names.
 | `scene_open` / `scene_save` | Open and save scenes |
 | `script_create` / `script_attach` / `script_patch` | Create, attach, anchor-edit GDScript files |
 | `project_run` | Play the project, then wait briefly for game liveness (autosave persists in-memory MCP edits unless `autosave=False`) |
-| `test_run` | Run GDScript test suites in the editor |
+| `test_run` | Run GDScript test suites in the editor — see [testing.md](testing.md) for writing suites and the `McpTestSuite` API |
 | `logs_read` | Read plugin / game / editor / combined log buffers. `source="editor"` surfaces parse errors, GDScript reload warnings, @tool/EditorPlugin runtime errors, push_error/push_warning, and visible Debugger dock Errors-tab rows — use this when the editor's Output or Debugger Errors panel shows red/yellow rows |
 | `editor_screenshot` | Capture editor viewport, cinematic camera, or running game framebuffer |
 | `editor_reload_plugin` | Reload the plugin and wait for reconnect (works with external and plugin-managed servers) |
