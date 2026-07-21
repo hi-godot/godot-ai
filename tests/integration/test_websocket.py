@@ -1504,11 +1504,13 @@ class TestHandshakeAuthToken:
         from fastmcp import Client
 
         from godot_ai.server import create_server
+        from tests.conftest import allocate_free_port
 
+        port = allocate_free_port()
         monkeypatch.setenv("GODOT_AI_WS_TOKEN", "env-secret")
-        mcp = create_server(ws_port=19533)
+        mcp = create_server(ws_port=port)
         async with Client(mcp):
-            ws = await websockets.connect("ws://127.0.0.1:19533")
+            ws = await websockets.connect(f"ws://127.0.0.1:{port}")
             await ws.send(
                 json.dumps(
                     {

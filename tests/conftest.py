@@ -22,6 +22,7 @@ os.environ.setdefault("GODOT_AI_DISABLE_TELEMETRY", "true")
 
 import asyncio
 import json
+import socket
 from dataclasses import dataclass, field
 
 import pytest
@@ -29,6 +30,28 @@ import websockets
 
 from godot_ai.sessions.registry import SessionRegistry
 from godot_ai.transport.websocket import GodotWebSocketServer
+
+
+def allocate_free_port() -> int:
+    """Grab a free loopback port by binding an ephemeral socket, then release it.
+
+    Hardcoded ports made two concurrent pytest runs (e.g. two worktrees of
+    the same clone) collide: the second run's server either failed to bind
+    or its mock plugin connected to the *other* run's server and died with
+    "4001 session id already registered". The port is free at allocation
+    time; the caller is expected to bind it promptly.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+@pytest.fixture(scope="session")
+def mcp_ws_port() -> int:
+    """WebSocket port for the ``mcp_stack`` server, allocated once per pytest
+    session. Tests that dial the mcp_stack server directly must use this
+    fixture instead of hardcoding a port."""
+    return allocate_free_port()
 
 
 async def drain_handshake_ack(ws) -> dict:
@@ -156,13 +179,13 @@ class ServerHarness:
 
 
 @pytest.fixture
-async def mcp_stack():
+async def mcp_stack(mcp_ws_port):
     """Full MCP server + mock Godot plugin connected via FastMCP Client."""
     from fastmcp import Client
 
     from godot_ai.server import create_server
 
-    port = 19502
+    port = mcp_ws_port
     mcp = create_server(ws_port=port)
     async with Client(mcp) as client:
         ws = await websockets.connect(f"ws://127.0.0.1:{port}")
@@ -184,11 +207,9 @@ async def mcp_stack():
 
 @pytest.fixture
 async def harness():
-    """Spin up a GodotWebSocketServer on a random high port, yield a ServerHarness, tear down."""
+    """Spin up a GodotWebSocketServer on a free port, yield a ServerHarness, tear down."""
     registry = SessionRegistry()
-    # Use port 0 to let the OS pick a free port — but websockets.serve needs a fixed port.
-    # Pick a high port unlikely to conflict.
-    port = 19500
+    port = allocate_free_port()
     server = GodotWebSocketServer(registry, port=port)
     task = asyncio.create_task(server.start())
     await asyncio.sleep(0.1)  # let server bind
