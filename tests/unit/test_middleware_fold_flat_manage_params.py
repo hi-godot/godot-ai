@@ -113,6 +113,12 @@ class TestFoldFlatManageParams:
     def test_truncate_leaves_short_repr_unchanged(self):
         assert _truncate("short") == "'short'"
 
+    def test_truncate_bounds_long_non_string_repr(self):
+        rendered = _truncate(list(range(100)), limit=20)
+
+        assert len(rendered) == 20
+        assert rendered.endswith("…")
+
     async def test_folds_flat_key(self, register_script_manage):
         seen: list[dict | None] = []
         ctx = _FakeContext(
@@ -351,6 +357,38 @@ class TestFoldFlatManageParams:
             CallToolRequestParams(
                 name="script_manage",
                 arguments={"op": "read", "params": {"path": "res://x.gd"}},
+            )
+        )
+
+        with pytest.raises(ValidationError) as info:
+            await FoldFlatManageParams().on_call_tool(ctx, await _raise_call_next(exc))
+
+        assert info.value is exc
+
+    async def test_does_not_rewrite_unsupported_nested_error_location(self, register_script_manage):
+        class _NestedParams(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+
+        class _OpParams(BaseModel):
+            nested: _NestedParams
+
+        class _ManageCall(BaseModel):
+            op: str
+            params: _OpParams
+
+        with pytest.raises(ValidationError) as validation_info:
+            _ManageCall.model_validate(
+                {
+                    "op": "read",
+                    "params": {"nested": {"path": "res://x.gd"}},
+                }
+            )
+        exc = validation_info.value
+        assert exc.errors()[0]["loc"] == ("params", "nested", "path")
+        ctx = _FakeContext(
+            CallToolRequestParams(
+                name="script_manage",
+                arguments={"op": "read", "path": "res://x.gd"},
             )
         )
 

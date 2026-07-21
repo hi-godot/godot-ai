@@ -476,6 +476,26 @@ async def test_dispatch_wraps_missing_param_typeerror():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_signature_hint_skips_variadic_params():
+    async def needs_path(rt, path, *args, **kwargs):
+        del rt, path, args, kwargs
+        return {}
+
+    with pytest.raises(GodotCommandError) as exc:
+        await dispatch_manage_op(
+            ops={"go": needs_path},
+            tool_name="x_manage",
+            runtime=None,
+            op="go",
+            params={},
+        )
+
+    assert exc.value.data["accepted"] == ["path"]
+    assert exc.value.data["required"] == ["path"]
+    assert exc.value.data["missing"] == ["path"]
+
+
+@pytest.mark.asyncio
 async def test_dispatch_wraps_extra_param_typeerror():
     async def no_params(rt):
         del rt
