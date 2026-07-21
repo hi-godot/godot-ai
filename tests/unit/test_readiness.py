@@ -8,7 +8,12 @@ import pytest
 
 from godot_ai.godot_client.client import GodotCommandError
 from godot_ai.handlers import editor as editor_handlers
-from godot_ai.handlers._readiness import KNOWN_READINESS, require_writable_async
+from godot_ai.handlers._readiness import (
+    _IMPORTING_HOLD_CAP_SECONDS,
+    _IMPORTING_HOLD_PROBE_INTERVAL_SECONDS,
+    KNOWN_READINESS,
+    require_writable_async,
+)
 from godot_ai.protocol.errors import ErrorCode
 from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.sessions.registry import Session, SessionRegistry
@@ -200,10 +205,98 @@ async def test_require_writable_async_probe_heals_stale_playing_cache():
     assert session.readiness == "ready", "probe must heal the cache before letting the call through"
 
 
-async def test_require_writable_async_rejects_importing_after_probe_confirms():
-    runtime, session, client = _runtime_with_stub(cached="importing", plugin_reports="importing")
+# --- #651 stage 2: bounded hold on live-confirmed importing.
+# All hold tests fake the clock AND the sleep — the suite must never
+# actually wait out the ~8s cap. ---
+
+
+class _FakeHoldClock:
+    """Monotonic fake advanced only by the gate's own sleep calls."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+class _SequencedStateClient:
+    """Stub plugin whose successive ``get_editor_state`` probes walk a fixed
+    readiness sequence; the last value repeats once exhausted. An exception
+    instance in the sequence is raised instead, simulating a mid-hold
+    disconnect / probe timeout."""
+
+    def __init__(self, sequence: list[str | Exception]):
+        self._sequence = sequence
+        self.probe_calls = 0
+
+    async def send(
+        self,
+        command: str,
+        params: dict | None = None,
+        session_id: str | None = None,
+        timeout: float = 5.0,
+        hint_policy=None,
+    ) -> dict:
+        if command != "get_editor_state":
+            raise AssertionError(f"unexpected command: {command}")
+        step = self._sequence[min(self.probe_calls, len(self._sequence) - 1)]
+        self.probe_calls += 1
+        if isinstance(step, Exception):
+            raise step
+        return {
+            "current_scene": "res://main.tscn",
+            "project_name": "p",
+            "is_playing": step == "playing",
+            "godot_version": "4.4.1",
+            "readiness": step,
+        }
+
+
+def _hold_runtime(
+    sequence: list[str | Exception], cached: str = "importing"
+) -> tuple[DirectRuntime, Session, _SequencedStateClient, _FakeHoldClock]:
+    session = _make_session(cached)
+    registry = SessionRegistry()
+    registry.register(session)
+    client = _SequencedStateClient(sequence)
+    return DirectRuntime(registry=registry, client=client), session, client, _FakeHoldClock()
+
+
+def test_importing_hold_tuning_constants():
+    """Pin the telemetry-derived tuning (14d retry-gap analysis, N=733:
+    still-importing 59% <1s → 29% 1-3s → 18% 3-5s → 9% 5-10s → ~12-15%
+    plateau). Retuning is legitimate but needs fresh telemetry — update
+    the source comment in _readiness.py together with this test."""
+    assert _IMPORTING_HOLD_CAP_SECONDS == 8.0
+    assert _IMPORTING_HOLD_PROBE_INTERVAL_SECONDS == 0.5
+
+
+async def test_require_writable_async_importing_hold_clears_early():
+    """An import that finishes on an early re-probe lets the write proceed
+    with no error — and the hold exits promptly, not after the full cap."""
+    runtime, session, client, fake = _hold_runtime(["importing", "importing", "ready"])
+
+    await require_writable_async(runtime, clock=fake.monotonic, sleep=fake.sleep)
+
+    # Initial confirm + two hold re-probes; the second re-probe saw "ready".
+    assert client.probe_calls == 3
+    assert session.readiness == "ready"
+    assert fake.sleeps == [_IMPORTING_HOLD_PROBE_INTERVAL_SECONDS] * 2
+    assert fake.now < _IMPORTING_HOLD_CAP_SECONDS, "must exit as soon as importing clears"
+
+
+async def test_require_writable_async_rejects_importing_after_hold_cap():
+    """An import that outlives the cap raises exactly the pre-hold error:
+    same sub-code, same retryable flag, same hint text."""
+    runtime, session, client, fake = _hold_runtime(["importing"])
     with pytest.raises(GodotCommandError) as exc_info:
-        await require_writable_async(runtime)
+        await require_writable_async(runtime, clock=fake.monotonic, sleep=fake.sleep)
     assert exc_info.value.code == ErrorCode.EDITOR_NOT_READY
     data = exc_info.value.data
     # #651 stage 1: the sub-code names the blocking state so telemetry can
@@ -220,13 +313,73 @@ async def test_require_writable_async_rejects_importing_after_probe_confirms():
     assert "retryable=True" in str(exc_info.value)
     assert "editor_state=importing" in str(exc_info.value)
     assert "sub_code=EDITOR_IMPORTING" in str(exc_info.value)
+    # Initial confirm + one re-probe per interval until the cap ran out —
+    # and the fake clock proves the hold stopped at the cap, not beyond.
+    expected_probes = int(_IMPORTING_HOLD_CAP_SECONDS / _IMPORTING_HOLD_PROBE_INTERVAL_SECONDS)
+    assert client.probe_calls == 1 + expected_probes
+    assert fake.now == pytest.approx(_IMPORTING_HOLD_CAP_SECONDS)
+
+
+async def test_require_writable_async_hold_never_overshoots_cap(monkeypatch):
+    """When the cap isn't an exact multiple of the interval, the final
+    sleep is clamped so the hold ends exactly at the cap — never up to a
+    full interval past it (Copilot on #789)."""
+    from godot_ai.handlers import _readiness as readiness_gate
+
+    monkeypatch.setattr(readiness_gate, "_IMPORTING_HOLD_CAP_SECONDS", 0.8)
+    monkeypatch.setattr(readiness_gate, "_IMPORTING_HOLD_PROBE_INTERVAL_SECONDS", 0.5)
+    runtime, session, client, fake = _hold_runtime(["importing"])
+    with pytest.raises(GodotCommandError) as exc_info:
+        await require_writable_async(runtime, clock=fake.monotonic, sleep=fake.sleep)
+    assert exc_info.value.data["sub_code"] == "EDITOR_IMPORTING"
+    assert fake.sleeps == [0.5, pytest.approx(0.3)]
+    assert fake.now == pytest.approx(0.8), "hold must stop at the cap, not one interval past it"
+
+
+async def test_require_writable_async_hold_fails_fast_when_importing_turns_playing():
+    """A state change mid-hold exits the loop immediately, and a
+    non-importing blocking state raises without any further waiting —
+    the hold never converts a playing rejection into a delay."""
+    runtime, session, client, fake = _hold_runtime(["importing", "playing"])
+    with pytest.raises(GodotCommandError) as exc_info:
+        await require_writable_async(runtime, clock=fake.monotonic, sleep=fake.sleep)
+    assert exc_info.value.data["sub_code"] == "EDITOR_PLAYING"
+    assert client.probe_calls == 2
+    assert fake.sleeps == [_IMPORTING_HOLD_PROBE_INTERVAL_SECONDS]
+
+
+async def test_require_writable_async_no_hold_when_initial_probe_fails():
+    """A failed initial probe (plugin unreachable) skips the hold — waiting
+    can't fix a dead link, so the cached importing state rejects at once."""
+    runtime, session, client, fake = _hold_runtime([ConnectionError("plugin gone")])
+    with pytest.raises(GodotCommandError) as exc_info:
+        await require_writable_async(runtime, clock=fake.monotonic, sleep=fake.sleep)
+    assert exc_info.value.data["sub_code"] == "EDITOR_IMPORTING"
     assert client.probe_calls == 1
+    assert fake.sleeps == []
+
+
+async def test_require_writable_async_hold_stops_on_mid_hold_probe_failure():
+    """A probe failure inside the hold stops the loop and enforces against
+    the cached value — same disconnect rationale as the initial probe."""
+    runtime, session, client, fake = _hold_runtime(
+        ["importing", ConnectionError("plugin gone mid-hold")]
+    )
+    with pytest.raises(GodotCommandError) as exc_info:
+        await require_writable_async(runtime, clock=fake.monotonic, sleep=fake.sleep)
+    assert exc_info.value.data["sub_code"] == "EDITOR_IMPORTING"
+    assert client.probe_calls == 2
+    assert fake.sleeps == [_IMPORTING_HOLD_PROBE_INTERVAL_SECONDS]
 
 
 async def test_require_writable_async_rejects_playing_after_probe_confirms():
     runtime, session, client = _runtime_with_stub(cached="playing", plugin_reports="playing")
+    ## Fake clock/sleep so this test also PROVES playing gets no #651
+    ## stage-2 hold: rejection must be immediate, zero sleeps.
+    fake = _FakeHoldClock()
     with pytest.raises(GodotCommandError) as exc_info:
-        await require_writable_async(runtime)
+        await require_writable_async(runtime, clock=fake.monotonic, sleep=fake.sleep)
+    assert fake.sleeps == [], "playing must fail fast — the bounded hold is importing-only"
     assert exc_info.value.code == ErrorCode.EDITOR_NOT_READY
     assert "play mode" in exc_info.value.message
     # The message names the recovery tool (the rolled-up form) so MCP

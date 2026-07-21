@@ -31,9 +31,11 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 signal connection_state_changed(is_open: bool)
 
 var _peer := WebSocketPeer.new()
-## Set by plugin.gd after resolving the configured WebSocket port once for the
-## server spawn. Reconnects reuse this cached value so they keep dialing the
-## same port the Python server was asked to bind.
+## Seeded by plugin.gd from the configured EditorSettings port before the
+## first dial, then republished with the fully resolved port once the
+## deferred startup walk (#678) finishes resolving/spawning. Each connect
+## attempt recomputes the URL from the latest value, so reconnects keep
+## dialing the port the Python server was asked to bind.
 var ws_port := ClientConfigurator.DEFAULT_WS_PORT
 ## Per-launch handshake auth token (#690). Set by plugin.gd from the value
 ## it generated for the server spawn (also persisted in the managed-server

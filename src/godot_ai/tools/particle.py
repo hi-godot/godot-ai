@@ -24,7 +24,9 @@ Ops:
   • set_process(node_path, properties)
         Behavior props (auto-creates ProcessMaterial for GPU). Emission shape,
         velocity, gravity, color_ramp, scale_curve, turbulence. See full
-        property list in the Godot reference.
+        property list in the Godot reference. GPU gravity is a Vector3 —
+        pass {x, y, z} or [x, y, z], including for gpu_2d (the shared
+        ProcessMaterial is 3D; z is ignored in 2D).
   • set_draw_pass(node_path, pass_=1, mesh="", texture="", material="")
         What gets drawn per particle. GPU 3D: mesh in draw_pass_N + optional
         material override. GPU 2D / CPU 2D: texture. CPU 3D: mesh.
@@ -35,6 +37,15 @@ Ops:
   • apply_preset(parent_path, name, preset, type="gpu_3d", overrides=None)
         Curated effects: fire, smoke, spark_burst, magic_swirl, rain,
         explosion, lightning. One-shot presets re-trigger via restart.
+        overrides = {"main": {...}, "process": {...}, "draw": {...}}; bare
+        keys are auto-routed to main (amount, lifetime, one_shot, ...) or
+        process — draw keys must be nested under "draw". draw configures
+        the gpu_3d draw-pass StandardMaterial3D (blend_mode, albedo_color,
+        emission, ...); on gpu_2d only draw.texture (res:// path) applies;
+        cpu_* types reject draw overrides. Unknown or malformed override
+        keys return INVALID_PARAMS (never silently dropped); response
+        reports applied_main / applied_process / applied_draw. GPU gravity
+        requires {x, y, z} (or [x, y, z]) even for gpu_2d.
 """
 
 

@@ -93,8 +93,25 @@ class _CrashSurvivorPlugin extends _ProofPlugin:
 const TEST_PORT := 65432
 
 
+## The spawn/adopt-path tests below drive the real startup walk on
+## _ProofPlugin fixtures, and the walk publishes via _set_resolved_ws_port —
+## which writes plugin.gd's SHARED statics (GDScript statics are per-Script,
+## so fixtures extending plugin.gd share them with the live plugin
+## instance). The first-dial seed made the kept resolution load-bearing: a
+## leaked fixture port (e.g. a record's 9500) would poison the next live
+## plugin reload's first dial. Capture the live values once, restore after
+## every test.
+var _saved_resolved_ws_port := 0
+var _saved_ws_port_published := false
+
+
 func suite_name() -> String:
 	return "plugin_lifecycle"
+
+
+func suite_setup(_ctx: Dictionary) -> void:
+	_saved_resolved_ws_port = GodotAiPlugin._resolved_ws_port
+	_saved_ws_port_published = GodotAiPlugin._ws_port_resolution_published
 
 
 func setup() -> void:
@@ -105,6 +122,8 @@ func setup() -> void:
 
 func teardown() -> void:
 	GodotAiPlugin._server_started_this_session = false
+	GodotAiPlugin._resolved_ws_port = _saved_resolved_ws_port
+	GodotAiPlugin._ws_port_resolution_published = _saved_ws_port_published
 	## Stop-finalize tests write to EditorSettings + the pid-file on disk;
 	## scrub both so state doesn't leak across tests or outlast the suite.
 	var es := EditorInterface.get_editor_settings()
@@ -865,6 +884,58 @@ func test_managed_compatible_adoption_log_reports_owned_pid() -> void:
 		"2.2.3"
 	)
 	assert_contains(message, "adopted managed server (PID 22222")
+
+
+func test_startup_ws_port_seed_prefers_configured_before_first_resolution() -> void:
+	## Regression: with the startup walk's port resolution deferred to a
+	## worker (#678), `_enter_tree` builds the Connection before
+	## `_set_resolved_ws_port` publishes. The pre-seed static held
+	## DEFAULT_WS_PORT, so a `godot_ai/ws_port` EditorSettings override
+	## (e.g. 19630) was ignored on the first dial — it failed against
+	## ws://127.0.0.1:9500 and only the 1s retry reached the configured
+	## port. The seed must hand the configured value to the first dial.
+	var seeded := GodotAiPlugin._startup_ws_port_seed(
+		false, McpClientConfigurator.DEFAULT_WS_PORT, 19630
+	)
+	assert_eq(seeded, 19630, "fresh session must dial the configured override first")
+
+	var unchanged := GodotAiPlugin._startup_ws_port_seed(
+		false, McpClientConfigurator.DEFAULT_WS_PORT, McpClientConfigurator.DEFAULT_WS_PORT
+	)
+	assert_eq(unchanged, McpClientConfigurator.DEFAULT_WS_PORT, "no override keeps the default")
+
+
+func test_startup_ws_port_seed_keeps_published_resolution_on_reload() -> void:
+	## A plugin reload in the same editor session adopts the server the
+	## previous instance spawned — the published resolution can differ from
+	## the configured value (Windows-reservation remap, adopted-server
+	## record) and must win over a re-read of the setting.
+	var remapped := GodotAiPlugin._startup_ws_port_seed(true, 9505, 9500)
+	assert_eq(remapped, 9505, "reload must keep the prior instance's remapped port")
+
+	var setting_changed_mid_session := GodotAiPlugin._startup_ws_port_seed(true, 10500, 19630)
+	assert_eq(
+		setting_changed_mid_session,
+		10500,
+		"a mid-session setting change must not clobber a published resolution — the walk republishes"
+	)
+
+
+func test_set_resolved_ws_port_marks_resolution_published() -> void:
+	## The seed's reload guard must flip exactly when a walk publishes.
+	var saved_port := GodotAiPlugin._resolved_ws_port
+	var saved_published := GodotAiPlugin._ws_port_resolution_published
+	GodotAiPlugin._ws_port_resolution_published = false
+	var plugin := GodotAiPlugin.new()
+	plugin._set_resolved_ws_port(TEST_PORT)
+	plugin.free()
+	assert_eq(GodotAiPlugin._resolved_ws_port, TEST_PORT)
+	assert_true(
+		GodotAiPlugin._ws_port_resolution_published,
+		"a published resolution must arm the reload guard so _enter_tree stops re-seeding"
+	)
+	GodotAiPlugin._resolved_ws_port = saved_port
+	GodotAiPlugin._ws_port_resolution_published = saved_published
 
 
 func test_resolved_ws_port_drops_stale_record_value() -> void:

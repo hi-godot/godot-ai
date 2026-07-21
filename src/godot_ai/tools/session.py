@@ -6,6 +6,8 @@ Top-level: ``session_activate`` (selecting which editor commands target).
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import session as session_handlers
@@ -22,14 +24,26 @@ Ops:
         List every connected Godot editor with metadata: session_id, short
         name, godot_version, project_path, plugin_version, server_version,
         editor_pid, server_launch_mode, current_scene, play_state, readiness,
-        connected_at, last_seen, is_active.
+        connected_at, last_seen, is_active. The response also carries the
+        server-global ``exclude_domains`` (tool domains not registered on
+        this server via --exclude-domains).
 """
 
 
-def register_session_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
+def register_session_tools(
+    mcp: FastMCP,
+    *,
+    include_non_core: bool = True,
+    exclude_domains: Iterable[str] | None = None,
+) -> None:
     ## ``include_non_core`` is accepted for a uniform signature with other
     ## core-bearing domains. session has no core/non-core split.
     del include_non_core
+
+    ## Server-global exclusion set, surfaced in ``list`` responses so the
+    ## capability picture an agent builds matches what was actually
+    ## registered (#772).
+    excluded = sorted(set(exclude_domains or ()))
 
     @mcp.tool()
     def session_activate(ctx: Context, session_id: str) -> dict:
@@ -50,12 +64,15 @@ def register_session_tools(mcp: FastMCP, *, include_non_core: bool = True) -> No
         runtime = DirectRuntime.from_context(ctx)
         return session_handlers.session_activate(runtime, session_id)
 
+    def session_list(runtime: DirectRuntime) -> dict:
+        return {**session_handlers.session_list(runtime), "exclude_domains": excluded}
+
     register_manage_tool(
         mcp,
         tool_name="session_manage",
         description=_DESCRIPTION,
         ops={
-            "list": session_handlers.session_list,
+            "list": session_list,
         },
         read_resource_forms={
             "list": "godot://sessions",

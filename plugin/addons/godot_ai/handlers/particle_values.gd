@@ -169,7 +169,12 @@ static func coerce(property: String, value: Variant, target_type: int) -> Dictio
 ##   albedo_color: Color
 ##   albedo_texture: res:// path
 ##   (anything else accepted by BaseMaterial3D.set())
-static func build_draw_material(config: Dictionary) -> StandardMaterial3D:
+##
+## Returns {ok: true, material: StandardMaterial3D, applied: Array[String]},
+## or {ok: false, key, error, unknown_key} when a config key is not a
+## StandardMaterial3D property or its value fails coercion — draw config must
+## not disappear silently (#770).
+static func build_draw_material(config: Dictionary) -> Dictionary:
 	var mat := StandardMaterial3D.new()
 	# Sensible defaults for particle draw-pass rendering.
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -178,17 +183,30 @@ static func build_draw_material(config: Dictionary) -> StandardMaterial3D:
 	mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
 	mat.billboard_keep_scale = true
 	# Configure from dict overrides.
+	var applied: Array[String] = []
 	for key in config:
 		var prop_name := String(key)
 		var prop_type := _object_property_type(mat, prop_name)
 		if prop_type == TYPE_NIL:
-			continue
+			return {
+				"ok": false,
+				"key": prop_name,
+				"unknown_key": true,
+				"error": "Unknown draw key '%s' (not a StandardMaterial3D property)" % prop_name,
+			}
 		var coerce_result := MaterialValues.coerce_material_value(
 			prop_name, config[prop_name], prop_type
 		)
-		if coerce_result.ok:
-			mat.set(prop_name, coerce_result.value)
-	return mat
+		if not coerce_result.ok:
+			return {
+				"ok": false,
+				"key": prop_name,
+				"unknown_key": false,
+				"error": "draw.%s: %s" % [prop_name, coerce_result.error],
+			}
+		mat.set(prop_name, coerce_result.value)
+		applied.append(prop_name)
+	return {"ok": true, "material": mat, "applied": applied}
 
 
 static func _object_property_type(obj: Object, name: String) -> int:

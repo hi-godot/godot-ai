@@ -59,6 +59,7 @@ from godot_ai.tools.autoload import register_autoload_tools
 from godot_ai.tools.batch import register_batch_tools
 from godot_ai.tools.camera import register_camera_tools
 from godot_ai.tools.client import register_client_tools
+from godot_ai.tools.domains import CORE_BEARING_DOMAINS, CORE_TOOLS
 from godot_ai.tools.editor import register_editor_tools
 from godot_ai.tools.filesystem import register_filesystem_tools
 from godot_ai.tools.game import register_game_tools
@@ -112,6 +113,235 @@ class GodotAIFastMCP(FastMCP):
         ## endpoints are guarded uniformly. ``--allow-host`` (#421) widens
         ## only the Host allowlist to named LAN CIDRs; None = loopback-only.
         return LocalhostOnlyHTTPMiddleware(app, getattr(self, "_allow_host_networks", None))
+
+
+## ---------------------------------------------------------------------------
+## MCP ``instructions`` — the capability map advertised to clients. Built per
+## server so configured ``--exclude-domains`` are reflected in what we
+## advertise (#772): an excluded tool must read as "excluded by config", not
+## as a tool-search failure. Registration truth lives in ``create_server``;
+## the tables below mirror it and are pinned against live registration by
+## ``tests/unit/test_server_instructions.py``.
+
+_INSTRUCTIONS_PREAMBLE = "Production-grade Godot MCP server with persistent editor integration.\n\n"
+
+## The always-loaded core verbs (one line each). Core tools survive their
+## domain's exclusion (see CORE_BEARING_DOMAINS), so these lines are
+## unconditional.
+_CORE_VERB_LINES: tuple[str, ...] = (
+    "  editor_state                      — readiness, version, current scene\n",
+    "  scene_get_hierarchy               — paginated scene tree walk\n",
+    "  node_get_properties               — full property snapshot\n",
+    "  session_activate                  — pin commands to one editor\n",
+)
+
+## Non-core named verbs, grouped into display lines: (separator, ((verb,
+## domain), ...)). A verb drops with its domain; a line whose verbs are all
+## excluded is omitted.
+_NAMED_VERB_LINES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    (" / ", (("node_create", "node"), ("node_set_property", "node"), ("node_find", "node"))),
+    (" / ", (("scene_open", "scene"), ("scene_save", "scene"))),
+    (
+        " / ",
+        (("script_create", "script"), ("script_attach", "script"), ("script_patch", "script")),
+    ),
+    (
+        ", ",
+        (
+            ("project_run", "project"),
+            ("test_run", "testing"),
+            ("batch_execute", "batch"),
+            ("logs_read", "editor"),
+        ),
+    ),
+    (
+        ", ",
+        (
+            ("editor_screenshot", "editor"),
+            ("editor_reload_plugin", "editor"),
+            ("animation_create", "animation"),
+        ),
+    ),
+)
+
+## Rollup display blocks in advertised order: (domain, text). Excluding a
+## domain drops its ``<domain>_manage`` from registration (core-bearing
+## domains keep only their core verb), so the block drops here too. A
+## ``None`` domain is unconditional text: ``session_manage`` stays
+## registered under any exclusion set, and the bare "\n" is the historical
+## blank line before the tilemap/tileset pair (kept for byte-stability of
+## the no-exclusion output).
+_ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
+    ("scene", "  scene_manage     create, save_as, get_roots\n"),
+    (
+        "node",
+        "  node_manage      get_children, get_groups, delete, duplicate, rename,\n"
+        "                   move, reparent, add_to_group, remove_from_group\n",
+    ),
+    ("script", "  script_manage    read, detach, find_symbols\n"),
+    ("project", "  project_manage   stop, settings_get, settings_set\n"),
+    (
+        "editor",
+        "  editor_manage    state, selection_get/set, monitors_get, quit, logs_clear,\n"
+        "                   game_eval\n",
+    ),
+    (None, "  session_manage   list\n"),
+    ("testing", "  test_manage      results_get\n"),
+    (
+        "animation",
+        "  animation_manage player_create, delete, validate, add_property_track,\n"
+        "                   add_method_track, set_autoplay, play, stop, list, get,\n"
+        "                   create_simple, preset_fade/slide/shake/pulse\n",
+    ),
+    (
+        "material",
+        "  material_manage  create, set_param, set_shader_param, get, list, assign,\n"
+        "                   apply_to_node, apply_preset\n",
+    ),
+    (
+        "audio",
+        "  audio_manage     player_create, player_set_stream, player_set_playback,\n"
+        "                   play, stop, list\n",
+    ),
+    (
+        "particle",
+        "  particle_manage  create, set_main, set_process, set_draw_pass, restart,\n"
+        "                   get, apply_preset\n",
+    ),
+    (
+        "camera",
+        "  camera_manage    create, configure, set_limits_2d, set_damping_2d,\n"
+        "                   follow_2d, get, list, apply_preset\n",
+    ),
+    ("signal", "  signal_manage    list, connect, disconnect\n"),
+    (
+        "input_map",
+        "  input_map_manage list, add_action, ensure_action, remove_action,\n"
+        "                   bind_event, ensure_binding\n",
+    ),
+    (
+        "game",
+        "  game_manage      get_scene_tree, get_node_info, get_ui_elements,\n"
+        "                   input_key, input_mouse, input_gamepad, input_action,\n"
+        "                   input_state\n",
+    ),
+    ("autoload", "  autoload_manage  list, add, remove\n"),
+    ("filesystem", "  filesystem_manage read_text, write_text, reimport, scan, search\n"),
+    (
+        "theme",
+        "  theme_manage     create, set_color, set_constant, set_font_size,\n"
+        "                   set_stylebox_flat, apply\n",
+    ),
+    ("ui", "  ui_manage        set_anchor_preset, set_text, build_layout, draw_recipe\n"),
+    (
+        "resource",
+        "  resource_manage  search, load, assign, get_info, create,\n"
+        "                   curve_set_points, environment_create,\n"
+        "                   physics_shape_autofit, gradient_texture_create,\n"
+        "                   noise_texture_create\n",
+    ),
+    ("api", "  api_manage       get_class\n"),
+    ("client", "  client_manage    status, configure, remove\n"),
+    (None, "\n"),
+    (
+        "tilemap",
+        "  tilemap_manage   tilemap_set_cell, tilemap_set_cells_rect,\n"
+        "                   tilemap_clear, tilemap_get_cells\n",
+    ),
+    ("tileset", "  tileset_manage   tileset_get_atlas_tiles, tileset_get_atlas_image\n"),
+)
+
+## Resources are registered unconditionally (they never count against tool
+## caps), so this section and the closing guidance are static.
+_INSTRUCTIONS_FOOTER = (
+    "Resources (read-only URIs, no tool-count cost — prefer for active-session "
+    "reads when the client surfaces them):\n"
+    "  godot://sessions, godot://editor/state, godot://selection/current,\n"
+    "  godot://logs/recent, godot://scene/current, godot://scene/hierarchy,\n"
+    "  godot://node/{path}/properties|children|groups,\n"
+    "  godot://class/{class_name},\n"
+    "  godot://script/{path}, godot://project/info, godot://project/settings,\n"
+    "  godot://materials, godot://input_map, godot://performance,\n"
+    "  godot://test/results\n\n"
+    "Always connect to an editor session first (session_activate or "
+    'session_manage(op="list")). Write operations require session readiness; '
+    "check editor_state if a call is rejected as 'not writable'. After driving a "
+    "running game, check logs_read(source='editor' or 'game', include_details=true) "
+    "before declaring a feature verified."
+)
+
+
+def build_instructions(exclude: set[str]) -> str:
+    """Build the MCP ``instructions`` string for one exclusion set.
+
+    Pure function of ``exclude`` so tests can pin both outputs: with no
+    exclusions the result is byte-identical to the historical static text;
+    with exclusions, the excluded domains' named verbs and rollup lines are
+    omitted, the named-verb count reflects what is actually registered, and
+    a trailing section names the exclusions (#772).
+    """
+    verb_lines: list[str] = list(_CORE_VERB_LINES)
+    verb_count = len(_CORE_VERB_LINES)
+    for separator, verbs in _NAMED_VERB_LINES:
+        kept = [verb for verb, domain in verbs if domain not in exclude]
+        if not kept:
+            continue
+        verb_count += len(kept)
+        verb_lines.append("  " + separator.join(kept) + "\n")
+
+    rollup_lines = [
+        text for domain, text in _ROLLUP_BLOCKS if domain is None or domain not in exclude
+    ]
+
+    parts = [
+        _INSTRUCTIONS_PREAMBLE,
+        f"Tool surface — {verb_count} named verbs + per-domain `<domain>_manage` rollups:\n\n",
+        "Core named verbs (always loaded — common reads + high-traffic writes):\n",
+        *verb_lines,
+        "\n",
+        "Domain rollups (one tool per domain; pass `op=` + a `params` dict):\n",
+        *rollup_lines,
+        "\n",
+        _INSTRUCTIONS_FOOTER,
+    ]
+
+    if exclude:
+        ## Core-bearing domains keep their core verb through an exclusion —
+        ## name the survivors so the caveat stays accurate as the core set
+        ## evolves (derived from CORE_BEARING_DOMAINS/CORE_TOOLS, not prose).
+        kept_core = [
+            tool
+            for tool in CORE_TOOLS
+            if any(tool.startswith(f"{domain}_") for domain in exclude & CORE_BEARING_DOMAINS)
+        ]
+        caveat = "Core tools for core-bearing domains remain available"
+        caveat += f": {', '.join(kept_core)}." if kept_core else "."
+        parts.append(
+            "\n\nExcluded domains (not registered on this server): "
+            f"{', '.join(sorted(exclude))}. {caveat}"
+        )
+
+    return "".join(parts)
+
+
+def _startup_record_data(
+    client: GodotClient, ws_port: int, lifespan_start_ms: float
+) -> dict[str, Any]:
+    """Build the STARTUP telemetry payload (#761 follow-up).
+
+    ``diagnostic_hints_suppressed`` reads the hint policy off the
+    already-constructed client instead of re-reading
+    ``GODOT_AI_SUPPRESS_DIAGNOSTIC_HINTS``: the policy is resolved once
+    at client construction (env default or explicit override), so the
+    client's value is the behavior the process actually runs with — a
+    fresh env read could disagree with it.
+    """
+    return {
+        "server_version": _SERVER_VERSION,
+        "ws_port": ws_port,
+        "lifespan_start_ms": lifespan_start_ms,
+        "diagnostic_hints_suppressed": client.default_hint_policy == "discard",
+    }
 
 
 def create_server(
@@ -197,11 +427,9 @@ def create_server(
             try:
                 record_telemetry(
                     RecordType.STARTUP,
-                    {
-                        "server_version": _SERVER_VERSION,
-                        "ws_port": ws_port,
-                        "lifespan_start_ms": (time.perf_counter() - start_clk) * 1000.0,
-                    },
+                    _startup_record_data(
+                        client, ws_port, (time.perf_counter() - start_clk) * 1000.0
+                    ),
                 )
                 record_milestone(MilestoneType.FIRST_STARTUP)
             except Exception:  # noqa: BLE001
@@ -239,77 +467,13 @@ def create_server(
             except Exception:  # noqa: BLE001
                 logger.debug("Telemetry shutdown failed", exc_info=True)
 
+    exclude = set(exclude_domains or ())
+    if exclude:
+        logger.info("Excluding tool domains: %s", ", ".join(sorted(exclude)))
+
     mcp = GodotAIFastMCP(
         "Godot AI",
-        instructions=(
-            "Production-grade Godot MCP server with persistent editor integration.\n\n"
-            "Tool surface — 19 named verbs + per-domain `<domain>_manage` rollups:\n\n"
-            "Core named verbs (always loaded — common reads + high-traffic writes):\n"
-            "  editor_state                      — readiness, version, current scene\n"
-            "  scene_get_hierarchy               — paginated scene tree walk\n"
-            "  node_get_properties               — full property snapshot\n"
-            "  session_activate                  — pin commands to one editor\n"
-            "  node_create / node_set_property / node_find\n"
-            "  scene_open / scene_save\n"
-            "  script_create / script_attach / script_patch\n"
-            "  project_run, test_run, batch_execute, logs_read\n"
-            "  editor_screenshot, editor_reload_plugin, animation_create\n\n"
-            "Domain rollups (one tool per domain; pass `op=` + a `params` dict):\n"
-            "  scene_manage     create, save_as, get_roots\n"
-            "  node_manage      get_children, get_groups, delete, duplicate, rename,\n"
-            "                   move, reparent, add_to_group, remove_from_group\n"
-            "  script_manage    read, detach, find_symbols\n"
-            "  project_manage   stop, settings_get, settings_set\n"
-            "  editor_manage    state, selection_get/set, monitors_get, quit, logs_clear,\n"
-            "                   game_eval\n"
-            "  session_manage   list\n"
-            "  test_manage      results_get\n"
-            "  animation_manage player_create, delete, validate, add_property_track,\n"
-            "                   add_method_track, set_autoplay, play, stop, list, get,\n"
-            "                   create_simple, preset_fade/slide/shake/pulse\n"
-            "  material_manage  create, set_param, set_shader_param, get, list, assign,\n"
-            "                   apply_to_node, apply_preset\n"
-            "  audio_manage     player_create, player_set_stream, player_set_playback,\n"
-            "                   play, stop, list\n"
-            "  particle_manage  create, set_main, set_process, set_draw_pass, restart,\n"
-            "                   get, apply_preset\n"
-            "  camera_manage    create, configure, set_limits_2d, set_damping_2d,\n"
-            "                   follow_2d, get, list, apply_preset\n"
-            "  signal_manage    list, connect, disconnect\n"
-            "  input_map_manage list, add_action, ensure_action, remove_action,\n"
-            "                   bind_event, ensure_binding\n"
-            "  game_manage      get_scene_tree, get_node_info, get_ui_elements,\n"
-            "                   input_key, input_mouse, input_gamepad, input_action,\n"
-            "                   input_state\n"
-            "  autoload_manage  list, add, remove\n"
-            "  filesystem_manage read_text, write_text, reimport, scan, search\n"
-            "  theme_manage     create, set_color, set_constant, set_font_size,\n"
-            "                   set_stylebox_flat, apply\n"
-            "  ui_manage        set_anchor_preset, set_text, build_layout, draw_recipe\n"
-            "  resource_manage  search, load, assign, get_info, create,\n"
-            "                   curve_set_points, environment_create,\n"
-            "                   physics_shape_autofit, gradient_texture_create,\n"
-            "                   noise_texture_create\n"
-            "  api_manage       get_class\n"
-            "  client_manage    status, configure, remove\n\n"
-            "  tilemap_manage   tilemap_set_cell, tilemap_set_cells_rect,\n"
-            "                   tilemap_clear, tilemap_get_cells\n"
-            "  tileset_manage   tileset_get_atlas_tiles, tileset_get_atlas_image\n\n"
-            "Resources (read-only URIs, no tool-count cost — prefer for active-session "
-            "reads when the client surfaces them):\n"
-            "  godot://sessions, godot://editor/state, godot://selection/current,\n"
-            "  godot://logs/recent, godot://scene/current, godot://scene/hierarchy,\n"
-            "  godot://node/{path}/properties|children|groups,\n"
-            "  godot://class/{class_name},\n"
-            "  godot://script/{path}, godot://project/info, godot://project/settings,\n"
-            "  godot://materials, godot://input_map, godot://performance,\n"
-            "  godot://test/results\n\n"
-            "Always connect to an editor session first (session_activate or "
-            'session_manage(op="list")). Write operations require session readiness; '
-            "check editor_state if a call is rejected as 'not writable'. After driving a "
-            "running game, check logs_read(source='editor' or 'game', include_details=true) "
-            "before declaring a feature verified."
-        ),
+        instructions=build_instructions(exclude),
         lifespan=_lifespan,
     )
 
@@ -366,10 +530,6 @@ def create_server(
     ## telemetry decorator captures as ``sub_action`` automatically.
     install_fastmcp_wraps(mcp)
 
-    exclude = set(exclude_domains or ())
-    if exclude:
-        logger.info("Excluding tool domains: %s", ", ".join(sorted(exclude)))
-
     @mcp.custom_route("/godot-ai/status", methods=["GET"], include_in_schema=False)
     async def godot_ai_status(_request: Request) -> JSONResponse:
         """Small unauthenticated probe used by the editor before reusing a port."""
@@ -391,7 +551,7 @@ def create_server(
 
     ## Core-bearing domains: always registered. ``include_non_core=False`` keeps
     ## only the core tool alive when the user excluded that domain.
-    register_session_tools(mcp, include_non_core="session" not in exclude)
+    register_session_tools(mcp, include_non_core="session" not in exclude, exclude_domains=exclude)
     register_editor_tools(mcp, include_non_core="editor" not in exclude)
     register_scene_tools(mcp, include_non_core="scene" not in exclude)
     register_node_tools(mcp, include_non_core="node" not in exclude)

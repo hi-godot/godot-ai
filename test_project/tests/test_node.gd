@@ -11,6 +11,7 @@ var _handler: NodeHandler
 var _undo_redo: EditorUndoRedoManager
 
 const TEST_MATERIAL_PATH := "res://tests/_mcp_test_material.tres"
+const TEST_NODE_SCRIPT_PATH := "res://tests/_mcp_test_node_script.gd"
 
 
 func suite_name() -> String:
@@ -22,11 +23,20 @@ func suite_setup(ctx: Dictionary) -> void:
 	_handler = NodeHandler.new(_undo_redo)
 	var mat := StandardMaterial3D.new()
 	ResourceSaver.save(mat, TEST_MATERIAL_PATH)
+	# Fixture script for the attached-script serialization test.
+	var file := FileAccess.open(TEST_NODE_SCRIPT_PATH, FileAccess.WRITE)
+	if file:
+		file.store_string("extends Node3D\n")
+		file.close()
 
 
 func suite_teardown() -> void:
 	if FileAccess.file_exists(TEST_MATERIAL_PATH):
 		DirAccess.remove_absolute(TEST_MATERIAL_PATH)
+	if FileAccess.file_exists(TEST_NODE_SCRIPT_PATH):
+		DirAccess.remove_absolute(TEST_NODE_SCRIPT_PATH)
+	if FileAccess.file_exists(TEST_NODE_SCRIPT_PATH + ".uid"):
+		DirAccess.remove_absolute(TEST_NODE_SCRIPT_PATH + ".uid")
 
 
 # ----- get_children -----
@@ -99,13 +109,13 @@ func test_get_properties_has_value_and_type() -> void:
 func test_get_properties_reports_total_count() -> void:
 	var result := _handler.get_node_properties({"path": "/Main/Camera3D"})
 	assert_has_key(result.data, "total_count")
-	## total_count counts every editor-visible property; count is what was
-	## returned. Even unfiltered they can differ: a property whose getter
-	## returns null is skipped from the response but still counted in
-	## total_count. So the invariant is count <= total_count, not equality.
-	assert_true(
-		result.data.count <= result.data.total_count,
-		"count must not exceed total_count",
+	## An unfiltered call returns every editor-visible property — null-valued
+	## ones included (#771) — so count and total_count agree exactly. Only the
+	## `fields` filter can make count < total_count.
+	assert_eq(
+		result.data.count,
+		result.data.total_count,
+		"unfiltered call returns every editor-visible property",
 	)
 	assert_gt(result.data.total_count, 0, "Camera3D has editor-visible properties")
 
@@ -132,15 +142,73 @@ func test_get_properties_fields_filter_returns_only_requested() -> void:
 	assert_true(filtered.data.count < full.data.count, "fields cuts the response")
 
 
-func test_get_properties_fields_unknown_name_is_skipped() -> void:
+func test_get_properties_fields_unknown_name_is_reported() -> void:
+	## Unknown names are no longer silently skipped (#771): known fields come
+	## back (even null-valued ones like `script`), unknown ones are listed in
+	## unknown_fields so callers can tell "doesn't exist" from "is null".
 	var result := _handler.get_node_properties({
 		"path": "/Main/Camera3D",
-		"fields": ["fov", "totally_not_a_real_property"],
+		"fields": ["script", "no_such_prop"],
 	})
 	var names: Array[String] = []
 	for prop: Dictionary in result.data.properties:
 		names.append(prop.name)
-	assert_eq(names, ["fov"], "Unknown field names are silently skipped, known ones kept")
+	assert_eq(names, ["script"], "known field names are returned, unknown ones are not")
+	assert_has_key(result.data, "unknown_fields")
+	assert_eq(
+		result.data.unknown_fields,
+		["no_such_prop"],
+		"requested names matching no editor-visible property are reported",
+	)
+
+
+func test_get_properties_null_script_returned_as_null() -> void:
+	## Camera3D in the test scene has no script attached. `script` is
+	## editor-visible with a null value and must be returned as value: null
+	## with its declared type, not dropped from the response (#771).
+	var result := _handler.get_node_properties({
+		"path": "/Main/Camera3D",
+		"fields": ["script"],
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.count, 1, "script property should be returned")
+	var prop: Dictionary = result.data.properties[0]
+	assert_eq(prop.name, "script")
+	assert_eq(prop.value, null, "unscripted node reports script as null")
+	assert_eq(result.data.unknown_fields, [], "script is a real property, not unknown")
+
+
+func test_get_properties_attached_script_returns_res_path() -> void:
+	var created := _handler.create_node({
+		"type": "Node3D",
+		"name": "_McpScriptProbe",
+		"parent_path": "/Main",
+	})
+	assert_has_key(created, "data")
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var node: Node = scene_root.get_node_or_null(NodePath(String(created.data.name)))
+	assert_true(node != null, "created probe node should be resolvable")
+	var script: Script = load(TEST_NODE_SCRIPT_PATH)
+	assert_true(script != null, "fixture script should load")
+	node.set_script(script)
+
+	var result := _handler.get_node_properties({
+		"path": String(created.data.path),
+		"fields": ["script"],
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.count, 1, "script property should be returned")
+	assert_eq(result.data.properties[0].name, "script")
+	assert_eq(
+		result.data.properties[0].value,
+		TEST_NODE_SCRIPT_PATH,
+		"attached script serializes to its res:// path",
+	)
+
+	## Detach before undoing the create so the fixture script isn't referenced
+	## by the undo stack when suite_teardown deletes the file.
+	node.set_script(null)
+	assert_true(editor_undo(_undo_redo), "undo should remove the probe node")
 
 
 func test_get_properties_fields_non_array_is_rejected() -> void:

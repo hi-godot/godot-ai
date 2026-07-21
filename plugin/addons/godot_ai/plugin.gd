@@ -143,6 +143,13 @@ var _export_plugin
 var _lifecycle
 static var _server_started_this_session := false  # guard against re-entrant spawns
 static var _resolved_ws_port := ClientConfigurator.DEFAULT_WS_PORT
+## True once a startup walk has published a port via `_set_resolved_ws_port`
+## this editor session. Gates the `_enter_tree` pre-resolution seed: a fresh
+## session seeds `_resolved_ws_port` from the configured EditorSettings
+## value, but a plugin reload must keep the prior instance's published
+## resolution, which can legitimately differ from the configured value
+## (Windows-reservation remap, adopted-server record).
+static var _ws_port_resolution_published := false
 ## Per-launch WS handshake auth token (#690). Static for the same reason as
 ## _resolved_ws_port: a plugin reload in the same editor session adopts the
 ## server the previous instance spawned, and must keep its token. Empty
@@ -198,6 +205,19 @@ func _enter_tree() -> void:
 	## builds the CLI args.
 	ClientConfigurator.ensure_settings_registered()
 	_startup_trace_phase("settings_registered")
+
+	## With the startup walk's blocking port resolution deferred to a worker
+	## (#678), the Connection below dials before `_set_resolved_ws_port`
+	## publishes. Seed the pre-resolution port from the configured
+	## EditorSettings value (a cheap main-thread read, not a blocking probe)
+	## so the first dial honors a `godot_ai/ws_port` override — without this
+	## it targeted the compile-time default and the override only took
+	## effect on the 1s retry.
+	_resolved_ws_port = _startup_ws_port_seed(
+		_ws_port_resolution_published,
+		_resolved_ws_port,
+		ClientConfigurator.ws_port(),
+	)
 
 	## #691: pre-warm the env snapshot on the main thread before any worker
 	## exists, so worker-thread env reads (dock refresh/action workers, the
@@ -1055,9 +1075,21 @@ func get_resolved_ws_port() -> int:
 
 
 func _set_resolved_ws_port(port: int) -> void:
+	_ws_port_resolution_published = true
 	_resolved_ws_port = port
 	if _connection != null:
 		_connection.ws_port = port
+
+
+## Pure decision helper — environment-state reads (the published flag, the
+## EditorSettings port) stay in `_enter_tree`; the logic lives here so tests
+## can drive the three inputs directly without mutating the shared statics.
+static func _startup_ws_port_seed(
+	resolution_published: bool,
+	session_ws_port: int,
+	configured_ws_port: int
+) -> int:
+	return session_ws_port if resolution_published else configured_ws_port
 
 
 func _resolve_ws_port() -> int:
