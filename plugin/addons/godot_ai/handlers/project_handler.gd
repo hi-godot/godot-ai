@@ -296,9 +296,14 @@ static func _run_project_liveness_decision(status: Dictionary, errors_info: Dict
 	var recent_errors: Array = errors_info.get("errors", [])
 	var errors_scope := str(errors_info.get("scope", "none"))
 	var truncated := bool(errors_info.get("truncated", false))
-	## When the game launches successfully, don't carry forward retained errors
-	## from past runs — they were already reported in earlier run responses and
-	## only add noise to the current response.
+		## When the game launches successfully, clear errors that predate this
+		## run's window — they don't belong in a successful launch response and
+		## only add noise. They remain reachable via logs_read(source='editor') and
+		## the retained buffer so failed-run debugging is unaffected.
+		## #635 tradeoff: a genuine in-run error whose Errors-tab row carries an
+		## empty or byte-identical time text can be misclassified as
+		## retained_recent and will be dropped here. It is still reachable via
+		## logs_read.
 	if state == "live" and errors_scope == "retained_recent":
 		recent_errors = []
 		errors_scope = "none"
