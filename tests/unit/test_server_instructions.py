@@ -159,6 +159,7 @@ def test_core_bearing_exclusion_names_surviving_core_tools():
         ("editor",),
         ("script", "animation"),
         ("node", "editor", "scene"),
+        ("project", "testing", "batch"),
     ],
     ids=lambda e: ",".join(e) or "none",
 )
