@@ -38,6 +38,11 @@ const _BASE_ENV_VARS: Array[String] = [
 	"ProgramFiles",
 	"GODOT_AI_MODE",
 	"GODOT_AI_STARTUP_TRACE",
+	## #804 (#752 adoption): _find_venv_python reads this via env_lookup on
+	## the dock's worker path; without pre-warming, a set override reads as
+	## empty there and is silently ignored — the exact misconfiguration the
+	## push_warning in client_configurator.gd exists to surface.
+	"GODOT_AI_VENV_PYTHON",
 ]
 
 
