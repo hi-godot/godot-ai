@@ -119,11 +119,12 @@ def _startup_record_data(
 ) -> dict[str, Any]:
     """Build the STARTUP telemetry payload (#761 follow-up).
 
-    ``diagnostic_hints_suppressed`` must read the constructed client's
-    hint policy, not re-read ``GODOT_AI_SUPPRESS_DIAGNOSTIC_HINTS`` —
-    the policy is resolved once at client construction (env default or
-    explicit override), so only the client value can never drift from
-    the behavior the process actually runs with.
+    ``diagnostic_hints_suppressed`` reads the hint policy off the
+    already-constructed client instead of re-reading
+    ``GODOT_AI_SUPPRESS_DIAGNOSTIC_HINTS``: the policy is resolved once
+    at client construction (env default or explicit override), so the
+    client's value is the behavior the process actually runs with — a
+    fresh env read could disagree with it.
     """
     return {
         "server_version": _SERVER_VERSION,
