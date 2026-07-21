@@ -39,28 +39,10 @@ from fastmcp.tools.base import ToolResult
 from mcp.types import CallToolRequestParams
 from pydantic import ValidationError as PydanticValidationError
 
+from godot_ai.middleware._validation_errors import find_pydantic_validation_error
 from godot_ai.tools._meta_tool import MANAGE_TOOL_OPS
 
 logger = logging.getLogger(__name__)
-
-
-def _find_pydantic_validation_error(
-    exc: BaseException,
-) -> PydanticValidationError | None:
-    """Find a Pydantic validation error through FastMCP wrapper chains."""
-    pending: list[BaseException] = [exc]
-    seen: set[int] = set()
-    while pending:
-        current = pending.pop()
-        if id(current) in seen:
-            continue
-        seen.add(id(current))
-        if isinstance(current, PydanticValidationError):
-            return current
-        for linked in (current.__cause__, current.__context__):
-            if isinstance(linked, BaseException):
-                pending.append(linked)
-    return None
 
 
 class HintOpTypoOnManage(Middleware):
@@ -119,7 +101,7 @@ def _build_hint_from_validation_error(
     arguments: dict | None,
     candidates: tuple[str, ...],
 ) -> str | None:
-    validation_error = _find_pydantic_validation_error(exc)
+    validation_error = find_pydantic_validation_error(exc)
     if validation_error is None:
         return None
     return _build_hint(validation_error, arguments, candidates)
@@ -129,7 +111,7 @@ def _build_hint_from_tool_error(
     exc: ToolError, arguments: dict | None, candidates: tuple[str, ...]
 ) -> str | None:
     """Return a hint when FastMCP wraps the op ``ValidationError`` as ToolError."""
-    validation_error = _find_pydantic_validation_error(exc)
+    validation_error = find_pydantic_validation_error(exc)
     if validation_error is not None:
         return _build_hint(validation_error, arguments, candidates)
 

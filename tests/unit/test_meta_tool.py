@@ -553,6 +553,49 @@ async def test_dispatch_nested_session_id_names_top_level_contract():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_nested_op_names_top_level_contract():
+    async def needs_path(rt, path):
+        del rt, path
+        return {}
+
+    with pytest.raises(GodotCommandError) as exc:
+        await dispatch_manage_op(
+            ops={"read": needs_path},
+            tool_name="script_manage",
+            runtime=None,
+            op="read",
+            params={"path": "res://x.gd", "op": "read"},
+        )
+
+    message = exc.value.message
+    assert "Unexpected param(s): 'op'" in message
+    assert "'op' is a top-level sibling of 'params' and 'session_id'" in message
+    assert "must be nested inside the 'params' object" not in message
+
+
+@pytest.mark.asyncio
+async def test_dispatch_unexpected_key_example_uses_first_accepted_param():
+    async def needs_path(rt, path):
+        del rt, path
+        return {}
+
+    with pytest.raises(GodotCommandError) as exc:
+        await dispatch_manage_op(
+            ops={"read": needs_path},
+            tool_name="script_manage",
+            runtime=None,
+            op="read",
+            params={"path": "res://x.gd", "force": True},
+        )
+
+    assert exc.value.data["missing"] == []
+    assert exc.value.data["example"] == {
+        "op": "read",
+        "params": {"path": "..."},
+    }
+
+
+@pytest.mark.asyncio
 async def test_dispatch_extra_param_hint_lists_handler_kwargs():
     """Op with several accepted kwargs surfaces those in the hint."""
 

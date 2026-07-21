@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -11,6 +12,11 @@ from mcp.types import CallToolRequestParams
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from godot_ai.middleware import FoldFlatManageParams, ParseStringifiedParams
+from godot_ai.middleware.fold_flat_manage_params import (
+    _call_example,
+    _same_json_value,
+    _truncate,
+)
 from godot_ai.tools._meta_tool import MANAGE_TOOL_OPS
 
 
@@ -60,6 +66,31 @@ def _validation_error(*, params: Any = None, **extra: Any) -> ValidationError:
 
 
 class TestFoldFlatManageParams:
+    def test_long_values_are_bounded_in_examples(self):
+        value = "a" * 1000
+
+        example = json.loads(_call_example({"op": "write", "content": value}, "content"))
+        rendered = example["params"]["content"]
+
+        assert len(rendered) == 120
+        assert rendered.startswith("'aaa")
+        assert rendered.endswith("…'")
+        assert value not in rendered
+
+    def test_call_example_fallback_is_valid_json(self):
+        example = _call_example({"op": "read", "path": object()}, "path")
+
+        assert json.loads(example) == {"op": "read", "params": {"path": "..."}}
+
+    def test_same_json_value_falls_back_for_non_serializable_values(self):
+        shared = object()
+
+        assert _same_json_value(shared, shared)
+        assert not _same_json_value(object(), object())
+
+    def test_truncate_leaves_short_repr_unchanged(self):
+        assert _truncate("short") == "'short'"
+
     async def test_folds_flat_key(self, register_script_manage):
         seen: list[dict | None] = []
         ctx = _FakeContext(
@@ -132,6 +163,29 @@ class TestFoldFlatManageParams:
             "path": "A",
             "params": {"path": "B"},
         }
+
+    async def test_conflicting_duplicate_truncates_both_values(self, register_script_manage):
+        flat_value = "A" * 1000
+        nested_value = "B" * 1000
+        ctx = _FakeContext(
+            CallToolRequestParams(
+                name="script_manage",
+                arguments={
+                    "op": "read",
+                    "content": flat_value,
+                    "params": {"content": nested_value},
+                },
+            )
+        )
+
+        with pytest.raises(ToolError) as info:
+            await FoldFlatManageParams().on_call_tool(ctx, await _record_arguments([]))
+
+        message = str(info.value)
+        assert len(message) < 400
+        assert flat_value not in message
+        assert nested_value not in message
+        assert message.count("…") == 2
 
     async def test_json_boolean_and_number_are_not_equal_duplicates(self, register_script_manage):
         ctx = _FakeContext(
@@ -253,6 +307,39 @@ class TestFoldFlatManageParams:
             "extra_forbidden",
         }
         ctx = _FakeContext(CallToolRequestParams(name="script_manage", arguments={"op": "read"}))
+
+        with pytest.raises(ValidationError) as info:
+            await FoldFlatManageParams().on_call_tool(ctx, await _raise_call_next(exc))
+
+        assert info.value is exc
+
+    async def test_preserves_manage_tool_error_without_pydantic_cause(self, register_script_manage):
+        exc = ToolError("plain tool failure")
+        ctx = _FakeContext(CallToolRequestParams(name="script_manage", arguments={"op": "read"}))
+
+        with pytest.raises(ToolError) as info:
+            await FoldFlatManageParams().on_call_tool(ctx, await _raise_call_next(exc))
+
+        assert info.value is exc
+
+    async def test_preserves_validation_error_with_empty_error_list(self, register_script_manage):
+        exc = ValidationError.from_exception_data("empty", [])
+        assert exc.errors() == []
+        ctx = _FakeContext(CallToolRequestParams(name="script_manage", arguments={"op": "read"}))
+
+        with pytest.raises(ValidationError) as info:
+            await FoldFlatManageParams().on_call_tool(ctx, await _raise_call_next(exc))
+
+        assert info.value is exc
+
+    async def test_non_manage_validation_error_is_untouched(self, register_script_manage):
+        exc = _validation_error(path="res://x.gd")
+        ctx = _FakeContext(
+            CallToolRequestParams(
+                name="script_create",
+                arguments={"path": "res://x.gd", "content": "extends Node"},
+            )
+        )
 
         with pytest.raises(ValidationError) as info:
             await FoldFlatManageParams().on_call_tool(ctx, await _raise_call_next(exc))

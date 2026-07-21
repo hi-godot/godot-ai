@@ -23,28 +23,42 @@ from fastmcp.tools.base import ToolResult
 from mcp.types import CallToolRequestParams
 from pydantic import ValidationError as PydanticValidationError
 
-from godot_ai.middleware.op_typo_hint import _find_pydantic_validation_error
+from godot_ai.middleware._validation_errors import find_pydantic_validation_error
 from godot_ai.tools._meta_tool import MANAGE_TOOL_OPS
 
 logger = logging.getLogger(__name__)
 
 _RESERVED_KEYS = frozenset({"op", "params", "session_id"})
 _EXTRA_ERROR_TYPES = frozenset({"extra_forbidden", "unexpected_keyword_argument"})
+_VALUE_REPR_LIMIT = 120
+
+
+def _truncate(value: Any, limit: int = _VALUE_REPR_LIMIT) -> str:
+    """Return a bounded repr for values echoed in client-facing errors."""
+    rendered = repr(value)
+    if len(rendered) <= limit:
+        return rendered
+    if rendered[:1] in {"'", '"'} and rendered[-1:] == rendered[:1]:
+        return rendered[: limit - 2] + "…" + rendered[-1]
+    return rendered[: limit - 1] + "…"
 
 
 def _call_example(arguments: dict[str, Any], key: str) -> str:
     """Build a concrete canonical-shape example from the caller's values."""
+    value = arguments.get(key, "<value>")
+    example_value = _truncate(value) if len(repr(value)) > _VALUE_REPR_LIMIT else value
     example = {
         "op": arguments.get("op", "<op>"),
-        "params": {key: arguments.get(key, "<value>")},
+        "params": {key: example_value},
     }
     try:
         return json.dumps(example, ensure_ascii=False)
     except (TypeError, ValueError):
-        return f'{{"op": {example["op"]!r}, "params": {{{key!r}: ...}}}}'
+        return f'{{"op": {json.dumps(example["op"])}, "params": {{{json.dumps(key)}: "..."}}}}'
 
 
 def _flat_keys(arguments: dict[str, Any]) -> list[str]:
+    """Return top-level keys that are candidates for folding into params."""
     return [key for key in arguments if key not in _RESERVED_KEYS]
 
 
@@ -63,7 +77,7 @@ def _extra_params_hint(
     arguments: dict[str, Any] | None,
 ) -> str | None:
     """Return a nesting hint only for a pure top-level-extra validation error."""
-    validation_error = _find_pydantic_validation_error(exc)
+    validation_error = find_pydantic_validation_error(exc)
     if validation_error is None:
         return None
 
@@ -126,8 +140,9 @@ class FoldFlatManageParams(Middleware):
                     if key in params and not _same_json_value(params[key], arguments[key]):
                         raise ToolError(
                             f"{tool_name}: param {key!r} was passed both at the "
-                            f"top level ({arguments[key]!r}) and inside 'params' "
-                            f"({params[key]!r}). Keep it in 'params' only."
+                            f"top level ({_truncate(arguments[key])}) and inside "
+                            f"'params' ({_truncate(params[key])}). Keep it in "
+                            "'params' only."
                         )
 
                 for key in flat_keys:

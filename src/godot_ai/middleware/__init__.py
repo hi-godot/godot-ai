@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from godot_ai.middleware._validation_errors import find_pydantic_validation_error
 from godot_ai.middleware.client_wrapper_kwargs import (
     CLIENT_WRAPPER_KWARGS,
     StripClientWrapperKwargs,
@@ -18,4 +19,5 @@ __all__ = [
     "ParseStringifiedParams",
     "PreserveGodotCommandErrorData",
     "StripClientWrapperKwargs",
+    "find_pydantic_validation_error",
 ]
