@@ -43,6 +43,16 @@ const FIRST_FRAME_WAIT_SEC := 6.0
 ## loop entirely, so any real threshold works; 1s keeps a merely-slow game
 ## (heavy frame, low FPS) on the fresh-frame await path.
 const MAIN_LOOP_STALL_MSEC := 1000
+## How long frames_drawn can stay flat before _handle_take_screenshot treats
+## rendering as suppressed and commits the synchronous stale-frame capture.
+## On Windows, minimizing the game window freezes frame presentation but NOT
+## the main loop — _process keeps ticking, so the MAIN_LOOP_STALL_MSEC beacon
+## never trips and every capture used to burn the full FIRST_FRAME_WAIT_SEC
+## await before replying stale (issue #794 smoke, item 1b). Larger than the
+## loop threshold so a heavy-but-rendering game (~1 FPS frame gaps) stays on
+## the fresh-frame await path; a sub-0.7 FPS game that trips this still gets
+## an honestly stale-flagged image immediately instead of a 6s wait.
+const RENDER_STALL_MSEC := 1500
 
 const GameLogger := preload("res://addons/godot_ai/runtime/game_logger.gd")
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
@@ -75,6 +85,13 @@ var _eval_token_counter: int = 0
 ## _handle_take_screenshot (running inside that capture) detects the freeze
 ## synchronously. -1 until the first tick.
 var _last_loop_tick_msec: int = -1
+## Rendering-freeze beacon for the Windows-minimize state (#794 smoke, 1b):
+## the frames_drawn value last observed in _process, and when it last
+## advanced. -1 until the first observed advance, so a booting or
+## render-less game (frames_drawn stuck at 0) can never read as
+## render-stalled and keeps the fresh-frame await path's error replies.
+var _last_frames_drawn_seen: int = -1
+var _last_frames_advance_msec: int = -1
 
 
 func _ready() -> void:
@@ -117,6 +134,13 @@ func _process(_delta: float) -> void:
 	## Recorded before the early returns below so the signal stays truthful
 	## even when the logger or debugger channel is unavailable.
 	_last_loop_tick_msec = Time.get_ticks_msec()
+	## Rendering beacon: on Windows a minimized game keeps ticking _process
+	## while presentation stops, so frames_drawn stagnation — not loop
+	## silence — is the observable freeze signal there (#794 smoke, 1b).
+	var frames_now := Engine.get_frames_drawn()
+	if frames_now != _last_frames_drawn_seen:
+		_last_frames_drawn_seen = frames_now
+		_last_frames_advance_msec = _last_loop_tick_msec
 	## Drain the logger queue on the main thread (Logger virtuals can fire
 	## from any thread; EngineDebugger.send_message is only safe from main).
 	## Send at most one FLUSH_BATCH_LIMIT-sized batch per frame so a runaway
@@ -187,7 +211,10 @@ func _handle_take_screenshot(data: Array) -> void:
 	## real image, flagged as such in the reply. Only fall through to the
 	## fresh-frame awaits when the loop is demonstrably alive.
 	if _should_capture_stale_sync(
-		_main_loop_appears_stalled(), tree.current_scene != null, Engine.get_frames_drawn()
+		_main_loop_appears_stalled(),
+		_rendering_appears_stalled(),
+		tree.current_scene != null,
+		Engine.get_frames_drawn()
 	):
 		_capture_and_reply(request_id, viewport, max_resolution, Engine.get_frames_drawn())
 		return
@@ -209,15 +236,16 @@ func _handle_take_screenshot(data: Array) -> void:
 
 
 ## #777: pure decision for the synchronous stale-frame path. Sync capture is
-## only worth committing when the main loop is stalled (an alive loop should
-## deliver a fresh frame instead) AND the viewport plausibly holds a real
-## frame: the main scene is in the tree and at least one frame was presented.
-## Without those, the stale readback would be the boot clear-color framebuffer
-## — worse than the honest timeout.
+## only worth committing when awaiting can't produce a fresh frame — the main
+## loop is frozen (macOS/suspend), or the loop still ticks but presentation
+## is suppressed (Windows minimize, #794 smoke 1b) — AND the viewport
+## plausibly holds a real frame: the main scene is in the tree and at least
+## one frame was presented. Without those, the stale readback would be the
+## boot clear-color framebuffer — worse than the honest timeout.
 static func _should_capture_stale_sync(
-	loop_stalled: bool, has_current_scene: bool, frames_drawn: int
+	loop_stalled: bool, render_stalled: bool, has_current_scene: bool, frames_drawn: int
 ) -> bool:
-	return loop_stalled and has_current_scene and frames_drawn > 0
+	return (loop_stalled or render_stalled) and has_current_scene and frames_drawn > 0
 
 
 ## #777: true when _process hasn't ticked within MAIN_LOOP_STALL_MSEC —
@@ -226,6 +254,18 @@ func _main_loop_appears_stalled() -> bool:
 	if _last_loop_tick_msec < 0:
 		return true
 	return Time.get_ticks_msec() - _last_loop_tick_msec > MAIN_LOOP_STALL_MSEC
+
+
+## True when frames_drawn has sat flat past RENDER_STALL_MSEC while _process
+## kept ticking — Windows minimize suppresses presentation without freezing
+## the loop, so the loop beacon alone misses it (#794 smoke, 1b). False until
+## the first observed frame advance: a game that has never presented has no
+## trustworthy frame to return, and must fall through to the await path's
+## texture/image error replies instead.
+func _rendering_appears_stalled() -> bool:
+	if _last_frames_advance_msec < 0:
+		return false
+	return Time.get_ticks_msec() - _last_frames_advance_msec > RENDER_STALL_MSEC
 
 
 ## Read back the viewport texture and reply — fully synchronous, so it is
