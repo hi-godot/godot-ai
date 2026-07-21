@@ -2,13 +2,32 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import TYPE_CHECKING
 
 from godot_ai.protocol.errors import EditorNotReadySubCode, ErrorCode
 from godot_ai.sessions.registry import Session
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from godot_ai.runtime.direct import DirectRuntime
+
+## #651 stage 2: bounded hold before rejecting on a live-confirmed
+## EDITOR_IMPORTING. Fleet retry-gap telemetry (14 days, N=733 import
+## collisions across 240 installs; P(still importing) measured from
+## same-tool retry success) shows the collision clears fast at first,
+## then plateaus: still-importing 59% at <1s gaps → 29% at 1-3s → 18%
+## at 3-5s → 9% at 5-10s → plateau ~12-15% past 10s. An ~8s cap thus
+## captures nearly every winnable collision; the ~12-17% floor (long or
+## re-triggered imports) is unwinnable by waiting, so past the cap we
+## fail fast with the retryable EDITOR_IMPORTING hint, exactly as
+## before the hold existed. Importing is the ONLY state that gets a
+## hold — the same telemetry shows waits are wrong for every other
+## blocking state ("playing" needs project_manage(op="stop"), not time).
+_IMPORTING_HOLD_CAP_SECONDS = 8.0
+_IMPORTING_HOLD_PROBE_INTERVAL_SECONDS = 0.5
 
 # (message, retryable, hint). Retryable means the condition clears on its own
 # (Godot finishes reimporting); non-retryable requires the caller to change
@@ -90,9 +109,38 @@ def sync_readiness_from_snapshot(runtime: "DirectRuntime", value: object) -> boo
     return sync_readiness_for_session(runtime.get_active_session(), value)
 
 
-async def require_writable_async(runtime: "DirectRuntime") -> None:
+async def _probe_readiness(runtime: "DirectRuntime", session: Session) -> bool:
+    """One ``get_editor_state`` round trip that heals ``session.readiness``.
+
+    Production replies self-heal the cache via the WebSocket transport's
+    envelope sync; the explicit ``sync_readiness_for_session`` call here
+    covers in-process tests that wire a custom client and bypass the
+    transport. Returns False when the probe itself failed (timeout,
+    disconnect, plugin error) — the caller then enforces against the
+    cached value rather than escalating the failure mode from "blocked"
+    to "connection error"; the actual write would have failed anyway.
+    """
+    try:
+        result = await runtime.send_command(
+            "get_editor_state",
+            timeout=2.0,
+            hint_policy="retain",
+        )
+    except Exception:
+        return False
+    sync_readiness_for_session(session, result.get("readiness"))
+    return True
+
+
+async def require_writable_async(
+    runtime: "DirectRuntime",
+    *,
+    clock: "Callable[[], float]" = time.monotonic,
+    sleep: "Callable[[float], Awaitable[None]]" = asyncio.sleep,
+) -> None:
     """Check that the active session is in a writable state, with a live
-    readiness probe to defeat a stale cache.
+    readiness probe to defeat a stale cache and a bounded hold when the
+    editor is mid-import.
 
     Fast path (cache says ``ready`` / ``no_scene``): no probe, no network.
 
@@ -100,14 +148,23 @@ async def require_writable_async(runtime: "DirectRuntime") -> None:
     stale because a `readiness_changed` event was lost in transit (a brief
     WebSocket disconnect), or coalesced inside the plugin's
     ``pause_processing`` window around save/play frames. Before rejecting
-    a write, fire one ``get_editor_state`` round trip — production replies
-    self-heal the cache via the WebSocket transport's envelope sync; the
-    explicit ``sync_readiness_for_session`` call below covers in-process
-    tests that wire a custom client and bypass the transport. If the
-    editor really is busy, the probe confirms the cache and we raise as
-    before. If the plugin is unreachable, the actual write would fail
-    anyway — trust the cached value and raise the gating error so the
-    caller gets a clean ``EDITOR_NOT_READY`` instead of a connection error.
+    a write, fire one ``get_editor_state`` round trip. If the editor
+    really is busy, the probe confirms the cache and we enforce as
+    before. If the plugin is unreachable, trust the cached value and
+    raise the gating error so the caller gets a clean
+    ``EDITOR_NOT_READY`` instead of a connection error.
+
+    Bounded hold (#651 stage 2): when the probe *confirms* ``importing``,
+    don't reject yet — re-probe every
+    ``_IMPORTING_HOLD_PROBE_INTERVAL_SECONDS`` for up to
+    ``_IMPORTING_HOLD_CAP_SECONDS`` (tuning telemetry above the
+    constants). Most import windows clear inside the cap, and the write
+    then proceeds as if it never collided. No intermediate errors are
+    emitted while holding: the caller sees either a clean pass-through
+    or, past the cap, exactly the pre-hold error. Only ``importing``
+    holds — ``playing`` (and any other blocking state) still fails fast,
+    because waiting provably doesn't clear those. ``clock`` and ``sleep``
+    exist for tests to fake time; production callers never pass them.
 
     Raises GodotCommandError with EDITOR_NOT_READY if the editor is
     importing or playing.  The ``ready`` and ``no_scene`` states are
@@ -128,19 +185,17 @@ async def require_writable_async(runtime: "DirectRuntime") -> None:
     if _READINESS_INFO.get(session.readiness) is None:
         return  # cache says writable — fast path, no probe
 
-    try:
-        result = await runtime.send_command(
-            "get_editor_state",
-            timeout=2.0,
-            hint_policy="retain",
-        )
-        sync_readiness_for_session(session, result.get("readiness"))
-    except Exception:
-        ## Probe failed (timeout, disconnect, plugin error). Fall through
-        ## to enforcement against the cached value — at worst the caller
-        ## sees a stale rejection, but we don't escalate the failure mode
-        ## from "blocked" to "connection error".
-        pass
+    if await _probe_readiness(runtime, session) and session.readiness == "importing":
+        ## Live-confirmed import in flight — hold instead of bouncing the
+        ## write back for the caller to blind-retry. A failed initial
+        ## probe skips the hold entirely: waiting can't fix a dead link.
+        deadline = clock() + _IMPORTING_HOLD_CAP_SECONDS
+        while clock() < deadline:
+            await sleep(_IMPORTING_HOLD_PROBE_INTERVAL_SECONDS)
+            if not await _probe_readiness(runtime, session):
+                break
+            if session.readiness != "importing":
+                break
 
     _enforce_blocking_state(session)
 

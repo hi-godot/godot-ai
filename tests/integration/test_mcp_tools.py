@@ -3118,15 +3118,32 @@ class TestInputMapListBuiltinFilter:
 
 
 class TestReadinessGating:
+    @pytest.fixture(autouse=True)
+    def _no_importing_hold(self, monkeypatch):
+        """Zero out the #651 stage-2 bounded importing hold by default.
+
+        The rejection tests here answer exactly ONE gate probe with a
+        blocking state; with the production ~8s cap the gate would keep
+        re-probing (unanswered probes = 2s timeouts each) and leave stray
+        ``get_editor_state`` commands in the mock plugin's queue for later
+        responders to trip over. Hold semantics are unit-tested with a
+        fake clock in test_readiness.py; the end-to-end held-write test
+        below re-enables a miniature real hold explicitly."""
+        from godot_ai.handlers import _readiness as readiness_gate
+
+        monkeypatch.setattr(readiness_gate, "_IMPORTING_HOLD_CAP_SECONDS", 0.0)
+
     async def _set_readiness(self, plugin, readiness: str) -> None:
         """Send a readiness_changed event and wait for it to be processed."""
         await plugin.send_event("readiness_changed", {"readiness": readiness})
         await asyncio.sleep(0.05)
 
-    async def _confirm_blocking_probe(self, plugin, readiness: str) -> None:
-        """Respond to the gate's `get_editor_state` probe with the same
-        blocking state the cache holds, so the gate raises immediately
-        instead of waiting out the 2s probe timeout."""
+    async def _answer_state_probe(self, plugin, readiness: str) -> None:
+        """Respond to one gate `get_editor_state` probe with the given
+        readiness. Rejection tests echo the blocking state the cache holds
+        (so the gate raises instead of waiting out the 2s probe timeout);
+        the held-write test answers successive probes with different states
+        to walk the gate through an import window."""
         cmd = await plugin.recv_command()
         assert cmd["command"] == "get_editor_state"
         await plugin.send_response(
@@ -3144,7 +3161,7 @@ class TestReadinessGating:
         client, plugin = mcp_stack
         await self._set_readiness(plugin, "importing")
 
-        probe_task = asyncio.create_task(self._confirm_blocking_probe(plugin, "importing"))
+        probe_task = asyncio.create_task(self._answer_state_probe(plugin, "importing"))
         result = await client.call_tool(
             "node_create",
             {"type": "Node3D", "name": "Blocked"},
@@ -3155,11 +3172,48 @@ class TestReadinessGating:
         assert result.is_error
         assert "EDITOR_NOT_READY" in str(result.content)
 
+    async def test_write_tool_held_through_import_window_then_proceeds(
+        self, mcp_stack, monkeypatch
+    ):
+        """#651 stage 2 end-to-end: a write colliding with an import window
+        is held at the gate, re-probed, and proceeds on its own once the
+        editor leaves ``importing`` — the caller never sees an error. Uses
+        a miniature real hold (tiny cap/interval) rather than the
+        fake-clock unit path, so the sleep→re-probe→dispatch sequence runs
+        through the actual server stack."""
+        from godot_ai.handlers import _readiness as readiness_gate
+
+        monkeypatch.setattr(readiness_gate, "_IMPORTING_HOLD_CAP_SECONDS", 2.0)
+        monkeypatch.setattr(readiness_gate, "_IMPORTING_HOLD_PROBE_INTERVAL_SECONDS", 0.02)
+
+        client, plugin = mcp_stack
+        await self._set_readiness(plugin, "importing")
+
+        async def respond():
+            # Initial gate probe confirms the import is really in flight...
+            await self._answer_state_probe(plugin, "importing")
+            # ...the first hold re-probe sees it cleared...
+            await self._answer_state_probe(plugin, "ready")
+            # ...and the held write dispatches without the caller retrying.
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "create_node"
+            await plugin.send_response(
+                cmd["request_id"],
+                {"path": "/Main/Held", "type": "Node3D"},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("node_create", {"type": "Node3D", "name": "Held"})
+        await task
+
+        assert not result.is_error
+        assert result.data["path"] == "/Main/Held"
+
     async def test_write_tool_rejected_when_playing(self, mcp_stack):
         client, plugin = mcp_stack
         await self._set_readiness(plugin, "playing")
 
-        probe_task = asyncio.create_task(self._confirm_blocking_probe(plugin, "playing"))
+        probe_task = asyncio.create_task(self._answer_state_probe(plugin, "playing"))
         result = await client.call_tool("scene_save", {}, raise_on_error=False)
         await probe_task
 
@@ -3195,7 +3249,7 @@ class TestReadinessGating:
         # First set importing to block writes
         await self._set_readiness(plugin, "importing")
 
-        probe_task = asyncio.create_task(self._confirm_blocking_probe(plugin, "importing"))
+        probe_task = asyncio.create_task(self._answer_state_probe(plugin, "importing"))
         result = await client.call_tool(
             "node_create",
             {"type": "Node3D", "name": "Blocked"},
