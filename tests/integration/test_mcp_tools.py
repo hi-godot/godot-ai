@@ -1362,6 +1362,9 @@ class TestSessionTools:
         assert result.data["count"] == 1
         assert result.data["sessions"][0]["session_id"] == "mcp-test"
         assert result.data["sessions"][0]["is_active"] is True
+        ## #772: the server-global exclusion set rides along so agents can
+        ## tell a configured exclusion from a discovery failure.
+        assert result.data["exclude_domains"] == []
 
     async def test_session_activate_existing(self, mcp_stack):
         client, plugin = mcp_stack
