@@ -20,6 +20,11 @@ const MANAGED_SERVER_WS_PORT_SETTING := "godot_ai/managed_server_ws_port"
 ## the managed-server record so a reloaded plugin instance adopting the
 ## same server keeps authenticating; cleared with the rest of the record.
 const MANAGED_SERVER_WS_TOKEN_SETTING := "godot_ai/managed_server_ws_token"
+## keep_server_on_exit (#800): records whether the managed server was
+## launched with the keep-alive env opt-outs, so a later session adopting
+## the survivor routes its own editor exit through detach too. The live
+## setting can't answer that — it may have changed since the spawn.
+const MANAGED_SERVER_KEEP_ALIVE_SETTING := "godot_ai/managed_server_keep_alive"
 const UPDATE_RELOAD_RUNNER_SCRIPT := preload("res://addons/godot_ai/update_reload_runner.gd")
 
 ## Server lifecycle + port discovery extracted from this file (#297 PR 5).
@@ -552,15 +557,12 @@ func _exit_tree() -> void:
 	_editor_log_buffer = null
 	_surfaced_error_tracker = null
 
-	## keep_server_on_exit (#800): detach instead of kill so MCP clients
-	## stay served across editor sessions; the next _enter_tree adopts the
-	## survivor. A disable/enable cycle in the same session takes the same
-	## adoption path. Explicit stops (dock Restart, update reload) still
-	## kill via _stop_server.
-	if ClientConfigurator.keep_server_on_exit():
-		_lifecycle.detach_server()
-	else:
-		_stop_server()
+	## keep_server_on_exit (#800): the manager routes on the spawn-time
+	## keep-alive flag (persisted in the managed-server record), NOT the
+	## live setting — detach leaves the server for the next session (or a
+	## same-session disable/enable cycle) to adopt. Explicit stops (dock
+	## Restart, update reload) still kill via _stop_server.
+	_lifecycle.teardown_for_editor_exit()
 	## Symmetric with prepare_for_update_reload: the static guard persists
 	## across disable/enable within a single editor session, so the re-enabled
 	## plugin instance's _start_server would short-circuit and never respawn.
@@ -1561,7 +1563,7 @@ func _wait_for_port_free(port: int, timeout_s: float) -> void:
 func _read_managed_server_record() -> Dictionary:
 	var es := EditorInterface.get_editor_settings()
 	if es == null:
-		return {"pid": 0, "version": "", "ws_port": 0, "ws_token": ""}
+		return {"pid": 0, "version": "", "ws_port": 0, "ws_token": "", "keep_alive": false}
 	var pid: int = 0
 	if es.has_setting(MANAGED_SERVER_PID_SETTING):
 		pid = int(es.get_setting(MANAGED_SERVER_PID_SETTING))
@@ -1574,10 +1576,19 @@ func _read_managed_server_record() -> Dictionary:
 	var ws_token: String = ""
 	if es.has_setting(MANAGED_SERVER_WS_TOKEN_SETTING):
 		ws_token = str(es.get_setting(MANAGED_SERVER_WS_TOKEN_SETTING))
-	return {"pid": pid, "version": version, "ws_port": ws_port, "ws_token": ws_token}
+	var keep_alive := false
+	if es.has_setting(MANAGED_SERVER_KEEP_ALIVE_SETTING):
+		keep_alive = bool(es.get_setting(MANAGED_SERVER_KEEP_ALIVE_SETTING))
+	return {
+		"pid": pid,
+		"version": version,
+		"ws_port": ws_port,
+		"ws_token": ws_token,
+		"keep_alive": keep_alive,
+	}
 
 
-func _write_managed_server_record(pid: int, version: String) -> void:
+func _write_managed_server_record(pid: int, version: String, keep_alive: bool = false) -> void:
 	var es := EditorInterface.get_editor_settings()
 	if es == null:
 		return
@@ -1585,6 +1596,7 @@ func _write_managed_server_record(pid: int, version: String) -> void:
 	es.set_setting(MANAGED_SERVER_VERSION_SETTING, version)
 	es.set_setting(MANAGED_SERVER_WS_PORT_SETTING, _resolved_ws_port)
 	es.set_setting(MANAGED_SERVER_WS_TOKEN_SETTING, _ws_auth_token)
+	es.set_setting(MANAGED_SERVER_KEEP_ALIVE_SETTING, keep_alive)
 
 
 ## Keep the in-memory token, the connection's handshake field, and (via the
@@ -1615,6 +1627,8 @@ func _clear_managed_server_record() -> void:
 		es.set_setting(MANAGED_SERVER_WS_PORT_SETTING, 0)
 	if es.has_setting(MANAGED_SERVER_WS_TOKEN_SETTING):
 		es.set_setting(MANAGED_SERVER_WS_TOKEN_SETTING, "")
+	if es.has_setting(MANAGED_SERVER_KEEP_ALIVE_SETTING):
+		es.set_setting(MANAGED_SERVER_KEEP_ALIVE_SETTING, false)
 
 
 func prepare_for_update_reload() -> void:

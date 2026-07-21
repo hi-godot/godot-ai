@@ -488,14 +488,28 @@ func test_detach_invalidates_async_generation() -> void:
 	assert_true(stale, "work captured before detach_server must read as stale")
 
 
+## Exact save/restore for the keep_server_on_exit EditorSetting: track
+## whether it existed so a previously-absent setting is erased rather than
+## restored-as-null (which would depend on re-registration to clean up).
+func _save_keep_setting(es: EditorSettings) -> Array:
+	if es.has_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT):
+		return [true, es.get_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT)]
+	return [false, null]
+
+
+func _restore_keep_setting(es: EditorSettings, saved: Array) -> void:
+	if bool(saved[0]):
+		es.set_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT, saved[1])
+	else:
+		es.erase(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT)
+
+
 func test_keep_alive_env_staging_honors_setting() -> void:
 	## With keep_server_on_exit ON, the spawn env must skip the owner pid
 	## (no owner-PID reaper) and stage GODOT_AI_NO_IDLE_EXIT (no idle
 	## backstop); with it OFF, NO_IDLE_EXIT must not be staged.
 	var es := EditorInterface.get_editor_settings()
-	var saved: Variant = null
-	if es.has_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT):
-		saved = es.get_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT)
+	var saved := _save_keep_setting(es)
 	var host := _ManagerHostStub.new()
 	var manager := McpServerLifecycleManagerScript.new(host)
 
@@ -509,13 +523,96 @@ func test_keep_alive_env_staging_honors_setting() -> void:
 	es.set_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT, false)
 	var keep_set_off := manager._set_keep_alive_env()
 
-	es.set_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT, saved)
+	_restore_keep_setting(es, saved)
 	host.free()
 
 	assert_false(owner_set_on, "keep-alive spawn must not hand the server an owner pid")
 	assert_true(keep_set_on, "keep-alive spawn must stage GODOT_AI_NO_IDLE_EXIT")
 	assert_eq(idle_env_on, "1")
 	assert_false(keep_set_off, "default spawn must leave the idle backstop armed")
+
+
+func test_teardown_for_exit_detaches_when_spawned_keep_alive() -> void:
+	## Routing must follow the spawn-time flag, not the live setting: a
+	## keep-alive-launched server survives editor exit even though the
+	## setting has since been turned OFF.
+	var es := EditorInterface.get_editor_settings()
+	var saved := _save_keep_setting(es)
+	es.set_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT, false)
+	var host := _ManagerHostStub.new()
+	host.listener_pids = [61111] as Array[int]
+	host.alive_pids = [61111] as Array[int]
+	host.branded_pids = [61111] as Array[int]
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 61111
+	manager._server_keep_alive = true
+
+	manager.teardown_for_editor_exit()
+	var killed := host.killed_targets.duplicate()
+	var cleared := host.cleared_record_calls
+	var finalize_calls := host.finalize_calls
+	_restore_keep_setting(es, saved)
+	host.free()
+
+	assert_true(killed.is_empty(), "keep-alive-spawned server must not be killed on exit")
+	assert_eq(cleared, 0)
+	assert_eq(finalize_calls, 0)
+
+
+func test_teardown_for_exit_kills_when_flag_clear_despite_setting() -> void:
+	## Enable-mid-session: the running server was spawned WITHOUT the
+	## keep-alive env opt-outs, so exit must kill it even though the
+	## setting is now ON — detaching would preserve a record pointing at
+	## a PID the owner-PID watchdog reaps moments later (#774 scenario).
+	var es := EditorInterface.get_editor_settings()
+	var saved := _save_keep_setting(es)
+	es.set_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT, true)
+	var host := _ManagerHostStub.new()
+	host.listener_pids = [62222] as Array[int]
+	host.alive_pids = [62222] as Array[int]
+	host.branded_pids = [62222] as Array[int]
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 62222
+
+	manager.teardown_for_editor_exit()
+	var killed := host.killed_targets.duplicate()
+	var finalize_calls := host.finalize_calls
+	_restore_keep_setting(es, saved)
+	host.free()
+
+	assert_true(killed.has(62222),
+		"a server spawned without keep-alive env must die with the editor")
+	assert_eq(finalize_calls, 1)
+
+
+func test_adopt_managed_recovers_keep_alive_from_record() -> void:
+	## A keep-alive survivor adopted by a later session must detach again
+	## on that session's exit — the flag rides the managed-server record.
+	var host := _ManagerHostStub.new()
+	host.managed_record = {"pid": 12121, "version": "2.2.0", "ws_port": 9500, "keep_alive": true}
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	var label := manager.adopt_compatible_server("2.2.0", "2.2.0", 12121, true)
+	var flag := manager._server_keep_alive
+	host.free()
+
+	assert_eq(label, McpAdoptionLabel.MANAGED)
+	assert_true(flag, "managed adoption must recover the record's keep-alive flag")
+
+
+func test_adopt_external_clears_keep_alive() -> void:
+	## External adoption knows nothing about the occupant's launch env —
+	## the conservative answer is kill-on-exit.
+	var host := _ManagerHostStub.new()
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_keep_alive = true
+
+	var label := manager.adopt_compatible_server("2.2.0", "2.2.0", 22222, false)
+	var flag := manager._server_keep_alive
+	host.free()
+
+	assert_eq(label, McpAdoptionLabel.EXTERNAL)
+	assert_false(flag, "external adoption must reset the keep-alive flag")
 
 
 # ----- check_server_health / start_server guards ----------------------

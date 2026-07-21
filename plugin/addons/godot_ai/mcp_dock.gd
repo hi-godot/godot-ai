@@ -985,6 +985,12 @@ func _update_status() -> void:
 		status_text = "Disconnected"
 		status_color = Color.RED
 
+	## keep_server_on_exit (#800): the reaper env opt-outs are staged at
+	## spawn, so a mid-session toggle only lands on the next server start —
+	## say so while the running server still carries the old behavior.
+	if connected and ClientConfigurator.keep_server_on_exit() != bool(server_status.get("keep_alive", false)):
+		status_text += " — keep-server-on-exit applies after Restart"
+
 	_update_crash_panel(server_status)
 	_refresh_server_version_label(server_status)
 
