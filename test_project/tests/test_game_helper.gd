@@ -244,3 +244,85 @@ func test_input_mouse_position_partial_dict_uses_number() -> void:
 	var r: Dictionary = _helper.call("_resolve_mouse_position", {"x": 7})
 	assert_false(r.has("error"), "partial numeric dict must not error")
 	assert_eq(r.position.x, 7.0)
+
+
+# ----- #777: stalled-main-loop synchronous screenshot fallback -----
+
+func test_should_capture_stale_sync_requires_all_three_conditions() -> void:
+	## The sync stale capture only commits when awaiting would park forever
+	## (stalled loop) AND the viewport plausibly holds a real frame.
+	assert_true(GameHelper._should_capture_stale_sync(true, true, 5),
+		"stalled loop + scene in tree + drawn frames commits the sync capture")
+	assert_false(GameHelper._should_capture_stale_sync(false, true, 5),
+		"an alive loop must take the fresh-frame await path")
+	assert_false(GameHelper._should_capture_stale_sync(true, false, 5),
+		"no current_scene (booting / custom main loop) has no trustworthy frame")
+	assert_false(GameHelper._should_capture_stale_sync(true, true, 0),
+		"zero frames drawn means the texture is the boot clear color, not a frame")
+
+
+func test_main_loop_appears_stalled_before_first_tick() -> void:
+	var helper: Node = GameHelper.new()
+	assert_true(helper._main_loop_appears_stalled(),
+		"the -1 sentinel (no _process tick yet) reads as stalled")
+	helper.free()
+
+
+func test_main_loop_appears_stalled_uses_threshold() -> void:
+	var helper: Node = GameHelper.new()
+	helper._last_loop_tick_msec = Time.get_ticks_msec()
+	assert_false(helper._main_loop_appears_stalled(),
+		"a just-ticked loop is alive")
+	helper._last_loop_tick_msec = Time.get_ticks_msec() - (GameHelper.MAIN_LOOP_STALL_MSEC + 500)
+	assert_true(helper._main_loop_appears_stalled(),
+		"a loop silent past MAIN_LOOP_STALL_MSEC reads as stalled")
+	helper.free()
+
+
+func test_capture_and_reply_flags_stale_when_no_new_frame() -> void:
+	## frames_at_request == current frames_drawn is exactly the frozen-loop
+	## case: nothing can render between receipt and this synchronous capture,
+	## so the reply must carry stale=true plus the frames_drawn diagnostic.
+	## The editor 3D viewport stands in for the game root viewport.
+	var viewport := EditorInterface.get_editor_viewport_3d()
+	if viewport == null:
+		skip("No editor 3D viewport available")
+		return
+	var helper: Node = GameHelper.new()
+	helper._capture_and_reply("rid-stale", viewport, 64, Engine.get_frames_drawn())
+	var reply: Dictionary = helper._last_screenshot_reply
+	helper.free()
+	if str(reply.get("kind")) == "error":
+		skip("Viewport readback unavailable in this environment: %s" % str(reply.get("message")))
+		return
+	assert_eq(reply.get("request_id"), "rid-stale")
+	assert_true(bool(reply.get("stale")), "no frame drawn after receipt -> stale flag set")
+	assert_gt(int(reply.get("frames_drawn")), 0, "frames_drawn rides with the reply")
+
+
+func test_capture_and_reply_fresh_when_frame_advanced() -> void:
+	## frames_at_request one below the current count models the await path
+	## having seen a fresh present: the reply must NOT be flagged stale.
+	var viewport := EditorInterface.get_editor_viewport_3d()
+	if viewport == null:
+		skip("No editor 3D viewport available")
+		return
+	var helper: Node = GameHelper.new()
+	helper._capture_and_reply("rid-fresh", viewport, 64, Engine.get_frames_drawn() - 1)
+	var reply: Dictionary = helper._last_screenshot_reply
+	helper.free()
+	if str(reply.get("kind")) == "error":
+		skip("Viewport readback unavailable in this environment: %s" % str(reply.get("message")))
+		return
+	assert_false(bool(reply.get("stale")), "a frame drawn after receipt -> not stale")
+
+
+func test_screenshot_reply_error_records_seam() -> void:
+	## The error paths stay synchronous and record through the same testing
+	## seam (EngineDebugger is inactive in the editor harness).
+	var helper: Node = GameHelper.new()
+	helper._reply_error("rid-err", "No game root viewport available")
+	assert_eq(helper._last_screenshot_reply.get("kind"), "error")
+	assert_eq(helper._last_screenshot_reply.get("request_id"), "rid-err")
+	assert_contains(str(helper._last_screenshot_reply.get("message")), "No game root viewport")
+	helper.free()

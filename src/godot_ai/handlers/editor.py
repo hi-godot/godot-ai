@@ -164,6 +164,12 @@ async def editor_screenshot(
         "aabb_size",
         "aabb_longest_ground_axis",
         "camera_path",
+        # #777: source="game" staleness metadata — a capture taken while the
+        # game's main loop was frozen (backgrounded window) returns the last
+        # rendered frame with stale_frame=true and an explanatory note.
+        "stale_frame",
+        "frames_drawn",
+        "note",
     ):
         if key in result:
             metadata[key] = result[key]

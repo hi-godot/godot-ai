@@ -51,6 +51,16 @@ const EVAL_HUNG := "EVAL_HUNG"
 ## to the 10s backstop as a phantom "hang". Failing fast game-side with the
 ## real byte count makes the failure actionable (return a smaller slice).
 const EVAL_RESULT_TOO_LARGE := "EVAL_RESULT_TOO_LARGE"
+## #777: a game-side request (currently editor_screenshot source="game")
+## reached a live, registered game helper but no reply came back before the
+## editor-side timer fired. Every editor gate already passed
+## (is_playing_scene, helper hello) so this is a TOP-LEVEL code, not an
+## EDITOR_NOT_READY sub-code: the game process itself failed to respond —
+## backgrounded with a frozen main loop and nothing rendered to fall back
+## on, main thread blocked, or the helper died mid-run. Carved out of
+## INTERNAL_ERROR (the largest opaque timeout bucket fleet-wide) so the
+## residual timeout is attributable and actionable.
+const GAME_HELPER_TIMEOUT := "GAME_HELPER_TIMEOUT"
 ## audit-v2 #21 (issue #365): finer-grained codes carved out of the 471
 ## INVALID_PARAMS sites so agents can distinguish recoverable input
 ## errors from structural ones. INVALID_PARAMS stays for genuinely

@@ -428,6 +428,119 @@ func test_debugger_plugin_clear_pending_disconnects_timer() -> void:
 	assert_false(timer.timeout.is_connected(cb), "_clear_pending should disconnect timeout signal")
 
 
+# ----- #777: game screenshot stale-frame plumbing + honest timeout -----
+
+## Records send_deferred_response payloads instead of touching a real socket.
+class _StubConnection:
+	extends McpConnection
+	var captured: Array = []
+
+	func send_deferred_response(request_id: String, payload: Dictionary) -> void:
+		captured.append({"request_id": request_id, "payload": payload})
+
+
+## Flip a bare plugin's flags so get_game_status() reports "live", the state
+## the timeout's GAME_HELPER_TIMEOUT branch requires.
+func _mark_game_live(plugin: McpDebuggerPlugin) -> void:
+	plugin._game_run_active = true
+	plugin._game_ready = true
+	plugin._ready_run_token = plugin._game_run_token
+
+
+func test_screenshot_response_plumbs_stale_metadata() -> void:
+	## #777: a frozen-main-loop capture arrives with frames_drawn + stale
+	## appended; the tool response must surface stale_frame, frames_drawn,
+	## and an explanatory note alongside the image.
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	var rid := "rid-stale-meta"
+	plugin._pending[rid] = {"connection": conn}
+	plugin._on_screenshot_response([rid, "aGk=", 320, 180, 640, 360, 42, true])
+	assert_false(plugin._pending.has(rid), "the response clears the pending entry")
+	assert_eq(conn.captured.size(), 1, "one deferred reply")
+	var data: Dictionary = conn.captured[0]["payload"]["data"]
+	assert_eq(data.get("stale_frame"), true, "the game's stale flag rides into the tool response")
+	assert_eq(int(data.get("frames_drawn", 0)), 42, "frames_drawn rides into the tool response")
+	assert_contains(str(data.get("note")), "backgrounded", "the note explains the stale frame")
+	assert_eq(data.get("image_base64"), "aGk=", "image payload is unchanged")
+	conn.free()
+
+
+func test_screenshot_response_fresh_frame_not_flagged() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	var rid := "rid-fresh-meta"
+	plugin._pending[rid] = {"connection": conn}
+	plugin._on_screenshot_response([rid, "aGk=", 320, 180, 640, 360, 42, false])
+	var data: Dictionary = conn.captured[0]["payload"]["data"]
+	assert_eq(data.get("stale_frame"), false, "fresh captures carry an explicit false")
+	assert_false(data.has("note"), "no explanatory note on a fresh capture")
+	conn.free()
+
+
+func test_screenshot_response_legacy_payload_has_no_stale_keys() -> void:
+	## An older game helper (self-update window) sends six fields; the editor
+	## must not fabricate staleness metadata it wasn't given.
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	var rid := "rid-legacy-meta"
+	plugin._pending[rid] = {"connection": conn}
+	plugin._on_screenshot_response([rid, "aGk=", 320, 180, 640, 360])
+	var data: Dictionary = conn.captured[0]["payload"]["data"]
+	assert_false(data.has("stale_frame"), "six-field legacy payload carries no stale_frame")
+	assert_false(data.has("frames_drawn"), "six-field legacy payload carries no frames_drawn")
+	assert_eq(data.get("image_base64"), "aGk=", "legacy image payload still flows through")
+	conn.free()
+
+
+func test_screenshot_timeout_live_game_replies_game_helper_timeout() -> void:
+	## #777: the 8s reply timer on a live game replies GAME_HELPER_TIMEOUT
+	## with an actionable hint — never the opaque INTERNAL_ERROR that was
+	## the largest opaque failure bucket fleet-wide.
+	var plugin := McpDebuggerPlugin.new()
+	_mark_game_live(plugin)
+	var conn := _StubConnection.new()
+	var rid := "rid-shot-timeout-live"
+	plugin._pending[rid] = {"connection": conn}
+	plugin._on_timeout(rid)
+	assert_false(plugin._pending.has(rid), "the timeout clears the pending entry")
+	assert_eq(conn.captured.size(), 1, "one deferred reply")
+	var payload: Dictionary = conn.captured[0]["payload"]
+	assert_has_key(payload, "error")
+	assert_eq(payload["error"]["code"], ErrorCodes.GAME_HELPER_TIMEOUT,
+		"a live-game screenshot timeout replies GAME_HELPER_TIMEOUT")
+	assert_contains(payload["error"]["message"], "focus the game window",
+		"the message names the recovery action")
+	assert_contains(payload["error"]["message"], "game_command",
+		"the message names the liveness-check tool")
+	conn.free()
+
+
+func test_screenshot_timeout_not_live_keeps_attributed_shape() -> void:
+	## A game that is no longer live rides the existing _explain_not_live
+	## path (INTERNAL_ERROR top-level with the attributed game_status data),
+	## not the new GAME_HELPER_TIMEOUT.
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	var rid := "rid-shot-timeout-dead"
+	plugin._pending[rid] = {"connection": conn}
+	plugin._on_timeout(rid)
+	assert_eq(conn.captured.size(), 1, "one deferred reply")
+	var payload: Dictionary = conn.captured[0]["payload"]
+	assert_eq(payload["error"]["code"], ErrorCodes.INTERNAL_ERROR,
+		"the not-live path keeps the existing attributed shape")
+	assert_has_key(payload["error"], "data")
+	assert_has_key(payload["error"]["data"], "game_status",
+		"the not-live payload attributes the game state")
+	conn.free()
+
+
+func test_screenshot_timeout_unknown_request_no_crash() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin._on_timeout("unknown-id")
+	assert_true(true, "a timeout for an already-resolved request is a no-op")
+
+
 func test_screenshot_view_target_not_found() -> void:
 	var result := _handler.take_screenshot({"source": "viewport", "view_target": "/Main/NonExistent"})
 	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)

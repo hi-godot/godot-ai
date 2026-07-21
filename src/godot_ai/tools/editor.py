@@ -201,6 +201,13 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
           the first Camera3D found in a depth-first walk. NODE_NOT_FOUND only
           when the scene contains no Camera3D at all.
         - "game": running game's framebuffer (only when project is running).
+          A backgrounded/minimized game window freezes its main loop; the
+          capture then returns the last rendered frame with
+          ``stale_frame: true`` and a ``note`` in the metadata — focus the
+          game window and retry for a current frame. ``GAME_HELPER_TIMEOUT``
+          means the game process never replied at all (nothing rendered yet,
+          main thread blocked, or helper dead) — focus the window and retry,
+          or use game_command to confirm liveness.
 
         ``include_image=True`` (default) returns an MCP ImageContent block.
         ``view_target`` (comma-separated Node3D paths) reframes editor camera;

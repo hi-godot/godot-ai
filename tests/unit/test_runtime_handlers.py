@@ -873,6 +873,13 @@ class StubClient:
                 result["fov"] = params["fov"]
             if params.get("source") == "cinematic":
                 result["camera_path"] = "/Main/Camera3D"
+            # #777: game-source captures taken while the game's main loop is
+            # frozen (backgrounded window) return the last rendered frame
+            # flagged stale plus an explanatory note.
+            if params.get("source") == "game":
+                result["stale_frame"] = True
+                result["frames_drawn"] = 42
+                result["note"] = "The game window appears backgrounded; returning last frame."
             return result
         if command == "clear_logs":
             return {"cleared_count": 5}
@@ -3933,6 +3940,31 @@ async def test_editor_screenshot_handler_passes_source():
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     await editor_handlers.editor_screenshot(runtime, source="game", include_image=False)
     assert client.calls[-1]["params"]["source"] == "game"
+
+
+async def test_editor_screenshot_game_stale_metadata_passthrough():
+    """#777: a frozen-main-loop game capture returns the last rendered frame
+    flagged stale; the handler must surface stale_frame/frames_drawn/note in
+    the metadata instead of dropping them."""
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await editor_handlers.editor_screenshot(runtime, source="game", include_image=False)
+    assert result["stale_frame"] is True
+    assert result["frames_drawn"] == 42
+    assert "backgrounded" in result["note"]
+
+
+async def test_editor_screenshot_viewport_has_no_stale_metadata():
+    """Staleness keys are game-source only; viewport captures must not grow
+    them from the passthrough list."""
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await editor_handlers.editor_screenshot(
+        runtime, source="viewport", include_image=False
+    )
+    assert "stale_frame" not in result
+    assert "frames_drawn" not in result
+    assert "note" not in result
 
 
 async def test_editor_screenshot_timeout_exceeds_plugin_deferred_timeout():
