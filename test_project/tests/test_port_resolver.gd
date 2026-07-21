@@ -240,6 +240,25 @@ func test_scrape_free_port_skips_powershell_windows() -> void:
 	)
 
 
+func test_scrape_held_port_reports_in_use_windows() -> void:
+	## Companion to the free-port trust test: a live listener must still
+	## scrape as in-use via the netstat-first path, with no PowerShell
+	## fallback needed.
+	if OS.get_name() != "Windows":
+		skip("Windows-only netstat trust path")
+		return
+	var port := 51254
+	var holder := TCPServer.new()
+	if holder.listen(port, "127.0.0.1") != OK:
+		skip("could not seize port for held-port scrape smoke")
+		return
+	var counters: Array = []
+	var in_use := McpPortResolver.is_port_in_use_via_scrape(port, func(c: String) -> void: counters.append(c))
+	holder.stop()
+	assert_true(in_use, "held port must scrape as in use")
+	assert_false(counters.has("powershell"), "netstat saw the listener; PowerShell must not run")
+
+
 func test_find_all_pids_sees_live_listener_via_netstat_windows() -> void:
 	## Companion to the free-port trust tests: a live listener must still
 	## be found by the netstat-first path (no fallback needed).
