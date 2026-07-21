@@ -142,7 +142,9 @@ String)` removes it.
   `_McpTest...` to get this for free.
 - **Per-suite cleanup**: nodes added under the scene root during a suite and
   left behind are removed when the suite ends.
-- **Suite isolation**: each suite receives a fresh `ctx.duplicate()`.
+- **Suite isolation**: each suite receives a fresh `ctx.duplicate(true)` —
+  Dictionary mutations can't leak between suites; the contained Objects are
+  shared editor references (see `suite_setup` above).
 - **Resilient discovery**: broken `test_*.gd` files land in `load_errors`
   without stopping the rest of the run.
 
