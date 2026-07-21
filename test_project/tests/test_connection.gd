@@ -519,6 +519,29 @@ func test_outbound_backpressure_limit_rejects_payload_that_would_overflow() -> v
 	)
 
 
+func test_might_exceed_uses_worst_case_four_bytes_per_code_point() -> void:
+	## The cheap gate must upper-bound the encoded size (<= 4 UTF-8 bytes per
+	## code point) so a "safe" verdict is never wrong.
+	assert_false(McpConnection._might_exceed_outbound_backpressure(0, 1024))
+	var char_budget := McpConnection.OUTBOUND_BUFFER_LIMIT_BYTES / 4
+	assert_false(McpConnection._might_exceed_outbound_backpressure(0, char_budget))
+	assert_true(McpConnection._might_exceed_outbound_backpressure(0, char_budget + 1))
+
+
+func test_might_exceed_is_conservative_relative_to_exact_check() -> void:
+	## When the cheap gate says "safe" the exact byte check must agree, because
+	## actual UTF-8 bytes can never exceed char_count * 4. Guarding the exact
+	## encode behind this gate must not let an overflowing payload slip through.
+	var near := McpConnection.OUTBOUND_BUFFER_LIMIT_BYTES - 8
+	## 1 code point -> at most 4 bytes, within the 8-byte headroom -> cleared as
+	## safe, and the exact check agrees for any real 1..4 byte encoding.
+	assert_false(McpConnection._might_exceed_outbound_backpressure(near, 1))
+	assert_false(McpConnection._would_exceed_outbound_backpressure(near, 4))
+	## 3 code points -> up to 12 bytes, over the 8-byte headroom -> the gate must
+	## refuse to clear it so the exact encode still runs.
+	assert_true(McpConnection._might_exceed_outbound_backpressure(near, 3))
+
+
 func test_backpressure_error_is_structured_and_actionable() -> void:
 	var err := McpConnection._make_backpressure_error("rid-1", 100, 200)
 	assert_eq(err.request_id, "rid-1")

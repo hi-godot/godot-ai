@@ -554,10 +554,16 @@ func _send_json(data: Dictionary) -> bool:
 	if not _connected:
 		return false
 	var text := JSON.stringify(data)
-	var message_bytes := text.to_utf8_buffer().size()
 	var buffered_bytes := _peer.get_current_outbound_buffered_amount()
-	if _would_exceed_outbound_backpressure(buffered_bytes, message_bytes):
-		return _handle_outbound_backpressure(data, buffered_bytes, message_bytes)
+	## `send_text` encodes the string to UTF-8 internally, so an exact
+	## `to_utf8_buffer().size()` here would encode every payload twice. Almost
+	## all payloads sit far below the limit, so gate on a cheap upper bound
+	## (<= 4 UTF-8 bytes per code point) and only pay for the exact count when
+	## the estimate lands near the backpressure ceiling.
+	if _might_exceed_outbound_backpressure(buffered_bytes, text.length()):
+		var message_bytes := text.to_utf8_buffer().size()
+		if _would_exceed_outbound_backpressure(buffered_bytes, message_bytes):
+			return _handle_outbound_backpressure(data, buffered_bytes, message_bytes)
 	var err := _peer.send_text(text)
 	if err != OK:
 		if log_buffer:
@@ -568,6 +574,14 @@ func _send_json(data: Dictionary) -> bool:
 
 static func _would_exceed_outbound_backpressure(buffered_bytes: int, message_bytes: int) -> bool:
 	return buffered_bytes + message_bytes > OUTBOUND_BUFFER_LIMIT_BYTES
+
+
+## Cheap pre-check on the code-point count: UTF-8 uses at most 4 bytes per code
+## point, so `char_count * 4` upper-bounds the encoded size. When even that
+## upper bound fits under the ceiling the payload is definitely safe and we can
+## skip the exact encode; only a positive here warrants `to_utf8_buffer()`.
+static func _might_exceed_outbound_backpressure(buffered_bytes: int, char_count: int) -> bool:
+	return buffered_bytes + char_count * 4 > OUTBOUND_BUFFER_LIMIT_BYTES
 
 
 func _handle_outbound_backpressure(
