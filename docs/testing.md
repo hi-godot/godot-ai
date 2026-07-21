@@ -150,7 +150,7 @@ String)` removes it.
 
 MCP tool `test_run` (120 s server-side timeout for the whole run):
 
-```
+```text
 test_run                              # all suites — compact: counts + failures only
 test_run suite=player                 # one suite (exact match on suite_name())
 test_run test_name=speed              # only tests whose name contains "speed"
