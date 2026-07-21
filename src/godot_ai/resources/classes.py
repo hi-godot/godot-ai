@@ -14,6 +14,15 @@ from godot_ai.runtime.direct import DirectRuntime
 def register_class_resources(mcp: FastMCP) -> None:
     @mcp.resource("godot://class/{class_name}", mime_type="application/json")
     async def get_class_info(ctx: Context, class_name: str) -> dict[str, Any]:
-        """ClassDB metadata for a class in the active Godot editor."""
+        """ClassDB metadata for a class in the active Godot editor.
+
+        Returns the full documentation set (properties, methods, signals,
+        enums, constants). The `get_class` tool defaults to properties-only,
+        but a resource URI cannot carry a `sections` argument, so the resource
+        pins `sections="all"` to preserve its advertised full-reference
+        contract.
+        """
         runtime = DirectRuntime.from_context(ctx)
-        return await safe_payload(api_handlers.api_get_class(runtime, class_name=class_name))
+        return await safe_payload(
+            api_handlers.api_get_class(runtime, class_name=class_name, sections="all")
+        )

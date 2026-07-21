@@ -276,8 +276,12 @@ class TestClassResourceTemplate:
         async def respond():
             cmd = await plugin.recv_command()
             assert cmd["command"] == "get_class_info"
+            # The resource cannot take a `sections` arg, so it pins "all" to
+            # preserve the full-reference contract despite the tool's
+            # properties-only default.
             assert cmd["params"] == {
                 "class_name": "CharacterBody3D",
+                "sections": "all",
                 "include_inherited": False,
                 "include_inheritors": False,
                 "offset": 0,

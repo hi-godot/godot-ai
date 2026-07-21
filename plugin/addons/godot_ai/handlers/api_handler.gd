@@ -80,7 +80,7 @@ static func _invalid_sections_error(invalid_sections: Array[String]) -> Dictiona
 			3,
 			0.3
 		)
-	var message := "Unknown class-info section(s): %s. Valid sections: %s (or \"all\" for the full set)" % [
+	var message := "Unknown class-info section(s): %s. Valid sections: %s (or \"all\" for all documentation sections; \"inheritors\" must be requested by name)" % [
 		", ".join(invalid_sections),
 		", ".join(ClassIntrospection.KNOWN_SECTIONS),
 	]

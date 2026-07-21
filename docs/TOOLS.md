@@ -216,12 +216,17 @@ Calls take the form:
 | `tileset_manage` | `tileset_get_atlas_tiles`, `tileset_get_atlas_image` |
 
 `api_manage(op="get_class")` inspects Godot API/ClassDB metadata for a class
-without creating an instance. By default it returns direct class members only,
-with each returned section capped at 100 items. Pass `sections` (`properties`,
-`methods`, `signals`, `enums`, `constants`, `inheritors`),
-`include_inherited=true`, `include_inheritors=true`, `offset`, or `limit=0`
-when a fuller class reference is needed. When paginating, request one section
-at a time so `offset`/`limit` apply only to the list you are paging.
+without creating an instance. By default it returns **only `properties`**
+(direct members, capped at 100 items) — a bare `get_class` is almost always
+"what properties does X have", and the full section dump costs an agent
+thousands of tokens it rarely wanted. Pass `sections` to widen it
+(`properties`, `methods`, `signals`, `enums`, `constants`, `inheritors`), or
+`sections="all"` for the full documentation set (all of those **except**
+`inheritors`, which stays opt-in by name). `include_inherited=true`,
+`include_inheritors=true`, `offset`, and `limit=0` further shape the result.
+When paginating, request one section at a time so `offset`/`limit` apply only
+to the list you are paging. The `godot://class/{class_name}` resource form
+cannot take `sections`, so it always returns the full set.
 
 Every rolled-up tool also accepts an optional top-level `session_id` for
 per-call multi-editor routing (sibling of `op` and `params`, *not* nested
