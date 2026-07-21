@@ -65,6 +65,21 @@ def _validation_error(*, params: Any = None, **extra: Any) -> ValidationError:
     raise AssertionError("expected validation to fail")
 
 
+def _nested_validation_error(**params: Any) -> ValidationError:
+    class _OpParams(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+    class _ManageCall(BaseModel):
+        op: str
+        params: _OpParams
+
+    try:
+        _ManageCall.model_validate({"op": "read", "params": params})
+    except ValidationError as exc:
+        return exc
+    raise AssertionError("expected validation to fail")
+
+
 class TestFoldFlatManageParams:
     def test_long_values_are_bounded_in_examples(self):
         value = "a" * 1000
@@ -81,6 +96,13 @@ class TestFoldFlatManageParams:
         example = _call_example({"op": "read", "path": object()}, "path")
 
         assert json.loads(example) == {"op": "read", "params": {"path": "..."}}
+
+    def test_call_example_fallback_stringifies_non_serializable_op(self):
+        op = object()
+
+        example = _call_example({"op": op, "path": object()}, "path")
+
+        assert json.loads(example) == {"op": str(op), "params": {"path": "..."}}
 
     def test_same_json_value_falls_back_for_non_serializable_values(self):
         shared = object()
@@ -291,7 +313,12 @@ class TestFoldFlatManageParams:
 
     async def test_rewrites_only_pure_top_level_extra_errors(self, register_script_manage):
         exc = _validation_error(path="res://x.gd")
-        ctx = _FakeContext(CallToolRequestParams(name="script_manage", arguments={"op": "read"}))
+        ctx = _FakeContext(
+            CallToolRequestParams(
+                name="script_manage",
+                arguments={"op": "read", "path": "res://x.gd"},
+            )
+        )
 
         with pytest.raises(ToolError) as info:
             await FoldFlatManageParams().on_call_tool(ctx, await _raise_call_next(exc))
@@ -299,6 +326,38 @@ class TestFoldFlatManageParams:
         message = str(info.value)
         assert "unexpected top-level op param(s): 'path'" in message
         assert "Op-specific parameters go inside 'params'" in message
+        assert '"params": {"path": "res://x.gd"}' in message
+
+    async def test_rewrites_folded_location_for_original_flat_key(self, register_script_manage):
+        exc = _nested_validation_error(path="res://x.gd")
+        assert exc.errors()[0]["loc"] == ("params", "path")
+        ctx = _FakeContext(
+            CallToolRequestParams(
+                name="script_manage",
+                arguments={"op": "read", "path": "res://x.gd"},
+            )
+        )
+
+        with pytest.raises(ToolError) as info:
+            await FoldFlatManageParams().on_call_tool(ctx, await _raise_call_next(exc))
+
+        message = str(info.value)
+        assert "unexpected top-level op param(s): 'path'" in message
+        assert '"params": {"path": "res://x.gd"}' in message
+
+    async def test_does_not_rewrite_already_nested_extra_param(self, register_script_manage):
+        exc = _nested_validation_error(path="res://x.gd")
+        ctx = _FakeContext(
+            CallToolRequestParams(
+                name="script_manage",
+                arguments={"op": "read", "params": {"path": "res://x.gd"}},
+            )
+        )
+
+        with pytest.raises(ValidationError) as info:
+            await FoldFlatManageParams().on_call_tool(ctx, await _raise_call_next(exc))
+
+        assert info.value is exc
 
     async def test_does_not_narrow_mixed_validation_errors(self, register_script_manage):
         exc = _validation_error(params=42, path="res://x.gd")

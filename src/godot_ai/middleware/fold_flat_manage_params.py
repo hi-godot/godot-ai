@@ -54,7 +54,7 @@ def _call_example(arguments: dict[str, Any], key: str) -> str:
     try:
         return json.dumps(example, ensure_ascii=False)
     except (TypeError, ValueError):
-        return f'{{"op": {json.dumps(example["op"])}, "params": {{{json.dumps(key)}: "..."}}}}'
+        return f'{{"op": {json.dumps(str(example["op"]))}, "params": {{{json.dumps(key)}: "..."}}}}'
 
 
 def _flat_keys(arguments: dict[str, Any]) -> list[str]:
@@ -75,8 +75,9 @@ def _extra_params_hint(
     *,
     tool_name: str,
     arguments: dict[str, Any] | None,
+    flat_keys: list[str],
 ) -> str | None:
-    """Return a nesting hint only for a pure top-level-extra validation error."""
+    """Return a nesting hint only for rejected params received at the top level."""
     validation_error = find_pydantic_validation_error(exc)
     if validation_error is None:
         return None
@@ -88,14 +89,19 @@ def _extra_params_hint(
     keys: list[str] = []
     for error in errors:
         location = error.get("loc")
-        if (
-            error.get("type") not in _EXTRA_ERROR_TYPES
-            or not isinstance(location, tuple)
-            or len(location) != 1
-            or not isinstance(location[0], str)
-        ):
+        if error.get("type") not in _EXTRA_ERROR_TYPES or not isinstance(location, tuple):
             return None
-        keys.append(location[0])
+
+        if len(location) == 1 and isinstance(location[0], str):
+            key = location[0]
+        elif len(location) == 2 and location[0] == "params" and isinstance(location[1], str):
+            key = location[1]
+        else:
+            return None
+
+        if key not in flat_keys:
+            return None
+        keys.append(key)
 
     raw_arguments = arguments if isinstance(arguments, dict) else {}
     first_key = keys[0]
@@ -118,9 +124,14 @@ class FoldFlatManageParams(Middleware):
     ) -> ToolResult:
         tool_name = context.message.name
         arguments = context.message.arguments
+        original_arguments = dict(arguments) if isinstance(arguments, dict) else None
+        flat_keys = (
+            _flat_keys(original_arguments)
+            if tool_name in MANAGE_TOOL_OPS and original_arguments is not None
+            else []
+        )
 
         if tool_name in MANAGE_TOOL_OPS and isinstance(arguments, dict):
-            flat_keys = _flat_keys(arguments)
             if flat_keys:
                 raw_params = arguments.get("params")
                 if raw_params is not None and not isinstance(raw_params, dict):
@@ -160,7 +171,8 @@ class FoldFlatManageParams(Middleware):
             hint = _extra_params_hint(
                 exc,
                 tool_name=tool_name,
-                arguments=arguments,
+                arguments=original_arguments,
+                flat_keys=flat_keys,
             )
             if hint is None:
                 raise
