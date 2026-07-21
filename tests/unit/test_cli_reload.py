@@ -188,8 +188,19 @@ def test_main_widens_http_bind_only_when_allow_host_set(monkeypatch):
     monkeypatch.setattr("godot_ai.server.create_server", lambda **kw: StubServer(app=None))
     monkeypatch.setattr(fastmcp.settings, "host", "127.0.0.1")
 
+    ## --ws-port keeps the preflight check off the default 9500, which a live
+    ## dev server on this machine may legitimately hold.
     godot_ai.main(
-        ["--transport", "streamable-http", "--port", "8123", "--allow-host", "192.168.1.0/24"]
+        [
+            "--transport",
+            "streamable-http",
+            "--port",
+            "8123",
+            "--ws-port",
+            "9555",
+            "--allow-host",
+            "192.168.1.0/24",
+        ]
     )
     assert fastmcp.settings.host == "0.0.0.0"
 
@@ -200,7 +211,7 @@ def test_main_does_not_widen_bind_without_allow_host(monkeypatch):
     monkeypatch.setattr("godot_ai.server.create_server", lambda **kw: StubServer(app=None))
     monkeypatch.setattr(fastmcp.settings, "host", "127.0.0.1")
 
-    godot_ai.main(["--transport", "streamable-http", "--port", "8123"])
+    godot_ai.main(["--transport", "streamable-http", "--port", "8123", "--ws-port", "9555"])
     assert fastmcp.settings.host == "127.0.0.1"
 
 

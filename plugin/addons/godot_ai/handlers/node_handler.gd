@@ -1277,23 +1277,31 @@ func get_node_properties(params: Dictionary) -> Dictionary:
 
 	var properties: Array[Dictionary] = []
 	var editor_property_count := 0
+	var matched_fields := {}
 	for prop in node.get_property_list():
 		var usage: int = prop.get("usage", 0)
 		if not (usage & PROPERTY_USAGE_EDITOR):
 			continue
 		editor_property_count += 1
-		if use_field_filter and not field_filter.has(prop.name):
-			continue
-		# Safe read: custom script getters can error; skip bad properties
-		# rather than letting one bad read timeout the entire request.
-		var value = node.get(prop.name)
-		if value == null and prop.type != TYPE_NIL:
-			continue
+		if use_field_filter:
+			if not field_filter.has(prop.name):
+				continue
+			matched_fields[prop.name] = true
+		# Null reads are values, not omissions: `script` on an unscripted node
+		# and unset Resource slots (mesh, material, …) read back null and must
+		# appear as "value": null with their declared type, so callers can tell
+		# "Object-typed, currently unset" from "doesn't exist" (#771).
 		properties.append({
 			"name": prop.name,
 			"type": type_string(prop.type),
-			"value": _serialize_value(value),
+			"value": _serialize_value(node.get(prop.name)),
 		})
+	# Requested names that matched no editor-visible property — distinguishes
+	# "you asked for something that doesn't exist" from "exists and is null".
+	var unknown_fields: Array[String] = []
+	for f in field_filter:
+		if not matched_fields.has(f):
+			unknown_fields.append(f)
 	return {
 		"data": {
 			"path": node_path,
@@ -1302,7 +1310,11 @@ func get_node_properties(params: Dictionary) -> Dictionary:
 			"count": properties.size(),
 			# Total editor-visible properties before field filtering, so a
 			# caller that passed `fields` knows how many were withheld.
+			# Invariant: an unfiltered call returns every editor-visible
+			# property, so count == total_count; only the `fields` filter
+			# can make count < total_count.
 			"total_count": editor_property_count,
+			"unknown_fields": unknown_fields,
 		}
 	}
 
