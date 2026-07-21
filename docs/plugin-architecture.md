@@ -189,6 +189,8 @@ Outer-to-inner teardown order matters (see #46). Handlers themselves are preload
 
 A symmetric `prepare_for_update_reload()` path runs during self-update so the new plugin version starts (or adopts) the right server.
 
+Step 5 has one opt-in exception: with the `godot_ai/keep_server_on_exit` EditorSetting enabled (#800), `_exit_tree` calls `detach_server()` instead — the watch stops and state settles on STOPPED, but the process, managed-server record, and pid-file are left alone, so MCP clients connected over HTTP stay served and the next editor session adopts the survivor. Keep-alive spawns also skip `GODOT_AI_OWNER_PID` and stage `GODOT_AI_NO_IDLE_EXIT`, so neither the owner-PID reaper nor the session-idle backstop reclaims a server that is idle between editor runs by design. The setting is read at spawn time: toggling it affects the *next* server start (dock Restart applies it immediately). Explicit stops — dock Restart, `prepare_for_update_reload()` — always kill.
+
 ### Self-update Boundary And Compatibility
 
 The update path is intentionally split so the runner can stay focused on the fragile editor reload window:

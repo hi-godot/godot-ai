@@ -559,6 +559,10 @@ func _inject_telemetry_env() -> bool:
 func _set_owner_pid_env() -> bool:
 	if OS.get_name() == "Windows":
 		return false
+	## keep_server_on_exit (#800): a server meant to outlive editors must not
+	## self-reap when this editor dies — don't hand it an owner pid at all.
+	if ClientConfigurator.keep_server_on_exit():
+		return false
 	OS.set_environment("GODOT_AI_OWNER_PID", str(OS.get_process_id()))
 	return true
 
@@ -574,6 +578,20 @@ func _set_owner_pid_env() -> bool:
 ## itself.
 func _set_plugin_spawned_env() -> void:
 	OS.set_environment("GODOT_AI_PLUGIN_SPAWNED", "1")
+
+
+## keep_server_on_exit (#800): opt the spawned server out of the
+## session-idle self-terminate backstop (#498) via its existing
+## GODOT_AI_NO_IDLE_EXIT escape hatch — a keep-alive server sits at zero
+## sessions between editor runs by design, which is exactly what the
+## backstop reaps. Returns true if set (same tight scoping as
+## _set_owner_pid_env: callers unset right after spawning, and only when
+## WE set it, so a user's own NO_IDLE_EXIT env is never stripped).
+func _set_keep_alive_env() -> bool:
+	if not ClientConfigurator.keep_server_on_exit():
+		return false
+	OS.set_environment("GODOT_AI_NO_IDLE_EXIT", "1")
+	return true
 
 
 ## Generate a fresh per-launch WS handshake auth token (#690) and stage it
@@ -866,6 +884,7 @@ func _start_server_impl(async_gen: int) -> void:
 	## gates on this too.
 	var owner_env_set := _set_owner_pid_env()
 	_set_plugin_spawned_env()
+	var keep_alive_env_set := _set_keep_alive_env()
 	var ws_token := _set_ws_token_env()
 
 	_server_pid = OS.create_process(cmd, args)
@@ -874,6 +893,8 @@ func _start_server_impl(async_gen: int) -> void:
 	if owner_env_set:
 		OS.unset_environment("GODOT_AI_OWNER_PID")
 	OS.unset_environment("GODOT_AI_PLUGIN_SPAWNED")
+	if keep_alive_env_set:
+		OS.unset_environment("GODOT_AI_NO_IDLE_EXIT")
 	OS.unset_environment("GODOT_AI_WS_TOKEN")
 
 	## Restore PYTHONPATH immediately — the spawned child has already
@@ -1060,11 +1081,14 @@ func respawn_with_refresh() -> void:
 	## start_server) — and unset right after, same scoping as start_server.
 	var owner_env_set := _set_owner_pid_env()
 	_set_plugin_spawned_env()
+	var keep_alive_env_set := _set_keep_alive_env()
 	var ws_token := _set_ws_token_env()
 	_server_pid = OS.create_process(cmd, args)
 	if owner_env_set:
 		OS.unset_environment("GODOT_AI_OWNER_PID")
 	OS.unset_environment("GODOT_AI_PLUGIN_SPAWNED")
+	if keep_alive_env_set:
+		OS.unset_environment("GODOT_AI_NO_IDLE_EXIT")
 	OS.unset_environment("GODOT_AI_WS_TOKEN")
 	if injected_telemetry_env:
 		OS.unset_environment("GODOT_AI_DISABLE_TELEMETRY")
@@ -1184,6 +1208,23 @@ func recover_strong_port_occupant(port: int, wait_s: float, pre_kill_live: Dicti
 	_host._clear_managed_server_record()
 	_host._clear_pid_file()
 	return true
+
+
+## keep_server_on_exit (#800): editor teardown that leaves the server
+## running. Mirrors stop_server's bookkeeping — cancel in-flight async
+## startup, stop the watch, settle on STOPPED — but kills nothing and
+## PRESERVES the managed-server record + pid-file, so the next editor
+## session's start_server walk adopts the survivor through the existing
+## record-matches branch (#758/#774). Explicit stops (dock Restart,
+## update reload) still route through stop_server and kill as before.
+func detach_server() -> void:
+	_invalidate_async_startup()
+	_host._stop_server_watch()
+	var detached_pid := int(_server_pid)
+	_server_pid = -1
+	transition_state(McpServerStateScript.STOPPED)
+	if detached_pid > 0:
+		print("MCP | keep_server_on_exit: leaving server running (PID %d)" % detached_pid)
 
 
 func stop_server() -> void:

@@ -46,6 +46,7 @@ const MAX_PORT := 65535
 const SUGGEST_PORT_MAX_PROBES := 64
 const SETTING_WS_PORT := "godot_ai/ws_port"
 const SETTING_STARTUP_TRACE := "godot_ai/log_startup_timing"
+const SETTING_KEEP_SERVER_ON_EXIT := "godot_ai/keep_server_on_exit"
 const _DISCOVERY_TIMEOUT_MS := 3000
 
 
@@ -85,6 +86,7 @@ static func ensure_settings_registered() -> void:
 	_register_port_setting(es, McpSettings.SETTING_HTTP_PORT, DEFAULT_HTTP_PORT)
 	_register_port_setting(es, SETTING_WS_PORT, DEFAULT_WS_PORT)
 	_register_bool_setting(es, SETTING_STARTUP_TRACE, false)
+	_register_bool_setting(es, SETTING_KEEP_SERVER_ON_EXIT, false)
 
 
 static func _register_port_setting(es: EditorSettings, key: String, default_port: int) -> void:
@@ -116,6 +118,21 @@ static func startup_trace_enabled() -> bool:
 	if raw == "1" or raw == "true" or raw == "yes" or raw == "on":
 		return true
 	var setting: Variant = _editor_setting_lookup(SETTING_STARTUP_TRACE)
+	if setting != null:
+		return bool(setting)
+	return false
+
+
+## keep_server_on_exit (#800): when enabled, editor teardown detaches from
+## the managed server instead of killing it, and the spawn env opts the
+## server out of both self-reap paths (owner-PID watchdog, session-idle
+## backstop) — so MCP clients connected over HTTP stay served across editor
+## sessions, and the next editor start adopts the survivor. Off by default:
+## "server dies with the editor" stays the shipped behavior. Read via
+## _editor_setting_lookup for the same worker-thread reason as
+## startup_trace_enabled (#691).
+static func keep_server_on_exit() -> bool:
+	var setting: Variant = _editor_setting_lookup(SETTING_KEEP_SERVER_ON_EXIT)
 	if setting != null:
 		return bool(setting)
 	return false
@@ -309,6 +326,7 @@ static func warm_env_snapshot() -> void:
 	McpPathTemplate.warm_env_snapshot(extras)
 	_editor_setting_lookup(MODE_OVERRIDE_SETTING)
 	_editor_setting_lookup(SETTING_STARTUP_TRACE)
+	_editor_setting_lookup(SETTING_KEEP_SERVER_ON_EXIT)
 
 
 static func client_status_probe_snapshot(id: String) -> Dictionary:

@@ -444,6 +444,80 @@ func test_stop_invokes_finalize_for_record_cleanup() -> void:
 	assert_eq(finalize_calls, 1)
 
 
+# ----- detach_server (keep_server_on_exit, #800) ----------------------
+
+func test_detach_kills_nothing_and_preserves_record() -> void:
+	## keep_server_on_exit teardown: the tracked server is alive, branded,
+	## and listening — everything stop_server would kill — yet detach must
+	## touch neither the process nor the record/pid-file.
+	var host := _ManagerHostStub.new()
+	host.listener_pids = [55555] as Array[int]
+	host.alive_pids = [55555] as Array[int]
+	host.branded_pids = [55555] as Array[int]
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 55555
+
+	manager.detach_server()
+	var killed := host.killed_targets.duplicate()
+	var cleared := host.cleared_record_calls
+	var finalize_calls := host.finalize_calls
+	var stops := host.stop_watch_calls
+	var pid_after := int(manager._server_pid)
+	var state_after: int = manager._server_state
+	host.free()
+
+	assert_true(killed.is_empty(), "detach must not kill the server")
+	assert_eq(cleared, 0, "detach must preserve the managed-server record")
+	assert_eq(finalize_calls, 0, "detach must not run record-cleanup finalize")
+	assert_eq(stops, 1, "detach must stop the server watch like stop_server")
+	assert_eq(pid_after, -1)
+	assert_eq(state_after, McpServerState.STOPPED)
+
+
+func test_detach_invalidates_async_generation() -> void:
+	## Same contract as stop_server: a suspended start_server resuming
+	## after a keep-alive teardown must not resurrect state.
+	var host := _ManagerHostStub.new()
+	var manager := McpServerLifecycleManagerScript.new(host)
+	var before := int(manager._async_generation)
+	manager.detach_server()
+	var after := int(manager._async_generation)
+	var stale := manager._async_stale(before)
+	host.free()
+	assert_eq(after, before + 1, "detach_server must bump the async generation")
+	assert_true(stale, "work captured before detach_server must read as stale")
+
+
+func test_keep_alive_env_staging_honors_setting() -> void:
+	## With keep_server_on_exit ON, the spawn env must skip the owner pid
+	## (no owner-PID reaper) and stage GODOT_AI_NO_IDLE_EXIT (no idle
+	## backstop); with it OFF, NO_IDLE_EXIT must not be staged.
+	var es := EditorInterface.get_editor_settings()
+	var saved: Variant = null
+	if es.has_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT):
+		saved = es.get_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT)
+	var host := _ManagerHostStub.new()
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	es.set_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT, true)
+	var owner_set_on := manager._set_owner_pid_env()
+	var keep_set_on := manager._set_keep_alive_env()
+	var idle_env_on := OS.get_environment("GODOT_AI_NO_IDLE_EXIT")
+	if keep_set_on:
+		OS.unset_environment("GODOT_AI_NO_IDLE_EXIT")
+
+	es.set_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT, false)
+	var keep_set_off := manager._set_keep_alive_env()
+
+	es.set_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT, saved)
+	host.free()
+
+	assert_false(owner_set_on, "keep-alive spawn must not hand the server an owner pid")
+	assert_true(keep_set_on, "keep-alive spawn must stage GODOT_AI_NO_IDLE_EXIT")
+	assert_eq(idle_env_on, "1")
+	assert_false(keep_set_off, "default spawn must leave the idle backstop armed")
+
+
 # ----- check_server_health / start_server guards ----------------------
 
 func test_check_server_health_short_circuits_when_pid_zero() -> void:

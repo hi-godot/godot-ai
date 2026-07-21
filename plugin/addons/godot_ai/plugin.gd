@@ -552,7 +552,15 @@ func _exit_tree() -> void:
 	_editor_log_buffer = null
 	_surfaced_error_tracker = null
 
-	_stop_server()
+	## keep_server_on_exit (#800): detach instead of kill so MCP clients
+	## stay served across editor sessions; the next _enter_tree adopts the
+	## survivor. A disable/enable cycle in the same session takes the same
+	## adoption path. Explicit stops (dock Restart, update reload) still
+	## kill via _stop_server.
+	if ClientConfigurator.keep_server_on_exit():
+		_lifecycle.detach_server()
+	else:
+		_stop_server()
 	## Symmetric with prepare_for_update_reload: the static guard persists
 	## across disable/enable within a single editor session, so the re-enabled
 	## plugin instance's _start_server would short-circuit and never respawn.
