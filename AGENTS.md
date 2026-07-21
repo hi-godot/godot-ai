@@ -275,10 +275,10 @@ GDScript test suites in `test_project/tests/` exercise handlers inside the runni
 test_run                     # compact: summary + failures only
 test_run suite=scene         # run one suite
 test_run verbose=true        # include every individual test result
-test_results_get             # review last results
+test_manage op=results_get   # review last results (resource form: godot://test/results)
 ```
 
-Test suites extend `McpTestSuite` (assertion methods: `assert_true`, `assert_eq`, `assert_has_key`, `assert_contains`, `assert_is_error`, etc.). Drop `test_*.gd` files in `res://tests/` and they're auto-discovered.
+Test suites extend `McpTestSuite`; drop `test_*.gd` files in `res://tests/` and they're auto-discovered. Authoring guide + full assertion/lifecycle API reference: [docs/testing.md](docs/testing.md).
 
 ### Stress / load testing — `script/stormtest.py`
 
