@@ -523,6 +523,9 @@ func test_might_exceed_uses_worst_case_four_bytes_per_code_point() -> void:
 	## The cheap gate must upper-bound the encoded size (<= 4 UTF-8 bytes per
 	## code point) so a "safe" verdict is never wrong.
 	assert_false(McpConnection._might_exceed_outbound_backpressure(0, 1024))
+	# Exact quarter of the limit; the operands are ints, so int-division is
+	# intended (the limit is a power of two, so it divides evenly).
+	@warning_ignore("integer_division")
 	var char_budget := McpConnection.OUTBOUND_BUFFER_LIMIT_BYTES / 4
 	assert_false(McpConnection._might_exceed_outbound_backpressure(0, char_budget))
 	assert_true(McpConnection._might_exceed_outbound_backpressure(0, char_budget + 1))
