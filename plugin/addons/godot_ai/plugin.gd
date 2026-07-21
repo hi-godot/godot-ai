@@ -1129,21 +1129,19 @@ static func _resolve_ws_port_from_output(
 
 
 ## Plugin-level shim around the resolver — keeps the startup-trace
-## counter increment and the `_ProofPlugin` override hook on the plugin.
+## counter wiring and the `_ProofPlugin` override hook on the plugin.
+## The scrape takes `_startup_trace_count` directly so the counter names
+## track the scraper that actually ran (Windows can fall through netstat
+## → PowerShell; the fallback used to hide under the `netstat` count).
 func _is_port_in_use(port: int) -> bool:
 	if PortResolver.can_bind_local_port(port):
 		## POSIX can still have an IPv6 wildcard listener on this port
 		## even when an IPv4 loopback bind succeeds. Confirm through
 		## lsof so startup and kill-path discovery agree.
 		if OS.get_name() != "Windows":
-			_startup_trace_count("lsof")
-			return PortResolver.is_port_in_use_via_scrape(port)
+			return PortResolver.is_port_in_use_via_scrape(port, _startup_trace_count)
 		return false
-	if OS.get_name() == "Windows":
-		_startup_trace_count("netstat")
-	else:
-		_startup_trace_count("lsof")
-	return PortResolver.is_port_in_use_via_scrape(port)
+	return PortResolver.is_port_in_use_via_scrape(port, _startup_trace_count)
 
 
 ## Pass `_startup_trace_count` so the resolver bumps the right counter
@@ -1190,21 +1188,6 @@ func _find_managed_pid(port: int) -> int:
 	if pid > 0 and _pid_alive(pid):
 		return pid
 	return _find_pid_on_port(port)
-
-
-## #745: after an editor crash the managed server keeps running, but the
-## bind probe can still report the HTTP port as free — Windows lets a
-## SO_REUSEADDR bind succeed straight over a live listener, and the OS
-## scrape fallback can fail transiently. The pid-file the server writes
-## via `--pid-file` survives the crash; when it names a live process
-## whose cmdline carries the godot-ai brand, a server is likely still
-## up. Liveness + brand only — the startup walk confirms with the HTTP
-## status probe before changing behavior, so a kernel-recycled PID can
-## never redirect startup on its own. Uses the `_for_proof` seams so
-## lifecycle tests can stub it without touching real processes.
-func _managed_server_evidence_alive() -> bool:
-	var pid := _read_pid_file_for_proof()
-	return pid > 0 and _pid_alive_for_proof(pid) and _pid_cmdline_is_godot_ai_for_proof(pid)
 
 
 ## `live` is the result of a prior `_probe_live_server_status_for_port`

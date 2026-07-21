@@ -239,6 +239,11 @@ def test_port_listening_detects_bound_socket():
 # --------------------------------------------------------------------------- #
 # scripts parse cleanly
 # --------------------------------------------------------------------------- #
-def test_dev_scripts_compile():
+def test_dev_scripts_compile(tmp_path):
+    ## cfile goes to the per-test temp dir: the default writes
+    ## script/__pycache__/*.pyc in the repo, and two concurrent pytest
+    ## runs in one worktree race on the atomic .pyc replace (WinError 5
+    ## Access denied) — the same fixed-resource collision class as the
+    ## hardcoded WS ports.
     for name in ("_dev_env.py", "stormtest.py", "serve_worktree.py"):
-        py_compile.compile(str(SCRIPT_DIR / name), doraise=True)
+        py_compile.compile(str(SCRIPT_DIR / name), cfile=str(tmp_path / (name + "c")), doraise=True)

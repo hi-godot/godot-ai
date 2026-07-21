@@ -105,6 +105,66 @@ func test_build_handshake_includes_auth_token_when_set() -> void:
 	conn.free()
 
 
+# ----- 4003 auth-token-mismatch fallback -----
+#
+# The server's token is fixed per launch, so redialing with the same wrong
+# token can never succeed — the reproduced multi-editor duplicate-spawn left
+# an editor 4003-looping forever. After repeated rejections the connection
+# must fall back to a token-less handshake, which the server accepts by
+# design (#690).
+
+
+func test_auth_mismatch_fallback_drops_token_after_repeated_4003() -> void:
+	var conn := McpConnection.new()
+	var buffer := McpLogBuffer.new()
+	conn.log_buffer = buffer
+	conn.auth_token = "stale-token"
+
+	conn._note_post_open_close(McpConnection.CLOSE_CODE_AUTH_TOKEN_MISMATCH)
+	assert_eq(conn.auth_token, "stale-token",
+		"one rejection may be a transient swap race — keep the token")
+	conn._note_post_open_close(McpConnection.CLOSE_CODE_AUTH_TOKEN_MISMATCH)
+	assert_eq(conn.auth_token, "",
+		"repeated 4003 must fall back to a token-less handshake")
+
+	var payload := conn._build_handshake()
+	assert_false(payload.has("auth_token"),
+		"fallback handshake must omit the token field entirely")
+	var lines := buffer.get_recent(5)
+	assert_true(lines.size() >= 1, "fallback must be logged")
+	assert_contains(lines[lines.size() - 1], "token-less")
+	conn.free()
+
+
+func test_auth_mismatch_streak_resets_on_other_close_codes() -> void:
+	var conn := McpConnection.new()
+	conn.auth_token = "per-launch-secret"
+
+	conn._note_post_open_close(McpConnection.CLOSE_CODE_AUTH_TOKEN_MISMATCH)
+	conn._note_post_open_close(1000)
+	conn._note_post_open_close(McpConnection.CLOSE_CODE_AUTH_TOKEN_MISMATCH)
+
+	assert_eq(conn.auth_token, "per-launch-secret",
+		"non-consecutive rejections must not trigger the fallback")
+	conn.free()
+
+
+func test_auth_mismatch_streak_resets_on_handshake_ack() -> void:
+	## Server swap shape: rejected once, then the next server accepted us.
+	## A later unrelated 4003 must start a fresh streak, not inherit the
+	## pre-ack one.
+	var conn := McpConnection.new()
+	conn.auth_token = "per-launch-secret"
+
+	conn._note_post_open_close(McpConnection.CLOSE_CODE_AUTH_TOKEN_MISMATCH)
+	conn._handle_message('{"type":"handshake_ack","server_version":"1.0.0"}')
+	conn._note_post_open_close(McpConnection.CLOSE_CODE_AUTH_TOKEN_MISMATCH)
+
+	assert_eq(conn.auth_token, "per-launch-secret",
+		"an accepted handshake must reset the mismatch streak")
+	conn.free()
+
+
 func test_handle_message_stores_server_version_from_ack() -> void:
 	var conn := McpConnection.new()
 	assert_eq(conn.server_version, "", "server_version defaults to empty")

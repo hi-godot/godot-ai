@@ -83,34 +83,60 @@ func test_parse_empty_input_returns_false() -> void:
 	assert_false(McpWindowsPortReservation.parse_excluded("\n\n", 8000))
 
 
-func test_cache_returns_hit_inside_ttl() -> void:
+func test_cache_miss_before_first_store() -> void:
 	McpWindowsPortReservation._clear_cache_for_tests()
-	McpWindowsPortReservation._store_excluded_output(SAMPLE_NETSH_OUTPUT, 1000)
-	var cached := McpWindowsPortReservation._get_cached_excluded_output(
-		1000 + McpWindowsPortReservation.NETSH_CACHE_TTL_MS
-	)
-	assert_true(bool(cached.get("hit", false)), "cached netsh output should be reused inside the TTL")
+	var cached := McpWindowsPortReservation._get_cached_excluded_output()
+	assert_false(bool(cached.get("hit", false)), "an empty cache must miss")
+	assert_eq(str(cached.get("text", "")), "")
+
+
+func test_cache_hit_lasts_for_the_session() -> void:
+	## winnat's excluded ranges are set at boot, so the cache is
+	## session-lifetime: once stored, netsh (~250ms per spawn) must never
+	## re-run for this editor session. The old 2s TTL re-paid it on every
+	## startup walk.
+	McpWindowsPortReservation._clear_cache_for_tests()
+	McpWindowsPortReservation._store_excluded_output(SAMPLE_NETSH_OUTPUT)
+	var cached := McpWindowsPortReservation._get_cached_excluded_output()
+	assert_true(bool(cached.get("hit", false)), "stored netsh output should be reused for the whole session")
 	assert_eq(str(cached.get("text", "")), SAMPLE_NETSH_OUTPUT)
 	McpWindowsPortReservation._clear_cache_for_tests()
 
 
-func test_cache_expires_after_ttl() -> void:
-	McpWindowsPortReservation._clear_cache_for_tests()
-	McpWindowsPortReservation._store_excluded_output(SAMPLE_NETSH_OUTPUT, 1000)
-	var cached := McpWindowsPortReservation._get_cached_excluded_output(
-		1001 + McpWindowsPortReservation.NETSH_CACHE_TTL_MS
-	)
-	assert_false(bool(cached.get("hit", false)), "cached netsh output should expire after the TTL")
-	assert_eq(str(cached.get("text", "")), "")
-	McpWindowsPortReservation._clear_cache_for_tests()
-
-
 func test_cache_clear_removes_stored_output() -> void:
-	McpWindowsPortReservation._store_excluded_output(SAMPLE_NETSH_OUTPUT, 1000)
+	McpWindowsPortReservation._store_excluded_output(SAMPLE_NETSH_OUTPUT)
 	McpWindowsPortReservation._clear_cache_for_tests()
-	var cached := McpWindowsPortReservation._get_cached_excluded_output(1000)
+	var cached := McpWindowsPortReservation._get_cached_excluded_output()
 	assert_false(bool(cached.get("hit", false)), "clearing the cache should remove stored output")
 	assert_eq(str(cached.get("text", "")), "")
+
+
+func test_cached_output_serves_queries_without_netsh() -> void:
+	## Windows-only: exercises the real is_port_excluded /
+	## suggest_non_excluded_port entry points against a seeded cache and
+	## proves neither respawns netsh (the query counter is the same seam
+	## the startup trace reads).
+	if OS.get_name() != "Windows":
+		skip("Windows-only netsh path")
+		return
+	McpWindowsPortReservation._clear_cache_for_tests()
+	McpWindowsPortReservation._store_excluded_output(SAMPLE_NETSH_OUTPUT)
+	var before := McpWindowsPortReservation.netsh_query_count()
+	assert_true(
+		McpWindowsPortReservation.is_port_excluded(8050),
+		"8050 sits inside the seeded [8000, 8099] range"
+	)
+	assert_eq(
+		McpWindowsPortReservation.suggest_non_excluded_port(8000, 2048),
+		8100,
+		"suggestion should skip the seeded [8000, 8099] range"
+	)
+	assert_eq(
+		McpWindowsPortReservation.netsh_query_count(),
+		before,
+		"session-cached output must serve both queries without a netsh spawn"
+	)
+	McpWindowsPortReservation._clear_cache_for_tests()
 
 
 func test_parse_excluded_ranges_extracts_ranges() -> void:

@@ -1269,10 +1269,10 @@ class TestEditorQuitTool:
 
 
 class TestReloadPluginTool:
-    async def test_reload_cycle(self, mcp_stack):
+    async def test_reload_cycle(self, mcp_stack, mcp_ws_port):
         """Full reload cycle: ack, disconnect, reconnect with new session."""
         client, plugin = mcp_stack
-        ws_port = 19502  # matches mcp_stack fixture
+        ws_port = mcp_ws_port  # matches mcp_stack fixture
 
         async def simulate_reload():
             # Receive the reload command and ack it
@@ -3943,11 +3943,11 @@ class TestBatchExecuteTool:
 
 
 class TestPerCallSessionRouting:
-    async def _connect_second_plugin(self, session_id: str, readiness: str = "ready"):
+    async def _connect_second_plugin(self, port: int, session_id: str, readiness: str = "ready"):
         """Connect a second mock plugin to the same MCP stack server."""
         from tests.conftest import MockGodotPlugin, drain_handshake_ack
 
-        ws = await websockets.connect("ws://127.0.0.1:19502")
+        ws = await websockets.connect(f"ws://127.0.0.1:{port}")
         handshake = {
             "type": "handshake",
             "session_id": session_id,
@@ -3964,10 +3964,10 @@ class TestPerCallSessionRouting:
         await drain_handshake_ack(ws)
         return MockGodotPlugin(ws=ws, session_id=session_id)
 
-    async def test_session_id_routes_to_specific_session(self, mcp_stack):
+    async def test_session_id_routes_to_specific_session(self, mcp_stack, mcp_ws_port):
         client, plugin_a = mcp_stack
         ## Rename the implicit session "mcp-test" for clarity: active=proj-a@0001.
-        plugin_b = await self._connect_second_plugin("proj-b@0002")
+        plugin_b = await self._connect_second_plugin(mcp_ws_port, "proj-b@0002")
         try:
             ## No session_id -> active (the default mcp-test plugin).
             async def respond_active():
@@ -3999,9 +3999,9 @@ class TestPerCallSessionRouting:
         finally:
             await plugin_b.close()
 
-    async def test_concurrent_read_and_write_route_to_target_sessions(self, mcp_stack):
+    async def test_concurrent_read_and_write_route_to_target_sessions(self, mcp_stack, mcp_ws_port):
         client, plugin_a = mcp_stack
-        plugin_b = await self._connect_second_plugin("proj-b@0002")
+        plugin_b = await self._connect_second_plugin(mcp_ws_port, "proj-b@0002")
         try:
 
             async def respond_a():
@@ -4043,10 +4043,12 @@ class TestPerCallSessionRouting:
         finally:
             await plugin_b.close()
 
-    async def test_session_id_respects_target_readiness(self, mcp_stack):
+    async def test_session_id_respects_target_readiness(self, mcp_stack, mcp_ws_port):
         client, plugin_a = mcp_stack
         ## Active session (plugin_a/mcp-test) is ready; plugin_b is playing.
-        plugin_b = await self._connect_second_plugin("proj-b@0002", readiness="playing")
+        plugin_b = await self._connect_second_plugin(
+            mcp_ws_port, "proj-b@0002", readiness="playing"
+        )
         try:
             ## require_writable must see the bound session's readiness, not active.
             result = await client.call_tool(

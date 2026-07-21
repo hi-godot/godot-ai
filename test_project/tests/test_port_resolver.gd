@@ -145,3 +145,133 @@ func test_netstat_parse_still_skips_established_rows() -> void:
 	var established := "  TCP  10.0.0.5:8000  10.0.0.9:51515  HERGESTELLT  777\n"
 	var pids := McpPortResolver.parse_windows_netstat_pids(established, 8000)
 	assert_eq(pids.size(), 0, "non-listener rows must be skipped regardless of locale")
+
+
+# ----- netstat dump health check (gates the PowerShell fallback) ------
+
+func test_netstat_dump_parseable_accepts_realistic_dump() -> void:
+	var dump := (
+		"Active Connections\n\n"
+		+ "  Proto  Local Address      Foreign Address    State        PID\n"
+		+ "  TCP    0.0.0.0:135        0.0.0.0:0          LISTENING    1240\n"
+		+ "  UDP    0.0.0.0:500        *:*                             892\n"
+	)
+	assert_true(McpPortResolver.windows_netstat_dump_parseable(dump))
+
+
+func test_netstat_dump_parseable_accepts_localized_state_column() -> void:
+	## German netstat: header words and state are localized, but "TCP" and
+	## the address/PID columns are not — the health check must pass.
+	var dump := "  TCP  0.0.0.0:8000  0.0.0.0:0  ABHÖREN  4242\n"
+	assert_true(McpPortResolver.windows_netstat_dump_parseable(dump))
+
+
+func test_netstat_dump_parseable_accepts_established_only_dump() -> void:
+	## A dump can legitimately contain zero LISTENING rows for the probed
+	## port; any parseable TCP row proves netstat works.
+	var dump := "  TCP  127.0.0.1:49701  127.0.0.1:8000  ESTABLISHED  12345\n"
+	assert_true(McpPortResolver.windows_netstat_dump_parseable(dump))
+
+
+func test_netstat_dump_parseable_rejects_empty_and_garbage() -> void:
+	assert_false(McpPortResolver.windows_netstat_dump_parseable(""))
+	assert_false(McpPortResolver.windows_netstat_dump_parseable("oops something went wrong\n"))
+	## Header-only output (no TCP rows at all) must not be trusted as a
+	## "no listener" answer — that shape is indistinguishable from a
+	## broken netstat, so the PowerShell fallback stays reachable.
+	var header_only := (
+		"Active Connections\n\n"
+		+ "  Proto  Local Address      Foreign Address    State        PID\n"
+	)
+	assert_false(McpPortResolver.windows_netstat_dump_parseable(header_only))
+
+
+func test_netstat_dump_parseable_rejects_rows_without_pid_column() -> void:
+	## `netstat -an` (no -o) has no PID column; trusting it would make
+	## every per-port PID parse return empty. 4-field TCP rows must not
+	## count as healthy for the -ano contract.
+	var dump := "  TCP  0.0.0.0:8000  0.0.0.0:0  LISTENING\n"
+	assert_false(McpPortResolver.windows_netstat_dump_parseable(dump))
+
+
+# ----- Windows live smoke: netstat-first, PowerShell only as fallback --
+
+func test_find_all_pids_on_free_port_skips_powershell_windows() -> void:
+	## Perf contract for the startup walk: on a healthy Windows host, a
+	## free port's empty netstat answer is trusted as-is. The PowerShell
+	## confirmation probe costs a ~1.2s powershell.exe spawn (~40x the
+	## netstat scrape) and must not run.
+	if OS.get_name() != "Windows":
+		skip("Windows-only netstat trust path")
+		return
+	var port := 51251
+	var probe := TCPServer.new()
+	if probe.listen(port, "127.0.0.1") != OK:
+		skip("port %d is already held on this host" % port)
+		return
+	probe.stop()
+	var counters: Array = []
+	var pids := McpPortResolver.find_all_pids_on_port(port, func(c: String) -> void: counters.append(c))
+	assert_eq(pids.size(), 0, "freshly-freed port should have no listener")
+	assert_true(counters.has("netstat"), "netstat scrape should have run")
+	assert_false(
+		counters.has("powershell"),
+		"a healthy netstat dump must not fall through to the PowerShell probe"
+	)
+
+
+func test_scrape_free_port_skips_powershell_windows() -> void:
+	if OS.get_name() != "Windows":
+		skip("Windows-only netstat trust path")
+		return
+	var port := 51252
+	var probe := TCPServer.new()
+	if probe.listen(port, "127.0.0.1") != OK:
+		skip("port %d is already held on this host" % port)
+		return
+	probe.stop()
+	var counters: Array = []
+	var in_use := McpPortResolver.is_port_in_use_via_scrape(port, func(c: String) -> void: counters.append(c))
+	assert_false(in_use, "freshly-freed port should scrape as not in use")
+	assert_true(counters.has("netstat"), "netstat scrape should have run")
+	assert_false(
+		counters.has("powershell"),
+		"a healthy netstat dump must not fall through to the PowerShell probe"
+	)
+
+
+func test_scrape_held_port_reports_in_use_windows() -> void:
+	## Companion to the free-port trust test: a live listener must still
+	## scrape as in-use via the netstat-first path, with no PowerShell
+	## fallback needed.
+	if OS.get_name() != "Windows":
+		skip("Windows-only netstat trust path")
+		return
+	var port := 51254
+	var holder := TCPServer.new()
+	if holder.listen(port, "127.0.0.1") != OK:
+		skip("could not seize port for held-port scrape smoke")
+		return
+	var counters: Array = []
+	var in_use := McpPortResolver.is_port_in_use_via_scrape(port, func(c: String) -> void: counters.append(c))
+	holder.stop()
+	assert_true(in_use, "held port must scrape as in use")
+	assert_false(counters.has("powershell"), "netstat saw the listener; PowerShell must not run")
+
+
+func test_find_all_pids_sees_live_listener_via_netstat_windows() -> void:
+	## Companion to the free-port trust tests: a live listener must still
+	## be found by the netstat-first path (no fallback needed).
+	if OS.get_name() != "Windows":
+		skip("Windows-only netstat trust path")
+		return
+	var port := 51253
+	var holder := TCPServer.new()
+	if holder.listen(port, "127.0.0.1") != OK:
+		skip("could not seize port for listener smoke")
+		return
+	var counters: Array = []
+	var pids := McpPortResolver.find_all_pids_on_port(port, func(c: String) -> void: counters.append(c))
+	holder.stop()
+	assert_true(pids.has(OS.get_process_id()), "the editor's own listener should be reported")
+	assert_false(counters.has("powershell"), "netstat found the listener; PowerShell must not run")

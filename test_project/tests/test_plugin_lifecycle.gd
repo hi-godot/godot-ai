@@ -1201,34 +1201,51 @@ func test_incompatible_status_exposes_actual_name_and_recovery_flag() -> void:
 	assert_true(bool(status.get("can_recover_incompatible", false)))
 
 
-func test_managed_server_evidence_requires_live_branded_pidfile() -> void:
-	## #745: the evidence gate that lets startup second-guess a "port is
-	## free" bind probe. Every tier must hold or the gate stays closed —
-	## a stale or kernel-recycled PID must never count as evidence.
+func test_start_adopts_survivor_when_bind_probe_free_and_pidfile_missing() -> void:
+	## Reproduced multi-editor failure (2026-07, Windows): two editors whose
+	## test projects share one app_userdata dir (same project name) share the
+	## pid-file too, so editor B's walk can find it missing/stale while
+	## editor A's managed server is alive behind a lying bind probe (#745
+	## SO_REUSEADDR bind-trap). The HTTP status probe now runs
+	## unconditionally — a live godot-ai answer must force the adopt path.
+	## Blind-spawning here produced a duplicate server that exited unable to
+	## bind and left a stale spawn token 4003-looping against the survivor.
+	var current := McpClientConfigurator.get_plugin_version()
 	var plugin := _ProofPlugin.new()
+	plugin.port_in_use = false
 	plugin.pid_file_pid = 0
-	assert_false(plugin._managed_server_evidence_alive(),
-		"no pid-file must yield no evidence")
-	plugin.pid_file_pid = 44444
-	assert_false(plugin._managed_server_evidence_alive(),
-		"pid-file naming a dead process must yield no evidence")
-	plugin.alive_pids = [44444] as Array[int]
-	assert_false(plugin._managed_server_evidence_alive(),
-		"live but unbranded pid (kernel-recycled) must yield no evidence")
-	plugin.branded_pids = [44444] as Array[int]
-	assert_true(plugin._managed_server_evidence_alive(),
-		"live godot-ai-branded pid-file process is evidence")
+	plugin.listener_pids = [12321] as Array[int]
+	plugin.alive_pids = [12321] as Array[int]
+	plugin.branded_pids = [12321] as Array[int]
+	plugin.managed_record = {"pid": 55555, "version": current, "ws_port": 9500}
+	plugin.live_status = {"name": "godot-ai", "version": current, "ws_port": 9500, "status_code": 200}
+	GodotAiPlugin._ws_auth_token = "stale-spawn-token"
+
+	plugin._start_server()
+	var status := plugin.get_server_status()
+	var server_pid := int(plugin._lifecycle._server_pid)
+	var killed := plugin.killed_targets.duplicate()
+	var token_after := GodotAiPlugin._ws_auth_token
 	plugin.free()
+
+	assert_eq(int(status.get("state", -1)), McpServerState.READY,
+		"a live godot-ai answer on a 'free' port must adopt, not blind-spawn")
+	assert_true(killed.is_empty(), "adoption must not kill the surviving server")
+	assert_eq(server_pid, -1,
+		"dead recorded PID means the survivor is adopted externally")
+	assert_eq(token_after, "",
+		"external adoption must drop the stale token so the handshake goes token-less")
 
 
 func test_start_adopts_crash_survivor_when_bind_probe_reports_port_free() -> void:
 	## #745: an editor crash leaves the managed server running, but the
 	## bind probe can report the HTTP port as free (Windows SO_REUSEADDR
 	## bind-over-listener semantics; transient scrape failures). With the
-	## surviving pid-file naming a live branded process AND the HTTP
-	## status probe answering as a compatible godot-ai server, startup
-	## must route through the normal adopt path instead of blind-spawning
-	## a duplicate server.
+	## HTTP status probe (now unconditional — no pid-file evidence gate)
+	## answering as a compatible godot-ai server, startup must route
+	## through the normal adopt path instead of blind-spawning a duplicate
+	## server. The surviving pid-file here additionally makes the recorded
+	## PID adoptable as managed.
 	var current := McpClientConfigurator.get_plugin_version()
 	var plugin := _CrashSurvivorPlugin.new()
 	plugin.port_in_use = false

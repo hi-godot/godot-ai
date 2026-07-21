@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import socket
 from pathlib import Path
 
 import fastmcp
@@ -8,23 +7,6 @@ import pytest
 
 import godot_ai
 from godot_ai import asgi
-
-
-def _free_ports(count: int) -> list[int]:
-    """Distinct ephemeral ports that are free right now. ``main()``'s
-    preflight really binds the HTTP and WS ports, so hard-coded values
-    collide with whatever the local environment happens to run — a live
-    dev server on the 9500 default, a parallel test run, another editor
-    (#789). All sockets stay open until every port is allocated so the
-    OS can't hand the same port out twice."""
-    socks = [socket.socket() for _ in range(count)]
-    try:
-        for s in socks:
-            s.bind(("127.0.0.1", 0))
-        return [s.getsockname()[1] for s in socks]
-    finally:
-        for s in socks:
-            s.close()
 
 
 class StubServer:
@@ -203,10 +185,14 @@ def test_main_widens_http_bind_only_when_allow_host_set(monkeypatch):
     transport; the guard (rebuilt with the same CIDRs) still gates requests."""
     import fastmcp
 
+    from tests.conftest import allocate_free_ports
+
     monkeypatch.setattr("godot_ai.server.create_server", lambda **kw: StubServer(app=None))
     monkeypatch.setattr(fastmcp.settings, "host", "127.0.0.1")
 
-    http_port, ws_port = _free_ports(2)
+    ## Explicit free ports: main()'s preflight probes both binds, so a live
+    ## process holding the default WS 9500 (or the HTTP port) exits 98.
+    http_port, ws_port = allocate_free_ports(2)
     godot_ai.main(
         [
             "--transport",
@@ -225,10 +211,12 @@ def test_main_widens_http_bind_only_when_allow_host_set(monkeypatch):
 def test_main_does_not_widen_bind_without_allow_host(monkeypatch):
     import fastmcp
 
+    from tests.conftest import allocate_free_ports
+
     monkeypatch.setattr("godot_ai.server.create_server", lambda **kw: StubServer(app=None))
     monkeypatch.setattr(fastmcp.settings, "host", "127.0.0.1")
 
-    http_port, ws_port = _free_ports(2)
+    http_port, ws_port = allocate_free_ports(2)
     godot_ai.main(
         ["--transport", "streamable-http", "--port", str(http_port), "--ws-port", str(ws_port)]
     )

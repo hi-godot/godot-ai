@@ -22,8 +22,8 @@ static func can_bind_local_port(port: int) -> bool:
 
 
 ## True when `port` is bound on 127.0.0.1. Probes via TCPServer first,
-## falls back to OS scraping. Callers that want to bracket the slow
-## scrape with a trace counter should call `is_port_in_use_via_scrape`
+## falls back to OS scraping. Callers that want per-scraper trace
+## counters should call `is_port_in_use_via_scrape` with a trace hook
 ## after their own `can_bind_local_port` probe.
 static func is_port_in_use(port: int) -> bool:
 	if can_bind_local_port(port):
@@ -36,15 +36,29 @@ static func is_port_in_use(port: int) -> bool:
 	return is_port_in_use_via_scrape(port)
 
 
-static func is_port_in_use_via_scrape(port: int) -> bool:
+## `trace` mirrors `find_all_pids_on_port`'s hook: one call per OS
+## invocation with the counter name of the scraper that actually ran, so
+## a wrapping caller's startup trace sees a genuine PowerShell fallback
+## as `powershell`, not as a silent extra second under `netstat`.
+static func is_port_in_use_via_scrape(port: int, trace: Callable = Callable()) -> bool:
 	var output: Array = []
 	if OS.get_name() == "Windows":
+		_trace(trace, "netstat")
 		var exit_code := OS.execute("netstat", ["-ano"], output, true)
-		if exit_code == 0 and output.size() > 0 and parse_windows_netstat_listening(str(output[0]), port):
-			return true
-		## Mirror find_all_pids_on_port's fallback: netstat can be absent
-		## or unparseable on stripped/locale-odd Windows installs.
+		if exit_code == 0 and output.size() > 0:
+			var stdout := str(output[0])
+			if parse_windows_netstat_listening(stdout, port):
+				return true
+			## A healthy dump with no listener row IS the answer — don't
+			## pay the ~1.2s powershell.exe spawn to confirm "not in use"
+			## (see find_all_pids_on_port for the cost rationale).
+			if windows_netstat_dump_parseable(stdout):
+				return false
+		## Fallback: netstat can be absent or unparseable on
+		## stripped/locale-odd Windows installs.
+		_trace(trace, "powershell")
 		return not find_listener_pids_windows(port).is_empty()
+	_trace(trace, "lsof")
 	var exit_code := OS.execute("lsof", ["-ti:%d" % port, "-sTCP:LISTEN"], output, true)
 	return exit_code == 0 and output.size() > 0 and not output[0].strip_edges().is_empty()
 
@@ -72,9 +86,20 @@ static func find_all_pids_on_port(port: int, trace: Callable = Callable()) -> Ar
 		_trace(trace, "netstat")
 		var exit_code := OS.execute("netstat", ["-ano"], output, true)
 		if exit_code == 0 and not output.is_empty():
-			var netstat_pids := parse_windows_netstat_pids(str(output[0]), port)
+			var stdout := str(output[0])
+			var netstat_pids := parse_windows_netstat_pids(stdout, port)
 			if not netstat_pids.is_empty():
 				return netstat_pids
+			## An empty per-port parse from a healthy dump IS the answer
+			## ("no listener"). Confirming it through the PowerShell probe
+			## costs a powershell.exe spawn (~1.2s measured) against ~30ms
+			## for the netstat scrape — two such confirmations dominated a
+			## ~7s Windows startup walk. Only fall through when the dump
+			## itself is unusable (netstat absent, or so format-odd that
+			## zero TCP rows parse).
+			if windows_netstat_dump_parseable(stdout):
+				var no_listeners: Array[int] = []
+				return no_listeners
 		_trace(trace, "powershell")
 		return find_listener_pids_windows(port)
 	var output: Array = []
@@ -195,6 +220,28 @@ static func parse_windows_netstat_pids(stdout: String, port: int) -> Array[int]:
 
 static func parse_windows_netstat_listening(stdout: String, port: int) -> bool:
 	return parse_windows_netstat_pid(stdout, port) > 0
+
+
+## True when `stdout` looks like a healthy `netstat -ano` dump: at least
+## one row parses as a TCP connection (proto column literally "TCP", an
+## address containing ":", an integer PID in the last column). Locale-
+## independent — protocol names are never localized, unlike the state
+## column. Gates whether an empty per-port parse can be trusted as "no
+## listener": a live Windows host always carries TCP rows (svchost/RPC
+## listen on 135 at minimum), so a dump with zero parseable rows means
+## netstat itself is absent/broken and the PowerShell fallback must run.
+static func windows_netstat_dump_parseable(stdout: String) -> bool:
+	for line in stdout.split("\n"):
+		var fields := split_on_whitespace(line.strip_edges())
+		if fields.size() < 5:
+			continue
+		if fields[0].to_upper() != "TCP":
+			continue
+		if fields[1].find(":") < 0:
+			continue
+		if fields[fields.size() - 1].is_valid_int():
+			return true
+	return false
 
 
 ## `String.split(" ", false)` only splits on single spaces; netstat
