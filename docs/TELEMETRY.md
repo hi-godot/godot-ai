@@ -40,6 +40,11 @@ A single `startup` record on server lifespan enter:
 - `server_version`
 - `ws_port`
 - `lifespan_start_ms` (time from lifespan begin to telemetry emit)
+- `diagnostic_hints_suppressed` — whether the client's default diagnostic
+  hint policy is `discard` (the `GODOT_AI_SUPPRESS_DIAGNOSTIC_HINTS`
+  escape hatch). Read from the constructed client, not the env var, so
+  the flag reflects actual behavior. A single boolean derived from a
+  config flag — no new identifying data.
 - `FIRST_STARTUP` milestone (one-shot, persisted to `milestones.json`)
 
 ### Connection events

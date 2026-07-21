@@ -53,8 +53,11 @@ GDScript test suites run inside the connected editor via MCP:
 ```
 test_run                     # run all suites
 test_run suite=scene         # run one suite
-test_results_get             # review last results
+test_manage op=results_get   # review last results
 ```
+
+See [testing.md](testing.md) for how to write suites and the full
+`McpTestSuite` API reference.
 
 ### CI regression range helper
 
