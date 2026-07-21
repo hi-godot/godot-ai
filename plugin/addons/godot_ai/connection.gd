@@ -20,6 +20,14 @@ const OUTBOUND_BUFFER_LIMIT_BYTES := 4 * 1024 * 1024
 ## next frame; the cumulative spill counter is logged so flood patterns
 ## are observable in `logs_read`. See audit-v2 finding #12 (issue #356).
 const PACKET_DRAIN_CAP_PER_TICK := 32
+## Mirror of the server's application close code for a handshake carrying a
+## wrong auth token (#690; `websocket.py::_CLOSE_CODE_AUTH_TOKEN_MISMATCH`).
+const CLOSE_CODE_AUTH_TOKEN_MISMATCH := 4003
+## After this many consecutive post-OPEN token-mismatch rejections, drop the
+## token and handshake token-less (see `_note_post_open_close`). Two, not
+## one: a transient stale-record race during a server swap gets one chance
+## to resolve before the token is given up.
+const AUTH_MISMATCH_FALLBACK_CLOSES := 2
 const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
@@ -49,6 +57,11 @@ var _reconnect_timer := 0.0
 ## CLOSED state is polled every frame and would flood the editor log.
 var _preopen_failure_logged_for_peer := false
 var _session_id := ""
+## Consecutive post-OPEN closes with CLOSE_CODE_AUTH_TOKEN_MISMATCH. NOT
+## reset by `_clear_on_disconnect` — the streak is counted exactly at the
+## close events it exists to observe, across reconnect attempts. Reset on
+## any other close code and on a successful `handshake_ack`.
+var _auth_mismatch_closes := 0
 ## Godot-AI Python package version reported by the server in its `handshake_ack`
 ## reply. Empty until the ack lands. Older servers (pre-handshake_ack) leave
 ## this empty forever — callers that gate on it (the dock's mismatch banner)
@@ -150,6 +163,7 @@ func _process(delta: float) -> void:
 				var code := _peer.get_close_code()
 				var reason := _peer.get_close_reason()
 				log_buffer.log(_close_diagnostic(true, code, reason, _url))
+				_note_post_open_close(code)
 				connection_state_changed.emit(false)
 			elif not _preopen_failure_logged_for_peer:
 				_preopen_failure_logged_for_peer = true
@@ -328,6 +342,34 @@ static func _close_diagnostic(
 	return "%s (code %d, reason %s, url %s)" % [phase, code, reason_label, url]
 
 
+## Token-mismatch fallback (#690 follow-up). The server's auth token is
+## fixed for its whole launch, so redialing with the same wrong token can
+## never succeed — without this the reconnect loop 4003s forever. The
+## reproduced multi-editor failure: a duplicate spawn overwrites the shared
+## managed-server record with its fresh token, dies unable to bind, and
+## this editor is left holding a token the surviving server never saw.
+## After AUTH_MISMATCH_FALLBACK_CLOSES consecutive rejections, drop to a
+## token-less handshake, which the server accepts by design (older plugins
+## and adopted servers have no token, and the field is attacker-omittable —
+## see websocket.py; omitting it gives up no security). Scope note: only
+## this connection's copy of the token is dropped — the plugin static and
+## the persisted record heal via the startup walk's adoption arms.
+func _note_post_open_close(code: int) -> void:
+	if code != CLOSE_CODE_AUTH_TOKEN_MISMATCH or auth_token.is_empty():
+		_auth_mismatch_closes = 0
+		return
+	_auth_mismatch_closes += 1
+	if _auth_mismatch_closes < AUTH_MISMATCH_FALLBACK_CLOSES:
+		return
+	auth_token = ""
+	_auth_mismatch_closes = 0
+	if log_buffer:
+		log_buffer.log(
+			"auth token rejected %d times (close code %d) — retrying with a token-less handshake"
+			% [AUTH_MISMATCH_FALLBACK_CLOSES, CLOSE_CODE_AUTH_TOKEN_MISMATCH]
+		)
+
+
 func _log_blocked_notice_once() -> void:
 	if _blocked_notice_logged:
 		return
@@ -371,6 +413,9 @@ func _handle_message(raw: String) -> void:
 		return
 	if parsed.get("type", "") == "handshake_ack":
 		server_version = str(parsed.get("server_version", ""))
+		## The server accepted our handshake — any token-mismatch streak is
+		## over; a later unrelated 4003 starts a fresh one.
+		_auth_mismatch_closes = 0
 		return
 	if parsed.has("request_id") and parsed.has("command"):
 		if (
