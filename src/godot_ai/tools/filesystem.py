@@ -22,6 +22,11 @@ Ops:
   • reimport(paths)
         Force-reimport the listed files via ``EditorFileSystem.update_file``.
         ``paths`` is a list of res:// paths.
+        Intended for imported assets such as textures, models, and audio. ``.gd``
+        scripts are not imported resources; a successful ``.gd`` entry only means
+        its editor filesystem cache entry was refreshed, not that it was parsed or
+        diagnostics were produced. Use ``script_patch``/``script_create`` to save a
+        script and receive fresh diagnostics.
   • scan()
         Force a full ``EditorFileSystem.scan()`` and wait for it to settle.
         This is the headless equivalent of the editor regaining window focus:

@@ -468,7 +468,11 @@ async def test_dispatch_wraps_missing_param_typeerror():
     assert exc.value.code == ErrorCode.INVALID_PARAMS
     assert "x_manage.go" in exc.value.message
     assert "path" in exc.value.message
+    assert "must be nested inside the 'params' object" in exc.value.message
+    assert '{"op": "go", "params": {"path": ...}}' in exc.value.message
     assert exc.value.data["received"] == []
+    assert exc.value.data["missing"] == ["path"]
+    assert exc.value.data["example"] == {"op": "go", "params": {"path": "..."}}
 
 
 @pytest.mark.asyncio
@@ -489,6 +493,7 @@ async def test_dispatch_wraps_extra_param_typeerror():
     assert exc.value.code == ErrorCode.INVALID_PARAMS
     assert "x_manage.go" in exc.value.message
     assert "extra" in exc.value.message
+    assert "must be nested inside the 'params' object" not in exc.value.message
     assert exc.value.data["received"] == ["extra"]
 
 
@@ -523,6 +528,28 @@ async def test_dispatch_extra_param_hint_lists_unexpected_and_accepted():
     assert err.data["accepted"] == []
     assert err.data["unexpected"] == ["force", "reason"]
     assert err.data["received"] == ["force", "reason"]
+    assert err.data["example"] == {"op": "stop", "params": {}}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_nested_session_id_names_top_level_contract():
+    async def needs_path(rt, path):
+        del rt, path
+        return {}
+
+    with pytest.raises(GodotCommandError) as exc:
+        await dispatch_manage_op(
+            ops={"read": needs_path},
+            tool_name="script_manage",
+            runtime=None,
+            op="read",
+            params={"path": "res://x.gd", "session_id": "project@1234"},
+        )
+
+    message = exc.value.message
+    assert "Unexpected param(s): 'session_id'" in message
+    assert "'session_id' is a top-level sibling of 'op' and 'params'" in message
+    assert "must be nested inside the 'params' object" not in message
 
 
 @pytest.mark.asyncio

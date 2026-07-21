@@ -24,6 +24,7 @@ filter.
 from __future__ import annotations
 
 from godot_ai.middleware import (
+    FoldFlatManageParams,
     HintOpTypoOnManage,
     ParseStringifiedParams,
     PreserveGodotCommandErrorData,
@@ -35,6 +36,7 @@ EXPECTED_ORDER: tuple[type, ...] = (
     PreserveGodotCommandErrorData,
     StripClientWrapperKwargs,
     ParseStringifiedParams,
+    FoldFlatManageParams,
     HintOpTypoOnManage,
 )
 
@@ -42,7 +44,7 @@ EXPECTED_ORDER: tuple[type, ...] = (
 def test_godot_ai_middleware_registered_in_documented_order() -> None:
     """First-added is outermost; reorder fails with the actual list named.
 
-    Filters ``mcp.middleware`` to entries whose class is one of the four
+    Filters ``mcp.middleware`` to entries whose class is one of the five
     godot_ai middleware classes. FastMCP itself adds internal middleware
     (e.g. ``DereferenceRefsMiddleware`` — see ``fastmcp/server/server.py``
     around the ``DereferenceRefsMiddleware`` append in ``__init__``); the
@@ -75,11 +77,7 @@ def test_every_godot_ai_middleware_is_covered_by_the_order_lock() -> None:
     lock to be updated in lockstep with the registration.
     """
     mcp = create_server()
-    ours = {
-        type(m)
-        for m in mcp.middleware
-        if type(m).__module__.startswith("godot_ai")
-    }
+    ours = {type(m) for m in mcp.middleware if type(m).__module__.startswith("godot_ai")}
     uncovered = ours - set(EXPECTED_ORDER)
     assert not uncovered, (
         "godot_ai middleware registered but missing from EXPECTED_ORDER: "

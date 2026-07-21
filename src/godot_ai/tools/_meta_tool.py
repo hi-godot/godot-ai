@@ -152,7 +152,11 @@ def register_manage_tool(
     }
     manage.__name__ = tool_name
     manage.__qualname__ = tool_name
-    manage.__doc__ = description
+    manage.__doc__ = (
+        description.rstrip() + '\n\nCanonical call shape: ``{"op": "<verb>", "params": {...}}``. '
+        "Flat op parameters are accepted as a compatibility alias when the client "
+        "transmits them; ``op`` and ``session_id`` remain top-level."
+    )
     mcp.tool(meta=DEFER_META)(manage)
 
 
@@ -466,21 +470,22 @@ async def dispatch_manage_op(
         ## can self-correct without a second round-trip.
         signature, _ = _handler_meta(handler)
         accepted: list[str] = []
+        required: list[str] = []
         if signature is not None:
             ## The first positional is always the runtime — skip by position
             ## rather than name (handlers in tests use ``rt``; real handlers
             ## use ``runtime``).
             params_iter = iter(signature.parameters.items())
             next(params_iter, None)
-            accepted = [
-                name
-                for name, param in params_iter
-                if param.kind
-                in (
+            for name, param in params_iter:
+                if param.kind not in (
                     inspect.Parameter.POSITIONAL_OR_KEYWORD,
                     inspect.Parameter.KEYWORD_ONLY,
-                )
-            ]
+                ):
+                    continue
+                accepted.append(name)
+                if param.default is inspect.Parameter.empty:
+                    required.append(name)
         received = list(call_params.keys())
         ## When we can't introspect the handler signature, leave unexpected empty
         ## so the hint reads as the bare TypeError (no false claims about keys).
@@ -488,6 +493,15 @@ async def dispatch_manage_op(
             unexpected = []
         else:
             unexpected = [k for k in received if k not in accepted]
+        missing = [key for key in required if key not in call_params]
+        example_param = missing[0] if missing else (accepted[0] if accepted else None)
+        if example_param is None:
+            example_data = {"op": op, "params": {}}
+            example = json.dumps(example_data)
+        else:
+            example_data = {"op": op, "params": {example_param: "..."}}
+            example = f'{{"op": {json.dumps(op)}, "params": {{{json.dumps(example_param)}: ...}}}}'
+        contract = "Op-specific parameters go inside 'params'; 'op' and 'session_id' are top-level."
         hint = f"{tool_name}.{op}: {exc}"
         if signature is not None:
             accepted_label = ", ".join(repr(k) for k in accepted) if accepted else "(none)"
@@ -498,6 +512,22 @@ async def dispatch_manage_op(
                 )
             else:
                 hint += f". Accepted params for op {op!r}: {accepted_label}"
+                if missing:
+                    hint += (
+                        ". Op params must be nested inside the 'params' object, "
+                        f"e.g. {example} — not passed at the top level."
+                    )
+
+            if "session_id" in unexpected:
+                hint += (
+                    " 'session_id' is a top-level sibling of 'op' and 'params', "
+                    "not nested inside 'params'."
+                )
+            if "op" in unexpected:
+                hint += (
+                    " 'op' is a top-level sibling of 'params' and 'session_id', "
+                    "not nested inside 'params'."
+                )
         raise GodotCommandError(
             code=ErrorCode.INVALID_PARAMS,
             message=hint,
@@ -506,7 +536,11 @@ async def dispatch_manage_op(
                 "op": op,
                 "received": received,
                 "accepted": accepted,
+                "required": required,
+                "missing": missing,
                 "unexpected": unexpected,
+                "contract": contract,
+                "example": example_data,
             },
         ) from exc
 

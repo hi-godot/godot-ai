@@ -44,6 +44,25 @@ from godot_ai.tools._meta_tool import MANAGE_TOOL_OPS
 logger = logging.getLogger(__name__)
 
 
+def _find_pydantic_validation_error(
+    exc: BaseException,
+) -> PydanticValidationError | None:
+    """Find a Pydantic validation error through FastMCP wrapper chains."""
+    pending: list[BaseException] = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, PydanticValidationError):
+            return current
+        for linked in (current.__cause__, current.__context__):
+            if isinstance(linked, BaseException):
+                pending.append(linked)
+    return None
+
+
 class HintOpTypoOnManage(Middleware):
     async def on_call_tool(
         self,
@@ -56,9 +75,7 @@ class HintOpTypoOnManage(Middleware):
             candidates = MANAGE_TOOL_OPS.get(context.message.name)
             if candidates is None:
                 raise
-            hint = _build_hint_from_validation_error(
-                exc, context.message.arguments, candidates
-            )
+            hint = _build_hint_from_validation_error(exc, context.message.arguments, candidates)
             if hint is None:
                 raise
             logger.debug("Rewrote op typo error on %s: %s", context.message.name, hint)
@@ -70,9 +87,7 @@ class HintOpTypoOnManage(Middleware):
             hint = _build_hint_from_tool_error(exc, context.message.arguments, candidates)
             if hint is None:
                 raise
-            logger.debug(
-                "Rewrote wrapped op typo error on %s: %s", context.message.name, hint
-            )
+            logger.debug("Rewrote wrapped op typo error on %s: %s", context.message.name, hint)
             raise ToolError(hint) from exc
 
 
@@ -104,31 +119,19 @@ def _build_hint_from_validation_error(
     arguments: dict | None,
     candidates: tuple[str, ...],
 ) -> str | None:
-    if isinstance(exc, PydanticValidationError):
-        return _build_hint(exc, arguments, candidates)
-    cause = exc.__cause__
-    if isinstance(cause, PydanticValidationError):
-        return _build_hint(cause, arguments, candidates)
-    context = exc.__context__
-    if isinstance(context, PydanticValidationError):
-        return _build_hint(context, arguments, candidates)
-    return None
+    validation_error = _find_pydantic_validation_error(exc)
+    if validation_error is None:
+        return None
+    return _build_hint(validation_error, arguments, candidates)
 
 
 def _build_hint_from_tool_error(
     exc: ToolError, arguments: dict | None, candidates: tuple[str, ...]
 ) -> str | None:
     """Return a hint when FastMCP wraps the op ``ValidationError`` as ToolError."""
-    cause = exc.__cause__
-    if isinstance(cause, PydanticValidationError):
-        return _build_hint(cause, arguments, candidates)
-    if isinstance(cause, FastMCPValidationError):
-        return _build_hint_from_validation_error(cause, arguments, candidates)
-    context = exc.__context__
-    if isinstance(context, PydanticValidationError):
-        return _build_hint(context, arguments, candidates)
-    if isinstance(context, FastMCPValidationError):
-        return _build_hint_from_validation_error(context, arguments, candidates)
+    validation_error = _find_pydantic_validation_error(exc)
+    if validation_error is not None:
+        return _build_hint(validation_error, arguments, candidates)
 
     message = str(exc)
     if not _looks_like_single_op_literal_error(message):

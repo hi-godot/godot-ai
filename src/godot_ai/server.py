@@ -21,6 +21,7 @@ from godot_ai import __version__ as _SERVER_VERSION
 from godot_ai.asgi import StaleMcpSessionDiagnosticMiddleware
 from godot_ai.godot_client.client import GodotClient
 from godot_ai.middleware import (
+    FoldFlatManageParams,
     HintOpTypoOnManage,
     ParseStringifiedParams,
     PreserveGodotCommandErrorData,
@@ -347,7 +348,12 @@ def create_server(
     ##    the client meant to send. Must run before Pydantic (which lives
     ##    below all middleware in the FastMCP tool layer). See #206.
     ##
-    ## 4. ``HintOpTypoOnManage`` — innermost on the response side. Catches
+    ## 4. ``FoldFlatManageParams`` — request-side, after stringified params
+    ##    are decoded. Folds transmitted top-level op params into the
+    ##    canonical ``params`` object before Pydantic sees them, and rewrites
+    ##    only pure top-level-extra validation failures. See #765.
+    ##
+    ## 5. ``HintOpTypoOnManage`` — innermost on the response side. Catches
     ##    Pydantic ``ValidationError`` for ``op`` literal_error and rewrites
     ##    it with a ``difflib``-derived "Did you mean…" hint. Must be
     ##    innermost on response so it sees Pydantic's raw ``ValidationError``
@@ -355,6 +361,7 @@ def create_server(
     mcp.add_middleware(PreserveGodotCommandErrorData())
     mcp.add_middleware(StripClientWrapperKwargs())
     mcp.add_middleware(ParseStringifiedParams())
+    mcp.add_middleware(FoldFlatManageParams())
     mcp.add_middleware(HintOpTypoOnManage())
 
     ## Wrap ``mcp.tool`` / ``mcp.resource`` once, before any

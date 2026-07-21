@@ -1750,6 +1750,82 @@ class TestScriptReadTool:
         assert result.data["content"] == "extends Node3D\n"
         assert result.data["line_count"] == 2
 
+    async def test_read_script_accepts_flat_param_alias(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "read_script"
+            assert cmd["params"] == {"path": "res://scripts/flat.gd"}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://scripts/flat.gd",
+                    "content": "extends Node\n",
+                    "size": 13,
+                    "line_count": 2,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "script_manage", {"op": "read", "path": "res://scripts/flat.gd"}
+        )
+        await task
+
+        assert not result.is_error
+        assert result.data["content"] == "extends Node\n"
+
+    async def test_read_script_decodes_params_before_flat_merge(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "read_script"
+            assert cmd["params"] == {"path": "res://scripts/flat.gd"}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://scripts/flat.gd",
+                    "content": "extends Node\n",
+                    "size": 13,
+                    "line_count": 2,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "script_manage",
+            {
+                "op": "read",
+                "params": '{"path": "res://scripts/flat.gd"}',
+                "path": "res://scripts/flat.gd",
+            },
+        )
+        await task
+
+        assert not result.is_error
+
+    async def test_read_script_rejects_conflicting_flat_param(self, mcp_stack):
+        client, _ = mcp_stack
+
+        result = await client.call_tool(
+            "script_manage",
+            {
+                "op": "read",
+                "path": "res://scripts/A.gd",
+                "params": {"path": "res://scripts/B.gd"},
+            },
+            raise_on_error=False,
+        )
+
+        assert result.is_error
+        text = str(result.content)
+        assert "passed both at the top level" in text
+        assert "res://scripts/A.gd" in text
+        assert "res://scripts/B.gd" in text
+        assert "Keep it in 'params' only" in text
+
 
 # ---------------------------------------------------------------------------
 # script_attach
@@ -3447,6 +3523,22 @@ class TestProjectStopTool:
         assert "Unexpected param(s)" in text
         assert "'force'" in text
         assert "Accepted params for op 'stop'" in text
+
+    async def test_stop_rejects_flat_invented_key_after_folding(self, mcp_stack):
+        client, _ = mcp_stack
+
+        result = await client.call_tool(
+            "project_manage",
+            {"op": "stop", "force": True},
+            raise_on_error=False,
+        )
+
+        assert result.is_error
+        text = str(result.content)
+        assert "Unexpected param(s)" in text
+        assert "'force'" in text
+        assert "Accepted params for op 'stop'" in text
+        assert "must be nested inside the 'params' object" not in text
 
 
 # ---------------------------------------------------------------------------

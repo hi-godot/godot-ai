@@ -161,6 +161,10 @@ The `op` field is a `Literal[...]` enum so MCP clients with schema-aware
 autocomplete still see every valid verb. Unknown ops surface a structured
 error with fuzzy `data.suggestions`.
 
+The nested form is canonical. For compatibility, the server also accepts
+op-specific parameters beside `op` and folds them into `params` when the client
+transmits those extra fields. `op` and `session_id` always remain top-level.
+
 Calls take the form:
 
 ```json
@@ -195,6 +199,12 @@ Calls take the form:
 | `client_manage` | `status`, `configure`, `remove` |
 | `tilemap_manage` | `tilemap_set_cell`, `tilemap_set_cells_rect`, `tilemap_clear`, `tilemap_get_cells` |
 | `tileset_manage` | `tileset_get_atlas_tiles`, `tileset_get_atlas_image` |
+
+`filesystem_manage.reimport` is intended for imported assets such as textures,
+models, and audio. Godot scripts (`.gd`) are not imported resources: a successful
+`.gd` entry only refreshes its editor filesystem cache entry and does not prove the
+script was parsed or diagnostics were produced. Use `script_patch` or
+`script_create` to save scripts and receive fresh diagnostics.
 
 `api_manage(op="get_class")` inspects Godot API/ClassDB metadata for a class
 without creating an instance. By default it returns direct class members only,
