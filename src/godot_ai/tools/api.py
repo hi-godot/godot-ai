@@ -24,7 +24,8 @@ Ops:
         Defaults to ["properties"] only — a bare get_class answers "what
         properties does X have" without the multi-thousand-token full dump.
         Pass the sections you want by name, or "all" for the full set
-        (properties, methods, signals, enums, constants).
+        (properties, methods, signals, enums, constants). "all" does NOT
+        include the heavier "inheritors" section — request that by name.
         For pagination, request one section at a time so offset/limit apply
         only to the list you are paging.
 """

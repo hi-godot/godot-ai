@@ -3,6 +3,7 @@ extends McpTestSuite
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const ApiHandler := preload("res://addons/godot_ai/handlers/api_handler.gd")
+const ClassIntrospection := preload("res://addons/godot_ai/utils/class_introspection.gd")
 
 var _handler: ApiHandler
 
@@ -142,6 +143,38 @@ func test_get_class_info_all_keyword_returns_full_set() -> void:
 		assert_true(result.data.has(key), "section %s should be present for 'all'" % key)
 	## "inheritors" is heavier and separately gated — not folded into "all".
 	assert_false(result.data.has("inheritors"))
+
+
+func test_get_class_info_all_keyword_as_list_element_expands_and_dedups() -> void:
+	## "all" also works inside a list alongside explicit names; the duplicate
+	## "properties" must not produce a doubled section.
+	var result := _handler.get_class_info({
+		"class_name": "Node",
+		"sections": ["properties", "all", "methods"],
+	})
+	assert_has_key(result, "data")
+	for key in ["properties", "methods", "signals", "enums", "constants"]:
+		assert_true(result.data.has(key), "list 'all' should expand section %s" % key)
+
+
+func test_sections_all_keyword_dedups_to_five() -> void:
+	## Direct check on the normalizer: "all" expands to the five doc sections
+	## and the redundant explicit "properties" is de-duplicated, not repeated.
+	var check := ClassIntrospection.validate_sections(["properties", "all", "properties"])
+	assert_true(check.invalid.is_empty(), "'all' must be accepted, never flagged invalid")
+	assert_eq(check.sections.size(), 5)
+
+
+func test_invalid_section_suggests_all_keyword() -> void:
+	## A near-miss for the meta-keyword should surface "all", and the error
+	## message must advertise it — it isn't in KNOWN_SECTIONS.
+	var result := _handler.get_class_info({
+		"class_name": "CharacterBody3D",
+		"sections": ["al"],
+	})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.data.suggestions.al, "all")
+	assert_contains(result.error.message, "all")
 
 
 func _find_named(items: Array, item_name: String) -> Dictionary:

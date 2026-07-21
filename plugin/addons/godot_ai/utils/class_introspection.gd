@@ -10,11 +10,18 @@ const VariantSerializer := preload("res://addons/godot_ai/utils/variant_serializ
 ## full five-section dump for a large class (e.g. Node, Control) costs an agent
 ## thousands of tokens it rarely wanted. Callers opt into the rest by name, or
 ## request the lot with the "all" keyword (see `_sections`).
-const DEFAULT_SECTIONS := ["properties"]
+const DEFAULT_SECTIONS: Array[String] = ["properties"]
 ## The full documentation-shaped section set (excludes the heavier, separately
 ## gated "inheritors"). Expanded from the "all" keyword.
-const ALL_SECTIONS := ["properties", "methods", "signals", "enums", "constants"]
-const KNOWN_SECTIONS := ["properties", "methods", "signals", "enums", "constants", "inheritors"]
+const ALL_SECTIONS: Array[String] = ["properties", "methods", "signals", "enums", "constants"]
+const KNOWN_SECTIONS: Array[String] = ["properties", "methods", "signals", "enums", "constants", "inheritors"]
+## Tokens a caller may legitimately pass in `sections` — the known sections plus
+## the "all" meta-keyword. Used for error suggestions so a typo like "al" can
+## resolve to "all"; "all" is NOT a section (it expands in `_sections`), so it
+## stays out of KNOWN_SECTIONS which gates validity.
+const SUGGESTABLE_SECTION_TOKENS: Array[String] = [
+	"properties", "methods", "signals", "enums", "constants", "inheritors", "all"
+]
 const MAX_DEFAULT_ITEMS := 100
 
 

@@ -76,11 +76,11 @@ static func _invalid_sections_error(invalid_sections: Array[String]) -> Dictiona
 	for section in invalid_sections:
 		suggestions[section] = FuzzySuggestions.rank(
 			section,
-			ClassIntrospection.KNOWN_SECTIONS,
+			ClassIntrospection.SUGGESTABLE_SECTION_TOKENS,
 			3,
 			0.3
 		)
-	var message := "Unknown class-info section(s): %s. Valid sections: %s" % [
+	var message := "Unknown class-info section(s): %s. Valid sections: %s (or \"all\" for the full set)" % [
 		", ".join(invalid_sections),
 		", ".join(ClassIntrospection.KNOWN_SECTIONS),
 	]
