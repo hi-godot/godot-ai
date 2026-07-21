@@ -93,8 +93,25 @@ class _CrashSurvivorPlugin extends _ProofPlugin:
 const TEST_PORT := 65432
 
 
+## The spawn/adopt-path tests below drive the real startup walk on
+## _ProofPlugin fixtures, and the walk publishes via _set_resolved_ws_port —
+## which writes plugin.gd's SHARED statics (GDScript statics are per-Script,
+## so fixtures extending plugin.gd share them with the live plugin
+## instance). The first-dial seed made the kept resolution load-bearing: a
+## leaked fixture port (e.g. a record's 9500) would poison the next live
+## plugin reload's first dial. Capture the live values once, restore after
+## every test.
+var _saved_resolved_ws_port := 0
+var _saved_ws_port_published := false
+
+
 func suite_name() -> String:
 	return "plugin_lifecycle"
+
+
+func suite_setup(_ctx: Dictionary) -> void:
+	_saved_resolved_ws_port = GodotAiPlugin._resolved_ws_port
+	_saved_ws_port_published = GodotAiPlugin._ws_port_resolution_published
 
 
 func setup() -> void:
@@ -105,6 +122,8 @@ func setup() -> void:
 
 func teardown() -> void:
 	GodotAiPlugin._server_started_this_session = false
+	GodotAiPlugin._resolved_ws_port = _saved_resolved_ws_port
+	GodotAiPlugin._ws_port_resolution_published = _saved_ws_port_published
 	## Stop-finalize tests write to EditorSettings + the pid-file on disk;
 	## scrub both so state doesn't leak across tests or outlast the suite.
 	var es := EditorInterface.get_editor_settings()

@@ -101,18 +101,37 @@ func suite_name() -> String:
 	return "server_lifecycle"
 
 
+## The manager walks below run on _ManagerHostStub (which extends
+## plugin.gd) and can publish via _host._set_resolved_ws_port — writing
+## plugin.gd's SHARED statics. See the twin guard in
+## test_plugin_lifecycle.gd: a leaked fixture port would poison the next
+## live plugin reload's first dial now that the seed keeps a published
+## resolution. Capture once, restore after every test.
+var _saved_resolved_ws_port := 0
+var _saved_ws_port_published := false
+
+
 func suite_setup(_ctx: Dictionary) -> void:
 	_saved_tenv1 = OS.get_environment(_TENV1) if OS.has_environment(_TENV1) else null
 	_saved_tenv2 = OS.get_environment(_TENV2) if OS.has_environment(_TENV2) else null
 	var es := EditorInterface.get_editor_settings()
 	if es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED):
 		_saved_telemetry_setting = es.get_setting(McpSettings.SETTING_TELEMETRY_ENABLED)
+	_saved_resolved_ws_port = GodotAiPlugin._resolved_ws_port
+	_saved_ws_port_published = GodotAiPlugin._ws_port_resolution_published
+
+
+func teardown() -> void:
+	GodotAiPlugin._resolved_ws_port = _saved_resolved_ws_port
+	GodotAiPlugin._ws_port_resolution_published = _saved_ws_port_published
 
 
 func suite_teardown() -> void:
 	_restore_tenv(_TENV1, _saved_tenv1)
 	_restore_tenv(_TENV2, _saved_tenv2)
 	EditorInterface.get_editor_settings().set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, _saved_telemetry_setting)
+	GodotAiPlugin._resolved_ws_port = _saved_resolved_ws_port
+	GodotAiPlugin._ws_port_resolution_published = _saved_ws_port_published
 
 
 func _restore_tenv(name: String, saved: Variant) -> void:
