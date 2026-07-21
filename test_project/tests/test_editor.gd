@@ -1665,6 +1665,102 @@ func test_surfaced_error_tracker_watermark_separates_errors_and_warnings() -> vo
 	tree.free()
 
 
+func test_surfaced_error_tracker_watermark_components_never_decrease() -> void:
+	## #767 producer side: released servers diff consecutive stamps
+	## (websocket.py::_sync_error_watermark_for_session) and treat a decrease
+	## as a counter reset, counting the FULL current value as new — so the
+	## plugin must never stamp a session-scoped component lower than the last
+	## stamp, and per-run game components may reset only when run_seq
+	## increments. Drive a representative session and check monotonicity
+	## between every consecutive pair of stamps.
+	var editor_buf := McpEditorLogBuffer.new()
+	var game_buf := McpGameLogBuffer.new()
+	var tree := _make_debugger_errors_tree()
+	var tracker := McpSurfacedErrorTracker.new(editor_buf, game_buf, tree)
+	var previous: Dictionary = tracker.watermark(true)
+
+	editor_buf.append("error", "parse error", "res://broken.gd", 4)
+	previous = _assert_watermark_monotonic(tracker, previous, "editor ring error")
+	editor_buf.append("warn", "builtin shadowed", "res://player.gd", 21)
+	previous = _assert_watermark_monotonic(tracker, previous, "editor ring warning")
+
+	## Run boundary as begin_game_run drives it: run_seq increments and the
+	## game buffer's per-run counters rotate together.
+	tracker.note_game_run_started(true)
+	game_buf.clear_for_new_run()
+	previous = _assert_watermark_monotonic(tracker, previous, "run 1 start")
+	assert_eq(previous.run_seq, 1)
+
+	game_buf.append("error", "runtime error")
+	previous = _assert_watermark_monotonic(tracker, previous, "game error in run 1")
+	game_buf.append("warn", "runtime warning")
+	previous = _assert_watermark_monotonic(tracker, previous, "game warning in run 1")
+
+	_append_duplicate_parse_error(tree.get_root())
+	previous = _assert_watermark_monotonic(tracker, previous, "recurring debugger row")
+	tracker.record_synthetic_error({
+		"source": "editor",
+		"level": "error",
+		"text": "Parse Error: boot break",
+		"path": "res://boot.gd",
+		"line": 3,
+	})
+	previous = _assert_watermark_monotonic(tracker, previous, "synthetic promotion")
+
+	tracker.note_game_run_stopped()
+	previous = _assert_watermark_monotonic(tracker, previous, "run 1 stop")
+
+	## User clears the Errors tab and an identical row repopulates: the
+	## promoted total must hold — already-promoted rows never subtract.
+	tree.clear()
+	_append_duplicate_parse_error(tree.create_item())
+	previous = _assert_watermark_monotonic(tracker, previous, "errors tab clear + repopulate")
+
+	var before_run_2: Dictionary = previous
+	tracker.note_game_run_started(false)
+	game_buf.clear_for_new_run()
+	previous = _assert_watermark_monotonic(tracker, previous, "run 2 start")
+	## The per-run reset is real (run 1 banked a game error) and rode a
+	## run_seq increment — the only sanctioned way a component may go down.
+	assert_eq(previous.run_seq, 2)
+	assert_eq(int(before_run_2.game_error_warn), 1, "run 1 must bank a game error so the run-2 reset is not vacuous")
+	assert_eq(previous.game_error_warn, 0, "per-run error count must reset with the run_seq increment")
+	assert_eq(previous.game_warn, 0, "per-run warn count must reset with the run_seq increment")
+
+	game_buf.append("error", "second-run error")
+	previous = _assert_watermark_monotonic(tracker, previous, "game error in run 2")
+
+	## The walk exercised every component — a stamp that never moved would
+	## make the monotonicity checks above vacuous.
+	assert_eq(previous.editor_ring, 1)
+	assert_eq(previous.editor_ring_warn, 1)
+	assert_eq(previous.debugger_promoted, 3)
+	assert_eq(previous.game_error_warn, 1)
+	assert_eq(previous.game_warn, 0)
+	tree.free()
+
+
+## #767: component-wise monotonicity between consecutive watermark stamps.
+## Session-scoped components must never decrease; per-run game components may
+## reset only when run_seq increments in the same stamp.
+func _assert_watermark_monotonic(tracker: McpSurfacedErrorTracker, previous: Dictionary, label: String) -> Dictionary:
+	var current: Dictionary = tracker.watermark(true)
+	assert_true(int(current.run_seq) >= int(previous.run_seq), "run_seq went backwards after %s" % label)
+	for key in ["editor_ring", "debugger_promoted", "editor_ring_warn"]:
+		assert_true(
+			int(current[key]) >= int(previous[key]),
+			"session-scoped %s decreased %d -> %d after %s — old servers read a decrease as a reset and re-count the full value as new" % [key, int(previous[key]), int(current[key]), label],
+		)
+	var run_advanced := int(current.run_seq) > int(previous.run_seq)
+	for key in ["game_error_warn", "game_warn"]:
+		if not run_advanced:
+			assert_true(
+				int(current[key]) >= int(previous[key]),
+				"per-run %s decreased %d -> %d after %s without a run_seq increment" % [key, int(previous[key]), int(current[key]), label],
+			)
+	return current
+
+
 func test_surfaced_error_tracker_caps_promoted_debugger_entries() -> void:
 	var tree := _make_debugger_errors_tree()
 	var root := tree.get_root()

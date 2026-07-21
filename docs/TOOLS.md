@@ -28,7 +28,7 @@ not the MCP tool names.
 | `scene_open` / `scene_save` | Open and save scenes |
 | `script_create` / `script_attach` / `script_patch` | Create, attach, anchor-edit GDScript files |
 | `project_run` | Play the project, then wait briefly for game liveness (autosave persists in-memory MCP edits unless `autosave=False`) |
-| `test_run` | Run GDScript test suites in the editor |
+| `test_run` | Run GDScript test suites in the editor — see [testing.md](testing.md) for writing suites and the `McpTestSuite` API |
 | `logs_read` | Read plugin / game / editor / combined log buffers. `source="editor"` surfaces parse errors, GDScript reload warnings, @tool/EditorPlugin runtime errors, push_error/push_warning, and visible Debugger dock Errors-tab rows — use this when the editor's Output or Debugger Errors panel shows red/yellow rows |
 | `editor_screenshot` | Capture editor viewport, cinematic camera, or running game framebuffer |
 | `editor_reload_plugin` | Reload the plugin and wait for reconnect (works with external and plugin-managed servers) |
@@ -128,12 +128,28 @@ it should finish the related writes and run `filesystem_manage(op="scan")`
 before debugging; otherwise it should inspect
 `logs_read(source="editor"|"game", include_details=true)`.
 
-The error count is of distinct new errors: a running game's script error
-reaches the server through both the game log buffer and the Errors tab, and
-those overlapping views are deduplicated rather than summed. Error and warning
-stamps are independent. Each stamp is delivered exactly once and consumed by
-that delivery — treat it as a doorbell, then read the logs; do not poll for it
-to repeat. It can appear on any tool's response, including `logs_read` itself.
+The count represents newly observed diagnostic entries after limited
+cross-source overlap handling. It is not a count of affected files or distinct
+logical error conditions. A single parse failure may contribute multiple
+root-error and derived-wrapper entries. Treat the value as a doorbell, not as
+a precise issue count, and inspect the diagnostics/logs for details. The
+overlap handling covers cross-source views of the same event: a running game's
+script error reaches the server through both the game log buffer and the
+Errors tab, and those overlapping views are deduplicated rather than summed.
+Error and warning stamps are independent. Each stamp is delivered exactly once
+and consumed by that delivery — do not poll for it to repeat. It can appear on
+any tool's response, including `logs_read` itself.
+
+Headless sessions: a parse failure in a `.gd` file written through MCP
+(`script_create`, `script_patch`, `filesystem_manage(op="write_text")`) is
+surfaced through the write response's `diagnostics` field and may never
+increment `new_errors_since_last_call` — even after a settled
+`filesystem_manage(op="scan")`. Per-write validation runs against a private
+capture buffer kept out of the shared editor log, and a scan does not reload
+an unchanged already-registered broken file, so no editor-origin parse event
+enters the ring. Headless agents and CI harnesses must inspect each write
+response's `diagnostics` — that is the contract-guaranteed channel for
+MCP-written code (#766).
 
 Set `GODOT_AI_SUPPRESS_DIAGNOSTIC_HINTS=true` (or `1`) before starting the
 server to consume these diagnostic stamps without adding their counts or hints
@@ -152,7 +168,10 @@ real parse diagnostics for the written file, `"fallback"` when validation failed
 but Logger details were unavailable, and `"none"`
 when no diagnostics were reported. Fallback diagnostics still prove the content
 failed validation, but their line number is a best-effort hint marked with
-`details.fallback_line`.
+`details.fallback_line`. In headless sessions this per-write `diagnostics`
+field is the reliable error channel for MCP-written code: the parse failure
+may never ring the `new_errors_since_last_call` doorbell (see "Headless
+sessions" above, #766).
 
 ## Domain rollups (`<domain>_manage`)
 

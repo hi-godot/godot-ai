@@ -6,6 +6,9 @@ This document defines how Godot AI should prove that new capability is real, sta
 
 Use the related docs for adjacent concerns:
 
+- [testing.md](testing.md) for how to write and run GDScript test suites
+  (authoring guide + `McpTestSuite` API reference) — this document covers
+  test-layer policy and CI expectations, not authoring
 - [implementation-plan.md](implementation-plan.md) for active priorities
 - [packaging-distribution.md](packaging-distribution.md) for release-smoke install coverage
 

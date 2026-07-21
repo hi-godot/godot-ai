@@ -114,6 +114,26 @@ class GodotAIFastMCP(FastMCP):
         return LocalhostOnlyHTTPMiddleware(app, getattr(self, "_allow_host_networks", None))
 
 
+def _startup_record_data(
+    client: GodotClient, ws_port: int, lifespan_start_ms: float
+) -> dict[str, Any]:
+    """Build the STARTUP telemetry payload (#761 follow-up).
+
+    ``diagnostic_hints_suppressed`` reads the hint policy off the
+    already-constructed client instead of re-reading
+    ``GODOT_AI_SUPPRESS_DIAGNOSTIC_HINTS``: the policy is resolved once
+    at client construction (env default or explicit override), so the
+    client's value is the behavior the process actually runs with — a
+    fresh env read could disagree with it.
+    """
+    return {
+        "server_version": _SERVER_VERSION,
+        "ws_port": ws_port,
+        "lifespan_start_ms": lifespan_start_ms,
+        "diagnostic_hints_suppressed": client.default_hint_policy == "discard",
+    }
+
+
 def create_server(
     ws_port: int = 9500,
     *,
@@ -197,11 +217,9 @@ def create_server(
             try:
                 record_telemetry(
                     RecordType.STARTUP,
-                    {
-                        "server_version": _SERVER_VERSION,
-                        "ws_port": ws_port,
-                        "lifespan_start_ms": (time.perf_counter() - start_clk) * 1000.0,
-                    },
+                    _startup_record_data(
+                        client, ws_port, (time.perf_counter() - start_clk) * 1000.0
+                    ),
                 )
                 record_milestone(MilestoneType.FIRST_STARTUP)
             except Exception:  # noqa: BLE001
