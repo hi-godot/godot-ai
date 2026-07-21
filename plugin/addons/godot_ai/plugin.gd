@@ -161,6 +161,13 @@ var _export_plugin
 var _lifecycle
 static var _server_started_this_session := false  # guard against re-entrant spawns
 static var _resolved_ws_port := ClientConfigurator.DEFAULT_WS_PORT
+## True once a startup walk has published a port via `_set_resolved_ws_port`
+## this editor session. Gates the `_enter_tree` pre-resolution seed: a fresh
+## session seeds `_resolved_ws_port` from the configured EditorSettings
+## value, but a plugin reload must keep the prior instance's published
+## resolution, which can legitimately differ from the configured value
+## (Windows-reservation remap, adopted-server record).
+static var _ws_port_resolution_published := false
 ## Per-launch WS handshake auth token (#690). Static for the same reason as
 ## _resolved_ws_port: a plugin reload in the same editor session adopts the
 ## server the previous instance spawned, and must keep its token. Empty
@@ -216,6 +223,19 @@ func _enter_tree() -> void:
 	## builds the CLI args.
 	ClientConfigurator.ensure_settings_registered()
 	_startup_trace_phase("settings_registered")
+
+	## With the startup walk's blocking port resolution deferred to a worker
+	## (#678), the Connection below dials before `_set_resolved_ws_port`
+	## publishes. Seed the pre-resolution port from the configured
+	## EditorSettings value (a cheap main-thread read, not a blocking probe)
+	## so the first dial honors a `godot_ai/ws_port` override — without this
+	## it targeted the compile-time default and the override only took
+	## effect on the 1s retry.
+	_resolved_ws_port = _startup_ws_port_seed(
+		_ws_port_resolution_published,
+		_resolved_ws_port,
+		ClientConfigurator.ws_port(),
+	)
 
 	## #691: pre-warm the env snapshot on the main thread before any worker
 	## exists, so worker-thread env reads (dock refresh/action workers, the
@@ -1069,9 +1089,21 @@ func get_resolved_ws_port() -> int:
 
 
 func _set_resolved_ws_port(port: int) -> void:
+	_ws_port_resolution_published = true
 	_resolved_ws_port = port
 	if _connection != null:
 		_connection.ws_port = port
+
+
+## Pure decision helper — environment-state reads (the published flag, the
+## EditorSettings port) stay in `_enter_tree`; the logic lives here so tests
+## can drive the three inputs directly without mutating the shared statics.
+static func _startup_ws_port_seed(
+	resolution_published: bool,
+	session_ws_port: int,
+	configured_ws_port: int
+) -> int:
+	return session_ws_port if resolution_published else configured_ws_port
 
 
 func _resolve_ws_port() -> int:
@@ -1111,21 +1143,19 @@ static func _resolve_ws_port_from_output(
 
 
 ## Plugin-level shim around the resolver — keeps the startup-trace
-## counter increment and the `_ProofPlugin` override hook on the plugin.
+## counter wiring and the `_ProofPlugin` override hook on the plugin.
+## The scrape takes `_startup_trace_count` directly so the counter names
+## track the scraper that actually ran (Windows can fall through netstat
+## → PowerShell; the fallback used to hide under the `netstat` count).
 func _is_port_in_use(port: int) -> bool:
 	if PortResolver.can_bind_local_port(port):
 		## POSIX can still have an IPv6 wildcard listener on this port
 		## even when an IPv4 loopback bind succeeds. Confirm through
 		## lsof so startup and kill-path discovery agree.
 		if OS.get_name() != "Windows":
-			_startup_trace_count("lsof")
-			return PortResolver.is_port_in_use_via_scrape(port)
+			return PortResolver.is_port_in_use_via_scrape(port, _startup_trace_count)
 		return false
-	if OS.get_name() == "Windows":
-		_startup_trace_count("netstat")
-	else:
-		_startup_trace_count("lsof")
-	return PortResolver.is_port_in_use_via_scrape(port)
+	return PortResolver.is_port_in_use_via_scrape(port, _startup_trace_count)
 
 
 ## Pass `_startup_trace_count` so the resolver bumps the right counter
@@ -1172,21 +1202,6 @@ func _find_managed_pid(port: int) -> int:
 	if pid > 0 and _pid_alive(pid):
 		return pid
 	return _find_pid_on_port(port)
-
-
-## #745: after an editor crash the managed server keeps running, but the
-## bind probe can still report the HTTP port as free — Windows lets a
-## SO_REUSEADDR bind succeed straight over a live listener, and the OS
-## scrape fallback can fail transiently. The pid-file the server writes
-## via `--pid-file` survives the crash; when it names a live process
-## whose cmdline carries the godot-ai brand, a server is likely still
-## up. Liveness + brand only — the startup walk confirms with the HTTP
-## status probe before changing behavior, so a kernel-recycled PID can
-## never redirect startup on its own. Uses the `_for_proof` seams so
-## lifecycle tests can stub it without touching real processes.
-func _managed_server_evidence_alive() -> bool:
-	var pid := _read_pid_file_for_proof()
-	return pid > 0 and _pid_alive_for_proof(pid) and _pid_cmdline_is_godot_ai_for_proof(pid)
 
 
 ## `live` is the result of a prior `_probe_live_server_status_for_port`

@@ -66,7 +66,19 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
         50-150 entries. Pass ``fields`` to return only the properties you
         need — a large response-size cut on this hot read. The response
         always carries ``total_count`` (all editor-visible properties)
-        alongside ``count`` (returned) so you can tell how much was withheld.
+        alongside ``count`` (returned): an unfiltered call returns the full
+        set, so ``count == total_count``; only the ``fields`` filter can
+        make ``count`` smaller. Requested names that match no
+        editor-visible property are listed in ``unknown_fields``, so a
+        nonexistent name is distinguishable from a property that exists
+        with a null value.
+
+        Null-valued properties are included: an unset object/resource slot
+        (``script`` on an unscripted node, an empty ``mesh`` or
+        ``material``, …) returns ``"value": null`` with its declared type.
+        An attached script serializes to its ``res://`` path; built-in
+        scripts (no resource path) fall back to their string
+        representation.
 
         Args:
             path: Scene path relative to the edited scene root (e.g.

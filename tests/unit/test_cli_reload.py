@@ -185,23 +185,22 @@ def test_main_widens_http_bind_only_when_allow_host_set(monkeypatch):
     transport; the guard (rebuilt with the same CIDRs) still gates requests."""
     import fastmcp
 
-    from tests.conftest import allocate_free_port
+    from tests.conftest import allocate_free_ports
 
     monkeypatch.setattr("godot_ai.server.create_server", lambda **kw: StubServer(app=None))
     monkeypatch.setattr(fastmcp.settings, "host", "127.0.0.1")
 
     ## Explicit free ports: main()'s preflight probes both binds, so a live
     ## process holding the default WS 9500 (or the HTTP port) exits 98.
-    http_port = str(allocate_free_port())
-    ws_port = str(allocate_free_port())
+    http_port, ws_port = allocate_free_ports(2)
     godot_ai.main(
         [
             "--transport",
             "streamable-http",
             "--port",
-            http_port,
+            str(http_port),
             "--ws-port",
-            ws_port,
+            str(ws_port),
             "--allow-host",
             "192.168.1.0/24",
         ]
@@ -212,14 +211,15 @@ def test_main_widens_http_bind_only_when_allow_host_set(monkeypatch):
 def test_main_does_not_widen_bind_without_allow_host(monkeypatch):
     import fastmcp
 
-    from tests.conftest import allocate_free_port
+    from tests.conftest import allocate_free_ports
 
     monkeypatch.setattr("godot_ai.server.create_server", lambda **kw: StubServer(app=None))
     monkeypatch.setattr(fastmcp.settings, "host", "127.0.0.1")
 
-    http_port = str(allocate_free_port())
-    ws_port = str(allocate_free_port())
-    godot_ai.main(["--transport", "streamable-http", "--port", http_port, "--ws-port", ws_port])
+    http_port, ws_port = allocate_free_ports(2)
+    godot_ai.main(
+        ["--transport", "streamable-http", "--port", str(http_port), "--ws-port", str(ws_port)]
+    )
     assert fastmcp.settings.host == "127.0.0.1"
 
 

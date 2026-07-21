@@ -93,8 +93,25 @@ class _CrashSurvivorPlugin extends _ProofPlugin:
 const TEST_PORT := 65432
 
 
+## The spawn/adopt-path tests below drive the real startup walk on
+## _ProofPlugin fixtures, and the walk publishes via _set_resolved_ws_port —
+## which writes plugin.gd's SHARED statics (GDScript statics are per-Script,
+## so fixtures extending plugin.gd share them with the live plugin
+## instance). The first-dial seed made the kept resolution load-bearing: a
+## leaked fixture port (e.g. a record's 9500) would poison the next live
+## plugin reload's first dial. Capture the live values once, restore after
+## every test.
+var _saved_resolved_ws_port := 0
+var _saved_ws_port_published := false
+
+
 func suite_name() -> String:
 	return "plugin_lifecycle"
+
+
+func suite_setup(_ctx: Dictionary) -> void:
+	_saved_resolved_ws_port = GodotAiPlugin._resolved_ws_port
+	_saved_ws_port_published = GodotAiPlugin._ws_port_resolution_published
 
 
 func setup() -> void:
@@ -105,6 +122,8 @@ func setup() -> void:
 
 func teardown() -> void:
 	GodotAiPlugin._server_started_this_session = false
+	GodotAiPlugin._resolved_ws_port = _saved_resolved_ws_port
+	GodotAiPlugin._ws_port_resolution_published = _saved_ws_port_published
 	## Stop-finalize tests write to EditorSettings + the pid-file on disk;
 	## scrub both so state doesn't leak across tests or outlast the suite.
 	var es := EditorInterface.get_editor_settings()
@@ -867,6 +886,58 @@ func test_managed_compatible_adoption_log_reports_owned_pid() -> void:
 	assert_contains(message, "adopted managed server (PID 22222")
 
 
+func test_startup_ws_port_seed_prefers_configured_before_first_resolution() -> void:
+	## Regression: with the startup walk's port resolution deferred to a
+	## worker (#678), `_enter_tree` builds the Connection before
+	## `_set_resolved_ws_port` publishes. The pre-seed static held
+	## DEFAULT_WS_PORT, so a `godot_ai/ws_port` EditorSettings override
+	## (e.g. 19630) was ignored on the first dial — it failed against
+	## ws://127.0.0.1:9500 and only the 1s retry reached the configured
+	## port. The seed must hand the configured value to the first dial.
+	var seeded := GodotAiPlugin._startup_ws_port_seed(
+		false, McpClientConfigurator.DEFAULT_WS_PORT, 19630
+	)
+	assert_eq(seeded, 19630, "fresh session must dial the configured override first")
+
+	var unchanged := GodotAiPlugin._startup_ws_port_seed(
+		false, McpClientConfigurator.DEFAULT_WS_PORT, McpClientConfigurator.DEFAULT_WS_PORT
+	)
+	assert_eq(unchanged, McpClientConfigurator.DEFAULT_WS_PORT, "no override keeps the default")
+
+
+func test_startup_ws_port_seed_keeps_published_resolution_on_reload() -> void:
+	## A plugin reload in the same editor session adopts the server the
+	## previous instance spawned — the published resolution can differ from
+	## the configured value (Windows-reservation remap, adopted-server
+	## record) and must win over a re-read of the setting.
+	var remapped := GodotAiPlugin._startup_ws_port_seed(true, 9505, 9500)
+	assert_eq(remapped, 9505, "reload must keep the prior instance's remapped port")
+
+	var setting_changed_mid_session := GodotAiPlugin._startup_ws_port_seed(true, 10500, 19630)
+	assert_eq(
+		setting_changed_mid_session,
+		10500,
+		"a mid-session setting change must not clobber a published resolution — the walk republishes"
+	)
+
+
+func test_set_resolved_ws_port_marks_resolution_published() -> void:
+	## The seed's reload guard must flip exactly when a walk publishes.
+	var saved_port := GodotAiPlugin._resolved_ws_port
+	var saved_published := GodotAiPlugin._ws_port_resolution_published
+	GodotAiPlugin._ws_port_resolution_published = false
+	var plugin := GodotAiPlugin.new()
+	plugin._set_resolved_ws_port(TEST_PORT)
+	plugin.free()
+	assert_eq(GodotAiPlugin._resolved_ws_port, TEST_PORT)
+	assert_true(
+		GodotAiPlugin._ws_port_resolution_published,
+		"a published resolution must arm the reload guard so _enter_tree stops re-seeding"
+	)
+	GodotAiPlugin._resolved_ws_port = saved_port
+	GodotAiPlugin._ws_port_resolution_published = saved_published
+
+
 func test_resolved_ws_port_drops_stale_record_value() -> void:
 	## Regression for the cached-ws-port + stale-ownership interaction.
 	## Setup mirrors the bad shape from the field:
@@ -1130,34 +1201,51 @@ func test_incompatible_status_exposes_actual_name_and_recovery_flag() -> void:
 	assert_true(bool(status.get("can_recover_incompatible", false)))
 
 
-func test_managed_server_evidence_requires_live_branded_pidfile() -> void:
-	## #745: the evidence gate that lets startup second-guess a "port is
-	## free" bind probe. Every tier must hold or the gate stays closed —
-	## a stale or kernel-recycled PID must never count as evidence.
+func test_start_adopts_survivor_when_bind_probe_free_and_pidfile_missing() -> void:
+	## Reproduced multi-editor failure (2026-07, Windows): two editors whose
+	## test projects share one app_userdata dir (same project name) share the
+	## pid-file too, so editor B's walk can find it missing/stale while
+	## editor A's managed server is alive behind a lying bind probe (#745
+	## SO_REUSEADDR bind-trap). The HTTP status probe now runs
+	## unconditionally — a live godot-ai answer must force the adopt path.
+	## Blind-spawning here produced a duplicate server that exited unable to
+	## bind and left a stale spawn token 4003-looping against the survivor.
+	var current := McpClientConfigurator.get_plugin_version()
 	var plugin := _ProofPlugin.new()
+	plugin.port_in_use = false
 	plugin.pid_file_pid = 0
-	assert_false(plugin._managed_server_evidence_alive(),
-		"no pid-file must yield no evidence")
-	plugin.pid_file_pid = 44444
-	assert_false(plugin._managed_server_evidence_alive(),
-		"pid-file naming a dead process must yield no evidence")
-	plugin.alive_pids = [44444] as Array[int]
-	assert_false(plugin._managed_server_evidence_alive(),
-		"live but unbranded pid (kernel-recycled) must yield no evidence")
-	plugin.branded_pids = [44444] as Array[int]
-	assert_true(plugin._managed_server_evidence_alive(),
-		"live godot-ai-branded pid-file process is evidence")
+	plugin.listener_pids = [12321] as Array[int]
+	plugin.alive_pids = [12321] as Array[int]
+	plugin.branded_pids = [12321] as Array[int]
+	plugin.managed_record = {"pid": 55555, "version": current, "ws_port": 9500}
+	plugin.live_status = {"name": "godot-ai", "version": current, "ws_port": 9500, "status_code": 200}
+	GodotAiPlugin._ws_auth_token = "stale-spawn-token"
+
+	plugin._start_server()
+	var status := plugin.get_server_status()
+	var server_pid := int(plugin._lifecycle._server_pid)
+	var killed := plugin.killed_targets.duplicate()
+	var token_after := GodotAiPlugin._ws_auth_token
 	plugin.free()
+
+	assert_eq(int(status.get("state", -1)), McpServerState.READY,
+		"a live godot-ai answer on a 'free' port must adopt, not blind-spawn")
+	assert_true(killed.is_empty(), "adoption must not kill the surviving server")
+	assert_eq(server_pid, -1,
+		"dead recorded PID means the survivor is adopted externally")
+	assert_eq(token_after, "",
+		"external adoption must drop the stale token so the handshake goes token-less")
 
 
 func test_start_adopts_crash_survivor_when_bind_probe_reports_port_free() -> void:
 	## #745: an editor crash leaves the managed server running, but the
 	## bind probe can report the HTTP port as free (Windows SO_REUSEADDR
 	## bind-over-listener semantics; transient scrape failures). With the
-	## surviving pid-file naming a live branded process AND the HTTP
-	## status probe answering as a compatible godot-ai server, startup
-	## must route through the normal adopt path instead of blind-spawning
-	## a duplicate server.
+	## HTTP status probe (now unconditional — no pid-file evidence gate)
+	## answering as a compatible godot-ai server, startup must route
+	## through the normal adopt path instead of blind-spawning a duplicate
+	## server. The surviving pid-file here additionally makes the recorded
+	## PID adoptable as managed.
 	var current := McpClientConfigurator.get_plugin_version()
 	var plugin := _CrashSurvivorPlugin.new()
 	plugin.port_in_use = false

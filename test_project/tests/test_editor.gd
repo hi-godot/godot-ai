@@ -428,6 +428,119 @@ func test_debugger_plugin_clear_pending_disconnects_timer() -> void:
 	assert_false(timer.timeout.is_connected(cb), "_clear_pending should disconnect timeout signal")
 
 
+# ----- #777: game screenshot stale-frame plumbing + honest timeout -----
+
+## Records send_deferred_response payloads instead of touching a real socket.
+class _StubConnection:
+	extends McpConnection
+	var captured: Array = []
+
+	func send_deferred_response(request_id: String, payload: Dictionary) -> void:
+		captured.append({"request_id": request_id, "payload": payload})
+
+
+## Flip a bare plugin's flags so get_game_status() reports "live", the state
+## the timeout's GAME_HELPER_TIMEOUT branch requires.
+func _mark_game_live(plugin: McpDebuggerPlugin) -> void:
+	plugin._game_run_active = true
+	plugin._game_ready = true
+	plugin._ready_run_token = plugin._game_run_token
+
+
+func test_screenshot_response_plumbs_stale_metadata() -> void:
+	## #777: a frozen-main-loop capture arrives with frames_drawn + stale
+	## appended; the tool response must surface stale_frame, frames_drawn,
+	## and an explanatory note alongside the image.
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	var rid := "rid-stale-meta"
+	plugin._pending[rid] = {"connection": conn}
+	plugin._on_screenshot_response([rid, "aGk=", 320, 180, 640, 360, 42, true])
+	assert_false(plugin._pending.has(rid), "the response clears the pending entry")
+	assert_eq(conn.captured.size(), 1, "one deferred reply")
+	var data: Dictionary = conn.captured[0]["payload"]["data"]
+	assert_eq(data.get("stale_frame"), true, "the game's stale flag rides into the tool response")
+	assert_eq(int(data.get("frames_drawn", 0)), 42, "frames_drawn rides into the tool response")
+	assert_contains(str(data.get("note")), "backgrounded", "the note explains the stale frame")
+	assert_eq(data.get("image_base64"), "aGk=", "image payload is unchanged")
+	conn.free()
+
+
+func test_screenshot_response_fresh_frame_not_flagged() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	var rid := "rid-fresh-meta"
+	plugin._pending[rid] = {"connection": conn}
+	plugin._on_screenshot_response([rid, "aGk=", 320, 180, 640, 360, 42, false])
+	var data: Dictionary = conn.captured[0]["payload"]["data"]
+	assert_eq(data.get("stale_frame"), false, "fresh captures carry an explicit false")
+	assert_false(data.has("note"), "no explanatory note on a fresh capture")
+	conn.free()
+
+
+func test_screenshot_response_legacy_payload_has_no_stale_keys() -> void:
+	## An older game helper (self-update window) sends six fields; the editor
+	## must not fabricate staleness metadata it wasn't given.
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	var rid := "rid-legacy-meta"
+	plugin._pending[rid] = {"connection": conn}
+	plugin._on_screenshot_response([rid, "aGk=", 320, 180, 640, 360])
+	var data: Dictionary = conn.captured[0]["payload"]["data"]
+	assert_false(data.has("stale_frame"), "six-field legacy payload carries no stale_frame")
+	assert_false(data.has("frames_drawn"), "six-field legacy payload carries no frames_drawn")
+	assert_eq(data.get("image_base64"), "aGk=", "legacy image payload still flows through")
+	conn.free()
+
+
+func test_screenshot_timeout_live_game_replies_game_helper_timeout() -> void:
+	## #777: the 8s reply timer on a live game replies GAME_HELPER_TIMEOUT
+	## with an actionable hint — never the opaque INTERNAL_ERROR that was
+	## the largest opaque failure bucket fleet-wide.
+	var plugin := McpDebuggerPlugin.new()
+	_mark_game_live(plugin)
+	var conn := _StubConnection.new()
+	var rid := "rid-shot-timeout-live"
+	plugin._pending[rid] = {"connection": conn}
+	plugin._on_timeout(rid)
+	assert_false(plugin._pending.has(rid), "the timeout clears the pending entry")
+	assert_eq(conn.captured.size(), 1, "one deferred reply")
+	var payload: Dictionary = conn.captured[0]["payload"]
+	assert_has_key(payload, "error")
+	assert_eq(payload["error"]["code"], ErrorCodes.GAME_HELPER_TIMEOUT,
+		"a live-game screenshot timeout replies GAME_HELPER_TIMEOUT")
+	assert_contains(payload["error"]["message"], "focus the game window",
+		"the message names the recovery action")
+	assert_contains(payload["error"]["message"], "game_command",
+		"the message names the liveness-check tool")
+	conn.free()
+
+
+func test_screenshot_timeout_not_live_keeps_attributed_shape() -> void:
+	## A game that is no longer live rides the existing _explain_not_live
+	## path (INTERNAL_ERROR top-level with the attributed game_status data),
+	## not the new GAME_HELPER_TIMEOUT.
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	var rid := "rid-shot-timeout-dead"
+	plugin._pending[rid] = {"connection": conn}
+	plugin._on_timeout(rid)
+	assert_eq(conn.captured.size(), 1, "one deferred reply")
+	var payload: Dictionary = conn.captured[0]["payload"]
+	assert_eq(payload["error"]["code"], ErrorCodes.INTERNAL_ERROR,
+		"the not-live path keeps the existing attributed shape")
+	assert_has_key(payload["error"], "data")
+	assert_has_key(payload["error"]["data"], "game_status",
+		"the not-live payload attributes the game state")
+	conn.free()
+
+
+func test_screenshot_timeout_unknown_request_no_crash() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	plugin._on_timeout("unknown-id")
+	assert_true(true, "a timeout for an already-resolved request is a no-op")
+
+
 func test_screenshot_view_target_not_found() -> void:
 	var result := _handler.take_screenshot({"source": "viewport", "view_target": "/Main/NonExistent"})
 	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)
@@ -1663,6 +1776,102 @@ func test_surfaced_error_tracker_watermark_separates_errors_and_warnings() -> vo
 	assert_eq(watermark.editor_ring_warn, 1)
 	assert_eq(watermark.game_warn, 1)
 	tree.free()
+
+
+func test_surfaced_error_tracker_watermark_components_never_decrease() -> void:
+	## #767 producer side: released servers diff consecutive stamps
+	## (websocket.py::_sync_error_watermark_for_session) and treat a decrease
+	## as a counter reset, counting the FULL current value as new — so the
+	## plugin must never stamp a session-scoped component lower than the last
+	## stamp, and per-run game components may reset only when run_seq
+	## increments. Drive a representative session and check monotonicity
+	## between every consecutive pair of stamps.
+	var editor_buf := McpEditorLogBuffer.new()
+	var game_buf := McpGameLogBuffer.new()
+	var tree := _make_debugger_errors_tree()
+	var tracker := McpSurfacedErrorTracker.new(editor_buf, game_buf, tree)
+	var previous: Dictionary = tracker.watermark(true)
+
+	editor_buf.append("error", "parse error", "res://broken.gd", 4)
+	previous = _assert_watermark_monotonic(tracker, previous, "editor ring error")
+	editor_buf.append("warn", "builtin shadowed", "res://player.gd", 21)
+	previous = _assert_watermark_monotonic(tracker, previous, "editor ring warning")
+
+	## Run boundary as begin_game_run drives it: run_seq increments and the
+	## game buffer's per-run counters rotate together.
+	tracker.note_game_run_started(true)
+	game_buf.clear_for_new_run()
+	previous = _assert_watermark_monotonic(tracker, previous, "run 1 start")
+	assert_eq(previous.run_seq, 1)
+
+	game_buf.append("error", "runtime error")
+	previous = _assert_watermark_monotonic(tracker, previous, "game error in run 1")
+	game_buf.append("warn", "runtime warning")
+	previous = _assert_watermark_monotonic(tracker, previous, "game warning in run 1")
+
+	_append_duplicate_parse_error(tree.get_root())
+	previous = _assert_watermark_monotonic(tracker, previous, "recurring debugger row")
+	tracker.record_synthetic_error({
+		"source": "editor",
+		"level": "error",
+		"text": "Parse Error: boot break",
+		"path": "res://boot.gd",
+		"line": 3,
+	})
+	previous = _assert_watermark_monotonic(tracker, previous, "synthetic promotion")
+
+	tracker.note_game_run_stopped()
+	previous = _assert_watermark_monotonic(tracker, previous, "run 1 stop")
+
+	## User clears the Errors tab and an identical row repopulates: the
+	## promoted total must hold — already-promoted rows never subtract.
+	tree.clear()
+	_append_duplicate_parse_error(tree.create_item())
+	previous = _assert_watermark_monotonic(tracker, previous, "errors tab clear + repopulate")
+
+	var before_run_2: Dictionary = previous
+	tracker.note_game_run_started(false)
+	game_buf.clear_for_new_run()
+	previous = _assert_watermark_monotonic(tracker, previous, "run 2 start")
+	## The per-run reset is real (run 1 banked a game error) and rode a
+	## run_seq increment — the only sanctioned way a component may go down.
+	assert_eq(previous.run_seq, 2)
+	assert_eq(int(before_run_2.game_error_warn), 1, "run 1 must bank a game error so the run-2 reset is not vacuous")
+	assert_eq(previous.game_error_warn, 0, "per-run error count must reset with the run_seq increment")
+	assert_eq(previous.game_warn, 0, "per-run warn count must reset with the run_seq increment")
+
+	game_buf.append("error", "second-run error")
+	previous = _assert_watermark_monotonic(tracker, previous, "game error in run 2")
+
+	## The walk exercised every component — a stamp that never moved would
+	## make the monotonicity checks above vacuous.
+	assert_eq(previous.editor_ring, 1)
+	assert_eq(previous.editor_ring_warn, 1)
+	assert_eq(previous.debugger_promoted, 3)
+	assert_eq(previous.game_error_warn, 1)
+	assert_eq(previous.game_warn, 0)
+	tree.free()
+
+
+## #767: component-wise monotonicity between consecutive watermark stamps.
+## Session-scoped components must never decrease; per-run game components may
+## reset only when run_seq increments in the same stamp.
+func _assert_watermark_monotonic(tracker: McpSurfacedErrorTracker, previous: Dictionary, label: String) -> Dictionary:
+	var current: Dictionary = tracker.watermark(true)
+	assert_true(int(current.run_seq) >= int(previous.run_seq), "run_seq went backwards after %s" % label)
+	for key in ["editor_ring", "debugger_promoted", "editor_ring_warn"]:
+		assert_true(
+			int(current[key]) >= int(previous[key]),
+			"session-scoped %s decreased %d -> %d after %s — old servers read a decrease as a reset and re-count the full value as new" % [key, int(previous[key]), int(current[key]), label],
+		)
+	var run_advanced := int(current.run_seq) > int(previous.run_seq)
+	for key in ["game_error_warn", "game_warn"]:
+		if not run_advanced:
+			assert_true(
+				int(current[key]) >= int(previous[key]),
+				"per-run %s decreased %d -> %d after %s without a run_seq increment" % [key, int(previous[key]), int(current[key]), label],
+			)
+	return current
 
 
 func test_surfaced_error_tracker_caps_promoted_debugger_entries() -> void:

@@ -36,6 +36,23 @@ const FLUSH_BATCH_LIMIT := 200
 ## texture/image error replies before the editor gives up with its
 ## generic timeout.
 const FIRST_FRAME_WAIT_SEC := 6.0
+## #777: how long the main loop can go without ticking _process before
+## _handle_take_screenshot treats it as frozen and commits a synchronous
+## stale-frame capture instead of awaiting frames that will never come.
+## A backgrounded/minimized play-in-editor game stops iterating its main
+## loop entirely, so any real threshold works; 1s keeps a merely-slow game
+## (heavy frame, low FPS) on the fresh-frame await path.
+const MAIN_LOOP_STALL_MSEC := 1000
+## How long frames_drawn can stay flat before _handle_take_screenshot treats
+## rendering as suppressed and commits the synchronous stale-frame capture.
+## On Windows, minimizing the game window freezes frame presentation but NOT
+## the main loop — _process keeps ticking, so the MAIN_LOOP_STALL_MSEC beacon
+## never trips and every capture used to burn the full FIRST_FRAME_WAIT_SEC
+## await before replying stale (issue #794 smoke, item 1b). Larger than the
+## loop threshold so a heavy-but-rendering game (~1 FPS frame gaps) stays on
+## the fresh-frame await path; a sub-0.7 FPS game that trips this still gets
+## an honestly stale-flagged image immediately instead of a 6s wait.
+const RENDER_STALL_MSEC := 1500
 
 const GameLogger := preload("res://addons/godot_ai/runtime/game_logger.gd")
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
@@ -63,6 +80,18 @@ var _pending_outbound: Array = []
 ## these to report a runtime error that aborted execute() before the reply.
 var _inflight_evals: Dictionary = {}
 var _eval_token_counter: int = 0
+## #777: last time _process ran, in ticks msec. The debugger message capture
+## stays live while a backgrounded game's main loop is frozen, so this is how
+## _handle_take_screenshot (running inside that capture) detects the freeze
+## synchronously. -1 until the first tick.
+var _last_loop_tick_msec: int = -1
+## Rendering-freeze beacon for the Windows-minimize state (#794 smoke, 1b):
+## the frames_drawn value last observed in _process, and when it last
+## advanced. -1 until the first observed advance, so a booting or
+## render-less game (frames_drawn stuck at 0) can never read as
+## render-stalled and keeps the fresh-frame await path's error replies.
+var _last_frames_drawn_seen: int = -1
+var _last_frames_advance_msec: int = -1
 
 
 func _ready() -> void:
@@ -75,6 +104,11 @@ func _ready() -> void:
 	## to skip registration in the game and time out every capture.
 	if Engine.is_editor_hint():
 		return
+	## Keep ticking while the tree is paused: _process both ferries game logs
+	## and timestamps main-loop liveness for the stalled-loop screenshot
+	## fallback (#777). A paused game still iterates its loop and renders, and
+	## must not be misread as frozen.
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	## register_message_capture is safe to call before the debugger
 	## handshake completes; the capture sits until a message arrives.
 	EngineDebugger.register_message_capture(CAPTURE_PREFIX, _on_debug_message)
@@ -96,6 +130,17 @@ func _ready() -> void:
 
 
 func _process(_delta: float) -> void:
+	## #777: liveness beacon for _handle_take_screenshot's stalled-loop check.
+	## Recorded before the early returns below so the signal stays truthful
+	## even when the logger or debugger channel is unavailable.
+	_last_loop_tick_msec = Time.get_ticks_msec()
+	## Rendering beacon: on Windows a minimized game keeps ticking _process
+	## while presentation stops, so frames_drawn stagnation — not loop
+	## silence — is the observable freeze signal there (#794 smoke, 1b).
+	var frames_now := Engine.get_frames_drawn()
+	if frames_now != _last_frames_drawn_seen:
+		_last_frames_drawn_seen = frames_now
+		_last_frames_advance_msec = _last_loop_tick_msec
 	## Drain the logger queue on the main thread (Logger virtuals can fire
 	## from any thread; EngineDebugger.send_message is only safe from main).
 	## Send at most one FLUSH_BATCH_LIMIT-sized batch per frame so a runaway
@@ -157,6 +202,23 @@ func _handle_take_screenshot(data: Array) -> void:
 		_reply_error(request_id, "No game root viewport available")
 		return
 
+	## #777: this function runs inside the debugger message capture, which
+	## stays live even when a backgrounded/minimized play-in-editor game has
+	## frozen its main loop. In that state awaiting `process_frame` parks
+	## this coroutine forever — no reply is ever sent, and the game side
+	## cannot self-timeout because timers need the same frozen loop. Commit a
+	## synchronous capture of the last rendered frame instead: stale, but a
+	## real image, flagged as such in the reply. Only fall through to the
+	## fresh-frame awaits when the loop is demonstrably alive.
+	if _should_capture_stale_sync(
+		_main_loop_appears_stalled(),
+		_rendering_appears_stalled(),
+		tree.current_scene != null,
+		Engine.get_frames_drawn()
+	):
+		_capture_and_reply(request_id, viewport, max_resolution, Engine.get_frames_drawn())
+		return
+
 	## Wait (bounded — see FIRST_FRAME_WAIT_SEC) until the main scene is in
 	## the tree and at least one frame has been drawn after this request, so
 	## the readback never precedes the first real present. Past the deadline,
@@ -170,6 +232,50 @@ func _handle_take_screenshot(data: Array) -> void:
 	while Engine.get_frames_drawn() <= frames_at_request and Time.get_ticks_msec() < deadline:
 		await tree.process_frame
 
+	_capture_and_reply(request_id, viewport, max_resolution, frames_at_request)
+
+
+## #777: pure decision for the synchronous stale-frame path. Sync capture is
+## only worth committing when awaiting can't produce a fresh frame — the main
+## loop is frozen (macOS/suspend), or the loop still ticks but presentation
+## is suppressed (Windows minimize, #794 smoke 1b) — AND the viewport
+## plausibly holds a real frame: the main scene is in the tree and at least
+## one frame was presented. Without those, the stale readback would be the
+## boot clear-color framebuffer — worse than the honest timeout.
+static func _should_capture_stale_sync(
+	loop_stalled: bool, render_stalled: bool, has_current_scene: bool, frames_drawn: int
+) -> bool:
+	return (loop_stalled or render_stalled) and has_current_scene and frames_drawn > 0
+
+
+## #777: true when _process hasn't ticked within MAIN_LOOP_STALL_MSEC —
+## i.e. the main loop is frozen (backgrounded window) or has never run.
+func _main_loop_appears_stalled() -> bool:
+	if _last_loop_tick_msec < 0:
+		return true
+	return Time.get_ticks_msec() - _last_loop_tick_msec > MAIN_LOOP_STALL_MSEC
+
+
+## True when frames_drawn has sat flat past RENDER_STALL_MSEC while _process
+## kept ticking — Windows minimize suppresses presentation without freezing
+## the loop, so the loop beacon alone misses it (#794 smoke, 1b). False until
+## the first observed frame advance: a game that has never presented has no
+## trustworthy frame to return, and must fall through to the await path's
+## texture/image error replies instead.
+func _rendering_appears_stalled() -> bool:
+	if _last_frames_advance_msec < 0:
+		return false
+	return Time.get_ticks_msec() - _last_frames_advance_msec > RENDER_STALL_MSEC
+
+
+## Read back the viewport texture and reply — fully synchronous, so it is
+## safe to call from the debugger capture while the main loop is frozen.
+## `frames_at_request` is Engine.get_frames_drawn() at request receipt: if no
+## further frame was drawn by capture time, the image predates the request
+## and the reply is flagged stale.
+func _capture_and_reply(
+	request_id: String, viewport: Viewport, max_resolution: int, frames_at_request: int
+) -> void:
 	var texture := viewport.get_texture()
 	if texture == null:
 		_reply_error(request_id, "Root viewport has no texture (headless?)")
@@ -181,19 +287,42 @@ func _handle_take_screenshot(data: Array) -> void:
 		return
 
 	var encoded: Dictionary = ScreenshotEncode.downscale_and_encode(image, max_resolution)
+	var frames_drawn := Engine.get_frames_drawn()
+	var stale := frames_drawn <= frames_at_request
 
-	EngineDebugger.send_message("mcp:screenshot_response", [
-		request_id,
-		encoded.base64,
-		encoded.width,
-		encoded.height,
-		encoded.original_width,
-		encoded.original_height,
-	])
+	_last_screenshot_reply = {
+		"kind": "response",
+		"request_id": request_id,
+		"frames_drawn": frames_drawn,
+		"stale": stale,
+		"width": encoded.width,
+		"height": encoded.height,
+	}
+	if EngineDebugger.is_active():
+		## Fields 7+8 are new in #777; older editors read the first six and
+		## ignore the rest.
+		EngineDebugger.send_message("mcp:screenshot_response", [
+			request_id,
+			encoded.base64,
+			encoded.width,
+			encoded.height,
+			encoded.original_width,
+			encoded.original_height,
+			frames_drawn,
+			stale,
+		])
+
+
+## Testing seam: the last screenshot reply (response or error), recorded
+## before hitting the EngineDebugger channel (inactive in the editor-side
+## test harness). Mirrors _last_eval_reply.
+var _last_screenshot_reply: Dictionary = {}
 
 
 func _reply_error(request_id: String, message: String) -> void:
-	EngineDebugger.send_message("mcp:screenshot_error", [request_id, message])
+	_last_screenshot_reply = {"kind": "error", "request_id": request_id, "message": message}
+	if EngineDebugger.is_active():
+		EngineDebugger.send_message("mcp:screenshot_error", [request_id, message])
 
 
 ## --- game_command: curated runtime inspection and input ---

@@ -36,6 +36,14 @@ class ErrorCode(StrEnum):
     # drops messages over ~8 MiB, which previously surfaced as a phantom 10s
     # "hang"). Keep in sync with utils/error_codes.gd.
     EVAL_RESULT_TOO_LARGE = "EVAL_RESULT_TOO_LARGE"
+    # #777: a game-side request (currently editor_screenshot source="game")
+    # reached a live game helper but no reply came back before the editor-side
+    # timer fired (backgrounded window with a frozen main loop and nothing
+    # rendered to fall back on, a blocked main thread, or a helper that died
+    # mid-run). Top-level code — the editor gates already passed, so this is
+    # not an EDITOR_NOT_READY sub-state. Keep in sync with
+    # utils/error_codes.gd.
+    GAME_HELPER_TIMEOUT = "GAME_HELPER_TIMEOUT"
     ## audit-v2 #21 (issue #365): finer-grained codes carved out of the
     ## 471 INVALID_PARAMS sites so agents can distinguish recoverable
     ## input errors from structural ones. INVALID_PARAMS stays for

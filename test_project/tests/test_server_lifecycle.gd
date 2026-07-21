@@ -31,6 +31,7 @@ class _ManagerHostStub extends GodotAiPlugin:
 	var cleared_record_calls := 0
 	var stop_watch_calls := 0
 	var finalize_calls := 0
+	var probe_calls := 0
 
 	func _find_all_pids_on_port(_port: int) -> Array[int]:
 		var pids: Array[int] = []
@@ -50,7 +51,14 @@ class _ManagerHostStub extends GodotAiPlugin:
 		return branded_pids.has(pid)
 
 	func _probe_live_server_status_for_port(_port: int) -> Dictionary:
+		probe_calls += 1
 		return live_status.duplicate()
+
+	## Deterministic false: the real helper consults the launch mode and the
+	## on-disk pid-file, which vary across dev machines / CI. No test in this
+	## suite exercises the uvx --refresh retry.
+	func _should_retry_with_refresh() -> bool:
+		return false
 
 	func _is_port_in_use(_port: int) -> bool:
 		if not port_in_use_sequence.is_empty():
@@ -101,18 +109,37 @@ func suite_name() -> String:
 	return "server_lifecycle"
 
 
+## The manager walks below run on _ManagerHostStub (which extends
+## plugin.gd) and can publish via _host._set_resolved_ws_port — writing
+## plugin.gd's SHARED statics. See the twin guard in
+## test_plugin_lifecycle.gd: a leaked fixture port would poison the next
+## live plugin reload's first dial now that the seed keeps a published
+## resolution. Capture once, restore after every test.
+var _saved_resolved_ws_port := 0
+var _saved_ws_port_published := false
+
+
 func suite_setup(_ctx: Dictionary) -> void:
 	_saved_tenv1 = OS.get_environment(_TENV1) if OS.has_environment(_TENV1) else null
 	_saved_tenv2 = OS.get_environment(_TENV2) if OS.has_environment(_TENV2) else null
 	var es := EditorInterface.get_editor_settings()
 	if es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED):
 		_saved_telemetry_setting = es.get_setting(McpSettings.SETTING_TELEMETRY_ENABLED)
+	_saved_resolved_ws_port = GodotAiPlugin._resolved_ws_port
+	_saved_ws_port_published = GodotAiPlugin._ws_port_resolution_published
+
+
+func teardown() -> void:
+	GodotAiPlugin._resolved_ws_port = _saved_resolved_ws_port
+	GodotAiPlugin._ws_port_resolution_published = _saved_ws_port_published
 
 
 func suite_teardown() -> void:
 	_restore_tenv(_TENV1, _saved_tenv1)
 	_restore_tenv(_TENV2, _saved_tenv2)
 	EditorInterface.get_editor_settings().set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, _saved_telemetry_setting)
+	GodotAiPlugin._resolved_ws_port = _saved_resolved_ws_port
+	GodotAiPlugin._ws_port_resolution_published = _saved_ws_port_published
 
 
 func _restore_tenv(name: String, saved: Variant) -> void:
@@ -500,6 +527,102 @@ func test_status_dict_carries_conflict_port() -> void:
 	host.free()
 
 	assert_eq(int(status.get("conflict_port", 0)), 9500)
+
+
+# ----- spawn fast-exit: lost-port-race re-adoption ----------------------
+
+func test_spawn_fast_exit_readopts_live_godot_ai_survivor() -> void:
+	## Reproduced multi-editor failure (2026-07, Windows): the duplicate
+	## spawn exits unable to bind while the surviving server still answers
+	## /godot-ai/status. The watch must re-run the startup walk (which
+	## adopts the survivor) instead of latching CRASHED and leaving the
+	## stale spawn token 4003-looping against it.
+	var current := McpClientConfigurator.get_plugin_version()
+	var saved_guard: bool = GodotAiPlugin._server_started_this_session
+	var saved_token: String = GodotAiPlugin._ws_auth_token
+	var host := _ManagerHostStub.new()
+	host._log_buffer = McpLogBuffer.new()
+	host.port_in_use = false
+	host.listener_pids = [12321] as Array[int]
+	host.alive_pids = [12321] as Array[int]
+	host.branded_pids = [12321] as Array[int]
+	host.managed_record = {"pid": 55555, "version": current, "ws_port": 9500}
+	host.live_status = {"name": "godot-ai", "version": current, "ws_port": 9500, "status_code": 200}
+	GodotAiPlugin._server_started_this_session = true
+	GodotAiPlugin._ws_auth_token = "stale-spawn-token"
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 99999
+	manager.transition_state(McpServerState.SPAWNING)
+
+	manager._diagnose_spawn_fast_exit(5500)
+	var state := manager.get_state()
+	var path := manager.get_startup_path()
+	var killed := host.killed_targets.duplicate()
+	var stop_watch_calls := host.stop_watch_calls
+	var readopt_guard: bool = manager._readopt_after_spawn_exit_retried
+	var token_after: String = GodotAiPlugin._ws_auth_token
+	host.free()
+	GodotAiPlugin._server_started_this_session = saved_guard
+	GodotAiPlugin._ws_auth_token = saved_token
+
+	assert_eq(state, McpServerState.READY,
+		"fast exit with a live godot-ai survivor must re-walk and adopt")
+	assert_eq(path, McpStartupPath.ADOPTED)
+	assert_true(killed.is_empty(), "re-adoption must not kill the survivor")
+	assert_true(stop_watch_calls >= 1, "the dead spawn's watch must stop")
+	assert_false(readopt_guard,
+		"the re-walk must reset the one-shot so a later walk keeps its budget")
+	assert_eq(token_after, "",
+		"external re-adoption must drop the stale spawn token")
+
+
+func test_spawn_fast_exit_readopt_is_one_shot_per_walk() -> void:
+	## A consumed re-adopt budget must fall through to the legacy diagnosis
+	## (a godot-ai occupant is not a foreign conflict -> CRASHED) instead of
+	## re-walking forever.
+	var host := _ManagerHostStub.new()
+	host._log_buffer = McpLogBuffer.new()
+	host.port_in_use = true
+	host.live_status = {"name": "godot-ai", "version": "1.0.0", "ws_port": 9500, "status_code": 200}
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 99999
+	manager.transition_state(McpServerState.SPAWNING)
+	manager._readopt_after_spawn_exit_retried = true
+
+	manager._diagnose_spawn_fast_exit(6000)
+	var state := manager.get_state()
+	var exit_ms := int(manager._server_exit_ms)
+	var stop_watch_calls := host.stop_watch_calls
+	host.free()
+
+	assert_eq(state, McpServerState.CRASHED,
+		"second fast exit in one walk must latch CRASHED, not loop")
+	assert_eq(exit_ms, 6000)
+	assert_eq(stop_watch_calls, 1)
+
+
+func test_spawn_fast_exit_foreign_occupant_reuses_probe_snapshot() -> void:
+	## The fast-exit handler probes the HTTP status endpoint once; the
+	## foreign-conflict diagnosis must consume that snapshot instead of
+	## paying a second ~500ms probe on the main thread.
+	var host := _ManagerHostStub.new()
+	host._log_buffer = McpLogBuffer.new()
+	host.port_in_use = true
+	host.live_status = {"name": "", "version": "", "ws_port": 0, "status_code": 0}
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 99999
+	manager.transition_state(McpServerState.SPAWNING)
+
+	manager._diagnose_spawn_fast_exit(6000)
+	var state := manager.get_state()
+	var probe_calls := host.probe_calls
+	var conflict_port := int(manager._conflict_port)
+	host.free()
+
+	assert_eq(state, McpServerState.FOREIGN_PORT,
+		"a non-godot-ai occupant must still surface FOREIGN_PORT through the new seam")
+	assert_eq(probe_calls, 1, "conflict diagnosis must reuse the fast-exit probe snapshot")
+	assert_eq(conflict_port, McpClientConfigurator.http_port())
 
 
 func test_start_server_short_circuits_on_static_guard() -> void:
