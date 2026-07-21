@@ -5,6 +5,7 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
 const ScriptHandler := preload("res://addons/godot_ai/handlers/script_handler.gd")
+const FilesystemHandler := preload("res://addons/godot_ai/handlers/filesystem_handler.gd")
 const EditorLogger := preload("res://addons/godot_ai/runtime/editor_logger.gd")
 
 ## Tests for ScriptHandler — script creation, reading, attach/detach, and symbol inspection.
@@ -135,6 +136,73 @@ func test_create_script_validation_does_not_pollute_shared_editor_log() -> void:
 	assert_eq(result.data.diagnostics.size(), 1, "Invalid GDScript should report one diagnostic")
 	var captured := shared_buf.get_since(cursor)
 	assert_eq(captured.entries.size(), 0, "Validation load diagnostics must not leak into the shared editor log")
+	DirAccess.remove_absolute(path)
+
+
+func test_headless_mcp_write_parse_failure_does_not_ring_watermark() -> void:
+	## #766 contract pin: in headless MCP-only sessions, a broken .gd written
+	## via script_create surfaces its parse failure ONLY through the write
+	## response's `diagnostics` field — the diagnostic doorbell
+	## (`new_errors_since_last_call`) stays silent. Per-write validation runs
+	## against a private throwaway buffer, the shared EditorLogger drops
+	## addon-origin entries, and registration is efs.update_file() (no reload),
+	## so no editor-origin parse event reaches the watermark.
+	##
+	## The test runner is synchronous, so a real efs.scan() cannot settle
+	## in-test; the scan step below coalesces via the single-flight latch
+	## (same as test_filesystem.gd) and the settled scan's silence for an
+	## unchanged already-registered broken file was verified live in #766.
+	## If an engine or plugin change starts ringing the doorbell for these
+	## writes, this failing is the cue to update the "Headless sessions"
+	## paragraph in docs/TOOLS.md — a deliberate contract decision, not
+	## silent drift.
+	var shared_buf := McpEditorLogBuffer.new()
+	_attach_shared_editor_logger(shared_buf)
+	var empty_errors_tree := Tree.new()
+	track(empty_errors_tree)
+	empty_errors_tree.create_item()
+	var tracker := McpSurfacedErrorTracker.new(shared_buf, null, empty_errors_tree)
+	var before: Dictionary = tracker.watermark(true)
+
+	var path := "res://tests/_mcp_test_invalid_watermark.gd"
+	var content := "extends Node\n\nfunc _ready() -> void:\n\tif\n\tpass\n"
+	_expect_invalid_if_parse_errors()
+	var result := _handler.create_script({"path": path, "content": content})
+
+	# (a) The write response itself carries the error diagnostics — the
+	# contract-guaranteed channel for MCP-written code.
+	assert_has_key(result, "data")
+	assert_eq(result.data.committed, true)
+	assert_eq(result.data.diagnostics_scope, "this_file")
+	assert_gt(result.data.diagnostics.size(), 0, "Write response must carry the parse diagnostics")
+	assert_eq(result.data.diagnostics[0].level, "error")
+	assert_eq(result.data.diagnostics[0].path, path)
+	assert_contains(result.data.diagnostics[0].text, "Parse Error")
+
+	# The write registered the file with the resource pipeline (update_file),
+	# which is why a later scan treats it as known-and-unchanged and does not
+	# reload it.
+	var efs := EditorInterface.get_resource_filesystem()
+	assert_true(efs != null and efs.get_file_type(path) != "",
+		"Broken file must still be registered with the editor filesystem")
+
+	# (b) filesystem_manage(op="scan") — sync fallback with the single-flight
+	# latch pre-set so the call coalesces instead of kicking a real editor
+	# scan mid-suite (see test_filesystem.gd).
+	FilesystemHandler._scan_in_flight = true
+	var scan_result := FilesystemHandler.new().scan_filesystem({})
+	FilesystemHandler._scan_in_flight = false
+	assert_has_key(scan_result, "data")
+	assert_true(scan_result.data.was_already_scanning, "Latch set → coalesced, no new scan() kicked")
+
+	var after: Dictionary = tracker.watermark(true)
+	_detach_shared_editor_logger()
+	assert_eq(after.editor_ring, before.editor_ring,
+		"MCP-written parse failure must not append to the shared error ring")
+	assert_eq(after.editor_ring_warn, before.editor_ring_warn,
+		"MCP-written parse failure must not append to the shared warning ring")
+	assert_eq(after.debugger_promoted, before.debugger_promoted,
+		"No Debugger Errors-tab row may be promoted for an MCP-written parse failure")
 	DirAccess.remove_absolute(path)
 
 
