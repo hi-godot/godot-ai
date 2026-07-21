@@ -70,6 +70,7 @@ func test_get_class_info_singleton_does_not_report_abstract() -> void:
 func test_get_class_info_character_body_3d() -> void:
 	var result := _handler.get_class_info({
 		"class_name": "CharacterBody3D",
+		"sections": "all",
 		"include_inherited": true,
 		"limit": 0,
 	})
@@ -112,8 +113,35 @@ func test_get_class_info_default_is_direct_and_limited() -> void:
 	var result := _handler.get_class_info({"class_name": "Control"})
 	assert_has_key(result, "data")
 	assert_false(result.data.include_inherited)
-	assert_true(result.data.methods.size() <= result.data.limit)
-	assert_eq(_find_named(result.data.methods, "get_parent"), {})
+	## Default section set is properties-only (see DEFAULT_SECTIONS).
+	assert_has_key(result.data, "properties")
+	assert_true(result.data.properties.size() <= result.data.limit)
+	## Direct-only: an inherited Node property must not appear.
+	assert_eq(_find_named(result.data.properties, "name"), {})
+
+
+func test_get_class_info_default_sections_are_properties_only() -> void:
+	## A bare get_class returns only properties; the heavier sections are
+	## opt-in so an agent asking "what does X have" doesn't pay for the lot.
+	var result := _handler.get_class_info({"class_name": "CharacterBody3D"})
+	assert_has_key(result, "data")
+	assert_has_key(result.data, "properties")
+	assert_false(result.data.has("methods"), "methods must be opt-in, not default")
+	assert_false(result.data.has("signals"), "signals must be opt-in, not default")
+	assert_false(result.data.has("enums"), "enums must be opt-in, not default")
+	assert_false(result.data.has("constants"), "constants must be opt-in, not default")
+
+
+func test_get_class_info_all_keyword_returns_full_set() -> void:
+	var result := _handler.get_class_info({
+		"class_name": "CharacterBody3D",
+		"sections": "all",
+	})
+	assert_has_key(result, "data")
+	for key in ["properties", "methods", "signals", "enums", "constants"]:
+		assert_true(result.data.has(key), "section %s should be present for 'all'" % key)
+	## "inheritors" is heavier and separately gated — not folded into "all".
+	assert_false(result.data.has("inheritors"))
 
 
 func _find_named(items: Array, item_name: String) -> Dictionary:

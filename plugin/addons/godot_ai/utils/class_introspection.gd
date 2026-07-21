@@ -5,7 +5,15 @@ extends RefCounted
 
 const VariantSerializer := preload("res://addons/godot_ai/utils/variant_serializer.gd")
 
-const DEFAULT_SECTIONS := ["properties", "methods", "signals", "enums", "constants"]
+## Sections returned when the caller does not name any. Deliberately narrow:
+## a bare `get_class` is almost always "what properties does X have", and the
+## full five-section dump for a large class (e.g. Node, Control) costs an agent
+## thousands of tokens it rarely wanted. Callers opt into the rest by name, or
+## request the lot with the "all" keyword (see `_sections`).
+const DEFAULT_SECTIONS := ["properties"]
+## The full documentation-shaped section set (excludes the heavier, separately
+## gated "inheritors"). Expanded from the "all" keyword.
+const ALL_SECTIONS := ["properties", "methods", "signals", "enums", "constants"]
 const KNOWN_SECTIONS := ["properties", "methods", "signals", "enums", "constants", "inheritors"]
 const MAX_DEFAULT_ITEMS := 100
 
@@ -90,6 +98,11 @@ static func _sections(raw_sections: Variant) -> Array[String]:
 		values = DEFAULT_SECTIONS
 	for raw_section in values:
 		var section := str(raw_section).strip_edges().to_lower()
+		if section == "all":
+			for expanded in ALL_SECTIONS:
+				if not result.has(expanded):
+					result.append(expanded)
+			continue
 		if not section.is_empty() and not result.has(section):
 			result.append(section)
 	if result.is_empty():

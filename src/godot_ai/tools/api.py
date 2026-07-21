@@ -21,6 +21,10 @@ Ops:
         Return selected class-reference sections without creating a scene
         instance. sections may be a comma-separated string or list containing
         properties, methods, signals, enums, constants, inheritors.
+        Defaults to ["properties"] only — a bare get_class answers "what
+        properties does X have" without the multi-thousand-token full dump.
+        Pass the sections you want by name, or "all" for the full set
+        (properties, methods, signals, enums, constants).
         For pagination, request one section at a time so offset/limit apply
         only to the list you are paging.
 """
