@@ -29,6 +29,9 @@ func suite_teardown() -> void:
 	for path in _created_paths:
 		_remove_by_path(path)
 	_created_paths.clear()
+	# Safety net: a test failing before its manual cleanup must not leave the
+	# texture fixture on disk.
+	_cleanup_particle_texture()
 
 
 func _remove_by_path(path: String) -> void:
