@@ -236,9 +236,13 @@ static func has(preset_name: String) -> bool:
 	return _PRESETS.has(preset_name)
 
 
-## Return deep-copied {main, process, draw} blueprint with overrides merged in.
+## Return deep-copied {main, process, draw} blueprint with overrides merged in,
+## plus "user_keys" ({main/process/draw: {key: true}}) recording which keys the
+## caller supplied. The handler needs that distinction: preset-blueprint keys
+## may skip silently on types they don't apply to (presets are cross-type by
+## design), but user-requested overrides must apply or error (#770).
 ## Overrides may include top-level "main" / "process" / "draw" dicts, or bare
-## keys that get routed based on which group they belong to.
+## keys routed to main (_MAIN_KEYS) or process — draw keys must be nested.
 static func build(preset_name: String, overrides: Dictionary) -> Variant:
 	if not _PRESETS.has(preset_name):
 		return null
@@ -246,24 +250,31 @@ static func build(preset_name: String, overrides: Dictionary) -> Variant:
 	var main: Dictionary = entry.get("main", {})
 	var process: Dictionary = entry.get("process", {})
 	var draw: Dictionary = entry.get("draw", {})
+	var user_keys := {"main": {}, "process": {}, "draw": {}}
 	for key in overrides:
 		var val = overrides[key]
 		if key == "main" and val is Dictionary:
 			for k in val:
 				main[k] = val[k]
+				user_keys.main[String(k)] = true
 		elif key == "process" and val is Dictionary:
 			for k in val:
 				process[k] = val[k]
+				user_keys.process[String(k)] = true
 		elif key == "draw" and val is Dictionary:
 			for k in val:
 				draw[k] = val[k]
+				user_keys.draw[String(k)] = true
 		elif _MAIN_KEYS.has(key):
 			main[key] = val
+			user_keys.main[String(key)] = true
 		else:
 			process[key] = val
+			user_keys.process[String(key)] = true
 	entry["main"] = main
 	entry["process"] = process
 	entry["draw"] = draw
+	entry["user_keys"] = user_keys
 	return entry
 
 

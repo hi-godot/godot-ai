@@ -552,3 +552,173 @@ func test_apply_preset_invalid_type() -> void:
 		"type": "gpu_5d",
 	})
 	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+
+
+# ============================================================================
+# particle_apply_preset — draw overrides must never disappear silently (#770)
+# ============================================================================
+
+const _PARTICLE_TEX_PATH := "res://tests/_mcp_particle_texture.tres"
+
+
+## The test project ships no image assets, so the gpu_2d draw.texture tests
+## save (and afterwards remove) a real Texture2D .tres to load from.
+func _particle_texture_path() -> String:
+	if not FileAccess.file_exists(_PARTICLE_TEX_PATH):
+		var tex := GradientTexture2D.new()
+		assert_eq(ResourceSaver.save(tex, _PARTICLE_TEX_PATH), OK,
+			"seed texture must save")
+	return _PARTICLE_TEX_PATH
+
+
+func _cleanup_particle_texture() -> void:
+	if FileAccess.file_exists(_PARTICLE_TEX_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(_PARTICLE_TEX_PATH))
+		var efs := EditorInterface.get_resource_filesystem()
+		if efs != null:
+			efs.update_file(_PARTICLE_TEX_PATH)
+
+
+func test_apply_preset_draw_override_gpu_3d_applied_and_reported() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.apply_preset({
+		"parent_path": "/" + scene_root.name,
+		"name": "TestDrawOverride3D",
+		"preset": "fire",
+		"overrides": {"draw": {
+			"emission_energy_multiplier": 3.5,
+			"albedo_color": {"r": 0.0, "g": 0.0, "b": 1.0, "a": 1.0},
+		}},
+	})
+	assert_has_key(result, "data")
+	assert_contains(result.data.applied_draw, "emission_energy_multiplier")
+	assert_contains(result.data.applied_draw, "albedo_color")
+	# Blueprint draw keys are applied and reported too — fire carries blend_mode.
+	assert_contains(result.data.applied_draw, "blend_mode")
+	# Read back the stored values, not just the report.
+	var node := McpScenePath.resolve(result.data.path, scene_root) as GPUParticles3D
+	var mat := (node.draw_pass_1 as QuadMesh).material as StandardMaterial3D
+	assert_true(mat != null, "draw material should be attached")
+	assert_true(abs(mat.emission_energy_multiplier - 3.5) < 0.01,
+		"emission_energy_multiplier override must land on the draw material")
+	assert_true(abs(mat.albedo_color.b - 1.0) < 0.01,
+		"albedo_color override must land on the draw material")
+	_created_paths.append(result.data.path)
+
+
+func test_apply_preset_draw_texture_gpu_2d_applied_and_undoable() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.apply_preset({
+		"parent_path": "/" + scene_root.name,
+		"name": "TestDrawTex2D",
+		"preset": "fire",
+		"type": "gpu_2d",
+		"overrides": {"draw": {"texture": _particle_texture_path()}},
+	})
+	assert_has_key(result, "data")
+	assert_contains(result.data.applied_draw, "texture")
+	var node := McpScenePath.resolve(result.data.path, scene_root) as GPUParticles2D
+	assert_true(node != null, "GPUParticles2D should exist at reported path")
+	assert_true(node.texture is Texture2D, "draw.texture override must land on node.texture")
+	# Undo removes the node; redo restores it with the texture intact.
+	var did_undo := editor_undo(_undo_redo)
+	assert_true(did_undo, "undo should succeed")
+	assert_true(McpScenePath.resolve(result.data.path, scene_root) == null,
+		"undo should remove the preset node")
+	var did_redo := editor_redo(_undo_redo)
+	assert_true(did_redo, "redo should succeed")
+	var restored := McpScenePath.resolve(result.data.path, scene_root) as GPUParticles2D
+	assert_true(restored != null, "redo should restore the preset node")
+	assert_true(restored.texture is Texture2D, "redo must restore the texture")
+	_created_paths.append(result.data.path)
+	_cleanup_particle_texture()
+
+
+func test_apply_preset_unknown_draw_key_errors() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.apply_preset({
+		"parent_path": "/" + scene_root.name,
+		"name": "TestBadDrawKey",
+		"preset": "fire",
+		"overrides": {"draw": {"bogus_key": 1}},
+	})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "bogus_key")
+
+
+func test_apply_preset_malformed_gravity_scalar_errors() -> void:
+	# GPU gravity is a Vector3; a bare scalar must be rejected, not dropped.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.apply_preset({
+		"parent_path": "/" + scene_root.name,
+		"name": "TestBadGravity",
+		"preset": "fire",
+		"overrides": {"gravity": 5},
+	})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "gravity")
+
+
+func test_apply_preset_draw_override_on_cpu_errors() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.apply_preset({
+		"parent_path": "/" + scene_root.name,
+		"name": "TestDrawOnCpu",
+		"preset": "fire",
+		"type": "cpu_3d",
+		"overrides": {"draw": {"blend_mode": "add"}},
+	})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	# The rejection must name the key and where draw overrides ARE supported.
+	assert_contains(result.error.message, "blend_mode")
+	assert_contains(result.error.message, "cpu_3d")
+	assert_contains(result.error.message, "gpu_3d")
+
+
+func test_apply_preset_user_main_override_not_on_type_errors() -> void:
+	# interp_to_end exists on GPU emitters only; as a USER override on cpu_3d
+	# it must error instead of silently skipping like blueprint keys do.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.apply_preset({
+		"parent_path": "/" + scene_root.name,
+		"name": "TestMainNotOnCpu",
+		"preset": "smoke",
+		"type": "cpu_3d",
+		"overrides": {"interp_to_end": 0.5},
+	})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "interp_to_end")
+
+
+func test_apply_preset_bare_unknown_override_errors() -> void:
+	# A typo'd bare key routes to the process group and must surface there.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var result := _handler.apply_preset({
+		"parent_path": "/" + scene_root.name,
+		"name": "TestTypoOverride",
+		"preset": "fire",
+		"overrides": {"amonut": 50},
+	})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "amonut")
