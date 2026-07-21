@@ -275,6 +275,42 @@ func test_run_project_liveness_decision_live_clears_retained_errors() -> void:
 	assert_eq(decision.recent_errors_may_predate_run, false)
 
 
+func test_dropped_retained_errors_still_ring_watermark() -> void:
+	## #779 narrowed a convenience field, not the guarantee channel. The
+	## live-run decision above empties retained_recent recent_errors, but the
+	## surfaced-error watermark the dispatcher stamps on every response is
+	## independent of that narrowing: an error appended to the editor ring in
+	## the same window — including a genuine in-run error misclassified as
+	## retained_recent (#635's empty/identical row-time edge) — still
+	## increments editor_ring, so the server's new_errors_since_last_call
+	## doorbell rings on the very response whose recent_errors came back
+	## empty, and logs_read retrieves the detail. Invariant: the liveness
+	## decision may narrow its convenience field; the watermark channel must
+	## never consult or respect that narrowing.
+	var editor_buf := McpEditorLogBuffer.new()
+	var empty_tree := Tree.new()
+	empty_tree.create_item()
+	var tracker := McpSurfacedErrorTracker.new(editor_buf, null, empty_tree)
+	var before: Dictionary = tracker.watermark(true)
+
+	var err := {"text": "Parse Error: Old", "path": "res://old.gd", "line": 2}
+	editor_buf.append("error", str(err.text), str(err.path), int(err.line))
+	var decision := _handler._run_project_liveness_decision(
+		_run_status("live", 100),
+		_errors_info([err], "retained_recent")
+	)
+	var after: Dictionary = tracker.watermark(true)
+
+	assert_eq(decision.recent_errors, [], "precondition: live + retained_recent drops the convenience field")
+	assert_eq(decision.recent_errors_scope, "none")
+	assert_eq(
+		int(after.editor_ring),
+		int(before.editor_ring) + 1,
+		"an error the liveness decision dropped from recent_errors must still increment the editor_ring watermark component",
+	)
+	empty_tree.free()
+
+
 func test_run_project_already_running_live_message_reports_run_scoped_errors() -> void:
 	var err := {"text": "Parse Error: Expected expression", "path": "res://broken.gd", "line": 4}
 	var decision := _handler._run_project_liveness_decision(
