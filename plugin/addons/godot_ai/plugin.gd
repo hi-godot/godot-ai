@@ -1143,21 +1143,19 @@ static func _resolve_ws_port_from_output(
 
 
 ## Plugin-level shim around the resolver — keeps the startup-trace
-## counter increment and the `_ProofPlugin` override hook on the plugin.
+## counter wiring and the `_ProofPlugin` override hook on the plugin.
+## The scrape takes `_startup_trace_count` directly so the counter names
+## track the scraper that actually ran (Windows can fall through netstat
+## → PowerShell; the fallback used to hide under the `netstat` count).
 func _is_port_in_use(port: int) -> bool:
 	if PortResolver.can_bind_local_port(port):
 		## POSIX can still have an IPv6 wildcard listener on this port
 		## even when an IPv4 loopback bind succeeds. Confirm through
 		## lsof so startup and kill-path discovery agree.
 		if OS.get_name() != "Windows":
-			_startup_trace_count("lsof")
-			return PortResolver.is_port_in_use_via_scrape(port)
+			return PortResolver.is_port_in_use_via_scrape(port, _startup_trace_count)
 		return false
-	if OS.get_name() == "Windows":
-		_startup_trace_count("netstat")
-	else:
-		_startup_trace_count("lsof")
-	return PortResolver.is_port_in_use_via_scrape(port)
+	return PortResolver.is_port_in_use_via_scrape(port, _startup_trace_count)
 
 
 ## Pass `_startup_trace_count` so the resolver bumps the right counter
