@@ -120,6 +120,33 @@ func test_scene_tree_contains_expected_nodes() -> void:
 	assert_contains(names, "TriggerZone")
 
 
+func test_scene_tree_full_read_builds_clean_scene_paths() -> void:
+	## Full reads (limit <= 0) build paths by threading the prefix down the DFS.
+	## Pin the exact format against the known fixture, including a nested node.
+	var result := _handler.get_scene_tree({"depth": 10})
+	var path_by_name := {}
+	for node: Dictionary in result.data.nodes:
+		path_by_name[node.name] = node.path
+	assert_eq(path_by_name["Main"], "/Main", "root path")
+	assert_eq(path_by_name["Camera3D"], "/Main/Camera3D", "direct child path")
+	assert_eq(path_by_name["Ground"], "/Main/World/Ground", "nested descendant path")
+
+
+func test_scene_tree_full_and_paginated_paths_agree() -> void:
+	## The full read threads the prefix down the DFS; a paginated read (limit > 0)
+	## builds paths via McpScenePath.from_node. The two strategies must produce
+	## byte-identical node dicts — this is what makes the perf branch safe.
+	var full := _handler.get_scene_tree({"depth": 10})
+	var total: int = full.data.total_count
+	var paged := _handler.get_scene_tree({"depth": 10, "limit": total})
+	assert_eq(paged.data.nodes.size(), full.data.nodes.size(), "same node count")
+	for i in full.data.nodes.size():
+		assert_eq(full.data.nodes[i].path, paged.data.nodes[i].path,
+			"path mismatch at index %d (full vs paginated)" % i)
+		assert_eq(full.data.nodes[i].name, paged.data.nodes[i].name)
+		assert_eq(full.data.nodes[i].type, paged.data.nodes[i].type)
+
+
 func test_scene_tree_depth_zero_returns_only_root() -> void:
 	var result := _handler.get_scene_tree({"depth": 0})
 	assert_eq(result.data.nodes.size(), 1, "Depth 0 should return only root")
