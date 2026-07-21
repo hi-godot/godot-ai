@@ -2,10 +2,11 @@
 
 The WebSocket command namespace (~135 names) is duplicated between the
 Python handlers' ``send_command("<name>", ...)`` literals and plugin.gd's
-``_dispatcher.register("<name>", ...)`` literals with no compiler on either
-side of the wire. A typo'd or renamed command on one side only surfaces at
-runtime as UNKNOWN_COMMAND — and the Python unit suite's StubClient answers
-ANY command, so unit tests can't catch it.
+``_dispatcher.register("<name>", ...)`` / ``register_lazy("<name>", ...)``
+literals with no compiler on either side of the wire. A typo'd or renamed
+command on one side only surfaces at runtime as UNKNOWN_COMMAND — and the
+Python unit suite's StubClient answers ANY command, so unit tests can't
+catch it.
 
 The contract is one-way: Python-sent ⊆ plugin-registered. The plugin may
 register commands Python doesn't call by literal (e.g. rollup-internal
@@ -25,8 +26,12 @@ PLUGIN_GD = REPO_ROOT / "plugin" / "addons" / "godot_ai" / "plugin.gd"
 PYTHON_SRC = REPO_ROOT / "src" / "godot_ai"
 
 ## Multiline-aware: `register(\n\t"name"` and `send_command(\n    "name"`
-## both match — \s* spans the newline.
-_REGISTER_RE = re.compile(r'\.register\(\s*"([a-z0-9_]+)"')
+## both match — \s* spans the newline. Covers both eager `.register("x", …)`
+## and lazy `.register_lazy("x", …)` forms (#736); `register_lazy_handler`
+## deliberately does NOT match — its first arg is a handler key, not a
+## command name, and the `(?:_lazy)?\(` suffix can't span the extra
+## `_handler` token.
+_REGISTER_RE = re.compile(r'\.register(?:_lazy)?\(\s*"([a-z0-9_]+)"')
 _SEND_RE = re.compile(r'send_command\(\s*"([a-z0-9_]+)"')
 
 

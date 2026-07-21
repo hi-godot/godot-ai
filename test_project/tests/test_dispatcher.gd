@@ -448,3 +448,137 @@ func test_balanced_handler_is_untouched_by_pause_restore() -> void:
 	var result := d.dispatch_direct("balanced", {})
 	assert_has_key(result, "data")
 	assert_eq(target.depth, 0)
+
+
+# ----- lazy handler registration (#736) -----
+
+const _LAZY_FIXTURE_PATH := "res://tests/mcp_lazy_handler_fixture.gd"
+
+
+func _make_lazy_dispatcher() -> McpDispatcher:
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	d.register_lazy_handler("fixture", _LAZY_FIXTURE_PATH, ["pre_"])
+	d.register_lazy("lazy_echo", "fixture", &"echo")
+	return d
+
+
+func test_lazy_command_counts_as_registered_before_materialization() -> void:
+	var d := _make_lazy_dispatcher()
+	assert_true(d.has_command("lazy_echo"),
+		"lazily-registered commands must be visible to has_command before first dispatch")
+
+
+func test_lazy_command_dispatches_with_ctor_args() -> void:
+	var d := _make_lazy_dispatcher()
+	var result := d.dispatch_direct("lazy_echo", {"value": 42})
+	assert_has_key(result, "data")
+	assert_eq(result.data.echo, "pre_42",
+		"handler must be constructed with the registered ctor args")
+	var again := d.dispatch_direct("lazy_echo", {"value": 7})
+	assert_eq(again.data.echo, "pre_7")
+
+
+func test_lazy_commands_share_one_cached_handler_instance() -> void:
+	var d := _make_lazy_dispatcher()
+	d.register_lazy("lazy_count_a", "fixture", &"count")
+	d.register_lazy("lazy_count_b", "fixture", &"count")
+	assert_eq(d.dispatch_direct("lazy_count_a", {}).data.calls, 1)
+	assert_eq(d.dispatch_direct("lazy_count_b", {}).data.calls, 2,
+		"both commands must resolve against the same cached handler instance")
+
+
+func test_lazy_command_dispatches_via_queue_tick() -> void:
+	var d := _make_lazy_dispatcher()
+	d.enqueue({"request_id": "r-lazy", "command": "lazy_echo", "params": {"value": 5}})
+	var responses := d.tick(100.0)
+	assert_eq(responses.size(), 1)
+	assert_eq(responses[0].data.echo, "pre_5")
+	assert_eq(responses[0].request_id, "r-lazy")
+
+
+func test_lazy_unknown_method_surfaces_internal_error() -> void:
+	var d := _make_lazy_dispatcher()
+	d.register_lazy("lazy_missing_method", "fixture", &"nope")
+	var result := d.dispatch_direct("lazy_missing_method", {})
+	assert_is_error(result, ErrorCodes.INTERNAL_ERROR)
+	assert_contains(result.error.message, "nope")
+
+
+func test_lazy_unknown_handler_key_surfaces_internal_error() -> void:
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	d.register_lazy("lazy_orphan", "ghost", &"echo")
+	var result := d.dispatch_direct("lazy_orphan", {})
+	assert_is_error(result, ErrorCodes.INTERNAL_ERROR)
+	assert_contains(result.error.message, "ghost")
+
+
+func test_lazy_missing_script_surfaces_internal_error() -> void:
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	d.register_lazy_handler("broken", "res://tests/does_not_exist_handler.gd", [])
+	d.register_lazy("lazy_broken", "broken", &"echo")
+	var result := d.dispatch_direct("lazy_broken", {})
+	assert_is_error(result, ErrorCodes.INTERNAL_ERROR)
+	assert_contains(result.error.message, "does_not_exist_handler.gd")
+
+
+func test_lazy_handler_malformed_result_still_flagged() -> void:
+	var d := _make_lazy_dispatcher()
+	d.register_lazy("lazy_malformed", "fixture", &"malformed")
+	var result := d.dispatch_direct("lazy_malformed", {})
+	assert_is_error(result, ErrorCodes.INTERNAL_ERROR)
+	assert_contains(result.error.message, "malformed result")
+
+
+func test_suggest_similar_includes_lazy_commands() -> void:
+	var d := _make_lazy_dispatcher()
+	var suggestions := d.suggest_similar("lazy_echo")
+	assert_true("lazy_echo" in suggestions,
+		"suggestions must rank lazily-registered command names too")
+
+
+func test_clear_resets_lazy_state() -> void:
+	var d := _make_lazy_dispatcher()
+	d.dispatch_direct("lazy_echo", {"value": 1})
+	d.clear()
+	assert_true(not d.has_command("lazy_echo"), "clear() must drop lazy registrations")
+	var result := d.dispatch_direct("lazy_echo", {})
+	assert_is_error(result, ErrorCodes.UNKNOWN_COMMAND)
+
+
+# ----- live plugin lazy registration coverage (#736) -----
+
+## The live plugin's dispatcher, provided by test_handler via ctx. Null when
+## an old two-arg TestHandler fixture drives the runner.
+var _live_dispatcher = null
+
+
+func suite_setup(ctx: Dictionary) -> void:
+	_live_dispatcher = ctx.get("dispatcher")
+
+
+func test_live_dispatcher_materializes_every_lazy_command() -> void:
+	## The eager preload block used to prove at boot that every handler
+	## script loads, constructs with its registered args, and has every
+	## registered method. Lazy registration moved that proof to first
+	## dispatch — this test moves it back under CI: materialize every
+	## lazily-registered command of the LIVE plugin dispatcher with its
+	## real ctor args. No commands are executed, so nothing mutates.
+	if _live_dispatcher == null:
+		skip("live dispatcher not exposed in ctx (old test_handler fixture)")
+		return
+	var specs: Dictionary = _live_dispatcher._lazy_handler_specs
+	assert_eq(specs.size(), 28, "every plugin handler should be declared lazily")
+	var commands: Array = _live_dispatcher._lazy_commands.keys()
+	assert_true(commands.size() > 100,
+		"expected the full plugin command surface registered lazily, got %d" % commands.size())
+	var handlers_seen: Dictionary = {}
+	for command in commands:
+		var err: Dictionary = _live_dispatcher._materialize_lazy_command(command)
+		assert_true(err.is_empty(),
+			"command '%s' failed to materialize: %s" % [command, str(err)])
+		handlers_seen[_live_dispatcher._lazy_commands[command]["handler"]] = true
+	assert_eq(handlers_seen.size(), specs.size(),
+		"every declared lazy handler must be reachable through at least one command")

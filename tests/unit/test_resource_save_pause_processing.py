@@ -115,13 +115,19 @@ def test_texture_handler_threads_connection_to_save() -> None:
 
 def test_plugin_passes_connection_to_resource_handlers() -> None:
     source = (PLUGIN_ROOT / "plugin.gd").read_text(encoding="utf-8")
-    # All four resource-saving handlers must be constructed with _connection,
-    # otherwise the pause guard inside save_to_disk silently no-ops.
-    for handler in ("ResourceHandler", "EnvironmentHandler", "TextureHandler", "CurveHandler"):
-        assert f"{handler}.new(get_undo_redo(), _connection)" in source, (
-            f"plugin.gd must construct {handler} with _connection. Without "
-            f"the connection ref, save_to_disk's pause guard can't fire and "
-            f"the editor crashes under load. See #288."
+    # All four resource-saving handlers must be registered with _connection
+    # in their lazy ctor args (#736), otherwise the pause guard inside
+    # save_to_disk silently no-ops.
+    for handler in ("resource", "environment", "texture", "curve"):
+        registration = (
+            f'register_lazy_handler("{handler}", '
+            f'HANDLERS_DIR + "{handler}_handler.gd", [undo, _connection])'
+        )
+        assert registration in source, (
+            f"plugin.gd must register the {handler} handler with _connection "
+            f"in its ctor args. Without the connection ref, save_to_disk's "
+            f"pause guard can't fire and the editor crashes under load. "
+            f"See #288."
         )
 
 

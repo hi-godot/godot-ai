@@ -229,12 +229,20 @@ def test_plugin_gd_passes_connection_to_handlers() -> None:
     """plugin.gd must wire _connection into both handlers — the field is null otherwise."""
     source = PLUGIN_GD.read_text(encoding="utf-8")
 
-    assert "ScriptHandler.new(get_undo_redo(), _connection)" in source, (
-        "plugin.gd must construct ScriptHandler with the connection so the "
-        "deferred-reply path is reachable in production. Without this, every "
-        "create_script falls back to the synchronous reply and #261 returns."
+    assert (
+        'register_lazy_handler("script", HANDLERS_DIR + "script_handler.gd", '
+        "[undo, _connection])"
+    ) in source, (
+        "plugin.gd must register the script handler with the connection in "
+        "its lazy ctor args (#736) so the deferred-reply path is reachable "
+        "in production. Without this, every create_script falls back to the "
+        "synchronous reply and #261 returns."
     )
-    assert "FilesystemHandler.new(_connection)" in source, (
-        "plugin.gd must construct FilesystemHandler with the connection so "
-        "write_file's fresh-.gd deferral is reachable in production (#714)."
+    assert (
+        'register_lazy_handler("filesystem", '
+        'HANDLERS_DIR + "filesystem_handler.gd", [_connection])'
+    ) in source, (
+        "plugin.gd must register the filesystem handler with the connection "
+        "in its lazy ctor args (#736) so write_file's fresh-.gd deferral is "
+        "reachable in production (#714)."
     )

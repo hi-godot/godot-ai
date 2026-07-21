@@ -7,12 +7,18 @@ extends RefCounted
 var _runner: McpTestRunner
 var _undo_redo: EditorUndoRedoManager
 var _log_buffer: McpLogBuffer
+## Live plugin dispatcher, exposed to suites via ctx so tests can prove the
+## lazy handler registrations (#736) materialize with their real ctor args.
+## Optional third arg keeps old two-arg fixtures working; untyped because
+## the dispatcher constructs this handler (avoids a load-time type cycle).
+var _dispatcher
 
 
-func _init(undo_redo: EditorUndoRedoManager, log_buffer: McpLogBuffer) -> void:
+func _init(undo_redo: EditorUndoRedoManager, log_buffer: McpLogBuffer, dispatcher = null) -> void:
 	_runner = McpTestRunner.new()
 	_undo_redo = undo_redo
 	_log_buffer = log_buffer
+	_dispatcher = dispatcher
 
 
 func run_tests(params: Dictionary) -> Dictionary:
@@ -39,6 +45,7 @@ func run_tests(params: Dictionary) -> Dictionary:
 	var ctx := {
 		"undo_redo": _undo_redo,
 		"log_buffer": _log_buffer,
+		"dispatcher": _dispatcher,
 	}
 
 	var results := _runner.run_suites(suites, suite_filter, test_filter, ctx, verbose, exclude_test_filter)

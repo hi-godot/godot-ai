@@ -7,6 +7,17 @@ extends RefCounted
 
 var _command_queue: Array[Dictionary] = []
 var _handlers: Dictionary = {}  # command_name -> Callable
+## Lazy handler registration (#736): plugin.gd registers command names
+## against a handler key plus a per-handler script path and constructor
+## args, and the handler script is load()ed and instantiated at the FIRST
+## dispatch of one of its commands. This keeps the ~30 handler scripts
+## (and everything they preload) out of plugin.gd's eager compile
+## closure, which stalled "Initializing plugins" on every editor boot.
+## Materialized commands are promoted into `_handlers`, so the lazy dicts
+## are only consulted on the first call per command.
+var _lazy_handler_specs: Dictionary = {}  # handler_key -> {path: String, args: Array}
+var _lazy_handler_cache: Dictionary = {}  # handler_key -> handler instance
+var _lazy_commands: Dictionary = {}  # command_name -> {handler: String, method: StringName}
 var _pending_deferred: Dictionary = {}  # request_id -> {command, started_ms, timeout_ms}
 var _log_buffer
 var _surfaced_error_tracker
@@ -47,11 +58,36 @@ func register(command_name: String, handler: Callable) -> void:
 	_handlers[command_name] = handler
 
 
+## Declare a lazily-constructed handler (#736). `script_path` is load()ed
+## and instantiated with `ctor_args` at the first dispatch of any command
+## registered against `handler_key` via register_lazy. `ctor_args` may hold
+## plugin-lifetime objects (connection, buffers, the dispatcher itself for
+## batch); clear() drops them so teardown ordering matches the old eager
+## registration (#46).
+func register_lazy_handler(handler_key: String, script_path: String, ctor_args: Array) -> void:
+	_lazy_handler_specs[handler_key] = {"path": script_path, "args": ctor_args}
+
+
+## Register a command that resolves to `method` on the lazily-constructed
+## handler declared under `handler_key`. Same dispatch semantics as
+## register(); only construction timing differs.
+func register_lazy(command_name: String, handler_key: String, method: StringName) -> void:
+	_lazy_commands[command_name] = {"handler": handler_key, "method": method}
+
+
 ## Drop registered handlers, queued commands, and the log buffer ref so
 ## plugin.gd can release RefCounted handlers before Godot reloads their
 ## class_name scripts (issue #46). After clear(), the dispatcher is inert.
 func clear() -> void:
 	_handlers.clear()
+	## Release lazily-constructed handler instances (and the ctor args that
+	## reference plugin-lifetime objects) at the same teardown point where
+	## eager handler Callables used to be dropped — their destructors must
+	## run while their scripts are still loaded (#46). This also breaks the
+	## dispatcher -> batch handler -> dispatcher ref cycle.
+	_lazy_handler_specs.clear()
+	_lazy_handler_cache.clear()
+	_lazy_commands.clear()
 	_command_queue.clear()
 	_pending_deferred.clear()
 	_log_buffer = null
@@ -73,7 +109,7 @@ func clear_command_queue() -> void:
 ## response dict (no request_id or status wrapping). Returns an UNKNOWN_COMMAND
 ## error dict if the command is not registered. Used by batch_execute.
 func dispatch_direct(command: String, params: Dictionary) -> Dictionary:
-	if not _handlers.has(command):
+	if not has_command(command):
 		return ErrorCodes.make(ErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
 	## Strip the reserved deferred-reply key: only _dispatch may thread it.
 	## A caller-supplied _request_id (e.g. inside a batch_execute
@@ -87,9 +123,9 @@ func dispatch_direct(command: String, params: Dictionary) -> Dictionary:
 	return _call_handler(command, params)
 
 
-## Whether a command is registered.
+## Whether a command is registered (eagerly or lazily).
 func has_command(command: String) -> bool:
-	return _handlers.has(command)
+	return _handlers.has(command) or _lazy_commands.has(command)
 
 
 ## Rank registered commands by similarity to `cmd_name` and return the top `limit`
@@ -97,7 +133,18 @@ func has_command(command: String) -> bool:
 ## array if no candidates clear the threshold. Used by batch_execute to surface
 ## "did you mean" suggestions when an unknown command is passed.
 func suggest_similar(cmd_name: String, limit: int = 3, threshold: float = 0.5) -> Array[String]:
-	return FuzzySuggestions.rank(cmd_name, _handlers.keys(), limit, threshold, 0.0, 0.0)
+	return FuzzySuggestions.rank(cmd_name, _registered_command_names(), limit, threshold, 0.0, 0.0)
+
+
+## Union of eagerly-registered and lazily-registered command names.
+## Materialized lazy commands live in both dicts, so dedupe via keys.
+func _registered_command_names() -> Array:
+	var names: Dictionary = {}
+	for command in _handlers:
+		names[command] = true
+	for command in _lazy_commands:
+		names[command] = true
+	return names.keys()
 
 
 ## Enqueue a raw command dict received from the WebSocket.
@@ -172,7 +219,7 @@ func _dispatch(cmd: Dictionary) -> Dictionary:
 
 	var result: Dictionary
 
-	if _handlers.has(command):
+	if has_command(command):
 		result = _call_handler(command, params)
 	else:
 		result = ErrorCodes.make(ErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
@@ -216,6 +263,10 @@ const _MALFORMED_ARGS_MAX := 400
 
 
 func _call_handler(command: String, params: Dictionary) -> Dictionary:
+	if not _handlers.has(command):
+		var materialize_error := _materialize_lazy_command(command)
+		if not materialize_error.is_empty():
+			return materialize_error
 	## #712: a handler that crashes between pause_processing = true and its
 	## matching false leaves the pause depth unbalanced — GDScript swallows
 	## the error, the dispatcher reports "malformed result", and the
@@ -257,6 +308,55 @@ func _call_handler(command: String, params: Dictionary) -> Dictionary:
 			)
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, msg)
 	return result
+
+
+## Resolve a lazily-registered command into a live Callable in `_handlers`.
+## Loads + constructs the owning handler on first use (cached per handler
+## key, so one load() covers every command the handler serves). Returns an
+## empty dict on success or a protocol error dict on failure — a missing
+## script or method is a plugin packaging bug and must surface loudly, not
+## as a silent no-op.
+func _materialize_lazy_command(command: String) -> Dictionary:
+	var command_spec: Dictionary = _lazy_commands.get(command, {})
+	if command_spec.is_empty():
+		return ErrorCodes.make(ErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
+	var handler_key: String = command_spec["handler"]
+	var instance = _lazy_handler_cache.get(handler_key)
+	if instance == null:
+		var handler_spec: Dictionary = _lazy_handler_specs.get(handler_key, {})
+		if handler_spec.is_empty():
+			return ErrorCodes.make(
+				ErrorCodes.INTERNAL_ERROR,
+				"No lazy handler '%s' declared for command '%s'" % [handler_key, command]
+			)
+		## Existence-check first so a missing script surfaces as one clean
+		## protocol error instead of also spraying engine load errors.
+		if not ResourceLoader.exists(handler_spec["path"]):
+			return ErrorCodes.make(
+				ErrorCodes.INTERNAL_ERROR,
+				"Missing handler script '%s' for command '%s'" % [handler_spec["path"], command]
+			)
+		var script := load(handler_spec["path"]) as GDScript
+		if script == null:
+			return ErrorCodes.make(
+				ErrorCodes.INTERNAL_ERROR,
+				"Failed to load handler script '%s' for command '%s'" % [handler_spec["path"], command]
+			)
+		instance = script.callv("new", handler_spec["args"])
+		if instance == null:
+			return ErrorCodes.make(
+				ErrorCodes.INTERNAL_ERROR,
+				"Failed to construct handler '%s' for command '%s'" % [handler_key, command]
+			)
+		_lazy_handler_cache[handler_key] = instance
+	var method: StringName = command_spec["method"]
+	if not instance.has_method(method):
+		return ErrorCodes.make(
+			ErrorCodes.INTERNAL_ERROR,
+			"Handler '%s' has no method '%s' for command '%s'" % [handler_key, method, command]
+		)
+	_handlers[command] = Callable(instance, method)
+	return {}
 
 
 func _register_deferred(request_id: String, command: String) -> void:
