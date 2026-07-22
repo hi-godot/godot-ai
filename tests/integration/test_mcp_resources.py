@@ -84,7 +84,7 @@ class TestSceneCurrentResource:
 
 
 class TestSceneHierarchyResource:
-    async def test_returns_full_tree(self, mcp_stack):
+    async def test_within_cap_returns_all_untruncated(self, mcp_stack):
         client, plugin = mcp_stack
         nodes = [
             {"name": "Main", "type": "Node3D", "path": "/Main"},
@@ -140,6 +140,34 @@ class TestSceneHierarchyResource:
         assert data["has_more"] is True
         assert data["resource_truncated"] is True
         assert "250" in data["hint"]
+        assert "scene_get_hierarchy" in data["hint"]
+
+    async def test_old_plugin_fallback_also_caps_and_hints(self, mcp_stack):
+        ## Old/skewed plugins ignore offset/limit and return the whole node list
+        ## with no `has_more`. scene_get_hierarchy's fallback then slices to the
+        ## cap and stamps `has_more`, so the resource must still truncate + hint
+        ## on that path too (Copilot).
+        client, plugin = mcp_stack
+        nodes = [
+            {"name": f"N{i}", "type": "Node", "path": f"/Main/N{i}"} for i in range(150)
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_scene_tree"
+            ## No has_more / offset / limit in the response — the old-plugin shape.
+            await plugin.send_response(cmd["request_id"], {"nodes": nodes})
+
+        task = asyncio.create_task(respond())
+        result = await client.read_resource("godot://scene/hierarchy")
+        await task
+
+        data = _parse_resource(result)
+        assert len(data["nodes"]) == 100, "fallback must slice to the cap"
+        assert data["total_count"] == 150
+        assert data["has_more"] is True
+        assert data["resource_truncated"] is True
+        assert "150" in data["hint"]
         assert "scene_get_hierarchy" in data["hint"]
 
 
