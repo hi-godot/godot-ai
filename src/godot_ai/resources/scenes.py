@@ -20,6 +20,11 @@ def register_scene_resources(mcp: FastMCP) -> None:
 
     @mcp.resource("godot://scene/hierarchy", mime_type="application/json")
     async def get_scene_hierarchy(ctx: Context) -> dict[str, Any]:
-        """Full scene tree hierarchy from the active Godot editor."""
+        """Scene tree hierarchy from the active Godot editor (first 100 nodes).
+
+        A resource URI takes no arguments, so this read is capped; a truncated
+        result sets `resource_truncated` with a hint. Use the
+        `scene_get_hierarchy` tool for offset/limit pagination or a scoped depth.
+        """
         runtime = DirectRuntime.from_context(ctx)
         return await safe_payload(scene_handlers.scene_hierarchy_resource_data(runtime))

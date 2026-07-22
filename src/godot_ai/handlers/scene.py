@@ -90,9 +90,28 @@ async def current_scene_resource_data(runtime: DirectRuntime) -> dict:
     }
 
 
+## The godot://scene/hierarchy resource takes no arguments and cannot paginate,
+## so a full read of a large scene would dump an unbounded node list into the
+## reader's context. Cap it at the same node budget the tool defaults to (100)
+## and stamp a truncated read so the reader knows to reach for the
+## scene_get_hierarchy tool (offset/limit, or a narrower depth) for the rest.
+_RESOURCE_HIERARCHY_NODE_CAP = 100
+
+
 async def scene_hierarchy_resource_data(runtime: DirectRuntime) -> dict:
-    ## Route through scene_get_hierarchy (limit=0 => full tree) rather than
-    ## calling the plugin directly, so the resource returns the same paginated
-    ## shape (total_count/offset/limit/has_more) regardless of plugin version —
-    ## the old-plugin fallback normalizes it. (CodeRabbit)
-    return await scene_get_hierarchy(runtime, depth=10, offset=0, limit=0)
+    ## Route through scene_get_hierarchy rather than calling the plugin directly,
+    ## so the resource returns the same paginated shape
+    ## (total_count/offset/limit/has_more) regardless of plugin version — the
+    ## old-plugin fallback normalizes it. (CodeRabbit)
+    result = await scene_get_hierarchy(
+        runtime, depth=10, offset=0, limit=_RESOURCE_HIERARCHY_NODE_CAP
+    )
+    if result.get("has_more"):
+        total = result.get("total_count")
+        result["resource_truncated"] = True
+        result["hint"] = (
+            f"Scene tree has {total} nodes; this resource returns the first "
+            f"{_RESOURCE_HIERARCHY_NODE_CAP}. Use the scene_get_hierarchy tool with "
+            "offset/limit to page the rest, or a smaller depth to scope it."
+        )
+    return result

@@ -256,7 +256,7 @@ don't, and the only path that supports `session_id` pinning.
 | `godot://selection/current` | Current editor selection |
 | `godot://logs/recent` | Last 100 plugin log lines |
 | `godot://scene/current` | Active scene path + project + play state |
-| `godot://scene/hierarchy` | Full scene hierarchy from the active editor |
+| `godot://scene/hierarchy` | Scene hierarchy from the active editor (first 100 nodes; sets `resource_truncated` + hint when larger — use the `scene_get_hierarchy` tool to page) |
 | `godot://node/{path}/properties` | All properties of a node by scene path |
 | `godot://node/{path}/children` | Direct children (name, type, path each) |
 | `godot://node/{path}/groups` | Group memberships for a node |

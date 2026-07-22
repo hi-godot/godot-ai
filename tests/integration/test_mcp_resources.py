@@ -95,6 +95,9 @@ class TestSceneHierarchyResource:
             cmd = await plugin.recv_command()
             assert cmd["command"] == "get_scene_tree"
             assert cmd["params"]["depth"] == 10
+            ## The resource caps its read (it can't paginate) rather than
+            ## requesting the whole tree (limit=0).
+            assert cmd["params"]["limit"] == 100
             await plugin.send_response(cmd["request_id"], {"nodes": nodes, "total_count": 2})
 
         task = asyncio.create_task(respond())
@@ -104,6 +107,40 @@ class TestSceneHierarchyResource:
         data = _parse_resource(result)
         assert len(data["nodes"]) == 2
         assert data["nodes"][0]["name"] == "Main"
+        ## A within-cap tree is not flagged truncated.
+        assert "resource_truncated" not in data
+
+    async def test_large_tree_is_capped_and_hinted(self, mcp_stack):
+        client, plugin = mcp_stack
+        nodes = [
+            {"name": f"N{i}", "type": "Node", "path": f"/Main/N{i}"} for i in range(100)
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_scene_tree"
+            ## Plugin paginated server-side and reports more remain.
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "nodes": nodes,
+                    "total_count": 250,
+                    "offset": 0,
+                    "limit": 100,
+                    "has_more": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.read_resource("godot://scene/hierarchy")
+        await task
+
+        data = _parse_resource(result)
+        assert len(data["nodes"]) == 100
+        assert data["has_more"] is True
+        assert data["resource_truncated"] is True
+        assert "250" in data["hint"]
+        assert "scene_get_hierarchy" in data["hint"]
 
 
 # ---------------------------------------------------------------------------
