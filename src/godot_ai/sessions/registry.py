@@ -166,7 +166,7 @@ class SessionRegistry:
             if not future.done():
                 future.set_result(session)
 
-    def unregister(self, session_id: str) -> None:
+    def unregister(self, session_id: str, close_code: int | None = None) -> None:
         ## Active-session promotion policy on disconnect:
         ## - n>=2 survivors: do NOT auto-promote — picking by insertion order
         ##   would route the user's commands to whichever editor happened to
@@ -179,9 +179,17 @@ class SessionRegistry:
         ## - n=0: keep cleared; nothing to promote.
         self._sessions.pop(session_id, None)
         try:
+            ## close_code is the normalized WebSocket close code (e.g. 1011
+            ## = keepalive timeout, 1013 = exclusive-run flood). None means
+            ## no close frame was observed (non-WS teardown paths). Included
+            ## even when None so the field is always present downstream.
             record_telemetry(
                 RecordType.GODOT_CONNECTION,
-                {"event": "disconnected", "session_count": len(self._sessions)},
+                {
+                    "event": "disconnected",
+                    "session_count": len(self._sessions),
+                    "close_code": close_code,
+                },
                 session_id=session_id,
             )
         except Exception:  # noqa: BLE001

@@ -406,44 +406,67 @@ func _build_handshake() -> Dictionary:
 	return payload
 
 
-func _handle_message(raw: String) -> void:
+## Classify one raw inbound frame. Shared by the normal dispatch path
+## (`_handle_message`, which enqueues commands) and the exclusive-run
+## service path (`_service_handle_message`, which rejects them) — one
+## parser, two sinks, so the paths can't drift. `kind` is one of:
+## "ack", "command", "malformed_command", "ignore".
+func _classify_message(raw: String) -> Dictionary:
 	var parsed = JSON.parse_string(raw)
 	if parsed == null:
 		push_warning("MCP: failed to parse message: %s" % raw)
-		return
+		return {"kind": "ignore", "parsed": null}
 	if not (parsed is Dictionary):
-		return
+		return {"kind": "ignore", "parsed": null}
 	if parsed.get("type", "") == "handshake_ack":
-		server_version = str(parsed.get("server_version", ""))
-		## The server accepted our handshake — any token-mismatch streak is
-		## over; a later unrelated 4003 starts a fresh one.
-		_auth_mismatch_closes = 0
-		return
+		return {"kind": "ack", "parsed": parsed}
 	if parsed.has("request_id") and parsed.has("command"):
 		if (
 			parsed.get("request_id") is String
 			and parsed.get("command") is String
 			and (not parsed.has("params") or parsed.get("params") is Dictionary)
 		):
+			return {"kind": "command", "parsed": parsed}
+		return {"kind": "malformed_command", "parsed": parsed}
+	return {"kind": "ignore", "parsed": parsed}
+
+
+func _handle_message(raw: String) -> void:
+	var classified := _classify_message(raw)
+	match classified["kind"]:
+		"ack":
+			_handle_handshake_ack(classified["parsed"])
+		"command":
 			if dispatcher:
-				dispatcher.enqueue(parsed)
-			return
-		## Never enqueue a malformed command frame: the dispatcher's typed
-		## casts would error on the queue head every tick, wedging every
-		## later command behind it. Reply with an error when the request_id
-		## is usable so the server's pending future resolves instead of
-		## waiting out the full command timeout.
-		push_warning("MCP: dropping malformed command frame (request_id/command must be String, params a Dictionary)")
-		var rid: Variant = parsed.get("request_id")
-		if rid is String and not String(rid).is_empty():
-			var response := ErrorCodes.make(
-				ErrorCodes.INVALID_PARAMS,
-				"Malformed command frame: request_id/command must be strings and params a dict"
-			)
-			response["request_id"] = rid
-			response["readiness"] = get_readiness()
-			_stamp_error_watermark(response)
-			_send_json(response)
+				dispatcher.enqueue(classified["parsed"])
+		"malformed_command":
+			_reply_malformed_command(classified["parsed"])
+
+
+func _handle_handshake_ack(parsed: Dictionary) -> void:
+	server_version = str(parsed.get("server_version", ""))
+	## The server accepted our handshake — any token-mismatch streak is
+	## over; a later unrelated 4003 starts a fresh one.
+	_auth_mismatch_closes = 0
+
+
+## Never enqueue a malformed command frame: the dispatcher's typed casts
+## would error on the queue head every tick, wedging every later command
+## behind it. Reply with an error when the request_id is usable so the
+## server's pending future resolves instead of waiting out the full
+## command timeout.
+func _reply_malformed_command(parsed: Dictionary) -> void:
+	push_warning("MCP: dropping malformed command frame (request_id/command must be String, params a Dictionary)")
+	var rid: Variant = parsed.get("request_id")
+	if rid is String and not String(rid).is_empty():
+		var response := ErrorCodes.make(
+			ErrorCodes.INVALID_PARAMS,
+			"Malformed command frame: request_id/command must be strings and params a dict"
+		)
+		response["request_id"] = rid
+		response["readiness"] = get_readiness()
+		_stamp_error_watermark(response)
+		_send_json(response)
 
 
 ## Send a state event to the server (not a command response).
@@ -474,6 +497,126 @@ func send_deferred_response(request_id: String, payload: Dictionary) -> void:
 		_stamp_error_watermark(response)
 	if _send_json(response) and dispatcher != null:
 		dispatcher.complete_deferred_response(request_id)
+
+
+## Result of one cooperative transport-servicing pass during an exclusive
+## synchronous run (currently only the test runner). PAUSED is an
+## invariant violation for callers, not a healthy state: a pause held
+## across servicing checkpoints would silently starve the heartbeat.
+enum ServiceStatus { SERVICED, DISCONNECTED, PAUSED, BLOCKED }
+
+## Cumulative cap on application packets processed across ONE exclusive
+## run. Counts every drained packet — valid command, malformed frame, or
+## ack-like — so no frame kind evades it. Past the cap the connection is
+## closed (1013): bounded rejects, never unbounded stale buffering. 2048
+## leaves headroom under Godot's default max_queued_packets (4096) and
+## sits above stormtest's ~1000-call default workload; tune with
+## telemetry/benchmarks if rejection traffic ever extends a checkpoint.
+const EXCLUSIVE_RUN_PACKET_CAP := 2048
+const CLOSE_CODE_EXCLUSIVE_RUN_FLOOD := 1013
+## Reject-log throttle: first few rejects verbatim, then periodic totals.
+const _SERVICE_REJECT_LOG_FIRST := 5
+const _SERVICE_REJECT_LOG_EVERY := 100
+
+## Service the WebSocket transport from inside a long synchronous handler
+## (an "exclusive run" — the test runner). The editor main thread is
+## blocked, so `_process` cannot poll; without this the server keepalive
+## (20s ping interval / 20s timeout) closes the session mid-run. See
+## docs/test-run-transport-starvation-plan.md.
+##
+## Contract — do NOT extend this method to dispatch:
+## - `WebSocketPeer.poll()` has no heartbeat-only mode; it also buffers
+##   application frames. Buffering them past this call would replay them
+##   STALE after their server-side futures expire (the #712 hazard), so
+##   every drained command frame is REJECTED immediately with a retryable
+##   EDITOR_NOT_READY / EDITOR_TEST_RUNNING error instead.
+## - Drains to quiescence: poll → drain everything available → poll again,
+##   until no packets remain. A full packet queue could hide a ping deeper
+##   in the TCP stream, so nothing may spill to a later checkpoint.
+## - `run_state` is caller-owned mutable state carrying the cumulative
+##   packet counter under "packets_serviced" — no connection-global
+##   lifecycle that could leak if the run dies.
+func service_transport_during_exclusive_run(run_state: Dictionary) -> ServiceStatus:
+	if connect_blocked:
+		return ServiceStatus.BLOCKED
+	if pause_processing:
+		return ServiceStatus.PAUSED
+	while true:
+		_peer.poll()
+		if _peer.get_ready_state() != WebSocketPeer.STATE_OPEN:
+			return ServiceStatus.DISCONNECTED
+		if _peer.get_available_packet_count() == 0:
+			return ServiceStatus.SERVICED
+		while _peer.get_available_packet_count() > 0:
+			var raw: String = _peer.get_packet().get_string_from_utf8()
+			if _service_note_packet(run_state):
+				if log_buffer:
+					log_buffer.log(
+						"[busy] packet flood during test run (%d > cap %d) — closing connection"
+						% [int(run_state.get("packets_serviced", 0)), EXCLUSIVE_RUN_PACKET_CAP]
+					)
+				_peer.close(CLOSE_CODE_EXCLUSIVE_RUN_FLOOD, "command flood during test run")
+				return ServiceStatus.DISCONNECTED
+			_service_handle_message(raw, int(run_state.get("packets_serviced", 0)))
+	## Unreachable: every exit above returns. Keeps the typed signature happy.
+	return ServiceStatus.SERVICED
+
+
+## Count one application packet against the exclusive-run cap. Counts EVERY
+## drained packet regardless of kind (valid command, malformed, ack-like)
+## so no frame kind can evade the flood limit. Returns true once the cap is
+## exceeded — the caller closes the connection.
+static func _service_note_packet(run_state: Dictionary) -> bool:
+	var count: int = int(run_state.get("packets_serviced", 0)) + 1
+	run_state["packets_serviced"] = count
+	return count > EXCLUSIVE_RUN_PACKET_CAP
+
+
+## Exclusive-run sink for `_classify_message`: acks are still processed,
+## malformed frames keep their normal reply, and valid commands are
+## rejected without touching the dispatcher.
+func _service_handle_message(raw: String, packets_serviced: int) -> void:
+	var classified := _classify_message(raw)
+	match classified["kind"]:
+		"ack":
+			_handle_handshake_ack(classified["parsed"])
+		"command":
+			_service_reject_command(classified["parsed"], packets_serviced)
+		"malformed_command":
+			_reply_malformed_command(classified["parsed"])
+
+
+func _service_reject_command(parsed: Dictionary, packets_serviced: int) -> void:
+	_send_json(_build_service_reject(parsed))
+	if log_buffer and (
+		packets_serviced <= _SERVICE_REJECT_LOG_FIRST
+		or packets_serviced % _SERVICE_REJECT_LOG_EVERY == 0
+	):
+		## Ring-buffer only (echo=false): a flood must not bury the console.
+		log_buffer.log(
+			"[busy] rejected '%s' during test run (packet %d)"
+			% [parsed.get("command", ""), packets_serviced],
+			false,
+		)
+
+
+## Build the busy-reject response for a valid command frame that arrived
+## mid-run. Split from the send so tests can assert the exact wire shape.
+func _build_service_reject(parsed: Dictionary) -> Dictionary:
+	var command: String = parsed.get("command", "")
+	var response := ErrorCodes.make_not_ready(
+		ErrorCodes.SUB_EDITOR_TEST_RUNNING,
+		(
+			"A test run is in progress on this editor — '%s' was not executed. "
+			+ "Retry when the run completes, or fetch results afterward with "
+			+ "test_manage(op=\"results_get\")."
+		) % command,
+		true,
+	)
+	response["request_id"] = parsed.get("request_id", "")
+	response["readiness"] = get_readiness()
+	_stamp_error_watermark(response)
+	return response
 
 
 func _hook_editor_signals() -> void:

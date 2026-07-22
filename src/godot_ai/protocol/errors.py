@@ -14,6 +14,10 @@ class ErrorCode(StrEnum):
     UNKNOWN_COMMAND = "UNKNOWN_COMMAND"
     INTERNAL_ERROR = "INTERNAL_ERROR"
     DEFERRED_TIMEOUT = "DEFERRED_TIMEOUT"
+    # A test run aborted at its between-test ceiling before finishing;
+    # error.data carries the partial summary and get_test_results keeps the
+    # partial results. Keep in sync with utils/error_codes.gd.
+    TEST_RUN_TIMEOUT = "TEST_RUN_TIMEOUT"
     # game_eval failure codes (#490): distinguish a compile/parse failure
     # or a runtime error from the generic 10s timeout so agents get a fast,
     # actionable reply. Keep in sync with utils/error_codes.gd.
@@ -81,3 +85,7 @@ class EditorNotReadySubCode(StrEnum):
     EDITOR_VIEWPORT_NOT_3D = "EDITOR_VIEWPORT_NOT_3D"
     EDITOR_VIEWPORT_EMPTY = "EDITOR_VIEWPORT_EMPTY"
     EDITOR_UNAVAILABLE = "EDITOR_UNAVAILABLE"
+    # Emitted plugin-side by the exclusive-run transport servicing path: a
+    # command arrived while a synchronous test run held the editor main
+    # thread and was rejected (retryable) instead of buffered.
+    EDITOR_TEST_RUNNING = "EDITOR_TEST_RUNNING"

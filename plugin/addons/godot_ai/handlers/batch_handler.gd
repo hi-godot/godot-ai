@@ -7,7 +7,12 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 ## semantics. When undo=true (default), any successful sub-commands are rolled
 ## back via the scene's UndoRedo history if a later sub-command fails.
 
-const FORBIDDEN_SUBCOMMANDS := ["batch_execute"]
+## run_tests is forbidden because a batch executes synchronously inside one
+## dispatcher tick with NO transport servicing: a full suite in a batch
+## starves the WebSocket heartbeat (the exact disconnect the serviced
+## test_run path exists to prevent) and the Python batch handler only
+## allows 30s anyway. Use the test_run tool directly.
+const FORBIDDEN_SUBCOMMANDS := ["batch_execute", "run_tests"]
 
 ## The whole batch executes synchronously inside one dispatcher tick,
 ## outside the 4ms frame budget — an unbounded array freezes the editor
@@ -46,7 +51,10 @@ func batch_execute(params: Dictionary) -> Dictionary:
 		if cmd_name.is_empty():
 			return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "commands[%d] missing 'command' field" % idx)
 		if cmd_name in FORBIDDEN_SUBCOMMANDS:
-			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "commands[%d]: '%s' is not allowed as a sub-command" % [idx, cmd_name])
+			var forbidden_msg := "commands[%d]: '%s' is not allowed as a sub-command" % [idx, cmd_name]
+			if cmd_name == "run_tests":
+				forbidden_msg += " — a batch runs synchronously with no transport servicing; call the test_run tool directly"
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, forbidden_msg)
 		if not _dispatcher.has_command(cmd_name):
 			return _unknown_command_error(idx, cmd_name)
 		## Pre-validate params type: the execution loop's typed Dictionary

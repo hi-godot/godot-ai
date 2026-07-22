@@ -24,6 +24,25 @@ func run_suite(suite: McpTestSuite, test_filter: String = "", exclude_test_filte
 	if owns_capture:
 		_register_capture()
 
+	_run_suite_tests(suite, test_filter, exclude_test_filter, Callable(), 0, {})
+
+	if owns_capture:
+		_unregister_capture()
+
+
+## Shared per-test loop for both the legacy synchronous path and the
+## serviced driver. Returns "" when the loop completed, or a terminal
+## outcome ("timeout" / "transport_lost" / "paused") when a checkpoint
+## aborted it. Checkpoints run BETWEEN tests — an atomic test body is
+## never preempted (see docs/test-run-transport-starvation-plan.md).
+func _run_suite_tests(
+	suite: McpTestSuite,
+	test_filter: String,
+	exclude_test_filter: String,
+	service_cb: Callable,
+	deadline_ticks_ms: int,
+	run_state: Dictionary,
+) -> String:
 	var name := suite.suite_name()
 	var methods := _get_test_methods(suite)
 	var exclusions := _parse_exclusions(exclude_test_filter)
@@ -31,6 +50,7 @@ func run_suite(suite: McpTestSuite, test_filter: String = "", exclude_test_filte
 	for method_name in methods:
 		if not test_filter.is_empty() and method_name.find(test_filter) == -1:
 			continue
+		_selected_processed += 1
 		if _matches_any_exclusion(method_name, exclusions):
 			_results.append({
 				"suite": name,
@@ -39,77 +59,125 @@ func run_suite(suite: McpTestSuite, test_filter: String = "", exclude_test_filte
 				"skipped": true,
 				"message": "Excluded by exclude_test_name filter",
 				"assertion_count": 0,
+				"duration_ms": 0,
 			})
 			continue
 
-		suite._reset()
-		_begin_script_error_capture()
-		suite.setup()
-		suite.call(method_name)
-		suite.teardown()
-		var script_errors := suite._unexpected_script_errors(_end_script_error_capture())
-		suite._free_tracked()
+		var test_start := Time.get_ticks_msec()
+		var entry := _run_one_test(suite, name, method_name)
+		entry["duration_ms"] = Time.get_ticks_msec() - test_start
+		_results.append(entry)
 
-		## Issue #19 defence: free any `_McpTest*` nodes the test created, even
-		## nested ones. If the scene gets auto-saved mid-test while one of these
-		## exists, the reference bakes into main.tscn and breaks the next open
-		## with a "missing dependency" error. Runs after every test, not just at
-		## suite boundaries, so a test that fails mid-flow can't leave a trap
-		## for the next test or for scene autosave.
-		var scene_root_for_cleanup := _edited_scene_root()
-		if scene_root_for_cleanup != null and scene_root_for_cleanup.is_inside_tree():
-			_free_mcp_test_nodes_recursive(scene_root_for_cleanup)
+		var stop := _checkpoint(service_cb, deadline_ticks_ms, run_state)
+		if not stop.is_empty():
+			return stop
+	return ""
 
-		if not script_errors.is_empty():
-			var abort_message := "Aborted by SCRIPT ERROR: %s" % "; ".join(script_errors)
-			if suite._failed:
-				abort_message += " (after assertion failure: %s)" % suite._message
-			_results.append({
-				"suite": name,
-				"test": method_name,
-				"passed": false,
-				"message": abort_message,
-				"assertion_count": suite._assertion_count,
-			})
-			continue
 
-		## A failed assertion always wins over a later skip(): a test that
-		## fails and then hits a skip-guard must report the failure, not
-		## park itself as green-skipped.
-		if suite._skipped and not suite._failed:
-			_results.append({
-				"suite": name,
-				"test": method_name,
-				"passed": true,
-				"skipped": true,
-				"message": suite._skip_reason,
-				"assertion_count": 0,
-			})
-			continue
+## Execute one test method and return its result entry (not yet appended;
+## the caller stamps `duration_ms`). Extracted from run_suite so the legacy
+## and serviced drivers share one execution core — behavior must stay
+## byte-identical to the pre-refactor loop body.
+func _run_one_test(suite: McpTestSuite, name: String, method_name: String) -> Dictionary:
+	suite._reset()
+	_begin_script_error_capture()
+	suite.setup()
+	suite.call(method_name)
+	suite.teardown()
+	var script_errors := suite._unexpected_script_errors(_end_script_error_capture())
+	suite._free_tracked()
 
-		var passed := not suite._failed
-		var msg := suite._message
+	## Issue #19 defence: free any `_McpTest*` nodes the test created, even
+	## nested ones. If the scene gets auto-saved mid-test while one of these
+	## exists, the reference bakes into main.tscn and breaks the next open
+	## with a "missing dependency" error. Runs after every test, not just at
+	## suite boundaries, so a test that fails mid-flow can't leave a trap
+	## for the next test or for scene autosave.
+	var scene_root_for_cleanup := _edited_scene_root()
+	if scene_root_for_cleanup != null and scene_root_for_cleanup.is_inside_tree():
+		_free_mcp_test_nodes_recursive(scene_root_for_cleanup)
 
-		## Warn about zero-assertion tests (likely silently skipped logic).
-		if passed and suite._assertion_count == 0:
-			passed = false
-			msg = "Test completed with 0 assertions (likely skipped its logic)"
-
-		_results.append({
+	if not script_errors.is_empty():
+		var abort_message := "Aborted by SCRIPT ERROR: %s" % "; ".join(script_errors)
+		if suite._failed:
+			abort_message += " (after assertion failure: %s)" % suite._message
+		return {
 			"suite": name,
 			"test": method_name,
-			"passed": passed,
-			"message": msg,
+			"passed": false,
+			"message": abort_message,
 			"assertion_count": suite._assertion_count,
-		})
+		}
 
-	if owns_capture:
-		_unregister_capture()
+	## A failed assertion always wins over a later skip(): a test that
+	## fails and then hits a skip-guard must report the failure, not
+	## park itself as green-skipped.
+	if suite._skipped and not suite._failed:
+		return {
+			"suite": name,
+			"test": method_name,
+			"passed": true,
+			"skipped": true,
+			"message": suite._skip_reason,
+			"assertion_count": 0,
+		}
+
+	var passed := not suite._failed
+	var msg := suite._message
+
+	## Warn about zero-assertion tests (likely silently skipped logic).
+	if passed and suite._assertion_count == 0:
+		passed = false
+		msg = "Test completed with 0 assertions (likely skipped its logic)"
+
+	return {
+		"suite": name,
+		"test": method_name,
+		"passed": passed,
+		"message": msg,
+		"assertion_count": suite._assertion_count,
+	}
 
 
 func run_suites(suites: Array, suite_filter: String = "", test_filter: String = "", ctx: Dictionary = {}, verbose: bool = false, exclude_test_filter: String = "") -> Dictionary:
+	## Legacy synchronous API — unchanged signature and semantics for direct
+	## callers, unit-test fixtures, and any batch context. No servicing, no
+	## ceiling: with an invalid Callable and deadline 0 every checkpoint is a
+	## no-op and the outcome is always "completed".
+	var run := run_suites_serviced(suites, suite_filter, test_filter, ctx, verbose, exclude_test_filter)
+	return run["results"]
+
+
+## Serviced driver for live MCP runs. Between tests and at suite
+## boundaries it (a) aborts once `deadline_ticks_ms` passes and (b) calls
+## `service_cb` (McpConnection.service_transport_during_exclusive_run) so
+## the WebSocket heartbeat stays alive while the suite monopolizes the
+## main thread. Returns:
+##   {
+##     "outcome": "completed" | "timeout" | "transport_lost" | "paused",
+##     "results": <same dict get_results(verbose) returns>,
+##     "tests_not_run": <int, 0 when completed>,
+##   }
+## Every outcome path — including aborts — runs the current suite's
+## teardown + leak cleanup, restores console echo, and unregisters the
+## capture logger. `run_state` is caller-owned and threaded through to the
+## service callback (cumulative packet counter lives there).
+func run_suites_serviced(
+	suites: Array,
+	suite_filter: String = "",
+	test_filter: String = "",
+	ctx: Dictionary = {},
+	verbose: bool = false,
+	exclude_test_filter: String = "",
+	service_cb: Callable = Callable(),
+	deadline_ticks_ms: int = 0,
+	run_state: Dictionary = {},
+) -> Dictionary:
 	_results.clear()
+	_selected_processed = 0
+	var selected_total := _count_selected_tests(suites, suite_filter, test_filter)
 	var start := Time.get_ticks_msec()
+	var outcome := ""
 
 	## Silence the plugin's ring-buffer console echo while tests run. Negative-
 	## path suites deliberately fill the ring with 500 lines and log malformed-
@@ -148,6 +216,8 @@ func run_suites(suites: Array, suite_filter: String = "", test_filter: String = 
 				"message": "suite_setup() failed: %s (subsequent tests not run)" % suite._suite_failed_message,
 				"assertion_count": 0,
 			})
+			## The bailed suite's tests are accounted for, not "not run".
+			_selected_processed += _count_selected_tests([suite], "", test_filter)
 		elif suite._suite_skipped:
 			_results.append({
 				"suite": suite.suite_name(),
@@ -157,8 +227,16 @@ func run_suites(suites: Array, suite_filter: String = "", test_filter: String = 
 				"message": "suite_setup() skipped: %s" % suite._suite_skipped_reason,
 				"assertion_count": 0,
 			})
+			_selected_processed += _count_selected_tests([suite], "", test_filter)
 		else:
-			run_suite(suite, test_filter, exclude_test_filter)
+			outcome = _checkpoint(service_cb, deadline_ticks_ms, run_state)
+			if outcome.is_empty():
+				outcome = _run_suite_tests(
+					suite, test_filter, exclude_test_filter,
+					service_cb, deadline_ticks_ms, run_state
+				)
+		## Suite epilogue runs on EVERY path, including aborts: the suite has
+		## begun, so its teardown and leak cleanup must not be skipped.
 		suite.suite_teardown()
 		suite._free_tracked()
 
@@ -166,10 +244,60 @@ func run_suites(suites: Array, suite_filter: String = "", test_filter: String = 
 		if scene_root != null and scene_root.is_inside_tree():
 			_cleanup_leaked_nodes(scene_root, before_children)
 
+		if not outcome.is_empty():
+			break
+
+		outcome = _checkpoint(service_cb, deadline_ticks_ms, run_state)
+		if not outcome.is_empty():
+			break
+
 	_last_run_ms = Time.get_ticks_msec() - start
 	McpLogBuffer.console_echo = _prev_console_echo
 	_unregister_capture()
-	return get_results(verbose)
+	if outcome.is_empty():
+		outcome = "completed"
+	return {
+		"outcome": outcome,
+		"results": get_results(verbose),
+		"tests_not_run": maxi(0, selected_total - _selected_processed),
+	}
+
+
+## Count of selected (filter-surviving) tests already looped over this run,
+## including exclusion-skips and bailed-suite accounting. Drives the
+## `tests_not_run` estimate on aborted runs.
+var _selected_processed := 0
+
+
+func _count_selected_tests(suites: Array, suite_filter: String, test_filter: String) -> int:
+	var count := 0
+	for suite: McpTestSuite in suites:
+		if not suite_filter.is_empty() and suite.suite_name() != suite_filter:
+			continue
+		for method_name in _get_test_methods(suite):
+			if not test_filter.is_empty() and method_name.find(test_filter) == -1:
+				continue
+			count += 1
+	return count
+
+
+## Between-phase checkpoint: "" to continue, or a terminal outcome.
+## Deadline first (cheap), then transport servicing. PAUSED maps to its
+## own outcome — a pause held at a between-test boundary would silently
+## skip every remaining poll and starve the heartbeat, so the run must
+## surface it instead of continuing (plan §9 Q2).
+func _checkpoint(service_cb: Callable, deadline_ticks_ms: int, run_state: Dictionary) -> String:
+	if deadline_ticks_ms > 0 and Time.get_ticks_msec() >= deadline_ticks_ms:
+		return "timeout"
+	if not service_cb.is_valid():
+		return ""
+	var status: int = service_cb.call(run_state)
+	if status == McpConnection.ServiceStatus.SERVICED:
+		return ""
+	if status == McpConnection.ServiceStatus.PAUSED:
+		return "paused"
+	## DISCONNECTED and BLOCKED both mean "no live transport".
+	return "transport_lost"
 
 
 func _register_capture() -> void:

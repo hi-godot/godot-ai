@@ -167,6 +167,7 @@ class GodotWebSocketServer:
 
     async def _handle_connection(self, ws: ServerConnection):
         session_id: str | None = None
+        close_code: int | None = None
         try:
             # First message must be a handshake
             raw = await asyncio.wait_for(ws.recv(), timeout=10.0)
@@ -347,13 +348,28 @@ class GodotWebSocketServer:
                         if not future.done():
                             future.set_result(response)
 
-        except websockets.ConnectionClosed:
-            logger.info("Session disconnected: %s", session_id)
+        except websockets.ConnectionClosed as exc:
+            ## Normalize the close frame: prefer the one the peer sent
+            ## (rcvd); the keepalive watchdog's own 1011 lives on ``sent``.
+            ## The numeric code flows into disconnect telemetry (so 1011
+            ## keepalive kills are measurable); the free-form reason stays
+            ## in local logs only.
+            frame = exc.rcvd or exc.sent
+            close_reason = ""
+            if frame is not None:
+                close_code = frame.code
+                close_reason = frame.reason or ""
+            logger.info(
+                "Session disconnected: %s (close code %s, reason %r)",
+                session_id,
+                close_code,
+                close_reason,
+            )
         except Exception:
             logger.exception("Error in WebSocket handler for session %s", session_id)
         finally:
             if session_id:
-                self.registry.unregister(session_id)
+                self.registry.unregister(session_id, close_code=close_code)
                 self._connections.pop(session_id, None)
                 ## Fail this session's in-flight futures NOW (#690): a close
                 ## settles nothing by itself, so every in-flight command used

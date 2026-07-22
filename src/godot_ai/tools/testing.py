@@ -40,7 +40,14 @@ def register_testing_tools(mcp: FastMCP) -> None:
         Discovers test_*.gd in res://tests/, instantiates them, and runs
         all test_* methods. Returns a compact summary by default (counts,
         suite names, duration) plus failures only. verbose=True includes
-        every individual test result.
+        every individual test result (each with per-test ``duration_ms``).
+
+        The whole run has a 300s budget; the plugin aborts between tests
+        shortly before it expires and returns TEST_RUN_TIMEOUT with the
+        partial summary (full partials via test_manage(op="results_get")).
+        Long suites are safe — the editor services the MCP transport
+        between tests — but one single test blocking the main thread for
+        20s+ can still drop the session. Not allowed inside batch_execute.
 
         The response includes ``edited_scene`` (the scene currently open in
         the editor). Many suites assume the project's main scene is open; if

@@ -1752,9 +1752,7 @@ async def test_logs_read_handler_plugin_normalizes_structured_payload():
     ## the public Python API still returns the legacy [str] shape for that
     ## source so existing callers don't shift.
     class StructuredPluginClient(StubClient):
-        async def send(
-            self, command, params=None, session_id=None, timeout=5.0, hint_policy=None
-        ):
+        async def send(self, command, params=None, session_id=None, timeout=5.0, hint_policy=None):
             self.calls.append(
                 {
                     "command": command,
@@ -2710,7 +2708,12 @@ async def test_run_tests_handler_with_no_params():
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     result = await testing_handlers.test_run(runtime)
     assert result["passed"] == 5
-    assert client.calls[-1]["params"] == {}
+    ## The per-call budget always rides in the envelope so the plugin can
+    ## derive its between-test abort ceiling from the same constant that
+    ## bounds the server-side await (transport-starvation plan D2).
+    assert client.calls[-1]["params"] == {
+        "timeout_budget_sec": testing_handlers.TEST_RUN_TIMEOUT_SEC
+    }
 
 
 async def test_run_tests_handler_uses_full_suite_timeout():
@@ -2725,14 +2728,21 @@ async def test_run_tests_handler_with_suite_and_test_name():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     await testing_handlers.test_run(runtime, suite="scene", test_name="test_tree")
-    assert client.calls[-1]["params"] == {"suite": "scene", "test_name": "test_tree"}
+    assert client.calls[-1]["params"] == {
+        "suite": "scene",
+        "test_name": "test_tree",
+        "timeout_budget_sec": testing_handlers.TEST_RUN_TIMEOUT_SEC,
+    }
 
 
 async def test_run_tests_handler_with_exclude_test_name():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     await testing_handlers.test_run(runtime, exclude_test_name="test_flaky")
-    assert client.calls[-1]["params"] == {"exclude_test_name": "test_flaky"}
+    assert client.calls[-1]["params"] == {
+        "exclude_test_name": "test_flaky",
+        "timeout_budget_sec": testing_handlers.TEST_RUN_TIMEOUT_SEC,
+    }
 
 
 async def test_get_test_results_handler():
@@ -2747,7 +2757,10 @@ async def test_run_tests_handler_verbose():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     await testing_handlers.test_run(runtime, verbose=True)
-    assert client.calls[-1]["params"] == {"verbose": True}
+    assert client.calls[-1]["params"] == {
+        "verbose": True,
+        "timeout_budget_sec": testing_handlers.TEST_RUN_TIMEOUT_SEC,
+    }
 
 
 async def test_get_test_results_handler_verbose():
@@ -3875,9 +3888,7 @@ async def test_project_stop_handler_passes_through_idempotent_payload():
     """
 
     class IdempotentStopClient(StubClient):
-        async def send(
-            self, command, params=None, session_id=None, timeout=5.0, hint_policy=None
-        ):
+        async def send(self, command, params=None, session_id=None, timeout=5.0, hint_policy=None):
             self.calls.append({"command": command, "params": params})
             return {
                 "stopped": True,
@@ -3897,9 +3908,7 @@ async def test_project_run_handler_passes_through_already_running_payload():
     """Idempotent-run path (was_already_running=true) flows through unchanged."""
 
     class AlreadyRunningClient(StubClient):
-        async def send(
-            self, command, params=None, session_id=None, timeout=5.0, hint_policy=None
-        ):
+        async def send(self, command, params=None, session_id=None, timeout=5.0, hint_policy=None):
             self.calls.append({"command": command, "params": params})
             return {
                 "mode": (params or {}).get("mode", "main"),
@@ -4106,9 +4115,7 @@ async def test_editor_screenshot_handler_custom_angles():
 
 async def test_editor_screenshot_handler_view_target_not_found_single():
     class NotFoundClient:
-        async def send(
-            self, command, params=None, session_id=None, timeout=5.0, hint_policy=None
-        ):
+        async def send(self, command, params=None, session_id=None, timeout=5.0, hint_policy=None):
             return {
                 "source": "viewport",
                 "width": 1,
@@ -4132,9 +4139,7 @@ async def test_editor_screenshot_handler_view_target_not_found_single():
 
 async def test_editor_screenshot_handler_view_target_not_found_coverage():
     class NotFoundCoverageClient:
-        async def send(
-            self, command, params=None, session_id=None, timeout=5.0, hint_policy=None
-        ):
+        async def send(self, command, params=None, session_id=None, timeout=5.0, hint_policy=None):
             return {
                 "source": "viewport",
                 "view_target": params["view_target"],
@@ -4209,9 +4214,7 @@ async def test_editor_screenshot_handler_relays_viewport_not_3d_error():
     from godot_ai.godot_client.client import GodotCommandError
 
     class ViewportNot3DClient:
-        async def send(
-            self, command, params=None, session_id=None, timeout=5.0, hint_policy=None
-        ):
+        async def send(self, command, params=None, session_id=None, timeout=5.0, hint_policy=None):
             raise GodotCommandError(
                 code="EDITOR_NOT_READY",
                 message=(
@@ -4247,9 +4250,7 @@ async def test_editor_screenshot_handler_relays_viewport_empty_error():
     from godot_ai.godot_client.client import GodotCommandError
 
     class ViewportEmptyClient:
-        async def send(
-            self, command, params=None, session_id=None, timeout=5.0, hint_policy=None
-        ):
+        async def send(self, command, params=None, session_id=None, timeout=5.0, hint_policy=None):
             raise GodotCommandError(
                 code="EDITOR_NOT_READY",
                 message="Captured an empty image from viewport.",
@@ -5058,9 +5059,7 @@ def _make_stop_project_runtime(
     from godot_ai.sessions.registry import Session
 
     class ReadinessAfterStub(StubClient):
-        async def send(
-            self, command, params=None, session_id=None, timeout=5.0, hint_policy=None
-        ):
+        async def send(self, command, params=None, session_id=None, timeout=5.0, hint_policy=None):
             self.calls.append({"command": command, "params": params})
             return {"stopped": True, "undoable": False, "readiness_after": readiness_after}
 

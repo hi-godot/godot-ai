@@ -103,6 +103,26 @@ class TestSessionRegistryTelemetry:
         ]
         assert len(match) == 1
         assert match[0].data["session_count"] == 0
+        ## close_code is always present; None means no close frame was
+        ## observed (non-WS teardown), a numeric value is the normalized
+        ## WebSocket close code (1011 keepalive, 1013 exclusive-run flood).
+        assert "close_code" in match[0].data
+        assert match[0].data["close_code"] is None
+
+    def test_unregister_records_normalized_close_code(self, captured) -> None:
+        reg = SessionRegistry()
+        reg.register(self._make_session())
+        reg.unregister("demo@a3f2", close_code=1011)
+        _wait_for(captured, 2)
+
+        match = [
+            r
+            for r in captured
+            if r.record_type is tel.RecordType.GODOT_CONNECTION
+            and r.data.get("event") == "disconnected"
+        ]
+        assert len(match) == 1
+        assert match[0].data["close_code"] == 1011
 
     def test_multiple_sessions_milestone(self, captured) -> None:
         reg = SessionRegistry()

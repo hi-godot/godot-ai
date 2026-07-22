@@ -105,6 +105,16 @@ const SUB_EDITOR_VIEWPORT_UNAVAILABLE := "EDITOR_VIEWPORT_UNAVAILABLE"
 const SUB_EDITOR_VIEWPORT_NOT_3D := "EDITOR_VIEWPORT_NOT_3D"
 const SUB_EDITOR_VIEWPORT_EMPTY := "EDITOR_VIEWPORT_EMPTY"
 const SUB_EDITOR_UNAVAILABLE := "EDITOR_UNAVAILABLE"
+## Emitted only by the exclusive-run transport servicing path: a command
+## arrived while a synchronous test run holds the main thread, and was
+## rejected (not buffered) so it can't replay stale after its server-side
+## future expires. See connection.gd::service_transport_during_exclusive_run.
+const SUB_EDITOR_TEST_RUNNING := "EDITOR_TEST_RUNNING"
+
+## Terminal code for a test run that hit its between-test abort ceiling
+## before finishing. error.data carries the partial summary; full partial
+## results stay retrievable via get_test_results.
+const TEST_RUN_TIMEOUT := "TEST_RUN_TIMEOUT"
 
 
 ## Build a standard error response dictionary.
