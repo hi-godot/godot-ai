@@ -425,9 +425,21 @@ func test_client_rows_show_config_file_buttons_only_for_file_clients() -> void:
 	assert_contains((file_row["open_config_btn"] as Button).tooltip_text, file_path,
 		"Open tooltip should carry the full path without widening the row")
 
-	var cli_id := "kimi_code"
-	if not _dock._client_rows.has(cli_id):
-		skip("Pure CLI client not registered")
+	## #kimi-mcp-json: kimi_code used to be the only "pure CLI" (no JSON
+	## fallback) client in the registry, so this branch hardcoded its id.
+	## It moved to config_type "json" (see test_kimi_code_client_json_descriptor
+	## in test_clients.gd) because Kimi Code has no `mcp` CLI subcommand.
+	## Discover a pure-CLI example dynamically instead of re-pinning to a
+	## specific id, so this assertion degrades to a clear skip — not a false
+	## pass or an unrelated failure — if the registry currently has none.
+	var cli_id := ""
+	for id in McpClientConfigurator.client_ids():
+		var c := McpClientRegistry.get_by_id(String(id))
+		if c != null and c.config_type == "cli" and not c.has_json_fallback():
+			cli_id = String(id)
+			break
+	if cli_id.is_empty() or not _dock._client_rows.has(cli_id):
+		skip("No pure CLI client (config_type \"cli\" with no JSON fallback) currently registered")
 		return
 	var cli_row: Dictionary = _dock._client_rows[cli_id]
 	assert_eq(String(cli_row.get("config_path", "")), "")
