@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# Regression harness for test_run transport starvation
+# (docs/test-run-transport-starvation-plan.md).
+#
+# Copies a ~50s main-thread-blocking fixture suite into test_project/tests/,
+# runs it via the test_run MCP tool, and asserts the ORIGINAL request
+# completes with correct counts. On pre-fix plugins the websockets heartbeat
+# (20s ping interval / 20s timeout) kills the editor session ~40s into the
+# run, the server fails the in-flight future, and the tool call returns a
+# disconnect error — which this script reports as the reproduced bug.
+#
+# Expects (same contract as ci-godot-tests): Python server on :8000, Godot
+# editor running with the plugin connected. The fixture is removed on exit
+# via trap, pass or fail.
+#
+# Optional: SERVER_LOG=<path to captured server stdout/stderr>. When set,
+# also asserts no "Session disconnected" lines were added during the run.
+# The primary continuity evidence is the completed original response —
+# a same session_id before/after is only a sanity check, because the plugin
+# reuses its session_id across reconnects (connection.gd::_ready).
+set -euo pipefail
+source "$(dirname "$0")/_ci_env.sh"
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+FIXTURE_SRC="$REPO_ROOT/script/fixtures/test_mcp_slow_smoke.gd"
+FIXTURE_DST="$REPO_ROOT/test_project/tests/test_mcp_slow_smoke.gd"
+SUITE_NAME="mcp_slow_smoke"
+EXPECTED_TESTS=25
+
+SERVER_URL="http://127.0.0.1:8000/mcp"
+HEADERS=(-H "Content-Type: application/json" -H "Accept: application/json, text/event-stream")
+
+cleanup() {
+  rm -f "$FIXTURE_DST" "$FIXTURE_DST.uid"
+}
+trap cleanup EXIT
+
+# Shared SSE-response field extractor: prints structuredContent JSON for the
+# first data: line, or exits 3 when none is present.
+extract_content() {
+  python3 -c "
+import json, sys
+raw = sys.stdin.read()
+for line in raw.split('\n'):
+    if line.startswith('data: '):
+        data = json.loads(line[6:])
+        result = data.get('result', {})
+        sc = result.get('structuredContent', {})
+        if not sc:
+            text = result.get('content', [{}])[0].get('text', '{}')
+            try:
+                sc = json.loads(text)
+            except json.JSONDecodeError:
+                sc = {'_raw_text': text}
+        sc['_is_error'] = bool(result.get('isError'))
+        sc['_rpc_id'] = data.get('id')
+        print(json.dumps(sc))
+        break
+else:
+    sys.exit(3)
+"
+}
+
+mcp_call() { # id name arguments-json
+  curl -s -m 300 "$SERVER_URL" -X POST "${HEADERS[@]}" \
+    -H "Mcp-Session-Id: $SESSION_ID" \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":$1,\"method\":\"tools/call\",\"params\":{\"name\":\"$2\",\"arguments\":$3}}"
+}
+
+godot_session_id() {
+  mcp_call 7 session_manage '{"op":"list"}' | extract_content | python3 -c "
+import json, sys
+sc = json.loads(sys.stdin.read())
+sessions = sc.get('sessions', [])
+print(sessions[0]['session_id'] if sessions else '')
+"
+}
+
+echo "Installing slow fixture suite ($EXPECTED_TESTS tests)..."
+cp "$FIXTURE_SRC" "$FIXTURE_DST"
+
+# --- MCP handshake + wait for a Godot session (mirrors ci-godot-tests) ---
+echo "Waiting for Godot plugin to connect..."
+SESSION_ID=""
+for i in $(seq 1 60); do
+  SESSION_ID=$(curl -si "$SERVER_URL" -X POST "${HEADERS[@]}" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"slow-smoke","version":"1.0"}}}' \
+    2>&1 | grep -i 'mcp-session-id' | tr -d '\r' | awk '{print $2}' || true)
+  if [ -z "$SESSION_ID" ]; then sleep 2; continue; fi
+  curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" -H "Mcp-Session-Id: $SESSION_ID" \
+    -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' > /dev/null || true
+  GODOT_SESSION_BEFORE=$(godot_session_id || true)
+  if [ -n "${GODOT_SESSION_BEFORE:-}" ]; then
+    echo "Godot plugin connected (session: $GODOT_SESSION_BEFORE)"
+    break
+  fi
+  echo "  attempt $i — no session yet"
+  sleep 2
+done
+if [ -z "${GODOT_SESSION_BEFORE:-}" ]; then
+  echo "ERROR: no Godot session connected"
+  exit 1
+fi
+
+# Make sure discovery sees the just-copied fixture (fresh scan; the tool is
+# single-flight and settles before replying).
+echo "Scanning filesystem so discovery sees the fixture..."
+mcp_call 8 filesystem_manage '{"op":"scan"}' > /dev/null || true
+
+if [ -n "${SERVER_LOG:-}" ] && [ -f "$SERVER_LOG" ]; then
+  DISCONNECTS_BEFORE=$(grep -c "Session disconnected" "$SERVER_LOG" || true)
+fi
+
+echo "Running $SUITE_NAME (~50s of main-thread blocking)..."
+START_TS=$(date +%s)
+RESULT=$(mcp_call 42 test_run "{\"suite\":\"$SUITE_NAME\"}")
+ELAPSED=$(( $(date +%s) - START_TS ))
+
+CONTENT=$(echo "$RESULT" | extract_content) || {
+  echo "REPRODUCED/FAIL: no SSE data line from test_run after ${ELAPSED}s"
+  echo "Raw response (first 500 chars): $(echo "$RESULT" | head -c 500)"
+  exit 1
+}
+
+echo "$CONTENT" | python3 -c "
+import json, sys
+sc = json.loads(sys.stdin.read())
+elapsed = $ELAPSED
+expected = $EXPECTED_TESTS
+if sc.get('_rpc_id') != 42:
+    print(f'FAIL: response id {sc.get(\"_rpc_id\")} does not match original request id 42')
+    sys.exit(1)
+if sc.get('_is_error'):
+    print(f'REPRODUCED: test_run failed after {elapsed}s — the in-flight call died instead of completing.')
+    print('Error payload:', json.dumps(sc)[:600])
+    sys.exit(1)
+passed, failed, total = sc.get('passed', 0), sc.get('failed', 0), sc.get('total', 0)
+print(f'test_run completed in {elapsed}s: {passed}/{total} passed, {failed} failed')
+if failed or total != expected or passed != expected:
+    print(f'FAIL: expected {expected}/{expected} passed in the fixture suite')
+    for f in sc.get('failures', []) or []:
+        print(f'  FAIL: {f[\"suite\"]}.{f[\"test\"]}: {f[\"message\"]}')
+    sys.exit(1)
+"
+
+GODOT_SESSION_AFTER=$(godot_session_id || true)
+if [ "$GODOT_SESSION_AFTER" != "$GODOT_SESSION_BEFORE" ]; then
+  echo "FAIL: session identity changed across the run ('$GODOT_SESSION_BEFORE' -> '$GODOT_SESSION_AFTER')"
+  exit 1
+fi
+echo "Session sanity check passed ($GODOT_SESSION_AFTER)"
+
+if [ -n "${SERVER_LOG:-}" ] && [ -f "$SERVER_LOG" ]; then
+  DISCONNECTS_AFTER=$(grep -c "Session disconnected" "$SERVER_LOG" || true)
+  if [ "${DISCONNECTS_AFTER:-0}" -gt "${DISCONNECTS_BEFORE:-0}" ]; then
+    echo "FAIL: server log shows $((DISCONNECTS_AFTER - DISCONNECTS_BEFORE)) disconnect(s) during the run window"
+    exit 1
+  fi
+  echo "Server-log check passed (no disconnects during run)"
+fi
+
+echo "PASS: slow suite completed without losing the editor session"
