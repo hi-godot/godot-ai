@@ -150,7 +150,8 @@ String)` removes it.
 
 ## Running tests
 
-MCP tool `test_run` (120 s server-side timeout for the whole run):
+MCP tool `test_run` (300 s server-side budget for the whole run; see
+"Long runs and the abort ceiling" below):
 
 ```text
 test_run                              # all suites — compact: counts + failures only
@@ -190,6 +191,41 @@ Re-fetch the last results without re-running: `test_manage(op="results_get")`
   treating those failures as real.
 - A suite aborted by `fail_setup` / `skip_suite` reports one entry with
   `"test": "<suite_setup>"`.
+- Every executed test entry carries `duration_ms` (visible with
+  `verbose=true`) — use it to find the slow tests when a run approaches the
+  abort ceiling.
+
+## Long runs and the abort ceiling
+
+Live `test_run` calls service the WebSocket transport between tests, suite
+phases, and discovery script-loads, so a long suite no longer starves the
+server's keepalive and drops the MCP session. Three consequences:
+
+- **Budget**: the server grants each run a 300 s budget (sent to the plugin
+  in the command envelope). The plugin aborts between tests ~10 s before the
+  budget expires and replies with a `TEST_RUN_TIMEOUT` error carrying the
+  partial summary; full partial results stay available via
+  `test_manage(op="results_get")`. Against an older server (which sends no
+  budget) the plugin uses a conservative 110 s ceiling. The ceiling is
+  **best-effort**: it is only checked between atomic phases, so a test that
+  starts just before it can overshoot.
+- **Concurrent clients**: commands arriving from other MCP clients while a
+  run holds the editor are rejected immediately with a retryable
+  `EDITOR_NOT_READY` (`sub_code: EDITOR_TEST_RUNNING`) instead of timing
+  out — retry after the run, or fetch results with
+  `test_manage(op="results_get")`. A pathological command flood (>2048
+  packets in one run) closes the connection (code 1013) rather than
+  buffering stale commands; the run aborts with partials preserved.
+- **Residual limitation**: any single non-yielding phase longer than the
+  heartbeat window (~20-40 s) — one long test body, `suite_setup`/
+  `suite_teardown`, or a huge script load — still blocks servicing and ends
+  in a keepalive disconnect. That doubles as the fail-fast for genuinely
+  hung tests. Keep individual phases well under ~20 s; `duration_ms` in
+  verbose results identifies offenders.
+
+`run_tests` is rejected inside `batch_execute` — a batch executes
+synchronously with no transport servicing (and a 30 s server budget), which
+is exactly the starvation this design removes. Call `test_run` directly.
 
 ## Testing your own game
 
@@ -207,7 +243,9 @@ Constraints (tests run synchronously on the editor's main thread):
   synchronously and `skip()` on unmet preconditions (see the
   "validation only" sections in
   [`test_scene.gd`](../test_project/tests/test_scene.gd)).
-- Keep per-test work small; the whole run must finish within `test_run`'s
-  120 s timeout.
+- Keep per-test work small: each test (and each `suite_setup`/teardown)
+  should stay well under ~20 s so transport servicing between phases keeps
+  the MCP session alive, and the whole run must finish within `test_run`'s
+  300 s budget (see "Long runs and the abort ceiling" above).
 - Free what you create: `track()` for objects and out-of-tree nodes, or the
   `_McpTest*` name prefix for scene nodes.
