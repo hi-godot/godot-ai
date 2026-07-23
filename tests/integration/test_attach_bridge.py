@@ -22,44 +22,6 @@ from godot_ai.attach.proxy import create_attach_proxy
 from godot_ai.protocol.attach import ATTACH_PROTOCOL_VERSION
 from tests.conftest import allocate_free_ports
 
-_TEST_SERVICE_PORT_MIN = 20_000
-_TEST_SERVICE_PORT_MAX = 30_000
-
-
-def _allocate_service_ports(count: int) -> list[int]:
-    """Allocate ports outside the OS ephemeral client-port ranges.
-
-    The cold-start bridge probes localhost before its child binds the WS
-    listener. If that WS port came from ``bind(0)``, Linux may immediately
-    reuse it as the probe's outbound source port and make the child report a
-    false foreign occupant. Holding all candidate sockets until selection is
-    complete keeps the returned ports distinct; choosing the service range
-    prevents the bridge's own client connections from stealing them afterward.
-    """
-
-    probes: list[socket.socket] = []
-    ports: list[int] = []
-    span = _TEST_SERVICE_PORT_MAX - _TEST_SERVICE_PORT_MIN
-    start = _TEST_SERVICE_PORT_MIN + (os.getpid() % span)
-    candidates = range(start, _TEST_SERVICE_PORT_MAX)
-    wrapped_candidates = range(_TEST_SERVICE_PORT_MIN, start)
-    try:
-        for candidate in (*candidates, *wrapped_candidates):
-            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            try:
-                probe.bind(("127.0.0.1", candidate))
-            except OSError:
-                probe.close()
-                continue
-            probes.append(probe)
-            ports.append(candidate)
-            if len(ports) == count:
-                return ports
-    finally:
-        for probe in probes:
-            probe.close()
-    raise RuntimeError(f"could not allocate {count} test service ports")
-
 
 def _port_open(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
@@ -141,7 +103,7 @@ async def test_cold_start_discovers_tools_and_explains_how_to_open_editor(
 ) -> None:
     """Client-first startup succeeds without an editor and leaves stdout MCP-clean."""
 
-    http_port, ws_port = _allocate_service_ports(2)
+    http_port, ws_port = allocate_free_ports(2)
     stderr_log = tmp_path / "attach-stderr.log"
     transport = _bridge_transport(
         http_port,
@@ -178,6 +140,7 @@ async def test_cold_start_discovers_tools_and_explains_how_to_open_editor(
             backend_pid = await _wait_backend_pid(backend_log)
             os.kill(backend_pid, signal.SIGTERM)
             assert await _wait_port_closed(http_port)
+            assert await _wait_port_closed(ws_port)
 
             recovered_tools = await client.list_tools()
             assert {tool.name for tool in recovered_tools} == names
