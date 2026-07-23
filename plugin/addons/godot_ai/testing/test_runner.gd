@@ -282,22 +282,10 @@ func _count_selected_tests(suites: Array, suite_filter: String, test_filter: Str
 
 
 ## Between-phase checkpoint: "" to continue, or a terminal outcome.
-## Deadline first (cheap), then transport servicing. PAUSED maps to its
-## own outcome — a pause held at a between-test boundary would silently
-## skip every remaining poll and starve the heartbeat, so the run must
-## surface it instead of continuing (plan §9 Q2).
+## Delegates to the shared mapping so the discovery checkpoints in
+## test_handler.gd can never drift from the between-test ones (plan §9 Q2).
 func _checkpoint(service_cb: Callable, deadline_ticks_ms: int, run_state: Dictionary) -> String:
-	if deadline_ticks_ms > 0 and Time.get_ticks_msec() >= deadline_ticks_ms:
-		return "timeout"
-	if not service_cb.is_valid():
-		return ""
-	var status: int = service_cb.call(run_state)
-	if status == McpConnection.ServiceStatus.SERVICED:
-		return ""
-	if status == McpConnection.ServiceStatus.PAUSED:
-		return "paused"
-	## DISCONNECTED and BLOCKED both mean "no live transport".
-	return "transport_lost"
+	return McpConnection.exclusive_run_checkpoint(service_cb, deadline_ticks_ms, run_state)
 
 
 func _register_capture() -> void:

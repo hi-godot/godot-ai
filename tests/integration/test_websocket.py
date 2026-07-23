@@ -60,16 +60,22 @@ class TestHandshake:
         ## (1013) from ordinary closes. The free-form reason stays in local
         ## logs only.
         captured = {}
+        unregistered = asyncio.Event()
         real_unregister = harness.registry.unregister
 
         def spy(session_id, close_code=None):
             captured["close_code"] = close_code
-            return real_unregister(session_id, close_code=close_code)
+            try:
+                return real_unregister(session_id, close_code=close_code)
+            finally:
+                unregistered.set()
 
         monkeypatch.setattr(harness.registry, "unregister", spy)
         plugin = await harness.connect_plugin(session_id="sess-cc")
         await plugin.ws.close(code=1011, reason="keepalive ping timeout")
-        await asyncio.sleep(0.1)  # let server process disconnect
+        ## Deterministic wait — a fixed sleep can race server cleanup under
+        ## CI load (CodeRabbit review on #817).
+        await asyncio.wait_for(unregistered.wait(), timeout=2.0)
         assert captured["close_code"] == 1011
         assert harness.registry.get("sess-cc") is None
 

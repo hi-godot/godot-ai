@@ -562,6 +562,29 @@ func service_transport_during_exclusive_run(run_state: Dictionary) -> ServiceSta
 	return ServiceStatus.SERVICED
 
 
+## Shared between-phase checkpoint for exclusive runs: deadline first
+## (cheap), then transport servicing via `service_cb`. Returns "" to
+## continue, or a terminal outcome: "timeout" | "transport_lost" |
+## "paused". Static and stateless so the runner's between-test checkpoints
+## and the handler's discovery checkpoints share ONE outcome mapping —
+## PAUSED is abort-worthy (a held pause would silently skip every later
+## poll and starve the heartbeat), and DISCONNECTED/BLOCKED both mean "no
+## live transport".
+static func exclusive_run_checkpoint(
+	service_cb: Callable, deadline_ticks_ms: int, run_state: Dictionary
+) -> String:
+	if deadline_ticks_ms > 0 and Time.get_ticks_msec() >= deadline_ticks_ms:
+		return "timeout"
+	if not service_cb.is_valid():
+		return ""
+	var status: int = service_cb.call(run_state)
+	if status == ServiceStatus.SERVICED:
+		return ""
+	if status == ServiceStatus.PAUSED:
+		return "paused"
+	return "transport_lost"
+
+
 ## Count one application packet against the exclusive-run cap. Counts EVERY
 ## drained packet regardless of kind (valid command, malformed, ack-like)
 ## so no frame kind can evade the flood limit. Returns true once the cap is
