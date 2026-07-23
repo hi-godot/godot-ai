@@ -53,6 +53,26 @@ class TestHandshake:
         await asyncio.sleep(0.1)  # let server process disconnect
         assert harness.registry.get("sess-dc") is None
 
+    async def test_disconnect_records_normalized_close_code(self, harness, monkeypatch):
+        ## The handler must extract the close frame off ConnectionClosed and
+        ## pass the numeric code into unregister() so disconnect telemetry
+        ## can distinguish keepalive kills (1011) and exclusive-run floods
+        ## (1013) from ordinary closes. The free-form reason stays in local
+        ## logs only.
+        captured = {}
+        real_unregister = harness.registry.unregister
+
+        def spy(session_id, close_code=None):
+            captured["close_code"] = close_code
+            return real_unregister(session_id, close_code=close_code)
+
+        monkeypatch.setattr(harness.registry, "unregister", spy)
+        plugin = await harness.connect_plugin(session_id="sess-cc")
+        await plugin.ws.close(code=1011, reason="keepalive ping timeout")
+        await asyncio.sleep(0.1)  # let server process disconnect
+        assert captured["close_code"] == 1011
+        assert harness.registry.get("sess-cc") is None
+
     async def test_handshake_captures_editor_pid(self, harness):
         plugin = await harness.connect_plugin(session_id="sess-pid", editor_pid=4242)
         session = harness.registry.get("sess-pid")
@@ -491,9 +511,7 @@ class TestCommandRoundTrip:
         assert third["new_warnings_since_last_call"] == 2
         await plugin.close()
 
-    async def test_error_watermark_discard_consumes_both_channels_without_backlog(
-        self, harness
-    ):
+    async def test_error_watermark_discard_consumes_both_channels_without_backlog(self, harness):
         plugin = await harness.connect_plugin(session_id="err-discard")
         client = GodotClient(
             harness.server,
