@@ -81,6 +81,8 @@ def test_attach_bridge_codes_are_registered_in_both_languages() -> None:
         "TRANSPORT_OUTCOME_UNKNOWN",
         "NEW_CLIENT_SESSION_REQUIRED",
         "ATTACH_LOCK_TIMEOUT",
+        "ATTACH_LOCK_ERROR",
+        "ATTACH_RUNTIME_DIR_ERROR",
         "PORT_OCCUPIED",
         "BACKEND_START_FAILED",
         "BACKEND_START_TIMEOUT",

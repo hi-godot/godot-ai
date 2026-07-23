@@ -37,7 +37,11 @@ import sys
 import time
 from collections.abc import Callable
 
-from godot_ai.protocol.attach import ATTACH_SPAWNED_ENV, DEV_TRANSPORT_ENV
+from godot_ai.protocol.attach import (
+    ATTACH_SPAWNED_ENV,
+    DEV_TRANSPORT_ENV,
+    PLUGIN_SPAWNED_ENV,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,12 +56,6 @@ POLL_SECONDS_ENV = "GODOT_AI_REAPER_POLL_SECONDS"
 ## for a full grace window exits on its own. It needs no process probing at
 ## all — just the session registry count and a monotonic clock — so it works
 ## identically on Windows, where the owner-PID reaper is disabled.
-
-## Marker set by the plugin (server_lifecycle.gd) around OS.create_process,
-## exactly like GODOT_AI_OWNER_PID. Only plugin-spawned servers may idle-exit;
-## manually launched dev servers (`python -m godot_ai`, serve-this-worktree)
-## never see this marker and are never idle-killed.
-PLUGIN_SPAWNED_ENV = "GODOT_AI_PLUGIN_SPAWNED"
 
 ## Opt-out escape hatch: a user who wants a plugin-spawned server to outlive
 ## all editors (e.g. debugging the server itself) sets this truthy.

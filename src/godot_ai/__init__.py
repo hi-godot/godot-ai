@@ -114,7 +114,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         attach_main(effective_argv[1:])
         return
 
-    parser = argparse.ArgumentParser(description="Godot AI server")
+    parser = argparse.ArgumentParser(
+        description="Godot AI server",
+        epilog=(
+            "Client-owned bridge: godot-ai attach [--port PORT] [--ws-port PORT] "
+            "[--exclude-domains LIST]. Run 'godot-ai attach --help' for details."
+        ),
+    )
     parser.add_argument(
         "--version",
         action="version",

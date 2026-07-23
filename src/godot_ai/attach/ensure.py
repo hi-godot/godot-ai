@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import os
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -21,13 +23,14 @@ from godot_ai.protocol.attach import (
     ATTACH_PROTOCOL_VERSION,
     ATTACH_SPAWNED_ENV,
     DEV_TRANSPORT_ENV,
+    PLUGIN_SPAWNED_ENV,
 )
 from godot_ai.protocol.errors import ErrorCode
 
 DEFAULT_HTTP_PORT = 8000
 DEFAULT_WS_PORT = 9500
-DEFAULT_LOCK_TIMEOUT_SECONDS = 30.0
 DEFAULT_HEALTH_TIMEOUT_SECONDS = 30.0
+DEFAULT_LOCK_TIMEOUT_MARGIN_SECONDS = 15.0
 DEFAULT_PROBE_TIMEOUT_SECONDS = 1.0
 RUNTIME_DIR_ENV = "GODOT_AI_RUNTIME_DIR"
 
@@ -61,7 +64,10 @@ class BackendStatus:
             "tool_catalog_hash": str,
         }
         for key, expected_type in required.items():
-            if not isinstance(payload.get(key), expected_type):
+            value = payload.get(key)
+            if not isinstance(value, expected_type) or (
+                expected_type is int and isinstance(value, bool)
+            ):
                 raise ValueError(f"godot-ai status is missing valid {key!r}")
         domains = payload["exclude_domains"]
         if not all(isinstance(item, str) for item in domains):
@@ -125,12 +131,29 @@ def user_runtime_dir() -> Path:
             if xdg_runtime
             else Path(tempfile.gettempdir()) / f"godot-ai-{os.getuid()}"
         )
-    path.mkdir(parents=True, exist_ok=True)
-    if os.name != "nt":
-        try:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode):
+                raise OSError(errno.ELOOP, "runtime path is a symbolic link", str(path))
+            if not stat.S_ISDIR(info.st_mode):
+                raise OSError(errno.ENOTDIR, "runtime path is not a directory", str(path))
+            if info.st_uid != os.getuid():
+                raise OSError(errno.EACCES, "runtime directory belongs to another user", str(path))
             path.chmod(0o700)
-        except OSError:
-            pass
+            if stat.S_IMODE(path.lstat().st_mode) != 0o700:
+                raise OSError(errno.EACCES, "runtime directory mode is not 0700", str(path))
+    except OSError as exc:
+        raise AttachStartupError(
+            "ATTACH_RUNTIME_DIR_ERROR",
+            f"Cannot use attach runtime directory {path}: {exc}.",
+            hint=(
+                f"Choose a private directory owned by your user with {RUNTIME_DIR_ENV}, "
+                "or correct the directory ownership and permissions."
+            ),
+            data={"path": str(path), "errno": exc.errno},
+        ) from exc
     return path.resolve()
 
 
@@ -141,7 +164,8 @@ class AdvisoryFileLock:
         self,
         path: Path,
         *,
-        timeout_seconds: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
+        timeout_seconds: float = DEFAULT_HEALTH_TIMEOUT_SECONDS
+        + DEFAULT_LOCK_TIMEOUT_MARGIN_SECONDS,
         poll_seconds: float = 0.05,
     ) -> None:
         self.path = path
@@ -150,19 +174,31 @@ class AdvisoryFileLock:
         self._handle: Any = None
 
     async def __aenter__(self) -> AdvisoryFileLock:
-        await asyncio.to_thread(self._acquire)
+        acquire_task = asyncio.create_task(asyncio.to_thread(self._acquire))
+        try:
+            await asyncio.shield(acquire_task)
+        except asyncio.CancelledError:
+            acquire_task.add_done_callback(self._release_after_cancelled_acquire)
+            raise
         return self
 
     async def __aexit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> None:
         await asyncio.to_thread(self._release)
 
     def _acquire(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        handle = self.path.open("a+b")
-        handle.seek(0, os.SEEK_END)
-        if handle.tell() == 0:
-            handle.write(b"\0")
-            handle.flush()
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            handle = self.path.open("a+b")
+        except OSError as exc:
+            raise self._lock_error("open", exc) from exc
+        try:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+        except OSError as exc:
+            handle.close()
+            raise self._lock_error("prepare", exc) from exc
         deadline = time.monotonic() + self.timeout_seconds
         while True:
             try:
@@ -178,6 +214,9 @@ class AdvisoryFileLock:
                 self._handle = handle
                 return
             except OSError as exc:
+                if not _is_lock_held_error(exc):
+                    handle.close()
+                    raise self._lock_error("acquire", exc) from exc
                 if time.monotonic() >= deadline:
                     handle.close()
                     raise AttachStartupError(
@@ -188,8 +227,28 @@ class AdvisoryFileLock:
                             "they finish starting."
                         ),
                         retryable=True,
+                        data={"path": str(self.path)},
                     ) from exc
                 time.sleep(self.poll_seconds)
+
+    def _release_after_cancelled_acquire(self, task: asyncio.Task[None]) -> None:
+        """Release a lock won by the worker after its caller was cancelled."""
+
+        try:
+            task.result()
+        except BaseException:
+            return
+        self._release()
+
+    def _lock_error(self, operation: str, exc: OSError) -> AttachStartupError:
+        return AttachStartupError(
+            "ATTACH_LOCK_ERROR",
+            f"Could not {operation} backend startup lock {self.path}: {exc}.",
+            hint=(
+                "Check the runtime directory permissions and filesystem lock support, then retry."
+            ),
+            data={"path": str(self.path), "errno": exc.errno, "operation": operation},
+        )
 
     def _release(self) -> None:
         handle = self._handle
@@ -208,6 +267,15 @@ class AdvisoryFileLock:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         finally:
             handle.close()
+
+
+def _is_lock_held_error(exc: OSError, *, platform: str | None = None) -> bool:
+    """Return whether ``exc`` means another process currently owns the lock."""
+
+    platform = os.name if platform is None else platform
+    if platform == "nt":
+        return exc.errno == errno.EACCES
+    return exc.errno in {errno.EAGAIN, errno.EWOULDBLOCK}
 
 
 async def probe_backend(
@@ -274,6 +342,7 @@ class SpawnedBackend:
 def spawn_backend(port: int, ws_port: int, exclude_domains: tuple[str, ...]) -> SpawnedBackend:
     runtime_dir = user_runtime_dir()
     log_path = runtime_dir / f"backend-{port}.log"
+    old_log_path = Path(f"{log_path}.old")
     args = [
         sys.executable,
         "-m",
@@ -289,7 +358,22 @@ def spawn_backend(port: int, ws_port: int, exclude_domains: tuple[str, ...]) -> 
         args.extend(("--exclude-domains", ",".join(exclude_domains)))
     env = _backend_spawn_env()
 
-    with log_path.open("ab", buffering=0) as log:
+    try:
+        if log_path.exists():
+            old_log_path.unlink(missing_ok=True)
+            log_path.replace(old_log_path)
+        log = log_path.open("ab", buffering=0)
+    except OSError as exc:
+        raise AttachStartupError(
+            "BACKEND_START_FAILED",
+            f"Could not prepare backend log {log_path}: {exc}.",
+            hint=(
+                "Stop any orphaned Godot AI backend that still has this log open, "
+                "verify the runtime directory is writable, then retry."
+            ),
+            data={"log_path": str(log_path), "errno": exc.errno},
+        ) from exc
+    with log:
         process = subprocess.Popen(
             args,
             stdout=log,
@@ -306,7 +390,7 @@ def _backend_spawn_env() -> dict[str, str]:
     env = os.environ.copy()
     env[ATTACH_SPAWNED_ENV] = "1"
     for inherited_process_key in (
-        "GODOT_AI_PLUGIN_SPAWNED",
+        PLUGIN_SPAWNED_ENV,
         "GODOT_AI_OWNER_PID",
         "GODOT_AI_WS_TOKEN",
         # A bridge launched from a reload worker must not make its independent
@@ -336,6 +420,8 @@ class BackendEnsurer:
         port_check: PortCheck = port_available,
         runtime_dir: Path | None = None,
         health_timeout_seconds: float = DEFAULT_HEALTH_TIMEOUT_SECONDS,
+        lock_timeout_seconds: float | None = None,
+        lock_timeout_margin_seconds: float = DEFAULT_LOCK_TIMEOUT_MARGIN_SECONDS,
         poll_seconds: float = 0.1,
         required_version: str = __version__,
     ) -> None:
@@ -347,6 +433,11 @@ class BackendEnsurer:
         self._port_check = port_check
         self._runtime_dir = runtime_dir
         self._health_timeout_seconds = health_timeout_seconds
+        self._lock_timeout_seconds = (
+            health_timeout_seconds + lock_timeout_margin_seconds
+            if lock_timeout_seconds is None
+            else lock_timeout_seconds
+        )
         self._poll_seconds = poll_seconds
         self._required_version = required_version
 
@@ -360,7 +451,10 @@ class BackendEnsurer:
 
     async def ensure(self) -> BackendStatus:
         runtime_dir = self._runtime_dir or user_runtime_dir()
-        lock = AdvisoryFileLock(runtime_dir / f"attach-http-{self.port}.lock")
+        lock = AdvisoryFileLock(
+            runtime_dir / f"attach-http-{self.port}.lock",
+            timeout_seconds=self._lock_timeout_seconds,
+        )
         async with lock:
             status = await self._probe(self.port)
             if status is not None:

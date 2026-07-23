@@ -21,6 +21,8 @@ class ErrorCode(StrEnum):
     # Python-originated attach startup failures. Mirrored in GDScript as
     # public registry constants even though the plugin has no emit path.
     ATTACH_LOCK_TIMEOUT = "ATTACH_LOCK_TIMEOUT"
+    ATTACH_LOCK_ERROR = "ATTACH_LOCK_ERROR"
+    ATTACH_RUNTIME_DIR_ERROR = "ATTACH_RUNTIME_DIR_ERROR"
     PORT_OCCUPIED = "PORT_OCCUPIED"
     BACKEND_START_FAILED = "BACKEND_START_FAILED"
     BACKEND_START_TIMEOUT = "BACKEND_START_TIMEOUT"

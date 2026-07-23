@@ -551,6 +551,7 @@ async def test_backend_editor_busy_error_passes_through_untouched() -> None:
                 content=[TextContent(type="text", text=payload["message"])],
                 structuredContent={"error": payload},
                 isError=True,
+                _meta={"backend-trace": "xyz"},
             )
 
     tool = AttachProxyTool.from_mcp_tool(
@@ -564,6 +565,7 @@ async def test_backend_editor_busy_error_passes_through_untouched() -> None:
     assert forwarded.isError is True
     assert forwarded.structuredContent == {"error": payload}
     assert forwarded.content == [TextContent(type="text", text=payload["message"])]
+    assert forwarded.meta == {"backend-trace": "xyz"}
     assert received["meta"] == {"trace": "abc"}
 
 

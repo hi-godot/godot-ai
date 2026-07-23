@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
 import signal
@@ -21,7 +22,18 @@ from godot_ai import __version__
 from godot_ai.attach.ensure import BackendStatus, probe_backend
 from godot_ai.attach.lease import LeaseClient
 from godot_ai.attach.proxy import create_attach_proxy
-from godot_ai.protocol.attach import ATTACH_PROTOCOL_VERSION
+from godot_ai.orphan_reaper import (
+    BOOT_GRACE_ENV,
+    IDLE_GRACE_ENV,
+    NO_IDLE_EXIT_ENV,
+    POLL_SECONDS_ENV,
+)
+from godot_ai.protocol.attach import (
+    ATTACH_PROTOCOL_VERSION,
+    ATTACH_SPAWNED_ENV,
+    DEV_TRANSPORT_ENV,
+    PLUGIN_SPAWNED_ENV,
+)
 from tests.conftest import allocate_free_ports
 
 
@@ -84,15 +96,26 @@ def _bridge_transport(
 ) -> StdioTransport:
     repo_root = Path(__file__).resolve().parents[2]
     env = dict(os.environ)
+    for inherited_reaper_key in (
+        NO_IDLE_EXIT_ENV,
+        POLL_SECONDS_ENV,
+        BOOT_GRACE_ENV,
+        IDLE_GRACE_ENV,
+        ATTACH_SPAWNED_ENV,
+        PLUGIN_SPAWNED_ENV,
+        DEV_TRANSPORT_ENV,
+        "GODOT_AI_OWNER_PID",
+    ):
+        env.pop(inherited_reaper_key, None)
     existing_pythonpath = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = os.pathsep.join(
         part for part in (str(repo_root / "src"), existing_pythonpath) if part
     )
     env["GODOT_AI_RUNTIME_DIR"] = str(runtime_dir)
     env["GODOT_AI_DISABLE_TELEMETRY"] = "true"
-    env["GODOT_AI_REAPER_POLL_SECONDS"] = "0.05"
-    env["GODOT_AI_IDLE_BOOT_GRACE_SECONDS"] = "2"
-    env["GODOT_AI_IDLE_GRACE_SECONDS"] = "0.2"
+    env[POLL_SECONDS_ENV] = "0.05"
+    env[BOOT_GRACE_ENV] = "2"
+    env[IDLE_GRACE_ENV] = "0.2"
     return StdioTransport(
         sys.executable,
         [
@@ -122,6 +145,32 @@ def _terminate_test_process(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=5)
 
 
+def _terminate_pid(pid: int) -> None:
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return
+
+
+def test_bridge_transport_sanitizes_inherited_reaper_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(NO_IDLE_EXIT_ENV, "1")
+    monkeypatch.setenv(ATTACH_SPAWNED_ENV, "inherited")
+    monkeypatch.setenv(PLUGIN_SPAWNED_ENV, "inherited")
+    monkeypatch.setenv(DEV_TRANSPORT_ENV, "inherited")
+    transport = _bridge_transport(8123, 9567, tmp_path / "runtime", tmp_path / "stderr")
+
+    assert transport.env is not None
+    assert NO_IDLE_EXIT_ENV not in transport.env
+    assert ATTACH_SPAWNED_ENV not in transport.env
+    assert PLUGIN_SPAWNED_ENV not in transport.env
+    assert DEV_TRANSPORT_ENV not in transport.env
+    assert transport.env[POLL_SECONDS_ENV] == "0.05"
+    assert transport.env[BOOT_GRACE_ENV] == "2"
+    assert transport.env[IDLE_GRACE_ENV] == "0.2"
+
+
 async def test_cold_start_discovers_tools_and_explains_how_to_open_editor(
     tmp_path: Path,
 ) -> None:
@@ -137,6 +186,8 @@ async def test_cold_start_discovers_tools_and_explains_how_to_open_editor(
     )
     backend_log = tmp_path / "runtime" / f"backend-{http_port}.log"
 
+    backend_pid: int | None = None
+    failure: BaseException | None = None
     try:
         async with Client(transport, timeout=20, init_timeout=30) as client:
             tools = await client.list_tools()
@@ -148,6 +199,7 @@ async def test_cold_start_discovers_tools_and_explains_how_to_open_editor(
             assert status["name"] == "godot-ai"
             assert status["owner_type"] == "attach"
             assert status["instance_id"]
+            backend_pid = await _wait_backend_pid(backend_log)
 
             result = await client.call_tool("editor_state", {}, raise_on_error=False)
             assert result.is_error
@@ -161,10 +213,10 @@ async def test_cold_start_discovers_tools_and_explains_how_to_open_editor(
             # re-register the instance-bound lease, and remain invisible to
             # the upstream stdio client.
             first_instance = status["instance_id"]
-            backend_pid = await _wait_backend_pid(backend_log)
             os.kill(backend_pid, signal.SIGTERM)
             assert await _wait_port_closed(http_port)
             assert await _wait_port_closed(ws_port)
+            backend_pid = None
 
             recovered_tools = await client.list_tools()
             assert {tool.name for tool in recovered_tools} == names
@@ -173,24 +225,47 @@ async def test_cold_start_discovers_tools_and_explains_how_to_open_editor(
                     await http.get(f"http://127.0.0.1:{http_port}/godot-ai/status")
                 ).json()
             assert recovered_status["instance_id"] != first_instance
+            backend_pid = await _wait_backend_pid(backend_log)
 
             # Give the backend reaper a poll in which to observe the active
             # bridge lease before graceful release exercises the idle grace.
             await asyncio.sleep(0.15)
-    finally:
-        stderr_text = (
-            stderr_log.read_text(encoding="utf-8", errors="replace")
-            if stderr_log.exists()
-            else "<missing>"
-        )
-        assert await _wait_port_closed(http_port), (
+    except BaseException as exc:
+        failure = exc
+
+    stderr_text = (
+        stderr_log.read_text(encoding="utf-8", errors="replace")
+        if stderr_log.exists()
+        else "<missing>"
+    )
+    if failure is not None:
+        if backend_log.exists():
+            with contextlib.suppress(AssertionError):
+                backend_pid = await _wait_backend_pid(backend_log, timeout=2)
+        if backend_pid is not None:
+            _terminate_pid(backend_pid)
+        backend_closed = await _wait_port_closed(http_port, timeout=5)
+        if not backend_closed:
+            failure.add_note(
+                "Cleanup could not confirm that the detached attach backend exited; "
+                f"bridge stderr: {stderr_text}"
+            )
+    else:
+        backend_closed = await _wait_port_closed(http_port)
+    if not backend_closed and failure is None:
+        failure = AssertionError(
             "attach-owned backend did not reap after the bridge released its lease; "
             f"bridge stderr: {stderr_text}"
         )
+        if backend_pid is not None:
+            _terminate_pid(backend_pid)
+            await _wait_port_closed(http_port)
+    if failure is not None:
+        raise failure.with_traceback(failure.__traceback__)
 
 
 async def test_slow_downstream_tool_has_no_bridge_read_deadline(tmp_path: Path) -> None:
-    """A dispatched response may outlive ordinary HTTP defaults without timing out."""
+    """A dispatched response may outlive HTTPX's 5s and MCP SDK's 30s defaults."""
 
     http_port = allocate_free_ports(1)[0]
     call_log = tmp_path / "slow-calls.log"
@@ -203,7 +278,7 @@ from fastmcp import FastMCP
 mcp = FastMCP("slow-backend")
 
 @mcp.tool
-async def slow_operation(delay: float = 1.2) -> dict:
+async def slow_operation(delay: float = 35.0) -> dict:
     with Path(sys.argv[2]).open("a", encoding="utf-8") as calls:
         calls.write("called\\n")
     await asyncio.sleep(delay)
@@ -249,9 +324,9 @@ mcp.run(transport="streamable-http", host="127.0.0.1", port=int(sys.argv[1]), sh
             ensure_ready,
             ensure_ready,
         )
-        async with Client(proxy, timeout=20) as client:
+        async with Client(proxy, timeout=60) as client:
             started = time.monotonic()
-            result = await client.call_tool("slow_operation", {"delay": 1.2})
+            result = await client.call_tool("slow_operation", {"delay": 35.0})
             elapsed = time.monotonic() - started
 
             interrupted = asyncio.create_task(
@@ -261,19 +336,25 @@ mcp.run(transport="streamable-http", host="127.0.0.1", port=int(sys.argv[1]), sh
                     raise_on_error=False,
                 )
             )
-            dispatch_deadline = time.monotonic() + 5
-            while time.monotonic() < dispatch_deadline:
-                calls = call_log.read_text(encoding="utf-8").splitlines()
-                if len(calls) >= 2:
-                    break
-                await asyncio.sleep(0.05)
-            else:
-                raise AssertionError("second slow operation was not dispatched")
+            try:
+                dispatch_deadline = time.monotonic() + 5
+                while time.monotonic() < dispatch_deadline:
+                    calls = call_log.read_text(encoding="utf-8").splitlines()
+                    if len(calls) >= 2:
+                        break
+                    await asyncio.sleep(0.05)
+                else:
+                    raise AssertionError("second slow operation was not dispatched")
+            except BaseException:
+                interrupted.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await interrupted
+                raise
             await asyncio.to_thread(_terminate_test_process, process)
             unknown = await interrupted
 
-        assert result.data == {"completed": True, "delay": 1.2}
-        assert elapsed >= 1.0
+        assert result.data == {"completed": True, "delay": 35.0}
+        assert elapsed >= 34.0
         assert unknown.is_error
         error = unknown.structured_content["error"]
         assert error["code"] == "TRANSPORT_OUTCOME_UNKNOWN"

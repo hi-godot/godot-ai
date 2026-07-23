@@ -9,6 +9,7 @@ from collections.abc import Sequence
 
 import httpx
 
+from godot_ai import __version__
 from godot_ai.attach.ensure import AttachStartupError, BackendEnsurer, probe_backend
 from godot_ai.attach.lease import LeaseClient
 from godot_ai.attach.proxy import (
@@ -20,6 +21,11 @@ from godot_ai.tools.domains import parse_exclude_list
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="godot-ai attach", description="Godot AI stdio bridge")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"godot-ai attach {__version__}",
+    )
     parser.add_argument("--port", type=int, default=8000, help="Shared backend HTTP port")
     parser.add_argument("--ws-port", type=int, default=9500, help="Godot editor WebSocket port")
     parser.add_argument(

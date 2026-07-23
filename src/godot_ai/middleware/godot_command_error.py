@@ -19,6 +19,7 @@ class GodotCommandErrorToolResult(ToolResult):
             content=self.content,
             structuredContent=self.structured_content,
             isError=True,
+            _meta=self.meta,  # type: ignore[call-arg]  # Pydantic alias for meta
         )
 
 

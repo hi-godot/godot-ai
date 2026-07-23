@@ -21,6 +21,22 @@ def test_root_main_dispatches_attach_before_legacy_parser(monkeypatch) -> None:
     assert received == [["--port", "8123"]]
 
 
+def test_root_help_discovers_attach(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        godot_ai.main(["--help"])
+
+    assert exc_info.value.code == 0
+    assert "godot-ai attach" in capsys.readouterr().out
+
+
+def test_attach_version_is_available(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        attach_main_module.main(["--version"])
+
+    assert exc_info.value.code == 0
+    assert f"godot-ai attach {godot_ai.__version__}" in capsys.readouterr().out
+
+
 def test_preinitialize_failure_uses_stderr_only(monkeypatch, capsys) -> None:
     async def fail(*_args):
         raise AttachStartupError(

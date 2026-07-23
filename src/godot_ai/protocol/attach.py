@@ -7,9 +7,10 @@ import json
 import os
 import uuid
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-from fastmcp import FastMCP
+if TYPE_CHECKING:
+    from fastmcp import FastMCP
 
 ATTACH_PROTOCOL_VERSION = 1
 ATTACH_SPAWNED_ENV = "GODOT_AI_CLIENT_SPAWNED"
