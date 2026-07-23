@@ -5,16 +5,19 @@ from __future__ import annotations
 from typing import Any
 
 NO_ACTIVE_SESSION_MESSAGE = (
-    "No active Godot session — this MCP server has no connected Godot editor. "
-    "Open the project in the Godot editor with the Godot AI plugin enabled, "
-    "and verify the editor and this MCP server share the same loopback/network "
+    "No active Godot session is connected to this MCP server. "
+    "Open this project in the Godot editor with the Godot AI plugin enabled, "
+    "wait for it to connect, then retry the same tool call. Restarting the MCP "
+    "client is not required. Verify the editor and this MCP server share the same loopback/network "
     "namespace. In Docker or remote-agent setups, do not point the agent at a "
     "different server than the one the editor connects to."
 )
 
 NO_ACTIVE_SESSION_HINT = (
-    "Run session_manage(op='list') to confirm whether this server has any editor "
-    "sessions. If it returns count=0, start or reconnect the Godot editor to this "
+    "Open this project in the Godot editor with the Godot AI plugin enabled, wait "
+    "for it to connect, then retry the same tool call. Restarting the MCP client is "
+    "not required. Run session_manage(op='list') to confirm whether this server has "
+    "any editor sessions. If it returns count=0, start or reconnect the editor to this "
     "same server. For Docker, run the MCP server on the host or put the editor and "
     "server in the same network namespace; container localhost is not host localhost."
 )

@@ -42,7 +42,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, get_type_hints
 from urllib.parse import urlparse
 
 import httpx
@@ -886,7 +886,15 @@ def _expose_wrapped_surface(wrapper: Callable[..., Any], func: Callable[..., Any
         wrapper.__signature__ = inspect.signature(func)  # type: ignore[attr-defined]
     except (TypeError, ValueError):
         pass
-    wrapper.__annotations__ = dict(getattr(func, "__annotations__", {}))
+    try:
+        # Resolve postponed annotations in the wrapped function's own globals.
+        # FastMCP 3.0 asks Pydantic to inspect the wrapper instead, whose
+        # telemetry-module globals cannot resolve names such as Annotated that
+        # belong to the original tool module.
+        annotations = get_type_hints(func, include_extras=True)
+    except (NameError, TypeError):
+        annotations = dict(getattr(func, "__annotations__", {}))
+    wrapper.__annotations__ = annotations
 
 
 def telemetry_tool(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:

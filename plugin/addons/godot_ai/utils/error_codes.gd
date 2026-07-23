@@ -26,6 +26,10 @@ const EDITOR_NOT_READY := "EDITOR_NOT_READY"
 const UNKNOWN_COMMAND := "UNKNOWN_COMMAND"
 const INTERNAL_ERROR := "INTERNAL_ERROR"
 const DEFERRED_TIMEOUT := "DEFERRED_TIMEOUT"
+## Python-originated attach bridge codes. GDScript has no emit path, but the
+## public registry intentionally mirrors protocol/errors.py.
+const TRANSPORT_OUTCOME_UNKNOWN := "TRANSPORT_OUTCOME_UNKNOWN"
+const NEW_CLIENT_SESSION_REQUIRED := "NEW_CLIENT_SESSION_REQUIRED"
 # game_eval failure codes (#490) — keep in sync with protocol/errors.py
 const EVAL_COMPILE_ERROR := "EVAL_COMPILE_ERROR"
 const EVAL_RUNTIME_ERROR := "EVAL_RUNTIME_ERROR"

@@ -4,14 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from godot_ai.protocol.timeouts import TEST_RUN_TIMEOUT_SEC
 from godot_ai.runtime.direct import DirectRuntime
-
-## Whole-run budget. Raised from 120s once run_tests stopped starving the
-## WebSocket heartbeat (docs/test-run-transport-starvation-plan.md): real
-## projects' full suites exceed 120s, and a genuinely hung test still fails
-## fast via the keepalive disconnect (~40s), so the long budget only ever
-## extends legitimately progressing runs.
-TEST_RUN_TIMEOUT_SEC = 300.0
 
 
 async def test_run(

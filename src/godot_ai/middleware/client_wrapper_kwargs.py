@@ -12,8 +12,9 @@ from __future__ import annotations
 import logging
 
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
-from fastmcp.tools.base import ToolResult
 from mcp.types import CallToolRequestParams
+
+from godot_ai.fastmcp_compat import ToolResult
 
 logger = logging.getLogger(__name__)
 

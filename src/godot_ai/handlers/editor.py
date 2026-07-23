@@ -7,10 +7,10 @@ import base64
 import json
 import logging
 
-from fastmcp.tools.base import Image as McpImage
 from mcp.types import TextContent
 
 from godot_ai import runtime_info
+from godot_ai.fastmcp_compat import Image as McpImage
 from godot_ai.godot_client.client import GodotCommandError
 from godot_ai.godot_client.session_diagnostics import (
     NO_ACTIVE_SESSION_MESSAGE,

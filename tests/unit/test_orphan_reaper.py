@@ -13,6 +13,7 @@ from godot_ai import orphan_reaper
 from godot_ai.orphan_reaper import (
     DEFAULT_IDLE_GRACE_SECONDS,
     pid_alive,
+    should_arm_attach_idle_exit,
     should_arm_idle_exit,
     should_arm_reaper,
     watch_idle,
@@ -179,6 +180,7 @@ async def test_grace_recheck_prevents_reap_on_transient_zero():
 def _clean_idle_env(monkeypatch):
     for name in (
         orphan_reaper.PLUGIN_SPAWNED_ENV,
+        orphan_reaper.ATTACH_SPAWNED_ENV,
         orphan_reaper.NO_IDLE_EXIT_ENV,
         orphan_reaper.BOOT_GRACE_ENV,
         orphan_reaper.IDLE_GRACE_ENV,
@@ -199,6 +201,22 @@ def test_idle_exit_not_armed_without_marker(_clean_idle_env):
 def test_idle_exit_armed_by_plugin_spawned_marker(_clean_idle_env):
     _clean_idle_env.setenv(orphan_reaper.PLUGIN_SPAWNED_ENV, "1")
     assert should_arm_idle_exit(None) is True
+
+
+def test_attach_idle_exit_armed_only_by_attach_marker(_clean_idle_env):
+    assert should_arm_attach_idle_exit() is False
+    _clean_idle_env.setenv(orphan_reaper.ATTACH_SPAWNED_ENV, "1")
+    assert should_arm_attach_idle_exit() is True
+    assert should_arm_idle_exit(None) is False
+
+
+def test_attach_idle_exit_honors_opt_out_and_reload(_clean_idle_env):
+    _clean_idle_env.setenv(orphan_reaper.ATTACH_SPAWNED_ENV, "1")
+    _clean_idle_env.setenv(orphan_reaper.NO_IDLE_EXIT_ENV, "1")
+    assert should_arm_attach_idle_exit() is False
+    _clean_idle_env.delenv(orphan_reaper.NO_IDLE_EXIT_ENV)
+    _clean_idle_env.setenv("GODOT_AI_DEV_TRANSPORT", "streamable-http")
+    assert should_arm_attach_idle_exit() is False
 
 
 def test_idle_exit_armed_by_owner_pid(_clean_idle_env):
@@ -369,6 +387,32 @@ async def test_idle_transient_zero_dip_does_not_exit():
     with pytest.raises(asyncio.CancelledError):
         await task
     assert calls == []
+
+
+async def test_attach_idle_requires_no_sessions_and_no_leases():
+    calls: list[bool] = []
+    clock = _FakeClock()
+    lease_counts = iter([1, 1, 0, 0, 0])
+
+    def advancing_clock() -> float:
+        clock.now += 5
+        return clock.now
+
+    await asyncio.wait_for(
+        watch_idle(
+            lambda: 0,
+            lease_count=lambda: next(lease_counts, 0),
+            poll_seconds=0.001,
+            boot_grace_seconds=10,
+            idle_grace_seconds=10,
+            clock=advancing_clock,
+            shutdown=lambda: calls.append(True),
+        ),
+        timeout=2,
+    )
+
+    assert calls == [True]
+    assert clock.now >= 20, "active leases must keep resetting the idle window"
 
 
 # ----- pid_alive conservative errno branches (audit backlog) -----

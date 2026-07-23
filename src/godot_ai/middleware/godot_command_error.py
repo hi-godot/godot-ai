@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
-from fastmcp.tools.base import ToolResult
 from mcp.types import CallToolRequestParams, CallToolResult, TextContent
 
+from godot_ai.fastmcp_compat import ToolResult
 from godot_ai.godot_client.client import GodotCommandError
 
 

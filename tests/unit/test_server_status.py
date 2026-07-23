@@ -19,14 +19,22 @@ def test_status_route_reports_live_server_version():
     response = client.get("/godot-ai/status")
 
     assert response.status_code == 200
-    assert response.json() == {
+    payload = response.json()
+    instance_id = payload.pop("instance_id")
+    catalog_hash = payload.pop("tool_catalog_hash")
+    assert payload == {
         "name": "godot-ai",
         "server_version": __version__,
         "ws_port": 9555,
         "tool_surface": "rollup",
         "exclude_domains": ["audio", "theme"],
         "package_path": str(Path(_godot_ai_pkg.__file__).resolve().parent),
+        "owner_type": "external",
+        "attach_protocol_version": 1,
     }
+    assert len(instance_id) == 32
+    assert len(catalog_hash) == 64
+    assert set(catalog_hash) <= set("0123456789abcdef")
 
 
 def test_status_route_package_path_points_at_loaded_package_dir():

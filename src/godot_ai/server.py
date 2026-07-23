@@ -19,6 +19,7 @@ from starlette.responses import JSONResponse
 import godot_ai as _godot_ai_pkg
 from godot_ai import __version__ as _SERVER_VERSION
 from godot_ai.asgi import StaleMcpSessionDiagnosticMiddleware
+from godot_ai.attach.lease import LeaseInstanceMismatch, LeaseNotFound, LeaseRegistry
 from godot_ai.godot_client.client import GodotClient
 from godot_ai.middleware import (
     FoldFlatManageParams,
@@ -31,10 +32,17 @@ from godot_ai.orphan_reaper import (
     boot_grace_from_env,
     idle_grace_from_env,
     poll_seconds_from_env,
+    should_arm_attach_idle_exit,
     should_arm_idle_exit,
     should_arm_reaper,
     watch_idle,
     watch_owner,
+)
+from godot_ai.protocol.attach import (
+    ATTACH_PROTOCOL_VERSION,
+    SERVER_INSTANCE_ID,
+    owner_type_from_env,
+    tool_catalog_hash,
 )
 from godot_ai.resources.classes import register_class_resources
 from godot_ai.resources.editor import register_editor_resources
@@ -98,6 +106,7 @@ class AppContext:
     registry: SessionRegistry
     ws_server: GodotWebSocketServer
     client: GodotClient
+    leases: LeaseRegistry
 
 
 class GodotAIFastMCP(FastMCP):
@@ -353,10 +362,12 @@ def create_server(
     allow_host_networks: Sequence[IPNetwork] | None = None,
 ) -> FastMCP:
     logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
+    leases = LeaseRegistry(SERVER_INSTANCE_ID)
 
     # Capture ws_port in the lifespan closure
     @asynccontextmanager
     async def _lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
+        leases.clear()
         registry = SessionRegistry()
         ## The WS server is intentionally loopback-only even under --allow-host
         ## (#421): it's the local editor↔server bridge, not a remote surface.
@@ -415,6 +426,17 @@ def create_server(
                 )
             )
             logger.info("Idle self-terminate backstop armed for plugin-spawned server")
+        elif should_arm_attach_idle_exit():
+            idle_task = asyncio.create_task(
+                watch_idle(
+                    lambda: len(registry.list_all()),
+                    lease_count=leases.active_count,
+                    poll_seconds=poll_seconds_from_env(),
+                    boot_grace_seconds=boot_grace_from_env(),
+                    idle_grace_seconds=idle_grace_from_env(),
+                )
+            )
+            logger.info("Lease-aware idle reaper armed for attach-owned server")
 
         ## Defer initial telemetry off the lifespan start tick — mirrors
         ## unity-mcp's 1s stdio-handshake guard so the first POST never
@@ -440,7 +462,12 @@ def create_server(
         startup_handle = loop.call_later(1.0, _emit_startup)
 
         try:
-            yield AppContext(registry=registry, ws_server=ws_server, client=client)
+            yield AppContext(
+                registry=registry,
+                ws_server=ws_server,
+                client=client,
+                leases=leases,
+            )
         finally:
             startup_handle.cancel()
             if reaper_task is not None:
@@ -537,9 +564,14 @@ def create_server(
     ## telemetry decorator captures as ``sub_action`` automatically.
     install_fastmcp_wraps(mcp)
 
+    catalog_digest: str | None = None
+
     @mcp.custom_route("/godot-ai/status", methods=["GET"], include_in_schema=False)
     async def godot_ai_status(_request: Request) -> JSONResponse:
         """Small unauthenticated probe used by the editor before reusing a port."""
+        nonlocal catalog_digest
+        if catalog_digest is None:
+            catalog_digest = await tool_catalog_hash(mcp)
         return JSONResponse(
             {
                 "name": "godot-ai",
@@ -553,8 +585,104 @@ def create_server(
                 ## "loaded from /Users/.../godot-ai/src") without the
                 ## user having to walk the process tree. See #416.
                 "package_path": _SERVER_PACKAGE_PATH,
+                ## Attach protocol compatibility fields are descriptive only.
+                ## In particular, owner_type is self-reported and MUST NEVER
+                ## authorize killing or replacing a process.
+                "instance_id": SERVER_INSTANCE_ID,
+                "owner_type": owner_type_from_env(),
+                "attach_protocol_version": ATTACH_PROTOCOL_VERSION,
+                "tool_catalog_hash": catalog_digest,
             }
         )
+
+    async def _lease_body(request: Request, *required: str) -> dict[str, Any] | JSONResponse:
+        try:
+            payload = await request.json()
+        except (TypeError, ValueError):
+            return JSONResponse(
+                {"error": {"code": "INVALID_LEASE_REQUEST", "message": "Expected JSON body."}},
+                status_code=400,
+            )
+        if not isinstance(payload, dict):
+            return JSONResponse(
+                {"error": {"code": "INVALID_LEASE_REQUEST", "message": "Expected JSON object."}},
+                status_code=400,
+            )
+        missing = [
+            key for key in required if not isinstance(payload.get(key), str) or not payload[key]
+        ]
+        if missing:
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": "INVALID_LEASE_REQUEST",
+                        "message": f"Missing non-empty string field(s): {', '.join(missing)}.",
+                    }
+                },
+                status_code=400,
+            )
+        return payload
+
+    def _lease_error(exc: Exception) -> JSONResponse:
+        if isinstance(exc, LeaseInstanceMismatch):
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": "BACKEND_INSTANCE_CHANGED",
+                        "message": str(exc),
+                        "instance_id": SERVER_INSTANCE_ID,
+                    }
+                },
+                status_code=409,
+            )
+        return JSONResponse(
+            {
+                "error": {
+                    "code": "LEASE_NOT_FOUND",
+                    "message": "Lease does not exist or has expired; register a new lease.",
+                    "instance_id": SERVER_INSTANCE_ID,
+                }
+            },
+            status_code=404,
+        )
+
+    @mcp.custom_route("/godot-ai/lease/register", methods=["POST"], include_in_schema=False)
+    async def godot_ai_lease_register(request: Request) -> JSONResponse:
+        payload = await _lease_body(request, "instance_id")
+        if isinstance(payload, JSONResponse):
+            return payload
+        try:
+            registration = leases.register(str(payload["instance_id"]))
+        except LeaseInstanceMismatch as exc:
+            return _lease_error(exc)
+        return JSONResponse(registration.to_dict())
+
+    @mcp.custom_route("/godot-ai/lease/heartbeat", methods=["POST"], include_in_schema=False)
+    async def godot_ai_lease_heartbeat(request: Request) -> JSONResponse:
+        payload = await _lease_body(request, "instance_id", "lease_id")
+        if isinstance(payload, JSONResponse):
+            return payload
+        try:
+            registration = leases.heartbeat(
+                str(payload["instance_id"]),
+                str(payload["lease_id"]),
+            )
+        except (LeaseInstanceMismatch, LeaseNotFound) as exc:
+            return _lease_error(exc)
+        return JSONResponse(registration.to_dict())
+
+    @mcp.custom_route("/godot-ai/lease/release", methods=["POST"], include_in_schema=False)
+    async def godot_ai_lease_release(request: Request) -> JSONResponse:
+        payload = await _lease_body(request, "instance_id", "lease_id")
+        if isinstance(payload, JSONResponse):
+            return payload
+        try:
+            released = leases.release(str(payload["instance_id"]), str(payload["lease_id"]))
+        except LeaseInstanceMismatch as exc:
+            return _lease_error(exc)
+        if not released:
+            return _lease_error(LeaseNotFound(str(payload["lease_id"])))
+        return JSONResponse({"released": True, "instance_id": SERVER_INSTANCE_ID})
 
     ## Core-bearing domains: always registered. ``include_non_core=False`` keeps
     ## only the core tool alive when the user excluded that domain.

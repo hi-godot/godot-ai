@@ -56,6 +56,7 @@ POLL_SECONDS_ENV = "GODOT_AI_REAPER_POLL_SECONDS"
 ## manually launched dev servers (`python -m godot_ai`, serve-this-worktree)
 ## never see this marker and are never idle-killed.
 PLUGIN_SPAWNED_ENV = "GODOT_AI_PLUGIN_SPAWNED"
+ATTACH_SPAWNED_ENV = "GODOT_AI_CLIENT_SPAWNED"
 
 ## Opt-out escape hatch: a user who wants a plugin-spawned server to outlive
 ## all editors (e.g. debugging the server itself) sets this truthy.
@@ -127,6 +128,16 @@ def should_arm_idle_exit(owner_pid: int | None) -> bool:
     if os.environ.get(_DEV_TRANSPORT_ENV, "").strip():
         return False
     return _env_truthy(PLUGIN_SPAWNED_ENV) or bool(owner_pid and owner_pid > 0)
+
+
+def should_arm_attach_idle_exit() -> bool:
+    """Whether the lease-aware idle policy should run for an attach backend."""
+
+    if _env_truthy(NO_IDLE_EXIT_ENV):
+        return False
+    if os.environ.get(_DEV_TRANSPORT_ENV, "").strip():
+        return False
+    return _env_truthy(ATTACH_SPAWNED_ENV)
 
 
 def poll_seconds_from_env() -> float:
@@ -270,6 +281,7 @@ async def watch_owner(
 async def watch_idle(
     session_count: Callable[[], int],
     *,
+    lease_count: Callable[[], int] | None = None,
     poll_seconds: float = DEFAULT_POLL_SECONDS,
     boot_grace_seconds: float = DEFAULT_IDLE_GRACE_SECONDS,
     idle_grace_seconds: float = DEFAULT_IDLE_GRACE_SECONDS,
@@ -301,9 +313,11 @@ async def watch_idle(
     while True:
         await asyncio.sleep(poll_seconds)
         now = clock()
-        if session_count() > 0:
+        active = session_count() > 0 or (lease_count is not None and lease_count() > 0)
+        if active:
             ever_connected = True
-            ## Restart the idle window at the last poll that saw a session —
+            ## Restart the idle window at the last poll that saw a session or
+            ## bridge lease —
             ## the true disconnect happened somewhere in the following poll
             ## interval, so this under-counts idle time by at most one poll.
             idle_since = now
@@ -312,8 +326,8 @@ async def watch_idle(
         if now - idle_since < grace:
             continue
         logger.info(
-            "No editor session for %.0fs (%s grace %.0fs); "
-            "idle backstop shutting down plugin-spawned server.",
+            "No editor session or bridge lease for %.0fs (%s grace %.0fs); "
+            "idle backstop shutting down managed server.",
             now - idle_since,
             "idle" if ever_connected else "boot",
             grace,

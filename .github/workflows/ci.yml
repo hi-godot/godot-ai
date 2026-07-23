@@ -72,6 +72,27 @@ jobs:
       - name: Lint
         run: ruff check src/ tests/
 
+  fastmcp-floor:
+    name: FastMCP 3.0 floor / Python 3.11
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install project at the declared FastMCP floor
+        run: |
+          pip install -e ".[dev]" "fastmcp==3.0.0"
+          python -c "import fastmcp; assert fastmcp.__version__ == '3.0.0'"
+
+      - name: Run floor compatibility contracts
+        run: pytest -q tests/unit tests/integration/test_attach_bridge.py
+
   release-smoke:
     name: Release smoke / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

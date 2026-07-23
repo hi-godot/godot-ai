@@ -107,6 +107,13 @@ def preflight_check_port(port: int, *, label: str, setting: str, host: str = "12
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    effective_argv = list(sys.argv[1:] if argv is None else argv)
+    if effective_argv[:1] == ["attach"]:
+        from godot_ai.attach.main import main as attach_main
+
+        attach_main(effective_argv[1:])
+        return
+
     parser = argparse.ArgumentParser(description="Godot AI server")
     parser.add_argument(
         "--version",
@@ -148,12 +155,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             "server self-terminates if that editor dies (crash / hard-kill with "
             "no clean stop_server) and no other editor has adopted it, so a "
             "detached server can't orphan onto the port. Omitted for externally "
-            "managed servers (CI, manual --reload). Note: omitting it does NOT "
-            "exempt the server from editor lifecycle teardown — an editor that "
-            "adopts this server owns its end-of-life and will stop it on clean "
-            "editor exit (see #669). To keep a long-lived dev server across "
-            "editor restarts, run it on a non-default port the plugin won't "
-            "adopt."
+            "managed servers (CI, manual --reload, attach-owned backends). "
+            "Compatible external servers are adopted without managed process "
+            "ownership and are not killed on normal editor exit."
         ),
     )
     parser.add_argument(
@@ -184,7 +188,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "a client's hard tool-count cap (Antigravity limits to 100)."
         ),
     )
-    args = parser.parse_args(argv)
+    args = parser.parse_args(effective_argv)
 
     from godot_ai.tools.domains import parse_exclude_list
 

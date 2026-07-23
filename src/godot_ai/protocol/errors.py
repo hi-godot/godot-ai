@@ -11,6 +11,13 @@ class ErrorCode(StrEnum):
     EDITOR_NOT_READY = "EDITOR_NOT_READY"
     INVALID_PARAMS = "INVALID_PARAMS"
     PLUGIN_DISCONNECTED = "PLUGIN_DISCONNECTED"
+    # Emitted by the attach bridge when a tools/call request may have reached
+    # the backend. Automatic replay is forbidden because the operation may
+    # already have completed.
+    TRANSPORT_OUTCOME_UNKNOWN = "TRANSPORT_OUTCOME_UNKNOWN"
+    # Emitted by attach when package/protocol drift cannot be repaired inside
+    # the running upstream MCP session.
+    NEW_CLIENT_SESSION_REQUIRED = "NEW_CLIENT_SESSION_REQUIRED"
     UNKNOWN_COMMAND = "UNKNOWN_COMMAND"
     INTERNAL_ERROR = "INTERNAL_ERROR"
     DEFERRED_TIMEOUT = "DEFERRED_TIMEOUT"

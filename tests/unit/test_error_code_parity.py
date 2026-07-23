@@ -72,3 +72,15 @@ def test_gdscript_and_python_string_values_match() -> None:
         f"String-value drift between GDScript and Python error codes: "
         f"{mismatched} (format: name -> (gdscript, python))"
     )
+
+
+def test_attach_bridge_codes_are_registered_in_both_languages() -> None:
+    """The generic one-way contract would not catch a missing GDScript mirror."""
+
+    required = {"TRANSPORT_OUTCOME_UNKNOWN", "NEW_CLIENT_SESSION_REQUIRED"}
+    gdscript_codes = _parse_gdscript_codes()
+    python_codes = {member.name: member.value for member in ErrorCode}
+    assert required <= gdscript_codes.keys()
+    assert required <= python_codes.keys()
+    for code in required:
+        assert gdscript_codes[code] == python_codes[code] == code

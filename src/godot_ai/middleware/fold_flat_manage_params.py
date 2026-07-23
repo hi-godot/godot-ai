@@ -19,10 +19,10 @@ from typing import Any
 from fastmcp.exceptions import ToolError
 from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
-from fastmcp.tools.base import ToolResult
 from mcp.types import CallToolRequestParams
 from pydantic import ValidationError as PydanticValidationError
 
+from godot_ai.fastmcp_compat import ToolResult
 from godot_ai.middleware._validation_errors import find_pydantic_validation_error
 from godot_ai.tools._meta_tool import MANAGE_TOOL_OPS
 
