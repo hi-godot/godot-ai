@@ -204,6 +204,7 @@ async def test_mutation_is_not_replayed_after_backend_instance_change() -> None:
 async def test_transient_probe_failure_does_not_cancel_healthy_mutation() -> None:
     ensures = 0
     observations = 0
+    observed_twice = asyncio.Event()
 
     async def ensure() -> BackendStatus:
         nonlocal ensures
@@ -215,10 +216,11 @@ async def test_transient_probe_failure_does_not_cancel_healthy_mutation() -> Non
         observations += 1
         if observations == 1:
             return None
+        observed_twice.set()
         return _status()
 
     async def call_next(_context: Any) -> ToolResult:
-        await asyncio.sleep(0.01)
+        await asyncio.wait_for(observed_twice.wait(), timeout=1)
         return ToolResult(content=[TextContent(type="text", text="healthy")])
 
     result = await AttachRecoveryMiddleware(

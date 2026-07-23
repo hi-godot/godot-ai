@@ -37,6 +37,8 @@ import sys
 import time
 from collections.abc import Callable
 
+from godot_ai.protocol.attach import ATTACH_SPAWNED_ENV
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_POLL_SECONDS = 5.0
@@ -56,7 +58,6 @@ POLL_SECONDS_ENV = "GODOT_AI_REAPER_POLL_SECONDS"
 ## manually launched dev servers (`python -m godot_ai`, serve-this-worktree)
 ## never see this marker and are never idle-killed.
 PLUGIN_SPAWNED_ENV = "GODOT_AI_PLUGIN_SPAWNED"
-ATTACH_SPAWNED_ENV = "GODOT_AI_CLIENT_SPAWNED"
 
 ## Opt-out escape hatch: a user who wants a plugin-spawned server to outlive
 ## all editors (e.g. debugging the server itself) sets this truthy.
