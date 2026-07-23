@@ -5,9 +5,15 @@ GitHub restricted detailed stargazer history (the `starred_at` timestamps
 behind `Accept: application/vnd.github.star+json`) to repository admins and
 collaborators, which broke star-history.com's unauthenticated README embed
 (#750). This script regenerates the chart from the GitHub API using an
-authenticated token (the Actions `GITHUB_TOKEN` qualifies for its own repo)
-and writes a self-contained SVG that the README references as a normal
-committed file.
+authenticated token (a collaborator PAT via STAR_HISTORY_TOKEN in CI) and
+writes a self-contained SVG that the README references as a normal committed
+file.
+
+The chart renders as a dark "night sky" card so it reads well on both GitHub
+light and dark themes. Everything is deterministic for a given (repo, data,
+date) — the starfield is seeded from the repo name — so reruns with unchanged
+data produce byte-identical output and the workflow's "chart unchanged" check
+keeps working.
 
 Usage:
     GITHUB_TOKEN=... script/generate-star-history [--repo owner/name] [--out path]
@@ -23,9 +29,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import urllib.error
 import urllib.request
+import zlib
 from datetime import date, datetime, timezone
 
 API_ROOT = "https://api.github.com"
@@ -37,12 +45,20 @@ WIDTH = 700
 HEIGHT = 360
 MARGIN_LEFT = 64
 MARGIN_RIGHT = 24
-MARGIN_TOP = 40
-MARGIN_BOTTOM = 48
-# Mid-tone palette readable on both GitHub light and dark backgrounds.
-LINE_COLOR = "#e8724c"
-TEXT_COLOR = "#8b949e"
-GRID_COLOR = "#8b949e"
+MARGIN_TOP = 56
+MARGIN_BOTTOM = 52
+
+# Night-sky palette; the card supplies its own background so the same SVG
+# works on GitHub light and dark themes alike.
+CARD_TOP = "#101527"
+CARD_BOTTOM = "#1a2033"
+CARD_BORDER = "#2e3650"
+TEXT_BRIGHT = "#e6edf3"
+TEXT_MUTED = "#8b95a7"
+GRID_COLOR = "#4a5470"
+LINE_START = "#4f9cff"
+LINE_END = "#ffd166"
+GOLD = "#ffd166"
 
 
 def fetch_star_dates(repo: str, token: str) -> list[date]:
@@ -109,17 +125,105 @@ def parse_seed(seed: str) -> list[tuple[date, int]]:
     return sorted(points)
 
 
-def _nice_ceiling(value: int) -> int:
-    """Round up to a tidy axis maximum (1/2/5 * 10^n)."""
-    if value <= 10:
-        return 10
+def _nice_axis(value: int) -> tuple[int, int]:
+    """Pick a (y_max, step) so the curve fills the plot instead of hugging
+    the bottom half: 3-5 tidy intervals with ~6% headroom over the peak."""
+    value = max(value, 1)
+    headroom = value * 1.06
+    best: tuple[int, int] | None = None
     magnitude = 1
-    while magnitude * 10 < value:
+    while magnitude <= headroom * 10:
+        for factor in (1.0, 2.0, 2.5, 5.0):
+            step = factor * magnitude
+            if step != int(step):
+                continue  # 2.5 only becomes integral at magnitude >= 10
+            step = int(step)
+            intervals = -(-int(headroom + 1) // step)  # ceil without floats
+            if 3 <= intervals <= 5:
+                y_max = step * intervals
+                if best is None or y_max < best[0] or (y_max == best[0] and step > best[1]):
+                    best = (y_max, step)
         magnitude *= 10
-    for factor in (1, 2, 5, 10):
-        if factor * magnitude >= value:
-            return factor * magnitude
-    return 10 * magnitude
+    if best is None:  # degenerate tiny counts (a chart of 1-2 stars)
+        y_max = value + 1
+        return y_max, max(1, y_max // 4)
+    return best
+
+
+def _fmt(n: int) -> str:
+    return f"{n:,}"
+
+
+def _starfield(repo: str) -> str:
+    """Deterministic background stars, seeded from the repo name so reruns
+    with unchanged data stay byte-identical."""
+    state = zlib.crc32(repo.encode()) or 1
+
+    def rnd() -> float:  # minimal LCG; stdlib random would also work but
+        nonlocal state  # this keeps the sequence frozen across Python versions
+        state = (state * 1103515245 + 12345) % (1 << 31)
+        return state / (1 << 31)
+
+    parts = []
+    for _ in range(60):
+        x = round(8 + rnd() * (WIDTH - 16), 1)
+        y = round(8 + rnd() * (HEIGHT - 16), 1)
+        r = round(0.4 + rnd() * 0.9, 2)
+        opacity = round(0.12 + rnd() * 0.55, 2)
+        tint = "#cfe1ff" if rnd() < 0.7 else "#ffe9b8"
+        parts.append(f'<circle cx="{x}" cy="{y}" r="{r}" fill="{tint}" opacity="{opacity}"/>')
+    # A few larger stars that slowly twinkle (SMIL runs fine inside <img>).
+    for i in range(4):
+        x = round(8 + rnd() * (WIDTH - 16), 1)
+        y = round(8 + rnd() * (HEIGHT * 0.45), 1)
+        parts.append(
+            f'<path d="{_star_path(x, y, 3.2)}" fill="#f4f8ff" opacity="0.8">'
+            f'<animate attributeName="opacity" values="0.8;0.2;0.8" '
+            f'dur="{3.4 + i * 1.1:.1f}s" begin="{i * 0.9:.1f}s" repeatCount="indefinite"/>'
+            "</path>"
+        )
+    return "".join(parts)
+
+
+def _star_path(cx: float, cy: float, r: float) -> str:
+    """Five-point star path centered on (cx, cy)."""
+    pts = []
+    for i in range(10):
+        radius = r if i % 2 == 0 else r * 0.42
+        angle = math.pi / 2 + i * math.pi / 5
+        pts.append(f"{cx + radius * math.cos(angle):.1f},{cy - radius * math.sin(angle):.1f}")
+    return "M" + " L".join(pts) + " Z"
+
+
+def _month_ticks(x0: int, x1: int) -> list[tuple[date, str]]:
+    """Ticks at month starts, thinned to at most 5; falls back to even
+    spacing when the history spans fewer than two month boundaries."""
+    firsts = []
+    d = date.fromordinal(x0)
+    year, month = d.year, d.month
+    while True:
+        month += 1
+        if month == 13:
+            year, month = year + 1, 1
+        first = date(year, month, 1)
+        if first.toordinal() > x1:
+            break
+        firsts.append(first)
+    if len(firsts) >= 2:
+        step = -(-len(firsts) // 5)
+        firsts = firsts[::step]
+        labels = []
+        prev_year = None
+        for d in firsts:
+            labels.append((d, d.strftime("%b %Y") if d.year != prev_year else d.strftime("%b")))
+            prev_year = d.year
+        return labels
+    span = max(x1 - x0, 1)
+    ticks = []
+    for i in range(4):
+        day = date.fromordinal(x0 + round(span * i / 3))
+        ticks.append((day, day.strftime("%b %d")))
+    return ticks
 
 
 def render_svg(points: list[tuple[date, int]], repo: str) -> str:
@@ -128,9 +232,10 @@ def render_svg(points: list[tuple[date, int]], repo: str) -> str:
 
     x0, x1 = points[0][0].toordinal(), points[-1][0].toordinal()
     x_span = max(x1 - x0, 1)
-    y_max = _nice_ceiling(points[-1][1])
+    y_max, y_step = _nice_axis(points[-1][1])
     plot_w = WIDTH - MARGIN_LEFT - MARGIN_RIGHT
     plot_h = HEIGHT - MARGIN_TOP - MARGIN_BOTTOM
+    baseline = MARGIN_TOP + plot_h
 
     def px(d: date) -> float:
         return MARGIN_LEFT + (d.toordinal() - x0) / x_span * plot_w
@@ -139,53 +244,100 @@ def render_svg(points: list[tuple[date, int]], repo: str) -> str:
         return MARGIN_TOP + plot_h - (count / y_max) * plot_h
 
     poly = " ".join(f"{px(d):.1f},{py(c):.1f}" for d, c in points)
+    area = (
+        f"{px(points[0][0]):.1f},{baseline:.1f} "
+        + poly
+        + f" {px(points[-1][0]):.1f},{baseline:.1f}"
+    )
 
-    # Five horizontal gridlines (baseline + four intervals) with y-axis labels.
     grid_lines = []
-    for i in range(5):
-        value = round(y_max * i / 4)
+    for value in range(0, y_max + 1, y_step):
         y = py(value)
+        dash = "" if value == 0 else ' stroke-dasharray="3 5"'
+        opacity = "0.9" if value == 0 else "0.45"
         grid_lines.append(
             f'<line x1="{MARGIN_LEFT}" y1="{y:.1f}" x2="{WIDTH - MARGIN_RIGHT}" '
-            f'y2="{y:.1f}" stroke="{GRID_COLOR}" stroke-opacity="0.25" stroke-width="1"/>'
-            f'<text x="{MARGIN_LEFT - 8}" y="{y + 4:.1f}" text-anchor="end" '
-            f'font-size="12" fill="{TEXT_COLOR}">{value}</text>'
+            f'y2="{y:.1f}" stroke="{GRID_COLOR}" stroke-opacity="{opacity}" '
+            f'stroke-width="1"{dash}/>'
+            f'<text x="{MARGIN_LEFT - 10}" y="{y + 4:.1f}" text-anchor="end" '
+            f'font-size="11" fill="{TEXT_MUTED}">{_fmt(value)}</text>'
         )
 
-    # Up to five x-axis date labels, evenly spaced across the range.
     x_labels = []
-    for i in range(5):
-        day = date.fromordinal(x0 + round(x_span * i / 4))
-        anchor = "start" if i == 0 else ("end" if i == 4 else "middle")
+    for day, label in _month_ticks(x0, x1):
+        x = px(day)
         x_labels.append(
-            f'<text x="{px(day):.1f}" y="{HEIGHT - MARGIN_BOTTOM + 20}" '
-            f'text-anchor="{anchor}" font-size="12" fill="{TEXT_COLOR}">'
-            f"{day.strftime('%b %d, %Y')}</text>"
+            f'<line x1="{x:.1f}" y1="{baseline:.1f}" x2="{x:.1f}" y2="{baseline + 5:.1f}" '
+            f'stroke="{GRID_COLOR}" stroke-width="1"/>'
+            f'<text x="{x:.1f}" y="{baseline + 20:.1f}" text-anchor="middle" '
+            f'font-size="11" fill="{TEXT_MUTED}">{label}</text>'
         )
 
     last_date, last_count = points[-1]
+    end_x, end_y = px(last_date), py(last_count)
+    # Count badge pinned to the line's endpoint: a pill whose right edge sits
+    # a fixed gap left of the gold end-star, vertically centered on it, so the
+    # figure reads as part of the line instead of floating in the plot.
+    badge_text = f"{_fmt(last_count)} stars"
+    badge_w = round(len(badge_text) * 7.0 + 20)
+    badge_h = 22
+    badge_x = end_x - 14 - badge_w
+    badge_y = min(max(end_y - badge_h / 2, MARGIN_TOP - 18), baseline - badge_h)
+
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    title = f"{repo} — GitHub stars over time"
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}"',
         f' viewBox="0 0 {WIDTH} {HEIGHT}" role="img" aria-label="Star history of {repo}">\n',
         f"  <title>Star history of {repo}</title>\n",
+        "  <defs>\n",
+        '    <linearGradient id="cardGrad" x1="0" y1="0" x2="0" y2="1">\n',
+        f'      <stop offset="0" stop-color="{CARD_TOP}"/>',
+        f'<stop offset="1" stop-color="{CARD_BOTTOM}"/>\n',
+        "    </linearGradient>\n",
+        '    <linearGradient id="lineGrad" x1="0" y1="0" x2="1" y2="0">\n',
+        f'      <stop offset="0" stop-color="{LINE_START}"/>',
+        f'<stop offset="1" stop-color="{LINE_END}"/>\n',
+        "    </linearGradient>\n",
+        '    <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">\n',
+        f'      <stop offset="0" stop-color="{LINE_START}" stop-opacity="0.30"/>\n',
+        f'      <stop offset="1" stop-color="{LINE_START}" stop-opacity="0.02"/>\n',
+        "    </linearGradient>\n",
+        '    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">\n',
+        '      <feGaussianBlur stdDeviation="3.5"/>\n',
+        "    </filter>\n",
+        "  </defs>\n",
+        f'  <rect x="0.5" y="0.5" width="{WIDTH - 1}" height="{HEIGHT - 1}" rx="10"',
+        f' fill="url(#cardGrad)" stroke="{CARD_BORDER}"/>\n',
+        f"  {_starfield(repo)}\n",
         "  <g font-family=\"-apple-system, BlinkMacSystemFont, 'Segoe UI',"
         ' Helvetica, Arial, sans-serif">\n',
-        f'    <text x="{WIDTH / 2}" y="24" text-anchor="middle" font-size="16"',
-        f' font-weight="600" fill="{TEXT_COLOR}">{title}</text>\n    ',
+        f'    <path d="{_star_path(30, 25, 7)}" fill="{GOLD}"/>\n',
+        '    <text x="44" y="30" font-size="15" font-weight="600"',
+        f' fill="{TEXT_BRIGHT}">{repo}</text>\n',
+        f'    <text x="{WIDTH - 24}" y="30" text-anchor="end" font-size="12"',
+        f' fill="{TEXT_MUTED}">GitHub stars over time</text>\n    ',
         "".join(grid_lines),
         "\n    ",
         "".join(x_labels),
-        f'\n    <polyline points="{poly}" fill="none" stroke="{LINE_COLOR}"',
+        f'\n    <polygon points="{area}" fill="url(#areaGrad)"/>\n',
+        f'    <polyline points="{poly}" fill="none" stroke="url(#lineGrad)"',
+        ' stroke-width="6" stroke-opacity="0.35" stroke-linejoin="round"',
+        ' stroke-linecap="round" filter="url(#glow)"/>\n',
+        f'    <polyline points="{poly}" fill="none" stroke="url(#lineGrad)"',
         ' stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>\n',
-        f'    <circle cx="{px(last_date):.1f}" cy="{py(last_count):.1f}" r="4"',
-        f' fill="{LINE_COLOR}"/>\n',
-        f'    <text x="{px(last_date) - 8:.1f}" y="{py(last_count) - 10:.1f}"',
-        ' text-anchor="end" font-size="13" font-weight="600"',
-        f' fill="{LINE_COLOR}">{last_count} ★</text>\n',
-        f'    <text x="{WIDTH - MARGIN_RIGHT}" y="{HEIGHT - 8}" text-anchor="end"',
-        f' font-size="10" fill="{TEXT_COLOR}" fill-opacity="0.7">',
+        f'    <line x1="{badge_x + badge_w:.1f}" y1="{end_y:.1f}"',
+        f' x2="{end_x:.1f}" y2="{end_y:.1f}"',
+        f' stroke="{GOLD}" stroke-opacity="0.5" stroke-width="1"/>\n',
+        f'    <rect x="{badge_x:.1f}" y="{badge_y:.1f}"',
+        f' width="{badge_w}" height="{badge_h}" rx="11"',
+        f' fill="{CARD_TOP}" fill-opacity="0.92" stroke="{CARD_BORDER}"/>\n',
+        f'    <text x="{badge_x + badge_w / 2:.1f}" y="{badge_y + 15:.1f}" text-anchor="middle"',
+        f' font-size="13" font-weight="600" fill="{GOLD}">{badge_text}</text>\n',
+        f'    <circle cx="{end_x:.1f}" cy="{end_y:.1f}" r="6" fill="{GOLD}"',
+        ' opacity="0.4" filter="url(#glow)"/>\n',
+        f'    <path d="{_star_path(end_x, end_y, 7)}" fill="{GOLD}"/>\n',
+        f'    <text x="{WIDTH - 16}" y="{HEIGHT - 10}" text-anchor="end"',
+        f' font-size="10" fill="{TEXT_MUTED}" fill-opacity="0.8">',
         f"updated {generated}</text>\n",
         "  </g>\n</svg>\n",
     ]
