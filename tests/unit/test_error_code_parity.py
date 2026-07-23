@@ -77,7 +77,14 @@ def test_gdscript_and_python_string_values_match() -> None:
 def test_attach_bridge_codes_are_registered_in_both_languages() -> None:
     """The generic one-way contract would not catch a missing GDScript mirror."""
 
-    required = {"TRANSPORT_OUTCOME_UNKNOWN", "NEW_CLIENT_SESSION_REQUIRED"}
+    required = {
+        "TRANSPORT_OUTCOME_UNKNOWN",
+        "NEW_CLIENT_SESSION_REQUIRED",
+        "ATTACH_LOCK_TIMEOUT",
+        "PORT_OCCUPIED",
+        "BACKEND_START_FAILED",
+        "BACKEND_START_TIMEOUT",
+    }
     gdscript_codes = _parse_gdscript_codes()
     python_codes = {member.name: member.value for member in ErrorCode}
     assert required <= gdscript_codes.keys()

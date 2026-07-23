@@ -241,4 +241,5 @@ class LeaseClient:
         return httpx.AsyncClient(
             timeout=self._request_timeout,
             transport=self._transport,
+            trust_env=False,
         )

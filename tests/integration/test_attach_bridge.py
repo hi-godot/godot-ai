@@ -13,11 +13,13 @@ import time
 from pathlib import Path
 
 import httpx
+import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 
 from godot_ai import __version__
-from godot_ai.attach.ensure import BackendStatus
+from godot_ai.attach.ensure import BackendStatus, probe_backend
+from godot_ai.attach.lease import LeaseClient
 from godot_ai.attach.proxy import create_attach_proxy
 from godot_ai.protocol.attach import ATTACH_PROTOCOL_VERSION
 from tests.conftest import allocate_free_ports
@@ -50,6 +52,28 @@ async def _wait_backend_pid(log_path: Path, timeout: float = 10.0) -> int:
                 return int(match.group(1))
         await asyncio.sleep(0.05)
     raise AssertionError(f"backend PID did not appear in {log_path}")
+
+
+async def _wait_port_open(port: int, timeout: float = 15.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _port_open(port):
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"port {port} did not open within {timeout}s")
+
+
+def _external_status(instance_id: str = "integration-backend") -> BackendStatus:
+    return BackendStatus(
+        instance_id=instance_id,
+        server_version=__version__,
+        attach_protocol_version=ATTACH_PROTOCOL_VERSION,
+        ws_port=9500,
+        exclude_domains=(),
+        owner_type="external",
+        tool_catalog_hash="0" * 64,
+        package_path="test",
+    )
 
 
 def _bridge_transport(
@@ -255,6 +279,145 @@ mcp.run(transport="streamable-http", host="127.0.0.1", port=int(sys.argv[1]), sh
         assert error["code"] == "TRANSPORT_OUTCOME_UNKNOWN"
         assert error["data"]["retryable"] is False
         assert call_log.read_text(encoding="utf-8").splitlines() == ["called", "called"]
+    finally:
+        _terminate_test_process(process)
+        backend_log.close()
+
+
+@pytest.mark.parametrize("failure_name", ["connect_error", "connect_timeout"])
+@pytest.mark.parametrize("failure_phase", ["initialize", "tools/call"])
+async def test_real_stack_connect_failure_replays_once_before_dispatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_name: str,
+    failure_phase: str,
+) -> None:
+    """The raw recorder survives FastMCP wrapping and never duplicates mutation."""
+
+    http_port = allocate_free_ports(1)[0]
+    call_log = tmp_path / f"{failure_name}-calls.log"
+    backend_script = """
+import sys
+from pathlib import Path
+from fastmcp import FastMCP
+
+mcp = FastMCP("counting-backend")
+
+@mcp.tool
+def counted_mutation() -> dict:
+    path = Path(sys.argv[2])
+    count = len(path.read_text(encoding="utf-8").splitlines()) if path.exists() else 0
+    count += 1
+    with path.open("a", encoding="utf-8") as calls:
+        calls.write(f"{count}\\n")
+    return {"count": count}
+
+mcp.run(transport="streamable-http", host="127.0.0.1", port=int(sys.argv[1]), show_banner=False)
+"""
+    backend_log = (tmp_path / f"{failure_name}-backend.log").open("wb")
+    process = subprocess.Popen(
+        [sys.executable, "-c", backend_script, str(http_port), str(call_log)],
+        stdin=subprocess.DEVNULL,
+        stdout=backend_log,
+        stderr=backend_log,
+    )
+    original = httpx.AsyncHTTPTransport.handle_async_request
+    armed = False
+    refused = 0
+
+    async def fail_first_tool_connect(self, request: httpx.Request) -> httpx.Response:
+        nonlocal refused
+        if armed and refused == 0 and failure_phase.encode() in request.content:
+            refused += 1
+            error_type = (
+                httpx.ConnectError if failure_name == "connect_error" else httpx.ConnectTimeout
+            )
+            raise error_type("synthetic pre-dispatch failure", request=request)
+        return await original(self, request)
+
+    monkeypatch.setattr(
+        httpx.AsyncHTTPTransport,
+        "handle_async_request",
+        fail_first_tool_connect,
+    )
+
+    async def ensure_ready() -> BackendStatus:
+        return _external_status()
+
+    try:
+        await _wait_port_open(http_port)
+        proxy = create_attach_proxy(
+            f"http://127.0.0.1:{http_port}/mcp",
+            ensure_ready,
+            ensure_ready,
+        )
+        async with Client(proxy, timeout=20) as client:
+            assert "counted_mutation" in {tool.name for tool in await client.list_tools()}
+            armed = True
+            result = await client.call_tool("counted_mutation", {})
+
+        assert result.data == {"count": 1}
+        assert refused == 1
+        assert call_log.read_text(encoding="utf-8").splitlines() == ["1"]
+    finally:
+        _terminate_test_process(process)
+        backend_log.close()
+
+
+async def test_loopback_status_lease_and_mcp_ignore_proxy_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    http_port, ws_port, bogus_proxy_port = allocate_free_ports(3)
+    backend_log = (tmp_path / "loopback-backend.log").open("wb")
+    env = dict(os.environ)
+    env["GODOT_AI_DISABLE_TELEMETRY"] = "true"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "godot_ai",
+            "--transport",
+            "streamable-http",
+            "--port",
+            str(http_port),
+            "--ws-port",
+            str(ws_port),
+        ],
+        cwd=str(Path(__file__).resolve().parents[2]),
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=backend_log,
+        stderr=backend_log,
+    )
+
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        monkeypatch.setenv(name, f"http://127.0.0.1:{bogus_proxy_port}")
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.setenv(name, "")
+
+    async def ensure_ready() -> BackendStatus:
+        status = await probe_backend(http_port, timeout=5)
+        assert status is not None
+        return status
+
+    try:
+        await _wait_port_open(http_port)
+        status = await ensure_ready()
+
+        lease = LeaseClient(f"http://127.0.0.1:{http_port}", ensure_ready)
+        await lease.start(status)
+        try:
+            proxy = create_attach_proxy(
+                f"http://127.0.0.1:{http_port}/mcp",
+                ensure_ready,
+                ensure_ready,
+            )
+            async with Client(proxy, timeout=20) as client:
+                names = {tool.name for tool in await client.list_tools()}
+            assert {"editor_state", "test_run"} <= names
+        finally:
+            await lease.close()
     finally:
         _terminate_test_process(process)
         backend_log.close()

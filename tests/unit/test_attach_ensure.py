@@ -78,8 +78,9 @@ def install_probe_response(
     error: Exception | None = None,
 ) -> None:
     class FakeClient:
-        def __init__(self, *, timeout: float) -> None:
+        def __init__(self, *, timeout: float, trust_env: bool) -> None:
             self.timeout = timeout
+            assert trust_env is False
 
         async def __aenter__(self):
             return self
@@ -106,6 +107,28 @@ def test_backend_status_validates_brand_fields_and_domains() -> None:
         BackendStatus.from_payload(status_payload(instance_id=42))
     with pytest.raises(ValueError, match="excluded domains"):
         BackendStatus.from_payload(status_payload(exclude_domains=["audio", 42]))
+
+
+def test_attach_startup_error_carries_source_retryability() -> None:
+    transient = AttachStartupError(
+        "ATTACH_LOCK_TIMEOUT",
+        "lock busy",
+        hint="retry",
+        retryable=True,
+        data={"path": "attach.lock"},
+    )
+    terminal = AttachStartupError(
+        "BACKEND_START_FAILED",
+        "child exited",
+        hint="inspect log",
+    )
+
+    assert transient.data == {
+        "retryable": True,
+        "hint": "retry",
+        "path": "attach.lock",
+    }
+    assert terminal.data["retryable"] is False
 
 
 def test_user_runtime_dir_covers_override_and_platform_fallbacks(
@@ -182,8 +205,10 @@ async def test_advisory_lock_times_out_and_release_without_handle_is_safe(tmp_pa
     await first.__aenter__()
     try:
         contender = AdvisoryFileLock(path, timeout_seconds=0.01, poll_seconds=0.001)
-        with pytest.raises(AttachStartupError, match="Timed out"):
+        with pytest.raises(AttachStartupError, match="Timed out") as exc_info:
             await contender.__aenter__()
+        assert exc_info.value.code == "ATTACH_LOCK_TIMEOUT"
+        assert exc_info.value.data["retryable"] is True
         contender._release()
     finally:
         await first.__aexit__(None, None, None)
@@ -469,6 +494,7 @@ async def test_spawned_backend_health_timeout_reports_log(tmp_path: Path) -> Non
 
     assert exc_info.value.code == "BACKEND_START_TIMEOUT"
     assert exc_info.value.data["log_path"] == str(log_path)
+    assert exc_info.value.data["retryable"] is True
 
 
 @pytest.mark.parametrize(

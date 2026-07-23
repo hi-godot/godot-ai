@@ -18,6 +18,12 @@ class ErrorCode(StrEnum):
     # Emitted by attach when package/protocol drift cannot be repaired inside
     # the running upstream MCP session.
     NEW_CLIENT_SESSION_REQUIRED = "NEW_CLIENT_SESSION_REQUIRED"
+    # Python-originated attach startup failures. Mirrored in GDScript as
+    # public registry constants even though the plugin has no emit path.
+    ATTACH_LOCK_TIMEOUT = "ATTACH_LOCK_TIMEOUT"
+    PORT_OCCUPIED = "PORT_OCCUPIED"
+    BACKEND_START_FAILED = "BACKEND_START_FAILED"
+    BACKEND_START_TIMEOUT = "BACKEND_START_TIMEOUT"
     UNKNOWN_COMMAND = "UNKNOWN_COMMAND"
     INTERNAL_ERROR = "INTERNAL_ERROR"
     DEFERRED_TIMEOUT = "DEFERRED_TIMEOUT"

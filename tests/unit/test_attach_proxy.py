@@ -9,17 +9,27 @@ from typing import Any
 
 import httpx
 import pytest
-from mcp.types import CallToolResult, TextContent, Tool
+from mcp.shared.exceptions import McpError
+from mcp.types import CallToolResult, ErrorData, TextContent, Tool
 
 from godot_ai import __version__
 from godot_ai.attach import proxy as proxy_module
 from godot_ai.attach.ensure import AttachStartupError, BackendStatus
 from godot_ai.attach.proxy import (
+    _OPERATION_TRACE,
     AttachProxyProvider,
     AttachProxyTool,
     AttachRecoveryMiddleware,
+    OperationTrace,
+    RecordingAsyncHTTPTransport,
+    TransportFailure,
     _BackendChanged,
+    _exception_chain,
     _http_client_factory,
+    _is_proven_pre_dispatch_failure,
+    _record_http_error_response,
+    _record_transport_failure,
+    _request_phase,
     create_attach_proxy,
 )
 from godot_ai.fastmcp_compat import ToolResult
@@ -316,6 +326,40 @@ async def test_second_connect_refusal_is_retryable_but_not_replayed_again() -> N
     assert "Open this project" not in error["data"]["hint"]
 
 
+async def test_second_laundered_initialize_failure_is_not_outcome_unknown() -> None:
+    calls = 0
+
+    async def ensure() -> BackendStatus:
+        return _status()
+
+    async def call_next(_context: Any) -> ToolResult:
+        nonlocal calls
+        calls += 1
+        request = httpx.Request(
+            "POST",
+            "http://127.0.0.1/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+        )
+        raw = httpx.ReadError("initialize stream lost", request=request)
+        trace = _OPERATION_TRACE.get()
+        assert trace is not None
+        trace.failures.append(
+            TransportFailure(
+                phase="initialize",
+                error=raw,
+                connect_class=False,
+            )
+        )
+        raise McpError(ErrorData(code=-32000, message="Connection closed"))
+
+    result = await AttachRecoveryMiddleware(ensure).on_call_tool(_context(), call_next)
+    error = result.to_mcp_result().structuredContent["error"]
+
+    assert calls == 2
+    assert error["code"] == "PLUGIN_DISCONNECTED"
+    assert error["data"]["retryable"] is True
+
+
 async def test_downstream_http_client_has_no_read_deadline() -> None:
     client = _http_client_factory()
     try:
@@ -325,6 +369,160 @@ async def test_downstream_http_client_has_no_read_deadline() -> None:
         assert client.timeout.pool == 5.0
     finally:
         await client.aclose()
+
+
+def test_exception_chain_descends_exception_groups() -> None:
+    request = httpx.Request("POST", "http://127.0.0.1/mcp")
+    leaf = httpx.ConnectTimeout("connect timed out", request=request)
+    group = ExceptionGroup("transport", [ValueError("other"), leaf])
+
+    assert leaf in _exception_chain(group)
+
+
+def test_exception_chain_follows_causes_without_looping() -> None:
+    root = RuntimeError("root")
+    outer = ValueError("outer")
+    outer.__cause__ = root
+    root.__context__ = outer
+
+    assert _exception_chain(outer) == [outer, root]
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ([{"method": "tools/call"}], "http"),
+        ({"method": "initialize"}, "initialize"),
+        ({"method": "notifications/initialized"}, "initialized-notification"),
+    ],
+)
+def test_request_phase_handles_non_object_and_initialized_notification(
+    payload: Any,
+    expected: str,
+) -> None:
+    request = httpx.Request("POST", "http://127.0.0.1/mcp", json=payload)
+
+    assert _request_phase(request) == expected
+
+
+def test_request_phase_handles_malformed_json() -> None:
+    request = httpx.Request("POST", "http://127.0.0.1/mcp", content=b"{")
+
+    assert _request_phase(request) == "http"
+
+
+def test_transport_failure_without_operation_trace_is_ignored() -> None:
+    request = httpx.Request("POST", "http://127.0.0.1/mcp")
+
+    _record_transport_failure(request, httpx.ReadError("reset", request=request))
+
+
+async def test_response_hook_records_http_status_error() -> None:
+    request = httpx.Request(
+        "POST",
+        "http://127.0.0.1/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+    )
+    response = httpx.Response(503, request=request)
+    trace = OperationTrace()
+    token = _OPERATION_TRACE.set(trace)
+    try:
+        await _record_http_error_response(response)
+    finally:
+        _OPERATION_TRACE.reset(token)
+
+    assert len(trace.failures) == 1
+    assert trace.failures[0].phase == "tools/list"
+    assert trace.failures[0].status_code == 503
+    assert isinstance(trace.failures[0].error, httpx.HTTPStatusError)
+
+
+async def test_response_hook_ignores_success() -> None:
+    request = httpx.Request("POST", "http://127.0.0.1/mcp")
+    trace = OperationTrace()
+    token = _OPERATION_TRACE.set(trace)
+    try:
+        await _record_http_error_response(httpx.Response(200, request=request))
+    finally:
+        _OPERATION_TRACE.reset(token)
+
+    assert trace.failures == []
+
+
+async def test_recording_transport_captures_raw_transport_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def reset_transport(
+        _self: httpx.AsyncHTTPTransport,
+        request: httpx.Request,
+    ) -> httpx.Response:
+        raise httpx.ReadError("reset", request=request)
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", reset_transport)
+    trace = OperationTrace()
+    token = _OPERATION_TRACE.set(trace)
+    transport = RecordingAsyncHTTPTransport()
+    request = httpx.Request(
+        "POST",
+        "http://127.0.0.1/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/call"},
+    )
+    try:
+        with pytest.raises(httpx.ReadError, match="reset"):
+            await transport.handle_async_request(request)
+    finally:
+        await transport.aclose()
+        _OPERATION_TRACE.reset(token)
+
+    assert len(trace.failures) == 1
+    assert trace.failures[0].phase == "tools/call"
+    assert trace.failures[0].connect_class is False
+
+
+def test_shared_transport_trace_classifies_laundered_connect_timeout() -> None:
+    request = httpx.Request(
+        "POST",
+        "http://127.0.0.1/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {}},
+    )
+    raw = httpx.ConnectTimeout("connect timed out", request=request)
+    trace = OperationTrace(
+        failures=[
+            TransportFailure(
+                phase="tools/call",
+                error=raw,
+                connect_class=True,
+            )
+        ]
+    )
+    token = _OPERATION_TRACE.set(trace)
+    try:
+        wrapped = McpError(ErrorData(code=-32000, message="request timed out"))
+        assert _is_proven_pre_dispatch_failure(wrapped) is True
+    finally:
+        _OPERATION_TRACE.reset(token)
+
+
+async def test_recording_transport_does_not_turn_cancellation_into_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def cancel_transport(
+        _self: httpx.AsyncHTTPTransport,
+        _request: httpx.Request,
+    ) -> httpx.Response:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", cancel_transport)
+    trace = OperationTrace()
+    token = _OPERATION_TRACE.set(trace)
+    transport = RecordingAsyncHTTPTransport()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await transport.handle_async_request(httpx.Request("POST", "http://127.0.0.1/mcp"))
+        assert trace.failures == []
+    finally:
+        await transport.aclose()
+        _OPERATION_TRACE.reset(token)
 
 
 async def test_backend_editor_busy_error_passes_through_untouched() -> None:
@@ -494,6 +692,223 @@ async def test_tool_initial_ensure_failure_is_structured() -> None:
     assert result.to_mcp_result().structuredContent["error"]["code"] == (
         "NEW_CLIENT_SESSION_REQUIRED"
     )
+
+
+async def test_tool_startup_error_preserves_code_data_hint_and_retryability() -> None:
+    async def ensure() -> BackendStatus:
+        raise AttachStartupError(
+            "PORT_OCCUPIED",
+            "foreign listener",
+            hint="free the port",
+            data={"port": 8123},
+        )
+
+    result = await AttachRecoveryMiddleware(ensure).on_call_tool(
+        _context(),
+        lambda _context: None,  # type: ignore[arg-type]
+    )
+    error = result.to_mcp_result().structuredContent["error"]
+
+    assert error["code"] == "PORT_OCCUPIED"
+    assert error["data"] == {
+        "port": 8123,
+        "retryable": False,
+        "hint": "free the port",
+        "sub_code": "PORT_OCCUPIED",
+    }
+
+
+async def test_safe_request_initial_startup_error_is_protocol_structured() -> None:
+    async def ensure() -> BackendStatus:
+        raise AttachStartupError(
+            "ATTACH_LOCK_TIMEOUT",
+            "startup lock busy",
+            hint="retry shortly",
+            retryable=True,
+            data={"path": "attach.lock"},
+        )
+
+    with pytest.raises(McpError) as exc_info:
+        await AttachRecoveryMiddleware(ensure).on_request(
+            _context(method="tools/list"),
+            lambda _context: None,  # type: ignore[arg-type]
+        )
+
+    assert exc_info.value.error.data == {
+        "path": "attach.lock",
+        "retryable": True,
+        "hint": "retry shortly",
+        "code": "ATTACH_LOCK_TIMEOUT",
+        "sub_code": "ATTACH_LOCK_TIMEOUT",
+    }
+
+
+async def test_safe_request_second_backend_change_is_protocol_structured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def ensure() -> BackendStatus:
+        return _status()
+
+    middleware = AttachRecoveryMiddleware(ensure)
+
+    async def always_changed(*_args):
+        raise _BackendChanged("instance-a")
+
+    monkeypatch.setattr(middleware, "_run_with_instance_monitor", always_changed)
+    with pytest.raises(McpError) as exc_info:
+        await middleware.on_request(
+            _context(method="tools/list"),
+            lambda _context: None,  # type: ignore[arg-type]
+        )
+
+    assert exc_info.value.error.data["code"] == "PLUGIN_DISCONNECTED"
+    assert exc_info.value.error.data["retryable"] is True
+
+
+async def test_safe_request_retry_preserves_startup_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ensures = 0
+
+    async def ensure() -> BackendStatus:
+        nonlocal ensures
+        ensures += 1
+        if ensures == 1:
+            return _status()
+        raise AttachStartupError(
+            "BACKEND_START_TIMEOUT",
+            "backend still starting",
+            hint="retry",
+            retryable=True,
+            data={"log_path": "backend.log"},
+        )
+
+    middleware = AttachRecoveryMiddleware(ensure)
+
+    async def changed_once(*_args):
+        raise _BackendChanged("instance-a")
+
+    monkeypatch.setattr(middleware, "_run_with_instance_monitor", changed_once)
+    with pytest.raises(McpError) as exc_info:
+        await middleware.on_request(
+            _context(method="tools/list"),
+            lambda _context: None,  # type: ignore[arg-type]
+        )
+
+    assert exc_info.value.error.data["code"] == "BACKEND_START_TIMEOUT"
+    assert exc_info.value.error.data["log_path"] == "backend.log"
+
+
+async def test_safe_request_preserves_startup_error_from_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def ensure() -> BackendStatus:
+        return _status()
+
+    middleware = AttachRecoveryMiddleware(ensure)
+
+    async def fail_during_dispatch(*_args):
+        raise AttachStartupError(
+            "PORT_OCCUPIED",
+            "foreign listener",
+            hint="free the port",
+            data={"port": 8123},
+        )
+
+    monkeypatch.setattr(middleware, "_run_with_instance_monitor", fail_during_dispatch)
+    with pytest.raises(McpError) as exc_info:
+        await middleware.on_request(
+            _context(method="tools/list"),
+            lambda _context: None,  # type: ignore[arg-type]
+        )
+
+    assert exc_info.value.error.data["code"] == "PORT_OCCUPIED"
+    assert exc_info.value.error.data["port"] == 8123
+
+
+async def test_safe_request_second_transport_failure_is_protocol_structured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def ensure() -> BackendStatus:
+        return _status()
+
+    middleware = AttachRecoveryMiddleware(ensure)
+
+    async def always_reset(*_args):
+        raise httpx.ReadError(
+            "reset",
+            request=httpx.Request("POST", "http://127.0.0.1/mcp"),
+        )
+
+    monkeypatch.setattr(middleware, "_run_with_instance_monitor", always_reset)
+    with pytest.raises(McpError) as exc_info:
+        await middleware.on_request(
+            _context(method="tools/list"),
+            lambda _context: None,  # type: ignore[arg-type]
+        )
+
+    assert exc_info.value.error.data["code"] == "PLUGIN_DISCONNECTED"
+    assert exc_info.value.error.data["retryable"] is True
+
+
+async def test_http_status_error_is_retried_for_safe_request() -> None:
+    calls = 0
+
+    async def ensure() -> BackendStatus:
+        return _status()
+
+    async def call_next(_context: Any) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            request = httpx.Request("POST", "http://127.0.0.1/mcp")
+            response = httpx.Response(503, request=request)
+            raise httpx.HTTPStatusError("unavailable", request=request, response=response)
+        return "tools"
+
+    result = await AttachRecoveryMiddleware(ensure).on_request(
+        _context(method="tools/list"),
+        call_next,
+    )
+
+    assert result == "tools"
+    assert calls == 2
+
+
+async def test_cancelling_call_cleans_up_monitor_and_downstream_tasks() -> None:
+    probes = 0
+    call_cancelled = asyncio.Event()
+
+    async def ensure() -> BackendStatus:
+        return _status()
+
+    async def observe() -> BackendStatus:
+        nonlocal probes
+        probes += 1
+        return _status()
+
+    async def call_next(_context: Any) -> ToolResult:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            call_cancelled.set()
+
+    task = asyncio.create_task(
+        AttachRecoveryMiddleware(
+            ensure,
+            observe,
+            dispatch_monitor_seconds=0.001,
+        ).on_call_tool(_context(tool_name="test_run"), call_next)
+    )
+    while probes < 2:
+        await asyncio.sleep(0.001)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.wait_for(call_cancelled.wait(), timeout=1)
+    probe_count = probes
+    await asyncio.sleep(0.02)
+    assert probes == probe_count
 
 
 async def test_tool_reraises_non_transport_failure() -> None:

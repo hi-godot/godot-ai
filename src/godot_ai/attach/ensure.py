@@ -88,6 +88,7 @@ class AttachStartupError(RuntimeError):
         *,
         hint: str,
         exit_code: int = 1,
+        retryable: bool = False,
         data: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(f"[{code}] {message} Hint: {hint}")
@@ -95,7 +96,7 @@ class AttachStartupError(RuntimeError):
         self.message = message
         self.hint = hint
         self.exit_code = exit_code
-        self.data = {"retryable": False, "hint": hint, **(data or {})}
+        self.data = {"retryable": retryable, "hint": hint, **(data or {})}
 
     def stderr_text(self) -> str:
         details = json.dumps(self.data, ensure_ascii=False, sort_keys=True)
@@ -186,6 +187,7 @@ class AdvisoryFileLock:
                             "Close stale godot-ai attach processes or retry after "
                             "they finish starting."
                         ),
+                        retryable=True,
                     ) from exc
                 time.sleep(self.poll_seconds)
 
@@ -215,7 +217,7 @@ async def probe_backend(
 
     url = f"http://127.0.0.1:{port}/godot-ai/status"
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             response = await client.get(url)
     except httpx.TransportError:
         return None
@@ -392,6 +394,7 @@ class BackendEnsurer:
                     f"Inspect {spawned.log_path}. The bridge did not kill the child; "
                     "its boot-grace reaper will clean it up if it remains idle."
                 ),
+                retryable=True,
                 data={"log_path": str(spawned.log_path)},
             )
 

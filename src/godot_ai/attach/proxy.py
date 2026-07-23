@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
+import contextvars
+import json
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 import anyio
@@ -13,7 +15,8 @@ from fastmcp import Client, FastMCP
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.server.providers.proxy import ProxyProvider, ProxyTool
-from mcp.types import CallToolRequestParams, TextContent
+from mcp.shared.exceptions import McpError
+from mcp.types import INTERNAL_ERROR, CallToolRequestParams, ErrorData, TextContent
 
 from godot_ai.attach.ensure import AttachStartupError, BackendStatus
 from godot_ai.fastmcp_compat import ToolResult
@@ -34,6 +37,94 @@ ObserveBackend = Callable[[], Awaitable[BackendStatus | None]]
 
 class _BackendChanged(RuntimeError):
     """The monitored backend identity changed while an operation was in flight."""
+
+
+@dataclass(frozen=True)
+class TransportFailure:
+    """One raw downstream transport failure captured before FastMCP wraps it."""
+
+    phase: str
+    error: BaseException
+    connect_class: bool
+    status_code: int | None = None
+
+
+@dataclass
+class OperationTrace:
+    """Mutable trace shared with AnyIO child tasks through a ContextVar."""
+
+    failures: list[TransportFailure] = field(default_factory=list)
+
+    def begin_attempt(self) -> None:
+        self.failures.clear()
+
+
+_OPERATION_TRACE: contextvars.ContextVar[OperationTrace | None] = contextvars.ContextVar(
+    "godot_ai_attach_operation_trace",
+    default=None,
+)
+
+
+def _request_phase(request: httpx.Request) -> str:
+    """Derive the phase from this request body, never shared mutable state."""
+
+    try:
+        payload = json.loads(request.content)
+    except (json.JSONDecodeError, TypeError, UnicodeDecodeError, httpx.RequestNotRead):
+        return "http"
+    if not isinstance(payload, dict):
+        return "http"
+    method = payload.get("method")
+    if method == "initialize":
+        return "initialize"
+    if method == "notifications/initialized":
+        return "initialized-notification"
+    return str(method) if isinstance(method, str) else "http"
+
+
+def _record_transport_failure(
+    request: httpx.Request,
+    error: BaseException,
+    *,
+    status_code: int | None = None,
+) -> None:
+    trace = _OPERATION_TRACE.get()
+    if trace is None:
+        return
+    trace.failures.append(
+        TransportFailure(
+            phase=_request_phase(request),
+            error=error,
+            connect_class=isinstance(error, (httpx.ConnectError, httpx.ConnectTimeout)),
+            status_code=status_code,
+        )
+    )
+
+
+class RecordingAsyncHTTPTransport(httpx.AsyncHTTPTransport):
+    """Capture raw httpx failures before the MCP client task group launders them."""
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        try:
+            return await super().handle_async_request(request)
+        except Exception as exc:
+            _record_transport_failure(request, exc)
+            raise
+
+
+async def _record_http_error_response(response: httpx.Response) -> None:
+    """Record received HTTP errors without changing when the SDK raises them."""
+
+    if not response.is_error:
+        return
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        _record_transport_failure(
+            response.request,
+            exc,
+            status_code=response.status_code,
+        )
 
 
 class AttachProxyTool(ProxyTool):
@@ -110,21 +201,46 @@ def _http_client_factory(
         auth=auth,
         follow_redirects=follow_redirects,
         timeout=timeout,
+        transport=RecordingAsyncHTTPTransport(),
+        event_hooks={"response": [_record_http_error_response]},
+        trust_env=False,
     )
 
 
 def _exception_chain(exc: BaseException) -> list[BaseException]:
     chain: list[BaseException] = []
     seen: set[int] = set()
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
+    pending: list[BaseException] = [exc]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
         chain.append(current)
         seen.add(id(current))
-        current = current.__cause__ or current.__context__
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend(reversed(current.exceptions))
+        linked = current.__cause__ or current.__context__
+        if linked is not None:
+            pending.append(linked)
     return chain
 
 
-def _is_proven_connect_failure(exc: BaseException) -> bool:
+def _trace_failures() -> tuple[TransportFailure, ...]:
+    trace = _OPERATION_TRACE.get()
+    return tuple(trace.failures) if trace is not None else ()
+
+
+def _is_proven_pre_dispatch_failure(exc: BaseException) -> bool:
+    failures = _trace_failures()
+    if failures:
+        # Initialization failures prove that the operation request was never
+        # sent. Once the operation request itself exists, only connect-class
+        # failures prove that no request bytes reached the backend.
+        return any(
+            failure.phase == "initialize"
+            or (failure.phase == "tools/call" and failure.connect_class)
+            for failure in failures
+        )
     return any(
         isinstance(item, (httpx.ConnectError, httpx.ConnectTimeout))
         for item in _exception_chain(exc)
@@ -138,25 +254,30 @@ def _is_transport_failure(exc: BaseException) -> bool:
         anyio.ClosedResourceError,
         anyio.BrokenResourceError,
         anyio.EndOfStream,
+        httpx.HTTPStatusError,
     )
-    return any(isinstance(item, transport_types) for item in _exception_chain(exc))
+    return bool(_trace_failures()) or any(
+        isinstance(item, transport_types) for item in _exception_chain(exc)
+    )
 
 
 def _error_result(
-    code: ErrorCode,
+    code: ErrorCode | str,
     message: str,
     hint: str,
     *,
     retryable: bool = False,
+    data: dict[str, Any] | None = None,
 ) -> ToolResult:
+    code_value = code.value if isinstance(code, ErrorCode) else code
+    details = dict(data or {})
+    details.setdefault("sub_code", code_value)
+    details.setdefault("retryable", retryable)
+    details.setdefault("hint", hint)
     payload = {
-        "code": code.value,
+        "code": code_value,
         "message": message,
-        "data": {
-            "sub_code": code.value,
-            "retryable": retryable,
-            "hint": hint,
-        },
+        "data": details,
     }
     return GodotCommandErrorToolResult(
         content=[TextContent(type="text", text=f"{message} {hint}")],
@@ -178,8 +299,50 @@ def _outcome_unknown_result(tool_name: str) -> ToolResult:
     )
 
 
-def _new_session_result(exc: AttachStartupError) -> ToolResult:
-    return _error_result(ErrorCode.NEW_CLIENT_SESSION_REQUIRED, exc.message, exc.hint)
+def _startup_error_result(exc: AttachStartupError) -> ToolResult:
+    return _error_result(
+        exc.code,
+        exc.message,
+        exc.hint,
+        retryable=bool(exc.data.get("retryable", False)),
+        data=exc.data,
+    )
+
+
+def _mcp_error(
+    code: ErrorCode | str,
+    message: str,
+    hint: str,
+    *,
+    retryable: bool,
+    data: dict[str, Any] | None = None,
+) -> McpError:
+    code_value = code.value if isinstance(code, ErrorCode) else code
+    details = dict(data or {})
+    details.setdefault("code", code_value)
+    details.setdefault("sub_code", code_value)
+    details.setdefault("retryable", retryable)
+    details.setdefault("hint", hint)
+    return McpError(ErrorData(code=INTERNAL_ERROR, message=message, data=details))
+
+
+def _startup_mcp_error(exc: AttachStartupError) -> McpError:
+    return _mcp_error(
+        exc.code,
+        exc.message,
+        exc.hint,
+        retryable=bool(exc.data.get("retryable", False)),
+        data=exc.data,
+    )
+
+
+def _backend_unstable_mcp_error() -> McpError:
+    return _mcp_error(
+        ErrorCode.PLUGIN_DISCONNECTED,
+        "The shared Godot AI backend changed or failed twice during this request.",
+        "The request is safe to retry; restarting the MCP client is not required.",
+        retryable=True,
+    )
 
 
 def _backend_unavailable_result() -> ToolResult:
@@ -221,58 +384,75 @@ class AttachRecoveryMiddleware(Middleware):
         ## recognized transport failure.
         if context.method == "tools/call":
             return await call_next(context)
-        initial_status = await self._ensure_ready()
+        token = _OPERATION_TRACE.set(OperationTrace())
         try:
-            return await self._run_with_instance_monitor(context, call_next, initial_status)
-        except _BackendChanged:
-            retry_status = await self._ensure_ready()
-            return await self._run_with_instance_monitor(context, call_next, retry_status)
-        except BaseException as exc:
-            if not _is_transport_failure(exc):
-                raise
-            retry_status = await self._ensure_ready()
-            return await self._run_with_instance_monitor(context, call_next, retry_status)
+            for attempt in range(2):
+                try:
+                    status = await self._ensure_ready()
+                except AttachStartupError as exc:
+                    raise _startup_mcp_error(exc) from None
+                try:
+                    return await self._run_with_instance_monitor(context, call_next, status)
+                except AttachStartupError as exc:
+                    raise _startup_mcp_error(exc) from None
+                except _BackendChanged:
+                    if attempt == 0:
+                        continue
+                    raise _backend_unstable_mcp_error() from None
+                except BaseException as exc:
+                    if not _is_transport_failure(exc):
+                        raise
+                    if attempt == 0:
+                        continue
+                    raise _backend_unstable_mcp_error() from None
+            raise AssertionError("safe request recovery loop exhausted")  # pragma: no cover
+        finally:
+            _OPERATION_TRACE.reset(token)
 
     async def on_call_tool(
         self,
         context: MiddlewareContext[CallToolRequestParams],
         call_next: CallNext[CallToolRequestParams, ToolResult],
     ) -> ToolResult:
+        token = _OPERATION_TRACE.set(OperationTrace())
         try:
-            initial_status = await self._ensure_ready()
-        except AttachStartupError as ensure_exc:
-            return _new_session_result(ensure_exc)
-        try:
-            return await self._run_with_instance_monitor(context, call_next, initial_status)
-        except _BackendChanged:
-            return _outcome_unknown_result(context.message.name)
-        except BaseException as exc:
-            if not _is_proven_connect_failure(exc):
-                if _is_transport_failure(exc):
+            try:
+                initial_status = await self._ensure_ready()
+            except AttachStartupError as ensure_exc:
+                return _startup_error_result(ensure_exc)
+            try:
+                return await self._run_with_instance_monitor(context, call_next, initial_status)
+            except _BackendChanged:
+                return _outcome_unknown_result(context.message.name)
+            except BaseException as exc:
+                if not _is_proven_pre_dispatch_failure(exc):
+                    if _is_transport_failure(exc):
+                        return _outcome_unknown_result(context.message.name)
+                    raise
+
+            # This is the sole tools/call replay path: initialization failed
+            # before the operation existed, or the operation's HTTP connect
+            # failed before any request bytes could be sent.
+            try:
+                retry_status = await self._ensure_ready()
+            except AttachStartupError as ensure_exc:
+                return _startup_error_result(ensure_exc)
+            try:
+                return await self._run_with_instance_monitor(context, call_next, retry_status)
+            except AttachStartupError as ensure_exc:
+                return _startup_error_result(ensure_exc)
+            except _BackendChanged:
+                return _outcome_unknown_result(context.message.name)
+            except BaseException as retry_exc:
+                if _is_proven_pre_dispatch_failure(retry_exc):
+                    # The single safe replay also failed before dispatch. Do
+                    # not mislabel it as an ambiguous mutation, and do not loop.
+                    return _backend_unavailable_result()
+                if _is_transport_failure(retry_exc):
                     return _outcome_unknown_result(context.message.name)
                 raise
-
-        ## ConnectError proves no HTTP connection was established and therefore
-        ## no request bytes reached the backend. This is the sole tools/call
-        ## replay path.
-        try:
-            retry_status = await self._ensure_ready()
-        except AttachStartupError as ensure_exc:
-            return _new_session_result(ensure_exc)
-        try:
-            return await self._run_with_instance_monitor(context, call_next, retry_status)
-        except AttachStartupError as ensure_exc:
-            return _new_session_result(ensure_exc)
-        except _BackendChanged:
-            return _outcome_unknown_result(context.message.name)
-        except BaseException as retry_exc:
-            if _is_proven_connect_failure(retry_exc):
-                # The single safe replay was also refused before dispatch. Do
-                # not mislabel this as an ambiguous mutation, and do not loop.
-                return _backend_unavailable_result()
-            if _is_transport_failure(retry_exc):
-                return _outcome_unknown_result(context.message.name)
-            raise
+        finally:
+            _OPERATION_TRACE.reset(token)
 
     async def _run_with_instance_monitor(
         self,
@@ -283,29 +463,36 @@ class AttachRecoveryMiddleware(Middleware):
         """Run one operation while watching backend identity, without a time limit."""
 
         if self._observe_backend is None:
+            trace = _OPERATION_TRACE.get()
+            if trace is not None:
+                trace.begin_attempt()
             return await call_next(context)
 
+        trace = _OPERATION_TRACE.get()
+        if trace is not None:
+            trace.begin_attempt()
         call_task = asyncio.create_task(call_next(context))
         monitor_task = asyncio.create_task(
             self._wait_for_backend_change(initial_status.instance_id)
         )
-        done, _pending = await asyncio.wait(
-            {call_task, monitor_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if call_task in done:
-            monitor_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await monitor_task
-            return await call_task
+        tasks = (call_task, monitor_task)
+        try:
+            done, _pending = await asyncio.wait(
+                tasks,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if call_task in done:
+                return call_task.result()
 
-        # The backend disappeared, changed identity, or became incompatible
-        # after dispatch. Cancel only the local downstream wait; never replay
-        # the operation, whose effects may already have committed.
-        call_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await call_task
-        raise _BackendChanged(initial_status.instance_id)
+            # The backend disappeared, changed identity, or became incompatible
+            # after dispatch. Cancel only the local downstream wait; never replay
+            # the operation, whose effects may already have committed.
+            raise _BackendChanged(initial_status.instance_id)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _wait_for_backend_change(self, initial_instance_id: str) -> None:
         observe_backend = self._observe_backend
@@ -343,6 +530,12 @@ def create_attach_proxy(
         # A new disconnected client and transport per provider operation keeps
         # the bridge sessionless. MCP request deadlines are disabled; the HTTP
         # factory separately retains bounded connect/write/pool phases.
+        # FastMCP 3.0 exposes an event_store option, but end-to-end resumption
+        # after a severed response stream hangs at the supported floor. Do not
+        # enable it until that compatibility gap is fixed. A same-instance
+        # network stream loss, or a server request task that dies without a
+        # response, can therefore wait indefinitely; upstream cancellation is
+        # the safe escape hatch and must remain cancellation-clean.
         return Client(
             transport,
             timeout=None,
