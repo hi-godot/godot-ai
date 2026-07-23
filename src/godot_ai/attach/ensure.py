@@ -17,7 +17,11 @@ from typing import Any, Awaitable, Callable, Protocol
 import httpx
 
 from godot_ai import __version__
-from godot_ai.protocol.attach import ATTACH_PROTOCOL_VERSION, ATTACH_SPAWNED_ENV
+from godot_ai.protocol.attach import (
+    ATTACH_PROTOCOL_VERSION,
+    ATTACH_SPAWNED_ENV,
+    DEV_TRANSPORT_ENV,
+)
 from godot_ai.protocol.errors import ErrorCode
 
 DEFAULT_HTTP_PORT = 8000
@@ -281,14 +285,7 @@ def spawn_backend(port: int, ws_port: int, exclude_domains: tuple[str, ...]) -> 
     ]
     if exclude_domains:
         args.extend(("--exclude-domains", ",".join(exclude_domains)))
-    env = os.environ.copy()
-    env[ATTACH_SPAWNED_ENV] = "1"
-    for inherited_plugin_key in (
-        "GODOT_AI_PLUGIN_SPAWNED",
-        "GODOT_AI_OWNER_PID",
-        "GODOT_AI_WS_TOKEN",
-    ):
-        env.pop(inherited_plugin_key, None)
+    env = _backend_spawn_env()
 
     with log_path.open("ab", buffering=0) as log:
         process = subprocess.Popen(
@@ -299,6 +296,23 @@ def spawn_backend(port: int, ws_port: int, exclude_domains: tuple[str, ...]) -> 
             **detached_spawn_kwargs(),
         )
     return SpawnedBackend(process=process, log_path=log_path)
+
+
+def _backend_spawn_env() -> dict[str, str]:
+    """Build a clean environment for the independent attach-owned backend."""
+
+    env = os.environ.copy()
+    env[ATTACH_SPAWNED_ENV] = "1"
+    for inherited_process_key in (
+        "GODOT_AI_PLUGIN_SPAWNED",
+        "GODOT_AI_OWNER_PID",
+        "GODOT_AI_WS_TOKEN",
+        # A bridge launched from a reload worker must not make its independent
+        # child look like another reload worker; that marker disables reaping.
+        DEV_TRANSPORT_ENV,
+    ):
+        env.pop(inherited_process_key, None)
+    return env
 
 
 Probe = Callable[[int], Awaitable[BackendStatus | None]]

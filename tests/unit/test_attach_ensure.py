@@ -13,9 +13,14 @@ from godot_ai.attach.ensure import (
     BackendEnsurer,
     BackendStatus,
     SpawnedBackend,
+    _backend_spawn_env,
     detached_spawn_kwargs,
 )
-from godot_ai.protocol.attach import ATTACH_PROTOCOL_VERSION
+from godot_ai.protocol.attach import (
+    ATTACH_PROTOCOL_VERSION,
+    ATTACH_SPAWNED_ENV,
+    DEV_TRANSPORT_ENV,
+)
 
 
 class FakeProcess:
@@ -179,3 +184,22 @@ def test_detached_spawn_arguments_isolate_stdio_on_posix() -> None:
     assert kwargs["close_fds"] is True
     assert kwargs["start_new_session"] is True
     assert "creationflags" not in kwargs
+
+
+def test_backend_spawn_environment_removes_parent_process_markers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GODOT_AI_PLUGIN_SPAWNED", "1")
+    monkeypatch.setenv("GODOT_AI_OWNER_PID", "123")
+    monkeypatch.setenv("GODOT_AI_WS_TOKEN", "secret")
+    monkeypatch.setenv(DEV_TRANSPORT_ENV, "streamable-http")
+    monkeypatch.setenv("GODOT_AI_UNRELATED", "preserved")
+
+    env = _backend_spawn_env()
+
+    assert env[ATTACH_SPAWNED_ENV] == "1"
+    assert env["GODOT_AI_UNRELATED"] == "preserved"
+    assert "GODOT_AI_PLUGIN_SPAWNED" not in env
+    assert "GODOT_AI_OWNER_PID" not in env
+    assert "GODOT_AI_WS_TOKEN" not in env
+    assert DEV_TRANSPORT_ENV not in env

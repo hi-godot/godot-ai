@@ -12,7 +12,8 @@ import fastmcp
 import uvicorn
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-DEV_TRANSPORT_ENV = "GODOT_AI_DEV_TRANSPORT"
+from godot_ai.protocol.attach import DEV_TRANSPORT_ENV
+
 DEV_WS_PORT_ENV = "GODOT_AI_DEV_WS_PORT"
 DEV_EXCLUDE_DOMAINS_ENV = "GODOT_AI_DEV_EXCLUDE_DOMAINS"
 ## #421: reload runs the app in a uvicorn-supervised subprocess via the

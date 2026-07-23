@@ -37,7 +37,7 @@ import sys
 import time
 from collections.abc import Callable
 
-from godot_ai.protocol.attach import ATTACH_SPAWNED_ENV
+from godot_ai.protocol.attach import ATTACH_SPAWNED_ENV, DEV_TRANSPORT_ENV
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +70,6 @@ NO_IDLE_EXIT_ENV = "GODOT_AI_NO_IDLE_EXIT"
 DEFAULT_IDLE_GRACE_SECONDS = 120.0
 BOOT_GRACE_ENV = "GODOT_AI_IDLE_BOOT_GRACE_SECONDS"
 IDLE_GRACE_ENV = "GODOT_AI_IDLE_GRACE_SECONDS"
-
-## Set by asgi.run_with_reload for the uvicorn reload supervisor + worker.
-## Duplicated string (not imported from godot_ai.asgi) to keep this module
-## free of the uvicorn/fastmcp import chain.
-_DEV_TRANSPORT_ENV = "GODOT_AI_DEV_TRANSPORT"
 
 
 def _env_truthy(name: str) -> bool:
@@ -126,7 +121,7 @@ def should_arm_idle_exit(owner_pid: int | None) -> bool:
     """
     if _env_truthy(NO_IDLE_EXIT_ENV):
         return False
-    if os.environ.get(_DEV_TRANSPORT_ENV, "").strip():
+    if os.environ.get(DEV_TRANSPORT_ENV, "").strip():
         return False
     return _env_truthy(PLUGIN_SPAWNED_ENV) or bool(owner_pid and owner_pid > 0)
 
@@ -136,7 +131,7 @@ def should_arm_attach_idle_exit() -> bool:
 
     if _env_truthy(NO_IDLE_EXIT_ENV):
         return False
-    if os.environ.get(_DEV_TRANSPORT_ENV, "").strip():
+    if os.environ.get(DEV_TRANSPORT_ENV, "").strip():
         return False
     return _env_truthy(ATTACH_SPAWNED_ENV)
 

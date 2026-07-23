@@ -159,13 +159,8 @@ async def test_cold_start_discovers_tools_and_explains_how_to_open_editor(
             if stderr_log.exists()
             else "<missing>"
         )
-        # FastMCP 3.0 on Linux may terminate the stdio child rather than let
-        # its graceful release complete. Allow the production 30s lease TTL,
-        # the configured idle grace, and scheduling margin so this also proves
-        # the crashed-bridge expiry path instead of requiring one SDK's exact
-        # subprocess shutdown behavior.
-        assert await _wait_port_closed(http_port, timeout=45), (
-            "attach-owned backend did not reap after bridge release/lease expiry; "
+        assert await _wait_port_closed(http_port), (
+            "attach-owned backend did not reap after the bridge released its lease; "
             f"bridge stderr: {stderr_text}"
         )
 

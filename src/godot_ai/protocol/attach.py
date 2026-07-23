@@ -14,6 +14,7 @@ from fastmcp import FastMCP
 ATTACH_PROTOCOL_VERSION = 1
 ATTACH_SPAWNED_ENV = "GODOT_AI_CLIENT_SPAWNED"
 PLUGIN_SPAWNED_ENV = "GODOT_AI_PLUGIN_SPAWNED"
+DEV_TRANSPORT_ENV = "GODOT_AI_DEV_TRANSPORT"
 
 ## One nonce per Python process. It deliberately changes on every backend
 ## restart and is compatibility information only — never process-kill proof.

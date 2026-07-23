@@ -63,13 +63,7 @@ def test_plugin_event_allowlists_match() -> None:
 
 
 def test_dev_transport_env_twin_matches_asgi() -> None:
-    """orphan_reaper deliberately duplicates asgi's env-var name.
-
-    The duplication keeps orphan_reaper free of the uvicorn/fastmcp import
-    chain (see the comment on _DEV_TRANSPORT_ENV), which is exactly why
-    only a test can hold the two strings together — a rename on either
-    side would otherwise silently break dev-reload orphan protection.
-    """
+    """Reload and reaper paths consume the shared protocol env-var name."""
     from godot_ai import asgi, orphan_reaper
 
-    assert orphan_reaper._DEV_TRANSPORT_ENV == asgi.DEV_TRANSPORT_ENV
+    assert orphan_reaper.DEV_TRANSPORT_ENV == asgi.DEV_TRANSPORT_ENV
