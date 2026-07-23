@@ -289,12 +289,13 @@ Full details (what's collected, where data lives, how to self-host the endpoint)
 
 ## Star History
 
-<!-- Regenerated weekly by .github/workflows/star-history.yml (#750):
+<!-- Regenerated daily by .github/workflows/star-history.yml (#750):
      GitHub restricted stargazer history to repo collaborators, which broke
-     star-history.com's unauthenticated embed, so the chart is now rendered
-     in CI and committed here. -->
+     star-history.com's unauthenticated embed, so the chart is rendered in CI
+     and published to the dedicated `star-history` branch (do not delete it —
+     embedded below; a manual workflow run recreates it if needed). -->
 <a href="https://github.com/hi-godot/godot-ai/stargazers">
-  <img src="docs/images/star-history.svg" alt="Star History Chart" width="700">
+  <img src="https://raw.githubusercontent.com/hi-godot/godot-ai/star-history/star-history.svg" alt="Star History Chart" width="700">
 </a>
 
 ---

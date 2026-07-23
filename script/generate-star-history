@@ -347,7 +347,7 @@ def render_svg(points: list[tuple[date, int]], repo: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default="hi-godot/godot-ai")
-    parser.add_argument("--out", default="docs/images/star-history.svg")
+    parser.add_argument("--out", default="star-history.svg")
     parser.add_argument(
         "--seed",
         help="comma-separated date:count points to render offline "
