@@ -114,3 +114,51 @@ async def test_attach_owned_lifespan_wires_lease_count_into_idle_reaper(monkeypa
     async with server._lifespan(server):
         await asyncio.wait_for(started.wait(), timeout=1)
         assert captured == {"sessions": 0, "leases": 0}
+
+
+async def test_plugin_owned_lifespan_wires_lease_count_into_both_reapers(monkeypatch) -> None:
+    started = asyncio.Event()
+    captured: dict[str, int] = {}
+
+    class FakeWebSocketServer:
+        def __init__(self, _registry, *, port: int, auth_token) -> None:
+            self.port = port
+
+        async def start(self) -> None:
+            await asyncio.Event().wait()
+
+    async def fake_watch_owner(_owner_pid, session_count, *, lease_count, **_kwargs) -> None:
+        captured["owner_sessions"] = session_count()
+        captured["owner_leases"] = lease_count()
+        if len(captured) == 4:
+            started.set()
+        await asyncio.Event().wait()
+
+    async def fake_watch_idle(session_count, *, lease_count, **_kwargs) -> None:
+        captured["idle_sessions"] = session_count()
+        captured["idle_leases"] = lease_count()
+        if len(captured) == 4:
+            started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(server_module, "GodotWebSocketServer", FakeWebSocketServer)
+    monkeypatch.setattr(
+        server_module,
+        "GodotClient",
+        lambda *_args: SimpleNamespace(default_hint_policy="preserve"),
+    )
+    monkeypatch.setattr(server_module, "should_arm_reaper", lambda _owner_pid: True)
+    monkeypatch.setattr(server_module, "should_arm_idle_exit", lambda _owner_pid: True)
+    monkeypatch.setattr(server_module, "watch_owner", fake_watch_owner)
+    monkeypatch.setattr(server_module, "watch_idle", fake_watch_idle)
+    monkeypatch.setattr(server_module, "shutdown_if_initialized", lambda: None)
+
+    server = create_server(ws_port=9562, owner_pid=4242)
+    async with server._lifespan(server):
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert captured == {
+            "owner_sessions": 0,
+            "owner_leases": 0,
+            "idle_sessions": 0,
+            "idle_leases": 0,
+        }

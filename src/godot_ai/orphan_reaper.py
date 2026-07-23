@@ -234,6 +234,7 @@ async def watch_owner(
     owner_pid: int,
     session_count: Callable[[], int],
     *,
+    lease_count: Callable[[], int] | None = None,
     poll_seconds: float = DEFAULT_POLL_SECONDS,
     grace_seconds: float | None = None,
     is_alive: Callable[[int], bool] = pid_alive,
@@ -245,8 +246,9 @@ async def watch_owner(
     The injectable ``is_alive`` / ``shutdown`` / ``session_count`` seams keep
     it unit-testable without spawning real processes.
 
-    A reap requires the "owner dead AND zero sessions" condition to hold on two
-    samples ``grace_seconds`` apart (default: one poll interval). This guards
+    A reap requires the "owner dead AND zero sessions AND zero bridge leases"
+    condition to hold on two samples ``grace_seconds`` apart (default: one poll
+    interval). This guards
     the adoption hand-off race: when an adopter editor's WebSocket briefly drops
     — a plugin reload, a GC pause, a transient blip — ``session_count()`` dips to
     zero for that instant, and a single-sample reap would SIGTERM the server out
@@ -258,15 +260,23 @@ async def watch_owner(
         grace_seconds = poll_seconds
     while True:
         await asyncio.sleep(poll_seconds)
-        if is_alive(owner_pid) or session_count() > 0:
+        if (
+            is_alive(owner_pid)
+            or session_count() > 0
+            or (lease_count is not None and lease_count() > 0)
+        ):
             continue
         # Looks orphaned. Re-confirm after a grace window so a transient
         # zero-session blip (adopter reconnecting) can't trigger a wrong reap.
         await asyncio.sleep(grace_seconds)
-        if is_alive(owner_pid) or session_count() > 0:
+        if (
+            is_alive(owner_pid)
+            or session_count() > 0
+            or (lease_count is not None and lease_count() > 0)
+        ):
             continue
         logger.info(
-            "Owner editor pid %d is gone and no sessions are connected; "
+            "Owner editor pid %d is gone and no sessions or bridge leases are active; "
             "shutting down orphaned server.",
             owner_pid,
         )

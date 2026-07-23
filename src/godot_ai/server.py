@@ -398,6 +398,7 @@ def create_server(
                 watch_owner(
                     owner_pid,
                     lambda: len(registry.list_all()),
+                    lease_count=leases.active_count,
                     poll_seconds=poll_seconds_from_env(),
                 )
             )
@@ -420,6 +421,7 @@ def create_server(
             idle_task = asyncio.create_task(
                 watch_idle(
                     lambda: len(registry.list_all()),
+                    lease_count=leases.active_count,
                     poll_seconds=poll_seconds_from_env(),
                     boot_grace_seconds=boot_grace_from_env(),
                     idle_grace_seconds=idle_grace_from_env(),

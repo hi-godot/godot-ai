@@ -123,6 +123,27 @@ async def test_no_reap_when_owner_dead_but_adopted():
     assert calls == []
 
 
+async def test_owner_reaper_honors_live_lease_then_reaps_after_expiry():
+    calls: list[bool] = []
+    state = {"leases": 1}
+    task = asyncio.create_task(
+        watch_owner(
+            4242,
+            lambda: 0,
+            lease_count=lambda: state["leases"],
+            poll_seconds=0.005,
+            is_alive=lambda _pid: False,
+            shutdown=lambda: calls.append(True),
+        )
+    )
+    await asyncio.sleep(0.05)
+    assert calls == []
+
+    state["leases"] = 0
+    await asyncio.wait_for(task, timeout=1)
+    assert calls == [True]
+
+
 async def test_reaps_once_adopter_disconnects():
     ## Sessions present for a few polls, then drop to zero with the owner dead.
     calls: list[bool] = []
@@ -413,6 +434,32 @@ async def test_attach_idle_requires_no_sessions_and_no_leases():
 
     assert calls == [True]
     assert clock.now >= 20, "active leases must keep resetting the idle window"
+
+
+async def test_plugin_idle_reaper_honors_live_lease_then_reaps_after_expiry():
+    calls: list[bool] = []
+    clock = _FakeClock()
+    lease_counts = iter([1, 1, 0, 0, 0])
+
+    def advancing_clock() -> float:
+        clock.now += 5
+        return clock.now
+
+    await asyncio.wait_for(
+        watch_idle(
+            lambda: 0,
+            lease_count=lambda: next(lease_counts, 0),
+            poll_seconds=0.001,
+            boot_grace_seconds=10,
+            idle_grace_seconds=10,
+            clock=advancing_clock,
+            shutdown=lambda: calls.append(True),
+        ),
+        timeout=2,
+    )
+
+    assert calls == [True]
+    assert clock.now >= 20
 
 
 # ----- pid_alive conservative errno branches (audit backlog) -----
