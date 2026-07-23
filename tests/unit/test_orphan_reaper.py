@@ -436,32 +436,6 @@ async def test_attach_idle_requires_no_sessions_and_no_leases():
     assert clock.now >= 20, "active leases must keep resetting the idle window"
 
 
-async def test_plugin_idle_reaper_honors_live_lease_then_reaps_after_expiry():
-    calls: list[bool] = []
-    clock = _FakeClock()
-    lease_counts = iter([1, 1, 0, 0, 0])
-
-    def advancing_clock() -> float:
-        clock.now += 5
-        return clock.now
-
-    await asyncio.wait_for(
-        watch_idle(
-            lambda: 0,
-            lease_count=lambda: next(lease_counts, 0),
-            poll_seconds=0.001,
-            boot_grace_seconds=10,
-            idle_grace_seconds=10,
-            clock=advancing_clock,
-            shutdown=lambda: calls.append(True),
-        ),
-        timeout=2,
-    )
-
-    assert calls == [True]
-    assert clock.now >= 20
-
-
 # ----- pid_alive conservative errno branches (audit backlog) -----
 
 

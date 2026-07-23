@@ -399,6 +399,8 @@ class AttachRecoveryMiddleware(Middleware):
                     if attempt == 0:
                         continue
                     raise _backend_unstable_mcp_error() from None
+                except asyncio.CancelledError:
+                    raise
                 except BaseException as exc:
                     if not _is_transport_failure(exc):
                         raise
@@ -424,6 +426,8 @@ class AttachRecoveryMiddleware(Middleware):
                 return await self._run_with_instance_monitor(context, call_next, initial_status)
             except _BackendChanged:
                 return _outcome_unknown_result(context.message.name)
+            except asyncio.CancelledError:
+                raise
             except BaseException as exc:
                 if not _is_proven_pre_dispatch_failure(exc):
                     if _is_transport_failure(exc):
@@ -443,6 +447,8 @@ class AttachRecoveryMiddleware(Middleware):
                 return _startup_error_result(ensure_exc)
             except _BackendChanged:
                 return _outcome_unknown_result(context.message.name)
+            except asyncio.CancelledError:
+                raise
             except BaseException as retry_exc:
                 if _is_proven_pre_dispatch_failure(retry_exc):
                     # The single safe replay also failed before dispatch. Do

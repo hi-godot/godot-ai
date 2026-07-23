@@ -911,6 +911,78 @@ async def test_cancelling_call_cleans_up_monitor_and_downstream_tasks() -> None:
     assert probes == probe_count
 
 
+async def test_safe_request_cancellation_bypasses_recorded_transport_recovery() -> None:
+    calls = 0
+
+    async def ensure() -> BackendStatus:
+        return _status()
+
+    async def call_next(_context: Any) -> str:
+        nonlocal calls
+        calls += 1
+        trace = _OPERATION_TRACE.get()
+        assert trace is not None
+        trace.failures.append(
+            TransportFailure(
+                phase="tools/list",
+                error=httpx.HTTPStatusError(
+                    "handled response",
+                    request=httpx.Request("POST", "http://127.0.0.1/mcp"),
+                    response=httpx.Response(503),
+                ),
+                connect_class=False,
+                status_code=503,
+            )
+        )
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await AttachRecoveryMiddleware(ensure).on_request(
+            _context(method="tools/list"),
+            call_next,
+        )
+
+    assert calls == 1
+
+
+async def test_replay_cancellation_bypasses_recorded_transport_recovery() -> None:
+    calls = 0
+    ensures = 0
+
+    async def ensure() -> BackendStatus:
+        nonlocal ensures
+        ensures += 1
+        return _status()
+
+    async def call_next(_context: Any) -> ToolResult:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.ConnectError(
+                "refused",
+                request=httpx.Request("POST", "http://127.0.0.1/mcp"),
+            )
+        trace = _OPERATION_TRACE.get()
+        assert trace is not None
+        trace.failures.append(
+            TransportFailure(
+                phase="initialize",
+                error=httpx.ConnectError(
+                    "recorded",
+                    request=httpx.Request("POST", "http://127.0.0.1/mcp"),
+                ),
+                connect_class=True,
+            )
+        )
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await AttachRecoveryMiddleware(ensure).on_call_tool(_context(), call_next)
+
+    assert calls == 2
+    assert ensures == 2
+
+
 async def test_tool_reraises_non_transport_failure() -> None:
     async def ensure() -> BackendStatus:
         return _status()
