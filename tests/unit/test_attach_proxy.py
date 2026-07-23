@@ -8,11 +8,20 @@ from types import SimpleNamespace
 from typing import Any
 
 import httpx
+import pytest
 from mcp.types import CallToolResult, TextContent, Tool
 
 from godot_ai import __version__
+from godot_ai.attach import proxy as proxy_module
 from godot_ai.attach.ensure import AttachStartupError, BackendStatus
-from godot_ai.attach.proxy import AttachProxyTool, AttachRecoveryMiddleware, _http_client_factory
+from godot_ai.attach.proxy import (
+    AttachProxyProvider,
+    AttachProxyTool,
+    AttachRecoveryMiddleware,
+    _BackendChanged,
+    _http_client_factory,
+    create_attach_proxy,
+)
 from godot_ai.fastmcp_compat import ToolResult
 from godot_ai.protocol.attach import ATTACH_PROTOCOL_VERSION
 
@@ -329,6 +338,8 @@ async def test_backend_editor_busy_error_passes_through_untouched() -> None:
         },
     }
 
+    received: dict[str, Any] = {}
+
     class FakeClient:
         async def __aenter__(self):
             return self
@@ -336,7 +347,8 @@ async def test_backend_editor_busy_error_passes_through_untouched() -> None:
         async def __aexit__(self, *_args):
             return None
 
-        async def call_tool_mcp(self, **_kwargs) -> CallToolResult:
+        async def call_tool_mcp(self, **kwargs) -> CallToolResult:
+            received.update(kwargs)
             return CallToolResult(
                 content=[TextContent(type="text", text=payload["message"])],
                 structuredContent={"error": payload},
@@ -348,8 +360,244 @@ async def test_backend_editor_busy_error_passes_through_untouched() -> None:
         Tool(name="test_run", inputSchema={"type": "object", "properties": {}}),
     )
 
-    forwarded = (await tool.run({})).to_mcp_result()
+    context = SimpleNamespace(request_context=SimpleNamespace(meta={"trace": "abc"}))
+    forwarded = (await tool.run({}, context)).to_mcp_result()
 
     assert forwarded.isError is True
     assert forwarded.structuredContent == {"error": payload}
     assert forwarded.content == [TextContent(type="text", text=payload["message"])]
+    assert received["meta"] == {"trace": "abc"}
+
+
+async def test_proxy_provider_lazily_populates_tool_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = AttachProxyProvider(lambda: None)  # type: ignore[arg-type]
+    tool = AttachProxyTool.from_mcp_tool(
+        lambda: None,  # type: ignore[arg-type]
+        Tool(name="editor_state", inputSchema={"type": "object", "properties": {}}),
+    )
+
+    async def load_tools():
+        provider._attach_tools = {tool.name: tool}
+        return [tool]
+
+    monkeypatch.setattr(provider, "_list_tools", load_tools)
+    assert await provider._get_tool("editor_state") is tool
+
+
+async def test_proxy_provider_converts_and_caches_upstream_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream = AttachProxyTool.from_mcp_tool(
+        lambda: None,  # type: ignore[arg-type]
+        Tool(name="editor_state", inputSchema={"type": "object", "properties": {}}),
+    )
+
+    async def list_upstream(_provider):
+        return [upstream]
+
+    monkeypatch.setattr(proxy_module.ProxyProvider, "_list_tools", list_upstream)
+    provider = AttachProxyProvider(lambda: None)  # type: ignore[arg-type]
+
+    tools = await provider._list_tools()
+
+    assert [tool.name for tool in tools] == ["editor_state"]
+    assert provider._attach_tools["editor_state"] is tools[0]
+
+
+def test_create_attach_proxy_wires_fresh_client_provider_and_outer_middleware(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeTransport:
+        def __init__(self, url: str, *, httpx_client_factory) -> None:
+            captured["url"] = url
+            captured["factory"] = httpx_client_factory
+
+    class FakeClient:
+        def __init__(self, transport, *, timeout, init_timeout) -> None:
+            captured["transport"] = transport
+            captured["timeout"] = timeout
+            captured["init_timeout"] = init_timeout
+
+    async def ensure() -> BackendStatus:
+        return _status()
+
+    async def observe() -> BackendStatus:
+        return _status()
+
+    monkeypatch.setattr(proxy_module, "StreamableHttpTransport", FakeTransport)
+    monkeypatch.setattr(proxy_module, "Client", FakeClient)
+
+    proxy = create_attach_proxy("http://127.0.0.1:8123/mcp", ensure, observe)
+    provider = proxy.providers[1]
+    client = provider.client_factory()
+
+    assert isinstance(client, FakeClient)
+    assert captured["url"] == "http://127.0.0.1:8123/mcp"
+    assert captured["factory"] is proxy_module._http_client_factory
+    assert captured["timeout"] is None
+    assert captured["init_timeout"] == proxy_module.DEFAULT_INIT_TIMEOUT_SECONDS
+    assert isinstance(proxy.middleware[0], AttachRecoveryMiddleware)
+
+
+async def test_generic_request_delegates_tools_call_to_specialized_hook() -> None:
+    ensured = False
+
+    async def ensure() -> BackendStatus:
+        nonlocal ensured
+        ensured = True
+        return _status()
+
+    async def call_next(_context: Any) -> str:
+        return "delegated"
+
+    result = await AttachRecoveryMiddleware(ensure).on_request(_context(), call_next)
+    assert result == "delegated"
+    assert ensured is False
+
+
+def test_recovery_middleware_rejects_invalid_monitor_threshold() -> None:
+    async def ensure() -> BackendStatus:
+        return _status()
+
+    with pytest.raises(ValueError, match="at least 1"):
+        AttachRecoveryMiddleware(ensure, monitor_failure_threshold=0)
+
+
+async def test_safe_request_reraises_non_transport_failure() -> None:
+    async def ensure() -> BackendStatus:
+        return _status()
+
+    async def call_next(_context: Any) -> str:
+        raise ValueError("application bug")
+
+    with pytest.raises(ValueError, match="application bug"):
+        await AttachRecoveryMiddleware(ensure).on_request(
+            _context(method="tools/list"),
+            call_next,
+        )
+
+
+async def test_tool_initial_ensure_failure_is_structured() -> None:
+    async def ensure() -> BackendStatus:
+        raise AttachStartupError(
+            "NEW_CLIENT_SESSION_REQUIRED",
+            "version mismatch",
+            hint="start a new session",
+        )
+
+    async def call_next(_context: Any) -> ToolResult:
+        raise AssertionError("must not dispatch")
+
+    result = await AttachRecoveryMiddleware(ensure).on_call_tool(_context(), call_next)
+    assert result.to_mcp_result().structuredContent["error"]["code"] == (
+        "NEW_CLIENT_SESSION_REQUIRED"
+    )
+
+
+async def test_tool_reraises_non_transport_failure() -> None:
+    async def ensure() -> BackendStatus:
+        return _status()
+
+    async def call_next(_context: Any) -> ToolResult:
+        raise ValueError("application bug")
+
+    with pytest.raises(ValueError, match="application bug"):
+        await AttachRecoveryMiddleware(ensure).on_call_tool(_context(), call_next)
+
+
+@pytest.mark.parametrize(
+    ("retry_error", "expected_code"),
+    [
+        (
+            AttachStartupError(
+                "NEW_CLIENT_SESSION_REQUIRED",
+                "version mismatch",
+                hint="start a new session",
+            ),
+            "NEW_CLIENT_SESSION_REQUIRED",
+        ),
+        (_BackendChanged("instance-a"), "TRANSPORT_OUTCOME_UNKNOWN"),
+        (
+            httpx.ReadError(
+                "reset",
+                request=httpx.Request("POST", "http://127.0.0.1/mcp"),
+            ),
+            "TRANSPORT_OUTCOME_UNKNOWN",
+        ),
+    ],
+)
+async def test_single_replay_maps_retry_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    retry_error: BaseException,
+    expected_code: str,
+) -> None:
+    async def ensure() -> BackendStatus:
+        return _status()
+
+    middleware = AttachRecoveryMiddleware(ensure)
+    attempts = 0
+
+    async def run_once(*_args):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ConnectError(
+                "refused",
+                request=httpx.Request("POST", "http://127.0.0.1/mcp"),
+            )
+        raise retry_error
+
+    monkeypatch.setattr(middleware, "_run_with_instance_monitor", run_once)
+    result = await middleware.on_call_tool(_context(), lambda _context: None)  # type: ignore[arg-type]
+    assert result.to_mcp_result().structuredContent["error"]["code"] == expected_code
+
+
+async def test_single_replay_reraises_unexpected_retry_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def ensure() -> BackendStatus:
+        return _status()
+
+    middleware = AttachRecoveryMiddleware(ensure)
+    attempts = 0
+
+    async def run_once(*_args):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ConnectError(
+                "refused",
+                request=httpx.Request("POST", "http://127.0.0.1/mcp"),
+            )
+        raise ValueError("application bug")
+
+    monkeypatch.setattr(middleware, "_run_with_instance_monitor", run_once)
+    with pytest.raises(ValueError, match="application bug"):
+        await middleware.on_call_tool(_context(), lambda _context: None)  # type: ignore[arg-type]
+
+
+async def test_backend_monitor_requires_observer() -> None:
+    async def ensure() -> BackendStatus:
+        return _status()
+
+    middleware = AttachRecoveryMiddleware(ensure)
+    with pytest.raises(RuntimeError, match="without an observer"):
+        await middleware._wait_for_backend_change("instance-a")
+
+
+async def test_backend_monitor_counts_observer_exceptions() -> None:
+    async def ensure() -> BackendStatus:
+        return _status()
+
+    async def observe() -> BackendStatus:
+        raise RuntimeError("transient probe failure")
+
+    middleware = AttachRecoveryMiddleware(
+        ensure,
+        observe,
+        dispatch_monitor_seconds=0,
+        monitor_failure_threshold=1,
+    )
+    await middleware._wait_for_backend_change("instance-a")

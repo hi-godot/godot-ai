@@ -444,3 +444,21 @@ class TestInstallFastmcpWraps:
         assert op_schema.get("enum") == ["alpha", "beta"], (
             f"op enum missing or wrong; got schema={op_schema!r}"
         )
+
+    def test_wrapped_annotations_fall_back_when_type_hints_cannot_resolve(
+        self, monkeypatch
+    ) -> None:
+        def target(value: "UnavailableType") -> "UnavailableType":  # type: ignore[name-defined] # noqa: F821
+            return value
+
+        def wrapper(*args, **kwargs):
+            return target(*args, **kwargs)
+
+        def fail_type_hints(*_args, **_kwargs):
+            raise NameError("UnavailableType")
+
+        monkeypatch.setattr(tel, "get_type_hints", fail_type_hints)
+        tel._expose_wrapped_surface(wrapper, target)
+
+        assert wrapper.__annotations__ == target.__annotations__
+        assert wrapper.__annotations__ is not target.__annotations__

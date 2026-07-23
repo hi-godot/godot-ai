@@ -1,9 +1,17 @@
+import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 from starlette.testclient import TestClient
 
 import godot_ai as _godot_ai_pkg
 from godot_ai import __version__
+from godot_ai import server as server_module
+from godot_ai.protocol.attach import (
+    ATTACH_SPAWNED_ENV,
+    PLUGIN_SPAWNED_ENV,
+    owner_type_from_env,
+)
 from godot_ai.server import create_server
 
 
@@ -59,3 +67,50 @@ def test_status_route_package_path_points_at_loaded_package_dir():
     assert (package_path / "__init__.py").exists(), (
         "package_path must point at the actual loaded godot_ai package dir"
     )
+
+
+def test_owner_type_uses_spawn_markers_with_plugin_precedence(monkeypatch) -> None:
+    monkeypatch.delenv(PLUGIN_SPAWNED_ENV, raising=False)
+    monkeypatch.delenv(ATTACH_SPAWNED_ENV, raising=False)
+    assert owner_type_from_env() == "external"
+
+    monkeypatch.setenv(ATTACH_SPAWNED_ENV, "true")
+    assert owner_type_from_env() == "attach"
+
+    monkeypatch.setenv(PLUGIN_SPAWNED_ENV, "1")
+    assert owner_type_from_env() == "plugin"
+
+
+async def test_attach_owned_lifespan_wires_lease_count_into_idle_reaper(monkeypatch) -> None:
+    started = asyncio.Event()
+    captured: dict[str, object] = {}
+
+    class FakeWebSocketServer:
+        def __init__(self, _registry, *, port: int, auth_token) -> None:
+            self.port = port
+
+        async def start(self) -> None:
+            await asyncio.Event().wait()
+
+    async def fake_watch_idle(session_count, *, lease_count, **_kwargs) -> None:
+        captured["sessions"] = session_count()
+        captured["leases"] = lease_count()
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(server_module, "GodotWebSocketServer", FakeWebSocketServer)
+    monkeypatch.setattr(
+        server_module,
+        "GodotClient",
+        lambda *_args: SimpleNamespace(default_hint_policy="preserve"),
+    )
+    monkeypatch.setattr(server_module, "should_arm_reaper", lambda _owner_pid: False)
+    monkeypatch.setattr(server_module, "should_arm_idle_exit", lambda _owner_pid: False)
+    monkeypatch.setattr(server_module, "should_arm_attach_idle_exit", lambda: True)
+    monkeypatch.setattr(server_module, "watch_idle", fake_watch_idle)
+    monkeypatch.setattr(server_module, "shutdown_if_initialized", lambda: None)
+
+    server = create_server(ws_port=9561)
+    async with server._lifespan(server):
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert captured == {"sessions": 0, "leases": 0}
