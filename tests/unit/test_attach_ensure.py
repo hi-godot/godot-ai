@@ -156,11 +156,11 @@ def test_user_runtime_dir_covers_override_and_platform_fallbacks(
         monkeypatch.delenv("LOCALAPPDATA")
         assert user_runtime_dir() == (tmp_path / "godot-ai-runtime").resolve()
     else:
-        monkeypatch.setattr(ensure_module.os, "getuid", lambda: 42)
+        current_uid = os.getuid()
         monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "xdg"))
         assert user_runtime_dir() == (tmp_path / "xdg" / "godot-ai").resolve()
         monkeypatch.delenv("XDG_RUNTIME_DIR")
-        assert user_runtime_dir() == (tmp_path / "godot-ai-42").resolve()
+        assert user_runtime_dir() == (tmp_path / f"godot-ai-{current_uid}").resolve()
 
 
 def test_user_runtime_dir_rejects_chmod_failure(
