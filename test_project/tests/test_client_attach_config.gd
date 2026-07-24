@@ -195,6 +195,35 @@ func test_launch_context_values_are_worker_safe_and_exclusions_are_canonical() -
 	assert_contains(launch.get("args", []), "particle,audio")
 
 
+func test_attach_launch_session_cache_is_keyed_copied_and_invalidated() -> void:
+	var context := _context("audio")
+	var cache_key := McpClientConfigurator._attach_launch_cache_key(context)
+	var changed := context.duplicate(true)
+	changed["http_port"] = 8999
+	assert_ne(
+		cache_key,
+		McpClientConfigurator._attach_launch_cache_key(changed),
+		"settings that alter attach argv must produce a distinct cache key",
+	)
+
+	McpClientConfigurator.invalidate_uv_detection()
+	McpClientConfigurator._attach_launch_cache_mutex.lock()
+	McpClientConfigurator._attach_launch_cache[cache_key] = {
+		"ok": true, "tier": "cached", "command": "cached-command", "args": ["attach"],
+	}
+	McpClientConfigurator._attach_launch_cache_mutex.unlock()
+	var first := McpClientConfigurator.resolve_attach_launch(context)
+	assert_eq(first.get("tier"), "cached", "production resolution must reuse the session cache")
+	first["tier"] = "mutated-by-caller"
+	var second := McpClientConfigurator.resolve_attach_launch(context)
+	assert_eq(second.get("tier"), "cached", "callers must receive an isolated cache copy")
+	McpClientConfigurator.invalidate_uv_detection()
+	McpClientConfigurator._attach_launch_cache_mutex.lock()
+	var still_cached := McpClientConfigurator._attach_launch_cache.has(cache_key)
+	McpClientConfigurator._attach_launch_cache_mutex.unlock()
+	assert_false(still_cached, "uv detection invalidation must also clear attach launch discovery")
+
+
 func test_toml_encoder_matches_tomllib_fixture() -> void:
 	var launch := McpClientConfigurator.resolve_attach_launch(
 		_context("audio,particle"),
@@ -210,14 +239,15 @@ func test_toml_encoder_matches_tomllib_fixture() -> void:
 	var rendered: Array[String] = [
 		"[samples.uvx]",
 		"command = %s" % McpTomlStrategy.encode_basic_string(command),
-		"args = [",
 	]
-	for arg in args:
-		rendered.append("  %s," % McpTomlStrategy.encode_basic_string(arg))
-	rendered.append("]")
+	var encoded_args := McpTomlStrategy.encode_string_array(args)
+	encoded_args[0] = "args = %s" % encoded_args[0]
+	rendered.append_array(encoded_args)
 	var fixture := FileAccess.open("res://tests/fixtures/attach_toml_samples.toml", FileAccess.READ)
 	assert_true(fixture != null, "cross-language TOML fixture must be readable")
-	var expected := fixture.get_as_text().strip_edges()
+	## Git may check this fixture out with CRLF on Windows while the renderer
+	## deliberately joins logical TOML lines with LF. Compare normalized text.
+	var expected := fixture.get_as_text().replace("\r\n", "\n").strip_edges()
 	fixture.close()
 	assert_eq("\n".join(rendered), expected)
 
@@ -413,7 +443,25 @@ func test_codex_manual_command_shows_attach_and_advanced_url_fallback() -> void:
 	assert_contains(manual, "command = ")
 	assert_contains(manual, '"attach"')
 	assert_contains(manual, "Advanced fallback")
+	assert_contains(manual, "replace the command/args block above")
+	assert_contains(manual, "never configure both shapes together")
 	assert_contains(manual, 'url = "http://127.0.0.1:8123/mcp"')
+
+
+func test_toml_command_transport_rejects_unsupported_values() -> void:
+	var client := _codex_client(_scratch_dir.path_join("bad_transport.toml"))
+	client.command_transport_key = "transport"
+	client.command_transport_value = null
+	var rendered := McpTomlStrategy.render_body(client, "http://unused", _uvx_launch())
+	assert_false(bool(rendered.get("ok", true)))
+	assert_contains(str(rendered.get("error", "")), "Unsupported TOML transport")
+
+
+func test_server_url_from_prefers_captured_snapshot() -> void:
+	assert_eq(
+		McpClientConfigurator.server_url_from({"server_url": "http://captured:8123/mcp"}),
+		"http://captured:8123/mcp",
+	)
 
 
 func _context(exclusions: String = "") -> Dictionary:

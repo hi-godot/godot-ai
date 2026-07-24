@@ -125,6 +125,12 @@ func test_every_client_has_required_fields() -> void:
 		assert_true(not client.id.is_empty(), "Client missing id: %s" % client)
 		assert_true(not client.display_name.is_empty(), "%s missing display_name" % client.id)
 		assert_contains(["json", "toml", "yaml", "cli"], client.config_type, "%s has unexpected config_type %s" % [client.id, client.config_type])
+		if client.command_shape != McpClient.CommandShape.NONE:
+			assert_eq(
+				client.entry_uvx_bridge,
+				McpClient.UvxBridge.NONE,
+				"%s cannot activate both command_shape and entry_uvx_bridge" % client.id,
+			)
 		if client.config_type == "json":
 			assert_gt(client.server_key_path.size(), 0, "%s missing server_key_path" % client.id)
 		elif client.config_type == "yaml":
@@ -138,11 +144,6 @@ func test_every_client_has_required_fields() -> void:
 		elif client.config_type == "toml":
 			assert_gt(client.toml_section_path.size(), 0, "%s toml client missing toml_section_path" % client.id)
 			if client.command_shape != McpClient.CommandShape.NONE:
-				assert_eq(
-					client.entry_uvx_bridge,
-					McpClient.UvxBridge.NONE,
-					"%s cannot activate both command_shape and entry_uvx_bridge" % client.id,
-				)
 				continue
 			assert_gt(client.toml_body_template.size(), 0, "%s toml client missing toml_body_template" % client.id)
 			## #711: check_status parses a literal `url = "..."` line and

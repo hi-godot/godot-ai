@@ -72,7 +72,7 @@ static func _build_toml(
 	var header := _toml_header(client)
 	if client.command_shape != McpClient.CommandShape.NONE:
 		var lines: Array[String] = []
-		var rendered := McpTomlStrategy._render_body(client, server_url, launch)
+		var rendered := McpTomlStrategy.render_body(client, server_url, launch)
 		if bool(rendered.get("ok", false)):
 			lines.append("Edit %s and add:" % resolved_path)
 			lines.append("  %s" % header)
@@ -81,7 +81,7 @@ static func _build_toml(
 		else:
 			lines.append("Attach launch command unavailable: %s" % str(rendered.get("error", "no compatible launcher found")))
 		lines.append("")
-		lines.append("Advanced fallback — URL mode depends on your client's own reconnect behavior. If the server is down when the client starts, restarting the client may be required.")
+		lines.append("Advanced fallback — replace the command/args block above with this URL-mode block; never configure both shapes together. URL mode depends on your client's own reconnect behavior. If the server is down when the client starts, restarting the client may be required.")
 		lines.append("Edit %s and add:" % resolved_path)
 		lines.append("  %s" % header)
 		lines.append("  url = %s" % McpTomlStrategy.encode_basic_string(server_url))

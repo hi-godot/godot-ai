@@ -75,6 +75,14 @@ static func http_url() -> String:
 	return "http://127.0.0.1:%d/mcp" % http_port()
 
 
+## Read a URL already captured on the main thread without evaluating the
+## EditorSettings-backed fallback unless the snapshot is genuinely incomplete.
+static func server_url_from(launch_context: Dictionary) -> String:
+	if launch_context.has("server_url"):
+		return str(launch_context["server_url"])
+	return http_url()
+
+
 static func _read_port_setting(key: String, default_port: int) -> int:
 	var es := EditorInterface.get_editor_settings()
 	if es == null or not es.has_setting(key):
@@ -313,13 +321,18 @@ static func configure(id: String, url: String = "", launch_context: Dictionary =
 				"message": "Cannot configure %s without a main-thread launch snapshot; retry from the dock." % client.display_name,
 			}
 		context = capture_launch_context()
-	var result := _dispatch_configure(client, url, context)
+	var launch := (
+		resolve_attach_launch(context)
+		if client.command_shape != Client.CommandShape.NONE
+		else {}
+	)
+	var result := _dispatch_configure(client, url, launch)
 	## Trust-but-verify: a strategy may report ok and have actually written the
 	## file, yet the entry is missing/stale on the read-back path — most often
 	## because the user's installed client is reading a different file than
 	## `path_template` resolves to (issue #201). Re-read the live state and
 	## surface a clear error before the dock reports a bogus green dot.
-	return _verify_post_state(client, result, Client.Status.CONFIGURED, url, "configure", context)
+	return _verify_post_state(client, result, Client.Status.CONFIGURED, url, "configure", launch)
 
 
 static func check_status(id: String) -> Client.Status:
@@ -400,28 +413,36 @@ static func client_status_probe_snapshot(id: String) -> Dictionary:
 ## Pass an explicit `url` when calling from a worker thread — see
 ## `configure()` above for why. The url is only used to format the
 ## verify-after-write diagnostic message; the remove itself doesn't need it.
-static func remove(id: String, url: String = "") -> Dictionary:
+static func remove(id: String, url: String = "", launch_context: Dictionary = {}) -> Dictionary:
 	var client := ClientRegistry.get_by_id(id)
 	if client == null:
 		return {"status": "error", "message": "Unknown client: %s" % id}
 	if url.is_empty():
 		url = http_url()
+	var context := launch_context
+	if client.command_shape != Client.CommandShape.NONE and context.is_empty():
+		if OS.get_thread_caller_id() != OS.get_main_thread_id():
+			return {
+				"status": "error",
+				"message": "Cannot remove %s without a main-thread launch snapshot; retry from the dock." % client.display_name,
+			}
+		context = capture_launch_context()
+	var launch := (
+		resolve_attach_launch(context)
+		if client.command_shape != Client.CommandShape.NONE
+		else {}
+	)
 	var result := _dispatch_remove(client)
-	return _verify_post_state(client, result, Client.Status.NOT_CONFIGURED, url, "remove")
+	return _verify_post_state(client, result, Client.Status.NOT_CONFIGURED, url, "remove", launch)
 
 
 # --- Strategy dispatch + verify (testable seam) --------------------------
 
-static func _dispatch_configure(client: Client, url: String, launch_context: Dictionary = {}) -> Dictionary:
+static func _dispatch_configure(client: Client, url: String, launch: Dictionary = {}) -> Dictionary:
 	match client.config_type:
 		"json":
 			return JsonStrategy.configure(client, SERVER_NAME, url)
 		"toml":
-			var launch := (
-				resolve_attach_launch(launch_context)
-				if client.command_shape != Client.CommandShape.NONE
-				else {}
-			)
 			return TomlStrategy.configure(client, SERVER_NAME, url, launch)
 		"yaml":
 			return YamlStrategy.configure(client, SERVER_NAME, url)
@@ -464,17 +485,23 @@ static func _dispatch_check_status_with_cli_path(
 
 
 static func _dispatch_check_status_with_cli_path_details(
-	client: Client, url: String, cli_path: String, launch_context: Dictionary = {}
+	client: Client,
+	url: String,
+	cli_path: String,
+	launch_context: Dictionary = {},
+	resolved_launch: Dictionary = {},
 ) -> Dictionary:
 	match client.config_type:
 		"json":
 			return JsonStrategy.check_status_details(client, SERVER_NAME, url)
 		"toml":
-			var launch := (
-				resolve_attach_launch(launch_context)
-				if client.command_shape != Client.CommandShape.NONE
-				else {}
-			)
+			var launch := {}
+			if client.command_shape != Client.CommandShape.NONE:
+				launch = (
+					resolved_launch
+					if not resolved_launch.is_empty()
+					else resolve_attach_launch(launch_context)
+				)
 			return TomlStrategy.check_status_details(client, SERVER_NAME, url, launch)
 		"yaml":
 			return YamlStrategy.check_status_details(client, SERVER_NAME, url)
@@ -498,11 +525,13 @@ static func _verify_post_state(
 	expected: Client.Status,
 	url: String,
 	action: String,
-	launch_context: Dictionary = {},
+	resolved_launch: Dictionary = {},
 ) -> Dictionary:
 	if result.get("status") != "ok":
 		return result
-	var actual := _dispatch_check_status(client, url, launch_context)
+	var actual := _dispatch_check_status_with_cli_path_details(
+		client, url, "", {}, resolved_launch
+	).get("status", Client.Status.NOT_CONFIGURED)
 	if actual == expected:
 		return result
 	var path := client.resolved_config_path()
@@ -530,7 +559,7 @@ static func manual_command(id: String) -> String:
 	var cmd := ManualCommand.build(
 		client,
 		SERVER_NAME,
-		str(context.get("server_url", http_url())),
+		server_url_from(context),
 		client.resolved_config_path(),
 		launch,
 	)
@@ -588,6 +617,32 @@ static func _pypi_pin_version(version: String) -> String:
 ## an empty value) bypasses that tier's live lookup; `system_version_result`
 ## bypasses the real `godot-ai --version` subprocess.
 static func resolve_attach_launch(
+	launch_context: Dictionary, discovery_override: Dictionary = {}
+) -> Dictionary:
+	## Test overrides always bypass the session cache so fixture-controlled
+	## discovery remains deterministic. Production results are keyed by every
+	## setting that affects the rendered command; a port/domain/version change
+	## therefore cannot reuse stale arguments.
+	if not discovery_override.is_empty():
+		return _resolve_attach_launch_uncached(launch_context, discovery_override)
+	var cache_key := _attach_launch_cache_key(launch_context)
+	_attach_launch_cache_mutex.lock()
+	if _attach_launch_cache.has(cache_key):
+		var cached: Dictionary = _attach_launch_cache[cache_key].duplicate(true)
+		_attach_launch_cache_mutex.unlock()
+		return cached
+	## Keep the cache lock through the bounded discovery probes. This cold path
+	## runs at most once per distinct context and prevents simultaneous status
+	## workers from repeating the same subprocess probes. Invalidation waits for
+	## the in-flight result, then clears it, so stale work cannot repopulate a
+	## freshly invalidated cache.
+	var resolved := _resolve_attach_launch_uncached(launch_context)
+	_attach_launch_cache[cache_key] = resolved.duplicate(true)
+	_attach_launch_cache_mutex.unlock()
+	return resolved
+
+
+static func _resolve_attach_launch_uncached(
 	launch_context: Dictionary, discovery_override: Dictionary = {}
 ) -> Dictionary:
 	for key in ["http_port", "ws_port", "excluded_domains", "plugin_version", "allow_dev_venv", "platform"]:
@@ -994,6 +1049,9 @@ static func uv_probe_negative() -> bool:
 static func invalidate_uv_detection() -> void:
 	invalidate_uvx_cli_cache()
 	invalidate_uv_version_cache()
+	_attach_launch_cache_mutex.lock()
+	_attach_launch_cache.clear()
+	_attach_launch_cache_mutex.unlock()
 
 
 static var _venv_python_cache: String = ""
@@ -1001,6 +1059,19 @@ static var _venv_python_searched: bool = false
 ## #678 worker threads write this cache while main-thread callers read
 ## it; same lock discipline as McpCliFinder (clients/_cli_finder.gd).
 static var _venv_mutex: Mutex = Mutex.new()
+static var _attach_launch_cache := {}
+static var _attach_launch_cache_mutex := Mutex.new()
+
+
+static func _attach_launch_cache_key(launch_context: Dictionary) -> String:
+	return JSON.stringify([
+		launch_context.get("http_port", null),
+		launch_context.get("ws_port", null),
+		launch_context.get("excluded_domains", null),
+		launch_context.get("plugin_version", null),
+		launch_context.get("allow_dev_venv", null),
+		launch_context.get("platform", null),
+	])
 
 
 static func _cached_venv_python() -> String:

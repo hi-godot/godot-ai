@@ -391,7 +391,7 @@ URL. The dock captures ports, canonical excluded domains, plugin version, and
 dev/user mode on the main thread, then workers resolve the same three launch
 tiers used by server startup (dev venv → exact-version uvx → matching system
 install). Package pins, command paths, ports, exclusions, and required uv
-options are verified as launch drift; **Configure all mismatched** is the
+options are verified as launch drift; **Configure all** is the
 repair path after a self-update, port change, or tool-domain change. Never
 silently fall back to a bare `uvx` command for these entries—report ERROR and
 leave the config untouched when no verified tier exists.

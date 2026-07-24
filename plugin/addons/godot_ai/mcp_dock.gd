@@ -1917,7 +1917,7 @@ func _dispatch_client_action(client_id: String, action: String) -> void:
 	## `_perform_initial_client_status_refresh` and
 	## `_request_client_status_refresh`.
 	var launch_context := ClientConfigurator.capture_launch_context()
-	var server_url := str(launch_context.get("server_url", ClientConfigurator.http_url()))
+	var server_url := ClientConfigurator.server_url_from(launch_context)
 	## #691: refresh the env snapshot on main before this worker starts —
 	## configure/remove resolve CLI + config paths off-thread and must not
 	## race a concurrent spawn window's setenv/unsetenv.
@@ -1951,7 +1951,7 @@ func _run_client_action_worker(
 ) -> Dictionary:
 	var result: Dictionary
 	if action == "remove":
-		result = ClientConfigurator.remove(client_id, server_url)
+		result = ClientConfigurator.remove(client_id, server_url, launch_context)
 	else:
 		result = ClientConfigurator.configure(client_id, server_url, launch_context)
 	return {
@@ -2765,7 +2765,7 @@ func _perform_initial_client_status_refresh() -> void:
 
 	var generation := _begin_client_status_refresh_run()
 	var launch_context := ClientConfigurator.capture_launch_context()
-	var server_url := str(launch_context.get("server_url", ClientConfigurator.http_url()))
+	var server_url := ClientConfigurator.server_url_from(launch_context)
 	var all_probes: Array[Dictionary] = []
 
 	for client_id in _client_rows:
@@ -2895,7 +2895,7 @@ func _request_client_status_refresh(force: bool = false) -> bool:
 	for client_id in _client_rows:
 		client_probes.append(ClientConfigurator.client_status_probe_snapshot(String(client_id)))
 	var launch_context := ClientConfigurator.capture_launch_context()
-	var server_url := str(launch_context.get("server_url", ClientConfigurator.http_url()))
+	var server_url := ClientConfigurator.server_url_from(launch_context)
 
 	var generation := _begin_client_status_refresh_run()
 	_client_status_refresh_thread = Thread.new()

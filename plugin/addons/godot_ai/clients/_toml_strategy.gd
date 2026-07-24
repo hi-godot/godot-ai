@@ -24,7 +24,7 @@ static func configure(
 	if not read["ok"]:
 		return {"status": "error", "message": "Refusing to overwrite %s: %s. Fix or move the file, then re-run Configure." % [path, read["error"]]}
 
-	var rendered := _render_body(client, server_url, launch)
+	var rendered := render_body(client, server_url, launch)
 	if not bool(rendered.get("ok", false)):
 		return {"status": "error", "message": str(rendered.get("error", "Could not build the TOML entry."))}
 
@@ -207,7 +207,7 @@ static func encode_basic_string(value: String) -> String:
 
 
 ## Multi-line string-array encoding used by command-shape entries.
-static func encode_string_array(values: Array) -> Array[String]:
+static func encode_string_array(values: Variant) -> Array[String]:
 	var out: Array[String] = ["["]
 	for value in values:
 		out.append("  %s," % encode_basic_string(str(value)))
@@ -215,7 +215,7 @@ static func encode_string_array(values: Array) -> Array[String]:
 	return out
 
 
-static func _render_body(client: McpClient, server_url: String, launch: Dictionary) -> Dictionary:
+static func render_body(client: McpClient, server_url: String, launch: Dictionary) -> Dictionary:
 	if client.command_shape == McpClient.CommandShape.NONE:
 		if client.toml_body_template.is_empty():
 			return {"ok": false, "error": "%s descriptor missing toml_body_template" % client.display_name}
@@ -247,17 +247,20 @@ static func _render_body(client: McpClient, server_url: String, launch: Dictiona
 
 	var command_lines: Array[String] = [
 		"command = %s" % encode_basic_string(str(launch.get("command", ""))),
-		"args = [",
 	]
-	for arg in launch.get("args", []):
-		command_lines.append("  %s," % encode_basic_string(str(arg)))
-	command_lines.append("]")
+	command_lines.append_array(_encode_assignment("args", launch.get("args", [])))
 
 	var pinned_keys := {"command": true, "args": true}
 	if not client.command_transport_key.is_empty():
-		command_lines.append(
-			"%s = %s" % [client.command_transport_key, _encode_scalar(client.command_transport_value)]
-		)
+		var encoded_transport := _encode_scalar(client.command_transport_value)
+		if encoded_transport.is_empty():
+			return {
+				"ok": false,
+				"error": "Unsupported TOML transport `%s` for %s" % [
+					client.command_transport_key, client.display_name,
+				],
+			}
+		command_lines.append("%s = %s" % [client.command_transport_key, encoded_transport])
 		pinned_keys[client.command_transport_key] = true
 
 	var initial_keys := {}
@@ -282,10 +285,8 @@ static func _render_body(client: McpClient, server_url: String, launch: Dictiona
 
 static func _encode_assignment(key: String, value: Variant) -> Array[String]:
 	if value is Array or value is PackedStringArray:
-		var lines: Array[String] = ["%s = [" % key]
-		for entry in value:
-			lines.append("  %s," % encode_basic_string(str(entry)))
-		lines.append("]")
+		var lines := encode_string_array(value)
+		lines[0] = "%s = %s" % [key, lines[0]]
 		return lines
 	var encoded := _encode_scalar(value)
 	var lines: Array[String] = []
