@@ -601,6 +601,31 @@ def test_spawn_backend_builds_detached_command_and_log(
     assert (tmp_path / "backend-8123.log.old").read_text(encoding="utf-8") == ("latest generation")
 
 
+def test_backend_python_uses_sibling_pythonw_on_windows(tmp_path: Path) -> None:
+    python = tmp_path / "Scripts" / "python.exe"
+    pythonw = python.with_name("pythonw.exe")
+    pythonw.parent.mkdir()
+    python.write_bytes(b"")
+    pythonw.write_bytes(b"")
+
+    assert (
+        ensure_module.backend_python_executable(python, platform="nt") == str(pythonw)
+    )
+
+
+def test_backend_python_falls_back_when_pythonw_is_missing(tmp_path: Path) -> None:
+    python = tmp_path / "Scripts" / "python.exe"
+    python.parent.mkdir()
+    python.write_bytes(b"")
+
+    assert (
+        ensure_module.backend_python_executable(python, platform="nt") == str(python)
+    )
+    assert (
+        ensure_module.backend_python_executable(python, platform="posix") == str(python)
+    )
+
+
 def test_spawn_backend_reports_log_rotation_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

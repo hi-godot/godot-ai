@@ -339,12 +339,35 @@ class SpawnedBackend:
     log_path: Path
 
 
+def backend_python_executable(
+    executable: str | os.PathLike[str] | None = None,
+    *,
+    platform: str | None = None,
+) -> str:
+    """Choose a backend interpreter that cannot allocate a Windows console.
+
+    ``CREATE_NO_WINDOW`` applies to the process created by ``Popen``, but a
+    venv's console-subsystem ``python.exe`` redirector can start its real
+    interpreter without preserving that property.  The sibling ``pythonw``
+    redirector uses the GUI subsystem throughout while retaining the backend's
+    file-backed stdout/stderr handles.
+    """
+
+    selected = Path(sys.executable if executable is None else executable)
+    current_platform = os.name if platform is None else platform
+    if current_platform == "nt":
+        pythonw = selected.with_name("pythonw.exe")
+        if pythonw.is_file():
+            return str(pythonw)
+    return str(selected)
+
+
 def spawn_backend(port: int, ws_port: int, exclude_domains: tuple[str, ...]) -> SpawnedBackend:
     runtime_dir = user_runtime_dir()
     log_path = runtime_dir / f"backend-{port}.log"
     old_log_path = Path(f"{log_path}.old")
     args = [
-        sys.executable,
+        backend_python_executable(),
         "-m",
         "godot_ai",
         "--transport",
