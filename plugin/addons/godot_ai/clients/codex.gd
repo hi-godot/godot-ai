@@ -14,8 +14,31 @@ func _init() -> void:
 	toml_section_path = PackedStringArray(["mcp_servers", "godot-ai"])
 	# Older Codex builds used the unquoted form with underscore-substituted ids.
 	toml_legacy_section_aliases = PackedStringArray(["mcp_servers.godot_ai"])
-	toml_body_template = PackedStringArray([
-		"url = \"{url}\"",
-		"enabled = true",
+	command_shape = McpClient.CommandShape.COMMAND_ARRAY
+	command_legacy_keys = PackedStringArray(["url"])
+	## Initial-only: users may disable the entry or tune either timeout and
+	## Configure preserves that choice. Codex currently defaults to 10s for
+	## startup and 60s per tool; test_run legitimately has a 300s server
+	## budget, so the generated config leaves transport margin at the client.
+	command_initial_fields = {
+		"enabled": true,
+		"startup_timeout_sec": 60,
+		"tool_timeout_sec": 360,
+	}
+	command_timeout_fields = PackedStringArray([
+		"startup_timeout_sec",
+		"tool_timeout_sec",
+	])
+	command_user_fields = PackedStringArray([
+		"enabled",
+		"required",
+		"startup_timeout_sec",
+		"tool_timeout_sec",
+		"enabled_tools",
+		"disabled_tools",
+		"default_tools_approval_mode",
+		"env",
+		"env_vars",
+		"cwd",
 	])
 	detect_paths = PackedStringArray(path_template.values())

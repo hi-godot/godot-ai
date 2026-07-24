@@ -49,9 +49,9 @@ both settings is the reliable fix.
 
 ## 3. Reconfigure your MCP clients
 
-Editor Settings only moves the *server*. Every MCP client still points at the
-old URL (`http://127.0.0.1:8000/mcp`), so they'll silently fail to connect
-until you update them too.
+Editor Settings only moves the *server*. URL-mode clients still point at the
+old URL (`http://127.0.0.1:8000/mcp`), while attach-mode Codex entries still
+carry the old HTTP and WebSocket ports in their `args`. Both need reconfiguration.
 
 The fastest way is the dock itself: each client row's **Configure** button
 rewrites that client's config with the current server URL, so once the server
@@ -66,8 +66,13 @@ claude mcp remove godot-ai
 claude mcp add --scope user --transport http godot-ai http://127.0.0.1:8001/mcp
 ```
 
-For config-file clients (Codex, Grok Build, Antigravity, Cursor, …), edit the
-`url` / `serverUrl` field to match the new port. See the **Manual Client
+For attach-mode Codex, re-running **Configure** is preferred because it updates
+both `--port` and `--ws-port` and re-verifies the package pin and excluded tool
+domains. If editing `~/.codex/config.toml` by hand, change the values following
+those two flags in the `args` array; there is no `url` field in an attach entry.
+
+For URL-mode config-file clients (Grok Build, Antigravity, Cursor, …), edit the
+`url` / `serverUrl` field to match the new HTTP port. See the **Manual Client
 Configuration** section in the [README](../README.md) for each client's file
 and format. Grok Build uses `~/.grok/config.toml`
 (`[mcp_servers.godot-ai]`).

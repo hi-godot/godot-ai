@@ -94,9 +94,12 @@ Kimi Code.
 
 </details>
 
-Server URL is always `http://127.0.0.1:8000/mcp`. If auto-configure can't find
-a CLI, each dock row exposes a **Run this manually** panel with a copyable
-snippet.
+Most clients connect to `http://127.0.0.1:8000/mcp`. Codex is configured with
+the client-owned `godot-ai attach` stdio bridge instead, so Codex can discover
+the tools before Godot opens and keep using them across same-version editor
+restarts. If auto-configure can't find a compatible local launcher, each dock
+row exposes a **Run this manually** panel with a copyable snippet and the
+advanced URL fallback.
 
 ### 4. Try it
 
@@ -130,9 +133,33 @@ claude mcp add --scope user --transport http godot-ai http://127.0.0.1:8000/mcp
 
 ```toml
 [mcp_servers."godot-ai"]
+command = "godot-ai"
+args = [
+  "attach",
+  "--port", "8000",
+  "--ws-port", "9500",
+]
+enabled = true
+startup_timeout_sec = 60
+tool_timeout_sec = 360
+```
+
+The dock chooses a compatible launcher automatically: a development venv,
+an exact-version `uvx --link-mode copy --from godot-ai==VERSION ...` command,
+or a matching system `godot-ai` install. Re-run **Configure** after changing
+ports, excluded tool domains, or plugin versions so those launch arguments
+stay synchronized.
+
+Advanced fallback for clients intentionally kept in URL mode:
+
+```toml
+[mcp_servers."godot-ai"]
 url = "http://127.0.0.1:8000/mcp"
 enabled = true
 ```
+
+URL mode depends on the client's own reconnect behavior. If Godot AI is not
+running when the client starts, a client restart may still be required.
 
 **Grok Build** (`~/.grok/config.toml`)
 

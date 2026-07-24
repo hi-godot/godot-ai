@@ -14,10 +14,11 @@ extends RefCounted
 ## Callable workaround from #192.
 
 ## CONFIGURED_MISMATCH = an entry with our `SERVER_NAME` exists in the user's
-## client config, but its URL doesn't match `http_url()` — typical after the
-## user changes `godot_ai/http_port` and reloads. Distinguishing this from
-## `NOT_CONFIGURED` lets the dock surface a "your saved client URLs are stale"
-## banner instead of conflating it with "you never configured this client".
+## client config, but its URL or launch command doesn't match the current
+## ports/version/exclusions — typical after a setting change or update.
+## Distinguishing this from `NOT_CONFIGURED` lets the dock surface a "your
+## saved client configuration is stale" banner instead of conflating it with
+## "you never configured this client".
 enum Status { NOT_CONFIGURED, CONFIGURED, CONFIGURED_MISMATCH, ERROR }
 
 
@@ -87,6 +88,37 @@ var entry_initial_fields: Dictionary = {}
 ## silently falling through `match` to the non-bridge path.
 enum UvxBridge { NONE, FLAT }
 var entry_uvx_bridge: UvxBridge = UvxBridge.NONE
+
+## Client-owned stdio launch shape. This is separate from `UvxBridge`, which
+## describes the legacy third-party stdio->HTTP adapter used by Claude
+## Desktop. A descriptor may activate at most one of these two paths.
+##
+## Only COMMAND_ARRAY is consumed by the TOML strategy in the first #816
+## rollout slice. The remaining values are shared vocabulary for later JSON,
+## YAML, and CLI migrations; keeping them data-only avoids reintroducing the
+## descriptor Callable race from #229.
+enum CommandShape { NONE, FLAT, TYPED_FLAT, COMMAND_ARRAY, NESTED_COMMAND }
+var command_shape: CommandShape = CommandShape.NONE
+
+## Optional discriminator required by a client's command transport shape
+## (for example `type = "stdio"`). Empty means command+args are sufficient.
+var command_transport_key: String = ""
+var command_transport_value: Variant = null
+
+## Keys from the legacy transport that Configure must delete. Codex removes
+## `url`, because Codex rejects a server entry containing both URL and stdio
+## launch fields.
+var command_legacy_keys: PackedStringArray = PackedStringArray()
+
+## Defaults seeded only for a new entry. Reconfigure preserves user values.
+## Codex uses this for enabled/startup/tool timeout defaults.
+var command_initial_fields: Dictionary = {}
+
+## Declarative documentation of fields owned by the user and timeout fields
+## supported by this client. Strategies preserve these values and tests pin
+## the descriptor contract; no control flow lives on the descriptor.
+var command_user_fields: PackedStringArray = PackedStringArray()
+var command_timeout_fields: PackedStringArray = PackedStringArray()
 
 ## Paths whose existence implies the user has this client installed.
 ## Used purely for the dock's "installed" badge. `is_installed()` additionally

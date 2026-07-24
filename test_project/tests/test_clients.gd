@@ -137,6 +137,13 @@ func test_every_client_has_required_fields() -> void:
 			assert_gt(client.cli_register_template.size(), 0, "%s cli client missing cli_register_template" % client.id)
 		elif client.config_type == "toml":
 			assert_gt(client.toml_section_path.size(), 0, "%s toml client missing toml_section_path" % client.id)
+			if client.command_shape != McpClient.CommandShape.NONE:
+				assert_eq(
+					client.entry_uvx_bridge,
+					McpClient.UvxBridge.NONE,
+					"%s cannot activate both command_shape and entry_uvx_bridge" % client.id,
+				)
+				continue
 			assert_gt(client.toml_body_template.size(), 0, "%s toml client missing toml_body_template" % client.id)
 			## #711: check_status parses a literal `url = "..."` line and
 			## configure's initial-vs-pinned split keys on the {url}

@@ -8,14 +8,20 @@ extends RefCounted
 ## Callable. See `_base.gd` for why descriptors are data-only.
 
 
-static func build(client: McpClient, server_name: String, server_url: String, resolved_path: String) -> String:
+static func build(
+	client: McpClient,
+	server_name: String,
+	server_url: String,
+	resolved_path: String,
+	launch: Dictionary = {},
+) -> String:
 	match client.config_type:
 		"cli":
 			return _build_cli(client, server_name, server_url, resolved_path)
 		"json":
 			return _build_json(client, server_name, server_url, resolved_path)
 		"toml":
-			return _build_toml(client, server_name, server_url, resolved_path)
+			return _build_toml(client, server_name, server_url, resolved_path, launch)
 		"yaml":
 			return _build_yaml(client, server_name, server_url, resolved_path)
 	return ""
@@ -56,8 +62,30 @@ static func _build_json(client: McpClient, server_name: String, server_url: Stri
 	return "Edit %s and add under \"%s\":\n  \"%s\": %s" % [resolved_path, key, server_name, entry_text]
 
 
-static func _build_toml(client: McpClient, _server_name: String, server_url: String, resolved_path: String) -> String:
+static func _build_toml(
+	client: McpClient,
+	_server_name: String,
+	server_url: String,
+	resolved_path: String,
+	launch: Dictionary = {},
+) -> String:
 	var header := _toml_header(client)
+	if client.command_shape != McpClient.CommandShape.NONE:
+		var lines: Array[String] = []
+		var rendered := McpTomlStrategy._render_body(client, server_url, launch)
+		if bool(rendered.get("ok", false)):
+			lines.append("Edit %s and add:" % resolved_path)
+			lines.append("  %s" % header)
+			for body_line in rendered.get("lines", []):
+				lines.append("  %s" % str(body_line))
+		else:
+			lines.append("Attach launch command unavailable: %s" % str(rendered.get("error", "no compatible launcher found")))
+		lines.append("")
+		lines.append("Advanced fallback — URL mode depends on your client's own reconnect behavior. If the server is down when the client starts, restarting the client may be required.")
+		lines.append("Edit %s and add:" % resolved_path)
+		lines.append("  %s" % header)
+		lines.append("  url = %s" % McpTomlStrategy.encode_basic_string(server_url))
+		return "\n".join(lines)
 	var body := McpTomlStrategy.format_body(client.toml_body_template, server_url)
 	var lines: Array[String] = ["Edit %s and add:" % resolved_path, "  %s" % header]
 	for b in body:
