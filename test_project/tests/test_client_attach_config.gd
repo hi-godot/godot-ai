@@ -173,14 +173,14 @@ func test_non_windows_launch_shape_stays_direct() -> void:
 
 
 func test_launch_context_values_are_worker_safe_and_exclusions_are_canonical() -> void:
-	assert_eq(
-		McpClientConfigurator._canonicalize_excluded_domains(" particle, audio,particle,unknown "),
-		"audio,particle",
+	var canonical_domains := McpClientConfigurator._canonicalize_excluded_domains(
+		" particle, audio,particle,unknown "
 	)
+	assert_eq(canonical_domains, "audio,particle")
 	var thread := Thread.new()
 	var err := thread.start(
 		Callable(self, "_resolve_on_worker").bind(
-			_context("particle,audio"),
+			_context(canonical_domains),
 			{
 				"venv_python": "",
 				"uvx_path": "C:/Tools/uv/uvx.exe",
@@ -192,7 +192,7 @@ func test_launch_context_values_are_worker_safe_and_exclusions_are_canonical() -
 	assert_eq(err, OK, "launch resolver worker should start")
 	var launch: Dictionary = thread.wait_to_finish()
 	assert_true(bool(launch.get("ok", false)))
-	assert_contains(launch.get("args", []), "particle,audio")
+	assert_contains(launch.get("args", []), "audio,particle")
 
 
 func test_attach_launch_session_cache_is_keyed_copied_and_invalidated() -> void:
@@ -215,8 +215,14 @@ func test_attach_launch_session_cache_is_keyed_copied_and_invalidated() -> void:
 	var first := McpClientConfigurator.resolve_attach_launch(context)
 	assert_eq(first.get("tier"), "cached", "production resolution must reuse the session cache")
 	first["tier"] = "mutated-by-caller"
+	first["args"][0] = "mutated-nested-arg"
 	var second := McpClientConfigurator.resolve_attach_launch(context)
 	assert_eq(second.get("tier"), "cached", "callers must receive an isolated cache copy")
+	assert_eq(
+		second.get("args", [])[0],
+		"attach",
+		"nested values returned from the cache must also be isolated copies",
+	)
 	McpClientConfigurator.invalidate_uv_detection()
 	McpClientConfigurator._attach_launch_cache_mutex.lock()
 	var still_cached := McpClientConfigurator._attach_launch_cache.has(cache_key)
@@ -338,7 +344,7 @@ func test_codex_status_is_semantic_and_detects_each_launch_drift() -> void:
 	for idx in range(args.size()):
 		formatted_args.append("  %s%s" % [
 			McpTomlStrategy.encode_basic_string(str(args[idx])),
-			", # comment" if idx == 0 else ",",
+			", # comment" if str(args[idx]) == "--link-mode" else ",",
 		])
 	_write(
 		path,
@@ -377,7 +383,9 @@ func test_codex_status_is_semantic_and_detects_each_launch_drift() -> void:
 	]:
 		_write(path, fresh.replace(replacement[0], replacement[1]))
 		assert_eq(McpTomlStrategy.check_status(client, "godot-ai", "", launch), McpClient.Status.CONFIGURED_MISMATCH)
-	_write(path, fresh.replace('  "--link-mode",\n  "copy",', ""))
+	var without_link_mode := fresh.replace('  "--link-mode", # comment\n  "copy",', "")
+	assert_ne(without_link_mode, fresh, "link-mode mutation must alter the fixture")
+	_write(path, without_link_mode)
 	assert_eq(McpTomlStrategy.check_status(client, "godot-ai", "", launch), McpClient.Status.CONFIGURED_MISMATCH)
 	_write(path, fresh.replace("args = [", "args = [\"unterminated"))
 	assert_eq(
