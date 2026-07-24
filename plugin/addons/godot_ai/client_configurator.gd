@@ -48,6 +48,17 @@ const SETTING_WS_PORT := "godot_ai/ws_port"
 const SETTING_STARTUP_TRACE := "godot_ai/log_startup_timing"
 const SETTING_KEEP_SERVER_ON_EXIT := "godot_ai/keep_server_on_exit"
 const _DISCOVERY_TIMEOUT_MS := 3000
+## Codex launches Windows console-subsystem MCP commands in a visible terminal.
+## A GUI-subsystem Python keeps the bridge attached to Codex's redirected MCP
+## pipes without allocating a console, then starts console launchers such as
+## uvx with CREATE_NO_WINDOW. Keep stdin/stdout/stderr explicit: pythonw can use
+## its own inherited pipes, but subprocess defaults do not reliably forward
+## them to a child when no console exists.
+const _WINDOWS_STDIO_BOOTSTRAP := (
+	"import subprocess,sys; "
+	+ "raise SystemExit(subprocess.call(sys.argv[1:], stdin=sys.stdin, stdout=sys.stdout, "
+	+ "stderr=sys.stderr, creationflags=0x08000000))"
+)
 
 
 ## Active HTTP port: user override (if in range) or `DEFAULT_HTTP_PORT`.
@@ -213,6 +224,7 @@ static func capture_launch_context() -> Dictionary:
 		"excluded_domains": excluded_domains(),
 		"plugin_version": get_plugin_version(),
 		"allow_dev_venv": mode_override() != "user",
+		"platform": OS.get_name(),
 		"server_url": "http://127.0.0.1:%d/mcp" % captured_http_port,
 	}
 
@@ -578,7 +590,7 @@ static func _pypi_pin_version(version: String) -> String:
 static func resolve_attach_launch(
 	launch_context: Dictionary, discovery_override: Dictionary = {}
 ) -> Dictionary:
-	for key in ["http_port", "ws_port", "excluded_domains", "plugin_version", "allow_dev_venv"]:
+	for key in ["http_port", "ws_port", "excluded_domains", "plugin_version", "allow_dev_venv", "platform"]:
 		if not launch_context.has(key):
 			return _attach_discovery_error("Launch context is missing `%s`; retry Configure." % key)
 
@@ -603,12 +615,9 @@ static func resolve_attach_launch(
 	if bool(launch_context.get("allow_dev_venv", true)) and not venv_python.is_empty():
 		var venv_args: Array[String] = ["-m", "godot_ai"]
 		venv_args.append_array(common_args)
-		return {
-			"ok": true,
-			"tier": "dev_venv",
-			"command": venv_python,
-			"args": venv_args,
-		}
+		return _finalize_attach_launch(
+			"dev_venv", venv_python, venv_args, launch_context, discovery_override
+		)
 
 	var uvx := ""
 	if discovery_override.has("uvx_path"):
@@ -626,12 +635,9 @@ static func resolve_attach_launch(
 			"godot-ai",
 		]
 		uvx_args.append_array(common_args)
-		return {
-			"ok": true,
-			"tier": "uvx",
-			"command": uvx,
-			"args": uvx_args,
-		}
+		return _finalize_attach_launch(
+			"uvx", uvx, uvx_args, launch_context, discovery_override
+		)
 
 	var system_cmd := ""
 	if discovery_override.has("system_path"):
@@ -648,12 +654,9 @@ static func resolve_attach_launch(
 		if bool(version_check.get("ok", false)):
 			var found_version := str(version_check.get("version", ""))
 			if found_version == plugin_version:
-				return {
-					"ok": true,
-					"tier": "system",
-					"command": system_cmd,
-					"args": common_args,
-				}
+				return _finalize_attach_launch(
+					"system", system_cmd, common_args, launch_context, discovery_override
+				)
 			return _attach_discovery_error(
 				"System godot-ai is version %s, but this plugin requires %s. Install uv or update the system package, then retry Configure."
 				% [found_version, plugin_version]
@@ -669,6 +672,73 @@ static func resolve_attach_launch(
 	return _attach_discovery_error(
 		"No compatible godot-ai launcher was found. Install uv (provides uvx), or use the manual URL-mode instructions with their reconnect limitation."
 	)
+
+
+## Return a launch shape that cannot allocate a visible console on Windows.
+## The development tier can execute its sibling pythonw directly. uvx and the
+## system entry point still need their own environments, so pythonw acts only
+## as a stdio-preserving, CREATE_NO_WINDOW process bootstrap for those tiers.
+static func _finalize_attach_launch(
+	tier: String,
+	command: String,
+	args: Array[String],
+	launch_context: Dictionary,
+	discovery_override: Dictionary,
+) -> Dictionary:
+	if str(launch_context.get("platform", "")) != "Windows":
+		return {"ok": true, "tier": tier, "command": command, "args": args}
+
+	var pythonw := _resolve_consoleless_python(command, tier, discovery_override)
+	if pythonw.is_empty():
+		return _attach_discovery_error(
+			"Windows requires pythonw.exe to launch the MCP bridge without opening a terminal window. Repair this Python or uv installation, then retry Configure."
+		)
+
+	if tier == "dev_venv":
+		return {"ok": true, "tier": tier, "command": pythonw, "args": args}
+
+	var wrapped_args: Array[String] = ["-c", _WINDOWS_STDIO_BOOTSTRAP, command]
+	wrapped_args.append_array(args)
+	return {"ok": true, "tier": tier, "command": pythonw, "args": wrapped_args}
+
+
+static func _resolve_consoleless_python(
+	command: String, tier: String, discovery_override: Dictionary
+) -> String:
+	## Data-only override keeps resolver tests independent of the host's Python.
+	if discovery_override.has("consoleless_python"):
+		return str(discovery_override["consoleless_python"])
+
+	## Venv/system console-script launchers normally keep pythonw beside their
+	## python.exe. The dev tier must use that exact interpreter so godot_ai is
+	## imported from the selected checkout rather than some unrelated install.
+	var sibling := command.get_base_dir().path_join("pythonw.exe")
+	if FileAccess.file_exists(sibling):
+		return sibling
+	if tier == "dev_venv":
+		return ""
+
+	## uvx may be installed without a PATH-visible CPython. Ask its sibling uv
+	## for the already-managed system interpreter; Godot AI's existing uvx
+	## server launch ensures one normally exists before client configuration.
+	if tier == "uvx":
+		var uv := command.get_base_dir().path_join("uv.exe")
+		if not FileAccess.file_exists(uv):
+			uv = CliFinder.find(["uv.exe"])
+		if not uv.is_empty():
+			var probe := McpCliExec.run(
+				uv, ["python", "find", "--system"], _DISCOVERY_TIMEOUT_MS, false
+			)
+			if int(probe.get("exit_code", -1)) == 0:
+				var python := str(probe.get("stdout", "")).strip_edges()
+				if not python.is_empty():
+					var managed_pythonw := python.get_base_dir().path_join("pythonw.exe")
+					if FileAccess.file_exists(managed_pythonw):
+						return managed_pythonw
+
+	## A system Python GUI launcher is sufficient for the non-dev bootstrap;
+	## it does not import godot_ai itself.
+	return CliFinder.find(["pythonw.exe"])
 
 
 static func _system_version_from_probe(probe: Dictionary) -> Dictionary:

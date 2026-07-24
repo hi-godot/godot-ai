@@ -1,6 +1,9 @@
 [samples.uvx]
-command = "C:\\Users\\Agent \"quoted\"\\bin\\uvx.exe"
+command = "C:/Python313/pythonw.exe"
 args = [
+  "-c",
+  "import subprocess,sys; raise SystemExit(subprocess.call(sys.argv[1:], stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, creationflags=0x08000000))",
+  "C:\\Users\\Agent \"quoted\"\\bin\\uvx.exe",
   "--link-mode",
   "copy",
   "--from",

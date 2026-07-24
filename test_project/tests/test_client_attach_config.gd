@@ -43,24 +43,45 @@ func test_no_descriptor_activates_two_bridge_shapes() -> void:
 func test_launch_resolver_dev_venv_shape() -> void:
 	var launch := McpClientConfigurator.resolve_attach_launch(
 		_context("audio"),
-		{"venv_python": "C:/repo/.venv/Scripts/python.exe", "uvx_path": "", "system_path": ""},
+		{
+			"venv_python": "C:/repo/.venv/Scripts/python.exe",
+			"uvx_path": "",
+			"system_path": "",
+			"consoleless_python": "C:/repo/.venv/Scripts/pythonw.exe",
+		},
 	)
 	assert_true(bool(launch.get("ok", false)))
 	assert_eq(launch.get("tier"), "dev_venv")
-	assert_eq(launch.get("command"), "C:/repo/.venv/Scripts/python.exe")
+	assert_eq(launch.get("command"), "C:/repo/.venv/Scripts/pythonw.exe")
 	assert_eq(
 		launch.get("args"),
 		["-m", "godot_ai", "attach", "--port", "8123", "--ws-port", "9623", "--exclude-domains", "audio"],
 	)
 
 
+func test_windows_dev_resolver_discovers_sibling_pythonw() -> void:
+	var python := _scratch_dir.path_join("python.exe")
+	var pythonw := _scratch_dir.path_join("pythonw.exe")
+	_write(python, "")
+	_write(pythonw, "")
+	var launch := McpClientConfigurator.resolve_attach_launch(
+		_context(), {"venv_python": python, "uvx_path": "", "system_path": ""}
+	)
+	assert_true(bool(launch.get("ok", false)))
+	assert_eq(launch.get("tier"), "dev_venv")
+	assert_eq(launch.get("command"), pythonw)
+
+
 func test_launch_resolver_uvx_is_strict_and_pinned() -> void:
 	var launch := _uvx_launch("audio,particle")
 	assert_true(bool(launch.get("ok", false)))
 	assert_eq(launch.get("tier"), "uvx")
-	assert_eq(launch.get("command"), "C:/Tools/uv/uvx.exe")
+	assert_eq(launch.get("command"), "C:/Python313/pythonw.exe")
+	assert_eq(launch.get("args", [])[0], "-c")
+	assert_contains(str(launch.get("args", [])[1]), "creationflags=0x08000000")
+	assert_eq(launch.get("args", [])[2], "C:/Tools/uv/uvx.exe")
 	assert_eq(
-		launch.get("args"),
+		launch.get("args", []).slice(3),
 		[
 			"--link-mode", "copy",
 			"--from", "godot-ai==3.0.6",
@@ -79,12 +100,18 @@ func test_launch_resolver_system_requires_exact_parseable_version() -> void:
 			"venv_python": "",
 			"uvx_path": "",
 			"system_path": "C:/Tools/godot-ai.exe",
+			"consoleless_python": "C:/Python313/pythonw.exe",
 			"system_version_result": _probe("godot-ai 3.0.6\n"),
 		},
 	)
 	assert_true(bool(compatible.get("ok", false)))
 	assert_eq(compatible.get("tier"), "system")
-	assert_eq(compatible.get("args"), ["attach", "--port", "8123", "--ws-port", "9623"])
+	assert_eq(compatible.get("command"), "C:/Python313/pythonw.exe")
+	assert_eq(compatible.get("args", [])[2], "C:/Tools/godot-ai.exe")
+	assert_eq(
+		compatible.get("args", []).slice(3),
+		["attach", "--port", "8123", "--ws-port", "9623"],
+	)
 
 	for bad_probe in [
 		_probe("godot-ai 3.0.5\n"),
@@ -97,6 +124,7 @@ func test_launch_resolver_system_requires_exact_parseable_version() -> void:
 				"venv_python": "",
 				"uvx_path": "",
 				"system_path": "C:/Tools/godot-ai.exe",
+				"consoleless_python": "C:/Python313/pythonw.exe",
 				"system_version_result": bad_probe,
 			},
 		)
@@ -113,6 +141,37 @@ func test_launch_resolver_no_tier_never_returns_bare_uvx() -> void:
 	assert_contains(str(launch.get("error", "")), "Install uv")
 
 
+func test_windows_launch_requires_consoleless_python_without_writing_a_console_command() -> void:
+	var launch := McpClientConfigurator.resolve_attach_launch(
+		_context(),
+		{
+			"venv_python": "C:/repo/.venv/Scripts/python.exe",
+			"uvx_path": "",
+			"system_path": "",
+			"consoleless_python": "",
+		},
+	)
+	assert_false(bool(launch.get("ok", true)))
+	assert_false(launch.has("command"))
+	assert_contains(str(launch.get("error", "")), "pythonw.exe")
+
+
+func test_non_windows_launch_shape_stays_direct() -> void:
+	var context := _context()
+	context["platform"] = "Linux"
+	var launch := McpClientConfigurator.resolve_attach_launch(
+		context,
+		{
+			"venv_python": "",
+			"uvx_path": "/home/agent/.local/bin/uvx",
+			"system_path": "",
+		},
+	)
+	assert_true(bool(launch.get("ok", false)))
+	assert_eq(launch.get("command"), "/home/agent/.local/bin/uvx")
+	assert_eq(launch.get("args", [])[0], "--link-mode")
+
+
 func test_launch_context_values_are_worker_safe_and_exclusions_are_canonical() -> void:
 	assert_eq(
 		McpClientConfigurator._canonicalize_excluded_domains(" particle, audio,particle,unknown "),
@@ -122,7 +181,12 @@ func test_launch_context_values_are_worker_safe_and_exclusions_are_canonical() -
 	var err := thread.start(
 		Callable(self, "_resolve_on_worker").bind(
 			_context("particle,audio"),
-			{"venv_python": "", "uvx_path": "C:/Tools/uv/uvx.exe", "system_path": ""},
+			{
+				"venv_python": "",
+				"uvx_path": "C:/Tools/uv/uvx.exe",
+				"system_path": "",
+				"consoleless_python": "C:/Python313/pythonw.exe",
+			},
 		)
 	)
 	assert_eq(err, OK, "launch resolver worker should start")
@@ -132,11 +196,17 @@ func test_launch_context_values_are_worker_safe_and_exclusions_are_canonical() -
 
 
 func test_toml_encoder_matches_tomllib_fixture() -> void:
-	var command := 'C:\\Users\\Agent "quoted"\\bin\\uvx.exe'
-	var args := [
-		"--link-mode", "copy", "--from", "godot-ai==3.0.6", "godot-ai", "attach",
-		"--port", "8123", "--ws-port", "9623", "--exclude-domains", "audio,particle",
-	]
+	var launch := McpClientConfigurator.resolve_attach_launch(
+		_context("audio,particle"),
+		{
+			"venv_python": "",
+			"uvx_path": 'C:\\Users\\Agent "quoted"\\bin\\uvx.exe',
+			"system_path": "",
+			"consoleless_python": "C:/Python313/pythonw.exe",
+		},
+	)
+	var command := str(launch.get("command", ""))
+	var args: Array = launch.get("args", [])
 	var rendered: Array[String] = [
 		"[samples.uvx]",
 		"command = %s" % McpTomlStrategy.encode_basic_string(command),
@@ -155,13 +225,20 @@ func test_toml_encoder_matches_tomllib_fixture() -> void:
 func test_codex_render_for_all_discovery_tiers() -> void:
 	var launches := [
 		McpClientConfigurator.resolve_attach_launch(
-			_context(), {"venv_python": "C:/repo/.venv/Scripts/python.exe", "uvx_path": "", "system_path": ""}
+			_context(),
+			{
+				"venv_python": "C:/repo/.venv/Scripts/python.exe",
+				"uvx_path": "",
+				"system_path": "",
+				"consoleless_python": "C:/repo/.venv/Scripts/pythonw.exe",
+			}
 		),
 		_uvx_launch(),
 		McpClientConfigurator.resolve_attach_launch(
 			_context(),
 			{
 				"venv_python": "", "uvx_path": "", "system_path": "C:/Tools/godot-ai.exe",
+				"consoleless_python": "C:/Python313/pythonw.exe",
 				"system_version_result": _probe("godot-ai 3.0.6\n"),
 			},
 		),
@@ -270,7 +347,7 @@ func test_codex_status_is_semantic_and_detects_each_launch_drift() -> void:
 	]:
 		_write(path, fresh.replace(replacement[0], replacement[1]))
 		assert_eq(McpTomlStrategy.check_status(client, "godot-ai", "", launch), McpClient.Status.CONFIGURED_MISMATCH)
-	_write(path, fresh.replace('  "--link-mode", # comment\n  "copy",', ""))
+	_write(path, fresh.replace('  "--link-mode",\n  "copy",', ""))
 	assert_eq(McpTomlStrategy.check_status(client, "godot-ai", "", launch), McpClient.Status.CONFIGURED_MISMATCH)
 	_write(path, fresh.replace("args = [", "args = [\"unterminated"))
 	assert_eq(
@@ -283,12 +360,19 @@ func test_codex_status_is_semantic_and_detects_each_launch_drift() -> void:
 func test_venv_and_system_entries_do_not_require_uvx_options() -> void:
 	for launch in [
 		McpClientConfigurator.resolve_attach_launch(
-			_context(), {"venv_python": "C:/repo/.venv/Scripts/python.exe", "uvx_path": "", "system_path": ""}
+			_context(),
+			{
+				"venv_python": "C:/repo/.venv/Scripts/python.exe",
+				"uvx_path": "",
+				"system_path": "",
+				"consoleless_python": "C:/repo/.venv/Scripts/pythonw.exe",
+			}
 		),
 		McpClientConfigurator.resolve_attach_launch(
 			_context(),
 			{
 				"venv_python": "", "uvx_path": "", "system_path": "C:/Tools/godot-ai.exe",
+				"consoleless_python": "C:/Python313/pythonw.exe",
 				"system_version_result": _probe("godot-ai 3.0.6\n"),
 			},
 		),
@@ -339,6 +423,7 @@ func _context(exclusions: String = "") -> Dictionary:
 		"excluded_domains": exclusions,
 		"plugin_version": "3.0.6",
 		"allow_dev_venv": true,
+		"platform": "Windows",
 		"server_url": "http://127.0.0.1:8123/mcp",
 	}
 
@@ -346,7 +431,12 @@ func _context(exclusions: String = "") -> Dictionary:
 func _uvx_launch(exclusions: String = "") -> Dictionary:
 	return McpClientConfigurator.resolve_attach_launch(
 		_context(exclusions),
-		{"venv_python": "", "uvx_path": "C:/Tools/uv/uvx.exe", "system_path": ""},
+		{
+			"venv_python": "",
+			"uvx_path": "C:/Tools/uv/uvx.exe",
+			"system_path": "",
+			"consoleless_python": "C:/Python313/pythonw.exe",
+		},
 	)
 
 
