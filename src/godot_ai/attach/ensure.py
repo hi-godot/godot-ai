@@ -323,9 +323,11 @@ def detached_spawn_kwargs(*, platform: str | None = None) -> dict[str, Any]:
     platform = os.name if platform is None else platform
     kwargs: dict[str, Any] = {"stdin": subprocess.DEVNULL, "close_fds": True}
     if platform == "nt":
+        # Win32 ignores CREATE_NO_WINDOW when DETACHED_PROCESS is also set.
+        # Keep the process-group boundary without defeating the fallback path's
+        # invisible-console protection.
         kwargs["creationflags"] = (
-            getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
-            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
             | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         )
     else:

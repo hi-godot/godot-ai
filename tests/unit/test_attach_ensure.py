@@ -897,7 +897,10 @@ def test_detached_spawn_arguments_isolate_stdio_on_windows() -> None:
     kwargs = detached_spawn_kwargs(platform="nt")
     assert kwargs["stdin"] is not None
     assert kwargs["close_fds"] is True
-    assert kwargs["creationflags"] != 0
+    flags = kwargs["creationflags"]
+    assert flags & getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+    assert flags & getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    assert not flags & getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
     assert "start_new_session" not in kwargs
 
 
