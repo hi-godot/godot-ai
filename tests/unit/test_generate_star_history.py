@@ -286,7 +286,7 @@ def test_main_extends_stored_series_when_history_is_refused(tmp_path, monkeypatc
     points = gsh.load_series(str(series))
     assert points[0] == (date(2026, 4, 13), 2)  # banked history preserved
     assert points[-1][1] == 1221  # today's total appended
-    assert "1,221 stars" in out.read_text()
+    assert "1,221 stars" in out.read_text(encoding="utf-8")
     # The refusal is reported even though the run succeeded — a silently
     # degraded chart would hide the outage indefinitely.
     assert "stargazer history unavailable" in capsys.readouterr().err
