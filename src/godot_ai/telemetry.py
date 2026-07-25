@@ -525,7 +525,15 @@ class TelemetryCollector:
 
         try:
             if self._client is None:
-                self._client = httpx.Client(timeout=self.config.timeout)
+                ## ``trust_env=False`` matches every other outbound client in
+                ## the package (attach/ensure, attach/lease, attach/proxy).
+                ## Without it httpx honours HTTP_PROXY / HTTPS_PROXY /
+                ## SSL_CERT_FILE from the environment, so a value the user
+                ## never set for telemetry could redirect or intercept records
+                ## carrying the persistent customer_uuid — routing around the
+                ## endpoint validation that exists precisely to keep those
+                ## records off cleartext transports (#532).
+                self._client = httpx.Client(timeout=self.config.timeout, trust_env=False)
             response = self._client.post(endpoint, json=payload)
             if not 200 <= response.status_code < 300:
                 logger.debug("Telemetry endpoint returned HTTP %s", response.status_code)

@@ -91,6 +91,74 @@ func test_set_project_setting_preserves_int_type() -> void:
 	_handler.set_project_setting({"key": "display/window/size/viewport_width", "value": old_width})
 
 
+func test_set_project_setting_refuses_autoload_keys() -> void:
+	## McpPathValidator refuses direct writes to res://project.godot because
+	## it is the startup-execution surface. set_project_setting writes that
+	## same manifest through the settings API, so it must refuse the keys that
+	## decide what the engine EXECUTES — otherwise the validator's guard is
+	## side-steppable with an autoload pointing at an arbitrary script.
+	var result := _handler.set_project_setting({
+		"key": "autoload/_McpEvil",
+		"value": "*res://../../evil.gd",
+	})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_true(
+		String(result.error.message).contains("autoload_manage"),
+		"refusal should point at the validated autoload route, got: %s" % result.error.message
+	)
+	## The refusal must land BEFORE ProjectSettings is touched.
+	assert_false(
+		ProjectSettings.has_setting("autoload/_McpEvil"),
+		"refused key must never reach ProjectSettings"
+	)
+
+
+func test_set_project_setting_refuses_startup_execution_keys() -> void:
+	for key in [
+		"application/run/main_scene",
+		"editor/script/templates_search_path",
+		"editor/run/main_run_args",
+		"editor_plugins/enabled",
+	]:
+		var result := _handler.set_project_setting({"key": key, "value": "res://evil.gd"})
+		assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+		assert_true(
+			String(result.error.message).contains("Refusing to set"),
+			"%s must be refused, got: %s" % [key, result.error.message]
+		)
+
+
+func test_startup_execution_key_refusal_is_case_folded() -> void:
+	## macOS/Windows users and LLM-generated calls both produce case variants.
+	assert_false(
+		ProjectHandler.startup_execution_key_refusal("AutoLoad/Boot").is_empty(),
+		"case variants of a blocked prefix must still be refused"
+	)
+	assert_false(
+		ProjectHandler.startup_execution_key_refusal("  autoload/Boot  ").is_empty(),
+		"surrounding whitespace must not smuggle a blocked key through"
+	)
+
+
+func test_startup_execution_key_refusal_allows_ordinary_settings() -> void:
+	## The guard must not turn settings_set into a no-op tool. The inert
+	## siblings of blocked keys matter most here: over-blocking a whole
+	## section is the failure mode this list is written to avoid.
+	for key in [
+		"application/config/name",
+		"application/run/max_fps",
+		"application/run/low_processor_mode",
+		"application/boot_splash/image",
+		"display/window/size/viewport_width",
+		"rendering/renderer/rendering_method",
+		"input_devices/pointing/emulate_touch_from_mouse",
+	]:
+		assert_true(
+			ProjectHandler.startup_execution_key_refusal(key).is_empty(),
+			"%s is an ordinary setting and must remain writable" % key
+		)
+
+
 func test_set_project_setting_missing_key() -> void:
 	var result := _handler.set_project_setting({})
 	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
@@ -178,6 +246,20 @@ func test_run_project_custom_missing_scene() -> void:
 func test_run_project_custom_empty_scene() -> void:
 	var result := _handler.run_project({"mode": "custom", "scene": ""})
 	assert_is_error(result)
+
+
+func test_run_project_custom_scene_rejects_traversal() -> void:
+	## play_custom_scene() was the last path-taking op in the plugin with no
+	## containment check. Every sibling that accepts a scene path validates it.
+	for scene in [
+		"res://../../etc/passwd.tscn",
+		"res://../outside.tscn",
+		"/etc/passwd.tscn",
+		"file:///etc/passwd.tscn",
+	]:
+		var result := _handler.run_project({"mode": "custom", "scene": scene})
+		assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE,
+			"traversal/absolute scene path must be refused: %s" % scene)
 
 
 func test_run_project_autosave_false_restores_editor_setting() -> void:

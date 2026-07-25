@@ -19,7 +19,12 @@ from starlette.responses import JSONResponse
 import godot_ai as _godot_ai_pkg
 from godot_ai import __version__ as _SERVER_VERSION
 from godot_ai.asgi import StaleMcpSessionDiagnosticMiddleware
-from godot_ai.attach.lease import LeaseInstanceMismatch, LeaseNotFound, LeaseRegistry
+from godot_ai.attach.lease import (
+    LeaseInstanceMismatch,
+    LeaseLimitExceeded,
+    LeaseNotFound,
+    LeaseRegistry,
+)
 from godot_ai.godot_client.client import GodotClient
 from godot_ai.middleware import (
     FoldFlatManageParams,
@@ -637,6 +642,21 @@ def create_server(
                 },
                 status_code=409,
             )
+        if isinstance(exc, LeaseLimitExceeded):
+            ## The routes are loopback-guarded but not authenticated, so an
+            ## unbounded registry is reachable by any local process. Refuse
+            ## past the ceiling instead of growing without limit; a real
+            ## bridge holds one lease and never sees this.
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": "LEASE_LIMIT_EXCEEDED",
+                        "message": str(exc),
+                        "instance_id": SERVER_INSTANCE_ID,
+                    }
+                },
+                status_code=429,
+            )
         return JSONResponse(
             {
                 "error": {
@@ -655,7 +675,7 @@ def create_server(
             return payload
         try:
             registration = leases.register(str(payload["instance_id"]))
-        except LeaseInstanceMismatch as exc:
+        except (LeaseInstanceMismatch, LeaseLimitExceeded) as exc:
             return _lease_error(exc)
         return JSONResponse(registration.to_dict())
 

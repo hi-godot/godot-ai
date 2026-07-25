@@ -48,6 +48,9 @@ const DEV_MODE_SETTING := "godot_ai/dev_mode"
 ## not tip-of-main, which may have drifted from that build's UI.
 const PORT_CONFLICT_DOCS_PATH := "docs/port-conflicts.md"
 const REPO_BLOB_BASE := "https://github.com/hi-godot/godot-ai/blob"
+## Opened by the "How to install uv" button. See _on_install_uv for why the
+## dock links here instead of running an installer itself.
+const UV_INSTALL_DOCS_URL := "https://docs.astral.sh/uv/getting-started/installation/"
 const CLIENT_STATUS_REFRESH_COOLDOWN_MSEC := 15 * 1000
 const CLIENT_STATUS_REFRESH_TIMEOUT_MSEC := 30 * 1000
 const CLIENT_ACTION_TIMEOUT_MSEC := 30 * 1000
@@ -1676,7 +1679,11 @@ func _refresh_setup_status() -> void:
 	else:
 		_setup_container.add_child(_make_status_row("uv", "not found", Color.RED))
 		var install_btn := Button.new()
-		install_btn.text = "Install uv"
+		install_btn.text = "How to install uv"
+		install_btn.tooltip_text = (
+			"Opens the official uv installation docs. Godot AI deliberately does "
+			+ "not run the installer for you — see _on_install_uv."
+		)
 		install_btn.pressed.connect(_on_install_uv)
 		_setup_container.add_child(install_btn)
 
@@ -1854,15 +1861,30 @@ func _connected_status_text() -> String:
 	return "Server connected"
 
 
+## Open uv's official install documentation rather than executing an
+## installer on the user's behalf.
+##
+## This used to shell out to `curl -LsSf https://astral.sh/uv/install.sh | sh`
+## (and the PowerShell `irm … | iex` equivalent). That is arbitrary remote
+## code execution as the editor user, one dock click deep, with no version
+## pin, no checksum, and no signature — while this same plugin verifies its
+## OWN updates with an RSA-4096 signature over a SHA-256 sidecar, pinned to a
+## GitHub host and this repo's release-asset path. Holding a third-party
+## installer to a weaker standard than our own payload is the wrong trade,
+## and pinning a digest here would only cover the bootstrap script, not the
+## uv binary it goes on to fetch.
+##
+## Opening the docs keeps the discovery value of the button (the user still
+## learns uv is missing and how to get it) while leaving the decision to
+## install — and the choice of install method — with the user. Mirrors the
+## dock's existing "Run this manually" fallback for client CLIs.
 func _on_install_uv() -> void:
-	match OS.get_name():
-		"Windows":
-			OS.execute("powershell", ["-ExecutionPolicy", "ByPass", "-c", "irm https://astral.sh/uv/install.ps1 | iex"], [], false)
-		_:
-			OS.execute("bash", ["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"], [], false)
-	## Drop the cached uvx path AND the cached `uvx --version` so the
-	## next `_refresh_setup_status` finds and reads the freshly-installed
-	## binary instead of returning the pre-install "not found" result.
+	OS.shell_open(UV_INSTALL_DOCS_URL)
+	## Drop the cached uvx path AND the cached `uvx --version` so that once
+	## the user has installed uv (in a terminal, from the docs we just
+	## opened), the next `_refresh_setup_status` finds and reads the new
+	## binary instead of replaying the cached "not found" result for the
+	## rest of the session.
 	## Routing through the configurator matters on Windows, where the
 	## CLI-finder cache key is `uvx.exe` — invalidating just `"uvx"`
 	## would leave the cache stale and the dock would keep showing
