@@ -61,18 +61,16 @@ LINE_END = "#ffd166"
 GOLD = "#ffd166"
 
 
-def describe_http_error(
-    err: urllib.error.HTTPError, url: str, token_source: str
-) -> str:
+def describe_http_error(err: urllib.error.HTTPError, url: str, token_source: str) -> str:
     """Explain a refused stargazers request using GitHub's own answer.
 
     GitHub states the reason in the response body and the rate-limit headers,
     and the distinctions matter: 401 means the credential itself was rejected,
-    a 403 with an exhausted quota is a rate limit, and any other 403 means the
-    token is alive but not authorized for this repo (org PAT policy, a revoked
-    or still-unapproved grant, SAML). A hardcoded hint cannot tell those apart
-    and sent a real investigation down the wrong path (#750 follow-up), so
-    quote the API verbatim and only then suggest where to look.
+    a throttled 403 is a rate limit, and any other 403 means the token is alive
+    but not authorized for this repo (org PAT policy, a revoked or
+    still-unapproved grant, SAML). A hardcoded hint cannot tell those apart and
+    sent a real investigation down the wrong path (#750 follow-up), so quote
+    the API verbatim and only then suggest where to look.
     """
     try:
         api_message = json.loads(err.read().decode("utf-8", "replace")).get("message")
@@ -81,28 +79,36 @@ def describe_http_error(
 
     headers = err.headers or {}
     remaining = headers.get("x-ratelimit-remaining")
-    rate_limited = err.code in (403, 429) and remaining == "0"
+    retry_after = headers.get("retry-after")
+    ## A *secondary* limit answers 403 with primary quota still on the clock,
+    ## so remaining == "0" alone misses it and the run would be reported as an
+    ## authorization failure — telling the reader to go replace a token that
+    ## is working fine. Retry-After and the message text are the other tells.
+    throttled_message = bool(api_message) and "rate limit" in api_message.lower()
+    rate_limited = err.code == 429 or (
+        err.code == 403 and (remaining == "0" or retry_after is not None or throttled_message)
+    )
 
     lines = [
         f"GitHub API returned {err.code} for {url}.",
-        f'GitHub says: "{api_message}"'
-        if api_message
-        else "GitHub returned no message body.",
+        f'GitHub says: "{api_message}"' if api_message else "GitHub returned no message body.",
         f"Token used: {token_source}.",
     ]
 
     if rate_limited:
+        detail = []
+        if remaining is not None:
+            detail.append(f"{remaining} requests remaining")
         reset = headers.get("x-ratelimit-reset")
-        when = ""
         if reset and reset.isdigit():
-            when = (
-                " (resets "
-                + datetime.fromtimestamp(int(reset), timezone.utc).strftime(
-                    "%Y-%m-%d %H:%M UTC"
-                )
-                + ")"
+            detail.append(
+                "resets "
+                + datetime.fromtimestamp(int(reset), timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
             )
-        lines.append(f"Rate limited: 0 requests remaining{when}. Retry later.")
+        if retry_after:
+            detail.append(f"retry after {retry_after}s")
+        suffix = f" ({'; '.join(detail)})" if detail else ""
+        lines.append(f"Rate limited{suffix}. Retry later.")
     elif err.code == 401:
         lines.append(
             "The credential itself was rejected — the token is expired, revoked, "
@@ -127,9 +133,7 @@ def describe_http_error(
     return "\n".join(lines)
 
 
-def fetch_star_dates(
-    repo: str, token: str, token_source: str = "STAR_HISTORY_TOKEN"
-) -> list[date]:
+def fetch_star_dates(repo: str, token: str, token_source: str = "STAR_HISTORY_TOKEN") -> list[date]:
     """Return the starred_at date of every stargazer, oldest first."""
     dates: list[date] = []
     for page in range(1, MAX_PAGES + 1):
@@ -154,9 +158,7 @@ def fetch_star_dates(
         for entry in batch:
             starred_at = entry.get("starred_at")
             if starred_at:
-                dates.append(
-                    datetime.fromisoformat(starred_at.replace("Z", "+00:00")).date()
-                )
+                dates.append(datetime.fromisoformat(starred_at.replace("Z", "+00:00")).date())
         if len(batch) < PER_PAGE:
             break
     dates.sort()

@@ -133,6 +133,21 @@ def test_describe_http_error_flags_rate_limiting():
     assert "not authorized" not in detail
 
 
+def test_describe_http_error_flags_secondary_rate_limiting():
+    # A secondary limit answers 403 with primary quota left, so classifying on
+    # remaining == "0" alone would file it as an authorization failure and send
+    # the reader off to replace a perfectly good token.
+    err = _http_error(
+        403,
+        body=b'{"message": "You have exceeded a secondary rate limit"}',
+        headers={"x-ratelimit-remaining": "4312", "retry-after": "60"},
+    )
+    detail = gsh.describe_http_error(err, _URL, "STAR_HISTORY_TOKEN")
+    assert "Rate limited" in detail
+    assert "retry after 60s" in detail
+    assert "not authorized" not in detail
+
+
 def test_describe_http_error_distinguishes_rejected_credentials():
     err = _http_error(401, body=b'{"message": "Bad credentials"}')
     detail = gsh.describe_http_error(err, _URL, "GITHUB_TOKEN (fallback)")
@@ -147,3 +162,31 @@ def test_describe_http_error_survives_a_bodyless_response():
     detail = gsh.describe_http_error(_http_error(403, body=b"<html>"), _URL, "tok")
     assert "GitHub returned no message body." in detail
     assert "403" in detail
+
+
+def test_fetch_star_dates_routes_4xx_through_the_diagnostic(monkeypatch):
+    # Cross-function contract: the fetch layer must hand refusals to
+    # describe_http_error with the token label attached, not swallow them or
+    # report a bare status code.
+    def refuse(req, timeout=None):
+        raise _http_error(404, body=b'{"message": "Not Found"}')
+
+    monkeypatch.setattr(gsh.urllib.request, "urlopen", refuse)
+    with pytest.raises(SystemExit) as excinfo:
+        gsh.fetch_star_dates("hi-godot/godot-ai", "tok", "STAR_HISTORY_TOKEN")
+
+    detail = str(excinfo.value)
+    assert "Not Found" in detail
+    assert "Token used: STAR_HISTORY_TOKEN." in detail
+    assert "cannot see hi-godot/godot-ai" in detail
+
+
+def test_fetch_star_dates_reraises_server_errors(monkeypatch):
+    # 5xx is an outage, not a misconfiguration — it must not be dressed up as
+    # a credential problem, and the traceback is the useful artifact.
+    def boom(req, timeout=None):
+        raise _http_error(502, body=b"")
+
+    monkeypatch.setattr(gsh.urllib.request, "urlopen", boom)
+    with pytest.raises(urllib.error.HTTPError):
+        gsh.fetch_star_dates("hi-godot/godot-ai", "tok", "STAR_HISTORY_TOKEN")
