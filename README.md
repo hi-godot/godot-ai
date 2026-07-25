@@ -4,6 +4,8 @@
 
 # Godot AI
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Fhi-godot%2Fgodot-ai.svg)](https://mcptoplist.com/server/glama%2Fhi-godot%2Fgodot-ai)
+
 [![CI](https://github.com/hi-godot/godot-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/hi-godot/godot-ai/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/hi-godot/godot-ai/graph/badge.svg)](https://codecov.io/gh/hi-godot/godot-ai)
 [![Godot Asset Library](https://img.shields.io/badge/Godot-Asset%20Library-478cbf?logo=godotengine&logoColor=white)](https://godotengine.org/asset-library/asset/5050)
