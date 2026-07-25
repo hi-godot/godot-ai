@@ -214,20 +214,43 @@ def fetch_star_count(repo: str, token: str, token_source: str) -> int:
     return count
 
 
-def load_series(path: str) -> list[tuple[date, int]]:
-    """Read the accumulated (date, count) series, or [] if absent."""
+def load_series(path: str, repo: str) -> list[tuple[date, int]]:
+    """Read the accumulated (date, count) series for `repo`, or [] if absent.
+
+    An *empty* file counts as absent. The workflow restores this file from a
+    branch that may not carry it yet, and a shell redirection creates the file
+    before the command feeding it can fail — so a half-created file must not
+    wedge the run before it can even try the exact-history path.
+
+    A series belonging to another repo is refused rather than silently
+    rendered: its points would be drawn as this repo's history and then
+    overwritten with this repo's, destroying both.
+    """
     try:
         with open(path, encoding="utf-8") as fh:
-            payload = json.load(fh)
+            raw = fh.read()
     except FileNotFoundError:
         return []
+    if not raw.strip():
+        return []
+    try:
+        payload = json.loads(raw)
     except ValueError as err:
         raise SystemExit(f"{path} is not valid JSON: {err}") from err
+
+    stored = payload.get("repo")
+    if stored and stored != repo:
+        raise SystemExit(
+            f"{path} holds the series for {stored}, not {repo}. Point --series "
+            f"at that repo's file, or delete it to start a fresh series — "
+            f"grafting one repo's history onto another would corrupt both."
+        )
     points = [(date.fromisoformat(d), int(c)) for d, c in payload.get("points", [])]
     return sorted(points)
 
 
 def save_series(path: str, repo: str, points: list[tuple[date, int]]) -> None:
+    """Write the series, stamped with the repo it belongs to."""
     payload = {
         "repo": repo,
         "points": [[d.isoformat(), c] for d, c in points],
@@ -521,7 +544,7 @@ def main() -> None:
         if not token:
             raise SystemExit("set GITHUB_TOKEN (or STAR_HISTORY_TOKEN), or use --seed")
 
-        series = load_series(args.series)
+        series = load_series(args.series, args.repo)
         try:
             ## Exact per-star history is still the preferred source: when the
             ## endpoint is reachable it rebuilds the whole curve and corrects

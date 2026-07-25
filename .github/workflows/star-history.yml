@@ -47,10 +47,22 @@ jobs:
         ## The series is the chart's memory. Exact per-star history is
         ## preferred, but when GitHub refuses the stargazers list the run
         ## extends this instead of failing, so it must survive across runs.
+        ## Restore via a temp file: `> star-history.json` would create the file
+        ## before git show could fail, leaving an empty one that the generator
+        ## then has to treat as corrupt. Only move it into place on success.
         run: |
-          git fetch --depth 1 origin star-history || true
-          git show origin/star-history:star-history.json > star-history.json \
-            || echo "no stored series yet — a successful history fetch will create it"
+          if git ls-remote --exit-code --heads origin star-history >/dev/null; then
+            git fetch --depth 1 origin star-history
+            if git show origin/star-history:star-history.json > series.tmp; then
+              mv series.tmp star-history.json
+              echo "restored $(wc -c < star-history.json) bytes of stored series"
+            else
+              rm -f series.tmp
+              echo "branch carries no series yet — an exact-history fetch will create it"
+            fi
+          else
+            echo "star-history branch does not exist yet — it will be created on publish"
+          fi
 
       - name: Generate chart
         env:

@@ -185,12 +185,44 @@ def test_series_round_trips(tmp_path):
     path = tmp_path / "series.json"
     points = [(date(2026, 4, 13), 2), (date(2026, 7, 25), 1221)]
     gsh.save_series(str(path), "hi-godot/godot-ai", points)
-    assert gsh.load_series(str(path)) == points
+    assert gsh.load_series(str(path), "hi-godot/godot-ai") == points
 
 
 def test_load_series_returns_empty_when_absent(tmp_path):
     # First ever run has no series yet; that is not an error.
-    assert gsh.load_series(str(tmp_path / "nope.json")) == []
+    assert gsh.load_series(str(tmp_path / "nope.json"), "hi-godot/godot-ai") == []
+
+
+def test_load_series_treats_an_empty_file_as_absent(tmp_path):
+    # The workflow restores this file from a branch that may not carry it, and
+    # a shell redirection creates the file before the command feeding it can
+    # fail. An empty file must not wedge the run before it can try exact
+    # history — that would take the whole chart down, not just the fallback.
+    empty = tmp_path / "series.json"
+    empty.write_text("", encoding="utf-8")
+    assert gsh.load_series(str(empty), "hi-godot/godot-ai") == []
+    empty.write_text("   \n", encoding="utf-8")
+    assert gsh.load_series(str(empty), "hi-godot/godot-ai") == []
+
+
+def test_load_series_rejects_another_repos_series(tmp_path):
+    # Rendering one repo's points as another's would then overwrite them with
+    # the second repo's history, destroying both.
+    path = tmp_path / "series.json"
+    gsh.save_series(str(path), "someone/else", [(date(2026, 4, 13), 2)])
+    with pytest.raises(SystemExit) as excinfo:
+        gsh.load_series(str(path), "hi-godot/godot-ai")
+    assert "someone/else" in str(excinfo.value)
+    assert "hi-godot/godot-ai" in str(excinfo.value)
+
+
+def test_load_series_still_rejects_corrupt_json(tmp_path):
+    # Non-empty garbage is a real problem and must not be silently discarded.
+    path = tmp_path / "series.json"
+    path.write_text("{not json", encoding="utf-8")
+    with pytest.raises(SystemExit) as excinfo:
+        gsh.load_series(str(path), "hi-godot/godot-ai")
+    assert "not valid JSON" in str(excinfo.value)
 
 
 def test_append_today_replaces_a_same_day_point():
@@ -283,7 +315,7 @@ def test_main_extends_stored_series_when_history_is_refused(tmp_path, monkeypatc
 
     gsh.main()
 
-    points = gsh.load_series(str(series))
+    points = gsh.load_series(str(series), "hi-godot/godot-ai")
     assert points[0] == (date(2026, 4, 13), 2)  # banked history preserved
     assert points[-1][1] == 1221  # today's total appended
     assert "1,221 stars" in out.read_text(encoding="utf-8")
