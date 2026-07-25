@@ -123,6 +123,13 @@ var _client_rows: Dictionary = {}
 # during tab-away/tab-back churn. See #166 and #226.
 var _drift_banner: VBoxContainer
 var _drift_label: Label
+## Set when the user clicks "How to install uv"; consumed by the next
+## application focus-in so the uv row is re-probed after the user has had a
+## chance to install, not immediately. See _on_install_uv and _notification.
+## (Deliberately spelled without the focus-in constant name: the guard in
+## tests/unit/test_editor_focus_refocus.py locates the notification handler
+## by first occurrence of that token.)
+var _uv_recheck_pending := false
 ## Handles for the Setup section's "Server" row. `_update_status` keeps
 ## the label text/color in sync with `McpConnection.server_version` so the
 ## dock reports the TRUE running server version, not the plugin's
@@ -453,6 +460,15 @@ func _notification(what: int) -> void:
 	elif what == NOTIFICATION_APPLICATION_FOCUS_IN:
 		if _should_refresh_client_statuses_on_focus_in():
 			_request_client_status_refresh(false)
+		## Re-probe uv only when the user actually went off to install it
+		## (see _on_install_uv). `check_uv_version()` is cached, so an
+		## ungated refresh here would usually be free — but after the
+		## button invalidated that cache it costs one blocking
+		## `uvx --version`, and this notification must not grow a probe on
+		## the common focus-in path. One-shot: clear before refreshing.
+		if _uv_recheck_pending:
+			_uv_recheck_pending = false
+			_refresh_setup_status.call_deferred()
 
 
 func _should_refresh_client_statuses_on_focus_in() -> bool:
@@ -1882,15 +1898,21 @@ func _on_install_uv() -> void:
 	OS.shell_open(UV_INSTALL_DOCS_URL)
 	## Drop the cached uvx path AND the cached `uvx --version` so that once
 	## the user has installed uv (in a terminal, from the docs we just
-	## opened), the next `_refresh_setup_status` finds and reads the new
-	## binary instead of replaying the cached "not found" result for the
-	## rest of the session.
+	## opened), the dock finds the new binary instead of replaying the
+	## cached "not found" result for the rest of the session.
 	## Routing through the configurator matters on Windows, where the
 	## CLI-finder cache key is `uvx.exe` — invalidating just `"uvx"`
 	## would leave the cache stale and the dock would keep showing
 	## "uv: not found" for the rest of the session.
 	ClientConfigurator.invalidate_uv_detection()
-	_refresh_setup_status.call_deferred()
+	## Deliberately do NOT refresh here. `OS.shell_open` returns as soon as
+	## the browser is handed the URL, so an immediate refresh would run long
+	## before the user could install anything and would simply re-cache
+	## "not found" — undoing the invalidation above. (The old shell-out was
+	## a blocking `OS.execute`, so refreshing straight after it was correct
+	## then; it stopped being correct when the installer call went away.)
+	## Re-probe when the editor regains focus instead — see _notification.
+	_uv_recheck_pending = true
 
 
 # --- Client section ---

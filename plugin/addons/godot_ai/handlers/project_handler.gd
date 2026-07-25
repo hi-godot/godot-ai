@@ -35,11 +35,11 @@ const RUN_READY_WAIT_SEC := 3.0
 ## themselves. Comparison is case-folded — ProjectSettings keys are
 ## case-sensitive, but a case variant that Godot would reject is still a
 ## clearer error coming from here than from a half-applied save.
-const STARTUP_EXECUTION_KEY_PREFIXES := [
+const STARTUP_EXECUTION_KEY_PREFIXES: Array[String] = [
 	"autoload/",      ## every key under it is a script path
 	"editor_plugins/",  ## enabled-plugin list; each entry is loaded as code
 ]
-const STARTUP_EXECUTION_KEYS_EXACT := [
+const STARTUP_EXECUTION_KEYS_EXACT: Array[String] = [
 	"application/run/main_scene",           ## the scene the game boots into
 	"editor/script/templates_search_path",  ## where the editor loads templates from
 	"editor/run/main_run_args",             ## command line for the run

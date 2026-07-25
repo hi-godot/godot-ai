@@ -156,6 +156,25 @@ class LeaseRegistry:
     def _track(self, lease_id: str, expiry: float) -> None:
         self._expiries[lease_id] = expiry
         heapq.heappush(self._expiry_heap, (expiry, lease_id))
+        ## Capping ``_expiries`` alone does NOT bound the heap. Every heartbeat
+        ## and every register pushes an entry dated one TTL in the future, and
+        ## ``prune`` can only pop entries that have already expired — so an
+        ## unauthenticated loopback caller heartbeating one valid lease (or
+        ## churning register/release) in a tight loop grows the heap without
+        ## limit inside a single TTL. Measured at 50k stale entries for ONE
+        ## live lease before this compaction existed.
+        ##
+        ## Rebuild from ``_expiries`` (the source of truth) once the heap
+        ## exceeds twice the ceiling. Compaction is O(live) with live <=
+        ## max_active_leases, and at least max_active_leases+1 pushes must
+        ## occur between compactions, so it is amortized O(1) per push while
+        ## making the heap hard-bounded rather than merely self-draining.
+        if len(self._expiry_heap) > (2 * self.max_active_leases) + 1:
+            self._expiry_heap = [
+                (live_expiry, live_lease_id)
+                for live_lease_id, live_expiry in self._expiries.items()
+            ]
+            heapq.heapify(self._expiry_heap)
 
     def _require_instance(self, expected_instance_id: str) -> None:
         if expected_instance_id != self.instance_id:

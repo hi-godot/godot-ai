@@ -162,6 +162,97 @@ def test_prune_is_not_quadratic_in_live_leases() -> None:
     assert registry._expiry_heap == []
 
 
+def test_heap_stays_bounded_under_heartbeat_churn_without_clock_movement() -> None:
+    """Capping ``_expiries`` does not by itself bound the expiry heap.
+
+    Every heartbeat pushes an entry dated one TTL in the future, and ``prune``
+    can only pop entries that have already expired. Without compaction, an
+    unauthenticated loopback caller heartbeating a single valid lease in a
+    tight loop grows the heap without limit inside one TTL — reintroducing the
+    memory-exhaustion vector the active-lease ceiling exists to close.
+
+    The clock deliberately never advances: that is the attacker's best case,
+    and an earlier version of this test moved the clock between heartbeats,
+    which hid the growth entirely.
+    """
+    clock = FakeClock()
+    cap = 8
+    registry = LeaseRegistry(
+        "instance-a",
+        ttl_seconds=30,
+        heartbeat_after_seconds=10,
+        max_active_leases=cap,
+        clock=clock,
+    )
+    registration = registry.register("instance-a")
+
+    for _ in range(20_000):
+        registry.heartbeat("instance-a", registration.lease_id)
+
+    assert registry.active_count() == 1
+    assert len(registry._expiry_heap) <= (2 * cap) + 2
+
+    ## The surviving entry must still be the CURRENT expiry, so the lease
+    ## neither expires early nor outlives its TTL after a compaction.
+    clock.now = 29
+    assert registry.active_count() == 1
+    clock.now = 31
+    assert registry.active_count() == 0
+
+
+def test_heap_stays_bounded_under_register_release_churn() -> None:
+    """Released leases leave heap entries behind; churn must not accumulate."""
+    clock = FakeClock()
+    cap = 8
+    registry = LeaseRegistry(
+        "instance-a",
+        ttl_seconds=30,
+        heartbeat_after_seconds=10,
+        max_active_leases=cap,
+        clock=clock,
+    )
+
+    for _ in range(20_000):
+        registration = registry.register("instance-a")
+        assert registry.release("instance-a", registration.lease_id) is True
+
+    assert registry.active_count() == 0
+    assert len(registry._expiry_heap) <= (2 * cap) + 2
+
+    ## Churn must not have consumed the ceiling: the registry is empty, so a
+    ## legitimate bridge can still register.
+    assert registry.register("instance-a") is not None
+
+
+def test_heap_compaction_preserves_live_expiries() -> None:
+    """Compaction rebuilds from ``_expiries``, so no live lease may be lost."""
+    clock = FakeClock()
+    cap = 4
+    registry = LeaseRegistry(
+        "instance-a",
+        ttl_seconds=100,
+        heartbeat_after_seconds=10,
+        max_active_leases=cap,
+        clock=clock,
+    )
+    held = [registry.register("instance-a") for _ in range(cap)]
+
+    ## Renew one lease far past the others, forcing many compactions.
+    clock.now = 50
+    for _ in range(500):
+        registry.heartbeat("instance-a", held[0].lease_id)
+
+    assert registry.active_count() == cap
+    assert len(registry._expiry_heap) <= (2 * cap) + 2
+
+    ## The three un-renewed leases expire on the original schedule...
+    clock.now = 101
+    assert registry.active_count() == 1
+    ## ...and the renewed one survives to its own, later deadline.
+    clock.now = 151
+    assert registry.active_count() == 0
+
+
 def test_heartbeat_supersedes_heap_entries_without_unbounded_growth() -> None:
     """Superseded heap entries must drain, not accumulate forever."""
     clock = FakeClock()
