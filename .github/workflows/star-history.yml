@@ -50,9 +50,16 @@ jobs:
         ## Restore via a temp file: `> star-history.json` would create the file
         ## before git show could fail, leaving an empty one that the generator
         ## then has to treat as corrupt. Only move it into place on success.
+        ##
+        ## The refspec must be explicit. actions/checkout configures a narrow
+        ## remote.origin.fetch covering only the checked-out branch, so a bare
+        ## `git fetch origin star-history` populates FETCH_HEAD without ever
+        ## creating refs/remotes/origin/star-history — git show would then fail
+        ## and every run would report "no series yet" while the branch had one.
         run: |
           if git ls-remote --exit-code --heads origin star-history >/dev/null; then
-            git fetch --depth 1 origin star-history
+            git fetch --depth 1 origin \
+              '+refs/heads/star-history:refs/remotes/origin/star-history'
             if git show origin/star-history:star-history.json > series.tmp; then
               mv series.tmp star-history.json
               echo "restored $(wc -c < star-history.json) bytes of stored series"
