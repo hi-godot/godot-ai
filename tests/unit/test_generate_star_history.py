@@ -1,10 +1,13 @@
 """Tests for script/generate-star-history (#750).
 
 The script lives in script/ without a .py suffix, so load it via importlib.
-Network fetch is not exercised here — rendering and aggregation are.
+Network fetch is not exercised here — rendering, aggregation, and the
+failure diagnostics are.
 """
 
 import importlib.util
+import io
+import urllib.error
 from datetime import date
 from pathlib import Path
 
@@ -91,3 +94,56 @@ def test_render_svg_is_deterministic():
 def test_render_svg_rejects_single_point():
     with pytest.raises(SystemExit):
         gsh.render_svg([(date(2026, 4, 12), 0)], "hi-godot/godot-ai")
+
+
+_URL = "https://api.github.com/repos/hi-godot/godot-ai/stargazers?per_page=100&page=1"
+
+
+def _http_error(code, message="Forbidden", body=None, headers=None):
+    payload = b"" if body is None else body
+    return urllib.error.HTTPError(_URL, code, message, headers or {}, io.BytesIO(payload))
+
+
+def test_describe_http_error_quotes_the_api_message():
+    # The whole point of the diagnostic: GitHub's own words, not our guess.
+    # A 403 naming an org policy must not be reported as a missing secret.
+    err = _http_error(
+        403,
+        body=b'{"message": "hi-godot forbids access via a personal access token"}',
+    )
+    detail = gsh.describe_http_error(err, _URL, "STAR_HISTORY_TOKEN")
+    assert "hi-godot forbids access via a personal access token" in detail
+    assert "Token used: STAR_HISTORY_TOKEN." in detail
+    # 403 is an authorization refusal, not an expiry — don't send the reader
+    # off to reissue a token that is working fine.
+    assert "not authorized" in detail
+    assert "Rate limited" not in detail
+
+
+def test_describe_http_error_flags_rate_limiting():
+    err = _http_error(
+        403,
+        body=b'{"message": "API rate limit exceeded"}',
+        # 2026-07-25T09:00:00Z
+        headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1784970000"},
+    )
+    detail = gsh.describe_http_error(err, _URL, "STAR_HISTORY_TOKEN")
+    assert "Rate limited" in detail
+    assert "2026-07-25 09:00 UTC" in detail
+    assert "not authorized" not in detail
+
+
+def test_describe_http_error_distinguishes_rejected_credentials():
+    err = _http_error(401, body=b'{"message": "Bad credentials"}')
+    detail = gsh.describe_http_error(err, _URL, "GITHUB_TOKEN (fallback)")
+    assert "Bad credentials" in detail
+    assert "expired, revoked, or malformed" in detail
+    assert "Token used: GITHUB_TOKEN (fallback)." in detail
+
+
+def test_describe_http_error_survives_a_bodyless_response():
+    # An empty or non-JSON body must still yield a usable report rather than
+    # masking the original failure with a decode error.
+    detail = gsh.describe_http_error(_http_error(403, body=b"<html>"), _URL, "tok")
+    assert "GitHub returned no message body." in detail
+    assert "403" in detail

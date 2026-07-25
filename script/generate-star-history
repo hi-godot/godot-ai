@@ -61,7 +61,75 @@ LINE_END = "#ffd166"
 GOLD = "#ffd166"
 
 
-def fetch_star_dates(repo: str, token: str) -> list[date]:
+def describe_http_error(
+    err: urllib.error.HTTPError, url: str, token_source: str
+) -> str:
+    """Explain a refused stargazers request using GitHub's own answer.
+
+    GitHub states the reason in the response body and the rate-limit headers,
+    and the distinctions matter: 401 means the credential itself was rejected,
+    a 403 with an exhausted quota is a rate limit, and any other 403 means the
+    token is alive but not authorized for this repo (org PAT policy, a revoked
+    or still-unapproved grant, SAML). A hardcoded hint cannot tell those apart
+    and sent a real investigation down the wrong path (#750 follow-up), so
+    quote the API verbatim and only then suggest where to look.
+    """
+    try:
+        api_message = json.loads(err.read().decode("utf-8", "replace")).get("message")
+    except (ValueError, OSError):
+        api_message = None
+
+    headers = err.headers or {}
+    remaining = headers.get("x-ratelimit-remaining")
+    rate_limited = err.code in (403, 429) and remaining == "0"
+
+    lines = [
+        f"GitHub API returned {err.code} for {url}.",
+        f'GitHub says: "{api_message}"'
+        if api_message
+        else "GitHub returned no message body.",
+        f"Token used: {token_source}.",
+    ]
+
+    if rate_limited:
+        reset = headers.get("x-ratelimit-reset")
+        when = ""
+        if reset and reset.isdigit():
+            when = (
+                " (resets "
+                + datetime.fromtimestamp(int(reset), timezone.utc).strftime(
+                    "%Y-%m-%d %H:%M UTC"
+                )
+                + ")"
+            )
+        lines.append(f"Rate limited: 0 requests remaining{when}. Retry later.")
+    elif err.code == 401:
+        lines.append(
+            "The credential itself was rejected — the token is expired, revoked, "
+            "or malformed. Issue a new collaborator PAT and update the "
+            "STAR_HISTORY_TOKEN secret."
+        )
+    elif err.code == 403:
+        lines.append(
+            "The token is live but not authorized for this repo's stargazer "
+            "history. Check, in order: the org's personal-access-token policy "
+            "(a policy change can revoke a working token), whether the token's "
+            "approval or repository-access grant was withdrawn, and whether it "
+            "has expired. Note the workflow's built-in GITHUB_TOKEN is a GitHub "
+            "App token, not a collaborator, and is always refused here."
+        )
+    elif err.code == 404:
+        lines.append(
+            f"The token cannot see {url.split('/repos/')[-1].split('/stargazers')[0]} "
+            "at all — check the repo name and the token's repository access."
+        )
+
+    return "\n".join(lines)
+
+
+def fetch_star_dates(
+    repo: str, token: str, token_source: str = "STAR_HISTORY_TOKEN"
+) -> list[date]:
     """Return the starred_at date of every stargazer, oldest first."""
     dates: list[date] = []
     for page in range(1, MAX_PAGES + 1):
@@ -78,14 +146,8 @@ def fetch_star_dates(repo: str, token: str) -> list[date]:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 batch = json.load(resp)
         except urllib.error.HTTPError as err:
-            if err.code in (401, 403, 404):
-                raise SystemExit(
-                    f"GitHub API returned {err.code} for {url}.\n"
-                    "Stargazer history requires repo-collaborator access. In CI, "
-                    "pass the workflow GITHUB_TOKEN; if GitHub stops granting it "
-                    "stargazer access, set a collaborator PAT as the "
-                    "STAR_HISTORY_TOKEN secret instead."
-                ) from err
+            if 400 <= err.code < 500:
+                raise SystemExit(describe_http_error(err, url, token_source)) from err
             raise
         if not batch:
             break
@@ -358,10 +420,16 @@ def main() -> None:
     if args.seed:
         points = parse_seed(args.seed)
     else:
-        token = os.environ.get("STAR_HISTORY_TOKEN") or os.environ.get("GITHUB_TOKEN")
+        ## Which token answered matters when a run is refused, so name it
+        ## rather than collapsing the two into one lookup.
+        token_source = "STAR_HISTORY_TOKEN"
+        token = os.environ.get("STAR_HISTORY_TOKEN")
+        if not token:
+            token_source = "GITHUB_TOKEN (fallback)"
+            token = os.environ.get("GITHUB_TOKEN")
         if not token:
             raise SystemExit("set GITHUB_TOKEN (or STAR_HISTORY_TOKEN), or use --seed")
-        star_dates = fetch_star_dates(args.repo, token)
+        star_dates = fetch_star_dates(args.repo, token, token_source)
         if not star_dates:
             raise SystemExit(f"no stargazer data returned for {args.repo}")
         points = cumulative_points(star_dates)
