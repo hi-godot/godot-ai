@@ -181,6 +181,141 @@ def test_fetch_star_dates_routes_4xx_through_the_diagnostic(monkeypatch):
     assert "cannot see hi-godot/godot-ai" in detail
 
 
+def test_series_round_trips(tmp_path):
+    path = tmp_path / "series.json"
+    points = [(date(2026, 4, 13), 2), (date(2026, 7, 25), 1221)]
+    gsh.save_series(str(path), "hi-godot/godot-ai", points)
+    assert gsh.load_series(str(path)) == points
+
+
+def test_load_series_returns_empty_when_absent(tmp_path):
+    # First ever run has no series yet; that is not an error.
+    assert gsh.load_series(str(tmp_path / "nope.json")) == []
+
+
+def test_append_today_replaces_a_same_day_point():
+    # Reruns must be idempotent — a manual dispatch after the scheduled run
+    # would otherwise stack two points on the same x-position.
+    today = date(2026, 7, 25)
+    series = [(date(2026, 7, 24), 1200), (today, 1215)]
+    assert gsh.append_today(series, 1221, today) == [
+        (date(2026, 7, 24), 1200),
+        (today, 1221),
+    ]
+
+
+def test_append_today_extends_and_keeps_order():
+    today = date(2026, 7, 25)
+    series = [(date(2026, 7, 24), 1200)]
+    assert gsh.append_today(series, 1221, today)[-1] == (today, 1221)
+
+
+class _Resp:
+    """Minimal stand-in for the urlopen context manager."""
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def __enter__(self):
+        return io.BytesIO(self._payload)
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_fetch_star_count_reads_the_repo_endpoint(monkeypatch):
+    # The whole point of the fallback: /repos/{repo} answers on metadata=read
+    # and kept working when the stargazers list did not.
+    seen = {}
+
+    def ok(req, timeout=None):
+        seen["url"] = req.full_url
+        return _Resp(b'{"stargazers_count": 1221}')
+
+    monkeypatch.setattr(gsh.urllib.request, "urlopen", ok)
+    assert gsh.fetch_star_count("hi-godot/godot-ai", "tok", "STAR_HISTORY_TOKEN") == 1221
+    assert seen["url"].endswith("/repos/hi-godot/godot-ai")
+
+
+def test_fetch_star_count_routes_4xx_through_the_diagnostic(monkeypatch):
+    def refuse(req, timeout=None):
+        raise _http_error(403, body=b'{"message": "Resource not accessible"}')
+
+    monkeypatch.setattr(gsh.urllib.request, "urlopen", refuse)
+    with pytest.raises(gsh.StargazerFetchError) as excinfo:
+        gsh.fetch_star_count("hi-godot/godot-ai", "tok", "STAR_HISTORY_TOKEN")
+    assert "Resource not accessible" in str(excinfo.value)
+
+
+def test_stargazer_fetch_error_is_a_system_exit():
+    # Uncaught, it must still exit 1 with the diagnostic printed rather than
+    # dumping a traceback — the pre-existing contract for a refused run.
+    assert issubclass(gsh.StargazerFetchError, SystemExit)
+
+
+def test_main_extends_stored_series_when_history_is_refused(tmp_path, monkeypatch, capsys):
+    # Reproduces the 2026-07-24 outage exactly: the stargazers list 403s for
+    # every credential class while /repos/{repo} still answers. The chart must
+    # still be produced, keeping banked history and gaining today's total.
+    series = tmp_path / "series.json"
+    out = tmp_path / "chart.svg"
+    gsh.save_series(
+        str(series),
+        "hi-godot/godot-ai",
+        [(date(2026, 4, 13), 2), (date(2026, 7, 24), 1200)],
+    )
+
+    def respond(req, timeout=None):
+        if "/stargazers" in req.full_url:
+            raise _http_error(
+                403,
+                body=b'{"message": "Resource not accessible by personal access token"}',
+            )
+        return _Resp(b'{"stargazers_count": 1221}')
+
+    monkeypatch.setattr(gsh.urllib.request, "urlopen", respond)
+    monkeypatch.setenv("STAR_HISTORY_TOKEN", "tok")
+    monkeypatch.setattr(
+        gsh.sys,
+        "argv",
+        ["generate-star-history", "--series", str(series), "--out", str(out)],
+    )
+
+    gsh.main()
+
+    points = gsh.load_series(str(series))
+    assert points[0] == (date(2026, 4, 13), 2)  # banked history preserved
+    assert points[-1][1] == 1221  # today's total appended
+    assert "1,221 stars" in out.read_text()
+    # The refusal is reported even though the run succeeded — a silently
+    # degraded chart would hide the outage indefinitely.
+    assert "stargazer history unavailable" in capsys.readouterr().err
+
+
+def test_main_fails_when_refused_with_no_stored_series(tmp_path, monkeypatch):
+    # Nothing banked and no history reachable means there is genuinely no
+    # chart to draw — fail loudly with the diagnostic rather than inventing one.
+    def refuse(req, timeout=None):
+        raise _http_error(403, body=b'{"message": "Resource not accessible"}')
+
+    monkeypatch.setattr(gsh.urllib.request, "urlopen", refuse)
+    monkeypatch.setenv("STAR_HISTORY_TOKEN", "tok")
+    monkeypatch.setattr(
+        gsh.sys,
+        "argv",
+        [
+            "generate-star-history",
+            "--series",
+            str(tmp_path / "absent.json"),
+            "--out",
+            str(tmp_path / "chart.svg"),
+        ],
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        gsh.main()
+    assert "Resource not accessible" in str(excinfo.value)
+
+
 def test_fetch_star_dates_reraises_server_errors(monkeypatch):
     # 5xx is an outage, not a misconfiguration — it must not be dressed up as
     # a credential problem, and the traceback is the useful artifact.

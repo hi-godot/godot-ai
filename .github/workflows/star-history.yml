@@ -8,8 +8,12 @@ name: Star history chart
 ## Background: GitHub restricted detailed stargazer history to repo
 ## admins/collaborators, which broke star-history.com's unauthenticated
 ## embed — so we render the chart ourselves with a collaborator PAT
-## (the STAR_HISTORY_TOKEN secret; the workflow token is an app token,
-## not a collaborator, and gets 403 on stargazer history).
+## (the STAR_HISTORY_TOKEN secret).
+##
+## Since 2026-07-24 the stargazers endpoint refuses every credential class
+## (403 demanding `contents=write` to read a public list; anonymous gets 401),
+## so runs currently take the fallback path: extend the stored series with the
+## repo's stargazers_count. Diagnosis and evidence in docs/star-history.md.
 on:
   workflow_dispatch:
   schedule:
@@ -39,22 +43,38 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Restore the accumulated series
+        ## The series is the chart's memory. Exact per-star history is
+        ## preferred, but when GitHub refuses the stargazers list the run
+        ## extends this instead of failing, so it must survive across runs.
+        run: |
+          git fetch --depth 1 origin star-history || true
+          git show origin/star-history:star-history.json > star-history.json \
+            || echo "no stored series yet — a successful history fetch will create it"
+
       - name: Generate chart
         env:
           GITHUB_TOKEN: ${{ github.token }}
           STAR_HISTORY_TOKEN: ${{ secrets.STAR_HISTORY_TOKEN }}
-        run: python script/generate-star-history --repo "$GITHUB_REPOSITORY" --out star-history.svg
+        run: |
+          python script/generate-star-history \
+            --repo "$GITHUB_REPOSITORY" \
+            --series star-history.json \
+            --out star-history.svg
 
       - name: Publish to the star-history branch
-        ## The branch holds exactly one orphan commit — history lives in the
-        ## chart itself — so each run rebuilds it with git plumbing and
-        ## force-pushes. If the branch was deleted, this recreates it.
+        ## The branch holds exactly one orphan commit — the chart and its
+        ## series — so each run rebuilds it with git plumbing and force-pushes.
+        ## If the branch was deleted, this recreates it.
         ## Any protection rule on star-history must restrict deletions ONLY
         ## and leave force pushes allowed, or this push starts failing.
+        ## git mktree requires entries sorted by name (.json before .svg).
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          blob=$(git hash-object -w star-history.svg)
-          tree=$(printf '100644 blob %s\tstar-history.svg\n' "$blob" | git mktree)
+          json_blob=$(git hash-object -w star-history.json)
+          svg_blob=$(git hash-object -w star-history.svg)
+          tree=$(printf '100644 blob %s\tstar-history.json\n100644 blob %s\tstar-history.svg\n' \
+            "$json_blob" "$svg_blob" | git mktree)
           commit=$(git commit-tree "$tree" -m "Update star history chart")
           git push --force origin "$commit:refs/heads/star-history"

@@ -15,12 +15,20 @@ date) — the starfield is seeded from the repo name — so reruns with unchange
 data produce byte-identical output and the workflow's "chart unchanged" check
 keeps working.
 
+Two data sources, in preference order. Exact per-star history rebuilds the
+whole curve and is used whenever the stargazers endpoint is reachable. When it
+refuses (as it has since 2026-07-24 — see docs/star-history.md), the run keeps
+the history banked in `--series` and extends it with the repo's
+`stargazers_count`, which needs only `metadata=read`. A run that can reach
+neither fails rather than drawing an invented curve.
+
 Usage:
     GITHUB_TOKEN=... script/generate-star-history [--repo owner/name] [--out path]
     script/generate-star-history --seed "2026-04-12:0,2026-07-16:1009" --out path
 
 `--seed` renders a chart from explicit `date:count` points without touching
-the network — used to commit an initial chart and for offline testing.
+the network — used to commit an initial chart and for offline testing; it
+neither reads nor writes the series.
 
 Stdlib only; no dependencies.
 """
@@ -31,6 +39,7 @@ import argparse
 import json
 import math
 import os
+import sys
 import urllib.error
 import urllib.request
 import zlib
@@ -59,6 +68,15 @@ GRID_COLOR = "#4a5470"
 LINE_START = "#4f9cff"
 LINE_END = "#ffd166"
 GOLD = "#ffd166"
+
+
+class StargazerFetchError(SystemExit):
+    """A refused stargazers request, carrying the full diagnostic.
+
+    Derives from SystemExit so an uncaught one still exits 1 with the message
+    printed, while callers that have a stored series can catch it specifically
+    and carry on.
+    """
 
 
 def describe_http_error(err: urllib.error.HTTPError, url: str, token_source: str) -> str:
@@ -151,7 +169,7 @@ def fetch_star_dates(repo: str, token: str, token_source: str = "STAR_HISTORY_TO
                 batch = json.load(resp)
         except urllib.error.HTTPError as err:
             if 400 <= err.code < 500:
-                raise SystemExit(describe_http_error(err, url, token_source)) from err
+                raise StargazerFetchError(describe_http_error(err, url, token_source)) from err
             raise
         if not batch:
             break
@@ -163,6 +181,71 @@ def fetch_star_dates(repo: str, token: str, token_source: str = "STAR_HISTORY_TO
             break
     dates.sort()
     return dates
+
+
+def fetch_star_count(repo: str, token: str, token_source: str) -> int:
+    """Return the repo's current stargazers_count.
+
+    Deliberately a different endpoint from fetch_star_dates: /repos/{repo}
+    answers on `metadata=read` alone, and kept working through the 2026-07-24
+    outage that made the stargazers list demand `contents=write` (see
+    docs/star-history.md). It gives a total but no history, which is why the
+    series file exists.
+    """
+    url = f"{API_ROOT}/repos/{repo}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = json.load(resp)
+    except urllib.error.HTTPError as err:
+        if 400 <= err.code < 500:
+            raise StargazerFetchError(describe_http_error(err, url, token_source)) from err
+        raise
+    count = payload.get("stargazers_count")
+    if not isinstance(count, int):
+        raise StargazerFetchError(f"{url} returned no stargazers_count")
+    return count
+
+
+def load_series(path: str) -> list[tuple[date, int]]:
+    """Read the accumulated (date, count) series, or [] if absent."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except FileNotFoundError:
+        return []
+    except ValueError as err:
+        raise SystemExit(f"{path} is not valid JSON: {err}") from err
+    points = [(date.fromisoformat(d), int(c)) for d, c in payload.get("points", [])]
+    return sorted(points)
+
+
+def save_series(path: str, repo: str, points: list[tuple[date, int]]) -> None:
+    payload = {
+        "repo": repo,
+        "points": [[d.isoformat(), c] for d, c in points],
+    }
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=1)
+        fh.write("\n")
+
+
+def append_today(series: list[tuple[date, int]], count: int, today: date) -> list[tuple[date, int]]:
+    """Extend the series with today's total, replacing a same-day point.
+
+    Same-day replacement keeps reruns idempotent; without it a manual dispatch
+    after the scheduled run would stack duplicate x-positions onto the curve.
+    """
+    points = [(d, c) for d, c in series if d != today]
+    points.append((today, count))
+    return sorted(points)
 
 
 def cumulative_points(star_dates: list[date]) -> list[tuple[date, int]]:
@@ -413,6 +496,12 @@ def main() -> None:
     parser.add_argument("--repo", default="hi-godot/godot-ai")
     parser.add_argument("--out", default="star-history.svg")
     parser.add_argument(
+        "--series",
+        default="star-history.json",
+        help="accumulated date:count points, carried between runs so the "
+        "chart survives the stargazers endpoint being unavailable",
+    )
+    parser.add_argument(
         "--seed",
         help="comma-separated date:count points to render offline "
         '(e.g. "2026-04-12:0,2026-07-16:1009")',
@@ -431,10 +520,30 @@ def main() -> None:
             token = os.environ.get("GITHUB_TOKEN")
         if not token:
             raise SystemExit("set GITHUB_TOKEN (or STAR_HISTORY_TOKEN), or use --seed")
-        star_dates = fetch_star_dates(args.repo, token, token_source)
-        if not star_dates:
-            raise SystemExit(f"no stargazer data returned for {args.repo}")
-        points = cumulative_points(star_dates)
+
+        series = load_series(args.series)
+        try:
+            ## Exact per-star history is still the preferred source: when the
+            ## endpoint is reachable it rebuilds the whole curve and corrects
+            ## any drift the append-only path accumulated.
+            star_dates = fetch_star_dates(args.repo, token, token_source)
+            if not star_dates:
+                raise SystemExit(f"no stargazer data returned for {args.repo}")
+            points = cumulative_points(star_dates)
+        except StargazerFetchError as err:
+            if not series:
+                raise
+            ## Degrade instead of failing: keep the history already banked and
+            ## extend it with a total from an endpoint that still answers.
+            print(
+                f"stargazer history unavailable, extending the stored series "
+                f"with today's total instead.\n{err}",
+                file=sys.stderr,
+            )
+            count = fetch_star_count(args.repo, token, token_source)
+            points = append_today(series, count, datetime.now(timezone.utc).date())
+
+        save_series(args.series, args.repo, points)
 
     svg = render_svg(points, args.repo)
     with open(args.out, "w", encoding="utf-8") as fh:
