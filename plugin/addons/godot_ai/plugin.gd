@@ -889,15 +889,42 @@ static func _probe_live_server_status(port: int, timeout_ms: int = SERVER_STATUS
 	if not (parsed is Dictionary):
 		result["error"] = "invalid_json"
 		return result
-	result["reachable"] = true
-	result["name"] = str(parsed.get("name", ""))
-	result["version"] = _extract_server_version(parsed)
-	result["ws_port"] = int(parsed.get("ws_port", 0))
-	## `package_path` was added in v2.4.4 (#416) so the dock's
-	## "Incompatible server" banner can name the source of a version
-	## skew. Older servers omit it; treat the missing field as "".
-	result["package_path"] = str(parsed.get("package_path", ""))
+	result.merge(_project_status_payload(parsed), true)
 	return result
+
+
+## Project a parsed `/godot-ai/status` body into the probe's result shape.
+##
+## Extracted from the probe so it can be tested against a real payload. The
+## probe is a whitelist — a field the server publishes does not reach callers
+## unless it is copied here — and that is silent: the consumer just sees a
+## missing key. #824's lease check shipped reading `active_lease_count` while
+## this projection dropped it, so the branch was dead on every platform, and
+## the tests could not see it because they hand-built the result dict this
+## function is supposed to produce. Add new fields here, and cover them with a
+## projection test rather than a fabricated `live_status`.
+static func _project_status_payload(parsed: Dictionary) -> Dictionary:
+	var projected := {
+		"reachable": true,
+		"name": str(parsed.get("name", "")),
+		"version": _extract_server_version(parsed),
+		"ws_port": int(parsed.get("ws_port", 0)),
+		## `package_path` was added in v2.4.4 (#416) so the dock's
+		## "Incompatible server" banner can name the source of a version
+		## skew. Older servers omit it; treat the missing field as "".
+		"package_path": str(parsed.get("package_path", "")),
+	}
+	## #824: advisory attach-lease count, consumed by teardown to decide
+	## detach-vs-kill. Absent stays absent rather than defaulting to 0, so
+	## `ServerLifecycleManager.active_lease_count` keeps distinguishing "backend
+	## too old to publish this" from "backend reports zero leases" — both stop
+	## the server, but only one of them is a compatibility statement.
+	## Non-numeric JSON is dropped for the same reason it is clamped
+	## downstream: a malformed value must not read as occupancy.
+	var raw: Variant = parsed.get("active_lease_count")
+	if raw is float or raw is int:
+		projected["active_lease_count"] = int(raw)
+	return projected
 
 
 func _probe_live_server_status_for_port(port: int) -> Dictionary:

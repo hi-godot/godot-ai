@@ -1390,3 +1390,63 @@ func test_teardown_routes_to_stop_when_the_pid_cannot_be_proven() -> void:
 		"the lease detach's record clear must not fire on the stop path")
 	assert_true(killed.is_empty(),
 		"stop_server's own proof gate still declines to kill an unbranded PID")
+
+
+# ----- #824 regression: the probe must PROJECT what teardown consumes -----
+
+func test_status_projection_carries_the_lease_count_to_the_consumer() -> void:
+	## The gap that shipped in #839 and was caught only by a Windows smoke:
+	## teardown read `active_lease_count` off the probe result while
+	## `_probe_live_server_status` never copied it out of the JSON, so the
+	## lease branch was unreachable on every platform. The stubbed teardown
+	## tests could not see it because they hand-built the probe's result dict.
+	##
+	## This drives a real `/godot-ai/status` body through the actual projection
+	## and into the actual consumer, so the two halves cannot drift again.
+	var server_payload := {
+		"name": "godot-ai",
+		"server_version": "3.0.7",
+		"ws_port": 9500,
+		"tool_surface": "rollup",
+		"exclude_domains": [],
+		"package_path": "/src/godot_ai",
+		"instance_id": "e43bd1d9d15c418784676f87055d50b8",
+		"owner_type": "plugin",
+		"attach_protocol_version": 1,
+		"tool_catalog_hash": "deadbeef",
+		"active_lease_count": 2,
+	}
+
+	var projected := GodotAiPlugin._project_status_payload(server_payload)
+
+	assert_true(projected.has("active_lease_count"),
+		"the probe must project the field teardown reads, not drop it")
+	assert_eq(McpServerLifecycleManagerScript.active_lease_count(projected), 2,
+		"a real status body with held leases must reach the teardown consumer")
+	## The fields the projection already carried must survive the refactor.
+	assert_eq(projected.get("name"), "godot-ai")
+	assert_eq(projected.get("version"), "3.0.7")
+	assert_eq(projected.get("ws_port"), 9500)
+	assert_eq(projected.get("package_path"), "/src/godot_ai")
+	assert_true(bool(projected.get("reachable")))
+
+
+func test_status_projection_leaves_an_older_backends_field_absent() -> void:
+	## "Too old to publish it" must stay distinguishable from "reports zero",
+	## which is what the absent-stays-absent rule buys. Both stop the server.
+	var projected := GodotAiPlugin._project_status_payload({
+		"name": "godot-ai", "server_version": "3.0.6", "ws_port": 9500,
+	})
+	assert_false(projected.has("active_lease_count"),
+		"a backend that never published the field must not gain a synthetic 0")
+	assert_eq(McpServerLifecycleManagerScript.active_lease_count(projected), 0)
+
+
+func test_status_projection_drops_a_non_numeric_lease_count() -> void:
+	## A malformed value must not read as occupancy and keep a server alive.
+	for junk in ["3", [], {}, null]:
+		var projected := GodotAiPlugin._project_status_payload({
+			"name": "godot-ai", "active_lease_count": junk,
+		})
+		assert_eq(McpServerLifecycleManagerScript.active_lease_count(projected), 0,
+			"non-numeric lease count must not read as leases held")
