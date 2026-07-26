@@ -396,6 +396,13 @@ repair path after a self-update, port change, or tool-domain change. Never
 silently fall back to a bare `uvx` command for these entries—report ERROR and
 leave the config untouched when no verified tier exists.
 
+Launch resolution intentionally fails **closed**: if no consoleless interpreter
+or valid launch tier is available, Configure returns ERROR and leaves the config
+untouched, because a missing entry is better than one known to be broken. Backend
+spawn intentionally fails **open**: `backend_python_executable()` prefers a
+sibling `pythonw.exe` on Windows but falls back to the current executable when it
+is absent, because a visible console is better than a dead backend at runtime.
+
 MCP tools `client_configure`, `client_remove`, and `client_status` expose this
 to AI clients. `client_status` returns `{"clients": [{id, display_name, status,
 installed}, …]}`. The dock renders one row per client with a status dot,

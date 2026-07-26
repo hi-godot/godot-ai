@@ -54,6 +54,11 @@ const _DISCOVERY_TIMEOUT_MS := 3000
 ## uvx with CREATE_NO_WINDOW. Keep stdin/stdout/stderr explicit: pythonw can use
 ## its own inherited pipes, but subprocess defaults do not reliably forward
 ## them to a child when no console exists.
+## This string is a wire format written verbatim into user config `args`.
+## Whitespace or formatting changes make every existing Windows entry report
+## CONFIGURED_MISMATCH, so changing it is a deliberate migration decision, not
+## a refactor. The inline `-c` script is required because the uvx and system
+## tiers resolve a system interpreter where `godot_ai` is not importable.
 const _WINDOWS_STDIO_BOOTSTRAP := (
 	"import subprocess,sys; "
 	+ "raise SystemExit(subprocess.call(sys.argv[1:], stdin=sys.stdin, stdout=sys.stdout, "
