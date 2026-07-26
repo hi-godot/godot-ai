@@ -1116,3 +1116,61 @@ func test_invalidate_async_startup_joins_in_flight_worker() -> void:
 		"invalidation must join the in-flight worker before returning")
 	assert_true(slot_cleared,
 		"invalidation must take ownership of the thread slot so the stale walk cannot double-join")
+
+
+# ----- #797: Windows uv-venv trampoline handoff -----
+
+func test_handoff_pending_while_windows_spawn_dies_before_the_pid_file() -> void:
+	## The reported case: a uv trampoline exits ~immediately, the real
+	## interpreter is still starting, no pid-file yet. That must read as a
+	## handoff in progress, not as "server exited".
+	assert_true(McpServerLifecycleManagerScript.is_spawn_handoff_pending(
+		"Windows", 0, 5146, 15000),
+		"a dead spawn PID with no pid-file inside the window is a handoff, not an exit")
+
+
+func test_handoff_not_pending_once_the_pid_file_lands() -> void:
+	## Once the server publishes a PID there is something to heal onto, so the
+	## caller's heal branch owns the case — waiting longer would strand it.
+	assert_false(McpServerLifecycleManagerScript.is_spawn_handoff_pending(
+		"Windows", 4242, 5146, 15000),
+		"a published pid-file ends the handoff wait")
+
+
+func test_handoff_expires_so_a_dead_windows_spawn_is_still_diagnosed() -> void:
+	## The wait is bounded: a genuinely dead spawn that never publishes must
+	## still reach the fast-exit diagnosis, inside SERVER_WATCH_MS.
+	assert_false(McpServerLifecycleManagerScript.is_spawn_handoff_pending(
+		"Windows", 0, 15000, 15000),
+		"the handoff window must close so a real crash is not waited out forever")
+	assert_true(int(GodotAiPlugin.SPAWN_HANDOFF_MS) < int(GodotAiPlugin.SERVER_WATCH_MS),
+		"the handoff window must close before the watch loop stops looking")
+	assert_true(int(GodotAiPlugin.SPAWN_HANDOFF_MS) > int(GodotAiPlugin.SPAWN_GRACE_MS),
+		"a handoff window at or under the spawn grace would change nothing")
+
+
+func test_handoff_never_pending_off_windows() -> void:
+	## POSIX uv venvs exec rather than trampoline, so a dead spawn PID there is
+	## a dead server. Delaying that diagnosis would slow honest crash reporting
+	## on the platforms where this cannot happen.
+	for os_name in ["Linux", "macOS", "FreeBSD", ""]:
+		assert_false(McpServerLifecycleManagerScript.is_spawn_handoff_pending(
+			os_name, 0, 100, 15000),
+			"%s must keep the unchanged dead-spawn-is-a-dead-server behavior" % os_name)
+
+
+func test_spawn_dead_since_preserves_the_true_exit_time() -> void:
+	## #797 is about an honest log line, so a diagnosis raised after waiting out
+	## a handoff must still report when the process actually died — not when we
+	## gave up waiting. The watch stamps the first tick that saw it dead and
+	## does not overwrite that on later ticks.
+	var host := _ManagerHostStub.new()
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._spawn_dead_since_ms = 0
+	for elapsed in [312, 1300, 14900]:
+		if manager._spawn_dead_since_ms <= 0:
+			manager._spawn_dead_since_ms = elapsed
+	var stamped := int(manager._spawn_dead_since_ms)
+	host.free()
+	assert_eq(stamped, 312,
+		"the first observed death time must survive the wait, not the last tick")

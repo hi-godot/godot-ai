@@ -45,6 +45,12 @@ var _server_pid: int = -1
 var _server_keep_alive := false
 var _server_spawn_ms: int = 0
 var _server_exit_ms: int = 0
+## Elapsed-since-spawn at the first watch tick that saw the spawn PID dead, or
+## 0 when it is alive / has been healed onto the real PID. Only meaningful
+## while a Windows trampoline handoff is being waited out (#797): it preserves
+## the true exit time so a diagnosis raised after the wait still reports when
+## the process actually died. Reset per spawn alongside `_server_spawn_ms`.
+var _spawn_dead_since_ms: int = 0
 
 ## Version metadata. `expected_version` is what the plugin shipped with;
 ## `actual_version` is what the live server reported via handshake_ack.
@@ -940,6 +946,7 @@ func _start_server_impl(async_gen: int) -> void:
 	if spawned_pid > 0:
 		_server_spawn_ms = Time.get_ticks_msec()
 		_server_exit_ms = 0
+		_spawn_dead_since_ms = 0
 		_server_keep_alive = keep_alive_env_set
 		_host._server_started_this_session = true
 		transition_state(McpServerStateScript.SPAWNING)
@@ -967,6 +974,38 @@ func _start_server_impl(async_gen: int) -> void:
 		push_warning("MCP | failed to start server")
 
 
+## Is the watched spawn PID's death still explainable as a launcher handoff
+## rather than a server exit? (#797)
+##
+## A uv-created venv on Windows ships `python.exe` as a trampoline: it spawns
+## the real interpreter as a child and exits as soon as that child is up. The
+## PID handed back by `OS.create_process` is the trampoline's, so on a
+## perfectly healthy boot it dies within a second or two while the real server
+## is still starting. Until that server writes its pid-file there is nothing
+## to heal onto, so the watch used to cross SPAWN_GRACE_MS and report
+## "server exited after Nms" on a session that was about to come up fine —
+## rescued only by the crash-survivor adoption path.
+##
+## `real_pid <= 0` means no pid-file exists yet, and that reliably means "this
+## server has not published one" rather than "stale leftover": `start_server`
+## wipes the pid-file immediately before every spawn. So an absent pid-file
+## plus a dead spawn PID inside the window is the handoff signature.
+##
+## Deliberately gated to Windows. POSIX uv venvs exec rather than trampoline,
+## so a dead spawn PID there really is a dead server, and delaying its
+## diagnosis would only slow down honest crash reporting on the platforms
+## where this cannot happen. `os_name` is a parameter rather than an
+## `OS.get_name()` call so the Windows path is exercisable from any host.
+static func is_spawn_handoff_pending(
+	os_name: String, real_pid: int, elapsed_ms: int, window_ms: int
+) -> bool:
+	if os_name != "Windows":
+		return false
+	if real_pid > 0:
+		return false
+	return elapsed_ms < window_ms
+
+
 ## Watch-loop callback (1 Hz, capped by SERVER_WATCH_MS).
 ## `--pid-file` is the source of truth on Windows / uvx where the
 ## launcher PID dies quickly after spawning the real interpreter.
@@ -978,6 +1017,7 @@ func check_server_health() -> void:
 	var real_pid := PortResolver.read_pid_file()
 	var spawn_pid := int(_server_pid)
 	if real_pid > 0 and real_pid != spawn_pid and PortResolver.pid_alive(real_pid):
+		_spawn_dead_since_ms = 0
 		_server_pid = real_pid
 		## The spawn record initially contains the launcher PID so same-session
 		## teardown can kill it. Heal it as soon as the server publishes its
@@ -988,8 +1028,18 @@ func check_server_health() -> void:
 		## recovery, so the fast-exit re-adopt budget refreshes.
 		_readopt_after_spawn_exit_retried = false
 	elif not PortResolver.pid_alive(spawn_pid):
+		## Stamp the first tick that observed the death, so a handoff we waited
+		## out is still reported with the elapsed time the process actually
+		## exited at — the point of #797 is an honest log line, and swapping one
+		## misleading number for another would miss it.
+		if _spawn_dead_since_ms <= 0:
+			_spawn_dead_since_ms = elapsed
+		if is_spawn_handoff_pending(
+			OS.get_name(), real_pid, elapsed, int(_host.SPAWN_HANDOFF_MS)
+		):
+			return
 		if elapsed >= int(_host.SPAWN_GRACE_MS) and not McpServerStateScript.is_terminal_diagnosis(_server_state):
-			_diagnose_spawn_fast_exit(elapsed)
+			_diagnose_spawn_fast_exit(_spawn_dead_since_ms)
 		return
 	if elapsed >= int(_host.SERVER_WATCH_MS):
 		## Survived startup — mid-session crashes surface via WebSocket disconnect.
@@ -1160,6 +1210,7 @@ func respawn_with_refresh() -> void:
 	if spawn_pid > 0:
 		_server_spawn_ms = Time.get_ticks_msec()
 		_server_exit_ms = 0
+		_spawn_dead_since_ms = 0
 		_server_keep_alive = keep_alive_env_set
 		var current_version := _expected_server_version()
 		_host._set_ws_auth_token(ws_token)

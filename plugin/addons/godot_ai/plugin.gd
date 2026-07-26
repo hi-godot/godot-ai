@@ -89,6 +89,17 @@ const SERVER_WATCH_MS := 30 * 1000
 ## a spawn a crash until this window elapses so the watch loop has time to
 ## observe either the pid-file (dev venv) or the port listening (uvx).
 const SPAWN_GRACE_MS := 5 * 1000
+## Windows only (#797). A uv-created venv ships `python.exe` as a trampoline:
+## it spawns the real interpreter as a child and exits immediately, so the PID
+## we watched dies on a perfectly healthy boot while the real server is still
+## starting and has not written its pid-file yet. Past SPAWN_GRACE_MS that
+## reads as "server exited" and only the crash-survivor adoption path rescues
+## the session. While no pid-file has appeared we keep watching until this
+## longer window closes, rather than calling a handoff an exit. Sized to cover
+## a cold uvx resolve on top of the trampoline hop, and kept well under
+## SERVER_WATCH_MS so a genuinely dead Windows spawn is still diagnosed inside
+## the watch rather than falling off the end of it.
+const SPAWN_HANDOFF_MS := 15 * 1000
 const SERVER_STATUS_PATH := "/godot-ai/status"
 const SERVER_STATUS_PROBE_TIMEOUT_MS := 800
 const STARTUP_TRACE_COUNTER_NAMES := [
