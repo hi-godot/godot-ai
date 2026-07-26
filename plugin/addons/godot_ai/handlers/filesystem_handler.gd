@@ -15,6 +15,11 @@ const ScriptHandler := preload("res://addons/godot_ai/handlers/script_handler.gd
 const _SCAN_START_GRACE_MSEC := 750
 const _SCAN_SETTLE_MAX_MSEC := 28000
 
+## Sidecar the editor writes next to every imported resource. `reimport` reads
+## it to tell imported assets from files that merely have a filesystem entry
+## (see `_is_imported_resource`).
+const IMPORT_SIDECAR_SUFFIX := ".import"
+
 ## Shared single-flight latch for scan_filesystem. `is_scanning()` alone can't
 ## enforce single-flight: `EditorFileSystem.scan()` doesn't flip `is_scanning()`
 ## for a frame or two (hence _SCAN_START_GRACE_MSEC), so a second request landing
@@ -135,6 +140,7 @@ func reimport(params: Dictionary) -> Dictionary:
 			"EditorFileSystem not available", false)
 
 	var reimported: Array[String] = []
+	var skipped_non_imported: Array[String] = []
 	var not_found: Array[String] = []
 
 	for path_variant in paths:
@@ -147,18 +153,56 @@ func reimport(params: Dictionary) -> Dictionary:
 			not_found.append("%s (file does not exist)" % path)
 			continue
 		efs.update_file(path)
-		reimported.append(path)
+		if _is_imported_resource(path):
+			reimported.append(path)
+		else:
+			skipped_non_imported.append(path)
 
-	return {
-		"data": {
-			"reimported": reimported,
-			"not_found": not_found,
-			"reimported_count": reimported.size(),
-			"not_found_count": not_found.size(),
-			"undoable": false,
-			"reason": "Reimport is a file system operation",
-		}
+	var data := {
+		"reimported": reimported,
+		"skipped_non_imported": skipped_non_imported,
+		"not_found": not_found,
+		"reimported_count": reimported.size(),
+		"skipped_non_imported_count": skipped_non_imported.size(),
+		"not_found_count": not_found.size(),
+		"undoable": false,
+		"reason": "Reimport is a file system operation",
 	}
+	## Only when it applies: a hint on every call would cost tokens on the
+	## all-assets path this op is actually for.
+	if not skipped_non_imported.is_empty():
+		data["skipped_non_imported_hint"] = (
+			"%d path(s) are not imported resources. Their editor filesystem entry was "
+			+ "refreshed, but no import ran — a success here is not evidence that a "
+			+ "script parsed or that diagnostics were produced. Use script_patch/"
+			+ "script_create for GDScript diagnostics, or filesystem_manage(op=\"scan\") "
+			+ "for an asset the editor has not imported yet."
+		) % skipped_non_imported.size()
+	return {"data": data}
+
+
+## #778: `update_file()` registers a path with the resource pipeline; it only
+## runs an *import* for files that have one. Scripts, scenes and hand-written
+## `.tres` are not imported resources, so listing them under `reimported` reads
+## as proof that a parse or import ran when nothing did.
+##
+## The `.import` sidecar is the editor's own record that a path goes through
+## the import pipeline, so it decides the split. An extension allow-list was
+## rejected: importers come and go with plugins, so the list would drift out of
+## agreement with the editor it claims to describe.
+##
+## Known edge: an asset the editor has never imported (just written, no scan
+## yet) has no sidecar and reports as non-imported. That is accurate at the
+## moment of the call — `update_file()` did not import it either — and the
+## hint names `scan` as the way through.
+##
+## Behaviour is unchanged for every path: `update_file()` still runs on all of
+## them, because refreshing an externally-edited `.tscn`/`.tres` is a real use
+## of this op. This splits the report, not the work.
+static func _is_imported_resource(path: String) -> bool:
+	if path.ends_with(IMPORT_SIDECAR_SUFFIX):
+		return false  ## The sidecar itself is not an imported resource.
+	return FileAccess.file_exists(path + IMPORT_SIDECAR_SUFFIX)
 
 
 ## Force a full EditorFileSystem scan and wait for it to settle. This is the

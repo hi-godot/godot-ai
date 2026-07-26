@@ -12,6 +12,11 @@ var _handler: FilesystemHandler
 const TEST_FILE_PATH := "res://tests/_mcp_test_file.txt"
 const TEST_FILE_CONTENT := "Hello from MCP test\nLine 2\nLine 3\n"
 
+## #778 fixture: a file that looks imported to the editor. `.dat` has no
+## importer, so the sidecar stays inert (no import runs, no import error is
+## logged) while still exercising the sidecar-based classification.
+const IMPORTED_ASSET_PATH := "res://tests/_mcp_test_imported.dat"
+
 
 func suite_name() -> String:
 	return "filesystem"
@@ -24,6 +29,12 @@ func suite_setup(_ctx: Dictionary) -> void:
 	if file:
 		file.store_string(TEST_FILE_CONTENT)
 		file.close()
+	# Imported-asset fixture: source + its `.import` sidecar (#778).
+	for path in [IMPORTED_ASSET_PATH, IMPORTED_ASSET_PATH + ".import"]:
+		var asset := FileAccess.open(path, FileAccess.WRITE)
+		if asset:
+			asset.store_string("[remap]\n")
+			asset.close()
 
 
 func suite_teardown() -> void:
@@ -33,6 +44,9 @@ func suite_teardown() -> void:
 	var written_path := "res://tests/_mcp_test_written.txt"
 	if FileAccess.file_exists(written_path):
 		DirAccess.remove_absolute(written_path)
+	for path in [IMPORTED_ASSET_PATH, IMPORTED_ASSET_PATH + ".import"]:
+		if FileAccess.file_exists(path):
+			DirAccess.remove_absolute(path)
 
 
 # ----- read_file -----
@@ -245,11 +259,57 @@ func test_reimport_nonexistent_file() -> void:
 
 
 func test_reimport_existing_file() -> void:
-	# Use the test file we created in setup
+	## #778: a .txt is not an imported resource — it has no `.import` sidecar,
+	## so it reports as refreshed-not-reimported rather than padding
+	## `reimported` with a path no importer ever touched.
 	var result := _handler.reimport({"paths": [TEST_FILE_PATH]})
 	assert_has_key(result, "data")
+	assert_eq(result.data.reimported_count, 0)
+	assert_eq(result.data.skipped_non_imported_count, 1)
+	assert_contains(result.data.skipped_non_imported, TEST_FILE_PATH)
+
+
+func test_reimport_imported_asset_is_reported_as_reimported() -> void:
+	## The `.import` sidecar is the signal, not the extension (#778).
+	var result := _handler.reimport({"paths": [IMPORTED_ASSET_PATH]})
+	assert_has_key(result, "data")
 	assert_eq(result.data.reimported_count, 1)
-	assert_contains(result.data.reimported, TEST_FILE_PATH)
+	assert_contains(result.data.reimported, IMPORTED_ASSET_PATH)
+	assert_eq(result.data.skipped_non_imported_count, 0)
+	assert_false(
+		result.data.has("skipped_non_imported_hint"),
+		"an all-imported batch must not pay for the hint"
+	)
+
+
+func test_reimport_mixed_batch_splits_the_report() -> void:
+	## The case #778 is about: one imported asset, one script, one missing
+	## path in a single call. Each lands in its own bucket, and the script
+	## never counts as reimported.
+	var script_path := "res://addons/godot_ai/handlers/filesystem_handler.gd"
+	var result := _handler.reimport({
+		"paths": [IMPORTED_ASSET_PATH, script_path, "res://nonexistent.png"],
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.reimported, [IMPORTED_ASSET_PATH])
+	assert_eq(result.data.skipped_non_imported, [script_path])
+	assert_eq(result.data.reimported_count, 1)
+	assert_eq(result.data.skipped_non_imported_count, 1)
+	assert_eq(result.data.not_found_count, 1)
+	assert_contains(result.data.not_found[0], "res://nonexistent.png")
+	assert_true(
+		result.data.has("skipped_non_imported_hint"),
+		"a batch carrying non-imported paths must say so"
+	)
+
+
+func test_reimport_sidecar_path_is_not_an_imported_resource() -> void:
+	## `foo.png.import` is the record, not the resource — passing it must not
+	## report an import that never ran.
+	var result := _handler.reimport({"paths": [IMPORTED_ASSET_PATH + ".import"]})
+	assert_has_key(result, "data")
+	assert_eq(result.data.reimported_count, 0)
+	assert_eq(result.data.skipped_non_imported_count, 1)
 
 
 func test_reimport_invalid_prefix() -> void:

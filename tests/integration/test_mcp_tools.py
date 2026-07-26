@@ -2698,6 +2698,39 @@ class TestImportReimportTool:
         assert result.data["reimported_count"] == 2
         assert result.data["not_found_count"] == 0
 
+    async def test_reimport_passes_through_non_imported_split(self, mcp_stack):
+        """#778: the imported/non-imported split survives the round trip."""
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "reimport"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "reimported": ["res://icon.png"],
+                    "skipped_non_imported": ["res://player.gd"],
+                    "not_found": [],
+                    "reimported_count": 1,
+                    "skipped_non_imported_count": 1,
+                    "not_found_count": 0,
+                    "skipped_non_imported_hint": "1 path(s) are not imported resources.",
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "filesystem_manage",
+            {"op": "reimport", "params": {"paths": ["res://icon.png", "res://player.gd"]}},
+        )
+        await task
+
+        assert result.data["reimported"] == ["res://icon.png"]
+        assert result.data["skipped_non_imported"] == ["res://player.gd"]
+        assert result.data["skipped_non_imported_count"] == 1
+        assert "not imported resources" in result.data["skipped_non_imported_hint"]
+
 
 # ---------------------------------------------------------------------------
 # signal_list / signal_connect / signal_disconnect
