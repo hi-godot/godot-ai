@@ -5,7 +5,7 @@ Part of the Godot AI agent guide — see [AGENTS.md](../AGENTS.md) for the alway
 
 How the plugin starts, adopts, and tears down the Python server in development.
 
-### Server lifecycle in dev
+## Server lifecycle in dev
 
 The plugin manages the server process:
 - On startup, plugin checks if port 8000 is already in use. If yes, uses existing server. If no, spawns `.venv/bin/python -m godot_ai --transport streamable-http --port 8000`.
@@ -22,13 +22,13 @@ python -m godot_ai --transport streamable-http --port 8000 --reload
 ```
 This uses `src/godot_ai/asgi.py` to run uvicorn with its factory reload path. Uvicorn watches `src/` for changes and restarts the server process automatically. The plugin auto-reconnects.
 
-### Server discovery (3-tier)
+## Server discovery (3-tier)
 
 1. `.venv/bin/python -m godot_ai` — dev checkout (venv near project)
 2. `uvx --from godot-ai==VERSION godot-ai` — user install (PyPI via uvx, exact version pin)
 3. `godot-ai` CLI — system install fallback
 
-### Plugin reload
+## Plugin reload
 
 The `editor_reload_plugin` MCP tool triggers a live plugin reload inside Godot (`EditorInterface.set_plugin_enabled` off/on). It works with both an externally-run server and the plugin-managed server (the handler special-cases the plugin-managed path, where the reload tears down and respawns the server process). The Python handler waits for the new session via `SessionRegistry.wait_for_session()`.
 

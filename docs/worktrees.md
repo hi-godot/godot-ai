@@ -6,7 +6,7 @@ Part of the Godot AI agent guide — see [AGENTS.md](../AGENTS.md) for the alway
 Mechanics of the `test_project/addons/godot_ai` link and how to work safely in a
 worktree another session owns. The data-loss rules themselves stay in AGENTS.md.
 
-### Worktree health: `script/verify-worktree` + `post-checkout` hook
+## Worktree health: `script/verify-worktree` + `post-checkout` hook
 
 `test_project/addons/godot_ai` is **not tracked in git** (see `.gitignore` and #185). Every working copy builds the link locally — as a symlink on Unix, as a directory junction on Windows. This avoids the Windows-without-Dev-Mode text-file-fallback trap and stops `git rebase` / `cherry-pick` from fighting the link on every checkout.
 
@@ -23,7 +23,7 @@ Wiring: `script/setup-dev` and `script/setup-dev.ps1` copy `script/githooks/post
 
 **Parallel plugin development IS supported** — each worktree has its own `plugin/` (standard git worktree semantics) and its own locally-built `test_project/addons/godot_ai` link. Multiple Godot editors, one per worktree, all connect to the same MCP server on :8000; use `session_activate` (or `session_id` per call) to route. The ban is only on editing in *broken* worktrees.
 
-### Working in another session's worktree
+## Working in another session's worktree
 
 Sometimes you're directed at another session's PR worktree (e.g. to fix a bug their friction log surfaced) and that session still has in-flight uncommitted work in adjacent files. Coexist safely:
 

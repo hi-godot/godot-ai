@@ -5,7 +5,7 @@ Part of the Godot AI agent guide — see [AGENTS.md](../AGENTS.md) for the alway
 
 Cutting a release, and the self-update install path with its smoke-test contract.
 
-### Releasing
+## Releasing
 
 Use the GitHub Actions workflow to cut a release:
 ```bash
@@ -13,7 +13,7 @@ gh workflow run bump-and-release.yml -f bump=patch   # or minor / major
 ```
 This bumps `plugin.cfg` + `pyproject.toml`, commits, tags, and pushes. The `release.yml` workflow triggers on the tag and builds a `godot-ai-plugin.zip` attached to the GitHub Release.
 
-### Self-update
+## Self-update
 
 The dock checks the GitHub releases API on startup. If a newer version exists, a yellow banner appears with an "Update" button that downloads the release ZIP, hands off to `update_reload_runner.gd`, disables the old plugin, extracts over the current `addons/godot_ai/`, waits for Godot's filesystem scan, and enables a fresh plugin instance. There must be no manual editor restart and no programmatic `OS.create_process` + `quit` restart in this path.
 
