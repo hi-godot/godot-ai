@@ -23,8 +23,10 @@ from the relevant `AGENTS.md` section — load it when the task calls for it:
 - Claude Code sessions may run in `.claude/worktrees/<name>`. The worktree and
   editor-routing guidance in `AGENTS.md` applies; verify the active worktree and
   connected Godot `test_project/` before editing or testing plugin code.
-- Keep `.claude/skills/godot-ai/SKILL.md` as a Claude adapter that points back
-  to `AGENTS.md`. The filename must be exactly `SKILL.md` — skill discovery is
-  case-sensitive, and a lowercase `skill.md` is silently never loaded.
+- Skills under `.claude/skills/` must be named exactly `SKILL.md` — discovery is
+  case-sensitive, and a lowercase `skill.md` is silently never loaded. Add one
+  only when it gives access to guidance this file does not already carry; a
+  skill that merely repeats `CLAUDE.md` costs a listing entry and returns
+  nothing.
 - When updating general repo operating guidance, update `AGENTS.md` first. Keep
   this file limited to Claude-specific loading behavior and reminders.
