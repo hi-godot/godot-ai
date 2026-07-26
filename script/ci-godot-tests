@@ -117,14 +117,23 @@ for line in raw.split('\n'):
 fi
 
 # Built via python3 so the id is JSON-escaped rather than spliced into the body.
+# `set -e` does not propagate failures out of a command substitution, so a
+# broken python3 would otherwise splice an empty string into the request body
+# and surface as a confusing parse error downstream. Fail here instead.
 _tool_args() {
-  GODOT_AI_PIN="$PIN_SESSION" python3 -c "
+  local out
+  out=$(GODOT_AI_PIN="$PIN_SESSION" python3 -c "
 import json, os, sys
 args = json.loads(sys.argv[1])
 pin = os.environ.get('GODOT_AI_PIN', '')
 if pin:
     args['session_id'] = pin
-print(json.dumps(args))" "$1"
+print(json.dumps(args))" "$1") || { echo "ERROR: failed to build tool arguments" >&2; exit 1; }
+  if [ -z "$out" ]; then
+    echo "ERROR: tool arguments came back empty" >&2
+    exit 1
+  fi
+  printf '%s' "$out"
 }
 if [ -n "$PIN_SESSION" ]; then
   echo "Pinned to session: $PIN_SESSION"
@@ -139,9 +148,13 @@ sleep 8
 # Open main.tscn so tests that need a scene root can actually run.
 # In a fresh CI checkout there's no editor state, so no scene is open by default.
 echo "Opening main.tscn..."
+# Assign first: a bare $(_tool_args ...) nested inside the request body would
+# swallow its failure, since exiting a command substitution does not exit the
+# parent shell. The assignment propagates the status so `|| exit 1` can catch it.
+SCENE_ARGS=$(_tool_args '{"path":"res://main.tscn"}') || exit 1
 SCENE_OPEN_RESULT=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
   -H "Mcp-Session-Id: $SESSION_ID" \
-  -d "$(printf '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"scene_open","arguments":%s}}' "$(_tool_args '{"path":"res://main.tscn"}')")")
+  -d "$(printf '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"scene_open","arguments":%s}}' "$SCENE_ARGS")")
 # A failed open hollows the run out: scene-dependent tests skip and the
 # summary still reads green. Fail loudly instead (audit backlog).
 echo "$SCENE_OPEN_RESULT" | python3 -c "
@@ -167,9 +180,10 @@ sleep 2
 
 # Call test_run
 echo "Running handler tests..."
+TEST_ARGS=$(_tool_args '{}') || exit 1
 RESULT=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
   -H "Mcp-Session-Id: $SESSION_ID" \
-  -d "$(printf '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"test_run","arguments":%s}}' "$(_tool_args '{}')")")
+  -d "$(printf '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"test_run","arguments":%s}}' "$TEST_ARGS")")
 
 # Parse and report results
 echo "$RESULT" | python3 -c "
