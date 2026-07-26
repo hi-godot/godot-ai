@@ -238,6 +238,10 @@ The exact set can evolve, but the behavior should stay the same:
 - writes are rejected or constrained when the editor is unsafe
 - `project.stop` remains explicitly allowed while already playing
 
+#### Readiness gating — implementation contract
+
+Write operations check session readiness (`ready`/`importing`/`playing`/`no_scene`) before executing. Plugin sends readiness in handshake and via `readiness_changed` events. Python `await require_writable_async()` in `handlers/_readiness.py` gates all write handlers; new write handlers must `await` it. Two layers self-heal a stale cache so a missed `readiness_changed` event can't strand an agent in `EDITOR_NOT_READY` against a writable editor: (1) every command response carries an envelope-level `readiness` field stamped by the plugin's dispatcher, piped through `sync_readiness_for_session` in the WebSocket transport — so the very next tool call after any state change refreshes the cache; (2) `require_writable_async` itself fires one `get_editor_state` probe before rejecting on a non-writable cached value, so the FIRST post-staleness call (which has no prior response to self-heal from) also recovers. Fast path (cache says writable) skips the probe — zero added latency in the common case. Any new plugin response builder (success, error, deferred reply, backpressure error) must include the envelope field; old plugins that omit it fall back to the event-driven path. Every `EDITOR_NOT_READY` emission carries `data.sub_code` naming the concrete editor state (`EDITOR_IMPORTING`, `EDITOR_PLAYING`, `EDITOR_NO_SCENE`, …) plus `retryable`/`hint` (#651 stage 1) — the top-level code is frozen (dashboards key on it), so never promote a sub-code to `error.code`. When the probe live-confirms `importing`, the gate holds the write and re-probes (~500ms interval, ~8s cap — telemetry-tuned constants in `_readiness.py`) instead of rejecting, since most import windows clear within seconds; past the cap it raises exactly the pre-hold error (#651 stage 2). The hold is importing-only — `playing` and every other blocking state stay fail-fast, and per-tool retry loops must not be added on top. GDScript emitters use `ErrorCodes.make_not_ready`; the sub-code vocabulary lives in `utils/error_codes.gd` (`SUB_*`) and `protocol/errors.py` (`EditorNotReadySubCode`), kept in sync by `tests/unit/test_editor_not_ready_hint_contract.py`. Only add a sub-code for a state the editor can report deterministically; undetectable busy states stay bare `EDITOR_NOT_READY`.
+
 ---
 
 ## Jobs And Long-Running Work
@@ -319,6 +323,16 @@ handler-return. New tools should only reach for it when the work can't
 fit in a frame and the reply genuinely has to flow back later — think
 IPC, remote-debugger queries, multi-frame renders.
 
+#### Deferred responses (tools whose reply flows out-of-band)
+
+The dispatcher runs handlers synchronously and auto-sends one response per command. For work whose reply arrives over a different channel or spans frames — the game-bus tools (`editor_screenshot(source="game")`, `game_eval`, `game_command`) plus multi-frame editor work in the scene, script, filesystem, and project handlers — use the deferred pattern:
+
+- Return `McpDispatcher.DEFERRED_RESPONSE` (a `{"_deferred": true}` sentinel dict). `tick()` skips auto-sending for these. `_call_handler` recognises it alongside `data` / `error` so the sentinel doesn't trip the malformed-result guard.
+- Read the incoming request id from `params["_request_id"]`. The dispatcher injects it on a **duplicated** params dict so the original queued command isn't mutated. Hand it off to whatever async source will produce the reply.
+- When the reply arrives, call `McpConnection.send_deferred_response(request_id, payload)`. `payload` must carry `data` or `error` in the same shape handlers normally return. The method attaches `request_id`, infers `status`, and pushes the JSON over the WebSocket.
+
+This is the only pattern in the plugin that decouples response from handler-return. Reach for it only when the work can't fit in a frame and the reply genuinely has to flow back later (IPC, remote-debugger queries, multi-frame renders). Everything else should stay synchronous.
+
 ---
 
 ## Undo Contract
@@ -333,6 +347,61 @@ The contract is:
 
 This is part of product trust, not just implementation detail.
 
+#### Auto-create missing dependencies in the same undo action
+
+When a write tool needs a sub-resource that may not exist yet (e.g. `animation_create` needs an `AnimationLibrary` on the AnimationPlayer; `particle_set_process` needs a `ParticleProcessMaterial` on the GPU emitter; `material_assign` with `create_if_missing=true` needs a `Material` on the mesh), do **not** error or do a separate setup write. Bundle the dependency creation into the same `create_action` so a single Ctrl-Z rolls back both:
+
+```gdscript
+var library = player.get_animation_library("") if player.has_animation_library("") else null
+var created = library == null
+if created:
+    library = AnimationLibrary.new()
+
+_undo_redo.create_action("MCP: Create animation foo")
+if created:
+    _undo_redo.add_do_method(player, "add_animation_library", "", library)
+    _undo_redo.add_undo_method(player, "remove_animation_library", "")
+    _undo_redo.add_do_reference(library)  # keep alive across undo→redo
+_undo_redo.add_do_method(library, "add_animation", "foo", anim)
+_undo_redo.add_undo_method(library, "remove_animation", "foo")
+_undo_redo.add_do_reference(anim)
+_undo_redo.commit_action()
+```
+
+Surface a `<dependency>_created: bool` field in the response so callers (and tests) can confirm the auto-creation actually happened. See `animation_handler.gd:create_animation`, `material_handler.gd:assign_material` (auto-creates a default material when `create_if_missing=true`), and `particle_handler.gd:create_particle` / `set_process` / `set_draw_pass_gpu_3d` for worked examples. The draw-pass handler also grows `draw_passes` when the target `draw_pass_N` slot doesn't exist yet — Godot only exposes `draw_pass_N` as a live property once the count is ≥ N, and naive `add_do_property` on a ghost slot silently no-ops.
+#### Value coercion: assert on the stored Variant, not on counts
+
+JSON dicts like `{"r":1,"g":0,"b":0,"a":1}` only become `Color` / `Vector2` / `Vector3` if the coercer finds a matching property on the target node and that property's `TYPE_*` is in the coerce table. If the property is missing (wrong scene root type) or the type isn't handled, the raw dict is silently stored as the keyframe value and Godot plays garbage at runtime.
+
+GDScript tests that just assert `track_count == 1` will pass even when coercion is broken. **Always read back via `track_get_key_value(idx, k)` and assert `value is Color` / `value is Vector3` / etc.** `test_animation.gd` `test_add_property_track_coerces_vector3_dict` is the reference pattern. The same rule applies to any future handler that takes JSON values intended to land as typed Variants in the scene.
+
+Same principle for theme override pseudo-properties on Controls: assert `has_theme_color_override` (or constant/font-size/stylebox variant) before reading the value back with the regular getter — Godot 4.6 removed `get_theme_*_override`, and the presence check is what stops a broken override from silently resolving via the theme fallback. `test_ui.gd` `test_build_layout_theme_override_*` are the reference pattern.
+#### Auto-generated indices: look up at undo time, not do time
+
+When a write tool mutates a resource whose index is assigned by Godot (`Animation.add_track` returns an int index, same for track keys, `MultiMesh.instance_count`, etc.), do **not** capture that index at do time and reuse it in the undo callable. Any other mutation landing between the do and the undo makes the index stale — the undo will then remove the wrong element (or error).
+
+Instead, undo via a helper that resolves the index at undo time via a stable lookup:
+
+```gdscript
+_undo_redo.add_undo_method(self, "_undo_remove_track_by_path", anim, track_path, Animation.TYPE_VALUE)
+
+func _undo_remove_track_by_path(anim: Animation, path: String, type: int) -> void:
+    var idx := anim.find_track(NodePath(path), type)
+    if idx >= 0:
+        anim.remove_track(idx)
+```
+
+See `animation_handler.gd::_undo_remove_track_by_path` for the reference pattern. Cover with a test that interleaves a second mutation between the do and undo of the first (`test_animation.gd::test_add_property_track_undo_survives_interleaving`).
+#### Scene instancing: use GEN_EDIT_STATE_INSTANCE
+
+When a tool instantiates a PackedScene into the edited scene, pass `PackedScene.GEN_EDIT_STATE_INSTANCE` to `instantiate()`:
+
+```gdscript
+new_node = packed_scene.instantiate(PackedScene.GEN_EDIT_STATE_INSTANCE)
+```
+
+This makes Godot treat the result as a real scene instance: the root shows the foldout icon, the `.tscn` stores a reference to the sub-scene rather than an exploded subtree, and the instance can be swapped or toggled editable via the usual editor UI. Don't manually set descendant owners to your scene_root — descendants of a scene instance stay owned by their sub-scene; overriding that breaks the instance link. See `node_handler.gd::create_node`.
+
 ---
 
 ## Security Model
@@ -346,6 +415,10 @@ The security posture should stay explicit:
 - mutation and execution paths are auditable enough to debug what happened
 
 This should be visible in both the protocol and the user-facing docs.
+
+### WebSocket trust boundary — the concrete contract
+
+The editor↔server WebSocket (port 9500) is **effectively unauthenticated** — the primary control is loopback-only binding: the WS port always binds `127.0.0.1` and `--allow-host` deliberately does NOT widen it (see `transport/websocket.py::start`). Defense in depth on top of that: unguessable `uuid4` request ids, session-scoped response correlation (a reply is only accepted from the connection its command was sent to — #690), and a compat-gated per-launch handshake token (#690 finding 4): the spawning plugin generates it, hands it to the server via the `GODOT_AI_WS_TOKEN` spawn env, and echoes it in the handshake; a handshake carrying a *wrong* token is rejected, but a token-less handshake is still accepted (older plugins, adopted servers, and the field is attacker-omittable — so the token is hardening, not an authentication boundary). Never bind the WS port beyond loopback. **The token authenticates the plugin TO the server, and nothing authenticates the server to the plugin**: `connection.gd` dials `ws://127.0.0.1:<ws_port>` and hands whatever answers the full write surface (`filesystem_write_text`, `script_create`, `game_eval`, `editor_quit`), adoption of an existing `:8000` listener is decided by a *self-reported* status JSON, and `_note_post_open_close` drops the token entirely after two close-4003 frames (an attacker-triggerable downgrade, deliberately accepted because omitting the field is always allowed anyway). Loopback binding is the whole boundary on the plugin side — do not add plugin-side logic that assumes the peer on 9500 is trusted.
 
 ---
 

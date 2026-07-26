@@ -5,15 +5,18 @@ this repository live in [AGENTS.md](AGENTS.md). Read and follow `AGENTS.md` as
 the source of truth for project structure, development workflow, tool changes,
 testing expectations, worktree safety, and release compatibility.
 
-`AGENTS.md` is long. Read the sections your task actually touches rather than
-the whole file:
+`AGENTS.md` holds the rules that apply everywhere. Depth lives in `docs/`, linked
+from the relevant `AGENTS.md` section — load it when the task calls for it:
 
-- Any change to plugin or server behavior — `## Architecture`, `## Key conventions`
-- Editing anything under `plugin/` — `## Worktrees`, `### Godot editor + worktree safety`
-- Adding or changing an MCP tool — `## Adding a new tool`, `## Tool-search friendliness + tool-count caps`
-- Writing tests — `## Testing`, `### Test hygiene checklist`
-- Before every commit — `## Pre-commit smoke test`
-- Release, self-update, or `class_name` changes — `### Releasing`, `### Self-update`, `### Published class_name compatibility`
+| Task | Read |
+|---|---|
+| Adding or changing an MCP tool | [docs/tool-surface.md](docs/tool-surface.md) |
+| Verifying a change before commit | [docs/verification.md](docs/verification.md) |
+| Server start/adopt/teardown, reload | [docs/server-lifecycle.md](docs/server-lifecycle.md) |
+| Release or self-update paths | [docs/releasing.md](docs/releasing.md) |
+| Undo patterns, readiness, WS security | [docs/plugin-architecture.md](docs/plugin-architecture.md) |
+| Repairing or sharing a worktree | [docs/worktrees.md](docs/worktrees.md) |
+| Adding an MCP client descriptor | [docs/client-configuration.md](docs/client-configuration.md) |
 
 ## Claude-specific notes
 
