@@ -31,14 +31,19 @@ script/ci-godot-tests    # waits for the plugin, opens main.tscn, runs test_run,
                          # prints {suite}.{test}: {message} for each failure
 ```
 
-**Confirm which editor you are about to drive first.** `script/ci-godot-tests`
-waits only for a session count greater than zero — it never calls
-`session_activate` — then runs `scene_open` and `test_run` against whatever
-session is active. Multiple editors sharing port 8000 is a supported setup (see
-[worktrees](worktrees.md)), so with more than one connected, the script can open
-a scene in and run tests against the wrong project. Use the shortcut only when
-`pgrep -af` shows exactly one editor on the `test_project/` you mean; otherwise
-`session_activate` the right session first, or take the interactive path.
+**With several editors connected, pin the one you mean.** Multiple editors
+sharing port 8000 is a supported setup (see [worktrees](worktrees.md)), and
+`scene_open` would otherwise land in whichever session is active — yanking
+another session's open scene and testing the wrong project. The script refuses
+to guess: past one connected session it lists them and exits. Pick one with
+
+```bash
+GODOT_AI_SESSION_ID='<project-slug>@<4hex>' script/ci-godot-tests
+```
+
+which is passed as a per-call `session_id`, so it does not disturb the active
+session other clients are using. A pinned session that isn't connected fails
+loudly rather than falling back to the active one.
 
 That satisfies steps 3–5. Use the interactive path below when you need a live
 editor to *look at* — the step 6 smoke test — or when nothing is running yet.
