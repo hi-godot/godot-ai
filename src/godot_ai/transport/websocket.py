@@ -506,18 +506,22 @@ def _sync_error_watermark_for_session(session: Session, value: dict[str, int]) -
     error components overlap (both observe the running game's script errors),
     so their deltas are combined with max(), not summed.
 
-    **Adding a component is a cross-version contract change.** Every integer
-    key that isn't explicitly popped below lands in ``sum(deltas.values())``,
-    so a new counter is folded into the error total by servers that have never
-    heard of it — a plugin stamping one against an older server inflates the
-    "N new errors" doorbell rather than being ignored. There is no allow-list
-    to gate that: ``_PER_RUN_WATERMARK_KEYS`` and ``_WARN_WATERMARK_KEYS`` only
-    route keys they recognize, and everything else falls through to the sum.
-    Carry genuinely new signal (paths, classifications, anything that isn't a
-    count of new errors) in a separate optional envelope field instead, where a
-    server that doesn't know it drops it: non-int values already fail
-    ``_normalized_watermark_int`` and are skipped, so that shape degrades
-    safely on both sides. See #782 for the case that established this.
+    **Adding a component is a cross-version contract change.** An unrecognized
+    key is not rejected. Its first stamp only establishes a baseline (recorded
+    in ``updates``, no delta), but every later increase becomes a delta, and any
+    delta not popped below falls through ``sum(deltas.values())`` into the
+    *error* total — on a server that has never heard of the key. Only
+    ``run_seq`` (skipped outright), the two warn components, and the
+    overlapping debugger/game error pair are routed elsewhere; nothing gates
+    the rest. So a plugin that stamps a new counter against an older server
+    silently inflates its "N new errors" doorbell from the second stamp onward.
+
+    Carry genuinely new signal (paths, classifications — anything that is not a
+    count of new errors) in a separate optional envelope field instead, which a
+    server that does not know it simply ignores. Note how narrow the skip is:
+    ``_normalized_watermark_int`` drops only what ``int()`` refuses, so a list
+    or dict falls out, while ``"5"``, ``1.5`` and ``True`` all coerce and count.
+    See #782 for the case that established this.
     """
 
     updates: dict[str, int] = {}
