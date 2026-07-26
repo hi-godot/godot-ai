@@ -309,7 +309,7 @@ func test_reimport_sidecar_path_is_not_an_imported_resource() -> void:
 	var result := _handler.reimport({"paths": [IMPORTED_ASSET_PATH + ".import"]})
 	assert_has_key(result, "data")
 	assert_eq(result.data.reimported_count, 0)
-	assert_eq(result.data.skipped_non_imported_count, 1)
+	assert_eq(result.data.skipped_non_imported, [IMPORTED_ASSET_PATH + ".import"])
 
 
 func test_reimport_invalid_prefix() -> void:
