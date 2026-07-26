@@ -1330,3 +1330,63 @@ func test_lease_count_gate_is_a_threshold_not_an_equality() -> void:
 	assert_false(McpServerLifecycleManagerScript.active_lease_count(
 		{"name": "godot-ai", "active_lease_count": 0}) > 0,
 		"only the last release may return the backend to kill-on-exit")
+
+
+func test_teardown_routes_to_detach_for_more_than_one_lease() -> void:
+	## Routing, not just the helper: the earlier case holds exactly one lease,
+	## so a regression narrowing the gate to `== 1` would still pass it. Several
+	## bridges must reach detach too. `finalize_calls` is the discriminator —
+	## stop_server ends in _finalize_stop_if_port_free, detach_server never
+	## touches it.
+	var es := EditorInterface.get_editor_settings()
+	var saved := _save_keep_setting(es)
+	es.set_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT, false)
+	var host := _ManagerHostStub.new()
+	host.listener_pids = [67777] as Array[int]
+	host.alive_pids = [67777] as Array[int]
+	host.branded_pids = [67777] as Array[int]
+	host.live_status = {"name": "godot-ai", "active_lease_count": 3}
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 67777
+
+	manager.teardown_for_editor_exit()
+	var killed := host.killed_targets.duplicate()
+	var finalize_calls := host.finalize_calls
+	var cleared := host.cleared_record_calls
+	_restore_keep_setting(es, saved)
+	host.free()
+
+	assert_true(killed.is_empty(), "three held leases must still detach, not kill")
+	assert_eq(finalize_calls, 0, "detach must not run the stop path's finalize")
+	assert_eq(cleared, 1, "detach drops the managed claim")
+
+
+func test_teardown_routes_to_stop_when_the_pid_cannot_be_proven() -> void:
+	## The proof gate's routing half: a backend reporting leases must NOT keep
+	## the editor from stopping when the PID we hold cannot be proven ours.
+	## Teardown has to reach the stop path, and must not clear the managed
+	## record on the way (stop_server preserves it when the port is still held,
+	## so the next start_server's drift branch can retry the kill).
+	var es := EditorInterface.get_editor_settings()
+	var saved := _save_keep_setting(es)
+	es.set_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT, false)
+	var host := _ManagerHostStub.new()
+	host.alive_pids = [68888] as Array[int]
+	host.branded_pids = [] as Array[int]
+	host.live_status = {"name": "godot-ai", "active_lease_count": 4}
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 68888
+
+	manager.teardown_for_editor_exit()
+	var killed := host.killed_targets.duplicate()
+	var finalize_calls := host.finalize_calls
+	var cleared := host.cleared_record_calls
+	_restore_keep_setting(es, saved)
+	host.free()
+
+	assert_eq(finalize_calls, 1,
+		"an unprovable PID must reach the stop path despite reported leases")
+	assert_eq(cleared, 0,
+		"the lease detach's record clear must not fire on the stop path")
+	assert_true(killed.is_empty(),
+		"stop_server's own proof gate still declines to kill an unbranded PID")
