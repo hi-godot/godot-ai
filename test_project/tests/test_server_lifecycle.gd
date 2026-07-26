@@ -1159,18 +1159,21 @@ func test_handoff_never_pending_off_windows() -> void:
 			"%s must keep the unchanged dead-spawn-is-a-dead-server behavior" % os_name)
 
 
-func test_spawn_dead_since_preserves_the_true_exit_time() -> void:
+func test_first_death_stamp_preserves_the_true_exit_time() -> void:
 	## #797 is about an honest log line, so a diagnosis raised after waiting out
-	## a handoff must still report when the process actually died — not when we
-	## gave up waiting. The watch stamps the first tick that saw it dead and
-	## does not overwrite that on later ticks.
-	var host := _ManagerHostStub.new()
-	var manager := McpServerLifecycleManagerScript.new(host)
-	manager._spawn_dead_since_ms = 0
+	## a handoff must still report when the process actually died — not when the
+	## wait gave up. Drives the production stamp across successive watch ticks
+	## rather than re-implementing first-write-wins in the test, so a regression
+	## in check_server_health's stamping is actually caught.
+	var stamp := 0
 	for elapsed in [312, 1300, 14900]:
-		if manager._spawn_dead_since_ms <= 0:
-			manager._spawn_dead_since_ms = elapsed
-	var stamped := int(manager._spawn_dead_since_ms)
-	host.free()
-	assert_eq(stamped, 312,
+		stamp = McpServerLifecycleManagerScript.first_death_stamp(stamp, elapsed)
+	assert_eq(stamp, 312,
 		"the first observed death time must survive the wait, not the last tick")
+
+
+func test_first_death_stamp_takes_the_first_tick_that_saw_the_death() -> void:
+	## An unstamped slot adopts the current elapsed; the field is cleared to 0
+	## per spawn, so this is the fresh-spawn entry point.
+	assert_eq(McpServerLifecycleManagerScript.first_death_stamp(0, 5146), 5146,
+		"an unstamped watch must record the tick that first saw the spawn dead")

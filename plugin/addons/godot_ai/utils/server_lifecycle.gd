@@ -1006,6 +1006,18 @@ static func is_spawn_handoff_pending(
 	return elapsed_ms < window_ms
 
 
+## First-write-wins stamp for the elapsed time at which the spawn PID was first
+## observed dead (#797).
+##
+## A diagnosis raised after waiting out a handoff must still report when the
+## process actually exited, not when the wait gave up — the point of #797 is an
+## honest log line. Returns the existing stamp once one is set, so later ticks
+## in the same wait cannot overwrite it; `<= 0` means "not yet stamped",
+## matching how the field is cleared per spawn.
+static func first_death_stamp(current_stamp_ms: int, elapsed_ms: int) -> int:
+	return current_stamp_ms if current_stamp_ms > 0 else elapsed_ms
+
+
 ## Watch-loop callback (1 Hz, capped by SERVER_WATCH_MS).
 ## `--pid-file` is the source of truth on Windows / uvx where the
 ## launcher PID dies quickly after spawning the real interpreter.
@@ -1028,12 +1040,7 @@ func check_server_health() -> void:
 		## recovery, so the fast-exit re-adopt budget refreshes.
 		_readopt_after_spawn_exit_retried = false
 	elif not PortResolver.pid_alive(spawn_pid):
-		## Stamp the first tick that observed the death, so a handoff we waited
-		## out is still reported with the elapsed time the process actually
-		## exited at — the point of #797 is an honest log line, and swapping one
-		## misleading number for another would miss it.
-		if _spawn_dead_since_ms <= 0:
-			_spawn_dead_since_ms = elapsed
+		_spawn_dead_since_ms = first_death_stamp(_spawn_dead_since_ms, elapsed)
 		if is_spawn_handoff_pending(
 			OS.get_name(), real_pid, elapsed, int(_host.SPAWN_HANDOFF_MS)
 		):
