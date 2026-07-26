@@ -14,8 +14,9 @@ server via `.claude/hooks/session-start.sh`, so steps 3–5 below are usually
 already done for you. Check before concluding anything is unavailable:
 
 ```bash
-command -v godot                      # engine installed?
-pgrep -f 'godot.*--editor'            # editor already running?
+command -v godot                          # engine on PATH?
+ls -d /Applications/Godot*.app 2>/dev/null # ...or a macOS app bundle (not on PATH)
+pgrep -af 'godot.*--editor'               # editor already running, and against which --path?
 curl -sf -o /dev/null http://127.0.0.1:8000/mcp -X POST \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
@@ -30,6 +31,15 @@ script/ci-godot-tests    # waits for the plugin, opens main.tscn, runs test_run,
                          # prints {suite}.{test}: {message} for each failure
 ```
 
+**Confirm which editor you are about to drive first.** `script/ci-godot-tests`
+waits only for a session count greater than zero — it never calls
+`session_activate` — then runs `scene_open` and `test_run` against whatever
+session is active. Multiple editors sharing port 8000 is a supported setup (see
+[worktrees](worktrees.md)), so with more than one connected, the script can open
+a scene in and run tests against the wrong project. Use the shortcut only when
+`pgrep -af` shows exactly one editor on the `test_project/` you mean; otherwise
+`session_activate` the right session first, or take the interactive path.
+
 That satisfies steps 3–5. Use the interactive path below when you need a live
 editor to *look at* — the step 6 smoke test — or when nothing is running yet.
 
@@ -39,7 +49,14 @@ editor to *look at* — the step 6 smoke test — or when nothing is running yet
 
 1. `ruff check src/ tests/` — lint passes
 2. `pytest -v` — all Python tests pass
-3. Open `test_project/` in Godot — macOS GUI: `/Applications/Godot_mono.app/Contents/MacOS/Godot --editor --path test_project/`; headless: `godot --headless --path test_project --editor`. Skip if one is already running (see above).
+3. Open `test_project/` in Godot. Skip if one is already running (see above). Both forms occupy the shell, so background them or use a second terminal — you need this one for steps 4–5:
+   ```bash
+   # macOS GUI
+   /Applications/Godot_mono.app/Contents/MacOS/Godot --editor --path test_project/ &
+   # headless (CI, containers, no display)
+   godot --headless --path test_project --editor >/tmp/godot-editor.log 2>&1 &
+   ```
+   Note the job's PID; `kill` it when you're done, and check `/tmp/godot-editor.log` if the plugin never connects.
 4. `session_activate` the test_project session if multiple editors are connected
 5. `test_run` via MCP — all GDScript tests pass (0 failures). `script/ci-godot-tests` does 3–5 in one command.
 6. **Live smoke test** new/changed features against the real editor:
