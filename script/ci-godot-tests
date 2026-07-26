@@ -86,6 +86,59 @@ if [ "$FINAL_COUNT" -eq 0 ] 2>/dev/null; then
   exit 1
 fi
 
+# Fail closed on ambiguity too. CI runs exactly one editor, but locally several
+# can share port 8000 — one per worktree is a supported setup. Without a pin,
+# `scene_open` and `test_run` below hit whichever session is active, which can
+# yank another session's open scene and run tests against the wrong project.
+# Set GODOT_AI_SESSION_ID=<project-slug>@<4hex> to target one deliberately.
+PIN_SESSION="${GODOT_AI_SESSION_ID:-}"
+if [ "$FINAL_COUNT" -gt 1 ] && [ -z "$PIN_SESSION" ]; then
+  echo "ERROR: $FINAL_COUNT Godot sessions are connected; refusing to guess which one to drive."
+  echo "Connected sessions:"
+  curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
+    -H "Mcp-Session-Id: $SESSION_ID" \
+    -d '{"jsonrpc":"2.0","id":98,"method":"tools/call","params":{"name":"session_manage","arguments":{"op":"list"}}}' \
+    | python3 -c "
+import json, sys
+raw = sys.stdin.read()
+for line in raw.split('\n'):
+    if line.startswith('data: '):
+        data = json.loads(line[6:])
+        sc = data.get('result',{}).get('structuredContent',{})
+        if not sc:
+            text = data.get('result',{}).get('content',[{}])[0].get('text','{}')
+            sc = json.loads(text)
+        for s in sc.get('sessions', []):
+            print('  %s  %s' % (s.get('session_id','?'), s.get('project_path','?')))
+        break
+" 2>/dev/null || echo "  (could not list sessions)"
+  echo "Re-run with GODOT_AI_SESSION_ID set to the one you mean."
+  exit 1
+fi
+
+# Built via python3 so the id is JSON-escaped rather than spliced into the body.
+# `set -e` does not propagate failures out of a command substitution, so a
+# broken python3 would otherwise splice an empty string into the request body
+# and surface as a confusing parse error downstream. Fail here instead.
+_tool_args() {
+  local out
+  out=$(GODOT_AI_PIN="$PIN_SESSION" python3 -c "
+import json, os, sys
+args = json.loads(sys.argv[1])
+pin = os.environ.get('GODOT_AI_PIN', '')
+if pin:
+    args['session_id'] = pin
+print(json.dumps(args))" "$1") || { echo "ERROR: failed to build tool arguments" >&2; exit 1; }
+  if [ -z "$out" ]; then
+    echo "ERROR: tool arguments came back empty" >&2
+    exit 1
+  fi
+  printf '%s' "$out"
+}
+if [ -n "$PIN_SESSION" ]; then
+  echo "Pinned to session: $PIN_SESSION"
+fi
+
 # Give the editor time to finish its filesystem scan and script class
 # registration. Without this, test_run fires before DirAccess sees the
 # test scripts — the plugin connects before the scan completes.
@@ -95,9 +148,13 @@ sleep 8
 # Open main.tscn so tests that need a scene root can actually run.
 # In a fresh CI checkout there's no editor state, so no scene is open by default.
 echo "Opening main.tscn..."
+# Assign first: a bare $(_tool_args ...) nested inside the request body would
+# swallow its failure, since exiting a command substitution does not exit the
+# parent shell. The assignment propagates the status so `|| exit 1` can catch it.
+SCENE_ARGS=$(_tool_args '{"path":"res://main.tscn"}') || exit 1
 SCENE_OPEN_RESULT=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
   -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"scene_open","arguments":{"path":"res://main.tscn"}}}')
+  -d "$(printf '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"scene_open","arguments":%s}}' "$SCENE_ARGS")")
 # A failed open hollows the run out: scene-dependent tests skip and the
 # summary still reads green. Fail loudly instead (audit backlog).
 echo "$SCENE_OPEN_RESULT" | python3 -c "
@@ -123,9 +180,10 @@ sleep 2
 
 # Call test_run
 echo "Running handler tests..."
+TEST_ARGS=$(_tool_args '{}') || exit 1
 RESULT=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
   -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"test_run","arguments":{}}}')
+  -d "$(printf '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"test_run","arguments":%s}}' "$TEST_ARGS")")
 
 # Parse and report results
 echo "$RESULT" | python3 -c "

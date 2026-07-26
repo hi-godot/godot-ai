@@ -27,9 +27,6 @@ _RUNTIME_BOUNDARY_DOCS = [
     _REPO_ROOT / "AGENTS.md",
     _REPO_ROOT / "CLAUDE.md",
     _REPO_ROOT / "docs" / "plugin-architecture.md",
-    # Must be `SKILL.md`: skill discovery globs for that exact name, so a
-    # lowercase `skill.md` is silently never loaded.
-    _REPO_ROOT / ".claude" / "skills" / "godot-ai" / "SKILL.md",
 ]
 
 
