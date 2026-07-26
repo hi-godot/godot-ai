@@ -984,19 +984,23 @@ func _start_server_impl(async_gen: int) -> void:
 ## the watch crossed SPAWN_GRACE_MS and reported an exit — rescued only by the
 ## crash-survivor adoption path.
 ##
-## A uv venv's `python.exe` is a shim rather than the interpreter, and the
-## real server does run under a *different* PID than the one
-## `OS.create_process` hands back — confirmed on a Windows runner (spawned
-## 7084, pid-file 6088). What is NOT confirmed is the original report's
-## suspected mechanism, that the shim exits once its child is up: on that
-## runner the spawned PID stayed alive for 90s, behaving as a live parent.
-## So the shim's exit is one possible cause of the reported death, not an
-## established one.
+## A uv venv's `python.exe` is a shim rather than the interpreter, and the real
+## server does run under a *different* PID than the one `OS.create_process`
+## hands back. But the original report's suspected mechanism — that the shim
+## exits once its child is up — is **disproven**, not merely unconfirmed. A
+## 12-boot run on Windows 11 with a uv venv found the spawned trampoline alive
+## on every boot, with the child owning both the pid-file and the listener; a
+## CI runner showed the same. The shim is a live parent for the process's whole
+## life, so it is not what kills the watched PID.
 ##
-## This gate is therefore keyed to the observable condition — watched PID
-## dead, no pid-file yet — and not to any theory of why it died. Whatever
-## kills it, waiting for the pid-file is the correct response, and when the
-## watched PID stays alive (as on that runner) this branch simply never fires.
+## Two consequences worth keeping straight. First, this gate is keyed to the
+## observable condition — watched PID dead, no pid-file yet — not to any theory
+## of why it died, so it stays correct whatever the cause. Second, and less
+## comfortable: in that same 12-boot run the false "server exited" line never
+## appeared AND the watched PID never died, so the guard never fired. Those
+## clean boots are evidence the symptom did not reproduce, NOT evidence this
+## guard fixes it. The true cause of the original 1-in-4 report is still
+## unknown; if it resurfaces, start from that rather than from the trampoline.
 ##
 ## `real_pid <= 0` means no pid-file exists yet, and that reliably means "this
 ## server has not published one" rather than "stale leftover": `start_server`
