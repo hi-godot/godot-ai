@@ -8,56 +8,23 @@ A production-grade MCP server for Godot. Python server (FastMCP v3) communicates
 
 ## Architecture
 
-```
-AI Client → MCP (stdio/sse/streamable-http) → Python FastMCP server → WebSocket (port 9500) → Godot EditorPlugin
-```
-
-- **Python server**: `src/godot_ai/` — FastMCP v3, async, lifespan manages WebSocket server
-- **GDScript plugin**: `plugin/addons/godot_ai/` — canonical source; symlinked into `test_project/addons/` for testing
 - **Protocol**: JSON over WebSocket. Request/response with `request_id` correlation. Handshake on connect.
-- **WS trust boundary**: the editor↔server WebSocket (port 9500) is **effectively unauthenticated** — the primary control is loopback-only binding: the WS port always binds `127.0.0.1` and `--allow-host` deliberately does NOT widen it (see `transport/websocket.py::start`). Defense in depth on top of that: unguessable `uuid4` request ids, session-scoped response correlation (a reply is only accepted from the connection its command was sent to — #690), and a compat-gated per-launch handshake token (#690 finding 4): the spawning plugin generates it, hands it to the server via the `GODOT_AI_WS_TOKEN` spawn env, and echoes it in the handshake; a handshake carrying a *wrong* token is rejected, but a token-less handshake is still accepted (older plugins, adopted servers, and the field is attacker-omittable — so the token is hardening, not an authentication boundary). Never bind the WS port beyond loopback.
+- **WS trust boundary**: the editor↔server WebSocket (port 9500) is **effectively unauthenticated** — the primary control is loopback-only binding: the WS port always binds `127.0.0.1` and `--allow-host` deliberately does NOT widen it (see `transport/websocket.py::start`). Defense in depth on top of that: unguessable `uuid4` request ids, session-scoped response correlation (a reply is only accepted from the connection its command was sent to — #690), and a compat-gated per-launch handshake token (#690 finding 4): the spawning plugin generates it, hands it to the server via the `GODOT_AI_WS_TOKEN` spawn env, and echoes it in the handshake; a handshake carrying a *wrong* token is rejected, but a token-less handshake is still accepted (older plugins, adopted servers, and the field is attacker-omittable — so the token is hardening, not an authentication boundary). Never bind the WS port beyond loopback. **The token authenticates the plugin TO the server, and nothing authenticates the server to the plugin**: `connection.gd` dials `ws://127.0.0.1:<ws_port>` and hands whatever answers the full write surface (`filesystem_write_text`, `script_create`, `game_eval`, `editor_quit`), adoption of an existing `:8000` listener is decided by a *self-reported* status JSON, and `_note_post_open_close` drops the token entirely after two close-4003 frames (an attacker-triggerable downgrade, deliberately accepted because omitting the field is always allowed anyway). Loopback binding is the whole boundary on the plugin side — do not add plugin-side logic that assumes the peer on 9500 is trusted.
 - **Session model**: Multiple Godot editors can connect. Tools route through active session.
 - **Handler/Runtime layer**: Shared handlers in `src/godot_ai/handlers/` contain tool logic. They depend on `DirectRuntime`, the in-process runtime adapter. Tools and resources are thin wrappers that create a runtime and delegate.
 - **Readiness gating**: Write operations check session readiness (`ready`/`importing`/`playing`/`no_scene`) before executing. Plugin sends readiness in handshake and via `readiness_changed` events. Python `await require_writable_async()` in `handlers/_readiness.py` gates all write handlers; new write handlers must `await` it. Two layers self-heal a stale cache so a missed `readiness_changed` event can't strand an agent in `EDITOR_NOT_READY` against a writable editor: (1) every command response carries an envelope-level `readiness` field stamped by the plugin's dispatcher, piped through `sync_readiness_for_session` in the WebSocket transport — so the very next tool call after any state change refreshes the cache; (2) `require_writable_async` itself fires one `get_editor_state` probe before rejecting on a non-writable cached value, so the FIRST post-staleness call (which has no prior response to self-heal from) also recovers. Fast path (cache says writable) skips the probe — zero added latency in the common case. Any new plugin response builder (success, error, deferred reply, backpressure error) must include the envelope field; old plugins that omit it fall back to the event-driven path. Every `EDITOR_NOT_READY` emission carries `data.sub_code` naming the concrete editor state (`EDITOR_IMPORTING`, `EDITOR_PLAYING`, `EDITOR_NO_SCENE`, …) plus `retryable`/`hint` (#651 stage 1) — the top-level code is frozen (dashboards key on it), so never promote a sub-code to `error.code`. When the probe live-confirms `importing`, the gate holds the write and re-probes (~500ms interval, ~8s cap — telemetry-tuned constants in `_readiness.py`) instead of rejecting, since most import windows clear within seconds; past the cap it raises exactly the pre-hold error (#651 stage 2). The hold is importing-only — `playing` and every other blocking state stay fail-fast, and per-tool retry loops must not be added on top. GDScript emitters use `ErrorCodes.make_not_ready`; the sub-code vocabulary lives in `utils/error_codes.gd` (`SUB_*`) and `protocol/errors.py` (`EditorNotReadySubCode`), kept in sync by `tests/unit/test_editor_not_ready_hint_contract.py`. Only add a sub-code for a state the editor can report deterministically; undetectable busy states stay bare `EDITOR_NOT_READY`.
 
 ## Project structure
 
-- `src/godot_ai/` — Python MCP server (FastMCP v3)
-  - `server.py` — entrypoint, lifespan, tool registration, `--exclude-domains` support
-  - `tools/` — MCP tool modules (session, editor, scene, node, project, script, resource, api, filesystem, signal, autoload, input_map, game, testing, batch, client, ui, theme, animation, material, particle, camera, audio, tilemap, tileset) + `_meta_tool.py` (`register_manage_tool` rollup factory)
-  - `resources/` — `godot://...` read-only URIs (sessions, editor, project, nodes, classes, scripts, scenes, library)
-  - `middleware/` — `PreserveGodotCommandErrorData`, `StripClientWrapperKwargs`, `ParseStringifiedParams`, `FoldFlatManageParams`, `HintOpTypoOnManage` (registration order is load-bearing — see the docstring above the `mcp.add_middleware(...)` calls in `server.py` and `tests/unit/test_server_middleware_order.py`)
-  - `handlers/` — shared sync handlers using `DirectRuntime`; `_readiness.py` gates writes
-  - `runtime/direct.py` — `DirectRuntime`, the in-process runtime adapter
-  - `transport/websocket.py` — WebSocket server for Godot plugin
-  - `sessions/registry.py` — multi-session tracking
-  - `godot_client/client.py` — typed async client, raises `GodotCommandError` on errors
-  - `protocol/` — envelope types, error codes
-- `plugin/addons/godot_ai/` — GDScript editor plugin (canonical source)
-  - `plugin.gd` — EditorPlugin lifecycle, handler registration, `_ensure_game_helper_autoload`
-  - `connection.gd` — WebSocket client, reconnection, `send_deferred_response`
-  - `dispatcher.gd` — command routing with frame budget; `DEFERRED_RESPONSE` sentinel; lazy handler load-at-first-dispatch (#736)
-  - `handlers/` — scene, node, editor, project, client, script, resource, filesystem, signal, autoload, input, test, batch, ui, theme, animation (+ values/presets), material (+ values/presets), particle (+ values/presets), camera, audio, environment, texture, curve, physics_shape, control_draw_recipe
-  - `clients/` — descriptor + strategy system (`_base`, `_registry`, `_json_strategy`, `_toml_strategy`, `_cli_strategy`, `_cli_exec`, `_atomic_write`, `_cli_finder`, `_path_template`, `_manual_command`) and 19 client descriptors
-  - `runtime/game_helper.gd` — game-side autoload that ferries logs back to the editor (`logs_read source=game`)
-  - `testing/` — McpTestRunner + McpTestSuite framework
-  - `utils/` — scene_path, error_codes, log_buffer
-  - `client_configurator.gd` — server discovery (venv → uvx → system), client config
-  - `mcp_dock.gd` — editor dock panel with status, setup, logs, self-update banner, Tools tab
-  - `tool_catalog.gd` — mirror of `src/godot_ai/tools/domains.py`; drives Tools tab; CI-enforced via `tests/unit/test_tool_domains.py`
-  - `update_reload_runner.gd` — self-update single-pass extract, filesystem scan, and plugin re-enable handoff
-- `test_project/` — Godot 4.7 project (plugin symlinked via `addons/godot_ai`, locally built — not tracked in git)
-  - `tests/` — GDScript test suites (auto-discovered by test_handler)
-- `tests/` — Python tests (pytest)
-  - `unit/` — protocol, session registry, runtime handlers, tool domains, middleware
-  - `integration/` — WebSocket server + mock Godot plugin, MCP tools, rollups
-- `script/` — dev and CI scripts
-  - `setup-dev` / `setup-dev.ps1` / `verify-worktree` — dev environment + worktree health
-  - `serve-this-worktree` / `open-godot-here` — point dev server / editor at the current worktree
-  - `local-self-update-smoke` — interactive local fixture for self-update changes
-  - `ci-start-server`, `ci-godot-tests`, `ci-reload-test`, `ci-quit-test`, `ci-check-gdscript`, `ci-game-capture-smoke` — CI scripts
-  - `ci-stale-server-smoke` — live cross-OS port-8000 conflict smoke. `--mode stale` (default) plants a godot-ai server simulator and asserts the recoverable kill+respawn path; `--mode foreign` plants a non-godot-ai listener and asserts the terminal, non-recoverable INCOMPATIBLE path (no kill, suggested free port logged). Drives the `stale-server-smoke` and `foreign-server-smoke` CI jobs.
-  - `ci-find-regression-range` — helper for identifying CI regression windows
+Read the tree directly — `src/godot_ai/` (Python MCP server) and
+`plugin/addons/godot_ai/` (GDScript editor plugin) are the two roots, and the
+directory names say what they hold. The parts the layout does *not* tell you:
+
+- `plugin/addons/godot_ai/` is the canonical GDScript copy. `test_project/addons/godot_ai`
+  is a locally-built symlink (Windows junction) into it, not tracked in git.
+- `src/godot_ai/tools/_meta_tool.py` holds `register_manage_tool`, the rollup factory.
+- `src/godot_ai/middleware/` registration order is load-bearing — see "Key conventions".
+- `script/` ships fixers for dev-environment problems; scan it before doing setup by hand.
 
 ## Key conventions
 
@@ -162,8 +129,6 @@ cd ~/godot-ai
 script/setup-dev             # creates .venv, installs deps, applies macOS .pth fix
 source .venv/bin/activate
 pytest -v                    # run tests
-ruff check src/ tests/       # lint
-ruff format src/ tests/      # format
 ```
 
 `uv.lock` is intentionally untracked: dependencies resolve from `pyproject.toml`, and CI installs with pip (`pip install -e ".[dev]"`) rather than enforcing a uv lockfile.
@@ -188,7 +153,7 @@ The plugin manages the server process:
 - On startup, plugin checks if port 8000 is already in use. If yes, uses existing server. If no, spawns `.venv/bin/python -m godot_ai --transport streamable-http --port 8000`.
 - The plugin prefers the local `.venv` over system-installed `godot-ai` so dev checkouts always use source code.
 - **External adoption does not transfer process ownership**: when the plugin adopts an externally started server (CI's `script/ci-start-server`, a hand-started dev server, or an attach-owned backend), `server_lifecycle.gd::adopt_compatible_server` sets `_server_pid = -1` and clears the managed record/pid file. Normal editor teardown therefore has no PID authority to kill and leaves that external server running. Plugin-spawned servers remain managed and follow their normal stop/`keep_server_on_exit` policy. Status fields such as `owner_type` are diagnostic only and never sufficient kill proof.
-- **Bridge leases bound crash survival for plugin-spawned servers**: the Python owner-PID watchdog and idle backstop both defer shutdown while an attach bridge holds a live lease. A plugin-spawned backend can therefore outlive a crashed editor until its last client lease expires, extending the same tokenless-loopback trust window as `keep_server_on_exit`, but only for the lease TTL. This does not yet cover a normal editor exit: the GDScript `_exit_tree` path still stops a plugin-managed backend without consulting leases, so that clean-exit case churns the backend and is tracked separately from #822.
+- **Bridge leases bound crash survival for plugin-spawned servers**: the Python owner-PID watchdog and idle backstop both defer shutdown while an attach bridge holds a live lease. A plugin-spawned backend can therefore outlive a crashed editor until its last client lease expires, extending the same tokenless-loopback trust window as `keep_server_on_exit`, but only for the lease TTL. That bound depends on the lease registry refusing to grow without limit: the `/godot-ai/lease/*` routes are loopback-guarded but **not authenticated**, and the `instance_id` they require is published by the unauthenticated `/godot-ai/status` probe, so any local process can register. `LeaseRegistry` therefore caps concurrent leases (`DEFAULT_MAX_ACTIVE_LEASES`, 429 `LEASE_LIMIT_EXCEEDED` past it) and prunes through an expiry heap rather than a full scan — the old full-dict scan ran on every register/heartbeat/release/`active_count`, so N registrations cost O(N²) CPU *on the event loop serving all MCP traffic*. Keep both properties: a bridge holds exactly one lease, so neither constrains real use. This does not yet cover a normal editor exit: the GDScript `_exit_tree` path still stops a plugin-managed backend without consulting leases, so that clean-exit case churns the backend and is tracked separately from #822.
 - **Attach response-stream limitation**: the bridge deliberately has no post-dispatch read deadline. A same-instance network stream loss, or a server-side request task that dies without producing a response, can therefore wait until the MCP client cancels the call. FastMCP 3.0 exposes `event_store`, but the real cut-and-resume flow hangs at that supported floor (while working on 3.4), so resumability remains a compatibility follow-up rather than a version-dependent feature. Cancellation is cleanup-safe and never replays an ambiguously dispatched mutation.
 - **Attach runtime files**: `godot-ai attach` keeps its per-port advisory lock and backend log in a private per-user runtime directory. Override it with `GODOT_AI_RUNTIME_DIR`; otherwise Windows uses `%LOCALAPPDATA%\godot-ai\runtime`, POSIX uses `$XDG_RUNTIME_DIR/godot-ai` when available, and the final fallback is a user-specific temporary directory. On POSIX the selected directory is rejected if it is a symlink, is not owned by the current user, or cannot be enforced as mode 0700; the predictable `/tmp` fallback is therefore not vulnerable to another user's pre-created directory or log-target symlink. A backend crash-loop diagnostic points to `backend-<HTTP-port>.log` there; each spawn retains one previous generation as `.old`. Future client-config rollout must pass the same `--exclude-domains` selection used by the plugin; differing exclusions intentionally fail compatibility with `NEW_CLIENT_SESSION_REQUIRED` rather than replacing the running backend.
 - In `--headless` / headless-display launches, the plugin returns early and does not start/adopt the server, open a WebSocket, add the dock, attach loggers, register the debugger plugin, instantiate handlers, or write the game-helper autoload. Set `GODOT_AI_ALLOW_HEADLESS=1` only for intentional headless MCP sessions such as CI handler tests.
@@ -349,42 +314,21 @@ current working tree's `test_project/`.
 ## Client configuration
 
 The plugin auto-configures 19+ MCP clients via a registry + strategy system in
-`plugin/addons/godot_ai/clients/`:
+`plugin/addons/godot_ai/clients/`. Read that directory for the mechanics; two
+rules are not visible in the code:
 
-- `_base.gd` — `McpClient` descriptor (data only: id, display_name, config_type,
-  path_template, server_key_path, entry_url_field, entry_extra_fields,
-  entry_uvx_bridge, command_shape, command_initial_fields,
-  cli_register_template, cli_status_args, toml_body_template, …). Descriptors
-  carry no `Callable` fields and no control flow — strategies
-  interpret the data. The `test_descriptors_are_data_only` suite enforces this
-  (issue #229: hot-reloaded per-client lambdas raced with worker threads).
-- `_registry.gd` — explicit `preload(...)` list of every client. Adding a client
-  means: write `clients/<name>.gd` extending `McpClient`, then append one
-  preload here. No edits to dock or facade required.
-- `_json_strategy.gd` / `_toml_strategy.gd` / `_cli_strategy.gd` — three
-  reusable writers, selected by descriptor `config_type`. **No per-client
-  branching** inside strategies — non-standard entry shapes are expressed
-  declaratively: `entry_url_field` overrides the URL key (Antigravity's
-  `serverUrl`, Gemini's `httpUrl`); `entry_extra_fields` adds verbatim keys
-  (Roo's `type: streamable-http`, OpenCode's `enabled: true`); `entry_uvx_bridge`
-  composes the stdio→HTTP bridge shape for stdio-only clients (Claude Desktop's
-  `flat`).
-- `_manual_command.gd` — synthesizes the dock's "Run this manually" string
-  from the same declarative fields. No per-client builders.
-- `_path_template.gd` — expands `~`, `$HOME`, `$APPDATA`, `$XDG_CONFIG_HOME`,
-  `$LOCALAPPDATA`, `$USERPROFILE`; picks the right per-OS entry from a
-  `{"darwin": ..., "windows": ..., "linux": ...}` (or `"unix"` shorthand) map.
-- `_atomic_write.gd` — `.tmp` + rename + `.backup` so a crash mid-write never
-  truncates the user's MCP config.
-- `_cli_finder.gd` — three-tier lookup (well-known dirs → login shell →
-  `which`/`where`) with per-exe caching. Critical for GUI-launched editors
-  whose PATH doesn't include `~/.local/bin`, `/opt/homebrew/bin`, etc.
+- **Descriptors are data only** — no `Callable` fields, no control flow. Strategies
+  interpret the data. `test_descriptors_are_data_only` enforces this (issue #229:
+  hot-reloaded per-client lambdas raced with worker threads).
+- **No per-client branching inside strategies.** Non-standard entry shapes are
+  expressed declaratively on the descriptor (`entry_url_field`, `entry_extra_fields`,
+  `entry_uvx_bridge`, `command_shape`, `command_initial_fields`). Adding a client
+  means exactly two things: write
+  `clients/<name>.gd` extending `McpClient`, then append one `preload` to
+  `_registry.gd`. No edits to the dock, the facade, or the strategies.
 
-`client_configurator.gd` is a thin facade exposing string-id wrappers
-(`configure`, `check_status`, `remove`, `manual_command`, `is_installed`,
-`client_ids`, `client_display_name`). It also keeps the server-launch
-discovery (`get_server_command`, `find_uvx`, `is_dev_checkout`) since those
-are unrelated to client configuration.
+MCP tools `client_configure`, `client_remove`, and `client_status` expose this to
+AI clients.
 
 Client-owned attach entries carry a launch command rather than only an HTTP
 URL. The dock captures ports, canonical excluded domains, plugin version, and
@@ -405,8 +349,7 @@ intentionally fails **open**: `backend_python_executable()` prefers a sibling
 `pythonw.exe` on Windows but falls back to the current executable when it is
 absent, because a visible console is better than a dead backend at runtime.
 
-MCP tools `client_configure`, `client_remove`, and `client_status` expose this
-to AI clients. `client_status` returns `{"clients": [{id, display_name, status,
+`client_status` returns `{"clients": [{id, display_name, status,
 installed}, …]}`. The dock renders one row per client with a status dot,
 Configure/Remove buttons, and a per-row "Run this manually" fallback for cases
 when auto-configure can't find a CLI.
@@ -470,7 +413,6 @@ When using `batch_execute`'s `commands[].command` field, use the **plugin comman
 - Write handlers: `await require_writable_async(runtime)` before sending commands (from `handlers/_readiness.py`).
 - Tools create `DirectRuntime.from_context(ctx)` and delegate to handlers.
 - Error codes in `protocol/errors.py` — keep in sync with `utils/error_codes.gd`.
-- Lint: `ruff check src/ tests/` — Format: `ruff format src/ tests/`.
 
 ## Deferred responses (tools whose reply flows out-of-band)
 

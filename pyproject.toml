@@ -1,6 +1,6 @@
 [project]
 name = "godot-ai"
-version = "3.0.6"
+version = "3.0.7"
 description = "Production-grade MCP server and AI tools for the Godot engine"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
@@ -43,10 +43,14 @@ dependencies = [
     # transitive installation for this public runtime dependency.
     "httpx>=0.27",
     # asgi.py imports these directly; declare them instead of relying on
-    # them arriving transitively through fastmcp (audit backlog). Floors
-    # match the mcp SDK's own minimums — resolution is unchanged.
+    # them arriving transitively through fastmcp (audit backlog).
     "uvicorn>=0.23",
-    "starlette>=0.27",
+    # Starlette < 0.40.0 is affected by CVE-2024-47874 (multipart/form-data
+    # denial of service). A normal install resolves far above this (fastmcp's
+    # own floor is starlette>=1.0.1), but this package's declared floor is
+    # what a *constrained* resolve is allowed to pick, so it must not name a
+    # version with a known advisory against it.
+    "starlette>=0.40.0",
 ]
 
 [project.urls]

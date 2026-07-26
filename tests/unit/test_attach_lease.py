@@ -12,8 +12,10 @@ from starlette.testclient import TestClient
 
 from godot_ai.attach import lease as lease_module
 from godot_ai.attach.lease import (
+    DEFAULT_MAX_ACTIVE_LEASES,
     LeaseClient,
     LeaseInstanceMismatch,
+    LeaseLimitExceeded,
     LeaseNotFound,
     LeaseRegistry,
 )
@@ -75,6 +77,208 @@ def test_registry_register_heartbeat_release_and_expiry() -> None:
     assert registry.active_count() == 0
 
 
+def test_registry_caps_concurrent_leases() -> None:
+    """An unauthenticated local peer must not be able to grow the registry.
+
+    The lease routes are loopback-guarded but not authenticated, and the
+    ``instance_id`` they need is published by ``/godot-ai/status``. Without a
+    ceiling a local process could both exhaust memory and — because a live
+    lease defers the owner-PID watchdog and the idle backstop — pin a
+    plugin-spawned backend alive indefinitely.
+    """
+    clock = FakeClock()
+    registry = LeaseRegistry(
+        "instance-a",
+        ttl_seconds=30,
+        heartbeat_after_seconds=10,
+        max_active_leases=3,
+        clock=clock,
+    )
+
+    held = [registry.register("instance-a") for _ in range(3)]
+    assert registry.active_count() == 3
+
+    with pytest.raises(LeaseLimitExceeded, match="maximum of 3"):
+        registry.register("instance-a")
+
+    ## Renewing an existing lease cannot grow the dict, so the ceiling must
+    ## not block a legitimate bridge's heartbeat while the registry is full.
+    clock.now = 5
+    assert registry.heartbeat("instance-a", held[0].lease_id).lease_id == held[0].lease_id
+
+    ## Releasing frees a slot immediately.
+    assert registry.release("instance-a", held[1].lease_id) is True
+    assert registry.register("instance-a") is not None
+    assert registry.active_count() == 3
+
+    ## So does expiry: the ceiling is on *live* leases, not lifetime issuance.
+    clock.now = 1_000
+    assert registry.active_count() == 0
+    assert registry.register("instance-a") is not None
+
+
+def test_registry_default_cap_is_generous_but_finite() -> None:
+    registry = LeaseRegistry("instance-a")
+    for _ in range(DEFAULT_MAX_ACTIVE_LEASES):
+        registry.register("instance-a")
+    with pytest.raises(LeaseLimitExceeded):
+        registry.register("instance-a")
+
+
+def test_registry_rejects_invalid_cap() -> None:
+    with pytest.raises(ValueError, match="max active leases must be positive"):
+        LeaseRegistry("instance-a", max_active_leases=0)
+
+
+def test_prune_is_not_quadratic_in_live_leases() -> None:
+    """``prune`` must cost what expired, not what is live.
+
+    The original implementation rescanned the whole dict on every register,
+    heartbeat, release, and ``active_count``, so N registrations cost O(N^2)
+    CPU on the event loop that serves all MCP traffic. This pins the fix by
+    counting clock reads: with an expiry heap, a prune over an all-live
+    registry touches no entries regardless of how many are held.
+    """
+    clock = FakeClock()
+    registry = LeaseRegistry(
+        "instance-a",
+        ttl_seconds=1_000,
+        heartbeat_after_seconds=10,
+        max_active_leases=10_000,
+        clock=clock,
+    )
+    for _ in range(2_000):
+        registry.register("instance-a")
+
+    ## Nothing has expired, so the heap's head is in the future and prune
+    ## returns without popping. Verified structurally: the heap still holds
+    ## every entry after the prune that active_count() performs.
+    assert registry.active_count() == 2_000
+    assert len(registry._expiry_heap) == 2_000
+
+    ## Expire everything at once; a single prune drains both structures.
+    clock.now = 2_000
+    assert registry.active_count() == 0
+    assert registry._expiry_heap == []
+
+
+def test_heap_stays_bounded_under_heartbeat_churn_without_clock_movement() -> None:
+    """Capping ``_expiries`` does not by itself bound the expiry heap.
+
+    Every heartbeat pushes an entry dated one TTL in the future, and ``prune``
+    can only pop entries that have already expired. Without compaction, an
+    unauthenticated loopback caller heartbeating a single valid lease in a
+    tight loop grows the heap without limit inside one TTL — reintroducing the
+    memory-exhaustion vector the active-lease ceiling exists to close.
+
+    The clock deliberately never advances: that is the attacker's best case,
+    and an earlier version of this test moved the clock between heartbeats,
+    which hid the growth entirely.
+    """
+    clock = FakeClock()
+    cap = 8
+    registry = LeaseRegistry(
+        "instance-a",
+        ttl_seconds=30,
+        heartbeat_after_seconds=10,
+        max_active_leases=cap,
+        clock=clock,
+    )
+    registration = registry.register("instance-a")
+
+    for _ in range(20_000):
+        registry.heartbeat("instance-a", registration.lease_id)
+
+    assert registry.active_count() == 1
+    assert len(registry._expiry_heap) <= (2 * cap) + 2
+
+    ## The surviving entry must still be the CURRENT expiry, so the lease
+    ## neither expires early nor outlives its TTL after a compaction.
+    clock.now = 29
+    assert registry.active_count() == 1
+    clock.now = 31
+    assert registry.active_count() == 0
+
+
+def test_heap_stays_bounded_under_register_release_churn() -> None:
+    """Released leases leave heap entries behind; churn must not accumulate."""
+    clock = FakeClock()
+    cap = 8
+    registry = LeaseRegistry(
+        "instance-a",
+        ttl_seconds=30,
+        heartbeat_after_seconds=10,
+        max_active_leases=cap,
+        clock=clock,
+    )
+
+    for _ in range(20_000):
+        registration = registry.register("instance-a")
+        assert registry.release("instance-a", registration.lease_id) is True
+
+    assert registry.active_count() == 0
+    assert len(registry._expiry_heap) <= (2 * cap) + 2
+
+    ## Churn must not have consumed the ceiling: the registry is empty, so a
+    ## legitimate bridge can still register.
+    assert registry.register("instance-a") is not None
+
+
+def test_heap_compaction_preserves_live_expiries() -> None:
+    """Compaction rebuilds from ``_expiries``, so no live lease may be lost."""
+    clock = FakeClock()
+    cap = 4
+    registry = LeaseRegistry(
+        "instance-a",
+        ttl_seconds=100,
+        heartbeat_after_seconds=10,
+        max_active_leases=cap,
+        clock=clock,
+    )
+    held = [registry.register("instance-a") for _ in range(cap)]
+
+    ## Renew one lease far past the others, forcing many compactions.
+    clock.now = 50
+    for _ in range(500):
+        registry.heartbeat("instance-a", held[0].lease_id)
+
+    assert registry.active_count() == cap
+    assert len(registry._expiry_heap) <= (2 * cap) + 2
+
+    ## The three un-renewed leases expire on the original schedule...
+    clock.now = 101
+    assert registry.active_count() == 1
+    ## ...and the renewed one survives to its own, later deadline.
+    clock.now = 151
+    assert registry.active_count() == 0
+
+
+def test_heartbeat_supersedes_heap_entries_without_unbounded_growth() -> None:
+    """Superseded heap entries must drain, not accumulate forever."""
+    clock = FakeClock()
+    registry = LeaseRegistry(
+        "instance-a",
+        ttl_seconds=30,
+        heartbeat_after_seconds=10,
+        clock=clock,
+    )
+    registration = registry.register("instance-a")
+
+    for tick in range(1, 21):
+        clock.now = tick * 10
+        registry.heartbeat("instance-a", registration.lease_id)
+
+    ## The lease is still live after 200s of renewals...
+    assert registry.active_count() == 1
+    ## ...and the stale entries pushed by earlier heartbeats have been popped
+    ## as their expiries passed, so the heap tracks live state, not history.
+    assert len(registry._expiry_heap) <= 4
+
+    clock.now += 31
+    assert registry.active_count() == 0
+    assert registry._expiry_heap == []
+
+
 def test_registry_rejects_instance_change() -> None:
     registry = LeaseRegistry("new-instance")
     with pytest.raises(LeaseInstanceMismatch, match="backend instance changed"):
@@ -122,6 +326,43 @@ def test_lease_routes_are_instance_bound() -> None:
     )
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "LEASE_NOT_FOUND"
+
+
+def test_lease_register_route_refuses_past_the_cap() -> None:
+    """The HTTP surface must surface the ceiling, not grow without bound."""
+    server = create_server(ws_port=9562)
+    app = server.http_app(transport="streamable-http")
+    client = TestClient(app, base_url="http://127.0.0.1")
+
+    ## The instance_id an attacker needs is handed out unauthenticated.
+    status = client.get("/godot-ai/status").json()
+    assert status["instance_id"] == SERVER_INSTANCE_ID
+
+    accepted = 0
+    for _ in range(DEFAULT_MAX_ACTIVE_LEASES + 25):
+        response = client.post(
+            "/godot-ai/lease/register",
+            json={"instance_id": SERVER_INSTANCE_ID},
+        )
+        if response.status_code == 200:
+            accepted += 1
+            continue
+        assert response.status_code == 429
+        body = response.json()["error"]
+        assert body["code"] == "LEASE_LIMIT_EXCEEDED"
+        assert body["instance_id"] == SERVER_INSTANCE_ID
+        break
+
+    assert accepted == DEFAULT_MAX_ACTIVE_LEASES
+
+    ## Every subsequent attempt keeps refusing rather than intermittently
+    ## letting one through.
+    for _ in range(5):
+        refused = client.post(
+            "/godot-ai/lease/register",
+            json={"instance_id": SERVER_INSTANCE_ID},
+        )
+        assert refused.status_code == 429
 
 
 def test_lease_routes_validate_bodies_and_release_errors() -> None:

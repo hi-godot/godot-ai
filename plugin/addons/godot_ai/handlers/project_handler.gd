@@ -8,6 +8,68 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
 const RUN_READY_WAIT_SEC := 3.0
 
+## ProjectSettings keys that decide what the engine EXECUTES at project
+## startup. `McpPathValidator._reject_sensitive_write` already refuses direct
+## writes to `res://project.godot`, `res://override.cfg` and `res://.godot/`
+## for exactly this reason — but `set_project_setting` writes that same
+## manifest through the settings API, so without this list the guard is
+## trivially side-steppable:
+##
+##     settings_set key="autoload/Boot" value="*res://../../evil.gd"
+##
+## would land arbitrary code on the next project open, and a `project.godot`
+## diff is easy to miss in review. Autoloads have a validated route of their
+## own (`autoload_handler.add_autoload`, which runs the path through
+## `McpPathValidator`); the rest are refused outright because there is no
+## legitimate agent workflow for repointing the engine's startup execution.
+##
+## Deliberately NARROW. A denylist that over-blocks turns settings_set into a
+## tool agents can't use, so only keys that actually carry code (or a command
+## line) are listed — not their whole section. `application/run/` is an exact
+## entry for `main_scene` precisely because its siblings (`max_fps`,
+## `low_processor_mode`, …) are inert and must stay writable; likewise
+## `application/boot_splash/image` is data, not code, and is NOT blocked.
+##
+## Prefix entries match the key and anything beneath it, and are used only
+## where every key under the prefix is code-bearing. Exact entries match only
+## themselves. Comparison is case-folded — ProjectSettings keys are
+## case-sensitive, but a case variant that Godot would reject is still a
+## clearer error coming from here than from a half-applied save.
+const STARTUP_EXECUTION_KEY_PREFIXES: Array[String] = [
+	"autoload/",      ## every key under it is a script path
+	"editor_plugins/",  ## enabled-plugin list; each entry is loaded as code
+]
+const STARTUP_EXECUTION_KEYS_EXACT: Array[String] = [
+	"application/run/main_scene",           ## the scene the game boots into
+	"editor/script/templates_search_path",  ## where the editor loads templates from
+	"editor/run/main_run_args",             ## command line for the run
+]
+
+
+## Returns "" when `key` may be written via set_project_setting, or a
+## human-readable refusal reason otherwise. Static so it is unit-testable
+## without instancing the handler.
+static func startup_execution_key_refusal(key: String) -> String:
+	var lowered := key.strip_edges().to_lower()
+	for prefix in STARTUP_EXECUTION_KEY_PREFIXES:
+		if lowered.begins_with(prefix):
+			if prefix == "autoload/":
+				return (
+					"Refusing to set '%s' — autoloads run code at project startup. " % key
+					+ "Use autoload_manage(op='add'), which validates the script path."
+				)
+			return (
+				"Refusing to set '%s' — keys under '%s' are loaded as code " % [key, prefix]
+				+ "at project startup."
+			)
+	for exact in STARTUP_EXECUTION_KEYS_EXACT:
+		if lowered == exact:
+			return (
+				"Refusing to set '%s' — this key controls what the engine loads " % key
+				+ "or executes at project startup."
+			)
+	return ""
+
 var _connection: McpConnection
 var _debugger_plugin
 var _editor_log_buffer
@@ -44,6 +106,13 @@ func set_project_setting(params: Dictionary) -> Dictionary:
 
 	if not params.has("value"):
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: value")
+
+	## Refuse the startup-execution surface before touching ProjectSettings —
+	## see STARTUP_EXECUTION_KEY_PREFIXES for why this guard exists here and
+	## not only in McpPathValidator.
+	var refusal := startup_execution_key_refusal(key)
+	if not refusal.is_empty():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, refusal)
 
 	var value = params.get("value")
 	var had_setting := ProjectSettings.has_setting(key)
@@ -99,6 +168,12 @@ func run_project(params: Dictionary) -> Dictionary:
 		var custom_scene: String = params.get("scene", "")
 		if custom_scene.is_empty():
 			validation_error = ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: scene (required when mode='custom')")
+		else:
+			## play_custom_scene() was the last path-taking op in the plugin
+			## with no containment check; every sibling that accepts a scene
+			## path validates it (scene_handler.open_scene,
+			## node_handler.create_node's scene_path).
+			validation_error = McpPathValidator.loadable_error(custom_scene, "scene")
 	elif mode != "main" and mode != "current":
 		validation_error = ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Invalid mode '%s' — use 'main', 'current', or 'custom'" % mode)
 	if validation_error != null:

@@ -48,6 +48,9 @@ const DEV_MODE_SETTING := "godot_ai/dev_mode"
 ## not tip-of-main, which may have drifted from that build's UI.
 const PORT_CONFLICT_DOCS_PATH := "docs/port-conflicts.md"
 const REPO_BLOB_BASE := "https://github.com/hi-godot/godot-ai/blob"
+## Opened by the "How to install uv" button. See _on_install_uv for why the
+## dock links here instead of running an installer itself.
+const UV_INSTALL_DOCS_URL := "https://docs.astral.sh/uv/getting-started/installation/"
 const CLIENT_STATUS_REFRESH_COOLDOWN_MSEC := 15 * 1000
 const CLIENT_STATUS_REFRESH_TIMEOUT_MSEC := 30 * 1000
 const CLIENT_ACTION_TIMEOUT_MSEC := 30 * 1000
@@ -120,6 +123,13 @@ var _client_rows: Dictionary = {}
 # during tab-away/tab-back churn. See #166 and #226.
 var _drift_banner: VBoxContainer
 var _drift_label: Label
+## Set when the user clicks "How to install uv"; consumed by the next
+## application focus-in so the uv row is re-probed after the user has had a
+## chance to install, not immediately. See _on_install_uv and _notification.
+## (Deliberately spelled without the focus-in constant name: the guard in
+## tests/unit/test_editor_focus_refocus.py locates the notification handler
+## by first occurrence of that token.)
+var _uv_recheck_pending := false
 ## Handles for the Setup section's "Server" row. `_update_status` keeps
 ## the label text/color in sync with `McpConnection.server_version` so the
 ## dock reports the TRUE running server version, not the plugin's
@@ -450,6 +460,15 @@ func _notification(what: int) -> void:
 	elif what == NOTIFICATION_APPLICATION_FOCUS_IN:
 		if _should_refresh_client_statuses_on_focus_in():
 			_request_client_status_refresh(false)
+		## Re-probe uv only when the user actually went off to install it
+		## (see _on_install_uv). `check_uv_version()` is cached, so an
+		## ungated refresh here would usually be free — but after the
+		## button invalidated that cache it costs one blocking
+		## `uvx --version`, and this notification must not grow a probe on
+		## the common focus-in path. One-shot: clear before refreshing.
+		if _uv_recheck_pending:
+			_uv_recheck_pending = false
+			_refresh_setup_status.call_deferred()
 
 
 func _should_refresh_client_statuses_on_focus_in() -> bool:
@@ -1676,7 +1695,11 @@ func _refresh_setup_status() -> void:
 	else:
 		_setup_container.add_child(_make_status_row("uv", "not found", Color.RED))
 		var install_btn := Button.new()
-		install_btn.text = "Install uv"
+		install_btn.text = "How to install uv"
+		install_btn.tooltip_text = (
+			"Opens the official uv installation docs. Godot AI deliberately does "
+			+ "not run the installer for you — see _on_install_uv."
+		)
 		install_btn.pressed.connect(_on_install_uv)
 		_setup_container.add_child(install_btn)
 
@@ -1854,21 +1877,42 @@ func _connected_status_text() -> String:
 	return "Server connected"
 
 
+## Open uv's official install documentation rather than executing an
+## installer on the user's behalf.
+##
+## This used to shell out to `curl -LsSf https://astral.sh/uv/install.sh | sh`
+## (and the PowerShell `irm … | iex` equivalent). That is arbitrary remote
+## code execution as the editor user, one dock click deep, with no version
+## pin, no checksum, and no signature — while this same plugin verifies its
+## OWN updates with an RSA-4096 signature over a SHA-256 sidecar, pinned to a
+## GitHub host and this repo's release-asset path. Holding a third-party
+## installer to a weaker standard than our own payload is the wrong trade,
+## and pinning a digest here would only cover the bootstrap script, not the
+## uv binary it goes on to fetch.
+##
+## Opening the docs keeps the discovery value of the button (the user still
+## learns uv is missing and how to get it) while leaving the decision to
+## install — and the choice of install method — with the user. Mirrors the
+## dock's existing "Run this manually" fallback for client CLIs.
 func _on_install_uv() -> void:
-	match OS.get_name():
-		"Windows":
-			OS.execute("powershell", ["-ExecutionPolicy", "ByPass", "-c", "irm https://astral.sh/uv/install.ps1 | iex"], [], false)
-		_:
-			OS.execute("bash", ["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"], [], false)
-	## Drop the cached uvx path AND the cached `uvx --version` so the
-	## next `_refresh_setup_status` finds and reads the freshly-installed
-	## binary instead of returning the pre-install "not found" result.
+	OS.shell_open(UV_INSTALL_DOCS_URL)
+	## Drop the cached uvx path AND the cached `uvx --version` so that once
+	## the user has installed uv (in a terminal, from the docs we just
+	## opened), the dock finds the new binary instead of replaying the
+	## cached "not found" result for the rest of the session.
 	## Routing through the configurator matters on Windows, where the
 	## CLI-finder cache key is `uvx.exe` — invalidating just `"uvx"`
 	## would leave the cache stale and the dock would keep showing
 	## "uv: not found" for the rest of the session.
 	ClientConfigurator.invalidate_uv_detection()
-	_refresh_setup_status.call_deferred()
+	## Deliberately do NOT refresh here. `OS.shell_open` returns as soon as
+	## the browser is handed the URL, so an immediate refresh would run long
+	## before the user could install anything and would simply re-cache
+	## "not found" — undoing the invalidation above. (The old shell-out was
+	## a blocking `OS.execute`, so refreshing straight after it was correct
+	## then; it stopped being correct when the installer call went away.)
+	## Re-probe when the editor regains focus instead — see _notification.
+	_uv_recheck_pending = true
 
 
 # --- Client section ---

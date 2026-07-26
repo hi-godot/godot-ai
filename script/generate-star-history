@@ -15,12 +15,20 @@ date) — the starfield is seeded from the repo name — so reruns with unchange
 data produce byte-identical output and the workflow's "chart unchanged" check
 keeps working.
 
+Two data sources, in preference order. Exact per-star history rebuilds the
+whole curve and is used whenever the stargazers endpoint is reachable. When it
+refuses (as it has since 2026-07-24 — see docs/star-history.md), the run keeps
+the history banked in `--series` and extends it with the repo's
+`stargazers_count`, which needs only `metadata=read`. A run that can reach
+neither fails rather than drawing an invented curve.
+
 Usage:
     GITHUB_TOKEN=... script/generate-star-history [--repo owner/name] [--out path]
     script/generate-star-history --seed "2026-04-12:0,2026-07-16:1009" --out path
 
 `--seed` renders a chart from explicit `date:count` points without touching
-the network — used to commit an initial chart and for offline testing.
+the network — used to commit an initial chart and for offline testing; it
+neither reads nor writes the series.
 
 Stdlib only; no dependencies.
 """
@@ -31,6 +39,7 @@ import argparse
 import json
 import math
 import os
+import sys
 import urllib.error
 import urllib.request
 import zlib
@@ -61,7 +70,88 @@ LINE_END = "#ffd166"
 GOLD = "#ffd166"
 
 
-def fetch_star_dates(repo: str, token: str) -> list[date]:
+class StargazerFetchError(SystemExit):
+    """A refused stargazers request, carrying the full diagnostic.
+
+    Derives from SystemExit so an uncaught one still exits 1 with the message
+    printed, while callers that have a stored series can catch it specifically
+    and carry on.
+    """
+
+
+def describe_http_error(err: urllib.error.HTTPError, url: str, token_source: str) -> str:
+    """Explain a refused stargazers request using GitHub's own answer.
+
+    GitHub states the reason in the response body and the rate-limit headers,
+    and the distinctions matter: 401 means the credential itself was rejected,
+    a throttled 403 is a rate limit, and any other 403 means the token is alive
+    but not authorized for this repo (org PAT policy, a revoked or
+    still-unapproved grant, SAML). A hardcoded hint cannot tell those apart and
+    sent a real investigation down the wrong path (#750 follow-up), so quote
+    the API verbatim and only then suggest where to look.
+    """
+    try:
+        api_message = json.loads(err.read().decode("utf-8", "replace")).get("message")
+    except (ValueError, OSError):
+        api_message = None
+
+    headers = err.headers or {}
+    remaining = headers.get("x-ratelimit-remaining")
+    retry_after = headers.get("retry-after")
+    ## A *secondary* limit answers 403 with primary quota still on the clock,
+    ## so remaining == "0" alone misses it and the run would be reported as an
+    ## authorization failure — telling the reader to go replace a token that
+    ## is working fine. Retry-After and the message text are the other tells.
+    throttled_message = bool(api_message) and "rate limit" in api_message.lower()
+    rate_limited = err.code == 429 or (
+        err.code == 403 and (remaining == "0" or retry_after is not None or throttled_message)
+    )
+
+    lines = [
+        f"GitHub API returned {err.code} for {url}.",
+        f'GitHub says: "{api_message}"' if api_message else "GitHub returned no message body.",
+        f"Token used: {token_source}.",
+    ]
+
+    if rate_limited:
+        detail = []
+        if remaining is not None:
+            detail.append(f"{remaining} requests remaining")
+        reset = headers.get("x-ratelimit-reset")
+        if reset and reset.isdigit():
+            detail.append(
+                "resets "
+                + datetime.fromtimestamp(int(reset), timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            )
+        if retry_after:
+            detail.append(f"retry after {retry_after}s")
+        suffix = f" ({'; '.join(detail)})" if detail else ""
+        lines.append(f"Rate limited{suffix}. Retry later.")
+    elif err.code == 401:
+        lines.append(
+            "The credential itself was rejected — the token is expired, revoked, "
+            "or malformed. Issue a new collaborator PAT and update the "
+            "STAR_HISTORY_TOKEN secret."
+        )
+    elif err.code == 403:
+        lines.append(
+            "The token is live but not authorized for this repo's stargazer "
+            "history. Check, in order: the org's personal-access-token policy "
+            "(a policy change can revoke a working token), whether the token's "
+            "approval or repository-access grant was withdrawn, and whether it "
+            "has expired. Note the workflow's built-in GITHUB_TOKEN is a GitHub "
+            "App token, not a collaborator, and is always refused here."
+        )
+    elif err.code == 404:
+        lines.append(
+            f"The token cannot see {url.split('/repos/')[-1].split('/stargazers')[0]} "
+            "at all — check the repo name and the token's repository access."
+        )
+
+    return "\n".join(lines)
+
+
+def fetch_star_dates(repo: str, token: str, token_source: str = "STAR_HISTORY_TOKEN") -> list[date]:
     """Return the starred_at date of every stargazer, oldest first."""
     dates: list[date] = []
     for page in range(1, MAX_PAGES + 1):
@@ -78,27 +168,107 @@ def fetch_star_dates(repo: str, token: str) -> list[date]:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 batch = json.load(resp)
         except urllib.error.HTTPError as err:
-            if err.code in (401, 403, 404):
-                raise SystemExit(
-                    f"GitHub API returned {err.code} for {url}.\n"
-                    "Stargazer history requires repo-collaborator access. In CI, "
-                    "pass the workflow GITHUB_TOKEN; if GitHub stops granting it "
-                    "stargazer access, set a collaborator PAT as the "
-                    "STAR_HISTORY_TOKEN secret instead."
-                ) from err
+            if 400 <= err.code < 500:
+                raise StargazerFetchError(describe_http_error(err, url, token_source)) from err
             raise
         if not batch:
             break
         for entry in batch:
             starred_at = entry.get("starred_at")
             if starred_at:
-                dates.append(
-                    datetime.fromisoformat(starred_at.replace("Z", "+00:00")).date()
-                )
+                dates.append(datetime.fromisoformat(starred_at.replace("Z", "+00:00")).date())
         if len(batch) < PER_PAGE:
             break
     dates.sort()
     return dates
+
+
+def fetch_star_count(repo: str, token: str, token_source: str) -> int:
+    """Return the repo's current stargazers_count.
+
+    Deliberately a different endpoint from fetch_star_dates: /repos/{repo}
+    answers on `metadata=read` alone, and kept working through the 2026-07-24
+    outage that made the stargazers list demand `contents=write` (see
+    docs/star-history.md). It gives a total but no history, which is why the
+    series file exists.
+    """
+    url = f"{API_ROOT}/repos/{repo}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = json.load(resp)
+    except urllib.error.HTTPError as err:
+        if 400 <= err.code < 500:
+            raise StargazerFetchError(describe_http_error(err, url, token_source)) from err
+        raise
+    count = payload.get("stargazers_count")
+    if not isinstance(count, int):
+        raise StargazerFetchError(f"{url} returned no stargazers_count")
+    return count
+
+
+def load_series(path: str, repo: str) -> list[tuple[date, int]]:
+    """Read the accumulated (date, count) series for `repo`, or [] if absent.
+
+    An *empty* file counts as absent. The workflow restores this file from a
+    branch that may not carry it yet, and a shell redirection creates the file
+    before the command feeding it can fail — so a half-created file must not
+    wedge the run before it can even try the exact-history path.
+
+    A series belonging to another repo is refused rather than silently
+    rendered: its points would be drawn as this repo's history and then
+    overwritten with this repo's, destroying both.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = fh.read()
+    except FileNotFoundError:
+        return []
+    if not raw.strip():
+        return []
+    try:
+        payload = json.loads(raw)
+    except ValueError as err:
+        raise SystemExit(f"{path} is not valid JSON: {err}") from err
+
+    stored = payload.get("repo")
+    if stored and stored != repo:
+        raise SystemExit(
+            f"{path} holds the series for {stored}, not {repo}. Point --series "
+            f"at that repo's file, or delete it to start a fresh series — "
+            f"grafting one repo's history onto another would corrupt both."
+        )
+    points = [(date.fromisoformat(d), int(c)) for d, c in payload.get("points", [])]
+    return sorted(points)
+
+
+def save_series(path: str, repo: str, points: list[tuple[date, int]]) -> None:
+    """Write the series, stamped with the repo it belongs to."""
+    payload = {
+        "repo": repo,
+        "points": [[d.isoformat(), c] for d, c in points],
+    }
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=1)
+        fh.write("\n")
+
+
+def append_today(series: list[tuple[date, int]], count: int, today: date) -> list[tuple[date, int]]:
+    """Extend the series with today's total, replacing a same-day point.
+
+    Same-day replacement keeps reruns idempotent; without it a manual dispatch
+    after the scheduled run would stack duplicate x-positions onto the curve.
+    """
+    points = [(d, c) for d, c in series if d != today]
+    points.append((today, count))
+    return sorted(points)
 
 
 def cumulative_points(star_dates: list[date]) -> list[tuple[date, int]]:
@@ -349,6 +519,12 @@ def main() -> None:
     parser.add_argument("--repo", default="hi-godot/godot-ai")
     parser.add_argument("--out", default="star-history.svg")
     parser.add_argument(
+        "--series",
+        default="star-history.json",
+        help="accumulated date:count points, carried between runs so the "
+        "chart survives the stargazers endpoint being unavailable",
+    )
+    parser.add_argument(
         "--seed",
         help="comma-separated date:count points to render offline "
         '(e.g. "2026-04-12:0,2026-07-16:1009")',
@@ -358,13 +534,39 @@ def main() -> None:
     if args.seed:
         points = parse_seed(args.seed)
     else:
-        token = os.environ.get("STAR_HISTORY_TOKEN") or os.environ.get("GITHUB_TOKEN")
+        ## Which token answered matters when a run is refused, so name it
+        ## rather than collapsing the two into one lookup.
+        token_source = "STAR_HISTORY_TOKEN"
+        token = os.environ.get("STAR_HISTORY_TOKEN")
+        if not token:
+            token_source = "GITHUB_TOKEN (fallback)"
+            token = os.environ.get("GITHUB_TOKEN")
         if not token:
             raise SystemExit("set GITHUB_TOKEN (or STAR_HISTORY_TOKEN), or use --seed")
-        star_dates = fetch_star_dates(args.repo, token)
-        if not star_dates:
-            raise SystemExit(f"no stargazer data returned for {args.repo}")
-        points = cumulative_points(star_dates)
+
+        series = load_series(args.series, args.repo)
+        try:
+            ## Exact per-star history is still the preferred source: when the
+            ## endpoint is reachable it rebuilds the whole curve and corrects
+            ## any drift the append-only path accumulated.
+            star_dates = fetch_star_dates(args.repo, token, token_source)
+            if not star_dates:
+                raise SystemExit(f"no stargazer data returned for {args.repo}")
+            points = cumulative_points(star_dates)
+        except StargazerFetchError as err:
+            if not series:
+                raise
+            ## Degrade instead of failing: keep the history already banked and
+            ## extend it with a total from an endpoint that still answers.
+            print(
+                f"stargazer history unavailable, extending the stored series "
+                f"with today's total instead.\n{err}",
+                file=sys.stderr,
+            )
+            count = fetch_star_count(args.repo, token, token_source)
+            points = append_today(series, count, datetime.now(timezone.utc).date())
+
+        save_series(args.series, args.repo, points)
 
     svg = render_svg(points, args.repo)
     with open(args.out, "w", encoding="utf-8") as fh:

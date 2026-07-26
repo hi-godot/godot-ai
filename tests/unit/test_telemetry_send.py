@@ -111,6 +111,33 @@ class TestSendOverHttpx:
 
         collector.shutdown()
 
+    def test_client_ignores_ambient_proxy_env(
+        self, monkeypatch, clean_env, isolated_data_dir
+    ) -> None:
+        """``httpx.Client`` must be built with ``trust_env=False``.
+
+        Every other outbound client in the package pins this (attach/ensure,
+        attach/lease, attach/proxy). Without it httpx honours HTTP_PROXY /
+        HTTPS_PROXY / SSL_CERT_FILE from the environment, so an ambient value
+        the user never set for telemetry could redirect or intercept records
+        carrying the persistent ``customer_uuid`` — routing around the
+        endpoint validation that exists to keep those records off cleartext
+        transports (#532).
+        """
+        monkeypatch.setenv("GODOT_AI_TELEMETRY_ENDPOINT", "https://example.com/x")
+        monkeypatch.setenv("HTTPS_PROXY", "http://attacker.invalid:8080")
+        collector = tel.TelemetryCollector()
+
+        client_inst = MagicMock()
+        client_inst.post.return_value = MagicMock(status_code=200)
+
+        with patch("godot_ai.telemetry.httpx.Client", return_value=client_inst) as ctor:
+            collector._send(_record())
+
+        assert ctor.call_args.kwargs.get("trust_env") is False
+
+        collector.shutdown()
+
     def test_client_is_reused_across_sends(self, monkeypatch, clean_env, isolated_data_dir) -> None:
         """``httpx.Client`` must be constructed at most once per collector
         — reusing the same instance is the whole point of caching it on

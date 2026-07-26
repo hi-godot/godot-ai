@@ -27,7 +27,9 @@ _RUNTIME_BOUNDARY_DOCS = [
     _REPO_ROOT / "AGENTS.md",
     _REPO_ROOT / "CLAUDE.md",
     _REPO_ROOT / "docs" / "plugin-architecture.md",
-    _REPO_ROOT / ".claude" / "skills" / "godot-ai" / "skill.md",
+    # Must be `SKILL.md`: skill discovery globs for that exact name, so a
+    # lowercase `skill.md` is silently never loaded.
+    _REPO_ROOT / ".claude" / "skills" / "godot-ai" / "SKILL.md",
 ]
 
 
@@ -58,6 +60,10 @@ def test_runtime_protocol_is_not_reintroduced_without_injection_seam():
 
     stale_docs = []
     for path in _RUNTIME_BOUNDARY_DOCS:
+        assert path.exists(), (
+            f"{path.relative_to(_REPO_ROOT)} is listed in _RUNTIME_BOUNDARY_DOCS but "
+            "does not exist — it was moved or renamed. Update the list here."
+        )
         text = path.read_text(encoding="utf-8")
         if "runtime/interface.py" in text or "`Runtime` protocol" in text:
             stale_docs.append(str(path.relative_to(_REPO_ROOT)))

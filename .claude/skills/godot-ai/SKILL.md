@@ -1,9 +1,6 @@
 ---
 name: godot-ai
 description: Build, test, and extend the Godot AI server and editor plugin
-globs:
-  - "**/godot-ai/**"
-  - "**/godot_ai/**"
 ---
 
 # Godot AI Development
