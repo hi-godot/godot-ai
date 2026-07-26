@@ -1272,3 +1272,61 @@ func test_lease_probe_skipped_when_no_managed_pid() -> void:
 
 	assert_eq(count, 0)
 	assert_eq(probes, 0, "no managed PID must mean no status probe at exit")
+
+
+func test_leases_ignored_when_the_managed_pid_cannot_be_proven_ours() -> void:
+	## #824 instance-binding: the lease count comes from whoever answers on the
+	## port, which is not proof that it is the process we are about to stop.
+	## Another backend holding the port must not talk this editor out of
+	## stopping its own server, so an unbranded PID falls back to stop_server
+	## (whose own #686 gate then declines to kill a PID it cannot verify).
+	var es := EditorInterface.get_editor_settings()
+	var saved := _save_keep_setting(es)
+	es.set_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT, false)
+	var host := _ManagerHostStub.new()
+	host.alive_pids = [65555] as Array[int]
+	## Deliberately NOT branded: a recycled PID, or a stranger's process.
+	host.branded_pids = [] as Array[int]
+	host.live_status = {"name": "godot-ai", "active_lease_count": 3}
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 65555
+
+	var count := manager.active_lease_count_at_exit()
+	var cleared := host.cleared_record_calls
+	var probes := host.probe_calls
+	_restore_keep_setting(es, saved)
+	host.free()
+
+	assert_eq(count, 0,
+		"leases must not be honored for a PID we cannot prove is our server")
+	assert_eq(probes, 0,
+		"the proof gate must short-circuit before paying for the status probe")
+	assert_eq(cleared, 0)
+
+
+func test_leases_honored_only_for_a_live_branded_managed_pid() -> void:
+	## The positive half of the same gate, so it cannot silently start
+	## returning 0 for everything.
+	var host := _ManagerHostStub.new()
+	host.alive_pids = [66666] as Array[int]
+	host.branded_pids = [66666] as Array[int]
+	host.live_status = {"name": "godot-ai", "active_lease_count": 2}
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 66666
+
+	var count := manager.active_lease_count_at_exit()
+	host.free()
+
+	assert_eq(count, 2, "a proven-ours backend's leases must be honored")
+
+
+func test_lease_count_gate_is_a_threshold_not_an_equality() -> void:
+	## Multiple bridges: teardown must detach while ANY lease is held, not only
+	## when exactly one is. Releasing one of several must keep the backend up.
+	for held in [1, 2, 7]:
+		assert_true(McpServerLifecycleManagerScript.active_lease_count(
+			{"name": "godot-ai", "active_lease_count": held}) > 0,
+			"%d held lease(s) must still count as occupied" % held)
+	assert_false(McpServerLifecycleManagerScript.active_lease_count(
+		{"name": "godot-ai", "active_lease_count": 0}) > 0,
+		"only the last release may return the backend to kill-on-exit")

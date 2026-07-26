@@ -193,3 +193,38 @@ def test_status_route_reports_active_attach_lease_count():
     ## ...and once the last bridge lets go, the editor's normal stop applies
     ## again on the next teardown.
     assert client.get("/godot-ai/status").json()["active_lease_count"] == 0
+
+
+def test_status_lease_count_tracks_multiple_bridges():
+    """#824: releasing one of several bridges must not free the backend."""
+    server = create_server(ws_port=9557)
+    app = server.http_app(transport="streamable-http")
+    client = TestClient(app, base_url="http://127.0.0.1")
+
+    instance_id = client.get("/godot-ai/status").json()["instance_id"]
+
+    def count() -> int:
+        return client.get("/godot-ai/status").json()["active_lease_count"]
+
+    first = client.post(
+        "/godot-ai/lease/register", json={"instance_id": instance_id}
+    ).json()["lease_id"]
+    second = client.post(
+        "/godot-ai/lease/register", json={"instance_id": instance_id}
+    ).json()["lease_id"]
+    assert count() == 2
+
+    ## One bridge exits; the other still holds the backend, so the editor's
+    ## teardown must still see a non-zero count and decline to kill.
+    client.post(
+        "/godot-ai/lease/release",
+        json={"instance_id": instance_id, "lease_id": first},
+    )
+    assert count() == 1
+
+    ## Only the last release returns it to the reapable state.
+    client.post(
+        "/godot-ai/lease/release",
+        json={"instance_id": instance_id, "lease_id": second},
+    )
+    assert count() == 0

@@ -1408,7 +1408,23 @@ func teardown_for_editor_exit() -> void:
 ## Bounded by the status probe's own timeout (SERVER_STATUS_PROBE_TIMEOUT_MS),
 ## which is what keeps editor exit from hanging on a wedged HTTP server.
 func active_lease_count_at_exit() -> int:
-	if int(_server_pid) <= 0:
+	var pid := int(_server_pid)
+	if pid <= 0:
+		return 0
+	## Only a process we can still prove is our godot-ai server earns the
+	## benefit of the doubt. The lease count comes from whoever answers on the
+	## port, which is not by itself proof that it IS the process we are about
+	## to stop — another editor's backend, or an attach-owned one, could hold
+	## the port after ours died. Requiring the same alive+branded proof
+	## `stop_server` uses before its kill closes that gap: without it, a
+	## stranger's leases could talk this editor out of stopping its own server.
+	##
+	## Failing this check is harmless either way. A dead PID has nothing to
+	## kill, and a recycled-but-unbranded PID is rejected by stop_server's own
+	## gate (#686) — both land on the historical path.
+	if not _host._pid_alive_for_proof(pid):
+		return 0
+	if not _host._pid_cmdline_is_godot_ai_for_proof(pid):
 		return 0
 	return active_lease_count(
 		_host._probe_live_server_status_for_port(ClientConfigurator.http_port())
