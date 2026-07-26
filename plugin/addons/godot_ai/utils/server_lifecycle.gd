@@ -1365,8 +1365,69 @@ func recover_strong_port_occupant(port: int, wait_s: float, pre_kill_live: Dicti
 func teardown_for_editor_exit() -> void:
 	if _server_keep_alive:
 		detach_server()
-	else:
-		stop_server()
+		return
+	## #824: a backend we spawned may be keeping one or more MCP clients alive
+	## through their `godot-ai attach` bridges. Killing it because *this* editor
+	## is closing takes the server out from under them: an in-flight call can
+	## become TRANSPORT_OUTCOME_UNKNOWN, and every bridge has to establish a new
+	## backend before the next editor can reconnect. A live lease means the
+	## backend has consumers beyond this editor, so hand it over instead.
+	var leased := active_lease_count_at_exit()
+	if leased > 0:
+		## Give up kill authority along with the process: dropping the managed
+		## record means the next editor adopts it through the external branch
+		## rather than as a managed server it may kill. The server's own
+		## pid-file is deliberately left in place — it is the backend's
+		## publication, not our claim on it, and adoption reads it.
+		##
+		## The Python side remains the reaper of record: a plugin-spawned
+		## backend keeps its idle backstop armed (only keep_server_on_exit
+		## disarms it) and that backstop is lease-aware, so this defers the
+		## stop to "no editors AND no leases AND grace elapsed" rather than
+		## leaking the process.
+		_host._clear_managed_server_record()
+		detach_server(
+			"detaching server: %d attach lease(s) still held, leaving it to the "
+			% leased
+			+ "server's own idle reaper"
+		)
+		return
+	stop_server()
+
+
+## Active attach-bridge leases on the backend this editor manages, or 0 when
+## there is nothing to consult (#824).
+##
+## Returns 0 — preserving the historical kill-on-exit behavior — for every
+## uncertain case: no managed PID, a probe that fails or times out, a server
+## that does not identify as godot-ai, or one too old to publish the field.
+## That direction is deliberate. A false 0 costs what today already costs
+## (the backend is stopped and bridges reconnect); a false positive would
+## leave a process running on a guess.
+##
+## Bounded by the status probe's own timeout (SERVER_STATUS_PROBE_TIMEOUT_MS),
+## which is what keeps editor exit from hanging on a wedged HTTP server.
+func active_lease_count_at_exit() -> int:
+	if int(_server_pid) <= 0:
+		return 0
+	return active_lease_count(
+		_host._probe_live_server_status_for_port(ClientConfigurator.http_port())
+	)
+
+
+## Read the advisory lease count out of a `/godot-ai/status` payload.
+##
+## Gated on the payload identifying as godot-ai, so an unrelated process
+## answering on the port cannot talk this editor out of a clean stop. A
+## missing field means an older backend that predates #824; it reads as 0,
+## which keeps that pairing on today's behavior.
+static func active_lease_count(live: Dictionary) -> int:
+	if not _live_status_identifies_godot_ai(live):
+		return 0
+	var raw: Variant = live.get("active_lease_count")
+	if raw == null:
+		return 0
+	return maxi(0, int(raw))
 
 
 ## keep_server_on_exit (#800): editor teardown that leaves the server
@@ -1376,14 +1437,20 @@ func teardown_for_editor_exit() -> void:
 ## session's start_server walk adopts the survivor through the existing
 ## record-matches branch (#758/#774). Explicit stops (dock Restart,
 ## update reload) still route through stop_server and kill as before.
-func detach_server() -> void:
+## `log_reason` names why the server is being left alive; the default is the
+## keep_server_on_exit wording this function was written for. #824 reuses the
+## same bookkeeping for the active-lease handover, and a shared log line would
+## have reported the wrong cause for it.
+func detach_server(
+	log_reason: String = "keep_server_on_exit: leaving server running"
+) -> void:
 	_invalidate_async_startup()
 	_host._stop_server_watch()
 	var detached_pid := int(_server_pid)
 	_server_pid = -1
 	transition_state(McpServerStateScript.STOPPED)
 	if detached_pid > 0:
-		print("MCP | keep_server_on_exit: leaving server running (PID %d)" % detached_pid)
+		print("MCP | %s (PID %d)" % [log_reason, detached_pid])
 
 
 func stop_server() -> void:

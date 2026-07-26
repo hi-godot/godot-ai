@@ -1177,3 +1177,98 @@ func test_first_death_stamp_takes_the_first_tick_that_saw_the_death() -> void:
 	## per spawn, so this is the fresh-spawn entry point.
 	assert_eq(McpServerLifecycleManagerScript.first_death_stamp(0, 5146), 5146,
 		"an unstamped watch must record the tick that first saw the spawn dead")
+
+
+# ----- #824: teardown honors active attach leases -----
+
+func test_teardown_detaches_when_attach_leases_are_active() -> void:
+	## The startup order the issue describes: editor spawns the backend, an MCP
+	## client's attach bridge adopts it and registers a lease, then the editor
+	## closes normally. Killing here would take the server out from under a live
+	## client, so the backend survives and the plugin drops its managed claim.
+	var es := EditorInterface.get_editor_settings()
+	var saved := _save_keep_setting(es)
+	es.set_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT, false)
+	var host := _ManagerHostStub.new()
+	host.listener_pids = [63333] as Array[int]
+	host.alive_pids = [63333] as Array[int]
+	host.branded_pids = [63333] as Array[int]
+	host.live_status = {"name": "godot-ai", "active_lease_count": 1}
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 63333
+
+	manager.teardown_for_editor_exit()
+	var killed := host.killed_targets.duplicate()
+	var cleared := host.cleared_record_calls
+	var pid_after := int(manager._server_pid)
+	_restore_keep_setting(es, saved)
+	host.free()
+
+	assert_true(killed.is_empty(),
+		"a backend with a live attach lease must survive normal editor exit")
+	assert_eq(cleared, 1,
+		"the plugin must drop its managed claim so the next editor adopts externally")
+	assert_eq(pid_after, -1, "the detached PID must not stay tracked as killable")
+
+
+func test_teardown_kills_when_no_leases_are_held() -> void:
+	## The no-lease case is the overwhelmingly common one and must not change:
+	## a backend nobody else is using still dies with the editor that spawned it.
+	var es := EditorInterface.get_editor_settings()
+	var saved := _save_keep_setting(es)
+	es.set_setting(McpClientConfigurator.SETTING_KEEP_SERVER_ON_EXIT, false)
+	var host := _ManagerHostStub.new()
+	host.listener_pids = [64444] as Array[int]
+	host.alive_pids = [64444] as Array[int]
+	host.branded_pids = [64444] as Array[int]
+	host.live_status = {"name": "godot-ai", "active_lease_count": 0}
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 64444
+
+	manager.teardown_for_editor_exit()
+	var killed := host.killed_targets.duplicate()
+	_restore_keep_setting(es, saved)
+	host.free()
+
+	assert_true(killed.has(64444),
+		"a backend with no leases must still be stopped by the editor that spawned it")
+
+
+func test_lease_count_reads_zero_for_a_backend_too_old_to_publish_it() -> void:
+	## Staggered upgrade: plugin knows about leases, backend does not. Absent
+	## field must read as "no information", which keeps that pairing on the
+	## historical kill-on-exit behavior rather than stranding a process.
+	assert_eq(McpServerLifecycleManagerScript.active_lease_count(
+		{"name": "godot-ai", "server_version": "3.0.7"}), 0)
+
+
+func test_lease_count_ignores_a_process_that_is_not_godot_ai() -> void:
+	## An unrelated process answering on the port must not be able to talk this
+	## editor out of a clean stop by claiming leases.
+	assert_eq(McpServerLifecycleManagerScript.active_lease_count(
+		{"name": "something-else", "active_lease_count": 9}), 0)
+	assert_eq(McpServerLifecycleManagerScript.active_lease_count({}), 0,
+		"a failed or timed-out probe returns {} and must read as no leases")
+
+
+func test_lease_count_clamps_a_nonsense_value() -> void:
+	assert_eq(McpServerLifecycleManagerScript.active_lease_count(
+		{"name": "godot-ai", "active_lease_count": -3}), 0)
+	assert_eq(McpServerLifecycleManagerScript.active_lease_count(
+		{"name": "godot-ai", "active_lease_count": 4}), 4)
+
+
+func test_lease_probe_skipped_when_no_managed_pid() -> void:
+	## Nothing to hand over and nothing to kill: teardown must not pay for an
+	## HTTP probe on the way out.
+	var host := _ManagerHostStub.new()
+	host.live_status = {"name": "godot-ai", "active_lease_count": 5}
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 0
+
+	var count := manager.active_lease_count_at_exit()
+	var probes := host.probe_calls
+	host.free()
+
+	assert_eq(count, 0)
+	assert_eq(probes, 0, "no managed PID must mean no status probe at exit")

@@ -599,6 +599,16 @@ def create_server(
                 "owner_type": owner_type_from_env(),
                 "attach_protocol_version": ATTACH_PROTOCOL_VERSION,
                 "tool_catalog_hash": catalog_digest,
+                ## #824: how many attach bridges currently hold this instance
+                ## alive. The plugin reads it at editor teardown to decide
+                ## whether to detach a backend it spawned instead of killing
+                ## it out from under a live MCP client. Like every other field
+                ## here it is ADVISORY: it may justify declining to kill, and
+                ## must never be read as permission to kill. Instance-bound by
+                ## construction — the count ships in the same response as the
+                ## ``instance_id`` it belongs to, so it cannot be stale
+                ## relative to that instance.
+                "active_lease_count": leases.active_count(),
             }
         )
 
