@@ -1,0 +1,52 @@
+## TEMPORARY — one-shot diagnostic for #797 / PR #837.
+##
+## Answers one question that cannot be answered off Windows: does a uv-created
+## venv's `python.exe` hand back a PID that dies while the real interpreter
+## keeps running? That premise is what the handoff fix rests on.
+##
+## Delete this file together with script/windows-trampoline-probe.py once the
+## result is recorded on the PR. It is not a regression test: the bug's symptom
+## is a race against the plugin's 5s spawn grace, so an end-to-end assertion
+## would be flaky and would pass without the fix most of the time.
+name: Windows trampoline probe (#797, temporary)
+
+## Path-filtered so this only ever runs on the PR that carries the probe,
+## never on unrelated work.
+on:
+  pull_request:
+    paths:
+      - "script/windows-trampoline-probe.py"
+      - ".github/workflows/windows-trampoline-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Trampoline probe / Windows
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      ## uv itself comes from pip rather than a third-party action so this
+      ## temporary file adds no new pinned dependency to review.
+      - name: Create a uv venv at the repo root
+        run: |
+          pip install uv
+          uv venv .venv
+          uv pip install --python .venv\Scripts\python.exe -e .
+
+      - name: Report what uv produced
+        run: |
+          Write-Host "python.exe size (a trampoline is a small shim, a copy is not):"
+          Get-Item .venv\Scripts\python.exe | Select-Object Name,Length | Format-List
+          .venv\Scripts\python.exe -c "import sys; print('sys.executable:', sys.executable)"
+
+      - name: Probe the spawn handoff
+        run: python script/windows-trampoline-probe.py .venv\Scripts\python.exe ${{ runner.temp }}\godot_ai_probe.pid
