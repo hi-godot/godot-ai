@@ -1444,9 +1444,25 @@ func test_status_projection_leaves_an_older_backends_field_absent() -> void:
 
 func test_status_projection_drops_a_non_numeric_lease_count() -> void:
 	## A malformed value must not read as occupancy and keep a server alive.
-	for junk in ["3", [], {}, null]:
+	## 1.5 is the interesting one: Godot parses every JSON number as a float, so
+	## a naive int() cast would truncate it to 1 and manufacture a held lease
+	## out of a malformed payload. Infinities and NaN are junk for the same
+	## reason. Whole floats (2.0) are the NORMAL case and must survive.
+	for junk in ["3", [], {}, null, 1.5, 0.5, -2.5, INF, -INF, NAN]:
 		var projected := GodotAiPlugin._project_status_payload({
 			"name": "godot-ai", "active_lease_count": junk,
 		})
 		assert_eq(McpServerLifecycleManagerScript.active_lease_count(projected), 0,
 			"non-numeric lease count must not read as leases held")
+
+
+func test_status_projection_keeps_whole_number_lease_counts() -> void:
+	## The other side of the fractional guard: JSON numbers arrive as floats, so
+	## rejecting floats outright would drop every real count.
+	for whole in [0.0, 1.0, 2.0, 9.0]:
+		var projected := GodotAiPlugin._project_status_payload({
+			"name": "godot-ai", "active_lease_count": whole,
+		})
+		assert_true(projected.has("active_lease_count"),
+			"a whole-number count (%s) is the normal wire shape and must project" % whole)
+		assert_eq(McpServerLifecycleManagerScript.active_lease_count(projected), int(whole))

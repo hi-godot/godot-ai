@@ -919,11 +919,16 @@ static func _project_status_payload(parsed: Dictionary) -> Dictionary:
 	## `ServerLifecycleManager.active_lease_count` keeps distinguishing "backend
 	## too old to publish this" from "backend reports zero leases" — both stop
 	## the server, but only one of them is a compatibility statement.
-	## Non-numeric JSON is dropped for the same reason it is clamped
-	## downstream: a malformed value must not read as occupancy.
+	## Anything that is not a finite whole number is dropped, for the same
+	## reason the value is clamped downstream: a malformed count must not read
+	## as occupancy and keep a server alive. Godot parses every JSON number as
+	## a float, so the whole-number test is what distinguishes a real count
+	## from junk — truncating 1.5 to 1 would manufacture a held lease.
 	var raw: Variant = parsed.get("active_lease_count")
-	if raw is float or raw is int:
-		projected["active_lease_count"] = int(raw)
+	if raw is int or raw is float:
+		var numeric := float(raw)
+		if is_finite(numeric) and numeric == floor(numeric):
+			projected["active_lease_count"] = int(numeric)
 	return projected
 
 
