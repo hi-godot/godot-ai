@@ -505,6 +505,19 @@ def _sync_error_watermark_for_session(session: Session, value: dict[str, int]) -
     current component value is counted when above zero. The debugger and game
     error components overlap (both observe the running game's script errors),
     so their deltas are combined with max(), not summed.
+
+    **Adding a component is a cross-version contract change.** Every integer
+    key that isn't explicitly popped below lands in ``sum(deltas.values())``,
+    so a new counter is folded into the error total by servers that have never
+    heard of it — a plugin stamping one against an older server inflates the
+    "N new errors" doorbell rather than being ignored. There is no allow-list
+    to gate that: ``_PER_RUN_WATERMARK_KEYS`` and ``_WARN_WATERMARK_KEYS`` only
+    route keys they recognize, and everything else falls through to the sum.
+    Carry genuinely new signal (paths, classifications, anything that isn't a
+    count of new errors) in a separate optional envelope field instead, where a
+    server that doesn't know it drops it: non-int values already fail
+    ``_normalized_watermark_int`` and are skipped, so that shape degrades
+    safely on both sides. See #782 for the case that established this.
     """
 
     updates: dict[str, int] = {}
