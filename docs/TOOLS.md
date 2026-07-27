@@ -208,7 +208,7 @@ Calls take the form:
 | `camera_manage` | `create`, `configure`, `set_limits_2d`, `set_damping_2d`, `follow_2d`, `get`, `list`, `apply_preset` |
 | `signal_manage` | `list`, `connect`, `disconnect` |
 | `input_map_manage` | `list`, `add_action`, `ensure_action`, `remove_action`, `bind_event`, `ensure_binding` |
-| `game_manage` | `get_scene_tree`, `get_node_info`, `get_ui_elements`, `input_key`, `input_mouse`, `input_gamepad`, `input_action`, `input_state` |
+| `game_manage` | `get_scene_tree`, `get_node_info`, `get_ui_elements`, `input_key`, `input_mouse`, `input_gamepad`, `input_action`, `input_sequence`, `input_state` |
 | `autoload_manage` | `list`, `add`, `remove` |
 | `filesystem_manage` | `read_text`, `write_text`, `reimport`, `scan`, `search` |
 | `theme_manage` | `create`, `set_color`, `set_constant`, `set_font_size`, `set_stylebox_flat`, `apply` |
@@ -237,6 +237,47 @@ thousands of tokens it rarely wanted. Pass `sections` to widen it
 When paginating, request one section at a time so `offset`/`limit` apply only
 to the list you are paging. The `godot://class/{class_name}` resource form
 cannot take `sections`, so it always returns the full set.
+
+`game_manage(op="input_sequence")` drives a **frame-timed** action timeline in
+the running game in a single call — the frame-accurate, multi-step form of
+`input_action`. Reach for it whenever timing matters (jump arcs, combos,
+"walk into the trigger then assert"): expressing the same thing as separate
+`input_action` calls fails because each call lands on whichever frame its
+network round-trip happens to complete on, so the timing drifts and the run
+isn't reproducible. The game applies each step's action on its scheduled frame,
+awaits `settle_frames` more, then replies once.
+
+Each step is `{at_frame, action, pressed=True, strength=1.0}`. Steps must be
+ordered by non-decreasing `at_frame`; two steps sharing a frame is a valid
+combo. Frames (not milliseconds) are the timing basis — that's what reproduces
+identically across runs. Action-based input is focus-independent, so a sequence
+works even against a backgrounded game window. A sequence is bounded (step and
+frame caps) and cannot be nested inside `batch_execute` (its reply is deferred
+and a batch has no completion channel for it).
+
+Worked example — a jump arc (hold jump 6 frames, run right for 24, then let
+1 frame settle before reading the landing):
+
+```json
+{
+  "op": "input_sequence",
+  "params": {
+    "steps": [
+      {"at_frame": 0,  "action": "jump",       "pressed": true},
+      {"at_frame": 6,  "action": "jump",       "pressed": false},
+      {"at_frame": 6,  "action": "move_right", "pressed": true},
+      {"at_frame": 30, "action": "move_right", "pressed": false}
+    ],
+    "settle_frames": 1
+  }
+}
+```
+
+The reply reports `steps_applied`, `frames_elapsed`, and
+`actions_pressed_at_end` — the last so you know which actions are still held
+(a press with no matching release stays down) and must be released before the
+next check. Follow with `get_node_info` / `get_scene_tree` to assert the
+resulting world state.
 
 Every rolled-up tool also accepts an optional top-level `session_id` for
 per-call multi-editor routing (sibling of `op` and `params`, *not* nested

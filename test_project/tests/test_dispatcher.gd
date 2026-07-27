@@ -231,6 +231,32 @@ func test_run_project_has_deferred_timeout_budget() -> void:
 	)
 
 
+func test_deferred_timeout_ms_override_from_sentinel() -> void:
+	## A handler that attaches _deferred_timeout_ms claims a per-request budget
+	## (game_command's input_sequence needs ~30s where the command's table
+	## entry is 15s). The registered timeout must reflect the override.
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	d.register("wide", func(_p): return {"_deferred": true, "_deferred_timeout_ms": 30000})
+	d.enqueue({"request_id": "req-wide", "command": "wide", "params": {}})
+	d.tick(100.0)
+	assert_eq(d.pending_deferred_count(), 1)
+	assert_eq(int(d._pending_deferred["req-wide"].timeout_ms), 30000,
+		"the sentinel's _deferred_timeout_ms must win over the per-command table")
+
+
+func test_deferred_timeout_ms_falls_back_without_override() -> void:
+	## No override → the per-command table (or default) still applies.
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	d.register("plain", func(_p): return McpDispatcher.DEFERRED_RESPONSE)
+	d.enqueue({"request_id": "req-plain", "command": "plain", "params": {}})
+	d.tick(100.0)
+	assert_eq(int(d._pending_deferred["req-plain"].timeout_ms),
+		McpDispatcher.DEFAULT_DEFERRED_TIMEOUT_MS,
+		"absent override falls back to the default budget")
+
+
 # ----- deferred response path -----
 
 func test_tick_suppresses_deferred_response_and_threads_request_id() -> void:

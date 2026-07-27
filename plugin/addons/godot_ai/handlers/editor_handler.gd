@@ -68,6 +68,13 @@ func get_selection(_params: Dictionary) -> Dictionary:
 
 const VALID_LOG_SOURCES := ["plugin", "game", "editor", "all"]
 
+## Deferred budget for the `input_sequence` game op. Unlike the one-shot game
+## ops (covered by game_command's 15s entry), it drives the game forward one
+## frame per step, so the reply legitimately takes seconds. The game side caps
+## the sequence length (GameHelper.MAX_SEQUENCE_FRAMES) well inside this; the
+## budget is the backstop for a frozen game loop, mirroring take_screenshot.
+const INPUT_SEQUENCE_TIMEOUT_SEC := 30.0
+
 
 func get_logs(params: Dictionary) -> Dictionary:
 	## Coerce defensively — MCP clients can send JSON numbers as floats or
@@ -1018,5 +1025,21 @@ func game_command(params: Dictionary) -> Dictionary:
 			"Missing request_id — cannot correlate deferred response")
 
 	var command_params: Dictionary = params.get("params", {})
+
+	## input_sequence steps the game forward frame-by-frame in one call, so it
+	## needs a far larger budget than the one-shot game ops that share the
+	## `game_command` deferred entry (15s). Widen both timers only for it: the
+	## debugger-side pending timer (below) and the dispatcher-side deferred
+	## budget (via the sentinel's `_deferred_timeout_ms`). Every other op keeps
+	## request_game_command's tight default.
+	if op == "input_sequence":
+		_debugger_plugin.request_game_command(
+			op, command_params, request_id, _connection, INPUT_SEQUENCE_TIMEOUT_SEC
+		)
+		return {
+			"_deferred": true,
+			"_deferred_timeout_ms": int(INPUT_SEQUENCE_TIMEOUT_SEC * 1000.0),
+		}
+
 	_debugger_plugin.request_game_command(op, command_params, request_id, _connection)
 	return McpDispatcher.DEFERRED_RESPONSE

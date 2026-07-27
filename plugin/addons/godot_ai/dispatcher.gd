@@ -225,7 +225,12 @@ func _dispatch(cmd: Dictionary) -> Dictionary:
 		result = ErrorCodes.make(ErrorCodes.UNKNOWN_COMMAND, "Unknown command: %s" % command)
 
 	if result.get("_deferred", false):
-		_register_deferred(request_id, command)
+		## A handler may attach `_deferred_timeout_ms` to its deferred sentinel
+		## to claim a per-request budget larger than its command's shared entry
+		## (e.g. game_command's `input_sequence`, which steps frames well past
+		## the 15s that suits one-shot game ops). 0/absent falls back to the
+		## per-command table.
+		_register_deferred(request_id, command, int(result.get("_deferred_timeout_ms", 0)))
 		if mcp_logging:
 			_log_buffer.log("[defer] %s (request %s)" % [command, request_id])
 		return result
@@ -359,13 +364,21 @@ func _materialize_lazy_command(command: String) -> Dictionary:
 	return {}
 
 
-func _register_deferred(request_id: String, command: String) -> void:
+func _register_deferred(request_id: String, command: String, timeout_override_ms: int = 0) -> void:
 	if request_id.is_empty():
 		return
+	## A positive per-request override wins over the per-command table so a
+	## single deferred call can claim more headroom without globally widening
+	## the command's budget (see _dispatch: input_sequence needs ~30s, but the
+	## other game_command ops must keep their tight 15s).
+	var timeout_ms: int = (
+		timeout_override_ms if timeout_override_ms > 0
+		else _deferred_timeout_ms_for_command(command)
+	)
 	_pending_deferred[request_id] = {
 		"command": command,
 		"started_ms": Time.get_ticks_msec(),
-		"timeout_ms": _deferred_timeout_ms_for_command(command),
+		"timeout_ms": timeout_ms,
 	}
 
 

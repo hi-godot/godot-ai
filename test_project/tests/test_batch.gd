@@ -111,6 +111,17 @@ func test_rejects_batch_execute_as_subcommand() -> void:
 	assert_is_error(result)
 
 
+func test_rejects_game_command_as_subcommand() -> void:
+	## game_command ops are deferred — their reply flows out-of-band and has no
+	## completion channel inside a batch (#814). Reject up front with a clear
+	## message rather than letting the stripped-_request_id path hang/half-run.
+	var result := _handler.batch_execute({
+		"commands": [{"command": "game_command", "params": {"op": "input_sequence"}}],
+	})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(result.error.message, "deferred")
+
+
 # ----- Success path -----
 
 func test_all_succeed_returns_results() -> void:

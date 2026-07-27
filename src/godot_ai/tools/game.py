@@ -35,6 +35,17 @@ Ops:
         Send a joypad button or axis event. control: "button" | "axis".
   - input_action(action, pressed=True, strength=1.0)
         Set a project action's pressed state directly in the running game.
+  - input_sequence(steps, settle_frames=0)
+        Apply a frame-timed action timeline in one call — the frame-accurate,
+        multi-step form of input_action. Each step is
+        {at_frame, action, pressed=True, strength=1.0}; the game applies each
+        step's action on its scheduled frame, awaits settle_frames more, then
+        replies once. Use this instead of separate input_action calls whenever
+        timing matters (jump arcs, combos, walk-into-trigger): per-call network
+        latency makes hitting a target frame impossible otherwise. Steps must
+        be ordered by non-decreasing at_frame; frames (not ms) are the timing
+        basis. Action-based input is focus-independent, so it works on a
+        backgrounded game window. Cannot run inside batch_execute.
   - input_state(actions=None)
         Read current action pressed states. Empty actions = all project actions."""
 
@@ -52,6 +63,7 @@ def register_game_tools(mcp: FastMCP) -> None:
             "input_mouse": game_handlers.game_input_mouse,
             "input_gamepad": game_handlers.game_input_gamepad,
             "input_action": game_handlers.game_input_action,
+            "input_sequence": game_handlers.game_input_sequence,
             "input_state": game_handlers.game_input_state,
         },
         read_resource_forms={
@@ -62,6 +74,7 @@ def register_game_tools(mcp: FastMCP) -> None:
             "input_mouse": None,
             "input_gamepad": None,
             "input_action": None,
+            "input_sequence": None,
             "input_state": None,
         },
     )
