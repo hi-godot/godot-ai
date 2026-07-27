@@ -456,22 +456,30 @@ func _clear_seq_action() -> void:
 		InputMap.erase_action(_SEQ_ACTION)
 
 
-func test_run_input_sequence_applies_actions_and_replies() -> void:
+func test_run_input_sequence_applies_all_steps_and_replies() -> void:
+	## Multi-frame progression (steps landing on distinct future frames) is
+	## covered by the isolated `--script` probe: the editor test runner calls
+	## test methods synchronously (test_runner.gd::_run_one_test) and never
+	## pumps `process_frame`, so a sequence that awaits real frame advances
+	## records 0 assertions. This is the same reason take_screenshot's frame
+	## loop is only tested via its pure `_should_capture_stale_sync` helper.
+	## Here: two steps on one frame (a combo), settle 0 — end_frame is 0, so
+	## the runner never awaits, and we can still assert the applied count and
+	## reply shape synchronously.
 	_register_seq_action()
 	var helper: GameHelper = _helper
-	await helper._run_input_sequence("req-seq-1", {
+	await helper._run_input_sequence("req-seq-combo", {
 		"steps": [
 			{"at_frame": 0, "action": _SEQ_ACTION, "pressed": true},
-			{"at_frame": 2, "action": _SEQ_ACTION, "pressed": false},
+			{"at_frame": 0, "action": _SEQ_ACTION, "pressed": false},
 		],
-		"settle_frames": 1,
 	})
 	var reply: Dictionary = helper._last_game_command_reply
 	assert_eq(reply.kind, "response", "a valid sequence replies with a response")
 	var result: Dictionary = reply.result
 	assert_eq(result.completed, true)
-	assert_eq(result.steps_applied, 2)
-	assert_eq(result.frames_elapsed, 3, "2 (last step) + 1 settle")
+	assert_eq(result.steps_applied, 2, "both same-frame steps applied")
+	assert_eq(result.frames_elapsed, 0)
 	assert_false(Input.is_action_pressed(_SEQ_ACTION),
 		"the release step must have run, leaving the action up")
 	assert_eq(result.actions_pressed_at_end, [], "nothing left held")
