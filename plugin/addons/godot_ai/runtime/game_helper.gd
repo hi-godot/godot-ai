@@ -717,6 +717,15 @@ const MAX_SEQUENCE_FRAMES := 600
 ## harness). Mirrors _last_screenshot_reply / _last_eval_reply.
 var _last_game_command_reply: Dictionary = {}
 
+## Testing seam: overrides the per-frame wait in _run_input_sequence. Left
+## invalid in production (real `process_frame` awaits). A test sets it to a
+## synchronously-returning Callable so the multi-frame loop runs to completion
+## in one call — the editor test runner invokes tests synchronously and never
+## pumps `process_frame`, so a real frame-await would suspend and record zero
+## assertions. Timing itself (one frame per step) is engine-guaranteed; this
+## seam covers the scheduling/application/reply logic layered on top.
+var _frame_waiter: Callable = Callable()
+
 
 ## Validate + normalize an input_sequence request. Pure (no engine state), so
 ## the ordering/cap/shape rules are unit-testable without a running game.
@@ -731,7 +740,17 @@ func _plan_input_sequence(params: Dictionary) -> Dictionary:
 	if steps_arr.size() > MAX_SEQUENCE_STEPS:
 		return {"error": "steps exceeds cap of %d (got %d)" % [MAX_SEQUENCE_STEPS, steps_arr.size()]}
 
-	var settle_frames := int(params.get("settle_frames", 0))
+	## Validate field *kinds* rather than coercing them: the server already
+	## rejects bad shapes, but this planner is also the backstop for a
+	## malformed direct debugger message, so it must not silently turn
+	## pressed="false" into true or at_frame="oops" into 0. _is_number accepts
+	## int or float (JSON round-trips whole numbers as either) but not bool or
+	## string, so this stays consistent with the server without tripping on
+	## JSON's number typing.
+	var settle_raw: Variant = params.get("settle_frames", 0)
+	if not _is_number(settle_raw):
+		return {"error": "settle_frames must be a number"}
+	var settle_frames := int(settle_raw)
 	if settle_frames < 0:
 		return {"error": "settle_frames must be >= 0"}
 
@@ -742,20 +761,29 @@ func _plan_input_sequence(params: Dictionary) -> Dictionary:
 		if not (raw is Dictionary):
 			return {"error": "steps[%d] must be an object" % i}
 		var step: Dictionary = raw
-		var action := str(step.get("action", ""))
-		if action.is_empty():
+		if not (step.get("action", "") is String) or str(step.get("action", "")).is_empty():
 			return {"error": "steps[%d].action is required" % i}
-		var at_frame := int(step.get("at_frame", 0))
+		var action: String = step["action"]
+		var at_frame_raw: Variant = step.get("at_frame", 0)
+		if not _is_number(at_frame_raw):
+			return {"error": "steps[%d].at_frame must be a number" % i}
+		var at_frame := int(at_frame_raw)
 		if at_frame < 0:
 			return {"error": "steps[%d].at_frame must be >= 0" % i}
 		if at_frame < prev_frame:
 			return {"error": "steps must be ordered by at_frame (steps[%d]=%d < previous %d)" % [i, at_frame, prev_frame]}
 		prev_frame = at_frame
+		var pressed_raw: Variant = step.get("pressed", true)
+		if not (pressed_raw is bool):
+			return {"error": "steps[%d].pressed must be a boolean" % i}
+		var strength_raw: Variant = step.get("strength", 1.0)
+		if not _is_number(strength_raw):
+			return {"error": "steps[%d].strength must be a number" % i}
 		normalized.append({
 			"at_frame": at_frame,
 			"action": action,
-			"pressed": bool(step.get("pressed", true)),
-			"strength": clampf(float(step.get("strength", 1.0)), 0.0, 1.0),
+			"pressed": pressed_raw,
+			"strength": clampf(float(strength_raw), 0.0, 1.0),
 		})
 
 	var end_frame: int = int(normalized[-1]["at_frame"]) + settle_frames
@@ -799,7 +827,10 @@ func _run_input_sequence(request_id: String, params: Dictionary) -> void:
 			applied.append({"at_frame": f, "action": step["action"], "pressed": step["pressed"]})
 			step_i += 1
 		if f < end_frame:
-			await tree.process_frame
+			if _frame_waiter.is_valid():
+				await _frame_waiter.call()
+			else:
+				await tree.process_frame
 
 	_reply_input_sequence_ok(request_id, {
 		"completed": true,
