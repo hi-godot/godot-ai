@@ -273,10 +273,10 @@ Worked example — a jump arc (hold jump 6 frames, run right for 24, then let
 }
 ```
 
-The reply reports `steps_applied`, `frames_elapsed`, and
-`actions_pressed_at_end` — the last so you know which actions are still held
-(a press with no matching release stays down) and must be released before the
-next check. Follow with `get_node_info` / `get_scene_tree` to assert the
+The reply reports `completed`, `steps_applied`, `frames_elapsed`, an `applied`
+array (each step's `at_frame`/`action`/`pressed`), and `actions_pressed_at_end`
+— the last so you know which actions are still held (a press with no matching
+release stays down) and must be released before the next check. Follow with `get_node_info` / `get_scene_tree` to assert the
 resulting world state.
 
 Every rolled-up tool also accepts an optional top-level `session_id` for

@@ -72,6 +72,10 @@ func suite_teardown() -> void:
 
 
 func setup() -> void:
+	## Reset input_sequence test state here (not just at each test's end) so a
+	## mid-test assertion failure can't leak a registered/pressed _SEQ_ACTION
+	## into a later test.
+	_clear_seq_action()
 	if _root == null:
 		return
 	for child in _root.get_children():
@@ -483,7 +487,7 @@ func test_run_input_sequence_applies_all_steps_and_replies() -> void:
 	assert_false(Input.is_action_pressed(_SEQ_ACTION),
 		"the release step must have run, leaving the action up")
 	assert_eq(result.actions_pressed_at_end, [], "nothing left held")
-	_clear_seq_action()
+	# cleanup is fail-safe in setup(), so no per-test _clear_seq_action() here
 
 
 func test_run_input_sequence_reports_actions_left_pressed() -> void:
@@ -496,7 +500,6 @@ func test_run_input_sequence_reports_actions_left_pressed() -> void:
 	var result: Dictionary = helper._last_game_command_reply.result
 	assert_eq(result.actions_pressed_at_end, [_SEQ_ACTION])
 	assert_true(Input.is_action_pressed(_SEQ_ACTION))
-	_clear_seq_action()
 
 
 func test_run_input_sequence_unknown_action_fails_fast() -> void:

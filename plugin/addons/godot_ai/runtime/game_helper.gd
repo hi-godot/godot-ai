@@ -701,6 +701,14 @@ func _game_input_state(params: Dictionary) -> Dictionary:
 ## side re-checks them so a malformed direct message can't park the coroutine
 ## on an unbounded await; the server rejects the same cases up front with a
 ## clearer error.
+##
+## The frame cap bounds the sequence in *frames*, which is a wall-clock time
+## only at a given FPS: 600 frames is ~10s at 60fps but longer under load or on
+## a throttled runner. It is not sized to the ~30s deferred budget
+## (editor_handler.INPUT_SEQUENCE_TIMEOUT_SEC) — the two are independent
+## safeguards. If a genuinely slow run exceeds the budget, the dispatcher
+## returns a clean DEFERRED_TIMEOUT rather than hanging, so the cap can stay a
+## simple frame count.
 const MAX_SEQUENCE_STEPS := 256
 const MAX_SEQUENCE_FRAMES := 600
 

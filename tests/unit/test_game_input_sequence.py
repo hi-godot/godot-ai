@@ -105,6 +105,11 @@ def test_validate_rejects_out_of_order():
         _validate_input_sequence(raw, 0)
 
 
+def test_validate_rejects_non_dict_step():
+    with pytest.raises(GodotCommandError, match="must be an object"):
+        _validate_input_sequence(["not a dict"], 0)
+
+
 def test_validate_rejects_missing_action():
     with pytest.raises(GodotCommandError, match="action"):
         _validate_input_sequence([{"at_frame": 0, "action": ""}], 0)
