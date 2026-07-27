@@ -161,7 +161,7 @@ def _validate_input_sequence(
         raise _invalid_params("steps must be a non-empty list")
     if len(steps) > MAX_SEQUENCE_STEPS:
         raise _invalid_params(f"steps exceeds the {MAX_SEQUENCE_STEPS}-step cap (got {len(steps)})")
-    if not isinstance(settle_frames, int) or settle_frames < 0:
+    if not isinstance(settle_frames, int) or isinstance(settle_frames, bool) or settle_frames < 0:
         raise _invalid_params("settle_frames must be an integer >= 0")
 
     normalized: list[dict[str, Any]] = []
@@ -180,12 +180,25 @@ def _validate_input_sequence(
                 f"steps must be ordered by at_frame (steps[{i}]={at_frame} < previous {prev_frame})"
             )
         prev_frame = at_frame
+
+        ## Validate rather than coerce: bool(step["pressed"]) would turn the
+        ## string "false" into True, and float(step["strength"]) on a bad
+        ## value would escape as an internal error instead of INVALID_PARAMS.
+        pressed = step.get("pressed", True)
+        if not isinstance(pressed, bool):
+            raise _invalid_params(f"steps[{i}].pressed must be a boolean")
+        strength = step.get("strength", 1.0)
+        if isinstance(strength, bool) or not isinstance(strength, (int, float)):
+            raise _invalid_params(f"steps[{i}].strength must be a number")
+        ## Clamp to [0, 1] to match the plugin's input_action semantics.
+        strength = max(0.0, min(1.0, float(strength)))
+
         normalized.append(
             {
                 "at_frame": at_frame,
                 "action": action,
-                "pressed": bool(step.get("pressed", True)),
-                "strength": float(step.get("strength", 1.0)),
+                "pressed": pressed,
+                "strength": strength,
             }
         )
 

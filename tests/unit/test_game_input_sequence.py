@@ -28,7 +28,7 @@ class _StubClient:
         params: dict | None = None,
         session_id: str | None = None,
         timeout: float = 5.0,
-        surface_error_hints: bool = True,
+        hint_policy=None,
     ) -> dict:
         self.calls.append({"command": command, "params": params, "timeout": timeout})
         return self._result
@@ -64,6 +64,18 @@ def test_validate_allows_equal_frames():
 
 def test_validate_span_at_cap_is_ok():
     _validate_input_sequence([{"at_frame": MAX_SEQUENCE_FRAMES, "action": "a"}], 0)
+
+
+def test_validate_clamps_strength():
+    steps = _validate_input_sequence(
+        [
+            {"at_frame": 0, "action": "a", "strength": 5.0},
+            {"at_frame": 0, "action": "b", "strength": -1.0},
+        ],
+        0,
+    )
+    assert steps[0]["strength"] == 1.0
+    assert steps[1]["strength"] == 0.0
 
 
 # ----- _validate_input_sequence: rejects -----
@@ -113,6 +125,28 @@ def test_validate_rejects_bool_at_frame():
     # bool is an int subclass in Python — must not sneak through as at_frame
     with pytest.raises(GodotCommandError, match="at_frame"):
         _validate_input_sequence([{"at_frame": True, "action": "a"}], 0)
+
+
+def test_validate_rejects_bool_settle_frames():
+    with pytest.raises(GodotCommandError, match="settle_frames"):
+        _validate_input_sequence([{"at_frame": 0, "action": "a"}], True)
+
+
+def test_validate_rejects_non_bool_pressed():
+    # "false" must not silently coerce to True
+    with pytest.raises(GodotCommandError, match="pressed"):
+        _validate_input_sequence([{"at_frame": 0, "action": "a", "pressed": "false"}], 0)
+
+
+def test_validate_rejects_non_numeric_strength():
+    # a bad strength must be a clean INVALID_PARAMS, not an internal error
+    with pytest.raises(GodotCommandError, match="strength"):
+        _validate_input_sequence([{"at_frame": 0, "action": "a", "strength": "hard"}], 0)
+
+
+def test_validate_rejects_bool_strength():
+    with pytest.raises(GodotCommandError, match="strength"):
+        _validate_input_sequence([{"at_frame": 0, "action": "a", "strength": True}], 0)
 
 
 # ----- game_input_sequence dispatch -----
