@@ -2807,7 +2807,8 @@ async def test_client_status_handler():
     assert clients["claude_code"]["status"] == "configured"
     assert clients["codex"]["installed"] is False
     assert client.calls[-1]["command"] == "check_client_status"
-    assert client.calls[-1]["timeout"] == client_handlers.CLIENT_STATUS_TIMEOUT_SECONDS
+    assert client_handlers.CLIENT_STATUS_TIMEOUT_SECONDS == 30.0
+    assert client.calls[-1]["timeout"] == 30.0
 
 
 # ---------------------------------------------------------------------------

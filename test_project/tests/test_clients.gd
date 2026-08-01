@@ -1116,6 +1116,22 @@ func test_editor_setting_lookup_worker_thread_serves_snapshot() -> void:
 		"a never-warmed setting must read as null on a worker, not hit EditorInterface")
 
 
+func test_capture_launch_context_worker_thread_serves_snapshot() -> void:
+	McpClientConfigurator.warm_env_snapshot()
+	var expected := McpClientConfigurator.capture_launch_context()
+	var thread := Thread.new()
+	var start_err := thread.start(func() -> Dictionary:
+		return McpClientConfigurator.capture_launch_context()
+	)
+	assert_eq(start_err, OK, "worker thread must start")
+	var worker_context: Dictionary = thread.wait_to_finish()
+	assert_eq(
+		worker_context,
+		expected,
+		"worker launch capture must use the complete main-thread snapshot",
+	)
+
+
 func test_warm_env_snapshot_covers_descriptor_config_home_envs() -> void:
 	## ClientConfigurator.warm_env_snapshot must include every descriptor's
 	## config_home_env (CLAUDE_CONFIG_DIR, CODEX_HOME, …) so worker-side
@@ -2328,8 +2344,16 @@ func test_handler_rejects_unknown_client() -> void:
 	assert_is_error(result)
 
 
-func test_handler_status_returns_array_of_clients() -> void:
+func test_handler_status_requires_deferred_request_context() -> void:
 	var result := _handler.check_client_status({})
+	assert_is_error(result)
+	assert_contains(str(result.get("error", {}).get("message", "")), "deferred request context")
+
+
+func test_status_sweep_returns_array_of_clients() -> void:
+	var result := McpClientConfigurator.run_client_status_sweep(
+		McpClientConfigurator.capture_launch_context()
+	)
 	assert_has_key(result, "data")
 	assert_has_key(result.data, "clients")
 	var clients = result.data.clients
@@ -2375,6 +2399,11 @@ func test_claude_desktop_declares_flat_attach_shape() -> void:
 	var windows_candidates: Array = client.config_path_candidates.get("windows", [])
 	assert_eq(windows_candidates.size(), 2)
 	assert_contains(str(windows_candidates[0]), "Packages/Claude_*")
+	assert_eq(
+		str(windows_candidates[1]),
+		"$APPDATA/Claude/claude_desktop_config.json",
+		"the second candidate is the deterministic conventional roaming fallback",
+	)
 	assert_false(
 		str(windows_candidates[0]).contains("pzs8sxrjxfjjc"),
 		"the Store publisher hash must not be hardcoded",
@@ -2457,10 +2486,7 @@ func test_claude_desktop_configure_migrates_losslessly() -> void:
 			}
 		}
 	}
-	var file := FileAccess.open(path, FileAccess.WRITE)
-	assert_true(file != null, "scratch path must be writable")
-	file.store_string(JSON.stringify(pre_existing))
-	file.close()
+	_write_text(path, JSON.stringify(pre_existing))
 
 	var client := _make_claude_flat_client(path)
 	var launch := _test_attach_launch()
@@ -2496,10 +2522,7 @@ func test_claude_desktop_missing_launch_is_error_without_write() -> void:
 	var path := _scratch_dir.path_join("claude_attach_missing_launch.json")
 	_remove_if_exists(path)
 	var original := '{"mcpServers":{"godot-ai":{"url":"http://x"}}}'
-	var file := FileAccess.open(path, FileAccess.WRITE)
-	assert_true(file != null)
-	file.store_string(original)
-	file.close()
+	_write_text(path, original)
 	var client := _make_claude_flat_client(path)
 	var unavailable := {"ok": false, "error": "Install uv or repair the launcher."}
 	var details := McpJsonStrategy.check_status_details(client, "godot-ai", "http://x", unavailable)

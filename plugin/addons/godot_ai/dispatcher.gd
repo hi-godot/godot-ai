@@ -40,6 +40,7 @@ const DEFERRED_TIMEOUT_MS_BY_COMMAND := {
 	"stop_project": 4500,
 	"run_project": 6000,
 	"take_screenshot": 30000,
+	"check_client_status": 30000,
 	"game_eval": 15000,
 	"game_command": 15000,
 	"scan_filesystem": 30000,

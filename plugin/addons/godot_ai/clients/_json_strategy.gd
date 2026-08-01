@@ -24,7 +24,7 @@ static func configure(
 	var read := _read_or_init(path)
 	if not read["ok"]:
 		return {"status": "error", "message": "Refusing to overwrite %s: %s. Fix or move the file, then re-run Configure." % [path, read["error"]]}
-	var launch_error := _command_launch_error(client, launch)
+	var launch_error := command_launch_error(client, launch)
 	if not launch_error.is_empty():
 		return {"status": "error", "message": launch_error}
 	var config: Dictionary = read["data"]
@@ -78,7 +78,7 @@ static func check_status_details(
 	var entry = holder[server_name]
 	if not (entry is Dictionary):
 		return {"status": McpClient.Status.NOT_CONFIGURED, "error_msg": ""}
-	var launch_error := _command_launch_error(client, launch)
+	var launch_error := command_launch_error(client, launch)
 	if not launch_error.is_empty():
 		return {"status": McpClient.Status.ERROR, "error_msg": launch_error}
 	## An entry under `server_name` exists — if the URL doesn't match,
@@ -189,7 +189,7 @@ static func verify_entry(
 	return true
 
 
-static func _command_launch_error(client: McpClient, launch: Dictionary) -> String:
+static func command_launch_error(client: McpClient, launch: Dictionary) -> String:
 	if client.command_shape == McpClient.CommandShape.NONE:
 		return ""
 	if client.command_shape != McpClient.CommandShape.FLAT:

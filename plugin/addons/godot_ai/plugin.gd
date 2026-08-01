@@ -306,7 +306,11 @@ func _enter_tree() -> void:
 	_dispatcher.register_lazy_handler("scene", HANDLERS_DIR + "scene_handler.gd", [_connection])
 	_dispatcher.register_lazy_handler("node", HANDLERS_DIR + "node_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("project", HANDLERS_DIR + "project_handler.gd", [_connection, _debugger_plugin, _editor_log_buffer])
-	_dispatcher.register_lazy_handler("client", HANDLERS_DIR + "client_handler.gd", [])
+	_dispatcher.register_lazy_handler(
+		"client",
+		HANDLERS_DIR + "client_handler.gd",
+		[_connection, ClientConfigurator.capture_launch_context()],
+	)
 	_dispatcher.register_lazy_handler("script", HANDLERS_DIR + "script_handler.gd", [undo, _connection])
 	_dispatcher.register_lazy_handler("resource", HANDLERS_DIR + "resource_handler.gd", [undo, _connection])
 	_dispatcher.register_lazy_handler("api", HANDLERS_DIR + "api_handler.gd", [])

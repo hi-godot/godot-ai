@@ -172,6 +172,11 @@ static func keep_server_on_exit() -> bool:
 ## before any worker dispatch.
 static var _setting_snapshot := {}
 static var _setting_snapshot_mutex := Mutex.new()
+## The aggregate MCP status command runs on a worker thread. Keep the same
+## main-thread-only LaunchContext contract used by dock workers by publishing a
+## deep snapshot whenever capture_launch_context() runs on the main thread.
+static var _launch_context_snapshot := {}
+static var _launch_context_snapshot_mutex := Mutex.new()
 
 
 static func _editor_setting_lookup(key: String) -> Variant:
@@ -226,12 +231,17 @@ static func _canonicalize_excluded_domains(raw: String) -> String:
 
 
 ## Snapshot every EditorSettings-backed value needed to render or verify an
-## attach launch command. Dock actions/status run on worker threads; they must
-## receive this data object rather than calling EditorInterface there (#691).
-## Call on the main thread before dispatching a worker.
+## attach launch command. Main-thread calls refresh the snapshot; worker calls
+## return that snapshot without touching EditorInterface (#691). Warm it on the
+## main thread before dispatching a worker.
 static func capture_launch_context() -> Dictionary:
+	if OS.get_thread_caller_id() != OS.get_main_thread_id():
+		_launch_context_snapshot_mutex.lock()
+		var cached := _launch_context_snapshot.duplicate(true)
+		_launch_context_snapshot_mutex.unlock()
+		return cached
 	var captured_http_port := http_port()
-	return {
+	var context := {
 		"http_port": captured_http_port,
 		"ws_port": ws_port(),
 		"excluded_domains": excluded_domains(),
@@ -240,6 +250,10 @@ static func capture_launch_context() -> Dictionary:
 		"platform": OS.get_name(),
 		"server_url": "http://127.0.0.1:%d/mcp" % captured_http_port,
 	}
+	_launch_context_snapshot_mutex.lock()
+	_launch_context_snapshot = context.duplicate(true)
+	_launch_context_snapshot_mutex.unlock()
+	return context
 
 
 ## Read the `godot_ai/allow_remote_hosts` EditorSetting as a canonicalized
@@ -409,6 +423,9 @@ static func warm_env_snapshot() -> void:
 	_editor_setting_lookup(MODE_OVERRIDE_SETTING)
 	_editor_setting_lookup(SETTING_STARTUP_TRACE)
 	_editor_setting_lookup(SETTING_KEEP_SERVER_ON_EXIT)
+	# Publish the complete launch context while EditorInterface access is safe;
+	# worker callers of capture_launch_context() read this snapshot only.
+	capture_launch_context()
 
 
 static func client_status_probe_snapshot(id: String) -> Dictionary:
@@ -425,6 +442,59 @@ static func client_status_probe_snapshot(id: String) -> Dictionary:
 	else:
 		installed = client.is_installed()
 	return {"id": id, "cli_path": cli_path, "installed": installed}
+
+
+## Force lazy GDScript bytecode swaps to complete before a client-status
+## worker reaches the registry and strategies. Pure-memory only: callers can
+## run this on the handler thread without performing CLI or config probes.
+static func warm_status_worker_bytecode() -> void:
+	var ids := client_ids()
+	if ids.is_empty():
+		return
+	var any_client := ClientRegistry.get_by_id(String(ids[0]))
+	if any_client != null:
+		JsonStrategy.verify_entry(any_client, {}, "")
+	TomlStrategy.format_body(PackedStringArray(), "")
+	CliStrategy.format_args(PackedStringArray(), "", "")
+	# Compile the aggregate worker entry point on main as well. After a plugin
+	# reload, first-dereferencing this function from Thread can hang in Godot's
+	# lazy bytecode swap even when every strategy it calls was already warmed.
+	run_client_status_sweep({}, true)
+
+
+## Worker entry point for the MCP aggregate status command. Every filesystem,
+## CLI, and launch-discovery probe stays inside this function; the WebSocket
+## handler only schedules it and returns the deferred sentinel.
+static func run_client_status_sweep(
+	fallback_launch_context: Dictionary = {}, warm_only: bool = false
+) -> Dictionary:
+	if warm_only:
+		return {}
+	var clients := []
+	var launch_context := capture_launch_context()
+	if launch_context.is_empty():
+		launch_context = fallback_launch_context.duplicate(true)
+	if launch_context.is_empty():
+		return {"worker_error": "Client status launch context was not warmed on the main thread."}
+	var server_url := server_url_from(launch_context)
+	var resolved_launch := resolve_attach_launch(launch_context)
+	for client_id in client_ids():
+		var probe := client_status_probe_snapshot(client_id)
+		var details := check_status_details_for_url_with_cli_path(
+			client_id,
+			server_url,
+			str(probe.get("cli_path", "")),
+			launch_context,
+			resolved_launch,
+		)
+		var status = details.get("status", Client.Status.NOT_CONFIGURED)
+		clients.append({
+			"id": client_id,
+			"display_name": client_display_name(client_id),
+			"status": Client.status_label(status),
+			"installed": bool(probe.get("installed", false)),
+		})
+	return {"data": {"clients": clients}}
 
 
 ## Pass an explicit `url` when calling from a worker thread — see
@@ -525,20 +595,12 @@ static func _dispatch_check_status_with_cli_path_details(
 		"json":
 			var launch := {}
 			if client.command_shape != Client.CommandShape.NONE:
-				launch = (
-					resolved_launch
-					if not resolved_launch.is_empty()
-					else resolve_attach_launch(launch_context)
-				)
+				launch = _resolved_or_discovered_launch(resolved_launch, launch_context)
 			return JsonStrategy.check_status_details(client, SERVER_NAME, url, launch)
 		"toml":
 			var launch := {}
 			if client.command_shape != Client.CommandShape.NONE:
-				launch = (
-					resolved_launch
-					if not resolved_launch.is_empty()
-					else resolve_attach_launch(launch_context)
-				)
+				launch = _resolved_or_discovered_launch(resolved_launch, launch_context)
 			return TomlStrategy.check_status_details(client, SERVER_NAME, url, launch)
 		"yaml":
 			return YamlStrategy.check_status_details(client, SERVER_NAME, url)
@@ -549,14 +611,20 @@ static func _dispatch_check_status_with_cli_path_details(
 			if resolved_cli.is_empty() and client.has_json_fallback():
 				var fallback_launch := {}
 				if client.command_shape != Client.CommandShape.NONE:
-					fallback_launch = (
-						resolved_launch
-						if not resolved_launch.is_empty()
-						else resolve_attach_launch(launch_context)
-					)
+					fallback_launch = _resolved_or_discovered_launch(resolved_launch, launch_context)
 				return JsonStrategy.check_status_details(client, SERVER_NAME, url, fallback_launch)
 			return CliStrategy.check_status_details(client, SERVER_NAME, url, resolved_cli)
 	return {"status": Client.Status.NOT_CONFIGURED, "error_msg": ""}
+
+
+static func _resolved_or_discovered_launch(
+	resolved_launch: Dictionary, launch_context: Dictionary
+) -> Dictionary:
+	return (
+		resolved_launch
+		if not resolved_launch.is_empty()
+		else resolve_attach_launch(launch_context)
+	)
 
 
 ## After a configure/remove returns ok, re-read the live status. If it doesn't

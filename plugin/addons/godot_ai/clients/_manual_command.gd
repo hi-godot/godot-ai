@@ -65,7 +65,7 @@ static func _build_json(
 	var key := client.server_key_path[0] if client.server_key_path.size() > 0 else "mcpServers"
 	if client.command_shape != McpClient.CommandShape.NONE:
 		var lines: Array[String] = []
-		var launch_error := McpJsonStrategy._command_launch_error(client, launch)
+		var launch_error := McpJsonStrategy.command_launch_error(client, launch)
 		if launch_error.is_empty():
 			var command_entry := McpJsonStrategy.build_entry(client, server_url, null, launch)
 			lines.append("Edit %s and add under \"%s\":" % [resolved_path, key])

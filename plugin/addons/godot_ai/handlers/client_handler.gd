@@ -5,6 +5,18 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 ## Handles MCP client configuration commands.
 
+var _connection
+var _fallback_launch_context := {}
+
+
+func _init(connection = null, fallback_launch_context = null) -> void:
+	_connection = connection
+	# Lazy-loading this handler can reload ClientConfigurator's static script and
+	# clear its warmed snapshot. Retain the plugin-start capture as a safe
+	# fallback; the worker still prefers capture_launch_context()'s live snapshot.
+	if fallback_launch_context is Dictionary:
+		_fallback_launch_context = fallback_launch_context.duplicate(true)
+
 
 func configure_client(params: Dictionary) -> Dictionary:
 	var client_id: String = params.get("client", "")
@@ -30,23 +42,64 @@ func remove_client(params: Dictionary) -> Dictionary:
 	return {"data": result}
 
 
-func check_client_status(_params: Dictionary) -> Dictionary:
-	var clients := []
-	# Claude Desktop and Codex share the same attach launch. Resolve it once for
-	# the aggregate status command instead of repeating the cold discovery path
-	# per command-shaped client and exhausting the command's 5-second budget.
-	var launch_context := McpClientConfigurator.capture_launch_context()
-	var server_url := McpClientConfigurator.server_url_from(launch_context)
-	var resolved_launch := McpClientConfigurator.resolve_attach_launch(launch_context)
-	for client_id in McpClientConfigurator.client_ids():
-		var details := McpClientConfigurator.check_status_details_for_url_with_cli_path(
-			client_id, server_url, "", launch_context, resolved_launch
+func check_client_status(params: Dictionary) -> Dictionary:
+	var request_id: String = params.get("_request_id", "")
+	if _connection == null or request_id.is_empty():
+		return ErrorCodes.make(
+			ErrorCodes.INTERNAL_ERROR,
+			"Client status requires a deferred request context.",
 		)
-		var status = details.get("status", McpClient.Status.NOT_CONFIGURED)
-		clients.append({
-			"id": client_id,
-			"display_name": McpClientConfigurator.client_display_name(client_id),
-			"status": McpClient.status_label(status),
-			"installed": McpClientConfigurator.is_installed(client_id),
-		})
-	return {"data": {"clients": clients}}
+	# Match the dock refresh worker's cold-load guard. This is pure-memory and
+	# performs no launcher discovery, CLI lookup, or config/status probe.
+	McpClientConfigurator.warm_status_worker_bytecode()
+	# The aggregate command has a 30-second budget. Its worker resolves the
+	# shared Claude Desktop/Codex attach launch once, then reuses it for every
+	# command-shaped client instead of repeating cold launcher discovery.
+	# Start the worker from the deferred finisher after its first frame. That
+	# lets the dispatcher register this request before any probe can complete.
+	_finish_client_status_deferred(
+		McpClientConfigurator.run_client_status_sweep.bind(_fallback_launch_context),
+		request_id,
+		_connection,
+	)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
+## Static so the coroutine can safely outlive this lazily-created handler.
+## The first-frame yield is load-bearing: check_client_status() must return the
+## deferred sentinel before the worker starts and can produce a response.
+static func _finish_client_status_deferred(
+	worker_callable: Callable, request_id: String, connection
+) -> void:
+	if not is_instance_valid(connection):
+		return
+	var tree: SceneTree = connection.get_tree()
+	if tree == null:
+		return
+	await tree.process_frame
+	if not is_instance_valid(connection):
+		return
+	var worker := Thread.new()
+	var start_error := worker.start(worker_callable)
+	if start_error != OK:
+		connection.send_deferred_response(request_id, ErrorCodes.make(
+			ErrorCodes.INTERNAL_ERROR,
+			"Could not start client status worker (error %d)." % start_error,
+		))
+		return
+	while worker.is_alive():
+		await tree.process_frame
+	var payload: Variant = worker.wait_to_finish()
+	if not is_instance_valid(connection):
+		return
+	if not payload is Dictionary:
+		payload = ErrorCodes.make(
+			ErrorCodes.INTERNAL_ERROR,
+			"Client status worker returned an invalid response.",
+		)
+	elif payload.has("worker_error"):
+		payload = ErrorCodes.make(
+			ErrorCodes.INTERNAL_ERROR,
+			str(payload.get("worker_error", "Client status worker failed.")),
+		)
+	connection.send_deferred_response(request_id, payload)

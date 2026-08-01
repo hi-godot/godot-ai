@@ -231,6 +231,15 @@ func test_run_project_has_deferred_timeout_budget() -> void:
 	)
 
 
+func test_client_status_has_30_second_deferred_timeout_budget() -> void:
+	assert_has_key(McpDispatcher.DEFERRED_TIMEOUT_MS_BY_COMMAND, "check_client_status")
+	assert_eq(
+		int(McpDispatcher.DEFERRED_TIMEOUT_MS_BY_COMMAND.check_client_status),
+		30000,
+		"dispatcher and Python client-status budgets must stay aligned",
+	)
+
+
 func test_deferred_timeout_ms_override_from_sentinel() -> void:
 	## A handler that attaches _deferred_timeout_ms claims a per-request budget
 	## (game_command's input_sequence needs ~30s where the command's table
