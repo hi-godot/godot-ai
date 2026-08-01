@@ -319,7 +319,7 @@ func test_reconnect_transition_logging_uses_time_heartbeat_after_initial_attempt
 
 func test_transport_snapshot_distinguishes_connecting_retrying_closing_and_open() -> void:
 	var connecting := McpConnection._transport_status_snapshot(
-		WebSocketPeer.STATE_CONNECTING, 12.5, 3, 0.0)
+		WebSocketPeer.STATE_CONNECTING, 12.5, 3, 9.0)
 	assert_eq(connecting.get("phase"), "connecting")
 	assert_eq(connecting.get("attempt"), 3)
 	assert_eq(connecting.get("state_elapsed_sec"), 12.5)
@@ -329,16 +329,22 @@ func test_transport_snapshot_distinguishes_connecting_retrying_closing_and_open(
 	var retrying := McpConnection._transport_status_snapshot(
 		WebSocketPeer.STATE_CLOSED, 0.25, 3, 4.5)
 	assert_eq(retrying.get("phase"), "retrying")
+	assert_eq(retrying.get("attempt"), 3)
+	assert_eq(retrying.get("state_elapsed_sec"), 0.25)
 	assert_eq(retrying.get("retry_in_sec"), 4.5)
 
 	var closing := McpConnection._transport_status_snapshot(
 		WebSocketPeer.STATE_CLOSING, 1.0, 3, 4.5)
 	assert_eq(closing.get("phase"), "closing")
+	assert_eq(closing.get("attempt"), 3)
+	assert_eq(closing.get("state_elapsed_sec"), 1.0)
 	assert_false(closing.has("retry_in_sec"))
 
 	var connected := McpConnection._transport_status_snapshot(
 		WebSocketPeer.STATE_OPEN, 30.0, 0, 4.5)
 	assert_eq(connected.get("phase"), "connected")
+	assert_eq(connected.get("attempt"), 0)
+	assert_eq(connected.get("state_elapsed_sec"), 30.0)
 	assert_false(connected.has("retry_in_sec"))
 
 
@@ -346,11 +352,17 @@ func test_transport_status_wrapper_applies_generic_blocked_reason() -> void:
 	var conn := McpConnection.new()
 	conn.connect_blocked = true
 	conn.connect_block_reason = "blocked for test"
+	conn._reconnect_attempt = 7
+	conn._reconnect_timer = 6.0
+	conn._peer_state_entered_msec = Time.get_ticks_msec() - 1250
 	var snapshot := conn.get_transport_status()
 	assert_eq(snapshot.get("phase"), "blocked")
+	assert_eq(snapshot.get("attempt"), 7)
+	assert_gt(snapshot.get("state_elapsed_sec"), 1.0)
 	assert_eq(snapshot.get("reason_code"), "connection_blocked")
 	assert_eq(snapshot.get("reason"), "blocked for test")
-	assert_false(snapshot.has("retry_in_sec"))
+	assert_false(snapshot.has("retry_in_sec"),
+		"blocked must hide the positive retry timer from the underlying CLOSED state")
 	conn.free()
 
 
