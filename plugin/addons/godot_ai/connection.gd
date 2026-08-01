@@ -195,6 +195,9 @@ func _process(delta: float) -> void:
 				connection_state_changed.emit(false)
 			elif not _preopen_failure_logged_for_peer:
 				_preopen_failure_logged_for_peer = true
+				## A failed attempt never reached OPEN, so any post-OPEN reason
+				## belongs to the previous peer and must not describe this one.
+				_transient_diagnostic.clear()
 				## Initial failure is attempt 1 for diagnostics. Later transition
 				## summaries are time-throttled so a missing listener stays
 				## observable without tying log volume to attempt duration.

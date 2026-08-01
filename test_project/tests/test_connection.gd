@@ -357,13 +357,13 @@ func test_transport_status_wrapper_applies_generic_blocked_reason() -> void:
 func test_reconnect_diagnostics_keep_preopen_and_postopen_failures_distinct() -> void:
 	var preopen := McpConnection._preopen_failure_diagnostic(
 		4,
-		30.25,
+		30.0,
 		8.0,
 		-1,
 		"",
 		"ws://127.0.0.1:9500"
 	)
-	assert_contains(preopen, "connection attempt 4 failed before OPEN after 30.3s")
+	assert_contains(preopen, "connection attempt 4 failed before OPEN after 30.0s")
 	assert_contains(preopen, "retrying in 8s")
 	assert_contains(preopen, "code -1")
 	assert_contains(preopen, "reason <none>")
@@ -389,6 +389,35 @@ func test_reconnect_diagnostics_keep_preopen_and_postopen_failures_distinct() ->
 	)
 	assert_contains(tokenless, "token-less handshake (rejection 2/2)",
 		"the post-OPEN line must surface the recovery action before the next ack")
+
+
+func test_preopen_failure_clears_stale_postopen_diagnostic() -> void:
+	var conn := McpConnection.new()
+	var buffer := McpLogBuffer.new()
+	conn.log_buffer = buffer
+	conn._url = "ws://127.0.0.1:9500"
+	conn._reconnect_timer = 5.0
+	conn._preopen_failure_logged_for_peer = false
+	conn._auth_mismatch_closes = 1
+	conn._transient_diagnostic = {
+		"reason_code": "auth_token_mismatch",
+		"reason": "stale post-OPEN diagnostic",
+		"occurrence": 1,
+		"recovery_action": "retry_authenticated",
+	}
+
+	## A fresh WebSocketPeer starts CLOSED, exercising the pre-OPEN failure
+	## branch without opening a real socket or advancing to another attempt.
+	conn._process(0.0)
+
+	assert_true(conn._transient_diagnostic.is_empty(),
+		"the new pre-OPEN failure must clear the previous peer's diagnosis")
+	assert_eq(conn._auth_mismatch_closes, 1,
+		"clearing presentation state must not reset the separate auth counter")
+	var snapshot := conn.get_transport_status()
+	assert_false(snapshot.has("reason_code"))
+	assert_false(snapshot.has("reason"))
+	conn.free()
 
 
 func test_post_open_close_does_not_emit_preopen_duplicate() -> void:
