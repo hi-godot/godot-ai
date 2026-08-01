@@ -15,6 +15,7 @@ func _init() -> void:
 	# Older Codex builds used the unquoted form with underscore-substituted ids.
 	toml_legacy_section_aliases = PackedStringArray(["mcp_servers.godot_ai"])
 	command_shape = McpClient.CommandShape.COMMAND_ARRAY
+	command_supports_url_fallback = true
 	command_legacy_keys = PackedStringArray(["url"])
 	## Initial-only: users may disable the entry or tune either timeout and
 	## Configure preserves that choice. Codex currently defaults to 10s for

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import tomllib
@@ -9,17 +10,24 @@ import pytest
 
 from godot_ai.attach.main import _parser
 
-_FIXTURE = (
+_TOML_FIXTURE = (
     Path(__file__).resolve().parents[2]
     / "test_project"
     / "tests"
     / "fixtures"
     / "attach_toml_samples.toml"
 )
+_JSON_FIXTURE = (
+    Path(__file__).resolve().parents[2]
+    / "test_project"
+    / "tests"
+    / "fixtures"
+    / "attach_json_sample.json"
+)
 
 
 def test_gdscript_toml_fixture_round_trips_through_tomllib() -> None:
-    parsed = tomllib.loads(_FIXTURE.read_text(encoding="utf-8"))
+    parsed = tomllib.loads(_TOML_FIXTURE.read_text(encoding="utf-8"))
     entry = parsed["samples"]["uvx"]
 
     assert entry["command"] == "C:/Python313/pythonw.exe"
@@ -37,7 +45,7 @@ def test_gdscript_toml_fixture_round_trips_through_tomllib() -> None:
 
 
 def test_rendered_attach_argv_is_accepted_by_attach_parser() -> None:
-    parsed = tomllib.loads(_FIXTURE.read_text(encoding="utf-8"))
+    parsed = tomllib.loads(_TOML_FIXTURE.read_text(encoding="utf-8"))
     args = parsed["samples"]["uvx"]["args"]
     attach_index = args.index("attach")
 
@@ -48,9 +56,32 @@ def test_rendered_attach_argv_is_accepted_by_attach_parser() -> None:
     assert namespace.exclude_domains == "audio,particle"
 
 
+def test_gdscript_json_fixture_round_trips_through_json_and_attach_parser() -> None:
+    entry = json.loads(_JSON_FIXTURE.read_text(encoding="utf-8"))
+
+    assert entry["command"] == "C:/Python313/pythonw.exe"
+    assert entry["args"][0] == "-c"
+    assert "creationflags=0x08000000" in entry["args"][1]
+    assert entry["args"][2] == 'C:\\Users\\Agent "quoted"\\bin\\uvx.exe'
+    assert entry["args"][3:9] == [
+        "--link-mode",
+        "copy",
+        "--from",
+        "godot-ai==3.0.6",
+        "godot-ai",
+        "attach",
+    ]
+
+    attach_index = entry["args"].index("attach")
+    namespace = _parser().parse_args(entry["args"][attach_index + 1 :])
+    assert namespace.port == 8123
+    assert namespace.ws_port == 9623
+    assert namespace.exclude_domains == "audio,particle"
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows consoleless launcher")
 def test_windows_pythonw_bootstrap_preserves_stdio_for_hidden_child() -> None:
-    parsed = tomllib.loads(_FIXTURE.read_text(encoding="utf-8"))
+    parsed = tomllib.loads(_TOML_FIXTURE.read_text(encoding="utf-8"))
     bootstrap_args = parsed["samples"]["uvx"]["args"][:2]
     pythonw = Path(sys.executable).with_name("pythonw.exe")
     if not pythonw.is_file():

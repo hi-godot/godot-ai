@@ -16,7 +16,11 @@ static func configure(
 	server_url: String,
 	launch: Dictionary = {},
 ) -> Dictionary:
-	var path := client.resolved_config_path()
+	var resolution := client.resolved_config_path_details()
+	var path := str(resolution.get("path", ""))
+	var path_error := str(resolution.get("error", ""))
+	if not path_error.is_empty():
+		return {"status": "error", "message": path_error}
 	if path.is_empty():
 		return {"status": "error", "message": "Could not resolve config path for %s" % client.display_name}
 
@@ -111,7 +115,11 @@ static func check_status_details(
 	server_url: String,
 	launch: Dictionary = {},
 ) -> Dictionary:
-	var path := client.resolved_config_path()
+	var resolution := client.resolved_config_path_details()
+	var path := str(resolution.get("path", ""))
+	var path_error := str(resolution.get("error", ""))
+	if not path_error.is_empty():
+		return {"status": McpClient.Status.ERROR, "error_msg": path_error}
 	if path.is_empty() or not FileAccess.file_exists(path):
 		return {"status": McpClient.Status.NOT_CONFIGURED, "error_msg": ""}
 	var read := _read_or_init(path)
@@ -166,7 +174,11 @@ static func check_status_details(
 
 
 static func remove(client: McpClient, _server_name: String) -> Dictionary:
-	var path := client.resolved_config_path()
+	var resolution := client.resolved_config_path_details()
+	var path := str(resolution.get("path", ""))
+	var path_error := str(resolution.get("error", ""))
+	if not path_error.is_empty():
+		return {"status": "error", "message": path_error}
 	if path.is_empty() or not FileAccess.file_exists(path):
 		return {"status": "ok", "message": "Not configured"}
 	var read := _read_or_init(path)

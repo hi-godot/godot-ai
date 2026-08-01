@@ -313,6 +313,9 @@ static func configure(id: String, url: String = "", launch_context: Dictionary =
 	var client := ClientRegistry.get_by_id(id)
 	if client == null:
 		return {"status": "error", "message": "Unknown client: %s" % id}
+	var path_error := _config_path_resolution_error(client)
+	if not path_error.is_empty():
+		return {"status": "error", "message": path_error}
 	## Capture `url` once so a port flip in EditorSettings between write and
 	## verify can't trigger a spurious CONFIGURED_MISMATCH against an entry
 	## that just landed correctly.
@@ -360,7 +363,11 @@ static func check_status_for_url_with_cli_path(
 ## NOT_CONFIGURED. Callers that only need the status can use the simpler
 ## helper above.
 static func check_status_details_for_url_with_cli_path(
-	id: String, url: String, cli_path: String, launch_context: Dictionary = {}
+	id: String,
+	url: String,
+	cli_path: String,
+	launch_context: Dictionary = {},
+	resolved_launch: Dictionary = {},
 ) -> Dictionary:
 	var client := ClientRegistry.get_by_id(id)
 	if client == null:
@@ -371,12 +378,17 @@ static func check_status_details_for_url_with_cli_path(
 	# a fallback-configured entry instead of always showing red.
 	if client.config_type == "cli" and cli_path.is_empty() and not client.has_json_fallback():
 		return {"status": Client.Status.NOT_CONFIGURED, "error_msg": ""}
+	var path_error := _config_path_resolution_error(client)
+	if not path_error.is_empty():
+		return {"status": Client.Status.ERROR, "error_msg": path_error}
 	if client.command_shape != Client.CommandShape.NONE and launch_context.is_empty():
 		return {
 			"status": Client.Status.ERROR,
 			"error_msg": "Missing launch-context snapshot; retry the status refresh.",
 		}
-	return _dispatch_check_status_with_cli_path_details(client, url, cli_path, launch_context)
+	return _dispatch_check_status_with_cli_path_details(
+		client, url, cli_path, launch_context, resolved_launch
+	)
 
 
 ## #691: main-thread pre-warm of McpPathTemplate's env snapshot, covering
@@ -422,6 +434,9 @@ static func remove(id: String, url: String = "", launch_context: Dictionary = {}
 	var client := ClientRegistry.get_by_id(id)
 	if client == null:
 		return {"status": "error", "message": "Unknown client: %s" % id}
+	var path_error := _config_path_resolution_error(client)
+	if not path_error.is_empty():
+		return {"status": "error", "message": path_error}
 	if url.is_empty():
 		url = http_url()
 	var context := launch_context
@@ -441,12 +456,22 @@ static func remove(id: String, url: String = "", launch_context: Dictionary = {}
 	return _verify_post_state(client, result, Client.Status.NOT_CONFIGURED, url, "remove", launch)
 
 
+## Resolve config-backed path errors before attach-launch discovery. This both
+## gives ambiguity precedence over unrelated launcher failures and avoids
+## spending the status worker's command budget on a Configure action that must
+## fail closed regardless. CLI clients keep their existing CLI/fallback dispatch.
+static func _config_path_resolution_error(client: Client) -> String:
+	if client.config_type == "cli":
+		return ""
+	return str(client.resolved_config_path_details().get("error", ""))
+
+
 # --- Strategy dispatch + verify (testable seam) --------------------------
 
 static func _dispatch_configure(client: Client, url: String, launch: Dictionary = {}) -> Dictionary:
 	match client.config_type:
 		"json":
-			return JsonStrategy.configure(client, SERVER_NAME, url)
+			return JsonStrategy.configure(client, SERVER_NAME, url, launch)
 		"toml":
 			return TomlStrategy.configure(client, SERVER_NAME, url, launch)
 		"yaml":
@@ -455,7 +480,7 @@ static func _dispatch_configure(client: Client, url: String, launch: Dictionary 
 			# #463: fall back to writing the config file directly when the CLI
 			# binary isn't on PATH (Claude Code as a VS Code/Cursor extension).
 			if client.has_json_fallback() and CliStrategy.resolve_cli_path(client).is_empty():
-				return JsonStrategy.configure(client, SERVER_NAME, url)
+				return JsonStrategy.configure(client, SERVER_NAME, url, launch)
 			return CliStrategy.configure(client, SERVER_NAME, url)
 	return {"status": "error", "message": "Unknown config_type for %s: %s" % [client.id, client.config_type]}
 
@@ -498,7 +523,14 @@ static func _dispatch_check_status_with_cli_path_details(
 ) -> Dictionary:
 	match client.config_type:
 		"json":
-			return JsonStrategy.check_status_details(client, SERVER_NAME, url)
+			var launch := {}
+			if client.command_shape != Client.CommandShape.NONE:
+				launch = (
+					resolved_launch
+					if not resolved_launch.is_empty()
+					else resolve_attach_launch(launch_context)
+				)
+			return JsonStrategy.check_status_details(client, SERVER_NAME, url, launch)
 		"toml":
 			var launch := {}
 			if client.command_shape != Client.CommandShape.NONE:
@@ -515,7 +547,14 @@ static func _dispatch_check_status_with_cli_path_details(
 			# #463: with no CLI binary, read the JSON fallback config so a
 			# fallback-configured entry reports CONFIGURED instead of red.
 			if resolved_cli.is_empty() and client.has_json_fallback():
-				return JsonStrategy.check_status_details(client, SERVER_NAME, url)
+				var fallback_launch := {}
+				if client.command_shape != Client.CommandShape.NONE:
+					fallback_launch = (
+						resolved_launch
+						if not resolved_launch.is_empty()
+						else resolve_attach_launch(launch_context)
+					)
+				return JsonStrategy.check_status_details(client, SERVER_NAME, url, fallback_launch)
 			return CliStrategy.check_status_details(client, SERVER_NAME, url, resolved_cli)
 	return {"status": Client.Status.NOT_CONFIGURED, "error_msg": ""}
 
@@ -555,6 +594,10 @@ static func manual_command(id: String) -> String:
 	var client := ClientRegistry.get_by_id(id)
 	if client == null:
 		return ""
+	var path_resolution := client.resolved_config_path_details()
+	var path_error := str(path_resolution.get("error", ""))
+	if not path_error.is_empty():
+		return "Config path unavailable: %s" % path_error
 	var context := capture_launch_context() if client.command_shape != Client.CommandShape.NONE else {}
 	var launch := (
 		resolve_attach_launch(context)
@@ -565,7 +608,7 @@ static func manual_command(id: String) -> String:
 		client,
 		SERVER_NAME,
 		server_url_from(context),
-		client.resolved_config_path(),
+		str(path_resolution.get("path", "")),
 		launch,
 	)
 	if cmd.is_empty():
@@ -683,10 +726,8 @@ static func _resolve_attach_launch_uncached(
 	if discovery_override.has("uvx_path"):
 		uvx = str(discovery_override["uvx_path"])
 	else:
-		## Strict lookup for new attach entries. Do not use
-		## McpClient.resolve_uvx_path(): its bare-`uvx` fallback is retained
-		## solely for the existing Claude Desktop bridge until that client is
-		## migrated in its own rollout PR.
+		## Strict lookup for attach entries: never write a bare `uvx` command
+		## that a GUI-launched client may be unable to resolve from its PATH.
 		uvx = find_uvx()
 	if not uvx.is_empty():
 		var uvx_args: Array[String] = [
@@ -730,7 +771,7 @@ static func _resolve_attach_launch_uncached(
 		)
 
 	return _attach_discovery_error(
-		"No compatible godot-ai launcher was found. Install uv (provides uvx), or use the manual URL-mode instructions with their reconnect limitation."
+		"No compatible godot-ai launcher was found. Install uv (provides uvx), then retry Configure."
 	)
 
 

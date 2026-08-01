@@ -94,12 +94,13 @@ Kimi Code.
 
 </details>
 
-Most clients connect to `http://127.0.0.1:8000/mcp`. Codex is configured with
-the client-owned `godot-ai attach` stdio bridge instead, so Codex can discover
-the tools before Godot opens and keep using them across same-version editor
-restarts. If auto-configure can't find a compatible local launcher, each dock
-row exposes a **Run this manually** panel with a copyable snippet and the
-advanced URL fallback.
+Most clients connect to `http://127.0.0.1:8000/mcp`. Claude Desktop and Codex
+are configured with the client-owned `godot-ai attach` stdio bridge instead,
+so they can discover the tools before Godot opens and keep using them across
+same-version editor restarts. If auto-configure can't find a compatible local
+launcher, each dock row exposes a **Run this manually** panel with a copyable
+snippet. Clients whose native configuration supports URL transport also show
+an advanced URL fallback.
 
 ### 4. Try it
 
@@ -129,6 +130,34 @@ advanced URL fallback.
 claude mcp add --scope user --transport http godot-ai http://127.0.0.1:8000/mcp
 ```
 
+**Claude Desktop** (`claude_desktop_config.json`)
+
+Claude Desktop local configuration requires a launched stdio command. Per
+[Anthropic's remote MCP guidance](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp),
+it does not accept a remote `url` entry in `claude_desktop_config.json`;
+Claude's remote Connectors flow is cloud-brokered and cannot reach this
+loopback-only server.
+Use the dock-generated entry so the command is an absolute, GUI-safe launcher.
+Its non-Windows uvx shape is:
+
+```json
+{
+  "mcpServers": {
+    "godot-ai": {
+      "command": "/absolute/path/to/uvx",
+      "args": ["--link-mode", "copy", "--from", "godot-ai==VERSION", "godot-ai", "attach", "--port", "8000", "--ws-port", "9500"]
+    }
+  }
+}
+```
+
+On Windows, the dock also detects Store/MSIX AppData virtualization. When one
+Store package is installed, Configure uses its private `LocalCache/Roaming`
+path, creating the config there if necessary so a later copy-on-write cannot
+hide an entry written to conventional roaming. Without a Store package it uses
+the conventional roaming config. Multiple matching Store packages fail with an
+actionable error instead of choosing one, and Configure never writes both.
+
 **Codex** (`~/.codex/config.toml`)
 
 ```toml
@@ -152,9 +181,10 @@ stay synchronized.
 
 On Windows, **Configure** writes a `pythonw.exe` launch (and, for uvx/system
 tiers, a small stdio-preserving `CREATE_NO_WINDOW` bootstrap). This prevents a
-terminal window from opening with Codex while keeping the MCP process attached
-to Codex's stdin/stdout pipes. Do not simplify that generated entry back to a
-console-subsystem `python.exe`, `uvx.exe`, or `godot-ai.exe` command.
+terminal window from opening with Claude Desktop or Codex while keeping the MCP
+process attached to the client's stdin/stdout pipes. Do not simplify that
+generated entry back to a console-subsystem `python.exe`, `uvx.exe`, or
+`godot-ai.exe` command.
 
 Advanced fallback for clients intentionally kept in URL mode:
 
@@ -234,7 +264,7 @@ prefer an SSH tunnel or Tailscale on untrusted networks.
 </details>
 
 <details>
-<summary><strong>Windows: <code>uvx mcp-proxy</code> won't start (<code>pywin32</code> install fails)</strong></summary>
+<summary><strong>Windows: an <code>uvx</code> attach launcher won't start (<code>pywin32</code> install fails)</strong></summary>
 
 Symptom (in your MCP client's server log):
 
@@ -258,13 +288,11 @@ package in the resolution order, not the actual lock holder.
    `McpUvCacheCleanup.purge_stale_builds()` immediately after killing the
    server children, while the `.pyd` is briefly unmapped. See
    [`plugin/addons/godot_ai/utils/uv_cache_cleanup.gd`](plugin/addons/godot_ai/utils/uv_cache_cleanup.gd).
-2. **Auto-configure now writes `UV_LINK_MODE=copy` into the bridged
-   entry's `env` block** for every uvx-bridge client (currently Claude Desktop),
-   telling uv to copy shared C extensions instead of hard-linking them.
-   That removes the reverse race where an MCP client spawns `uvx mcp-proxy`
-   *while* a server child still holds the `.pyd`. Existing entries written
-   by older plugin versions surface in the dock as **drift (amber banner)**
-   so a single Configure click rewrites them with the env pin.
+2. Attach entries put `--link-mode copy` directly in the generated uvx
+   arguments, telling uv to copy shared C extensions instead of hard-linking
+   them. This works for configuration formats that do not support an `env`
+   object and removes the reverse race where an MCP client starts its attach
+   launcher while a server child still holds the `.pyd`.
 
 The shape `client_configure` writes for Claude Desktop is now:
 
@@ -272,20 +300,20 @@ The shape `client_configure` writes for Claude Desktop is now:
 {
   "mcpServers": {
     "godot-ai": {
-      "command": "uvx",
-      "args": ["mcp-proxy==0.11.0", "--transport", "streamablehttp", "http://127.0.0.1:8000/mcp"],
-      "env": { "UV_LINK_MODE": "copy" }
+      "command": "/absolute/path/to/uvx",
+      "args": ["--link-mode", "copy", "--from", "godot-ai==VERSION", "godot-ai", "attach", "--port", "8000", "--ws-port", "9500"]
     }
   }
 }
 ```
 
-If you've already hit the lock on an older config, click **Configure**
-on the affected uvx-bridge client (Claude Desktop) in the
-godot-ai dock to rewrite the entry with the env pin, then quit and
-reopen that client. If the lock persists (rare — pre-existing orphans
-the cache sweeper couldn't reach), kill stray `python.exe` children
-whose command line contains `spawn_main(parent_pid=...)` and delete
+The exact command may be an absolute uvx path or a Windows `pythonw.exe`
+bootstrap; use the dock-generated form rather than simplifying it. If you've
+already hit the lock, click **Configure** on Claude Desktop to rewrite its old
+mcp-proxy entry to the attach shape, then quit and reopen Claude Desktop. If the
+lock persists (rare — pre-existing orphans the cache sweeper couldn't reach),
+kill stray `python.exe` children whose command line contains
+`spawn_main(parent_pid=...)` and delete
 `%LOCALAPPDATA%\uv\cache\builds-v0\.tmp*` manually before retrying.
 
 </details>

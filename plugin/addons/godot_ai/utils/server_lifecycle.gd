@@ -1622,7 +1622,7 @@ func stop_server() -> void:
 	transition_state(McpServerStateScript.STOPPED)
 
 	## Server's `_pydantic_core.pyd` hard-link is now released — sweep
-	## stale uvx builds before they trip the next `uvx mcp-proxy`.
+	## stale uvx builds before they trip the next attach launcher.
 	UvCacheCleanup.purge_stale_builds()
 
 
@@ -1820,7 +1820,7 @@ func force_restart_server() -> void:
 	## Same rationale as `stop_server`: the server child python just
 	## released its `pydantic_core` mapping, so this is the only window in
 	## which the hard-linked copies under `builds-v0\.tmp*` are deletable.
-	## Sweep before respawning so the upcoming `uvx mcp-proxy` build doesn't
+	## Sweep before respawning so the next uvx attach build doesn't
 	## inherit the same cleanup-failure path that triggered the restart.
 	UvCacheCleanup.purge_stale_builds()
 	reset_for_force_restart()

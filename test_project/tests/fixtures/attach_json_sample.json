@@ -1,0 +1,20 @@
+{
+  "command": "C:/Python313/pythonw.exe",
+  "args": [
+    "-c",
+    "import subprocess,sys; raise SystemExit(subprocess.call(sys.argv[1:], stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, creationflags=0x08000000))",
+    "C:\\Users\\Agent \"quoted\"\\bin\\uvx.exe",
+    "--link-mode",
+    "copy",
+    "--from",
+    "godot-ai==3.0.6",
+    "godot-ai",
+    "attach",
+    "--port",
+    "8123",
+    "--ws-port",
+    "9623",
+    "--exclude-domains",
+    "audio,particle"
+  ]
+}

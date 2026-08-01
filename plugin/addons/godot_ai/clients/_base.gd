@@ -46,6 +46,24 @@ var config_type: String = ""                     ## "json" | "toml" | "yaml" | "
 ## Keys may also use "unix" as a shorthand for darwin+linux.
 var path_template: Dictionary = {}
 
+## Optional ordered path candidates by platform. Each value is an Array of
+## templates; one `*` may appear in a directory segment so packaged-app roots
+## can be discovered without hardcoding publisher hashes.
+##
+## Resolution contract:
+##   1. Existing files win in descriptor order, except that a unique wildcard
+##      match is authoritative even before its config leaf exists. A matching
+##      package root therefore creates inside that package rather than writing
+##      a fallback path that may become invisible after copy-on-write.
+##   2. If no file or wildcard package match exists, the first non-wildcard
+##      template is the deterministic create target.
+##   3. Multiple matches within any wildcard group are ambiguous and fail
+##      closed instead of choosing an arbitrary package.
+##
+## `config_home_override` still has higher priority. When this map has no entry
+## for the current platform, `path_template` remains the fallback.
+var config_path_candidates: Dictionary = {}
+
 ## Path inside the config object where the per-server map lives.
 ## Cursor / Claude Desktop / most others: ["mcpServers"]
 ## VS Code:                                ["servers"]
@@ -78,27 +96,20 @@ var entry_extra_fields: Dictionary = {}
 ## restores that contract under the data-only descriptor model.
 var entry_initial_fields: Dictionary = {}
 
-## stdio→HTTP bridge mode for clients that don't speak HTTP natively.
-##   NONE    — entry is `{[entry_url_field]: url, **entry_extra_fields,
-##             ...entry_initial_fields (only for new entries)}`
-##   FLAT    — Claude Desktop shape: `{"command": <uvx>, "args": [...bridge...]}`
-##             Verifier ALSO accepts a future url-style entry.
+## Client-owned stdio launch shape.
 ##
-## Enum (vs. String) so a typo in a descriptor fails at parse time instead of
-## silently falling through `match` to the non-bridge path.
-enum UvxBridge { NONE, FLAT }
-var entry_uvx_bridge: UvxBridge = UvxBridge.NONE
-
-## Client-owned stdio launch shape. This is separate from `UvxBridge`, which
-## describes the legacy third-party stdio->HTTP adapter used by Claude
-## Desktop. A descriptor may activate at most one of these two paths.
-##
-## Only COMMAND_ARRAY is consumed by the TOML strategy in the first #816
-## rollout slice. The remaining values are shared vocabulary for later JSON,
-## YAML, and CLI migrations; keeping them data-only avoids reintroducing the
+## COMMAND_ARRAY is consumed by the TOML strategy and FLAT by the JSON
+## strategy. The remaining values are shared vocabulary for later JSON, YAML,
+## and CLI migrations; keeping them data-only avoids reintroducing the
 ## descriptor Callable race from #229.
 enum CommandShape { NONE, FLAT, TYPED_FLAT, COMMAND_ARRAY, NESTED_COMMAND }
 var command_shape: CommandShape = CommandShape.NONE
+
+## Whether manual instructions may offer the client's native URL transport as
+## an alternative to its command shape. This is capability metadata, not a
+## consequence of `command_shape`: Codex supports a URL block, while Claude
+## Desktop's local `claude_desktop_config.json` entries are stdio-only.
+var command_supports_url_fallback: bool = false
 
 ## Optional discriminator required by a client's command transport shape
 ## (for example `type = "stdio"`). Empty means command+args are sufficient.
@@ -109,6 +120,11 @@ var command_transport_value: Variant = null
 ## `url`, because Codex rejects a server entry containing both URL and stdio
 ## launch fields.
 var command_legacy_keys: PackedStringArray = PackedStringArray()
+
+## Keys inside a preserved JSON `env` object that belonged to a legacy launch
+## shape and must be removed during migration. Other environment values remain
+## user-owned and survive Configure. Currently consumed by the JSON strategy.
+var command_env_legacy_keys: PackedStringArray = PackedStringArray()
 
 ## Defaults seeded only for a new entry. Reconfigure preserves user values.
 ## Codex uses this for enabled/startup/tool timeout defaults.
@@ -168,10 +184,50 @@ var toml_body_template: PackedStringArray = PackedStringArray()
 ## (issue #617: e.g. CODEX_HOME relocates ~/.codex — writing the default
 ## path would false-succeed while Codex reads elsewhere).
 func resolved_config_path() -> String:
+	return str(resolved_config_path_details().get("path", ""))
+
+
+## Detailed sibling used by status/configure/remove so safe resolution
+## failures reach the dock instead of collapsing into NOT_CONFIGURED. `error`
+## is empty for ordinary unsupported/missing path mappings to preserve the
+## long-standing status behavior for clients not installed on this platform.
+func resolved_config_path_details() -> Dictionary:
 	var override := config_home_override()
 	if not override.is_empty():
-		return override
-	return McpPathTemplate.resolve(path_template)
+		return {"path": override, "error": ""}
+	var candidate_key := McpPathTemplate.platform_key(config_path_candidates)
+	if not candidate_key.is_empty():
+		return _resolve_ordered_config_path_candidates(config_path_candidates[candidate_key])
+	return {"path": McpPathTemplate.resolve(path_template), "error": ""}
+
+
+func _resolve_ordered_config_path_candidates(templates: Variant) -> Dictionary:
+	if not (templates is Array or templates is PackedStringArray):
+		return {"path": "", "error": ""}
+	var fallback_create_path := ""
+	for template_variant in templates:
+		var template := str(template_variant)
+		var group := McpPathTemplate.expand_path_candidates(template)
+		if group.size() > 1:
+			var message := (
+				"%s has multiple matching config package paths for %s: %s. "
+				+ "Remove the stale package installation or edit the intended config manually."
+			) % [display_name, template, ", ".join(group)]
+			push_warning(message)
+			return {"path": "", "error": message}
+		if group.is_empty():
+			continue
+		var path := String(group[0])
+		if FileAccess.file_exists(path):
+			return {"path": path, "error": ""}
+		# A wildcard only resolves when its package directory exists. Treat that
+		# installation evidence as authoritative and create its private config
+		# directly instead of relying on copy-on-write read-through.
+		if template.contains("*"):
+			return {"path": path, "error": ""}
+		if fallback_create_path.is_empty():
+			fallback_create_path = path
+	return {"path": fallback_create_path, "error": ""}
 
 
 ## The env-var-relocated config path, or "" when no override applies
@@ -210,9 +266,9 @@ func is_installed() -> bool:
 			return not cfg.is_empty() and FileAccess.file_exists(cfg)
 		return false
 	for p in detect_paths:
-		var resolved := McpPathTemplate.expand(p)
-		if not resolved.is_empty() and (FileAccess.file_exists(resolved) or DirAccess.dir_exists_absolute(resolved)):
-			return true
+		for resolved in McpPathTemplate.expand_path_candidates(p):
+			if FileAccess.file_exists(resolved) or DirAccess.dir_exists_absolute(resolved):
+				return true
 	# Fall back to "config file already exists" — usually means installed at some point.
 	var cfg := resolved_config_path()
 	return not cfg.is_empty() and FileAccess.file_exists(cfg)
@@ -233,47 +289,3 @@ static func _packed_slice(packed: PackedStringArray, from: int, to: int) -> Pack
 	for i in range(from, to):
 		out.append(packed[i])
 	return out
-
-
-# ---------- stdio→http bridge helpers (Claude Desktop) --------------------
-
-## Pinned mcp-proxy release used by every stdio-only client's bridge. uvx's
-## cache key is version-specific, so pinning guarantees all users run the
-## same vetted bridge — a malicious or broken future release on PyPI can't
-## silently break everyone's Configure flow. Bump deliberately when the
-## upstream publishes something we want.
-const MCP_PROXY_VERSION := "0.11.0"
-
-
-## Resolve `uvx` to an absolute path. GUI-launched apps (Claude Desktop)
-## often run with a minimal PATH that excludes ~/.local/bin on macOS /
-## Linux, so a bare "uvx" string in the config would fail at spawn time
-## with the same "Server disconnected" symptom we're trying to cure. The
-## shared three-tier McpCliFinder covers the well-known install dirs;
-## returns bare "uvx" as a last-resort fallback so the entry is still
-## well-formed even if the lookup failed.
-static func resolve_uvx_path() -> String:
-	var names: Array[String] = []
-	names.append("uvx.exe" if OS.get_name() == "Windows" else "uvx")
-	var resolved := McpCliFinder.find(names)
-	return resolved if not resolved.is_empty() else "uvx"
-
-
-## Build the `mcp-proxy` bridge argv (without the leading uvx command).
-## Callers splice this into the client-specific command shape.
-static func mcp_proxy_bridge_args(url: String) -> Array:
-	return ["mcp-proxy==" + MCP_PROXY_VERSION, "--transport", "streamablehttp", url]
-
-
-## Environment overrides written alongside every auto-configured uvx-bridge
-## entry. `UV_LINK_MODE=copy` tells uv to copy shared C extensions into each
-## `builds-v0\.tmpXXXXXX\` build venv instead of hard-linking them from
-## `archive-v0\`. On Windows that breaks the lock race documented in
-## `utils/uv_cache_cleanup.gd` and the README — the running godot-ai server
-## holds `_pydantic_core.pyd` mapped, the build venv's hard-linked copy
-## inherits the lock, uv's post-install cleanup fails, and the MCP launcher
-## reports "pywin32 wheel invalid / file in use" with no working transport.
-## Cost on macOS/Linux is a few extra MB in the uvx cache — well worth it
-## to keep one config shape across platforms.
-static func bridge_env_for_uvx() -> Dictionary:
-	return {"UV_LINK_MODE": "copy"}

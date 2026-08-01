@@ -6,8 +6,8 @@ extends RefCounted
 ##
 ## Background
 ## ----------
-## When Claude Desktop's MCP launcher invokes `uvx mcp-proxy ...` to talk to
-## a running godot-ai server, uv builds an ephemeral venv under
+## When an MCP client's attach launcher invokes
+## `uvx --from godot-ai==VERSION godot-ai attach ...`, uv builds an ephemeral venv under
 ## `builds-v0\.tmpXXXXXX\`. To save disk it hard-links shared C extensions
 ## (notably `pydantic_core/_pydantic_core.cp313-win_amd64.pyd`) from
 ## `archive-v0\<hash>\Lib\site-packages\...` into the build venv.

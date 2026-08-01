@@ -125,12 +125,6 @@ func test_every_client_has_required_fields() -> void:
 		assert_true(not client.id.is_empty(), "Client missing id: %s" % client)
 		assert_true(not client.display_name.is_empty(), "%s missing display_name" % client.id)
 		assert_contains(["json", "toml", "yaml", "cli"], client.config_type, "%s has unexpected config_type %s" % [client.id, client.config_type])
-		if client.command_shape != McpClient.CommandShape.NONE:
-			assert_eq(
-				client.entry_uvx_bridge,
-				McpClient.UvxBridge.NONE,
-				"%s cannot activate both command_shape and entry_uvx_bridge" % client.id,
-			)
 		if client.config_type == "json":
 			assert_gt(client.server_key_path.size(), 0, "%s missing server_key_path" % client.id)
 		elif client.config_type == "yaml":
@@ -867,6 +861,172 @@ func test_path_template_xdg_fallback() -> void:
 	assert_true(resolved.ends_with("/foo"))
 
 
+func test_path_candidate_expansion_supports_directory_wildcard_and_missing_leaf() -> void:
+	var root := _scratch_dir.path_join("candidate_expand")
+	_remove_dir_recursive(root)
+	var package_root := root.path_join("Packages/Claude_testpublisher")
+	DirAccess.make_dir_recursive_absolute(package_root)
+	var template := root.path_join(
+		"Packages/Claude_*/LocalCache/Roaming/Claude/claude_desktop_config.json"
+	)
+	var candidates := McpPathTemplate.expand_path_candidates(template)
+	assert_eq(candidates.size(), 1)
+	assert_eq(
+		candidates[0],
+		package_root.path_join("LocalCache/Roaming/Claude/claude_desktop_config.json"),
+		"wildcard resolution must produce a create target even when the leaf is absent",
+	)
+	var install_matches := McpPathTemplate.expand_path_candidates(root.path_join("Packages/Claude_*"))
+	assert_eq(install_matches, PackedStringArray([package_root]))
+	_remove_dir_recursive(root)
+
+
+func test_wildcard_segment_match_rejects_overlapping_fixed_parts() -> void:
+	assert_false(
+		McpPathTemplate._wildcard_segment_matches("Claude_", "Claude_", "Claude_"),
+		"prefix and suffix must not overlap inside a value shorter than their combined length",
+	)
+	assert_true(McpPathTemplate._wildcard_segment_matches("Claude_Beta", "Claude_", "Beta"))
+
+
+func test_ordered_config_candidates_choose_effective_existing_file() -> void:
+	var root := _scratch_dir.path_join("candidate_existing")
+	_remove_dir_recursive(root)
+	var package_root := root.path_join("Packages/Claude_store")
+	var container_path := package_root.path_join(
+		"LocalCache/Roaming/Claude/claude_desktop_config.json"
+	)
+	var roaming_path := root.path_join("Roaming/Claude/claude_desktop_config.json")
+	_write_text(container_path, "container")
+	_write_text(roaming_path, "roaming")
+	var client := _make_candidate_json_client(root, roaming_path)
+	assert_eq(
+		client.resolved_config_path(),
+		container_path,
+		"an existing Store-private config must win over the roaming file",
+	)
+	_remove_if_exists(container_path)
+	assert_eq(
+		client.resolved_config_path(),
+		container_path,
+		"an installed Store package must create its private config instead of relying on read-through",
+	)
+	_remove_dir_recursive(package_root)
+	assert_eq(client.resolved_config_path(), roaming_path, "roaming wins when no Store package exists")
+	_remove_dir_recursive(root)
+
+
+func test_ordered_config_candidates_define_fresh_create_target() -> void:
+	var root := _scratch_dir.path_join("candidate_create")
+	_remove_dir_recursive(root)
+	var package_root := root.path_join("Packages/Claude_store")
+	DirAccess.make_dir_recursive_absolute(package_root)
+	var roaming_path := root.path_join("Roaming/Claude/claude_desktop_config.json")
+	var client := _make_candidate_json_client(root, roaming_path)
+	assert_eq(
+		client.resolved_config_path(),
+		package_root.path_join("LocalCache/Roaming/Claude/claude_desktop_config.json"),
+		"a unique Store package root must define the fresh create target",
+	)
+	_remove_dir_recursive(package_root)
+	assert_eq(
+		client.resolved_config_path(),
+		roaming_path,
+		"without a Store package, the descriptor's roaming candidate is deterministic",
+	)
+	_remove_dir_recursive(root)
+
+
+func test_ordered_config_candidates_fail_closed_for_ambiguous_store_roots() -> void:
+	var root := _scratch_dir.path_join("candidate_ambiguous")
+	_remove_dir_recursive(root)
+	DirAccess.make_dir_recursive_absolute(root.path_join("Packages/Claude_alpha"))
+	DirAccess.make_dir_recursive_absolute(root.path_join("Packages/Claude_beta"))
+	var roaming_path := root.path_join("Roaming/Claude/claude_desktop_config.json")
+	_write_text(roaming_path, '{"mcpServers":{}}')
+	var client := _make_candidate_json_client(root, roaming_path)
+	var resolution := client.resolved_config_path_details()
+	assert_eq(
+		resolution.get("path"),
+		"",
+		"multiple Store targets must fail closed even when a roaming fallback exists",
+	)
+	assert_contains(str(resolution.get("error", "")), "multiple matching config package paths")
+	assert_contains(str(resolution.get("error", "")), "Claude_alpha")
+	assert_contains(str(resolution.get("error", "")), "Claude_beta")
+	assert_eq(McpClientConfigurator._config_path_resolution_error(client), resolution.get("error"))
+	var details := McpJsonStrategy.check_status_details(client, "godot-ai", "http://x")
+	assert_eq(details.get("status"), McpClient.Status.ERROR)
+	assert_eq(details.get("error_msg"), resolution.get("error"))
+	var configure := McpJsonStrategy.configure(client, "godot-ai", "http://x")
+	assert_eq(configure.get("status"), "error")
+	assert_eq(configure.get("message"), resolution.get("error"))
+	assert_false(str(configure.get("message", "")).contains("on this OS"))
+	var remove := McpJsonStrategy.remove(client, "godot-ai")
+	assert_eq(remove.get("status"), "error")
+	assert_eq(remove.get("message"), resolution.get("error"))
+	_remove_dir_recursive(root)
+
+
+func test_candidate_detect_path_marks_store_package_installed_without_config() -> void:
+	var root := _scratch_dir.path_join("candidate_detect")
+	_remove_dir_recursive(root)
+	DirAccess.make_dir_recursive_absolute(root.path_join("Packages/Claude_store"))
+	var client := _make_candidate_json_client(
+		root, root.path_join("Roaming/Claude/claude_desktop_config.json")
+	)
+	client.detect_paths = PackedStringArray([root.path_join("Packages/Claude_*")])
+	assert_true(client.is_installed(), "the Store package root must drive the installed badge")
+	_remove_dir_recursive(root)
+
+
+func test_candidate_effective_path_drives_json_configure_verify_status_and_remove() -> void:
+	var root := _scratch_dir.path_join("candidate_e2e")
+	_remove_dir_recursive(root)
+	var container_path := root.path_join(
+		"Packages/Claude_store/LocalCache/Roaming/Claude/claude_desktop_config.json"
+	)
+	var roaming_path := root.path_join("Roaming/Claude/claude_desktop_config.json")
+	var container_seed := {
+		"mcpServers": {
+			"someone-else": {"command": "keep-me"},
+		},
+		"containerOnly": true,
+	}
+	var roaming_seed := '{"mcpServers":{"roaming-only":{"command":"untouched"}}}'
+	_write_text(container_path, JSON.stringify(container_seed))
+	_write_text(roaming_path, roaming_seed)
+	var client := _make_candidate_json_client(root, roaming_path)
+	client.command_shape = McpClient.CommandShape.FLAT
+	var launch := _test_attach_launch()
+	var configured := McpJsonStrategy.configure(client, "godot-ai", "http://unused", launch)
+	var verified := McpClientConfigurator._verify_post_state(
+		client,
+		configured,
+		McpClient.Status.CONFIGURED,
+		"http://unused",
+		"configure",
+		launch,
+	)
+	assert_eq(configured.get("status"), "ok")
+	assert_eq(verified.get("status"), "ok", "post-state verification must read the effective path")
+	assert_eq(
+		McpJsonStrategy.check_status(client, "godot-ai", "http://unused", launch),
+		McpClient.Status.CONFIGURED,
+	)
+	var configured_data = JSON.parse_string(_read_text(container_path))
+	assert_true(configured_data.get("mcpServers", {}).has("someone-else"))
+	assert_eq(configured_data.get("containerOnly"), true)
+	assert_eq(_read_text(roaming_path), roaming_seed, "the non-effective config must stay byte-identical")
+	var removed := McpJsonStrategy.remove(client, "godot-ai")
+	assert_eq(removed.get("status"), "ok")
+	var after_remove = JSON.parse_string(_read_text(container_path))
+	assert_true(after_remove.get("mcpServers", {}).has("someone-else"))
+	assert_false(after_remove.get("mcpServers", {}).has("godot-ai"))
+	assert_eq(_read_text(roaming_path), roaming_seed, "Remove must target only the effective config")
+	_remove_dir_recursive(root)
+
+
 # ----- env snapshot (#691) -----
 
 const TEST_SNAPSHOT_ENV := "GODOT_AI_TEST_ENV_SNAPSHOT"
@@ -1395,7 +1555,7 @@ func test_json_strategy_distinguishes_missing_entry_from_url_drift() -> void:
 
 
 func test_json_strategy_drift_with_bridge_entry() -> void:
-	## Bridge clients (Claude Desktop "flat") run through a different verify path in
+	## Command clients (Claude Desktop "flat") run through a different verify path in
 	## `_json_strategy.verify_entry` than the default url-field comparison. Drift must still
 	## surface as CONFIGURED_MISMATCH, not NOT_CONFIGURED — dock contract is the same.
 	var path := _scratch_dir.path_join("verify_drift.json")
@@ -1406,11 +1566,14 @@ func test_json_strategy_drift_with_bridge_entry() -> void:
 	client.config_type = "json"
 	client.path_template = {"darwin": path, "windows": path, "linux": path, "unix": path}
 	client.server_key_path = PackedStringArray(["mcpServers"])
-	client.entry_uvx_bridge = McpClient.UvxBridge.FLAT
+	client.command_shape = McpClient.CommandShape.FLAT
+	var launch := {"ok": true, "command": "C:/Tools/godot-ai.exe", "args": ["attach", "--port", "8000"]}
 
-	McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp", launch)
+	var drifted_launch := launch.duplicate(true)
+	drifted_launch["args"] = ["attach", "--port", "9000"]
 	assert_eq(
-		McpJsonStrategy.check_status(client, "godot-ai", "http://127.0.0.1:9000/mcp"),
+		McpJsonStrategy.check_status(client, "godot-ai", "http://127.0.0.1:9000/mcp", drifted_launch),
 		McpClient.Status.CONFIGURED_MISMATCH,
 	)
 
@@ -2206,143 +2369,190 @@ func test_gemini_cli_entry_uses_httpUrl() -> void:
 	assert_eq(entry.get("httpUrl", ""), "http://x")
 
 
-func test_claude_desktop_bridges_via_uvx() -> void:
-	var c := McpClientRegistry.get_by_id("claude_desktop")
-	assert_eq(c.entry_uvx_bridge, McpClient.UvxBridge.FLAT, "claude_desktop must declare FLAT uvx bridge")
-	var entry := McpJsonStrategy.build_entry(c, "http://x")
-	_assert_uvx_command(entry.get("command", ""))
-	_assert_mcp_proxy_bridge_args(entry.get("args", []), "http://x")
-	_assert_bridge_env_pin(entry)
+func test_claude_desktop_declares_flat_attach_shape() -> void:
+	var client := McpClientRegistry.get_by_id("claude_desktop")
+	assert_eq(client.command_shape, McpClient.CommandShape.FLAT)
+	var windows_candidates: Array = client.config_path_candidates.get("windows", [])
+	assert_eq(windows_candidates.size(), 2)
+	assert_contains(str(windows_candidates[0]), "Packages/Claude_*")
+	assert_false(
+		str(windows_candidates[0]).contains("pzs8sxrjxfjjc"),
+		"the Store publisher hash must not be hardcoded",
+	)
+	assert_true(client.detect_paths.has("$LOCALAPPDATA/Packages/Claude_*"))
+	assert_false(
+		client.command_supports_url_fallback,
+		"claude_desktop_config.json local entries do not support URL transport",
+	)
+	assert_true(client.command_legacy_keys.has("url"), "URL migration must remove the legacy key")
+	assert_true(client.command_env_legacy_keys.has("UV_LINK_MODE"), "legacy bridge env pin must be removed")
+	assert_true(client.command_user_fields.has("env"))
+	assert_true(client.command_user_fields.has("disabled"))
 
 
-func test_claude_desktop_verify_entry_accepts_uvx_form() -> void:
-	## Drift-detection: once we've written the new uvx entry, check_status
-	## must round-trip it as CONFIGURED (not MISMATCH). Guards against a
-	## verifier that still only recognises the old npx/mcp-remote shape.
-	var c := McpClientRegistry.get_by_id("claude_desktop")
-	var entry := McpJsonStrategy.build_entry(c, "http://x")
-	assert_true(McpJsonStrategy.verify_entry(c, entry, "http://x"), "uvx entry should verify as a match")
+func test_claude_desktop_flat_entry_round_trips() -> void:
+	var client := McpClientRegistry.get_by_id("claude_desktop")
+	var launch := _test_attach_launch()
+	var entry := McpJsonStrategy.build_entry(client, "http://unused", null, launch)
+	assert_eq(entry.get("command"), launch.get("command"))
+	assert_eq(entry.get("args"), launch.get("args"))
+	assert_false(entry.has("url"))
+	assert_true(McpJsonStrategy.verify_entry(client, entry, "http://unused", launch))
 
 
-func test_claude_desktop_verify_flags_pre_uv_link_mode_entry_as_drift() -> void:
-	## Users who configured Claude Desktop before the UV_LINK_MODE=copy fix
-	## have a uvx bridge entry with no `env` block (or one missing
-	## UV_LINK_MODE). Without this drift, they hit the Windows pywin32 install
-	## failure documented in utils/uv_cache_cleanup.gd and the README. The
-	## verifier must flag those as MISMATCH so the dock prompts a reconfigure.
-	var c := McpClientRegistry.get_by_id("claude_desktop")
-	var legacy_no_env := {
+func test_json_flat_transport_and_initial_fields_are_declarative() -> void:
+	var client := McpClient.new()
+	client.display_name = "Typed Flat Test"
+	client.command_shape = McpClient.CommandShape.FLAT
+	client.command_transport_key = "transport"
+	client.command_transport_value = null
+	client.command_initial_fields = {"disabled": false}
+	var launch := _test_attach_launch()
+	var entry := McpJsonStrategy.build_entry(
+		client, "http://unused", {"disabled": true, "future": 7}, launch
+	)
+	assert_true(entry.has("transport"), "a null-valued discriminator must still be emitted")
+	assert_eq(entry.get("transport"), null)
+	assert_eq(entry.get("disabled"), true, "initial fields must not reset user state")
+	assert_eq(entry.get("future"), 7, "unknown fields must survive")
+	assert_true(McpJsonStrategy.verify_entry(client, entry, "http://unused", launch))
+	entry.erase("transport")
+	assert_false(
+		McpJsonStrategy.verify_entry(client, entry, "http://unused", launch),
+		"a missing null-valued discriminator is still launch drift",
+	)
+
+
+func test_claude_desktop_legacy_proxy_and_url_entries_are_drift() -> void:
+	var client := McpClientRegistry.get_by_id("claude_desktop")
+	var launch := _test_attach_launch()
+	var legacy_proxy := {
 		"command": "uvx",
-		"args": McpClient.mcp_proxy_bridge_args("http://x"),
+		"args": ["mcp-proxy==0.11.0", "--transport", "streamablehttp", "http://x"],
+		"env": {"UV_LINK_MODE": "copy"},
 	}
-	assert_false(McpJsonStrategy.verify_entry(c, legacy_no_env, "http://x"), "pre-fix entry without env must register as drift")
-	var legacy_wrong_mode := {
-		"command": "uvx",
-		"args": McpClient.mcp_proxy_bridge_args("http://x"),
-		"env": {"UV_LINK_MODE": "hardlink"},
-	}
-	assert_false(McpJsonStrategy.verify_entry(c, legacy_wrong_mode, "http://x"), "entry with wrong UV_LINK_MODE must register as drift")
-	var legacy_empty_env := {
-		"command": "uvx",
-		"args": McpClient.mcp_proxy_bridge_args("http://x"),
-		"env": {},
-	}
-	assert_false(McpJsonStrategy.verify_entry(c, legacy_empty_env, "http://x"), "entry with empty env must register as drift")
+	assert_false(McpJsonStrategy.verify_entry(client, legacy_proxy, "http://x", launch))
+	assert_false(
+		McpJsonStrategy.verify_entry(client, {"url": "http://x"}, "http://x", launch),
+		"legacy URL mode must surface migration drift",
+	)
 
 
-func test_claude_desktop_manual_command_includes_env_pin() -> void:
-	## The dock's "Run this manually" string is rendered by `_format_entry_inline`
-	## on the same `build_entry` output the auto-configure path writes — if it
-	## ever loses the env block, paste-into-config users silently miss the
-	## UV_LINK_MODE=copy pin and hit the Windows pywin32 lock. Pin the
-	## inline-JSON shape so a future change to `_format_value` / `build_entry`
-	## that drops the env key fails CI.
-	var c := McpClientRegistry.get_by_id("claude_desktop")
-	var manual := McpManualCommand.build(c, "godot-ai", "http://x", "/tmp/cd.json")
-	assert_contains(manual, "\"env\":")
-	assert_contains(manual, "\"UV_LINK_MODE\": \"copy\"")
-
-
-func test_claude_desktop_configure_preserves_existing_env_keys() -> void:
-	## Verifier tolerates user-added env keys (HTTP_PROXY, PYTHONUNBUFFERED, etc.)
-	## so the rewriter must too. Without merge, a Configure click on a
-	## CONFIGURED_MISMATCH entry silently drops them — the user reports their
-	## proxy settings disappear after we surface drift on a port change.
-	var path := _scratch_dir.path_join("preserve_env.json")
+func test_claude_desktop_configure_migrates_losslessly() -> void:
+	var path := _scratch_dir.path_join("claude_attach_migration.json")
 	_remove_if_exists(path)
 	var pre_existing := {
 		"mcpServers": {
 			"godot-ai": {
+				"url": "http://old",
 				"command": "uvx",
-				"args": McpClient.mcp_proxy_bridge_args("http://old"),
+				"args": ["mcp-proxy==0.11.0", "--transport", "streamablehttp", "http://old"],
 				"env": {
+					"UV_LINK_MODE": "copy",
 					"HTTP_PROXY": "http://corp-proxy:3128",
 					"PYTHONUNBUFFERED": "1",
 				},
+				"disabled": true,
+				"futureClaudeField": {"keep": true},
 			}
 		}
 	}
-	var f := FileAccess.open(path, FileAccess.WRITE)
-	assert_true(f != null, "scratch path must be writable")
-	f.store_string(JSON.stringify(pre_existing))
-	f.close()
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	assert_true(file != null, "scratch path must be writable")
+	file.store_string(JSON.stringify(pre_existing))
+	file.close()
 
-	var client := McpClient.new()
-	client.id = "preserve_env_test"
-	client.display_name = "Preserve Env Test"
-	client.config_type = "json"
-	client.path_template = {"darwin": path, "windows": path, "linux": path, "unix": path}
-	client.server_key_path = PackedStringArray(["mcpServers"])
-	client.entry_uvx_bridge = McpClient.UvxBridge.FLAT
-
-	var result := McpJsonStrategy.configure(client, "godot-ai", "http://new")
+	var client := _make_claude_flat_client(path)
+	var launch := _test_attach_launch()
+	var before := McpJsonStrategy.check_status(client, "godot-ai", "http://new", launch)
+	assert_eq(before, McpClient.Status.CONFIGURED_MISMATCH)
+	var result := McpJsonStrategy.configure(client, "godot-ai", "http://new", launch)
 	assert_eq(result.get("status"), "ok")
 
-	var rf := FileAccess.open(path, FileAccess.READ)
-	var written = JSON.parse_string(rf.get_as_text())
-	rf.close()
-	var entry = written.get("mcpServers", {}).get("godot-ai", {})
-	var env = entry.get("env", {})
-	assert_eq(env.get("HTTP_PROXY", ""), "http://corp-proxy:3128", "HTTP_PROXY must be preserved across rewrite")
-	assert_eq(env.get("PYTHONUNBUFFERED", ""), "1", "PYTHONUNBUFFERED must be preserved across rewrite")
-	assert_eq(env.get("UV_LINK_MODE", ""), "copy", "UV_LINK_MODE pin must overlay existing env")
+	var read_file := FileAccess.open(path, FileAccess.READ)
+	var written = JSON.parse_string(read_file.get_as_text())
+	read_file.close()
+	var entry: Dictionary = written.get("mcpServers", {}).get("godot-ai", {})
+	assert_false(entry.has("url"), "migration must remove the conflicting URL key")
+	assert_eq(entry.get("command"), launch.get("command"))
+	assert_eq(entry.get("args"), launch.get("args"))
+	assert_eq(entry.get("disabled"), true, "user disabled state must survive")
+	assert_eq(entry.get("futureClaudeField"), {"keep": true}, "unknown client fields must survive")
+	var env: Dictionary = entry.get("env", {})
+	assert_false(env.has("UV_LINK_MODE"), "obsolete bridge-only env pin must be removed")
+	assert_eq(env.get("HTTP_PROXY"), "http://corp-proxy:3128")
+	assert_eq(env.get("PYTHONUNBUFFERED"), "1")
+	assert_eq(McpJsonStrategy.check_status(client, "godot-ai", "http://new", launch), McpClient.Status.CONFIGURED)
 
 
-func test_claude_desktop_verify_flags_wrong_transport_as_drift() -> void:
-	## Pre-PR302 verifier only required `args.has(server_url)` — an entry like
-	## `mcp-proxy --transport sse <url>` (Claude Desktop's old SSE shape) would
-	## report CONFIGURED even though our streamable-http /mcp endpoint returns
-	## HTTP 400 against SSE. Tightened verifier requires the full bridge argv
-	## shape so transport drift surfaces too.
-	var c := McpClientRegistry.get_by_id("claude_desktop")
-	var sse_entry := {
-		"command": "uvx",
-		"args": ["mcp-proxy", "--transport", "sse", "http://x"],
-		"env": McpClient.bridge_env_for_uvx(),
-	}
-	assert_false(McpJsonStrategy.verify_entry(c, sse_entry, "http://x"), "wrong-transport entry must register as drift")
-	var no_proxy_entry := {
-		"command": "uvx",
-		"args": ["some-other-package", "--transport", "streamablehttp", "http://x"],
-		"env": McpClient.bridge_env_for_uvx(),
-	}
-	assert_false(McpJsonStrategy.verify_entry(c, no_proxy_entry, "http://x"), "non-mcp-proxy entry must register as drift")
-	var non_uvx_command := {
-		"command": "python",
-		"args": McpClient.mcp_proxy_bridge_args("http://x"),
-		"env": McpClient.bridge_env_for_uvx(),
-	}
-	assert_false(McpJsonStrategy.verify_entry(c, non_uvx_command, "http://x"), "non-uvx command must register as drift")
+func test_claude_desktop_migration_omits_empty_env() -> void:
+	var client := McpClientRegistry.get_by_id("claude_desktop")
+	var existing := {"env": {"UV_LINK_MODE": "copy"}}
+	var entry := McpJsonStrategy.build_entry(client, "http://unused", existing, _test_attach_launch())
+	assert_false(entry.has("env"), "an env object emptied by migration must be omitted")
 
 
-func test_claude_desktop_verify_entry_accepts_future_url_form() -> void:
-	## Tolerance preserved from the pre-refactor verifier: a hypothetical
-	## future Claude Desktop that speaks HTTP natively would write a plain
-	## `{"url": "..."}` entry. The flat-bridge verifier must accept that
-	## shape too so we don't downgrade-classify it as drift.
-	var c := McpClientRegistry.get_by_id("claude_desktop")
-	var future_entry := {"url": "http://x"}
-	assert_true(McpJsonStrategy.verify_entry(c, future_entry, "http://x"), "future url-style entry should verify")
+func test_claude_desktop_missing_launch_is_error_without_write() -> void:
+	var path := _scratch_dir.path_join("claude_attach_missing_launch.json")
+	_remove_if_exists(path)
+	var original := '{"mcpServers":{"godot-ai":{"url":"http://x"}}}'
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	assert_true(file != null)
+	file.store_string(original)
+	file.close()
+	var client := _make_claude_flat_client(path)
+	var unavailable := {"ok": false, "error": "Install uv or repair the launcher."}
+	var details := McpJsonStrategy.check_status_details(client, "godot-ai", "http://x", unavailable)
+	assert_eq(details.get("status"), McpClient.Status.ERROR)
+	assert_contains(str(details.get("error_msg", "")), "Install uv")
+	var configured := McpJsonStrategy.configure(client, "godot-ai", "http://x", unavailable)
+	assert_eq(configured.get("status"), "error")
+	var read_file := FileAccess.open(path, FileAccess.READ)
+	assert_eq(read_file.get_as_text(), original, "failed discovery must leave JSON byte-identical")
+	read_file.close()
+
+
+func test_claude_desktop_manual_command_shows_attach_without_url_fallback() -> void:
+	var client := McpClientRegistry.get_by_id("claude_desktop")
+	var manual := McpManualCommand.build(
+		client, "godot-ai", "http://x", "/tmp/cd.json", _test_attach_launch()
+	)
+	assert_contains(manual, '"command": "C:/Python313/pythonw.exe"')
+	assert_contains(manual, '"attach"')
+	assert_false(manual.contains("Advanced fallback"))
+	assert_false(manual.contains('"url": "http://x"'))
+	var unavailable := McpManualCommand.build(
+		client,
+		"godot-ai",
+		"http://x",
+		"/tmp/cd.json",
+		{"ok": false, "error": "Install uv first."},
+	)
+	assert_contains(unavailable, "Install uv first")
+	assert_false(unavailable.contains('"url": "http://x"'))
+
+
+func test_json_manual_url_fallback_requires_descriptor_capability() -> void:
+	var client := _make_claude_flat_client("/tmp/flat.json")
+	client.command_supports_url_fallback = true
+	var manual := McpManualCommand.build(
+		client, "godot-ai", "http://x", "/tmp/flat.json", _test_attach_launch()
+	)
+	assert_contains(manual, "Advanced fallback")
+	assert_contains(manual, '"url": "http://x"')
+
+
+func test_json_manual_command_rejects_unsupported_command_shape() -> void:
+	var client := McpClient.new()
+	client.display_name = "Future JSON Client"
+	client.config_type = "json"
+	client.server_key_path = PackedStringArray(["mcpServers"])
+	client.command_shape = McpClient.CommandShape.TYPED_FLAT
+	var manual := McpManualCommand.build(
+		client, "godot-ai", "http://x", "/tmp/future.json", _test_attach_launch()
+	)
+	assert_contains(manual, "command shape not supported by JSON yet")
+	assert_false(manual.contains('"godot-ai": {}'), "unsupported shapes must not render an empty entry")
 
 
 func test_zed_uses_url() -> void:
@@ -2351,22 +2561,6 @@ func test_zed_uses_url() -> void:
 	assert_eq(entry.get("url", ""), "http://x")
 
 
-func test_mcp_proxy_bridge_args_pins_version() -> void:
-	## Security: mcp-proxy is pulled from PyPI at first-connect. Pinning the
-	## version protects every user from a malicious or broken future release.
-	## If MCP_PROXY_VERSION ever changes, the pinned arg must change with it.
-	var args := McpClient.mcp_proxy_bridge_args("http://x")
-	assert_eq(args[0], "mcp-proxy==" + McpClient.MCP_PROXY_VERSION)
-
-
-func test_resolve_uvx_path_returns_nonempty() -> void:
-	## Fallback contract: even if McpCliFinder comes up empty (CI with no
-	## uvx installed), we must still emit a well-formed command string so
-	## the config file is valid. The bare "uvx" fallback is fine — the user
-	## will get the same spawn failure they would have had anyway.
-	var resolved := McpClient.resolve_uvx_path()
-	assert_false(resolved.is_empty())
-	assert_true(resolved.get_file() == "uvx" or resolved.get_file() == "uvx.exe", "resolved path must end in uvx or uvx.exe, got: %s" % resolved)
 
 
 func test_vscode_uses_servers_key_with_type_http() -> void:
@@ -2641,12 +2835,6 @@ func test_hermes_uses_snake_case_mcp_servers_key() -> void:
 	assert_eq(c.server_key_path[0], "mcp_servers")
 
 
-func test_hermes_has_no_uvx_bridge() -> void:
-	## Hermes Agent is HTTP-native — no uvx mcp-proxy bridge needed.
-	var c := McpClientRegistry.get_by_id("hermes")
-	assert_eq(c.entry_uvx_bridge, McpClient.UvxBridge.NONE)
-
-
 func test_hermes_is_in_required_registry_check() -> void:
 	## Ensure test_registry_loads_all_clients would not break if this test
 	## was added to the required client list — just a forward-compat guard.
@@ -2850,52 +3038,31 @@ func test_path_template_expand_home_falls_back_to_userprofile() -> void:
 
 # ----- helpers -----
 
-func _assert_uvx_command(cmd: Variant) -> void:
-	## The bridge command may be a bare "uvx"/"uvx.exe" (CI fallback) or an
-	## absolute path resolved by McpCliFinder. Either is fine — just assert
-	## the basename matches uvx.
-	assert_true(cmd is String, "command must be a String, got: %s" % cmd)
-	var cmd_str: String = cmd
-	var basename := cmd_str.get_file()
-	assert_true(basename == "uvx" or basename == "uvx.exe", "command must resolve to uvx/uvx.exe, got: %s" % cmd_str)
+func _test_attach_launch() -> Dictionary:
+	return {
+		"ok": true,
+		"tier": "uvx",
+		"command": "C:/Python313/pythonw.exe",
+		"args": [
+			"-c", "stdio-bootstrap", "C:/Tools/uv/uvx.exe",
+			"--link-mode", "copy", "--from", "godot-ai==3.0.7",
+			"godot-ai", "attach", "--port", "8000", "--ws-port", "9500",
+		],
+	}
 
 
-func _assert_mcp_proxy_bridge_args(args: Variant, expected_url: String) -> void:
-	## Shared shape check for any client that bridges stdio → streamable-http
-	## via `uvx mcp-proxy`. The first arg is a pinned version spec like
-	## `mcp-proxy==0.11.0` — match by prefix so this doesn't have to churn
-	## every time MCP_PROXY_VERSION bumps.
-	##
-	## NOTE: Pass `args` through `str()` before `%` substitution. GDScript's
-	## `%` operator interprets a bare Array on the right-hand side as a list
-	## of arguments to splice into multiple `%s` slots — `"got: %s" % args`
-	## with a 4-element array errors with "not all arguments converted",
-	## the assertion message becomes garbage, and on stricter runtimes the
-	## SCRIPT ERROR is treated as a test failure.
-	assert_true(args is Array, "bridge args must be an Array, got: %s" % str(args))
-	var has_mcp_proxy := false
-	for a in args:
-		if a is String and (a as String).begins_with("mcp-proxy"):
-			has_mcp_proxy = true
-			break
-	assert_true(has_mcp_proxy, "args must include an mcp-proxy entry, got: %s" % str(args))
-	assert_contains(args, "--transport")
-	assert_contains(args, "streamablehttp")
-	assert_contains(args, expected_url)
-
-
-func _assert_bridge_env_pin(entry: Variant) -> void:
-	## Every uvx-bridge entry must carry `env.UV_LINK_MODE=copy`. Without it,
-	## the running godot-ai server's `_pydantic_core.pyd` mapping locks the
-	## hard-linked copy under `builds-v0\.tmpXXXXXX\` on Windows and uvx's
-	## post-install cleanup fails — the symptom is a "pywin32 wheel invalid /
-	## file in use" error in Claude Desktop's MCP launcher with no working
-	## transport. See utils/uv_cache_cleanup.gd and the README troubleshooting
-	## section for the full hard-link explanation.
-	assert_true(entry is Dictionary, "entry must be a Dictionary, got: %s" % str(entry))
-	var env = entry.get("env", null)
-	assert_true(env is Dictionary, "bridged entry must include an env dict pinning UV_LINK_MODE=copy, got env=%s" % str(env))
-	assert_eq(env.get("UV_LINK_MODE", ""), "copy", "env must pin UV_LINK_MODE=copy")
+func _make_claude_flat_client(path: String) -> McpClient:
+	var client := McpClient.new()
+	client.id = "claude_desktop_test"
+	client.display_name = "Claude Desktop Test"
+	client.config_type = "json"
+	client.path_template = {"darwin": path, "windows": path, "linux": path, "unix": path}
+	client.server_key_path = PackedStringArray(["mcpServers"])
+	client.command_shape = McpClient.CommandShape.FLAT
+	client.command_legacy_keys = PackedStringArray(["url"])
+	client.command_env_legacy_keys = PackedStringArray(["UV_LINK_MODE"])
+	client.command_user_fields = PackedStringArray(["env", "disabled"])
+	return client
 
 
 func _make_test_json_client(path: String) -> McpClient:
@@ -2909,6 +3076,23 @@ func _make_test_json_client(path: String) -> McpClient:
 	# → strategy synthesises `{"url": <url>}`, matching the pre-refactor
 	# entry_builder lambda.
 	return c
+
+
+func _make_candidate_json_client(root: String, roaming_path: String) -> McpClient:
+	var client := _make_test_json_client(roaming_path)
+	var candidates := [
+		root.path_join(
+			"Packages/Claude_*/LocalCache/Roaming/Claude/claude_desktop_config.json"
+		),
+		roaming_path,
+	]
+	client.config_path_candidates = {
+		"darwin": candidates,
+		"windows": candidates,
+		"linux": candidates,
+		"unix": candidates,
+	}
+	return client
 
 
 func _make_test_toml_client(path: String) -> McpClient:
@@ -2925,6 +3109,38 @@ func _make_test_toml_client(path: String) -> McpClient:
 func _remove_if_exists(path: String) -> void:
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)
+
+
+func _write_text(path: String, content: String) -> void:
+	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	assert_true(file != null, "Failed to write scratch file at %s" % path)
+	if file != null:
+		file.store_string(content)
+		file.close()
+
+
+func _read_text(path: String) -> String:
+	var file := FileAccess.open(path, FileAccess.READ)
+	assert_true(file != null, "Failed to read scratch file at %s" % path)
+	if file == null:
+		return ""
+	var content := file.get_as_text()
+	file.close()
+	return content
+
+
+func _remove_dir_recursive(path: String) -> void:
+	if not DirAccess.dir_exists_absolute(path):
+		return
+	var dir := DirAccess.open(path)
+	if dir == null:
+		return
+	for file_name in dir.get_files():
+		DirAccess.remove_absolute(path.path_join(file_name))
+	for dir_name in dir.get_directories():
+		_remove_dir_recursive(path.path_join(dir_name))
+	DirAccess.remove_absolute(path)
 
 
 ## Relative path inside a scratch dir where `_find_venv_python_in` expects

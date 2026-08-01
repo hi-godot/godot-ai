@@ -19,7 +19,7 @@ static func build(
 		"cli":
 			return _build_cli(client, server_name, server_url, resolved_path)
 		"json":
-			return _build_json(client, server_name, server_url, resolved_path)
+			return _build_json(client, server_name, server_url, resolved_path, launch)
 		"toml":
 			return _build_toml(client, server_name, server_url, resolved_path, launch)
 		"yaml":
@@ -55,11 +55,32 @@ static func _build_cli(client: McpClient, server_name: String, server_url: Strin
 	return cmd
 
 
-static func _build_json(client: McpClient, server_name: String, server_url: String, resolved_path: String) -> String:
-	var entry := McpJsonStrategy.build_entry(client, server_url)
-	var entry_text := _format_entry_inline(entry)
+static func _build_json(
+	client: McpClient,
+	server_name: String,
+	server_url: String,
+	resolved_path: String,
+	launch: Dictionary = {},
+) -> String:
 	var key := client.server_key_path[0] if client.server_key_path.size() > 0 else "mcpServers"
-	return "Edit %s and add under \"%s\":\n  \"%s\": %s" % [resolved_path, key, server_name, entry_text]
+	if client.command_shape != McpClient.CommandShape.NONE:
+		var lines: Array[String] = []
+		var launch_error := McpJsonStrategy._command_launch_error(client, launch)
+		if launch_error.is_empty():
+			var command_entry := McpJsonStrategy.build_entry(client, server_url, null, launch)
+			lines.append("Edit %s and add under \"%s\":" % [resolved_path, key])
+			lines.append("  \"%s\": %s" % [server_name, _format_entry_inline(command_entry)])
+		else:
+			lines.append("Attach launch command unavailable: %s" % launch_error)
+		if client.command_supports_url_fallback:
+			lines.append("")
+			lines.append("Advanced fallback — use this URL-mode entry instead; never configure both shapes together. URL mode depends on your client's own reconnect behavior. If the server is down when the client starts, restarting the client may be required.")
+			lines.append("Edit %s and add under \"%s\":" % [resolved_path, key])
+			var fallback_entry := McpJsonStrategy.build_url_entry(client, server_url)
+			lines.append("  \"%s\": %s" % [server_name, _format_entry_inline(fallback_entry)])
+		return "\n".join(lines)
+	var entry := McpJsonStrategy.build_entry(client, server_url)
+	return "Edit %s and add under \"%s\":\n  \"%s\": %s" % [resolved_path, key, server_name, _format_entry_inline(entry)]
 
 
 static func _build_toml(
@@ -80,11 +101,12 @@ static func _build_toml(
 				lines.append("  %s" % str(body_line))
 		else:
 			lines.append("Attach launch command unavailable: %s" % str(rendered.get("error", "no compatible launcher found")))
-		lines.append("")
-		lines.append("Advanced fallback — replace the command/args block above with this URL-mode block; never configure both shapes together. URL mode depends on your client's own reconnect behavior. If the server is down when the client starts, restarting the client may be required.")
-		lines.append("Edit %s and add:" % resolved_path)
-		lines.append("  %s" % header)
-		lines.append("  url = %s" % McpTomlStrategy.encode_basic_string(server_url))
+		if client.command_supports_url_fallback:
+			lines.append("")
+			lines.append("Advanced fallback — replace the command/args block above with this URL-mode block; never configure both shapes together. URL mode depends on your client's own reconnect behavior. If the server is down when the client starts, restarting the client may be required.")
+			lines.append("Edit %s and add:" % resolved_path)
+			lines.append("  %s" % header)
+			lines.append("  url = %s" % McpTomlStrategy.encode_basic_string(server_url))
 		return "\n".join(lines)
 	var body := McpTomlStrategy.format_body(client.toml_body_template, server_url)
 	var lines: Array[String] = ["Edit %s and add:" % resolved_path, "  %s" % header]

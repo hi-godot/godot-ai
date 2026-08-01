@@ -32,8 +32,17 @@ func remove_client(params: Dictionary) -> Dictionary:
 
 func check_client_status(_params: Dictionary) -> Dictionary:
 	var clients := []
+	# Claude Desktop and Codex share the same attach launch. Resolve it once for
+	# the aggregate status command instead of repeating the cold discovery path
+	# per command-shaped client and exhausting the command's 5-second budget.
+	var launch_context := McpClientConfigurator.capture_launch_context()
+	var server_url := McpClientConfigurator.server_url_from(launch_context)
+	var resolved_launch := McpClientConfigurator.resolve_attach_launch(launch_context)
 	for client_id in McpClientConfigurator.client_ids():
-		var status := McpClientConfigurator.check_status(client_id)
+		var details := McpClientConfigurator.check_status_details_for_url_with_cli_path(
+			client_id, server_url, "", launch_context, resolved_launch
+		)
+		var status = details.get("status", McpClient.Status.NOT_CONFIGURED)
 		clients.append({
 			"id": client_id,
 			"display_name": McpClientConfigurator.client_display_name(client_id),

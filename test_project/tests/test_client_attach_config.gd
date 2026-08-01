@@ -30,16 +30,6 @@ func test_codex_descriptor_declares_attach_shape_and_timeouts() -> void:
 	assert_eq(client.command_initial_fields.get("tool_timeout_sec"), 360)
 
 
-func test_no_descriptor_activates_two_bridge_shapes() -> void:
-	for client in McpClientRegistry.all():
-		var command_active := client.command_shape != McpClient.CommandShape.NONE
-		var legacy_bridge_active := client.entry_uvx_bridge != McpClient.UvxBridge.NONE
-		assert_false(
-			command_active and legacy_bridge_active,
-			"%s activates command_shape and entry_uvx_bridge" % client.id,
-		)
-
-
 func test_launch_resolver_dev_venv_shape() -> void:
 	var launch := McpClientConfigurator.resolve_attach_launch(
 		_context("audio"),
@@ -297,6 +287,54 @@ func test_codex_render_for_all_discovery_tiers() -> void:
 			assert_false(content.contains('"--link-mode"'))
 
 
+func test_claude_json_render_for_all_discovery_tiers() -> void:
+	var launches := [
+		McpClientConfigurator.resolve_attach_launch(
+			_context(),
+			{
+				"venv_python": "C:/repo/.venv/Scripts/python.exe",
+				"uvx_path": "",
+				"system_path": "",
+				"consoleless_python": "C:/repo/.venv/Scripts/pythonw.exe",
+			}
+		),
+		_uvx_launch(),
+		McpClientConfigurator.resolve_attach_launch(
+			_context(),
+			{
+				"venv_python": "", "uvx_path": "", "system_path": "C:/Tools/godot-ai.exe",
+				"consoleless_python": "C:/Python313/pythonw.exe",
+				"system_version_result": _probe("godot-ai 3.0.6\n"),
+			},
+		),
+	]
+	var client := McpClientRegistry.get_by_id("claude_desktop")
+	for launch in launches:
+		var entry := McpJsonStrategy.build_entry(client, "http://unused", null, launch)
+		assert_eq(entry.get("command"), launch.get("command"))
+		assert_eq(entry.get("args"), launch.get("args"))
+		assert_true(McpJsonStrategy.verify_entry(client, entry, "http://unused", launch))
+
+
+func test_json_encoder_matches_python_fixture() -> void:
+	var launch := McpClientConfigurator.resolve_attach_launch(
+		_context("audio,particle"),
+		{
+			"venv_python": "",
+			"uvx_path": 'C:\\Users\\Agent "quoted"\\bin\\uvx.exe',
+			"system_path": "",
+			"consoleless_python": "C:/Python313/pythonw.exe",
+		},
+	)
+	var client := McpClientRegistry.get_by_id("claude_desktop")
+	var rendered := McpJsonStrategy.build_entry(client, "http://unused", null, launch)
+	var fixture := FileAccess.open("res://tests/fixtures/attach_json_sample.json", FileAccess.READ)
+	assert_true(fixture != null, "cross-language JSON fixture must be readable")
+	var expected = JSON.parse_string(fixture.get_as_text())
+	fixture.close()
+	assert_eq(rendered, expected)
+
+
 func test_codex_migration_preserves_multiline_values_and_renames_legacy_subtables() -> void:
 	var path := _scratch_dir.path_join("legacy_migration.toml")
 	var original_span := (
@@ -514,6 +552,7 @@ func _codex_client(path: String) -> McpClient:
 	client.toml_section_path = registered.toml_section_path
 	client.toml_legacy_section_aliases = registered.toml_legacy_section_aliases
 	client.command_shape = registered.command_shape
+	client.command_supports_url_fallback = registered.command_supports_url_fallback
 	client.command_legacy_keys = registered.command_legacy_keys
 	client.command_initial_fields = registered.command_initial_fields.duplicate(true)
 	client.command_user_fields = registered.command_user_fields

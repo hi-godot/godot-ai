@@ -478,6 +478,22 @@ def test_worker_uses_main_thread_probe_snapshot_for_cli_paths() -> None:
     assert "check_status_with_cli_path" in cli_source
 
 
+def test_status_aggregates_resolve_shared_attach_launch_once() -> None:
+    """Claude Desktop and Codex must not each pay cold launch discovery."""
+
+    dock_source = (PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
+    handler_source = (PLUGIN_ROOT / "handlers" / "client_handler.gd").read_text(
+        encoding="utf-8"
+    )
+    worker_block = get_func_block(dock_source, "func _run_client_status_refresh_worker")
+    handler_block = get_func_block(handler_source, "func check_client_status")
+
+    assert worker_block.count("resolve_attach_launch(") == 1
+    assert handler_block.count("resolve_attach_launch(") == 1
+    assert "resolved_launch," in worker_block
+    assert "resolved_launch" in handler_block
+
+
 def test_refresh_timeout_can_abandon_stale_worker_results() -> None:
     """A hung CLI probe should not permanently own the refresh slot."""
 

@@ -3008,6 +3008,10 @@ func _run_client_status_refresh_worker(
 	generation: int,
 ) -> Dictionary:
 	var results: Dictionary = {}
+	# Command-shaped clients share one attach launch. Discovery can be the
+	# dominant cold-cache cost, so resolve it once per refresh worker rather
+	# than once for Claude Desktop and again for Codex.
+	var resolved_launch := ClientConfigurator.resolve_attach_launch(launch_context)
 	for probe in client_probes:
 		var client_id := String(probe.get("id", ""))
 		if client_id.is_empty():
@@ -3017,6 +3021,7 @@ func _run_client_status_refresh_worker(
 			server_url,
 			String(probe.get("cli_path", "")),
 			launch_context,
+			resolved_launch,
 		)
 		var installed := bool(probe.get("installed", false))
 		results[client_id] = {

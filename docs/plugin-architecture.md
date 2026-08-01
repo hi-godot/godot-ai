@@ -191,6 +191,18 @@ A symmetric `prepare_for_update_reload()` path runs during self-update so the ne
 
 Step 5 has one opt-in exception: with the `godot_ai/keep_server_on_exit` EditorSetting enabled (#800), spawns skip `GODOT_AI_OWNER_PID` and stage `GODOT_AI_NO_IDLE_EXIT`, so neither the owner-PID reaper nor the session-idle backstop reclaims a server that is idle between editor runs by design. `_exit_tree` routes through `teardown_for_editor_exit()`, which picks by how the *running* server was actually launched — a keep-alive flag set at spawn and persisted in the managed-server record (`managed_server_keep_alive`), never the live setting, which may have been toggled since the spawn. Flag set → `detach_server()`: the watch stops and state settles on STOPPED, but the process, record, and pid-file are left alone, so MCP clients connected over HTTP stay served and the next editor session adopts the survivor — managed adoption recovers the flag from the record, so the survivor detaches again on that session's exit. Flag clear → `stop_server()` kills as always, even with the setting enabled: the server's spawn env has the reapers armed, so detaching would just leave a record pointing at a soon-reaped PID. Net effect: toggling the setting takes effect on the next server start (dock Restart applies it immediately). Explicit stops — dock Restart, `prepare_for_update_reload()` — always kill. Trust model: a kept server keeps listening on its localhost-only port while no editor is attached — the same binding and handshake rules as during a session (tokenless handshakes remain accepted for adoption, #690/#798), so enabling this setting means accepting that any local process can reach the MCP surface between editor runs, not just during them.
 
+Client-owned `godot-ai attach` bridges add a second bounded-lifetime path. Each
+stdio bridge probes the configured loopback endpoint, adopts a compatible
+backend or starts an attach-owned one, and maintains an instance-bound lease.
+Godot adopts attach-owned backends as external and has no authority to kill
+them. If a plugin-owned backend has an active attach lease during normal editor
+exit, teardown transfers it to detached lifetime instead of killing it; a later
+editor reconnects to the same instance. Once there are no editor sessions and
+the final bridge lease is released or expires, the Python idle reaper stops the
+backend after its grace period. Explicit restart and update flows may still
+replace a verified owned backend. The lease is lifecycle evidence, not
+authentication or kill authority, and the endpoint remains loopback-only.
+
 ### Self-update Boundary And Compatibility
 
 The update path is intentionally split so the runner can stay focused on the fragile editor reload window:
