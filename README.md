@@ -267,6 +267,21 @@ prefer an SSH tunnel or Tailscale on untrusted networks.
 </details>
 
 <details>
+<summary><strong><code>ImportError</code> from <code>mcp-proxy</code> (<code>streamablehttp_client</code> or <code>request_ctx</code>)</strong></summary>
+
+An older client configuration may launch `mcp-proxy` against an unbounded
+`mcp>=1.17.0` dependency. `mcp` 2.x is incompatible with released
+`mcp-proxy` versions: 0.11.0 fails on `streamablehttp_client`, while 0.12.0
+contains both incompatible imports and may report `request_ctx` first.
+
+Preferred fix: update Godot AI, click **Configure** for Claude Desktop, and
+restart it. This replaces the legacy proxy entry with the current
+`godot-ai attach` launcher. As a temporary workaround, constrain the old uvx
+command with `--with "mcp<2"` before its `mcp-proxy` package argument.
+
+</details>
+
+<details>
 <summary><strong>Windows: an <code>uvx</code> attach launcher won't start (<code>pywin32</code> install fails)</strong></summary>
 
 Symptom (in your MCP client's server log):
