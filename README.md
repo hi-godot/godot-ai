@@ -154,9 +154,12 @@ Its non-Windows uvx shape is:
 On Windows, the dock also detects Store/MSIX AppData virtualization. When one
 Store package is installed, Configure uses its private `LocalCache/Roaming`
 path, creating the config there if necessary so a later copy-on-write cannot
-hide an entry written to conventional roaming. Without a Store package it uses
-the conventional roaming config. Multiple matching Store packages fail with an
-actionable error instead of choosing one, and Configure never writes both.
+hide an entry written to conventional roaming. If the private file is new and
+the roaming config already exists, its full contents seed the private file
+before the `godot-ai` entry is merged; the roaming source remains byte-identical.
+Without a Store package it uses the conventional roaming config. Multiple
+matching Store packages fail with an actionable error instead of choosing one,
+and Configure never writes both.
 
 **Codex** (`~/.codex/config.toml`)
 

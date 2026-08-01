@@ -487,14 +487,26 @@ static func run_client_status_sweep(
 			launch_context,
 			resolved_launch,
 		)
-		var status = details.get("status", Client.Status.NOT_CONFIGURED)
-		clients.append({
-			"id": client_id,
-			"display_name": client_display_name(client_id),
-			"status": Client.status_label(status),
-			"installed": bool(probe.get("installed", false)),
-		})
+		clients.append(_client_status_sweep_entry(
+			client_id, details, bool(probe.get("installed", false))
+		))
 	return {"data": {"clients": clients}}
+
+
+static func _client_status_sweep_entry(
+	client_id: String, details: Dictionary, installed: bool
+) -> Dictionary:
+	var status = details.get("status", Client.Status.NOT_CONFIGURED)
+	var entry := {
+		"id": client_id,
+		"display_name": client_display_name(client_id),
+		"status": Client.status_label(status),
+		"installed": installed,
+	}
+	var error_msg := str(details.get("error_msg", ""))
+	if not error_msg.is_empty():
+		entry["error"] = error_msg
+	return entry
 
 
 ## Pass an explicit `url` when calling from a worker thread — see

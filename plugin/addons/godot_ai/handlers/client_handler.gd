@@ -7,6 +7,7 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 var _connection
 var _fallback_launch_context := {}
+var _status_worker_state := {"tearing_down": false, "threads": []}
 
 
 func _init(connection = null, fallback_launch_context = null) -> void:
@@ -49,6 +50,8 @@ func check_client_status(params: Dictionary) -> Dictionary:
 			ErrorCodes.INTERNAL_ERROR,
 			"Client status requires a deferred request context.",
 		)
+	if bool(_status_worker_state.get("tearing_down", false)):
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Client status handler is shutting down.")
 	# Match the dock refresh worker's cold-load guard. This is pure-memory and
 	# performs no launcher discovery, CLI lookup, or config/status probe.
 	McpClientConfigurator.warm_status_worker_bytecode()
@@ -61,15 +64,28 @@ func check_client_status(params: Dictionary) -> Dictionary:
 		McpClientConfigurator.run_client_status_sweep.bind(_fallback_launch_context),
 		request_id,
 		_connection,
+		_status_worker_state,
 	)
 	return McpDispatcher.DEFERRED_RESPONSE
+
+
+## Called by McpDispatcher.clear() before releasing this lazy handler. Joining
+## is intentionally blocking: Godot has no Thread cancellation primitive, and
+## destroying a live GDScript Thread during plugin reload corrupts the VM.
+func prepare_for_teardown() -> void:
+	_status_worker_state["tearing_down"] = true
+	var workers: Array = _status_worker_state.get("threads", [])
+	for worker in workers.duplicate():
+		if worker is Thread and worker.is_started():
+			worker.wait_to_finish()
+	workers.clear()
 
 
 ## Static so the coroutine can safely outlive this lazily-created handler.
 ## The first-frame yield is load-bearing: check_client_status() must return the
 ## deferred sentinel before the worker starts and can produce a response.
 static func _finish_client_status_deferred(
-	worker_callable: Callable, request_id: String, connection
+	worker_callable: Callable, request_id: String, connection, worker_state: Dictionary
 ) -> void:
 	if not is_instance_valid(connection):
 		return
@@ -77,11 +93,14 @@ static func _finish_client_status_deferred(
 	if tree == null:
 		return
 	await tree.process_frame
-	if not is_instance_valid(connection):
+	if not is_instance_valid(connection) or bool(worker_state.get("tearing_down", false)):
 		return
 	var worker := Thread.new()
+	var workers: Array = worker_state.get("threads", [])
+	workers.append(worker)
 	var start_error := worker.start(worker_callable)
 	if start_error != OK:
+		workers.erase(worker)
 		connection.send_deferred_response(request_id, ErrorCodes.make(
 			ErrorCodes.INTERNAL_ERROR,
 			"Could not start client status worker (error %d)." % start_error,
@@ -89,7 +108,13 @@ static func _finish_client_status_deferred(
 		return
 	while worker.is_alive():
 		await tree.process_frame
+	if bool(worker_state.get("tearing_down", false)):
+		if worker.is_started():
+			worker.wait_to_finish()
+		workers.erase(worker)
+		return
 	var payload: Variant = worker.wait_to_finish()
+	workers.erase(worker)
 	if not is_instance_valid(connection):
 		return
 	if not payload is Dictionary:

@@ -54,7 +54,9 @@ var path_template: Dictionary = {}
 ##   1. Existing files win in descriptor order, except that a unique wildcard
 ##      match is authoritative even before its config leaf exists. A matching
 ##      package root therefore creates inside that package rather than writing
-##      a fallback path that may become invisible after copy-on-write.
+##      a fallback path that may become invisible after copy-on-write. When
+##      that private leaf is new, Configure seeds it from the first later
+##      existing candidate so read-through content is not shadowed.
 ##   2. If no file or wildcard package match exists, the first non-wildcard
 ##      template is the deterministic create target.
 ##   3. Multiple matches within any wildcard group are ambiguous and fail
@@ -63,6 +65,12 @@ var path_template: Dictionary = {}
 ## `config_home_override` still has higher priority. When this map has no entry
 ## for the current platform, `path_template` remains the fallback.
 var config_path_candidates: Dictionary = {}
+
+## De-duplicate persistent path-ambiguity warnings across recurring status
+## refreshes. The actionable message still returns on every resolution; only
+## the editor-console echo is single-shot until the ambiguity clears/changes.
+var _last_config_path_warning := ""
+var _config_path_warning_mutex := Mutex.new()
 
 ## Path inside the config object where the per-server map lives.
 ## Cursor / Claude Desktop / most others: ["mcpServers"]
@@ -194,40 +202,80 @@ func resolved_config_path() -> String:
 func resolved_config_path_details() -> Dictionary:
 	var override := config_home_override()
 	if not override.is_empty():
+		_clear_config_path_warning()
 		return {"path": override, "error": ""}
 	var candidate_key := McpPathTemplate.platform_key(config_path_candidates)
 	if not candidate_key.is_empty():
 		return _resolve_ordered_config_path_candidates(config_path_candidates[candidate_key])
+	_clear_config_path_warning()
 	return {"path": McpPathTemplate.resolve(path_template), "error": ""}
 
 
 func _resolve_ordered_config_path_candidates(templates: Variant) -> Dictionary:
 	if not (templates is Array or templates is PackedStringArray):
+		_clear_config_path_warning()
 		return {"path": "", "error": ""}
-	var fallback_create_path := ""
+	var ordered_templates: Array = []
 	for template_variant in templates:
-		var template := str(template_variant)
+		ordered_templates.append(str(template_variant))
+	var fallback_create_path := ""
+	for index in range(ordered_templates.size()):
+		var template := str(ordered_templates[index])
 		var group := McpPathTemplate.expand_path_candidates(template)
 		if group.size() > 1:
 			var message := (
 				"%s has multiple matching config package paths for %s: %s. "
 				+ "Remove the stale package installation or edit the intended config manually."
 			) % [display_name, template, ", ".join(group)]
-			push_warning(message)
+			_warn_config_path_once(message)
 			return {"path": "", "error": message}
 		if group.is_empty():
 			continue
 		var path := String(group[0])
 		if FileAccess.file_exists(path):
+			_clear_config_path_warning()
 			return {"path": path, "error": ""}
 		# A wildcard only resolves when its package directory exists. Treat that
 		# installation evidence as authoritative and create its private config
-		# directly instead of relying on copy-on-write read-through.
+		# directly instead of relying on copy-on-write read-through. Preserve
+		# anything currently visible through read-through by naming the first
+		# later existing candidate as a one-time seed source.
 		if template.contains("*"):
-			return {"path": path, "error": ""}
+			var seed_path := _first_existing_later_candidate(ordered_templates, index + 1)
+			_clear_config_path_warning()
+			return {"path": path, "error": "", "seed_path": seed_path}
 		if fallback_create_path.is_empty():
 			fallback_create_path = path
+	_clear_config_path_warning()
 	return {"path": fallback_create_path, "error": ""}
+
+
+func _first_existing_later_candidate(templates: Array, start_index: int) -> String:
+	for index in range(start_index, templates.size()):
+		var group := McpPathTemplate.expand_path_candidates(str(templates[index]))
+		# A seed is optional. Never choose among an ambiguous later wildcard;
+		# the authoritative target was already resolved by the earlier group.
+		if group.size() != 1:
+			continue
+		var path := String(group[0])
+		if FileAccess.file_exists(path):
+			return path
+	return ""
+
+
+func _warn_config_path_once(message: String) -> void:
+	_config_path_warning_mutex.lock()
+	var should_warn := message != _last_config_path_warning
+	_last_config_path_warning = message
+	_config_path_warning_mutex.unlock()
+	if should_warn:
+		push_warning(message)
+
+
+func _clear_config_path_warning() -> void:
+	_config_path_warning_mutex.lock()
+	_last_config_path_warning = ""
+	_config_path_warning_mutex.unlock()
 
 
 ## The env-var-relocated config path, or "" when no override applies

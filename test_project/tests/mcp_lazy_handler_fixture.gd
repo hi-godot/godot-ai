@@ -8,6 +8,7 @@ extends RefCounted
 
 var prefix: String
 var calls := 0
+var teardown_calls := 0
 
 
 func _init(fixture_prefix: String = "") -> void:
@@ -25,3 +26,7 @@ func count(_params: Dictionary) -> Dictionary:
 
 func malformed(_params: Dictionary) -> Dictionary:
 	return {}
+
+
+func prepare_for_teardown() -> void:
+	teardown_calls += 1

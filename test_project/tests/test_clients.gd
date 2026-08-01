@@ -906,13 +906,68 @@ func test_ordered_config_candidates_choose_effective_existing_file() -> void:
 		"an existing Store-private config must win over the roaming file",
 	)
 	_remove_if_exists(container_path)
+	var create_resolution := client.resolved_config_path_details()
 	assert_eq(
-		client.resolved_config_path(),
+		create_resolution.get("path"),
 		container_path,
 		"an installed Store package must create its private config instead of relying on read-through",
 	)
+	assert_eq(
+		create_resolution.get("seed_path"),
+		roaming_path,
+		"an existing roaming config must seed a new authoritative private file",
+	)
 	_remove_dir_recursive(package_root)
 	assert_eq(client.resolved_config_path(), roaming_path, "roaming wins when no Store package exists")
+	_remove_dir_recursive(root)
+
+
+func test_candidate_fresh_private_config_seeds_roaming_losslessly() -> void:
+	var root := _scratch_dir.path_join("candidate_seed_roaming")
+	_remove_dir_recursive(root)
+	var package_root := root.path_join("Packages/Claude_store")
+	var container_path := package_root.path_join(
+		"LocalCache/Roaming/Claude/claude_desktop_config.json"
+	)
+	var roaming_path := root.path_join("Roaming/Claude/claude_desktop_config.json")
+	DirAccess.make_dir_recursive_absolute(package_root)
+	var roaming_seed := JSON.stringify({
+		"mcpServers": {"someone-else": {"command": "keep-me"}},
+		"preferences": {"theme": "dark"},
+	})
+	_write_text(roaming_path, roaming_seed)
+	var client := _make_candidate_json_client(root, roaming_path)
+	var configured := McpJsonStrategy.configure(client, "godot-ai", "http://new")
+	assert_eq(configured.get("status"), "ok")
+	assert_true(FileAccess.file_exists(container_path), "Configure must create the private target")
+	var private_data = JSON.parse_string(_read_text(container_path))
+	assert_true(private_data.get("mcpServers", {}).has("someone-else"))
+	assert_eq(private_data.get("preferences"), {"theme": "dark"})
+	assert_eq(
+		private_data.get("mcpServers", {}).get("godot-ai", {}).get("url"),
+		"http://new",
+	)
+	assert_eq(_read_text(roaming_path), roaming_seed, "the roaming seed must stay byte-identical")
+	_remove_dir_recursive(root)
+
+
+func test_candidate_invalid_roaming_seed_fails_without_private_write() -> void:
+	var root := _scratch_dir.path_join("candidate_invalid_seed")
+	_remove_dir_recursive(root)
+	var package_root := root.path_join("Packages/Claude_store")
+	var container_path := package_root.path_join(
+		"LocalCache/Roaming/Claude/claude_desktop_config.json"
+	)
+	var roaming_path := root.path_join("Roaming/Claude/claude_desktop_config.json")
+	DirAccess.make_dir_recursive_absolute(package_root)
+	var invalid_seed := "{ broken json"
+	_write_text(roaming_path, invalid_seed)
+	var client := _make_candidate_json_client(root, roaming_path)
+	var configured := McpJsonStrategy.configure(client, "godot-ai", "http://new")
+	assert_eq(configured.get("status"), "error")
+	assert_contains(str(configured.get("message", "")), roaming_path)
+	assert_false(FileAccess.file_exists(container_path), "an invalid seed must not create a private file")
+	assert_eq(_read_text(roaming_path), invalid_seed, "a failed seed read must not rewrite roaming")
 	_remove_dir_recursive(root)
 
 
@@ -954,6 +1009,14 @@ func test_ordered_config_candidates_fail_closed_for_ambiguous_store_roots() -> v
 	assert_contains(str(resolution.get("error", "")), "multiple matching config package paths")
 	assert_contains(str(resolution.get("error", "")), "Claude_alpha")
 	assert_contains(str(resolution.get("error", "")), "Claude_beta")
+	assert_eq(client._last_config_path_warning, resolution.get("error"))
+	var repeated_resolution := client.resolved_config_path_details()
+	assert_eq(repeated_resolution.get("error"), resolution.get("error"))
+	assert_eq(
+		client._last_config_path_warning,
+		resolution.get("error"),
+		"repeated resolution must retain one de-duplication key",
+	)
 	assert_eq(McpClientConfigurator._config_path_resolution_error(client), resolution.get("error"))
 	var details := McpJsonStrategy.check_status_details(client, "godot-ai", "http://x")
 	assert_eq(details.get("status"), McpClient.Status.ERROR)
@@ -965,6 +1028,9 @@ func test_ordered_config_candidates_fail_closed_for_ambiguous_store_roots() -> v
 	var remove := McpJsonStrategy.remove(client, "godot-ai")
 	assert_eq(remove.get("status"), "error")
 	assert_eq(remove.get("message"), resolution.get("error"))
+	_remove_dir_recursive(root.path_join("Packages/Claude_beta"))
+	client.resolved_config_path_details()
+	assert_eq(client._last_config_path_warning, "", "successful resolution resets warning de-duplication")
 	_remove_dir_recursive(root)
 
 
@@ -2370,6 +2436,36 @@ func test_status_sweep_returns_array_of_clients() -> void:
 		assert_has_key(entry, "status")
 		assert_has_key(entry, "installed")
 		assert_contains(allowed_statuses, entry.status, "Unexpected status: %s" % entry.status)
+
+
+func test_status_sweep_entry_surfaces_actionable_error_only_when_present() -> void:
+	var with_error := McpClientConfigurator._client_status_sweep_entry(
+		"cursor",
+		{"status": McpClient.Status.ERROR, "error_msg": "two package roots matched"},
+		true,
+	)
+	assert_eq(with_error.get("status"), "error")
+	assert_eq(with_error.get("error"), "two package roots matched")
+	var without_error := McpClientConfigurator._client_status_sweep_entry(
+		"cursor", {"status": McpClient.Status.CONFIGURED, "error_msg": ""}, true
+	)
+	assert_false(without_error.has("error"), "healthy rows must not gain an empty error field")
+
+
+func test_handler_teardown_joins_status_workers() -> void:
+	var handler := ClientHandler.new()
+	var worker := Thread.new()
+	var start_error := worker.start(func() -> Dictionary:
+		OS.delay_msec(20)
+		return {"data": {}}
+	)
+	assert_eq(start_error, OK)
+	var workers: Array = handler._status_worker_state.get("threads", [])
+	workers.append(worker)
+	handler.prepare_for_teardown()
+	assert_false(worker.is_started(), "teardown must realize every worker completion")
+	assert_true(workers.is_empty(), "teardown must release joined worker references")
+	assert_true(bool(handler._status_worker_state.get("tearing_down", false)))
 
 
 # ----- entry-builder shape sanity for shipped clients -----

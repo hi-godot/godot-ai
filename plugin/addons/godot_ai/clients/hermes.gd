@@ -31,7 +31,7 @@ func _init() -> void:
 	entry_extra_fields = {}
 	entry_initial_fields = {}
 
-	# No UVX bridge needed - Hermes is HTTP-native.
+	# Hermes is HTTP-native; no command shape is needed.
 
 	# Hermes is "installed" wherever the config.yaml lives; presence of the
 	# file is sufficient for the dock's installed badge.

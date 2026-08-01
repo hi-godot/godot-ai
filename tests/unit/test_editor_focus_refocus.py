@@ -537,6 +537,38 @@ def test_handler_client_status_sweep_is_deferred_to_worker() -> None:
     assert "check_status_details_for_url_with_cli_path" in worker_block
 
 
+def test_handler_client_status_worker_surfaces_errors_and_joins_on_teardown() -> None:
+    """Aggregate errors stay actionable and plugin reload realizes every Thread."""
+
+    handler_source = (PLUGIN_ROOT / "handlers" / "client_handler.gd").read_text(
+        encoding="utf-8"
+    )
+    configurator_source = (PLUGIN_ROOT / "client_configurator.gd").read_text(
+        encoding="utf-8"
+    )
+    dispatcher_source = (PLUGIN_ROOT / "dispatcher.gd").read_text(encoding="utf-8")
+    plugin_source = (PLUGIN_ROOT / "plugin.gd").read_text(encoding="utf-8")
+
+    entry_block = get_func_block(
+        configurator_source, "static func _client_status_sweep_entry"
+    )
+    teardown_block = get_func_block(handler_source, "func prepare_for_teardown")
+    finish_block = get_func_block(
+        handler_source, "static func _finish_client_status_deferred"
+    )
+    clear_block = get_func_block(dispatcher_source, "func clear() -> void:")
+    update_reload_block = get_func_block(
+        plugin_source, "func prepare_for_update_reload() -> void:"
+    )
+
+    assert 'entry["error"] = error_msg' in entry_block
+    assert "worker.wait_to_finish()" in teardown_block
+    assert 'worker_state.get("threads"' in finish_block
+    assert 'instance.has_method("prepare_for_teardown")' in clear_block
+    assert 'instance.call("prepare_for_teardown")' in clear_block
+    assert "_dispatcher.clear()" in update_reload_block
+
+
 def test_refresh_timeout_can_abandon_stale_worker_results() -> None:
     """A hung CLI probe should not permanently own the refresh slot."""
 

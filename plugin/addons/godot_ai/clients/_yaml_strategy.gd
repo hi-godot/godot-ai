@@ -24,9 +24,11 @@ static func configure(client: McpClient, server_name: String, server_url: String
 	if path.is_empty():
 		return {"status": "error", "message": "Could not resolve config path for %s on this OS" % client.display_name}
 
-	var read := _read(path)
+	var seed_path := str(resolution.get("seed_path", ""))
+	var read_path := seed_path if not FileAccess.file_exists(path) and not seed_path.is_empty() else path
+	var read := _read(read_path)
 	if not read["ok"]:
-		return {"status": "error", "message": "Refusing to overwrite %s: %s. Fix or move the file, then re-run Configure." % [path, read["error"]]}
+		return {"status": "error", "message": "Refusing to overwrite %s: %s. Fix or move the file, then re-run Configure." % [read_path, read["error"]]}
 
 	var text: String = read["data"]
 	var block := _extract_block(text)

@@ -1679,6 +1679,11 @@ func _clear_managed_server_record() -> void:
 
 
 func prepare_for_update_reload() -> void:
+	if _dispatcher != null:
+		# Stop accepting work and drain handler-owned threads before the update
+		# runner overwrites any plugin script. _exit_tree() calls clear() again;
+		# the second call is intentionally inert because the caches are empty.
+		_dispatcher.clear()
 	_lifecycle.prepare_for_update_reload()
 
 
