@@ -220,6 +220,7 @@ var _log_viewer: LogViewerScript
 
 var _last_connected := false
 var _last_status_text := ""
+var _last_status_tooltip := ""
 var _startup_grace_until_msec: int = 0
 
 # Spawn-failure panel — rendered when `get_server_status` reports a
@@ -946,6 +947,14 @@ func _apply_editor_icon(button: Button, icon_name: String, fallback_text: String
 
 func _update_status() -> void:
 	var connected: bool = _connection != null and _connection.is_connected
+	## Pull the connection's transport snapshot on this existing refresh tick.
+	## `has_method` preserves the plugin self-update seam while an older
+	## Connection instance is still alive under a hot-reloaded dock script.
+	var transport_status: Dictionary = (
+		_connection.get_transport_status()
+		if _connection != null and _connection.has_method("get_transport_status")
+		else {}
+	)
 	## During plugin self-update there's a brief window where this dock
 	## script is already the new version (Godot hot-reloads scripts on
 	## file change) but `_plugin` is still the old `EditorPlugin` instance
@@ -966,8 +975,12 @@ func _update_status() -> void:
 	## One `match`/`elif` chain, one source of truth. Adding a new
 	## spawn outcome = one `ServerStateScript` constant + one arm here +
 	## one body string in `_crash_body_for_state`.
-	var status_text: String
-	var status_color: Color
+	## Default covers both a missing/old Connection instance and an unknown
+	## future transport phase. Every recognized state below overrides it, so
+	## startup grace and settled disconnect have one rendering path.
+	var inside_startup_grace := Time.get_ticks_msec() < _startup_grace_until_msec
+	var status_text := "Starting server…" if inside_startup_grace else "Disconnected"
+	var status_color := COLOR_AMBER if inside_startup_grace else Color.RED
 	if _server_restart_in_progress:
 		status_text = "Restarting server..."
 		status_color = COLOR_AMBER
@@ -995,14 +1008,22 @@ func _update_status() -> void:
 	elif state == ServerStateScript.NO_COMMAND:
 		status_text = "No server command found"
 		status_color = Color.RED
-	elif Time.get_ticks_msec() < _startup_grace_until_msec:
-		## Inside startup grace — distinguish from real disconnect so
-		## first-run users don't assume it's broken while uvx downloads.
-		status_text = "Starting server…"
-		status_color = COLOR_AMBER
-	else:
-		status_text = "Disconnected"
-		status_color = Color.RED
+	elif not transport_status.is_empty():
+		var transport_phase := str(transport_status.get("phase", ""))
+		if transport_phase == "connecting":
+			status_text = _transport_status_text(transport_status)
+			status_color = COLOR_AMBER
+		elif transport_phase == "retrying":
+			status_text = _transport_status_text(transport_status)
+			status_color = COLOR_AMBER
+		elif transport_phase == "closing":
+			status_text = _transport_status_text(transport_status)
+			status_color = COLOR_AMBER
+		elif transport_phase == "blocked":
+			## Exact terminal labels come from lifecycle state above. This is a
+			## generic fallback for a blocked connection without a diagnosis.
+			status_text = _transport_status_text(transport_status)
+			status_color = Color.RED
 
 	## keep_server_on_exit (#800): the reaper env opt-outs are staged at
 	## spawn, so a mid-session toggle only lands on the next server start —
@@ -1013,14 +1034,21 @@ func _update_status() -> void:
 	_update_crash_panel(server_status)
 	_refresh_server_version_label(server_status)
 
-	var changed: bool = connected != _last_connected or status_text != _last_status_text
+	var status_tooltip := str(transport_status.get("reason", ""))
+	var changed: bool = (
+		connected != _last_connected
+		or status_text != _last_status_text
+		or status_tooltip != _last_status_tooltip
+	)
 	if not changed:
 		return
 	var just_connected: bool = connected and not _last_connected
 	_last_connected = connected
 	_last_status_text = status_text
+	_last_status_tooltip = status_tooltip
 	_status_icon.color = status_color
 	_status_label.text = status_text
+	_status_label.tooltip_text = status_tooltip
 	if just_connected:
 		## #739: the server just came up. If the startup uv probe failed
 		## (the reporter's screenshot: green "Server connected" beside a
@@ -1875,6 +1903,26 @@ func _client_status_refresh_has_completed() -> bool:
 
 func _connected_status_text() -> String:
 	return "Server connected"
+
+
+static func _transport_status_text(snapshot: Dictionary) -> String:
+	## Total over the transport enum for isolated consumers/tests. The dock's
+	## connected fast path renders `_connected_status_text()` before calling it.
+	var phase := str(snapshot.get("phase", ""))
+	var attempt := maxi(1, int(snapshot.get("attempt", 0)))
+	match phase:
+		"connected":
+			return "Server connected"
+		"connecting":
+			return "Connecting — attempt %d" % attempt
+		"retrying":
+			var retry_in_sec := ceili(maxf(0.0, float(snapshot.get("retry_in_sec", 0.0))))
+			return "Retrying in %ds — attempt %d" % [retry_in_sec, attempt]
+		"closing":
+			return "Disconnecting…"
+		"blocked":
+			return "Connection blocked"
+	return "Disconnected"
 
 
 ## Open uv's official install documentation rather than executing an

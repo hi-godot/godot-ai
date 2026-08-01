@@ -116,23 +116,25 @@ func test_build_handshake_includes_auth_token_when_set() -> void:
 
 func test_auth_mismatch_fallback_drops_token_after_repeated_4003() -> void:
 	var conn := McpConnection.new()
-	var buffer := McpLogBuffer.new()
-	conn.log_buffer = buffer
 	conn.auth_token = "stale-token"
 
-	conn._note_post_open_close(McpConnection.CLOSE_CODE_AUTH_TOKEN_MISMATCH)
+	var first := conn._note_post_open_close(McpConnection.CLOSE_CODE_AUTH_TOKEN_MISMATCH)
 	assert_eq(conn.auth_token, "stale-token",
 		"one rejection may be a transient swap race — keep the token")
-	conn._note_post_open_close(McpConnection.CLOSE_CODE_AUTH_TOKEN_MISMATCH)
+	assert_eq(first.get("reason_code"), "auth_token_mismatch")
+	assert_eq(first.get("occurrence"), 1)
+	assert_eq(first.get("recovery_action"), "retry_authenticated")
+
+	var second := conn._note_post_open_close(McpConnection.CLOSE_CODE_AUTH_TOKEN_MISMATCH)
 	assert_eq(conn.auth_token, "",
 		"repeated 4003 must fall back to a token-less handshake")
+	assert_eq(second.get("reason_code"), "auth_token_mismatch")
+	assert_eq(second.get("occurrence"), 2)
+	assert_eq(second.get("recovery_action"), "retry_tokenless")
 
 	var payload := conn._build_handshake()
 	assert_false(payload.has("auth_token"),
 		"fallback handshake must omit the token field entirely")
-	var lines := buffer.get_recent(5)
-	assert_true(lines.size() >= 1, "fallback must be logged")
-	assert_contains(lines[lines.size() - 1], "token-less")
 	conn.free()
 
 
@@ -156,12 +158,16 @@ func test_auth_mismatch_streak_resets_on_handshake_ack() -> void:
 	var conn := McpConnection.new()
 	conn.auth_token = "per-launch-secret"
 
-	conn._note_post_open_close(McpConnection.CLOSE_CODE_AUTH_TOKEN_MISMATCH)
+	conn._transient_diagnostic = conn._note_post_open_close(
+		McpConnection.CLOSE_CODE_AUTH_TOKEN_MISMATCH
+	)
 	conn._handle_message('{"type":"handshake_ack","server_version":"1.0.0"}')
 	conn._note_post_open_close(McpConnection.CLOSE_CODE_AUTH_TOKEN_MISMATCH)
 
 	assert_eq(conn.auth_token, "per-launch-secret",
 		"an accepted handshake must reset the mismatch streak")
+	assert_true(conn._transient_diagnostic.is_empty(),
+		"an accepted handshake must clear the healed reconnect reason")
 	conn.free()
 
 
@@ -290,49 +296,99 @@ func test_reconnect_delay_caps_at_sixty_seconds() -> void:
 	assert_eq(McpConnection._reconnect_delay_for_attempt(42), 60.0)
 
 
-func test_reconnect_logging_includes_initial_attempts() -> void:
+func test_reconnect_transition_logging_includes_initial_attempts() -> void:
 	for attempt in range(1, 6):
 		assert_true(
-			McpConnection._should_log_reconnect_attempt(attempt),
+			McpConnection._should_log_reconnect_transition(attempt, 1000, 1000),
 			"attempt %d should be logged for immediate diagnostics" % attempt,
 		)
 
 
-func test_reconnect_logging_throttles_later_attempts() -> void:
-	assert_false(McpConnection._should_log_reconnect_attempt(6), "attempt 6 should be quiet")
-	assert_false(McpConnection._should_log_reconnect_attempt(9), "attempt 9 should be quiet")
-	assert_true(
-		McpConnection._should_log_reconnect_attempt(10),
-		"attempt 10 should log periodic progress",
+func test_reconnect_transition_logging_uses_time_heartbeat_after_initial_attempts() -> void:
+	assert_false(
+		McpConnection._should_log_reconnect_transition(6, 60_999, 1000),
+		"later transition inside the one-minute heartbeat should stay quiet",
 	)
-	assert_false(McpConnection._should_log_reconnect_attempt(11), "attempt 11 should be quiet again")
 	assert_true(
-		McpConnection._should_log_reconnect_attempt(20),
-		"attempt 20 should log periodic progress",
+		McpConnection._should_log_reconnect_transition(6, 61_000, 1000),
+		"later transition should log after one minute regardless of attempt number",
 	)
+	assert_true(McpConnection._should_log_reconnect_transition(99, 1, -1),
+		"the first observed transition should always be visible")
 
 
-func test_close_diagnostic_distinguishes_preopen_failure_and_reason() -> void:
-	var preopen := McpConnection._close_diagnostic(
-		false,
+func test_transport_snapshot_distinguishes_connecting_retrying_closing_and_open() -> void:
+	var connecting := McpConnection._transport_status_snapshot(
+		WebSocketPeer.STATE_CONNECTING, 12.5, 3, 0.0)
+	assert_eq(connecting.get("phase"), "connecting")
+	assert_eq(connecting.get("attempt"), 3)
+	assert_eq(connecting.get("state_elapsed_sec"), 12.5)
+	assert_false(connecting.has("retry_in_sec"),
+		"an in-flight connection must not advertise a scheduled retry")
+
+	var retrying := McpConnection._transport_status_snapshot(
+		WebSocketPeer.STATE_CLOSED, 0.25, 3, 4.5)
+	assert_eq(retrying.get("phase"), "retrying")
+	assert_eq(retrying.get("retry_in_sec"), 4.5)
+
+	var closing := McpConnection._transport_status_snapshot(
+		WebSocketPeer.STATE_CLOSING, 1.0, 3, 4.5)
+	assert_eq(closing.get("phase"), "closing")
+	assert_false(closing.has("retry_in_sec"))
+
+	var connected := McpConnection._transport_status_snapshot(
+		WebSocketPeer.STATE_OPEN, 30.0, 0, 4.5)
+	assert_eq(connected.get("phase"), "connected")
+	assert_false(connected.has("retry_in_sec"))
+
+
+func test_transport_status_wrapper_applies_generic_blocked_reason() -> void:
+	var conn := McpConnection.new()
+	conn.connect_blocked = true
+	conn.connect_block_reason = "blocked for test"
+	var snapshot := conn.get_transport_status()
+	assert_eq(snapshot.get("phase"), "blocked")
+	assert_eq(snapshot.get("reason_code"), "connection_blocked")
+	assert_eq(snapshot.get("reason"), "blocked for test")
+	assert_false(snapshot.has("retry_in_sec"))
+	conn.free()
+
+
+func test_reconnect_diagnostics_keep_preopen_and_postopen_failures_distinct() -> void:
+	var preopen := McpConnection._preopen_failure_diagnostic(
+		4,
+		30.25,
+		8.0,
 		-1,
 		"",
 		"ws://127.0.0.1:9500"
 	)
-	assert_contains(preopen, "connection failed before OPEN")
+	assert_contains(preopen, "connection attempt 4 failed before OPEN after 30.3s")
+	assert_contains(preopen, "retrying in 8s")
 	assert_contains(preopen, "code -1")
 	assert_contains(preopen, "reason <none>")
 	assert_contains(preopen, "ws://127.0.0.1:9500")
 
-	var opened := McpConnection._close_diagnostic(
-		true,
+	var opened := McpConnection._postopen_close_diagnostic(
+		3600.0,
 		4003,
 		"auth\nfailed",
 		"ws://127.0.0.1:9500"
 	)
-	assert_contains(opened, "disconnected after OPEN")
+	assert_contains(opened, "connection lost after being open for 3600.0s")
+	assert_contains(opened, "; reconnecting")
 	assert_contains(opened, "code 4003")
 	assert_contains(opened, "reason auth\\nfailed")
+
+	var tokenless := McpConnection._postopen_close_diagnostic(
+		1.0,
+		McpConnection.CLOSE_CODE_AUTH_TOKEN_MISMATCH,
+		"token mismatch",
+		"ws://127.0.0.1:9500",
+		{"occurrence": 2, "recovery_action": "retry_tokenless"},
+	)
+	assert_contains(tokenless, "token-less handshake (rejection 2/2)",
+		"the post-OPEN line must surface the recovery action before the next ack")
 
 
 func test_post_open_close_does_not_emit_preopen_duplicate() -> void:
@@ -356,9 +412,9 @@ func test_post_open_close_does_not_emit_preopen_duplicate() -> void:
 
 	var lines := buffer.get_recent(10)
 	assert_eq(lines.size(), 1, "one CLOSED peer must emit exactly one diagnostic")
-	assert_contains(lines[0], "disconnected after OPEN")
+	assert_contains(lines[0], "connection lost after being open")
 	assert_false(
-		lines[0].contains("connection failed before OPEN"),
+		lines[0].contains("failed before OPEN"),
 		"post-OPEN close must never be relabeled as a pre-OPEN failure"
 	)
 	conn.free()

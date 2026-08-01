@@ -68,6 +68,10 @@ class _RefreshCountingDock extends McpDockScript:
 class _ConnectionStub:
 	var is_connected := true
 	var server_version := ""
+	var transport_status: Dictionary = {"phase": "connected", "attempt": 0, "state_elapsed_sec": 0.0}
+
+	func get_transport_status() -> Dictionary:
+		return transport_status.duplicate(true)
 
 
 static func _finished_thread_noop() -> void:
@@ -216,6 +220,50 @@ func test_connected_status_stays_compact_across_client_readiness() -> void:
 		_dock._status_label.text,
 		"Server connected",
 		"Connected status should stay compact with multiple configured AI clients",
+	)
+
+
+func test_transport_status_text_distinguishes_each_reconnect_phase() -> void:
+	assert_eq(
+		McpDockScript._transport_status_text({"phase": "connecting", "attempt": 3}),
+		"Connecting — attempt 3",
+	)
+	assert_eq(
+		McpDockScript._transport_status_text(
+			{"phase": "retrying", "attempt": 4, "retry_in_sec": 2.1}
+		),
+		"Retrying in 3s — attempt 4",
+	)
+	assert_eq(
+		McpDockScript._transport_status_text({"phase": "closing", "attempt": 4}),
+		"Disconnecting…",
+	)
+	assert_eq(
+		McpDockScript._transport_status_text({"phase": "blocked", "attempt": 4}),
+		"Connection blocked",
+	)
+
+
+func test_update_status_renders_transport_phase_and_transient_reason() -> void:
+	_dock._build_ui()
+	var connection := _ConnectionStub.new()
+	connection.is_connected = false
+	connection.transport_status = {
+		"phase": "connecting",
+		"attempt": 2,
+		"state_elapsed_sec": 10.0,
+		"reason": "Server rejected the editor auth token.",
+	}
+	_dock._connection = connection
+	_dock._startup_grace_until_msec = 0
+
+	_dock._update_status()
+
+	assert_eq(_dock._status_label.text, "Connecting — attempt 2")
+	assert_eq(
+		_dock._status_label.tooltip_text,
+		"Server rejected the editor auth token.",
+		"the compact primary label should keep transient detail in its tooltip",
 	)
 
 

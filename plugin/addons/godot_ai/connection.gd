@@ -8,7 +8,7 @@ extends Node
 
 const RECONNECT_DELAYS: Array[float] = [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 60.0]
 const RECONNECT_VERBOSE_ATTEMPTS := 5
-const RECONNECT_LOG_EVERY_N_ATTEMPTS := 10
+const RECONNECT_LOG_HEARTBEAT_MSEC := 60_000
 ## Backpressure policy: do not queue responses once the WebSocket's current
 ## outbound buffer plus the next payload would exceed this cap. Command
 ## responses get a compact structured error when that can still be sent;
@@ -55,6 +55,13 @@ var _url := ""
 var _connected := false
 var _reconnect_attempt := 0
 var _reconnect_timer := 0.0
+## Pull-based reconnect observability. The peer owns CONNECTING/CLOSING
+## timing; tracking entry time here lets logs and the dock distinguish those
+## phases from the plugin-owned CLOSED-state backoff without changing policy.
+var _observed_peer_state := WebSocketPeer.STATE_CLOSED
+var _peer_state_entered_msec := 0
+var _last_reconnect_transition_log_msec := -1
+var _transient_diagnostic: Dictionary = {}
 ## One pre-OPEN failure diagnostic per WebSocketPeer. Without this guard the
 ## CLOSED state is polled every frame and would flood the editor log.
 var _preopen_failure_logged_for_peer := false
@@ -130,7 +137,9 @@ func _process(delta: float) -> void:
 	## reconnect would still observe stale "live" state (PR #642 review).
 	_check_game_run_play_state(EditorInterface.is_playing_scene())
 
-	match _peer.get_ready_state():
+	var peer_state := _peer.get_ready_state()
+	var transition := _observe_peer_state(peer_state, Time.get_ticks_msec())
+	match peer_state:
 		WebSocketPeer.STATE_OPEN:
 			if not _connected:
 				_connected = true
@@ -164,22 +173,46 @@ func _process(delta: float) -> void:
 				_clear_on_disconnect()
 				var code := _peer.get_close_code()
 				var reason := _peer.get_close_reason()
-				log_buffer.log(_close_diagnostic(true, code, reason, _url))
-				_note_post_open_close(code)
+				var open_elapsed_sec := float(transition.get("previous_elapsed_sec", 0.0))
+				var close_diagnostic := _note_post_open_close(code)
+				if close_diagnostic.is_empty():
+					close_diagnostic = {
+						"reason_code": "connection_lost",
+						"reason": _close_reason_text(code, reason),
+					}
+				_transient_diagnostic = close_diagnostic
+				_log_reconnect_transition(
+					_postopen_close_diagnostic(
+						open_elapsed_sec,
+						code,
+						reason,
+						_url,
+						close_diagnostic,
+					),
+					maxi(1, _reconnect_attempt),
+					true,
+				)
 				connection_state_changed.emit(false)
 			elif not _preopen_failure_logged_for_peer:
 				_preopen_failure_logged_for_peer = true
-				## Initial failure is attempt 1 for diagnostics. Later failures
-				## follow the same first-five/each-tenth throttle as reconnect
-				## progress so a missing listener stays observable but bounded.
+				## Initial failure is attempt 1 for diagnostics. Later transition
+				## summaries are time-throttled so a missing listener stays
+				## observable without tying log volume to attempt duration.
 				var failed_attempt := maxi(1, _reconnect_attempt)
-				if _should_log_reconnect_attempt(failed_attempt):
-					log_buffer.log(_close_diagnostic(
-						false,
+				var connecting_elapsed_sec := float(
+					transition.get("previous_elapsed_sec", 0.0)
+				)
+				_log_reconnect_transition(
+					_preopen_failure_diagnostic(
+						failed_attempt,
+						connecting_elapsed_sec,
+						_reconnect_timer,
 						_peer.get_close_code(),
 						_peer.get_close_reason(),
 						_url
-					))
+					),
+					failed_attempt,
+				)
 			_reconnect_timer -= delta
 			if _reconnect_timer <= 0.0:
 				_attempt_reconnect()
@@ -277,6 +310,8 @@ func _connect_to_server() -> void:
 	var err := _peer.connect_to_url(_url)
 	if err != OK:
 		log_buffer.log("failed to initiate connection (error %d)" % err)
+	_observed_peer_state = _peer.get_ready_state()
+	_peer_state_entered_msec = Time.get_ticks_msec()
 
 
 func _attempt_reconnect() -> void:
@@ -287,11 +322,10 @@ func _attempt_reconnect() -> void:
 	var delay := _reconnect_delay_for_attempt(_reconnect_attempt)
 	_reconnect_attempt += 1
 	_reconnect_timer = delay
-	if _should_log_reconnect_attempt(_reconnect_attempt):
-		log_buffer.log(
-			"reconnecting (attempt %d; next retry in %.0fs if needed)"
-			% [_reconnect_attempt, delay]
-		)
+	_log_reconnect_transition(
+		"connecting to server (attempt %d)" % _reconnect_attempt,
+		_reconnect_attempt,
+	)
 	## Always create a fresh WebSocketPeer before reconnecting. A peer that has
 	## reached STATE_CLOSED is terminal; reusing it can leave the editor stuck in
 	## a quiet reconnect loop after the Python server restarts.
@@ -320,28 +354,90 @@ static func _reconnect_delay_for_attempt(attempt_index: int) -> float:
 	return RECONNECT_DELAYS[delay_idx]
 
 
-static func _should_log_reconnect_attempt(attempt_number: int) -> bool:
-	## Log the first few failures for immediate diagnostics, then only periodic
-	## progress markers. Reconnect continues indefinitely; the log should not.
+static func _should_log_reconnect_transition(
+	attempt_number: int,
+	now_msec: int,
+	last_log_msec: int
+) -> bool:
+	## Keep the first few transitions visible, then emit at most one summary per
+	## minute. Attempt-number throttling goes quiet for minutes when the engine
+	## spends a long time in CONNECTING, which is the state this log explains.
 	return (
 		attempt_number <= RECONNECT_VERBOSE_ATTEMPTS
-		or attempt_number % RECONNECT_LOG_EVERY_N_ATTEMPTS == 0
+		or last_log_msec < 0
+		or now_msec - last_log_msec >= RECONNECT_LOG_HEARTBEAT_MSEC
 	)
 
 
-static func _close_diagnostic(
-	reached_open: bool,
+func _log_reconnect_transition(message: String, attempt_number: int, force := false) -> void:
+	if not log_buffer:
+		return
+	var now_msec := Time.get_ticks_msec()
+	if not force and not _should_log_reconnect_transition(
+		attempt_number,
+		now_msec,
+		_last_reconnect_transition_log_msec,
+	):
+		return
+	_last_reconnect_transition_log_msec = now_msec
+	log_buffer.log(message)
+
+
+static func _preopen_failure_diagnostic(
+	attempt_number: int,
+	connecting_elapsed_sec: float,
+	retry_in_sec: float,
 	code: int,
 	reason: String,
 	url: String
 ) -> String:
-	var phase := "disconnected after OPEN" if reached_open else "connection failed before OPEN"
+	var retry_text := "retrying now"
+	if retry_in_sec > 0.0:
+		retry_text = "retrying in %.0fs" % retry_in_sec
+	return (
+		"connection attempt %d failed before OPEN after %.1fs; %s"
+		+ " (code %d, reason %s, url %s)"
+	) % [
+		attempt_number,
+		maxf(0.0, connecting_elapsed_sec),
+		retry_text,
+		code,
+		_sanitized_close_reason(reason),
+		url,
+	]
+
+
+static func _postopen_close_diagnostic(
+	open_elapsed_sec: float,
+	code: int,
+	reason: String,
+	url: String,
+	diagnostic: Dictionary = {}
+) -> String:
+	var message := (
+		"connection lost after being open for %.1fs (code %d, reason %s, url %s); reconnecting"
+		% [maxf(0.0, open_elapsed_sec), code, _sanitized_close_reason(reason), url]
+	)
+	match str(diagnostic.get("recovery_action", "")):
+		"retry_authenticated":
+			message += " with the current auth token (rejection 1/%d)" % AUTH_MISMATCH_FALLBACK_CLOSES
+		"retry_tokenless":
+			message += " with a token-less handshake (rejection %d/%d)" % [
+				int(diagnostic.get("occurrence", AUTH_MISMATCH_FALLBACK_CLOSES)),
+				AUTH_MISMATCH_FALLBACK_CLOSES,
+			]
+	return message
+
+
+static func _sanitized_close_reason(reason: String) -> String:
 	var reason_label := reason.strip_edges()
 	if reason_label.is_empty():
-		reason_label = "<none>"
-	else:
-		reason_label = reason_label.replace("\r", "\\r").replace("\n", "\\n")
-	return "%s (code %d, reason %s, url %s)" % [phase, code, reason_label, url]
+		return "<none>"
+	return reason_label.replace("\r", "\\r").replace("\n", "\\n")
+
+
+static func _close_reason_text(code: int, reason: String) -> String:
+	return "Close code %d: %s" % [code, _sanitized_close_reason(reason)]
 
 
 ## Token-mismatch fallback (#690 follow-up). The server's auth token is
@@ -356,20 +452,106 @@ static func _close_diagnostic(
 ## see websocket.py; omitting it gives up no security). Scope note: only
 ## this connection's copy of the token is dropped — the plugin static and
 ## the persisted record heal via the startup walk's adoption arms.
-func _note_post_open_close(code: int) -> void:
+func _note_post_open_close(code: int) -> Dictionary:
 	if code != CLOSE_CODE_AUTH_TOKEN_MISMATCH or auth_token.is_empty():
 		_auth_mismatch_closes = 0
-		return
+		return {}
 	_auth_mismatch_closes += 1
+	var occurrence := _auth_mismatch_closes
 	if _auth_mismatch_closes < AUTH_MISMATCH_FALLBACK_CLOSES:
-		return
+		return {
+			"reason_code": "auth_token_mismatch",
+			"reason": "Server rejected the editor auth token; retrying once in case of a server-swap race.",
+			"occurrence": occurrence,
+			"recovery_action": "retry_authenticated",
+		}
 	auth_token = ""
 	_auth_mismatch_closes = 0
-	if log_buffer:
-		log_buffer.log(
-			"auth token rejected %d times (close code %d) — retrying with a token-less handshake"
-			% [AUTH_MISMATCH_FALLBACK_CLOSES, CLOSE_CODE_AUTH_TOKEN_MISMATCH]
-		)
+	return {
+		"reason_code": "auth_token_mismatch",
+		"reason": "Server rejected the editor auth token twice; the next handshake will omit it.",
+		"occurrence": occurrence,
+		"recovery_action": "retry_tokenless",
+	}
+
+
+## Record one peer-state transition and return the duration of the state that
+## just ended. Kept separate from `_transport_status_snapshot` so tests can
+## exercise the status contract with injected values and no live socket.
+func _observe_peer_state(state: int, now_msec: int) -> Dictionary:
+	if _peer_state_entered_msec <= 0:
+		_observed_peer_state = state
+		_peer_state_entered_msec = now_msec
+		return {"changed": false, "previous_elapsed_sec": 0.0}
+	if state == _observed_peer_state:
+		return {"changed": false, "previous_elapsed_sec": 0.0}
+	var previous_elapsed_sec := maxf(
+		0.0,
+		(now_msec - _peer_state_entered_msec) / 1000.0,
+	)
+	var previous_state := _observed_peer_state
+	_observed_peer_state = state
+	_peer_state_entered_msec = now_msec
+	return {
+		"changed": true,
+		"previous_state": previous_state,
+		"previous_elapsed_sec": previous_elapsed_sec,
+	}
+
+
+## Pure transport-status contract shared by the connection log and dock. It
+## intentionally knows nothing about lifecycle diagnoses; the thin public
+## wrapper below applies generic `blocked`, while server_lifecycle.gd remains
+## authoritative for exact terminal states such as incompatible/foreign port.
+static func _transport_status_snapshot(
+	state: int,
+	state_elapsed_sec: float,
+	attempt: int,
+	retry_timer: float
+) -> Dictionary:
+	var phase := "closing"
+	match state:
+		WebSocketPeer.STATE_OPEN:
+			phase = "connected"
+		WebSocketPeer.STATE_CONNECTING:
+			phase = "connecting"
+		WebSocketPeer.STATE_CLOSED:
+			phase = "retrying"
+		WebSocketPeer.STATE_CLOSING:
+			phase = "closing"
+	var snapshot := {
+		"phase": phase,
+		"attempt": maxi(0, attempt),
+		"state_elapsed_sec": maxf(0.0, state_elapsed_sec),
+	}
+	## `retry_in_sec` is deliberately unrepresentable outside CLOSED-state
+	## backoff. CONNECTING is an in-flight attempt, never "retrying in 0s".
+	if phase == "retrying":
+		snapshot["retry_in_sec"] = maxf(0.0, retry_timer)
+	return snapshot
+
+
+func get_transport_status() -> Dictionary:
+	var now_msec := Time.get_ticks_msec()
+	var elapsed_sec := 0.0
+	if _peer_state_entered_msec > 0:
+		elapsed_sec = maxf(0.0, (now_msec - _peer_state_entered_msec) / 1000.0)
+	var snapshot := _transport_status_snapshot(
+		_peer.get_ready_state(),
+		elapsed_sec,
+		_reconnect_attempt,
+		_reconnect_timer,
+	)
+	if connect_blocked:
+		snapshot["phase"] = "blocked"
+		snapshot.erase("retry_in_sec")
+		snapshot["reason_code"] = "connection_blocked"
+		if not connect_block_reason.is_empty():
+			snapshot["reason"] = connect_block_reason
+	elif not _transient_diagnostic.is_empty():
+		for key in _transient_diagnostic:
+			snapshot[key] = _transient_diagnostic[key]
+	return snapshot
 
 
 func _log_blocked_notice_once() -> void:
@@ -448,6 +630,7 @@ func _handle_handshake_ack(parsed: Dictionary) -> void:
 	## The server accepted our handshake — any token-mismatch streak is
 	## over; a later unrelated 4003 starts a fresh one.
 	_auth_mismatch_closes = 0
+	_transient_diagnostic.clear()
 
 
 ## Never enqueue a malformed command frame: the dispatcher's typed casts
