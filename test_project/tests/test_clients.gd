@@ -2452,20 +2452,23 @@ func test_status_sweep_entry_surfaces_actionable_error_only_when_present() -> vo
 	assert_false(without_error.has("error"), "healthy rows must not gain an empty error field")
 
 
-func test_handler_teardown_joins_status_workers() -> void:
+func test_handler_teardown_defers_status_worker_join() -> void:
 	var handler := ClientHandler.new()
 	var worker := Thread.new()
 	var start_error := worker.start(func() -> Dictionary:
-		OS.delay_msec(20)
+		OS.delay_msec(100)
 		return {"data": {}}
 	)
 	assert_eq(start_error, OK)
-	var workers: Array = handler._status_worker_state.get("threads", [])
-	workers.append(worker)
+	handler._status_workers.append(worker)
 	handler.prepare_for_teardown()
-	assert_false(worker.is_started(), "teardown must realize every worker completion")
-	assert_true(workers.is_empty(), "teardown must release joined worker references")
-	assert_true(bool(handler._status_worker_state.get("tearing_down", false)))
+	assert_true(worker.is_alive(), "teardown must not block the main thread waiting for a live worker")
+	assert_eq(handler._status_workers, [worker], "the polling coroutine must retain worker ownership")
+	assert_true(handler._status_tearing_down, "teardown must reject new status sweeps")
+	# This synthetic worker has no finisher coroutine, so realize it explicitly
+	# after the non-blocking contract above has been asserted.
+	worker.wait_to_finish()
+	handler._status_workers.erase(worker)
 
 
 # ----- entry-builder shape sanity for shipped clients -----

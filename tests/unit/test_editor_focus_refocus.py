@@ -537,8 +537,8 @@ def test_handler_client_status_sweep_is_deferred_to_worker() -> None:
     assert "check_status_details_for_url_with_cli_path" in worker_block
 
 
-def test_handler_client_status_worker_surfaces_errors_and_joins_on_teardown() -> None:
-    """Aggregate errors stay actionable and plugin reload realizes every Thread."""
+def test_handler_client_status_worker_surfaces_errors_and_polls_on_teardown() -> None:
+    """Aggregate errors stay actionable and teardown never blocks on a live Thread."""
 
     handler_source = (PLUGIN_ROOT / "handlers" / "client_handler.gd").read_text(
         encoding="utf-8"
@@ -554,7 +554,7 @@ def test_handler_client_status_worker_surfaces_errors_and_joins_on_teardown() ->
     )
     teardown_block = get_func_block(handler_source, "func prepare_for_teardown")
     finish_block = get_func_block(
-        handler_source, "static func _finish_client_status_deferred"
+        handler_source, "func _finish_client_status_deferred"
     )
     clear_block = get_func_block(dispatcher_source, "func clear() -> void:")
     update_reload_block = get_func_block(
@@ -562,8 +562,14 @@ def test_handler_client_status_worker_surfaces_errors_and_joins_on_teardown() ->
     )
 
     assert 'entry["error"] = error_msg' in entry_block
-    assert "worker.wait_to_finish()" in teardown_block
-    assert 'worker_state.get("threads"' in finish_block
+    assert "_status_tearing_down = true" in teardown_block
+    assert "wait_to_finish" not in teardown_block
+    assert "while worker.is_alive()" in finish_block
+    assert "await tree.process_frame" in finish_block
+    assert "worker.wait_to_finish()" in finish_block
+    assert "_status_workers.erase(worker)" in finish_block
+    assert "static func _finish_client_status_deferred" not in handler_source
+    assert "var _status_workers: Array[Thread] = []" in handler_source
     assert 'instance.has_method("prepare_for_teardown")' in clear_block
     assert 'instance.call("prepare_for_teardown")' in clear_block
     assert "_dispatcher.clear()" in update_reload_block

@@ -80,10 +80,9 @@ func register_lazy(command_name: String, handler_key: String, method: StringName
 ## plugin.gd can release RefCounted handlers before Godot reloads their
 ## class_name scripts (issue #46). After clear(), the dispatcher is inert.
 func clear() -> void:
-	## Give lazy handlers a last chance to join worker threads while their
-	## scripts and constructor-owned dependencies are still valid. A live Thread
-	## must never be released into plugin reload; Godot treats that as VM
-	## corruption, not a recoverable leak.
+	## Stop lazy handlers before releasing the cache. Handler-owned polling
+	## coroutines retain any in-flight worker and deferred-response connection
+	## across frames, then join only after the worker is no longer alive.
 	for instance in _lazy_handler_cache.values():
 		if is_instance_valid(instance) and instance.has_method("prepare_for_teardown"):
 			instance.call("prepare_for_teardown")
