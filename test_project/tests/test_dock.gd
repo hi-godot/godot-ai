@@ -267,6 +267,29 @@ func test_update_status_renders_transport_phase_and_transient_reason() -> void:
 	)
 
 
+func test_update_status_hides_stale_transient_reason_while_connected() -> void:
+	_dock._build_ui()
+	var connection := _ConnectionStub.new()
+	connection.is_connected = true
+	connection.transport_status = {
+		"phase": "connected",
+		"attempt": 0,
+		"state_elapsed_sec": 0.0,
+		"reason": "Previous peer rejected the editor auth token.",
+	}
+	_dock._connection = connection
+	_dock._startup_grace_until_msec = 0
+
+	_dock._update_status()
+
+	assert_eq(_dock._status_label.text, "Server connected")
+	assert_eq(
+		_dock._status_label.tooltip_text,
+		"",
+		"an OPEN connection must not show the previous peer's transient reason",
+	)
+
+
 func test_empty_client_cta_visible_only_until_a_client_is_configured() -> void:
 	_dock._build_ui()
 	_dock._last_client_status_refresh_completed_msec = 0

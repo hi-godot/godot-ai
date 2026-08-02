@@ -1034,7 +1034,10 @@ func _update_status() -> void:
 	_update_crash_panel(server_status)
 	_refresh_server_version_label(server_status)
 
-	var status_tooltip := str(transport_status.get("reason", ""))
+	## A transient disconnect reason remains in the transport snapshot until
+	## handshake_ack. Once the dock renders the connection as OPEN, do not pair
+	## its green label with the previous peer's recovery diagnostic.
+	var status_tooltip := "" if connected else str(transport_status.get("reason", ""))
 	var changed: bool = (
 		connected != _last_connected
 		or status_text != _last_status_text
