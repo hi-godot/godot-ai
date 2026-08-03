@@ -509,9 +509,9 @@ static func _incompatible_server_message(
 	## first; "stop the old server" alone reads as a dead end when the server
 	## respawns the moment the user kills it.
 	var repair := (
-		"If AI clients launched it, run Configure all and restart those apps — "
-		+ "the old server exits on its own. Otherwise stop it manually or "
-		+ "change both HTTP and WS ports."
+		"If AI-client attach bridges are keeping it alive, run Configure all to "
+		+ "repin them, then restart those client apps — the old server exits on "
+		+ "its own. Otherwise stop it manually or change both HTTP and WS ports."
 	)
 	if not version.is_empty():
 		if actual_ws_port > 0 and actual_ws_port != expected_ws_port:

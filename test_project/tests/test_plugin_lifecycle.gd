@@ -1109,9 +1109,12 @@ func test_incompatible_server_message_names_actual_version_when_discoverable() -
 	assert_contains(message, "plugin expects v2.2.0")
 	assert_contains(message, "change both HTTP and WS ports")
 	## The usual occupant after a plugin update is a backend kept alive by
-	## attach-bridge leases; the message must name the repair that actually
-	## works (repin + restart clients), not just "stop the old server".
+	## attach-bridge leases; the message must name the full repair that
+	## actually works — repin AND restart the client apps — not just "stop
+	## the old server", which the bridges would undo by respawning it.
 	assert_contains(message, "Configure all")
+	assert_contains(message, "repin")
+	assert_contains(message, "restart those client apps")
 
 
 func test_incompatible_server_message_names_ws_port_mismatch() -> void:
