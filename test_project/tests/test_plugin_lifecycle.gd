@@ -1108,6 +1108,10 @@ func test_incompatible_server_message_names_actual_version_when_discoverable() -
 	assert_contains(message, "Port 8000 is occupied by godot-ai server v1.2.10")
 	assert_contains(message, "plugin expects v2.2.0")
 	assert_contains(message, "change both HTTP and WS ports")
+	## The usual occupant after a plugin update is a backend kept alive by
+	## attach-bridge leases; the message must name the repair that actually
+	## works (repin + restart clients), not just "stop the old server".
+	assert_contains(message, "Configure all")
 
 
 func test_incompatible_server_message_names_ws_port_mismatch() -> void:

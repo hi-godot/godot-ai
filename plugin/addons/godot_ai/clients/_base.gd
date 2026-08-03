@@ -238,6 +238,17 @@ func resolved_config_path() -> String:
 ## is empty for ordinary unsupported/missing path mappings to preserve the
 ## long-standing status behavior for clients not installed on this platform.
 func resolved_config_path_details() -> Dictionary:
+	## Reflected reads: after an in-session self-update, an instance created
+	## before the update can answer Nil for vars the update added, and the
+	## typed calls below would each hard-error (Nil -> Dictionary, #850's
+	## per-row error wall). Fail with the
+	## one repair message instead; the registry's coherence probe drives the
+	## same text on the status path.
+	var candidates: Variant = get("config_path_candidates")
+	var template: Variant = get("path_template")
+	var file_env: Variant = get("config_file_env")
+	if not (candidates is Dictionary) or not (template is Dictionary) or not (file_env is String):
+		return {"path": "", "error": McpClientRegistry.RESTART_TO_FINISH_UPDATE}
 	var file_override := config_file_override_details()
 	if not str(file_override.get("path", "")).is_empty() or not str(file_override.get("error", "")).is_empty():
 		_clear_config_path_warning()
@@ -246,11 +257,11 @@ func resolved_config_path_details() -> Dictionary:
 	if not override.is_empty():
 		_clear_config_path_warning()
 		return {"path": override, "error": ""}
-	var candidate_key := McpPathTemplate.platform_key(config_path_candidates)
+	var candidate_key := McpPathTemplate.platform_key(candidates)
 	if not candidate_key.is_empty():
-		return _resolve_ordered_config_path_candidates(config_path_candidates[candidate_key])
+		return _resolve_ordered_config_path_candidates(candidates[candidate_key])
 	_clear_config_path_warning()
-	return {"path": McpPathTemplate.resolve(path_template), "error": ""}
+	return {"path": McpPathTemplate.resolve(template), "error": ""}
 
 
 ## The exact-file env override plus any fail-closed diagnostic. Empty path and

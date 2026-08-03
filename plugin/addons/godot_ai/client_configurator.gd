@@ -328,6 +328,8 @@ static func client_display_name(id: String) -> String:
 ## Empty defaults to the live server URL — appropriate for MCP-tool callers
 ## that always run on main.
 static func configure(id: String, url: String = "", launch_context: Dictionary = {}) -> Dictionary:
+	if ClientRegistry.stale_session_detected():
+		return {"status": "error", "message": ClientRegistry.RESTART_TO_FINISH_UPDATE}
 	var client := ClientRegistry.get_by_id(id)
 	if client == null:
 		return {"status": "error", "message": "Unknown client: %s" % id}
@@ -362,6 +364,8 @@ static func configure(id: String, url: String = "", launch_context: Dictionary =
 
 
 static func check_status(id: String) -> Client.Status:
+	if ClientRegistry.stale_session_detected():
+		return Client.Status.ERROR
 	var client := ClientRegistry.get_by_id(id)
 	if client == null:
 		return Client.Status.NOT_CONFIGURED
@@ -387,6 +391,10 @@ static func check_status_details_for_url_with_cli_path(
 	launch_context: Dictionary = {},
 	resolved_launch: Dictionary = {},
 ) -> Dictionary:
+	## One comprehensible line per row beats a wall of per-field type errors —
+	## the dock keeps painting, every row names the same repair (restart).
+	if ClientRegistry.stale_session_detected():
+		return {"status": Client.Status.ERROR, "error_msg": ClientRegistry.RESTART_TO_FINISH_UPDATE}
 	var client := ClientRegistry.get_by_id(id)
 	if client == null:
 		return {"status": Client.Status.NOT_CONFIGURED, "error_msg": ""}
@@ -423,9 +431,12 @@ static func warm_env_snapshot() -> void:
 		var client := ClientRegistry.get_by_id(String(id))
 		if client == null:
 			continue
-		for env_name in [client.config_file_env, client.config_home_env]:
-			if not String(env_name).is_empty() and not extras.has(String(env_name)):
-				extras.append(String(env_name))
+		## Reflected get(): after an in-session self-update these fields can
+		## read as Nil on stale instances, and String(Nil) is a hard error (#850). Skipping just degrades env-override
+		## resolution until the restart the registry is already asking for.
+		for env_name in [client.get("config_file_env"), client.get("config_home_env")]:
+			if env_name is String and not env_name.is_empty() and not extras.has(env_name):
+				extras.append(env_name)
 	McpPathTemplate.warm_env_snapshot(extras)
 	_editor_setting_lookup(MODE_OVERRIDE_SETTING)
 	_editor_setting_lookup(SETTING_STARTUP_TRACE)
@@ -520,6 +531,8 @@ static func _client_status_sweep_entry(
 ## `configure()` above for why. The url is only used to format the
 ## verify-after-write diagnostic message; the remove itself doesn't need it.
 static func remove(id: String, url: String = "", launch_context: Dictionary = {}) -> Dictionary:
+	if ClientRegistry.stale_session_detected():
+		return {"status": "error", "message": ClientRegistry.RESTART_TO_FINISH_UPDATE}
 	var client := ClientRegistry.get_by_id(id)
 	if client == null:
 		return {"status": "error", "message": "Unknown client: %s" % id}

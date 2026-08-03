@@ -503,17 +503,25 @@ static func _incompatible_server_message(
 	## walking the process tree. See #416.
 	var package_path := _live_package_path_for_message(live)
 	var path_suffix := " (loaded from %s)" % package_path if not package_path.is_empty() else ""
+	## After a plugin update, the usual occupant is a backend kept alive by
+	## AI-client attach bridges still pinned to the previous version (their
+	## leases outrank us — #669/#839, we must not kill it). Name that repair
+	## first; "stop the old server" alone reads as a dead end when the server
+	## respawns the moment the user kills it.
+	var repair := (
+		"If AI clients launched it, run Configure all and restart those apps — "
+		+ "the old server exits on its own. Otherwise stop it manually or "
+		+ "change both HTTP and WS ports."
+	)
 	if not version.is_empty():
 		if actual_ws_port > 0 and actual_ws_port != expected_ws_port:
 			return (
 				"Port %d is occupied by godot-ai server v%s using WS port %d%s; "
-				+ "plugin expects v%s with WS port %d. Stop the old server or "
-				+ "change both HTTP and WS ports."
-			) % [port, version, actual_ws_port, path_suffix, expected_version, expected_ws_port]
+				+ "plugin expects v%s with WS port %d. %s"
+			) % [port, version, actual_ws_port, path_suffix, expected_version, expected_ws_port, repair]
 		return (
-			"Port %d is occupied by godot-ai server v%s%s; plugin expects v%s. "
-			+ "Stop the old server or change both HTTP and WS ports."
-		) % [port, version, path_suffix, expected_version]
+			"Port %d is occupied by godot-ai server v%s%s; plugin expects v%s. %s"
+		) % [port, version, path_suffix, expected_version, repair]
 	var status_code := int(live.get("status_code", 0))
 	if status_code > 0:
 		return (

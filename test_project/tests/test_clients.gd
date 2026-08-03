@@ -1378,6 +1378,31 @@ func test_config_file_env_configure_status_remove_and_manual_use_exact_file() ->
 	assert_eq(post_remove, McpClient.Status.NOT_CONFIGURED)
 
 
+func test_registry_stale_session_probe_and_gate() -> void:
+	## #850: an in-session self-update can leave descriptor instances answering
+	## Nil for vars the update added. The registry's coherence probe detects
+	## that; a consistent checkout must never trip it, and an object without
+	## the current schema must.
+	assert_false(
+		McpClientRegistry.stale_session_detected(),
+		"a consistent session must not report a stale update"
+	)
+	assert_true(
+		McpClientRegistry._instance_is_coherent(McpClientRegistry.get_by_id("claude_desktop")),
+		"a freshly loaded descriptor must read coherent"
+	)
+	assert_false(
+		McpClientRegistry._instance_is_coherent(RefCounted.new()),
+		"an instance missing current-schema fields must read incoherent"
+	)
+	assert_false(McpClientRegistry._instance_is_coherent(null))
+	assert_contains(
+		McpClientRegistry.RESTART_TO_FINISH_UPDATE,
+		"Restart the editor",
+		"the stale-session message must name the one repair"
+	)
+
+
 func test_configure_message_names_the_written_transport() -> void:
 	## The success line must describe the transport that was actually written:
 	## "stdio attach" for command-shape entries, "(HTTP: <url>)" only for
