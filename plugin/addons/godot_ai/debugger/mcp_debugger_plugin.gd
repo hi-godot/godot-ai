@@ -62,10 +62,13 @@ const EVAL_COMPILE_GRACE_SEC := 3.0
 ## without flooding the channel; most evals reply before the first probe.
 const EVAL_PROBE_INTERVAL_SEC := 0.35
 
+const VisionRoutingScript := preload("res://addons/godot_ai/vision_routing.gd")
+
 var _log_buffer: McpLogBuffer
 var _game_log_buffer: McpGameLogBuffer
 var _editor_log_buffer: McpEditorLogBuffer
 var _surfaced_error_tracker
+var vision_routing: VisionRoutingScript = null
 
 ## Pending request_id -> {connection, timer, timeout_callable}.
 ## We retain the bound timeout lambda so `_clear_pending` can disconnect
@@ -111,11 +114,12 @@ const BREAK_FRAME_SCRAPE_DELAYS_SEC: Array[float] = [0.5, 2.0]
 
 
 
-func _init(log_buffer: McpLogBuffer = null, game_log_buffer: McpGameLogBuffer = null, editor_log_buffer: McpEditorLogBuffer = null, surfaced_error_tracker = null) -> void:
+func _init(log_buffer: McpLogBuffer = null, game_log_buffer: McpGameLogBuffer = null, editor_log_buffer: McpEditorLogBuffer = null, surfaced_error_tracker = null, vision_routing: VisionRoutingScript = null) -> void:
 	_log_buffer = log_buffer
 	_game_log_buffer = game_log_buffer
 	_editor_log_buffer = editor_log_buffer
 	_surfaced_error_tracker = surfaced_error_tracker
+	vision_routing = vision_routing
 
 
 func _has_capture(prefix: String) -> bool:
@@ -858,6 +862,12 @@ func _on_screenshot_response(data: Array) -> void:
 			payload["note"] = ("The game window appears backgrounded or its main loop is "
 				+ "stalled; returning the last rendered frame. Focus the game window and "
 				+ "retry for a current frame.")
+	## Vision Routing: when enabled, describe the frame through Groq on a
+	## worker thread and reply with the text description instead of the raw
+	## image (see vision_routing.gd). The router replies for us in that case.
+	if vision_routing != null and vision_routing.is_routing_enabled():
+		if vision_routing.route_game_payload(connection, request_id, {"data": payload}):
+			return
 	connection.send_deferred_response(request_id, {"data": payload})
 	if _log_buffer:
 		_log_buffer.log("[debug] <- mcp:screenshot_response (%s)" % request_id)

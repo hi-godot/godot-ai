@@ -4049,6 +4049,55 @@ async def test_editor_screenshot_handler_passes_comma_view_target():
     assert result["view_target_count"] == 2
 
 
+
+async def test_editor_screenshot_routed_metadata_forwarded_without_image():
+    """Vision Routing: a capture the plugin routed through a vision API
+    carries `vision_description` / `routed_via`; with include_image=False
+    they must surface in the returned metadata."""
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+
+    original_send = client.send
+
+    async def routed_send(command: str, params: dict | None = None, **kwargs):
+        result = await original_send(command, params, **kwargs)
+        if command == "take_screenshot":
+            result["routed_via"] = "qwen/qwen3.6-27b"
+            result["vision_description"] = "A rusty spider robot on a platform."
+        return result
+
+    client.send = routed_send  # type: ignore[method-assign]
+    result = await editor_handlers.editor_screenshot(runtime, include_image=False)
+    assert result["routed_via"] == "qwen/qwen3.6-27b"
+    assert "spider" in result["vision_description"]
+
+
+async def test_editor_screenshot_routed_drops_image_block():
+    """Vision Routing: when the plugin replaced the image with a text
+    description (`routed_via` set), the handler must not forward an image
+    block - a text-only model cannot use it, and the placeholder would
+    waste tokens. Only the metadata text is returned."""
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+
+    original_send = client.send
+
+    async def routed_send(command: str, params: dict | None = None, **kwargs):
+        result = await original_send(command, params, **kwargs)
+        if command == "take_screenshot":
+            result["routed_via"] = "qwen/qwen3.6-27b"
+            result["vision_description"] = "A rusty spider robot on a platform."
+        return result
+
+    client.send = routed_send  # type: ignore[method-assign]
+    result = await editor_handlers.editor_screenshot(runtime, include_image=True)
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert result[0].type == "text"
+    assert "routed_via" in result[0].text
+    assert "vision_description" in result[0].text
+    assert "spider" in result[0].text
+
 async def test_editor_screenshot_handler_coverage_passes_param():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)

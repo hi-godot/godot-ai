@@ -38,6 +38,7 @@ const CliStrategy := preload("res://addons/godot_ai/clients/_cli_strategy.gd")
 const ToolCatalog := preload("res://addons/godot_ai/tool_catalog.gd")
 const LogViewerScript := preload("res://addons/godot_ai/dock_panels/log_viewer.gd")
 const PortPickerPanelScript := preload("res://addons/godot_ai/dock_panels/port_picker_panel.gd")
+const VisionRoutingScript := preload("res://addons/godot_ai/vision_routing.gd")
 
 const DEV_MODE_SETTING := "godot_ai/dev_mode"
 ## "Change the port + reconfigure your clients" guide. Surfaced from the crash
@@ -217,6 +218,9 @@ var _dev_primary_btn: Button
 ## spawning a replacement. Disabled when no dev server is running.
 var _dev_stop_btn: Button
 var _log_viewer: LogViewerScript
+## Vision Routing (optional) - set by plugin.gd; builds the "Vision Routing"
+## tab in Clients & Tools and the quick toggle under Developer mode.
+var vision_routing: VisionRoutingScript = null
 
 var _last_connected := false
 var _last_status_text := ""
@@ -807,6 +811,8 @@ func _build_ui() -> void:
 
 	_build_tools_tab(tabs)
 	_build_settings_tab(tabs)
+	if vision_routing != null:
+		vision_routing.build_tab(tabs)
 
 	_body.add_child(HSeparator.new())
 
@@ -822,6 +828,8 @@ func _build_ui() -> void:
 	_dev_mode_toggle.toggled.connect(_on_dev_mode_toggled)
 	dev_toggle_row.add_child(_dev_mode_toggle)
 	_body.add_child(dev_toggle_row)
+	if vision_routing != null:
+		vision_routing.build_toggle_row(_body)
 
 	# --- Log section (dev-only) ---
 	_log_viewer = LogViewerScript.new()

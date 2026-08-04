@@ -30,7 +30,7 @@ not the MCP tool names.
 | `project_run` | Play the project, then wait briefly for game liveness (autosave persists in-memory MCP edits unless `autosave=False`) |
 | `test_run` | Run GDScript test suites in the editor — see [testing.md](testing.md) for writing suites and the `McpTestSuite` API |
 | `logs_read` | Read plugin / game / editor / combined log buffers. `source="editor"` surfaces parse errors, GDScript reload warnings, @tool/EditorPlugin runtime errors, push_error/push_warning, and visible Debugger dock Errors-tab rows — use this when the editor's Output or Debugger Errors panel shows red/yellow rows |
-| `editor_screenshot` | Capture the editor 3D viewport (`viewport`), editor 2D viewport (`viewport_2d`), cinematic Camera3D render (`cinematic`), or running game framebuffer (`game`) |
+| `editor_screenshot` | Capture the editor 3D viewport (`viewport`), editor 2D viewport (`viewport_2d`), cinematic Camera3D render (`cinematic`), or running game framebuffer (`game`). With Vision Routing enabled, images are replaced by a text description (`vision_description` / `routed_via`) - see [vision-routing.md](vision-routing.md) |
 | `editor_reload_plugin` | Reload the plugin and wait for reconnect (works with external and plugin-managed servers) |
 | `animation_create` | Create an Animation clip (auto-creates AnimationPlayer + library if missing) |
 

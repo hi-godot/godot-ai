@@ -3,6 +3,7 @@ extends RefCounted
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const Telemetry := preload("res://addons/godot_ai/telemetry.gd")
+const VisionRoutingScript := preload("res://addons/godot_ai/vision_routing.gd")
 
 ## Handles editor state, selection, log, screenshot, and performance commands.
 
@@ -15,9 +16,10 @@ var _game_log_buffer: McpGameLogBuffer
 var _editor_log_buffer: McpEditorLogBuffer
 var _debugger_errors_root: Node
 var _surfaced_error_tracker
+var _vision_routing: VisionRoutingScript = null
 
 
-func _init(log_buffer: McpLogBuffer, connection: McpConnection = null, debugger_plugin: McpDebuggerPlugin = null, game_log_buffer: McpGameLogBuffer = null, editor_log_buffer: McpEditorLogBuffer = null, debugger_errors_root: Node = null, surfaced_error_tracker = null) -> void:
+func _init(log_buffer: McpLogBuffer, connection: McpConnection = null, debugger_plugin: McpDebuggerPlugin = null, game_log_buffer: McpGameLogBuffer = null, editor_log_buffer: McpEditorLogBuffer = null, debugger_errors_root: Node = null, surfaced_error_tracker = null, vision_routing: VisionRoutingScript = null) -> void:
 	_log_buffer = log_buffer
 	_connection = connection
 	_debugger_plugin = debugger_plugin
@@ -25,6 +27,7 @@ func _init(log_buffer: McpLogBuffer, connection: McpConnection = null, debugger_
 	_editor_log_buffer = editor_log_buffer
 	_debugger_errors_root = debugger_errors_root
 	_surfaced_error_tracker = surfaced_error_tracker
+	_vision_routing = vision_routing
 	if _surfaced_error_tracker == null:
 		_surfaced_error_tracker = McpSurfacedErrorTracker.new(_editor_log_buffer, _game_log_buffer, _debugger_errors_root)
 
@@ -419,6 +422,16 @@ func _compute_coverage_angles(aabb: AABB) -> Array[Dictionary]:
 
 
 func take_screenshot(params: Dictionary) -> Dictionary:
+	## Vision Routing hook: when enabled, the capture is described by Groq on a
+	## worker thread and the text description is returned instead of the raw
+	## image (see vision_routing.gd). Off, no key, or non-image results keep the
+	## original behavior.
+	if _vision_routing != null and _vision_routing.is_routing_enabled():
+		return _vision_routing.route_editor_screenshot(params, Callable(self, "_take_screenshot_impl"), _connection)
+	return _take_screenshot_impl(params)
+
+
+func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 	var source: String = params.get("source", "viewport")
 	var max_resolution: int = params.get("max_resolution", 0)
 	var view_target: String = params.get("view_target", "")
