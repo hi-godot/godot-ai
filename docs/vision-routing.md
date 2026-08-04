@@ -1,7 +1,7 @@
 # Vision Routing
 
 Vision Routing lets models without image support (e.g. DeepSeek) still "see"
-the editor and the running game. When enabled, every capture made through the
+the editor and the running game. When enabled, every single-image capture made through the
 `editor_screenshot` tool is sent to a curated vision model on a worker thread,
 and the resulting **text description** is returned to the AI instead of the raw
 image.
@@ -21,7 +21,7 @@ never silently call the wrong model:
 | --- | --- | --- | --- |
 | Groq | `qwen/qwen3.6-27b` | OpenAI chat-completions | Yes |
 | Google Gemini | `gemini-2.5-flash` | generateContent (REST) | Yes (AI Studio key) |
-| xAI Grok | `grok-2-vision-latest` | OpenAI chat-completions | No (paid) |
+| xAI Grok | `grok-4.5` | OpenAI chat-completions | No (paid) |
 
 Each provider has its own encrypted key slot and its own environment-variable
 override: `GROQ_API_KEY`, `GOOGLE_API_KEY` and `XAI_API_KEY`. The environment

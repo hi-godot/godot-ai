@@ -119,7 +119,7 @@ func _init(log_buffer: McpLogBuffer = null, game_log_buffer: McpGameLogBuffer = 
 	_game_log_buffer = game_log_buffer
 	_editor_log_buffer = editor_log_buffer
 	_surfaced_error_tracker = surfaced_error_tracker
-	vision_routing = vision_routing
+	self.vision_routing = vision_routing
 
 
 func _has_capture(prefix: String) -> bool:
@@ -862,7 +862,8 @@ func _on_screenshot_response(data: Array) -> void:
 			payload["note"] = ("The game window appears backgrounded or its main loop is "
 				+ "stalled; returning the last rendered frame. Focus the game window and "
 				+ "retry for a current frame.")
-	## Vision Routing: when enabled, describe the frame through Groq on a
+	## Vision Routing: when enabled, describe the frame through the configured
+	## vision provider on a
 	## worker thread and reply with the text description instead of the raw
 	## image (see vision_routing.gd). The router replies for us in that case.
 	if vision_routing != null and vision_routing.is_routing_enabled():

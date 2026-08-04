@@ -99,8 +99,7 @@ func test_route_complete_failure_passes_original_through() -> void:
 		"data": {"source": "viewport", "image_base64": "AAAA", "format": "png"},
 		"connection": stub,
 	}
-	router._error_notes[rid] = "Groq HTTP 401: bad key"
-	router._on_route_complete(rid, "")
+	router._on_route_complete(rid, {"desc": "", "error": "Groq HTTP 401: bad key"})
 	assert_eq(stub.replies.size(), 1)
 	var data: Dictionary = stub.replies[0]["payload"]["data"]
 	assert_eq(data["image_base64"], "AAAA")
@@ -121,6 +120,24 @@ func test_route_complete_keeps_existing_note() -> void:
 	var note := str(data["note"])
 	assert_true(note.contains("stale frame"))
 	assert_true(note.contains("A game window showing the main menu."))
+
+func test_route_complete_reports_active_provider_in_routed_via() -> void:
+	for provider_id in VisionRoutingScript.PROVIDER_ORDER:
+		var router := _make_router()
+		var stub := StubConnection.new()
+		var rid := "test-rid-%s" % provider_id
+		router._pending[rid] = {
+			"payload": {"data": {"source": "viewport", "image_base64": "AAAA"}},
+			"data": {"source": "viewport", "width": 100, "height": 100, "image_base64": "AAAA", "format": "png"},
+			"connection": stub,
+			"provider": provider_id,
+		}
+		router._on_route_complete(rid, {"desc": "A rusty spider robot on a platform.", "error": ""})
+		assert_eq(stub.replies.size(), 1)
+		var data: Dictionary = stub.replies[0]["payload"]["data"]
+		var model := str(VisionRoutingScript.PROVIDERS[provider_id]["model"])
+		assert_eq(str(data["routed_via"]), "%s:%s" % [provider_id, model])
+
 
 # ----- providers -----
 
@@ -182,7 +199,7 @@ func test_gemini_response_parser_extracts_text() -> void:
 		"code": 200,
 		"text": JSON.stringify({"candidates": [{"content": {"parts": [{"text": "A goldfish in a bowl."}]}}]}),
 	}
-	assert_eq(router._parse_description(provider, response, "rid-g"), "A goldfish in a bowl.")
+	assert_eq(router._parse_description(provider, response)["desc"], "A goldfish in a bowl.")
 
 
 func test_gemini_response_parser_rejects_empty_candidates() -> void:
@@ -192,8 +209,9 @@ func test_gemini_response_parser_rejects_empty_candidates() -> void:
 		"code": 200,
 		"text": JSON.stringify({"candidates": [], "promptFeedback": {"blockReason": "SAFETY"}}),
 	}
-	assert_eq(router._parse_description(provider, response, "rid-g2"), "")
-	assert_true(str(router._error_notes.get("rid-g2", "")).contains("SAFETY"))
+	var failed := router._parse_description(provider, response)
+	assert_eq(failed["desc"], "")
+	assert_true(str(failed["error"]).contains("SAFETY"))
 
 
 func test_openai_parser_strips_think_blocks() -> void:
@@ -203,4 +221,4 @@ func test_openai_parser_strips_think_blocks() -> void:
 		"code": 200,
 		"text": JSON.stringify({"choices": [{"message": {"content": "<think>hmm</think>\nThe scene shows a red door."}}]}),
 	}
-	assert_eq(router._parse_description(provider, response, "rid-t"), "The scene shows a red door.")
+	assert_eq(router._parse_description(provider, response)["desc"], "The scene shows a red door.")

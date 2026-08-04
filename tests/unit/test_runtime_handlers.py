@@ -4062,13 +4062,13 @@ async def test_editor_screenshot_routed_metadata_forwarded_without_image():
     async def routed_send(command: str, params: dict | None = None, **kwargs):
         result = await original_send(command, params, **kwargs)
         if command == "take_screenshot":
-            result["routed_via"] = "qwen/qwen3.6-27b"
+            result["routed_via"] = "groq:qwen/qwen3.6-27b"
             result["vision_description"] = "A rusty spider robot on a platform."
         return result
 
     client.send = routed_send  # type: ignore[method-assign]
     result = await editor_handlers.editor_screenshot(runtime, include_image=False)
-    assert result["routed_via"] == "qwen/qwen3.6-27b"
+    assert result["routed_via"] == "groq:qwen/qwen3.6-27b"
     assert "spider" in result["vision_description"]
 
 
@@ -4085,7 +4085,7 @@ async def test_editor_screenshot_routed_drops_image_block():
     async def routed_send(command: str, params: dict | None = None, **kwargs):
         result = await original_send(command, params, **kwargs)
         if command == "take_screenshot":
-            result["routed_via"] = "qwen/qwen3.6-27b"
+            result["routed_via"] = "groq:qwen/qwen3.6-27b"
             result["vision_description"] = "A rusty spider robot on a platform."
         return result
 
@@ -4094,7 +4094,7 @@ async def test_editor_screenshot_routed_drops_image_block():
     assert isinstance(result, list)
     assert len(result) == 1
     assert result[0].type == "text"
-    assert "routed_via" in result[0].text
+    assert '"routed_via": "groq:qwen/qwen3.6-27b"' in result[0].text
     assert "vision_description" in result[0].text
     assert "spider" in result[0].text
 

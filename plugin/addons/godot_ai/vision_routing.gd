@@ -4,7 +4,7 @@ extends RefCounted
 ## Vision Routing - route screenshot-tool images through a curated vision API.
 ##
 ## Models without image support (e.g. DeepSeek) cannot read the image blocks the
-## screenshot tool returns. When routing is enabled, every capture is sent to a
+## screenshot tool returns. When routing is enabled, every single-image capture is sent to a
 ## vision model on a worker thread and the resulting text description is
 ## returned to the AI instead:
 ##
@@ -22,7 +22,7 @@ extends RefCounted
 ## in the UI) so switching providers can never ping the wrong model:
 ##   - Groq          -> qwen/qwen3.6-27b     (free tier)
 ##   - Google Gemini -> gemini-2.5-flash     (free tier, AI Studio key)
-##   - xAI Grok      -> grok-2-vision-latest (image understanding)
+##   - xAI Grok      -> grok-4.5              (image understanding)
 ## Groq and Grok speak the OpenAI chat-completions dialect; Gemini uses the
 ## generateContent REST dialect. Both are handled in this file.
 ##
@@ -69,7 +69,7 @@ const PROVIDERS := {
 	},
 	"grok": {
 		"label": "xAI Grok",
-		"model": "grok-2-vision-latest",
+		"model": "grok-4.5",
 		"dialect": "openai",
 		"host": "api.x.ai",
 		"port": 443,
@@ -103,7 +103,6 @@ var _active := true
 var _route_done: Callable
 var _pending: Dictionary = {}   # request_id -> {payload, data, connection}
 var _threads: Dictionary = {}   # request_id -> Thread ("_test" = ping thread)
-var _error_notes: Dictionary = {}  # request_id -> last vision-routing error detail
 var _key_loading := false
 
 # UI references, kept in sync by _sync_ui_states().
@@ -129,11 +128,10 @@ func shutdown() -> void:
 	## case is a connect/request timeout.
 	for rid in _threads:
 		var thread: Thread = _threads[rid]
-		if thread != null and thread.is_started() and thread.is_alive():
+		if thread != null and thread.is_started():
 			thread.wait_to_finish()
 	_threads.clear()
 	_pending.clear()
-	_error_notes.clear()
 	_tab_provider = null
 	_tab_enable = null
 	_tab_key_label = null
@@ -188,13 +186,17 @@ func _start_route(rid: String, source: String, payload: Dictionary, data: Dictio
 	_pending[rid] = {"payload": payload, "data": data, "connection": connection, "provider": provider_id}
 	var prompt := _build_prompt(params)
 	var thread := Thread.new()
+	var start_err := thread.start(_route_worker.bind(provider_id, str(data.get("image_base64", "")), prompt, api_key, rid))
+	if start_err != OK:
+		_pending.erase(rid)
+		_log("vision routing: could not start worker for %s: %s - screenshot %s passed through" % [rid, error_string(start_err), source])
+		return false
 	_threads[rid] = thread
-	thread.start(_route_worker.bind(provider_id, str(data.get("image_base64", "")), prompt, api_key, rid))
 	_log("vision routing: routing %s screenshot %s (%d b64 chars) via %s (%s)" % [source, rid, str(data.get("image_base64", "")).length(), provider.get("label", provider_id), provider.get("model", "")])
 	return true
 
 
-func _on_route_complete(rid: String, description: Variant) -> void:
+func _on_route_complete(rid: String, result: Variant) -> void:
 	_join_thread(rid)
 	if not _active:
 		_pending.erase(rid)
@@ -208,13 +210,21 @@ func _on_route_complete(rid: String, description: Variant) -> void:
 		return
 	var provider_id := str(entry.get("provider", "groq"))
 	var payload: Dictionary = entry.get("payload", {})
-	var description_str := str(description) if description != null else ""
+	## Workers return {"desc": ..., "error": ...}; plain strings are accepted
+	## for backwards compatibility (tests / older callers).
+	var description_str := ""
+	var error_str := ""
+	if result is Dictionary:
+		description_str = str(result.get("desc", ""))
+		error_str = str(result.get("error", ""))
+	elif result != null:
+		description_str = str(result)
 	if description_str.is_empty():
-		_log("vision routing: %s failed for %s (%s) - returning original image" % [provider_id, rid, _error_notes.get(rid, "unknown error")])
-		_error_notes.erase(rid)
+		if error_str.is_empty():
+			error_str = "unknown error"
+		_log("vision routing: %s failed for %s (%s) - returning original image" % [provider_id, rid, error_str])
 		_pass_through(connection, rid, payload)
 		return
-	_error_notes.erase(rid)
 	var data: Dictionary = entry.get("data", {}).duplicate()
 	## The server forwards a fixed whitelist of metadata keys into the text
 	## result; `note` is the free-form one, so the description rides there
@@ -260,17 +270,20 @@ func _build_prompt(params: Dictionary) -> String:
 # --- routing worker (thread) ---------------------------------------------------
 
 func _route_worker(provider_id: String, image_b64: String, prompt: String, api_key: String, rid: String) -> void:
-	var description := _describe_blocking(provider_id, image_b64, prompt, api_key, rid)
-	_route_done.call_deferred(rid, description)
+	var result := _describe_blocking(provider_id, image_b64, prompt, api_key)
+	_route_done.call_deferred(rid, result)
 
 
-func _describe_blocking(provider_id: String, image_b64: String, prompt: String, api_key: String, rid: String) -> String:
+## Returns {"desc": String, "error": String}; "desc" is empty on failure and
+## "error" carries the reason. Runs on a worker thread, so it never writes
+## shared state - everything it needs is passed in and returned.
+func _describe_blocking(provider_id: String, image_b64: String, prompt: String, api_key: String) -> Dictionary:
 	var provider: Dictionary = PROVIDERS.get(provider_id, PROVIDERS["groq"])
 	var b64 := _downscale_image_if_needed(image_b64)
 	var body := _build_request_body(provider, prompt, b64)
 	var headers := _build_headers(provider, api_key)
 	var response := _http_post_json(str(provider.get("host", "")), int(provider.get("port", 443)), str(provider.get("path", "")), headers, body)
-	return _parse_description(provider, response, rid)
+	return _parse_description(provider, response)
 
 
 func _build_request_body(provider: Dictionary, prompt: String, image_b64: String) -> String:
@@ -314,44 +327,37 @@ func _build_headers(provider: Dictionary, api_key: String) -> PackedStringArray:
 	])
 
 
-func _parse_description(provider: Dictionary, response: Dictionary, rid: String) -> String:
+func _parse_description(provider: Dictionary, response: Dictionary) -> Dictionary:
 	var code: int = int(response.get("code", 0))
 	var label := str(provider.get("label", str(provider.get("model", "?"))))
 	if code == 0:
-		_error_notes[rid] = str(response.get("error", "HTTP request failed"))
-		return ""
+		return {"desc": "", "error": str(response.get("error", "HTTP request failed"))}
 	if code != 200:
-		_error_notes[rid] = "%s HTTP %d: %s" % [label, code, _body_snippet(str(response.get("text", "")))]
-		return ""
+		return {"desc": "", "error": "%s HTTP %d: %s" % [label, code, _body_snippet(str(response.get("text", "")))]}
 	var parsed: Variant = JSON.parse_string(str(response.get("text", "")))
 	if not (parsed is Dictionary):
-		_error_notes[rid] = "%s response was not JSON: %s" % [label, _body_snippet(str(response.get("text", "")))]
-		return ""
+		return {"desc": "", "error": "%s response was not JSON: %s" % [label, _body_snippet(str(response.get("text", "")))]}
 	if str(provider.get("dialect", "")) == "gemini":
-		return _parse_gemini(parsed, label, response, rid)
-	return _parse_openai(parsed, label, response, rid)
+		return _parse_gemini(parsed, label, response)
+	return _parse_openai(parsed, label, response)
 
 
-func _parse_openai(parsed: Dictionary, label: String, response: Dictionary, rid: String) -> String:
+func _parse_openai(parsed: Dictionary, label: String, response: Dictionary) -> Dictionary:
 	var choices: Variant = parsed.get("choices")
 	if not (choices is Array) or choices.is_empty():
-		_error_notes[rid] = "%s response had no choices: %s" % [label, _body_snippet(str(response.get("text", "")))]
-		return ""
+		return {"desc": "", "error": "%s response had no choices: %s" % [label, _body_snippet(str(response.get("text", "")))]}
 	if not (choices[0] is Dictionary):
-		_error_notes[rid] = "%s response choice was not an object: %s" % [label, _body_snippet(str(response.get("text", "")))]
-		return ""
+		return {"desc": "", "error": "%s response choice was not an object: %s" % [label, _body_snippet(str(response.get("text", "")))]}
 	var message: Variant = choices[0].get("message", {})
 	if not (message is Dictionary):
-		_error_notes[rid] = "%s response message was not an object: %s" % [label, _body_snippet(str(response.get("text", "")))]
-		return ""
+		return {"desc": "", "error": "%s response message was not an object: %s" % [label, _body_snippet(str(response.get("text", "")))]}
 	var content: Variant = message.get("content", "")
 	if content == null:
-		_error_notes[rid] = "%s response content was null: %s" % [label, _body_snippet(str(response.get("text", "")))]
-		return ""
-	return _strip_think(str(content))
+		return {"desc": "", "error": "%s response content was null: %s" % [label, _body_snippet(str(response.get("text", "")))]}
+	return {"desc": _strip_think(str(content)), "error": ""}
 
 
-func _parse_gemini(parsed: Dictionary, label: String, response: Dictionary, rid: String) -> String:
+func _parse_gemini(parsed: Dictionary, label: String, response: Dictionary) -> Dictionary:
 	var candidates: Variant = parsed.get("candidates")
 	if not (candidates is Array) or candidates.is_empty():
 		var reason := ""
@@ -361,19 +367,15 @@ func _parse_gemini(parsed: Dictionary, label: String, response: Dictionary, rid:
 		var reason_part := ""
 		if not reason.is_empty():
 			reason_part = " (blocked: %s)" % reason
-		_error_notes[rid] = "%s response had no candidates%s: %s" % [label, reason_part, _body_snippet(str(response.get("text", "")))]
-		return ""
+		return {"desc": "", "error": "%s response had no candidates%s: %s" % [label, reason_part, _body_snippet(str(response.get("text", "")))]}
 	if not (candidates[0] is Dictionary):
-		_error_notes[rid] = "%s response candidate was not an object: %s" % [label, _body_snippet(str(response.get("text", "")))]
-		return ""
+		return {"desc": "", "error": "%s response candidate was not an object: %s" % [label, _body_snippet(str(response.get("text", "")))]}
 	var content: Variant = candidates[0].get("content", {})
 	if not (content is Dictionary):
-		_error_notes[rid] = "%s response content was missing: %s" % [label, _body_snippet(str(response.get("text", "")))]
-		return ""
+		return {"desc": "", "error": "%s response content was missing: %s" % [label, _body_snippet(str(response.get("text", "")))]}
 	var parts: Variant = content.get("parts")
 	if not (parts is Array) or parts.is_empty():
-		_error_notes[rid] = "%s response had no parts: %s" % [label, _body_snippet(str(response.get("text", "")))]
-		return ""
+		return {"desc": "", "error": "%s response had no parts: %s" % [label, _body_snippet(str(response.get("text", "")))]}
 	var texts := PackedStringArray()
 	for part in parts:
 		if part is Dictionary:
@@ -381,9 +383,8 @@ func _parse_gemini(parsed: Dictionary, label: String, response: Dictionary, rid:
 			if not part_text.is_empty():
 				texts.append(part_text)
 	if texts.is_empty():
-		_error_notes[rid] = "%s response parts had no text: %s" % [label, _body_snippet(str(response.get("text", "")))]
-		return ""
-	return _strip_think("\n".join(texts))
+		return {"desc": "", "error": "%s response parts had no text: %s" % [label, _body_snippet(str(response.get("text", "")))]}
+	return {"desc": _strip_think("\n".join(texts)), "error": ""}
 
 
 func _strip_think(text: String) -> String:
@@ -474,6 +475,9 @@ func _http_post_json(host: String, port: int, path: String, headers: PackedStrin
 	var chunks := PackedByteArray()
 	var body_deadline := Time.get_ticks_msec() + REQUEST_TIMEOUT_MS
 	while http.get_status() == HTTPClient.STATUS_BODY:
+		if not _active:
+			http.close()
+			return {"code": 0, "error": "aborted (plugin teardown)"}
 		chunks.append_array(http.read_response_body_chunk())
 		http.poll()
 		if Time.get_ticks_msec() > body_deadline:
@@ -550,7 +554,7 @@ func _settings() -> EditorSettings:
 
 func is_routing_enabled() -> bool:
 	var es := _settings()
-	if es == null:
+	if es == null or not es.has_setting(SETTING_ENABLED):
 		return false
 	var value = es.get_setting(SETTING_ENABLED)
 	return value != null and value
@@ -560,7 +564,9 @@ func _active_provider_id() -> String:
 	var es := _settings()
 	if es == null:
 		return "groq"
-	var stored := str(es.get_setting(SETTING_PROVIDER))
+	var stored := ""
+	if es.has_setting(SETTING_PROVIDER):
+		stored = str(es.get_setting(SETTING_PROVIDER))
 	if stored.is_empty() or not PROVIDERS.has(stored):
 		return "groq"
 	return stored
@@ -579,7 +585,10 @@ func _resolved_api_key(provider_id: String) -> String:
 	var es := _settings()
 	if es == null:
 		return ""
-	var blob := str(es.get_setting(_provider_setting(provider_id)))
+	var setting := _provider_setting(provider_id)
+	var blob := ""
+	if es.has_setting(setting):
+		blob = str(es.get_setting(setting))
 	if blob.is_empty():
 		return ""
 	return _decrypt(blob)
@@ -589,7 +598,10 @@ func _decrypted_key(provider_id: String) -> String:
 	var es := _settings()
 	if es == null:
 		return ""
-	return _decrypt(str(es.get_setting(_provider_setting(provider_id))))
+	var setting := _provider_setting(provider_id)
+	if not es.has_setting(setting):
+		return ""
+	return _decrypt(str(es.get_setting(setting)))
 
 
 func set_api_key(provider_id: String, plain: String) -> void:
@@ -633,6 +645,7 @@ func _encrypt(plain: String) -> String:
 	aes.finish()
 	var hmac := HMACContext.new()
 	hmac.start(HashingContext.HASH_SHA256, key)
+	hmac.update(iv)
 	hmac.update(cipher)
 	var mac := hmac.finish()
 	return "%s:%s:%s:%s" % [_ENC_PREFIX, Marshalls.raw_to_base64(iv), Marshalls.raw_to_base64(mac), Marshalls.raw_to_base64(cipher)]
@@ -650,6 +663,7 @@ func _decrypt(blob: String) -> String:
 	var key := _derive_key()
 	var hmac := HMACContext.new()
 	hmac.start(HashingContext.HASH_SHA256, key)
+	hmac.update(iv)
 	hmac.update(cipher)
 	var expected := hmac.finish()
 	if expected != mac:
@@ -716,8 +730,8 @@ func build_tab(tabs: TabContainer) -> void:
 
 	var description := Label.new()
 	description.text = (
-		"When enabled, every screenshot the AI model takes through the godot-ai "
-		+ "screenshot tool is sent to the selected provider's vision model (see "
+		"When enabled, every single-image screenshot the AI model takes through "
+		+ "the godot-ai screenshot tool is sent to the selected provider's vision model (see "
 		+ "the Provider dropdown) for a text description. The description is "
 		+ "returned to the AI instead of the raw image, so models without image "
 		+ "support (e.g. DeepSeek) can still \"see\" the editor and game. When "
@@ -737,7 +751,11 @@ func build_tab(tabs: TabContainer) -> void:
 	_tab_key_edit.placeholder_text = "gsk_..."
 	_tab_key_edit.secret = true
 	_tab_key_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_tab_key_edit.text_changed.connect(_on_key_text_changed)
+	## Persist on commit (Enter / focus loss) instead of per keystroke, so
+	## pasting a key does not re-encrypt and rewrite Editor Settings dozens
+	## of times.
+	_tab_key_edit.text_submitted.connect(_on_key_committed)
+	_tab_key_edit.focus_exited.connect(func() -> void: _on_key_committed(_tab_key_edit.text))
 	key_row.add_child(_tab_key_edit)
 	var show_button := CheckButton.new()
 	show_button.tooltip_text = "Show / hide key"
@@ -766,7 +784,7 @@ func build_tab(tabs: TabContainer) -> void:
 	box.add_child(test_row)
 
 
-func _on_key_text_changed(_new_text: String) -> void:
+func _on_key_committed(_new_text: String) -> void:
 	if _key_loading:
 		return
 	set_api_key(_active_provider_id(), _tab_key_edit.text)
@@ -816,6 +834,9 @@ func _on_test_connection() -> void:
 		_tab_status.text = "No key set - add one below or set %s." % provider.get("env", "")
 		return
 	_tab_status.text = "Testing..."
+	var running: Thread = _threads.get("_test")
+	if running != null and running.is_started() and running.is_alive():
+		return
 	var thread := Thread.new()
 	_threads["_test"] = thread
 	thread.start(_ping_worker.bind(provider_id, api_key, _tab_status))
