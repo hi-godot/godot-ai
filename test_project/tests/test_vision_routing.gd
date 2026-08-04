@@ -83,7 +83,7 @@ func test_route_complete_injects_description_and_placeholder() -> void:
 	assert_eq(stub.replies.size(), 1)
 	var data: Dictionary = stub.replies[0]["payload"]["data"]
 	assert_eq(data["vision_description"], "A rusty spider robot on a platform.")
-	assert_eq(data["routed_via"], VisionRoutingScript.MODEL_ID)
+	assert_eq(data["routed_via"], "groq:" + VisionRoutingScript.MODEL_ID)
 	assert_true(str(data["note"]).contains("A rusty spider robot on a platform."))
 	## The original image is replaced by the 2x2 placeholder PNG.
 	assert_eq(data["image_base64"], VisionRoutingScript._PLACEHOLDER_PNG)
@@ -121,3 +121,86 @@ func test_route_complete_keeps_existing_note() -> void:
 	var note := str(data["note"])
 	assert_true(note.contains("stale frame"))
 	assert_true(note.contains("A game window showing the main menu."))
+
+# ----- providers -----
+
+func test_provider_table_is_curated() -> void:
+	assert_eq(VisionRoutingScript.PROVIDER_ORDER, ["groq", "google", "grok"])
+	for provider_id in VisionRoutingScript.PROVIDER_ORDER:
+		var provider: Dictionary = VisionRoutingScript.PROVIDERS[provider_id]
+		assert_true(str(provider.get("model", "")).length() > 0)
+		assert_true(str(provider.get("host", "")).length() > 0)
+		assert_true(str(provider.get("path", "")).length() > 0)
+		assert_true(str(provider.get("env", "")).length() > 0)
+		assert_true(str(provider.get("setting", "")).begins_with("vision_routing/"))
+		assert_true(str(provider.get("dialect", "")) in ["openai", "gemini"])
+
+
+func test_provider_models_are_distinct_and_fixed() -> void:
+	var models := {}
+	for provider_id in VisionRoutingScript.PROVIDER_ORDER:
+		var model := str(VisionRoutingScript.PROVIDERS[provider_id]["model"])
+		assert_false(models.has(model), "duplicate model %s across providers" % model)
+		models[model] = true
+	assert_eq(VisionRoutingScript.PROVIDERS["groq"]["model"], VisionRoutingScript.MODEL_ID)
+
+
+func test_provider_key_slots_are_distinct() -> void:
+	var router := _make_router()
+	var slots := {}
+	for provider_id in VisionRoutingScript.PROVIDER_ORDER:
+		var setting := router._provider_setting(provider_id)
+		assert_false(slots.has(setting), "duplicate key slot %s" % setting)
+		slots[setting] = true
+
+
+func test_openai_body_builder_sends_image_data_url() -> void:
+	var router := _make_router()
+	for provider_id in ["groq", "grok"]:
+		var provider: Dictionary = VisionRoutingScript.PROVIDERS[provider_id]
+		var body: Dictionary = JSON.parse_string(router._build_request_body(provider, "describe it", "B64DATA"))
+		assert_eq(body["model"], provider["model"])
+		var content: Array = body["messages"][0]["content"]
+		assert_eq(content[1]["image_url"]["url"], "data:image/png;base64,B64DATA")
+
+
+func test_gemini_body_builder_uses_inline_data() -> void:
+	var router := _make_router()
+	var provider: Dictionary = VisionRoutingScript.PROVIDERS["google"]
+	var body: Dictionary = JSON.parse_string(router._build_request_body(provider, "describe it", "B64DATA"))
+	assert_false(body.has("messages"))
+	var parts: Array = body["contents"][0]["parts"]
+	var inline: Dictionary = parts[1]["inline_data"]
+	assert_eq(inline["mime_type"], "image/png")
+	assert_eq(inline["data"], "B64DATA")
+
+
+func test_gemini_response_parser_extracts_text() -> void:
+	var router := _make_router()
+	var provider: Dictionary = VisionRoutingScript.PROVIDERS["google"]
+	var response := {
+		"code": 200,
+		"text": JSON.stringify({"candidates": [{"content": {"parts": [{"text": "A goldfish in a bowl."}]}}]}),
+	}
+	assert_eq(router._parse_description(provider, response, "rid-g"), "A goldfish in a bowl.")
+
+
+func test_gemini_response_parser_rejects_empty_candidates() -> void:
+	var router := _make_router()
+	var provider: Dictionary = VisionRoutingScript.PROVIDERS["google"]
+	var response := {
+		"code": 200,
+		"text": JSON.stringify({"candidates": [], "promptFeedback": {"blockReason": "SAFETY"}}),
+	}
+	assert_eq(router._parse_description(provider, response, "rid-g2"), "")
+	assert_true(str(router._error_notes.get("rid-g2", "")).contains("SAFETY"))
+
+
+func test_openai_parser_strips_think_blocks() -> void:
+	var router := _make_router()
+	var provider: Dictionary = VisionRoutingScript.PROVIDERS["groq"]
+	var response := {
+		"code": 200,
+		"text": JSON.stringify({"choices": [{"message": {"content": "<think>hmm</think>\nThe scene shows a red door."}}]}),
+	}
+	assert_eq(router._parse_description(provider, response, "rid-t"), "The scene shows a red door.")

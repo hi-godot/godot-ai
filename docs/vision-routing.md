@@ -2,7 +2,7 @@
 
 Vision Routing lets models without image support (e.g. DeepSeek) still "see"
 the editor and the running game. When enabled, every capture made through the
-`editor_screenshot` tool is sent to Groq's free vision API on a worker thread,
+`editor_screenshot` tool is sent to a curated vision model on a worker thread,
 and the resulting **text description** is returned to the AI instead of the raw
 image.
 
@@ -10,6 +10,23 @@ The feature is implemented natively in the plugin (`vision_routing.gd`) and is
 off by default. It is opt-in per editor installation; the enabled flag and the
 API key live in **Editor Settings**, so they are not committed with the
 project.
+
+## Providers
+
+The provider and its model are **curated** - the model id is fixed per provider
+and shown in brackets in the Provider dropdown, so switching providers can
+never silently call the wrong model:
+
+| Provider | Model | Dialect | Free tier |
+| --- | --- | --- | --- |
+| Groq | `qwen/qwen3.6-27b` | OpenAI chat-completions | Yes |
+| Google Gemini | `gemini-2.5-flash` | generateContent (REST) | Yes (AI Studio key) |
+| xAI Grok | `grok-2-vision-latest` | OpenAI chat-completions | No (paid) |
+
+Each provider has its own encrypted key slot and its own environment-variable
+override: `GROQ_API_KEY`, `GOOGLE_API_KEY` and `XAI_API_KEY`. The environment
+variable always takes priority over the stored key. Changing the provider in
+the dropdown switches the key field to that provider's stored key.
 
 ## Why
 
@@ -24,14 +41,15 @@ result's text block).
 
 1. The AI calls `editor_screenshot` (any `source`).
 2. The plugin captures the frame exactly as before.
-3. If routing is enabled, the image is sent to
-   `qwen/qwen3.6-27b` on Groq (free tier) on a background thread - the editor
-   main thread never blocks.
+3. If routing is enabled, the image is sent to the selected provider's model
+   (see [Providers](#providers)) on a background thread - the editor main
+   thread never blocks.
 4. The response is deferred until the description is ready; the payload the
    model receives contains:
-   - `vision_description`: the Groq description.
+   - `vision_description`: the text description.
    - `note`: the description (plus any pre-existing note, e.g. stale-frame).
-   - `routed_via`: the model id, so the client knows the capture was routed.
+   - `routed_via`: `provider:model` (e.g. `groq:qwen/qwen3.6-27b`), so the
+     client knows the capture was routed and by which model.
    - `image_base64`: a 2x2 transparent placeholder PNG (kept so the payload
      stays well-formed; the server omits the image block for routed captures).
 5. Any failure (missing key, network error, API error) passes the **original
@@ -48,12 +66,15 @@ untouched - routing applies to single-image captures.
 
 1. Open the Godot AI dock -> **Clients & Tools** -> **Vision Routing** tab.
 2. Toggle **Enable routing** on.
-3. Paste a Groq API key (free tier: <https://console.groq.com>). The key is
-   stored encrypted (AES-256-CBC, key derived from this machine) in Editor
-   Settings - not plain text, but local obfuscation only. Alternatively set
-   the `GROQ_API_KEY` environment variable; it takes priority over the stored
-   key.
-4. Press **Test connection** to verify the key works.
+3. Pick a provider in the **Provider** dropdown (the model it will use is
+   shown in brackets, e.g. `Google Gemini (gemini-2.5-flash)`).
+4. Paste the key for that provider (Groq: <https://console.groq.com>, Google:
+   <https://aistudio.google.com>, xAI: <https://console.x.ai>). Each provider
+   keeps its own key slot. Keys are stored encrypted (AES-256-CBC, key derived
+   from this machine) in Editor Settings - not plain text, but local
+   obfuscation only. Alternatively set `GROQ_API_KEY`, `GOOGLE_API_KEY` or
+   `XAI_API_KEY`; the environment variable takes priority over the stored key.
+5. Press **Test connection** to verify the key works.
 
 A quick **Vision Routing** toggle also sits in the dock right under
 **Developer mode**, so you can flip routing on/off without opening the settings
@@ -62,19 +83,21 @@ images itself).
 
 ## Notes
 
-- The Groq call adds ~1-2s to each screenshot while routing is enabled.
+- The vision call adds ~1-2s to each screenshot while routing is enabled.
 - Screenshots are downscaled to at most 1024px on the longest edge before
-  being sent to Groq.
+  being sent to the provider.
 - If you stop using a key that was typed into the settings window, consider
-  rotating it in the Groq console - an encrypted-at-rest key is still local
-  obfuscation, not a secret vault.
+  rotating it in the provider console - an encrypted-at-rest key is still
+  local obfuscation, not a secret vault.
 - Routing only applies when the connected model is expected to be text-only;
   keep it off for image-capable models to avoid the extra hop.
 
 ## Developer notes
 
-- `plugin/addons/godot_ai/vision_routing.gd` - routing core, Groq worker,
-  encrypted key storage, UI construction.
+- `plugin/addons/godot_ai/vision_routing.gd` - routing core, per-provider
+  workers (OpenAI chat-completions + Gemini generateContent dialects),
+  encrypted key storage, UI construction. The `PROVIDERS` constant is the
+  single place where provider/model pairs are curated.
 - Hook points: `editor_handler.gd::take_screenshot` (editor captures) and
   `mcp_debugger_plugin.gd::_on_screenshot_response` (game captures).
 - Server-side metadata forwarding: `src/godot_ai/handlers/editor.py`.
