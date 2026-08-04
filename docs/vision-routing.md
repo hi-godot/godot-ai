@@ -13,20 +13,28 @@ project.
 
 ## Providers
 
-The provider and its model are **curated** - the model id is fixed per provider
-and shown in brackets in the Provider dropdown, so switching providers can
-never silently call the wrong model:
+The provider itself is **curated** - label, API dialect, endpoint shape,
+environment variable and encrypted key slot are fixed in the `PROVIDERS`
+table. The **model id is not**: third-party model ids retire, and only the
+account holder gets notified when one does, so the model is a required
+per-provider field you enter next to the key. Switching providers switches to
+that provider's entered model - the software never guesses a model name.
 
-| Provider | Model | Dialect | Free tier |
+Suggestions that were verified working **as of 2026-08** (always check your
+provider console for current ids; a provider's model *listing* API still
+advertises retired ids - only a real call proves serviceability):
+
+| Provider | Dialect | Suggested model | Free tier |
 | --- | --- | --- | --- |
-| Groq | `qwen/qwen3.6-27b` | OpenAI chat-completions | Yes |
-| Google Gemini | `gemini-2.5-flash` | generateContent (REST) | Yes (AI Studio key) |
-| xAI Grok | `grok-4.5` | OpenAI chat-completions | No (paid) |
+| Groq | OpenAI chat-completions | `qwen/qwen3.6-27b` | Yes |
+| Google Gemini | generateContent (REST) | `gemini-flash-latest` (or `gemini-3-flash-preview`) | Yes (AI Studio key) |
+| xAI Grok | OpenAI chat-completions | `grok-4.5` | No (paid) |
 
-Each provider has its own encrypted key slot and its own environment-variable
-override: `GROQ_API_KEY`, `GOOGLE_API_KEY` and `XAI_API_KEY`. The environment
-variable always takes priority over the stored key. Changing the provider in
-the dropdown switches the key field to that provider's stored key.
+Each provider has its own encrypted key slot, its own model-id slot and its
+own environment-variable override for the key: `GROQ_API_KEY`,
+`GOOGLE_API_KEY` and `XAI_API_KEY`. The environment variable always takes
+priority over the stored key. Changing the provider in the dropdown switches
+the key and model fields to that provider's stored values.
 
 ## Why
 
@@ -50,12 +58,16 @@ result's text block).
    model receives contains:
    - `vision_description`: the text description.
    - `note`: the description (plus any pre-existing note, e.g. stale-frame).
-   - `routed_via`: `provider:model` (e.g. `groq:qwen/qwen3.6-27b`), so the
-     client knows the capture was routed and by which model.
+   - `routed_via`: `provider:<entered model>` (e.g.
+     `groq:qwen/qwen3.6-27b`), so the client knows the capture was routed and
+     by which model.
    - `image_base64`: a 2x2 transparent placeholder PNG (kept so the payload
      stays well-formed; the server omits the image block for routed captures).
-5. Any failure (missing key, network error, API error) passes the **original
-   image through unchanged** - the screenshot tool never breaks.
+5. Any failure (missing key, missing model id, network error, API error)
+   passes the **original image through unchanged**, with a short
+   "Vision routing unavailable (provider): reason" note appended so text-only
+   agents learn the feature is down and why - the screenshot tool never
+   breaks.
 
 The same flow applies to editor viewport / cinematic / 2D captures and to
 running-game captures (`source="game"`, which are intercepted in the debugger
@@ -66,22 +78,22 @@ untouched - routing applies to single-image captures.
 
 ## Setup
 
-1. Open the Godot AI dock -> **Clients & Tools** -> **Vision Routing** tab.
-2. Toggle **Enable routing** on.
-3. Pick a provider in the **Provider** dropdown (the model it will use is
-   shown in brackets, e.g. `Google Gemini (gemini-2.5-flash)`).
-4. Paste the key for that provider (Groq: <https://console.groq.com>, Google:
+1. Open the Godot AI dock -> **Clients & Tools** -> **Settings** tab.
+2. In the **Vision Routing** section, toggle **Enable routing** on.
+3. Pick a provider in the **Provider** dropdown.
+4. Enter the **model id** for that provider (required - see the suggestions
+   above; ids retire, so check your provider console). Empty behaves exactly
+   like an empty key: routing declines and screenshots pass through.
+5. Paste the key for that provider (Groq: <https://console.groq.com>, Google:
    <https://aistudio.google.com>, xAI: <https://console.x.ai>). Each provider
    keeps its own key slot. Keys are stored encrypted (AES-256-CBC, key derived
    from this machine) in Editor Settings - not plain text, but local
    obfuscation only. Alternatively set `GROQ_API_KEY`, `GOOGLE_API_KEY` or
    `XAI_API_KEY`; the environment variable takes priority over the stored key.
-5. Press **Test connection** to verify the key works.
-
-A quick **Vision Routing** toggle also sits in the dock right under
-**Developer mode**, so you can flip routing on/off without opening the settings
-window (e.g. when you switch from a text-only model to one that analyzes
-images itself).
+6. Press **Test connection** - it sends the same image-bearing request as
+   real routing (with the placeholder image), so one click validates key +
+   model existence + image capability. A wrong or retired model id fails
+   loudly right where you entered it.
 
 ## Notes
 
@@ -91,6 +103,11 @@ images itself).
 - If you stop using a key that was typed into the settings window, consider
   rotating it in the provider console - an encrypted-at-rest key is still
   local obfuscation, not a secret vault.
+- The model id is yours to maintain: when a provider retires a model, replace
+  the id in the settings (the provider notifies the account holder - not this
+  repo). A stale id surfaces as a loud `Test connection` failure and as a
+  "Vision routing unavailable" note on routed screenshots, never as a silent
+  wrong-model call.
 - Routing only applies when the connected model is expected to be text-only;
   keep it off for image-capable models to avoid the extra hop.
 - Metadata-only captures (`include_image=false`) are still routed and still
@@ -102,8 +119,9 @@ images itself).
 
 - `plugin/addons/godot_ai/vision_routing.gd` - routing core, per-provider
   workers (OpenAI chat-completions + Gemini generateContent dialects),
-  encrypted key storage, UI construction. The `PROVIDERS` constant is the
-  single place where provider/model pairs are curated.
+  encrypted key storage, per-provider model id, UI construction. The
+  `PROVIDERS` constant curates everything repo-owned (label, dialect,
+  endpoint, env var, setting slots); model ids are user-entered.
 - Hook points: `editor_handler.gd::take_screenshot` (editor captures) and
   `mcp_debugger_plugin.gd::_on_screenshot_response` (game captures).
 - Server-side metadata forwarding: `src/godot_ai/handlers/editor.py`.

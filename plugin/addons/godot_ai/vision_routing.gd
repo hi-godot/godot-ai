@@ -18,34 +18,38 @@ extends RefCounted
 ##   - On failure (missing key, network, API error) the original image payload
 ##     passes through unchanged, so the screenshot tool never breaks.
 ##
-## Providers are curated: the model id is fixed per provider (shown in brackets
-## in the UI) so switching providers can never ping the wrong model:
-##   - Groq          -> qwen/qwen3.6-27b     (free tier)
-##   - Google Gemini -> gemini-2.5-flash     (free tier, AI Studio key)
-##   - xAI Grok      -> grok-4.5              (image understanding)
-## Groq and Grok speak the OpenAI chat-completions dialect; Gemini uses the
-## generateContent REST dialect. Both are handled in this file.
+## Providers are curated: label, API dialect, endpoint shape, environment
+## variable and encrypted key slot are fixed in the PROVIDERS table. The model
+## id is NOT - it is required per provider and entered by the user (stored in
+## Editor Settings next to the key), because third-party model ids retire and
+## only the account holder gets notified. Switching providers switches to that
+## provider's entered model, so the software never guesses a model name:
+##   - Groq          (free tier)                - OpenAI chat-completions
+##   - Google Gemini (free tier, AI Studio key) - generateContent REST
+##   - xAI Grok      (paid)                     - OpenAI chat-completions
+## Both dialects are handled in this file.
 ##
 ## Settings live in Editor Settings (`vision_routing/enabled`,
-## `vision_routing/provider`, plus one encrypted key slot per provider). Keys
-## are stored encrypted (AES-256-CBC, key derived from this machine) rather
-## than in plain text, and each provider's environment variable
-## (GROQ_API_KEY / GOOGLE_API_KEY / XAI_API_KEY) takes priority over the
-## stored key.
+## `vision_routing/provider`, plus one encrypted key slot and one model-id
+## slot per provider). Keys are stored encrypted (AES-256-CBC, key derived
+## from this machine) rather than in plain text, and each provider's
+## environment variable (GROQ_API_KEY / GOOGLE_API_KEY / XAI_API_KEY) takes
+## priority over the stored key.
 ##
-## UI: "Vision Routing" tab in Clients & Tools (after Settings) plus a quick
-## toggle in the dock right under Developer mode.
+## UI: a "Vision Routing" section inside the Clients & Tools Settings tab.
 
-## Groq's curated model id; also the default used by tests and routed_via.
-const MODEL_ID := "qwen/qwen3.6-27b"
-
-## Curated providers: model ids are fixed here on purpose so the UI can show
-## them in brackets and the worker never pings a guessed model name.
+## Curated providers: label, dialect, endpoint shape, env var and key/model
+## setting slots are fixed here. The model id itself is user-entered per
+## provider (see `_resolved_model`), so provider rows carry a `model_setting`
+## slot and a `model_placeholder` suggestion instead of a baked-in id -
+## third-party model ids retire, and only the account holder gets notified
+## when one does.
 const PROVIDERS := {
 	"groq": {
 		"label": "Groq",
-		"model": MODEL_ID,
 		"dialect": "openai",
+		"model_setting": "vision_routing/groq_model",
+		"model_placeholder": "qwen/qwen3.6-27b",
 		"host": "api.groq.com",
 		"port": 443,
 		"path": "/openai/v1/chat/completions",
@@ -57,11 +61,12 @@ const PROVIDERS := {
 	},
 	"google": {
 		"label": "Google Gemini",
-		"model": "gemini-2.5-flash",
 		"dialect": "gemini",
 		"host": "generativelanguage.googleapis.com",
 		"port": 443,
-		"path": "/v1beta/models/gemini-2.5-flash:generateContent",
+		"path": "/v1beta/models/{model}:generateContent",
+		"model_setting": "vision_routing/google_model",
+		"model_placeholder": "gemini-flash-latest",
 		"env": "GOOGLE_API_KEY",
 		"setting": "vision_routing/google_api_key_enc",
 		"placeholder": "AIza...",
@@ -69,8 +74,9 @@ const PROVIDERS := {
 	},
 	"grok": {
 		"label": "xAI Grok",
-		"model": "grok-4.5",
 		"dialect": "openai",
+		"model_setting": "vision_routing/grok_model",
+		"model_placeholder": "grok-4.5",
 		"host": "api.x.ai",
 		"port": 443,
 		"path": "/v1/chat/completions",
@@ -86,7 +92,6 @@ const SETTING_ENABLED := "vision_routing/enabled"
 const SETTING_PROVIDER := "vision_routing/provider"
 const SETTING_API_KEY_ENC := "vision_routing/api_key_enc"
 const TAB_NAME := "Vision Routing"
-const ROW_NAME := "VisionRoutingToggleRow"
 
 const MAX_IMAGE_EDGE := 1024
 const CONNECT_TIMEOUT_MS := 4000
@@ -95,6 +100,10 @@ const REQUEST_TIMEOUT_MS := 8000
 ## Kept under the server's 15s editor_screenshot window so the fallback
 ## pass-through always lands before the server gives up on slow providers.
 const TOTAL_ROUTE_BUDGET_MS := 10000
+## Response body cap: the deadline bounds time but not bytes, and the socket
+## talks to third-party hosts - a faulty or hostile provider must not be able
+## to stream an unbounded body inside the window.
+const MAX_RESPONSE_BODY_BYTES := 1048576
 
 const _ENC_PREFIX := "v1"
 const _SALT := "vision_routing::v1::godot-ai"
@@ -105,9 +114,9 @@ var log_buffer: Object = null
 
 var _active := true
 var _route_done: Callable
-var _pending: Dictionary = {}   # request_id -> {payload, data, connection}
+var _pending: Dictionary = {}   # request_id -> {payload, data, connection, provider_id, provider, params}
 var _threads: Dictionary = {}   # request_id -> Thread ("_test" = ping thread)
-var _key_loading := false
+var _ui_loading := false
 
 # UI references, kept in sync by _sync_ui_states().
 var _tab_provider: OptionButton = null
@@ -115,9 +124,11 @@ var _tab_enable: CheckButton = null
 var _tab_key_label: Label = null
 var _tab_key_hint: Label = null
 var _tab_key_edit: LineEdit = null
+var _tab_model_label: Label = null
+var _tab_model_hint: Label = null
+var _tab_model_edit: LineEdit = null
 var _tab_status: Label = null
 var _tab_test_button: Button = null
-var _row_toggle: CheckButton = null
 
 
 func _init() -> void:
@@ -144,7 +155,9 @@ func shutdown() -> void:
 	_tab_key_edit = null
 	_tab_status = null
 	_tab_test_button = null
-	_row_toggle = null
+	_tab_model_label = null
+	_tab_model_hint = null
+	_tab_model_edit = null
 
 
 # --- routing ------------------------------------------------------------------
@@ -161,6 +174,11 @@ func route_editor_screenshot(params: Dictionary, original: Callable, connection:
 		return original.call(params)
 	var result := original.call(params)
 	if not (result is Dictionary) or not result.has("data"):
+		## Deferred capture (source="game"): the frame arrives later through
+		## route_game_payload. Stash the caller params (e.g. user_prompt) by
+		## request id so the routed description keeps the agent's context.
+		if result is Dictionary and result.get("_deferred", false):
+			_pending[rid] = {"params": params}
 		return result
 	var data: Variant = result["data"]
 	if not (data is Dictionary) or not data.has("image_base64"):
@@ -180,29 +198,47 @@ func route_editor_screenshot(params: Dictionary, original: Callable, connection:
 func route_game_payload(connection: Object, rid: String, payload: Dictionary) -> bool:
 	var data: Variant = payload.get("data")
 	if not (data is Dictionary) or not data.has("image_base64"):
+		## Not a routeable frame - drop any params stashed by
+		## route_editor_screenshot for this request id.
+		_pending.erase(rid)
 		return false
-	return _start_route(rid, "game", payload, data, connection, {})
+	## The editor handler stashed the caller params (user_prompt etc.) by
+	## request id when it deferred the capture; hand them to the prompt
+	## builder. Absent (older helper, direct call) = generic prompt.
+	var params: Dictionary = _pending.get(rid, {}).get("params", {})
+	return _start_route(rid, "game", payload, data, connection, params)
 
 
 ## Returns true when a worker owns the reply; false means the caller should
 ## pass the original payload through unchanged.
 func _start_route(rid: String, source: String, payload: Dictionary, data: Dictionary, connection: Object, params: Dictionary) -> bool:
 	var provider_id := _active_provider_id()
-	var provider: Dictionary = PROVIDERS.get(provider_id, PROVIDERS["groq"])
+	var base_provider: Dictionary = PROVIDERS.get(provider_id, PROVIDERS["groq"])
+	## Worker-thread snapshot: the entered model id is resolved into the
+	## provider dict here, once, so the thread sees a stable copy and
+	## routed_via can report the exact model that was pinged.
+	var provider := _provider_with_model(provider_id)
 	var api_key := _resolved_api_key(provider_id)
 	if api_key.is_empty():
-		_log("vision routing: no API key for %s (set %s or paste one in the Vision Routing tab) - screenshot %s passed through" % [provider_id, provider.get("env", ""), rid])
+		_log("vision routing: no API key for %s (set %s or paste one in the Vision Routing section) - screenshot %s passed through" % [provider_id, base_provider.get("env", ""), rid])
+		_pending.erase(rid)
 		return false
-	_pending[rid] = {"payload": payload, "data": data, "connection": connection, "provider": provider_id}
+	if str(provider.get("model", "")).is_empty():
+		## Empty model behaves exactly like empty key: routing declines, the
+		## image passes through, and the log line says what is missing.
+		_log("vision routing: no model id set for %s - screenshot %s passed through (set a model id in the Vision Routing section)" % [provider_id, rid])
+		_pending.erase(rid)
+		return false
+	_pending[rid] = {"payload": payload, "data": data, "connection": connection, "provider_id": provider_id, "provider": provider, "params": params}
 	var prompt := _build_prompt(params)
 	var thread := Thread.new()
-	var start_err := thread.start(_route_worker.bind(provider_id, str(data.get("image_base64", "")), prompt, api_key, rid))
+	var start_err := thread.start(_route_worker.bind(provider, str(data.get("image_base64", "")), prompt, api_key, rid))
 	if start_err != OK:
 		_pending.erase(rid)
 		_log("vision routing: could not start worker for %s: %s - screenshot %s passed through" % [rid, error_string(start_err), source])
 		return false
 	_threads[rid] = thread
-	_log("vision routing: routing %s screenshot %s (%d b64 chars) via %s (%s)" % [source, rid, str(data.get("image_base64", "")).length(), provider.get("label", provider_id), provider.get("model", "")])
+	_log("vision routing: routing %s screenshot %s (%d b64 chars) via %s (%s)" % [source, rid, str(data.get("image_base64", "")).length(), base_provider.get("label", provider_id), provider.get("model", "")])
 	return true
 
 
@@ -218,8 +254,12 @@ func _on_route_complete(rid: String, result: Variant) -> void:
 	var connection: Object = entry.get("connection")
 	if connection == null or not is_instance_valid(connection):
 		return
-	var provider_id := str(entry.get("provider", "groq"))
-	var payload: Dictionary = entry.get("payload", {})
+	var provider_id := str(entry.get("provider_id", "groq"))
+	## Provider snapshot taken at route start (with the entered model id);
+	## falls back to a fresh resolve if absent (direct test callers).
+	var provider: Dictionary = entry.get("provider", {})
+	if provider.is_empty():
+		provider = _provider_with_model(provider_id)
 	## Workers return {"desc": ..., "error": ...}; plain strings are accepted
 	## for backwards compatibility (tests / older callers).
 	var description_str := ""
@@ -232,12 +272,18 @@ func _on_route_complete(rid: String, result: Variant) -> void:
 	if description_str.is_empty():
 		if error_str.is_empty():
 			error_str = "unknown error"
-		_log("vision routing: %s failed for %s (%s) - returning original image" % [provider_id, rid, error_str])
-		_pass_through(connection, rid, payload)
+		_log("vision routing: %s failed for %s (%s) - returning original image with failure note" % [provider_id, rid, error_str])
+		## Append a short templated reason to the note so text-only agents
+		## (who otherwise just receive a useless image block) learn the
+		## feature is down and why.
+		var failed_data: Dictionary = entry.get("data", {}).duplicate()
+		var failure_note := "Vision routing unavailable (%s): %s" % [provider_id, error_str]
+		var existing_note := str(failed_data.get("note", ""))
+		failed_data["note"] = (existing_note + " | " if not existing_note.is_empty() else "") + failure_note
+		_pass_through(connection, rid, {"data": failed_data})
 		return
 	var data: Dictionary = entry.get("data", {}).duplicate()
-	var provider: Dictionary = PROVIDERS.get(provider_id, PROVIDERS["groq"])
-	var routed_via := "%s:%s" % [provider_id, provider.get("model", MODEL_ID)]
+	var routed_via := "%s:%s" % [provider_id, provider.get("model", "")]
 	## The server forwards a fixed whitelist of metadata keys into the text
 	## result; `note` is the free-form one, so a self-attributing description
 	## rides there (plus an explicit `vision_description` key) so text-only
@@ -279,25 +325,31 @@ func _build_prompt(params: Dictionary) -> String:
 
 # --- routing worker (thread) ---------------------------------------------------
 
-func _route_worker(provider_id: String, image_b64: String, prompt: String, api_key: String, rid: String) -> void:
-	var result := _describe_blocking(provider_id, image_b64, prompt, api_key)
+func _route_worker(provider: Dictionary, image_b64: String, prompt: String, api_key: String, rid: String) -> void:
+	var result := _describe_blocking(provider, image_b64, prompt, api_key)
 	_route_done.call_deferred(rid, result)
 
 
 ## Returns {"desc": String, "error": String}; "desc" is empty on failure and
 ## "error" carries the reason. Runs on a worker thread, so it never writes
-## shared state - everything it needs is passed in and returned.
-func _describe_blocking(provider_id: String, image_b64: String, prompt: String, api_key: String) -> Dictionary:
-	var provider: Dictionary = PROVIDERS.get(provider_id, PROVIDERS["groq"])
+## shared state - everything it needs is passed in and returned. `provider`
+## is the route-start snapshot (includes the entered model id).
+func _describe_blocking(provider: Dictionary, image_b64: String, prompt: String, api_key: String) -> Dictionary:
 	var b64 := _downscale_image_if_needed(image_b64)
 	var body := _build_request_body(provider, prompt, b64)
 	var headers := _build_headers(provider, api_key)
-	var response := _http_post_json(str(provider.get("host", "")), int(provider.get("port", 443)), str(provider.get("path", "")), headers, body)
+	var response := _http_post_json(str(provider.get("host", "")), int(provider.get("port", 443)), _resolve_path(provider), headers, body)
 	return _parse_description(provider, response)
 
 
+## Provider paths may carry a {model} placeholder (Gemini's endpoint embeds
+## the model id); substitute the entered model id verbatim.
+func _resolve_path(provider: Dictionary) -> String:
+	return str(provider.get("path", "")).replace("{model}", str(provider.get("model", "")))
+
+
 func _build_request_body(provider: Dictionary, prompt: String, image_b64: String) -> String:
-	var model := str(provider.get("model", MODEL_ID))
+	var model := str(provider.get("model", ""))
 	if str(provider.get("dialect", "")) == "gemini":
 		return JSON.stringify({
 			"contents": [{
@@ -406,27 +458,20 @@ func _strip_think(text: String) -> String:
 	return out
 
 
-## Minimal text-only call used by the "Test connection" button.
-func _ping_blocking(provider_id: String, api_key: String) -> Dictionary:
-	var provider: Dictionary = PROVIDERS.get(provider_id, PROVIDERS["groq"])
-	var body := ""
-	if str(provider.get("dialect", "")) == "gemini":
-		body = JSON.stringify({
-			"contents": [{"role": "user", "parts": [{"text": "Reply with exactly: OK"}]}],
-		})
-	else:
-		body = JSON.stringify({
-			"model": provider.get("model", MODEL_ID),
-			"messages": [{"role": "user", "content": "Reply with exactly: OK"}],
-			"max_tokens": 5,
-		})
-	var response := _http_post_json(str(provider.get("host", "")), int(provider.get("port", 443)), str(provider.get("path", "")), _build_headers(provider, api_key), body)
+## Minimal vision call used by the "Test connection" button. Sends the same
+## image-bearing body shape as real routing (with the 2x2 placeholder PNG),
+## so one click validates key + model existence + image capability - a
+## text-only or retired model id fails loudly here instead of at screenshot
+## time. `provider` is the route-style snapshot (includes the model id).
+func _ping_blocking(provider: Dictionary, api_key: String) -> Dictionary:
+	var body := _build_request_body(provider, "Reply with exactly: OK", _PLACEHOLDER_PNG)
+	var response := _http_post_json(str(provider.get("host", "")), int(provider.get("port", 443)), _resolve_path(provider), _build_headers(provider, api_key), body)
 	var code: int = int(response.get("code", 0))
 	if code == 200:
 		return {"ok": true, "error": ""}
 	if code == 0:
 		return {"ok": false, "error": str(response.get("error", "request failed"))}
-	return {"ok": false, "error": "%s HTTP %d: %s" % [provider.get("label", provider_id), code, _body_snippet(str(response.get("text", "")))]}
+	return {"ok": false, "error": "%s HTTP %d: %s" % [provider.get("label", "provider"), code, _body_snippet(str(response.get("text", "")))]}
 
 
 func _http_post_json(host: String, port: int, path: String, headers: PackedStringArray, body: String) -> Dictionary:
@@ -492,6 +537,9 @@ func _http_post_json(host: String, port: int, path: String, headers: PackedStrin
 			http.close()
 			return {"code": 0, "error": "aborted (plugin teardown)"}
 		chunks.append_array(http.read_response_body_chunk())
+		if chunks.size() > MAX_RESPONSE_BODY_BYTES:
+			http.close()
+			return {"code": 0, "error": "response body exceeded %d bytes" % MAX_RESPONSE_BODY_BYTES}
 		http.poll()
 		if Time.get_ticks_msec() > body_deadline:
 			break
@@ -543,17 +591,17 @@ func _downscale_image_if_needed(image_b64: String) -> String:
 	return Marshalls.raw_to_base64(out)
 
 
-func _ping_worker(provider_id: String, api_key: String, status_label: Label, key_source: String) -> void:
-	var result := _ping_blocking(provider_id, api_key)
-	Callable(self, "_on_ping_done").call_deferred(result, provider_id, status_label, key_source)
+func _ping_worker(provider: Dictionary, api_key: String, status_label: Label, key_source: String) -> void:
+	var result := _ping_blocking(provider, api_key)
+	Callable(self, "_on_ping_done").call_deferred(result, provider, status_label, key_source)
 
 
-func _on_ping_done(result: Dictionary, provider_id: String, status_label: Label, key_source: String) -> void:
+func _on_ping_done(result: Dictionary, provider: Dictionary, status_label: Label, key_source: String) -> void:
 	_join_thread("_test")
 	if _tab_test_button != null and is_instance_valid(_tab_test_button):
 		_tab_test_button.disabled = false
 	if status_label != null and is_instance_valid(status_label):
-		var label := str(PROVIDERS.get(provider_id, PROVIDERS["groq"]).get("label", provider_id))
+		var label := str(provider.get("label", "provider"))
 		if result.get("ok", false):
 			status_label.text = "OK - %s responded (%s)." % [label, key_source]
 		else:
@@ -631,6 +679,38 @@ func set_api_key(provider_id: String, plain: String) -> void:
 		_log("vision routing: cannot store %s key - this machine reports no unique id; set %s instead" % [provider_id, PROVIDERS.get(provider_id, PROVIDERS["groq"]).get("env", "")])
 		return
 	es.set_setting(_provider_setting(provider_id), blob)
+
+
+## The model id is stored per provider next to the key (a plain Editor
+## Setting - it is not a secret). Empty clears the slot.
+func set_model_id(provider_id: String, model: String) -> void:
+	var es := _settings()
+	if es == null:
+		return
+	es.set_setting(_model_setting(provider_id), model.strip_edges())
+
+
+func _model_setting(provider_id: String) -> String:
+	return str(PROVIDERS.get(provider_id, PROVIDERS["groq"]).get("model_setting", ""))
+
+
+func _resolved_model(provider_id: String) -> String:
+	var es := _settings()
+	if es == null:
+		return ""
+	var setting := _model_setting(provider_id)
+	if not es.has_setting(setting):
+		return ""
+	return str(es.get_setting(setting)).strip_edges()
+
+
+## Route-start snapshot: the curated provider table plus the user's entered
+## model id. Used by the worker thread and by _on_route_complete for the
+## routed_via label, so it always reports the model that was actually pinged.
+func _provider_with_model(provider_id: String) -> Dictionary:
+	var provider: Dictionary = PROVIDERS.get(provider_id, PROVIDERS["groq"]).duplicate()
+	provider["model"] = _resolved_model(provider_id)
+	return provider
 
 
 ## Machine-derived key: not a password, but enough that a casually-opened
@@ -714,17 +794,13 @@ func _decrypt(blob: String) -> String:
 
 # --- UI: tab in Clients & Tools -------------------------------------------------
 
-## Builds the "Vision Routing" tab. Called by mcp_dock._build_ui right after
-## the Settings tab is built, so it appears directly after Settings.
-func build_tab(tabs: TabContainer) -> void:
-	var margin := MarginContainer.new()
-	margin.name = TAB_NAME
-	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
-		margin.add_theme_constant_override(side, 12)
+## Builds the "Vision Routing" section inside the Clients & Tools Settings
+## tab. Called by mcp_dock._build_settings_tab; `refresh_ui()` re-syncs the
+## controls from Editor Settings each time the window opens.
+func build_section(parent: VBoxContainer) -> void:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 8)
-	margin.add_child(box)
-	tabs.add_child(margin)
+	parent.add_child(box)
 
 	var header := Label.new()
 	header.text = "Vision Routing"
@@ -737,11 +813,11 @@ func build_tab(tabs: TabContainer) -> void:
 	provider_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	provider_row.add_child(provider_label)
 	_tab_provider = OptionButton.new()
-	_tab_provider.tooltip_text = "Which vision provider routes the screenshots. The model is fixed per provider (shown in brackets) so it can never silently change."
+	_tab_provider.tooltip_text = "Which vision provider routes the screenshots. The model id is required per provider and is yours to maintain."
 	var active_provider := _active_provider_id()
 	for provider_index in PROVIDER_ORDER.size():
 		var provider_item: Dictionary = PROVIDERS[PROVIDER_ORDER[provider_index]]
-		_tab_provider.add_item("%s (%s)" % [provider_item.get("label", PROVIDER_ORDER[provider_index]), provider_item.get("model", "")], provider_index)
+		_tab_provider.add_item(str(provider_item.get("label", PROVIDER_ORDER[provider_index])), provider_index)
 		if PROVIDER_ORDER[provider_index] == active_provider:
 			_tab_provider.select(provider_index)
 	_tab_provider.item_selected.connect(_on_provider_changed)
@@ -766,8 +842,7 @@ func build_tab(tabs: TabContainer) -> void:
 		+ "the Provider dropdown) for a text description. The description is "
 		+ "returned to the AI instead of the raw image, so models without image "
 		+ "support (e.g. DeepSeek) can still \"see\" the editor and game. When "
-		+ "the connected model analyzes images itself, switch this off (or use "
-		+ "the quick toggle under Developer mode in the Godot AI dock) so "
+		+ "the connected model analyzes images itself, switch this off here so "
 		+ "screenshots pass through unchanged."
 	)
 	description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -779,7 +854,6 @@ func build_tab(tabs: TabContainer) -> void:
 
 	var key_row := HBoxContainer.new()
 	_tab_key_edit = LineEdit.new()
-	_tab_key_edit.placeholder_text = "gsk_..."
 	_tab_key_edit.secret = true
 	_tab_key_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	## Persist on commit (Enter / focus loss) instead of per keystroke, so
@@ -793,15 +867,28 @@ func build_tab(tabs: TabContainer) -> void:
 	show_button.toggled.connect(func(show: bool) -> void: _tab_key_edit.secret = not show)
 	key_row.add_child(show_button)
 	box.add_child(key_row)
-	_key_loading = true
-	_tab_key_edit.text = _decrypted_key(_active_provider_id())
-	_key_loading = false
-	_sync_provider_ui()
 
 	_tab_key_hint = Label.new()
 	_tab_key_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_tab_key_hint.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
 	box.add_child(_tab_key_hint)
+
+	_tab_model_label = Label.new()
+	box.add_child(_tab_model_label)
+
+	var model_row := HBoxContainer.new()
+	_tab_model_edit = LineEdit.new()
+	_tab_model_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	## Persist on commit (Enter / focus loss), same pattern as the key field.
+	_tab_model_edit.text_submitted.connect(_on_model_committed)
+	_tab_model_edit.focus_exited.connect(func() -> void: _on_model_committed(_tab_model_edit.text))
+	model_row.add_child(_tab_model_edit)
+	box.add_child(model_row)
+
+	_tab_model_hint = Label.new()
+	_tab_model_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_tab_model_hint.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
+	box.add_child(_tab_model_hint)
 
 	var test_row := HBoxContainer.new()
 	var test_button := Button.new()
@@ -815,11 +902,34 @@ func build_tab(tabs: TabContainer) -> void:
 	test_row.add_child(_tab_status)
 	box.add_child(test_row)
 
+	refresh_ui()
+
+
+## Re-syncs every control from Editor Settings. Called after the section is
+## built and again by mcp_dock each time the Clients & Tools window opens,
+## so a change made in another editor instance (or a hand-edit of
+## editor_settings-4.tres) is reflected.
+func refresh_ui() -> void:
+	_sync_ui_states()
+	_sync_provider_ui()
+	_ui_loading = true
+	if _tab_key_edit != null and is_instance_valid(_tab_key_edit):
+		_tab_key_edit.text = _decrypted_key(_active_provider_id())
+	if _tab_model_edit != null and is_instance_valid(_tab_model_edit):
+		_tab_model_edit.text = _resolved_model(_active_provider_id())
+	_ui_loading = false
+
 
 func _on_key_committed(_new_text: String) -> void:
-	if _key_loading:
+	if _ui_loading:
 		return
 	set_api_key(_active_provider_id(), _tab_key_edit.text)
+
+
+func _on_model_committed(_new_text: String) -> void:
+	if _ui_loading:
+		return
+	set_model_id(_active_provider_id(), _tab_model_edit.text)
 
 
 func _on_provider_changed(index: int) -> void:
@@ -829,12 +939,14 @@ func _on_provider_changed(index: int) -> void:
 	var es := _settings()
 	if es != null:
 		es.set_setting(SETTING_PROVIDER, provider_id)
-	_key_loading = true
+	_ui_loading = true
 	if _tab_key_edit != null and is_instance_valid(_tab_key_edit):
 		_tab_key_edit.text = _decrypted_key(provider_id)
-	_key_loading = false
+	if _tab_model_edit != null and is_instance_valid(_tab_model_edit):
+		_tab_model_edit.text = _resolved_model(provider_id)
+	_ui_loading = false
 	_sync_provider_ui()
-	_log("vision routing: provider changed to %s (%s)" % [provider_id, PROVIDERS[provider_id].get("model", "")])
+	_log("vision routing: provider changed to %s (%s)" % [provider_id, PROVIDERS[provider_id].get("label", provider_id)])
 
 
 func _sync_provider_ui() -> void:
@@ -857,14 +969,28 @@ func _sync_provider_ui() -> void:
 		_tab_key_hint.text = hint
 	if _tab_key_edit != null and is_instance_valid(_tab_key_edit):
 		_tab_key_edit.placeholder_text = str(provider.get("placeholder", ""))
+	if _tab_model_label != null and is_instance_valid(_tab_model_label):
+		_tab_model_label.text = "Model id (required) - %s" % provider.get("label", provider_id)
+	if _tab_model_edit != null and is_instance_valid(_tab_model_edit):
+		_tab_model_edit.placeholder_text = str(provider.get("model_placeholder", ""))
+		_tab_model_edit.tooltip_text = "The vision model this provider should ping. Yours to maintain: when a model id retires, replace it here."
+	if _tab_model_hint != null and is_instance_valid(_tab_model_hint):
+		_tab_model_hint.text = (
+			"Required per provider; empty behaves like an empty key (routing "
+			+ "declines and screenshots pass through). Suggested id (as of "
+			+ "2026-08 - check your provider console, ids retire): %s."
+		) % provider.get("model_placeholder", "")
 
 
 func _on_test_connection() -> void:
 	if _tab_status == null:
 		return
 	var provider_id := _active_provider_id()
-	var provider: Dictionary = PROVIDERS.get(provider_id, PROVIDERS["groq"])
-	var env_name := str(provider.get("env", ""))
+	var provider := _provider_with_model(provider_id)
+	var env_name := str(PROVIDERS.get(provider_id, PROVIDERS["groq"]).get("env", ""))
+	if str(provider.get("model", "")).is_empty():
+		_tab_status.text = "No model id set for %s - add one below." % provider.get("label", provider_id)
+		return
 	var api_key := _resolved_api_key(provider_id)
 	if api_key.is_empty():
 		_tab_status.text = "No key set - add one below or set %s." % env_name
@@ -872,6 +998,7 @@ func _on_test_connection() -> void:
 	var running: Thread = _threads.get("_test")
 	if running != null and running.is_started() and running.is_alive():
 		return
+	var previous_status := _tab_status.text
 	_tab_status.text = "Testing..."
 	if _tab_test_button != null and is_instance_valid(_tab_test_button):
 		_tab_test_button.disabled = true
@@ -880,26 +1007,15 @@ func _on_test_connection() -> void:
 		key_source = "via %s" % env_name
 	var thread := Thread.new()
 	_threads["_test"] = thread
-	thread.start(_ping_worker.bind(provider_id, api_key, _tab_status, key_source))
-
-
-# --- UI: quick toggle in the dock ----------------------------------------------
-
-## Builds the "Vision Routing" quick toggle. Called by mcp_dock._build_ui
-## right after the Developer mode row, so it sits directly under it.
-func build_toggle_row(body: VBoxContainer) -> void:
-	var row := HBoxContainer.new()
-	row.name = ROW_NAME
-	var label := Label.new()
-	label.text = "Vision Routing"
-	label.tooltip_text = "Route screenshot-tool images through the selected provider's vision API (see the Vision Routing tab in Clients & Tools)."
-	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(label)
-	_row_toggle = CheckButton.new()
-	_row_toggle.button_pressed = is_routing_enabled()
-	_row_toggle.toggled.connect(_on_enable_toggled)
-	row.add_child(_row_toggle)
-	body.add_child(row)
+	var start_err := thread.start(_ping_worker.bind(provider, api_key, _tab_status, key_source))
+	if start_err != OK:
+		## A failed thread start must not leave the button disabled and the
+		## status stuck on "Testing..." forever.
+		_threads.erase("_test")
+		_tab_status.text = previous_status
+		if _tab_test_button != null and is_instance_valid(_tab_test_button):
+			_tab_test_button.disabled = false
+		_log("vision routing: could not start ping thread: %s" % error_string(start_err))
 
 
 func _on_enable_toggled(enabled: bool) -> void:
@@ -913,8 +1029,6 @@ func _sync_ui_states() -> void:
 	var enabled := is_routing_enabled()
 	if _tab_enable != null and is_instance_valid(_tab_enable) and _tab_enable.button_pressed != enabled:
 		_tab_enable.set_pressed_no_signal(enabled)
-	if _row_toggle != null and is_instance_valid(_row_toggle) and _row_toggle.button_pressed != enabled:
-		_row_toggle.set_pressed_no_signal(enabled)
 
 
 # --- logging --------------------------------------------------------------------
