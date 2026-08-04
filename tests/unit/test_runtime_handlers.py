@@ -4049,6 +4049,24 @@ async def test_editor_screenshot_handler_passes_comma_view_target():
     assert result["view_target_count"] == 2
 
 
+async def test_editor_screenshot_handler_forwards_user_prompt():
+    """Vision Routing: a caller-supplied user_prompt must reach the plugin so
+    the vision model can describe what the agent is looking for."""
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await editor_handlers.editor_screenshot(
+        runtime, user_prompt="Why is the spider red?"
+    )
+    assert client.calls[-1]["params"]["user_prompt"] == "Why is the spider red?"
+
+
+async def test_editor_screenshot_handler_omits_empty_user_prompt():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await editor_handlers.editor_screenshot(runtime, user_prompt="")
+    assert "user_prompt" not in client.calls[-1]["params"]
+
+
 
 async def test_editor_screenshot_routed_metadata_forwarded_without_image():
     """Vision Routing: a capture the plugin routed through a vision API

@@ -422,25 +422,12 @@ func _compute_coverage_angles(aabb: AABB) -> Array[Dictionary]:
 
 
 func take_screenshot(params: Dictionary) -> Dictionary:
-	## Source guard: mirrors the implementation's own `match source:` dispatch
-	## below and is pinned by tests/unit/test_docs_screenshot_sources.py, so an
-	## unknown source is rejected before the Vision Routing hook can touch it.
-	var source: String = params.get("source", "viewport")
-	match source:
-		"viewport":
-			pass
-		"viewport_2d":
-			pass
-		"cinematic":
-			pass
-		"game":
-			pass
-		_:
-			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Invalid source '%s' — use 'viewport', 'viewport_2d', 'cinematic', or 'game'" % source)
-	## Vision Routing hook: when enabled, the capture is described by a vision
-	## model on a worker thread and the text description is returned instead of
-	## the raw image (see vision_routing.gd). Off, no key, or non-image results
-	## keep the original behavior.
+	## Vision Routing hook: when enabled, the capture is described by the
+	## configured vision provider on a worker thread and the text description
+	## is returned instead of the raw image (see vision_routing.gd). Off, no
+	## key, or non-image results keep the original behavior. The single source
+	## of truth for the `match source:` dispatch lives in _take_screenshot_impl
+	## (pinned by tests/unit/test_docs_screenshot_sources.py).
 	if _vision_routing != null and _vision_routing.is_routing_enabled():
 		return _vision_routing.route_editor_screenshot(params, Callable(self, "_take_screenshot_impl"), _connection)
 	return _take_screenshot_impl(params)

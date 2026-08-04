@@ -59,11 +59,22 @@ func test_decrypt_rejects_tampered_blob() -> void:
 	assert_eq(router._decrypt(":".join(parts)), "")
 
 
+func test_decrypt_rejects_tampered_iv() -> void:
+	var router := _make_router()
+	var parts := router._encrypt("gsk_test_secret_key_123").split(":")
+	## Flip one byte of the IV: it is inside the MAC, so decryption must fail
+	## instead of silently decrypting to a different plaintext.
+	var iv := Marshalls.base64_to_raw(parts[1])
+	iv[0] = iv[0] ^ 0xFF
+	parts[1] = Marshalls.raw_to_base64(iv)
+	assert_eq(router._decrypt(":".join(parts)), "")
+
+
 # ----- prompt -----
 
 func test_build_prompt_includes_user_context() -> void:
 	var router := _make_router()
-	var prompt := router._build_prompt({"_user_prompt": "Why is the spider red?"})
+	var prompt := router._build_prompt({"user_prompt": "Why is the spider red?"})
 	assert_true(prompt.contains("Why is the spider red?"))
 	assert_true(prompt.contains("Godot editor"))
 
@@ -84,7 +95,7 @@ func test_route_complete_injects_description_and_placeholder() -> void:
 	var data: Dictionary = stub.replies[0]["payload"]["data"]
 	assert_eq(data["vision_description"], "A rusty spider robot on a platform.")
 	assert_eq(data["routed_via"], "groq:" + VisionRoutingScript.MODEL_ID)
-	assert_true(str(data["note"]).contains("A rusty spider robot on a platform."))
+	assert_true(str(data["note"]).contains("Vision description (groq:" + VisionRoutingScript.MODEL_ID + "): A rusty spider robot on a platform."))
 	## The original image is replaced by the 2x2 placeholder PNG.
 	assert_eq(data["image_base64"], VisionRoutingScript._PLACEHOLDER_PNG)
 	assert_eq(data["format"], "png")
@@ -151,6 +162,11 @@ func test_provider_table_is_curated() -> void:
 		assert_true(str(provider.get("env", "")).length() > 0)
 		assert_true(str(provider.get("setting", "")).begins_with("vision_routing/"))
 		assert_true(str(provider.get("dialect", "")) in ["openai", "gemini"])
+
+
+func test_aes_and_mac_keys_are_distinct() -> void:
+	var router := _make_router()
+	assert_ne(router._derive_key("aes"), router._derive_key("mac"))
 
 
 func test_provider_models_are_distinct_and_fixed() -> void:

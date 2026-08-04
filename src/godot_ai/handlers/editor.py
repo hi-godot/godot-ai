@@ -80,6 +80,7 @@ async def editor_screenshot(
     elevation: float | None = None,
     azimuth: float | None = None,
     fov: float | None = None,
+    user_prompt: str = "",
 ) -> dict | list:
     params: dict = {"source": source}
     if max_resolution > 0:
@@ -94,6 +95,8 @@ async def editor_screenshot(
         params["azimuth"] = azimuth
     if fov is not None:
         params["fov"] = fov
+    if user_prompt:
+        params["user_prompt"] = user_prompt
 
     timeout = GAME_SCREENSHOT_TIMEOUT_SEC if source == "game" else SCREENSHOT_TIMEOUT_SEC
     result = await runtime.send_command(

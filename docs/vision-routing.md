@@ -39,7 +39,9 @@ result's text block).
 
 ## How it works
 
-1. The AI calls `editor_screenshot` (any `source`).
+1. The AI calls `editor_screenshot` (any `source`), optionally passing a
+   `user_prompt` with context that is sent to the vision model alongside the
+   image.
 2. The plugin captures the frame exactly as before.
 3. If routing is enabled, the image is sent to the selected provider's model
    (see [Providers](#providers)) on a background thread - the editor main
@@ -91,6 +93,10 @@ images itself).
   local obfuscation, not a secret vault.
 - Routing only applies when the connected model is expected to be text-only;
   keep it off for image-capable models to avoid the extra hop.
+- Metadata-only captures (`include_image=false`) are still routed and still
+  pay the vision call - for a text-only model that is the point, since the
+  description is what makes the capture readable. Image-capable clients that
+  only want capture metadata should turn routing off.
 
 ## Developer notes
 

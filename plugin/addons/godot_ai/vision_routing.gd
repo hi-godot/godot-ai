@@ -36,7 +36,7 @@ extends RefCounted
 ## UI: "Vision Routing" tab in Clients & Tools (after Settings) plus a quick
 ## toggle in the dock right under Developer mode.
 
-## Backwards-compatible alias for the Groq model (used by tests + routed_via).
+## Groq's curated model id; also the default used by tests and routed_via.
 const MODEL_ID := "qwen/qwen3.6-27b"
 
 ## Curated providers: model ids are fixed here on purpose so the UI can show
@@ -91,6 +91,10 @@ const ROW_NAME := "VisionRoutingToggleRow"
 const MAX_IMAGE_EDGE := 1024
 const CONNECT_TIMEOUT_MS := 4000
 const REQUEST_TIMEOUT_MS := 8000
+## Total budget for the whole provider exchange (connect + request + body).
+## Kept under the server's 15s editor_screenshot window so the fallback
+## pass-through always lands before the server gives up on slow providers.
+const TOTAL_ROUTE_BUDGET_MS := 10000
 
 const _ENC_PREFIX := "v1"
 const _SALT := "vision_routing::v1::godot-ai"
@@ -112,6 +116,7 @@ var _tab_key_label: Label = null
 var _tab_key_hint: Label = null
 var _tab_key_edit: LineEdit = null
 var _tab_status: Label = null
+var _tab_test_button: Button = null
 var _row_toggle: CheckButton = null
 
 
@@ -138,6 +143,7 @@ func shutdown() -> void:
 	_tab_key_hint = null
 	_tab_key_edit = null
 	_tab_status = null
+	_tab_test_button = null
 	_row_toggle = null
 
 
@@ -160,7 +166,11 @@ func route_editor_screenshot(params: Dictionary, original: Callable, connection:
 	if not (data is Dictionary) or not data.has("image_base64"):
 		return result
 	if _start_route(rid, str(params.get("source", "viewport")), result, data, connection, params):
-		return {"_deferred": true, "_deferred_timeout_ms": 30000}
+		## Keep the deferred ledger inside the server's 15s editor_screenshot
+		## window (the worker itself is capped at TOTAL_ROUTE_BUDGET_MS), so
+		## a hung provider surfaces as a clean plugin timeout, not a
+		## server-side abort.
+		return {"_deferred": true, "_deferred_timeout_ms": 13000}
 	return result
 
 
@@ -226,17 +236,19 @@ func _on_route_complete(rid: String, result: Variant) -> void:
 		_pass_through(connection, rid, payload)
 		return
 	var data: Dictionary = entry.get("data", {}).duplicate()
-	## The server forwards a fixed whitelist of metadata keys into the text
-	## result; `note` is the free-form one, so the description rides there
-	## (plus an explicit `vision_description` key) so text-only models can
-	## read it. The original image is replaced by a valid 2x2 placeholder so
-	## the payload stays well-formed.
-	data.erase("image_base64")
-	data["vision_description"] = description_str
 	var provider: Dictionary = PROVIDERS.get(provider_id, PROVIDERS["groq"])
-	data["routed_via"] = "%s:%s" % [provider_id, provider.get("model", MODEL_ID)]
+	var routed_via := "%s:%s" % [provider_id, provider.get("model", MODEL_ID)]
+	## The server forwards a fixed whitelist of metadata keys into the text
+	## result; `note` is the free-form one, so a self-attributing description
+	## rides there (plus an explicit `vision_description` key) so text-only
+	## models can read it. The label keeps provider text from reading as if
+	## the plugin said it. The image is replaced by a valid 2x2 placeholder
+	## so the payload stays well-formed.
+	data["vision_description"] = description_str
+	data["routed_via"] = routed_via
 	var original_note := str(data.get("note", ""))
-	data["note"] = (original_note + " | " if not original_note.is_empty() else "") + description_str
+	var labeled := "Vision description (%s): %s" % [routed_via, description_str]
+	data["note"] = (original_note + " | " if not original_note.is_empty() else "") + labeled
 	data["image_base64"] = _PLACEHOLDER_PNG
 	data["format"] = "png"
 	_log("vision routing: description ready for %s (%d chars)" % [rid, description_str.length()])
@@ -259,9 +271,7 @@ func _build_prompt(params: Dictionary) -> String:
 		"- Problems: errors, red highlights, missing textures, black screens, glitches, stretching.",
 		"Be concise (under 200 words), factual, and use exact quotes instead of paraphrase. Do not give advice.",
 	])
-	var user_prompt := str(params.get("_user_prompt", ""))
-	if user_prompt.is_empty():
-		user_prompt = str(params.get("user_prompt", ""))
+	var user_prompt := str(params.get("user_prompt", ""))
 	if not user_prompt.is_empty():
 		lines.append("Context from the agent that requested this screenshot: %s" % user_prompt)
 	return "\n".join(lines)
@@ -427,7 +437,10 @@ func _http_post_json(host: String, port: int, path: String, headers: PackedStrin
 	if connect_err != OK:
 		http.close()
 		return {"code": 0, "error": "connect_to_host failed: %s" % error_string(connect_err)}
-	var deadline := Time.get_ticks_msec() + CONNECT_TIMEOUT_MS
+	## One total deadline for the whole exchange (see TOTAL_ROUTE_BUDGET_MS),
+	## so connect + request + body can never exceed it.
+	var budget_deadline := Time.get_ticks_msec() + TOTAL_ROUTE_BUDGET_MS
+	var deadline := mini(Time.get_ticks_msec() + CONNECT_TIMEOUT_MS, budget_deadline)
 	var first_poll := true
 	var connected := false
 	var last_status := -1
@@ -451,7 +464,7 @@ func _http_post_json(host: String, port: int, path: String, headers: PackedStrin
 	if http.request(HTTPClient.METHOD_POST, path, headers, body) != OK:
 		http.close()
 		return {"code": 0, "error": "request() failed"}
-	deadline = Time.get_ticks_msec() + REQUEST_TIMEOUT_MS
+	deadline = mini(Time.get_ticks_msec() + REQUEST_TIMEOUT_MS, budget_deadline)
 	var timed_out := false
 	var status_at_timeout := -1
 	while http.get_status() == HTTPClient.STATUS_REQUESTING:
@@ -473,7 +486,7 @@ func _http_post_json(host: String, port: int, path: String, headers: PackedStrin
 		return {"code": 0, "error": "no HTTP response (status %d)" % st}
 	var code := http.get_response_code()
 	var chunks := PackedByteArray()
-	var body_deadline := Time.get_ticks_msec() + REQUEST_TIMEOUT_MS
+	var body_deadline := mini(Time.get_ticks_msec() + REQUEST_TIMEOUT_MS, budget_deadline)
 	while http.get_status() == HTTPClient.STATUS_BODY:
 		if not _active:
 			http.close()
@@ -530,19 +543,21 @@ func _downscale_image_if_needed(image_b64: String) -> String:
 	return Marshalls.raw_to_base64(out)
 
 
-func _ping_worker(provider_id: String, api_key: String, status_label: Label) -> void:
+func _ping_worker(provider_id: String, api_key: String, status_label: Label, key_source: String) -> void:
 	var result := _ping_blocking(provider_id, api_key)
-	Callable(self, "_on_ping_done").call_deferred(result, provider_id, status_label)
+	Callable(self, "_on_ping_done").call_deferred(result, provider_id, status_label, key_source)
 
 
-func _on_ping_done(result: Dictionary, provider_id: String, status_label: Label) -> void:
+func _on_ping_done(result: Dictionary, provider_id: String, status_label: Label, key_source: String) -> void:
 	_join_thread("_test")
+	if _tab_test_button != null and is_instance_valid(_tab_test_button):
+		_tab_test_button.disabled = false
 	if status_label != null and is_instance_valid(status_label):
 		var label := str(PROVIDERS.get(provider_id, PROVIDERS["groq"]).get("label", provider_id))
 		if result.get("ok", false):
-			status_label.text = "OK - %s responded." % label
+			status_label.text = "OK - %s responded (%s)." % [label, key_source]
 		else:
-			status_label.text = "FAILED - %s" % result.get("error", "unknown error")
+			status_label.text = "FAILED - %s (%s)." % [result.get("error", "unknown error"), key_source]
 		_log("vision routing: ping result: %s" % status_label.text)
 
 
@@ -611,18 +626,27 @@ func set_api_key(provider_id: String, plain: String) -> void:
 	if plain.is_empty():
 		es.set_setting(_provider_setting(provider_id), "")
 		return
-	es.set_setting(_provider_setting(provider_id), _encrypt(plain))
+	var blob := _encrypt(plain)
+	if blob.is_empty():
+		_log("vision routing: cannot store %s key - this machine reports no unique id; set %s instead" % [provider_id, PROVIDERS.get(provider_id, PROVIDERS["groq"]).get("env", "")])
+		return
+	es.set_setting(_provider_setting(provider_id), blob)
 
 
 ## Machine-derived key: not a password, but enough that a casually-opened
-## editor_settings-4.tres does not reveal the key in plain text.
-func _derive_key() -> PackedByteArray:
+## editor_settings-4.tres does not reveal the key in plain text. Separate
+## domain tags give AES and HMAC independent keys so neither reuses the
+## other's bytes.
+func _derive_key(tag: String) -> PackedByteArray:
 	var parts := PackedStringArray([
 		OS.get_unique_id(),
 		OS.get_environment("USERNAME"),
 		OS.get_environment("USERPROFILE"),
+		OS.get_environment("USER"),
+		OS.get_environment("HOME"),
 		OS.get_name(),
 		_SALT,
+		tag,
 	])
 	var ctx := HashingContext.new()
 	ctx.start(HashingContext.HASH_SHA256)
@@ -631,7 +655,13 @@ func _derive_key() -> PackedByteArray:
 
 
 func _encrypt(plain: String) -> String:
-	var key := _derive_key()
+	if OS.get_unique_id().is_empty():
+		## Without a machine id the key would be near-constant across users
+		## on the same machine - refuse, and let callers fall back to the
+		## provider's environment variable.
+		return ""
+	var aes_key := _derive_key("aes")
+	var mac_key := _derive_key("mac")
 	var iv := Crypto.new().generate_random_bytes(16)
 	var raw := plain.to_utf8_buffer()
 	## PKCS7 padding.
@@ -640,11 +670,11 @@ func _encrypt(plain: String) -> String:
 	for i in pad:
 		padded.append(pad)
 	var aes := AESContext.new()
-	aes.start(AESContext.MODE_CBC_ENCRYPT, key, iv)
+	aes.start(AESContext.MODE_CBC_ENCRYPT, aes_key, iv)
 	var cipher := aes.update(padded)
 	aes.finish()
 	var hmac := HMACContext.new()
-	hmac.start(HashingContext.HASH_SHA256, key)
+	hmac.start(HashingContext.HASH_SHA256, mac_key)
 	hmac.update(iv)
 	hmac.update(cipher)
 	var mac := hmac.finish()
@@ -660,16 +690,17 @@ func _decrypt(blob: String) -> String:
 	var cipher := Marshalls.base64_to_raw(parts[3])
 	if iv.size() != 16 or cipher.is_empty() or cipher.size() % 16 != 0:
 		return ""
-	var key := _derive_key()
+	var aes_key := _derive_key("aes")
+	var mac_key := _derive_key("mac")
 	var hmac := HMACContext.new()
-	hmac.start(HashingContext.HASH_SHA256, key)
+	hmac.start(HashingContext.HASH_SHA256, mac_key)
 	hmac.update(iv)
 	hmac.update(cipher)
 	var expected := hmac.finish()
 	if expected != mac:
 		return ""
 	var aes := AESContext.new()
-	aes.start(AESContext.MODE_CBC_DECRYPT, key, iv)
+	aes.start(AESContext.MODE_CBC_DECRYPT, aes_key, iv)
 	var padded := aes.update(cipher)
 	aes.finish()
 	if padded.is_empty():
@@ -776,6 +807,7 @@ func build_tab(tabs: TabContainer) -> void:
 	var test_button := Button.new()
 	test_button.text = "Test connection"
 	test_button.pressed.connect(_on_test_connection)
+	_tab_test_button = test_button
 	test_row.add_child(test_button)
 	_tab_status = Label.new()
 	_tab_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -815,11 +847,14 @@ func _sync_provider_ui() -> void:
 	if _tab_key_label != null and is_instance_valid(_tab_key_label):
 		_tab_key_label.text = str(provider.get("key_label", "API key"))
 	if _tab_key_hint != null and is_instance_valid(_tab_key_hint):
-		_tab_key_hint.text = (
+		var hint := (
 			"Stored encrypted (AES-256, key derived from this machine) in Editor Settings "
 			+ "- not plain text, but local obfuscation only. You can also set the "
 			+ "%s environment variable; it takes priority over this field."
 		) % provider.get("env", "")
+		if OS.get_unique_id().is_empty():
+			hint += " This machine reports no unique id, so keys cannot be stored locally - use the %s environment variable." % provider.get("env", "")
+		_tab_key_hint.text = hint
 	if _tab_key_edit != null and is_instance_valid(_tab_key_edit):
 		_tab_key_edit.placeholder_text = str(provider.get("placeholder", ""))
 
@@ -829,17 +864,23 @@ func _on_test_connection() -> void:
 		return
 	var provider_id := _active_provider_id()
 	var provider: Dictionary = PROVIDERS.get(provider_id, PROVIDERS["groq"])
+	var env_name := str(provider.get("env", ""))
 	var api_key := _resolved_api_key(provider_id)
 	if api_key.is_empty():
-		_tab_status.text = "No key set - add one below or set %s." % provider.get("env", "")
+		_tab_status.text = "No key set - add one below or set %s." % env_name
 		return
-	_tab_status.text = "Testing..."
 	var running: Thread = _threads.get("_test")
 	if running != null and running.is_started() and running.is_alive():
 		return
+	_tab_status.text = "Testing..."
+	if _tab_test_button != null and is_instance_valid(_tab_test_button):
+		_tab_test_button.disabled = true
+	var key_source := "stored key"
+	if not OS.get_environment(env_name).is_empty():
+		key_source = "via %s" % env_name
 	var thread := Thread.new()
 	_threads["_test"] = thread
-	thread.start(_ping_worker.bind(provider_id, api_key, _tab_status))
+	thread.start(_ping_worker.bind(provider_id, api_key, _tab_status, key_source))
 
 
 # --- UI: quick toggle in the dock ----------------------------------------------
@@ -871,9 +912,9 @@ func _on_enable_toggled(enabled: bool) -> void:
 func _sync_ui_states() -> void:
 	var enabled := is_routing_enabled()
 	if _tab_enable != null and is_instance_valid(_tab_enable) and _tab_enable.button_pressed != enabled:
-		_tab_enable.button_pressed = enabled
+		_tab_enable.set_pressed_no_signal(enabled)
 	if _row_toggle != null and is_instance_valid(_row_toggle) and _row_toggle.button_pressed != enabled:
-		_row_toggle.button_pressed = enabled
+		_row_toggle.set_pressed_no_signal(enabled)
 
 
 # --- logging --------------------------------------------------------------------

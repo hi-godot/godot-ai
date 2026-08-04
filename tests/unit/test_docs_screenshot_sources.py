@@ -36,10 +36,10 @@ _DOC_SOURCE_TOKEN_RE = re.compile(r"""source\s*=\s*["']([^"']+)["']""")
 @functools.cache
 def _handler_sources() -> frozenset[str]:
     text = EDITOR_HANDLER_GD.read_text(encoding="utf-8")
-    block = get_func_block(text, "func take_screenshot(params: Dictionary) -> Dictionary:")
+    block = get_func_block(text, "func _take_screenshot_impl(params: Dictionary) -> Dictionary:")
     match = _INVALID_SOURCE_LINE_RE.search(block)
     assert match, (
-        f"Invalid-source error message not found in take_screenshot in {EDITOR_HANDLER_GD}; "
+        f"Invalid-source error message not found in _take_screenshot_impl in {EDITOR_HANDLER_GD}; "
         "if its wording changed, update _INVALID_SOURCE_LINE_RE."
     )
     return frozenset(_QUOTED_TOKEN_RE.findall(match.group(1)))
@@ -48,11 +48,11 @@ def _handler_sources() -> frozenset[str]:
 @functools.cache
 def _dispatch_arm_sources() -> frozenset[str]:
     text = EDITOR_HANDLER_GD.read_text(encoding="utf-8")
-    block = get_func_block(text, "func take_screenshot(params: Dictionary) -> Dictionary:")
+    block = get_func_block(text, "func _take_screenshot_impl(params: Dictionary) -> Dictionary:")
     section = re.search(r"match source:\n(.*?)^\t\t_:", block, re.MULTILINE | re.DOTALL)
     assert section, (
         f"`match source:` dispatch (with a `_:` default arm) not found in "
-        f"take_screenshot in {EDITOR_HANDLER_GD}; update this parser."
+        f"_take_screenshot_impl in {EDITOR_HANDLER_GD}; update this parser."
     )
     return frozenset(re.findall(r'^\t\t"([a-z0-9_]+)":\s*$', section.group(1), re.MULTILINE))
 
@@ -62,7 +62,7 @@ def test_error_message_stays_in_sync_with_dispatch_arms() -> None:
     # pins that message to the actual `match source:` arms so a new arm added
     # without updating the message can't silently escape the doc guard.
     assert _dispatch_arm_sources() == _handler_sources(), (
-        f"take_screenshot's match arms {sorted(_dispatch_arm_sources())} and its "
+        f"_take_screenshot_impl's match arms {sorted(_dispatch_arm_sources())} and its "
         f"invalid-source error message {sorted(_handler_sources())} disagree; "
         "update the error message, then re-align docs/screenshot-testing.md."
     )

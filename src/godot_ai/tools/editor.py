@@ -179,6 +179,7 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         elevation: float | None = None,
         azimuth: float | None = None,
         fov: float | None = None,
+        user_prompt: str = "",
         session_id: str = "",
     ):
         """Capture a screenshot of the Godot editor viewport or running game.
@@ -223,6 +224,10 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
             elevation: Camera elevation in degrees (0=level, 90=overhead).
             azimuth: Camera azimuth in degrees (0=front, 90=right).
             fov: Camera FOV in degrees. Tight 20-30 = zoom; 60-75 = context.
+            user_prompt: Optional context from the agent that requested the
+                capture. With Vision Routing enabled it is sent alongside the
+                image so the vision model can describe what the agent is
+                looking for.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -236,6 +241,7 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
             elevation=elevation,
             azimuth=azimuth,
             fov=fov,
+            user_prompt=user_prompt,
         )
 
     @mcp.tool(meta=DEFER_META)
