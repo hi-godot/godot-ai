@@ -104,6 +104,10 @@ const TOTAL_ROUTE_BUDGET_MS := 10000
 ## talks to third-party hosts - a faulty or hostile provider must not be able
 ## to stream an unbounded body inside the window.
 const MAX_RESPONSE_BODY_BYTES := 1048576
+## Output-token budget shared by both dialects (OpenAI `max_tokens`,
+## Gemini `generationConfig.maxOutputTokens`) so routed descriptions
+## stay bounded.
+const MAX_OUTPUT_TOKENS := 512
 
 const _ENC_PREFIX := "v1"
 const _SALT := "vision_routing::v1::godot-ai"
@@ -359,6 +363,7 @@ func _build_request_body(provider: Dictionary, prompt: String, image_b64: String
 					{"inline_data": {"mime_type": "image/png", "data": image_b64}},
 				],
 			}],
+			"generationConfig": {"maxOutputTokens": MAX_OUTPUT_TOKENS},
 		})
 	var payload := {
 		"model": model,
@@ -369,7 +374,7 @@ func _build_request_body(provider: Dictionary, prompt: String, image_b64: String
 				{"type": "image_url", "image_url": {"url": "data:image/png;base64," + image_b64}},
 			],
 		}],
-		"max_tokens": 512,
+		"max_tokens": MAX_OUTPUT_TOKENS,
 		"temperature": 0.2,
 	}
 	if provider.has("reasoning_effort"):

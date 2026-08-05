@@ -22,6 +22,17 @@ class StubConnection:
 		replies.append({"request_id": request_id, "payload": payload})
 
 
+## Spy router: captures the prompt the route-start path binds into the
+## worker thread, so a test can assert the stashed game-capture params
+## reached the provider prompt without making a real network call.
+class SpyRouter:
+	extends VisionRoutingScript
+	var captured_prompt := ""
+
+	func _route_worker(_provider: Dictionary, _image_b64: String, prompt: String, _api_key: String, _rid: String) -> void:
+		captured_prompt = prompt
+
+
 func _make_router() -> VisionRoutingScript:
 	var router := VisionRoutingScript.new()
 	router.log_buffer = null
@@ -244,6 +255,8 @@ func test_gemini_body_builder_uses_inline_data() -> void:
 	provider["model"] = "gemini-test"
 	var body: Dictionary = JSON.parse_string(router._build_request_body(provider, "describe it", "B64DATA"))
 	assert_false(body.has("messages"))
+	## Both dialects cap output tokens; Gemini uses generationConfig.
+	assert_eq(body["generationConfig"]["maxOutputTokens"], 512)
 	var parts: Array = body["contents"][0]["parts"]
 	var inline: Dictionary = parts[1]["inline_data"]
 	assert_eq(inline["mime_type"], "image/png")
@@ -312,15 +325,27 @@ func test_empty_model_declines_route_like_empty_key() -> void:
 	if es == null:
 		skip("EditorInterface.get_editor_settings() unavailable in test env")
 		return
-	## Save/restore the groq key + model slots so the test never leaves junk
-	## behind. The model slot is forced empty; the key slot is set so the
-	## decline is provably caused by the missing model, not the missing key.
+	if router._encrypt("x").is_empty():
+		skip("machine reports no unique id; cannot store a test key")
+		return
+	## Save/restore provider + key + model slots so the test never leaves
+	## junk behind and behaves the same on any configured provider. The
+	## route-start path resolves the provider from Editor Settings, so it
+	## must be pinned to groq for the duration (otherwise, on a machine
+	## configured for google/grok, the route proceeds and fires a real
+	## network request). The model slot is forced empty; the key slot is
+	## set so the decline is provably caused by the missing model, not the
+	## missing key.
+	var provider_setting := VisionRoutingScript.SETTING_PROVIDER
+	var had_provider := es.has_setting(provider_setting)
+	var saved_provider: String = es.get_setting(provider_setting) if had_provider else ""
 	var model_setting := router._model_setting("groq")
 	var had_model := es.has_setting(model_setting)
 	var saved_model: String = es.get_setting(model_setting) if had_model else ""
 	var key_setting := router._provider_setting("groq")
 	var had_key := es.has_setting(key_setting)
 	var saved_key: String = es.get_setting(key_setting) if had_key else ""
+	es.set_setting(provider_setting, "groq")
 	router.set_model_id("groq", "")
 	es.set_setting(key_setting, router._encrypt("gsk_test_route_key"))
 	var declined := not router._start_route(
@@ -335,19 +360,70 @@ func test_empty_model_declines_route_like_empty_key() -> void:
 		es.set_setting(model_setting, saved_model)
 	elif es.has_setting(model_setting):
 		es.erase(model_setting)
+	if had_provider:
+		es.set_setting(provider_setting, saved_provider)
+	elif es.has_setting(provider_setting):
+		es.erase(provider_setting)
 	assert_true(declined)
 	assert_false(router._pending.has("test-rid-empty-model"))
 
 
 func test_game_capture_stashes_and_forwards_user_prompt() -> void:
 	## The editor handler stashes params by request id when it defers a game
-	## capture; route_game_payload hands them to the prompt builder.
-	var router := _make_router()
+	## capture; route_game_payload must hand them to the prompt built on the
+	## route-start path, so the provider prompt carries the agent's context.
+	## The worker is spied (_route_worker) so no network call happens.
+	var router := SpyRouter.new()
+	router.log_buffer = null
+	var es := EditorInterface.get_editor_settings()
+	if es == null:
+		skip("EditorInterface.get_editor_settings() unavailable in test env")
+		return
+	if router._encrypt("x").is_empty():
+		skip("machine reports no unique id; cannot store a test key")
+		return
+	## Save/restore provider + key + model so the route-start path is
+	## deterministic regardless of the user's configured provider.
+	var provider_setting := VisionRoutingScript.SETTING_PROVIDER
+	var had_provider := es.has_setting(provider_setting)
+	var saved_provider: String = es.get_setting(provider_setting) if had_provider else ""
+	var key_setting := router._provider_setting("groq")
+	var had_key := es.has_setting(key_setting)
+	var saved_key: String = es.get_setting(key_setting) if had_key else ""
+	var model_setting := router._model_setting("groq")
+	var had_model := es.has_setting(model_setting)
+	var saved_model: String = es.get_setting(model_setting) if had_model else ""
+	es.set_setting(provider_setting, "groq")
+	es.set_setting(key_setting, router._encrypt("gsk_test_route_key"))
+	router.set_model_id("groq", "qwen/qwen3.6-27b")
 	var rid := "test-rid-game"
-	router._pending[rid] = {"params": {"user_prompt": "Why is the spider red?", "source": "game"}}
-	var params: Dictionary = router._pending.get(rid, {}).get("params", {})
-	var prompt := router._build_prompt(params)
-	assert_true(prompt.contains("Why is the spider red?"))
+	## Deferred editor capture of a game frame: the params (user_prompt)
+	## are stashed by request id for the later game payload.
+	var deferred: Dictionary = router.route_editor_screenshot(
+		{"user_prompt": "Why is the spider red?", "source": "game", "_request_id": rid},
+		func(_params: Dictionary) -> Dictionary: return {"_deferred": true},
+		null)
+	assert_true(deferred.get("_deferred", false))
+	## The deferred frame arrives through route_game_payload, which reads
+	## the stash and runs the real route-start path (worker spied for the
+	## prompt).
+	var owned := router.route_game_payload(StubConnection.new(), rid, {"data": {"image_base64": "AAAA", "format": "png"}})
+	assert_true(owned)
+	router._join_thread(rid)
+	assert_true(router.captured_prompt.contains("Why is the spider red?"))
+	assert_true(router.captured_prompt.contains("Godot editor"))
+	if had_key:
+		es.set_setting(key_setting, saved_key)
+	elif es.has_setting(key_setting):
+		es.erase(key_setting)
+	if had_model:
+		es.set_setting(model_setting, saved_model)
+	elif es.has_setting(model_setting):
+		es.erase(model_setting)
+	if had_provider:
+		es.set_setting(provider_setting, saved_provider)
+	elif es.has_setting(provider_setting):
+		es.erase(provider_setting)
 
 
 func test_route_game_payload_clears_stash_when_not_routeable() -> void:
