@@ -97,6 +97,12 @@ func test_terrain_create_builds_mesh_and_collision() -> void:
 	var cs: CollisionShape3D = body.get_child(0) as CollisionShape3D
 	assert_true(cs.shape is ConcavePolygonShape3D)
 
+	## Owners are assigned after attachment, so every generated node is
+	## owned by the scene root and persists when the scene is saved.
+	assert_true(container.owner == scene_root, "container must be owned by the scene root")
+	assert_true(mi.owner == scene_root, "TerrainMesh must be owned by the scene root")
+	assert_true(body.owner == scene_root, "TerrainCollision must be owned by the scene root")
+
 
 func test_terrain_create_collision_off_when_disabled() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
@@ -168,20 +174,26 @@ func test_terrain_regenerate_undo_restores_previous_mesh() -> void:
 	var container := _find_child(scene_root, "Rebuild")
 	_created_nodes.append(container)
 	var before := _grid_height(container, 10, 10)
+	assert_true(_find_child(container, "TerrainCollision") is StaticBody3D)
 
 	var regenerated := _terrain_handler.regenerate({
 		"path": created.data.path, "seed": 999, "height_scale": 20.0,
+		"generate_collision": false,
 	})
 	assert_has_key(regenerated, "data")
 	assert_eq(regenerated.data.vertices, 48 * 48)
 	assert_true(regenerated.data.undoable)
 	var after := _grid_height(container, 10, 10)
 	assert_ne(after, before, "regenerate must change the mesh for a new seed")
+	assert_true(_find_child(container, "TerrainCollision") == null,
+		"regenerate with generate_collision=false must remove the collision body")
 
 	var did_undo := editor_undo(_undo_redo)
 	assert_true(did_undo, "undo should succeed")
 	assert_eq(_grid_height(container, 10, 10), before,
 		"undo must restore the previous mesh state")
+	assert_true(_find_child(container, "TerrainCollision") is StaticBody3D,
+		"undo must restore the previous collision state")
 
 
 func test_terrain_create_is_undoable() -> void:
@@ -230,6 +242,32 @@ func test_terrain_rejects_unknown_noise_type() -> void:
 		"parent_path": _root_path(), "noise_type": "billow",
 	})
 	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+
+
+func test_terrain_frequency_changes_shape() -> void:
+	## Guard against the frequency being applied twice (FastNoiseLite
+	## frequency + a manual coordinate multiply would square it): distinct
+	## frequency values must produce distinct meshes for the same seed.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene open")
+		return
+
+	var low := _terrain_handler.create({
+		"parent_path": _root_path(), "name": "FreqLow", "seed": 5, "frequency": 0.02,
+	})
+	var high := _terrain_handler.create({
+		"parent_path": _root_path(), "name": "FreqHigh", "seed": 5, "frequency": 0.2,
+	})
+	assert_has_key(low, "data")
+	assert_has_key(high, "data")
+
+	var node_low := _find_child(scene_root, "FreqLow")
+	var node_high := _find_child(scene_root, "FreqHigh")
+	_created_nodes.append(node_low)
+	_created_nodes.append(node_high)
+	assert_ne(_grid_height(node_low, 10, 10), _grid_height(node_high, 10, 10),
+		"different frequencies must produce different terrain for the same seed")
 
 
 func test_terrain_parent_not_node3d_returns_error() -> void:

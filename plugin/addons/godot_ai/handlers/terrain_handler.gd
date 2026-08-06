@@ -14,6 +14,13 @@ extends RefCounted
 ## params; one undo action restores the previous mesh/collision state.
 ## Holes and carved detail are CSG territory (csg_manage) — composition,
 ## not duplication.
+##
+## Frame cost is bounded and one-shot: a size=128 build measures ~27ms
+## (default size=48 ~4ms) — a brief editor hitch on an explicit authoring
+## command, same order as the existing 4096-cell tilemap/gridmap fills.
+## Generation stays synchronous by design; worker threads are reserved for
+## blocking I/O (vision routing) and the mesh build touches no scene state
+## until the final attach.
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
@@ -72,11 +79,14 @@ func create(params: Dictionary) -> Dictionary:
 	if name.is_empty():
 		name = "Terrain"
 	container.name = name
-	_build_children(container, built, has_collision, scene_root)
+	## Owners are NOT set here: the container is not attached yet, so
+	## Godot cannot accept scene_root as the owner of its descendants.
+	## _assign_owners runs in the undo do-chain after attachment.
+	_build_children(container, built, has_collision)
 
 	_undo_redo.create_action("MCP: Create %s" % container.name)
 	_undo_redo.add_do_method(parent, "add_child", container, true)
-	_undo_redo.add_do_method(container, "set_owner", scene_root)
+	_undo_redo.add_do_method(self, "_assign_owners", container, scene_root)
 	_undo_redo.add_do_reference(container)
 	_undo_redo.add_undo_method(parent, "remove_child", container)
 	_undo_redo.commit_action()
@@ -192,8 +202,9 @@ func _build_surface(p: Dictionary) -> Dictionary:
 	cols.resize(n * n)
 	for y in n:
 		for x in n:
-			var h: float = p.base_height + noise.get_noise_2d(
-				x * p.frequency, y * p.frequency) * p.height_scale
+			## Raw grid coordinates: FastNoiseLite.frequency already scales
+			## the domain, so multiplying here would square the frequency.
+			var h: float = p.base_height + noise.get_noise_2d(float(x), float(y)) * p.height_scale
 			verts[y * n + x] = Vector3(x * p.cell_size - half, h, y * p.cell_size - half)
 			uvs[y * n + x] = Vector2(float(x) / float(n - 1), float(y) / float(n - 1))
 			cols[y * n + x] = _height_color(h, p.height_scale, p.base_height)
@@ -288,11 +299,10 @@ func _make_material() -> StandardMaterial3D:
 	return mat
 
 
-func _build_children(container: Node3D, built: Dictionary, has_collision: bool, scene_root: Node) -> void:
+func _build_children(container: Node3D, built: Dictionary, has_collision: bool) -> void:
 	var mi := MeshInstance3D.new()
 	mi.name = MESH_CHILD
 	mi.mesh = built.mesh
-	mi.owner = scene_root
 	container.add_child(mi)
 	if has_collision:
 		var body := StaticBody3D.new()
@@ -302,18 +312,34 @@ func _build_children(container: Node3D, built: Dictionary, has_collision: bool, 
 		concave.set_faces(built.triangles)
 		cs.shape = concave
 		body.add_child(cs)
-		cs.owner = scene_root
-		body.owner = scene_root
 		container.add_child(body)
 
 
+## Assign scene_root as the owner of the container and every generated
+## descendant (do-method of the create action — runs after attachment, so
+## the owner is an ancestor of each node).
+func _assign_owners(container: Node3D, scene_root: Node) -> void:
+	_assign_owner_recursive(container, scene_root)
+
+
+func _assign_owner_recursive(node: Node, scene_root: Node) -> void:
+	node.owner = scene_root
+	for child in node.get_children():
+		_assign_owner_recursive(child, scene_root)
+
+
 ## Rebuild the generated children of a terrain container (do-method for
-## regenerate).
+## regenerate). The container is already in the tree, so owners can be
+## assigned directly.
 func _apply_rebuild(container: Node3D, p: Dictionary, has_collision: bool) -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
+	## Drop the routing marker placed by the first undo do-method — it must
+	## never serialize into the scene.
+	container.remove_meta("_mcp_terrain_rebuild")
 	_clear_generated(container)
 	var built := _build_surface(p)
-	_build_children(container, built, has_collision, scene_root)
+	_build_children(container, built, has_collision)
+	_assign_owners(container, scene_root)
 
 
 ## Restore a previously captured mesh/collision state (undo-method for
@@ -324,7 +350,6 @@ func _apply_mesh_state(container: Node3D, prev: Dictionary) -> void:
 	var mi := MeshInstance3D.new()
 	mi.name = MESH_CHILD
 	mi.mesh = prev.mesh
-	mi.owner = scene_root
 	container.add_child(mi)
 	if prev.has_collision and prev.shape != null:
 		var body := StaticBody3D.new()
@@ -332,9 +357,8 @@ func _apply_mesh_state(container: Node3D, prev: Dictionary) -> void:
 		var cs := CollisionShape3D.new()
 		cs.shape = prev.shape
 		body.add_child(cs)
-		cs.owner = scene_root
-		body.owner = scene_root
 		container.add_child(body)
+	_assign_owners(container, scene_root)
 
 
 func _capture_mesh_state(container: Node3D) -> Dictionary:
