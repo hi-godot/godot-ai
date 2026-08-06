@@ -187,7 +187,6 @@ async def test_gridmap_get_used_cells_does_not_call_require_writable():
     with patch(
         "godot_ai.handlers.gridmap.require_writable_async",
         new_callable=AsyncMock,
-        create=True,
     ) as mock_require_writable:
         await gridmap_handlers.gridmap_get_used_cells(runtime, path="/Main/Terrain")
 
@@ -211,7 +210,6 @@ async def test_gridmap_list_library_items_does_not_call_require_writable():
     with patch(
         "godot_ai.handlers.gridmap.require_writable_async",
         new_callable=AsyncMock,
-        create=True,
     ) as mock_require_writable:
         await gridmap_handlers.gridmap_list_library_items(runtime, path="/Main/Terrain")
 

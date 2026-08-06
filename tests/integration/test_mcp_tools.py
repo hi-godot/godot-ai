@@ -7149,6 +7149,50 @@ class TestGridmapAndCsgManageRollups:
         assert result.data["item"] == 3
         assert result.data["undoable"] is True
 
+    async def test_gridmap_manage_set_item_preserves_envelope_readiness(self, mcp_stack):
+        """An explicit envelope-level readiness in the plugin response must
+        survive the server pipeline (per-envelope self-heal may not clobber
+        it), for the new gridmap commands.
+        """
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "gridmap_set_item"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "map_x": 1,
+                    "map_y": 2,
+                    "map_z": 0,
+                    "item": 3,
+                    "orientation": 0,
+                    "undoable": True,
+                },
+                readiness="importing",
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "gridmap_manage",
+            {
+                "op": "gridmap_set_item",
+                "params": {
+                    "path": "/Main/Terrain",
+                    "item": 3,
+                    "map_x": 1,
+                    "map_y": 2,
+                    "map_z": 0,
+                },
+            },
+        )
+        await task
+
+        assert result.data["item"] == 3
+
+        sessions = await client.call_tool("session_manage", {"op": "list"})
+        assert sessions.data["sessions"][0]["readiness"] == "importing"
+
     async def test_gridmap_manage_list_library_items_dispatches_plugin_command(self, mcp_stack):
         client, plugin = mcp_stack
 

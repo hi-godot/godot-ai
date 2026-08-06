@@ -10,7 +10,7 @@ from godot_ai.tools._meta_tool import register_manage_tool
 _DESCRIPTION = """\
 CSG authoring (create boolean shapes, set their operation).
 
-Create CSG shapes (box, sphere, cylinder, torus, prism) under a Node3D
+Create CSG shapes (box, sphere, cylinder, torus, polygon) under a Node3D
 parent in the currently edited scene and set their boolean operation
 (union / intersection / subtraction) so geometry like holes, caves and
 tunnels can be carved directly in the editor. All write ops are undoable
@@ -22,7 +22,7 @@ node_set_property / material_manage after creation.
 Ops:
   • csg_create(parent_path, name="", shape="box", operation="union")
         Create a CSG shape under a Node3D parent (empty parent_path = scene
-        root). shape: box | sphere | cylinder | torus | prism.
+        root). shape: box | sphere | cylinder | torus | polygon.
         operation: union | intersection | subtraction.
         Returns: {path, name, shape, operation}
 

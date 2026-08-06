@@ -61,20 +61,21 @@ func fill(params: Dictionary) -> Dictionary:
 	if cell_count > MAX_FILL_CELLS:
 		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Region too large: %d cells exceeds max %d" % [cell_count, MAX_FILL_CELLS])
-	var cells: Array[Vector3i] = []
 	var snapshot: Array[Dictionary] = []
 	for x in range(rx, rx + rw):
 		for y in range(ry, ry + rh):
 			for z in range(rz, rz + rd):
 				var pos := Vector3i(x, y, z)
-				cells.append(pos)
 				snapshot.append({"pos": pos, "state": _capture_cell_state(node, pos)})
 	_undo_redo.create_action("MCP: GridMap fill %dx%dx%d" % [rw, rh, rd])
-	for pos in cells:
-		_undo_redo.add_do_method(node, "set_cell_item", pos, item, orientation)
+	## First callback targets the node so the action lands in the scene undo
+	## history (first-target routing); _apply_fill batches the rest of the
+	## region into a single history entry instead of one per cell.
+	_undo_redo.add_do_method(node, "set_cell_item", snapshot[0].pos, item, orientation)
+	_undo_redo.add_do_method(self, "_apply_fill", node, snapshot, item, orientation)
 	_undo_redo.add_undo_method(self, "_restore_rect_snapshot", node, snapshot)
 	_undo_redo.commit_action()
-	return {"data": {"cells_filled": cells.size(),
+	return {"data": {"cells_filled": snapshot.size(),
 		"rect": {"x": rx, "y": ry, "z": rz, "w": rw, "h": rh, "d": rd}, "undoable": true}}
 
 
@@ -85,6 +86,11 @@ func clear_layer(params: Dictionary) -> Dictionary:
 	var gm := _resolve_gridmap(params)
 	if gm.has("error"): return gm
 	var node: GridMap = gm.node
+	var used := node.get_used_cells()
+	if used.size() > MAX_FILL_CELLS:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+			"GridMap has %d cells, exceeds max %d for undoable clear"
+			% [used.size(), MAX_FILL_CELLS])
 	var snapshot := _capture_used_cells_snapshot(node)
 	_undo_redo.create_action("MCP: GridMap clear")
 	_undo_redo.add_do_method(node, "clear")
@@ -165,6 +171,13 @@ func _restore_cells_snapshot(node: GridMap, snapshot: Array[Dictionary]) -> void
 	node.clear()
 	for entry in snapshot:
 		_restore_cell_state(node, entry.pos, entry.state)
+
+
+## Batched do-method for fill: one undo-history entry applies the whole
+## region instead of one entry per cell.
+func _apply_fill(node: GridMap, snapshot: Array[Dictionary], item: int, orientation: int) -> void:
+	for entry in snapshot:
+		node.set_cell_item(entry.pos, item, orientation)
 
 
 func _restore_rect_snapshot(node: GridMap, snapshot: Array[Dictionary]) -> void:

@@ -20,6 +20,10 @@ func suite_setup(ctx: Dictionary) -> void:
 
 func teardown() -> void:
 	_cleanup_runtime_artifacts()
+	## Committed undoable actions accumulate in the shared editor history;
+	## drop them so later undo calls never roll back unrelated suites.
+	if _undo_redo != null:
+		_undo_redo.clear_history()
 
 
 func suite_teardown() -> void:
@@ -88,6 +92,63 @@ func test_csg_create_sphere_with_subtraction() -> void:
 	_created_nodes.append(node)
 	assert_true(node is CSGSphere3D, "created node should be a CSGSphere3D")
 	assert_eq((node as CSGShape3D).operation, CSGShape3D.OPERATION_SUBTRACTION)
+
+
+func test_csg_create_defaults_name_to_shape_class() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene open")
+		return
+
+	var result := _csg_handler.create({"parent_path": _root_path()})
+	assert_has_key(result, "data")
+	assert_eq(result.data.name, "CSGBox3D", "omitted name should fall back to the shape class")
+
+	var node := _find_child_by_name(scene_root, "CSGBox3D")
+	_created_nodes.append(node)
+	assert_true(node is CSGBox3D)
+
+
+func test_csg_create_torus_and_polygon_shapes() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene open")
+		return
+
+	var torus := _csg_handler.create({"parent_path": _root_path(), "name": "Ring", "shape": "torus"})
+	assert_has_key(torus, "data")
+	assert_eq(torus.data.shape, "torus")
+	var torus_node := _find_child_by_name(scene_root, "Ring")
+	_created_nodes.append(torus_node)
+	assert_true(torus_node is CSGTorus3D, "created node should be a CSGTorus3D")
+
+	var polygon := _csg_handler.create({"parent_path": _root_path(), "name": "Slab", "shape": "polygon"})
+	assert_has_key(polygon, "data")
+	assert_eq(polygon.data.shape, "polygon")
+	var polygon_node := _find_child_by_name(scene_root, "Slab")
+	_created_nodes.append(polygon_node)
+	assert_true(polygon_node is CSGPolygon3D, "created node should be a CSGPolygon3D")
+
+
+func test_csg_create_intersection_operation() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene open")
+		return
+
+	var result := _csg_handler.create({
+		"parent_path": _root_path(),
+		"name": "Overlap",
+		"shape": "cylinder",
+		"operation": "intersection",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.operation, "intersection")
+
+	var node := _find_child_by_name(scene_root, "Overlap")
+	_created_nodes.append(node)
+	assert_true(node is CSGCylinder3D)
+	assert_eq((node as CSGShape3D).operation, CSGShape3D.OPERATION_INTERSECTION)
 
 
 func test_csg_create_is_undoable() -> void:

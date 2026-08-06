@@ -20,6 +20,10 @@ func suite_setup(ctx: Dictionary) -> void:
 
 func teardown() -> void:
 	_cleanup_runtime_artifacts()
+	## Committed undoable actions accumulate in the shared editor history;
+	## drop them so later undo calls never roll back unrelated suites.
+	if _undo_redo != null:
+		_undo_redo.clear_history()
 
 
 func suite_teardown() -> void:
@@ -104,11 +108,13 @@ func test_gridmap_erase_with_negative_item() -> void:
 		"path": path, "item": 1, "map_x": 0, "map_y": 0, "map_z": 0,
 	})
 	assert_has_key(placed, "data")
+	assert_eq(placed.data.item, 1)
 
 	var erased := _gridmap_handler.set_item({
 		"path": path, "item": -1, "map_x": 0, "map_y": 0, "map_z": 0,
 	})
 	assert_has_key(erased, "data")
+	assert_eq(erased.data.item, -1)
 
 	var after := _gridmap_handler.get_used_cells({"path": path})
 	assert_eq(after.data.count, 0)
@@ -128,7 +134,9 @@ func test_gridmap_fill_undo_preserves_outside_cells() -> void:
 		"path": path, "item": 1, "map_x": 10, "map_y": 10, "map_z": 10,
 	})
 	assert_has_key(seed_a, "data")
+	assert_eq(seed_a.data.item, 1)
 	assert_has_key(seed_b, "data")
+	assert_eq(seed_b.data.item, 1)
 
 	var fill := _gridmap_handler.fill({
 		"path": path,
@@ -171,6 +179,28 @@ func test_gridmap_fill_rejects_large_region() -> void:
 	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
 
 
+func test_gridmap_fill_accepts_exactly_max_fill_cells() -> void:
+	var ctx := _create_gridmap("_McpGridMapFillExact")
+	if ctx.is_empty():
+		skip("No scene open")
+		return
+	var path: String = ctx.path
+
+	## 16×16×16 = 4096 = MAX_FILL_CELLS — the boundary must succeed, only
+	## strictly larger regions are rejected.
+	var result := _gridmap_handler.fill({
+		"path": path,
+		"item": 1,
+		"rect_x": 0, "rect_y": 0, "rect_z": 0,
+		"rect_w": 16, "rect_h": 16, "rect_d": 16,
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.cells_filled, 4096)
+
+	var cells := _gridmap_handler.get_used_cells({"path": path})
+	assert_eq(cells.data.count, 4096)
+
+
 func test_gridmap_clear_is_undoable() -> void:
 	var ctx := _create_gridmap("_McpGridMapClear")
 	if ctx.is_empty():
@@ -185,7 +215,9 @@ func test_gridmap_clear_is_undoable() -> void:
 		"path": path, "item": 2, "map_x": 1, "map_y": 1, "map_z": 1,
 	})
 	assert_has_key(a, "data")
+	assert_eq(a.data.item, 1)
 	assert_has_key(b, "data")
+	assert_eq(b.data.item, 2)
 
 	var cleared := _gridmap_handler.clear_layer({"path": path})
 	assert_has_key(cleared, "data")
@@ -201,6 +233,36 @@ func test_gridmap_clear_is_undoable() -> void:
 	assert_eq(restored.data.count, 2)
 
 
+func test_gridmap_clear_rejects_oversized_map() -> void:
+	var ctx := _create_gridmap("_McpGridMapClearBig")
+	if ctx.is_empty():
+		skip("No scene open")
+		return
+	var path: String = ctx.path
+
+	## Fill exactly MAX_FILL_CELLS (16×16×16), then nudge past the limit
+	## with a handful of individual cells so clear_layer must refuse.
+	var fill := _gridmap_handler.fill({
+		"path": path,
+		"item": 1,
+		"rect_x": 0, "rect_y": 0, "rect_z": 0,
+		"rect_w": 16, "rect_h": 16, "rect_d": 16,
+	})
+	assert_has_key(fill, "data")
+	assert_eq(fill.data.cells_filled, 4096)
+	for i in 8:
+		var extra := _gridmap_handler.set_item({
+			"path": path, "item": 1, "map_x": i, "map_y": 40, "map_z": 40,
+		})
+		assert_has_key(extra, "data")
+
+	var result := _gridmap_handler.clear_layer({"path": path})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	## The oversized map is untouched — nothing was cleared.
+	var cells := _gridmap_handler.get_used_cells({"path": path})
+	assert_eq(cells.data.count, 4104)
+
+
 func test_gridmap_list_library_items() -> void:
 	var ctx := _create_gridmap("_McpGridMapLibrary", true)
 	if ctx.is_empty():
@@ -213,7 +275,8 @@ func test_gridmap_list_library_items() -> void:
 	assert_eq(result.data.count, 2)
 	assert_eq(result.data.items[0].item, 0)
 	assert_eq(result.data.items[0].name, "Wall")
-	assert_true(str(result.data.items[0].mesh).begins_with("res://") or result.data.items[0].mesh.is_empty())
+	## Runtime BoxMesh.new() has no resource_path — the exact value is "".
+	assert_eq(result.data.items[0].mesh, "")
 	assert_eq(result.data.items[1].item, 5)
 	assert_eq(result.data.items[1].name, "Pillar")
 

@@ -17,7 +17,7 @@ const SHAPES := {
 	"sphere": "CSGSphere3D",
 	"cylinder": "CSGCylinder3D",
 	"torus": "CSGTorus3D",
-	"prism": "CSGPrism3D",
+	"polygon": "CSGPolygon3D",
 }
 
 const OPERATIONS := {
@@ -68,7 +68,10 @@ func create(params: Dictionary) -> Dictionary:
 	var node: CSGShape3D = ClassDB.instantiate(shape_class)
 	if node == null:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s" % shape_class)
-	node.name = params.get("name", shape_class)
+	var node_name: String = params.get("name", "")
+	if node_name.is_empty():
+		node_name = shape_class
+	node.name = node_name
 	node.operation = OPERATIONS[operation]
 
 	_undo_redo.create_action("MCP: Create %s" % node.name)
