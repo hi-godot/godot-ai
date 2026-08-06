@@ -7099,6 +7099,156 @@ class TestTilemapAndTilesetManageRollups:
         assert result.data["original_width"] == 512
 
 
+class TestGridmapAndCsgManageRollups:
+    async def test_gridmap_manage_set_item_dispatches_plugin_command(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "gridmap_set_item"
+            assert cmd["params"] == {
+                "path": "/Main/Terrain",
+                "item": 3,
+                "map_x": 1,
+                "map_y": 2,
+                "map_z": 0,
+                "orientation": 9,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "map_x": 1,
+                    "map_y": 2,
+                    "map_z": 0,
+                    "item": 3,
+                    "orientation": 9,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "gridmap_manage",
+            {
+                "op": "gridmap_set_item",
+                "params": {
+                    "path": "/Main/Terrain",
+                    "item": 3,
+                    "map_x": 1,
+                    "map_y": 2,
+                    "map_z": 0,
+                    "orientation": 9,
+                },
+            },
+        )
+        await task
+
+        assert result.data["map_x"] == 1
+        assert result.data["map_y"] == 2
+        assert result.data["map_z"] == 0
+        assert result.data["item"] == 3
+        assert result.data["undoable"] is True
+
+    async def test_gridmap_manage_list_library_items_dispatches_plugin_command(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "gridmap_list_library_items"
+            assert cmd["params"] == {"path": "/Main/Terrain"}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "library": "res://libraries/ruins.tres",
+                    "items": [{"item": 0, "name": "Wall", "mesh": "res://meshes/wall.glb"}],
+                    "count": 1,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "gridmap_manage",
+            {
+                "op": "gridmap_list_library_items",
+                "params": {"path": "/Main/Terrain"},
+            },
+        )
+        await task
+
+        assert result.data["count"] == 1
+        assert result.data["items"][0]["item"] == 0
+
+    async def test_csg_manage_create_dispatches_plugin_command(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "csg_create"
+            assert cmd["params"] == {
+                "parent_path": "/Main",
+                "name": "Cave",
+                "shape": "sphere",
+                "operation": "subtraction",
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Cave",
+                    "name": "Cave",
+                    "shape": "sphere",
+                    "operation": "subtraction",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "csg_manage",
+            {
+                "op": "csg_create",
+                "params": {
+                    "parent_path": "/Main",
+                    "name": "Cave",
+                    "shape": "sphere",
+                    "operation": "subtraction",
+                },
+            },
+        )
+        await task
+
+        assert result.data["path"] == "/Main/Cave"
+        assert result.data["operation"] == "subtraction"
+        assert result.data["undoable"] is True
+
+    async def test_csg_manage_set_operation_dispatches_plugin_command(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "csg_set_operation"
+            assert cmd["params"] == {
+                "path": "/Main/Cave",
+                "operation": "union",
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {"operation": "union", "undoable": True},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "csg_manage",
+            {
+                "op": "csg_set_operation",
+                "params": {"path": "/Main/Cave", "operation": "union"},
+            },
+        )
+        await task
+
+        assert result.data["operation"] == "union"
+        assert result.data["undoable"] is True
+
+
 # ---------------------------------------------------------------------------
 # *_manage op typo "Did you mean" hint (#211)
 # ---------------------------------------------------------------------------

@@ -218,6 +218,8 @@ Calls take the form:
 | `client_manage` | `status`, `configure`, `remove` |
 | `tilemap_manage` | `tilemap_set_cell`, `tilemap_set_cells_rect`, `tilemap_clear`, `tilemap_get_cells` |
 | `tileset_manage` | `tileset_get_atlas_tiles`, `tileset_get_atlas_image` |
+| `gridmap_manage` | `gridmap_set_item`, `gridmap_fill`, `gridmap_clear`, `gridmap_get_used_cells`, `gridmap_list_library_items` |
+| `csg_manage` | `csg_create`, `csg_set_operation` |
 
 `filesystem_manage.reimport` is intended for imported assets such as textures,
 models, and audio. Godot scripts (`.gd`) are not imported resources: a successful

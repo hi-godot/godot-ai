@@ -51,6 +51,8 @@ DOMAINS: tuple[str, ...] = (
     "audio",
     "tilemap",
     "tileset",
+    "gridmap",
+    "csg",
 )
 
 ## Domains that contain at least one core (always-loaded) tool. When the

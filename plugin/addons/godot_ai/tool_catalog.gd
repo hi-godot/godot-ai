@@ -60,6 +60,8 @@ const DOMAINS := [
 	{"id": "theme", "label": "theme", "count": 1, "tools": ["theme_manage"]},
 	{"id": "tilemap", "label": "tilemap", "count": 1, "tools": ["tilemap_manage"]},
 	{"id": "tileset", "label": "tileset", "count": 1, "tools": ["tileset_manage"]},
+	{"id": "gridmap", "label": "gridmap", "count": 1, "tools": ["gridmap_manage"]},
+	{"id": "csg", "label": "csg", "count": 1, "tools": ["csg_manage"]},
 	{"id": "ui", "label": "ui", "count": 1, "tools": ["ui_manage"]},
 ]
 

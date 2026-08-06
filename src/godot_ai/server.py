@@ -73,10 +73,12 @@ from godot_ai.tools.autoload import register_autoload_tools
 from godot_ai.tools.batch import register_batch_tools
 from godot_ai.tools.camera import register_camera_tools
 from godot_ai.tools.client import register_client_tools
+from godot_ai.tools.csg import register_csg_tools
 from godot_ai.tools.domains import CORE_BEARING_DOMAINS, CORE_TOOLS
 from godot_ai.tools.editor import register_editor_tools
 from godot_ai.tools.filesystem import register_filesystem_tools
 from godot_ai.tools.game import register_game_tools
+from godot_ai.tools.gridmap import register_gridmap_tools
 from godot_ai.tools.input_map import register_input_map_tools
 from godot_ai.tools.material import register_material_tools
 from godot_ai.tools.node import register_node_tools
@@ -264,6 +266,12 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
         "                   tilemap_clear, tilemap_get_cells\n",
     ),
     ("tileset", "  tileset_manage   tileset_get_atlas_tiles, tileset_get_atlas_image\n"),
+    (
+        "gridmap",
+        "  gridmap_manage   gridmap_set_item, gridmap_fill, gridmap_clear,\n"
+        "                   gridmap_get_used_cells, gridmap_list_library_items\n",
+    ),
+    ("csg", "  csg_manage       csg_create, csg_set_operation\n"),
 )
 
 ## Resources are registered unconditionally (they never count against tool
@@ -766,6 +774,10 @@ def create_server(
         register_tilemap_tools(mcp)
     if "tileset" not in exclude:
         register_tileset_tools(mcp)
+    if "gridmap" not in exclude:
+        register_gridmap_tools(mcp)
+    if "csg" not in exclude:
+        register_csg_tools(mcp)
 
     register_session_resources(mcp)
     register_scene_resources(mcp)
