@@ -200,6 +200,12 @@ func test_gridmap_fill_accepts_exactly_max_fill_cells() -> void:
 	var cells := _gridmap_handler.get_used_cells({"path": path})
 	assert_eq(cells.data.count, 4096)
 
+	## Read the stored items back from the engine, not just the count: the
+	## boundary fill must store item 1 at the region corners.
+	var gm: GridMap = ctx.node
+	assert_eq(gm.get_cell_item(Vector3i(0, 0, 0)), 1)
+	assert_eq(gm.get_cell_item(Vector3i(15, 15, 15)), 1)
+
 
 func test_gridmap_clear_is_undoable() -> void:
 	var ctx := _create_gridmap("_McpGridMapClear")
@@ -261,6 +267,12 @@ func test_gridmap_clear_rejects_oversized_map() -> void:
 	## The oversized map is untouched — nothing was cleared.
 	var cells := _gridmap_handler.get_used_cells({"path": path})
 	assert_eq(cells.data.count, 4104)
+
+	## Read the stored items back from the engine: a filled cell and an
+	## added cell must still carry item 1 after the rejected clear.
+	var gm: GridMap = ctx.node
+	assert_eq(gm.get_cell_item(Vector3i(0, 0, 0)), 1)
+	assert_eq(gm.get_cell_item(Vector3i(7, 40, 40)), 1)
 
 
 func test_gridmap_list_library_items() -> void:
