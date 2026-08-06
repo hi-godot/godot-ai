@@ -7099,6 +7099,151 @@ class TestTilemapAndTilesetManageRollups:
         assert result.data["original_width"] == 512
 
 
+class TestTerrainManageRollups:
+    async def test_terrain_manage_create_dispatches_plugin_command(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "terrain_create"
+            assert cmd["params"] == {
+                "parent_path": "/Main",
+                "name": "Hills",
+                "size": 64,
+                "cell_size": 3.0,
+                "seed": 42,
+                "noise_type": "ridged",
+                "frequency": 0.02,
+                "octaves": 4,
+                "height_scale": 12.0,
+                "base_height": 1.0,
+                "generate_collision": False,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Hills",
+                    "name": "Hills",
+                    "size": 64,
+                    "vertices": 4096,
+                    "triangles": 7938,
+                    "generate_collision": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "terrain_manage",
+            {
+                "op": "terrain_create",
+                "params": {
+                    "parent_path": "/Main",
+                    "name": "Hills",
+                    "size": 64,
+                    "cell_size": 3.0,
+                    "seed": 42,
+                    "noise_type": "ridged",
+                    "frequency": 0.02,
+                    "octaves": 4,
+                    "height_scale": 12.0,
+                    "base_height": 1.0,
+                    "generate_collision": False,
+                },
+            },
+        )
+        await task
+
+        assert result.data["path"] == "/Main/Hills"
+        assert result.data["vertices"] == 4096
+        assert result.data["undoable"] is True
+
+    async def test_terrain_manage_create_preserves_envelope_readiness(self, mcp_stack):
+        """An explicit envelope-level readiness in the plugin response must
+        survive the server pipeline (per-envelope self-heal may not clobber
+        it), for the new terrain commands.
+        """
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "terrain_create"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Terrain",
+                    "name": "Terrain",
+                    "size": 48,
+                    "vertices": 2304,
+                    "triangles": 4418,
+                    "generate_collision": True,
+                    "undoable": True,
+                },
+                readiness="importing",
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "terrain_manage",
+            {
+                "op": "terrain_create",
+                "params": {"parent_path": "/Main"},
+            },
+        )
+        await task
+
+        assert result.data["name"] == "Terrain"
+
+        sessions = await client.call_tool("session_manage", {"op": "list"})
+        assert sessions.data["sessions"][0]["readiness"] == "importing"
+
+    async def test_terrain_manage_regenerate_dispatches_plugin_command(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "terrain_regenerate"
+            assert cmd["params"] == {
+                "path": "/Main/Hills",
+                "size": 48,
+                "cell_size": 2.0,
+                "seed": 999,
+                "noise_type": "simplex",
+                "frequency": 0.05,
+                "octaves": 3,
+                "height_scale": 20.0,
+                "base_height": 0.0,
+                "generate_collision": True,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Hills",
+                    "vertices": 2304,
+                    "triangles": 4418,
+                    "generate_collision": True,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "terrain_manage",
+            {
+                "op": "terrain_regenerate",
+                "params": {
+                    "path": "/Main/Hills",
+                    "seed": 999,
+                    "height_scale": 20.0,
+                },
+            },
+        )
+        await task
+
+        assert result.data["vertices"] == 2304
+        assert result.data["undoable"] is True
+
+
 # ---------------------------------------------------------------------------
 # *_manage op typo "Did you mean" hint (#211)
 # ---------------------------------------------------------------------------

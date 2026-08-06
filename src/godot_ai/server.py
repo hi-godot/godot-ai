@@ -87,6 +87,7 @@ from godot_ai.tools.scene import register_scene_tools
 from godot_ai.tools.script import register_script_tools
 from godot_ai.tools.session import register_session_tools
 from godot_ai.tools.signal import register_signal_tools
+from godot_ai.tools.terrain import register_terrain_tools
 from godot_ai.tools.testing import register_testing_tools
 from godot_ai.tools.theme import register_theme_tools
 from godot_ai.tools.tilemap import register_tilemap_tools
@@ -264,6 +265,7 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
         "                   tilemap_clear, tilemap_get_cells\n",
     ),
     ("tileset", "  tileset_manage   tileset_get_atlas_tiles, tileset_get_atlas_image\n"),
+    ("terrain", "  terrain_manage   terrain_create, terrain_regenerate\n"),
 )
 
 ## Resources are registered unconditionally (they never count against tool
@@ -766,6 +768,8 @@ def create_server(
         register_tilemap_tools(mcp)
     if "tileset" not in exclude:
         register_tileset_tools(mcp)
+    if "terrain" not in exclude:
+        register_terrain_tools(mcp)
 
     register_session_resources(mcp)
     register_scene_resources(mcp)

@@ -615,7 +615,7 @@ func test_live_dispatcher_materializes_every_lazy_command() -> void:
 		skip("live dispatcher not exposed in ctx (old test_handler fixture)")
 		return
 	var specs: Dictionary = _live_dispatcher._lazy_handler_specs
-	assert_eq(specs.size(), 28, "every plugin handler should be declared lazily")
+	assert_eq(specs.size(), 29, "every plugin handler should be declared lazily")
 	var commands: Array = _live_dispatcher._lazy_commands.keys()
 	assert_true(commands.size() > 100,
 		"expected the full plugin command surface registered lazily, got %d" % commands.size())

@@ -339,6 +339,7 @@ func _enter_tree() -> void:
 	_dispatcher.register_lazy_handler("control_draw_recipe", HANDLERS_DIR + "control_draw_recipe_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("tilemap", HANDLERS_DIR + "tilemap_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("tileset", HANDLERS_DIR + "tileset_handler.gd", [])
+	_dispatcher.register_lazy_handler("terrain", HANDLERS_DIR + "terrain_handler.gd", [undo])
 
 	_dispatcher.register_lazy("get_editor_state", "editor", &"get_editor_state")
 	_dispatcher.register_lazy("get_scene_tree", "scene", &"get_scene_tree")
@@ -475,6 +476,8 @@ func _enter_tree() -> void:
 	_dispatcher.register_lazy("tilemap_get_cells", "tilemap", &"get_used_cells")
 	_dispatcher.register_lazy("tileset_get_atlas_tiles", "tileset", &"get_atlas_tiles")
 	_dispatcher.register_lazy("tileset_get_atlas_image", "tileset", &"get_atlas_image")
+	_dispatcher.register_lazy("terrain_create", "terrain", &"create")
+	_dispatcher.register_lazy("terrain_regenerate", "terrain", &"regenerate")
 
 	_connection.dispatcher = _dispatcher
 	add_child(_connection)
