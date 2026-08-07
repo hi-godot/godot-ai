@@ -86,11 +86,27 @@ def test_store_zip_packs_addons_only(workflow_text: str) -> None:
     )
 
 
+def _step_block(workflow_text: str, step_name: str, next_step_name: str) -> str:
+    # Slice the text of one workflow step so assertions can't be
+    # satisfied by comments or unrelated steps elsewhere in the file.
+    start_marker = f"      - name: {step_name}"
+    end_marker = f"      - name: {next_step_name}"
+    assert start_marker in workflow_text, f"release.yml is missing step {step_name!r}"
+    block = workflow_text.split(start_marker, 1)[1]
+    assert end_marker in block, (
+        f"release.yml is missing step {next_step_name!r} after {step_name!r}"
+    )
+    return block.split(end_marker, 1)[0]
+
+
 def test_store_zip_verifies_inner_license_present(workflow_text: str) -> None:
     # Dropping the root license is only valid while the canonical copy
     # ships inside the addon folder; the workflow must keep verifying
-    # that premise at build time.
-    assert "addons/godot_ai/LICENSE" in workflow_text, (
+    # that premise at build time. Scoped to the verify step: the build
+    # step's comments also mention the path, so a whole-file substring
+    # match would pass even with the actual check deleted.
+    verify_step = _step_block(workflow_text, "Verify zip structure", "Generate SHA-256 checksum")
+    assert "grep -qx 'addons/godot_ai/LICENSE'" in verify_step, (
         "release.yml must verify addons/godot_ai/LICENSE exists in the "
         "store zip — it is the only license copy in that artifact."
     )
@@ -99,8 +115,11 @@ def test_store_zip_verifies_inner_license_present(workflow_text: str) -> None:
 def test_store_zip_attached_to_release(workflow_text: str) -> None:
     # The store zip is only useful if it ships with the release for the
     # maintainer to upload; building it and forgetting to attach it
-    # would silently revert the store to the multi-top zip.
-    assert workflow_text.count("godot-ai-plugin-store.zip") >= 3, (
-        "release.yml must build, verify, and attach "
-        "godot-ai-plugin-store.zip to the GitHub Release."
+    # would silently revert the store to the multi-top zip. Scoped to
+    # the release step's files list: the name appears many times in the
+    # build/verify steps, so a bare count can't catch a missing entry.
+    release_step = _step_block(workflow_text, "Create GitHub Release", "Post changelog to Discord")
+    assert "\n            godot-ai-plugin-store.zip\n" in release_step, (
+        "release.yml must attach godot-ai-plugin-store.zip to the "
+        "GitHub Release."
     )
