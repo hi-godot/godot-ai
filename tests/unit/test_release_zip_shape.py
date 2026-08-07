@@ -1,7 +1,10 @@
 """Pin the release-zip contract enforced by `.github/workflows/release.yml`.
 
-This test exists to keep two invariants from regressing in CI's
-`build-plugin-zip` step, both motivated by issue #450:
+CI's `build-plugin-zip` step produces two artifacts with deliberately
+different shapes; this test keeps both from regressing:
+
+`godot-ai-plugin.zip` (classic AssetLib entry, self-updater, manual
+downloads) — invariants motivated by issue #450:
 
   1. The zip's second top-level entry is `godot-ai-LICENSE.txt`, not a
      bare `LICENSE`. A bare `LICENSE` lands at `res://LICENSE` on
@@ -9,13 +12,22 @@ This test exists to keep two invariants from regressing in CI's
      LICENSE file.
 
   2. The multi-top-level shape (`addons/` + a sibling file) is preserved.
-     A single-top-folder zip lets AssetLib's "Ignore asset root" toggle
-     strip the `addons/` prefix and drop `godot_ai/` outside the
-     plugin path.
+     On Godot <= 4.6 a single-top-folder zip lets AssetLib's autoskipped
+     "Ignore asset root" toggle strip the `addons/` prefix and drop
+     `godot_ai/` outside the plugin path. (Godot 4.7+ special-cases a
+     bare `addons/` root; the sibling can be retired — and the two
+     artifacts re-unified — once the supported floor reaches 4.7.)
+
+`godot-ai-plugin-store.zip` (Godot Asset Store upload) — Asset Store
+review asked that the zip carry no root-level license duplicate, so it
+ships `addons/` only, with the canonical license at
+`addons/godot_ai/LICENSE`. Its consumers never hit the <= 4.6 autoskip
+default (browser download + manual Import, or the 4.7+ in-editor store).
 
 We assert against the workflow YAML text directly so a casual edit (e.g.
-"clean up the rename, just call it LICENSE again") trips this test before
-shipping a release that would clobber user files.
+"clean up the rename, just call it LICENSE again" or "add the license
+back to the store zip root") trips this test before shipping a release
+that would clobber user files or bounce off store review.
 """
 
 from __future__ import annotations
@@ -59,4 +71,36 @@ def test_release_zip_preserves_multi_top_shape(workflow_text: str) -> None:
     assert "addons/ godot-ai-LICENSE.txt" in workflow_text, (
         "release.yml must keep the multi-top-level zip shape so "
         "AssetLib doesn't strip the `addons/` prefix on install."
+    )
+
+
+def test_store_zip_packs_addons_only(workflow_text: str) -> None:
+    # The Asset Store upload must contain `addons/` and nothing else at
+    # the top level — store review rejects a root-level license
+    # duplicate, and any other root sibling is clutter installed into
+    # the user's project.
+    assert "../godot-ai-plugin-store.zip addons/\n" in workflow_text, (
+        "release.yml must build godot-ai-plugin-store.zip from `addons/` "
+        "alone — no root-level license or other sibling entries (Asset "
+        "Store review feedback)."
+    )
+
+
+def test_store_zip_verifies_inner_license_present(workflow_text: str) -> None:
+    # Dropping the root license is only valid while the canonical copy
+    # ships inside the addon folder; the workflow must keep verifying
+    # that premise at build time.
+    assert "addons/godot_ai/LICENSE" in workflow_text, (
+        "release.yml must verify addons/godot_ai/LICENSE exists in the "
+        "store zip — it is the only license copy in that artifact."
+    )
+
+
+def test_store_zip_attached_to_release(workflow_text: str) -> None:
+    # The store zip is only useful if it ships with the release for the
+    # maintainer to upload; building it and forgetting to attach it
+    # would silently revert the store to the multi-top zip.
+    assert workflow_text.count("godot-ai-plugin-store.zip") >= 3, (
+        "release.yml must build, verify, and attach "
+        "godot-ai-plugin-store.zip to the GitHub Release."
     )

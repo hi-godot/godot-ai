@@ -11,7 +11,12 @@ Use the GitHub Actions workflow to cut a release:
 ```bash
 gh workflow run bump-and-release.yml -f bump=patch   # or minor / major
 ```
-This bumps `plugin.cfg` + `pyproject.toml`, commits, tags, and pushes. The `release.yml` workflow triggers on the tag and builds a `godot-ai-plugin.zip` attached to the GitHub Release.
+This bumps `plugin.cfg` + `pyproject.toml`, commits, tags, and pushes. The `release.yml` workflow triggers on the tag and attaches two plugin zips to the GitHub Release:
+
+- **`godot-ai-plugin.zip`** — the artifact the classic Asset Library entry ([asset 5050](https://godotengine.org/asset-library/asset/5050)) downloads directly, the self-updater installs, and the README links for manual install. Ships `addons/` plus a `godot-ai-LICENSE.txt` sibling at the zip root: the multi-top shape stops the AssetLib-tab installer on Godot ≤ 4.6 from auto-stripping a lone `addons/` root (which would install to `res://godot_ai/`), and the namespaced filename avoids clobbering the user's project `LICENSE` (issue #450). Godot 4.7+ no longer strips a bare `addons/` root, so the sibling — and the split below — can be retired once the supported floor reaches 4.7.
+- **`godot-ai-plugin-store.zip`** — the upload for the [new Godot Asset Store](https://store.godotengine.org/asset/dlight/godot-ai/) listing. `addons/` only, no root license: store review requires no license duplicate at the zip root since the canonical copy ships at `addons/godot_ai/LICENSE`. Store installs never hit the ≤ 4.6 autoskip default (browser download + manual Import, or the 4.7+ in-editor store), so the single-top shape is safe there. No `.sha256`/`.sig` sidecars — the self-updater never consumes this artifact. **Use this zip, not `godot-ai-plugin.zip`, when updating the Asset Store listing.**
+
+The shape contract for both zips is pinned by `tests/unit/test_release_zip_shape.py` and re-verified against the built artifacts in the workflow's "Verify zip structure" step.
 
 ## Self-update
 

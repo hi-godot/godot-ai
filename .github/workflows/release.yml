@@ -86,23 +86,39 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Build plugin ZIP
-        # Ship `addons/` + `godot-ai-LICENSE.txt` at the zip's top level. The
-        # multi-top shape matters: Godot's AssetLib install dialog defaults
-        # "Ignore asset root" to CHECKED whenever it detects a single top-
-        # level folder, which would strip `addons/` and drop `godot_ai/` at
-        # res:// — outside the plugin path and outside the addons-warning
-        # exclusion. With two top-level entries, Godot doesn't offer the
-        # strip option, so files land as-archived at res://addons/godot_ai/
-        # regardless of any user-toggled preference.
+      - name: Build plugin ZIPs
+        # Two artifacts from the same staging tree:
         #
-        # The second top-level entry is namespaced (`godot-ai-LICENSE.txt`)
-        # rather than a bare `LICENSE`. A bare `LICENSE` lands at
-        # `res://LICENSE` on install and silently overwrites the user's own
-        # project LICENSE file — issue #450. The namespaced name preserves
-        # the AssetLib trick without clobbering anything in a typical project.
-        # The canonical addon-scoped license still ships at
-        # `addons/godot_ai/LICENSE` for in-tree consumers.
+        # 1. `godot-ai-plugin.zip` — classic Asset Library entry (asset
+        #    5050 points straight at this release asset), self-updater, and
+        #    manual GitHub downloads. Ships `addons/` +
+        #    `godot-ai-LICENSE.txt` at the zip's top level. The multi-top
+        #    shape matters: the AssetLib-tab flow calls the installer with
+        #    autoskip enabled, and on Godot <= 4.6 that defaults "Ignore
+        #    Asset Root" to CHECKED for any single-top-folder zip — which
+        #    would strip `addons/` and drop `godot_ai/` at res:// — outside
+        #    the plugin path and outside the addons-warning exclusion. With
+        #    two top-level entries there is no root to strip, so files land
+        #    as-archived at res://addons/godot_ai/. Godot 4.7 added an
+        #    installer special case that refuses to strip a bare `addons/`
+        #    root by default (editor_asset_installer.cpp), so this trick —
+        #    and the whole two-artifact split — can be retired once the
+        #    supported floor reaches 4.7.
+        #
+        #    The sibling entry is namespaced (`godot-ai-LICENSE.txt`)
+        #    rather than a bare `LICENSE`. A bare `LICENSE` lands at
+        #    `res://LICENSE` on install and silently overwrites the user's
+        #    own project LICENSE file — issue #450.
+        #
+        # 2. `godot-ai-plugin-store.zip` — the upload for the new Godot
+        #    Asset Store. `addons/` only, no root-level license: store
+        #    review asked that the zip not duplicate the license at its
+        #    root since the canonical copy already ships at
+        #    `addons/godot_ai/LICENSE`. The single-top shape is safe for
+        #    every store consumer: browser downloads install via the
+        #    editor's manual Import... path (autoskip is off there on all
+        #    versions), and in-editor store browsing exists only on 4.7+,
+        #    which has the `addons/`-root guard.
         run: |
           mkdir -p staging/addons
           cp -r plugin/addons/godot_ai staging/addons/
@@ -114,6 +130,7 @@ jobs:
           # the extract. Stripping directory entries lets those installs
           # successfully self-update to a fixed runner.
           zip -D -r ../godot-ai-plugin.zip addons/ godot-ai-LICENSE.txt
+          zip -D -r ../godot-ai-plugin-store.zip addons/
 
       - name: Verify zip structure
         run: |
@@ -160,6 +177,38 @@ jobs:
             exit 1
           fi
           echo "Zip structure verified: addons/godot_ai/... + godot-ai-LICENSE.txt (multi-top)"
+
+          # --- Store zip (Asset Store upload) ---
+          # Exactly one top-level entry: `addons`. No root-level license —
+          # Asset Store review feedback: the license must not be duplicated
+          # at the zip root because it already ships inside the addon
+          # folder. Verify that inner copy is actually present before
+          # trusting its absence at the root.
+          store_tops=$(unzip -Z1 godot-ai-plugin-store.zip | awk -F/ '{print $1}' | sort -u | tr '\n' ' ' | sed 's/ $//')
+          if [ "$store_tops" != "addons" ]; then
+            echo "ERROR: expected sole top-level entry 'addons' in store zip, got:" >&2
+            echo "  $store_tops" >&2
+            exit 1
+          fi
+          if ! unzip -Z1 godot-ai-plugin-store.zip | grep -qx 'addons/godot_ai/plugin.cfg'; then
+            echo "ERROR: plugin.cfg not at expected path addons/godot_ai/plugin.cfg in store zip" >&2
+            exit 1
+          fi
+          if ! unzip -Z1 godot-ai-plugin-store.zip | grep -qx 'addons/godot_ai/LICENSE'; then
+            echo "ERROR: store zip is missing addons/godot_ai/LICENSE — the root license was dropped on the premise that this copy exists" >&2
+            exit 1
+          fi
+          if unzip -Z1 godot-ai-plugin-store.zip | grep -qE '/$'; then
+            echo "ERROR: store zip contains directory entries (forgot \`zip -D\`?):" >&2
+            unzip -Z1 godot-ai-plugin-store.zip | grep -E '/$' >&2
+            exit 1
+          fi
+          if unzip -Z1 godot-ai-plugin-store.zip | grep -q ' 2\.'; then
+            echo "ERROR: store zip contains iCloud-duplicate files (pattern ' 2.'):" >&2
+            unzip -Z1 godot-ai-plugin-store.zip | grep ' 2\.' >&2
+            exit 1
+          fi
+          echo "Store zip structure verified: addons/godot_ai/... only (license inside addon folder)"
 
       - name: Generate SHA-256 checksum
         # Sidecar checksum for the plugin's self-updater to verify the
@@ -222,10 +271,16 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
+          # godot-ai-plugin-store.zip ships without .sha256/.sig sidecars
+          # on purpose: only the self-updater verifies sidecars, and it
+          # downloads godot-ai-plugin.zip exclusively. The store zip exists
+          # solely to be uploaded to the Godot Asset Store, whose review
+          # asked for no root-level license duplicate.
           files: |
             godot-ai-plugin.zip
             godot-ai-plugin.zip.sha256
             godot-ai-plugin.zip.sha256.sig
+            godot-ai-plugin-store.zip
           generate_release_notes: true
 
       - name: Post changelog to Discord
