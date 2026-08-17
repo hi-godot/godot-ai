@@ -232,7 +232,7 @@ static func _build_dsh(
 	if client.command_shape != McpClient.CommandShape.NONE:
 		var launch_error := McpDshStrategy.command_launch_error(client, launch)
 		if launch_error.is_empty():
-			var command_entry := McpDshStrategy.build_entry(client, server_name, null, launch)
+			var command_entry := McpDshStrategy.build_entry(client, server_name, server_url, null, launch)
 			for row_line in McpDshStrategy.render_insert_row(entry_id_value, command_entry):
 				lines.append(String(row_line))
 		else:
