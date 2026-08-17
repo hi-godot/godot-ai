@@ -124,7 +124,7 @@ func test_every_client_has_required_fields() -> void:
 	for client in McpClientRegistry.all():
 		assert_true(not client.id.is_empty(), "Client missing id: %s" % client)
 		assert_true(not client.display_name.is_empty(), "%s missing display_name" % client.id)
-		assert_contains(["json", "toml", "yaml", "cli"], client.config_type, "%s has unexpected config_type %s" % [client.id, client.config_type])
+		assert_contains(["json", "toml", "yaml", "cli", "dsh"], client.config_type, "%s has unexpected config_type %s" % [client.id, client.config_type])
 		if client.config_type == "json":
 			assert_gt(client.server_key_path.size(), 0, "%s missing server_key_path" % client.id)
 		elif client.config_type == "yaml":
@@ -132,6 +132,15 @@ func test_every_client_has_required_fields() -> void:
 			## and writes the url under entry_url_field — both must be set.
 			assert_gt(client.server_key_path.size(), 0, "%s yaml client missing server_key_path" % client.id)
 			assert_true(not client.entry_url_field.is_empty(), "%s yaml client missing entry_url_field" % client.id)
+		elif client.config_type == "dsh":
+			## The DeepSeek Harness strategy writes a loader `insert` row into
+			## the home patch file the path_template resolves to; it only
+			## supports the stdio attach bridge, so the transport pin is
+			## load-bearing.
+			assert_gt(client.path_template.size(), 0, "%s dsh client missing path_template" % client.id)
+			assert_eq(client.command_shape, McpClient.CommandShape.FLAT, "%s dsh client must use the FLAT command shape" % client.id)
+			assert_eq(String(client.command_transport_key), "transport", "%s dsh client must pin the transport key" % client.id)
+			assert_eq(String(client.command_transport_value), "stdio", "%s dsh client must pin transport to stdio" % client.id)
 		elif client.config_type == "cli":
 			assert_gt(client.cli_names.size(), 0, "%s cli client missing cli_names" % client.id)
 			assert_gt(client.cli_register_template.size(), 0, "%s cli client missing cli_register_template" % client.id)
@@ -3428,6 +3437,269 @@ func test_hermes_yaml_command_args_round_trip_through_flow_parser() -> void:
 	assert_eq(status, McpClient.Status.CONFIGURED, "hazardous-char args must round-trip to CONFIGURED")
 	assert_eq(drift_status, McpClient.Status.CONFIGURED_MISMATCH, "a changed port must read as drift")
 	DirAccess.remove_absolute(path)
+
+
+# ----- DeepSeek Harness (dsh) strategy -------------------------------------
+
+
+func test_deepseek_harness_client_descriptor() -> void:
+	## Pin the descriptor contract: the home patch layer, the DSH_HOME
+	## relocation, the loader insert shape, and the stdio transport pin.
+	var client := McpClientRegistry.get_by_id("deepseek_harness")
+	assert_true(client != null, "deepseek_harness must remain registered")
+	assert_eq(client.display_name, "DeepSeek Harness")
+	assert_eq(client.config_type, "dsh")
+	assert_eq(
+		String(client.path_template.get("unix", "")),
+		"~/.dsh/cordis.patch.yml",
+		"DSH config path must be the home patch layer ~/.dsh/cordis.patch.yml"
+	)
+	assert_eq(
+		String(client.path_template.get("windows", "")),
+		"~/.dsh/cordis.patch.yml",
+		"DSH home patch path must be the same on Windows (the loader resolves $DSH_HOME)"
+	)
+	assert_eq(client.config_home_env, "DSH_HOME", "DSH_HOME must relocate the home patch")
+	assert_eq(client.config_home_env_subpath, "cordis.patch.yml")
+	assert_eq(client.command_shape, McpClient.CommandShape.FLAT)
+	assert_eq(String(client.command_transport_key), "transport")
+	assert_eq(String(client.command_transport_value), "stdio")
+	assert_true(client.command_supports_url_fallback, "DSH accepts a streamable-http URL entry")
+	assert_true(
+		McpDshStrategy.entry_id("godot-ai") == "mcp-godot-ai",
+		"the loader entry id must be the mcp- prefixed server name"
+	)
+
+
+func test_dsh_strategy_round_trip() -> void:
+	## End-to-end: a configure write must produce an `insert` row the dsh
+	## loader composes (verified live via `dsh --profile web --dump-config`),
+	## read back as CONFIGURED, and remove back to NOT_CONFIGURED.
+	var c := _make_test_dsh_client(_dsh_scratch_path("godot_ai_dsh_rt.yaml"))
+	var path := String(c.path_template["unix"])
+	_remove_if_exists(path)
+	var launch := _test_attach_launch()
+	var res := McpDshStrategy.configure(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch)
+	assert_eq(res.get("status", ""), "ok", "configure must report ok: %s" % res.get("message", ""))
+	var status := McpDshStrategy.check_status(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch)
+	assert_eq(status, McpClient.Status.CONFIGURED, "written insert row must read back CONFIGURED")
+
+	var reread := _read_text(path)
+	assert_contains(reread, "- insert:", "a new server needs an insert row, not a plain row")
+	assert_contains(reread, "    - id: mcp-godot-ai", "nested entry must carry the loader id")
+	assert_contains(reread, "name: '@deepseek-ai/dsh-mcp-client'")
+	assert_contains(reread, "serverName: godot-ai")
+	assert_contains(reread, "transport: stdio")
+	assert_contains(reread, "command: C:/Python313/pythonw.exe")
+	assert_contains(reread, "args: [\"-c\", ")
+	assert_false(reread.contains("url:"), "our entry must be command-mode, not url-mode")
+
+	var rem := McpDshStrategy.remove(c, "godot-ai")
+	assert_eq(rem.get("status", ""), "ok", "remove must report ok: %s" % rem.get("message", ""))
+	assert_eq(
+		McpDshStrategy.check_status(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch),
+		McpClient.Status.NOT_CONFIGURED,
+		"removed entry must read back NOT_CONFIGURED"
+	)
+	DirAccess.remove_absolute(path)
+
+
+func test_dsh_strategy_preserves_other_rows() -> void:
+	## The home patch file may already carry the user's own insert rows,
+	## override rows, and comments. Configure/remove must touch only our
+	## entry's lines and leave everything else byte-for-byte intact.
+	var path := _dsh_scratch_path("godot_ai_dsh_preserve.yaml")
+	_remove_if_exists(path)
+	var seed := (
+		"# my header comment\n"
+		+ "- insert:\n"
+		+ "    - id: mcp-github\n"
+		+ "      name: '@deepseek-ai/dsh-mcp-client'\n"
+		+ "      config:\n"
+		+ "        serverName: github\n"
+		+ "        transport: stdio\n"
+		+ "        command: npx\n"
+		+ "        args: ['-y', '@modelcontextprotocol/server-github']\n"
+		+ "- id: session-telemetry-otel\n"
+		+ "  disabled: true\n"
+	)
+	_write_text(path, seed)
+	var c := _make_test_dsh_client(path)
+	var launch := _test_attach_launch()
+	var res := McpDshStrategy.configure(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch)
+	assert_eq(res.get("status", ""), "ok", "configure must report ok: %s" % res.get("message", ""))
+	var reread := _read_text(path)
+	assert_contains(reread, "# my header comment")
+	assert_contains(reread, "mcp-github")
+	assert_contains(reread, "- id: session-telemetry-otel")
+	assert_contains(reread, "disabled: true")
+	assert_contains(reread, "mcp-godot-ai")
+
+	var rem := McpDshStrategy.remove(c, "godot-ai")
+	assert_eq(rem.get("status", ""), "ok", "remove must report ok: %s" % rem.get("message", ""))
+	reread = _read_text(path)
+	assert_contains(reread, "mcp-github", "other insert rows must survive remove")
+	assert_contains(reread, "session-telemetry-otel", "override rows must survive remove")
+	assert_false(reread.contains("mcp-godot-ai"), "our entry must be gone after remove")
+	DirAccess.remove_absolute(path)
+
+
+func test_dsh_strategy_reconfigure_preserves_user_fields() -> void:
+	## A user-edited toolCallTimeoutMs inside our entry's config must survive
+	## a reconfigure (the strategy only forces transport/launch fields).
+	var path := _dsh_scratch_path("godot_ai_dsh_userfields.yaml")
+	_remove_if_exists(path)
+	var c := _make_test_dsh_client(path)
+	var launch := _test_attach_launch()
+	var res := McpDshStrategy.configure(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch)
+	assert_eq(res.get("status", ""), "ok", "configure must report ok: %s" % res.get("message", ""))
+	var text := _read_text(path)
+	text = text.replace(
+		"serverName: godot-ai",
+		"serverName: godot-ai\n        toolCallTimeoutMs: 30000"
+	)
+	_write_text(path, text)
+	res = McpDshStrategy.configure(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch)
+	assert_eq(res.get("status", ""), "ok", "reconfigure must report ok: %s" % res.get("message", ""))
+	var reread := _read_text(path)
+	assert_contains(reread, "toolCallTimeoutMs: 30000", "user field must survive reconfigure")
+	assert_eq(
+		McpDshStrategy.check_status(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch),
+		McpClient.Status.CONFIGURED,
+		"user-mutable fields must not read as drift"
+	)
+	DirAccess.remove_absolute(path)
+
+
+func test_dsh_strategy_drift_and_legacy_url() -> void:
+	## A changed port or a legacy `url` key inside the entry must read as
+	## CONFIGURED_MISMATCH — the same drift contract the JSON/TOML/YAML
+	## strategies use.
+	var path := _dsh_scratch_path("godot_ai_dsh_drift.yaml")
+	_remove_if_exists(path)
+	var c := _make_test_dsh_client(path)
+	var launch := _test_attach_launch()
+	var res := McpDshStrategy.configure(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch)
+	assert_eq(res.get("status", ""), "ok", "configure must report ok: %s" % res.get("message", ""))
+	assert_eq(
+		McpDshStrategy.check_status(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch),
+		McpClient.Status.CONFIGURED
+	)
+
+	var drifted := launch.duplicate(true)
+	var port_index: int = drifted["args"].find("--port")
+	assert_true(port_index >= 0 and port_index + 1 < drifted["args"].size(),
+		"launch args must contain --port <value>")
+	drifted["args"][port_index + 1] = "9999"
+	assert_eq(
+		McpDshStrategy.check_status(c, "godot-ai", "http://127.0.0.1:8000/mcp", drifted),
+		McpClient.Status.CONFIGURED_MISMATCH,
+		"a changed port must read as drift"
+	)
+
+	var text := _read_text(path)
+	text = text.replace("transport: stdio", "transport: stdio\n        url: \"http://old/mcp\"")
+	_write_text(path, text)
+	assert_eq(
+		McpDshStrategy.check_status(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch),
+		McpClient.Status.CONFIGURED_MISMATCH,
+		"a legacy url key next to command fields must read as drift"
+	)
+	DirAccess.remove_absolute(path)
+
+
+func test_dsh_plain_row_is_inert_and_migrated() -> void:
+	## A plain `- id: mcp-godot-ai` row only overrides an EXISTING bundle id;
+	## for a new id the loader skips it with a warning, so status must read
+	## NOT_CONFIGURED and Configure must migrate the row to the insert form.
+	var path := _dsh_scratch_path("godot_ai_dsh_plain.yaml")
+	_remove_if_exists(path)
+	var seed := (
+		"- id: mcp-godot-ai\n"
+		+ "  name: '@deepseek-ai/dsh-mcp-client'\n"
+		+ "  config:\n"
+		+ "    serverName: godot-ai\n"
+		+ "    transport: stdio\n"
+		+ "    command: old\n"
+		+ "    args: [\"old\"]\n"
+	)
+	_write_text(path, seed)
+	var c := _make_test_dsh_client(path)
+	var launch := _test_attach_launch()
+	assert_eq(
+		McpDshStrategy.check_status(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch),
+		McpClient.Status.NOT_CONFIGURED,
+		"a plain row for a new id is inert"
+	)
+	var res := McpDshStrategy.configure(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch)
+	assert_eq(res.get("status", ""), "ok", "configure must migrate the plain row: %s" % res.get("message", ""))
+	var reread := _read_text(path)
+	assert_contains(reread, "- insert:", "configure must rewrite the plain row as an insert row")
+	assert_contains(reread, "    - id: mcp-godot-ai", "nested entry must carry the loader id")
+	assert_false(reread.contains("command: old"), "stale plain-row launch must be gone")
+	assert_eq(
+		McpDshStrategy.check_status(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch),
+		McpClient.Status.CONFIGURED
+	)
+	DirAccess.remove_absolute(path)
+
+
+func test_dsh_strategy_preserves_non_row_top_level_lines() -> void:
+	## A stray top-level scalar (invalid for the loader, but not ours to fix)
+	## must survive configure byte-for-byte — the strategy only ever replaces
+	## its own entry blocks and appends its own row.
+	var path := _dsh_scratch_path("godot_ai_dsh_stray.yaml")
+	_remove_if_exists(path)
+	_write_text(path, "not-a-patch-list: true\n")
+	var c := _make_test_dsh_client(path)
+	var launch := _test_attach_launch()
+	var res := McpDshStrategy.configure(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch)
+	assert_eq(res.get("status", ""), "ok", "configure must report ok: %s" % res.get("message", ""))
+	var reread := _read_text(path)
+	assert_contains(reread, "not-a-patch-list: true", "unrelated top-level content must survive")
+	assert_contains(reread, "mcp-godot-ai")
+	DirAccess.remove_absolute(path)
+
+
+func test_dsh_manual_command_shows_insert_row() -> void:
+	## The manual-instruction text must render the exact insert row Configure
+	## would write, plus the URL-mode fallback.
+	var path := _dsh_scratch_path("godot_ai_dsh_manual.yaml")
+	var c := _make_test_dsh_client(path)
+	var manual := McpManualCommand.build(
+		c, "godot-ai", "http://127.0.0.1:8000/mcp", path, _test_attach_launch()
+	)
+	assert_contains(manual, "- insert:")
+	assert_contains(manual, "- id: mcp-godot-ai")
+	assert_contains(manual, "name: '@deepseek-ai/dsh-mcp-client'")
+	assert_contains(manual, "serverName: godot-ai")
+	assert_contains(manual, "transport: stdio")
+	assert_contains(manual, "Advanced fallback", "URL fallback text must be present")
+	assert_contains(manual, "streamable-http")
+
+
+func _make_test_dsh_client(path: String) -> McpClient:
+	var c := McpClient.new()
+	c.id = "dsh_test"
+	c.display_name = "DSH Test"
+	c.config_type = "dsh"
+	c.path_template = {"darwin": path, "windows": path, "linux": path, "unix": path}
+	c.command_shape = McpClient.CommandShape.FLAT
+	c.command_transport_key = "transport"
+	c.command_transport_value = "stdio"
+	c.command_legacy_keys = PackedStringArray(["url"])
+	c.command_user_fields = PackedStringArray(["env", "toolCallTimeoutMs", "reconnect"])
+	c.command_supports_url_fallback = true
+	return c
+
+
+func _dsh_scratch_path(filename: String) -> String:
+	var dir := OS.get_environment("TMPDIR")
+	if dir.is_empty():
+		dir = OS.get_environment("TEMP")
+	if dir.is_empty():
+		dir = "/tmp"
+	return dir.path_join(filename)
 
 
 func test_opencode_client_uses_home_config_on_windows() -> void:

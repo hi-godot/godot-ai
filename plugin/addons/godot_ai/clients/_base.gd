@@ -50,7 +50,7 @@ static func configured_message(client: McpClient, server_url: String) -> String:
 
 var id: String = ""                              ## stable key, e.g. "cursor"
 var display_name: String = ""                    ## "Cursor"
-var config_type: String = ""                     ## "json" | "toml" | "yaml" | "cli"
+var config_type: String = ""                     ## "json" | "toml" | "yaml" | "cli" | "dsh"
 
 # JSON / TOML clients ------------------------------------------------------
 ## {"darwin": "~/...", "windows": "$APPDATA/...", "linux": "$XDG_CONFIG_HOME/..."}

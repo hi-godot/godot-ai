@@ -1,4 +1,4 @@
-# Client configuration (22 MCP clients)
+# Client configuration (23 MCP clients)
 
 Part of the Godot AI agent guide — see [AGENTS.md](../AGENTS.md) for the always-loaded rules.
 
@@ -7,7 +7,7 @@ The registry + strategy system that auto-configures MCP clients.
 
 ## Client configuration
 
-The plugin auto-configures 22 MCP clients via a registry + strategy system in
+The plugin auto-configures 23 MCP clients via a registry + strategy system in
 `plugin/addons/godot_ai/clients/`. Read that directory for the mechanics; two
 rules are not visible in the code:
 
@@ -18,9 +18,14 @@ rules are not visible in the code:
   expressed declaratively on the descriptor (`entry_url_field`, `entry_extra_fields`,
   `command_shape`, `command_initial_fields`, `command_legacy_keys`,
   `command_supports_url_fallback`, `config_path_candidates`). Adding a client
-  means exactly two things: write
+  with a shape one of the existing strategies already writes means exactly two
+  things: write
   `clients/<name>.gd` extending `McpClient`, then append one `preload` to
-  `_registry.gd`. No edits to the dock, the facade, or the strategies.
+  `_registry.gd`. No edits to the dock, the facade, or the strategies. A client
+  whose config language is a genuinely new shape gets a small dedicated
+  strategy instead (DeepSeek Harness' loader `insert` list is the current
+  example: `_dsh_strategy.gd`, dispatched on `config_type "dsh"`), plus the
+  matching branch in `client_configurator.gd` and `_manual_command.gd`.
 
 MCP tools `client_configure`, `client_remove`, and `client_status` expose this to
 AI clients.
@@ -53,6 +58,18 @@ Per-strategy command rendering (`CommandShape` docs in `_base.gd`):
   (Codex, Grok).
 - **YAML** — FLAT with flow-style `args` (Hermes); `url`/`headers` are the
   legacy keys there because Hermes infers transport from key presence.
+- **DSH** — DeepSeek Harness (dsh) has no `mcp` CLI verb. MCP servers register
+  as `@deepseek-ai/dsh-mcp-client` plugin entries in the HOME patch layer
+  `$DSH_HOME/cordis.patch.yml` (applies over every profile, web GUI included).
+  New servers must be added as `insert` rows — a plain `- id:` row only
+  overrides an existing bundle id and is skipped with a warning (verified
+  live against dsh 0.1.0-rc.6 via `dsh --profile web --dump-config`). The
+  strategy writes one dedicated insert row and preserves every other row
+  byte-for-byte (other insert rows, overrides, comments, `!!js` expressions).
+  The entry's launch nests under `config`
+  (`serverName`/`transport`/`command`/`args`); `serverName` is the
+  model-facing tool namespace. dsh's patch parser rejects a non-array file at
+  boot, so Remove deletes an all-blank patch file instead of writing it back.
 - **CLI** — `cli_register_template` uses the whole-element tokens
   `{command}` / `{args...}` (Claude Code:
   `mcp add --scope user {name} -- {command} {args...}`). Status for
@@ -65,7 +82,11 @@ migrator drops http-typed command entries); Zed's untagged entry enum makes
 removing `url`/`headers`/`oauth` load-bearing; VS Code's stdio schema is
 `additionalProperties: false`; gemini-cli/qwen configs are one-of
 `command`|`url`|`httpUrl`, so both URL keys are legacy; kimi_code also
-removes its legacy `transport` key and honors `$KIMI_CODE_HOME`.
+removes its legacy `transport` key and honors `$KIMI_CODE_HOME`; DeepSeek
+Harness writes the loader `insert` row into `$DSH_HOME/cordis.patch.yml`
+(the home patch layer, not a per-profile file), requires `transport` next to
+command fields, rejects `url` next to them, and honors `$DSH_HOME` for the
+whole home root.
 
 Command migrations deep-copy existing JSON entries before replacing pinned
 launch fields. `command_user_fields` documents known client-owned settings but

@@ -21,6 +21,7 @@ const ClientRegistry := preload("res://addons/godot_ai/clients/_registry.gd")
 const JsonStrategy := preload("res://addons/godot_ai/clients/_json_strategy.gd")
 const TomlStrategy := preload("res://addons/godot_ai/clients/_toml_strategy.gd")
 const YamlStrategy := preload("res://addons/godot_ai/clients/_yaml_strategy.gd")
+const DshStrategy := preload("res://addons/godot_ai/clients/_dsh_strategy.gd")
 const CliStrategy := preload("res://addons/godot_ai/clients/_cli_strategy.gd")
 const ManualCommand := preload("res://addons/godot_ai/clients/_manual_command.gd")
 const CliFinder := preload("res://addons/godot_ai/clients/_cli_finder.gd")
@@ -472,6 +473,7 @@ static func warm_status_worker_bytecode() -> void:
 	var any_client := ClientRegistry.get_by_id(String(ids[0]))
 	if any_client != null:
 		JsonStrategy.verify_entry(any_client, {}, "")
+		DshStrategy.command_launch_error(any_client, {})
 	TomlStrategy.format_body(PackedStringArray(), "")
 	CliStrategy.format_args(PackedStringArray(), "", "")
 	# Compile the aggregate worker entry point on main as well. After a plugin
@@ -579,6 +581,8 @@ static func _dispatch_configure(client: Client, url: String, launch: Dictionary 
 			return TomlStrategy.configure(client, SERVER_NAME, url, launch)
 		"yaml":
 			return YamlStrategy.configure(client, SERVER_NAME, url, launch)
+		"dsh":
+			return DshStrategy.configure(client, SERVER_NAME, url, launch)
 		"cli":
 			# #463: fall back to writing the config file directly when the CLI
 			# binary isn't on PATH (Claude Code as a VS Code/Cursor extension).
@@ -596,6 +600,8 @@ static func _dispatch_remove(client: Client) -> Dictionary:
 			return TomlStrategy.remove(client, SERVER_NAME)
 		"yaml":
 			return YamlStrategy.remove(client, SERVER_NAME)
+		"dsh":
+			return DshStrategy.remove(client, SERVER_NAME)
 		"cli":
 			# #463: mirror the configure fallback so Remove also works without
 			# the CLI binary — otherwise a fallback-written entry is unremovable.
@@ -640,6 +646,11 @@ static func _dispatch_check_status_with_cli_path_details(
 			if client.command_shape != Client.CommandShape.NONE:
 				yaml_launch = _resolved_or_discovered_launch(client, resolved_launch, launch_context)
 			return YamlStrategy.check_status_details(client, SERVER_NAME, url, yaml_launch)
+		"dsh":
+			var dsh_launch := {}
+			if client.command_shape != Client.CommandShape.NONE:
+				dsh_launch = _resolved_or_discovered_launch(client, resolved_launch, launch_context)
+			return DshStrategy.check_status_details(client, SERVER_NAME, url, dsh_launch)
 		"cli":
 			# Command-shape CLI clients register through their CLI, but the entry
 			# lands in the same file the JSON fallback reads (`claude mcp add
