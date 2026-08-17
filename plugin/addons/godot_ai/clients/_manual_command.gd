@@ -31,6 +31,8 @@ static func build(
 			return _build_toml(client, server_name, server_url, resolved_path, launch)
 		"yaml":
 			return _build_yaml(client, server_name, server_url, resolved_path, launch)
+		"dsh":
+			return _build_dsh(client, server_name, server_url, resolved_path, launch)
 	return ""
 
 
@@ -211,6 +213,40 @@ static func _build_yaml(
 	]
 	for k in entry:
 		lines.append("    %s: %s" % [k, str(entry[k])])
+	return "\n".join(lines)
+
+
+## DeepSeek Harness: the user pastes a loader `insert` row into the home
+## patch layer (`$DSH_HOME/cordis.patch.yml`). Auto-configure writes exactly
+## these lines, so the manual text matches the file Configure would produce
+## byte-for-byte.
+static func _build_dsh(
+	client: McpClient,
+	server_name: String,
+	server_url: String,
+	resolved_path: String,
+	launch: Dictionary = {},
+) -> String:
+	var lines: Array[String] = ["Edit %s and add this loader entry (an `insert` row; a plain `- id:` row only overrides an existing bundle id and would be skipped):" % resolved_path]
+	var entry_id_value := McpDshStrategy.entry_id(server_name)
+	if client.command_shape != McpClient.CommandShape.NONE:
+		var launch_error := McpDshStrategy.command_launch_error(client, launch)
+		if launch_error.is_empty():
+			var command_entry := McpDshStrategy.build_entry(client, server_name, null, launch)
+			for row_line in McpDshStrategy.render_insert_row(entry_id_value, command_entry):
+				lines.append(String(row_line))
+		else:
+			lines.append("Attach launch command unavailable: %s" % launch_error)
+		if client.command_supports_url_fallback:
+			lines.append("")
+			lines.append("Advanced fallback — replace the command/args block above with this URL-mode entry; never configure both shapes together. URL mode depends on the harness' own reconnect behavior. If the server is down when the harness starts, restarting the harness may be required.")
+			var fallback_entry := McpDshStrategy.build_url_entry(client, server_name, server_url)
+			for row_line in McpDshStrategy.render_insert_row(entry_id_value, fallback_entry):
+				lines.append(String(row_line))
+		return "\n".join(lines)
+	var url_entry := McpDshStrategy.build_url_entry(client, server_name, server_url)
+	for row_line in McpDshStrategy.render_insert_row(entry_id_value, url_entry):
+		lines.append(String(row_line))
 	return "\n".join(lines)
 
 
