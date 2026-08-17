@@ -92,7 +92,7 @@ static func configure(
 		## Pass the parsed config through so user-mutable fields (env,
 		## toolCallTimeoutMs, reconnect) survive a reconfigure.
 		existing_config = _extract_config(lines, found)
-	var new_entry := build_entry(client, server_name, existing_config, launch)
+	var new_entry := build_entry(client, server_name, server_url, existing_config, launch)
 	var rendered := render_nested_entry(entry_id(server_name), new_entry)
 	var out := ""
 	if found.is_empty():
@@ -194,6 +194,7 @@ static func remove(client: McpClient, server_name: String) -> Dictionary:
 static func build_entry(
 	client: McpClient,
 	server_name: String,
+	server_url: String,
 	existing: Variant = null,
 	launch: Dictionary = {},
 ) -> Dictionary:
