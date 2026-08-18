@@ -152,7 +152,16 @@ static func check_status_details(
 			"status": McpClient.Status.ERROR,
 			"error_msg": "Cannot read %s: %s" % [path, read["error"]],
 		}
-	var lines := _split_lines(String(read["data"]))
+	var text := String(read["data"])
+	if not _is_patch_sequence(text):
+		## A top-level mapping/scalar is not a dsh patch list: nothing in it
+		## can be "configured", and a nested `- id:` inside a mapping must
+		## not read as ours (#867 review).
+		return {
+			"status": McpClient.Status.ERROR,
+			"error_msg": "%s is not a top-level YAML list of loader entries; fix or remove the file." % path,
+		}
+	var lines := _split_lines(text)
 	var found := _find_entry_block(lines, entry_id(server_name), true)
 	if found.is_empty():
 		## A plain row for our id is inert (the loader skips unknown ids), so
@@ -183,7 +192,15 @@ static func remove(client: McpClient, server_name: String) -> Dictionary:
 	var read := _read(path)
 	if not read["ok"]:
 		return {"status": "error", "message": "Refusing to rewrite %s: %s." % [path, read["error"]]}
-	var lines := _split_lines(String(read["data"]))
+	var text := String(read["data"])
+	if not _is_patch_sequence(text):
+		## Same fail-closed contract as configure (#867 review): never modify
+		## a file that dsh cannot load as a patch list.
+		return {
+			"status": "error",
+			"message": "Refusing to rewrite %s: it is not a top-level YAML list of loader entries. Fix or remove the file, then re-run Remove." % path,
+		}
+	var lines := _split_lines(text)
 	var found := _find_entry_block(lines, entry_id(server_name), true)
 	if found.is_empty():
 		found = _find_entry_block(lines, entry_id(server_name), false)
@@ -436,9 +453,11 @@ static func _extract_config(lines: PackedStringArray, block: Dictionary) -> Dict
 
 
 ## Parse sibling `key: value` lines at a fixed minimum indent into a
-## Dictionary. Nested blocks (a key with no inline value) recurse. Flow
-## arrays parse back into Arrays via JSON. Quoted and plain scalars strip
-## like `_coerce_scalar` in the YAML strategy.
+## Dictionary. Nested blocks (a key with no inline value) recurse and their
+## child lines are consumed by the recursion — the parent index advances past
+## them so they are never re-parsed as top-level config fields (#867 review).
+## Flow arrays parse back into Arrays via JSON. Quoted and plain scalars
+## strip like `_coerce_scalar` in the YAML strategy.
 static func _parse_block_lines(lines: PackedStringArray, start: int, end: int, min_indent: int) -> Dictionary:
 	var out: Dictionary = {}
 	var i := start
@@ -458,8 +477,15 @@ static func _parse_block_lines(lines: PackedStringArray, start: int, end: int, m
 		var key := stripped.substr(0, colon).strip_edges()
 		var value := stripped.substr(colon + 1).strip_edges()
 		if value.is_empty():
-			out[key] = _parse_block_lines(lines, i + 1, end, indent)
-			i += 1
+			## Nested block: find where its children end (a line at or above
+			## the block key's indent), parse only that span, and jump past it.
+			var child_end := i + 1
+			while child_end < end:
+				if not _is_blank_or_comment(lines[child_end]) and _indent_of(lines[child_end]) <= indent:
+					break
+				child_end += 1
+			out[key] = _parse_block_lines(lines, i + 1, child_end, indent)
+			i = child_end
 		else:
 			out[key] = _coerce_scalar(value)
 			i += 1
@@ -501,7 +527,7 @@ static func _coerce_scalar(s: String) -> Variant:
 ## Append a new `- insert:` row at the end of the file. A blank separator
 ## line keeps rows visually distinct; the file always ends with a newline.
 static func _append_row(lines: PackedStringArray, nested_lines: PackedStringArray) -> String:
-	var parts: Array = []
+	var parts: Array[String] = []
 	for l in lines:
 		parts.append(l)
 	## Collapse trailing blank lines so the appended row is not orphaned
@@ -524,7 +550,7 @@ static func _append_row(lines: PackedStringArray, nested_lines: PackedStringArra
 static func _replace_lines(lines: PackedStringArray, block: Dictionary, nested_lines: PackedStringArray) -> String:
 	var start := int(block.get("start", -1))
 	var end := int(block.get("end", -1))
-	var parts: Array = []
+	var parts: Array[String] = []
 	for i in range(lines.size()):
 		if i == start:
 			## A nested block keeps the surrounding `- insert:` row, so only
@@ -550,7 +576,7 @@ static func _remove_lines(lines: PackedStringArray, block: Dictionary) -> String
 	var start := int(block.get("start", -1))
 	var end := int(block.get("end", -1))
 	var nested := _indent_of(lines[start]) > 0
-	var parts: Array = []
+	var parts: Array[String] = []
 	if nested:
 		## Find the enclosing `- insert:` row header: the nearest preceding
 		## 0-indent `- ` line.
@@ -601,7 +627,7 @@ static func _remove_lines(lines: PackedStringArray, block: Dictionary) -> String
 
 
 ## Remove trailing blank lines left behind by a removal.
-static func _trim_trailing_blanks(parts: Array) -> Array:
+static func _trim_trailing_blanks(parts: Array[String]) -> Array[String]:
 	while parts.size() > 0 and String(parts[parts.size() - 1]).strip_edges().is_empty():
 		parts.remove_at(parts.size() - 1)
 	return parts
@@ -623,16 +649,27 @@ static func _is_blank_or_comment_only(text: String) -> bool:
 ## a top-level mapping or scalar — would make dsh fail boot, so Configure
 ## refuses to write into it instead of producing a broken file (#867 review).
 ## Only 0-indent content lines define the top-level structure: they must all
-## be `- ` rows. Deeper lines are row children and are not inspected.
+## be `- ` rows. Deeper lines are row children and are not inspected. `[]` is
+## valid only as the COMPLETE document — appending rows after the empty flow
+## sequence would produce malformed YAML, so a mixed `[]` + rows file fails
+## the check too.
 static func _is_patch_sequence(text: String) -> bool:
 	if text.strip_edges().is_empty():
 		return true
+	var saw_brackets := false
+	var content_count := 0
 	for line in text.split("\n"):
 		var stripped := line.strip_edges()
-		if stripped.is_empty() or stripped.begins_with("#") or stripped == "[]":
+		if stripped.is_empty() or stripped.begins_with("#"):
+			continue
+		content_count += 1
+		if stripped == "[]":
+			saw_brackets = true
 			continue
 		if _indent_of(line) == 0 and not stripped.begins_with("- "):
 			return false
+	if saw_brackets and content_count > 1:
+		return false
 	return true
 
 
