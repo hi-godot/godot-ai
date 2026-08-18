@@ -48,8 +48,6 @@ const ENTRY_ID_PREFIX := "mcp-"
 const PLUGIN_NAME := "@deepseek-ai/dsh-mcp-client"
 ## 2-space indentation steps, matching the shipped profile patch files.
 const ENTRY_INDENT := 4
-const FIELD_INDENT := 6
-const NESTED_FIELD_INDENT := 8
 
 
 static func entry_id(server_name: String) -> String:
@@ -77,9 +75,21 @@ static func configure(
 	var read := _read(path)
 	if not read["ok"]:
 		return {"status": "error", "message": "Refusing to overwrite %s: %s. Fix or move the file, then re-run Configure." % [path, read["error"]]}
+	## Fail closed on content that is not a loader patch list: dsh's patch
+	## parser rejects a non-array file at boot, so appending our row to a
+	## top-level mapping would hand the user a broken file (#867 review).
+	## `[]` is a valid empty sequence and is normalized away before writing.
+	var text := String(read["data"])
+	if text.strip_edges() == "[]":
+		text = ""
+	if not _is_patch_sequence(text):
+		return {
+			"status": "error",
+			"message": "Refusing to overwrite %s: it is not a top-level YAML list of loader entries. Fix or remove the file, then re-run Configure." % path,
+		}
 
 	var existing_config: Variant = null
-	var lines := _split_lines(String(read["data"]))
+	var lines := _split_lines(text)
 	var found := _find_entry_block(lines, entry_id(server_name), true)
 	if found.is_empty():
 		var plain := _find_entry_block(lines, entry_id(server_name), false)
@@ -93,7 +103,16 @@ static func configure(
 		## toolCallTimeoutMs, reconnect) survive a reconfigure.
 		existing_config = _extract_config(lines, found)
 	var new_entry := build_entry(client, server_name, server_url, existing_config, launch)
-	var rendered := render_nested_entry(entry_id(server_name), new_entry)
+	## Nested replacement must keep the sequence's existing header indent —
+	## items of one block sequence share indentation, so a hand-written
+	## 2-space file re-emitted at 4 spaces would no longer parse (#867
+	## review). Fresh rows and plain-row migrations keep the 4-space style.
+	var base_indent := ENTRY_INDENT
+	if not found.is_empty():
+		var header_indent := int(found.get("indent", 0))
+		if header_indent > 0:
+			base_indent = header_indent
+	var rendered := render_nested_entry(entry_id(server_name), new_entry, base_indent)
 	var out := ""
 	if found.is_empty():
 		out = _append_row(lines, rendered)
@@ -212,21 +231,23 @@ static func build_entry(
 			entry.erase(String(key))
 		return entry
 	if client.command_shape == McpClient.CommandShape.NONE:
-		entry["transport"] = "streamable-http"
-		entry[client.entry_url_field] = server_url
-		return entry
+		## Single URL-mode source of truth (#867 review): build_entry's URL
+		## branch delegates to build_url_entry so the two can never drift.
+		return build_url_entry(client, server_name, server_url, existing)
 	return {}
 
 
-## URL-mode sibling for the manual-instruction fallback text. DeepSeek
-## Harness' mcp-client bridge accepts `transport: streamable-http` with a
-## `url`, so the entry keeps the same `serverName` namespace with an HTTP
-## transport instead of the stdio attach bridge.
-static func build_url_entry(client: McpClient, server_name: String, server_url: String) -> Dictionary:
-	var entry: Dictionary = {
-		"serverName": server_name,
-		"transport": "streamable-http",
-	}
+## URL-mode sibling for the manual-instruction fallback text and the
+## build_entry URL branch. DeepSeek Harness' mcp-client bridge accepts
+## `transport: streamable-http` with a `url`, so the entry keeps the same
+## `serverName` namespace with an HTTP transport instead of the stdio attach
+## bridge. Existing user state survives via the deep copy.
+static func build_url_entry(
+	client: McpClient, server_name: String, server_url: String, existing: Variant = null
+) -> Dictionary:
+	var entry: Dictionary = (existing as Dictionary).duplicate(true) if existing is Dictionary else {}
+	entry["serverName"] = server_name
+	entry["transport"] = "streamable-http"
 	if not client.entry_url_field.is_empty():
 		entry[client.entry_url_field] = server_url
 	return entry
@@ -289,15 +310,18 @@ static func render_insert_row(entry_id_value: String, config: Dictionary) -> Pac
 
 
 ## Render one nested loader entry (the `- id:` block inside an `insert`
-## list) at the 4-space base indent used by the shipped patch files.
-static func render_nested_entry(entry_id_value: String, config: Dictionary) -> PackedStringArray:
+## list). `base_indent` defaults to the 4-space style used by the shipped
+## patch files; a nested replacement reuses the indent the existing entry was
+## found at so the block sequence keeps a single indentation (#867 review).
+static func render_nested_entry(
+	entry_id_value: String, config: Dictionary, base_indent: int = ENTRY_INDENT
+) -> PackedStringArray:
 	var lines: PackedStringArray = []
-	var base := _indent_str(ENTRY_INDENT)
-	lines.append("%s- id: %s" % [base, entry_id_value])
-	lines.append("%sname: '%s'" % [_indent_str(FIELD_INDENT), PLUGIN_NAME])
-	lines.append("%sconfig:" % _indent_str(FIELD_INDENT))
+	lines.append("%s- id: %s" % [_indent_str(base_indent), entry_id_value])
+	lines.append("%sname: '%s'" % [_indent_str(base_indent + 2), PLUGIN_NAME])
+	lines.append("%sconfig:" % _indent_str(base_indent + 2))
 	for key in config:
-		lines.append_array(_emit_field(String(key), config[key], NESTED_FIELD_INDENT))
+		lines.append_array(_emit_field(String(key), config[key], base_indent + 4))
 	return lines
 
 
@@ -337,10 +361,13 @@ static func _split_lines(text: String) -> PackedStringArray:
 ##                         list (indent > 0), plus its indented children.
 ##   require_nested=false — a plain top-level `- id: <entry_id>` row (indent
 ##                         0), plus its indented children.
-## Returns {"start": int, "end": int} (end exclusive) or {} when absent. The
-## header indent is detected dynamically so a hand-written file using
-## non-2-space indentation is still found; children are lines deeper than
-## the header (blanks/comments between fields are skipped, not consumed).
+## Returns {"start": int, "end": int, "indent": int} (end exclusive) or {}
+## when absent. The header indent is detected dynamically so a hand-written
+## file using non-2-space indentation is still found; children are lines
+## deeper than the header. `end` stops right AFTER the last content line:
+## trailing blank and comment lines between our entry and the next sibling
+## belong to the file, not to our block, so `_replace_lines` / `_remove_lines`
+## (which splice [start, end)) never delete them (#867 review).
 static func _find_entry_block(lines: PackedStringArray, entry_id_value: String, require_nested: bool) -> Dictionary:
 	for i in range(lines.size()):
 		var indent := _indent_of(lines[i])
@@ -352,6 +379,7 @@ static func _find_entry_block(lines: PackedStringArray, entry_id_value: String, 
 		if parsed.is_empty() or parsed.get("id") != entry_id_value:
 			continue
 		var j := i + 1
+		var last_content := i
 		while j < lines.size():
 			var l := lines[j]
 			if _is_blank_or_comment(l):
@@ -359,8 +387,9 @@ static func _find_entry_block(lines: PackedStringArray, entry_id_value: String, 
 				continue
 			if _indent_of(l) <= indent:
 				break
+			last_content = j
 			j += 1
-		return {"start": i, "end": j}
+		return {"start": i, "end": last_content + 1, "indent": indent}
 	return {}
 
 
@@ -546,13 +575,18 @@ static func _remove_lines(lines: PackedStringArray, block: Dictionary) -> String
 				has_other_entries = true
 				break
 		if has_other_entries or row_start < 0:
+			## Only our block goes; sibling entries and any trailing
+			## comments in the same row survive.
 			for i in range(lines.size()):
 				if i >= start and i < end:
 					continue
 				parts.append(lines[i])
 		else:
+			## The row held only our entry: drop the `- insert:` header and
+			## our block, but keep trailing blank/comment lines — a comment
+			## the user wrote above the next row must survive (#867 review).
 			for i in range(lines.size()):
-				if i >= row_start and i < row_end:
+				if i >= row_start and i < end:
 					continue
 				parts.append(lines[i])
 			parts = _trim_trailing_blanks(parts)
@@ -580,6 +614,24 @@ static func _is_blank_or_comment_only(text: String) -> bool:
 	for line in text.split("\n"):
 		var stripped := line.strip_edges()
 		if not stripped.is_empty() and not stripped.begins_with("#"):
+			return false
+	return true
+
+
+## True when the text is a valid loader patch list (or empty/comment-only /
+## the empty flow sequence `[]`, which all mean "no layer"). Anything else —
+## a top-level mapping or scalar — would make dsh fail boot, so Configure
+## refuses to write into it instead of producing a broken file (#867 review).
+## Only 0-indent content lines define the top-level structure: they must all
+## be `- ` rows. Deeper lines are row children and are not inspected.
+static func _is_patch_sequence(text: String) -> bool:
+	if text.strip_edges().is_empty():
+		return true
+	for line in text.split("\n"):
+		var stripped := line.strip_edges()
+		if stripped.is_empty() or stripped.begins_with("#") or stripped == "[]":
+			continue
+		if _indent_of(line) == 0 and not stripped.begins_with("- "):
 			return false
 	return true
 

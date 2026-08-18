@@ -3958,20 +3958,94 @@ func test_dsh_plain_row_is_inert_and_migrated() -> void:
 	DirAccess.remove_absolute(path)
 
 
-func test_dsh_strategy_preserves_non_row_top_level_lines() -> void:
-	## A stray top-level scalar (invalid for the loader, but not ours to fix)
-	## must survive configure byte-for-byte — the strategy only ever replaces
-	## its own entry blocks and appends its own row.
-	var path := _dsh_scratch_path("godot_ai_dsh_stray.yaml")
+func test_dsh_strategy_refuses_non_sequence_file() -> void:
+	## A top-level mapping is not a loader patch list — dsh would fail boot on
+	## it, so Configure must fail closed and leave the file untouched instead
+	## of appending a row into a file that can never load (#867 review).
+	var path := _dsh_scratch_path("godot_ai_dsh_non_sequence.yaml")
 	_remove_if_exists(path)
-	_write_text(path, "not-a-patch-list: true\n")
+	var seed := "not-a-patch-list: true\n"
+	_write_text(path, seed)
+	var c := _make_test_dsh_client(path)
+	var launch := _test_attach_launch()
+	var res := McpDshStrategy.configure(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch)
+	assert_eq(res.get("status", ""), "error", "configure must fail closed on a non-sequence file")
+	assert_contains(str(res.get("message", "")), "not a top-level YAML list")
+	assert_eq(_read_text(path), seed, "the invalid file must be left untouched")
+	DirAccess.remove_absolute(path)
+
+
+func test_dsh_strategy_preserves_trailing_comments() -> void:
+	## A comment a user wrote after our entry's last field (above the next
+	## sibling) must survive both Configure and Remove (#867 review).
+	var path := _dsh_scratch_path("godot_ai_dsh_trailing_comment.yaml")
+	_remove_if_exists(path)
+	var seed := (
+		"- insert:\n"
+		+ "    - id: mcp-godot-ai\n"
+		+ "      name: '@deepseek-ai/dsh-mcp-client'\n"
+		+ "      config:\n"
+		+ "        serverName: godot-ai\n"
+		+ "        transport: stdio\n"
+		+ "        command: old\n"
+		+ "        args: [\"old\"]\n"
+		+ "    # keep this comment\n"
+		+ "- insert:\n"
+		+ "    - id: mcp-github\n"
+		+ "      name: '@deepseek-ai/dsh-mcp-client'\n"
+		+ "      config:\n"
+		+ "        serverName: github\n"
+		+ "        transport: stdio\n"
+		+ "        command: npx\n"
+		+ "        args: []\n"
+	)
+	_write_text(path, seed)
 	var c := _make_test_dsh_client(path)
 	var launch := _test_attach_launch()
 	var res := McpDshStrategy.configure(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch)
 	assert_eq(res.get("status", ""), "ok", "configure must report ok: %s" % res.get("message", ""))
 	var reread := _read_text(path)
-	assert_contains(reread, "not-a-patch-list: true", "unrelated top-level content must survive")
-	assert_contains(reread, "mcp-godot-ai")
+	assert_contains(reread, "# keep this comment", "configure must preserve the trailing comment")
+	assert_contains(reread, "mcp-github")
+
+	var rem := McpDshStrategy.remove(c, "godot-ai")
+	assert_eq(rem.get("status", ""), "ok", "remove must report ok: %s" % rem.get("message", ""))
+	reread = _read_text(path)
+	assert_contains(reread, "# keep this comment", "remove must preserve the trailing comment")
+	assert_contains(reread, "mcp-github", "the sibling row must survive remove")
+	DirAccess.remove_absolute(path)
+
+
+func test_dsh_strategy_replacement_matches_existing_indent() -> void:
+	## A hand-written file nesting entries at 2 spaces must have our block
+	## re-emitted at the SAME indent — items of one block sequence share
+	## indentation, so a 4-space rewrite inside a 2-space list would not
+	## parse (#867 review).
+	var path := _dsh_scratch_path("godot_ai_dsh_indent.yaml")
+	_remove_if_exists(path)
+	var seed := (
+		"- insert:\n"
+		+ "  - id: mcp-godot-ai\n"
+		+ "    name: '@deepseek-ai/dsh-mcp-client'\n"
+		+ "    config:\n"
+		+ "      serverName: godot-ai\n"
+		+ "      transport: stdio\n"
+		+ "      command: old\n"
+		+ "      args: [\"old\"]\n"
+	)
+	_write_text(path, seed)
+	var c := _make_test_dsh_client(path)
+	var launch := _test_attach_launch()
+	var res := McpDshStrategy.configure(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch)
+	assert_eq(res.get("status", ""), "ok", "configure must report ok: %s" % res.get("message", ""))
+	var reread := _read_text(path)
+	assert_contains(reread, "  - id: mcp-godot-ai", "replacement must keep the existing 2-space header indent")
+	assert_contains(reread, "      serverName: godot-ai", "config fields must stay at the 2-space style depth")
+	assert_false(reread.contains("    - id: mcp-godot-ai"), "no 4-space nested header may appear")
+	assert_eq(
+		McpDshStrategy.check_status(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch),
+		McpClient.Status.CONFIGURED
+	)
 	DirAccess.remove_absolute(path)
 
 
