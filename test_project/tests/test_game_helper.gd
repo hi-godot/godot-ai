@@ -286,6 +286,26 @@ func test_main_loop_appears_stalled_uses_threshold() -> void:
 	helper.free()
 
 
+func test_eval_liveness_probe_reports_loop_beacon() -> void:
+	var helper: Node = GameHelper.new()
+	helper._last_loop_tick_msec = Time.get_ticks_msec()
+	assert_true(helper._on_debug_message("mcp:eval_liveness", ["rid-live"]),
+		"the helper should capture eval liveness probes")
+	assert_eq(helper._last_eval_liveness_reply.request_id, "rid-live")
+	assert_eq(helper._last_eval_liveness_reply.loop_live, true,
+		"a recent _process beacon should report a live loop")
+
+	helper._last_loop_tick_msec = (
+		Time.get_ticks_msec() - (GameHelper.MAIN_LOOP_STALL_MSEC + 500)
+	)
+	assert_true(helper._on_debug_message("eval_liveness", ["rid-stalled"]),
+		"the capture should also accept the trimmed action form used by tests")
+	assert_eq(helper._last_eval_liveness_reply.request_id, "rid-stalled")
+	assert_eq(helper._last_eval_liveness_reply.loop_live, false,
+		"a stale _process beacon should report a parked loop")
+	helper.free()
+
+
 func test_rendering_appears_stalled_false_before_first_advance() -> void:
 	## A game that has never presented (booting, render-less) has no
 	## trustworthy frame — the -1 sentinel must read as NOT render-stalled so

@@ -92,6 +92,11 @@ var _last_loop_tick_msec: int = -1
 ## render-stalled and keeps the fresh-frame await path's error replies.
 var _last_frames_drawn_seen: int = -1
 var _last_frames_advance_msec: int = -1
+## #859: test/diagnostic seam for the synchronous eval liveness reply. The
+## debugger capture remains callable while the game loop is parked, so the
+## reply reports whether the _process beacon is actually advancing rather
+## than merely proving that the capture was registered once.
+var _last_eval_liveness_reply: Dictionary = {}
 
 
 func _ready() -> void:
@@ -180,6 +185,9 @@ func _on_debug_message(message: String, data: Array) -> bool:
 		"take_screenshot":
 			_handle_take_screenshot(data)
 			return true
+		"eval_liveness":
+			_reply_eval_liveness(data)
+			return true
 		"eval":
 			_handle_eval(data)
 			return true
@@ -190,6 +198,17 @@ func _on_debug_message(message: String, data: Array) -> bool:
 			_handle_game_command(data)
 			return true
 	return false
+
+
+## #859: answer from the debugger capture without awaiting a game frame. The
+## capture can still run while a backgrounded/frozen game's main loop cannot,
+## so the _process beacon is the liveness signal that matters for game_eval.
+func _reply_eval_liveness(data: Array) -> void:
+	var request_id: String = data[0] if data.size() > 0 else ""
+	var loop_live := not _main_loop_appears_stalled()
+	_last_eval_liveness_reply = {"request_id": request_id, "loop_live": loop_live}
+	if EngineDebugger.is_active():
+		EngineDebugger.send_message("mcp:eval_liveness_response", [request_id, loop_live])
 
 
 func _handle_take_screenshot(data: Array) -> void:
@@ -942,8 +961,8 @@ func _mouse_button_index(name: String) -> int:
 ## EVAL_HUNG code, #518, but the editor's message can't name the cause).
 ## Raise this at/above the editor timer (or drop that timer below this) and
 ## the less specific editor message wins the race, silently losing the
-## diagnostic this fix exists to provide. Nothing enforces the order —
-## change one, re-check the other two.
+## diagnostic this fix exists to provide. The cross-file contract is enforced
+## by tests/unit/test_game_eval_timeout_ordering.py.
 ##
 ## NOTE: this catches a hung `await`, not a CPU-bound loop with no `await` —
 ## a tight `while true:` with no yield blocks the main thread, so nothing

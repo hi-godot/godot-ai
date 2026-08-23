@@ -33,20 +33,26 @@ const GAME_READY_WAIT_SEC := 20.0
 ## #500: how long to wait for the game-side autoload to beacon mcp:hello before
 ## issuing a game_eval. This is deliberately MUCH shorter than the 20s
 ## screenshot wait above: the eval path's total editor-side budget is this wait
-## plus the 10s eval backstop (request_game_eval's timeout_sec), and that total
-## MUST stay below the 15s game_eval timeout enforced at two layers: the Python
-## server's send_command budget (src/godot_ai/handlers/editor.py::game_eval) and
-## this plugin's own deferred budget (dispatcher.gd's 15000ms game_eval entry,
-## editor/plugin-side — not server-side). Either firing produces the opaque tail.
+## plus the 250ms liveness probe and 10s eval backstop
+## (request_game_eval's timeout_sec), and that total MUST stay below the 15s
+## game_eval timeout enforced at two layers: the Python server's send_command
+## budget (src/godot_ai/handlers/editor.py::game_eval) and this plugin's own
+## deferred budget (dispatcher.gd's 15000ms game_eval entry, editor/plugin-side
+## — not server-side). Either firing produces the opaque tail.
 ## With the 20s screenshot wait, a not-yet-ready game made the editor poll past
 ## the 15s deadline, so the server gave up first with an opaque
 ## ~15s TimeoutError instead of the actionable "Is the game actually running?"
 ## error below ever reaching the client (#500's residual TimeoutError bucket).
-## 3s wait + 10s backstop = 13s, comfortably under the 15s server timeout, so
-## the actionable error always wins. A game launched moments before the eval
-## still has the 3s grace to register; if it needs longer, the user gets a fast,
-## clear "is it running?" rather than a 15s hang.
+## 3s wait + 0.25s probe + 10s backstop = 13.25s, comfortably under the 15s
+## server timeout, so the actionable error always wins. A game launched moments
+## before the eval still has the 3s grace to register; if it needs longer, the
+## user gets a fast, clear "is it running?" rather than a 15s hang.
 const EVAL_READY_WAIT_SEC := 3.0
+## #859: once the helper has registered, confirm its game loop is still
+## advancing before dispatching an eval. The helper replies synchronously from
+## the debugger capture, so 250ms is ample while keeping not-ready failures
+## below the telemetry target of 0.5s.
+const EVAL_LIVENESS_WAIT_SEC := 0.25
 ## #490: how long to wait for the game's mcp:eval_compiled beacon before
 ## concluding the eval source failed to compile. A parse error aborts the
 ## game-side handler before it can reply, so without this we'd wait the
@@ -188,6 +194,9 @@ func _editor_log_cursor() -> int:
 
 
 func end_game_run() -> void:
+	_fail_pending_evals_not_ready(
+		"The game run ended before game_eval completed — the game stopped, crashed, or is restarting. Confirm it is running and retry."
+	)
 	_game_run_active = false
 	_manual_run_armed = false
 	_game_ready = false
@@ -232,6 +241,20 @@ func _on_debugger_session_stopped(session_id: int) -> void:
 	if not _manual_run_armed and _game_session_id == -1:
 		return
 	end_game_run()
+
+
+## #859: a closed debugger session is authoritative. Do not leave evals on
+## their 10s backstop after the game process has already gone away. Other
+## pending request kinds keep their existing ownership and timeout behavior.
+func _fail_pending_evals_not_ready(message: String) -> void:
+	for request_id in _pending.keys():
+		var pending: Dictionary = _pending.get(request_id, {})
+		if str(pending.get("kind", "")) not in ["eval_liveness", "eval"]:
+			continue
+		var connection: McpConnection = pending.get("connection")
+		_clear_pending(str(request_id))
+		if connection != null and is_instance_valid(connection):
+			_send_error(connection, str(request_id), ErrorCodes.EVAL_GAME_NOT_READY, message)
 
 
 ## --- #645: boot-time debugger breaks ---------------------------------------
@@ -682,6 +705,9 @@ func _capture(message: String, data: Array, session_id: int) -> bool:
 				else:
 					_log_buffer.log("[debug] <- mcp:hello from game_helper")
 			return true
+		"mcp:eval_liveness_response":
+			_on_eval_liveness_response(data)
+			return true
 		"mcp:eval_response":
 			_on_eval_response(data)
 			return true
@@ -956,12 +982,13 @@ func _clear_pending(request_id: String) -> void:
 ## the game's more specific "Eval exceeded 8s" message — see the TIMEOUT
 ## ORDERING note on EVAL_TIMEOUT_SEC.
 ##
-## #500: the *not-ready* path adds EVAL_READY_WAIT_SEC (3s) on top of this 10s
-## backstop. That sum (13s) must also stay below the dispatcher/server 15s
-## budget, or a not-yet-ready game makes the server time out opaquely before
-## the editor's actionable error returns — which is exactly the residual ~15s
-## TimeoutError bucket #500 tracked down. Keep EVAL_READY_WAIT_SEC + timeout_sec
-## < 15s if you tune either.
+## #500/#859: the *not-ready* path adds EVAL_READY_WAIT_SEC (3s) and the
+## EVAL_LIVENESS_WAIT_SEC probe (0.25s) on top of this 10s backstop. That sum
+## (13.25s) must also stay below the dispatcher/server 15s budget, or a
+## not-yet-ready game makes the server time out opaquely before the editor's
+## actionable error returns — exactly the residual ~15s TimeoutError bucket
+## #500 tracked down. The cross-file contract is enforced by
+## tests/unit/test_game_eval_timeout_ordering.py.
 func request_game_eval(
 	code: String,
 	request_id: String,
@@ -979,7 +1006,7 @@ func request_game_eval(
 		return
 
 	if is_game_capture_ready():
-		_send_eval(tree, code, request_id, connection, timeout_sec)
+		_probe_then_eval(tree, code, request_id, connection, timeout_sec)
 		return
 
 	if _log_buffer:
@@ -1013,7 +1040,79 @@ func _wait_then_eval(
 		_send_error_response(connection, request_id,
 			_explain_not_live(get_game_status(-1, EVAL_READY_WAIT_SEC), ErrorCodes.EVAL_GAME_NOT_READY))
 		return
-	_send_eval(tree, code, request_id, connection, timeout_sec)
+	_probe_then_eval(tree, code, request_id, connection, timeout_sec)
+
+
+## #859: registration is run-scoped but not a liveness guarantee. Ping the
+## helper's debugger capture and let it report whether its _process beacon is
+## still advancing before arming the much longer eval backstop.
+func _probe_then_eval(
+	tree: SceneTree,
+	code: String,
+	request_id: String,
+	connection: McpConnection,
+	timeout_sec: float,
+) -> void:
+	var session: EditorDebuggerSession = _first_active_session()
+	if session == null:
+		_send_error(connection, request_id, ErrorCodes.EVAL_GAME_NOT_READY,
+			"Game-side capture registered but its debugger session is no longer active — the game likely just stopped or is restarting. Confirm it is running and retry.")
+		return
+
+	var timer := tree.create_timer(EVAL_LIVENESS_WAIT_SEC)
+	var timeout_callable := func() -> void: _on_eval_liveness_timeout(request_id)
+	timer.timeout.connect(timeout_callable)
+	_pending[request_id] = {
+		"kind": "eval_liveness",
+		"connection": connection,
+		"timer": timer,
+		"timeout_callable": timeout_callable,
+		"code": code,
+		"eval_timeout_sec": timeout_sec,
+	}
+	session.send_message("mcp:eval_liveness", [request_id])
+	if _log_buffer:
+		_log_buffer.log("[debug] -> mcp:eval_liveness (%s)" % request_id)
+
+
+func _on_eval_liveness_timeout(request_id: String) -> void:
+	var pending_entry = _pending.get(request_id)
+	if pending_entry == null or str(pending_entry.get("kind", "")) != "eval_liveness":
+		return
+	var connection: McpConnection = pending_entry.get("connection")
+	_clear_pending(request_id)
+	if connection == null or not is_instance_valid(connection):
+		return
+	_send_error(connection, request_id, ErrorCodes.EVAL_GAME_NOT_READY,
+		("The game helper did not answer the liveness probe within %.0fms — the game may be backgrounded, frozen, stopped, or restarting. Focus the game window (or relaunch it) and retry."
+			% (EVAL_LIVENESS_WAIT_SEC * 1000.0)))
+
+
+func _on_eval_liveness_response(data: Array) -> void:
+	if data.size() < 2:
+		push_warning("MCP debugger: malformed eval liveness response")
+		return
+	var request_id := str(data[0])
+	var pending_entry = _pending.get(request_id)
+	if pending_entry == null or str(pending_entry.get("kind", "")) != "eval_liveness":
+		return
+	var connection: McpConnection = pending_entry.get("connection")
+	var code := str(pending_entry.get("code", ""))
+	var timeout_sec := float(pending_entry.get("eval_timeout_sec", 10.0))
+	var loop_live := bool(data[1])
+	_clear_pending(request_id)
+	if connection == null or not is_instance_valid(connection):
+		return
+	if not loop_live:
+		_send_error(connection, request_id, ErrorCodes.EVAL_GAME_NOT_READY,
+			"The game helper is registered but its main loop is not advancing — the game window may be backgrounded or the game may be frozen. Focus the game window (or relaunch it) and retry.")
+		return
+	var current_tree := Engine.get_main_loop() as SceneTree
+	if current_tree == null:
+		_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR,
+			"Editor main loop is not a SceneTree — cannot schedule eval")
+		return
+	_send_eval(current_tree, code, request_id, connection, timeout_sec)
 
 
 func _send_eval(
@@ -1045,6 +1144,7 @@ func _send_eval(
 	grace.timeout.connect(grace_callable)
 
 	_pending[request_id] = {
+		"kind": "eval",
 		"connection": connection,
 		"timer": timer,
 		"timeout_callable": timeout_callable,

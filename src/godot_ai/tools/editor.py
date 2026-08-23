@@ -44,11 +44,11 @@ Ops:
         EVAL_RUNTIME_ERROR (with the real message + line) for a runtime
         error; EVAL_GAME_NOT_READY if the game can't service evals — still
         launching (retry once it's up), the _mcp_game_helper autoload is
-        missing/disabled, or the game is parked in a debugger break (stop
-        and relaunch); EVAL_HUNG for a genuine infinite loop / never-firing
-        await; EVAL_RESULT_TOO_LARGE if the returned value serializes past
-        the debugger channel's capacity (return a smaller slice). 'await'
-        only progresses while the game window is focused."""
+        missing/disabled, its main loop is not advancing (focus the game),
+        or its debugger session closed; EVAL_HUNG for a live game's genuine
+        infinite loop / never-firing await; EVAL_RESULT_TOO_LARGE if the
+        returned value serializes past the debugger channel's capacity
+        (return a smaller slice)."""
 
 
 def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:

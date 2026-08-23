@@ -38,11 +38,11 @@ class ErrorCode(StrEnum):
     # actionable reply. Keep in sync with utils/error_codes.gd.
     EVAL_COMPILE_ERROR = "EVAL_COMPILE_ERROR"
     EVAL_RUNTIME_ERROR = "EVAL_RUNTIME_ERROR"
-    # #518: the play session is up but the game-side autoload never registered
-    # its debugger capture within the readiness wait (boot-window race, worst on
-    # Windows, or a missing/disabled autoload). Carved out of INTERNAL_ERROR so
-    # this fast (~3s), caller-actionable failure stops being counted as the
-    # opaque "eval hung" 10s timeout. Keep in sync with utils/error_codes.gd.
+    # #518/#859: the play session is up but the game cannot service evals: the
+    # autoload did not register within the readiness wait, its main-loop beacon
+    # is stale, or its debugger session closed mid-eval. Carved out of
+    # INTERNAL_ERROR so these fast, caller-actionable failures do not burn the
+    # opaque 10s eval backstop. Keep in sync with utils/error_codes.gd.
     EVAL_GAME_NOT_READY = "EVAL_GAME_NOT_READY"
     # #518: the eval genuinely never finished inside the timeout ladder (hung
     # await caught by the game-side 8s deadline, or no game reply at all by the

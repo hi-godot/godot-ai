@@ -39,14 +39,12 @@ const BACKEND_START_TIMEOUT := "BACKEND_START_TIMEOUT"
 # game_eval failure codes (#490) — keep in sync with protocol/errors.py
 const EVAL_COMPILE_ERROR := "EVAL_COMPILE_ERROR"
 const EVAL_RUNTIME_ERROR := "EVAL_RUNTIME_ERROR"
-## #518: the play session is up (EditorInterface.is_playing_scene() is true, so
-## editor_handler's EDITOR_NOT_READY "game is not running" gate already passed)
-## but the game-side _mcp_game_helper autoload never registered its debugger
-## capture within EVAL_READY_WAIT_SEC. Carved out of INTERNAL_ERROR so this
-## boot-window / missing-autoload race stops masquerading as the opaque "eval
-## hung" 10s timeout in telemetry — the same split #490 made for compile/runtime
-## errors. NOT a hang: it fires fast (~3s) and is caller-actionable (let the game
-## finish booting and retry, or check the autoload is enabled).
+## #518/#859: the play session is up (EditorInterface.is_playing_scene() is true,
+## so editor_handler's EDITOR_NOT_READY "game is not running" gate already
+## passed) but the game cannot service evals: the helper did not register within
+## EVAL_READY_WAIT_SEC, its main-loop beacon is stale, or its debugger session
+## closed mid-eval. Carved out of INTERNAL_ERROR so these fast,
+## caller-actionable failures do not burn the opaque 10s eval backstop.
 const EVAL_GAME_NOT_READY := "EVAL_GAME_NOT_READY"
 ## #518: the eval genuinely never finished inside the timeout ladder — the
 ## game-side 8s deadline aborted a hung await, or the editor-side 10s backstop
