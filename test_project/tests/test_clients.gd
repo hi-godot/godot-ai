@@ -1730,6 +1730,115 @@ func test_project_scope_status_leaves_the_user_scope_file() -> void:
 	_remove_if_exists(path)
 
 
+## Real `claude mcp get godot-ai` output, captured from claude 2.1.241 in an
+## isolated CLAUDE_CONFIG_DIR. Recorded verbatim so the parser is tested
+## against what the CLI actually prints rather than an idealised shape.
+const _PROBE_USER := """godot-ai:
+  Scope: User config (available in all your projects)
+  Status: ✘ Failed to connect
+  Issue: -32000: MCP error -32000: Connection closed
+  Type: stdio
+  Command: C:/Program Files/Git/usr/bin/true
+  Args: --flag
+  Environment:
+"""
+
+const _PROBE_PROJECT := """godot-ai:
+  Scope: Project config (shared via .mcp.json)
+  Status: ⏸ Pending approval (run `claude` to approve)
+  Type: stdio
+  Command: C:/Program Files/Git/usr/bin/true
+  Args: --p
+  Environment:
+"""
+
+const _PROBE_LOCAL := """godot-ai:
+  Scope: Local config (private to you in this project)
+  Status: ✘ Failed to connect
+  Type: stdio
+  Command: C:/Program Files/Git/usr/bin/true
+  Args: --l
+  Environment:
+"""
+
+const _PROBE_TARGET := "C:/Program Files/Git/usr/bin/true"
+
+
+func test_scope_probe_parses_real_cli_scope_labels() -> void:
+	## The parser matches the first word after "Scope:", so the parenthetical
+	## blurb can be reworded by a future CLI release without breaking us.
+	assert_eq(McpCliStrategy._scope_from_probe_output(_PROBE_USER), "user")
+	assert_eq(McpCliStrategy._scope_from_probe_output(_PROBE_PROJECT), "project")
+	assert_eq(McpCliStrategy._scope_from_probe_output(_PROBE_LOCAL), "local")
+	assert_eq(McpCliStrategy._scope_from_probe_output("no scope line here"), "",
+		"an unrecognisable probe must report empty, not guess a scope")
+
+
+func test_scope_probe_verdict_flags_entry_resolved_from_another_scope() -> void:
+	## The bug this exists to catch: `mcp list` prints a leftover user-scope
+	## entry with our exact command, so a name+target scan calls an EMPTY
+	## project scope CONFIGURED — a green dot over the "loaded in every
+	## workspace" state the setting exists to end. Verified against claude
+	## 2.1.241, where the user entry does win the resolve.
+	var wrong_scope := McpCliStrategy._scope_probe_verdict(
+		0, _PROBE_USER, "project", _PROBE_TARGET
+	)
+	assert_eq(wrong_scope.get("status"), McpClient.Status.CONFIGURED_MISMATCH,
+		"an entry resolved from user scope is not a configured project scope")
+	assert_contains(str(wrong_scope.get("error_msg", "")), "user",
+		"the row message should name the scope that actually resolved")
+
+	## Same output, matching selection — this is the ordinary green path.
+	assert_eq(
+		McpCliStrategy._scope_probe_verdict(0, _PROBE_USER, "user", _PROBE_TARGET).get("status"),
+		McpClient.Status.CONFIGURED,
+	)
+	assert_eq(
+		McpCliStrategy._scope_probe_verdict(0, _PROBE_PROJECT, "project", _PROBE_TARGET).get("status"),
+		McpClient.Status.CONFIGURED,
+	)
+	assert_eq(
+		McpCliStrategy._scope_probe_verdict(0, _PROBE_LOCAL, "local", _PROBE_TARGET).get("status"),
+		McpClient.Status.CONFIGURED,
+	)
+
+
+func test_scope_probe_verdict_absent_entry_and_drift() -> void:
+	## `claude mcp get` exits 1 with "No MCP server named ..." when absent.
+	assert_eq(
+		McpCliStrategy._scope_probe_verdict(1, "No MCP server named \"godot-ai\".", "project", _PROBE_TARGET).get("status"),
+		McpClient.Status.NOT_CONFIGURED,
+	)
+	## Right scope, wrong launcher — still drift, same as the JSON path.
+	assert_eq(
+		McpCliStrategy._scope_probe_verdict(0, _PROBE_PROJECT, "project", "/somewhere/else/uvx").get("status"),
+		McpClient.Status.CONFIGURED_MISMATCH,
+	)
+	## A future CLI that stops printing a Scope line must degrade to the
+	## target check, not invent a red dot on a working install.
+	var no_label := "godot-ai:\n  Command: %s\n" % _PROBE_TARGET
+	assert_eq(
+		McpCliStrategy._scope_probe_verdict(0, no_label, "project", _PROBE_TARGET).get("status"),
+		McpClient.Status.CONFIGURED,
+		"an unparseable Scope line degrades to the target check",
+	)
+
+
+func test_claude_code_declares_scope_aware_status_probe() -> void:
+	## `mcp list` cannot say which scope resolved, so a `{scope}` descriptor
+	## needs the richer probe. Same single subprocess — see #238/#239 for why
+	## adding a second CLI spawn per status check would not be acceptable.
+	var client := McpClientRegistry.get_by_id("claude_code")
+	assert_true(client != null, "claude_code must be registered")
+	var probe := client.cli_scope_status_template
+	assert_false(probe.is_empty(), "scope-token client must declare a scope probe")
+	assert_true(probe.has("get"), "the probe must be `mcp get`, which prints the Scope line")
+	assert_true(probe.has("{name}"), "probe must target our server by name")
+	var args := McpCliStrategy.format_args(probe, "godot-ai", "")
+	assert_true(args.has("godot-ai"), "{name} must substitute")
+	assert_false(args.has("{name}"), "no token may reach the CLI unsubstituted")
+
+
 func test_claude_code_manual_command_shows_json_fallback() -> void:
 	# The CLI form is still the primary hint, but a user without the `claude`
 	# binary (VS Code extension) needs the ~/.claude.json edit too (#463).

@@ -29,6 +29,17 @@ func _init() -> void:
 	## read-back finds whatever the register wrote (see
 	## `_scope_diverges_from_json_fallback` in client_configurator.gd).
 	cli_status_args = PackedStringArray(["mcp", "list"])
+	## `mcp list` prints the resolved entry for the cwd without saying which
+	## scope won, so it cannot tell "registered at project scope" from "an old
+	## user-scope entry is shadowing an empty project scope". `mcp get` prints
+	## both the command and a `Scope: …` line, in the same single subprocess,
+	## so scope-token clients probe with it instead (#872). Verified against
+	## claude 2.1.241, which prints one of:
+	##   Scope: User config (available in all your projects)
+	##   Scope: Project config (shared via .mcp.json)
+	##   Scope: Local config (private to you in this project)
+	## and exits 1 with "No MCP server named …" when the entry is absent.
+	cli_scope_status_template = PackedStringArray(["mcp", "get", "{name}"])
 	## #463: JSON fallback for when the `claude` binary isn't on PATH — e.g.
 	## Claude Code installed only as a VS Code / Cursor extension. The CLI is
 	## still preferred for Configure whenever it resolves; this is what gets

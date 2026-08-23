@@ -238,6 +238,84 @@ static func _format_args(
 	return out
 
 
+## Scope-aware status for descriptors that declare `cli_scope_status_template`.
+## Returns the same `{"status", "error_msg"}` shape as check_status_details.
+##
+## Split from the subprocess call so the verdict is a pure function of what the
+## CLI printed — `_scope_probe_verdict` is unit-tested against real recorded
+## `claude mcp get` output rather than needing a `claude` binary on the runner.
+static func check_scope_status_details(
+	client: McpClient,
+	server_name: String,
+	server_url: String,
+	cli: String,
+	launch: Dictionary,
+	expected_scope: String,
+) -> Dictionary:
+	if cli.is_empty() or client.cli_scope_status_template.is_empty():
+		return _status_details(McpClient.Status.NOT_CONFIGURED)
+	var expected_target := server_url
+	if client.command_shape != McpClient.CommandShape.NONE:
+		## Same fail-closed contract as configure and the plain status probe.
+		var launch_error := command_launch_error(client, launch)
+		if not launch_error.is_empty():
+			return _status_details(McpClient.Status.ERROR, launch_error)
+		expected_target = str(launch.get("command", ""))
+	var args := _format_args(client.cli_scope_status_template, server_name, server_url)
+	var result := McpCliExec.run(cli, args, _STATUS_TIMEOUT_MS, false)
+	if result.get("timed_out", false):
+		return _status_details(McpClient.Status.ERROR, "probe timed out")
+	if result.get("spawn_failed", false):
+		return _status_details(McpClient.Status.NOT_CONFIGURED)
+	return _scope_probe_verdict(
+		int(result.get("exit_code", -1)),
+		str(result.get("stdout", "")),
+		expected_scope,
+		expected_target,
+	)
+
+
+## The `Scope:` label the probe printed, normalised to a CLIENT_SCOPES value,
+## or "" when no line was recognisable. Matched on the first word after the
+## label so the parenthetical blurb ("(shared via .mcp.json)") can change
+## wording between CLI releases without breaking detection.
+static func _scope_from_probe_output(text: String) -> String:
+	for raw_line in text.split("\n"):
+		var line := String(raw_line).strip_edges()
+		var marker := line.find("Scope:")
+		if marker < 0:
+			continue
+		var rest := line.substr(marker + 6).strip_edges().to_lower()
+		for scope in McpSettings.CLIENT_SCOPES:
+			var name := String(scope)
+			if rest.begins_with(name):
+				return name
+	return ""
+
+
+## Pure verdict for a scope probe. A non-zero exit is the CLI's "no such
+## server" signal. An entry resolved from a scope other than the selected one
+## is MISMATCH, not CONFIGURED: the dock offers Reconfigure, and Configure's
+## all-scope pre-cleanup is what actually moves it. An unparseable Scope line
+## degrades to the target check alone rather than reporting a false red.
+static func _scope_probe_verdict(
+	exit_code: int, text: String, expected_scope: String, expected_target: String
+) -> Dictionary:
+	if exit_code != 0:
+		return _status_details(McpClient.Status.NOT_CONFIGURED)
+	if not expected_target.is_empty() and text.find(expected_target) < 0:
+		return _status_details(McpClient.Status.CONFIGURED_MISMATCH)
+	var resolved := _scope_from_probe_output(text)
+	if resolved.is_empty():
+		return _status_details(McpClient.Status.CONFIGURED)
+	if resolved != expected_scope:
+		return _status_details(
+			McpClient.Status.CONFIGURED_MISMATCH,
+			"registered at %s scope, not %s" % [resolved, expected_scope],
+		)
+	return _status_details(McpClient.Status.CONFIGURED)
+
+
 ## True when the descriptor's register template takes `{scope}`, i.e. where
 ## its entry lands is decided by the `godot_ai/mcp_client_scope` setting rather
 ## than fixed by the descriptor. The configurator uses this to decide whether

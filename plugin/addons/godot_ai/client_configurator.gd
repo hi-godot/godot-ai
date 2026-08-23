@@ -685,6 +685,17 @@ static func _dispatch_check_status_with_cli_path_details(
 			var cli_launch := {}
 			if client.command_shape != Client.CommandShape.NONE:
 				cli_launch = _resolved_or_discovered_launch(client, resolved_launch, launch_context)
+			# #872: at a scope `path_template` can't see, a plain listing probe
+			# cannot tell our entry from a leftover one in another scope. When
+			# the descriptor offers a scope-aware probe, use it — same single
+			# subprocess, but it reports which scope actually resolved.
+			if (
+				not client.cli_scope_status_template.is_empty()
+				and CliStrategy.uses_scope_token(client)
+			):
+				return CliStrategy.check_scope_status_details(
+					client, SERVER_NAME, url, resolved_cli, cli_launch, McpSettings.client_scope()
+				)
 			return CliStrategy.check_status_details(client, SERVER_NAME, url, resolved_cli, cli_launch)
 	return {"status": Client.Status.NOT_CONFIGURED, "error_msg": ""}
 

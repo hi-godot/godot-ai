@@ -3278,7 +3278,15 @@ func _apply_row_status(
 			dot.color = COLOR_AMBER
 			configure_btn.text = "Reconfigure"
 			remove_btn.visible = true
-			name_label.text = "%s  (URL out of date)" % base_name
+			## Drift is usually a stale URL, but a `{scope}` client can also be
+			## registered in a scope the user did not select (#872), and
+			## "URL out of date" would be a wrong description of that. Prefer
+			## the probe's own words whenever it supplied any.
+			name_label.text = (
+				"%s  (%s)" % [base_name, error_msg]
+				if not error_msg.is_empty()
+				else "%s  (URL out of date)" % base_name
+			)
 		_:
 			dot.color = Color.RED
 			configure_btn.text = "Retry"

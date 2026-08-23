@@ -479,6 +479,25 @@ func test_apply_row_status_renders_mismatch_as_amber_with_url_hint() -> void:
 		"Mismatched rows offer the same Reconfigure action as the banner")
 
 
+func test_apply_row_status_mismatch_prefers_probe_message() -> void:
+	## A `{scope}` client can drift by being registered in a scope the user
+	## did not select (#872). "URL out of date" is a wrong description of
+	## that, so a probe-supplied message wins the label.
+	_dock._build_ui()
+	var any_id := McpClientConfigurator.client_ids()[0]
+	_dock._apply_row_status(
+		any_id, McpClient.Status.CONFIGURED_MISMATCH, "registered at user scope, not project"
+	)
+	var row: Dictionary = _dock._client_rows[any_id]
+	assert_eq((row["dot"] as ColorRect).color, McpDockScript.COLOR_AMBER,
+		"a scope mismatch is still drift, so it stays amber")
+	var label := (row["name_label"] as Label).text
+	assert_contains(label, "registered at user scope, not project",
+		"the probe's own words must reach the row")
+	assert_false(label.contains("URL out of date"),
+		"a scope mismatch is not a stale URL — that label would misdescribe it")
+
+
 func test_client_rows_show_config_file_buttons_only_for_file_clients() -> void:
 	_dock._build_ui()
 	var file_id := "cursor"

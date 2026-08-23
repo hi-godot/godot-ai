@@ -222,6 +222,16 @@ var cli_unregister_template: PackedStringArray = PackedStringArray()
 ## URL. Presence of `name` AND `url` → CONFIGURED, name only → MISMATCH,
 ## neither → NOT_CONFIGURED.
 var cli_status_args: PackedStringArray = PackedStringArray()
+## Optional scope-aware status template with a `{name}` token, for descriptors
+## that also take `{scope}` in their register template. `cli_status_args` lists
+## whatever the CLI resolves for the current directory and cannot say WHICH
+## scope an entry came from, so a leftover user-scope entry reads as CONFIGURED
+## while the selected project scope is empty — the dock then shows green over
+## exactly the "loaded in every workspace" state the scope setting exists to
+## end (#872). This template must print a `Scope: <user|project|local> …` line
+## (`claude mcp get <name>` does) and exit non-zero when the server is absent.
+## Only consulted when the selected scope isn't the one `path_template` reads.
+var cli_scope_status_template: PackedStringArray = PackedStringArray()
 
 # Codex / TOML clients -----------------------------------------------------
 ## Dotted TOML path under which our entry lives, e.g. ["mcp_servers", "godot-ai"].

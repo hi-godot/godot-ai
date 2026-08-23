@@ -129,11 +129,16 @@ Two caveats for `project` scope:
   directory**, which is the one the Godot editor was launched from — not
   necessarily the project folder. Launching Godot from the project directory
   (or from a shell already `cd`'d into it) puts `.mcp.json` where you expect.
+- Claude Code will not actually load a `project`-scoped server until you
+  approve it: run `claude` in that project once and accept the prompt. Until
+  then `claude mcp get godot-ai` reports *Pending approval*, and an older
+  `user`-scoped entry can keep answering in its place.
 - Status for a project- or local-scoped entry is read back by asking the client
-  CLI to list its servers, rather than by reading the config file directly. The
-  dock still reports configured / not configured correctly, but it can no
-  longer spot a stale entry whose arguments drifted — press **Configure** again
-  after changing the port or excluded domains.
+  CLI about the server rather than by reading the config file directly. The
+  dock reports configured / not configured correctly and will flag an entry
+  that resolved from a different scope than the one you selected, but it can no
+  longer spot a stale entry whose *arguments* drifted — press **Configure**
+  again after changing the port or excluded domains.
 
 </details>
 

@@ -61,12 +61,26 @@ Per-strategy command rendering (`CommandShape` docs in `_base.gd`):
   CLI clients reads the JSON fallback file the CLI itself writes — exact drift
   detection that `mcp list` stdout scanning cannot give — but **only while the
   selected scope is the one `path_template` points at**. `project` and `local`
-  land outside that file, so status falls through to the `mcp list` probe,
-  which inherits the same cwd the register ran in and therefore agrees with it
-  by construction (#872). Trading exact drift detection for a correct status
-  dot is deliberate: `_verify_post_state` re-reads status after every
-  Configure, so a file read that can't see the entry would report every
-  successful project-scope Configure as a failure.
+  land outside that file, so status falls through to a CLI probe, which
+  inherits the same cwd the register ran in and therefore agrees with it by
+  construction (#872). Trading exact drift detection for a correct status dot
+  is deliberate: `_verify_post_state` re-reads status after every Configure, so
+  a file read that can't see the entry would report every successful
+  project-scope Configure as a failure.
+
+  That probe is `cli_scope_status_template`, **not** `cli_status_args`.
+  `mcp list` prints whatever resolved for the current directory without saying
+  which scope won, so a leftover user-scope entry carrying our exact command
+  reads as CONFIGURED while the selected project scope is empty — a green dot
+  over precisely the "loaded in every workspace" state the setting exists to
+  end. `mcp get <name>` returns the command *and* a `Scope:` line in the same
+  single subprocess (adding a second spawn per status check would be
+  unacceptable — see #238 / #239), so an entry resolved from another scope is
+  reported as MISMATCH and the dock's Reconfigure moves it. Verified against
+  claude 2.1.241, which prints `Scope: User config (…)` /
+  `Scope: Project config (…)` / `Scope: Local config (…)` and exits non-zero
+  when the entry is absent. The parser matches the first word after `Scope:`
+  and degrades to the command check if a future release drops the line.
 
 Per-client sharp edges (each is descriptor data, cited in the descriptor):
 Kilo Code stdio entries must stay TYPELESS (`type` is a legacy key — its v7
