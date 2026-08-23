@@ -19,6 +19,19 @@ const SETTING_ALLOW_HOSTS := "godot_ai/allow_remote_hosts"
 ## Whether MCP log lines echo to the Godot console (dock "Log" toggle).
 ## The dock's ring-buffer log panel keeps recording regardless.
 const SETTING_MCP_LOGGING := "godot_ai/mcp_logging"
+## Which scope CLI-configured clients register the server in. Claude Code's
+## `--scope user` writes the global block of ~/.claude.json, which that client
+## loads in EVERY workspace — so the server gets spawned in unrelated,
+## non-Godot projects. `project` writes <project>/.mcp.json instead, so the
+## entry travels with the project. Defaults to `user` to preserve the
+## historical behaviour for existing installs.
+const SETTING_CLIENT_SCOPE := "godot_ai/mcp_client_scope"
+
+## Scopes accepted for SETTING_CLIENT_SCOPE. These are the values the Claude
+## Code CLI's `--scope` flag takes; an unrecognised setting falls back to
+## DEFAULT_CLIENT_SCOPE rather than passing junk to the CLI.
+const CLIENT_SCOPES := ["user", "project", "local"]
+const DEFAULT_CLIENT_SCOPE := "user"
 
 
 ## Returns true if the string value is truthy
@@ -30,6 +43,22 @@ static func truthy(value: String) -> bool:
 ## Returns true if the named environment variable is set to a truthy value.
 static func env_truthy(var_name: String) -> bool:
 	return truthy(OS.get_environment(var_name))
+
+
+## Returns the scope CLI clients should register the MCP server in, as
+## substituted into `{scope}` in a descriptor's cli_register_template /
+## cli_unregister_template. Read on the main thread from the dock's Configure
+## action and from the manual-command renderer, same as mcp_logging_enabled().
+## Unrecognised values fall back to DEFAULT_CLIENT_SCOPE so a hand-edited
+## editor_settings-4.tres can never make the plugin shell out with a bad flag.
+static func client_scope() -> String:
+	var es := EditorInterface.get_editor_settings()
+	if es == null or not es.has_setting(SETTING_CLIENT_SCOPE):
+		return DEFAULT_CLIENT_SCOPE
+	var raw := String(es.get_setting(SETTING_CLIENT_SCOPE)).strip_edges().to_lower()
+	if raw in CLIENT_SCOPES:
+		return raw
+	return DEFAULT_CLIENT_SCOPE
 
 
 ## Returns true if telemetry should be active, checking in priority order:

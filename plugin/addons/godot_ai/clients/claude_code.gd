@@ -9,14 +9,17 @@ func _init() -> void:
 	cli_names = PackedStringArray(["claude", "claude.exe"] if OS.get_name() == "Windows" else ["claude"])
 	## Stdio registration through the client-owned `godot-ai attach` bridge
 	## (#838). `--` stops claude's own flag parsing so the attach argv passes
-	## through verbatim; stdio is the CLI's default transport. Scope stays
-	## `user` — the same ~/.claude.json the pre-attach HTTP entry lived in.
+	## through verbatim; stdio is the CLI's default transport. Scope comes from
+	## the `godot_ai/mcp_client_scope` EditorSetting via the `{scope}` token; it
+	## defaults to `user` — the same ~/.claude.json the pre-attach HTTP entry
+	## lived in — and can be set to `project` to write <project>/.mcp.json so the
+	## server is not loaded in every unrelated workspace.
 	cli_register_template = PackedStringArray(
-		["mcp", "add", "--scope", "user", "{name}", "--", "{command}", "{args...}"]
+		["mcp", "add", "--scope", "{scope}", "{name}", "--", "{command}", "{args...}"]
 	)
 	## Explicit scope: an unscoped `mcp remove` deletes from whichever scope
 	## matches first, which could eat a project-local entry the user made.
-	cli_unregister_template = PackedStringArray(["mcp", "remove", "--scope", "user", "{name}"])
+	cli_unregister_template = PackedStringArray(["mcp", "remove", "--scope", "{scope}", "{name}"])
 	cli_status_args = PackedStringArray(["mcp", "list"])
 	## #463: JSON fallback for when the `claude` binary isn't on PATH — e.g.
 	## Claude Code installed only as a VS Code / Cursor extension. The CLI is

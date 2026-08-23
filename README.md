@@ -105,6 +105,25 @@ configuration supports URL transport also show an advanced URL fallback.
 (Cherry Studio intentionally stays URL-mode — its MCP servers are managed
 inside the app, not via an external config file.)
 
+<details>
+<summary><strong>Registering per-project instead of globally</strong></summary>
+
+CLI-configured clients register at **user** scope by default, which is a single
+global config the client loads in every workspace — so the Godot AI tools are
+present even in projects that have nothing to do with Godot.
+
+Set **Editor Settings → Plugins → `godot_ai/mcp_client_scope`** to `project` and
+Configure writes the entry into the project's own config (for Claude Code,
+`<project>/.mcp.json`) instead. The server is then loaded only when the client is
+opened on that project. `local` is also accepted for clients that support it.
+
+The default stays `user` so existing installs are unchanged on upgrade. Change
+the setting and press **Configure** again to move an entry; press **Remove**
+*before* changing it if you want the old-scope entry cleaned up, since Remove
+targets whichever scope is currently selected.
+
+</details>
+
 ### 4. Try it
 
 - *"Show me the current scene hierarchy."*

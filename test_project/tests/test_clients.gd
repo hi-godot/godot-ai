@@ -18,6 +18,10 @@ var _scratch_dir: String
 ## port if a test fails mid-flight.
 var _saved_http_port: Variant = null
 var _saved_ws_port: Variant = null
+## Same reason as the ports: these tests drive godot_ai/mcp_client_scope
+## through its valid and invalid values and must not leave the editor
+## registering at a scope the user never chose.
+var _saved_client_scope: Variant = null
 
 
 func suite_name() -> String:
@@ -34,6 +38,8 @@ func suite_setup(_ctx: Dictionary) -> void:
 			_saved_http_port = es.get_setting(McpSettings.SETTING_HTTP_PORT)
 		if es.has_setting(McpClientConfigurator.SETTING_WS_PORT):
 			_saved_ws_port = es.get_setting(McpClientConfigurator.SETTING_WS_PORT)
+		if es.has_setting(McpSettings.SETTING_CLIENT_SCOPE):
+			_saved_client_scope = es.get_setting(McpSettings.SETTING_CLIENT_SCOPE)
 
 
 func suite_teardown() -> void:
@@ -1542,7 +1548,7 @@ func test_claude_code_has_claude_json_fallback() -> void:
 
 
 func test_claude_code_declares_stdio_attach_registration() -> void:
-	## #838: registration goes through `claude mcp add --scope user <name> --
+	## #838: registration goes through `claude mcp add --scope <scope> <name> --
 	## <command> <args...>` (stdio is the CLI's default transport; verified
 	## live in an isolated CLAUDE_CONFIG_DIR). The JSON fallback file renders
 	## the same entry the CLI itself writes: type:stdio + command + args.
@@ -1553,7 +1559,8 @@ func test_claude_code_declares_stdio_attach_registration() -> void:
 	assert_true(client.command_legacy_keys.has("url"), "legacy HTTP entry's url must be removed")
 	assert_true(client.command_supports_url_fallback)
 	var register := client.cli_register_template
-	assert_true(register.has("--scope"), "registration stays user-scoped")
+	assert_true(register.has("--scope"), "registration must stay explicitly scoped")
+	assert_true(register.has("{scope}"), "scope comes from the setting, not a hardcoded value")
 	assert_true(register.has("--"), "`--` must stop claude's own flag parsing")
 	assert_true(register.has("{command}"), "register template must take the launch command token")
 	assert_true(register.has("{args...}"), "register template must splice the launch args")
@@ -1565,6 +1572,58 @@ func test_claude_code_declares_stdio_attach_registration() -> void:
 	assert_eq(args_index, command_index + 1, "{args...} must immediately follow {command}")
 	assert_false(register.has("--transport"), "stdio is the default transport — no pin in argv")
 	assert_true(client.cli_unregister_template.has("--scope"), "unscoped remove could eat a project-local entry")
+	assert_true(client.cli_unregister_template.has("{scope}"),
+		"remove must target the same scope the register wrote to")
+
+
+func test_client_scope_defaults_to_user() -> void:
+	## Existing installs must keep registering where they always have; the
+	## setting is opt-in, not a silent behaviour change on upgrade.
+	var es := EditorInterface.get_editor_settings()
+	if es != null and es.has_setting(McpSettings.SETTING_CLIENT_SCOPE):
+		es.set_setting(McpSettings.SETTING_CLIENT_SCOPE, McpSettings.DEFAULT_CLIENT_SCOPE)
+	assert_eq(McpSettings.client_scope(), "user")
+	var client := McpClientRegistry.get_by_id("claude_code")
+	var args := McpCliStrategy.format_args(
+		client.cli_register_template, "godot-ai", "", {"command": "uvx", "args": ["godot-ai"]}
+	)
+	var scope_index := args.find("--scope")
+	assert_true(scope_index >= 0, "register argv must carry --scope")
+	assert_eq(args[scope_index + 1], "user", "default scope must render as user")
+	assert_false(args.has("{scope}"), "the token must be substituted, never passed through to the CLI")
+
+
+func test_client_scope_project_renders_in_argv() -> void:
+	## The whole point of the setting: `project` makes the CLI write
+	## <project>/.mcp.json instead of the global ~/.claude.json block.
+	var es := EditorInterface.get_editor_settings()
+	if es == null:
+		return
+	es.set_setting(McpSettings.SETTING_CLIENT_SCOPE, "project")
+	assert_eq(McpSettings.client_scope(), "project")
+	var client := McpClientRegistry.get_by_id("claude_code")
+	var register := McpCliStrategy.format_args(
+		client.cli_register_template, "godot-ai", "", {"command": "uvx", "args": ["godot-ai"]}
+	)
+	var reg_index := register.find("--scope")
+	assert_eq(register[reg_index + 1], "project")
+	## Remove must follow the same scope, or Configure-then-Remove leaves the
+	## entry behind in whichever scope the register actually wrote.
+	var unregister := McpCliStrategy.format_args(client.cli_unregister_template, "godot-ai", "")
+	var unreg_index := unregister.find("--scope")
+	assert_eq(unregister[unreg_index + 1], "project")
+
+
+func test_client_scope_rejects_unknown_value() -> void:
+	## A hand-edited editor_settings-4.tres must not make the plugin shell out
+	## with a bad --scope flag; fall back to the default instead.
+	var es := EditorInterface.get_editor_settings()
+	if es == null:
+		return
+	es.set_setting(McpSettings.SETTING_CLIENT_SCOPE, "not-a-scope")
+	assert_eq(McpSettings.client_scope(), McpSettings.DEFAULT_CLIENT_SCOPE)
+	es.set_setting(McpSettings.SETTING_CLIENT_SCOPE, "  PROJECT  ")
+	assert_eq(McpSettings.client_scope(), "project", "value should be trimmed and case-folded")
 
 
 func test_claude_code_manual_command_shows_json_fallback() -> void:
@@ -3633,3 +3692,7 @@ func _restore_port_settings() -> void:
 		es.set_setting(McpClientConfigurator.SETTING_WS_PORT, McpClientConfigurator.DEFAULT_WS_PORT)
 	else:
 		es.set_setting(McpClientConfigurator.SETTING_WS_PORT, _saved_ws_port)
+	if _saved_client_scope == null:
+		es.set_setting(McpSettings.SETTING_CLIENT_SCOPE, McpSettings.DEFAULT_CLIENT_SCOPE)
+	else:
+		es.set_setting(McpSettings.SETTING_CLIENT_SCOPE, _saved_client_scope)

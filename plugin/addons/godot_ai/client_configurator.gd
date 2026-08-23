@@ -111,6 +111,7 @@ static func ensure_settings_registered() -> void:
 	_register_port_setting(es, SETTING_WS_PORT, DEFAULT_WS_PORT)
 	_register_bool_setting(es, SETTING_STARTUP_TRACE, false)
 	_register_bool_setting(es, SETTING_KEEP_SERVER_ON_EXIT, false)
+	_register_client_scope_setting(es)
 
 
 static func _register_port_setting(es: EditorSettings, key: String, default_port: int) -> void:
@@ -122,6 +123,22 @@ static func _register_port_setting(es: EditorSettings, key: String, default_port
 		"type": TYPE_INT,
 		"hint": PROPERTY_HINT_RANGE,
 		"hint_string": "%d,%d,1" % [MIN_PORT, MAX_PORT],
+	})
+
+
+## Surface the CLI registration scope as an enum in Settings > Plugins so it is
+## discoverable without hand-editing editor_settings-4.tres. Kept at `user` by
+## default; `project` writes the entry into <project>/.mcp.json instead.
+static func _register_client_scope_setting(es: EditorSettings) -> void:
+	var key := McpSettings.SETTING_CLIENT_SCOPE
+	if not es.has_setting(key):
+		es.set_setting(key, McpSettings.DEFAULT_CLIENT_SCOPE)
+	es.set_initial_value(key, McpSettings.DEFAULT_CLIENT_SCOPE, false)
+	es.add_property_info({
+		"name": key,
+		"type": TYPE_STRING,
+		"hint": PROPERTY_HINT_ENUM,
+		"hint_string": ",".join(PackedStringArray(McpSettings.CLIENT_SCOPES)),
 	})
 
 

@@ -203,6 +203,10 @@ static func _format_args(
 			continue
 		s = s.replace("{name}", server_name)
 		s = s.replace("{url}", server_url)
+		## Resolved per-call rather than baked into the descriptor so the
+		## setting can change without an editor restart, and so the manual
+		## command shown in the dock always matches what Configure would run.
+		s = s.replace("{scope}", McpSettings.client_scope())
 		out.append(s)
 	return out
 
