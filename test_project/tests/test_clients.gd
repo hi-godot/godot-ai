@@ -1824,6 +1824,48 @@ func test_scope_probe_verdict_absent_entry_and_drift() -> void:
 	)
 
 
+func test_json_fallback_configure_notes_the_scope_it_could_not_honour() -> void:
+	## #872 + #463: with no CLI on PATH, Configure falls back to writing the
+	## config file directly — and that file is the USER-scope one whatever the
+	## setting says. The write is real and works, so it stays `ok`; the caveat
+	## rides in the message rather than in the status, because
+	## _verify_post_state converts any non-CONFIGURED status after a successful
+	## write into an error (see test_verify_post_state_treats_drift_as_failure_
+	## after_configure) and a correct write must not report as a failure.
+	var es := EditorInterface.get_editor_settings()
+	if es == null:
+		skip("EditorSettings unavailable in test environment")
+		return
+	var path := _scratch_dir.path_join("fallback_scope_note.json")
+	_remove_if_exists(path)
+	var client := _make_scope_cli_client(path)
+	var launch := {"ok": true, "command": "uvx", "args": ["godot-ai", "attach"]}
+
+	es.set_setting(McpSettings.SETTING_CLIENT_SCOPE, "project")
+	var noted := McpClientConfigurator._dispatch_configure(client, "", launch)
+	assert_eq(noted.get("status"), "ok", "the fallback write really did land — it is not a failure")
+	var msg := str(noted.get("message", ""))
+	assert_contains(msg, "project", "the message must name the scope that was asked for")
+	assert_contains(msg, "user", "...and the scope it actually wrote")
+
+	## The status still reads CONFIGURED, so Configure does not end in the
+	## "configure ok but verification reads Not configured" false error.
+	var status := McpClientConfigurator._dispatch_check_status_with_cli_path_details(
+		client, "", "", {}, launch
+	)
+	assert_eq(status.get("status"), McpClient.Status.CONFIGURED,
+		"a fallback-written entry must verify clean, or configure reports success as failure")
+
+	## At the default scope there is nothing to warn about — no note.
+	es.set_setting(McpSettings.SETTING_CLIENT_SCOPE, McpSettings.DEFAULT_CLIENT_SCOPE)
+	var plain := McpClientConfigurator._dispatch_configure(client, "", launch)
+	assert_eq(plain.get("status"), "ok")
+	assert_false(str(plain.get("message", "")).contains("wrote user scope"),
+		"no scope caveat when the selected scope is the one the fallback writes")
+	_restore_client_scope()
+	_remove_if_exists(path)
+
+
 func test_claude_code_declares_scope_aware_status_probe() -> void:
 	## `mcp list` cannot say which scope resolved, so a `{scope}` descriptor
 	## needs the richer probe. Same single subprocess — see #238/#239 for why

@@ -601,7 +601,9 @@ static func _dispatch_configure(client: Client, url: String, launch: Dictionary 
 			# #463: fall back to writing the config file directly when the CLI
 			# binary isn't on PATH (Claude Code as a VS Code/Cursor extension).
 			if client.has_json_fallback() and CliStrategy.resolve_cli_path(client).is_empty():
-				return JsonStrategy.configure(client, SERVER_NAME, url, launch)
+				return _note_unhonoured_scope(
+					client, JsonStrategy.configure(client, SERVER_NAME, url, launch)
+				)
 			return CliStrategy.configure(client, SERVER_NAME, url, launch)
 	return {"status": "error", "message": "Unknown config_type for %s: %s" % [client.id, client.config_type]}
 
@@ -698,6 +700,42 @@ static func _dispatch_check_status_with_cli_path_details(
 				)
 			return CliStrategy.check_status_details(client, SERVER_NAME, url, resolved_cli, cli_launch)
 	return {"status": Client.Status.NOT_CONFIGURED, "error_msg": ""}
+
+
+## #872: the #463 JSON fallback writes the user-scope file whatever
+## `godot_ai/mcp_client_scope` says — that file IS `path_template`, and
+## `clients/_path_template.gd` has no project-relative token to aim it
+## elsewhere. Returning a bare "configured" would hide that the requested
+## scope was not honoured, so say so in the message.
+##
+## Deliberately a message and not a status. `_verify_post_state` compares the
+## post-write status against CONFIGURED and replaces the ok with an error on
+## any mismatch (pinned by test_verify_post_state_treats_drift_as_failure_
+## after_configure), so reporting this write as NOT_CONFIGURED or MISMATCH
+## would turn a *successful* configure into a user-facing failure — the same
+## false-error class #872's blocker was about, just moved onto the fallback
+## path. The entry is genuinely written and genuinely works; only its scope
+## differs from the request, and that is a caveat, not a failure.
+static func _note_unhonoured_scope(client: Client, result: Dictionary) -> Dictionary:
+	if result.get("status") != "ok":
+		return result
+	if not CliStrategy.uses_scope_token(client):
+		return result
+	var scope := McpSettings.client_scope()
+	if scope == McpSettings.DEFAULT_CLIENT_SCOPE:
+		return result
+	var noted := result.duplicate(true)
+	noted["message"] = (
+		"%s — wrote %s scope, not %s: the %s CLI wasn't found, and the file fallback can only write %s"
+		% [
+			str(result.get("message", "")),
+			McpSettings.DEFAULT_CLIENT_SCOPE,
+			scope,
+			client.display_name,
+			client.resolved_config_path(),
+		]
+	)
+	return noted
 
 
 ## True when this client's CLI writes its entry somewhere `path_template`

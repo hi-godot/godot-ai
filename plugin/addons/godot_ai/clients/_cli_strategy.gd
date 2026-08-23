@@ -296,8 +296,19 @@ static func _scope_from_probe_output(text: String) -> String:
 ## Pure verdict for a scope probe. A non-zero exit is the CLI's "no such
 ## server" signal. An entry resolved from a scope other than the selected one
 ## is MISMATCH, not CONFIGURED: the dock offers Reconfigure, and Configure's
-## all-scope pre-cleanup is what actually moves it. An unparseable Scope line
-## degrades to the target check alone rather than reporting a false red.
+## all-scope pre-cleanup is what actually moves it.
+##
+## A missing or unrecognised `Scope:` line degrades to the target check alone,
+## deliberately rather than failing closed. `_verify_post_state` turns any
+## non-CONFIGURED status after a successful write into an error, so treating an
+## unparsed label as MISMATCH would mean a future CLI release that reworded or
+## dropped that line breaks Configure outright — a false error plus a
+## permanently amber row whose Reconfigure button cannot clear it. The entry
+## has already been matched by name and exact launcher path at that point; the
+## only thing in doubt is which scope it came from, and a slightly optimistic
+## dot is a much cheaper failure than a configure flow that reports success as
+## failure. Today's claude (2.1.241) always prints the line, so this is a
+## forward-compatibility hedge, not a live code path.
 static func _scope_probe_verdict(
 	exit_code: int, text: String, expected_scope: String, expected_target: String
 ) -> Dictionary:
