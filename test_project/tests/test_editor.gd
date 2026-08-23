@@ -475,11 +475,13 @@ func test_eval_liveness_positive_response_dispatches_eval() -> void:
 	var plugin := _RecordingEvalPlugin.new()
 	var conn := _StubConnection.new()
 	var rid := "rid-eval-live"
+	_mark_game_live(plugin)
 	plugin._pending[rid] = {
 		"kind": "eval_liveness",
 		"connection": conn,
 		"code": "return 42",
 		"eval_timeout_sec": 7.5,
+		"run_token": plugin._game_run_token,
 	}
 	assert_true(plugin._capture("mcp:eval_liveness_response", [rid, true], 0),
 		"the editor should capture positive helper liveness replies")
@@ -495,11 +497,13 @@ func test_eval_liveness_negative_response_fails_fast() -> void:
 	var plugin := McpDebuggerPlugin.new()
 	var conn := _StubConnection.new()
 	var rid := "rid-eval-not-live"
+	_mark_game_live(plugin)
 	plugin._pending[rid] = {
 		"kind": "eval_liveness",
 		"connection": conn,
 		"code": "return 1",
 		"eval_timeout_sec": 10.0,
+		"run_token": plugin._game_run_token,
 	}
 	assert_true(plugin._capture("mcp:eval_liveness_response", [rid, false], 0),
 		"the editor should capture helper liveness replies")
@@ -526,16 +530,84 @@ func test_eval_liveness_timeout_fails_fast() -> void:
 	conn.free()
 
 
+func test_eval_readiness_wait_stop_then_restart_does_not_cross_runs() -> void:
+	## The test runner does not pump process_frame while a test is active, so a
+	## synchronous waiter drives the exact coroutine path without suspending it.
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		skip("No SceneTree available")
+		return
+	var plugin := _RecordingEvalPlugin.new()
+	var conn := _StubConnection.new()
+	plugin.begin_game_run()
+	var original_run_token := plugin._game_run_token
+	plugin._eval_ready_frame_waiter = func() -> void:
+		plugin.end_game_run()
+		plugin.begin_game_run()
+		plugin._game_ready = true
+		plugin._ready_run_token = plugin._game_run_token
+
+	await plugin._wait_then_eval(
+		tree, "return 42", "rid-ready-restart", conn, 10.0, original_run_token
+	)
+	plugin._eval_ready_frame_waiter = Callable()
+
+	assert_ne(plugin._game_run_token, original_run_token,
+		"the replacement game must have a distinct run token")
+	assert_true(plugin.is_game_capture_ready(),
+		"the replacement run is ready, so the old implementation would dispatch")
+	assert_true(plugin.dispatched.is_empty(),
+		"an eval created for the stopped run must never reach the replacement run")
+	assert_false(plugin._pending.has("rid-ready-restart"),
+		"ending the original run clears the tracked readiness wait")
+	assert_eq(conn.captured.size(), 1, "the stopped request receives one failure")
+	assert_eq(conn.captured[0].payload.error.code, ErrorCodes.EVAL_GAME_NOT_READY)
+	conn.free()
+
+
+func test_eval_liveness_response_from_prior_run_is_not_dispatched() -> void:
+	var plugin := _RecordingEvalPlugin.new()
+	var conn := _StubConnection.new()
+	var rid := "rid-liveness-prior-run"
+	_mark_game_live(plugin)
+	var original_run_token := plugin._game_run_token
+	plugin._pending[rid] = {
+		"kind": "eval_liveness",
+		"connection": conn,
+		"code": "return 42",
+		"eval_timeout_sec": 10.0,
+		"run_token": original_run_token,
+	}
+	## Model a replacement run being tracked before the old session's late
+	## response arrives; the token check is the fallback if stop cleanup missed.
+	plugin.begin_game_run()
+	plugin._game_ready = true
+	plugin._ready_run_token = plugin._game_run_token
+
+	plugin._on_eval_liveness_response([rid, true])
+
+	assert_true(plugin.dispatched.is_empty(),
+		"a liveness response from the prior run must not dispatch into the new run")
+	assert_false(plugin._pending.has(rid), "the stale liveness response is consumed")
+	assert_eq(conn.captured.size(), 1, "the stale request receives one failure")
+	assert_eq(conn.captured[0].payload.error.code, ErrorCodes.EVAL_GAME_NOT_READY)
+	conn.free()
+
+
 func test_debugger_session_stop_fails_only_pending_evals() -> void:
 	var plugin := McpDebuggerPlugin.new()
 	plugin._game_run_active = true
 	plugin._game_session_id = 31
 	var eval_conn := _StubConnection.new()
 	var liveness_conn := _StubConnection.new()
+	var readiness_conn := _StubConnection.new()
 	var shot_conn := _StubConnection.new()
 	plugin._pending["rid-eval"] = {"kind": "eval", "connection": eval_conn}
 	plugin._pending["rid-eval-liveness"] = {
 		"kind": "eval_liveness", "connection": liveness_conn
+	}
+	plugin._pending["rid-eval-readiness"] = {
+		"kind": "eval_ready_wait", "connection": readiness_conn
 	}
 	plugin._pending["rid-shot"] = {"connection": shot_conn}
 
@@ -545,6 +617,8 @@ func test_debugger_session_stop_fails_only_pending_evals() -> void:
 		"session close should immediately clear pending evals")
 	assert_false(plugin._pending.has("rid-eval-liveness"),
 		"session close should immediately clear pending liveness probes")
+	assert_false(plugin._pending.has("rid-eval-readiness"),
+		"session close should immediately clear pending readiness waits")
 	assert_true(plugin._pending.has("rid-shot"),
 		"session close should not steal another request kind's timeout ownership")
 	assert_eq(eval_conn.captured.size(), 1, "the eval receives one immediate failure")
@@ -553,11 +627,16 @@ func test_debugger_session_stop_fails_only_pending_evals() -> void:
 		"the liveness probe receives one immediate failure")
 	assert_eq(liveness_conn.captured[0].payload.error.code,
 		ErrorCodes.EVAL_GAME_NOT_READY)
+	assert_eq(readiness_conn.captured.size(), 1,
+		"the readiness wait receives one immediate failure")
+	assert_eq(readiness_conn.captured[0].payload.error.code,
+		ErrorCodes.EVAL_GAME_NOT_READY)
 	assert_eq(plugin.get_game_status().status, "stopped")
 
 	plugin._clear_pending("rid-shot")
 	eval_conn.free()
 	liveness_conn.free()
+	readiness_conn.free()
 	shot_conn.free()
 
 

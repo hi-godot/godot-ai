@@ -76,11 +76,16 @@ var _editor_log_buffer: McpEditorLogBuffer
 var _surfaced_error_tracker
 var vision_routing: VisionRoutingScript = null
 
-## Pending request_id -> {connection, timer, timeout_callable}.
-## We retain the bound timeout lambda so `_clear_pending` can disconnect
-## it on success/error; otherwise the SceneTreeTimer pins the captured
-## request_id until `timeout_sec` elapses (8s default).
+## Pending request_id -> phase-specific data. Every eval phase carries kind
+## and connection; timer-backed phases also retain their bound timeout lambda
+## so `_clear_pending` can disconnect it on success/error. Otherwise the
+## SceneTreeTimer pins the captured request_id until its timeout elapses.
 var _pending: Dictionary = {}
+
+## Testing seam for the readiness wait below. Production leaves this invalid
+## and awaits SceneTree.process_frame; editor tests inject a synchronous
+## callable because their runner does not pump frames while a test is running.
+var _eval_ready_frame_waiter: Callable = Callable()
 
 ## Flipped true when the game-side autoload sends its "mcp:hello" boot
 ## beacon for the current project_run. Reset as soon as a new run is
@@ -249,12 +254,26 @@ func _on_debugger_session_stopped(session_id: int) -> void:
 func _fail_pending_evals_not_ready(message: String) -> void:
 	for request_id in _pending.keys():
 		var pending: Dictionary = _pending.get(request_id, {})
-		if str(pending.get("kind", "")) not in ["eval_liveness", "eval"]:
+		if str(pending.get("kind", "")) not in [
+			"eval_ready_wait", "eval_liveness", "eval"
+		]:
 			continue
 		var connection: McpConnection = pending.get("connection")
 		_clear_pending(str(request_id))
 		if connection != null and is_instance_valid(connection):
 			_send_error(connection, str(request_id), ErrorCodes.EVAL_GAME_NOT_READY, message)
+
+
+func _is_current_game_run(run_token: int) -> bool:
+	return _game_run_active and _game_run_token == run_token
+
+
+func _fail_eval_not_ready(request_id: String, message: String) -> void:
+	var pending: Dictionary = _pending.get(request_id, {})
+	var connection: McpConnection = pending.get("connection")
+	_clear_pending(request_id)
+	if connection != null and is_instance_valid(connection):
+		_send_error(connection, request_id, ErrorCodes.EVAL_GAME_NOT_READY, message)
 
 
 ## --- #645: boot-time debugger breaks ---------------------------------------
@@ -1005,13 +1024,14 @@ func request_game_eval(
 			"Editor main loop is not a SceneTree — cannot schedule eval")
 		return
 
+	var run_token := _game_run_token
 	if is_game_capture_ready():
-		_probe_then_eval(tree, code, request_id, connection, timeout_sec)
+		_probe_then_eval(tree, code, request_id, connection, timeout_sec, run_token)
 		return
 
 	if _log_buffer:
 		_log_buffer.log("[debug] waiting for game_helper hello before eval (%s)" % request_id)
-	_wait_then_eval(tree, code, request_id, connection, timeout_sec)
+	_wait_then_eval(tree, code, request_id, connection, timeout_sec, run_token)
 
 
 func _wait_then_eval(
@@ -1020,27 +1040,54 @@ func _wait_then_eval(
 	request_id: String,
 	connection: McpConnection,
 	timeout_sec: float,
+	run_token: int,
 ) -> void:
 	## #500: eval uses EVAL_READY_WAIT_SEC (not the 20s GAME_READY_WAIT_SEC) so
 	## the not-ready path returns its actionable error before the 15s server-side
 	## command timeout fires an opaque TimeoutError. See EVAL_READY_WAIT_SEC.
+	_pending[request_id] = {
+		"kind": "eval_ready_wait",
+		"connection": connection,
+		"run_token": run_token,
+	}
 	var deadline := Time.get_ticks_msec() + int(EVAL_READY_WAIT_SEC * 1000.0)
 	## #645: the leading yield guarantees the dispatcher has registered the
 	## deferred request before any reply (a same-frame reply is dropped as
 	## expired); the break check bails out early because a parked game never
 	## registers its capture.
-	await tree.process_frame
-	while not is_game_capture_ready() and not _break_active and Time.get_ticks_msec() < deadline:
+	if _eval_ready_frame_waiter.is_valid():
+		await _eval_ready_frame_waiter.call()
+	else:
 		await tree.process_frame
+	while (
+		_pending.has(request_id)
+		and _is_current_game_run(run_token)
+		and not is_game_capture_ready()
+		and not _break_active
+		and Time.get_ticks_msec() < deadline
+	):
+		if _eval_ready_frame_waiter.is_valid():
+			await _eval_ready_frame_waiter.call()
+		else:
+			await tree.process_frame
+	## end_game_run() owns the reply once it has cleared this tracked wait.
+	if not _pending.has(request_id):
+		return
+	if not _is_current_game_run(run_token):
+		_fail_eval_not_ready(request_id,
+			"The game run changed before game_eval could start — the game stopped or restarted. Retry against the current run.")
+		return
 	if not is_game_capture_ready():
 		## #518: EVAL_GAME_NOT_READY (not INTERNAL_ERROR) — the play session is up
 		## but the game-side capture didn't register within the short wait. Fast
 		## and caller-actionable; classifying it apart from the opaque 10s hang
 		## keeps the INTERNAL_ERROR telemetry bucket meaning "the eval truly hung".
+		_clear_pending(request_id)
 		_send_error_response(connection, request_id,
 			_explain_not_live(get_game_status(-1, EVAL_READY_WAIT_SEC), ErrorCodes.EVAL_GAME_NOT_READY))
 		return
-	_probe_then_eval(tree, code, request_id, connection, timeout_sec)
+	_clear_pending(request_id)
+	_probe_then_eval(tree, code, request_id, connection, timeout_sec, run_token)
 
 
 ## #859: registration is run-scoped but not a liveness guarantee. Ping the
@@ -1052,7 +1099,12 @@ func _probe_then_eval(
 	request_id: String,
 	connection: McpConnection,
 	timeout_sec: float,
+	run_token: int,
 ) -> void:
+	if not _is_current_game_run(run_token) or not is_game_capture_ready():
+		_send_error(connection, request_id, ErrorCodes.EVAL_GAME_NOT_READY,
+			"The game run changed before game_eval could be checked — the game stopped or restarted. Retry against the current run.")
+		return
 	var session: EditorDebuggerSession = _first_active_session()
 	if session == null:
 		_send_error(connection, request_id, ErrorCodes.EVAL_GAME_NOT_READY,
@@ -1069,6 +1121,7 @@ func _probe_then_eval(
 		"timeout_callable": timeout_callable,
 		"code": code,
 		"eval_timeout_sec": timeout_sec,
+		"run_token": run_token,
 	}
 	session.send_message("mcp:eval_liveness", [request_id])
 	if _log_buffer:
@@ -1099,9 +1152,14 @@ func _on_eval_liveness_response(data: Array) -> void:
 	var connection: McpConnection = pending_entry.get("connection")
 	var code := str(pending_entry.get("code", ""))
 	var timeout_sec := float(pending_entry.get("eval_timeout_sec", 10.0))
+	var run_token := int(pending_entry.get("run_token", -1))
 	var loop_live := bool(data[1])
 	_clear_pending(request_id)
 	if connection == null or not is_instance_valid(connection):
+		return
+	if not _is_current_game_run(run_token) or not is_game_capture_ready():
+		_send_error(connection, request_id, ErrorCodes.EVAL_GAME_NOT_READY,
+			"The game run changed while game_eval liveness was being checked — the game stopped or restarted. Retry against the current run.")
 		return
 	if not loop_live:
 		_send_error(connection, request_id, ErrorCodes.EVAL_GAME_NOT_READY,
