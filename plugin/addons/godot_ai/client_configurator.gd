@@ -458,6 +458,7 @@ static func warm_env_snapshot() -> void:
 	_editor_setting_lookup(MODE_OVERRIDE_SETTING)
 	_editor_setting_lookup(SETTING_STARTUP_TRACE)
 	_editor_setting_lookup(SETTING_KEEP_SERVER_ON_EXIT)
+	McpSettings.warm_client_scope()
 	# Publish the complete launch context while EditorInterface access is safe;
 	# worker callers of capture_launch_context() read this snapshot only.
 	capture_launch_context()
@@ -664,7 +665,13 @@ static func _dispatch_check_status_with_cli_path_details(
 			# file gives exact launch-drift detection — a changed port, version
 			# pin, or exclusion list — which scanning `mcp list` stdout cannot,
 			# so it is preferred even when the CLI binary resolves.
-			if client.command_shape != Client.CommandShape.NONE and client.has_json_fallback():
+			# #872: ...but only while the selected scope is still the one
+			# `path_template` points at — see _scope_diverges_from_json_fallback.
+			if (
+				client.command_shape != Client.CommandShape.NONE
+				and client.has_json_fallback()
+				and not _scope_diverges_from_json_fallback(client, cli_path)
+			):
 				var command_launch := _resolved_or_discovered_launch(client, resolved_launch, launch_context)
 				return JsonStrategy.check_status_details(client, SERVER_NAME, url, command_launch)
 			var resolved_cli := cli_path if not cli_path.is_empty() else CliStrategy.resolve_cli_path(client)
@@ -680,6 +687,36 @@ static func _dispatch_check_status_with_cli_path_details(
 				cli_launch = _resolved_or_discovered_launch(client, resolved_launch, launch_context)
 			return CliStrategy.check_status_details(client, SERVER_NAME, url, resolved_cli, cli_launch)
 	return {"status": Client.Status.NOT_CONFIGURED, "error_msg": ""}
+
+
+## True when this client's CLI writes its entry somewhere `path_template`
+## cannot see, so reading that file would describe the wrong thing (#872).
+##
+## `claude mcp add --scope project` writes <cwd>/.mcp.json and `--scope local`
+## writes a per-project block inside ~/.claude.json — neither is the top-level
+## `mcpServers` map `path_template` + `server_key_path` resolve to. Reading it
+## anyway makes `_verify_post_state` turn every successful project-scope
+## Configure into "configure ok but verification still reads Not configured",
+## and pins the dock row red (or green, describing a stale user-scope entry).
+##
+## Diverging sends status down the CLI probe instead: `mcp list` is
+## scope-agnostic and inherits the same cwd the register ran in, so read-back
+## and write agree by construction. The cost is losing exact launch-drift
+## detection — a stdout scan sees the command, not the full argv — which is the
+## documented trade for a status that is merely coarse instead of wrong.
+##
+## Ordering matters: the token check and the scope compare both short-circuit
+## for every non-`{scope}` descriptor and for the default user scope, so the
+## PATH walk only runs when the answer can actually be true. An unresolvable
+## CLI means configure took the #463 JSON fallback, which writes user scope
+## whatever the setting says — so the file is the right thing to read again.
+static func _scope_diverges_from_json_fallback(client: Client, cli_path: String) -> bool:
+	if not CliStrategy.uses_scope_token(client):
+		return false
+	if McpSettings.client_scope() == McpSettings.DEFAULT_CLIENT_SCOPE:
+		return false
+	var resolved := cli_path if not cli_path.is_empty() else CliStrategy.resolve_cli_path(client)
+	return not resolved.is_empty()
 
 
 static func _resolved_or_discovered_launch(

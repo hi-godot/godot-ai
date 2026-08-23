@@ -20,6 +20,14 @@ func _init() -> void:
 	## Explicit scope: an unscoped `mcp remove` deletes from whichever scope
 	## matches first, which could eat a project-local entry the user made.
 	cli_unregister_template = PackedStringArray(["mcp", "remove", "--scope", "{scope}", "{name}"])
+	## Scope caveat: `--scope project` resolves `.mcp.json` against the
+	## *spawned CLI's* working directory, which is whatever the editor process
+	## inherited at launch — not necessarily `res://`. Godot has no API to set
+	## a child's cwd (`OS.execute_with_pipe` takes none), so this is an
+	## accepted limitation rather than something the descriptor can pin. It is
+	## self-consistent: `cli_status_args` runs from the same cwd, so the
+	## read-back finds whatever the register wrote (see
+	## `_scope_diverges_from_json_fallback` in client_configurator.gd).
 	cli_status_args = PackedStringArray(["mcp", "list"])
 	## #463: JSON fallback for when the `claude` binary isn't on PATH — e.g.
 	## Claude Code installed only as a VS Code / Cursor extension. The CLI is

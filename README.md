@@ -117,10 +117,23 @@ Configure writes the entry into the project's own config (for Claude Code,
 `<project>/.mcp.json`) instead. The server is then loaded only when the client is
 opened on that project. `local` is also accepted for clients that support it.
 
-The default stays `user` so existing installs are unchanged on upgrade. Change
-the setting and press **Configure** again to move an entry; press **Remove**
-*before* changing it if you want the old-scope entry cleaned up, since Remove
-targets whichever scope is currently selected.
+The default stays `user` so existing installs are unchanged on upgrade. To move
+an existing entry, change the setting and press **Configure** again — Configure
+clears `godot-ai` out of every scope before writing the new one, so the old
+entry doesn't linger. **Remove**, by contrast, only targets the scope that is
+currently selected, so switch back before removing if you changed the setting.
+
+Two caveats for `project` scope:
+
+- The client CLI resolves the project config against **its own working
+  directory**, which is the one the Godot editor was launched from — not
+  necessarily the project folder. Launching Godot from the project directory
+  (or from a shell already `cd`'d into it) puts `.mcp.json` where you expect.
+- Status for a project- or local-scoped entry is read back by asking the client
+  CLI to list its servers, rather than by reading the config file directly. The
+  dock still reports configured / not configured correctly, but it can no
+  longer spot a stale entry whose arguments drifted — press **Configure** again
+  after changing the port or excluded domains.
 
 </details>
 

@@ -14,6 +14,10 @@ extends RefCounted
 ## inter-Claude-Code contention) gets killed at the budget instead of
 ## locking up the caller forever — see issues #238 / #239.
 
+## The descriptor token resolved from `godot_ai/mcp_client_scope` (#872).
+## Only Claude Code takes it today; any `config_type = "cli"` descriptor can.
+const SCOPE_TOKEN := "{scope}"
+
 const _CONFIGURE_TIMEOUT_MS := 10000
 const _REMOVE_TIMEOUT_MS := 10000
 const _STATUS_TIMEOUT_MS := 6000
@@ -39,8 +43,18 @@ static func configure(
 	# the same budget — a hung unregister shouldn't block the configure
 	# that follows.
 	if not client.cli_unregister_template.is_empty():
-		var pre_args := _format_args(client.cli_unregister_template, server_name, server_url)
-		McpCliExec.run(cli, pre_args, _REMOVE_TIMEOUT_MS)
+		## #872: a `{scope}` descriptor sweeps EVERY scope, not just the
+		## selected one. Flipping the setting user -> project and pressing
+		## Configure would otherwise leave the old user-scope entry alive —
+		## exactly the "loaded in every unrelated workspace" problem the
+		## setting exists to fix. `mcp remove` on an absent entry is a no-op
+		## and the result is discarded either way, so the extra passes are
+		## safe; they cost one bounded subprocess per additional scope.
+		for pre_scope in _cleanup_scopes(client):
+			var pre_args := _format_args(
+				client.cli_unregister_template, server_name, server_url, {}, pre_scope
+			)
+			McpCliExec.run(cli, pre_args, _REMOVE_TIMEOUT_MS)
 
 	if client.cli_register_template.is_empty():
 		return {"status": "error", "message": "%s descriptor missing cli_register_template" % client.display_name}
@@ -182,15 +196,28 @@ static func remove(client: McpClient, server_name: String) -> Dictionary:
 ## is exactly `{args...}` is spliced into the argv as one element per launch
 ## arg. Whole-element matching keeps a literal brace inside a path or flag
 ## from ever triggering an expansion.
+##
+## `scope_override` forces a specific `{scope}` value instead of the live
+## setting; the configure pre-cleanup uses it to sweep the scopes the user is
+## NOT currently on. Empty means "resolve from the setting".
 static func format_args(
-	template: PackedStringArray, server_name: String, server_url: String, launch: Dictionary = {}
+	template: PackedStringArray,
+	server_name: String,
+	server_url: String,
+	launch: Dictionary = {},
+	scope_override: String = "",
 ) -> Array[String]:
-	return _format_args(template, server_name, server_url, launch)
+	return _format_args(template, server_name, server_url, launch, scope_override)
 
 
 static func _format_args(
-	template: PackedStringArray, server_name: String, server_url: String, launch: Dictionary = {}
+	template: PackedStringArray,
+	server_name: String,
+	server_url: String,
+	launch: Dictionary = {},
+	scope_override: String = "",
 ) -> Array[String]:
+	var scope := scope_override if not scope_override.is_empty() else McpSettings.client_scope()
 	var out: Array[String] = []
 	for arg in template:
 		var s := String(arg)
@@ -206,9 +233,29 @@ static func _format_args(
 		## Resolved per-call rather than baked into the descriptor so the
 		## setting can change without an editor restart, and so the manual
 		## command shown in the dock always matches what Configure would run.
-		s = s.replace("{scope}", McpSettings.client_scope())
+		s = s.replace(SCOPE_TOKEN, scope)
 		out.append(s)
 	return out
+
+
+## True when the descriptor's register template takes `{scope}`, i.e. where
+## its entry lands is decided by the `godot_ai/mcp_client_scope` setting rather
+## than fixed by the descriptor. The configurator uses this to decide whether
+## the JSON-fallback file is still a valid place to read status back from.
+static func uses_scope_token(client: McpClient) -> bool:
+	return client.cli_register_template.has(SCOPE_TOKEN)
+
+
+## Scopes the configure pre-cleanup removes from. A descriptor without the
+## `{scope}` token has exactly one place its entry can live, so it keeps the
+## single pass it always had — "" means "resolve the scope normally".
+static func _cleanup_scopes(client: McpClient) -> Array[String]:
+	if not uses_scope_token(client):
+		return [""]
+	var scopes: Array[String] = []
+	for scope in McpSettings.CLIENT_SCOPES:
+		scopes.append(String(scope))
+	return scopes
 
 
 static func _resolve_cli(client: McpClient) -> String:

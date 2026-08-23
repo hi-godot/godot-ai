@@ -54,10 +54,19 @@ Per-strategy command rendering (`CommandShape` docs in `_base.gd`):
 - **YAML** — FLAT with flow-style `args` (Hermes); `url`/`headers` are the
   legacy keys there because Hermes infers transport from key presence.
 - **CLI** — `cli_register_template` uses the whole-element tokens
-  `{command}` / `{args...}` (Claude Code:
-  `mcp add --scope user {name} -- {command} {args...}`). Status for
-  command-shape CLI clients reads the JSON fallback file the CLI itself
-  writes — exact drift detection that `mcp list` stdout scanning cannot give.
+  `{command}` / `{args...}`, plus the optional `{scope}` token resolved from
+  the `godot_ai/mcp_client_scope` EditorSetting (Claude Code:
+  `mcp add --scope {scope} {name} -- {command} {args...}`; `{scope}` is one of
+  `user` / `project` / `local`, defaulting to `user`). Status for command-shape
+  CLI clients reads the JSON fallback file the CLI itself writes — exact drift
+  detection that `mcp list` stdout scanning cannot give — but **only while the
+  selected scope is the one `path_template` points at**. `project` and `local`
+  land outside that file, so status falls through to the `mcp list` probe,
+  which inherits the same cwd the register ran in and therefore agrees with it
+  by construction (#872). Trading exact drift detection for a correct status
+  dot is deliberate: `_verify_post_state` re-reads status after every
+  Configure, so a file read that can't see the entry would report every
+  successful project-scope Configure as a failure.
 
 Per-client sharp edges (each is descriptor data, cited in the descriptor):
 Kilo Code stdio entries must stay TYPELESS (`type` is a legacy key — its v7
