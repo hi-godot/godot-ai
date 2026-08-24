@@ -66,13 +66,17 @@ static func _build_cli(
 			var parts: Array[String] = [short_name]
 			for arg in args:
 				parts.append(String(arg))
-			cmd = _format_shell_command(parts, shell_kind)
+			var lines := _sweep_lines(client, server_name, server_url, short_name, shell_kind)
+			lines.append(_render_command_line(parts, shell_kind))
+			cmd = _format_shell_block(lines, shell_kind)
 	else:
 		var args := McpCliStrategy.format_args(client.cli_register_template, server_name, server_url)
 		var parts: Array[String] = [short_name]
 		for arg in args:
 			parts.append(String(arg))
-		cmd = _format_shell_command(parts, shell_kind)
+		var lines := _sweep_lines(client, server_name, server_url, short_name, shell_kind)
+		lines.append(_render_command_line(parts, shell_kind))
+		cmd = _format_shell_block(lines, shell_kind)
 	# #463: a CLI client with a JSON fallback (Claude Code) may have no `claude`
 	# binary at all — e.g. installed only as a VS Code/Cursor extension. The CLI
 	# line above is useless to that user, so also show the config-file edit that
@@ -88,15 +92,50 @@ static func _shell_kind_for_platform() -> String:
 	return SHELL_POWERSHELL if OS.get_name() == "Windows" else SHELL_POSIX
 
 
+## #877: Configure's pre-cleanup removes `godot-ai` from every scope the
+## descriptor can write to before registering (see `_cli_strategy.gd`
+## `configure`). The manual text must show those removes too — otherwise the
+## snippet a user is told to run is not what Configure runs, and the sweep's
+## side effect (a `--scope project` remove edits the `.mcp.json` in the
+## CLI's cwd) stays invisible.
+static func _sweep_lines(
+	client: McpClient,
+	server_name: String,
+	server_url: String,
+	short_name: String,
+	shell_kind: String,
+) -> Array[String]:
+	var lines: Array[String] = []
+	if client.cli_unregister_template.is_empty():
+		return lines
+	for pre_scope in McpCliStrategy.cleanup_scopes(client):
+		var args := McpCliStrategy.format_args(
+			client.cli_unregister_template, server_name, server_url, {}, pre_scope
+		)
+		var parts: Array[String] = [short_name]
+		for arg in args:
+			parts.append(String(arg))
+		lines.append(_render_command_line(parts, shell_kind))
+	return lines
+
+
 ## Render a command for one explicitly named shell. The label is load-bearing:
 ## POSIX and PowerShell use different escaping for embedded single quotes, so
 ## presenting the command without its target shell invites a bad copy/paste.
 static func _format_shell_command(parts: Array[String], shell_kind: String) -> String:
+	return _format_shell_block([_render_command_line(parts, shell_kind)], shell_kind)
+
+
+static func _format_shell_block(lines: Array[String], shell_kind: String) -> String:
+	var label := "Run in PowerShell:" if shell_kind == SHELL_POWERSHELL else "Run in a POSIX shell:"
+	return "%s\n%s" % [label, "\n".join(lines)]
+
+
+static func _render_command_line(parts: Array[String], shell_kind: String) -> String:
 	var rendered: Array[String] = []
 	for part in parts:
 		rendered.append(_shell_display_arg(part, shell_kind))
-	var label := "Run in PowerShell:" if shell_kind == SHELL_POWERSHELL else "Run in a POSIX shell:"
-	return "%s\n%s" % [label, " ".join(rendered)]
+	return " ".join(rendered)
 
 
 ## Quote one argv element for the paste-into-terminal hint. Single-quoted

@@ -19,6 +19,11 @@ func _init() -> void:
 	)
 	## Explicit scope: an unscoped `mcp remove` deletes from whichever scope
 	## matches first, which could eat a project-local entry the user made.
+	## The one sanctioned exception is Configure's pre-cleanup, which runs
+	## this template once per scope ON PURPOSE (`_cli_strategy.gd`
+	## `_cleanup_scopes`) so flipping the setting can't strand the old
+	## entry — the manual-command text renders those removes so the side
+	## effect is visible (#877).
 	cli_unregister_template = PackedStringArray(["mcp", "remove", "--scope", "{scope}", "{name}"])
 	## Scope caveat: `--scope project` resolves `.mcp.json` against the
 	## *spawned CLI's* working directory, which is whatever the editor process
@@ -43,18 +48,21 @@ func _init() -> void:
 	## #463: JSON fallback for when the `claude` binary isn't on PATH — e.g.
 	## Claude Code installed only as a VS Code / Cursor extension. The CLI is
 	## still preferred for Configure whenever it resolves; this is what gets
-	## written otherwise. `claude mcp add --scope user <name> -- <cmd> <args>`
-	## produces exactly this shape under `mcpServers` in ~/.claude.json
-	## (verified live against claude CLI in an isolated CLAUDE_CONFIG_DIR):
+	## written otherwise. At the default `user` scope, `claude mcp add
+	## --scope user <name> -- <cmd> <args>` produces exactly this shape under
+	## `mcpServers` in ~/.claude.json (verified live against claude CLI in an
+	## isolated CLAUDE_CONFIG_DIR):
 	##   "godot-ai": { "type": "stdio", "command": "<cmd>", "args": [...], "env": {} }
 	## The fallback writer omits the empty `env`; the verifier accepts both.
-	## Status always reads this file — it is the CLI's own store for user
-	## scope, and file reads give exact launch-drift detection that `mcp list`
-	## stdout scanning cannot.
+	## Status reads this file at the default `user` scope — the CLI's own
+	## store for that scope, and file reads give exact launch-drift detection
+	## that `mcp list` stdout scanning cannot. At `project`/`local` scope the
+	## entry lives elsewhere, so status routes to the `mcp get` scope probe
+	## instead — see `_scope_diverges_from_json_fallback` (#872).
 	path_template = {"unix": "~/.claude.json", "windows": "~/.claude.json"}
 	server_key_path = PackedStringArray(["mcpServers"])
 	## URL-mode shape, used only for the manual-instruction fallback text —
-	## `claude mcp add --scope user --transport http` writes {type: http, url}.
+	## `claude mcp add --scope <scope> --transport http` writes {type: http, url}.
 	entry_extra_fields = {"type": "http"}
 	command_shape = McpClient.CommandShape.FLAT
 	command_transport_key = "type"

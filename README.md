@@ -120,10 +120,15 @@ opened on that project. `local` is also accepted for clients that support it.
 The default stays `user` so existing installs are unchanged on upgrade. To move
 an existing entry, change the setting and press **Configure** again — Configure
 clears `godot-ai` out of every scope before writing the new one, so the old
-entry doesn't linger. **Remove**, by contrast, only targets the scope that is
-currently selected, so switch back before removing if you changed the setting.
+entry doesn't linger. That sweep runs on *every* Configure, whatever scope is
+selected, and its `project` pass resolves `.mcp.json` against the CLI's working
+directory (first caveat below) — so a `godot-ai` entry in that file is removed
+even when you only ever use `user` scope. The dock's "Run this manually" text
+shows the exact remove commands the sweep runs. **Remove**, by contrast, only
+targets the scope that is currently selected, so switch back before removing if
+you changed the setting.
 
-Two caveats for `project` scope:
+Caveats for `project` scope:
 
 - The client CLI resolves the project config against **its own working
   directory**, which is the one the Godot editor was launched from — not

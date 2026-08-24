@@ -672,7 +672,7 @@ static func _dispatch_check_status_with_cli_path_details(
 			if (
 				client.command_shape != Client.CommandShape.NONE
 				and client.has_json_fallback()
-				and not _scope_diverges_from_json_fallback(client, cli_path)
+				and not _scope_diverges_from_json_fallback(client)
 			):
 				var command_launch := _resolved_or_discovered_launch(client, resolved_launch, launch_context)
 				return JsonStrategy.check_status_details(client, SERVER_NAME, url, command_launch)
@@ -754,18 +754,15 @@ static func _note_unhonoured_scope(client: Client, result: Dictionary) -> Dictio
 ## detection — a stdout scan sees the command, not the full argv — which is the
 ## documented trade for a status that is merely coarse instead of wrong.
 ##
-## Ordering matters: the token check and the scope compare both short-circuit
-## for every non-`{scope}` descriptor and for the default user scope, so the
-## PATH walk only runs when the answer can actually be true. An unresolvable
-## CLI means configure took the #463 JSON fallback, which writes user scope
-## whatever the setting says — so the file is the right thing to read again.
-static func _scope_diverges_from_json_fallback(client: Client, cli_path: String) -> bool:
+## No CLI-resolvability check here (#879): when the CLI is unresolvable —
+## meaning configure took the #463 JSON fallback, which writes user scope
+## whatever the setting says — the caller's own fallback branch reads the
+## file with identical arguments, so re-walking PATH to pre-empt it changed
+## no outcome and cost a duplicate McpCliFinder.find per status check.
+static func _scope_diverges_from_json_fallback(client: Client) -> bool:
 	if not CliStrategy.uses_scope_token(client):
 		return false
-	if McpSettings.client_scope() == McpSettings.DEFAULT_CLIENT_SCOPE:
-		return false
-	var resolved := cli_path if not cli_path.is_empty() else CliStrategy.resolve_cli_path(client)
-	return not resolved.is_empty()
+	return McpSettings.client_scope() != McpSettings.DEFAULT_CLIENT_SCOPE
 
 
 static func _resolved_or_discovered_launch(
@@ -793,13 +790,13 @@ static func _verify_post_state(
 ) -> Dictionary:
 	if result.get("status") != "ok":
 		return result
-	var actual := _dispatch_check_status_with_cli_path_details(
+	var details := _dispatch_check_status_with_cli_path_details(
 		client, url, "", {}, resolved_launch
-	).get("status", Client.Status.NOT_CONFIGURED)
+	)
+	var actual: Client.Status = details.get("status", Client.Status.NOT_CONFIGURED)
 	if actual == expected:
 		return result
-	var path := client.resolved_config_path()
-	var path_hint := "" if path.is_empty() else " Inspect %s and remove the godot-ai entry by hand if needed." % path
+	var path_hint := _post_state_path_hint(client, str(details.get("resolved_scope", "")))
 	return {
 		"status": "error",
 		"message": "%s reported %s ok but verification still reads %s (expected %s).%s" % [
@@ -808,6 +805,33 @@ static func _verify_post_state(
 			path_hint,
 		],
 	}
+
+
+## Where to point the user when verification finds a surviving entry. The
+## scope probe's mismatch verdict carries `resolved_scope` (#879); without it,
+## `resolved_config_path()` (`path_template`) is the right file only for the
+## default user scope — naming ~/.claude.json for a project-scope survivor
+## sends the user to a file where there is nothing to find. `path_template`
+## has no project-relative token (see _note_unhonoured_scope), so the
+## project hint is phrased rather than resolved.
+static func _post_state_path_hint(client: Client, resolved_scope: String) -> String:
+	match resolved_scope:
+		"project":
+			return (
+				" The surviving entry is project-scoped: inspect the .mcp.json in the"
+				+ " directory the editor was launched from and remove the godot-ai entry"
+				+ " by hand if needed."
+			)
+		"local":
+			return (
+				" The surviving entry is local-scoped: inspect this project's block in %s"
+				+ " and remove the godot-ai entry by hand if needed."
+			) % client.resolved_config_path()
+		_:
+			var path := client.resolved_config_path()
+			if path.is_empty():
+				return ""
+			return " Inspect %s and remove the godot-ai entry by hand if needed." % path
 
 
 static func manual_command(id: String) -> String:

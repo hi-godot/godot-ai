@@ -4,6 +4,7 @@ extends McpTestSuite
 ## #816 rollout steps 5-6: launch discovery plus Codex's TOML command shape.
 
 var _scratch_dir: String
+var _saved_client_scope: Variant = null
 
 
 func suite_name() -> String:
@@ -13,11 +14,30 @@ func suite_name() -> String:
 func suite_setup(_ctx: Dictionary) -> void:
 	_scratch_dir = OS.get_user_data_dir().path_join("mcp_attach_client_tests")
 	DirAccess.make_dir_recursive_absolute(_scratch_dir)
+	## #876: pin `godot_ai/mcp_client_scope` to the default for this suite.
+	## `_claude_cli_clone()` copies the real descriptor's `{scope}` templates
+	## (but deliberately not `cli_scope_status_template` — these tests prove
+	## the JSON fallback file is authoritative), and that premise only holds
+	## at the default `user` scope: at `project`/`local` the configurator
+	## routes status away from the file and the clone's fake CLI spawn-fails
+	## to NOT_CONFIGURED. The user's ambient editor setting must not decide
+	## whether this suite passes.
+	var es := EditorInterface.get_editor_settings()
+	if es != null:
+		if es.has_setting(McpSettings.SETTING_CLIENT_SCOPE):
+			_saved_client_scope = es.get_setting(McpSettings.SETTING_CLIENT_SCOPE)
+		es.set_setting(McpSettings.SETTING_CLIENT_SCOPE, McpSettings.DEFAULT_CLIENT_SCOPE)
 
 
 func suite_teardown() -> void:
 	for file_name in DirAccess.get_files_at(_scratch_dir):
 		DirAccess.remove_absolute(_scratch_dir.path_join(file_name))
+	var es := EditorInterface.get_editor_settings()
+	if es != null:
+		if _saved_client_scope == null:
+			es.set_setting(McpSettings.SETTING_CLIENT_SCOPE, McpSettings.DEFAULT_CLIENT_SCOPE)
+		else:
+			es.set_setting(McpSettings.SETTING_CLIENT_SCOPE, _saved_client_scope)
 
 
 func test_codex_descriptor_declares_attach_shape_and_timeouts() -> void:
