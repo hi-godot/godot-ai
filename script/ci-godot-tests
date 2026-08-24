@@ -242,8 +242,14 @@ for line in raw.split('\n'):
         suites_run = content.get('suites_run', []) or []
         if expected_suites and suite_count < expected_suites:
             print(f'ERROR: only {suite_count} of {expected_suites} expected suites ran — suite discovery was truncated (#882).')
+            # Normalize BOTH sides by stripping an optional test_ prefix:
+            # suite_name() usually drops it (test_clients.gd -> 'clients')
+            # but not always (test_runner.gd -> 'test_runner'), and naming
+            # the wrong missing suite would misdirect the debugging.
+            def stripped(name):
+                return name[5:] if name.startswith('test_') else name
             expected_names = set(os.environ.get('EXPECTED_SUITE_NAMES', '').split())
-            missing = sorted(expected_names - set(suites_run))
+            missing = sorted(expected_names - {stripped(s) for s in suites_run})
             if missing:
                 print('  suites with no matching run (filename-derived names): ' + ', '.join(missing))
             print('  Re-import and restart the editor, then re-run.')

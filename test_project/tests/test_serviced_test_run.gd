@@ -360,7 +360,7 @@ func test_unknown_suite_filter_is_an_error_not_an_empty_run() -> void:
 	## #882: {"total": 0} for an unmatched `suite` filter is indistinguishable
 	## from a suite that registered with no tests — so a truncated discovery
 	## (suite file never registered) read as a harmless empty run. Pure-helper
-	## pin; run_tests() wires it in right after discovery.
+	## pin; run_tests() wires it in ahead of the no-suites branch.
 	var suites: Array = [ProbeSuite.new(), ClassifyProbe.new()]
 	assert_eq(TestHandlerScript.unknown_suite_error("", suites), {},
 		"no filter means no error")
@@ -368,10 +368,21 @@ func test_unknown_suite_filter_is_an_error_not_an_empty_run() -> void:
 		"a matching filter means no error")
 	var unknown: Dictionary = TestHandlerScript.unknown_suite_error("custom_tools", suites)
 	assert_false(unknown.is_empty(), "an unmatched filter must produce the error payload")
-	assert_contains(str(unknown.get("error", "")), "custom_tools")
-	assert_contains(str(unknown.get("error", "")), "truncated",
+	## A protocol error, never an "error" key inside a data success envelope —
+	## the same ErrorCodes.make contract as the paused/timeout aborts.
+	assert_is_error(unknown, ErrorCodes.INVALID_PARAMS)
+	var message := str(unknown["error"]["message"])
+	assert_contains(message, "custom_tools")
+	assert_contains(message, "truncated",
 		"the message must name the truncated-discovery possibility")
-	assert_eq(unknown.get("total"), 0)
-	var available: Array = unknown.get("suites_available", [])
+	var data: Dictionary = unknown["error"].get("data", {})
+	assert_eq(data.get("suite"), "custom_tools")
+	var available: Array = data.get("suites_available", [])
 	assert_true(available.has("probe") and available.has("classify_probe"),
 		"the payload lists what IS registered so the caller can self-diagnose")
+	## An EMPTY discovery with a filter still names the filter — the check
+	## runs before run_tests' no-suites branch (#883 review).
+	var empty_unknown: Dictionary = TestHandlerScript.unknown_suite_error("custom_tools", [])
+	assert_is_error(empty_unknown, ErrorCodes.INVALID_PARAMS)
+	assert_eq(empty_unknown["error"]["data"].get("suites_available"), [],
+		"zero discovered suites reads as an empty available list, not a crash")
