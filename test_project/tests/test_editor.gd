@@ -493,6 +493,32 @@ func test_eval_liveness_positive_response_dispatches_eval() -> void:
 	assert_eq(conn.captured.size(), 0, "a live probe should not emit an error")
 	conn.free()
 
+
+func test_eval_probe_without_active_debugger_session_fails_fast() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		skip("No SceneTree available")
+		return
+	var plugin := _RecordingEvalPlugin.new()
+	_mark_game_live(plugin)
+	if plugin._first_active_session() != null:
+		skip("an active debugger session is present; no-session branch not exercised")
+		return
+	var conn := _StubConnection.new()
+	var rid := "rid-probe-no-session"
+
+	plugin._probe_then_eval(
+		tree, "return 42", rid, conn, 10.0, plugin._game_run_token
+	)
+
+	assert_true(plugin.dispatched.is_empty(), "the eval must not be dispatched")
+	assert_false(plugin._pending.has(rid), "the guard must not leave pending state")
+	assert_eq(conn.captured.size(), 1, "one deferred failure reply")
+	assert_eq(conn.captured[0].payload.error.code, ErrorCodes.EVAL_GAME_NOT_READY)
+	assert_contains(conn.captured[0].payload.error.message, "debugger session")
+	conn.free()
+
+
 func test_eval_liveness_negative_response_fails_fast() -> void:
 	var plugin := McpDebuggerPlugin.new()
 	var conn := _StubConnection.new()

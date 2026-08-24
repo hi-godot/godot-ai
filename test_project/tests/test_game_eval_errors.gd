@@ -431,7 +431,12 @@ func test_eval_timeout_replies_eval_hung_when_game_live() -> void:
 	_mark_game_live(plugin)
 	var conn := _StubConnection.new()
 	var rid := "rid-timeout-live"
-	plugin._pending[rid] = {"connection": conn, "acked": true, "compiled": true}
+	plugin._pending[rid] = {
+		"connection": conn,
+		"run_token": plugin._game_run_token,
+		"acked": true,
+		"compiled": true,
+	}
 	plugin._on_eval_timeout(rid, 10.0)
 	assert_false(plugin._pending.has(rid), "the timeout clears the pending entry")
 	assert_eq(conn.captured.size(), 1, "one deferred reply")
@@ -451,7 +456,12 @@ func test_eval_timeout_unacked_names_unserviced_eval() -> void:
 	_mark_game_live(plugin)
 	var conn := _StubConnection.new()
 	var rid := "rid-timeout-noack"
-	plugin._pending[rid] = {"connection": conn, "acked": false, "compiled": false}
+	plugin._pending[rid] = {
+		"connection": conn,
+		"run_token": plugin._game_run_token,
+		"acked": false,
+		"compiled": false,
+	}
 	plugin._on_eval_timeout(rid, 10.0)
 	var payload: Dictionary = conn.captured[0]["payload"]
 	assert_eq(payload["error"]["code"], ErrorCodes.EVAL_HUNG,
@@ -470,13 +480,49 @@ func test_eval_timeout_replies_not_ready_when_game_in_break() -> void:
 	plugin.note_debug_break(false, "Invalid call. Nonexistent function 'foo' in base 'Nil'.")
 	var conn := _StubConnection.new()
 	var rid := "rid-timeout-break"
-	plugin._pending[rid] = {"connection": conn, "acked": true, "compiled": true}
+	plugin._pending[rid] = {
+		"connection": conn,
+		"run_token": plugin._game_run_token,
+		"acked": true,
+		"compiled": true,
+	}
 	plugin._on_eval_timeout(rid, 10.0)
 	var payload: Dictionary = conn.captured[0]["payload"]
 	assert_eq(payload["error"]["code"], ErrorCodes.EVAL_GAME_NOT_READY,
 		"a break-parked game replies EVAL_GAME_NOT_READY, not a phantom hang")
 	assert_contains(payload["error"]["message"], "debugger break",
 		"the break state is named in the message")
+	conn.free()
+
+
+func test_eval_timeout_from_prior_run_replies_not_ready() -> void:
+	## Model the defensive fallback when replacement-run tracking advances before
+	## an old timeout callback observes the cleanup normally owned by end_game_run().
+	var plugin := McpDebuggerPlugin.new()
+	_mark_game_live(plugin)
+	var original_run_token := plugin._game_run_token
+	var conn := _StubConnection.new()
+	var rid := "rid-timeout-prior-run"
+	plugin._pending[rid] = {
+		"connection": conn,
+		"run_token": original_run_token,
+		"acked": true,
+		"compiled": true,
+	}
+	plugin.begin_game_run()
+	plugin._game_ready = true
+	plugin._ready_run_token = plugin._game_run_token
+
+	plugin._on_eval_timeout(rid, 10.0)
+
+	assert_ne(plugin._game_run_token, original_run_token,
+		"the replacement game must have a distinct run token")
+	assert_false(plugin._pending.has(rid), "the prior-run timeout is consumed")
+	assert_eq(conn.captured.size(), 1, "one deferred failure reply")
+	var payload: Dictionary = conn.captured[0]["payload"]
+	assert_eq(payload["error"]["code"], ErrorCodes.EVAL_GAME_NOT_READY,
+		"a prior-run timeout must not be attributed as a hang in the new game")
+	assert_contains(payload["error"]["message"], "game run changed")
 	conn.free()
 
 

@@ -1204,6 +1204,7 @@ func _send_eval(
 	_pending[request_id] = {
 		"kind": "eval",
 		"connection": connection,
+		"run_token": _game_run_token,
 		"timer": timer,
 		"timeout_callable": timeout_callable,
 		"grace_timer": grace,
@@ -1240,9 +1241,17 @@ func _on_eval_timeout(request_id: String, timeout_sec: float) -> void:
 	var pending_entry = _pending.get(request_id)
 	if pending_entry == null:
 		return
+	var run_token := int(pending_entry.get("run_token", _game_run_token))
 	_clear_pending(request_id)
 	var conn: McpConnection = pending_entry.connection
 	if conn == null or not is_instance_valid(conn):
+		return
+	if run_token != _game_run_token:
+		_send_error(conn, request_id, ErrorCodes.EVAL_GAME_NOT_READY,
+			"The game run changed before game_eval completed — the original game stopped or restarted. Retry against the current run.")
+		if _log_buffer:
+			_log_buffer.log("[debug] !! eval timeout from prior run (%s, run=%d, current=%d)"
+				% [request_id, run_token, _game_run_token])
 		return
 	var status := get_game_status(-1, EVAL_READY_WAIT_SEC)
 	if str(status.get("status", "")) != "live":

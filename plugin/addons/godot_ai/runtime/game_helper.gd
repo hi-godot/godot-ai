@@ -270,6 +270,9 @@ static func _should_capture_stale_sync(
 ## #777: true when _process hasn't ticked within MAIN_LOOP_STALL_MSEC —
 ## i.e. the main loop is frozen (backgrounded window) or has never run.
 func _main_loop_appears_stalled() -> bool:
+	## The hello→probe round trip normally follows at least one _process tick.
+	## Treat the never-ticked sentinel as stalled defensively rather than
+	## dispatching an eval into a game whose main loop has not started.
 	if _last_loop_tick_msec < 0:
 		return true
 	return Time.get_ticks_msec() - _last_loop_tick_msec > MAIN_LOOP_STALL_MSEC
