@@ -355,3 +355,23 @@ func test_batch_rejects_run_tests() -> void:
 		"rejection points at the test_run tool"
 	)
 	dispatcher.clear()
+
+func test_unknown_suite_filter_is_an_error_not_an_empty_run() -> void:
+	## #882: {"total": 0} for an unmatched `suite` filter is indistinguishable
+	## from a suite that registered with no tests — so a truncated discovery
+	## (suite file never registered) read as a harmless empty run. Pure-helper
+	## pin; run_tests() wires it in right after discovery.
+	var suites: Array = [ProbeSuite.new(), ClassifyProbe.new()]
+	assert_eq(TestHandlerScript.unknown_suite_error("", suites), {},
+		"no filter means no error")
+	assert_eq(TestHandlerScript.unknown_suite_error("probe", suites), {},
+		"a matching filter means no error")
+	var unknown: Dictionary = TestHandlerScript.unknown_suite_error("custom_tools", suites)
+	assert_false(unknown.is_empty(), "an unmatched filter must produce the error payload")
+	assert_contains(str(unknown.get("error", "")), "custom_tools")
+	assert_contains(str(unknown.get("error", "")), "truncated",
+		"the message must name the truncated-discovery possibility")
+	assert_eq(unknown.get("total"), 0)
+	var available: Array = unknown.get("suites_available", [])
+	assert_true(available.has("probe") and available.has("classify_probe"),
+		"the payload lists what IS registered so the caller can self-diagnose")

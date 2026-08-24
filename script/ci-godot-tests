@@ -185,9 +185,28 @@ RESULT=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
   -H "Mcp-Session-Id: $SESSION_ID" \
   -d "$(printf '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"test_run","arguments":%s}}' "$TEST_ARGS")")
 
+# #882: discovery can be silently truncated — whole suites absent from
+# suites_run, or individual tests missing from a suite that did register —
+# with failed=0, no load_errors, and a non-zero total, so every gate below
+# this comment would pass over a hollowed-out run. Derive the expected suite
+# count from the checkout itself (suite files map 1:1 onto test_*.gd; helper
+# fixtures use mcp_/stub_ prefixes) so there is no magic number to drift.
+# GODOT_AI_MIN_TESTS (optional, set in the CI workflow) additionally floors
+# the total, because a suite-count check alone cannot see in-suite loss.
+# Anchored to the script's own location so the gate cannot be silently
+# disabled by running from a different cwd (an empty glob would read as
+# "expect 0 suites" and pass anything).
+TESTS_DIR="$(dirname "$0")/../test_project/tests"
+EXPECTED_SUITES=$(ls "$TESTS_DIR"/test_*.gd 2>/dev/null | wc -l | tr -d ' ')
+EXPECTED_SUITE_NAMES=$(ls "$TESTS_DIR"/test_*.gd 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/^test_//' -e 's/\.gd$//')
+if [ "$EXPECTED_SUITES" -eq 0 ]; then
+  echo "ERROR: found no test_*.gd files under $TESTS_DIR — cannot establish the expected suite count (#882)"
+  exit 1
+fi
+
 # Parse and report results
-echo "$RESULT" | python3 -c "
-import json, sys
+echo "$RESULT" | EXPECTED_SUITES="$EXPECTED_SUITES" EXPECTED_SUITE_NAMES="$EXPECTED_SUITE_NAMES" python3 -c "
+import json, os, sys
 raw = sys.stdin.read()
 for line in raw.split('\n'):
     if line.startswith('data: '):
@@ -217,6 +236,25 @@ for line in raw.split('\n'):
         if total == 0:
             print('ERROR: No tests ran — Godot plugin may not have connected')
             sys.exit(1)
+        # #882: fail on partial discovery, not just all-or-nothing loss.
+        expected_suites = int(os.environ.get('EXPECTED_SUITES', '0') or 0)
+        suite_count = content.get('suite_count', 0)
+        suites_run = content.get('suites_run', []) or []
+        if expected_suites and suite_count < expected_suites:
+            print(f'ERROR: only {suite_count} of {expected_suites} expected suites ran — suite discovery was truncated (#882).')
+            expected_names = set(os.environ.get('EXPECTED_SUITE_NAMES', '').split())
+            missing = sorted(expected_names - set(suites_run))
+            if missing:
+                print('  suites with no matching run (filename-derived names): ' + ', '.join(missing))
+            print('  Re-import and restart the editor, then re-run.')
+            sys.exit(1)
+        min_tests = int(os.environ.get('GODOT_AI_MIN_TESTS', '0') or 0)
+        if min_tests and total < min_tests:
+            print(f'ERROR: total {total} is below the GODOT_AI_MIN_TESTS floor of {min_tests} — in-suite discovery was truncated (#882).')
+            print('  If tests were legitimately removed, lower GODOT_AI_MIN_TESTS in .github/workflows/ci.yml.')
+            sys.exit(1)
+        if expected_suites:
+            print(f'Suites: {suite_count}/{expected_suites} expected' + (f'; total floor: {min_tests}' if min_tests else ''))
         break
 else:
     print('ERROR: No valid response from test_run')

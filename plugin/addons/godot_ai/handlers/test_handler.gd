@@ -101,6 +101,14 @@ func run_tests(params: Dictionary) -> Dictionary:
 		_annotate_edited_scene(no_suites)
 		return {"data": no_suites}
 
+	## #882: an explicit `suite` filter that matches nothing must say so, not
+	## return {"total": 0} — a caller cannot otherwise distinguish "suite has
+	## no tests" from "suite was never registered" (truncated discovery).
+	var unknown := unknown_suite_error(suite_filter, suites)
+	if not unknown.is_empty():
+		_annotate_edited_scene(unknown)
+		return {"data": unknown}
+
 	var ctx := {
 		"undo_redo": _undo_redo,
 		"log_buffer": _log_buffer,
@@ -117,6 +125,29 @@ func run_tests(params: Dictionary) -> Dictionary:
 	return _map_outcome(
 		run["outcome"], "run", results, run["tests_not_run"], started_ms, budget_sec
 	)
+
+
+## Empty when `suite_filter` is empty or names a discovered suite; otherwise
+## the error payload run_tests returns. Static + pure so the suite can pin it
+## without calling run_tests() end-to-end (which would recursively re-run the
+## whole corpus from inside itself — see test_serviced_test_run.gd).
+static func unknown_suite_error(suite_filter: String, suites: Array) -> Dictionary:
+	if suite_filter.is_empty():
+		return {}
+	var names := PackedStringArray()
+	for suite: McpTestSuite in suites:
+		names.append(suite.suite_name())
+	if names.has(suite_filter):
+		return {}
+	return {
+		"error": (
+			"No suite named '%s' is registered (%d discovered)."
+			+ " If it should exist, discovery may be truncated —"
+			+ " re-import and restart the editor (#882)."
+		) % [suite_filter, names.size()],
+		"total": 0,
+		"suites_available": Array(names),
+	}
 
 
 ## Map a runner/discovery outcome onto the response envelope. Ownership is

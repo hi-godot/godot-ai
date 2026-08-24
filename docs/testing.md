@@ -42,6 +42,9 @@ That's the whole loop.
   is reported in the response's `load_errors`; the remaining suites still run.
 - Suites run sorted by `suite_name()`; within a suite, `test_*` methods run in
   alphabetical order.
+- A `suite=` filter that names no registered suite is an error carrying
+  `suites_available`, not an empty run — `{"total": 0}` would be
+  indistinguishable from a silently truncated discovery (#882).
 - Test methods must be synchronous. The runner does not await coroutines — a
   test suspends at its first `await` and everything after it never runs
   (usually surfacing as a zero-assertion failure).
