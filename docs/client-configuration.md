@@ -1,4 +1,4 @@
-# Client configuration (23 MCP clients)
+# Client configuration (24 MCP clients)
 
 Part of the Godot AI agent guide — see [AGENTS.md](../AGENTS.md) for the always-loaded rules.
 
@@ -7,7 +7,7 @@ The registry + strategy system that auto-configures MCP clients.
 
 ## Client configuration
 
-The plugin auto-configures 23 MCP clients via a registry + strategy system in
+The plugin auto-configures 24 MCP clients via a registry + strategy system in
 `plugin/addons/godot_ai/clients/`. Read that directory for the mechanics; two
 rules are not visible in the code:
 

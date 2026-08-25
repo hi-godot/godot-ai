@@ -315,7 +315,14 @@ static func _build_dsh(
 			lines.append("Attach launch command unavailable: %s" % launch_error)
 		if client.command_supports_url_fallback:
 			lines.append("")
-			lines.append("Advanced fallback — replace the command/args block above with this URL-mode entry; never configure both shapes together. URL mode depends on the harness' own reconnect behavior. If the server is down when the harness starts, restarting the harness may be required.")
+			## No command/args block was rendered on the launch-error path, so
+			## "replace the block above" would point at nothing.
+			var fallback_lead := (
+				"replace the command/args block above with this URL-mode entry"
+				if launch_error.is_empty()
+				else "use this URL-mode entry instead"
+			)
+			lines.append("Advanced fallback — %s; never configure both shapes together. URL mode depends on the harness' own reconnect behavior. If the server is down when the harness starts, restarting the harness may be required." % fallback_lead)
 			var fallback_entry := McpDshStrategy.build_url_entry(client, server_name, server_url)
 			for row_line in McpDshStrategy.render_insert_row(entry_id_value, fallback_entry):
 				lines.append(String(row_line))

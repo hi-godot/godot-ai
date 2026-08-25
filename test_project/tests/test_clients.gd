@@ -4461,7 +4461,20 @@ func test_dsh_manual_command_shows_insert_row() -> void:
 	assert_contains(manual, "serverName: godot-ai")
 	assert_contains(manual, "transport: stdio")
 	assert_contains(manual, "Advanced fallback", "URL fallback text must be present")
+	assert_contains(manual, "replace the command/args block above", "with a launcher, the fallback refers to the rendered block")
 	assert_contains(manual, "streamable-http")
+
+	## On the launch-error path no command/args block is rendered, so the
+	## fallback text must not tell the user to replace one.
+	var manual_no_launch := McpManualCommand.build(
+		c, "godot-ai", "http://127.0.0.1:8000/mcp", path, {"ok": false, "error": "no launcher"}
+	)
+	assert_contains(manual_no_launch, "Attach launch command unavailable: no launcher")
+	assert_contains(manual_no_launch, "use this URL-mode entry instead")
+	assert_false(
+		manual_no_launch.contains("replace the command/args block above"),
+		"no command block was rendered, so nothing exists to replace"
+	)
 
 
 func _make_test_dsh_client(path: String) -> McpClient:
