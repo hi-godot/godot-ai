@@ -98,6 +98,19 @@ def test_rejects_ambiguous_sessions_without_pin(
     assert "two@2222" in error
 
 
+def test_rejects_zero_sessions_without_pin(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit):
+        guard._select_session(
+            _payload(),
+            expected_project=str(tmp_path / "expected"),
+            explicit_pin="",
+        )
+
+    assert "no Godot session is connected" in capsys.readouterr().err
+
+
 def test_rejects_explicit_pin_that_is_not_connected(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -168,3 +181,12 @@ def test_main_runner_pins_scene_and_test_calls() -> None:
 
     assert "PIN_SESSION=$(ci_select_godot_session" in source
     assert "args['session_id'] = pin" in source
+
+
+def test_quit_runner_fails_closed_when_session_status_query_fails() -> None:
+    source = (ROOT / "script" / "ci-quit-test").read_text(encoding="utf-8")
+
+    assert "TARGET_PRESENT=1" in source
+    assert "if ! SESSIONS=$(mcp_call session_manage" in source
+    assert "A failed registry query is not proof" in source
+    assert "|| echo '{\"sessions\":[]}'" not in source

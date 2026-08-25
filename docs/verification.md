@@ -48,8 +48,8 @@ Every shell `script/ci-*` runner verifies the editor before its first tool
 mutation. With no explicit pin, exactly one session must be connected and its
 normalized `project_path` must match this checkout's `test_project/`. This also
 catches a wrong `MCP_SERVER_URL` that happens to lead to one unrelated editor.
-Once selected, the runner pins every subsequent tool call to that session so a
-later connection cannot change the target.
+Once selected, the runner pins every subsequent non-session-management tool
+call to that session so a later connection cannot change the target.
 
 **With several editors connected, pin the one you mean.** Multiple editors
 sharing port 8000 is a supported setup (see [worktrees](worktrees.md)), so the

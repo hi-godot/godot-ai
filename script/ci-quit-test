@@ -92,16 +92,25 @@ print(f'editor_quit OK: {content.get(\"message\", \"\")}')
 # Verify the session disconnected (proves Godot actually shut down).
 # The session should disappear from the registry within a few seconds.
 echo "Waiting for session to disconnect..."
+TARGET_PRESENT=1
 for i in $(seq 1 20); do
   sleep 0.5
-  # session_manage may fail if the MCP session expired — that's also fine
-  SESSIONS=$(mcp_call session_manage '{"op":"list"}' 2>/dev/null || echo '{"sessions":[]}')
-  TARGET_PRESENT=$(TARGET_GODOT_SESSION="$TARGET_GODOT_SESSION" python3 -c "
+  # A failed registry query is not proof that the editor disconnected. Retry,
+  # and only pass after a successful response no longer contains our target.
+  if ! SESSIONS=$(mcp_call session_manage '{"op":"list"}'); then
+    echo "Session status check failed on attempt $i; retrying..." >&2
+    continue
+  fi
+  if ! TARGET_PRESENT=$(TARGET_GODOT_SESSION="$TARGET_GODOT_SESSION" python3 -c "
 import json, os, sys
 target = os.environ['TARGET_GODOT_SESSION']
 sessions = json.loads(sys.stdin.read()).get('sessions', [])
 print(1 if any(s.get('session_id') == target for s in sessions) else 0)
-" <<< "$SESSIONS" 2>/dev/null || echo "0")
+" <<< "$SESSIONS"); then
+    TARGET_PRESENT=1
+    echo "Session status response was invalid on attempt $i; retrying..." >&2
+    continue
+  fi
   if [ "$TARGET_PRESENT" -eq 0 ] 2>/dev/null; then
     echo "Session disconnected after ~$((i / 2))s"
     break

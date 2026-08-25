@@ -38,9 +38,9 @@ def _read_object() -> dict[str, Any]:
     try:
         payload = json.load(sys.stdin)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"session response is not valid JSON: {exc}") from exc
+        raise ValueError(f"input is not valid JSON: {exc}") from exc
     if not isinstance(payload, dict):
-        raise ValueError("session response must be a JSON object")
+        raise ValueError("input must be a JSON object")
     return payload
 
 
