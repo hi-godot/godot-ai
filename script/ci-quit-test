@@ -104,7 +104,12 @@ for i in $(seq 1 20); do
   if ! TARGET_PRESENT=$(TARGET_GODOT_SESSION="$TARGET_GODOT_SESSION" python3 -c "
 import json, os, sys
 target = os.environ['TARGET_GODOT_SESSION']
-sessions = json.loads(sys.stdin.read()).get('sessions', [])
+payload = json.loads(sys.stdin.read())
+if not isinstance(payload, dict):
+    raise ValueError('session response must be a JSON object')
+sessions = payload.get('sessions')
+if not isinstance(sessions, list) or not all(isinstance(s, dict) for s in sessions):
+    raise ValueError('session response is missing a valid sessions array')
 print(1 if any(s.get('session_id') == target for s in sessions) else 0)
 " <<< "$SESSIONS"); then
     TARGET_PRESENT=1

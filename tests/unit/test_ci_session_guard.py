@@ -189,4 +189,6 @@ def test_quit_runner_fails_closed_when_session_status_query_fails() -> None:
     assert "TARGET_PRESENT=1" in source
     assert "if ! SESSIONS=$(mcp_call session_manage" in source
     assert "A failed registry query is not proof" in source
+    assert "sessions = payload.get('sessions')" in source
+    assert "if not isinstance(sessions, list)" in source
     assert "|| echo '{\"sessions\":[]}'" not in source
