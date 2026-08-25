@@ -9,10 +9,11 @@
 [![Godot Asset Store](https://img.shields.io/badge/Godot-Asset%20Store-478cbf?logo=godotengine&logoColor=white)](https://store.godotengine.org/asset/dlight/godot-ai/)
 [![Discord](https://img.shields.io/badge/Discord-Join%20chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/FDZ5fr2QkP)
 
-**Godot AI connects [MCP](https://modelcontextprotocol.io/introduction) clients
-to a live Godot editor.** Its [~43 tools and 120+ operations](docs/TOOLS.md) let
-AI assistants build scenes, edit nodes and scripts, wire signals, and configure
-UI, materials, animation, particles, cameras, and environments.
+**Godot AI connects Claude Code, Claude Desktop, Codex, Hermes Agent, and other
+[MCP](https://modelcontextprotocol.io/introduction) clients to a live Godot
+editor.** Its [~43 tools and 120+ operations](docs/TOOLS.md) let AI assistants
+build scenes, edit nodes and scripts, wire signals, and configure UI, materials,
+animation, particles, cameras, and environments.
 
 > 📦 Install from the [Godot Asset Store](https://store.godotengine.org/asset/dlight/godot-ai/) or the legacy [Asset Library](https://godotengine.org/asset-library/asset/5050). The Python server requires [uv](https://docs.astral.sh/uv/).
 
