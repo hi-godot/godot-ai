@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/hi-godot/godot-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/hi-godot/godot-ai/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/hi-godot/godot-ai/graph/badge.svg)](https://codecov.io/gh/hi-godot/godot-ai)
-[![Godot Asset Library](https://img.shields.io/badge/Godot-Asset%20Library-478cbf?logo=godotengine&logoColor=white)](https://godotengine.org/asset-library/asset/5050)
+[![Godot Asset Store](https://img.shields.io/badge/Godot-Asset%20Store-478cbf?logo=godotengine&logoColor=white)](https://store.godotengine.org/asset/dlight/godot-ai/)
 [![Discord](https://img.shields.io/badge/Discord-Join%20chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/FDZ5fr2QkP)
 
 **Godot AI connects [MCP](https://modelcontextprotocol.io/introduction) clients
@@ -14,7 +14,7 @@ to a live Godot editor.** Its [~43 tools and 120+ operations](docs/TOOLS.md) let
 AI assistants build scenes, edit nodes and scripts, wire signals, and configure
 UI, materials, animation, particles, cameras, and environments.
 
-> 📦 Install from the [Godot Asset Library](https://godotengine.org/asset-library/asset/5050) or [Godot Asset Store](https://store.godotengine.org/asset/dlight/godot-ai/). The Python server requires [uv](https://docs.astral.sh/uv/).
+> 📦 Install from the [Godot Asset Store](https://store.godotengine.org/asset/dlight/godot-ai/) or the legacy [Asset Library](https://godotengine.org/asset-library/asset/5050). The Python server requires [uv](https://docs.astral.sh/uv/).
 
 > 💬 **[Join the Discord](https://discord.gg/FDZ5fr2QkP)** — questions, showcases, and contributor chat.
 
@@ -59,10 +59,11 @@ Or [download the latest release ZIP](https://github.com/hi-godot/godot-ai/releas
 and extract `addons/godot_ai` into your project's `addons/` folder.
 
 <details>
-<summary>Or via the Godot Asset Library</summary>
+<summary>Or from a Godot marketplace</summary>
 
-In Godot, open **AssetLib**, search for **Godot AI**, then click **Download** and
-**Install**. Asset Library releases may lag behind GitHub.
+Use the [Godot Asset Store](https://store.godotengine.org/asset/dlight/godot-ai/)
+or the deprecated but still-active [Asset Library](https://godotengine.org/asset-library/asset/5050).
+Marketplace releases may lag behind GitHub.
 
 </details>
 
