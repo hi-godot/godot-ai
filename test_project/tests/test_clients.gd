@@ -4260,6 +4260,26 @@ func test_dsh_strategy_drift_and_legacy_url() -> void:
 	DirAccess.remove_absolute(path)
 
 
+func test_dsh_url_mode_entry_builds_and_verifies() -> void:
+	## URL-mode branch (CommandShape.NONE): build_entry delegates to
+	## build_url_entry, and verify_entry checks the url plus the
+	## streamable-http transport pin.
+	var c := _make_test_dsh_client(_tmp_scratch_path("godot_ai_dsh_url.yaml"))
+	c.command_shape = McpClient.CommandShape.NONE
+	var entry := McpDshStrategy.build_entry(c, "godot-ai", "http://127.0.0.1:8000/mcp")
+	assert_eq(String(entry.get("serverName", "")), "godot-ai")
+	assert_eq(String(entry.get("transport", "")), "streamable-http")
+	assert_eq(String(entry.get("url", "")), "http://127.0.0.1:8000/mcp")
+	assert_true(
+		McpDshStrategy.verify_entry(c, entry, "godot-ai", "http://127.0.0.1:8000/mcp"),
+		"the built URL entry must verify against the same URL"
+	)
+	assert_false(
+		McpDshStrategy.verify_entry(c, entry, "godot-ai", "http://127.0.0.1:9999/mcp"),
+		"a changed port must fail URL-mode verification"
+	)
+
+
 func test_dsh_plain_row_is_inert_and_migrated() -> void:
 	## A plain `- id: mcp-godot-ai` row only overrides an EXISTING bundle id;
 	## for a new id the loader skips it with a warning, so status must read
