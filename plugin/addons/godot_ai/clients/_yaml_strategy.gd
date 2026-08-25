@@ -346,7 +346,7 @@ static func _parse_entry(raw: String, lines: PackedStringArray, start: int, entr
 			data[key] = sub["value"]
 			i = sub["next_idx"]
 		else:
-			data[key] = _coerce_scalar(val)
+			data[key] = coerce_scalar(val)
 			i += 1
 	return {"name": name, "data": data, "next_idx": i}
 
@@ -375,7 +375,7 @@ static func _parse_subblock(lines: PackedStringArray, start: int, entry_indent: 
 		if val.is_empty():
 			i += 1
 			continue
-		sub[key] = _coerce_scalar(val)
+		sub[key] = coerce_scalar(val)
 		i += 1
 	return {"value": sub, "next_idx": i}
 
@@ -435,7 +435,7 @@ static func _emit_entry(name: String, data: Dictionary) -> PackedStringArray:
 
 ## Flow-style sequence with every item double-quoted. JSON string quoting is
 ## valid YAML double-quote style (shared escape set), so the same encoding
-## both writes the file and — via JSON.parse_string in `_coerce_scalar` —
+## both writes the file and — via JSON.parse_string in `coerce_scalar` —
 ## reads it back for verification. Shared with `McpDshStrategy` for the
 ## DeepSeek Harness patch-list `args` lines.
 static func emit_flow_array(values: Array) -> String:
@@ -505,8 +505,10 @@ static func _indent_of(line: String) -> int:
 ## url/headers/command/args. A hand-edited args in block style or with
 ## unquoted items doesn't JSON-parse — it stays a raw string, compares
 ## unequal, and surfaces as CONFIGURED_MISMATCH, which Reconfigure
-## normalizes back to the flow form.
-static func _coerce_scalar(s: String) -> Variant:
+## normalizes back to the flow form. Public: the dsh strategy parses its
+## patch-list scalars with the same rules, so both YAML dialects share one
+## coercion (#867 review).
+static func coerce_scalar(s: String) -> Variant:
 	var t := s.strip_edges()
 	if t.begins_with("[") and t.ends_with("]"):
 		var parsed_array: Variant = JSON.parse_string(t)

@@ -46,7 +46,8 @@ const ENTRY_ID_PREFIX := "mcp-"
 ## the CLI package). Quoted in the file: `@` is a reserved YAML indicator and
 ## cannot start a plain scalar.
 const PLUGIN_NAME := "@deepseek-ai/dsh-mcp-client"
-## 2-space indentation steps, matching the shipped profile patch files.
+## Indent of a nested entry header under `- insert:` (children step 2 spaces
+## deeper), matching the shipped profile patch files.
 const ENTRY_INDENT := 4
 
 
@@ -78,10 +79,11 @@ static func configure(
 	## Fail closed on content that is not a loader patch list: dsh's patch
 	## parser rejects a non-array file at boot, so appending our row to a
 	## top-level mapping would hand the user a broken file (#867 review).
-	## `[]` is a valid empty sequence and is normalized away before writing.
+	## `[]` is a valid empty sequence meaning "no rows"; the literal must not
+	## survive an append (block rows after `[]` are malformed YAML), so only
+	## that line is dropped — comments around it belong to the user and stay.
 	var text := String(read["data"])
-	if text.strip_edges() == "[]":
-		text = ""
+	text = _strip_empty_flow_sequence(text)
 	if not _is_patch_sequence(text):
 		return {
 			"status": "error",
@@ -395,6 +397,11 @@ static func _find_entry_block(lines: PackedStringArray, entry_id_value: String, 
 		var parsed := _parse_entry_header(lines[i])
 		if parsed.is_empty() or parsed.get("id") != entry_id_value:
 			continue
+		## A nested match must actually live inside an `- insert:` row: a
+		## `- id:` list under some other top-level row (an override row's own
+		## sequence, say) is not a loader entry and is not ours to touch.
+		if require_nested and not _under_insert_row(lines, i):
+			continue
 		var j := i + 1
 		var last_content := i
 		while j < lines.size():
@@ -408,6 +415,19 @@ static func _find_entry_block(lines: PackedStringArray, entry_id_value: String, 
 			j += 1
 		return {"start": i, "end": last_content + 1, "indent": indent}
 	return {}
+
+
+## True when the nearest preceding 0-indent content line above `index` is an
+## `- insert:` row header. Blank and comment lines are skipped; hitting the
+## top of the file without a header means the nested line is orphaned and
+## cannot be a loader entry.
+static func _under_insert_row(lines: PackedStringArray, index: int) -> bool:
+	for i in range(index - 1, -1, -1):
+		if _is_blank_or_comment(lines[i]):
+			continue
+		if _indent_of(lines[i]) == 0:
+			return lines[i].strip_edges().begins_with("- insert:")
+	return false
 
 
 ## Parse a `- id: <value>` header line into {"id": String}. Returns {} for
@@ -457,7 +477,7 @@ static func _extract_config(lines: PackedStringArray, block: Dictionary) -> Dict
 ## child lines are consumed by the recursion — the parent index advances past
 ## them so they are never re-parsed as top-level config fields (#867 review).
 ## Flow arrays parse back into Arrays via JSON. Quoted and plain scalars
-## strip like `_coerce_scalar` in the YAML strategy.
+## strip via the YAML strategy's shared `coerce_scalar`.
 static func _parse_block_lines(lines: PackedStringArray, start: int, end: int, min_indent: int) -> Dictionary:
 	var out: Dictionary = {}
 	var i := start
@@ -487,39 +507,11 @@ static func _parse_block_lines(lines: PackedStringArray, start: int, end: int, m
 			out[key] = _parse_block_lines(lines, i + 1, child_end, indent)
 			i = child_end
 		else:
-			out[key] = _coerce_scalar(value)
+			## Shared with the YAML strategy so the two dialects can never
+			## drift on quoting/typing rules (#867 review).
+			out[key] = McpYamlStrategy.coerce_scalar(value)
 			i += 1
 	return out
-
-
-## Minimal scalar coercion mirroring `McpYamlStrategy._coerce_scalar`:
-## quoted strings strip, bare true/false/numbers type, and flow arrays
-## (the command entry's `args`) parse back into an Array. A hand-edited
-## block-style args list stays a raw string and surfaces as
-## CONFIGURED_MISMATCH, which Reconfigure normalizes back to the flow form.
-static func _coerce_scalar(s: String) -> Variant:
-	var t := s.strip_edges()
-	if t.begins_with("[") and t.ends_with("]"):
-		var parsed_array: Variant = JSON.parse_string(t)
-		if parsed_array is Array:
-			return parsed_array
-		return t
-	if t.begins_with("\"") and t.ends_with("\""):
-		var parsed_string: Variant = JSON.parse_string(t)
-		if parsed_string is String:
-			return parsed_string
-		return t.substr(1, t.length() - 2)
-	if t.begins_with("'") and t.ends_with("'"):
-		return t.substr(1, t.length() - 2)
-	if t == "true":
-		return true
-	if t == "false":
-		return false
-	if t.is_valid_int():
-		return t.to_int()
-	if t.is_valid_float():
-		return t.to_float()
-	return t
 
 
 # --- Rewrites ---------------------------------------------------------------
@@ -642,6 +634,31 @@ static func _is_blank_or_comment_only(text: String) -> bool:
 		if not stripped.is_empty() and not stripped.begins_with("#"):
 			return false
 	return true
+
+
+## When the document's only content line is the empty flow sequence `[]`,
+## return the text with that one line removed — blanks and comments stay,
+## because they belong to the user. Any other document comes back unchanged;
+## a `[]` mixed with real rows is left for `_is_patch_sequence` to refuse.
+static func _strip_empty_flow_sequence(text: String) -> String:
+	var lines := _split_lines(text)
+	var bracket_line := -1
+	for i in range(lines.size()):
+		if _is_blank_or_comment(lines[i]):
+			continue
+		if bracket_line < 0 and lines[i].strip_edges() == "[]":
+			bracket_line = i
+			continue
+		return text
+	if bracket_line < 0:
+		return text
+	var parts: Array[String] = []
+	for i in range(lines.size()):
+		if i != bracket_line:
+			parts.append(lines[i])
+	if parts.is_empty():
+		return ""
+	return _join_lines(parts)
 
 
 ## True when the text is a valid loader patch list (or empty/comment-only /

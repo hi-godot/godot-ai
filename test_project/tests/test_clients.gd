@@ -65,9 +65,13 @@ func suite_teardown() -> void:
 
 func test_registry_loads_all_clients() -> void:
 	var ids := McpClientRegistry.ids()
-	assert_gt(ids.size(), 10, "Expected at least 10 registered clients, got %d" % ids.size())
+	assert_eq(
+		ids.size(),
+		McpClientRegistry._CLIENT_SCRIPT_PATHS.size(),
+		"Every registered client script must load; got %d of %d" % [ids.size(), McpClientRegistry._CLIENT_SCRIPT_PATHS.size()]
+	)
 	# Each existing client must remain registered for behaviour parity.
-	for required in ["claude_code", "claude_desktop", "codex", "grok", "antigravity", "zoo_code", "hermes", "pi"]:
+	for required in ["claude_code", "claude_desktop", "codex", "grok", "antigravity", "zoo_code", "hermes", "pi", "deepseek_harness"]:
 		assert_true(McpClientRegistry.has_id(required), "Missing client: %s" % required)
 
 
@@ -4116,7 +4120,11 @@ func test_dsh_strategy_round_trip() -> void:
 		McpClient.Status.NOT_CONFIGURED,
 		"removed entry must read back NOT_CONFIGURED"
 	)
-	DirAccess.remove_absolute(path)
+	assert_false(
+		FileAccess.file_exists(path),
+		"an all-blank patch file must be deleted, not written back — dsh fails boot on a non-array file"
+	)
+	_remove_if_exists(path)
 
 
 func test_dsh_strategy_preserves_other_rows() -> void:
@@ -4302,6 +4310,66 @@ func test_dsh_strategy_refuses_non_sequence_file() -> void:
 	assert_eq(res.get("status", ""), "error", "configure must fail closed on a non-sequence file")
 	assert_contains(str(res.get("message", "")), "not a top-level YAML list")
 	assert_eq(_read_text(path), seed, "the invalid file must be left untouched")
+	DirAccess.remove_absolute(path)
+
+
+func test_dsh_strategy_configure_replaces_empty_flow_sequence() -> void:
+	## `[]` means "no rows", but the literal cannot survive an append — block
+	## rows after `[]` are malformed YAML dsh rejects at boot. Configure must
+	## drop exactly that line while keeping the user's comments around it.
+	var path := _tmp_scratch_path("godot_ai_dsh_empty_flow.yaml")
+	_remove_if_exists(path)
+	_write_text(path, "# reserved for my patches\n[]\n")
+	var c := _make_test_dsh_client(path)
+	var launch := _test_attach_launch()
+	var res := McpDshStrategy.configure(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch)
+	assert_eq(res.get("status", ""), "ok", "configure must report ok: %s" % res.get("message", ""))
+	var reread := _read_text(path)
+	assert_contains(reread, "# reserved for my patches", "the user's comment must survive")
+	assert_contains(reread, "- insert:")
+	assert_false(reread.contains("[]\n"), "the empty flow sequence line must be gone")
+	assert_eq(
+		McpDshStrategy.check_status(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch),
+		McpClient.Status.CONFIGURED,
+		"the rewritten file must read back CONFIGURED"
+	)
+	DirAccess.remove_absolute(path)
+
+
+func test_dsh_nested_id_under_non_insert_row_is_not_ours() -> void:
+	## A `- id: mcp-godot-ai` nested under some OTHER top-level row (an
+	## override row's own list, say) is not a loader entry: status must read
+	## NOT_CONFIGURED and configure/remove must never touch those lines.
+	var path := _tmp_scratch_path("godot_ai_dsh_foreign_nested.yaml")
+	_remove_if_exists(path)
+	var seed := (
+		"- id: session-widgets\n"
+		+ "  panels:\n"
+		+ "    - id: mcp-godot-ai\n"
+		+ "      title: not an mcp entry\n"
+	)
+	_write_text(path, seed)
+	var c := _make_test_dsh_client(path)
+	var launch := _test_attach_launch()
+	assert_eq(
+		McpDshStrategy.check_status(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch),
+		McpClient.Status.NOT_CONFIGURED,
+		"a nested id outside an insert row must not read as our entry"
+	)
+	var res := McpDshStrategy.configure(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch)
+	assert_eq(res.get("status", ""), "ok", "configure must report ok: %s" % res.get("message", ""))
+	var reread := _read_text(path)
+	assert_contains(reread, "title: not an mcp entry", "the foreign nested row must survive configure")
+	assert_contains(reread, "- insert:", "configure must append a fresh insert row instead")
+	assert_eq(
+		McpDshStrategy.check_status(c, "godot-ai", "http://127.0.0.1:8000/mcp", launch),
+		McpClient.Status.CONFIGURED
+	)
+	var rem := McpDshStrategy.remove(c, "godot-ai")
+	assert_eq(rem.get("status", ""), "ok", "remove must report ok: %s" % rem.get("message", ""))
+	reread = _read_text(path)
+	assert_contains(reread, "title: not an mcp entry", "the foreign nested row must survive remove")
+	assert_false(reread.contains("- insert:"), "our appended insert row must be gone after remove")
 	DirAccess.remove_absolute(path)
 
 
