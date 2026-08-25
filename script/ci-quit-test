@@ -5,7 +5,10 @@
 # Expects: Python server reachable at $MCP_SERVER_URL (default :8000, set in
 # _ci_env.sh), Godot editor with plugin connected.
 set -euo pipefail
-source "$(dirname "$0")/_ci_env.sh"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/_ci_env.sh"
+source "$SCRIPT_DIR/_ci_session_guard.sh"
 
 SERVER_URL="$MCP_SERVER_URL"
 HEADERS=(-H "Content-Type: application/json" -H "Accept: application/json, text/event-stream")
@@ -15,6 +18,9 @@ REQ_ID=0
 mcp_call() {
   local tool="$1"
   local args="$2"
+  if [ "$tool" != "session_manage" ] && [ -n "${TARGET_GODOT_SESSION:-}" ]; then
+    args=$(ci_pin_tool_args "$args" "$TARGET_GODOT_SESSION") || return 1
+  fi
   REQ_ID=$((REQ_ID + 1))
   local raw
   raw=$(curl -s --max-time 30 "$SERVER_URL" -X POST "${HEADERS[@]}" \
@@ -64,13 +70,11 @@ curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
 # Verify Godot is connected before quitting
 echo "Verifying Godot session..."
 SESSIONS=$(mcp_call session_manage '{"op":"list"}')
-COUNT=$(echo "$SESSIONS" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('count',0))")
-
-if [ "$COUNT" -eq 0 ] 2>/dev/null; then
-  echo "ERROR: No Godot session connected"
+if ! TARGET_GODOT_SESSION=$(ci_select_godot_session \
+  "$SESSIONS" "$REPO_ROOT/test_project" "${GODOT_AI_SESSION_ID:-}"); then
   exit 1
 fi
-echo "Godot session active (count: $COUNT)"
+echo "Godot session selected: $TARGET_GODOT_SESSION"
 
 # Call editor_quit
 echo "Calling editor_quit..."
@@ -91,15 +95,20 @@ echo "Waiting for session to disconnect..."
 for i in $(seq 1 20); do
   sleep 0.5
   # session_manage may fail if the MCP session expired — that's also fine
-  SESSIONS=$(mcp_call session_manage '{"op":"list"}' 2>/dev/null || echo '{"count":0}')
-  COUNT=$(echo "$SESSIONS" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('count',0))" 2>/dev/null || echo "0")
-  if [ "$COUNT" -eq 0 ] 2>/dev/null; then
+  SESSIONS=$(mcp_call session_manage '{"op":"list"}' 2>/dev/null || echo '{"sessions":[]}')
+  TARGET_PRESENT=$(TARGET_GODOT_SESSION="$TARGET_GODOT_SESSION" python3 -c "
+import json, os, sys
+target = os.environ['TARGET_GODOT_SESSION']
+sessions = json.loads(sys.stdin.read()).get('sessions', [])
+print(1 if any(s.get('session_id') == target for s in sessions) else 0)
+" <<< "$SESSIONS" 2>/dev/null || echo "0")
+  if [ "$TARGET_PRESENT" -eq 0 ] 2>/dev/null; then
     echo "Session disconnected after ~$((i / 2))s"
     break
   fi
 done
 
-if [ "$COUNT" -ne 0 ] 2>/dev/null; then
+if [ "$TARGET_PRESENT" -ne 0 ] 2>/dev/null; then
   echo "FAIL: Godot session still connected after 10s — quit did not work"
   exit 1
 fi

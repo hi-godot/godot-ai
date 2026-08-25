@@ -19,9 +19,11 @@
 # a same session_id before/after is only a sanity check, because the plugin
 # reuses its session_id across reconnects (connection.gd::_ready).
 set -euo pipefail
-source "$(dirname "$0")/_ci_env.sh"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/_ci_env.sh"
+source "$SCRIPT_DIR/_ci_session_guard.sh"
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FIXTURE_SRC="$REPO_ROOT/script/fixtures/test_mcp_slow_smoke.gd"
 FIXTURE_DST="$REPO_ROOT/test_project/tests/test_mcp_slow_smoke.gd"
 SUITE_NAME="mcp_slow_smoke"
@@ -62,22 +64,33 @@ else:
 }
 
 mcp_call() { # id name arguments-json
+  local args="$3"
+  if [ "$2" != "session_manage" ] && [ -n "${TARGET_GODOT_SESSION:-}" ]; then
+    args=$(ci_pin_tool_args "$args" "$TARGET_GODOT_SESSION") || return 1
+  fi
   curl -s -m 300 "$SERVER_URL" -X POST "${HEADERS[@]}" \
     -H "Mcp-Session-Id: $SESSION_ID" \
-    -d "{\"jsonrpc\":\"2.0\",\"id\":$1,\"method\":\"tools/call\",\"params\":{\"name\":\"$2\",\"arguments\":$3}}"
+    -d "{\"jsonrpc\":\"2.0\",\"id\":$1,\"method\":\"tools/call\",\"params\":{\"name\":\"$2\",\"arguments\":$args}}"
 }
 
-godot_session_id() {
+godot_sessions() {
   mcp_call 7 session_manage '{"op":"list"}' | extract_content | python3 -c "
 import json, sys
 sc = json.loads(sys.stdin.read())
-sessions = sc.get('sessions', [])
-print(sessions[0]['session_id'] if sessions else '')
+sc.pop('_is_error', None)
+sc.pop('_rpc_id', None)
+print(json.dumps(sc))
 "
 }
 
-echo "Installing slow fixture suite ($EXPECTED_TESTS tests)..."
-cp "$FIXTURE_SRC" "$FIXTURE_DST"
+godot_target_session_id() {
+  godot_sessions | TARGET_GODOT_SESSION="$TARGET_GODOT_SESSION" python3 -c "
+import json, os, sys
+target = os.environ['TARGET_GODOT_SESSION']
+sessions = json.loads(sys.stdin.read()).get('sessions', [])
+print(target if any(s.get('session_id') == target for s in sessions) else '')
+"
+}
 
 # --- MCP handshake + wait for a Godot session (mirrors ci-godot-tests) ---
 echo "Waiting for Godot plugin to connect..."
@@ -89,8 +102,15 @@ for i in $(seq 1 60); do
   if [ -z "$SESSION_ID" ]; then sleep 2; continue; fi
   curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" -H "Mcp-Session-Id: $SESSION_ID" \
     -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' > /dev/null || true
-  GODOT_SESSION_BEFORE=$(godot_session_id || true)
-  if [ -n "${GODOT_SESSION_BEFORE:-}" ]; then
+  SESSIONS=$(godot_sessions || true)
+  SESSION_COUNT=$(python3 -c "import json,sys; print(len(json.loads(sys.stdin.read()).get('sessions', [])))" \
+    <<< "$SESSIONS" 2>/dev/null || echo "0")
+  if [ "$SESSION_COUNT" -gt 0 ] 2>/dev/null; then
+    if ! TARGET_GODOT_SESSION=$(ci_select_godot_session \
+      "$SESSIONS" "$REPO_ROOT/test_project" "${GODOT_AI_SESSION_ID:-}"); then
+      exit 1
+    fi
+    GODOT_SESSION_BEFORE="$TARGET_GODOT_SESSION"
     echo "Godot plugin connected (session: $GODOT_SESSION_BEFORE)"
     break
   fi
@@ -101,6 +121,9 @@ if [ -z "${GODOT_SESSION_BEFORE:-}" ]; then
   echo "ERROR: no Godot session connected"
   exit 1
 fi
+
+echo "Installing slow fixture suite ($EXPECTED_TESTS tests)..."
+cp "$FIXTURE_SRC" "$FIXTURE_DST"
 
 # Make sure discovery sees the just-copied fixture (fresh scan; the tool is
 # single-flight and settles before replying).
@@ -143,7 +166,7 @@ if failed or total != expected or passed != expected:
     sys.exit(1)
 "
 
-GODOT_SESSION_AFTER=$(godot_session_id || true)
+GODOT_SESSION_AFTER=$(godot_target_session_id || true)
 if [ "$GODOT_SESSION_AFTER" != "$GODOT_SESSION_BEFORE" ]; then
   echo "FAIL: session identity changed across the run ('$GODOT_SESSION_BEFORE' -> '$GODOT_SESSION_AFTER')"
   exit 1

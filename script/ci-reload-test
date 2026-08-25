@@ -8,7 +8,10 @@
 # Expects: Python server reachable at $MCP_SERVER_URL (default :8000, set in
 # _ci_env.sh), Godot editor with plugin connected.
 set -euo pipefail
-source "$(dirname "$0")/_ci_env.sh"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/_ci_env.sh"
+source "$SCRIPT_DIR/_ci_session_guard.sh"
 
 SERVER_URL="$MCP_SERVER_URL"
 HEADERS=(-H "Content-Type: application/json" -H "Accept: application/json, text/event-stream")
@@ -19,6 +22,9 @@ REQ_ID=0
 mcp_call() {
   local tool="$1"
   local args="$2"
+  if [ "$tool" != "session_manage" ] && [ -n "${TARGET_GODOT_SESSION:-}" ]; then
+    args=$(ci_pin_tool_args "$args" "$TARGET_GODOT_SESSION") || return 1
+  fi
   REQ_ID=$((REQ_ID + 1))
   local raw
   raw=$(curl -s --max-time 30 "$SERVER_URL" -X POST "${HEADERS[@]}" \
@@ -78,6 +84,17 @@ curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
   -H "Mcp-Session-Id: $SESSION_ID" \
   -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' > /dev/null
 
+# Resolve and pin the exact editor before the first scene mutation. An
+# explicit pin intentionally bypasses the checkout path check for supported
+# cross-worktree smoke runs; an implicit lone session must match (#885).
+echo "Verifying Godot session..."
+SESSIONS=$(mcp_call_or_die "session list" session_manage '{"op":"list"}')
+if ! TARGET_GODOT_SESSION=$(ci_select_godot_session \
+  "$SESSIONS" "$REPO_ROOT/test_project" "${GODOT_AI_SESSION_ID:-}"); then
+  exit 1
+fi
+echo "Godot session selected: $TARGET_GODOT_SESSION"
+
 # --- Step 1: Create a cube with the OLD plugin ---
 echo "Creating test node with old plugin..."
 CREATE_RESULT=$(mcp_call_or_die "node_create" node_create '{"type":"MeshInstance3D","name":"ReloadTestCube","parent_path":""}')
@@ -109,6 +126,13 @@ if old_id == new_id:
     sys.exit(1)
 print(f'editor_reload_plugin OK: {old_id[:12]}... -> {new_id[:12]}...')
 "
+TARGET_GODOT_SESSION=$(python3 -c "
+import json, sys
+new_id = json.loads(sys.stdin.read()).get('new_session_id', '')
+if not new_id:
+    raise SystemExit('FAIL: editor_reload_plugin did not return new_session_id')
+print(new_id)
+" <<< "$RELOAD_RESULT")
 
 # --- Step 3: Verify log buffer is fresh (proves plugin fully rebuilt) ---
 echo "Checking log buffer..."
@@ -185,7 +209,14 @@ print(f'Game-logs path OK: total={total}, returned={content.get(\"returned_count
 # calls — catches both single-reload and cumulative-state regressions.
 echo "Running 9 more reload iterations..."
 for i in $(seq 2 10); do
-  mcp_call_or_die "editor_reload_plugin #$i" editor_reload_plugin '{}' > /dev/null
+  RELOAD_ITER_RESULT=$(mcp_call_or_die "editor_reload_plugin #$i" editor_reload_plugin '{}')
+  TARGET_GODOT_SESSION=$(python3 -c "
+import json, sys
+new_id = json.loads(sys.stdin.read()).get('new_session_id', '')
+if not new_id:
+    raise SystemExit('FAIL: editor_reload_plugin did not return new_session_id')
+print(new_id)
+" <<< "$RELOAD_ITER_RESULT")
   # Rotate the post-reload probe across the three reported-stable tools.
   case $(( i % 3 )) in
     0)

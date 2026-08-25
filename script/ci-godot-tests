@@ -4,7 +4,10 @@
 # _ci_env.sh), Godot editor launched with plugin.
 # This script waits for the plugin to connect before running tests.
 set -euo pipefail
-source "$(dirname "$0")/_ci_env.sh"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/_ci_env.sh"
+source "$SCRIPT_DIR/_ci_session_guard.sh"
 
 SERVER_URL="$MCP_SERVER_URL"
 HEADERS=(-H "Content-Type: application/json" -H "Accept: application/json, text/event-stream")
@@ -61,8 +64,10 @@ if [ -z "${SESSION_ID:-}" ]; then
   exit 1
 fi
 
-# Verify a Godot session is actually connected before running tests
-FINAL_COUNT=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
+# Resolve the exact editor this run will drive. A lone session is not trusted
+# until its project_path matches this checkout; after selection every call is
+# pinned so a later connection cannot change the active target (#885).
+FINAL_SESSIONS=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
   -H "Mcp-Session-Id: $SESSION_ID" \
   -d '{"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"session_manage","arguments":{"op":"list"}}}' \
   | python3 -c "
@@ -75,47 +80,16 @@ for line in raw.split('\n'):
         if not sc:
             text = data.get('result',{}).get('content',[{}])[0].get('text','{}')
             sc = json.loads(text)
-        print(sc.get('count', 0))
+        print(json.dumps(sc))
         break
-" 2>/dev/null || echo "0")
+" 2>/dev/null || true)
 
-# Fail closed: an empty/non-numeric parse must read as "no session", not
-# silently pass the [ -eq ] test failure through (audit backlog).
-case "$FINAL_COUNT" in (""|*[!0-9]*) FINAL_COUNT=0;; esac
-if [ "$FINAL_COUNT" -eq 0 ] 2>/dev/null; then
-  echo "ERROR: No Godot session connected after 60 attempts at $SERVER_URL."
-  echo "  Either the plugin did not load, or the editor's server is on another port:"
-  echo "  check the editor log's 'MCP | started server ... --port N' line and set MCP_SERVER_URL."
+if [ -z "$FINAL_SESSIONS" ]; then
+  echo "ERROR: Could not read connected sessions from $SERVER_URL."
   exit 1
 fi
-
-# Fail closed on ambiguity too. CI runs exactly one editor, but locally several
-# can share port 8000 — one per worktree is a supported setup. Without a pin,
-# `scene_open` and `test_run` below hit whichever session is active, which can
-# yank another session's open scene and run tests against the wrong project.
-# Set GODOT_AI_SESSION_ID=<project-slug>@<4hex> to target one deliberately.
-PIN_SESSION="${GODOT_AI_SESSION_ID:-}"
-if [ "$FINAL_COUNT" -gt 1 ] && [ -z "$PIN_SESSION" ]; then
-  echo "ERROR: $FINAL_COUNT Godot sessions are connected; refusing to guess which one to drive."
-  echo "Connected sessions:"
-  curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
-    -H "Mcp-Session-Id: $SESSION_ID" \
-    -d '{"jsonrpc":"2.0","id":98,"method":"tools/call","params":{"name":"session_manage","arguments":{"op":"list"}}}' \
-    | python3 -c "
-import json, sys
-raw = sys.stdin.read()
-for line in raw.split('\n'):
-    if line.startswith('data: '):
-        data = json.loads(line[6:])
-        sc = data.get('result',{}).get('structuredContent',{})
-        if not sc:
-            text = data.get('result',{}).get('content',[{}])[0].get('text','{}')
-            sc = json.loads(text)
-        for s in sc.get('sessions', []):
-            print('  %s  %s' % (s.get('session_id','?'), s.get('project_path','?')))
-        break
-" 2>/dev/null || echo "  (could not list sessions)"
-  echo "Re-run with GODOT_AI_SESSION_ID set to the one you mean."
+if ! PIN_SESSION=$(ci_select_godot_session \
+  "$FINAL_SESSIONS" "$REPO_ROOT/test_project" "${GODOT_AI_SESSION_ID:-}"); then
   exit 1
 fi
 
@@ -199,7 +173,7 @@ RESULT=$(curl -s "$SERVER_URL" -X POST "${HEADERS[@]}" \
 # Anchored to the script's own location so the gate cannot be silently
 # disabled by running from a different cwd (an empty glob would read as
 # "expect 0 suites" and pass anything).
-TESTS_DIR="$(dirname "$0")/../test_project/tests"
+TESTS_DIR="$REPO_ROOT/test_project/tests"
 EXPECTED_SUITES=$(ls "$TESTS_DIR"/test_*.gd 2>/dev/null | wc -l | tr -d ' ')
 EXPECTED_SUITE_NAMES=$(ls "$TESTS_DIR"/test_*.gd 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/^test_//' -e 's/\.gd$//')
 if [ "$EXPECTED_SUITES" -eq 0 ]; then

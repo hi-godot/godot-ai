@@ -44,17 +44,23 @@ The symptom of forgetting is a healthy editor log next to
 `No Godot session connected after 60 attempts`: the runner was polling a
 different server the whole time.
 
+Every shell `script/ci-*` runner verifies the editor before its first tool
+mutation. With no explicit pin, exactly one session must be connected and its
+normalized `project_path` must match this checkout's `test_project/`. This also
+catches a wrong `MCP_SERVER_URL` that happens to lead to one unrelated editor.
+Once selected, the runner pins every subsequent tool call to that session so a
+later connection cannot change the target.
+
 **With several editors connected, pin the one you mean.** Multiple editors
-sharing port 8000 is a supported setup (see [worktrees](worktrees.md)), and
-`scene_open` would otherwise land in whichever session is active — yanking
-another session's open scene and testing the wrong project. The script refuses
-to guess: past one connected session it lists them and exits. Pick one with
+sharing port 8000 is a supported setup (see [worktrees](worktrees.md)), so the
+runners refuse to guess and list the connected sessions. Pick one with
 
 ```bash
 GODOT_AI_SESSION_ID='<project-slug>@<4hex>' script/ci-godot-tests
 ```
 
-which is passed as a per-call `session_id`, so it does not disturb the active
+which intentionally bypasses the checkout-path match for cross-worktree smoke
+runs and is passed as a per-call `session_id`, so it does not disturb the active
 session other clients are using. A pinned session that isn't connected fails
 loudly rather than falling back to the active one.
 
