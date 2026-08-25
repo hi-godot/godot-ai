@@ -673,6 +673,9 @@ func test_registry_wide_attach_shape_declarations() -> void:
 		"grok": [McpClient.CommandShape.COMMAND_ARRAY, null, ["url", "headers"]],
 		"hermes": [McpClient.CommandShape.FLAT, null, ["url", "headers"]],
 		"pi": [McpClient.CommandShape.FLAT, null, ["url", "headers", "type"]],
+		## DeepSeek Harness nests the launch under the loader entry's `config`
+		## and pins `transport` next to command/args (see _dsh_strategy.gd).
+		"deepseek_harness": [McpClient.CommandShape.FLAT, "stdio", ["url"]],
 		## cherry_studio deliberately stays URL-mode: its mcp_servers.json is
 		## not read by the app at all (SQLite-backed) — see #838 follow-up.
 		"cherry_studio": [McpClient.CommandShape.NONE, null, []],

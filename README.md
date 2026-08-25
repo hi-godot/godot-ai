@@ -9,7 +9,7 @@
 [![Godot Asset Library](https://img.shields.io/badge/Godot-Asset%20Library-478cbf?logo=godotengine&logoColor=white)](https://godotengine.org/asset-library/asset/5050)
 [![Discord](https://img.shields.io/badge/Discord-Join%20chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/FDZ5fr2QkP)
 
-**Connect MCP clients directly to a live Godot editor** via the [Model Context Protocol](https://modelcontextprotocol.io/introduction). Over **120 ops across ~43 MCP tools** ([full list](docs/TOOLS.md)) let AI assistants (Claude Code, Codex, **Grok Build**, Antigravity, Hermes Agent, etc.) build scenes, edit nodes and scripts, wire signals, and configure UI, materials, animations, particles, cameras, and environments.
+**Connect MCP clients directly to a live Godot editor** via the [Model Context Protocol](https://modelcontextprotocol.io/introduction). Over **120 ops across ~43 MCP tools** ([full list](docs/TOOLS.md)) let AI assistants (Claude Code, Codex, **Grok Build**, Antigravity, Hermes Agent, **DeepSeek Harness**, etc.) build scenes, edit nodes and scripts, wire signals, and configure UI, materials, animations, particles, cameras, and environments.
 
 > 🎉 **Now on the [Godot Asset Library](https://godotengine.org/asset-library/asset/5050) and the [new Godot Asset Store](https://store.godotengine.org/asset/dlight/godot-ai/)** — one-click install from Godot's **AssetLib** tab. You'll still need [uv](https://docs.astral.sh/uv/) for the Python server (see [Quick Start](#quick-start)).
 
@@ -83,7 +83,7 @@ The dock lists every supported client with a status dot and per-row
 **Configure** / **Remove** buttons, or press **Configure all**. Auto-configure
 covers:
 
-- **Claude Code**, **Claude Desktop**, **Antigravity**, **Hermes Agent**
+- **Claude Code**, **Claude Desktop**, **Antigravity**, **Hermes Agent**, **DeepSeek Harness**
 
 <details>
 <summary><strong>…and 17+ more clients</strong></summary>
