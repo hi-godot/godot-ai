@@ -1543,8 +1543,11 @@ static func prewarm_server_package_argv(version: String) -> Array[String]:
 	var pinned := version.strip_edges()
 	if pinned.is_empty():
 		return []
+	## No `*`: PEP 440 reserves it for prefix-match SPECIFIERS (`==3.2.*`),
+	## not version identifiers — letting it through would turn the exact pin
+	## into a prefix match (#890 CodeRabbit).
 	var re := RegEx.new()
-	if re.compile("^[A-Za-z0-9.+!*-]+$") != OK or re.search(pinned) == null:
+	if re.compile("^[A-Za-z0-9.+!-]+$") != OK or re.search(pinned) == null:
 		return []
 	return ["--from", "godot-ai==%s" % pinned, "godot-ai", "--version"]
 

@@ -1136,6 +1136,10 @@ func test_prewarm_argv_rejects_empty_and_non_pep440_versions() -> void:
 		McpClientConfigurator.prewarm_server_package_argv("3.2.0@https://evil/pkg.whl").is_empty(),
 		"direct-reference smuggling must be rejected"
 	)
+	assert_true(
+		McpClientConfigurator.prewarm_server_package_argv("3.2.*").is_empty(),
+		"PEP 440 reserves * for prefix-match specifiers — a wildcard would turn the exact pin into a prefix match"
+	)
 
 
 func _pi_clone(path: String) -> McpClient:
