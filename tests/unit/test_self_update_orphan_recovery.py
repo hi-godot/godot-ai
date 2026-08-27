@@ -20,7 +20,9 @@ def test_recover_incompatible_success_unblocks_existing_connection() -> None:
     """
 
     source = PLUGIN_GD.read_text(encoding="utf-8")
-    recover_block = get_func_block(source, "func recover_incompatible_server() -> bool:")
+    recover_block = get_func_block(
+        source, "func recover_incompatible_server(user_initiated: bool = true) -> bool:"
+    )
     resume_block = get_func_block(source, "func _resume_connection_after_recovery() -> void:")
     lifecycle_source = (
         Path(__file__).resolve().parents[2]

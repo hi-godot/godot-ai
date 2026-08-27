@@ -39,7 +39,7 @@ class _RestartDispatchPlugin extends GodotAiPlugin:
 	func force_restart_server() -> void:
 		force_restart_calls += 1
 
-	func recover_incompatible_server() -> bool:
+	func recover_incompatible_server(_user_initiated: bool = true) -> bool:
 		recover_calls += 1
 		return true
 
@@ -591,6 +591,154 @@ func test_drift_banner_clears_after_per_row_reconfigure() -> void:
 		"Banner must clear once the last amber row is reconfigured")
 	assert_eq(_dock._last_mismatched_ids, [] as Array[String],
 		"Cache must drop the now-green client so a follow-up Reconfigure-mismatched click is a no-op")
+
+
+## Records the reconfigure fan-out so the post-update repin tests can assert
+## dispatch without running real Configure workers, and fakes the pin-only
+## gate so no real config files are read.
+class _RepinRecordingDock extends McpDockScript:
+	var configured_ids: Array[String] = []
+	var refresh_calls := 0
+	var pin_only_ids: Array[String] = []
+	var gate_from_versions: Array[String] = []
+
+	func _on_configure_client(client_id: String) -> void:
+		configured_ids.append(client_id)
+
+	func _refresh_all_client_statuses() -> void:
+		refresh_calls += 1
+
+	func _entry_drift_is_version_pin_only(
+		client_id: String, from_version: String, _launch_context: Dictionary
+	) -> bool:
+		gate_from_versions.append(from_version)
+		return pin_only_ids.has(client_id)
+
+
+func test_post_update_repin_reconfigures_pin_only_rows_once() -> void:
+	## After a self-update the plugin arms the one-shot repin; the first
+	## completed sweep with drift must reconfigure the rows whose only drift
+	## is the version pin, then never fire again.
+	var dock := _RepinRecordingDock.new()
+	dock._client_rows["claude_code"] = {"status": McpClient.Status.CONFIGURED_MISMATCH}
+	dock._last_mismatched_ids = ["claude_code"] as Array[String]
+	dock.pin_only_ids = ["claude_code"] as Array[String]
+	dock.notify_self_update_success("3.1.2")
+
+	dock._maybe_auto_repin_after_update()
+	var first_pass := dock.configured_ids.duplicate()
+	var pending_after := dock._pending_post_update_repin
+	var gate_versions := dock.gate_from_versions.duplicate()
+
+	dock._maybe_auto_repin_after_update()
+	var second_pass := dock.configured_ids.duplicate()
+	var refreshes := dock.refresh_calls
+	dock.free()
+
+	assert_eq(first_pass, ["claude_code"] as Array[String],
+		"the armed repin must reconfigure every pin-only-drifted row")
+	assert_eq(gate_versions, ["3.1.2"] as Array[String],
+		"the gate must render the entry against the replaced version")
+	assert_false(pending_after, "the repin is one-shot: consumed by the sweep that ran it")
+	assert_eq(second_pass, ["claude_code"] as Array[String],
+		"a later sweep must not reconfigure again")
+	assert_true(refreshes >= 1,
+		"the repin must trigger the trailing status re-sweep like the banner click")
+
+
+func test_post_update_repin_skips_rows_that_drift_beyond_the_pin() -> void:
+	## The blast-radius regression the self-update smoke caught live: a
+	## fixture editor on custom ports saw every real client config as
+	## mismatched and rewrote all of them to its own ports. Entries whose
+	## drift is anything more than the version pin must be left for the
+	## drift banner's human click.
+	var dock := _RepinRecordingDock.new()
+	dock._client_rows["claude_code"] = {"status": McpClient.Status.CONFIGURED_MISMATCH}
+	dock._client_rows["cursor"] = {"status": McpClient.Status.CONFIGURED_MISMATCH}
+	dock._last_mismatched_ids = ["claude_code", "cursor"] as Array[String]
+	## Only claude_code's drift is the pin; cursor points elsewhere.
+	dock.pin_only_ids = ["claude_code"] as Array[String]
+	dock.notify_self_update_success("3.1.2")
+
+	dock._maybe_auto_repin_after_update()
+	var configured := dock.configured_ids.duplicate()
+	dock.free()
+
+	assert_eq(configured, ["claude_code"] as Array[String],
+		"rows drifting beyond the version pin must never be auto-rewritten")
+
+
+func test_post_update_repin_requires_a_from_version() -> void:
+	## Markers written by pre-gate runners carry no from_version — without
+	## it the pin-only comparison cannot be rendered, so nothing may arm.
+	var dock := _RepinRecordingDock.new()
+	dock._client_rows["claude_code"] = {"status": McpClient.Status.CONFIGURED_MISMATCH}
+	dock._last_mismatched_ids = ["claude_code"] as Array[String]
+	dock.pin_only_ids = ["claude_code"] as Array[String]
+	dock.notify_self_update_success("")
+
+	dock._maybe_auto_repin_after_update()
+	var configured := dock.configured_ids.duplicate()
+	var pending := dock._pending_post_update_repin
+	dock.free()
+
+	assert_true(configured.is_empty(),
+		"an empty from_version must arm nothing (fail closed)")
+	assert_false(pending, "an empty from_version must not leave the flag armed")
+
+
+func test_post_update_repin_stays_pending_while_server_blocks_health() -> void:
+	## While the post-update stale-occupant recovery is still in flight the
+	## server state is INCOMPATIBLE and every row reads ERROR — consuming the
+	## flag on that sweep would drop the repin. It must stay pending and fire
+	## on the first healthy sweep.
+	var plugin := _RestartDispatchPlugin.new()
+	plugin.status = {"state": McpServerState.INCOMPATIBLE, "message": "incompatible"}
+	var dock := _RepinRecordingDock.new()
+	dock._plugin = plugin
+	dock._client_rows["claude_code"] = {"status": McpClient.Status.CONFIGURED_MISMATCH}
+	dock._last_mismatched_ids = ["claude_code"] as Array[String]
+	dock.pin_only_ids = ["claude_code"] as Array[String]
+	dock.notify_self_update_success("3.1.2")
+
+	dock._maybe_auto_repin_after_update()
+	var pending_while_blocked := dock._pending_post_update_repin
+	var configured_while_blocked := dock.configured_ids.duplicate()
+
+	plugin.status = {"state": McpServerState.READY}
+	dock._maybe_auto_repin_after_update()
+	var configured_after_recovery := dock.configured_ids.duplicate()
+	dock.free()
+	plugin.free()
+
+	assert_true(pending_while_blocked,
+		"an INCOMPATIBLE-server sweep must keep the repin pending")
+	assert_true(configured_while_blocked.is_empty(),
+		"no reconfigure may run while rows read ERROR")
+	assert_eq(configured_after_recovery, ["claude_code"] as Array[String],
+		"the first healthy sweep must run the deferred repin")
+
+
+func test_post_update_repin_consumed_without_drift_never_fires_later() -> void:
+	## A clean sweep (no drift — e.g. the user reconfigured by hand mid-
+	## update) must consume the flag without firing, so it cannot ambush an
+	## unrelated mismatch weeks later.
+	var dock := _RepinRecordingDock.new()
+	dock.pin_only_ids = ["claude_code"] as Array[String]
+	dock.notify_self_update_success("3.1.2")
+
+	dock._maybe_auto_repin_after_update()
+	var pending_after := dock._pending_post_update_repin
+
+	dock._client_rows["claude_code"] = {"status": McpClient.Status.CONFIGURED_MISMATCH}
+	dock._last_mismatched_ids = ["claude_code"] as Array[String]
+	dock._maybe_auto_repin_after_update()
+	var configured := dock.configured_ids.duplicate()
+	dock.free()
+
+	assert_false(pending_after, "a clean sweep must still consume the one-shot flag")
+	assert_true(configured.is_empty(),
+		"a consumed repin must never fire on later drift")
 
 
 func test_successful_configure_discloses_the_scope_sweep_on_the_row() -> void:

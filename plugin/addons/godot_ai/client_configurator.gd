@@ -465,6 +465,37 @@ static func check_status_for_url_with_cli_path(
 	return check_status_details_for_url_with_cli_path(id, url, cli_path, launch_context).get("status", Client.Status.NOT_CONFIGURED)
 
 
+## True when <id>'s stored entry verifies EXACTLY against the launch this
+## editor would have rendered at `from_version` — same ports, exclusions,
+## telemetry flag, command shape; nothing differs but the version pin. This
+## is the post-update auto-repin gate: only such entries are provably "what
+## Configure wrote before the update", so rewriting them to the current
+## version restores the user's own prior intent. Anything else — entries
+## pointing at another editor's ports (the smoke-fixture blast radius that
+## motivated this gate), hand-edits, changed settings — stays untouched for
+## the drift banner's human click. An empty `from_version` (marker written
+## by a pre-gate runner) fails closed.
+##
+## The version-substituted context is safe to resolve and cache:
+## `plugin_version` is part of both the attach-launch resolution
+## (`_resolve_attach_launch_uncached`) and its cache key.
+static func entry_drift_is_version_pin_only(
+	id: String, from_version: String, launch_context: Dictionary = {}
+) -> bool:
+	var pinned_from := from_version.strip_edges()
+	if pinned_from.is_empty():
+		return false
+	var context := launch_context if not launch_context.is_empty() else capture_launch_context()
+	var old_context := context.duplicate(true)
+	old_context["plugin_version"] = pinned_from
+	## Same URL under both versions: the URL carries the port, not the
+	## version, so URL-mode entries can never be version-pin-only drift and
+	## correctly fail this check.
+	var url := str(context.get("server_url", http_url()))
+	var status := check_status_for_url_with_cli_path(id, url, "", old_context)
+	return status == Client.Status.CONFIGURED
+
+
 ## Detailed variant used by the dock refresh worker. Returns
 ## `{"status": Status, "error_msg": String}` so the worker can surface
 ## "probe timed out" on the row instead of silently flipping it to
@@ -1452,6 +1483,35 @@ static func get_server_launch_mode() -> String:
 
 static func find_uvx() -> String:
 	return CliFinder.find(_uvx_cli_names())
+
+
+## Pre-build the uvx tool environment for `godot-ai==<version>` in the
+## background, so the FIRST spawn of that version is a warm cache hit.
+## Fired when a self-update install starts: post-update the old backend is
+## killed and the new one spawned, and a cold `uvx --from godot-ai==<new>`
+## resolve+install takes seconds — while an attach bridge pinned to the OLD
+## version respawns its already-cached backend near-instantly, winning the
+## port bind race every time (the INCOMPATIBLE dead end after every
+## self-update with a live AI client). Warming the new env while the plugin
+## zip downloads flips that race.
+##
+## `--version` makes the spawned process exit immediately after uv resolves
+## and installs the env. Detached fire-and-forget: a failure only means the
+## post-update spawn pays the cold cost it always used to. Returns the
+## spawned PID, or -1 when skipped (no uvx on this machine — the dev-venv
+## and system tiers have no per-version cache to warm — or no version).
+static func prewarm_server_package(version: String) -> int:
+	var pinned := version.strip_edges()
+	if pinned.is_empty():
+		return -1
+	var uvx := find_uvx()
+	if uvx.is_empty():
+		return -1
+	var args: Array[String] = ["--from", "godot-ai==%s" % pinned, "godot-ai", "--version"]
+	var pid := OS.create_process(uvx, args)
+	if pid > 0:
+		print("MCP | pre-warming godot-ai==%s server package for the post-update restart" % pinned)
+	return pid
 
 
 static func _uvx_cli_names() -> Array[String]:

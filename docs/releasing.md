@@ -24,6 +24,44 @@ The dock checks the GitHub releases API on startup. If a newer version exists, a
 
 The server process is intentionally prepared for reload, not left untouched: `prepare_for_update_reload()` stops the managed server and resets the spawn guard so the re-enabled plugin starts or adopts the correct server for the new plugin version.
 
+An adopted **external** backend (typically one kept alive by AI-client attach
+bridges) survives that prep by design — the plugin holds no strong ownership
+proof for it — so the re-enabled plugin always wakes up facing a
+previous-version occupant on the HTTP port. Three mechanisms make that
+converge without user intervention:
+
+1. **Pre-warm** (`update_manager.gd::start_install` →
+   `ClientConfigurator.prewarm_server_package`): while the plugin zip
+   downloads, a detached `uvx --from godot-ai==<new> godot-ai --version`
+   builds the new server env into the uv cache. Bridges pinned to the old
+   version respawn their cached backend near-instantly after a kill; without
+   the warm cache the plugin's cold spawn loses the port bind race every
+   time.
+2. **Bounded stale-occupant recovery** (`server_lifecycle.gd`,
+   `_stale_recovery_budget`): a `status == "success"` pending-update marker
+   arms `authorize_stale_recovery()` before the startup walk (the Update
+   click is the consent), letting the walk — and the WS handshake-mismatch
+   verdict, which usually lands first — kill a brand-verified stale-version
+   godot-ai occupant via the weak (`status_name`) proof tier and retry a
+   bounded number of rounds when a bridge respawn wins a race. Automatic
+   triggers only spend budget; only user actions (Update click, dock Restart
+   click) arm it, so the kill/respawn loop cannot run unbounded. Same-version
+   and foreign occupants are never touched by this path.
+3. **Auto-repin** (`mcp_dock.gd::_maybe_auto_repin_after_update`): once the
+   new server is healthy, the first completed client sweep rewrites client
+   configs to the new version pin, armed one-shot by the drained update
+   marker (which carries `from_version`/`to_version` since the gate
+   landed). **Scope gate**: only entries whose stored launch verifies
+   EXACTLY against the rendering at the replaced version — same ports,
+   exclusions, telemetry flag; nothing differs but the pin
+   (`ClientConfigurator.entry_drift_is_version_pin_only`). Any other drift
+   (an entry pointing at another editor's ports, hand-edits) stays on the
+   drift banner's human Reconfigure click; auto-rewriting those was
+   observed live to hijack every client config on the machine to a smoke
+   fixture's ports. Markers from pre-gate runners lack `from_version` and
+   arm nothing. Running client apps still need a restart to pick up the
+   new argv, which the incompatible-occupant message continues to say.
+
 In dev checkouts the check is skipped: `is_dev_checkout()` detects a nearby `.venv` and short-circuits to avoid offering a path that would overwrite tracked source (the addons dir is a symlink into `plugin/`). Three override knobs let you exercise the update flow without leaving the repo (resolved in priority order):
 
 1. **EditorSetting `godot_ai/mode_override`** — set it manually via Editor > Editor Settings (there is currently no dock UI that writes it). Values: empty/absent (auto) / `user` / `dev`, read by `client_configurator.gd::mode_override()`.

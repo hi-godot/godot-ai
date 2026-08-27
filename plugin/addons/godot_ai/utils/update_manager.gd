@@ -255,6 +255,15 @@ func start_install() -> void:
 		"button_disabled": true,
 	})
 
+	## Warm the uv cache for the NEW server version while the plugin zip
+	## downloads (see prewarm_server_package): the post-update walk must win
+	## a port bind race against attach bridges respawning the cached OLD
+	## version, and a cold uvx resolve loses that race every time. uvx is
+	## almost always cached in the CliFinder by now (the dock's setup probe);
+	## a cold lookup is the same bounded main-thread cost as
+	## `_reprobe_uv_if_negative`, on the same rare click-driven path.
+	ClientConfigurator.prewarm_server_package(_latest_remote_version)
+
 	if _download_request != null:
 		_download_request.queue_free()
 	_download_request = HTTPRequest.new()

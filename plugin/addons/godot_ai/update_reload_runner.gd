@@ -49,6 +49,9 @@ const INSTALL_BACKUP_SUFFIX := ".update_backup"
 enum InstallStatus { OK, FAILED_CLEAN, FAILED_MIXED }
 
 var _zip_path := ""
+## Old plugin.cfg version, read from disk in `start()` before the extract
+## replaces it. Rides the pending self-update marker.
+var _from_version := ""
 var _temp_dir := ""
 var _detached_dock = null
 var _started := false
@@ -110,7 +113,30 @@ func start(zip_path: String, temp_dir: String, detached_dock) -> void:
 	_zip_path = zip_path
 	_temp_dir = temp_dir
 	_detached_dock = detached_dock
+	## Captured before the extract replaces plugin.cfg: the success marker
+	## carries from/to versions so the re-enabled plugin can (a) report a
+	## complete self_update telemetry event and (b) scope the post-update
+	## client repin to entries whose ONLY drift is the old version pin. Pure
+	## file IO on purpose — the runner must not call into plugin scripts
+	## during the disable window.
+	_from_version = _read_plugin_cfg_version()
 	_wait_frames(PRE_DISABLE_DRAIN_FRAMES, "_disable_old_plugin")
+
+
+## Read `version="X.Y.Z"` from the on-disk plugin.cfg. Returns "" when the
+## file or key is missing — consumers treat an empty version as "unknown"
+## and degrade (telemetry sends empty fields, the repin gate skips).
+static func _read_plugin_cfg_version() -> String:
+	var file := FileAccess.open(PLUGIN_CFG_PATH, FileAccess.READ)
+	if file == null:
+		return ""
+	var text := file.get_as_text()
+	file.close()
+	var re := RegEx.new()
+	if re.compile("(?m)^version=\"([^\"]+)\"") != OK:
+		return ""
+	var found := re.search(text)
+	return found.get_string(1) if found != null else ""
 
 
 func _process(_delta: float) -> void:
@@ -505,7 +531,14 @@ func _finalize_install_success() -> void:
 		if record.get("had_original", false):
 			DirAccess.remove_absolute(String(record.get("backup_path", "")))
 	_paths_written.clear()
-	_record_pending_self_update({"status": "success"})
+	## plugin.cfg on disk is the NEW version by now — read it back rather
+	## than trusting any in-memory value, so the marker describes what was
+	## actually installed.
+	_record_pending_self_update({
+		"status": "success",
+		"from_version": _from_version,
+		"to_version": _read_plugin_cfg_version(),
+	})
 
 
 ## Persist a self_update event description so the re-enabled plugin can

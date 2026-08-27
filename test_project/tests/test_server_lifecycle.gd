@@ -903,6 +903,266 @@ func test_fresh_walk_resets_readopt_budget() -> void:
 		"a fresh walk must reset the re-adopt budget at its top")
 
 
+# ----- stale-version recovery budget (post-self-update) ------------------
+
+## Shared fixture shape for the stale-occupant walks below: an external
+## previous-version godot-ai holds the port (branded, alive, answering
+## /status) and no strong ownership proof exists (empty record, no
+## pid-file) — the exact post-self-update shape when attach bridges kept
+## the old backend alive.
+func _stale_occupant_host() -> _ManagerHostStub:
+	var host := _ManagerHostStub.new()
+	host._log_buffer = McpLogBuffer.new()
+	host._connection = null
+	host.port_in_use = true
+	host.listener_pids = [13131] as Array[int]
+	host.alive_pids = [13131] as Array[int]
+	host.branded_pids = [13131] as Array[int]
+	host.live_status = {"name": "godot-ai", "version": "0.0.1", "ws_port": 9500, "status_code": 200}
+	return host
+
+
+func test_walk_without_authorization_never_weak_kills_stale_occupant() -> void:
+	## Safety floor: with no authorized budget, the walk must keep the
+	## pre-fix behavior — a killable (branded, alive) stale occupant with
+	## only weak proof latches INCOMPATIBLE untouched.
+	var saved_guard: bool = GodotAiPlugin._server_started_this_session
+	GodotAiPlugin._server_started_this_session = false
+	var host := _stale_occupant_host()
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	manager.start_server()
+	var state := manager.get_state()
+	var killed := host.killed_targets.duplicate()
+	host.free()
+	GodotAiPlugin._server_started_this_session = saved_guard
+
+	assert_eq(state, McpServerState.INCOMPATIBLE)
+	assert_true(killed.is_empty(),
+		"without authorize_stale_recovery the walk must never weak-proof-kill")
+
+
+func test_walk_spends_budget_and_weak_kills_stale_occupant_when_authorized() -> void:
+	## Post-update walk: authorized budget lets the incompatible arm escalate
+	## from the (unprovable) strong recovery to the weak-proof kill. The
+	## fixture keeps the port held after the kill so the walk stops at
+	## INCOMPATIBLE instead of reaching a real spawn.
+	var saved_guard: bool = GodotAiPlugin._server_started_this_session
+	GodotAiPlugin._server_started_this_session = false
+	var host := _stale_occupant_host()
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager.authorize_stale_recovery()
+
+	manager.start_server()
+	var state := manager.get_state()
+	var killed := host.killed_targets.duplicate()
+	var budget := int(manager.get_status_dict().get("stale_recovery_budget", -1))
+	host.free()
+	GodotAiPlugin._server_started_this_session = saved_guard
+
+	assert_eq(killed, [13131] as Array[int],
+		"authorized walk must weak-proof-kill the stale occupant")
+	assert_eq(budget, 1, "the walk's recovery arm must spend exactly one round")
+	assert_eq(state, McpServerState.INCOMPATIBLE,
+		"fixture: the still-held port must stop the walk before a real spawn")
+
+
+func test_walk_stale_budget_ignores_same_version_occupant() -> void:
+	## The budget only ever targets a version DRIFT. A same-version occupant
+	## that fails compatibility another way (here: WS port mismatch) must not
+	## be killed by the stale arm, authorized or not.
+	var saved_guard: bool = GodotAiPlugin._server_started_this_session
+	GodotAiPlugin._server_started_this_session = false
+	var host := _stale_occupant_host()
+	host.live_status = {
+		"name": "godot-ai",
+		"version": McpClientConfigurator.get_plugin_version(),
+		"ws_port": 1,
+		"status_code": 200,
+	}
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager.authorize_stale_recovery()
+
+	manager.start_server()
+	var killed := host.killed_targets.duplicate()
+	var budget := int(manager.get_status_dict().get("stale_recovery_budget", -1))
+	host.free()
+	GodotAiPlugin._server_started_this_session = saved_guard
+
+	assert_true(killed.is_empty(),
+		"same-version occupants stay outside the stale-recovery authority")
+	assert_eq(budget, 2, "no round may be spent on a same-version occupant")
+
+
+func test_recover_stale_port_occupant_kills_with_weak_proof_and_clears() -> void:
+	## Unit coverage for the weak-proof recovery itself: status_name proof is
+	## enough, the kill brand-verifies, and a freed port clears record +
+	## pid-file exactly like the strong-proof sibling.
+	var host := _stale_occupant_host()
+	## Held while the occupant lives, free on the post-kill re-check.
+	host.port_in_use_sequence = [false] as Array[bool]
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	var recovered: bool = await manager.recover_stale_port_occupant(TEST_PORT, 0.5)
+	var killed := host.killed_targets.duplicate()
+	var clear_calls := host.cleared_record_calls
+	host.free()
+
+	assert_true(recovered, "weak-proof recovery must succeed once the port frees")
+	assert_eq(killed, [13131] as Array[int])
+	assert_eq(clear_calls, 1, "a freed port must clear the managed record")
+
+
+func test_recover_stale_port_occupant_refuses_foreign_occupant() -> void:
+	## No godot-ai /status answer -> no weak proof -> nothing killed, even
+	## with a branded-looking listener list.
+	var host := _stale_occupant_host()
+	host.live_status = {"name": "other-server", "version": "", "ws_port": 0, "status_code": 200}
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	var recovered: bool = await manager.recover_stale_port_occupant(TEST_PORT, 0.5)
+	var killed := host.killed_targets.duplicate()
+	host.free()
+
+	assert_false(recovered)
+	assert_true(killed.is_empty(),
+		"a foreign occupant must never be killed by the stale-recovery path")
+
+
+func test_spawn_fast_exit_stale_occupant_with_budget_rewalks_and_spends() -> void:
+	## The bridge-respawn race: the re-adopt one-shot (#805) is already
+	## spent, but the live occupant is a verified stale version and budget
+	## remains — the fast exit must spend a round and re-walk (which spends
+	## another in its recovery arm) instead of latching the flapping CRASHED.
+	var saved_guard: bool = GodotAiPlugin._server_started_this_session
+	GodotAiPlugin._server_started_this_session = false
+	var host := _stale_occupant_host()
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 99999
+	manager.transition_state(McpServerState.SPAWNING)
+	manager._readopt_after_spawn_exit_retried = true
+	manager.authorize_stale_recovery()
+
+	manager._diagnose_spawn_fast_exit(6000)
+	var state := manager.get_state()
+	var killed := host.killed_targets.duplicate()
+	var budget := int(manager.get_status_dict().get("stale_recovery_budget", -1))
+	host.free()
+	GodotAiPlugin._server_started_this_session = saved_guard
+
+	assert_eq(state, McpServerState.INCOMPATIBLE,
+		"the stale retry must re-walk (ending INCOMPATIBLE on the held port), not latch CRASHED")
+	assert_eq(killed, [13131] as Array[int],
+		"the triggered walk must spend its round on the weak-proof kill")
+	assert_eq(budget, 0,
+		"one round spent at the fast exit + one in the walk's recovery arm")
+
+
+func test_spawn_fast_exit_same_version_occupant_with_budget_still_latches() -> void:
+	## The budget must not weaken the #805 flapping bound for same-version
+	## occupants — that shape is multi-editor churn, not a stale update.
+	var host := _ManagerHostStub.new()
+	host._log_buffer = McpLogBuffer.new()
+	host.port_in_use = true
+	host.live_status = {
+		"name": "godot-ai",
+		"version": McpClientConfigurator.get_plugin_version(),
+		"ws_port": 9500,
+		"status_code": 200,
+	}
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager._server_pid = 99999
+	manager.transition_state(McpServerState.SPAWNING)
+	manager._readopt_after_spawn_exit_retried = true
+	manager.authorize_stale_recovery()
+
+	manager._diagnose_spawn_fast_exit(6000)
+	var state := manager.get_state()
+	var budget := int(manager.get_status_dict().get("stale_recovery_budget", -1))
+	host.free()
+
+	assert_eq(state, McpServerState.CRASHED,
+		"same-version flapping must still latch the #805 terminal diagnosis")
+	assert_eq(budget, 2, "no round may be spent on a same-version occupant")
+
+
+## Records plugin-level recovery invocations so the handshake-trigger tests
+## can assert spend-only dispatch without running a real recovery.
+class _RecoveryRecordingHostStub extends _ManagerHostStub:
+	var recovery_calls: Array = []
+
+	func recover_incompatible_server(user_initiated: bool = true) -> bool:
+		recovery_calls.append(user_initiated)
+		return true
+
+
+func test_handshake_mismatch_with_budget_triggers_spend_only_recovery() -> void:
+	## Post-update the WS usually reaches the OLD backend before the walk
+	## finishes; the mismatch verdict must consume the authorized budget and
+	## fire the recovery flow as NON-user-initiated (spend-only — re-arming
+	## from the trigger would unbound the kill/respawn loop).
+	var host := _RecoveryRecordingHostStub.new()
+	host._log_buffer = McpLogBuffer.new()
+	host._connection = null
+	host.port_in_use = true
+	var manager := McpServerLifecycleManagerScript.new(host)
+	manager.authorize_stale_recovery()
+
+	manager.handle_server_version_verified("", "0.0.1")
+	var state := manager.get_state()
+	var calls := host.recovery_calls.duplicate()
+	var budget := int(manager.get_status_dict().get("stale_recovery_budget", -1))
+	host.free()
+
+	assert_eq(state, McpServerState.INCOMPATIBLE,
+		"the verdict must still latch INCOMPATIBLE before the recovery fires")
+	assert_eq(calls, [false],
+		"the trigger must dispatch exactly one non-user-initiated recovery")
+	assert_eq(budget, 1, "the trigger must spend one round")
+
+
+func test_handshake_mismatch_without_budget_latches_without_recovery() -> void:
+	var host := _RecoveryRecordingHostStub.new()
+	host._log_buffer = McpLogBuffer.new()
+	host._connection = null
+	host.port_in_use = true
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	manager.handle_server_version_verified("", "0.0.1")
+	var state := manager.get_state()
+	var calls := host.recovery_calls.duplicate()
+	host.free()
+
+	assert_eq(state, McpServerState.INCOMPATIBLE)
+	assert_true(calls.is_empty(),
+		"without authorized budget the mismatch verdict must stay manual")
+
+
+func test_proven_recovery_resets_stale_budget() -> void:
+	## Leftover authorized rounds must not survive into a later, unrelated
+	## episode where they could weak-proof-kill a deliberately started
+	## server: adoption and a verified compatible handshake both end the
+	## episode.
+	var host := _ManagerHostStub.new()
+	host._log_buffer = McpLogBuffer.new()
+	host._connection = null
+	var manager := McpServerLifecycleManagerScript.new(host)
+	var current := McpClientConfigurator.get_plugin_version()
+
+	manager.authorize_stale_recovery()
+	manager.adopt_compatible_server(current, current, 0, false)
+	var budget_after_adopt := int(manager.get_status_dict().get("stale_recovery_budget", -1))
+
+	manager.authorize_stale_recovery()
+	manager._server_state = McpServerState.SPAWNING
+	manager.handle_server_version_verified(current, current)
+	var budget_after_verify := int(manager.get_status_dict().get("stale_recovery_budget", -1))
+	host.free()
+
+	assert_eq(budget_after_adopt, 0, "adoption must reset the stale budget")
+	assert_eq(budget_after_verify, 0, "a verified compatible handshake must reset the stale budget")
+
+
 func test_spawn_fast_exit_foreign_occupant_reuses_probe_snapshot() -> void:
 	## The fast-exit handler probes the HTTP status endpoint once; the
 	## foreign-conflict diagnosis must consume that snapshot instead of

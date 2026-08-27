@@ -161,6 +161,20 @@ var _server_restart_in_progress := false
 ## repeated explicit refreshes don't repaint identical text. Mirrors the
 ## `_last_server_status` pattern used by the crash panel.
 var _last_mismatched_ids: Array[String] = []
+## One-shot post-self-update auto-repin (armed by plugin.gd via
+## `notify_self_update_success`). After an update, every client configured
+## through this plugin still pins the OLD server version — the drift banner
+## names them, but until they're rewritten each attach-bridge (re)start
+## launches the outdated backend. The first completed status sweep with a
+## healthy server consumes this flag and runs the same reconfigure the
+## banner button would, so the user isn't left owing a manual click for a
+## state the update itself created. Sweeps that land while the server is
+## still INCOMPATIBLE (stale-occupant recovery in flight) keep it pending —
+## their rows read ERROR, not CONFIGURED_MISMATCH.
+var _pending_post_update_repin: bool = false
+## The version the completed update replaced — consumed with the flag
+## above; the pin-only gate renders each entry against it.
+var _post_update_from_version: String = ""
 var _client_status_refresh_thread: Thread
 ## Single source of truth for the refresh-sweep state machine. See
 ## `ClientRefreshStateScript` for the transition table. Replaces the
@@ -3089,6 +3103,9 @@ func _finalize_completed_refresh() -> void:
 	if _refresh_state != ClientRefreshStateScript.SHUTTING_DOWN:
 		_refresh_state = ClientRefreshStateScript.IDLE
 	_refresh_clients_summary()
+	## After the summary pass so `_last_mismatched_ids` reflects the sweep
+	## that just completed.
+	_maybe_auto_repin_after_update()
 
 
 func _request_client_status_refresh(force: bool = false) -> bool:
@@ -3350,6 +3367,79 @@ func _on_reconfigure_mismatched() -> void:
 		if _client_rows.has(client_id):
 			_on_configure_client(client_id)
 	_refresh_all_client_statuses()
+
+
+## Arm the one-shot post-update repin (see `_pending_post_update_repin`).
+## Called by plugin.gd when it drains a `status == "success"` self-update
+## marker, i.e. exactly once per completed update. `from_version` is the
+## plugin version the update replaced — required by the pin-only gate
+## below; an empty value (marker from a pre-gate runner) arms nothing, so
+## those updates keep the manual drift-banner path.
+func notify_self_update_success(from_version: String = "") -> void:
+	if from_version.strip_edges().is_empty():
+		return
+	_post_update_from_version = from_version.strip_edges()
+	_pending_post_update_repin = true
+
+
+## Consume `_pending_post_update_repin` on the first completed status sweep
+## that could actually observe drift. Runs from `_finalize_completed_refresh`
+## AFTER `_refresh_clients_summary()` has rebuilt `_last_mismatched_ids`
+## from the sweep that just landed.
+##
+## Blast-radius gate: only entries whose SOLE drift is the old version pin
+## are repinned (`entry_drift_is_version_pin_only`). A mismatched entry can
+## also mean "points at a different editor's ports" — this dock ran inside
+## a side project with custom ports, or the user hand-tuned the entry — and
+## auto-rewriting those hijacks every AI client on the machine to THIS
+## editor's ports (observed live: the self-update smoke fixture on port
+## 18000 repinned 21 real client configs). Those stay on the drift banner's
+## human click.
+func _maybe_auto_repin_after_update() -> void:
+	if not _pending_post_update_repin:
+		return
+	## While the server is INCOMPATIBLE (post-update stale-occupant recovery
+	## still in flight) every row reads ERROR, not CONFIGURED_MISMATCH — a
+	## consume here would see an empty mismatch list and drop the repin on
+	## the floor. Stay pending for the sweep that lands after recovery.
+	if _server_blocks_client_health():
+		return
+	if ClientRefreshStateScript.should_disable_client_actions(_refresh_state):
+		return
+	_pending_post_update_repin = false
+	var from_version := _post_update_from_version
+	_post_update_from_version = ""
+	if _last_mismatched_ids.is_empty():
+		return
+	var launch_context := ClientConfigurator.capture_launch_context()
+	var pin_only: Array[String] = []
+	for client_id in _last_mismatched_ids:
+		if _entry_drift_is_version_pin_only(String(client_id), from_version, launch_context):
+			pin_only.append(String(client_id))
+	if pin_only.is_empty():
+		print(
+			"MCP | self-update complete — no client entry drifts by version pin alone; leaving %d drifted config(s) to the Reconfigure banner"
+			% _last_mismatched_ids.size()
+		)
+		return
+	print(
+		"MCP | self-update complete — repinning %d client config(s) from v%s to v%s"
+		% [pin_only.size(), from_version, ClientConfigurator.get_plugin_version()]
+	)
+	for client_id in pin_only:
+		if _client_rows.has(client_id):
+			_on_configure_client(client_id)
+	_refresh_all_client_statuses()
+
+
+## Instance seam over the static gate so the dock test suite can fake the
+## per-client verdict without real config files on disk.
+func _entry_drift_is_version_pin_only(
+	client_id: String, from_version: String, launch_context: Dictionary
+) -> bool:
+	return ClientConfigurator.entry_drift_is_version_pin_only(
+		client_id, from_version, launch_context
+	)
 
 
 func _apply_row_status(
